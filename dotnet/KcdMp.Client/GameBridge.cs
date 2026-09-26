@@ -1710,6 +1710,7 @@ public partial class GameBridge(ClientConfig config)
         Wo122OnConnect(stream, cts.Token);   // WO-122: owner death, the host-only save lock, world saves
         Wo123OnConnect(stream, cts.Token);   // WO-123: the join (send the world, pause the host)
         Wo124OnConnect(stream, cts.Token);   // WO-124: the session mode, the joiner's side of the join
+        Wo114OnConnect(stream, cts.Token);   // WO-114: the leash (host decides; joiner is brought back)
         _ = _combat.NpcConfigAsync(_nativeWriteOn, _nativeSenderClock, cts.Token);
         _ = RespawnHeartbeatAsync(stream, announceGraves: true, cts.Token);
         // WO-99 Phase 0: learn who the local player is before the first hit.
@@ -2204,6 +2205,7 @@ public partial class GameBridge(ClientConfig config)
             await Wo122OnDisconnectAsync();   // WO-122: the joiner may save again
             await Wo123OnDisconnectAsync();   // WO-123: a paused host resumes; a joiner's staging goes
             await Wo124OnDisconnectAsync();   // WO-124: a joiner in the host's world leaves it
+            await Wo114OnDisconnectAsync();   // WO-114: the leash, the partner, the fast-travel block
             _myOpenDrops.Clear();
             // WO-113: no relay, no session -- the DLL's guard stands down
             // (vanilla death), and every peer's mirror gravestone goes.
@@ -2969,6 +2971,15 @@ public partial class GameBridge(ClientConfig config)
     {
         var send = _sendTimeSkip;
         if (send is null) return;
+        // WO-114: only the host fast-travels. A joiner in the host's world whose
+        // clock jumped (a fast travel the block missed, a local quest skip) must
+        // not move the host's world clock; the host's own travel reaches it
+        // through the host's report instead.
+        if (_joinedWorld && _combatRoleApplied && !_isDamageAuthority)
+        {
+            Console.WriteLine($"[timeskip] clock jump to {worldTime} on a joiner in the host's world -- NOT reported (WO-114: only the host fast-travels)");
+            return;
+        }
         await send(Protocol.TimeSkipPhaseStart, Protocol.TimeSkipKindFastTravel, 0);
         await send(Protocol.TimeSkipPhaseDone, Protocol.TimeSkipKindFastTravel, worldTime);
         await RequestNpcResyncAsync(NpcResyncReason.FastTravel, _resyncStream, CancellationToken.None);   // WO-102 Phase 6
@@ -5540,6 +5551,11 @@ public partial class GameBridge(ClientConfig config)
             case "leash_trace":      // WO-127: mp_leash_trace on|off
             case "leash_ctx":
                 Wo127LeashOnEvent(name, arg);
+                return;
+            case "wo114_cfg":        // WO-114: the leash settings (mp_leash, mp_leash_warn_m, mp_leash_pull_m)
+            case "wo114_busy":
+            case "wo114_ft_try":
+                Wo114OnEvent(name, arg);
                 return;
         }
 

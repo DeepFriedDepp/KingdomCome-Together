@@ -1153,6 +1153,7 @@ function KCD2MP_DrawInteractionUI()
     -- WO-94: the readiness prompt and the catch-up window, rows 160/184/208.
     if KCD2MP_QuestDrawUI then pcall(KCD2MP_QuestDrawUI) end
     if KCD2MP_JoinDrawUI then pcall(KCD2MP_JoinDrawUI) end   -- WO-123: "<partner> is joining..."
+    if KCD2MP_Wo114DrawUI then pcall(KCD2MP_Wo114DrawUI) end -- WO-114: "Bringing you back to your host in N..."
     mp_screen_frame_end()   -- WO-98 Phase 6: rows that vanished this frame log text=""
 end
 
@@ -4519,18 +4520,20 @@ KCD2MP._presets = {
     -- only (0.29.0). shared_world -- clean = ON (the default since 0.30.0),
     -- legacy = OFF (every machine saves as before, 0.29.9); autosave_minutes
     -- is the same in both.
+    -- WO-114: leash -- clean = on (the new build: 600 m warning, 650 m pull),
+    -- legacy = off (0.30.0 had no leash). The distances are the same in both.
     clean  = { authority_pause = true,  npc_replica = false, npc_yield = false, resume_dwell_s = 10.0,
                npc_read_native = false, npc_track_max = 200, cull_radius_m = 60, npc_senderclock = true,
                respawn = true,  npc_native_write = true,  npc_detach = true,
                avatar_gait = true, npc_gait = true, avatar_moves = true, avatar_combat = true, npc_rows = true,
                npc_attribution = true, friendly_fire = true,
-               owner_death = true, shared_world = true, autosave_minutes = 5 },
+               owner_death = true, shared_world = true, autosave_minutes = 5, leash = true },
     legacy = { authority_pause = true,  npc_replica = false, npc_yield = false, resume_dwell_s = 10.0,
                npc_read_native = true,  npc_track_max = 40,  cull_radius_m = 30, npc_senderclock = false,
                respawn = false, npc_native_write = false, npc_detach = false,
                avatar_gait = false, npc_gait = false, avatar_moves = false, avatar_combat = false, npc_rows = false,
                npc_attribution = false, friendly_fire = false,
-               owner_death = false, shared_world = false, autosave_minutes = 5 },
+               owner_death = false, shared_world = false, autosave_minutes = 5, leash = false },
 }
 function KCD2MP_ApplyPreset(which)
     which = tostring(which or "")
@@ -4577,6 +4580,7 @@ function KCD2MP_ApplyPreset(which)
     set("owner_death",     w122.ownerDeath,              P.owner_death,     function() KCD2MP_SetOwnerDeath(P.owner_death and "on" or "off") end)
     set("shared_world",    w122.sharedWorld,             P.shared_world,    function() KCD2MP_SetSharedWorld(P.shared_world and "on" or "off") end)
     set("autosave_minutes", w122.autosaveMinutes,        P.autosave_minutes, function() KCD2MP_SetAutosaveMinutes(tostring(P.autosave_minutes)) end)
+    set("leash",           KCD2MP.w114.leash,            P.leash,           function() KCD2MP_SetLeash(P.leash and "on" or "off") end)   -- WO-114
     set("npc_proximity",   KCD2MP.npcProx.enabled,       true,              function() KCD2MP_EnableNpcProximity("on") end)
     set("npc_sync",        KCD2MP.npcSync.enabled,       true,              function() KCD2MP_EnableNpcSync("on") end)
     mp_log(string.format("MP-PRESET applied name=%s values=%d authority_model=untouched (authority_host=%s pos_native=%s npc_scan_native=%s)",
@@ -5299,6 +5303,189 @@ function KCD2MP_LeashCtx()
         if c == true or (tonumber(c) or 0) ~= 0 then f = 1 end
     end)
     KCD2MP_EmitEvent("leash_ctx", string.format("d=%d f=%d", d, f))
+end
+
+-- ===== WO-114: the leash ============================================================
+-- docs/WO-114-findings.md. The world is only alive around the host, so the HOST
+-- decides (its agent has both positions) and the joiner is the one brought back.
+-- The mod keeps the host's settings (mp_leash, mp_leash_warn_m, mp_leash_pull_m),
+-- shows the words and the countdown, answers the agent's questions (in a
+-- dialogue? mounted?), dismounts for a pull, and switches the joiner's fast
+-- travel off while it is in the host's world (only the host fast-travels).
+-- The numbers are the maintainer's (600 m warning, 650 m pull); never moved
+-- without the maintainer.
+KCD2MP.w114 = { leash = true, warnM = 600, pullM = 650, cdN = 0, cdAt = -1e9, msgs = 0,
+                ftBlocked = false, ftPrev = nil, ftCvarOk = nil, ftToldAt = -1e9, dismountAt = -1e9 }
+
+function KCD2MP_Wo114CfgEmit()
+    local w = KCD2MP.w114
+    KCD2MP_EmitEvent("wo114_cfg", string.format("leash=%s warn=%d pull=%d", w.leash and "on" or "off", w.warnM, w.pullM))
+end
+
+function KCD2MP_Wo114Report(what)
+    local w = KCD2MP.w114
+    mp_log(string.format("WO114-TOGGLE %s leash=%s warn_m=%d pull_m=%d -- %s", tostring(what), w.leash and "on" or "off", w.warnM, w.pullM,
+        w.leash and "the HOST's values decide: a warning past warn_m, a 10 s countdown past pull_m, then the joiner is brought beside the host"
+                 or "off: no warning, no pull; a death wakes by the WO-113 rule"))
+end
+
+-- mp_leash on|off (default on); bare = report. Only the host's value counts.
+function KCD2MP_SetLeash(arg)
+    local w = KCD2MP.w114
+    local v = KCD2MP_Wo122ParseBool(arg)
+    if v == "bad" then mp_log("mp_leash: expected on|off, got '" .. tostring(arg) .. "'"); return false end
+    if v ~= nil then w.leash = v end
+    KCD2MP_Wo114Report("mp_leash")
+    KCD2MP_Wo114CfgEmit()
+    return true
+end
+
+-- A whole number of metres 50..20000, or nil for a bare call; "bad" otherwise.
+function KCD2MP_Wo114ParseM(arg)
+    local s = tostring(arg or ""):gsub("^%s+", ""):gsub("%s+$", "")
+    if s == "" or s == "%line" or s == "nil" then return nil end
+    local n = tonumber(s)
+    if not n or n ~= math.floor(n) or n < 50 or n > 20000 then return "bad" end
+    return n
+end
+
+-- mp_leash_warn_m <metres> (default 600; must stay below mp_leash_pull_m).
+function KCD2MP_SetLeashWarn(arg)
+    local w = KCD2MP.w114
+    local n = KCD2MP_Wo114ParseM(arg)
+    if n == "bad" then mp_log("mp_leash_warn_m: expected whole metres 50..20000, got '" .. tostring(arg) .. "'"); return false end
+    if n ~= nil then
+        if n >= w.pullM then mp_log(string.format("mp_leash_warn_m: %d is not below mp_leash_pull_m (%d) -- unchanged", n, w.pullM)); return false end
+        w.warnM = n
+    end
+    KCD2MP_Wo114Report("mp_leash_warn_m")
+    KCD2MP_Wo114CfgEmit()
+    return true
+end
+
+-- mp_leash_pull_m <metres> (default 650; must stay above mp_leash_warn_m).
+function KCD2MP_SetLeashPull(arg)
+    local w = KCD2MP.w114
+    local n = KCD2MP_Wo114ParseM(arg)
+    if n == "bad" then mp_log("mp_leash_pull_m: expected whole metres 50..20000, got '" .. tostring(arg) .. "'"); return false end
+    if n ~= nil then
+        if n <= w.warnM then mp_log(string.format("mp_leash_pull_m: %d is not above mp_leash_warn_m (%d) -- unchanged", n, w.warnM)); return false end
+        w.pullM = n
+    end
+    KCD2MP_Wo114Report("mp_leash_pull_m")
+    KCD2MP_Wo114CfgEmit()
+    return true
+end
+
+-- A plain line for the player (the warning, the host's note, "brought back").
+function KCD2MP_Wo114Msg(text)
+    local w = KCD2MP.w114
+    w.msgs = w.msgs + 1
+    mp_log("WO114-MSG " .. tostring(text))
+    pcall(KCD2MP_ShowInteractionMsg, tostring(text))
+end
+
+-- The countdown row: n seconds left (0 clears). The host sends one a second;
+-- the row goes by itself 2.5 s after the last one (a hold, a lost message).
+function KCD2MP_Wo114Countdown(n)
+    local w = KCD2MP.w114
+    n = tonumber(n) or 0
+    if n > 0 then mp_log(string.format("WO114-COUNTDOWN %d", n))
+    elseif w.cdN > 0 then mp_log("WO114-COUNTDOWN cleared") end
+    w.cdN, w.cdAt = n, os.clock()
+end
+
+function KCD2MP_Wo114DrawUI()
+    local w = KCD2MP.w114
+    if w.cdN > 0 and (os.clock() - w.cdAt) < 2.5 then
+        mp_draw_row("leash_countdown", 700, 200, "Bringing you back to your host in " .. w.cdN .. "...", 2.2,
+            "Bringing you back to your host in N...")
+    end
+end
+
+-- In a dialogue? On a horse? (the local player)
+function KCD2MP_Wo114BusyRead()
+    local d, m = 0, 0
+    pcall(function() if player and player.human and player.human:IsInDialog() then d = 1 end end)
+    pcall(function() if player and player.human and player.human:IsMounted() then m = 1 end end)
+    if m == 0 and KCD2MP.isRiding then m = 1 end
+    return d, m
+end
+
+-- Asked by the agent once a second (both roles).
+function KCD2MP_Wo114Busy()
+    local d, m = KCD2MP_Wo114BusyRead()
+    KCD2MP_EmitEvent("wo114_busy", string.format("d=%d m=%d", d, m))
+end
+
+-- Asked right before a pull (token reply).
+function KCD2MP_Wo114BusyNow(tok)
+    local d, m = KCD2MP_Wo114BusyRead()
+    KCD2MP_EmitEvent("wo124_reply", tostring(tok) .. string.format(" d=%d m=%d", d, m))
+end
+
+-- WO-124 6a for the local player: dismount before the pull's teleport and read
+-- it back. The dismount is asked once per 3 s (the animation takes a moment);
+-- the calls in between only read.
+function KCD2MP_Wo114Dismount(tok)
+    local w = KCD2MP.w114
+    local was, how = "?", "none"
+    pcall(function() was = player.human:IsMounted() and "yes" or "no" end)
+    if was ~= "no" and (os.clock() - w.dismountAt) > 3.0 then
+        w.dismountAt = os.clock()
+        local ok, err = pcall(function() player.human:ForceDismount() end)
+        how = ok and "ok" or ("err:" .. tostring(err))
+    end
+    local now = "?"
+    pcall(function() now = player.human:IsMounted() and "yes" or "no" end)
+    mp_log(string.format("WO114-DISMOUNT was=%s force=%s mounted=%s", was, how, now))
+    KCD2MP_EmitEvent("wo124_reply", tostring(tok) .. " was=" .. was .. " force=" .. how .. " mounted=" .. now)
+end
+
+-- Only the host fast-travels: the joiner's fast travel off while it is in the
+-- host's world (the engine's own switch, wh_pl_FastTravelEnabled 0), the
+-- previous value given back when it leaves. The agent re-asserts every 5 s.
+function KCD2MP_Wo114FastTravelBlock(on, why)
+    local w = KCD2MP.w114
+    local cur = nil
+    pcall(function() cur = tonumber(System.GetCVar("wh_pl_FastTravelEnabled")) end)
+    w.ftCvarOk = cur ~= nil
+    if cur == nil then
+        if on and not w.ftBlocked then mp_log("WO114-FASTTRAVEL cvar wh_pl_FastTravelEnabled unreadable -- fast travel NOT blocked") end
+        w.ftBlocked = on == true
+        return false
+    end
+    if on then
+        if not w.ftBlocked then w.ftPrev = cur; w.ftBlocked = true end
+        if cur ~= 0 then
+            pcall(function() System.SetCVar("wh_pl_FastTravelEnabled", 0) end)
+            local back = nil
+            pcall(function() back = tonumber(System.GetCVar("wh_pl_FastTravelEnabled")) end)
+            mp_log(string.format("WO114-FASTTRAVEL off (%s): wh_pl_FastTravelEnabled %s -> %s (was %s before co-op)",
+                tostring(why), tostring(cur), tostring(back), tostring(w.ftPrev)))
+        end
+        return true
+    end
+    if w.ftBlocked then
+        w.ftBlocked = false
+        local give = (w.ftPrev ~= nil and w.ftPrev ~= 0) and w.ftPrev or 1
+        pcall(function() System.SetCVar("wh_pl_FastTravelEnabled", give) end)
+        local back = nil
+        pcall(function() back = tonumber(System.GetCVar("wh_pl_FastTravelEnabled")) end)
+        mp_log(string.format("WO114-FASTTRAVEL given back (%s): wh_pl_FastTravelEnabled -> %s", tostring(why), tostring(back)))
+    end
+    return true
+end
+
+-- The joiner tried to fast travel while it is blocked: say why, once per 5 s.
+function KCD2MP_Wo114FastTravelTried(how)
+    local w = KCD2MP.w114
+    if not w.ftBlocked then return false end
+    if (os.clock() - w.ftToldAt) < 5 then return true end
+    w.ftToldAt = os.clock()
+    KCD2MP_Wo114Msg("Only the host can fast travel in co-op.")
+    KCD2MP_EmitEvent("wo114_ft_try", tostring(how or "map"))
+    return true
 end
 
 -- The agent's answer to mp_henry_files: one line per world, "|"-separated.
@@ -13560,6 +13747,12 @@ local ok, err = pcall(function()
     mp_log("WO125-BUILD snapshot=QuickSave keep=100 stale_days=90 -- dormant unless the host runs a shared world")
     -- WO-127: the leash recorder (off unless turned on; the tester page says: host, for the session).
     System.AddCCommand("mp_leash_trace",         'KCD2MP_SetLeashTrace(%line)',           "WO-127: record, once a second, every NPC within 200 m of either player and every simulation signal the game exposes cheaply, to a CSV beside agent.log (for WO-128): mp_leash_trace on|off; bare = report")
+    -- WO-114: the leash (HOST values decide; default on, 600 m warning, 650 m pull).
+    System.AddCCommand("mp_leash",               'KCD2MP_SetLeash(%line)',                "WO-114: keep the joiner near the host (HOST only -- the host's value is the session's): a warning past mp_leash_warn_m, a 10 s countdown past mp_leash_pull_m, then the joiner is brought beside the host: mp_leash on|off (default on); bare = report")
+    System.AddCCommand("mp_leash_warn_m",        'KCD2MP_SetLeashWarn(%line)',            "WO-114: the leash warning distance in metres (HOST; default 600; below mp_leash_pull_m): mp_leash_warn_m <metres>; bare = report")
+    System.AddCCommand("mp_leash_pull_m",        'KCD2MP_SetLeashPull(%line)',            "WO-114: the leash pull distance in metres (HOST; default 650; above mp_leash_warn_m): mp_leash_pull_m <metres>; bare = report")
+    mp_log("WO114-BUILD leash=on warn_m=600 pull_m=650 countdown_s=10 rearm_m=550 place_m=3 fast_travel=host-only wake=within-leash")
+    KCD2MP_Wo114CfgEmit()
     System.AddCCommand("mp_npc_native_write",    'KCD2MP_SetNpcNativeWrite(%line)',           "WO-118: KCDMP.dll writes every bound NPC puppet every frame at its frame hook (default on); off = the 50 ms Lua path: mp_npc_native_write on|off; bare = report")
     System.AddCCommand("mp_npc_detach",          'KCD2MP_SetNpcDetach(%line)',                "WO-118: at puppet start, right after the pause, free the NPC from its seat/activity (wh_ai_NPCStateResetElement Stance + Unstance; default on): mp_npc_detach on|off")
     System.AddCCommand("mp_npc_trace",           'KCD2MP_NpcTrace(%line)',                    "WO-118: per-frame position of one named entity at the DLL's frame hook and at render, to a CSV in the game folder: mp_npc_trace <name> [seconds] | mp_npc_trace stop")

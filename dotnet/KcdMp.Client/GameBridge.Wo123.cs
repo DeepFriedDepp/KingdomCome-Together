@@ -248,6 +248,12 @@ public partial class GameBridge
             case Protocol.JoinStatusDown:
                 OnJoinStatusIn(src, joinId, body);
                 return;
+            case Protocol.LeashDown:        // WO-114
+                Wo114OnLeashIn(src, body);
+                return;
+            case Protocol.LeashStateDown:   // WO-114
+                Wo114OnLeashStateIn(src, body);
+                return;
             case Protocol.WorldOfferDown:
                 await OnWorldOfferInAsync(src, joinId, body, ct);
                 return;

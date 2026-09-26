@@ -14,15 +14,23 @@ bool  g_fallHeld = false;
 DWORD g_fallUntil = 0;
 } // namespace
 
+bool find_beside(float hx, float hy, float hz, float dist, float out[3], int* tried) {
+    int n = 0;
+    bool found = false;
+    for (int k = 0; k < 8 && !found; ++k) {
+        const float a = 0.785398f * static_cast<float>(k);
+        const float in[3] = {hx + dist * std::cos(a), hy + dist * std::sin(a), hz};
+        ++n;
+        if (hangover::snap_to_ground(in, out) && std::fabs(out[2] - hz) < 3.0f) found = true;
+    }
+    if (tried) *tried = n;
+    return found;
+}
+
 PlaceReport place(float hx, float hy, float hz, float dist) {
     PlaceReport r{};
     float g[3]{};
-    for (int k = 0; k < 8 && !r.snapped; ++k) {
-        const float a = 0.785398f * static_cast<float>(k);
-        const float in[3] = {hx + dist * std::cos(a), hy + dist * std::sin(a), hz};
-        ++r.tried;
-        if (hangover::snap_to_ground(in, g) && std::fabs(g[2] - hz) < 3.0f) r.snapped = true;
-    }
+    r.snapped = find_beside(hx, hy, hz, dist, g, &r.tried);
     actions::player_position(r.before);
     if (!r.snapped) {
         logf("MP-JOINPLACE host=(%.2f, %.2f, %.2f) dist=%.1f: no ground in %d directions -- NOT placed (the joiner keeps the spliced spot)",

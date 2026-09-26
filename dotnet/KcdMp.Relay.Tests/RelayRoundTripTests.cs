@@ -832,7 +832,46 @@ public class RelayRoundTripTests : IClassFixture<RelayFixture>
         await using var _p = p;
         Assert.Equal(Protocol.VersionMismatch, type);
         Assert.Equal(Protocol.Version, payload[0]);
-        Assert.Equal(9, Protocol.Version);
+        Assert.Equal(10, Protocol.Version);   // WO-114 bumped 9 -> 10
+    }
+
+    // ---- WO-114: the leash 0x58..0x5B, protocol v10 -------------------------
+
+    [Fact]
+    public async Task A_v9_agent_is_refused_by_the_v10_relay()
+    {
+        var (p, type, payload) = await Peer.ConnectRawAsync(_relay.TcpPort, "v9build", ReleaseVersionInfo.Current, 9);
+        await using var _p = p;
+        Assert.Equal(Protocol.VersionMismatch, type);
+        Assert.Equal(10, payload[0]);
+    }
+
+    [Fact]
+    public async Task Leash_messages_cross_the_relay_each_way_and_only_from_the_right_side()
+    {
+        // alpha connects first -> damage authority (the host); bravo is the joiner.
+        var (a, b) = await TwoPeersAsync();
+        await using var _a = a; await using var _b = b;
+
+        var pull = new LeashCommand(Protocol.LeashKindPull, 7, Protocol.LeashReasonDistance, 2452.5f, 2092.25f, 118.4f, 661);
+        await a.SendRawAsync(pull.Build(b.Id));
+        var down = await b.ReadUntilAsync(Protocol.LeashDown, Wait);
+        Assert.Equal(a.Id, down[0]);   // [source][target][joinId:4][body]
+        Assert.True(LeashCommand.TryDecode(down.AsSpan(1 + Protocol.JoinHeaderLen), out var got));
+        Assert.Equal(pull, got);
+
+        var st = new LeashState(Protocol.LeashFlagInWorld | Protocol.LeashFlagDialogue, 7, Protocol.LeashResultPlaced, 661, 3, 12);
+        await b.SendRawAsync(st.Build());
+        var sd = await a.ReadUntilAsync(Protocol.LeashStateDown, Wait);
+        Assert.Equal(b.Id, sd[0]);
+        Assert.True(LeashState.TryDecode(sd.AsSpan(1 + Protocol.JoinHeaderLen), out var sgot));
+        Assert.Equal(st, sgot);
+
+        // a joiner cannot send the host's leash message; the host does not report a leash state to itself
+        await b.SendRawAsync(pull.Build(a.Id));
+        await a.SendRawAsync(st.Build());
+        Assert.True(await a.NoneOfAsync(Protocol.LeashDown, Quiet));
+        Assert.True(await b.NoneOfAsync(Protocol.LeashStateDown, Quiet));
     }
 
     [Fact]

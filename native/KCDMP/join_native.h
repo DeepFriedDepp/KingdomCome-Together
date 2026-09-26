@@ -27,6 +27,11 @@ struct PlaceReport {
 
 PlaceReport place(float hostX, float hostY, float hostZ, float dist);
 
+// WO-114: the ground search place() uses, alone -- eight directions around
+// (hx,hy), `dist` metres out, navmesh-snapped within 3 m of hz. False when no
+// direction has ground. Main thread only.
+bool find_beside(float hx, float hy, float hz, float dist, float out[3], int* tried);
+
 // Per-frame: gives the fall damage back 3 s after a place().
 void tick();
 

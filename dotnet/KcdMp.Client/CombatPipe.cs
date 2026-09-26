@@ -72,6 +72,8 @@ public sealed class CombatPipe : IAsyncDisposable
     // WO-127: the leash recorder (native/KCDMP/leash.h)
     private const byte LeashSample       = 0x1F;   // [radius:4f][n][anchors n*12][offset:2] -> 0x8F
     private const byte LeashReply        = 0x8F;
+    // WO-114 Phase 2: the other player's position for the death wake choice (respawn.h set_partner)
+    private const byte SetPartner        = 0x20;   // [valid][x:4f][y:4f][z:4f][radius:4f] -> 0x81
 
     private const int GuidLen = 16;
 
@@ -484,6 +486,22 @@ public sealed class CombatPipe : IAsyncDisposable
         if (body is null || body.Length < 44) return null;
         float[] V(int o) => [BinaryPrimitives.ReadSingleLittleEndian(body.AsSpan(o)), BinaryPrimitives.ReadSingleLittleEndian(body.AsSpan(o + 4)), BinaryPrimitives.ReadSingleLittleEndian(body.AsSpan(o + 8))];
         return new JoinPlaceReport(body[0] == 1, body[2] == 1, body[3] == 1, V(4), V(16), V(28), BinaryPrimitives.ReadSingleLittleEndian(body.AsSpan(40)));
+    }
+
+    /// <summary>
+    /// WO-114 Phase 2: where the other player is and the leash's warning
+    /// distance; a death then wakes within it (native wake_pick.h). valid=false
+    /// = no partner (today's rule). The DLL forgets it after 10 s without one.
+    /// </summary>
+    public Task<PipeResult> SetPartnerAsync(bool valid, float x, float y, float z, float radius, CancellationToken ct = default)
+    {
+        var payload = new byte[17];
+        payload[0] = B(valid);
+        BinaryPrimitives.WriteSingleLittleEndian(payload.AsSpan(1), x);
+        BinaryPrimitives.WriteSingleLittleEndian(payload.AsSpan(5), y);
+        BinaryPrimitives.WriteSingleLittleEndian(payload.AsSpan(9), z);
+        BinaryPrimitives.WriteSingleLittleEndian(payload.AsSpan(13), radius);
+        return SendForResultAsync(SetPartner, payload, ct);
     }
 
     /// <summary>(session, enabled, applied) of the WO-113 death guard, or null.</summary>

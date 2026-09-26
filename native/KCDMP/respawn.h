@@ -59,4 +59,11 @@ bool guard_applied();
 // player is bleeding, poisoned or starving.
 void note_pvp_hit(bool unarmed, uint8_t attackerGhost);
 
+// WO-114 Phase 2: the other player's position and the leash's warning distance
+// (the agent, about once a second; pipe 0x20). A death then wakes at the spot
+// nearest that player within `radius`, at least 100 m from the death and not
+// the last spot again (wake_pick.h); none: beside that player. valid=false, or
+// no update for 10 s, or the pipe closing: today's rule. Any thread (locked).
+void set_partner(bool valid, float x, float y, float z, float radius);
+
 } // namespace kcdmp::respawn

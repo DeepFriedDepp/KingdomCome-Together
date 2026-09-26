@@ -773,6 +773,23 @@ void serve(HANDLE h) {
                 break;
             }
 
+            // WO-114 Phase 2: the partner for the wake choice. Locked setter.
+            case kSetPartner: {
+                if (len != kSetPartnerLen) {
+                    logf("PIPE: SetPartner wrong length %u", len);
+                    send_result(h, false, seq);
+                    break;
+                }
+                float x = 0, y = 0, z = 0, r = 0;
+                std::memcpy(&x, body + 1, 4);
+                std::memcpy(&y, body + 5, 4);
+                std::memcpy(&z, body + 9, 4);
+                std::memcpy(&r, body + 13, 4);
+                respawn::set_partner(body[0] != 0, x, y, z, r);
+                send_result(h, true, seq);
+                break;
+            }
+
             case kMirrorGrave: {
                 if (len != kMirrorGraveLen) {
                     logf("PIPE: MirrorGrave wrong length %u", len);
@@ -1098,6 +1115,8 @@ void serve(HANDLE h) {
     npcdrive::on_pipe_closed();
     // WO-113: no agent, no session -- the death guard stands down (vanilla).
     respawn::set_session(false, "pipe closed");
+    // WO-114: no agent, no partner -- a death wakes by today's rule.
+    respawn::set_partner(false, 0, 0, 0, 0);
 }
 
 void listen_loop() {

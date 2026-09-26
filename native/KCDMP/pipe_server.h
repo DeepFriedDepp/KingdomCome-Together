@@ -272,6 +272,11 @@ constexpr uint8_t kJoinGuardReply     = 0x8E;
 constexpr uint8_t kLeashSample        = 0x1F;
 constexpr uint8_t kLeashReply         = 0x8F;
 constexpr size_t  kLeashPageBudget    = 7000;
+// WO-114 Phase 2: the other player's position for the death wake choice
+// (respawn::set_partner; wake_pick.h). [valid:1][x:4f][y:4f][z:4f][radius:4f] -> 0x81.
+// Atomic setter (locked), no main-thread hop; the pipe closing clears it.
+constexpr uint8_t kSetPartner         = 0x20;
+constexpr int     kSetPartnerLen      = 17;
 constexpr uint8_t kSaveListReply      = 0x8D;   // [ok][seq][listed][idx:2][count:2][current][contPl][contIdx:2][nameLen][contName]
 constexpr uint8_t kLocalAction        = 0x96;   // unsolicited: [kind][phase][ic][zone][type][flags][guid:16][eid:4][nameLen][name]
 constexpr uint8_t kPvpHitOut          = 0x97;   // unsolicited: [victimEid:4][st:4f][hp:4f][flags][material]

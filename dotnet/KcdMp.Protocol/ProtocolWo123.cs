@@ -75,6 +75,9 @@ public static partial class Protocol
         (JoinAbortUp,   JoinAbortDown,   "join-abort",   JoinHeaderLen + 1, JoinHeaderLen + 1, JoinFrom.Either),
         (JoinerReadyUp, JoinerReadyDown, "joiner-ready", JoinHeaderLen + 4, JoinHeaderLen + 4, JoinFrom.Joiner),
         (JoinStatusUp,  JoinStatusDown,  "join-status",  JoinHeaderLen + 4, JoinHeaderLen + 4, JoinFrom.Host),
+        // WO-114: the leash (ProtocolWo114.cs), protocol v10
+        (LeashUp,       LeashDown,       "leash",        JoinHeaderLen + LeashBodyLen, JoinHeaderLen + LeashBodyLen, JoinFrom.Host),
+        (LeashStateUp,  LeashStateDown,  "leash-state",  JoinHeaderLen + LeashStateBodyLen, JoinHeaderLen + LeashStateBodyLen, JoinFrom.Joiner),
     };
 
     /// <summary>The JoinWire row for an up type, or null.</summary>

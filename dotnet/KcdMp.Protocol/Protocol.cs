@@ -783,8 +783,13 @@ public static partial class Protocol
     /// ProtocolWo123.cs, 0x48-0x57). WO-122's WorldSaved (0x46/0x47), added
     /// without a bump, rides along with this one. A v8 relay would drop every
     /// join frame and count it; v8 and v9 now refuse each other at Handshake.
+    ///
+    /// Bumped to 10 in WO-114 (the leash, ProtocolWo114.cs): Leash 0x58/0x59
+    /// and LeashState 0x5A/0x5B ride the join channel as two new JoinWire
+    /// rows. A v9 relay would drop both as unknown types; v9 and v10 refuse
+    /// each other at Handshake.
     /// </summary>
-    public const byte Version = 9;
+    public const byte Version = 10;
 
     // C→S
     public const byte Handshake      = 0x00;

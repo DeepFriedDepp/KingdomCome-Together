@@ -4,6 +4,7 @@
 #include "buffs.h"
 #include "gameover_hook.h"
 #include "hangover.h"
+#include "join_native.h"
 #include "main_thread.h"
 #include "punishment.h"
 #include "rttr_abi.h"
@@ -15,6 +16,9 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <mutex>
+
+#include "wake_pick.h"
 
 namespace kcdmp::respawn {
 
@@ -178,6 +182,22 @@ bool outside_settlement(const hangover::Spot& s, void*) {
     if (!actions::in_settlement(p, &inside)) return false;
     return !inside;
 }
+// WO-114 Phase 2: the other player (the agent sends it about once a second).
+struct Partner { bool valid = false; float x = 0, y = 0, z = 0, radius = 0; DWORD at = 0; };
+std::mutex g_partnerLock;
+Partner    g_partner;
+constexpr DWORD kPartnerStaleMs = 10000;
+constexpr float kBesidePartnerM = 3.0f;       // the WO-124 placement distance
+uint64_t   g_lastWakeId = 0;                  // the spot this player woke at last (rule 3)
+
+bool partner_get(float out[3], float* radius) {
+    std::lock_guard<std::mutex> lk(g_partnerLock);
+    if (!g_partner.valid || GetTickCount() - g_partner.at > kPartnerStaleMs) return false;
+    out[0] = g_partner.x; out[1] = g_partner.y; out[2] = g_partner.z;
+    *radius = g_partner.radius;
+    return true;
+}
+
 DWORD g_immuneUntil = 0;
 DWORD g_lastDoneAt = 0;       // when the last sequence finished (the grace window)
 DWORD g_seqStartedAt = 0;
@@ -582,12 +602,58 @@ void step_act() {
                 rule = "nearest beyond the execution-distance fallback";
             }
         }
-        if (!spot && k == Kind::Death) {
+        // WO-114 Phase 2: with the other player in the world, the wake stays
+        // inside the leash (wake_pick.h has the rules); none there -> beside them.
+        bool beside = false;
+        float partner[3]{}, radius = 0;
+        if (!spot && k == Kind::Death && partner_get(partner, &radius)) {
+            const hangover::Spot* list = nullptr;
+            const int n = hangover::spots(&list);
+            static wake::Cand cands[hangover::kMaxSpots];
+            const int m = n < hangover::kMaxSpots ? n : hangover::kMaxSpots;
+            for (int i = 0; i < m; ++i) {
+                cands[i].x = list[i].nx; cands[i].y = list[i].ny; cands[i].z = list[i].nz;
+                cands[i].id = list[i].wuid; cands[i].usable = list[i].onNavmesh;
+            }
+            const wake::Pick pk = wake::pick(cands, m, d, partner, radius, kDeathMinDist, g_lastWakeId);
+            logf("MP-RESPAWN-LEASH partner at (%.1f, %.1f, %.1f) radius=%.0f: spots=%d far_enough=%d in_leash=%d last=0x%016llX -> %s",
+                 partner[0], partner[1], partner[2], radius, m, pk.farEnough, pk.inLeash,
+                 static_cast<unsigned long long>(g_lastWakeId), wake::rule_name(pk.rule));
+            if (pk.index >= 0) {
+                spot = &list[pk.index];
+                rule = wake::rule_name(pk.rule);
+                logf("MP-RESPAWN-LEASH picked \"%s\" %.0f m from the partner, %.0f m from the death", spot->name, pk.toPartner, pk.fromDeath);
+            } else if (pk.rule == wake::Rule::BesidePartner) {
+                beside = true;
+            }
+        }
+        if (beside) {
+            float g[3]{};
+            int tried = 0;
+            if (joinnative::find_beside(partner[0], partner[1], partner[2], kBesidePartnerM, g, &tried)) {
+                g_x.wakePos[0] = g[0]; g_x.wakePos[1] = g[1]; g_x.wakePos[2] = g[2];
+                g_x.haveWake = true;
+                const bool fall = actions::suppress_fall_damage(true);
+                g_fallHeldUntil = 0;
+                const bool tp = actions::teleport_player(g[0], g[1], g[2]);
+                const float dx = g[0] - d[0], dy = g[1] - d[1];
+                logf("MP-RESPAWN wake beside the partner at (%.1f, %.1f, %.1f) %.0f m from the death (tried %d directions, fall damage %s) -- teleport %s",
+                     g[0], g[1], g[2], std::sqrt(dx * dx + dy * dy), tried, fall ? "held off" : "switch UNAVAILABLE",
+                     tp ? "ran" : "FAILED (the settle check retries)");
+            } else {
+                logf("MP-RESPAWN-LEASH no ground beside the partner in %d directions -- today's rule instead", tried);
+                beside = false;
+            }
+        }
+        if (!spot && !beside && k == Kind::Death) {
             spot = hangover::nearest(d[0], d[1], d[2], kDeathMinDist, d[0], d[1]);
             if (spot) rule = "nearest at least 100 m from the death";
         }
-        if (!spot) spot = hangover::nearest(d[0], d[1], d[2]);
-        if (spot) {
+        if (!spot && !beside) spot = hangover::nearest(d[0], d[1], d[2]);
+        if (beside) {
+            // placed above; the settle phase checks it like a spot teleport
+        } else if (spot) {
+            g_lastWakeId = spot->wuid;
             g_x.wakePos[0] = spot->nx; g_x.wakePos[1] = spot->ny; g_x.wakePos[2] = spot->nz;
             g_x.haveWake = true;
             const float dx = spot->nx - d[0], dy = spot->ny - d[1];
@@ -956,6 +1022,16 @@ void note_pvp_hit(bool unarmed, uint8_t attackerGhost) {
     g_pvpAt = now_s();
     g_pvpUnarmed = unarmed;
     g_pvpFrom = attackerGhost;
+}
+
+void set_partner(bool valid, float x, float y, float z, float radius) {
+    std::lock_guard<std::mutex> lk(g_partnerLock);
+    const bool was = g_partner.valid;
+    g_partner.valid = valid && std::isfinite(x) && std::isfinite(y) && std::isfinite(z) && radius > 0.f;
+    if (g_partner.valid) { g_partner.x = x; g_partner.y = y; g_partner.z = z; g_partner.radius = radius; g_partner.at = GetTickCount(); }
+    if (was != g_partner.valid)
+        logf("MP-RESPAWN-LEASH partner %s%s", g_partner.valid ? "known" : "gone",
+             g_partner.valid ? " -- a death wakes within the leash of the other player" : " -- a death wakes by today's rule");
 }
 
 } // namespace kcdmp::respawn
