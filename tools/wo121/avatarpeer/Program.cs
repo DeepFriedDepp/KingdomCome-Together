@@ -34,6 +34,12 @@
 //   at <t> timeskip start|done|sync <kind> <worldTime>  (WO-133) a TimeSkipUp (0x28) as a joiner's sleep/wait/
 //                                              clock jump would send it (kind 0 sleep, 1 wait, 2 fast travel)
 //   at <t> story objective|fingerprint|approach <text>  (WO-133) a StoryBeatUp (0x37) of that kind
+//   at <t> itemdrop <classGuid> <amount> <health> <x> <y> <z> [dropId]  (WO-134) an ItemDropUp (0x32): "I dropped this"
+//   at <t> itemclaim <dropId>                  (WO-134) an ItemClaimUp (0x34): "I picked that drop up"
+//                                              every ItemDropDown (0x33) / ItemClaimDown (0x35) received is printed
+//   at <t> loot open <body> | take|put <body> <cls> <amt> <hp> | item <cls> <x> <y> <z> [fromBody]
+//                                              (WO-134) a LootAsk (0x5C) to the host, as a joiner's agent sends it (tok = a counter);
+//                                              every LootHostDown (0x5F) received is printed
 //   end <t>                                    stop
 //
 // Position packets: every 30 ms while moving, 2 s heartbeat still; the state
@@ -129,6 +135,13 @@ static class P
                         Console.WriteLine($"PEER got action kind={ia.Kind} phase={ia.Phase} from={ia.SourceGhostId} len={ia.Payload.Length}");
                     else if (t2 == Protocol.TimeSkipDown && b2.Length == Protocol.TimeSkipDownPayloadLen)   // WO-133: the host's skips reach this peer
                         Console.WriteLine(FormattableString.Invariant($"PEER t={recClock.Elapsed.TotalSeconds:F1} got TimeSkip from={b2[0]} phase={b2[1]} kind={b2[2]} t={BinaryPrimitives.ReadUInt32LittleEndian(b2.AsSpan(3))}"));
+                    else if (t2 == Protocol.ItemDropDown && b2.Length == Protocol.ItemDropDownPayloadLen)   // WO-134: a drop reaches this peer
+                        Console.WriteLine(FormattableString.Invariant($"PEER t={recClock.Elapsed.TotalSeconds:F1} got ItemDrop from={b2[0]} drop={BinaryPrimitives.ReadUInt32LittleEndian(b2.AsSpan(1))} class={new Guid(b2.AsSpan(5, 16))} x{BinaryPrimitives.ReadUInt16LittleEndian(b2.AsSpan(21))} hp={BinaryPrimitives.ReadSingleLittleEndian(b2.AsSpan(23)):F2} at=({BinaryPrimitives.ReadSingleLittleEndian(b2.AsSpan(27)):F2}, {BinaryPrimitives.ReadSingleLittleEndian(b2.AsSpan(31)):F2}, {BinaryPrimitives.ReadSingleLittleEndian(b2.AsSpan(35)):F2})"));
+                    else if (t2 == Protocol.ItemClaimDown && b2.Length == Protocol.ItemClaimDownPayloadLen)   // WO-134: a claim echo
+                        Console.WriteLine($"PEER t={recClock.Elapsed.TotalSeconds:F1} got ItemClaim claimer={b2[0]}{(b2[0] == myId ? " (me)" : "")} drop={BinaryPrimitives.ReadUInt32LittleEndian(b2.AsSpan(1))}");
+                    else if (t2 == Protocol.LootHostDown && b2.Length > 1 + Protocol.JoinHeaderLen
+                             && LootMsg.TryDecode(b2.AsSpan(1 + Protocol.JoinHeaderLen), out var lm))   // WO-134
+                        Console.WriteLine($"PEER t={recClock.Elapsed.TotalSeconds:F1} got LootHost {Protocol.LootHostName(lm.Kind)} tok={lm.Tok} from={b2[0]}: {lm.Text}");
                     else if (t2 == Protocol.LeashDown && b2.Length > 1 + Protocol.JoinHeaderLen
                              && LeashCommand.TryDecode(b2.AsSpan(1 + Protocol.JoinHeaderLen), out var lc))
                         leashIn.Enqueue((b2[0], lc));   // WO-114: handled on the main loop
@@ -138,6 +151,7 @@ static class P
         });
 
         var outbox = new ActionOutbox();
+        uint lootTok = 0;   // WO-134
         var sw = Stopwatch.StartNew();
         float x = 0, y = 0, z = 0, yaw = 0, speed = 0, head = 0, moveDir = 0, zRate = 0; double moveUntil = -1;
         double jumpT0 = -1, jumpDur = 0.8; float jumpH = 0.5f, zBase = 0;
@@ -341,6 +355,40 @@ static class P
                         BinaryPrimitives.WriteUInt16LittleEndian(sp.AsSpan(1), (ushort)body.Length); body.CopyTo(sp, 3);
                         await Send(st, sp);
                         Console.WriteLine($"PEER t={t:F1} story sent {f[1]} ({body.Length} bytes)");
+                        break;
+                    }
+                    case "itemdrop":   // WO-134: itemdrop <cls> <amt> <hp> <x> <y> <z> [dropId]
+                    {
+                        uint did = f.Length > 7 ? uint.Parse(f[7], CultureInfo.InvariantCulture) : (uint)Random.Shared.Next(1, int.MaxValue);
+                        var dp = new byte[3 + Protocol.ItemDropUpPayloadLen]; dp[0] = Protocol.ItemDropUp;
+                        BinaryPrimitives.WriteUInt16LittleEndian(dp.AsSpan(1), (ushort)Protocol.ItemDropUpPayloadLen);
+                        BinaryPrimitives.WriteUInt32LittleEndian(dp.AsSpan(3), did);
+                        Guid.Parse(f[1]).TryWriteBytes(dp.AsSpan(7, 16));
+                        BinaryPrimitives.WriteUInt16LittleEndian(dp.AsSpan(23), ushort.Parse(f[2], CultureInfo.InvariantCulture));
+                        BinaryPrimitives.WriteSingleLittleEndian(dp.AsSpan(25), F(f[3]));
+                        BinaryPrimitives.WriteSingleLittleEndian(dp.AsSpan(29), F(f[4]));
+                        BinaryPrimitives.WriteSingleLittleEndian(dp.AsSpan(33), F(f[5]));
+                        BinaryPrimitives.WriteSingleLittleEndian(dp.AsSpan(37), F(f[6]));
+                        await Send(st, dp);
+                        Console.WriteLine($"PEER t={t:F1} itemdrop sent drop={did} class={f[1]} x{f[2]}");
+                        break;
+                    }
+                    case "itemclaim":   // WO-134: itemclaim <dropId>
+                    {
+                        var cp = new byte[3 + Protocol.ItemClaimUpPayloadLen]; cp[0] = Protocol.ItemClaimUp;
+                        BinaryPrimitives.WriteUInt16LittleEndian(cp.AsSpan(1), (ushort)Protocol.ItemClaimUpPayloadLen);
+                        BinaryPrimitives.WriteUInt32LittleEndian(cp.AsSpan(3), uint.Parse(f[1], CultureInfo.InvariantCulture));
+                        await Send(st, cp);
+                        Console.WriteLine($"PEER t={t:F1} itemclaim sent drop={f[1]}");
+                        break;
+                    }
+                    case "loot":   // WO-134
+                    {
+                        lootTok++;
+                        byte k = f[1] switch { "open" => Protocol.LootAskBodyOpen, "take" => Protocol.LootAskBodyTake, "put" => Protocol.LootAskBodyPut, _ => Protocol.LootAskItemTake };
+                        string text = f[1] == "item" && f.Length == 6 ? string.Join(' ', f.Skip(2)) + " 0" : string.Join(' ', f.Skip(2));
+                        await Send(st, new LootMsg(k, lootTok, text).BuildUp(Protocol.LootAskUp, Protocol.JoinTargetHost));
+                        Console.WriteLine($"PEER t={t:F1} loot {Protocol.LootAskName(k)} tok={lootTok}: {text}");
                         break;
                     }
                     case "leash":   // WO-114

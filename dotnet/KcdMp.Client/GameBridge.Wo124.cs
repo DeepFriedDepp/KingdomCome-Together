@@ -668,6 +668,7 @@ public partial class GameBridge
         // 5. Ready
         uint readySeq = _joinReceivedSeq;
         await SendJoinerReadyAsync("wo124");
+        if (j.WorldTag is string wt0) Wo134AfterReady(wt0);   // WO-134: the joiner's chest ledger (restored with the Henry), then the host's
         if (j.WorldTag is string wt && j.SplicedParts is { } sp) Wo125AfterReady(wt, j.Mode, sp, j.OfferMd5, readySeq);   // WO-125: the join save's matched pair
         j.Phase = "in";
         SetJoinUi("in", "In your host's world.");

@@ -6041,11 +6041,14 @@ end
 -- player looks at a body, so wrapping the two functions covers every body and
 -- every living NPC. Only while the guard is active; everything else (the
 -- host, solo, separate worlds, graves, animals, horses) calls straight through.
-function KCD2MP_W131LootAllowed(body, kind)
+function KCD2MP_W131LootAllowed(body, kind, orig, user, slot)
     local w = KCD2MP.w131
     if not (w.lootBlock and KCD2MP_W131IsActive()) then return true end
     local ok, name = KCD2MP_W131Guardable(body)
     if not ok then return true end
+    -- WO-134: a body's loot is a request to the host (its list, then the loot screen);
+    -- pickpocketing a living NPC stays blocked.
+    if kind == "loot" and orig and KCD2MP_W134LootRequest and KCD2MP_W134LootRequest(body, orig, user, slot) then return false end
     w.stats.lootBlocked = w.stats.lootBlocked + 1
     mp_log(string.format("WO131-LOOT blocked npc=%s kind=%s -- host-owned; only the host loots for now", tostring(name), kind))
     KCD2MP_ShowNativeToast(kind == "pickpocket" and "Only the host can pickpocket in co-op for now."
@@ -6060,7 +6063,7 @@ function KCD2MP_W131InstallLootBlock()
         local orig = BasicAIActions.OnLoot
         w.lootOrig = orig
         w.lootWrap = function(self, user, slot)
-            if not KCD2MP_W131LootAllowed(self, "loot") then return end
+            if not KCD2MP_W131LootAllowed(self, "loot", orig, user, slot) then return end
             return orig(self, user, slot)
         end
         BasicAIActions.OnLoot = w.lootWrap
@@ -14135,6 +14138,918 @@ function KCD2MP_EnableItemSync(arg)
     return true
 end
 
+-- ===== WO-134: world items (docs/WO-134-findings.md) =============================
+-- Who can take what in a shared world, and where it comes from. The maintainer's
+-- rule table:
+--   items one player drops for the other  shared, EXACTLY as WO-48 does it (untouched
+--                                         here: every rule below recognises a tracked
+--                                         drop and leaves it alone, W134.isDrop)
+--   NPC bodies        shared, in the host's world. The joiner's loot is a request to
+--                     the host: his loot screen shows the host body's items (the copy's
+--                     inventory is set to the host's list first), every take he makes is
+--                     sent to the host, which moves it out of its body; a stale take is
+--                     rolled back ("Someone already took that."). The host's own looting
+--                     reaches the joiner's copy: its inventory and its look (worn items
+--                     removed = removed on his screen). Pickpocketing a living NPC stays
+--                     blocked on the joiner (WO-131).
+--   loose world items per world: a joiner's pickup asks the host first (matched by item
+--                     class + position, never by name: pickable names carry a
+--                     per-process spawn counter), the host's copy goes, then the joiner
+--                     picks his own up. The host's pickup removes the joiner's copy. An
+--                     item the host cannot match is left per machine (as before).
+--   chests            per player. Nothing is synced live (each machine has its own
+--                     copy); every take and put is recorded (w134_chest) into a ledger
+--                     per world -- the host's and, with his Henry files, the joiner's --
+--                     and after a join the agent applies both (the host's takes put back,
+--                     the joiner's own takes removed) through KCD2MP_W134ChestApply.
+-- Herb gathering (PickableArea -> Minigame.StartHerbGathering) is not an item pickup:
+-- per player, untouched.
+--
+--   WO134-BODY open|state|take|put|result npc=<name> ...
+--   WO134-ITEM ask|ok|gone|unmatched|timeout|host-take|host-gone ...
+--   WO134-CHEST take|put|apply ...
+KCD2MP.w134 = {
+    bodies = true, items = true, chests = true,   -- mp_loot_bodies / mp_loot_items / mp_loot_chests on|off
+    joiner = false, host = false, shared = false, peers = 0, aliveAt = nil,
+    aliveTimeoutS = 10.0,
+    tokN = 0,
+    pendingOpen = {},     -- joiner: body name -> { at, ent, orig, slot }
+    sessions = {},        -- joiner: body name -> { snap, pend = { tok -> take }, puts = { tok -> put }, at }
+    partial = {},         -- joiner: body name -> { parts = {}, n, reason, flags }
+    stash = {},           -- joiner: body name -> the host's last list, for a copy that is not dead here yet
+    itemReq = {},         -- joiner: tok -> { name, ent, hold, cls, x, y, z, at }
+    hostTaken = {},       -- host: { cls, x, y, z, at } world items gone this session
+    hostVerify = {},      -- host: pickups to confirm on the next loop pass
+    bodySig = {},         -- host: body name -> last signature sent
+    chestSess = {},       -- both: container name -> { snap = counts, at }
+    loopMs = 250,
+    matchM = 0.35,        -- a world item's class + position match (host and joiner copies of one save: 0.000 m observed)
+    deadBodyMatchM = 2.5, -- an item that fell off a corpse lands where each machine's physics put it
+    bodyRadiusM = 25.0,   -- host: bodies watched around the host and every avatar
+    chestRadiusM = 3.0,   -- the player's reach to a container (fUseDistance 2.5)
+    askTimeoutS = 4.0,
+    logN = 0,
+    stats = { opens = 0, states = 0, takes = 0, takeOk = 0, takeGone = 0, puts = 0, created = 0, deleted = 0,
+              itemAsk = 0, itemOk = 0, itemGone = 0, itemUnmatched = 0, itemTimeout = 0, hostTakes = 0, hostGone = 0,
+              chestTakes = 0, chestPuts = 0, applied = 0, expired = 0, skipped = 0, bcasts = 0 },
+}
+local W134 = {}
+
+function W134.log(line)
+    local w = KCD2MP.w134
+    w.logN = w.logN + 1
+    if w.logN <= 400 or (w.logN % 100) == 0 then mp_log(line) end
+end
+
+function W134.fresh()
+    local w = KCD2MP.w134
+    return w.aliveAt ~= nil and (os.clock() - w.aliveAt) <= w.aliveTimeoutS
+end
+
+-- The joiner of the host's shared world: WO-131's copy guard condition (host
+-- authority, a shared world, a fresh agent tick) and this section's own tick.
+function KCD2MP_W134JoinerActive()
+    local w = KCD2MP.w134
+    return w.joiner and w.shared and W134.fresh() and KCD2MP_W131IsActive and KCD2MP_W131IsActive() == true
+end
+
+-- The host of a shared world with somebody connected.
+function KCD2MP_W134HostActive()
+    local w = KCD2MP.w134
+    return w.host and w.shared and W134.fresh() and (w.peers or 0) > 0
+end
+
+-- Chests are recorded on both roles in a shared world, with or without a peer
+-- (the host's solo takes are what a later join must put back).
+function W134.chestsRecording()
+    local w = KCD2MP.w134
+    if not (w.chests and w.shared and W134.fresh()) then return false end
+    if w.joiner then return KCD2MP_W134JoinerActive() end
+    return w.host
+end
+
+function W134.tok()
+    local w = KCD2MP.w134
+    w.tokN = (w.tokN % 99999) + 1
+    return tostring(w.tokN)
+end
+
+function W134.name(e)
+    local n = nil
+    pcall(function() n = e:GetName() end)
+    return n
+end
+
+function W134.pos(e)
+    local p = nil
+    pcall(function() p = e:GetWorldPos() end)
+    return p
+end
+
+-- A player's drop (WO-48): the ground copy of any tracked drop, mine or a
+-- peer's materialized one, and the anchors the materializer spawns. The one
+-- test every new rule applies first.
+function W134.isDrop(name)
+    if not name then return false end
+    if string.find(name, "^kcd2mp_") or string.find(name, "^kcdmp_") then return true end
+    for _, d in pairs(KCD2MP.itemDrops or {}) do
+        if d.entName == name or d.anchorName == name then return true end
+    end
+    return false
+end
+
+-- A loose world item: a bound PickableItem that is not a player's drop.
+function KCD2MP_W134IsWorldItem(e)
+    if not e or e.class ~= "PickableItem" then return false end
+    local cls = nil
+    pcall(function() cls = e.Properties and e.Properties.sItemClassId end)
+    if not cls or cls == "" then return false end
+    if W134.isDrop(W134.name(e)) then return false end
+    local npcOnly = false
+    pcall(function() npcOnly = e.npcOnly == true end)
+    return not npcOnly
+end
+
+function W134.belongsToBody(e)
+    local r = false
+    pcall(function() r = e.item and e.item:BelongsToDeadBody() == true end)
+    return r
+end
+
+-- The world item of class cls nearest to (x, y, z) within tol metres, never a drop.
+function W134.findItem(cls, x, y, z, tol)
+    local best, bd = nil, tol * tol
+    local ents = {}
+    pcall(function() ents = System.GetEntitiesInSphere({ x = x, y = y, z = z }, tol + 0.5) or {} end)
+    for _, e in ipairs(ents) do
+        if KCD2MP_W134IsWorldItem(e) and e.Properties.sItemClassId == cls then
+            local p = W134.pos(e)
+            if p then
+                local d = (p.x - x) ^ 2 + (p.y - y) ^ 2 + (p.z - z) ^ 2
+                if d <= bd then best, bd = e, d end
+            end
+        end
+    end
+    return best, math.sqrt(bd)
+end
+
+-- Take a world item out of this world for good. A plain RemoveEntity is not a
+-- take to the engine: an item that belongs to an item slot (food on a table, a
+-- tool on a rack -- most authored loose items) is spawned again at once
+-- (observed: the same bread back at 0.000 m within 3 s). Moving the item into an
+-- inventory is the engine's own take (the slot then restocks on its own period,
+-- like any pickup); the inventory is an avatar's (a mod entity, never saved) and
+-- the item is deleted from it straight away. No avatar here: RemoveEntity.
+function W134.takeAway(e, preferGhost)
+    local wuid = nil
+    pcall(function() wuid = e.item:GetId() end)
+    local g = nil
+    local pg = preferGhost and KCD2MP.ghosts and KCD2MP.ghosts[tostring(preferGhost)]
+    if pg and pg.entity and pg.entity.inventory then g = pg.entity end
+    if not g then
+        for _, gh in pairs(KCD2MP.ghosts or {}) do
+            if gh.entity and gh.entity.inventory then g = gh.entity break end
+        end
+    end
+    if wuid and g then
+        local ok = pcall(function() g.inventory:AddItem(wuid) end)
+        if ok then
+            pcall(function() g.inventory:DeleteItem(wuid, -1) end)
+            return "taken"
+        end
+    end
+    pcall(function() System.RemoveEntity(e.id) end)
+    return "removed"
+end
+
+-- ---- inventories ----------------------------------------------------------------
+
+-- { { w = wuid, cls, amt, hp } ... } of an entity's inventory.
+function W134.items(e)
+    local o = {}
+    pcall(function()
+        local t = e.inventory:GetInventoryTable()
+        for i = 1, #t do
+            local it = ItemManager.GetItem(t[i])
+            if it and it.class then o[#o + 1] = { w = t[i], cls = it.class, amt = it.amount or 1, hp = it.health or 1 } end
+        end
+    end)
+    return o
+end
+
+function W134.encode(list)
+    local parts = {}
+    for _, it in ipairs(list) do
+        parts[#parts + 1] = string.format("%s:%d:%.4f", it.cls, it.amt, it.hp)
+    end
+    table.sort(parts)
+    return parts
+end
+
+function W134.sig(list) return table.concat(W134.encode(list), ",") end
+
+-- Delete n pieces of class cls from an inventory, preferring items not in keep
+-- (a wuid set) and the one nearest to hp. Returns the pieces deleted.
+function W134.deleteClass(e, cls, n, hp, keep)
+    local left = n
+    local cands = {}
+    for _, it in ipairs(W134.items(e)) do
+        if it.cls == cls then cands[#cands + 1] = it end
+    end
+    table.sort(cands, function(a, b)
+        local ka = keep and keep[tostring(a.w)] and 1 or 0
+        local kb = keep and keep[tostring(b.w)] and 1 or 0
+        if ka ~= kb then return ka < kb end
+        return math.abs(a.hp - (hp or 1)) < math.abs(b.hp - (hp or 1))
+    end)
+    for _, it in ipairs(cands) do
+        if left <= 0 then break end
+        local k = math.min(left, it.amt)
+        local ok = pcall(function() e.inventory:DeleteItem(it.w, k) end)
+        if ok then left = left - k end
+    end
+    return n - left
+end
+
+-- Set a body's inventory to the host's list with the least change: items that
+-- already match (class + amount + condition within 0.01) stay -- a worn item stays
+-- worn -- the rest here is deleted, the missing ones are created (with the
+-- host's condition; the quality badge follows it) and put on when the host's
+-- body wears them. want = { { cls, amt, hp, worn } ... }.
+function W134.applyList(e, want)
+    local have = W134.items(e)
+    local used = {}
+    local missing = {}
+    for _, wi in ipairs(want) do
+        local bi, bd = nil, 1e9
+        for i, hi in ipairs(have) do
+            if not used[i] and hi.cls == wi.cls and hi.amt == wi.amt then
+                local d = math.abs(hi.hp - wi.hp)
+                if d <= 0.01 and d < bd then bi, bd = i, d end   -- the host's condition, not just its class
+            end
+        end
+        if bi then used[bi] = true else missing[#missing + 1] = wi end
+    end
+    local del, made = 0, 0
+    for i, hi in ipairs(have) do
+        if not used[i] then
+            if pcall(function() e.inventory:DeleteItem(hi.w, -1) end) then del = del + 1 end
+        end
+    end
+    for _, wi in ipairs(missing) do
+        local before = {}
+        for _, hi in ipairs(W134.items(e)) do before[tostring(hi.w)] = true end
+        pcall(function() e.inventory:CreateItem(wi.cls, wi.hp, wi.amt) end)
+        made = made + 1
+        if wi.worn then
+            for _, hi in ipairs(W134.items(e)) do
+                if not before[tostring(hi.w)] and hi.cls == wi.cls then
+                    pcall(function() e.actor:EquipInventoryItem(hi.w) end)
+                end
+            end
+        end
+    end
+    local s = KCD2MP.w134.stats
+    s.created = s.created + made
+    s.deleted = s.deleted + del
+    return del, made
+end
+
+function W134.isDeadBody(e)
+    if not e or (e.class ~= "NPC" and e.class ~= "NPC_Female") then return false end
+    local dead, ko = false, false
+    pcall(function() dead = e.actor and e.actor:IsDead() == true end)
+    pcall(function() ko = e.actor and e.actor:IsUnconscious() == true end)
+    return dead or ko
+end
+
+function W134.near(e, m)
+    local pp, ep = nil, W134.pos(e)
+    pcall(function() pp = player:GetWorldPos() end)
+    if not (pp and ep) then return false end
+    return (pp.x - ep.x) ^ 2 + (pp.y - ep.y) ^ 2 + (pp.z - ep.z) ^ 2 <= m * m
+end
+
+-- ---- NPC bodies: the joiner ---------------------------------------------------------
+
+-- From WO-131's loot wrapper, on a joiner: returns true when this body's loot has
+-- become a request to the host (the local screen opens when the host's list arrives).
+function KCD2MP_W134LootRequest(body, orig, user, slot)
+    local w = KCD2MP.w134
+    if not (w.bodies and KCD2MP_W134JoinerActive()) then return false end
+    local name = W134.name(body)
+    if not name then return false end
+    w.pendingOpen[name] = { at = os.clock(), ent = body, orig = orig, user = user, slot = slot }
+    w.stats.opens = w.stats.opens + 1
+    KCD2MP_EmitEvent("w134_open", name)
+    W134.log(string.format("WO134-BODY open npc=%s -- asked the host for its body's items", name))
+    W134.startLoop()
+    return true
+end
+
+-- Agent -> joiner: the host body's items, in parts (a long list is split so no
+-- console command runs past the engine's limit). reason = open (answer to a loot
+-- request) | update (the host's body changed). flags: 1 dead or down on the host.
+-- items = { { cls, amt, hp, worn } ... }
+function KCD2MP_W134BodyState(name, reason, flags, part, nparts, items)
+    local w = KCD2MP.w134
+    name = tostring(name)
+    part, nparts = tonumber(part) or 1, tonumber(nparts) or 1
+    local acc = w.partial[name]
+    -- Parts may arrive in any order; a part seen twice (or a new part count) starts a new list.
+    if not acc or acc.n ~= nparts or acc.parts[part] then acc = { parts = {}, n = nparts, reason = reason, flags = tonumber(flags) or 0 }; w.partial[name] = acc end
+    if reason == "open" then acc.reason = "open" end
+    acc.parts[part] = items or {}
+    for i = 1, acc.n do if not acc.parts[i] then return end end
+    w.partial[name] = nil
+    local list = {}
+    for i = 1, acc.n do
+        for _, it in ipairs(acc.parts[i]) do
+            list[#list + 1] = { cls = tostring(it[1]), amt = tonumber(it[2]) or 1, hp = tonumber(it[3]) or 1, worn = it[4] == true }
+        end
+    end
+    W134.bodyState(name, acc.reason, acc.flags, list)
+end
+
+function W134.bodyState(name, reason, flags, list)
+    local w = KCD2MP.w134
+    w.stats.states = w.stats.states + 1
+    local e = nil
+    pcall(function() e = System.GetEntityByName(name) end)
+    local po = w.pendingOpen[name]
+    if reason == "open" then w.pendingOpen[name] = nil end
+    if not e then
+        W134.log(string.format("WO134-BODY state npc=%s reason=%s items=%d -- no such body here", name, tostring(reason), #list))
+        return
+    end
+    if not W134.isDeadBody(e) then
+        -- The host's death has not reached this copy yet: keep the list, apply at its death.
+        w.stash[name] = list
+        W134.log(string.format("WO134-BODY state npc=%s reason=%s items=%d -- alive here, kept for its death", name, tostring(reason), #list))
+        if reason == "open" then KCD2MP_ShowNativeToast("The host's body isn't ready yet -- try again.") end
+        return
+    end
+    w.stash[name] = nil
+    local sess = w.sessions[name]
+    if sess then W134.diffSession(name, sess, e) end   -- my own takes first: they must not be undone
+    -- A take or a put still waiting for the host's answer is part of this body's
+    -- truth already (the host's list may predate it).
+    local want = {}
+    for _, it in ipairs(list) do want[#want + 1] = it end
+    if sess then
+        for _, t in pairs(sess.pend) do
+            local left = t.amt
+            for i = #want, 1, -1 do
+                if left > 0 and want[i].cls == t.cls then
+                    if want[i].amt <= left then left = left - want[i].amt; table.remove(want, i)
+                    else want[i] = { cls = want[i].cls, amt = want[i].amt - left, hp = want[i].hp, worn = want[i].worn }; left = 0 end
+                end
+            end
+        end
+        for _, p in pairs(sess.puts) do want[#want + 1] = { cls = p.cls, amt = p.amt, hp = p.hp } end
+    end
+    local del, made = W134.applyList(e, want)
+    W134.log(string.format("WO134-BODY state npc=%s reason=%s host_items=%d -> copy deleted=%d created=%d", name, tostring(reason), #list, del, made))
+    if sess then sess.snap = W134.items(e); sess.at = os.clock() end
+    if reason == "open" and po and (os.clock() - po.at) <= 8.0 and W134.near(e, 5.0) then
+        w.sessions[name] = w.sessions[name] or { pend = {}, puts = {} }
+        local s2 = w.sessions[name]
+        s2.snap = W134.items(e); s2.at = os.clock(); s2.pinv = W134.wuidSet(player)
+        local ok, err = pcall(function() po.orig(po.ent, po.user or player, po.slot) end)
+        W134.log(string.format("WO134-BODY open npc=%s -- the loot screen opens on the host's items (%d) ok=%s%s", name, #want, tostring(ok), ok and "" or (" err=" .. tostring(err))))
+        W134.startLoop()
+    end
+end
+
+function W134.wuidSet(e)
+    local s = {}
+    for _, it in ipairs(W134.items(e)) do s[tostring(it.w)] = true end
+    return s
+end
+
+-- Counts by class of an item list.
+function W134.counts(list)
+    local c = {}
+    for _, it in ipairs(list) do c[it.cls] = (c[it.cls] or 0) + it.amt end
+    return c
+end
+
+function W134.hpOf(list, cls)
+    for _, it in ipairs(list) do if it.cls == cls then return it.hp end end
+    return 1
+end
+
+-- A loot session: what left the body since the last look went to the player
+-- (a take, sent to the host); what arrived was put in by the player.
+function W134.diffSession(name, sess, e)
+    local now = W134.items(e)
+    local a, b = W134.counts(sess.snap or {}), W134.counts(now)
+    local w = KCD2MP.w134
+    for cls, n in pairs(a) do
+        local m = b[cls] or 0
+        if m < n then
+            local tok = W134.tok()
+            local hp = W134.hpOf(sess.snap, cls)
+            sess.pend[tok] = { cls = cls, amt = n - m, hp = hp, at = os.clock(), pinv = sess.pinv }
+            w.stats.takes = w.stats.takes + 1
+            KCD2MP_EmitEvent("w134_take", string.format("%s %s %s %d %.4f", tok, name, cls, n - m, hp))
+            W134.log(string.format("WO134-BODY take npc=%s cls=%s amt=%d tok=%s -- sent to the host", name, cls, n - m, tok))
+        end
+    end
+    for cls, m in pairs(b) do
+        local n = a[cls] or 0
+        if m > n then
+            local tok = W134.tok()
+            local hp = W134.hpOf(now, cls)
+            sess.puts[tok] = { cls = cls, amt = m - n, hp = hp, at = os.clock() }
+            w.stats.puts = w.stats.puts + 1
+            KCD2MP_EmitEvent("w134_put", string.format("%s %s %s %d %.4f", tok, name, cls, m - n, hp))
+            W134.log(string.format("WO134-BODY put npc=%s cls=%s amt=%d tok=%s -- sent to the host", name, cls, m - n, tok))
+        end
+    end
+    sess.snap = now
+    sess.pinv = W134.wuidSet(player)
+end
+
+-- Agent -> joiner: the host's answer to a take. ok = it came out of the host's
+-- body; gone = someone had taken it first: the item is taken back off Henry.
+function KCD2MP_W134TakeResult(tok, verdict, name)
+    local w = KCD2MP.w134
+    tok = tostring(tok)
+    for bname, sess in pairs(w.sessions) do
+        local t = sess.pend[tok]
+        if t then
+            sess.pend[tok] = nil
+            if verdict == "ok" then
+                w.stats.takeOk = w.stats.takeOk + 1
+                W134.log(string.format("WO134-BODY result npc=%s tok=%s ok -- out of the host's body, kept", bname, tok))
+            else
+                w.stats.takeGone = w.stats.takeGone + 1
+                local n = W134.deleteClass(player, t.cls, t.amt, t.hp, t.pinv)
+                W134.log(string.format("WO134-BODY result npc=%s tok=%s gone -- someone took it first: %d of %d taken back off Henry", bname, tok, n, t.amt))
+                KCD2MP_ShowNativeToast("Someone already took that.")
+            end
+            return
+        end
+        if sess.puts[tok] then sess.puts[tok] = nil; return end
+    end
+end
+
+-- ---- NPC bodies: the host -------------------------------------------------------
+
+-- Agent -> host: a joiner asked for a body. Answer with its items (parts of 10).
+function KCD2MP_W134HostOpen(peer, tok, name)
+    W134.hostSend(tostring(peer), tostring(tok), tostring(name), "open")
+end
+
+function W134.hostSend(peer, tok, name, reason)
+    local e = nil
+    pcall(function() e = System.GetEntityByName(name) end)
+    local flags, list = 0, {}
+    if e then
+        if W134.isDeadBody(e) then flags = 1 end
+        list = W134.items(e)
+    else
+        flags = 2   -- no such body on the host
+    end
+    local enc = W134.encode(list)
+    local nparts = math.max(1, math.ceil(#enc / 10))
+    for p = 1, nparts do
+        local chunk = {}
+        for i = (p - 1) * 10 + 1, math.min(#enc, p * 10) do chunk[#chunk + 1] = enc[i] end
+        KCD2MP_EmitEvent("w134_bstate", string.format("%s %s %s %s %d %d %d %s", peer, tok, name, reason, flags, p, nparts,
+            #chunk > 0 and table.concat(chunk, ",") or "-"))
+    end
+    KCD2MP.w134.bodySig[name] = W134.sig(list)
+    return #list
+end
+
+-- Agent -> host: a joiner took an item out of its copy of this body. The host's
+-- body is the one inventory: the item comes out here, or it was already gone.
+function KCD2MP_W134HostTake(peer, tok, name, cls, amt, hp)
+    local w = KCD2MP.w134
+    amt = tonumber(amt) or 1
+    local e = nil
+    pcall(function() e = System.GetEntityByName(tostring(name)) end)
+    local have = 0
+    if e then
+        for _, it in ipairs(W134.items(e)) do if it.cls == cls then have = have + it.amt end end
+    end
+    local verdict = "gone"
+    if e and have >= amt then
+        local n = W134.deleteClass(e, cls, amt, tonumber(hp) or 1, nil)
+        if n >= amt then verdict = "ok" end
+    end
+    w.stats.hostTakes = w.stats.hostTakes + 1
+    KCD2MP_EmitEvent("w134_tres", string.format("%s %s %s %s %s %d", tostring(peer), tostring(tok), verdict, tostring(name), tostring(cls), amt))
+    W134.log(string.format("WO134-BODY host-take npc=%s cls=%s amt=%d from=%s -> %s (had %d)", tostring(name), tostring(cls), amt, tostring(peer), verdict, have))
+    if e then w.bodySig[tostring(name)] = nil end   -- the next watch pass sends the new state to every joiner
+end
+
+-- Agent -> host: a joiner put an item into its copy of this body: it goes into the host's too.
+function KCD2MP_W134HostPut(peer, tok, name, cls, amt, hp)
+    local e = nil
+    pcall(function() e = System.GetEntityByName(tostring(name)) end)
+    if not e then return end
+    pcall(function() e.inventory:CreateItem(tostring(cls), tonumber(hp) or 1, tonumber(amt) or 1) end)
+    KCD2MP.w134.bodySig[tostring(name)] = nil
+    W134.log(string.format("WO134-BODY host-put npc=%s cls=%s amt=%s from=%s", tostring(name), tostring(cls), tostring(amt), tostring(peer)))
+end
+
+-- Host, every loop pass: dead bodies around the host and every avatar; a body
+-- whose items changed (the host looted it, a joiner's take) goes to every joiner.
+function W134.hostWatch()
+    local w = KCD2MP.w134
+    local anchors = {}
+    local pp = nil
+    pcall(function() pp = player:GetWorldPos() end)
+    if pp then anchors[#anchors + 1] = pp end
+    for _, g in pairs(KCD2MP.ghosts or {}) do
+        local gp = g.entity and W134.pos(g.entity)
+        if gp then anchors[#anchors + 1] = gp end
+    end
+    local seen, sent = {}, 0
+    for _, a in ipairs(anchors) do
+        local ents = {}
+        pcall(function() ents = System.GetEntitiesInSphere(a, w.bodyRadiusM) or {} end)
+        for _, e in ipairs(ents) do
+            local name = W134.name(e)
+            if name and not seen[name] and W134.isDeadBody(e) and not mp_is_mod_entity(e) and not W134.isDrop(name) then
+                seen[name] = true
+                local list = W134.items(e)
+                local sig = W134.sig(list)
+                if w.bodySig[name] ~= sig and sent < 4 then
+                    w.bodySig[name] = sig
+                    sent = sent + 1
+                    w.stats.bcasts = w.stats.bcasts + 1
+                    W134.hostSend("0", "0", name, "update")
+                end
+            end
+        end
+    end
+end
+
+-- ---- loose world items ------------------------------------------------------------
+
+-- The wrapped pickup (PickableItem.OnUsed / OnUsedHold, what the game's use action
+-- calls). Returns handled, result.
+function W134.onPickup(self, user, slot, hold, orig)
+    local w = KCD2MP.w134
+    if W134.bypass or not w.items or user ~= player then return false end
+    if KCD2MP_W134JoinerActive() then
+        if not KCD2MP_W134IsWorldItem(self) then return false end
+        local name = W134.name(self)
+        for _, r in pairs(w.itemReq) do
+            if r.name == name then return true, true end   -- already asked; the answer decides
+        end
+        local p = W134.pos(self)
+        if not p then return false end
+        local tok = W134.tok()
+        local cls = self.Properties.sItemClassId
+        w.itemReq[tok] = { name = name, ent = self, hold = hold, cls = cls, x = p.x, y = p.y, z = p.z, at = os.clock(), orig = orig, slot = slot,
+                           body = W134.belongsToBody(self) }
+        w.stats.itemAsk = w.stats.itemAsk + 1
+        KCD2MP_EmitEvent("w134_item", string.format("%s %s %.3f %.3f %.3f %d", tok, cls, p.x, p.y, p.z, w.itemReq[tok].body and 1 or 0))
+        W134.log(string.format("WO134-ITEM ask tok=%s cls=%s at=(%.2f,%.2f,%.2f) name=%s -- the host decides", tok, cls, p.x, p.y, p.z, tostring(name)))
+        W134.startLoop()
+        return true, true
+    end
+    if KCD2MP_W134HostActive() and KCD2MP_W134IsWorldItem(self) then
+        local p = W134.pos(self)
+        local rec = p and { name = W134.name(self), cls = self.Properties.sItemClassId, x = p.x, y = p.y, z = p.z, at = os.clock() }
+        local r = orig(self, user, slot)
+        if rec then w.hostVerify[#w.hostVerify + 1] = rec; W134.startLoop() end
+        return true, r
+    end
+    return false
+end
+
+function W134.hostVerifyPass()
+    local w = KCD2MP.w134
+    local keep = {}
+    for _, rec in ipairs(w.hostVerify) do
+        local e = nil
+        pcall(function() e = System.GetEntityByName(rec.name) end)
+        if not e then
+            w.hostTaken[#w.hostTaken + 1] = { cls = rec.cls, x = rec.x, y = rec.y, z = rec.z, at = os.clock() }
+            w.stats.hostGone = w.stats.hostGone + 1
+            KCD2MP_EmitEvent("w134_igone", string.format("%s %.3f %.3f %.3f", rec.cls, rec.x, rec.y, rec.z))
+            W134.log(string.format("WO134-ITEM host-gone cls=%s at=(%.2f,%.2f,%.2f) -- the host picked it up; gone for every joiner", rec.cls, rec.x, rec.y, rec.z))
+        elseif (os.clock() - rec.at) < 3.0 then
+            keep[#keep + 1] = rec
+        end
+    end
+    w.hostVerify = keep
+end
+
+-- Agent -> host: a joiner wants this world item. body = 1: an item that fell off a
+-- corpse (each machine's physics placed it; matched within deadBodyMatchM).
+function KCD2MP_W134HostItem(peer, tok, cls, x, y, z, body)
+    local w = KCD2MP.w134
+    x, y, z = tonumber(x), tonumber(y), tonumber(z)
+    local tol = (tonumber(body) == 1) and w.deadBodyMatchM or w.matchM
+    local e, d = W134.findItem(tostring(cls), x, y, z, tol)
+    local verdict = "unknown"
+    local how = ""
+    if e then
+        verdict = "ok"
+        w.hostTaken[#w.hostTaken + 1] = { cls = cls, x = x, y = y, z = z, at = os.clock() }
+        how = W134.takeAway(e, peer)
+    else
+        for _, t in ipairs(w.hostTaken) do
+            if t.cls == cls and (t.x - x) ^ 2 + (t.y - y) ^ 2 + (t.z - z) ^ 2 <= tol * tol then verdict = "gone" break end
+        end
+    end
+    KCD2MP_EmitEvent("w134_ires", string.format("%s %s %s %s %.3f %.3f %.3f", tostring(peer), tostring(tok), verdict, tostring(cls), x, y, z))
+    W134.log(string.format("WO134-ITEM host-take cls=%s at=(%.2f,%.2f,%.2f) from=%s -> %s%s", tostring(cls), x, y, z, tostring(peer), verdict,
+        e and string.format(" (matched %.3f m, %s)", d, how) or ""))
+end
+
+-- Agent -> joiner: the host's answer. ok = the host's copy is gone, pick mine up;
+-- gone = someone took it first; unknown = the host has no such item (a spawned or
+-- moved one): left per machine, picked up here as before.
+function KCD2MP_W134ItemResult(tok, verdict)
+    local w = KCD2MP.w134
+    tok = tostring(tok)
+    local r = w.itemReq[tok]
+    if not r then return end
+    w.itemReq[tok] = nil
+    if verdict == "ok" or verdict == "unknown" then
+        if verdict == "ok" then w.stats.itemOk = w.stats.itemOk + 1 else w.stats.itemUnmatched = w.stats.itemUnmatched + 1 end
+        W134.bypass = true
+        local ok, res = pcall(function() return r.orig(r.ent, player, r.slot) end)
+        W134.bypass = false
+        W134.log(string.format("WO134-ITEM %s tok=%s cls=%s -- picked up here ok=%s res=%s%s", verdict == "ok" and "ok" or "unmatched", tok, tostring(r.cls),
+            tostring(ok), tostring(res), verdict == "ok" and " (the host's copy is gone)" or " (the host has no such item: per machine, as before)"))
+    else
+        w.stats.itemGone = w.stats.itemGone + 1
+        W134.takeAway(r.ent)
+        W134.log(string.format("WO134-ITEM gone tok=%s cls=%s -- someone took it first; removed here", tok, tostring(r.cls)))
+        KCD2MP_ShowNativeToast("Someone already took that.")
+    end
+end
+
+-- Agent -> joiner: the host (or another joiner) took this world item.
+function KCD2MP_W134ItemGone(cls, x, y, z)
+    local w = KCD2MP.w134
+    x, y, z = tonumber(x), tonumber(y), tonumber(z)
+    local e, d = W134.findItem(tostring(cls), x, y, z, w.matchM)
+    if not e then e, d = W134.findItem(tostring(cls), x, y, z, w.deadBodyMatchM); if e and not W134.belongsToBody(e) then e = nil end end
+    if not e then
+        W134.log(string.format("WO134-ITEM host-gone cls=%s at=(%.2f,%.2f,%.2f) -- nothing here to remove", tostring(cls), x, y, z))
+        return false
+    end
+    for tok, r in pairs(w.itemReq) do if r.ent == e then w.itemReq[tok] = nil end end
+    local how = W134.takeAway(e)
+    W134.log(string.format("WO134-ITEM host-gone cls=%s at=(%.2f,%.2f,%.2f) -- %s here (matched %.3f m)", tostring(cls), x, y, z, how, d))
+    return true
+end
+
+function W134.installPickup()
+    if type(PickableItem) ~= "table" then return end
+    local w = KCD2MP.w134
+    if type(PickableItem.OnUsed) == "function" and PickableItem.OnUsed ~= w.useWrap then
+        local orig = PickableItem.OnUsed
+        w.useOrig = orig
+        w.useWrap = function(self, user, slot)
+            local handled, r = W134.onPickup(self, user, slot, false, orig)
+            if handled then return r end
+            return orig(self, user, slot)
+        end
+        PickableItem.OnUsed = w.useWrap
+        mp_log("WO134-ITEM wrapped PickableItem.OnUsed")
+    end
+    if type(PickableItem.OnUsedHold) == "function" and PickableItem.OnUsedHold ~= w.holdWrap then
+        local orig = PickableItem.OnUsedHold
+        w.holdOrig = orig
+        w.holdWrap = function(self, user, slot)
+            local handled, r = W134.onPickup(self, user, slot, true, orig)
+            if handled then return r end
+            return orig(self, user, slot)
+        end
+        PickableItem.OnUsedHold = w.holdWrap
+        mp_log("WO134-ITEM wrapped PickableItem.OnUsedHold")
+    end
+end
+
+-- ---- chests -----------------------------------------------------------------------
+
+W134.CHEST_CLASS = { Stash = true, CartStash = true, Nest = true, DestroStash = true }
+
+function W134.isChest(e)
+    if not e or not W134.CHEST_CLASS[e.class] or not e.inventory then return false end
+    local name = W134.name(e)
+    if not name or W134.isDrop(name) then return false end
+    return true, name
+end
+
+function W134.restockDays(e)
+    local r = 0
+    pcall(function() r = tonumber(e.Properties.Database.nRestockPeriodDays) or 0 end)
+    return r
+end
+
+function W134.worldTime()
+    local t = 0
+    pcall(function() t = Calendar.GetWorldTime() or 0 end)
+    return t
+end
+
+-- Every container within reach: snapshot on arrival, then every change while in
+-- reach is the player's (a take or a put), recorded for the ledgers.
+function W134.chestPass()
+    local w = KCD2MP.w134
+    local pp = nil
+    pcall(function() pp = player:GetWorldPos() end)
+    if not pp then return end
+    local ents = {}
+    pcall(function() ents = System.GetEntitiesInSphere(pp, w.chestRadiusM) or {} end)
+    local inReach = {}
+    for _, e in ipairs(ents) do
+        local ok, name = W134.isChest(e)
+        if ok then
+            inReach[name] = true
+            local now = W134.counts(W134.items(e))
+            local s = w.chestSess[name]
+            if not s then
+                w.chestSess[name] = { snap = now, hp = {}, at = os.clock() }
+                for _, it in ipairs(W134.items(e)) do w.chestSess[name].hp[it.cls] = it.hp end
+            else
+                local t, r = W134.worldTime(), W134.restockDays(e)
+                for cls, n in pairs(s.snap) do
+                    local m = now[cls] or 0
+                    if m < n then
+                        w.stats.chestTakes = w.stats.chestTakes + 1
+                        KCD2MP_EmitEvent("w134_chest", string.format("%s %s %d %.4f %d %d", name, cls, n - m, s.hp[cls] or 1, math.floor(t), r))
+                        W134.log(string.format("WO134-CHEST take chest=%s cls=%s n=%d world_t=%d restock_d=%d", name, cls, n - m, math.floor(t), r))
+                    end
+                end
+                for _, it in ipairs(W134.items(e)) do s.hp[it.cls] = s.hp[it.cls] or it.hp end
+                for cls, m in pairs(now) do
+                    local n = s.snap[cls] or 0
+                    if m > n then
+                        w.stats.chestPuts = w.stats.chestPuts + 1
+                        KCD2MP_EmitEvent("w134_chest", string.format("%s %s %d %.4f %d %d", name, cls, -(m - n), s.hp[cls] or 1, math.floor(t), r))
+                        W134.log(string.format("WO134-CHEST put chest=%s cls=%s n=%d world_t=%d restock_d=%d", name, cls, m - n, math.floor(t), r))
+                    end
+                end
+                s.snap = now
+            end
+        end
+    end
+    for name in pairs(w.chestSess) do if not inReach[name] then w.chestSess[name] = nil end end
+end
+
+-- Agent -> joiner, after a join loaded: rows = { { container, cls, delta, hp, worldT, restockDays } ... }.
+-- delta > 0: put pieces back (the host took them); delta < 0: take them out (the
+-- joiner took them). A row older than its container's restock period is left to the
+-- engine (it restocks on its own); restock 0 never expires.
+function KCD2MP_W134ChestApply(rows)
+    local w = KCD2MP.w134
+    local now = W134.worldTime()
+    local applied, expired, skipped = 0, 0, 0
+    for _, r in ipairs(rows or {}) do
+        local name, cls, delta, hp, t, rd = tostring(r[1]), tostring(r[2]), tonumber(r[3]) or 0, tonumber(r[4]) or 1, tonumber(r[5]) or 0, tonumber(r[6]) or 0
+        local e = nil
+        pcall(function() e = System.GetEntityByName(name) end)
+        if rd > 0 and (now - t) > rd * 86400 then
+            expired = expired + 1
+        elseif not (e and W134.isChest(e)) or delta == 0 then
+            skipped = skipped + 1
+        else
+            if delta > 0 then
+                pcall(function() e.inventory:CreateItem(cls, hp, delta) end)
+            else
+                W134.deleteClass(e, cls, -delta, hp, nil)
+            end
+            applied = applied + 1
+            w.chestSess[name] = nil   -- re-snapshot: this is not the player's doing
+        end
+    end
+    local s = w.stats
+    s.applied, s.expired, s.skipped = s.applied + applied, s.expired + expired, s.skipped + skipped
+    W134.log(string.format("WO134-CHEST apply rows=%d applied=%d expired=%d skipped=%d world_t=%d", #(rows or {}), applied, expired, skipped, math.floor(now)))
+    KCD2MP_EmitEvent("w134_applied", string.format("%d %d %d", applied, expired, skipped))
+end
+
+-- ---- the loop -------------------------------------------------------------------------
+
+KCD2MP.w134LoopRunning = false
+KCD2MP._w134LoopAliveAt = nil
+function W134.loop()
+    local w = KCD2MP.w134
+    if not KCD2MP.w134LoopRunning then return end
+    Script.SetTimer(w.loopMs, W134.loop)   -- reschedule FIRST
+    KCD2MP._w134LoopAliveAt = os.clock()
+    if not player then return end
+    local now = os.clock()
+    -- joiner: loot sessions (a session ends 5 m away or after 10 min)
+    for name, sess in pairs(w.sessions) do
+        local e = nil
+        pcall(function() e = System.GetEntityByName(name) end)
+        local nopend = next(sess.pend) == nil and next(sess.puts) == nil
+        if not e or (nopend and ((not W134.near(e, 5.0)) or (now - (sess.at or now)) > 600)) then
+            w.sessions[name] = nil
+        else
+            W134.diffSession(name, sess, e)
+            for tok, t in pairs(sess.pend) do
+                if (now - t.at) > 15 then sess.pend[tok] = nil end   -- no answer: kept (the host's next state decides the copy)
+            end
+        end
+    end
+    -- joiner: a kept host list for a copy that has now died
+    for name, list in pairs(w.stash) do
+        local e = nil
+        pcall(function() e = System.GetEntityByName(name) end)
+        if not e then w.stash[name] = nil
+        elseif W134.isDeadBody(e) then W134.bodyState(name, "update", 1, list) end
+    end
+    -- joiner: unanswered asks
+    for name, po in pairs(w.pendingOpen) do
+        if (now - po.at) > w.askTimeoutS then
+            w.pendingOpen[name] = nil
+            KCD2MP_ShowNativeToast("The host didn't answer -- try again.")
+            W134.log(string.format("WO134-BODY open npc=%s -- no answer from the host", name))
+        end
+    end
+    for tok, r in pairs(w.itemReq) do
+        if (now - r.at) > w.askTimeoutS then
+            w.itemReq[tok] = nil
+            w.stats.itemTimeout = w.stats.itemTimeout + 1
+            KCD2MP_ShowNativeToast("The host didn't answer -- try again.")
+            W134.log(string.format("WO134-ITEM timeout tok=%s cls=%s", tok, tostring(r.cls)))
+        end
+    end
+    -- host
+    if #w.hostVerify > 0 then W134.hostVerifyPass() end
+    if KCD2MP_W134HostActive() and w.bodies then
+        w.watchAt = w.watchAt or 0
+        if (now - w.watchAt) >= 1.0 then w.watchAt = now; W134.hostWatch() end
+    end
+    -- both: chests
+    if W134.chestsRecording() then W134.chestPass() else w.chestSess = {} end
+end
+
+function W134.forgetWorld(why)
+    local w = KCD2MP.w134
+    local n = 0
+    for _ in pairs(w.chestSess) do n = n + 1 end
+    w.chestSess = {}; w.sessions = {}; w.pendingOpen = {}; w.itemReq = {}; w.stash = {}; w.partial = {}; w.hostVerify = {}
+    if n > 0 then W134.log(string.format("WO134-CHEST reset why=%s -- %d chest snapshot(s) dropped; the next pass takes new ones", tostring(why), n)) end
+end
+
+function W134.startLoop()
+    local w = KCD2MP.w134
+    if not chainMayStart("w134", "w134LoopRunning", "_w134LoopAliveAt", W134.startLoop) then return end
+    -- A (re)start follows a load (a load kills every timer chain): everything seen
+    -- before it belongs to a world that is gone. Found live: a host reload beside a
+    -- chest diffed the old snapshot against the reloaded chest and logged a take and
+    -- a put nobody made.
+    W134.forgetWorld("loop-start")
+    KCD2MP.w134LoopRunning = true
+    KCD2MP._w134LoopAliveAt = os.clock()
+    Script.SetTimer(w.loopMs, W134.loop)
+end
+KCD2MP.w134.startLoop = W134.startLoop   -- WO-134 test hook
+KCD2MP.w134.loopOnce = function() local r = KCD2MP.w134LoopRunning; KCD2MP.w134LoopRunning = true; W134.loop(); KCD2MP.w134LoopRunning = r end
+
+-- The agent, once a second while connected: this machine's role in a shared world.
+function KCD2MP_W134Tick(joiner, host, shared, peers)
+    local w = KCD2MP.w134
+    w.joiner = joiner == true
+    w.host = host == true
+    w.shared = shared == true
+    w.peers = tonumber(peers) or 0
+    w.aliveAt = os.clock()
+    pcall(W134.installPickup)
+    if w.shared and (w.joiner or w.host) then W134.startLoop() end
+end
+
+function KCD2MP_W134Status()
+    local w = KCD2MP.w134
+    local s = w.stats
+    mp_log(string.format("WO134-STATUS bodies=%s items=%s chests=%s joiner=%s host=%s shared=%s peers=%d joiner_active=%s host_active=%s chest_rec=%s | opens=%d states=%d takes=%d ok=%d gone=%d puts=%d created=%d deleted=%d | item ask=%d ok=%d gone=%d unmatched=%d timeout=%d host_takes=%d host_gone=%d | chest takes=%d puts=%d applied=%d expired=%d skipped=%d | bcasts=%d",
+        w.bodies and "on" or "off", w.items and "on" or "off", w.chests and "on" or "off", tostring(w.joiner), tostring(w.host), tostring(w.shared), w.peers,
+        tostring(KCD2MP_W134JoinerActive() == true), tostring(KCD2MP_W134HostActive() == true), tostring(W134.chestsRecording() == true),
+        s.opens, s.states, s.takes, s.takeOk, s.takeGone, s.puts, s.created, s.deleted,
+        s.itemAsk, s.itemOk, s.itemGone, s.itemUnmatched, s.itemTimeout, s.hostTakes, s.hostGone,
+        s.chestTakes, s.chestPuts, s.applied, s.expired, s.skipped, s.bcasts))
+end
+
+-- mp_loot_bodies / mp_loot_items / mp_loot_chests on|off (default on); bare = report.
+function KCD2MP_SetLootRule(which, arg)
+    local key = ({ bodies = "bodies", items = "items", chests = "chests" })[tostring(which)]
+    if not key then return false end
+    local v = KCD2MP_Wo122ParseBool(arg)
+    if v == "bad" then mp_log("mp_loot_" .. key .. ": expected on|off, got '" .. tostring(arg) .. "'"); return false end
+    if v ~= nil then KCD2MP.w134[key] = v end
+    KCD2MP_W134Status()
+    return true
+end
+function KCD2MP_SetLootBodies(arg) return KCD2MP_SetLootRule("bodies", arg) end
+function KCD2MP_SetLootItems(arg) return KCD2MP_SetLootRule("items", arg) end
+function KCD2MP_SetLootChests(arg) return KCD2MP_SetLootRule("chests", arg) end
+
 -- ===== Register Console Commands =====
 
 local ok, err = pcall(function()
@@ -14295,6 +15210,10 @@ local ok, err = pcall(function()
     System.AddCCommand("mp_avatar_perceive",     'KCD2MP_SetAvatarPerceive(%line)',       "WO-131 1d (HOST of a shared world): the partner's avatar is always perceivable by NPCs (never AI-ignorant) and in the player's faction: mp_avatar_perceive on|off (default on); bare = report")
     System.AddCCommand("mp_npc_standin",         'KCD2MP_SetNpcStandIn(%line)',           "WO-131 1f (JOINER): an NPC the host spawned at runtime (road encounters) gets a stand-in here under its own name, driven by the host's stream: mp_npc_standin on|off (default on)")
     System.AddCCommand("mp_w131_status",         'KCD2MP_W131Status()',                   "WO-131: the copy guard, loot block and perception state (WO131-STATUS in kcd.log)")
+    System.AddCCommand("mp_w134_status",         'KCD2MP_W134Status()',                   "WO-134: world items -- bodies, loose items, chests (WO134-STATUS in kcd.log)")
+    System.AddCCommand("mp_loot_bodies",         'KCD2MP_SetLootBodies(%line)',         "WO-134: NPC bodies are shared (the joiner's loot is a request to the host): on|off (default on); bare = report")
+    System.AddCCommand("mp_loot_items",          'KCD2MP_SetLootItems(%line)',          "WO-134: loose world items are per world (a joiner's pickup asks the host): on|off (default on); bare = report")
+    System.AddCCommand("mp_loot_chests",         'KCD2MP_SetLootChests(%line)',         "WO-134: chests per player, remembered per world (takes recorded for the join ledgers): on|off (default on); bare = report")
     System.AddCCommand("mp_leash",               'KCD2MP_SetLeash(%line)',                "WO-114: keep the joiner near the host (HOST only -- the host's value is the session's): a warning past mp_leash_warn_m, a 10 s countdown past mp_leash_pull_m, then the joiner is brought beside the host: mp_leash on|off (default on); bare = report")
     System.AddCCommand("mp_leash_warn_m",        'KCD2MP_SetLeashWarn(%line)',            "WO-114: the leash warning distance in metres (HOST; default 600; below mp_leash_pull_m): mp_leash_warn_m <metres>; bare = report")
     System.AddCCommand("mp_leash_pull_m",        'KCD2MP_SetLeashPull(%line)',            "WO-114: the leash pull distance in metres (HOST; default 650; above mp_leash_warn_m): mp_leash_pull_m <metres>; bare = report")

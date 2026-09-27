@@ -197,12 +197,40 @@ public sealed class HenryStore
         }
     }
 
+    // ------------------------------------------------------------------ WO-134: chest ledgers
+
+    /// <summary>
+    /// WO-134: the joiner's chest ledger paired with one snapshot (what this Henry
+    /// took out of which container in that world, as of that snapshot). Stored and
+    /// pruned with its snapshot, so a restore brings back the ledger of the same
+    /// moment: loss, never duplication.
+    /// </summary>
+    public string ChestLedgerPath(Snapshot s) => Path.Combine(WorldDir(s.Tag), "chests-" + Path.GetFileNameWithoutExtension(s.File) + ".json");
+
+    public void StoreChestLedger(Snapshot s, string json)
+    {
+        lock (_gate)
+        {
+            var p = ChestLedgerPath(s);
+            File.WriteAllText(p + ".part", json);
+            File.Move(p + ".part", p, overwrite: true);
+        }
+    }
+
+    /// <summary>The ledger stored with this snapshot, or null (a snapshot from before WO-134: none).</summary>
+    public string? LoadChestLedger(Snapshot s)
+    {
+        try { var p = ChestLedgerPath(s); return File.Exists(p) ? File.ReadAllText(p) : null; }
+        catch (IOException) { return null; }
+    }
+
     private void Prune(string tag)
     {
         var all = Snapshots(tag);
         foreach (var s in all.Skip(KeepPerWorld))
         {
             TryDelete(Path.Combine(WorldDir(tag), s.File));
+            TryDelete(ChestLedgerPath(s));
             UpdateWorld(tag, w => w.Pairs.Remove(s.File));
             _log($"MP-HENRY world {tag}: pruned snapshot {s.Short} (keeping the newest {KeepPerWorld})");
         }

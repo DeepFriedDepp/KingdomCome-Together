@@ -138,7 +138,7 @@ static class P
         public byte FlagsAt(double t) => (byte)(0x04 | (((int)(t / 2.5)) != (int)((t - 0.1) / 2.5) ? 0x08 : 0));
     }
 
-    static byte[] BuildUp(string npc, float x, float y, float z, float rot, float hp, byte flags, ushort seq, uint ms)
+    internal static byte[] BuildUp(string npc, float x, float y, float z, float rot, float hp, byte flags, ushort seq, uint ms)
     {
         var nb = Encoding.UTF8.GetBytes(npc);
         int payloadLen = 1 + nb.Length + Protocol.NpcStateFixedTail;

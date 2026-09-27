@@ -21,6 +21,19 @@
 //       leash config on|off <warn> <pull>
 //       timeskip <worldTime>      (WO-114) a fast-travel time skip (TimeSkip start + done, kind fast-travel)
 //       story objective|fingerprint|approach <text>   (WO-133) a StoryBeatUp (0x37) of that kind
+//       itemdrop <cls> <amt> <hp> <x> <y> <z> [dropId]  (WO-134) an ItemDropUp (0x32): the host dropped this
+//       itemclaim <dropId>        (WO-134) an ItemClaimUp (0x34): the host picked that drop up
+//                                 (every ItemDropDown 0x33 / ItemClaimDown 0x35 received is logged)
+//       bodyset <name> <items|->  (WO-134) the host's body <name> holds these items (cls:amt:hp[:w],...): a joiner's
+//                                 BodyOpen is answered with them, its BodyTake comes out of them (ok) or not (gone)
+//       bodypush <name>           (WO-134) a BodyState "update" of that body to every joiner (the host looted it)
+//       witem <cls> <x> <y> <z>   (WO-134) a world item the host still has: a joiner's ItemTake of it is ok (once)
+//       witemtaken <cls> <x> <y> <z>  (WO-134) one the host already took: an ItemTake of it is gone
+//       itemgone <cls> <x> <y> <z>    (WO-134) an ItemGone to every joiner (the host picked it up)
+//       npc <name> <x> <y> <z> <yaw> <hp> <flags> [secs]  (WO-134) stream that NPC (NpcStateUp 0x26) every 200 ms for
+//                                 secs (default 30): flags 1 = dead (the joiner applies the host's death to its copy)
+//       ledger <rows|->           (WO-134) the host's chest ledger (container|cls|n|hp|worldT|restockDays;...),
+//                                 sent to the joiner at every Ready (and at once with ledgersend)
 //     [reseed] = a synthetic seed (hex) written into the save's body 0x01FB, re-signed: a second
 //     "playthrough" made from a copy. Files are COPIES of real host saves; never logged by path.
 //
@@ -83,6 +96,10 @@ static class Host125
         double duration = double.Parse(Arg(a, "--duration", "3600"), CultureInfo.InvariantCulture);
         var hp = Arg(a, "--host-pos", "0,0,0").Split(',').Select(v => float.Parse(v, CultureInfo.InvariantCulture)).ToArray();
         byte leashSeq = 0;
+        // WO-134: the scripted host world
+        var bodies = new Dictionary<string, List<Wo134Rules.Item>>(StringComparer.Ordinal);
+        var witems = new List<(Guid Cls, float X, float Y, float Z, bool Taken)>();
+        var ledger = new Wo134Rules.Ledger();
         var leashSeen = new Dictionary<byte, LeashState>();   // WO-114: the last LeashState per joiner
         var world = Load(Arg(a, "--join-host125", ""), Arg(a, "--reseed", ""));
         bool shared = true;
@@ -254,6 +271,82 @@ static class Host125
                                 Say($"STORY {p[1]} sent ({body.Length} bytes)");
                                 break;
                             }
+                            case "itemdrop":   // WO-134
+                            {
+                                uint did = p.Length > 7 ? uint.Parse(p[7], CultureInfo.InvariantCulture) : (uint)Random.Shared.Next(1, int.MaxValue);
+                                var dp = new byte[3 + Protocol.ItemDropUpPayloadLen]; dp[0] = Protocol.ItemDropUp;
+                                BinaryPrimitives.WriteUInt16LittleEndian(dp.AsSpan(1), (ushort)Protocol.ItemDropUpPayloadLen);
+                                BinaryPrimitives.WriteUInt32LittleEndian(dp.AsSpan(3), did);
+                                Guid.Parse(p[1]).TryWriteBytes(dp.AsSpan(7, 16));
+                                BinaryPrimitives.WriteUInt16LittleEndian(dp.AsSpan(23), ushort.Parse(p[2], CultureInfo.InvariantCulture));
+                                for (int k = 0; k < 4; k++) BinaryPrimitives.WriteSingleLittleEndian(dp.AsSpan(25 + 4 * k), float.Parse(p[3 + k], CultureInfo.InvariantCulture));
+                                await W(dp);
+                                Say($"ITEMDROP sent drop={did} class={p[1]} x{p[2]}");
+                                break;
+                            }
+                            case "itemclaim":   // WO-134
+                            {
+                                var cp = new byte[3 + Protocol.ItemClaimUpPayloadLen]; cp[0] = Protocol.ItemClaimUp;
+                                BinaryPrimitives.WriteUInt16LittleEndian(cp.AsSpan(1), (ushort)Protocol.ItemClaimUpPayloadLen);
+                                BinaryPrimitives.WriteUInt32LittleEndian(cp.AsSpan(3), uint.Parse(p[1], CultureInfo.InvariantCulture));
+                                await W(cp);
+                                Say($"ITEMCLAIM sent drop={p[1]}");
+                                break;
+                            }
+                            case "npc":   // WO-134: npc <name> <x> <y> <z> <yaw> <hp> <flags> [secs]
+                            {
+                                string nm = p[1];
+                                float nx = float.Parse(p[2], CultureInfo.InvariantCulture), ny = float.Parse(p[3], CultureInfo.InvariantCulture), nz = float.Parse(p[4], CultureInfo.InvariantCulture);
+                                float nyaw = float.Parse(p[5], CultureInfo.InvariantCulture), nhp = float.Parse(p[6], CultureInfo.InvariantCulture);
+                                byte nfl = byte.Parse(p[7], CultureInfo.InvariantCulture);
+                                double secs = p.Length > 8 ? double.Parse(p[8], CultureInfo.InvariantCulture) : 30;
+                                _ = Task.Run(async () =>
+                                {
+                                    ushort nseq = 0; var t0 = Clock.Elapsed.TotalSeconds;
+                                    while (Clock.Elapsed.TotalSeconds - t0 < secs && !hard.IsCancellationRequested)
+                                    {
+                                        await W(P.BuildUp(nm, nx, ny, nz, nyaw, nhp, nfl, ++nseq, (uint)Clock.ElapsedMilliseconds));
+                                        await Task.Delay(200);
+                                    }
+                                });
+                                Say($"NPC {nm} streamed at {p[2]},{p[3]},{p[4]} hp={p[6]} flags={p[7]} for {secs} s");
+                                break;
+                            }
+                            case "bodyset":   // WO-134
+                                bodies[p[1]] = Wo134Rules.ParseItems(p.Length > 2 ? p[2] : "-") ?? [];
+                                Say($"BODY {p[1]} = {bodies[p[1]].Count} item(s)");
+                                break;
+                            case "bodypush":   // WO-134
+                            {
+                                var items = bodies.GetValueOrDefault(p[1]) ?? [];
+                                for (byte g = 1; g < 8; g++)
+                                    await W(new LootMsg(Protocol.LootHostBodyState, 0, $"{p[1]} update 1 1 1 {Wo134Rules.FormatItems(items)}").BuildUp(Protocol.LootHostUp, g));
+                                Say($"BODYPUSH {p[1]} ({items.Count} item(s)) to every joiner");
+                                break;
+                            }
+                            case "witem":
+                            case "witemtaken":   // WO-134
+                                witems.Add((Guid.Parse(p[1]), float.Parse(p[2], CultureInfo.InvariantCulture), float.Parse(p[3], CultureInfo.InvariantCulture), float.Parse(p[4], CultureInfo.InvariantCulture), p[0] == "witemtaken"));
+                                Say($"WITEM {p[1]} at {p[2]},{p[3]},{p[4]} taken={p[0] == "witemtaken"}");
+                                break;
+                            case "itemgone":   // WO-134
+                                for (byte g = 1; g < 8; g++)
+                                    await W(new LootMsg(Protocol.LootHostItemGone, 0, $"{p[1]} {p[2]} {p[3]} {p[4]}").BuildUp(Protocol.LootHostUp, g));
+                                Say($"ITEMGONE {p[1]} at {p[2]},{p[3]},{p[4]} to every joiner");
+                                break;
+                            case "ledger":   // WO-134
+                            {
+                                ledger = new Wo134Rules.Ledger();
+                                if (p.Length > 1 && p[1] != "-")
+                                    foreach (var r in p[1].Split(';')) if (Wo134Rules.ParseRow(r) is { } e) ledger.Entries.Add(e);
+                                Say($"LEDGER {ledger.Entries.Count} entries");
+                                break;
+                            }
+                            case "ledgersend":   // WO-134
+                                for (byte g = 1; g < 8; g++)
+                                    foreach (var lp in Wo134Rules.LedgerParts(ledger)) await W(new LootMsg(Protocol.LootHostLedger, 0, lp).BuildUp(Protocol.LootHostUp, g));
+                                Say($"LEDGERSEND {ledger.Entries.Count} entries to every joiner");
+                                break;
                             case "leave":
                                 Say("LEAVE: disconnecting -- the joiner must leave the host's world");
                                 tcp.Close();
@@ -318,12 +411,28 @@ static class Host125
                 double now = Clock.Elapsed.TotalSeconds;
                 await W(JoinStatusCodec.Build(joiner, joinId, Protocol.JoinStateResumed, Protocol.JoinReasonId(end == "ready" ? "ready" : "failed"), (ushort)(now - tr)));
                 Say(FormattableString.Invariant($"JOIN 0x{joinId:x8} ended: {end} after {now - tr:F1} s -- THE HOST RESUMES"));
+                if (end == "ready")   // WO-134: this world's chest ledger, as a real host sends it
+                {
+                    var lps = Wo134Rules.LedgerParts(ledger);
+                    foreach (var lp in lps) await W(new LootMsg(Protocol.LootHostLedger, 0, lp).BuildUp(Protocol.LootHostUp, joiner));
+                    Say($"LEDGER sent to {joiner}: {ledger.Entries.Count} entries in {lps.Count} part(s)");
+                }
             }
         });
         try
         {
             await foreach (var (type, p) in inbox.Reader.ReadAllAsync(hard.Token))
             {
+                if (type == Protocol.ItemDropDown && p.Length == Protocol.ItemDropDownPayloadLen)   // WO-134
+                {
+                    Say(FormattableString.Invariant($"GOT ItemDrop from={p[0]} drop={BinaryPrimitives.ReadUInt32LittleEndian(p.AsSpan(1))} class={new Guid(p.AsSpan(5, 16))} x{BinaryPrimitives.ReadUInt16LittleEndian(p.AsSpan(21))} hp={BinaryPrimitives.ReadSingleLittleEndian(p.AsSpan(23)):F2} at=({BinaryPrimitives.ReadSingleLittleEndian(p.AsSpan(27)):F2}, {BinaryPrimitives.ReadSingleLittleEndian(p.AsSpan(31)):F2}, {BinaryPrimitives.ReadSingleLittleEndian(p.AsSpan(35)):F2})"));
+                    continue;
+                }
+                if (type == Protocol.ItemClaimDown && p.Length == Protocol.ItemClaimDownPayloadLen)   // WO-134
+                {
+                    Say($"GOT ItemClaim claimer={p[0]} drop={BinaryPrimitives.ReadUInt32LittleEndian(p.AsSpan(1))}");
+                    continue;
+                }
                 if (!Protocol.IsJoinDown(type, p.Length) || Split(p) is not var (src, jid, body)) continue;
                 if (type == Protocol.LeashStateDown)   // WO-114: logged on a change only
                 {
@@ -331,6 +440,48 @@ static class Host125
                     {
                         leashSeen[src] = ls;
                         Say($"LEASHSTATE from {src}: flags={Protocol.LeashFlagsText(ls.Flags)} pull #{ls.PullSeq} {Protocol.LeashResultName(ls.Result)} from={ls.FromM} to={ls.ToM} residual_cm={ls.ResidualCm}");
+                    }
+                    continue;
+                }
+                if (type == Protocol.LootAskDown && LootMsg.TryDecode(body, out var la))   // WO-134: answered like a real host
+                {
+                    var f = la.Text.Split(' ');
+                    Say($"LOOTASK {Protocol.LootAskName(la.Kind)} tok={la.Tok} from {src}: {la.Text}");
+                    switch (la.Kind)
+                    {
+                        case Protocol.LootAskBodyOpen:
+                        {
+                            var items = bodies.GetValueOrDefault(f[0]);
+                            string bst = items is null ? $"{f[0]} open 2 1 1 -" : $"{f[0]} open 1 1 1 {Wo134Rules.FormatItems(items)}";
+                            await W(new LootMsg(Protocol.LootHostBodyState, la.Tok, bst).BuildUp(Protocol.LootHostUp, src));
+                            Say($"  -> BodyState {bst}");
+                            break;
+                        }
+                        case Protocol.LootAskBodyTake:
+                        {
+                            var items = bodies.GetValueOrDefault(f[0]);
+                            var cls = Guid.Parse(f[1]); int amt = int.Parse(f[2], CultureInfo.InvariantCulture);
+                            int i = items?.FindIndex(x => x.Cls == cls && x.Amt >= amt) ?? -1;
+                            string v = i >= 0 ? "ok" : "gone";
+                            if (i >= 0) { var it = items![i]; if (it.Amt == amt) items.RemoveAt(i); else items[i] = it with { Amt = it.Amt - amt }; }
+                            await W(new LootMsg(Protocol.LootHostTakeResult, la.Tok, $"{v} {f[0]} {f[1]} {f[2]}").BuildUp(Protocol.LootHostUp, src));
+                            Say($"  -> TakeResult {v}");
+                            break;
+                        }
+                        case Protocol.LootAskBodyPut:
+                            if (bodies.TryGetValue(f[0], out var pitems)) pitems.Add(new Wo134Rules.Item(Guid.Parse(f[1]), int.Parse(f[2], CultureInfo.InvariantCulture), float.Parse(f[3], CultureInfo.InvariantCulture), false));
+                            break;
+                        case Protocol.LootAskItemTake:
+                        {
+                            var cls = Guid.Parse(f[0]);
+                            float x = float.Parse(f[1], CultureInfo.InvariantCulture), y = float.Parse(f[2], CultureInfo.InvariantCulture), z = float.Parse(f[3], CultureInfo.InvariantCulture);
+                            int i = witems.FindIndex(w => w.Cls == cls && (w.X - x) * (w.X - x) + (w.Y - y) * (w.Y - y) + (w.Z - z) * (w.Z - z) <= 0.35f * 0.35f);
+                            string v = i < 0 ? "unknown" : witems[i].Taken ? "gone" : "ok";
+                            if (i >= 0) witems[i] = witems[i] with { Taken = true };
+                            await W(new LootMsg(Protocol.LootHostItemResult, la.Tok, $"{v} {f[0]} {f[1]} {f[2]} {f[3]}").BuildUp(Protocol.LootHostUp, src));
+                            Say($"  -> ItemResult {v}");
+                            break;
+                        }
                     }
                     continue;
                 }

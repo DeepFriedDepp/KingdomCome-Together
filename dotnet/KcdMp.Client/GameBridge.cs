@@ -1741,6 +1741,7 @@ public partial class GameBridge(ClientConfig config)
         Wo124OnConnect(stream, cts.Token);   // WO-124: the session mode, the joiner's side of the join
         Wo114OnConnect(stream, cts.Token);   // WO-114: the leash (host decides; joiner is brought back)
         Wo131OnConnect(cts.Token);           // WO-131: combat and bodies (the copy guard, the hit gate, perception)
+        Wo134OnConnect(cts.Token);           // WO-134: world items (bodies, loose items, chest ledgers)
         Wo132OnConnect(cts.Token);           // WO-132: damage safety, combat engagement
         _ = _combat.NpcConfigAsync(_nativeWriteOn, _nativeSenderClock, cts.Token);
         _ = RespawnHeartbeatAsync(stream, announceGraves: true, cts.Token);
@@ -2242,6 +2243,7 @@ public partial class GameBridge(ClientConfig config)
             await Wo124OnDisconnectAsync();   // WO-124: a joiner in the host's world leaves it
             await Wo114OnDisconnectAsync();   // WO-114: the leash, the partner, the fast-travel block
             await Wo131OnDisconnectAsync();   // WO-131: copy guards off, parked bodies given back
+            await Wo134OnDisconnectAsync();   // WO-134: the host ledger flushed, the mod told
             Wo132OnDisconnect();              // WO-132: engaged copies released
             _myOpenDrops.Clear();
             // WO-113: no relay, no session -- the DLL's guard stands down
@@ -5631,6 +5633,18 @@ public partial class GameBridge(ClientConfig config)
                 return;
             case "w131_cfg":         // WO-131: mp_avatar_perceive
                 Wo131OnCfg(arg);
+                return;
+            case "w134_open":        // WO-134: world items
+            case "w134_take":
+            case "w134_put":
+            case "w134_item":
+            case "w134_bstate":
+            case "w134_tres":
+            case "w134_ires":
+            case "w134_igone":
+            case "w134_chest":
+            case "w134_applied":
+                Wo134OnEvent(name, arg);
                 return;
         }
 

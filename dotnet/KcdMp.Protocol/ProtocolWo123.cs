@@ -78,6 +78,9 @@ public static partial class Protocol
         // WO-114: the leash (ProtocolWo114.cs), protocol v10
         (LeashUp,       LeashDown,       "leash",        JoinHeaderLen + LeashBodyLen, JoinHeaderLen + LeashBodyLen, JoinFrom.Host),
         (LeashStateUp,  LeashStateDown,  "leash-state",  JoinHeaderLen + LeashStateBodyLen, JoinHeaderLen + LeashStateBodyLen, JoinFrom.Joiner),
+        // WO-134: world items (ProtocolWo134.cs)
+        (LootAskUp,     LootAskDown,     "loot-ask",     JoinHeaderLen + LootFixedLen + 1, JoinHeaderLen + LootFixedLen + LootTextMax, JoinFrom.Joiner),
+        (LootHostUp,    LootHostDown,    "loot-host",    JoinHeaderLen + LootFixedLen + 1, JoinHeaderLen + LootFixedLen + LootTextMax, JoinFrom.Host),
     };
 
     /// <summary>The JoinWire row for an up type, or null.</summary>

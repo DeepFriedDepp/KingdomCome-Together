@@ -254,6 +254,10 @@ public partial class GameBridge
             case Protocol.LeashStateDown:   // WO-114
                 Wo114OnLeashStateIn(src, body);
                 return;
+            case Protocol.LootAskDown:      // WO-134
+            case Protocol.LootHostDown:
+                await Wo134OnFrameAsync(type, src, body);
+                return;
             case Protocol.WorldOfferDown:
                 await OnWorldOfferInAsync(src, joinId, body, ct);
                 return;
@@ -510,6 +514,7 @@ public partial class GameBridge
                 {
                     uint seq = msg.Body.Length == 4 ? BinaryPrimitives.ReadUInt32LittleEndian(msg.Body) : 0;
                     Console.WriteLine($"MP-JOIN host: join 0x{j.JoinId:x8}: {j.Partner} is ready (loaded worldsaved_seq={seq}, sent {sender.Offer.WorldSavedSeq}{(seq == sender.Offer.WorldSavedSeq ? "" : " -- MISMATCH")})");
+                    _ = Wo134SendLedgerAsync(j.Joiner);   // WO-134: this world's chest ledger (what the host took)
                     resumeReason = "ready";
                     return;
                 }

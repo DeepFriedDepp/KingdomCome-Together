@@ -123,6 +123,9 @@ static class JoinPeer
                 var body = BodyOf(p);
                 switch (type)
                 {
+                    case Protocol.LootHostDown:   // WO-134: the host's chest ledger after Ready, body states, results
+                        if (LootMsg.TryDecode(body, out var lm)) Say($"LootHost {Protocol.LootHostName(lm.Kind)} tok={lm.Tok}: {lm.Text}");
+                        break;
                     case Protocol.JoinStatusDown:
                         JoinStatusCodec.TryDecode(body, out byte s, out byte r, out ushort arg);
                         Say($"host status {Protocol.JoinStateName(s)} reason={Protocol.JoinReasonName(r)} arg={arg}");

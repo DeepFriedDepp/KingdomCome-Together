@@ -140,6 +140,7 @@ public partial class GameBridge
                 _branchHead = md5;
                 SaveBranchMap();
             }
+            if (seed is uint) Wo134OnHostWorld(tag, md5, loaded);   // WO-134: the host's chest ledger pairs with this save
             Console.WriteLine($"MP-HENRY host: world {tag} ({why}: {SaveDisplay(path)}, md5 {md5[..8]} = the save's footer MD5) player={who.Player} henry={On(who.IsHenry)} branch_depth={BranchNewestFirst().Count}");
             if (changed)
             {
@@ -570,8 +571,10 @@ public partial class GameBridge
             var pick = _henry.PickFor(tag, branch);
             if (pick is null) { why = $"world {tag}: no snapshot could be read (all broken)"; abortReason = Protocol.JoinAbortNoHenrySource; return null; }
             Console.WriteLine($"MP-HENRY joiner: join 0x{joinId:x8}: world {tag} -- RESTORE snapshot {pick.Snapshot.Short} ({pick.Snapshot.Source}): {pick.How}");
+            Wo134OnRestorePick(pick.Snapshot);   // WO-134: its chest ledger comes back with it
             return new HenryChoice("restore", pick.Parts, null, $"snapshot {pick.Snapshot.Short}");
         }
+        Wo134OnRestorePick(null);   // WO-134: a first join: an empty chest ledger
         var choice = CurrentChoice();
         if (choice is null) { why = $"a first join to world {tag} but no choice was made (bring / fresh)"; abortReason = Protocol.JoinAbortNoHenrySource; return null; }
         var src = Wo125SourceFor(choice, out string swhy);
@@ -600,7 +603,8 @@ public partial class GameBridge
         try
         {
             parts.Origin = WhsSave.HenryParts.OriginSnapshot;
-            _henry.Store(tag, parts, Convert.ToHexString(offerMd5), mode == "restore" ? HenryStore.SourceJoin : mode, $"the join save (seq {seq})");
+            var joinSnap = _henry.Store(tag, parts, Convert.ToHexString(offerMd5), mode == "restore" ? HenryStore.SourceJoin : mode, $"the join save (seq {seq})");
+            Wo134OnSnapshotStored(joinSnap);   // WO-134: the chest ledger pairs with it
             _henry.MarkJoined(tag);
             if (_firstChoiceTag == tag || _firstChoiceTag is null) { _firstChoice = null; _firstChoiceTag = null; }
         }
@@ -680,6 +684,7 @@ public partial class GameBridge
             if (storeWhy is null)
             {
                 var snap = _henry.Store(_joinedTag!, parts!, md5, HenryStore.SourceSnapshot, $"host {Protocol.SaveKindName(w.Kind)} playline{w.Playline}/{w.FileName} seq={w.Seq}");
+                Wo134OnSnapshotStored(snap);   // WO-134: the chest ledger pairs with it
                 Console.WriteLine(FormattableString.Invariant(
                     $"MP-HENRY joiner: PAIRED host save seq={w.Seq} md5={md5[..8]} with snapshot {snap.Short}: host-save-in -> request {lagS:F2} s, -> file verified {(tFile - tReq).TotalSeconds:F2} s ({SaveDisplay(path)}, {bytes.Length} B)"));
             }
