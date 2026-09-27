@@ -16,7 +16,9 @@ banner, 3840x2160) and Banner3_Filter-background.png (the launcher's background,
                                                 a close crop of the "KC" letters (the
                                                 plaque's lettering cannot be read that
                                                 small)
-  docs/branding/banner-1280.jpg                 README and tester pages
+  docs/branding/banner-1280.jpg                 the tester pages
+  docs/branding/KCT_txt-900.png                 the README's header: the maintainer's text
+                                                logo (KCT_txt.png), 900 wide, transparent
 
 python tools/Build-Branding.py   (needs Pillow)
 """
@@ -35,7 +37,14 @@ out = os.path.join(ROOT, 'KCDMP_launcher', 'wwwroot', 'img', 'background.jpg')
 bg.save(out, 'JPEG', quality=82, optimize=True, progressive=True)
 print(out, bg.size, os.path.getsize(out), 'bytes')
 
-# ---- README / tester pages
+# ---- the README's header: the text logo, transparency kept
+txt = Image.open(os.path.join(B, 'KCT_txt.png')).convert('RGBA')
+txt = txt.resize((900, round(900 * txt.size[1] / txt.size[0])), Image.LANCZOS)
+out = os.path.join(B, 'KCT_txt-900.png')
+txt.save(out, 'PNG', optimize=True)
+print(out, txt.size, os.path.getsize(out), 'bytes')
+
+# ---- tester pages
 web = banner.resize((1280, 720), Image.LANCZOS)
 out = os.path.join(B, 'banner-1280.jpg')
 web.save(out, 'JPEG', quality=82, optimize=True, progressive=True)

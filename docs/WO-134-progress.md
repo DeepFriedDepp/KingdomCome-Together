@@ -57,7 +57,10 @@ art commit), tree clean, fast-forward only. No force-push.
   at 84 % of the width on a blended fill. At the maintainer's request the banner
   header became the text title **Kingdom Come: Together**, and the new
   `Banner3_Filter-background.png` replaced the launcher's page background.
-  Installer rebuilt.
+  The README's header became the maintainer's text logo (`KCT_txt.png`, a
+  900 px transparent copy). The stale header and old background images were
+  also cleared from the launcher's publish folder, which had carried them into
+  the payload. Installer rebuilt.
 - `tools\Build-Installer.ps1`: the first run stopped at the agent unit tests
   (`Wo123Tests.Join_wire_table_is_consistent` had the join channel's range
   hard-coded to 0x5B); widened to 0x5F; the second run green end to end.
@@ -72,7 +75,7 @@ art commit), tree clean, fast-forward only. No force-push.
 | static checks | console placeholders 7/7, Lua locals 6/6 |
 | native unit tests | 53/53 |
 | local publish + payload coherence + smoke | pass |
-| installer | `release\KingdomComeTogether-Setup-0.30.9.exe`, 96.9 MB, sha256 `59929b9f975dba5a14b9766aa0752f4cb57366cc296c24718b0e550773f307de` |
+| installer | `release\KingdomComeTogether-Setup-0.30.9.exe`, 95.5 MB, sha256 `677b01b20c5363883d6ea0a15626e32c609c1de64c9964171c79e4e6d6c86df6` (the last rebuild, after the review fixes) |
 
 Outside the release gates: `Test-ItemSyncRelay` 11/11 (baseline). The WO-134
 markers are present in the built payload and the shipped pak (checked).
