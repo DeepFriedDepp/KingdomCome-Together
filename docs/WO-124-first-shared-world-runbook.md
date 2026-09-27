@@ -111,7 +111,7 @@ host's world (time, NPCs, quests).
 * Joiner console: `mp_henry_files` lists the host worlds your character is
   stored for.
 
-## Staying together (from the build after 0.30.0, WO-114)
+## Staying together (from 0.30.2, WO-114)
 
 * The joiner past **600 m** from the host: a warning on both screens, once.
 * Past **650 m**: a 10 s countdown on the joiner's screen; back inside stops

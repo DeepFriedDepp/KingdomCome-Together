@@ -100,9 +100,9 @@ Watch for these; note the time of anything that still looks like 0.29.9.
   **sunk into the ground** to the knees or more, note where (the village or
   road) and the time.
 
-## Staying together (the next build, not in 0.30.0)
+## Staying together (0.30.2, not in 0.30.0)
 
-From the build after 0.30.0 the partner can't wander off on their own; the
+From 0.30.2 (`docs/TEST-0.30.2.md`) the partner can't wander off on their own; the
 world is only alive around the host.
 
 * **600 m:** the partner sees "You're getting far from your host. Head back,

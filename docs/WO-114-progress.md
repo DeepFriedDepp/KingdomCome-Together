@@ -102,6 +102,6 @@ No installer (no version string given): `VERSION` stays 0.30.0.
 
 ## 6. For the next WO
 
-* The two-player items: `docs/TEST-0.30.0.md` "Staying together" (next build)
-  and the runbook's leash lines; predictions in findings §7.
+* The two-player items: `docs/TEST-0.30.2.md` section 4 and the runbook's
+  leash lines; predictions in findings §7.
 * A fade around the pull; a real dialogue/cutscene hold on the joiner.
