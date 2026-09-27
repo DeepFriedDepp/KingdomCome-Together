@@ -131,6 +131,9 @@ $AsmMarkers = @(
     # WO-134: world items (bodies, loose items, chest ledgers) and the rebrand
     @{ File = 'KcdMpClient.dll'; Marker = 'KCD2MP_W134BodyState';   Owner = 'WO-134 bodies shared in the host world (agent half)' },
     @{ File = 'KcdMpClient.dll'; Marker = 'MP-WO134-STATS';         Owner = 'WO-134 chest ledgers and loot requests (agent half)' },
+    @{ File = 'KcdMpClient.dll'; Marker = 'MP-WO135-STATS';         Owner = 'WO-135 avatar puppet, knockouts, same-build Henry (agent half)' },
+    @{ File = 'KCDMP.dll';       Marker = 'WO135-DIALOG';           Owner = 'WO-135 the avatar is never heard (native dialogue gate)' },
+    @{ File = 'KCDMP.dll';       Marker = 'WO135-QUIET';            Owner = 'WO-135 the avatar puppet contexts (native)' },
     @{ File = 'KcdMp.Protocol.dll'; Marker = 'loot-host';           Owner = 'WO-134 loot messages on the join channel (wire)' },
     @{ File = 'KCDMP_launcher.dll'; Marker = 'Kingdom Come: Together'; Owner = 'WO-134 rebrand (launcher window title)' }
 )
@@ -189,6 +192,8 @@ $PakMarkers = @(
     @{ Marker = 'function KCD2MP_W134HostItem';    Owner = 'WO-134 loose world items per world (mod half)' },
     @{ Marker = 'function KCD2MP_W134ChestApply';  Owner = 'WO-134 chests per player across rejoins (mod half)' },
     @{ Marker = 'function W134.takeAway';          Owner = 'WO-134 world items leave for good (no item-slot respawn)' },
+    @{ Marker = 'function KCD2MP_W135KoTick';      Owner = 'WO-135 knockouts follow the host (mod half)' },
+    @{ Marker = 'function KCD2MP_W135HostTakedown'; Owner = 'WO-135 takedowns are requests to the host (mod half)' },
     @{ Marker = 'Quest catch-up is off in a shared world.'; Owner = 'WO-133 the plain refusal line' }
 )
 

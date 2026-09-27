@@ -71,6 +71,13 @@ public partial class GameBridge
             try
             {
                 if (_where == GameWhere.Menu) continue;
+                // WO-135: never while a world loads. The guard's pauses landed right after
+                // EntityModuleOnPostLoadGame, before "Gameplay started": suspended NPCs never
+                // finish the AI's post-load reconstruction, so the loading screen waited for the
+                // engine's timeout ("Loading screen timeouted while still in post load
+                // reconstruction", observed on a join, run J1). The load drops every suspension
+                // anyway; the first tick after Gameplay started re-parks (the reassert path).
+                if (_where == GameWhere.Loading) continue;
                 bool joiner = _combatRoleApplied && !_isDamageAuthority && _hostAuthority;
                 bool shared = joiner ? JoinerSharedEffective : _sharedWorld;
                 _ = ExecLuaAsync($"if KCD2MP_W131Tick then KCD2MP_W131Tick({(joiner ? "true" : "false")}, {(shared ? "true" : "false")}) end");

@@ -10,10 +10,21 @@
 //                   (1b): is the body driven by the host's stream, how old is
 //                   the newest sample, how far is the body from it, is it dead
 //                   there, the copy's own health now, does it carry the guard.
-//   op 2 CopyGuard  [on:1][eid:4] -> [present:1]
+//   op 2 CopyGuard  [mode:1][eid:4] -> [present:1]
 //                   The joiner's copy of a host NPC can never die or be knocked
 //                   out locally (1c): kcdmp_avatar_guard (imm=1, upr=1) on it,
 //                   removed before the host's death is applied.
+//                   WO-135 modes: 0 off (both guards off), 1 guard (the full
+//                   guard, the knockout guard off), 2 knockout -- the host's
+//                   NPC is knocked out, so the copy is too: the full guard is
+//                   swapped for kcdmp_knockout_guard (imm=1 only: still never
+//                   dies here) and the game's own unconsciousness buffs are
+//                   added (unconscious_nonpersistend + the endless
+//                   infinite_unconsciousness_nonpersistent: it wakes when the
+//                   host's does, not on the game's timer). 3 wake -- those
+//                   removed, the game's remove_unconsciousness added, the full
+//                   guard back. present = the copy is unconscious (2) or
+//                   carries the guard it should (0, 1, 3).
 //   op 3 FollowHp   [guid:16][eid:4][hp:4f] -> [before:4f][after:4f]
 //                   The copy's health follows the host's (1c). A drop we write
 //                   is credited to the LocalHit sampler first, so it never
@@ -27,6 +38,9 @@
 //                   hit measured nothing.
 //   op 6 Faction    [guid:16][mode:1] -> []   mode 2 = the player's faction (1d)
 //   op 7 Status     [] -> [text]
+//   op 8 PlayerCrouch [on:1] -> []   WO-135 live checks only: the local
+//                   player's crouch through its own setter (the function the
+//                   crouch key reaches); no input is made.
 
 #include <cstddef>
 #include <cstdint>
@@ -40,6 +54,10 @@ constexpr uint8_t kOpStopFight = 4;
 constexpr uint8_t kOpRestoreHp = 5;
 constexpr uint8_t kOpFaction   = 6;
 constexpr uint8_t kOpStatus    = 7;
+constexpr uint8_t kOpPlayerCrouch = 8;   // WO-135
+
+// CopyGuard modes (WO-135).
+constexpr uint8_t kGuardOff = 0, kGuardOn = 1, kGuardKnockout = 2, kGuardWake = 3;
 
 // Reasons (reply byte 3). Mirrored by number in GameBridge.Wo131.cs.
 constexpr uint8_t kROk         = 0;

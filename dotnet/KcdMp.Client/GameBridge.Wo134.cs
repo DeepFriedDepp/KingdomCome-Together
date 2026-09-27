@@ -72,11 +72,13 @@ public partial class GameBridge
                 int peers = _ghostNames.Count;
                 _ = ExecLuaAsync($"if KCD2MP_W134Tick then KCD2MP_W134Tick({B(joiner)}, {B(host)}, {B(shared)}, {peers}) end");
                 Wo134FlushHost();
+                Wo135HostTick();   // WO-135: the host world's build to every joiner
                 await Wo134ApplyIfReadyAsync(timeout: false);
                 if (Environment.TickCount64 - lastStats >= 60_000)
                 {
                     lastStats = Environment.TickCount64;
                     Console.WriteLine($"MP-WO134-STATS joiner={B(joiner)} host={B(host)} shared={B(shared)} peers={peers} asks_out={_w134AsksOut} asks_in={_w134AsksIn} host_out={_w134HostOut} host_in={_w134HostIn} dropped={_w134Dropped} host_ledger={_w134HostLedger?.Entries.Count ?? -1} joiner_ledger={_w134JoinerLedger.Entries.Count}");
+                    Console.WriteLine(Wo135StatsLine());   // WO-135
                 }
             }
             catch (Exception ex) { Console.WriteLine($"MP-WO134 tick failed: {ex.GetType().Name}: {ex.Message}"); }
@@ -194,6 +196,7 @@ public partial class GameBridge
     private async Task Wo134OnFrameAsync(int type, byte src, byte[] body)
     {
         if (!LootMsg.TryDecode(body, out var m)) { Interlocked.Increment(ref _w134Dropped); return; }
+        if (await Wo135OnLootFrameAsync(type, src, m)) return;   // WO-135: takedowns, the host's build
         var f = m.Text.Split(' ');
         string Q(string s) => EscapeLua(s);
         if (type == Protocol.LootAskDown)

@@ -2929,6 +2929,12 @@ function KCD2MP_NpcNativeAck(name, ok, reason)
         if tostring(reason) == "not-living" and KCD2MP_W131StandUpIfDown and KCD2MP_W131StandUpIfDown(name, "not-living") then
             p.nativeRetryAt = os.clock() + 2.0
         end
+        -- WO-135: an AVATAR on the ground (a hit's knockdown ragdolled it; it can
+        -- never be unconscious or dead here, the avatar guard) lay in the ground
+        -- while the writer refused it every 10 s (observed, run H2). Same fix.
+        if tostring(reason) == "not-living" and KCD2MP_W135AvatarStandUp and KCD2MP_W135AvatarStandUp(name) then
+            p.nativeRetryAt = os.clock() + 2.0
+        end
     end
 end
 
@@ -5880,6 +5886,7 @@ function KCD2MP_W131Tick(joiner, shared)
     w.shared = shared == true
     w.aliveAt = os.clock()
     pcall(KCD2MP_W131InstallLootBlock)
+    pcall(KCD2MP_W135InstallTakedowns)   -- WO-135
     local now = KCD2MP_W131IsActive()
     if now and not w.active then
         w.active = true
@@ -5887,7 +5894,7 @@ function KCD2MP_W131Tick(joiner, shared)
     elseif not now and w.active then
         KCD2MP_W131UnparkAll("inactive")
     end
-    if w.active then pcall(w131_sweep) end
+    if w.active then pcall(w131_sweep); pcall(KCD2MP_W135KoTick) end   -- WO-135: knockouts follow the host's
 end
 
 -- Liveness backstop from the 8 ms draw loop: the agent went away without a
@@ -6128,6 +6135,313 @@ function KCD2MP_W131InConversation()
     local twin = nil
     pcall(function() twin = System.GetEntityByName("DialogTwin_" .. pn) end)
     return twin ~= nil
+end
+
+-- ===== WO-135: the avatar is a puppet; knockouts shared (docs/WO-135-findings.md) =====
+--
+-- Phase 1 (host): the partner's avatar never reacts to anything. The switches
+-- are the game's own per-soul script contexts, set natively (motion.cpp
+-- kQuiet*: speech, witness, react, defence). mp_avatar_quiet picks the groups
+-- (a bit mask, default all four = 15); it rides the agent's MotionConfig.
+--   WO135-QUIET quiet=<mask> (<groups>)
+--
+-- Phase 2 (joiner): a knocked-out NPC is a state both screens share, like a
+-- death. The host's world decides (stream flag bit 1, WO-38); the joiner's
+-- copy follows: the agent swaps its guard for the imm-only knockout guard and
+-- adds the game's own unconsciousness (wo131 op 2 mode 2), and wakes it when
+-- the host's NPC is up (mode 3). The game's takedown actions on a host-owned
+-- copy (finish a lying body, knock out, stealth kill) are requests to the
+-- host, whose own world performs them with the joiner's avatar.
+--   WO135-KO npc=<name> want=down|up local=down|up -> asked
+--   WO135-TAKEDOWN ask npc=<name> kind=<mercy|knockout|stealth>
+--   WO135-TAKEDOWN host npc=<name> kind=<k> from=<ghost> -> <how>
+do
+    KCD2MP.w135 = {
+        quiet = 15,
+        koSync = true,            -- mp_npc_ko_sync on|off (joiner)
+        ko = {},                  -- name -> { want = bool, at = os.clock() } the last ask
+        koRetryS = 4.0,
+        pendingTd = {},           -- host: tok -> { src, name, kind, at, tries }
+        stats = { koAsk = 0, koDone = 0, wakeDone = 0, tdAsk = 0, tdOk = 0, tdRefused = 0, tdHost = 0 },
+    }
+
+    local W135_GROUPS = { { 1, "speech" }, { 2, "witness" }, { 4, "react" }, { 8, "defence" } }
+
+    local function w135_groups(mask)
+        local t = {}
+        for _, g in ipairs(W135_GROUPS) do
+            if math.floor(mask / g[1]) % 2 == 1 then t[#t + 1] = g[2] end
+        end
+        return #t > 0 and table.concat(t, ",") or "none"
+    end
+
+    -- mp_avatar_quiet [0..15|on|off]: bare = report.
+    function KCD2MP_W135SetQuiet(arg)
+        local s = tostring(arg or ""):lower():gsub("^%s+", ""):gsub("%s+$", "")
+        local w = KCD2MP.w135
+        if s == "on" then w.quiet = 15
+        elseif s == "off" then w.quiet = 0
+        elseif s ~= "" then
+            local n = tonumber(s)
+            if not n or n < 0 or n > 15 or n ~= math.floor(n) then
+                mp_log("mp_avatar_quiet: expected 0..15 (1 speech, 2 witness, 4 react, 8 defence), on or off; got '" .. s .. "'")
+                return false
+            end
+            w.quiet = n
+        end
+        mp_log(string.format("WO135-QUIET quiet=%d (%s) -- the partner's avatar never %s", w.quiet, w135_groups(w.quiet),
+            w.quiet == 15 and "barks, witnesses, reacts or defends itself" or "does what its groups switch off"))
+        if s ~= "" then KCD2MP_EmitEvent("w135_cfg", string.format("quiet=%d", w.quiet)) end
+        return true
+    end
+
+    -- mp_w135_check <verb ...>: live checks through the agent (crouch on|off, ...).
+    function KCD2MP_W135Check(arg)
+        KCD2MP_EmitEvent("w135_check", tostring(arg or ""))
+    end
+
+    -- mp_npc_ko_sync on|off (joiner): the host's knockouts reach the copies.
+    function KCD2MP_W135SetKoSync(arg)
+        local v = KCD2MP_Wo122ParseBool(arg)
+        if v == "bad" then mp_log("mp_npc_ko_sync: expected on|off"); return false end
+        if v ~= nil then KCD2MP.w135.koSync = v end
+        mp_log("WO135-KO ko_sync=" .. (KCD2MP.w135.koSync and "on" or "off"))
+        return true
+    end
+
+    local function w135_body(name)
+        local e = nil
+        pcall(function() e = System.GetEntityByName(name) end)
+        return e
+    end
+
+    local function w135_down(e)
+        local d = false
+        pcall(function() d = e and e.actor and e.actor:IsUnconscious() == true end)
+        return d
+    end
+
+    local function w135_dead(e)
+        local d = false
+        pcall(function() d = e and e.actor and e.actor:IsDead() == true end)
+        return d
+    end
+
+    -- Joiner, from the WO-131 guard tick (1 s): every host-owned copy that the
+    -- host has down and is up here (or the other way round) is asked for once,
+    -- then again every koRetryS while it still differs.
+    function KCD2MP_W135KoTick()
+        local w = KCD2MP.w135
+        if not w.koSync or not KCD2MP_W131IsActive() then return end
+        local now = os.clock()
+        for name, p in pairs(KCD2MP.npcPuppets or {}) do
+            if not p.dead and p.everPacket then
+                local e = w135_body(name)
+                if e and e.actor and not w135_dead(e) then
+                    local want = p.ko == true
+                    local here = w135_down(e)
+                    local last = w.ko[name]
+                    if want ~= here then
+                        if not last or last.want ~= want or (now - last.at) >= w.koRetryS then
+                            w.ko[name] = { want = want, at = now }
+                            w.stats.koAsk = w.stats.koAsk + 1
+                            mp_log(string.format("WO135-KO npc=%s want=%s local=%s -> asked", name, want and "down" or "up", here and "down" or "up"))
+                            KCD2MP_EmitEvent("w135_ko", name .. " " .. (want and "1" or "0"))
+                        end
+                    elseif last and last.want == want then
+                        w.ko[name] = nil   -- settled
+                    end
+                end
+            end
+        end
+    end
+
+    -- The agent's answer to w135_ko: the guard swap and the game's own
+    -- unconsciousness (or its removal) are done natively.
+    function KCD2MP_W135KoDone(name, down, ok)
+        local w = KCD2MP.w135
+        if ok then
+            if down then w.stats.koDone = w.stats.koDone + 1 else w.stats.wakeDone = w.stats.wakeDone + 1 end
+        end
+        local e = w135_body(name)
+        mp_log(string.format("WO135-KO npc=%s %s ok=%s local_now=%s", tostring(name), down and "knocked out" or "woken",
+            tostring(ok), w135_down(e) and "down" or "up"))
+        if not down and ok then
+            -- The wake ends the unconsciousness, but the get-up is the brain's
+            -- (interrupt_wakeUp) and a copy's brain is paused (WO-131): it stays
+            -- ragdolled, and StandUp does nothing then (observed, run J1). The
+            -- engine's actor:Revive(false) puts it on its feet (observed); its
+            -- health keeps following the host's (WO-131 FollowHp).
+            Script.SetTimer(1500, function()
+                local e2 = w135_body(name)
+                if not (e2 and e2.actor) or w135_dead(e2) or w135_down(e2) then return end
+                local rok = pcall(function() e2.actor:Revive(false) end)
+                mp_log("WO135-KO npc=" .. tostring(name) .. " woken -> Revive(false) ok=" .. tostring(rok) .. " (on its feet; the writer re-binds it)")
+            end)
+        end
+    end
+
+    -- ---- takedowns on a host-owned copy (joiner) --------------------------------------
+    -- The game builds these interactions in BasicAIActions:GetActions: a lying body
+    -- offers mercy_kill (OnMercyKill -> user.actor:RequestMercyKill), a standing
+    -- one knock_out / stealth_kill (OnKnockout / OnStealthKill). On a host-owned
+    -- copy none of them may run here: the copy is the host's NPC.
+    local W135_KINDS = { mercy = true, knockout = true, stealth = true }
+
+    function KCD2MP_W135TakedownRequest(body, kind)
+        local ok, name = KCD2MP_W131Guardable(body)
+        if not ok or not W135_KINDS[kind] then return false end
+        local w = KCD2MP.w135
+        w.stats.tdAsk = w.stats.tdAsk + 1
+        mp_log(string.format("WO135-TAKEDOWN ask npc=%s kind=%s -- the host's world performs it", tostring(name), kind))
+        KCD2MP_EmitEvent("w135_takedown", tostring(name) .. " " .. kind)
+        return true
+    end
+
+    function KCD2MP_W135TakedownResult(name, kind, res)
+        local w = KCD2MP.w135
+        if res == "ok" then w.stats.tdOk = w.stats.tdOk + 1 else w.stats.tdRefused = w.stats.tdRefused + 1 end
+        mp_log(string.format("WO135-TAKEDOWN result npc=%s kind=%s -> %s", tostring(name), tostring(kind), tostring(res)))
+        if res ~= "ok" then KCD2MP_ShowNativeToast("Your host's world did not allow that.") end
+    end
+
+    function KCD2MP_W135InstallTakedowns()
+        if type(BasicAIActions) ~= "table" then return end
+        local w = KCD2MP.w135
+        local function wrap(fname, kind)
+            local cur = BasicAIActions[fname]
+            if type(cur) ~= "function" or cur == w[fname .. "Wrap"] then return end
+            local orig = cur
+            w[fname .. "Orig"] = orig
+            w[fname .. "Wrap"] = function(self, user, slot)
+                if KCD2MP_W131IsActive() and KCD2MP_W135TakedownRequest(self, kind) then return end
+                return orig(self, user, slot)
+            end
+            BasicAIActions[fname] = w[fname .. "Wrap"]
+            mp_log("WO135-TAKEDOWN wrapped BasicAIActions." .. fname)
+        end
+        wrap("OnMercyKill", "mercy")
+        wrap("OnKnockout", "knockout")
+        wrap("OnStealthKill", "stealth")
+    end
+
+    -- ---- takedowns, host side -------------------------------------------------------
+    -- The joiner's request: the host's own world performs it with the joiner's
+    -- avatar as the actor (the same Request* calls the game's interaction makes).
+    -- If the avatar's request did not take after 3 s (an avatar is not a player:
+    -- the pair animation may refuse it), the engine's result is applied directly:
+    -- mercy = the NPC dies (DealDamage), knockout = the game's unconsciousness.
+    -- Checked first: the body exists, is a human NPC, lies within 4 m of the avatar,
+    -- and is in the state the kind needs (mercy: down, not dead; others: up).
+    local W135_UNCONSCIOUS = "f8d60fe4-e2c1-420a-946a-213e1cd09264"   -- the game's `unconscious` buff (60 s)
+
+    local function w135_avatar(src)
+        local g = KCD2MP.ghosts[src] or KCD2MP.ghosts[tostring(src)] or KCD2MP.ghosts[tonumber(src) or -1]
+        return g and g.entity or nil
+    end
+
+    local function w135_result(src, tok, res, name, kind)
+        KCD2MP_EmitEvent("w135_tdres", string.format("%d %d %s %s %s", tonumber(src) or 0, tonumber(tok) or 0, res, tostring(name), kind))
+    end
+
+    local function w135_done(e, kind)
+        if kind == "mercy" or kind == "stealth" then return w135_dead(e) end
+        return w135_down(e) or w135_dead(e)
+    end
+
+    function KCD2MP_W135HostTakedown(src, tok, name, kind)
+        local w = KCD2MP.w135
+        w.stats.tdHost = w.stats.tdHost + 1
+        local e = w135_body(name)
+        local av = w135_avatar(src)
+        local why = nil
+        if not W135_KINDS[kind] then why = "kind"
+        elseif not (e and e.actor) then why = "no-body"
+        elseif not (e.class == "NPC" or e.class == "NPC_Female") then why = "not-human"
+        elseif w135_dead(e) then why = "already-dead"
+        elseif kind == "mercy" and not w135_down(e) then why = "not-down"
+        elseif kind ~= "mercy" and w135_down(e) then why = "already-down"
+        elseif not av then why = "no-avatar"
+        else
+            local a, b = av:GetWorldPos(), e:GetWorldPos()
+            local d = (a and b) and math.sqrt((a.x - b.x) ^ 2 + (a.y - b.y) ^ 2 + (a.z - b.z) ^ 2) or 99
+            if d > 4.0 then why = string.format("far-%.1fm", d) end
+        end
+        if why then
+            mp_log(string.format("WO135-TAKEDOWN host npc=%s kind=%s from=%s -> refused (%s)", tostring(name), tostring(kind), tostring(src), why))
+            w135_result(src, tok, "refused", name, W135_KINDS[kind] and kind or "mercy")
+            return
+        end
+        local fn = kind == "mercy" and "RequestMercyKill" or kind == "knockout" and "RequestKnockOut" or "RequestStealthKill"
+        local ok, r = pcall(function() return av.actor[fn](av.actor, e.id) end)
+        mp_log(string.format("WO135-TAKEDOWN host npc=%s kind=%s from=%s -> avatar %s ok=%s ret=%s", name, kind, tostring(src), fn, tostring(ok), tostring(r)))
+        Script.SetTimer(3000, function()
+            local e2 = w135_body(name)
+            if not e2 then w135_result(src, tok, "refused", name, kind); return end
+            if not w135_done(e2, kind) then
+                -- The engine's result, directly.
+                if kind == "knockout" then
+                    pcall(function() e2.soul:AddBuff(W135_UNCONSCIOUS) end)
+                else
+                    local hp = 100
+                    pcall(function() hp = e2.soul:GetState("health") or 100 end)
+                    pcall(function() e2.soul:DealDamage(0, (tonumber(hp) or 100) + 50) end)
+                end
+                mp_log(string.format("WO135-TAKEDOWN host npc=%s kind=%s -> the avatar's %s did not take; applied directly", name, kind, fn))
+            end
+            Script.SetTimer(1500, function()
+                local e3 = w135_body(name)
+                local done = e3 and w135_done(e3, kind)
+                mp_log(string.format("WO135-TAKEDOWN host npc=%s kind=%s -> %s", name, kind, done and "done" or "NOT done"))
+                w135_result(src, tok, done and "ok" or "refused", name, kind)
+            end)
+        end)
+    end
+
+    -- mp_w135_ko <test npc> on|off (host, live checks only): knock a TEST NPC out
+    -- with the game's own unconsciousness, or wake it. Only names starting with a
+    -- test prefix (wo13) -- never a world NPC.
+    function KCD2MP_W135TestKo(arg)
+        local name, v = tostring(arg or ""):match("^%s*(%S+)%s+(%S+)")
+        if not (name and name:match("^wo13") and (v == "on" or v == "off")) then
+            mp_log("mp_w135_ko: expected <wo13* test npc> on|off"); return false
+        end
+        local e = w135_body(name)
+        if not (e and e.soul) then mp_log("mp_w135_ko: no " .. name); return false end
+        if v == "on" then
+            pcall(function() e.soul:AddBuff("c75aa0db-65ca-44d7-9001-e4b6d38c6875") end)   -- unconscious_permanent
+        else
+            pcall(function() e.soul:RemoveAllBuffsByGuid("c75aa0db-65ca-44d7-9001-e4b6d38c6875") end)
+            pcall(function() e.soul:AddBuff("bd22f98a-e61f-4d83-b39c-79d1d85b6b91") end)   -- remove_unconsciousness
+        end
+        Script.SetTimer(1500, function()
+            mp_log(string.format("WO135-KO test %s %s -> unconscious=%s", name, v, tostring(w135_down(w135_body(name)))))
+        end)
+        return true
+    end
+
+    -- WO-135: a ragdolled avatar gets up (the engine's own StandUp, WO-131 2b).
+    --   WO135-STANDUP avatar=<name> ok=<pcall>
+    function KCD2MP_W135AvatarStandUp(name)
+        if not tostring(name):match("^kcd2mp_%d+$") then return false end
+        local w = KCD2MP.w135
+        w.standAt = w.standAt or {}
+        local now = os.clock()
+        if w.standAt[name] and (now - w.standAt[name]) < 3.0 then return false end
+        local e = w135_body(name)
+        if not (e and e.actor) or w135_dead(e) then return false end
+        if type(e.actor.StandUp) ~= "function" then return false end
+        w.standAt[name] = now
+        local ok, err = pcall(function() e.actor:StandUp() end)
+        mp_log(string.format("WO135-STANDUP avatar=%s ok=%s%s -- it was on the ground (physics not living)", name, tostring(ok), ok and "" or (" err=" .. tostring(err))))
+        return ok
+    end
+
+    function KCD2MP_W135Status()
+        local w, s = KCD2MP.w135, KCD2MP.w135.stats
+        mp_log(string.format("WO135-STATUS quiet=%d (%s) ko_sync=%s ko_ask=%d ko_done=%d wake_done=%d td_ask=%d td_ok=%d td_refused=%d td_host=%d",
+            w.quiet, w135_groups(w.quiet), w.koSync and "on" or "off", s.koAsk, s.koDone, s.wakeDone, s.tdAsk, s.tdOk, s.tdRefused, s.tdHost))
+    end
 end
 
 -- ===== WO-102 Phase 6: NPC resync burst (the sleep / fast-travel / reload net) =====
@@ -7788,7 +8102,10 @@ function KCD2MP_ApplyNpcState(name, x, y, z, rot, hp, flags, src, seq, senderMs)
     -- arm's reach. Names are probed (findAnim); none-found degrades to the
     -- existing freeze behaviour. Only a WITNESSED transition cues -- a body
     -- that is already KO on its first packet (late join) just freezes.
-    if p.ko and wasKo == false and p.everPacket then
+    -- WO-135: under the copy guard the copy is really knocked out (KCD2MP_W135KoTick);
+    -- the cosmetic takedown clip would fight that state, so it is skipped there.
+    if p.ko and wasKo == false and p.everPacket
+       and not (KCD2MP.w135 and KCD2MP.w135.koSync and KCD2MP_W131IsActive and KCD2MP_W131IsActive()) then
         pcall(function() KCD2MP_NpcTakedownCue(name, e, x, y, z) end)
     end
     -- WO-86 Phase 1: the inbound dead bit, against this world's copy. The
@@ -15208,6 +15525,11 @@ local ok, err = pcall(function()
     -- WO-114: the leash (HOST values decide; default on, 600 m warning, 650 m pull).
     System.AddCCommand("mp_npc_guard",           'KCD2MP_SetNpcGuard(%line)',             "WO-131 1a (JOINER): every NPC of the host's world is the host's stream or parked here (suspended + hidden) -- never a free copy: mp_npc_guard on|off (default on); bare = report")
     System.AddCCommand("mp_avatar_perceive",     'KCD2MP_SetAvatarPerceive(%line)',       "WO-131 1d (HOST of a shared world): the partner's avatar is always perceivable by NPCs (never AI-ignorant) and in the player's faction: mp_avatar_perceive on|off (default on); bare = report")
+    System.AddCCommand("mp_avatar_quiet",        'KCD2MP_W135SetQuiet(%line)',            "WO-135 (host): the partner's avatar is a puppet -- which groups of its own reactions are off: 1 speech (barks, dialogue), 2 witness (crime), 4 react (perception, hits), 8 defence (its own blocks); mp_avatar_quiet 0..15|on|off (default 15 = all); bare = report")
+    System.AddCCommand("mp_npc_ko_sync",         'KCD2MP_W135SetKoSync(%line)',           "WO-135 (joiner): the host's knocked-out NPCs go down on this screen too, and get up when they do: mp_npc_ko_sync on|off (default on)")
+    System.AddCCommand("mp_w135_check",          'KCD2MP_W135Check(%line)',               "WO-135 live checks: mp_w135_check crouch on|off (the player's own crouch setter, no input) | status")
+    System.AddCCommand("mp_w135_ko",             'KCD2MP_W135TestKo(%line)',              "WO-135 live checks (host): knock a wo13* TEST npc out or wake it with the game's own unconsciousness: mp_w135_ko <npc> on|off")
+    System.AddCCommand("mp_w135_status",         'KCD2MP_W135Status()',                   "WO-135: quiet groups, knockout sync and takedown request counters")
     System.AddCCommand("mp_npc_standin",         'KCD2MP_SetNpcStandIn(%line)',           "WO-131 1f (JOINER): an NPC the host spawned at runtime (road encounters) gets a stand-in here under its own name, driven by the host's stream: mp_npc_standin on|off (default on)")
     System.AddCCommand("mp_w131_status",         'KCD2MP_W131Status()',                   "WO-131: the copy guard, loot block and perception state (WO131-STATUS in kcd.log)")
     System.AddCCommand("mp_w134_status",         'KCD2MP_W134Status()',                   "WO-134: world items -- bodies, loose items, chests (WO134-STATUS in kcd.log)")

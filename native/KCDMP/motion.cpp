@@ -8,6 +8,8 @@
 #include <cstring>
 #include <mutex>
 #include <string>
+#include "wo135.h"
+#include "mannequin_read.h"
 #include <unordered_map>
 #include <vector>
 
@@ -178,6 +180,9 @@ std::string g_whyGait = "not installed", g_whyMoves = "not installed", g_whyComb
 // ---- config (agent) --------------------------------------------------------------
 std::atomic<bool> g_cfgAvatarGait{true}, g_cfgNpcGait{true}, g_cfgMoves{true}, g_cfgCombat{true}, g_cfgNpcRows{true};
 std::atomic<bool> g_cfgChanged{false};
+// WO-135: which groups of the avatar's puppet contexts are set (MotionConfig byte 5;
+// kQuiet* below). Default: all of them.
+std::atomic<uint8_t> g_cfgQuiet{0x0F};
 
 // ---- per-body state (main thread) ------------------------------------------------
 struct Body {
@@ -204,6 +209,7 @@ struct Body {
     double lastCombatAssert = 0, lastBuffCheck = 0, lastGaitLog = 0;
     uint32_t combatStarts = 0;
     bool ctxApplied = false;      // the WO-121 avatar contexts (kAvatarContexts) are set on its soul
+    uint8_t quietApplied = 0;     // WO-135: the kQuiet* groups set on its soul
 };
 std::unordered_map<uint32_t, Body> g_bodies;
 
@@ -369,6 +375,35 @@ void* player_actor() {
     void* actor = nullptr;
     if (!call_p0(s_fn, inst, &actor)) return nullptr;
     return actor;
+}
+
+// WO-135: the local player's crouch as the capture reads it. Every edge is
+// logged and counted (cap_crouch), and a read that cannot happen says why once
+// -- the field's `crouch=0` could not tell a capture that never saw a crouch
+// from an apply that never ran.
+std::atomic<uint32_t> c_capCrouch{0};
+bool g_localCrouch = false;
+bool g_crouchWhyLogged = false;
+void note_local_crouch(void* actor, void* exp, bool readOk, bool crouched, const char* src) {
+    if (!readOk) {
+        if (g_crouchWhyLogged) return;
+        g_crouchWhyLogged = true;
+        void* holderFn = vslot(actor, kActorExpHolder);
+        void* holder = nullptr; void* ext = nullptr;
+        if (holderFn && call_p0(holderFn, actor, &holder) && holder) {
+            void* getExt = vslot(holder, kHolderGetExt);
+            if (getExt) call_p1b(getExt, holder, true, &ext);
+        }
+        char cls[128] = "?";
+        void* vt = nullptr;
+        if (ext && rd(ext, 0, &vt)) rtti_name_of(vt, cls, sizeof cls);
+        logf("WO135-CROUCH local capture CANNOT read: exp=%s ext=%p class=%s -- the local crouch is never sent", exp ? "yes" : "no", ext, cls);
+        return;
+    }
+    if (crouched == g_localCrouch) return;
+    g_localCrouch = crouched;
+    if (crouched) c_capCrouch.fetch_add(1);
+    logf("WO135-CROUCH local crouch=%d (source: %s -- the state expansion's crouch byte / the Mannequin stealth stance tag)", crouched ? 1 : 0, crouched ? src : "-");
 }
 
 // ---- the capture hooks -----------------------------------------------------------
@@ -546,11 +581,13 @@ void release_gait(Body& b) {
     b.gaitWritten = false;
 }
 
+std::atomic<uint32_t> c_crouchApplyFail{0};
+
 void apply_crouch(Body& b, bool want) {
     if (!b.exp) b.exp = expansion_of(b.actor);
-    if (!b.exp) return;
+    if (!b.exp) { if (c_crouchApplyFail.fetch_add(1) < 5) logf("WO135-CROUCH body=%s apply refused: no state expansion", b.key.c_str()); return; }
     void* fn = vslot(b.exp, kExpSetCrouch);
-    if (fn != A.fnSetCrouch) return;
+    if (fn != A.fnSetCrouch) { if (c_crouchApplyFail.fetch_add(1) < 5) logf("WO135-CROUCH body=%s apply refused: SetCrouch slot mismatch", b.key.c_str()); return; }
     if (!call_bb(fn, b.exp, want, false)) { c_faults.fetch_add(1); g_moves = false; g_whyMoves = "SetCrouch faulted"; return; }
     b.crouchApplied = want;
     c_crouch.fetch_add(1);
@@ -612,10 +649,12 @@ void apply_combat(Body& b, const State2* st, double now) {
 }
 
 void set_avatar_contexts(Body& b, bool on);
+void set_quiet(Body& b, uint8_t want);
 
 void release_body(Body& b, const char* why) {
     release_gait(b);
     if (b.ctxApplied) set_avatar_contexts(b, false);
+    if (b.quietApplied) set_quiet(b, 0);
     if (b.crouchApplied && b.exp && vslot(b.exp, kExpSetCrouch) == A.fnSetCrouch) { call_bb(A.fnSetCrouch, b.exp, false, false); b.crouchApplied = false; }
     if (b.ca && is_a(b.ca, A.vftCa)) {
         if (b.blockApplied) call_setblock(A.fnSetBlock, b.ca, false, 0);
@@ -670,6 +709,91 @@ void set_avatar_contexts(Body& b, bool on) {
     logf("WO121-MOTION body=%s avatar contexts %s: %d ok, %d failed", b.key.c_str(), on ? "set" : "cleared", ok, bad);
 }
 
+// WO-135: the avatar is a puppet -- seen, never heard. Its own brain perceives
+// and reacts like any NPC's (the 0.30.9 field log: 56 assault-witness barks at
+// the host's attacks, recognition and torch barks, greetings, 90 hit screams,
+// and blocks of its own: a guard's hits measured hp -0.0 st -30). Other NPCs
+// perceive and target it (WO-131: never AI-ignorant, the player's faction);
+// what it may no longer do is react. Each group is a set of the game's own
+// per-soul script contexts (Tables :: Libs/Tables/ai/ScriptContext.xml,
+// Class="Entity"), each one checked by the brain on ITSELF (target="" /
+// $this.id in Scripts.pak :: AI/npc/basic/switch/*.xml), so setting them on
+// the avatar changes only the avatar's own reactions -- nobody else's view of
+// it. Why each group is needed: docs/WO-135-findings.md Phase 1.
+constexpr uint8_t kQuietSpeech  = 0x01;
+constexpr uint8_t kQuietWitness = 0x02;
+constexpr uint8_t kQuietReact   = 0x04;
+constexpr uint8_t kQuietDefence = 0x08;
+struct QuietGroup { uint8_t bit; const char* name; const char* const* ctx; size_t n; };
+// The speech group is no script context: speech_mute (SideEffect muteDialogue),
+// RestrictDialog and the combat chat switches left every avatar bark starting
+// and voiced (WO-135 run H1). It is the native dialogue-start gate (wo135.cpp):
+// no dialogue with the avatar among its speakers starts at all.
+constexpr const char* const* kQuietSpeechCtx = nullptr;
+constexpr const char* kQuietWitnessCtx[] = {
+    "crime_ignorePlayerPerception",         // handleAwareness: no awareness of the player -> no recognition, no crime seen
+    "crime_ignoreNPCHitVolumes",            // handleAwareness_hitVolume: never witnesses an NPC being hit (the assault barks)
+    "crime_ignoreAnimalHitVolumes",
+    "crime_ignoreCombatSounds",
+    "crime_ignorePlayersSounds",
+    "crime_ignoreCorpses",
+    "crime_ignoreUnconsciousBodies",
+    "crime_ignoreThefts",
+    "crime_ignorePickpocketing",
+    "crime_ignoreLockpicking",
+    "crime_disableCrimeInformationEmit",    // never spreads a crime to others
+    "crime_disableReport",                  // SideEffect crimeDisableReport: never reports to a guard
+    "crime_dontCreateInformationsWhenHit",  // a hit on it creates no crime information (never turns a guard on the host)
+    "switch_disabledInformationReaction",   // SideEffect disableInformationReaction
+};
+constexpr const char* kQuietReactCtx[] = {
+    "switch_disabledPerceptionReaction",
+    "switch_disabledHearingReaction",
+    "switch_disabledHitReaction",           // a hit starts no brain reaction (its body still takes the hit)
+    "switch_disabledHitBehavioralReaction",
+    "switch_disabledNearMissReaction",
+    "crime_ignoreCrouchingPlayer",          // NPC_VIDI_HRACE_V_CROUCHI
+    "crime_ignorePlayerWithoutTorch",       // NPC_REAGUJE_NA_HRACE_BEZ_POCHODNE
+    "crime_doNotReactToEnemiesOnSight",
+    "combat_neverSurrenderOrFlee",          // no flee/surrender of its own (WO-119: SKIRMISH_SOULFLEE)
+};
+constexpr const char* kQuietDefenceCtx[] = {
+    // interrupt_attack.xml wraps a fight in Melee{Offense,Defense,Guard}AutomationDecorator
+    // active = NOT these contexts: the brain re-arms, every fight, the automation that
+    // WO-119's native switch turns off. These are the brain's own off switch.
+    "combat_disableMeleeDefenseAutomation", // the blocks it made by itself
+    "combat_disableGuardAutomation",
+    "combat_disableOffenseAutomation",
+    "combat_disableCombatMovement",         // its position is the stream's
+};
+constexpr QuietGroup kQuiet[] = {
+    { kQuietSpeech,  "speech",  kQuietSpeechCtx,  0 },
+    { kQuietWitness, "witness", kQuietWitnessCtx, sizeof(kQuietWitnessCtx) / sizeof(*kQuietWitnessCtx) },
+    { kQuietReact,   "react",   kQuietReactCtx,   sizeof(kQuietReactCtx) / sizeof(*kQuietReactCtx) },
+    { kQuietDefence, "defence", kQuietDefenceCtx, sizeof(kQuietDefenceCtx) / sizeof(*kQuietDefenceCtx) },
+};
+std::atomic<uint32_t> c_quietSet{0}, c_quietFail{0};
+
+void set_quiet(Body& b, uint8_t want) {
+    void* soul = body_soul(b);
+    if (!soul) return;
+    for (const auto& g : kQuiet) {
+        const bool on = (want & g.bit) != 0, had = (b.quietApplied & g.bit) != 0;
+        if (on == had) continue;
+        int ok = 0, bad = 0;
+        std::string missing;
+        for (size_t i = 0; i < g.n; ++i) {
+            const int r = kcdmp::sctx::set_soul_context(soul, g.ctx[i], on);
+            if (r >= 0) ++ok; else { ++bad; if (missing.size() < 160) { missing += ' '; missing += g.ctx[i]; } }
+        }
+        if (g.bit == kQuietSpeech) { kcdmp::wo135::set_speaker_blocked(soul, on); ok = kcdmp::wo135::armed() ? 1 : 0; bad = ok ? 0 : 1; if (bad) missing = " the dialogue gate is not armed"; }
+        c_quietSet.fetch_add(ok); c_quietFail.fetch_add(bad);
+        logf("WO135-QUIET body=%s group=%s %s: %d ok, %d failed%s%s", b.key.c_str(), g.name, on ? "set" : "cleared", ok, bad,
+             bad ? " --" : "", missing.c_str());
+    }
+    b.quietApplied = want;
+}
+
 // kcdmp_avatar_guard (buff__kcdmp.xml): imm=1 upr=1, non-persistent -- an
 // avatar can never die or be knocked out in this world, whatever hits it.
 unsigned char g_avatarGuard[16]{};
@@ -681,6 +805,8 @@ void ensure_avatar_guard(Body& b, double now) {
     b.lastBuffCheck = now;
     const bool wantCtx = g_combat && g_cfgCombat;
     if (wantCtx != b.ctxApplied) set_avatar_contexts(b, wantCtx);
+    const uint8_t wantQuiet = wantCtx ? g_cfgQuiet.load() : 0;   // WO-135
+    if (wantQuiet != b.quietApplied) set_quiet(b, wantQuiet);
     if (!g_avatarGuardOk) return;
     void* soul = nullptr;
     void* fn = vslot(b.actor, kActorGetSoul);
@@ -911,12 +1037,13 @@ void install() {
 }
 
 uint8_t on_config(const uint8_t* body, size_t len) {
-    if (len != 5) return 8;
+    if (len != 5 && len != 6) return 8;
     g_cfgAvatarGait = body[0] != 0; g_cfgNpcGait = body[1] != 0; g_cfgMoves = body[2] != 0;
     g_cfgCombat = body[3] != 0; g_cfgNpcRows = body[4] != 0;
+    if (len == 6) g_cfgQuiet = static_cast<uint8_t>(body[5] & 0x0F);   // WO-135
     g_cfgChanged = true;
-    logf("WO121-MOTION config avatar_gait=%d npc_gait=%d avatar_moves=%d avatar_combat=%d npc_rows=%d",
-         body[0] != 0, body[1] != 0, body[2] != 0, body[3] != 0, body[4] != 0);
+    logf("WO121-MOTION config avatar_gait=%d npc_gait=%d avatar_moves=%d avatar_combat=%d npc_rows=%d quiet=0x%X",
+         body[0] != 0, body[1] != 0, body[2] != 0, body[3] != 0, body[4] != 0, g_cfgQuiet.load());
     return 0;
 }
 
@@ -1041,7 +1168,14 @@ bool read_local_state2(State2* out, float facingYaw) {
         void* exp = expansion_of(actor);
         g_playerExp = exp;
         uint8_t cr = 0;
-        if (exp && vslot(exp, kExpGetCrouch) == A.fnGetCrouch && call_ret_u8(A.fnGetCrouch, exp, &cr) && cr) out->bits |= kBitCrouch;
+        const bool readOk = exp && vslot(exp, kExpGetCrouch) == A.fnGetCrouch && call_ret_u8(A.fnGetCrouch, exp, &cr);
+        // WO-135: and the engine's rendered stance -- the Mannequin Stance tag
+        // `stealth` a crouch sets (WO-119) -- whichever setter the key used.
+        kcdmp::mannequin::BodyState bs{};
+        const bool tagOk = kcdmp::mannequin::read_body_state(true, 0, &bs);
+        const bool tagCrouch = tagOk && bs.stance == kcdmp::mannequin::kStanceStealth;
+        if ((readOk && cr) || tagCrouch) out->bits |= kBitCrouch;
+        note_local_crouch(actor, exp, readOk || tagOk, (readOk && cr) || tagCrouch, (readOk && cr) ? (tagCrouch ? "byte+tag" : "byte") : "tag");
     }
     if (ca) {
         void* model = nullptr;
@@ -1100,13 +1234,21 @@ void tick() {
 
 void set_action_callback(ActionFn fn) { g_actionFn.store(fn); }
 
+int status_text_motion(char* out, int n);
+
 int status_text(char* out, int n) {
+    int m = status_text_motion(out, n);
+    if (m > 0 && m < n - 2) { out[m++] = ' '; m += kcdmp::wo135::status_text(out + m, n - m); }   // WO-135: the dialogue gate
+    return m;
+}
+
+int status_text_motion(char* out, int n) {
     return std::snprintf(out, n,
         "gait=%s moves=%s combat=%s attack_capture=%s cfg=%d%d%d%d%d bodies=%zu gait_writes=%u crouch=%u jumps=%u/%u "
         "combat_starts=%u automation_off=%u guard_zone=%u atk_zone=%u block=%u cap_attack=%u cap_npc=%u cap_jump=%u cap_other=%u "
         "cap_dropped=%u buff_adds=%u ctx_set=%u ctx_fail=%u faults=%u tags=%s tags_applied=%u gait_slots=%d "
         "cap_drop_notca=%u cap_drop_nodesc=%u cap_drop_noguid=%u cap_drop_noowner=%u cap_via_base8=%u cap_ours=%u "
-        "engaged=%zu engage_holds=%u engage_releases=%u",
+        "engaged=%zu engage_holds=%u engage_releases=%u cap_crouch=%u crouch_fail=%u quiet=0x%X quiet_set=%u quiet_fail=%u",
         g_gait ? "armed" : "off", g_moves ? "armed" : "off", g_combat ? "armed" : "off", g_capture ? "armed" : "off",
         g_cfgAvatarGait.load(), g_cfgNpcGait.load(), g_cfgMoves.load(), g_cfgCombat.load(), g_cfgNpcRows.load(), g_bodies.size(),
         c_gaitWrites.load(), c_crouch.load(), c_jumps.load(), c_jumpFail.load(), c_combatStarts.load(), c_autoOff.load(),
@@ -1114,7 +1256,18 @@ int status_text(char* out, int n) {
         c_capDropped.load(), c_buffAdds.load(), c_ctxSet.load(), c_ctxFail.load(), c_faults.load(),
         g_tags ? "armed" : "off", c_tagApplied.load(), g_gaitTable.live(),
         c_dropNotCa.load(), c_dropNoDesc.load(), c_dropNoGuid.load(), c_dropNoOwner.load(), c_capViaBase8.load(), c_capOurs.load(),
-        g_engage.size(), c_engageHolds.load(), c_engageReleases.load());
+        g_engage.size(), c_engageHolds.load(), c_engageReleases.load(),
+        c_capCrouch.load(), c_crouchApplyFail.load(), g_cfgQuiet.load(), c_quietSet.load(), c_quietFail.load());
+}
+
+// WO-135 test verb: the player's own crouch setter -- the function the crouch
+// key reaches (WO-119: toggle_crouch -> state expansion slot 0xE8 SetCrouch),
+// called with the key's arguments. No input is sent anywhere.
+bool player_set_crouch(bool on) {
+    void* actor = player_actor();
+    void* exp = actor ? expansion_of(actor) : nullptr;
+    if (!exp || vslot(exp, kExpSetCrouch) != A.fnSetCrouch) return false;
+    return call_bb(A.fnSetCrouch, exp, on, false);
 }
 
 bool test_fight(uint32_t eid) {

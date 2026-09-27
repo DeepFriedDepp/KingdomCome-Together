@@ -13,12 +13,19 @@
 #include "npc_drive.h"
 #include "respawn_actions.h"
 #include "rttr_abi.h"
+#include "motion.h"
 
 namespace kcdmp::wo131 {
 namespace {
 
 constexpr size_t kActorGetSoul = 0x6E0;   // hits.cpp / motion.cpp
 constexpr const char* kGuardGuidText = "4b43444d-7121-4d67-b1a5-9e2f6d8c0a15";   // kcdmp_avatar_guard (buff__kcdmp.xml)
+// WO-135: a knocked-out copy. kcdmp_knockout_guard is buff__kcdmp.xml's imm-only
+// guard (WO-113); the other three are the game's own (Tables :: rpg/buff.xml).
+constexpr const char* kKoGuardGuidText  = "4b43444d-7113-4d67-b1a5-9e2f6d8c0a14";   // kcdmp_knockout_guard
+constexpr const char* kUnconsciousText  = "f8d60fe4-e2c1-420a-946a-213e1cd09265";   // unconscious_nonpersistend (Cpp:Unconscious)
+constexpr const char* kInfiniteUncText  = "74cf0c29-d03e-4233-9352-b91ca5ea69ea";   // infinite_unconsciousness_nonpersistent (ufo*0)
+constexpr const char* kRemoveUncText    = "bd22f98a-e61f-4d83-b39c-79d1d85b6b91";   // remove_unconsciousness
 
 template <class T> bool rd(const void* base, size_t off, T* out) {
     __try { *out = *reinterpret_cast<const T*>(static_cast<const char*>(base) + off); return true; }
@@ -60,8 +67,18 @@ const unsigned char* guard_guid() {
     return g_guardParsed ? g_guard : nullptr;
 }
 
+struct KoGuids { unsigned char ko[16], unc[16], inf[16], rem[16]; bool ok = false, tried = false; } g_ko;
+const KoGuids* ko_guids() {
+    if (!g_ko.tried) {
+        g_ko.tried = true;
+        g_ko.ok = buffs::parse_guid(kKoGuardGuidText, g_ko.ko) && buffs::parse_guid(kUnconsciousText, g_ko.unc)
+               && buffs::parse_guid(kInfiniteUncText, g_ko.inf) && buffs::parse_guid(kRemoveUncText, g_ko.rem);
+    }
+    return g_ko.ok ? &g_ko : nullptr;
+}
+
 std::atomic<uint32_t> c_checks{0}, c_guardOn{0}, c_guardOff{0}, c_follow{0}, c_followCredit{0},
-                      c_stopFight{0}, c_restore{0}, c_faction{0}, c_fail{0};
+                      c_stopFight{0}, c_restore{0}, c_faction{0}, c_fail{0}, c_knockouts{0}, c_wakes{0};
 
 void put_f(uint8_t* p, float v) { std::memcpy(p, &v, 4); }
 float get_f(const uint8_t* p) { float v; std::memcpy(&v, p, 4); return v; }
@@ -93,6 +110,8 @@ uint8_t handle(const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t
             if (cs) {
                 rttr::soul_state(cs, "health", &hp);
                 if (guard_guid() && buffs::ready()) guarded = buffs::has(cs, guard_guid());
+                // WO-135: a knocked-out copy carries the imm-only guard instead.
+                if (guarded == 0 && ko_guids() && buffs::ready()) guarded = buffs::has(cs, ko_guids()->ko);
             }
         }
         c_checks.fetch_add(1);
@@ -109,20 +128,55 @@ uint8_t handle(const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t
     }
     case kOpCopyGuard: {
         if (n != 5) return kRBadRequest;
-        const bool on = a[0] != 0;
+        const uint8_t mode = a[0];
         const uint32_t eid = get_u32(a + 1);
+        if (mode > kGuardWake) return kRBadRequest;
         if (!guard_guid() || !buffs::ready()) { c_fail.fetch_add(1); return kRUnarmed; }
+        const KoGuids* k = ko_guids();
+        if (mode >= kGuardKnockout && !k) { c_fail.fetch_add(1); return kRUnarmed; }
         void* soul = soul_of_eid(eid);
         if (!soul) { c_fail.fetch_add(1); return kRNoActor; }
         void* cs = buffs::as_c_soul(soul) ? buffs::as_c_soul(soul) : soul;
-        if (on) {
+        bool present = false;
+        switch (mode) {
+        case kGuardOn:
+            if (k) buffs::remove_all(cs, k->ko);
             if (buffs::has(cs, guard_guid()) <= 0 && !buffs::add(cs, guard_guid())) { c_fail.fetch_add(1); return kRFailed; }
             c_guardOn.fetch_add(1);
-        } else {
+            present = buffs::has(cs, guard_guid()) > 0;
+            break;
+        case kGuardOff:
             buffs::remove_all(cs, guard_guid());
+            if (k) buffs::remove_all(cs, k->ko);
             c_guardOff.fetch_add(1);
+            present = buffs::has(cs, guard_guid()) <= 0;
+            break;
+        case kGuardKnockout:
+            // Order: the imm-only guard first (never a moment without imm), then
+            // the full guard off (its upr=1 blocks unconsciousness), then the
+            // game's own unconsciousness.
+            if (buffs::has(cs, k->ko) <= 0 && !buffs::add(cs, k->ko)) { c_fail.fetch_add(1); return kRFailed; }
+            buffs::remove_all(cs, guard_guid());
+            if (buffs::has(cs, k->inf) <= 0) buffs::add(cs, k->inf);
+            if (buffs::has(cs, k->unc) <= 0 && !buffs::add(cs, k->unc)) { c_fail.fetch_add(1); return kRFailed; }
+            c_knockouts.fetch_add(1);
+            present = buffs::has(cs, k->unc) > 0;
+            logf("WO135-KO copy eid=0x%X knocked out (the host's NPC is): unconscious=%d imm-only guard=%d", eid,
+                 buffs::has(cs, k->unc), buffs::has(cs, k->ko));
+            break;
+        case kGuardWake:
+            buffs::remove_all(cs, k->inf);
+            buffs::remove_all(cs, k->unc);
+            buffs::add(cs, k->rem);
+            if (buffs::has(cs, guard_guid()) <= 0) buffs::add(cs, guard_guid());
+            buffs::remove_all(cs, k->ko);
+            c_wakes.fetch_add(1);
+            present = buffs::has(cs, guard_guid()) > 0;
+            logf("WO135-KO copy eid=0x%X woken (the host's NPC is up): unconscious=%d guard=%d", eid,
+                 buffs::has(cs, k->unc), buffs::has(cs, guard_guid()));
+            break;
         }
-        out[0] = static_cast<uint8_t>(buffs::has(cs, guard_guid()) > 0 ? 1 : 0);
+        out[0] = static_cast<uint8_t>(present ? 1 : 0);
         *outLen = 1;
         return kROk;
     }
@@ -190,12 +244,19 @@ uint8_t handle(const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t
         c_faction.fetch_add(1);
         return kROk;
     }
+    case kOpPlayerCrouch: {
+        if (n != 1) return kRBadRequest;
+        const bool ok = motion::player_set_crouch(a[0] != 0);
+        logf("WO135-CROUCH check: the player's own SetCrouch(%d) -> %s (no input)", a[0] != 0 ? 1 : 0, ok ? "called" : "FAILED");
+        return ok ? kROk : kRFailed;
+    }
     case kOpStatus: {
-        char t[240];
+        char t[256];
         int m = std::snprintf(t, sizeof(t),
-            "wo131 checks=%u guard_on=%u guard_off=%u follow=%u follow_credit=%u stopfight=%u restore=%u faction=%u fail=%u buffs=%s stopfight_armed=%s",
+            "wo131 checks=%u guard_on=%u guard_off=%u follow=%u follow_credit=%u stopfight=%u restore=%u faction=%u fail=%u buffs=%s stopfight_armed=%s knockouts=%u wakes=%u",
             c_checks.load(), c_guardOn.load(), c_guardOff.load(), c_follow.load(), c_followCredit.load(), c_stopFight.load(),
-            c_restore.load(), c_faction.load(), c_fail.load(), buffs::ready() ? "ready" : "no", actions::stop_fight_available() ? "yes" : "no");
+            c_restore.load(), c_faction.load(), c_fail.load(), buffs::ready() ? "ready" : "no", actions::stop_fight_available() ? "yes" : "no",
+            c_knockouts.load(), c_wakes.load());
         if (m < 0) m = 0;
         if (static_cast<size_t>(m) > cap) m = static_cast<int>(cap);
         std::memcpy(out, t, m);

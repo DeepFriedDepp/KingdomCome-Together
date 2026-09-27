@@ -40,6 +40,7 @@
 //   at <t> loot open <body> | take|put <body> <cls> <amt> <hp> | item <cls> <x> <y> <z> [fromBody]
 //                                              (WO-134) a LootAsk (0x5C) to the host, as a joiner's agent sends it (tok = a counter);
 //                                              every LootHostDown (0x5F) received is printed
+//   at <t> takedown <body> <mercy|knockout|stealth>  (WO-135) a LootAsk Takedown (0x5C kind 5): the game's takedown on a host NPC
 //   end <t>                                    stop
 //
 // Position packets: every 30 ms while moving, 2 s heartbeat still; the state
@@ -113,6 +114,7 @@ static class P
         StreamWriter? rec = recPath.Length > 0 ? new StreamWriter(recPath, append: true) { AutoFlush = true } : null;
         var recClock = Stopwatch.StartNew();
         byte[]? hostAppearance = null;   // WO-131: the last AppearanceDown classes (for `appearance mirror`)
+        BodyState2Bits lastHostBits = BodyState2Bits.None;   // WO-135
         var reader = Task.Run(async () =>
         {
             try
@@ -124,7 +126,16 @@ static class P
                         lock (rec) rec.WriteLine($"{recClock.ElapsedMilliseconds} {t2:X2} {Convert.ToHexString(b2)}");
                     if (t2 == Protocol.AppearanceDown && b2.Length >= 2 && b2[0] != myId) hostAppearance = b2.AsSpan(1).ToArray();   // [src][count][classes]
                     if (t2 == Protocol.Name && b2.Length >= 2 && b2[0] != myId) { joiner ??= b2[0]; }
-                    else if (t2 == Protocol.Ghost && b2.Length >= 1 && b2[0] != myId) joiner ??= b2[0];
+                    else if (t2 == Protocol.Ghost && b2.Length >= 1 && b2[0] != myId)
+                    {
+                        joiner ??= b2[0];
+                        // WO-135: the other player's state bits as they arrive (crouch capture, end to end)
+                        if (PositionCodec.TryDecodeGhost(b2, out var gs) && gs.State2 is BodyState2 gst && gst.Bits != lastHostBits)
+                        {
+                            lastHostBits = gst.Bits;
+                            Console.WriteLine($"PEER t={recClock.Elapsed.TotalSeconds:F1} got host state bits={gst.Bits} crouch={(gst.Bits.HasFlag(BodyState2Bits.Crouched) ? 1 : 0)}");
+                        }
+                    }
                     else if (t2 == Protocol.PlayerHitDown && b2.Length == Protocol.PlayerHitDownPayloadLen)   // WO-132: an NPC's hit on my avatar, from the host
                         Console.WriteLine(FormattableString.Invariant($"PEER t={recClock.Elapsed.TotalSeconds:F1} got NPC hit (0x22) hp={BinaryPrimitives.ReadSingleLittleEndian(b2):F2} st={BinaryPrimitives.ReadSingleLittleEndian(b2.AsSpan(4)):F2}"));
                     else if (t2 == Protocol.DamageDown && b2.Length == Protocol.DamageDownPayloadLen)   // WO-132: the guid route (a second path per hit)
@@ -389,6 +400,14 @@ static class P
                         string text = f[1] == "item" && f.Length == 6 ? string.Join(' ', f.Skip(2)) + " 0" : string.Join(' ', f.Skip(2));
                         await Send(st, new LootMsg(k, lootTok, text).BuildUp(Protocol.LootAskUp, Protocol.JoinTargetHost));
                         Console.WriteLine($"PEER t={t:F1} loot {Protocol.LootAskName(k)} tok={lootTok}: {text}");
+                        break;
+                    }
+                    case "takedown":   // WO-135
+                    {
+                        lootTok++;
+                        string text = $"{f[1]} {f[2]}";
+                        await Send(st, new LootMsg(Protocol.LootAskTakedown, lootTok, text).BuildUp(Protocol.LootAskUp, Protocol.JoinTargetHost));
+                        Console.WriteLine($"PEER t={t:F1} takedown tok={lootTok}: {text}");
                         break;
                     }
                     case "leash":   // WO-114

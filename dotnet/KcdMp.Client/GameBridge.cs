@@ -451,6 +451,11 @@ public partial class GameBridge(ClientConfig config)
 
     /// <summary>How long one exhausted verify schedule suppresses an item class for a ghost.</summary>
     private static readonly TimeSpan NeverEquipTtl = TimeSpan.FromMinutes(10);
+    // WO-135: the newest outfit per avatar, one apply at a time, and the classes the
+    // game refused for the CURRENT outfit (cleared when it changes).
+    private readonly ConcurrentDictionary<byte, Guid[]> _ghostWantedAppearance = new();
+    private readonly ConcurrentDictionary<byte, SemaphoreSlim> _ghostApplyGate = new();
+    private readonly ConcurrentDictionary<byte, Wo135Rules.Unwearable> _ghostUnwearable = new();
 
     // WO-59: one-shot log latch for the local equipped-set read failing
     // (see AppearanceLoopAsync) -- a busy game times out for minutes and a
@@ -1439,6 +1444,7 @@ public partial class GameBridge(ClientConfig config)
         _ghostAppearance.Clear();
         _ghostKnownItemClasses.Clear();
         _ghostNeverEquips.Clear();
+        _ghostUnwearable.Clear(); _ghostWantedAppearance.Clear();
         _ghostLastAppearance.Clear();      // WO-88: per-connection, like the sets above
         _reloadConvergeTarget = null;      // WO-88: a convergence belongs to one connection
         // WO-17: ghost ids are reassigned per relay connection; a cached
@@ -2244,6 +2250,7 @@ public partial class GameBridge(ClientConfig config)
             await Wo114OnDisconnectAsync();   // WO-114: the leash, the partner, the fast-travel block
             await Wo131OnDisconnectAsync();   // WO-131: copy guards off, parked bodies given back
             await Wo134OnDisconnectAsync();   // WO-134: the host ledger flushed, the mod told
+            Wo135OnDisconnect();              // WO-135
             Wo132OnDisconnect();              // WO-132: engaged copies released
             _myOpenDrops.Clear();
             // WO-113: no relay, no session -- the DLL's guard stands down
@@ -2687,144 +2694,150 @@ public partial class GameBridge(ClientConfig config)
         }
         target = target.Distinct().ToArray();
 
-        string soulName = $"kcd2mp_{ghostId}";
-        var applied = _ghostAppearance.GetOrAdd(ghostId, static _ => [.. GhostSpawnPresetItems]);
-        // The preset's items are already sitting in the ghost's inventory from
-        // spawn (EquipClothingPreset put them there) -- CreateItems must never
-        // run for them again.
-        var known = _ghostKnownItemClasses.GetOrAdd(ghostId, static _ => [.. GhostSpawnPresetItems]);
-        var targetSet = new HashSet<Guid>(target);
-
-        List<Guid> toRemove;
-        List<Guid> toAdd;
-        var neverEquips = _ghostNeverEquips.GetOrAdd(ghostId, static _ => []);
-        lock (applied)
+        // WO-135: one apply per avatar at a time, and the newest outfit wins. Every
+        // packet used to start its own apply, so a heartbeat landing mid-verify ran
+        // a second diff and a second 10 s retry loop over the same avatar.
+        _ghostWantedAppearance[ghostId] = target;
+        var gate = _ghostApplyGate.GetOrAdd(ghostId, static _ => new SemaphoreSlim(1, 1));
+        if (!await gate.WaitAsync(0, ct)) return;   // the running apply picks the newest target up when it finishes
+        try
         {
-            toRemove = applied.Except(targetSet).ToList();
-            lock (neverEquips)
+            for (int round = 0; round < 3; round++)
             {
-                // WO-59: prune expired blacklist entries so a transient
-                // failure stops suppressing once its TTL runs out.
-                var nowUtc = DateTime.UtcNow;
-                foreach (var expired in neverEquips.Where(kv => kv.Value <= nowUtc).Select(kv => kv.Key).ToList())
-                    neverEquips.Remove(expired);
-                toAdd = targetSet.Except(applied).Where(c => !neverEquips.ContainsKey(c)).ToList();
+                if (!_ghostWantedAppearance.TryGetValue(ghostId, out var want)) return;
+                await ConvergeAppearanceAsync(ghostId, want, ct);
+                if (_ghostWantedAppearance.TryGetValue(ghostId, out var now) && ReferenceEquals(now, want)) return;
             }
         }
+        finally { gate.Release(); }
+    }
 
+    /// <summary>
+    /// WO-135: dress avatar <paramref name="ghostId"/> in exactly <paramref name="target"/>.
+    /// The diff is against the avatar's REAL equipped set, read back from the game
+    /// -- never against what this agent believes it applied. The 0.30.9 field
+    /// session: the belief was seeded with the spawn preset, but that avatar never
+    /// wore the preset (ten "UnequipItem failed. Item was not found" at the join),
+    /// so the joiner's padded gambeson -- a preset class -- counted as worn and was
+    /// never equipped, and his plate over it was refused seven times ("Can't equip
+    /// armor 'ArmPlate01_m01_C2'. It requires 'body_cloth_padded' slot to be
+    /// filled") until the whole piece was suppressed for 10 minutes.
+    /// Layers: equipping everything in one pass and re-equipping what is still
+    /// missing a second later puts an outer layer on once its under-layer is in.
+    /// A class that never shows up is reported once, with the reason, and skipped
+    /// only until this avatar's outfit changes (Wo135Rules.Unwearable) -- never a
+    /// whole outfit, never on a failed read, never while the avatar is in combat.
+    /// </summary>
+    private async Task ConvergeAppearanceAsync(byte ghostId, Guid[] target, CancellationToken ct)
+    {
+        string soulName = $"kcd2mp_{ghostId}";
+        var known = _ghostKnownItemClasses.GetOrAdd(ghostId, static _ => [.. GhostSpawnPresetItems]);
+        var applied = _ghostAppearance.GetOrAdd(ghostId, static _ => []);
+        var unwearable = _ghostUnwearable.GetOrAdd(ghostId, static _ => new Wo135Rules.Unwearable());
+        var targetSet = new HashSet<Guid>(target);
+        lock (unwearable) unwearable.OnTarget(targetSet);
+        // What the peer wears (the swing catalog resolves its weapon from this).
+        lock (applied) { applied.Clear(); applied.UnionWith(targetSet); }
+
+        var actual = await ReadGhostSetAsync(soulName, ct);
+        if (actual is null)
+        {
+            Console.WriteLine($"[appearance] ghost {ghostId}: its equipped set could not be read -- the next outfit packet or heartbeat tries again");
+            return;
+        }
+        List<Guid> toRemove, toAdd;
+        lock (unwearable)
+        {
+            toRemove = Wo135Rules.AppearanceRemovals(actual, targetSet);
+            toAdd = Wo135Rules.AppearanceAdditions(actual, targetSet).Where(c => !unwearable.Skips(c)).ToList();
+        }
         foreach (var cls in toRemove)
         {
-            try
-            {
-                await _transport.UnequipItemOnGhostAsync(soulName, cls, ct);
-                lock (applied) applied.Remove(cls);
-            }
+            try { await _transport.UnequipItemOnGhostAsync(soulName, cls, ct); }
             catch (Exception ex) { Console.WriteLine($"[appearance] unequip {cls} on {soulName} failed: {ex.Message}"); }
         }
-
         foreach (var cls in toAdd)
         {
             bool createIfMissing;
             lock (known) createIfMissing = known.Add(cls);
-            try
-            {
-                await _transport.EquipItemOnGhostAsync(soulName, cls, createIfMissing, ct);
-                lock (applied) applied.Add(cls);
-            }
-            catch (Exception ex) { Console.WriteLine($"[appearance] equip {cls} on {soulName} failed: {ex.Message}"); }
+            try { await _transport.EquipItemOnGhostAsync(soulName, cls, createIfMissing, ct); }
+            catch (Exception ex) { Console.WriteLine($"[appearance] equip {cls} on {soulName} failed: {ex.Message}"); lock (known) known.Remove(cls); }
         }
-
         if (toRemove.Count > 0 || toAdd.Count > 0)
+            Console.WriteLine($"[appearance] ghost {ghostId}: +{toAdd.Count} -{toRemove.Count} (against its real equipped set of {actual.Count})");
+        if (toAdd.Count == 0 && toRemove.Count == 0) { lock (applied) { applied.Clear(); applied.UnionWith(targetSet); } return; }
+        await VerifyAndRetryAsync(soulName, ghostId, targetSet, known, unwearable, applied, ct);
+    }
+
+    /// <summary>The avatar's equipped set, retried once on a timed-out read (a busy game answers late).</summary>
+    private async Task<HashSet<Guid>?> ReadGhostSetAsync(string soulName, CancellationToken ct)
+    {
+        for (int i = 0; i < 3; i++)
         {
-            Console.WriteLine($"[appearance] ghost {ghostId}: +{toAdd.Count} -{toRemove.Count}");
-            await VerifyAndRetryAsync(soulName, ghostId, toAdd, applied, ct);
+            var arr = await _transport.ReadGhostEquippedItemClassesAsync(soulName, ct);
+            if (arr is not null) return new HashSet<Guid>(arr);
+            await Task.Delay(400, ct);
         }
+        return null;
     }
 
     /// <summary>
     /// A fault-free EquipItem invoke is not a successful one. Measured live
     /// (WO-9 Phase 2, two-agent test): under the agent's normal concurrent
-    /// load -- its own position tick flushing Lua every ~10 ms plus this same
-    /// poll loop's other traffic -- EquipItem returns <c>true</c> immediately
-    /// but the actual game-state commit lagged several seconds behind on a
-    /// freshly-spawned ghost. A lone manual call against a quiet API answered
-    /// instantly; the identical call through the running agent needed up to
-    /// ~10 s to actually land. So this is a real, reproduced processing
-    /// delay, not a guessed one, and the retry schedule below (1/2/3/4 s,
-    /// ~10 s total) is sized to the worst case actually observed rather than
-    /// an arbitrary short backoff.
-    ///
-    /// Reads the ghost's own EquippedArmorsByClassId back, and for anything
-    /// this call just tried to add but is still missing, retries EquipItem
-    /// (never CreateItems again -- the item instance from the first attempt
-    /// is already sitting in the ghost's inventory). Anything still missing
-    /// once the schedule is exhausted is dropped from <paramref name="applied"/>
-    /// so the next change or heartbeat naturally tries again, rather than the
-    /// diff believing a slot is settled when it never took.
+    /// load EquipItem returns <c>true</c> immediately but the game-state commit
+    /// can lag several seconds on a freshly-spawned ghost; the schedule below
+    /// (1, 1, 1, 2, 2, 3 s: 10 s) is sized to the worst case observed.
+    /// Each round reads the avatar's own equipped set back and re-equips what is
+    /// still missing (never CreateItems again for a class already created).
+    /// WO-135: what is still missing after the schedule is reported once and
+    /// skipped until the outfit changes -- unless the read failed or the avatar
+    /// is in combat, when it is simply tried again by the next packet.
     /// </summary>
     private static readonly int[] AppearanceRetryDelaysMs = [1000, 1000, 1000, 2000, 2000, 3000];
 
-    private async Task VerifyAndRetryAsync(string soulName, byte ghostId, List<Guid> toAdd,
-        HashSet<Guid> applied, CancellationToken ct)
+    private async Task VerifyAndRetryAsync(string soulName, byte ghostId, HashSet<Guid> target, HashSet<Guid> known,
+        Wo135Rules.Unwearable unwearable, HashSet<Guid> applied, CancellationToken ct)
     {
-        var pending = new List<Guid>(toAdd);
-
+        List<Guid> pending = [];
+        HashSet<Guid>? last = null;
         foreach (int delayMs in AppearanceRetryDelaysMs)
         {
-            if (pending.Count == 0) return;
-
             await Task.Delay(delayMs, ct);
-            var actualArr = await _transport.ReadGhostEquippedItemClassesAsync(soulName, ct);
-            if (actualArr is null)
+            if (_ghostWantedAppearance.TryGetValue(ghostId, out var newest) && !new HashSet<Guid>(newest).SetEquals(target)) return;   // a newer outfit: that apply takes over
+            var actual = await ReadGhostSetAsync(soulName, ct);
+            if (actual is null) { Console.WriteLine($"[appearance] ghost {ghostId}: verify read failed -- skipping this round"); continue; }
+            last = actual;
+            lock (unwearable) pending = Wo135Rules.AppearanceAdditions(actual, target).Where(c => !unwearable.Skips(c)).ToList();
+            var extra = Wo135Rules.AppearanceRemovals(actual, target);
+            if (pending.Count == 0 && extra.Count == 0) { lock (applied) { applied.Clear(); applied.UnionWith(target); } return; }
+            Console.WriteLine($"[appearance] ghost {ghostId}: {pending.Count} item(s) still not worn, {extra.Count} still worn that should not be -- retrying");
+            foreach (var cls in extra)
             {
-                // WO-59: the read failed -- we learned nothing about what is
-                // equipped. Re-equipping blind would be noise; skip this
-                // round and let the next delay try again.
-                Console.WriteLine($"[appearance] ghost {ghostId}: verify read failed -- skipping this round");
-                continue;
+                try { await _transport.UnequipItemOnGhostAsync(soulName, cls, ct); }
+                catch (Exception ex) { Console.WriteLine($"[appearance] retry unequip {cls} on {soulName} failed: {ex.Message}"); }
             }
-            var actual = new HashSet<Guid>(actualArr);
-            pending = pending.Where(cls => !actual.Contains(cls)).ToList();
-            if (pending.Count == 0) return;
-
-            Console.WriteLine($"[appearance] ghost {ghostId}: {pending.Count} item(s) still not applied, retrying");
             foreach (var cls in pending)
             {
-                try { await _transport.EquipItemOnGhostAsync(soulName, cls, createIfMissing: false, ct); }
+                bool create;
+                lock (known) create = known.Add(cls);
+                try { await _transport.EquipItemOnGhostAsync(soulName, cls, createIfMissing: create, ct); }
                 catch (Exception ex) { Console.WriteLine($"[appearance] retry equip {cls} on {soulName} failed: {ex.Message}"); }
             }
         }
-
-        // Schedule exhausted: one final read to tell a genuine failure (a
-        // slot the game will never grant, e.g. the Hood-vs-Helmet exclusivity
-        // found in Phase 0) from one more round of lag.
-        var finalArr = await _transport.ReadGhostEquippedItemClassesAsync(soulName, ct);
-        if (finalArr is null)
-        {
-            // WO-59: the final read failed, so nothing was PROVEN unequippable.
-            // The pre-WO-58 behaviour is correct here: drop the items from
-            // `applied` so the next heartbeat retries, and blacklist nothing.
-            // Blacklisting on a timed-out read mass-suppressed whole outfits
-            // for the ghost's lifetime -- the receiver-side half of the
-            // one-way clothing asymmetry.
-            Console.WriteLine($"[appearance] ghost {ghostId}: final verify read failed -- {pending.Count} item(s) left for the next heartbeat, none blacklisted");
-            lock (applied) foreach (var cls in pending) applied.Remove(cls);
-            return;
-        }
-        var final = new HashSet<Guid>(finalArr);
-        var blacklist = _ghostNeverEquips.GetOrAdd(ghostId, static _ => []);
+        if (last is null) { Console.WriteLine($"[appearance] ghost {ghostId}: no verify read answered -- left for the next packet, nothing marked"); return; }
+        bool inCombat = _peerLastState2.TryGetValue(ghostId, out var st) && st.CombatMode;
         foreach (var cls in pending)
         {
-            if (final.Contains(cls)) continue;
-            // WO-58: one exhausted schedule is the retry budget. Dropping it
-            // from `applied` alone put it right back into the next
-            // heartbeat's diff, which re-ran the whole 10 s retry cycle
-            // forever (observed all session on both machines, 2026-08-25).
-            // WO-59: the suppression now expires (NeverEquipTtl) instead of
-            // lasting the ghost's lifetime.
-            Console.WriteLine($"[appearance] ghost {ghostId}: {cls} never equipped after {AppearanceRetryDelaysMs.Sum()}ms of retrying -- suppressing it for {NeverEquipTtl.TotalMinutes:F0} min");
-            lock (applied) applied.Remove(cls);
-            lock (blacklist) blacklist[cls] = DateTime.UtcNow + NeverEquipTtl;
+            if (inCombat)
+            {
+                Console.WriteLine($"[appearance] ghost {ghostId}: {cls} not worn yet -- the avatar is in combat; tried again by the next packet (nothing marked)");
+                continue;
+            }
+            bool first;
+            lock (unwearable) first = unwearable.Mark(cls);
+            if (first)
+                Console.WriteLine($"[appearance] ghost {ghostId}: {cls} can't be worn by this avatar -- the game refused it for {AppearanceRetryDelaysMs.Sum()} ms of retries " +
+                                  $"(kcd.log names the reason on a \"Can't equip\" line, e.g. a layer it needs underneath). Skipped until this outfit changes; the rest of the outfit is worn.");
         }
     }
 
@@ -4610,6 +4623,7 @@ public partial class GameBridge(ClientConfig config)
                     _ghostAppearance.TryRemove(ghostId, out _);
                     _ghostKnownItemClasses.TryRemove(ghostId, out _);
                     _ghostNeverEquips.TryRemove(ghostId, out _);
+                    _ghostUnwearable.TryRemove(ghostId, out _); _ghostWantedAppearance.TryRemove(ghostId, out _);
                     _ghostLastAppearance.TryRemove(ghostId, out _);   // WO-88
                     // WO-17: a respawned ghost gets a fresh Soul.Guid, and a
                     // gone ghost has nothing left to detach.
@@ -5462,6 +5476,7 @@ public partial class GameBridge(ClientConfig config)
                     _ghostAppearance.TryRemove(respawnedId, out _);
                     _ghostKnownItemClasses.TryRemove(respawnedId, out _);
                     _ghostNeverEquips.TryRemove(respawnedId, out _);
+                    _ghostUnwearable.TryRemove(respawnedId, out _);
                     if (_ghostLastAppearance.TryGetValue(respawnedId, out var lastOutfit))
                     {
                         Console.WriteLine($"[appearance] ghost {respawnedId}: body respawned (entity 0x{prevId:X} -> 0x{rawId:X}) -- re-applying its last {lastOutfit.Length} item class(es)");
@@ -5633,6 +5648,13 @@ public partial class GameBridge(ClientConfig config)
                 return;
             case "w131_cfg":         // WO-131: mp_avatar_perceive
                 Wo131OnCfg(arg);
+                return;
+            case "w135_cfg":         // WO-135: mp_avatar_quiet
+            case "w135_check":
+            case "w135_ko":
+            case "w135_takedown":
+            case "w135_tdres":
+                Wo135OnEvent(name, arg);
                 return;
             case "w134_open":        // WO-134: world items
             case "w134_take":

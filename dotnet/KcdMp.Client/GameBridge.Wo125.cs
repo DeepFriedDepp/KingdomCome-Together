@@ -119,8 +119,12 @@ public partial class GameBridge
             var bytes = WhsSave.ReadShared(path);
             var v = WhsSave.Verify(bytes);
             if (!v.Ok) { Console.WriteLine($"MP-HENRY host: {SaveDisplay(path)} does not verify ({v.Reason}) -- world identity unchanged"); return; }
-            var raw = WhsSave.Inflate(bytes).Raw;
+            var inflated = WhsSave.Inflate(bytes);
+            var raw = inflated.Raw;
             uint? seed = WhsSave.ReadSeed(raw);
+            // WO-135: the world's game build, announced to every joiner (Wo135HostTick).
+            string? build = WhsSave.DescriptionSummary(inflated.Desc).GetValueOrDefault("BuildInfo");
+            if (build != _hostWorldBuild) { _hostWorldBuild = build; _w135BuildTold.Clear(); }
             var who = WhsSave.PlayerOf(raw);
             string md5 = v.Md5.ToLowerInvariant();
             bool changed = seed != _hostWorldSeed || who.IsHenry != _hostWorldHenry;
@@ -254,6 +258,7 @@ public partial class GameBridge
         bool henry = (flags & Protocol.SessionHenryWorld) != 0;
         string? tag = known ? WhsSave.SeedTag(seed) : null;
         bool changed = known != _peerSeedKnown || (known && seed != _peerSeed) || henry != _peerHenryWorld;
+        if (known && (!_peerSeedKnown || seed != _peerSeed)) _peerSeedKnownSinceUtc = DateTime.UtcNow;   // WO-135: the build wait starts here
         _peerSeedKnown = known;
         _peerSeed = seed;
         _peerHenryWorld = henry;
@@ -375,6 +380,16 @@ public partial class GameBridge
             return false;
         }
         if (_henry.HasWorld(_peerTag!)) return true;
+        // WO-135: a first join's Henry comes from a save of the host world's game build only
+        // (the splice's rule, WO-115). The host announces it; until it has (15 s at most),
+        // nothing is asked. What this machine can offer is decided before any request, so
+        // the host is never paused for a join that cannot splice.
+        if (_peerHostBuild is null && (DateTime.UtcNow - _peerSeedKnownSinceUtc).TotalSeconds < 15)
+        {
+            why = "waiting for the host's game version";
+            SetJoinUi("waiting", "Waiting for your host...");
+            return false;
+        }
         var choice = CurrentChoice();
         if (choice is null)
         {
@@ -382,8 +397,10 @@ public partial class GameBridge
             if (!_chooseAsked)
             {
                 _chooseAsked = true;
-                Console.WriteLine($"MP-HENRY joiner: first join to world {_peerTag} -- asking the player: Bring my character / Start fresh (launcher; console: mp_join_henry auto|fresh|playlineN/file)");
-                SetJoinUi("choose", "First time in this world: bring your character, or start fresh?");
+                var (state, msg) = Wo135FirstJoinUi();
+                Console.WriteLine($"MP-HENRY joiner: first join to world {_peerTag} -- {(state == "wrong-build" ? "NO save of the host's game version: nothing asked of the host" : $"asking the player ({state}): Bring my character / Start fresh")} (launcher; console: mp_join_henry auto|fresh|playlineN/file)");
+                SetJoinUi(state, msg);
+                if (state == "wrong-build") Wo135TellInGame(msg);
             }
             return false;
         }
@@ -395,10 +412,42 @@ public partial class GameBridge
             Console.WriteLine($"MP-HENRY joiner: no join asked -- '{choice}': {swhy} (asking again)");
             _firstChoice = null;
             _chooseAsked = true;
-            SetJoinUi("choose", $"{swhy} Bring your character, or start fresh?");
+            var (state, msg) = Wo135FirstJoinUi();
+            SetJoinUi(state, state == "wrong-build" ? msg : $"{swhy} {msg}");
+            if (state == "wrong-build") Wo135TellInGame(msg); else Wo135TellInGame(swhy);
             return false;
         }
         return true;
+    }
+
+    /// <summary>WO-135: the host's build, when known (null = no filter: an announcement never came).</summary>
+    private string? Wo135TargetBuild() => _peerHostBuild;
+
+    /// <summary>WO-135: which of Bring / Start fresh exist from the host's build, as the launcher shows it.</summary>
+    private (string State, string Message) Wo135FirstJoinUi()
+    {
+        string? host = Wo135TargetBuild();
+        if (host is null) return Wo135Rules.ChooseUi(Wo135Rules.Offer.Both, null, "");
+        bool bring = Wo125SourceFor("bring", out _) is not null;
+        bool fresh = Wo125SourceFor("fresh", out _) is not null;
+        return Wo135Rules.ChooseUi(Wo135Rules.OfferFor(bring, fresh), Wo135NewestHenryBuild(), host);
+    }
+
+    /// <summary>The build of this player's newest own save (any build) -- the "X" of the plain message.</summary>
+    private string? Wo135NewestHenryBuild()
+    {
+        if (ResolveSavesDirForJoin() is not string saves) return null;
+        foreach (var s in OwnSaves(saves, HostSeedForOwn()))
+            if (WhsSave.ReadBuildFromFile(s.Save.FullPath) is string b) return b;
+        return null;
+    }
+
+    private string? _w135ToldInGame;
+    private void Wo135TellInGame(string msg)
+    {
+        if (_w135ToldInGame == msg) return;
+        _w135ToldInGame = msg;
+        _ = ExecLuaAsync($"if KCD2MP_Wo124Msg then KCD2MP_Wo124Msg(\"{EscapeLua(msg)}\") end");
     }
 
     // ---------------------------------------------------------------- joiner: which saves are "own"
@@ -487,7 +536,7 @@ public partial class GameBridge
         why = "";
         if (ResolveSavesDirForJoin() is not string saves) { why = "no saves folder"; return null; }
         uint? hostSeed = HostSeedForOwn();
-        string? build = null;
+        string? build = Wo135TargetBuild();   // WO-135: only saves of the host world's build
         if (choice.StartsWith("playline", StringComparison.Ordinal))
         {
             var m = Regex.Match(choice, @"^playline([0-4])/([A-Za-z0-9_]+?)(\.whs)?$");
@@ -501,28 +550,62 @@ public partial class GameBridge
                 return null;
             }
             var src = new HenrySource(int.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture), f, full, ReadSaveTime(full) ?? 0);
+            if (build is not null && WhsSave.ReadBuildFromFile(full) is var fb && !Wo135Rules.SameBuild(fb, build))
+            {
+                why = Wo135Rules.WrongBuildMessage(fb, build);
+                Console.WriteLine($"MP-HENRY joiner: mp_join_henry playline{m.Groups[1].Value}/{f} REFUSED: its game build is {fb ?? "unknown"}, the host world's is {build}");
+                return null;
+            }
             return TryHenrySave(src, WhsSave.HenryParts.OriginSave, "bring", out why, requirePristine: false);
         }
         var own = OwnSaves(saves, hostSeed, l => Console.WriteLine(l));
+        // WO-135: a save from another game build is skipped (logged once per file), before it is even read.
+        var same = build is null ? own : SameBuildSaves(own, build, l => Console.WriteLine(l));
         if (choice == "bring")
         {
-            foreach (var s in own)
+            foreach (var s in same)
                 if (TryHenrySave(s.Save, WhsSave.HenryParts.OriginSave, "bring", out string w, requirePristine: false, quiet: true) is { } c) return c;
                 else Console.WriteLine($"MP-HENRY joiner: skipping {s.Save.Display} as the Henry source: {w}");
-            why = own.Count == 0 ? NoOwnSaveMessage : "No save of your own with Henry in it yet.";
+            why = own.Count == 0 ? NoOwnSaveMessage
+                : same.Count == 0 && build is not null ? Wo135Rules.WrongBuildMessage(Wo135NewestHenryBuild(), build)
+                : "No save of your own with Henry in it yet.";
             return null;
         }
         if (choice == "fresh")
         {
             // A new game's first Henry save: quest saves first (a new game writes permanent002 right after the prologue).
-            foreach (var s in own.OrderBy(x => x.Save.File.StartsWith("permanent", StringComparison.OrdinalIgnoreCase) ? 0 : 1).ThenBy(x => x.Save.SaveTime).Take(80))
+            foreach (var s in same.OrderBy(x => x.Save.File.StartsWith("permanent", StringComparison.OrdinalIgnoreCase) ? 0 : 1).ThenBy(x => x.Save.SaveTime).Take(80))
                 if (TryHenrySave(s.Save, WhsSave.HenryParts.OriginFreshSave, "fresh", out _, requirePristine: true, quiet: true) is { } c) return c;
-            why = "Start fresh needs a new game's first save on this computer: start a new game once and play past the prologue (its first save after it is used, never your host's character).";
+            why = build is null
+                ? "Start fresh needs a new game's first save on this computer: start a new game once and play past the prologue (its first save after it is used, never your host's character)."
+                : $"Start fresh needs a new game's first save from your host's game version ({Wo135Rules.PlainBuild(build)}): start a new game once in the Modding Tools build and play past the prologue.";
             return null;
         }
         why = $"unknown choice '{choice}'";
-        _ = build;
         return null;
+    }
+
+    private static readonly ConcurrentDictionary<string, byte> BuildWarned = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// WO-135: the own saves of <paramref name="build"/> only, in the same (newest-first) order;
+    /// every skip is logged once per file and build, from the header alone (nothing is inflated).
+    /// </summary>
+    public static List<OwnSave> SameBuildSaves(List<OwnSave> own, string build, Action<string>? log = null)
+    {
+        var o = new List<OwnSave>();
+        var skipped = new SortedDictionary<string, List<string>>(StringComparer.Ordinal);   // build -> newly skipped files
+        foreach (var s in own)
+        {
+            string? b = WhsSave.ReadBuildFromFile(s.Save.FullPath);
+            if (Wo135Rules.SameBuild(b, build)) { o.Add(s); continue; }
+            if (BuildWarned.TryAdd($"{s.Save.FullPath}|{build}", 0))
+                (skipped.TryGetValue(b ?? "unknown", out var l) ? l : skipped[b ?? "unknown"] = []).Add(s.Save.Display);
+        }
+        // One line per build (each file is reported once per host build, ever).
+        foreach (var (b, files) in skipped)
+            log?.Invoke($"MP-HENRY joiner: skipping {files.Count} save(s) of game build {b} (the host world's is {build}; a character and a world are combined from the same build only): {string.Join(", ", files.Take(6))}{(files.Count > 6 ? ", ..." : "")}");
+        return o;
     }
 
     private HenryChoice? TryHenrySave(HenrySource s, string origin, string mode, out string why, bool requirePristine, bool quiet = false)

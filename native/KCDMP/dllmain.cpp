@@ -6,6 +6,7 @@
 #include "motion.h"
 #include "hits.h"
 #include "wo132.h"
+#include "wo135.h"
 #include "concept_read.h"
 #include "dice_hook.h"
 #include "log.h"
@@ -154,6 +155,11 @@ DWORD WINAPI plugin_main(LPVOID) {
     // WO-6 R2 research hook: read-only, see dice_hook.cpp for the evidence
     // behind the patch site. Not gated on pipe/rttr success -- independent
     // of everything else this DLL does.
+    // WO-135: the avatar is never heard -- the dialogue-start gate (fails
+    // closed: WO135-DIALOG gate NOT armed). Off the main thread: the patch
+    // suspends every other thread while it writes.
+    kcdmp::wo135::install();
+
     if (kcdmp::dice::install_pause_hook()) {
         kcdmp::main_thread::post_repeating(&kcdmp::dice::sample_instance_if_changed);
     }

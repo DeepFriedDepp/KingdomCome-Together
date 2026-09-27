@@ -38,4 +38,12 @@ bool install(void* target, const uint8_t* expect, size_t len, Callback cb, const
 using ThisCallback = void (*)(void* self);
 bool install_this(void* target, const uint8_t* expect, size_t len, ThisCallback cb, const char** why);
 
+// WO-135: a gate at a function's ENTRY. `cb` gets the hooked call's first two
+// arguments (rcx, rdx untouched); when it returns true the function is not run
+// and returns 0 to its caller (at the entry the stack is the caller's, so a
+// plain `ret` is correct); false runs the original. For functions whose own
+// failure value is 0.
+using GateCallback = bool (*)(void* a1, void* a2);
+bool install_gate(void* target, const uint8_t* expect, size_t len, GateCallback cb, const char** why);
+
 } // namespace kcdmp::inlinehook

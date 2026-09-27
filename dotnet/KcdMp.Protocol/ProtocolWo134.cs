@@ -24,6 +24,7 @@ namespace KcdMp.Wire;
 //   2 BodyTake   "<body> <cls> <amt> <hp>"        it took that out of its copy
 //   3 BodyPut    "<body> <cls> <amt> <hp>"        it put that into its copy
 //   4 ItemTake   "<cls> <x> <y> <z> <fromBody>"   it wants this loose world item
+//   5 Takedown   "<body> <mercy|knockout|stealth>" WO-135: the game's takedown on a host-owned copy
 // Host kinds (APPEND-ONLY):
 //   1 BodyState  "<body> <reason> <flags> <part> <nparts> <items|->"   items = cls:amt:hp[:w],...
 //                reason open|update; flags 1 = dead or down here, 2 = no such body; w = worn
@@ -32,6 +33,8 @@ namespace KcdMp.Wire;
 //   4 ItemGone   "<cls> <x> <y> <z>"              the host (or another joiner) took it
 //   5 Ledger     "<part> <nparts> <rows|->"       the host's chest ledger for this world,
 //                rows = container|cls|n|hp|worldT|restockDays;... (after the joiner's Ready)
+//   6 TakedownResult "<ok|refused> <body> <kind>"   WO-135
+//   7 Build      "<BuildInfo>"                     WO-135: the host world's game build (on change, every 30 s)
 //
 // No protocol bump: two new types on the join channel. A mixed release is
 // refused at the relay (WO-110 R9), so a peer that does not know them never
@@ -48,18 +51,21 @@ public static partial class Protocol
 
     // ---- ask kinds (APPEND-ONLY) ----
     public const byte LootAskBodyOpen = 1, LootAskBodyTake = 2, LootAskBodyPut = 3, LootAskItemTake = 4;
+    public const byte LootAskTakedown = 5;                                  // WO-135
     // ---- host kinds (APPEND-ONLY) ----
     public const byte LootHostBodyState = 1, LootHostTakeResult = 2, LootHostItemResult = 3, LootHostItemGone = 4, LootHostLedger = 5;
+    public const byte LootHostTakedownResult = 6, LootHostBuild = 7;          // WO-135
 
     public static string LootAskName(byte k) => k switch
     {
-        LootAskBodyOpen => "body-open", LootAskBodyTake => "body-take", LootAskBodyPut => "body-put", LootAskItemTake => "item-take", _ => $"unknown-{k}",
+        LootAskBodyOpen => "body-open", LootAskBodyTake => "body-take", LootAskBodyPut => "body-put", LootAskItemTake => "item-take",
+        LootAskTakedown => "takedown", _ => $"unknown-{k}",
     };
 
     public static string LootHostName(byte k) => k switch
     {
         LootHostBodyState => "body-state", LootHostTakeResult => "take-result", LootHostItemResult => "item-result",
-        LootHostItemGone => "item-gone", LootHostLedger => "ledger", _ => $"unknown-{k}",
+        LootHostItemGone => "item-gone", LootHostLedger => "ledger", LootHostTakedownResult => "takedown-result", LootHostBuild => "build", _ => $"unknown-{k}",
     };
 }
 

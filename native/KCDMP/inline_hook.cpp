@@ -55,7 +55,7 @@ bool rip_inside(const Suspended* s, uintptr_t a, size_t n) {
 // push rcx/rdx/r8/r9; sub rsp,0x68; save xmm0-3; call cb; restore; add rsp,0x68;
 // pop r9/r8/rdx/rcx; jmp [rip+0] -> trampoline. At entry RSP == 8 (mod 16); four
 // pushes + 0x68 leave it 16-aligned for the call, with 0x20 of shadow space.
-size_t emit_thunk(uint8_t* p, Callback cb, void* tramp) {
+size_t emit_thunk(uint8_t* p, Callback cb, void* tramp, bool gate = false) {
     uint8_t* s = p;
     auto put = [&](std::initializer_list<uint8_t> b) { for (uint8_t x : b) *p++ = x; };
     auto put64 = [&](uint64_t v) { std::memcpy(p, &v, 8); p += 8; };
@@ -73,6 +73,13 @@ size_t emit_thunk(uint8_t* p, Callback cb, void* tramp) {
     put({0xF3, 0x0F, 0x6F, 0x5C, 0x24, 0x50});
     put({0x48, 0x83, 0xC4, 0x68});                      // add rsp, 0x68
     put({0x41, 0x59, 0x41, 0x58, 0x5A, 0x59});          // pop r9; pop r8; pop rdx; pop rcx
+    if (gate) {
+        // WO-135: the callback said refuse -> return 0 without running the target.
+        put({0x84, 0xC0});                              // test al, al
+        put({0x74, 0x03});                              // jz +3 (run the original)
+        put({0x31, 0xC0});                              // xor eax, eax
+        put({0xC3});                                    // ret
+    }
     put({0xFF, 0x25, 0, 0, 0, 0}); put64(reinterpret_cast<uint64_t>(tramp));
     return static_cast<size_t>(p - s);
 }
@@ -81,7 +88,17 @@ Suspended g_sus;   // static: kMaxThreads handles do not belong on a stack
 
 } // namespace
 
+bool install_impl(void* target, const uint8_t* expect, size_t len, Callback cb, const char** why, bool gate);
+
 bool install(void* target, const uint8_t* expect, size_t len, Callback cb, const char** why) {
+    return install_impl(target, expect, len, cb, why, false);
+}
+
+bool install_gate(void* target, const uint8_t* expect, size_t len, GateCallback cb, const char** why) {
+    return install_impl(target, expect, len, reinterpret_cast<Callback>(cb), why, true);
+}
+
+bool install_impl(void* target, const uint8_t* expect, size_t len, Callback cb, const char** why, bool gate) {
     const char* dummy = nullptr;
     if (!why) why = &dummy;
     if (!target || !expect || !cb || len < 14 || len > 32) { *why = "bad arguments"; return false; }
@@ -99,7 +116,7 @@ bool install(void* target, const uint8_t* expect, size_t len, Callback cb, const
     const uint64_t back = reinterpret_cast<uint64_t>(tgt + len);
     std::memcpy(q + 6, &back, 8);
     uint8_t* thunk = mem + 128;
-    emit_thunk(thunk, cb, mem);
+    emit_thunk(thunk, cb, mem, gate);
     FlushInstructionCache(GetCurrentProcess(), mem, 4096);
 
     uint8_t patch[32];

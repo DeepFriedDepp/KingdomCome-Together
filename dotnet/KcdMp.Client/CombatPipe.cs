@@ -400,8 +400,8 @@ public sealed class CombatPipe : IAsyncDisposable
 
     /// <summary>WO-121: mirror the movement/combat toggles into the DLL (0x16).</summary>
     public Task<PipeResult> MotionConfigAsync(bool avatarGait, bool npcGait, bool avatarMoves, bool avatarCombat, bool npcRows,
-                                              CancellationToken ct = default)
-        => SendForResultAsync(MotionConfig, [B(avatarGait), B(npcGait), B(avatarMoves), B(avatarCombat), B(npcRows)], ct);
+                                              byte avatarQuiet = 0x0F, CancellationToken ct = default)
+        => SendForResultAsync(MotionConfig, [B(avatarGait), B(npcGait), B(avatarMoves), B(avatarCombat), B(npcRows), (byte)(avatarQuiet & 0x0F)], ct);   // WO-135: [5] the avatar's quiet groups
 
     /// <summary>WO-121: a one-shot on a native-written avatar (0x17): kind 1 = jump.</summary>
     public Task<PipeResult> AvatarEventAsync(byte kind, uint eid, CancellationToken ct = default)

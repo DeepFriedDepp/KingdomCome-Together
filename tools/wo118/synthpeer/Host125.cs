@@ -99,6 +99,9 @@ static class Host125
         // WO-134: the scripted host world
         var bodies = new Dictionary<string, List<Wo134Rules.Item>>(StringComparer.Ordinal);
         var witems = new List<(Guid Cls, float X, float Y, float Z, bool Taken)>();
+        var npcFlags = new System.Collections.Concurrent.ConcurrentDictionary<string, byte>(StringComparer.Ordinal);   // WO-135: a running npc stream's flags, changeable
+        string? hostBuild = null;
+        BodyState2? hostSt2 = null;                                                                                    // WO-135: hstate crouch=1 -- the host avatar's state block                                                                                      // WO-135: announced to every joiner every 10 s
         var ledger = new Wo134Rules.Ledger();
         var leashSeen = new Dictionary<byte, LeashState>();   // WO-114: the last LeashState per joiner
         var world = Load(Arg(a, "--join-host125", ""), Arg(a, "--reseed", ""));
@@ -167,7 +170,7 @@ static class Host125
             {
                 while (!hard.IsCancellationRequested)
                 {
-                    await W(PositionCodec.BuildPosition(hp[0], hp[1], hp[2], 0, false, false, null, hostClaim: true));   // WO-127: the synthetic host claims the session like a real one
+                    await W(PositionCodec.BuildPosition(hp[0], hp[1], hp[2], 0, false, false, hostSt2, hostClaim: true));   // WO-127: the synthetic host claims the session like a real one (WO-135: + its state block)
                     if (n++ % 5 == 0) await Announce();
                     await Task.Delay(1000, hard.Token);
                 }
@@ -300,18 +303,46 @@ static class Host125
                                 float nyaw = float.Parse(p[5], CultureInfo.InvariantCulture), nhp = float.Parse(p[6], CultureInfo.InvariantCulture);
                                 byte nfl = byte.Parse(p[7], CultureInfo.InvariantCulture);
                                 double secs = p.Length > 8 ? double.Parse(p[8], CultureInfo.InvariantCulture) : 30;
-                                _ = Task.Run(async () =>
+                                bool running = npcFlags.ContainsKey(nm);
+                                npcFlags[nm] = nfl;
+                                if (!running) _ = Task.Run(async () =>
                                 {
                                     ushort nseq = 0; var t0 = Clock.Elapsed.TotalSeconds;
                                     while (Clock.Elapsed.TotalSeconds - t0 < secs && !hard.IsCancellationRequested)
                                     {
-                                        await W(P.BuildUp(nm, nx, ny, nz, nyaw, nhp, nfl, ++nseq, (uint)Clock.ElapsedMilliseconds));
+                                        await W(P.BuildUp(nm, nx, ny, nz, nyaw, nhp, npcFlags.GetValueOrDefault(nm, nfl), ++nseq, (uint)Clock.ElapsedMilliseconds));
                                         await Task.Delay(200);
                                     }
+                                    npcFlags.TryRemove(nm, out _);
                                 });
                                 Say($"NPC {nm} streamed at {p[2]},{p[3]},{p[4]} hp={p[6]} flags={p[7]} for {secs} s");
                                 break;
                             }
+                            case "hstate":   // WO-135: hstate crouch=0|1 -- the host's state block rides its position packets (1 s heartbeat)
+                            {
+                                bool cr = p.Length > 1 && p[1] == "crouch=1";
+                                hostSt2 = new BodyState2(0, 0, cr ? BodyState2Bits.Crouched : BodyState2Bits.None, WireZone.Undefined, WireGuardStance.None, WireZone.Undefined, 0, 0, 0);
+                                await W(PositionCodec.BuildPosition(hp[0], hp[1], hp[2], 0, false, false, hostSt2, hostClaim: true));
+                                Say($"HSTATE crouch={(cr ? 1 : 0)}");
+                                break;
+                            }
+                            case "npcflags":   // WO-135: npcflags <name> <flags> -- a running npc stream's flags (2 = knocked out, 0 = up, 1 = dead)
+                                npcFlags[p[1]] = byte.Parse(p[2], CultureInfo.InvariantCulture);
+                                Say($"NPCFLAGS {p[1]} = {p[2]}");
+                                break;
+                            case "build":   // WO-135: build <BuildInfo> -- the host world's game build, to every joiner every 10 s
+                                hostBuild = p[1];
+                                _ = Task.Run(async () =>
+                                {
+                                    string mine = p[1];
+                                    while (hostBuild == mine && !hard.IsCancellationRequested)
+                                    {
+                                        for (byte g = 1; g < 8; g++) await W(new LootMsg(Protocol.LootHostBuild, 0, mine).BuildUp(Protocol.LootHostUp, g));
+                                        await Task.Delay(10_000);
+                                    }
+                                });
+                                Say($"BUILD {p[1]} announced to every joiner");
+                                break;
                             case "bodyset":   // WO-134
                                 bodies[p[1]] = Wo134Rules.ParseItems(p.Length > 2 ? p[2] : "-") ?? [];
                                 Say($"BODY {p[1]} = {bodies[p[1]].Count} item(s)");
@@ -471,6 +502,14 @@ static class Host125
                         case Protocol.LootAskBodyPut:
                             if (bodies.TryGetValue(f[0], out var pitems)) pitems.Add(new Wo134Rules.Item(Guid.Parse(f[1]), int.Parse(f[2], CultureInfo.InvariantCulture), float.Parse(f[3], CultureInfo.InvariantCulture), false));
                             break;
+                        case Protocol.LootAskTakedown:   // WO-135: the host's world performs it -- here: ok, and the NPC's stream says the result
+                        {
+                            string res = f.Length == 2 && npcFlags.ContainsKey(f[0]) ? "ok" : "refused";
+                            if (res == "ok") npcFlags[f[0]] = f[1] == "knockout" ? (byte)2 : (byte)1;
+                            await W(new LootMsg(Protocol.LootHostTakedownResult, la.Tok, $"{res} {f[0]} {(f.Length > 1 ? f[1] : "mercy")}").BuildUp(Protocol.LootHostUp, src));
+                            Say($"  -> TakedownResult {res} (stream flags now {npcFlags.GetValueOrDefault(f[0])})");
+                            break;
+                        }
                         case Protocol.LootAskItemTake:
                         {
                             var cls = Guid.Parse(f[0]);

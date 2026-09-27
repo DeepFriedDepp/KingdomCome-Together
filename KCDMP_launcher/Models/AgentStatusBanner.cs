@@ -48,7 +48,10 @@ namespace KCDMP_launcher.Models
         public string JoinMessage { get; private set; } = "";
         public string JoinState { get; private set; } = "idle";
         /// <summary>True while the agent asks the player for the first-join choice.</summary>
-        public bool ShowChoiceButtons => JoinState == "choose";
+        public bool ShowChoiceButtons => JoinState is "choose" or "choose-bring" or "choose-fresh";
+        /// <summary>WO-135: only the choice that has a save of the host's game version.</summary>
+        public bool ShowBring => JoinState is "choose" or "choose-bring";
+        public bool ShowFresh => JoinState is "choose" or "choose-fresh";
 
         private string _lastConnState = "";
         private double _lastReadAt = double.NaN;
