@@ -92,8 +92,8 @@ in plain words:
 
 Still not working, do not report these as new:
 
-* On the partner's screen, people **do not swing** in a fight (they may stand
-  with their arms out). Their hits still land.
+* On the partner's screen, people's swings should now show; robbers from a
+  road ambush (the look-alikes) may still stand with their arms out instead.
 * Your own swings showing on the other player's figure: still unproven.
 * How hard people hit the partner compared with the partner's own armour:
   not measured yet.

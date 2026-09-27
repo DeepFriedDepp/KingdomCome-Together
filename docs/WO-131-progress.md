@@ -136,3 +136,22 @@ their reason, as they were made. Evidence marks: (observed), (code-verified),
   `kcdmp-combatwrite.txt` removed; 5 host autosaves (run A) and 1 (run B's
   first, mis-roled start) moved out of playline1 into the session scratchpad;
   no joiner run wrote a save.
+- Run F (host, bandit camp): Henry trespassed with his weapon drawn, the
+  avatar beside him wearing what it could of Henry's gear (4 of 7 items took).
+  Two campers fought and killed Henry (hits 12.9, 39.2, 26.2, 20.7 hp); the
+  avatar was on Henry's side of the skirmish but never attacked, so the 1e
+  comparison still has no avatar number. Wake 487 m away, StopFight, no chase.
+  The host's NPC rows: `cap_npc=5`, `npc_rows_out=5` (the capture fix, live).
+  **Incident:** straight after the avatar's attributed hit on a camper, a
+  civilian caravan passing the camp road got into a brawl with a camper and one
+  caravan civilian died -- in the host's throwaway world, never saved. The camp
+  turned out to border a settlement; no further runs there. 2 host autosaves
+  moved out of the playline.
+- Run G (joiner): the recording's rows replayed; the camera first sat behind a
+  rock and a bush (re-aimed; the synthetic host's 120 s ran out once and the
+  real game briefly became the authority: 4 autosaves moved out). The last
+  replay, in open ground: both copies swing (sheets 7-8). The same camp
+  bordered a settlement on the joiner side too (a "Surrender" prompt appeared
+  while the camera search placed Henry there); Henry was moved away at once,
+  excluded from targeting, and no fight happened.
+- The test game's original `kdcmp.pak` restored again (hash checked).

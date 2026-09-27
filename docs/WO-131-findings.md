@@ -21,15 +21,17 @@ it is in the repo (**0.30.2**; the prompt names 0.30.5, which is not on
 | 1d NPCs perceive the joiner | **partly** (observed / inconclusive). On the host of a shared world the avatar is never AI-ignorant and is re-parented onto **the player's faction** (read back: `FactionNode/Parent/Name = player`); wolves targeted and bit it and it joined Henry's side of their skirmishes (observed). A human hostile attacking it unprovoked was **not** produced: spawned bandit souls ignore even Henry, and a live bandit camp's reactions (warn, chase out) are scripted on the player only — they reacted to Henry at 4 m, not to the avatar at 4 m (observed). Guards: not tested (no guards outside towns) |
 | 1e the joiner's armor counts | **not measured** (inconclusive). The direct defect is fixed: the avatar is immortal (imm guard) and was never healed, so after the first hits it sat at 1 hp and later NPC hits measured little or nothing; its health is now restored after every measured hit (code-verified; no damaging NPC hit on the avatar happened in the runs — the wolves' bites did 0 health) |
 | 1f runtime-spawned NPCs | **fixed for humans** (observed). A name the host streams that has no body on the joiner gets a **stand-in under that exact name** (a road bandit wears a bandit soul), bound, guarded, removed when its stream stops. Horses carry a new stream bit 0x80 and never get one; animals are still per-machine |
-| 1g fights end with a death | **fixed** (observed). The joiner's death/respawn → the host StopFights its avatar: the wolf fighting it dropped the fight at once (`SkirmishVictory`). The local player's own death now StopFights too (observed log, no live fight around it) |
+| 1g fights end with a death | **fixed** (observed). The joiner's death/respawn → the host StopFights its avatar: the wolf fighting it dropped the fight at once (`SkirmishVictory`). The local player's own death StopFights too: in a real fight two camp bandits killed Henry, he woke 487 m away, `WO131-STOPFIGHT`, `SkirmishVictory`, nobody chased (observed, run F) |
 
 **Priority 2 — animation.**
 
 | item | result |
 |---|---|
-| 2a NPC combat moves reach the joiner | **send side fixed, animation NOT working.** `npc_rows_out=0` because the host's NPC capture never produced a name (the owner at `ca+0x2D8` is a `C_Actor`, the name helper wanted a `CEntity`); fixed (code-verified, no live NPC swing on the host happened). On the joiner, replayed attack rows **do not animate** a copy: consecutive frames show no swing and an arms-out bind pose (observed, sheets 5–6), with the brain paused or resumed, while the agent logs `result=ok` |
+| 2a NPC combat moves reach the joiner | **fixed end to end** (observed). `npc_rows_out=0` because the host's NPC capture never produced a name (the owner at `ca+0x2D8` is a `C_Actor`, the name helper wanted a `CEntity`). Fixed: in a real fight on the host, `cap_npc=5`, no drops, `npc_rows_out=5`. Those five captured rows, replayed into a joiner game (`tools/wo131/replay.py` → synthpeer), make the joiner's copies of the same two bandits **swing**: an overhead mace blow over ten consecutive frames and an axe blow over fourteen (sheets 7–8). Limit: rows picked from the table by hand for a stand-in whose loadout did not match them gave a bind pose, not a swing (sheets 5–6): a stand-in's approximate loadout can refuse the host's real rows |
 | 2b no stuck poses | **fixed** (observed). Reproduced the field's "phasing" exactly: a local blow ragdolls a copy, the writer holds it at standing height, only the head shows. Now the native writer drops a bound body whose physics stops being a living entity (`reason=not-living`) and Lua calls the engine's `actor:StandUp()`: standing 0.7 s after the blow in every frame (sheets 3–4) |
 | 2c the players' swings | **capture fixed (code-verified), live swing (inconclusive).** The field's `owner-not-a-combat-actor … +0x612B28` is **`C_CombatPlayer`** (the player's combat actor is a subclass; resolved from the RTTI locator) and `no-owner-name … +0x5BF030` is a plain `C_CombatActor` (the NPC case above). Both accepted now. No input-free route to a real swing exists on this build: `RequestAction(attack|freeAttack)` returns null on the player and on NPCs (observed) |
+
+**Also found:** an NPC hit by the avatar (attributed) targets it but still never swings at it on the host — with spawned souls and with a live camp bandit mid-fight (observed, runs A and F); and in a real fight the campers go for Henry, never the avatar beside him, although it is on Henry's side of their skirmish (observed). Fight-back against the avatar stays open (§8).
 
 **Phase 3 — leash.** The countdown is cancelled only back under 630 m (650 −
 20); a dialogue hold needs a conversation the player is in: `IsInDialog`
@@ -167,15 +169,23 @@ the fight — a harness artifact, fixed in avatarpeer for later runs.)
 
 - **Why 0 rows:** above (the capture's owner name). Also, `npc_rows_out` only
   ever counts on the host; a joiner's log shows `npc_rows_in`.
-- **Receiving side:** rows arrive and dispatch (`MP-ACTION … NpcAttack …
-  dispatch=native-row result=ok`), but the copy does not swing. Blunt-weapon
-  rows on the club-carrying stand-in: an arms-out bind pose, then a normal
-  stance (sheet 5); the same with its brain resumed (sheet 6); fist rows on a
-  world villager: no visible swing (26 m, small in frame). The rows are the NPC
-  actor class (all human attack rows are) (observed).
-- Carried: the swing path (`GhostSwing` / `C_CombatAnimAction`) on a puppet
-  needs its own work; WO-121's "rows visible on a puppet" does not hold on this
-  build.
+- **Host, run F (observed):** a real fight at a bandit camp (Henry trespassing,
+  the avatar beside him). `cap_npc=5`, all drop counters 0, `npc_rows_out=5`,
+  `MP-ACTION section=outbound kind=NpcAttack npc=tpod_bandit_2 row=…`; the
+  recording peer received all five.
+- **Joiner, run G (observed):** the recording's five rows replayed onto the
+  joiner's copies of the same two bandits (bound by identity, placed in open
+  ground, weapons drawn by the stream): both swing, with their own shields and
+  weapons — sheet 7 (f20–f33: guard, mace up, overhead, blow, recovery) and
+  sheet 8 (f66–f79: wind-up, axe overhead, strike, back to guard). This is the
+  WO's protocol: record the host side, replay into a joiner game, judge frame
+  by frame.
+- **What did not animate (observed):** rows picked by hand from the table for
+  the club-carrying stand-in (sheet 5; with its brain resumed, sheet 6): an
+  arms-out bind pose. The real rows carry the attacker's own loadout tags
+  (`l_shield+…`); a body whose loadout does not match them does not play them.
+  A stand-in wears an approximate soul, so a road bandit's real rows may not
+  fit it (inconclusive until a live road encounter).
 
 ### 2b — no stuck poses
 
@@ -209,6 +219,8 @@ is pinned by the Lua suite (a bark without a twin is no hold).
 | C | joiner | rows → no swing; hit gate (after the deadlock fix); lethal/floor; phasing reproduced + manual StandUp |
 | D | joiner | automatic stand-up; save load; release → park; CSV (found the re-pause defect) |
 | E | joiner | the re-pause fix; save load; the local player's death; long CSV |
+| F | host (avatarpeer joiner) | a real fight at the bandit camp: Henry killed by two campers, StopFight on the wake; the host's NPC rows captured and sent (`npc_rows_out=5`) and recorded; the avatar in the skirmish but never attacked; the avatar's attributed hit: targeted, no swing |
+| G | joiner | the recorded real rows replayed: the copies swing (sheets 7–8) |
 
 ### 4.1 CSV (joiner, `mp_leash_trace`)
 
@@ -231,6 +243,9 @@ Horses are free by design (excluded) and are not counted.
 | `4-auto-standup-strip.jpg` | run D, 0.5 s apart from 0.7 s after a lethal local blow: standing throughout |
 | `5-npc-rows-no-swing.jpg` | run C, 80 ms apart around three attack rows: no swing, arms-out pose |
 | `6-npc-rows-brain-resumed-no-swing.jpg` | the same with the copy's brain resumed |
+| `7-real-host-row-swing-a.jpg` | run G: a row captured from a real host NPC attack, replayed: the joiner's copy swings a mace overhead (f20–f33, ~100 ms apart) |
+| `8-real-host-row-swing-b.jpg` | the other bandit's captured row: an overhead axe strike (f66–f79) |
+| `9-replay-scene.jpg` | the replay scene on the joiner: both copies, shields and weapons drawn |
 
 ## 6. Gates
 
@@ -252,8 +267,9 @@ Each item says what the **joiner** looks at.
 2. **An enemy attacks him.** Ride to bandits or wolves together; the host stays
    back. Joiner: they come at you, and you can see every one that hits you
    (road ambushers are stand-ins: `WO131-STANDIN spawn` in your kcd.log).
-3. **An NPC he hits fights back.** Joiner hits a bandit: it fights you back on
-   the host's screen. On your screen it does **not** swing yet (known).
+3. **An NPC he hits fights back, and swings.** Joiner hits a bandit: does it
+   fight you back (host's screen), and does it **swing on your screen**? (World
+   NPCs' copies swung in the replay test; road-ambush stand-ins may not.)
 4. **No phasing.** Hit an enemy hard: it never sinks into the ground; it lies
    down only if it lies down on the host's screen too (`WO131-STANDUP` lines).
 5. **A body and its loot in one place.** Kill one: the body lies in the same
@@ -268,7 +284,8 @@ Each item says what the **joiner** looks at.
 
 ## 8. Carried forward
 
-1. NPC-copy swings on the joiner (2a receiving side).
+1. Stand-in loadouts vs the host's real rows (2a): a road bandit's rows on an
+   approximate stand-in may not play.
 2. The ~10 % damage comparison (1e); if the avatar is far off, forward the hit
    (weapon, zone, strength) and let the joiner's engine compute it.
 3. An unprovoked human hostile engaging the avatar; guards (needs a live world
