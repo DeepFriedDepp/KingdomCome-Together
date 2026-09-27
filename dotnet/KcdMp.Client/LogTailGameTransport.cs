@@ -373,6 +373,39 @@ public sealed class LogTailGameTransport : IGameTransport
     /// </summary>
     public event Action<string>? PlayerTeleported;
 
+    /// <summary>
+    /// WO-114: the engine's own fast-travel edges, "FastTravel: started..." and
+    /// "FastTravel: ended..." (PlayerModule; observed live on a console
+    /// wh_pl_FastTravelTo). KCD2's fast travel is a sped-up simulated walk (the
+    /// position advances along the road), not a jump, so a position rule cannot
+    /// see it; these lines can. true = started, false = ended (arrived).
+    /// </summary>
+    public event Action<bool>? FastTravelStateChanged;
+
+    /// <summary>
+    /// WO-114: the engine refused a fast travel -- "[Warning] FastTravel: unable to
+    /// start fast travel from/to outside navmesh!" (observed live: the refusal
+    /// wh_pl_FastTravelEnabled 0 produces, whatever the navmesh; the same trip ran
+    /// with the switch at 1).
+    /// </summary>
+    public event Action? FastTravelRefused;
+
+    private void ProcessFastTravelMarker(ReadOnlySpan<char> line)
+    {
+        if (FastTravelRefused is not null && line.IndexOf("FastTravel: unable to start fast travel", StringComparison.Ordinal) >= 0)
+        {
+            try { FastTravelRefused?.Invoke(); }
+            catch (Exception ex) { Console.WriteLine($"[leash] fast-travel refusal handler threw: {ex.Message}"); }
+            return;
+        }
+        if (FastTravelStateChanged is null || !line.StartsWith("FastTravel: ", StringComparison.Ordinal)) return;
+        bool? on = line.StartsWith("FastTravel: started", StringComparison.Ordinal) ? true
+                 : line.StartsWith("FastTravel: ended", StringComparison.Ordinal) ? false : null;
+        if (on is not bool b) return;
+        try { FastTravelStateChanged?.Invoke(b); }
+        catch (Exception ex) { Console.WriteLine($"[leash] fast-travel handler threw: {ex.Message}"); }
+    }
+
     private void ProcessTeleportMarker(ReadOnlySpan<char> line)
     {
         int at = line.IndexOf("TeleportPlayer Player 'Dude'", StringComparison.Ordinal);
@@ -451,6 +484,12 @@ public sealed class LogTailGameTransport : IGameTransport
         // open at the start of that window, not inventory at all).
         if (line.IndexOf("PlayAudio: ApseOpen") >= 0) _inventoryOpen = true;
         else if (line.IndexOf("PlayAudio: ApseClose") >= 0) _inventoryOpen = false;
+        // WO-114: a fast travel plays ApseOpen right before "FastTravel: started..."
+        // and no ApseClose after it (observed live, two console fast travels):
+        // the APSE screen is not open once the travel has ended, so the end
+        // clears the flag -- else this player reads "paused" for good after
+        // every fast travel (and the leash holds its pull forever).
+        if (_inventoryOpen && line.StartsWith("FastTravel: ended", StringComparison.Ordinal)) _inventoryOpen = false;
 
         // Skip-time (sleep/wait/bed): brackets the entire skip, start to
         // finish, via CryEngine's own readiness-observer logging.
@@ -787,6 +826,7 @@ public sealed class LogTailGameTransport : IGameTransport
             ProcessStoryMarkers(line);
             ProcessLevelMarker(line);   // WO-94
             ProcessTeleportMarker(line); // WO-94
+            ProcessFastTravelMarker(line); // WO-114
             return;
         }
 

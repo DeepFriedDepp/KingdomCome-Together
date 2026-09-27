@@ -14,6 +14,12 @@
 //       world <file> <reseed>     the same, another playthrough (give a synthetic seed in hex)
 //       mode shared|separate      the session mode
 //       leave                     disconnect (the joiner must leave the world)
+//       pos <x> <y> <z>           (WO-114) the host's streamed position from now on
+//       leash warn|cancel         (WO-114) a Leash message to every joiner (0x58), with the current position
+//       leash countdown|hold <s>  ... seconds left
+//       leash pull [fast]         ... a pull beside the host's position (fast = the fast-travel reason)
+//       leash config on|off <warn> <pull>
+//       timeskip <worldTime>      (WO-114) a fast-travel time skip (TimeSkip start + done, kind fast-travel)
 //     [reseed] = a synthetic seed (hex) written into the save's body 0x01FB, re-signed: a second
 //     "playthrough" made from a copy. Files are COPIES of real host saves; never logged by path.
 //
@@ -75,6 +81,8 @@ static class Host125
         string ctl = Arg(a, "--ctl", "");
         double duration = double.Parse(Arg(a, "--duration", "3600"), CultureInfo.InvariantCulture);
         var hp = Arg(a, "--host-pos", "0,0,0").Split(',').Select(v => float.Parse(v, CultureInfo.InvariantCulture)).ToArray();
+        byte leashSeq = 0;
+        var leashSeen = new Dictionary<byte, LeashState>();   // WO-114: the last LeashState per joiner
         var world = Load(Arg(a, "--join-host125", ""), Arg(a, "--reseed", ""));
         bool shared = true;
         bool loading = false;   // like a WO-125 host agent: silent, and joins deferred, while a load runs
@@ -201,6 +209,40 @@ static class Host125
                                 await Announce();
                                 Say($"MODE {(shared ? "shared-world" : "separate")} announced");
                                 break;
+                            case "pos":   // WO-114
+                                hp = [float.Parse(p[1], CultureInfo.InvariantCulture), float.Parse(p[2], CultureInfo.InvariantCulture), float.Parse(p[3], CultureInfo.InvariantCulture)];
+                                await W(PositionCodec.BuildPosition(hp[0], hp[1], hp[2], 0, false, false, null, hostClaim: true));
+                                Say(FormattableString.Invariant($"POS the host is now at ({hp[0]:F1}, {hp[1]:F1}, {hp[2]:F1})"));
+                                break;
+                            case "leash":   // WO-114
+                            {
+                                byte kind = p[1] switch { "warn" => Protocol.LeashKindWarn, "countdown" => Protocol.LeashKindCountdown, "cancel" => Protocol.LeashKindCancel,
+                                                          "pull" => Protocol.LeashKindPull, "config" => Protocol.LeashKindConfig, "hold" => Protocol.LeashKindHold, _ => (byte)0 };
+                                ushort arg = 0; byte sq = 0; ushort dist = 0;
+                                if (kind is Protocol.LeashKindCountdown or Protocol.LeashKindHold) arg = ushort.Parse(p[2], CultureInfo.InvariantCulture);
+                                if (kind == Protocol.LeashKindWarn) arg = 600;
+                                if (kind == Protocol.LeashKindPull) { sq = ++leashSeq; arg = p.Length > 2 && p[2] == "fast" ? Protocol.LeashReasonFastTravel : Protocol.LeashReasonDistance; }
+                                if (kind == Protocol.LeashKindConfig) { sq = (byte)(p[2] == "on" ? 1 : 0); arg = ushort.Parse(p[3], CultureInfo.InvariantCulture); dist = ushort.Parse(p[4], CultureInfo.InvariantCulture); }
+                                if (kind == 0) { Say($"LEASH unknown kind {p[1]}"); break; }
+                                for (byte g = 1; g < 8; g++)
+                                    await W(new LeashCommand(kind, sq, arg, hp[0], hp[1], hp[2], dist).Build(g));
+                                Say(FormattableString.Invariant($"LEASH {Protocol.LeashKindName(kind)} seq={sq} arg={arg} host=({hp[0]:F1}, {hp[1]:F1}, {hp[2]:F1}) sent"));
+                                break;
+                            }
+                            case "timeskip":   // WO-114: the host's fast travel's time skip
+                            {
+                                uint wt = uint.Parse(p[1], CultureInfo.InvariantCulture);
+                                foreach (byte ph in new[] { Protocol.TimeSkipPhaseStart, Protocol.TimeSkipPhaseDone })
+                                {
+                                    var pk = new byte[3 + Protocol.TimeSkipUpPayloadLen];
+                                    pk[0] = Protocol.TimeSkipUp; BinaryPrimitives.WriteUInt16LittleEndian(pk.AsSpan(1), Protocol.TimeSkipUpPayloadLen);
+                                    pk[3] = ph; pk[4] = Protocol.TimeSkipKindFastTravel;
+                                    BinaryPrimitives.WriteUInt32LittleEndian(pk.AsSpan(5), ph == Protocol.TimeSkipPhaseStart ? 0 : wt);
+                                    await W(pk);
+                                }
+                                Say($"TIMESKIP fast-travel start + done t={wt} sent");
+                                break;
+                            }
                             case "leave":
                                 Say("LEAVE: disconnecting -- the joiner must leave the host's world");
                                 tcp.Close();
@@ -272,6 +314,15 @@ static class Host125
             await foreach (var (type, p) in inbox.Reader.ReadAllAsync(hard.Token))
             {
                 if (!Protocol.IsJoinDown(type, p.Length) || Split(p) is not var (src, jid, body)) continue;
+                if (type == Protocol.LeashStateDown)   // WO-114: logged on a change only
+                {
+                    if (LeashState.TryDecode(body, out var ls) && (!leashSeen.TryGetValue(src, out var prev) || prev != ls))
+                    {
+                        leashSeen[src] = ls;
+                        Say($"LEASHSTATE from {src}: flags={Protocol.LeashFlagsText(ls.Flags)} pull #{ls.PullSeq} {Protocol.LeashResultName(ls.Result)} from={ls.FromM} to={ls.ToM} residual_cm={ls.ResidualCm}");
+                    }
+                    continue;
+                }
                 if (type == Protocol.JoinRequestDown) { Say($"JoinRequest 0x{jid:x8} from {src}"); await joinQ.Writer.WriteAsync((src, jid)); }
                 else await joinMsgs.Writer.WriteAsync((type, body));
             }

@@ -5397,6 +5397,13 @@ end
 
 function KCD2MP_Wo114DrawUI()
     local w = KCD2MP.w114
+    -- A line queued while a menu held the timers (the map after a refused fast
+    -- travel): shown now, for the usual 5 s, instead of expiring unseen.
+    if w.pendingMsg then
+        local text = w.pendingMsg
+        w.pendingMsg = nil
+        KCD2MP_Wo114Msg(text)
+    end
     if w.cdN > 0 and (os.clock() - w.cdAt) < 2.5 then
         mp_draw_row("leash_countdown", 700, 200, "Bringing you back to your host in " .. w.cdN .. "...", 2.2,
             "Bringing you back to your host in N...")
@@ -5478,12 +5485,17 @@ function KCD2MP_Wo114FastTravelBlock(on, why)
 end
 
 -- The joiner tried to fast travel while it is blocked: say why, once per 5 s.
+-- The engine refuses on the map screen, where the timers (and DrawText) stop:
+-- the game's own HUD toast now, and the plain line again once the map closes.
 function KCD2MP_Wo114FastTravelTried(how)
     local w = KCD2MP.w114
     if not w.ftBlocked then return false end
     if (os.clock() - w.ftToldAt) < 5 then return true end
     w.ftToldAt = os.clock()
-    KCD2MP_Wo114Msg("Only the host can fast travel in co-op.")
+    local text = "Only the host can fast travel in co-op."
+    mp_log("WO114-FASTTRAVEL refused (" .. tostring(how or "map") .. ") -- telling the player")
+    pcall(KCD2MP_ShowNativeToast, text)
+    w.pendingMsg = text
     KCD2MP_EmitEvent("wo114_ft_try", tostring(how or "map"))
     return true
 end

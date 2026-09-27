@@ -336,6 +336,55 @@ public class Wo114Tests
         Assert.Equal(Protocol.LeashReasonFastTravel, Assert.Single(Run(l, ref t, 250, 2400)).Reason);
     }
 
+    // ---------------------------------------------------------------- the engine's fast-travel lines
+
+    [Fact]
+    public void The_log_tail_reports_the_engines_fast_travel_edges()
+    {
+        // Observed live (a console wh_pl_FastTravelTo on the host): kcd.log prints
+        // "FastTravel: started..." and "FastTravel: ended..."; the position walks the
+        // road in between (a sped-up simulation, not a jump).
+        var tail = new LogTailGameTransport(new HttpGameTransport("http://127.0.0.1:1"), "unused.log");
+        var seen = new List<bool>();
+        tail.FastTravelStateChanged += on => seen.Add(on);
+        var process = typeof(LogTailGameTransport).GetMethod("ProcessLine", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+        foreach (var line in new[] { "[CONSOLE] Executing console command 'wh_pl_FastTravelTo 2439.9 2497.4 172.0'", "FastTravel: started...",
+                                     "Readiness observer 'AfterFastTravel' with category bitmask '16273' started async waiting",
+                                     "FastTravel: ended...", "FastTravel: skiptime started 12", "a line about FastTravel: started elsewhere" })
+            FeedSpan(tail, process, line);
+        Assert.Equal(new[] { true, false }, seen);
+
+        // The refusal the switch at 0 produces (observed live; same trip ran at 1).
+        int refused = 0;
+        tail.FastTravelRefused += () => refused++;
+        FeedSpan(tail, process, "[Warning] FastTravel: unable to start fast travel from/to outside navmesh!");
+        Assert.Equal(1, refused);
+        Assert.Equal(new[] { true, false }, seen);   // a refusal is not an edge
+    }
+
+    [Fact]
+    public void A_fast_travels_end_clears_the_stale_map_open_pause()
+    {
+        // Observed live: "PlayAudio: ApseOpen" right before "FastTravel: started..."
+        // and no ApseClose after it -- the pause detector stayed "entered" for good.
+        var tail = new LogTailGameTransport(new HttpGameTransport("http://127.0.0.1:1"), "unused.log");
+        var pause = new List<bool>();
+        tail.PauseStateChanged += p => pause.Add(p);
+        var process = typeof(LogTailGameTransport).GetMethod("ProcessLine", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+        foreach (var line in new[] { "PlayAudio: ApseOpen", "FastTravel: started...", "FastTravel: ended..." })
+            FeedSpan(tail, process, line);
+        Assert.Equal(new[] { true, false }, pause);
+
+    }
+
+    private static void FeedSpan(LogTailGameTransport tail, System.Reflection.MethodInfo process, string line)
+    {
+        // ProcessLine takes a ReadOnlySpan<char>: invoke through a delegate (spans cannot be boxed).
+        var d = (SpanLine)Delegate.CreateDelegate(typeof(SpanLine), tail, process);
+        d(line.AsSpan());
+    }
+    private delegate void SpanLine(ReadOnlySpan<char> line);
+
     // ---------------------------------------------------------------- the wire
 
     [Fact]

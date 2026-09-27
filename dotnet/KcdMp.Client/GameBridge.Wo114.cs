@@ -41,6 +41,9 @@ public partial class GameBridge
     private (float X, float Y, DateTime AtUtc)? _leashPrevLocal;
     private DateTime _leashFastTravelUtc = DateTime.MinValue;
     private DateTime _leashJumpQuietUntilUtc = DateTime.MinValue;   // after a respawn/load: the next jump is that, not a travel
+    private volatile bool _leashHostTravelling;                      // "FastTravel: started..." seen, "ended" not yet
+    private DateTime _leashFtArrivedUtc = DateTime.MinValue;         // "FastTravel: ended...": the joiners come along 1.5 s later
+    private (float X, float Y)? _leashJumpStartPos;                  // where the host was when its clock started jumping
     private (bool Valid, float X, float Y, float R, DateTime AtUtc) _leashPartnerSent;
 
     // ---- both: the mod's answer to KCD2MP_Wo114Busy (dialogue, mounted) ----
@@ -187,6 +190,7 @@ public partial class GameBridge
         if (_localAutoPaused || _localManualPaused) h |= LeashLogic.Hold.HostMenu;
         if (_hostWorldHenry == false) h |= LeashLogic.Hold.NonHenry;
         if (_hostLoadAnnounced) h |= LeashLogic.Hold.HostReloading;
+        if (_leashHostTravelling) h |= LeashLogic.Hold.HostTravelling;
         return h;
     }
 
@@ -194,6 +198,11 @@ public partial class GameBridge
     {
         var hostHold = HostHold();
         Wo114HostFastTravelCheck(hostHold);
+        if (_leashFtArrivedUtc != DateTime.MinValue && (DateTime.UtcNow - _leashFtArrivedUtc).TotalSeconds >= 1.5)
+        {
+            _leashFtArrivedUtc = DateTime.MinValue;
+            Wo114NoteHostFastTravel("the engine's fast travel ended");
+        }
 
         // The settings, to every joiner in the world (their death wake filter reads them).
         bool sendCfg = (DateTime.UtcNow - _leashCfgSentUtc).TotalSeconds >= 10;
@@ -227,7 +236,7 @@ public partial class GameBridge
     private void Wo114HostFastTravelCheck(LeashLogic.Hold hostHold)
     {
         if (!_hasPushed) return;
-        var excluded = LeashLogic.Hold.HostDowned | LeashLogic.Hold.HostLoading | LeashLogic.Hold.HostReloading;
+        var excluded = LeashLogic.Hold.HostDowned | LeashLogic.Hold.HostLoading | LeashLogic.Hold.HostReloading | LeashLogic.Hold.HostTravelling;
         if ((hostHold & excluded) != 0) { _leashPrevLocal = null; _leashJumpQuietUntilUtc = DateTime.UtcNow.AddSeconds(5); return; }
         if (DateTime.UtcNow < _leashJumpQuietUntilUtc) { _leashPrevLocal = null; return; }
         var prev = _leashPrevLocal;
@@ -235,13 +244,62 @@ public partial class GameBridge
         if (prev is not { } p) return;
         double jump = LeashLogic.Dist2D(p.X, p.Y, _lastX, _lastY);
         if (jump < LeashJumpM) return;
-        if ((DateTime.UtcNow - _leashFastTravelUtc).TotalSeconds < 10) return;
+        Wo114NoteHostFastTravel(FormattableString.Invariant($"this game jumped {jump:F0} m ({p.X:F0},{p.Y:F0}) -> ({_lastX:F0},{_lastY:F0}), a teleport"));
+    }
+
+    /// <summary>The host arrived somewhere else (the engine's fast travel, a teleport): every joiner comes along. Deduped for 20 s.</summary>
+    private void Wo114NoteHostFastTravel(string why)
+    {
+        if ((DateTime.UtcNow - _leashFastTravelUtc).TotalSeconds < 20) return;
         _leashFastTravelUtc = DateTime.UtcNow;
-        Console.WriteLine(FormattableString.Invariant(
-            $"MP-LEASH host: this game jumped {jump:F0} m ({p.X:F0},{p.Y:F0}) -> ({_lastX:F0},{_lastY:F0}) -- a fast travel; {_leashJoinerState.Count} joiner(s) come along"));
+        Console.WriteLine($"MP-LEASH host: {why} -- {_leashJoinerState.Count} joiner(s) come along");
         if (!_leashEnabled) { Console.WriteLine("MP-LEASH host: mp_leash is off -- nobody is brought along"); return; }
-        foreach (var l in _leashByJoiner.Values) l.NoteHostFastTravel();
         foreach (var id in _leashJoinerState.Keys) _leashByJoiner.GetOrAdd(id, _ => new LeashLogic()).NoteHostFastTravel();
+    }
+
+    /// <summary>"FastTravel: started..." / "FastTravel: ended..." on this machine (LogTailGameTransport).</summary>
+    private void Wo114OnLocalFastTravel(bool active)
+    {
+        if (_combatRoleApplied && _isDamageAuthority)
+        {
+            _leashHostTravelling = active;
+            if (active) Console.WriteLine("MP-LEASH host: fast travel started -- the joiners' countdowns hold; they come along on arrival");
+            else { _leashFtArrivedUtc = DateTime.UtcNow; Console.WriteLine("MP-LEASH host: fast travel ended -- the joiners come along in 1.5 s"); }
+            return;
+        }
+        if (!_combatRoleApplied) return;
+        if (active)
+        {
+            _leashFtRefusedUtc = DateTime.UtcNow;
+            Console.WriteLine($"MP-LEASH joiner: a fast travel STARTED on this game{(_joinedWorld ? " in the host's world, past the block -- only the host fast-travels; the leash brings you back" : " (not in the host's world)")}");
+            if (_joinedWorld) _ = Wo114SayAsync(LeashLogic.Text.JoinerFastTravelBlocked);
+        }
+        else Console.WriteLine("MP-LEASH joiner: this game's fast travel ended");
+    }
+
+    /// <summary>The engine refused a fast travel on this machine (the switch at 0): on a blocked joiner, say why.</summary>
+    private void Wo114OnFastTravelRefused()
+    {
+        if (!_leashFtBlocked) { Console.WriteLine("MP-LEASH the engine refused a fast travel here (not our block)"); return; }
+        _leashFtRefusedUtc = DateTime.UtcNow;
+        Console.WriteLine("MP-LEASH joiner: fast travel refused by the engine (wh_pl_FastTravelEnabled 0) -- only the host fast-travels in co-op; telling the player");
+        _ = ExecLuaAsync("if KCD2MP_Wo114FastTravelTried then KCD2MP_Wo114FastTravelTried(\"engine-refused\") end");
+    }
+
+    /// <summary>The host's clock started jumping (the clock-jump watcher): remember where the host stood.</summary>
+    private void Wo114OnClockJumpStart()
+    {
+        if (_combatRoleApplied && _isDamageAuthority && _hasPushed) _leashJumpStartPos = (_lastX, _lastY);
+    }
+
+    /// <summary>The host's clock jump settled (reported as a fast travel): a fallback when the log line was missed -- only if the host moved 100 m or more.</summary>
+    private void Wo114OnClockJumpSettled()
+    {
+        var p = _leashJumpStartPos;
+        _leashJumpStartPos = null;
+        if (!(_combatRoleApplied && _isDamageAuthority) || p is not { } s || !_hasPushed) return;
+        double moved = LeashLogic.Dist2D(s.X, s.Y, _lastX, _lastY);
+        if (moved >= 100) Wo114NoteHostFastTravel(FormattableString.Invariant($"the clock jumped and this game moved {moved:F0} m (a fast travel)"));
     }
 
     private string LeashPartnerName(byte id) => _ghostNames.TryGetValue(id, out var n) && !string.IsNullOrWhiteSpace(n) ? n : "Your partner";

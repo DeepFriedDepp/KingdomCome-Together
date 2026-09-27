@@ -18,6 +18,12 @@
 //   at <t> dodge <rowGuid>                     a Dodge row event
 //   at <t> ff on|off                           a SessionSetting (friendly fire) -- valid only as host
 //   at <t> hit <hp> <st> [unarmed]             a PlayerHit 0x44 on the joiner (the agent's id)
+//   at <t> leash on|off [flag,...]             (WO-114) act as a JOINER for the host's leash: a LeashState
+//                                              (0x5A) every second with these flags (default in-world;
+//                                              names: in-world downed loading cutscene dialogue menu mounted)
+//   at <t> leash flags <flag,...>              change the reported flags (none = not in the world)
+//   at <t> leash obey on|busy|fail             what a Pull does: move 3 m east of the host and report
+//                                              placed (on), refuse as busy, or report not-placed (fail)
 //   end <t>                                    stop
 //
 // Position packets: every 30 ms while moving, 2 s heartbeat still; the state
@@ -81,6 +87,7 @@ static class P
         Console.WriteLine($"PEER connected id={myId} release={release} protocol=v{Protocol.Version} steps={steps.Count}");
 
         byte? joiner = null;
+        var leashIn = new System.Collections.Concurrent.ConcurrentQueue<(byte Src, LeashCommand C)>();   // WO-114
         using var cts = new CancellationTokenSource();
         var inbox = new ActionInbox();
         var reader = Task.Run(async () =>
@@ -96,6 +103,9 @@ static class P
                         Console.WriteLine($"PEER got PlayerHit from ghost {att}: {h}");
                     else if (t2 == Protocol.ActionDown && inbox.Accept(b2, out _) is InboundAction ia)
                         Console.WriteLine($"PEER got action kind={ia.Kind} phase={ia.Phase} from={ia.SourceGhostId} len={ia.Payload.Length}");
+                    else if (t2 == Protocol.LeashDown && b2.Length > 1 + Protocol.JoinHeaderLen
+                             && LeashCommand.TryDecode(b2.AsSpan(1 + Protocol.JoinHeaderLen), out var lc))
+                        leashIn.Enqueue((b2[0], lc));   // WO-114: handled on the main loop
                 }
             }
             catch { }
@@ -108,6 +118,21 @@ static class P
         var s2 = new BodyState2(0, 0, BodyState2Bits.None, WireZone.Undefined, WireGuardStance.None, WireZone.Undefined, 0, 0, 0);
         BodyState2? lastSent = null; double lastSentT = -9, lastPos = -9, lastPing = 0; int si = 0; bool placed = false, frozen = false;
         double lastT = 0;
+        // WO-114: the joiner's side of the leash (off until "leash on").
+        bool leashOn = false; ushort leashFlags = Protocol.LeashFlagInWorld; string leashObey = "on";
+        byte leashSeq = 0, leashResult = 0; ushort leashFrom = 0, leashTo = 0, leashRes = 0; double lastLeash = -9;
+        static ushort LeashFlagsOf(string csv)
+        {
+            ushort f = 0;
+            foreach (var n in csv.Split(',', StringSplitOptions.RemoveEmptyEntries))
+                f |= n switch
+                {
+                    "in-world" => Protocol.LeashFlagInWorld, "downed" => Protocol.LeashFlagDowned, "loading" => Protocol.LeashFlagLoading,
+                    "cutscene" => Protocol.LeashFlagCutscene, "dialogue" => Protocol.LeashFlagDialogue, "menu" => Protocol.LeashFlagMenu,
+                    "mounted" => Protocol.LeashFlagMounted, _ => (ushort)0,
+                };
+            return f;
+        }
         string? control = Arg(a, "--control", "") is { Length: > 0 } c ? c : null;
         long controlPos = 0; double lastPoll = 0;
         if (control is not null) File.WriteAllText(control, "");
@@ -226,7 +251,39 @@ static class P
                         }
                         else Console.WriteLine($"PEER t={t:F1} hit: no joiner seen yet");
                         break;
+                    case "leash":   // WO-114
+                        if (f.Length > 1 && f[1] is "on" or "off") { leashOn = f[1] == "on"; if (f.Length > 2) leashFlags = LeashFlagsOf(f[2]); lastLeash = -9; }
+                        else if (f.Length > 2 && f[1] == "flags") { leashFlags = LeashFlagsOf(f[2]); lastLeash = -9; }
+                        else if (f.Length > 2 && f[1] == "obey") leashObey = f[2];
+                        Console.WriteLine($"PEER t={t:F1} leash on={leashOn} flags={Protocol.LeashFlagsText(leashFlags)} obey={leashObey}");
+                        break;
                 }
+            }
+            // WO-114: the host's leash messages; a pull moves the avatar beside the host.
+            while (leashIn.TryDequeue(out var li))
+            {
+                var lcmd = li.C;
+                double dh = Math.Sqrt((x - lcmd.HostX) * (x - lcmd.HostX) + (y - lcmd.HostY) * (y - lcmd.HostY));
+                Console.WriteLine(FormattableString.Invariant(
+                    $"PEER t={t:F1} leash from host {li.Src}: {Protocol.LeashKindName(lcmd.Kind)} seq={lcmd.Seq} arg={lcmd.Arg} host_d={lcmd.DistM} m (own view {dh:F0} m) host=({lcmd.HostX:F1}, {lcmd.HostY:F1}, {lcmd.HostZ:F1})"));
+                if (lcmd.Kind != Protocol.LeashKindPull) continue;
+                leashSeq = lcmd.Seq; leashFrom = LeashCommand.Metres(dh);
+                if (leashObey == "busy") { leashResult = Protocol.LeashResultBusy; leashTo = leashFrom; }
+                else if (leashObey == "fail") { leashResult = Protocol.LeashResultNotPlaced; leashTo = leashFrom; }
+                else
+                {
+                    x = lcmd.HostX + 3; y = lcmd.HostY; z = zBase = lcmd.HostZ; speed = 0; moveUntil = -1; placed = true; frozen = false;
+                    leashResult = Protocol.LeashResultPlaced; leashTo = 3; leashRes = 0;
+                    await Send(st, PositionCodec.BuildPosition(x, y, z, yaw, false, false, null, Ms()));
+                    lastPos = t;
+                }
+                Console.WriteLine($"PEER t={t:F1} MP-LEASH pulled from={leashFrom} to={leashTo} residual=0.00 result={Protocol.LeashResultName(leashResult)} (synthetic joiner)");
+                lastLeash = -9;
+            }
+            if (leashOn && t - lastLeash >= 1.0)
+            {
+                lastLeash = t;
+                await Send(st, new LeashState(leashFlags, leashSeq, leashResult, leashFrom, leashTo, leashRes).Build());
             }
             if (!placed || frozen) { await Task.Delay(5); continue; }
             bool moving = moveUntil > t && speed > 0;

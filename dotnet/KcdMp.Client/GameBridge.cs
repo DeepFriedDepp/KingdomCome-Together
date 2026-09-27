@@ -1783,6 +1783,8 @@ public partial class GameBridge(ClientConfig config)
             tailForPause.LevelDetected += OnLocalLevel;              // WO-94
             tailForPause.CutsceneStateChanged += OnLocalCutscene;    // WO-94
             tailForPause.PlayerTeleported += OnLocalTeleport;        // WO-94
+            tailForPause.FastTravelStateChanged += Wo114OnLocalFastTravel;   // WO-114
+            tailForPause.FastTravelRefused += Wo114OnFastTravelRefused;       // WO-114
             tailForPause.CutsceneEdge += OnLocalCutsceneEdge;        // WO-98 Phase 5
             tailForPause.ModInitDetected += OnModInitDetected;       // WO-98 Phase 7
             tailForPause.GameplayStarted += Wo122OnGameplayStarted;  // WO-122
@@ -2176,6 +2178,8 @@ public partial class GameBridge(ClientConfig config)
                 tailForPause2.LevelDetected -= OnLocalLevel;            // WO-94
                 tailForPause2.CutsceneStateChanged -= OnLocalCutscene;  // WO-94
                 tailForPause2.PlayerTeleported -= OnLocalTeleport;      // WO-94
+                tailForPause2.FastTravelStateChanged -= Wo114OnLocalFastTravel;   // WO-114
+                tailForPause2.FastTravelRefused -= Wo114OnFastTravelRefused;       // WO-114
                 tailForPause2.CutsceneEdge -= OnLocalCutsceneEdge;      // WO-98 Phase 5
                 tailForPause2.ModInitDetected -= OnModInitDetected;     // WO-98 Phase 7
                 tailForPause2.GameplayStarted -= Wo122OnGameplayStarted; // WO-122
@@ -2924,6 +2928,7 @@ public partial class GameBridge(ClientConfig config)
                 {
                     _fastAdvanceActive = true;
                     _fastAdvanceStartTime = last;
+                    Wo114OnClockJumpStart();   // WO-114: where the host was when its clock started jumping
                     Console.WriteLine($"[timeskip] clock jumping ({last} -> {worldTime}); waiting for it to settle{CatchupTag()}");
                 }
             }
@@ -2982,6 +2987,7 @@ public partial class GameBridge(ClientConfig config)
         }
         await send(Protocol.TimeSkipPhaseStart, Protocol.TimeSkipKindFastTravel, 0);
         await send(Protocol.TimeSkipPhaseDone, Protocol.TimeSkipKindFastTravel, worldTime);
+        Wo114OnClockJumpSettled();   // WO-114: a fallback fast-travel signal for the leash
         await RequestNpcResyncAsync(NpcResyncReason.FastTravel, _resyncStream, CancellationToken.None);   // WO-102 Phase 6
     }
 

@@ -48,6 +48,7 @@ public sealed class LeashLogic
         HostMenu = 1 << 8, JoinerMenu = 1 << 9,
         NonHenry = 1 << 10, HostReloading = 1 << 11,
         NoJoinerPosition = 1 << 12,
+        HostTravelling = 1 << 13,   // the host's fast travel is running (the pull follows on arrival)
     }
 
     public readonly record struct Settings(bool On, float WarnM, float PullM)
@@ -253,7 +254,7 @@ public sealed class LeashLogic
                 Hold.HostDialogue => "host-dialogue", Hold.JoinerDialogue => "joiner-dialogue",
                 Hold.HostMenu => "host-menu", Hold.JoinerMenu => "joiner-menu",
                 Hold.NonHenry => "non-henry", Hold.HostReloading => "host-reloading",
-                Hold.NoJoinerPosition => "no-joiner-position", _ => f.ToString(),
+                Hold.NoJoinerPosition => "no-joiner-position", Hold.HostTravelling => "host-travelling", _ => f.ToString(),
             });
         return string.Join(',', parts);
     }

@@ -109,7 +109,12 @@ $AsmMarkers = @(
     # 0.30.0 (WO-129): the gait tag hook (native), the clock-skew removal and
     # the Discord merge fix (agent).
     @{ File = 'KCDMP.dll';       Marker = 'WO129-GAIT tag hook';    Owner = 'WO-129 avatar/NPC-copy gait (native)' },
-    @{ File = 'KcdMpClient.dll'; Marker = 'no (no clock sample yet)'; Owner = 'WO-129 host-stamp skew removal' }
+    @{ File = 'KcdMpClient.dll'; Marker = 'no (no clock sample yet)'; Owner = 'WO-129 host-stamp skew removal' },
+    # WO-114: the leash (agent decides and pulls), the wake within the leash
+    # (native), the leash messages on the join channel (protocol v10).
+    @{ File = 'KcdMpClient.dll'; Marker = 'MP-LEASH pulled from=';  Owner = 'WO-114 leash pull (agent half)' },
+    @{ File = 'KCDMP.dll';       Marker = 'MP-RESPAWN-LEASH partner at'; Owner = 'WO-114 wake within the leash (native)' },
+    @{ File = 'KcdMp.Protocol.dll'; Marker = 'leash-state';         Owner = 'WO-114 leash wire rows (protocol v10)' }
 )
 
 $PakMarkers = @(
@@ -153,6 +158,9 @@ $PakMarkers = @(
     @{ Marker = 'function KCD2MP_SetLeashTrace';  Owner = 'WO-127 mp_leash_trace' },
     # 0.30.0 (WO-129): the host's join bar and the shared-world scan anchors.
     @{ Marker = 'function KCD2MP_JoinBarText';     Owner = 'WO-129 host join bar (stage + seconds)' },
+    # WO-114: the leash settings, the countdown row and the joiner's fast-travel switch.
+    @{ Marker = 'function KCD2MP_Wo114Countdown';  Owner = 'WO-114 leash countdown row' },
+    @{ Marker = 'function KCD2MP_Wo114FastTravelBlock'; Owner = 'WO-114 host-only fast travel' },
     @{ Marker = 'function KCD2MP_Wo129SharedAnchors'; Owner = 'WO-129 every player an NPC scan anchor' }
 )
 
