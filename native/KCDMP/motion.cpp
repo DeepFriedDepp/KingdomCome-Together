@@ -207,6 +207,14 @@ struct Body {
 };
 std::unordered_map<uint32_t, Body> g_bodies;
 
+// WO-132: NPC copies engaged on a joiner -- the host NPC's combat state (a
+// synthesized State2: combat, guard zone/stance, attack zone, block) held on
+// the copy exactly as an avatar's stream is. Main thread only.
+struct Engage { State2 st{}; double at = 0; };
+std::unordered_map<uint32_t, Engage> g_engage;
+constexpr double kEngageStaleS = 3.0;   // no fresh host state for this long: the hold lets go
+std::atomic<uint32_t> c_engageHolds{0}, c_engageReleases{0};
+
 // ---- WO-129: the gait table (main thread writes, any thread reads) --------------
 // UpdateMannequinTags runs on the main thread and on job workers, so the hook
 // reads gait::Table (fixed, open-addressed atomics); only the main thread
@@ -971,7 +979,20 @@ void body_frame(const char* key, void* ent, uint32_t eid, float renderSpeedMps, 
                  renderSpeedMps, s, cls, range, back, c_tagApplied.load(std::memory_order_relaxed));
         }
     } else if (b.gaitWritten || b.slot >= 0) release_gait(b);
-    if (!b.avatar) return;
+    if (!b.avatar) {
+        // WO-132: an engaged copy holds the host NPC's combat state (never its
+        // own brain's: the copy stays suspended and driven).
+        auto eg = g_engage.find(eid);
+        const bool hold = eg != g_engage.end() && now - eg->second.at < kEngageStaleS && g_combat;
+        if (hold) {
+            if (!b.combatHeld) c_engageHolds.fetch_add(1);
+            apply_combat(b, &eg->second.st, now);
+        } else if (b.automationOff || b.combatHeld) {
+            release_body(b, "engagement over");
+            c_engageReleases.fetch_add(1);
+        }
+        return;
+    }
     ensure_avatar_guard(b, now);
     // crouch
     if (g_moves && g_cfgMoves) {
@@ -1084,14 +1105,65 @@ int status_text(char* out, int n) {
         "gait=%s moves=%s combat=%s attack_capture=%s cfg=%d%d%d%d%d bodies=%zu gait_writes=%u crouch=%u jumps=%u/%u "
         "combat_starts=%u automation_off=%u guard_zone=%u atk_zone=%u block=%u cap_attack=%u cap_npc=%u cap_jump=%u cap_other=%u "
         "cap_dropped=%u buff_adds=%u ctx_set=%u ctx_fail=%u faults=%u tags=%s tags_applied=%u gait_slots=%d "
-        "cap_drop_notca=%u cap_drop_nodesc=%u cap_drop_noguid=%u cap_drop_noowner=%u cap_via_base8=%u cap_ours=%u",
+        "cap_drop_notca=%u cap_drop_nodesc=%u cap_drop_noguid=%u cap_drop_noowner=%u cap_via_base8=%u cap_ours=%u "
+        "engaged=%zu engage_holds=%u engage_releases=%u",
         g_gait ? "armed" : "off", g_moves ? "armed" : "off", g_combat ? "armed" : "off", g_capture ? "armed" : "off",
         g_cfgAvatarGait.load(), g_cfgNpcGait.load(), g_cfgMoves.load(), g_cfgCombat.load(), g_cfgNpcRows.load(), g_bodies.size(),
         c_gaitWrites.load(), c_crouch.load(), c_jumps.load(), c_jumpFail.load(), c_combatStarts.load(), c_autoOff.load(),
         c_guardZone.load(), c_atkZone.load(), c_block.load(), c_capAttack.load(), c_capNpc.load(), c_capJump.load(), c_capOther.load(),
         c_capDropped.load(), c_buffAdds.load(), c_ctxSet.load(), c_ctxFail.load(), c_faults.load(),
         g_tags ? "armed" : "off", c_tagApplied.load(), g_gaitTable.live(),
-        c_dropNotCa.load(), c_dropNoDesc.load(), c_dropNoGuid.load(), c_dropNoOwner.load(), c_capViaBase8.load(), c_capOurs.load());
+        c_dropNotCa.load(), c_dropNoDesc.load(), c_dropNoGuid.load(), c_dropNoOwner.load(), c_capViaBase8.load(), c_capOurs.load(),
+        g_engage.size(), c_engageHolds.load(), c_engageReleases.load());
+}
+
+bool player_block(bool on) {
+    void* pca = g_playerCa.load();
+    if (!g_combat || !pca || !A.fnSetBlock) return false;
+    return call_setblock(A.fnSetBlock, pca, on, 0);
+}
+
+void set_npc_engage(uint32_t eid, bool on, const State2* st, double now) {
+    if (!on) { g_engage.erase(eid); return; }
+    Engage& e = g_engage[eid];
+    if (st) e.st = *st;
+    e.st.bits |= kBitCombat;
+    e.at = now;
+}
+
+bool npc_engaged(uint32_t eid) { return g_engage.count(eid) != 0; }
+size_t npc_engaged_count() { return g_engage.size(); }
+
+bool read_npc_combat(uint32_t eid, NpcCombat* out) {
+    *out = NpcCombat{};
+    void* actor = actor_by_eid(eid);
+    if (!actor) return false;
+    void* ca = combat_actor_of(actor, false);
+    if (!ca) return true;   // no combat actor yet: not in a fight
+    out->hasCa = 1;
+    void* model = nullptr;
+    if (!rd(ca, kCaModel, &model) || !model) return true;
+    uint8_t mode = 0;
+    if (prop_named(model, kPropCombatMode)) rd(model, kPropCombatMode.off + 8, &mode);
+    out->combat = mode ? 1 : 0;
+    int32_t v = -1;
+    if (prop_value(model, kPropGuardZone, &v)) out->guardZone = static_cast<int8_t>(v);
+    if (prop_value(model, kPropGuardStance, &v)) out->guardStance = static_cast<int8_t>(v);
+    if (prop_value(model, kPropReqAtkZone, &v)) out->atkZone = static_cast<int8_t>(v);
+    uint8_t blk = 0;
+    rd(model, kModelBlockMax, &blk);
+    out->block = blk ? 1 : 0;
+    void* opp = nullptr;
+    if (rd(model, kModelOpponent, &opp) && opp) {
+        if (void* oca = as_combat_actor(opp)) {
+            void* pca = g_playerCa.load();
+            if (pca && oca == pca) out->opponentIsPlayer = 1;
+            void* owner = nullptr;
+            uint32_t oeid = 0;
+            if (rd(oca, kCaOwnerEntity, &owner) && owner && rd(owner, kActorEntityId, &oeid)) out->opponentEid = oeid;
+        }
+    }
+    return true;
 }
 
 bool is_avatar_eid(uint32_t eid) {

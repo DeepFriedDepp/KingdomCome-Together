@@ -1676,6 +1676,8 @@ public enum ActionKind : byte
     SessionSetting = 12,
     /// <summary>WO-121: the owner's NPC committed an attack row, payload <see cref="RowEvent"/> with the NPC's name. Replaces the WO-49 swing-cue flag as the NPC copy's swing.</summary>
     NpcAttack = 13,
+    /// <summary>WO-132: the owner's NPC combat state (in a fight, guard, block, who it fights), payload <see cref="NpcCombatEvent"/>. The relay forwards it only from the damage authority (the host).</summary>
+    NpcCombat = 14,
 }
 
 /// <summary>

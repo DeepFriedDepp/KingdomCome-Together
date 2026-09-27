@@ -5830,6 +5830,50 @@ end
 
 -- The agent, once a second while in the world: (joiner, shared) = this machine
 -- is connected as a non-authority, and the session is the host's shared world.
+-- WO-132 (host): a peer went down (its death, or the death guard floored it)
+-- or woke. Down: its avatar's bleeding is healed and it is hidden where it
+-- fell, so nothing keeps hitting it there; the agent has already taken it out
+-- of its skirmish and resets its health. Up (1.5 s after the wake, once the new
+-- position has streamed in): shown again.
+--   WO132-AVATAR down|up id=<n> bleed_healed=<k> hidden=<bool>
+KCD2MP.w132 = { avatarDown = {}, healN = 0 }
+local function w132_heal_bleeding(e)
+    local healed = 0
+    local soul = e and e.soul
+    if soul and soul.HealBleeding then
+        for bp = 0, 9 do
+            if pcall(function() soul:HealBleeding(1.0, bp) end) then healed = healed + 1 end
+        end
+    end
+    return healed
+end
+-- WO-132 (host): after every forwarded or dropped NPC hit on an avatar -- its
+-- bleeding is healed (the joiner's own game bleeds him if a real hit should).
+function KCD2MP_W132AvatarHeal(id)
+    local ghost = KCD2MP.ghosts and KCD2MP.ghosts[tostring(id)]
+    local n = w132_heal_bleeding(ghost and ghost.entity)
+    KCD2MP.w132.healN = KCD2MP.w132.healN + 1
+    if KCD2MP.w132.healN <= 5 then mp_log(string.format("WO132-AVATAR heal id=%s bleed_healed=%d", tostring(id), n)) end
+end
+function KCD2MP_W132AvatarDown(id, down)
+    id = tostring(id)
+    local ghost = KCD2MP.ghosts and KCD2MP.ghosts[id]
+    local e = ghost and ghost.entity
+    if not e then return end
+    local healed = 0
+    if down then
+        KCD2MP.w132.avatarDown[id] = os.clock()
+        healed = w132_heal_bleeding(e)
+        pcall(function() e:Hide(1) end)
+    else
+        KCD2MP.w132.avatarDown[id] = nil
+        pcall(function() e:Hide(0) end)
+    end
+    local hidden = nil
+    pcall(function() hidden = e:IsHidden() end)
+    mp_log(string.format("WO132-AVATAR %s id=%s bleed_healed=%d hidden=%s", down and "down" or "up", id, healed, tostring(hidden)))
+end
+
 function KCD2MP_W131Tick(joiner, shared)
     local w = KCD2MP.w131
     w.joiner = joiner == true

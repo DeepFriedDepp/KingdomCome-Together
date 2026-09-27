@@ -142,6 +142,7 @@ public partial class GameBridge
         if (ok && present)
         {
             _w131Guarded[name] = eid;
+            await Wo132DiscardAsync(true, eid);   // WO-132: its local hits on me never count
             if (Interlocked.Increment(ref _w131GuardOn) <= 20)
                 Console.WriteLine($"MP-WO131 copy guard on {name} (eid 0x{eid:X}): it dies only when the host says so");
         }
@@ -179,6 +180,8 @@ public partial class GameBridge
     {
         if (!_w131Guarded.TryRemove(name, out uint eid)) return;
         try { await _combat.Wo131CopyGuardAsync(false, eid); } catch { }
+        await Wo132DiscardAsync(false, eid);
+        if (_w132Engaged.TryRemove(name, out var eg)) { try { await _combat.Wo132EngageAsync(false, eg.Eid, default); } catch { } }
         Console.WriteLine($"MP-WO131 copy guard off {name}: the host's death is applied now, at the host's position");
     }
 
@@ -199,16 +202,9 @@ public partial class GameBridge
             Console.WriteLine($"MP-WO131 avatar {ghostId} health restore FAILED (reason {reason})");
     }
 
-    /// <summary>1g: the joiner died or woke -- the NPCs fighting its avatar here drop that fight.</summary>
-    private async Task Wo131OnPeerDownOrUpAsync(byte ghostId, string what)
-    {
-        if (!_isDamageAuthority) return;
-        if (_w121Engaged.TryRemove(ghostId, out _)) await Wo121EngageAsync(ghostId, false);
-        if (!_ghostEntityIds.TryGetValue(ghostId.ToString(CultureInfo.InvariantCulture), out uint eid)) return;
-        var (ok, reason) = await _combat.Wo131StopFightAsync(eid);
-        if (ok) Interlocked.Increment(ref _w131StopFights);
-        Console.WriteLine($"MP-WO131 peer {ghostId} {what}: StopFight on its avatar -> {(ok ? "sent" : $"FAILED (reason {reason})")} -- crime is untouched");
-    }
+    // 1g (the joiner died or woke): WO-132 replaced the avatar's StopFight -- it
+    // ended the whole fight, the host's with it -- by the avatar leaving its
+    // skirmish at the down itself (GameBridge.Wo132.cs).
 
     /// <summary>1d: every avatar here joins the player's faction (once per spawn; retried every 10 s).</summary>
     private async Task Wo131FactionSweepAsync(CancellationToken ct)

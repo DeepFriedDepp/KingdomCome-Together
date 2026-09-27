@@ -2,6 +2,7 @@
 #include "respawn_actions.h"
 #include "engine.h"
 #include "buffs.h"
+#include "hits.h"
 #include "gameover_hook.h"
 #include "hangover.h"
 #include "join_native.h"
@@ -746,11 +747,24 @@ void step_executor(DWORD now) {
                 // did -- the game's own StopFight on the player's skirmish, so
                 // the NPCs that were fighting drop it instead of chasing the
                 // woken player. Crime is not touched (its own rules).
+                // WO-132: only the dead player leaves the fight. StopFight ended
+                // every soul's fight in the player's skirmish -- a partner's
+                // avatar fighting beside him lost its fight too. The skirmish
+                // manager's own RemoveSoulFromSkirmish takes this player out and
+                // the rest goes on; StopFight stays the fallback.
                 if (g_x.kind == Kind::Death || g_x.kind == Kind::Execution) {
-                    void* ps = rttr::read_player_soul();
-                    const bool stopped = ps && actions::stop_fight(buffs::as_c_soul(ps) ? buffs::as_c_soul(ps) : ps);
-                    logf("WO131-STOPFIGHT the local player's death -> StopFight %s",
-                         stopped ? "sent to the player's skirmish" : (actions::stop_fight_available() ? "FAULTED" : "NOT armed"));
+                    void* pe = engine::entity_by_id(0x7777);
+                    void* as = pe ? hits::soul_of_eid(engine::entity_id(pe)) : nullptr;
+                    uint64_t rv = 0;
+                    if (as && hits::skirmish_remove(as, &rv)) {
+                        logf("WO132-LEAVEFIGHT the local player's death -> left its skirmish (rv=0x%llX); the fight goes on without him",
+                             static_cast<unsigned long long>(rv));
+                    } else {
+                        void* ps = rttr::read_player_soul();
+                        const bool stopped = ps && actions::stop_fight(buffs::as_c_soul(ps) ? buffs::as_c_soul(ps) : ps);
+                        logf("WO131-STOPFIGHT the local player's death -> StopFight %s (the skirmish remove was unavailable)",
+                             stopped ? "sent to the player's skirmish" : (actions::stop_fight_available() ? "FAULTED" : "NOT armed"));
+                    }
                 }
             }
             g_x.phase = Phase::Idle;

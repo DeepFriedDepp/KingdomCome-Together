@@ -12,8 +12,8 @@ times; synthpeer re-stamps the sender clock on the way out (tools/wo118/synthpee
   --npc        keep only these NPC names (states, rows and hits)
   --start      seconds of stream time before the first packet (default 3)
 
-Only NpcAttack action rows are kept from 0x3C (the host's other actions are about its
-own avatar). Nothing here ships.
+Only NpcAttack and (WO-132) NpcCombat actions are kept from 0x3C (the host's other
+actions are about its own avatar). Nothing here ships.
 """
 import sys
 
@@ -41,9 +41,12 @@ def main():
             if keep and name not in keep:
                 continue
             rows.append((ms, '26', b[1:], nl + 24))
-        elif typ == '3C' and len(b) > 10 and b[1] == 13:   # NpcAttack: [src][kind][seq:2][phase][gen:4][len][payload]
+        elif typ == '3C' and len(b) > 10 and b[1] in (13, 14):   # NpcAttack / NpcCombat (WO-132): [src][kind][seq:2][phase][gen:4][len][payload]
             pl = b[10:10 + b[9]]
-            nl = pl[21]; name = pl[22:22 + nl].decode('utf-8', 'replace')
+            if b[1] == 13:
+                nl = pl[21]; name = pl[22:22 + nl].decode('utf-8', 'replace')
+            else:   # NpcCombat: [senderMs:4][state:12][target][targetGhost][nameLen][name]
+                nl = pl[18]; name = pl[19:19 + nl].decode('utf-8', 'replace')
             if keep and name not in keep:
                 continue
             rows.append((ms, '3B', b[1:], 9))

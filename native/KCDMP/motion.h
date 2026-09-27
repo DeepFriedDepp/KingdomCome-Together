@@ -101,6 +101,24 @@ void set_action_callback(ActionFn fn);
 // Human-readable armed/off state and counters for the 0x1B status reply.
 int status_text(char* out, int n);
 
+// WO-132 (joiner, main thread): hold a native-written NPC copy in the host NPC's
+// combat state (combat mode, guard zone/stance, attack zone, block) -- the same
+// applier the avatars use. It lets go 3 s after the last update, or on `on=false`.
+void set_npc_engage(uint32_t eid, bool on, const State2* st, double now);
+bool npc_engaged(uint32_t eid);
+// WO-132 (live checks only): the local player's held block through the engine's
+// own SetBlockMode -- the function the block button calls; no input is made.
+bool player_block(bool on);
+size_t npc_engaged_count();
+
+// WO-132 (host, main thread): one NPC's combat state, read from its combat model.
+struct NpcCombat {
+    uint8_t hasCa = 0, combat = 0, block = 0, opponentIsPlayer = 0;
+    int8_t  guardZone = -1, guardStance = -1, atkZone = -1;
+    uint32_t opponentEid = 0;   // the opponent's entity id (0 = none / unreadable)
+};
+bool read_npc_combat(uint32_t eid, NpcCombat* out);   // false = no actor for eid
+
 // For hits.cpp: is this entity id a native-written avatar, and its soul.
 bool is_avatar_eid(uint32_t eid);
 // The local player's combat actor (main-thread cache; 0 when unknown).

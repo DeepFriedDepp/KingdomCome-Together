@@ -27,6 +27,7 @@ namespace {
 constexpr size_t kSlotMelee   = 0x150;
 constexpr size_t kSlotMissile = 0x158;
 constexpr size_t kSmAddSoul   = 0x10;    // I_SkirmishManager::AddSoulToSkirmish(soul, reference, override)
+constexpr size_t kSmRemoveSoul = 0x18;   // I_SkirmishManager::RemoveSoulFromSkirmish(soul) (WO-132)
 constexpr size_t kActorGetSoul = 0x6E0;
 constexpr size_t kSoulCombat  = 0x108;   // C_CombatSoul from the actor's soul (WO-119 s2.1, observed)
 constexpr double kEngagementS = 30.0;    // one skirmish add per (victim, avatar) per this
@@ -58,6 +59,13 @@ bool call_getter(void* fn, void** out) {
 }
 bool call_add_soul(void* fn, void* mgr, void* soul, void* ref, uint8_t ovr, uint64_t* out) {
     __try { *out = reinterpret_cast<uint64_t (__fastcall*)(void*, void*, void*, uint8_t)>(fn)(mgr, soul, ref, ovr); return true; }
+    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+// WO-132: I_SkirmishManager vtable +0x18 RemoveSoulFromSkirmish(mgr, soul) (RPGModule
+// 0x645970, its __FUNCTION__ string names it) -> C_Skirmish::RemoveSoul: one soul
+// leaves its skirmish, the fight itself goes on.
+bool call_remove_soul(void* fn, void* mgr, void* soul, uint64_t* out) {
+    __try { *out = reinterpret_cast<uint64_t (__fastcall*)(void*, void*)>(fn)(mgr, soul); return true; }
     __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
 bool is_a(void* obj, void* const* vft) { void* vp = nullptr; return obj && vft && rd(obj, 0, &vp) && vp == static_cast<const void*>(vft); }
@@ -97,13 +105,33 @@ std::mutex g_qMutex;
 std::vector<PvpHit> g_pvp;
 std::vector<PlayerHitMark> g_marks;
 // A player's hit on an avatar, watched until its queued damage has landed.
-struct NewWatch { void* soul; uint32_t eid; float hp0, st0; uint8_t flags, material; };
+// WO-132: also an NPC's hit on an avatar (kind kWatchNpc: measured and put back
+// here, forwarded by the agent as the avatar owner's damage -- a real hit, never
+// a bleed tick), and an engaged copy's hit on the local player on a joiner (kind
+// kWatchDiscard: put back, never forwarded -- the joiner's damage comes only
+// from the host).
+enum WatchKind : uint8_t { kWatchPvp = 0, kWatchNpc = 1, kWatchDiscard = 2 };
+struct NewWatch { void* soul; uint32_t eid; float hp0, st0; uint8_t flags, material; uint8_t kind; uint32_t attackerEid; };
 std::vector<NewWatch> g_newWatches;
-struct Watch { void* soul; uint32_t eid; float hp0, st0, dh = 0, ds = 0; uint8_t flags, material; double t0; int frames = 0, landedAt = -1; };
+struct Watch { void* soul; uint32_t eid; float hp0, st0, dh = 0, ds = 0; uint8_t flags, material; double t0; int frames = 0, landedAt = -1;
+               uint8_t kind = 0; uint32_t attackerEid = 0; };
 std::vector<Watch> g_watches;   // main thread only
 constexpr double kWatchS = 0.6;
 std::atomic<uint64_t> g_playerWuid{0};
+std::atomic<uint32_t> g_playerEid{0};
 std::atomic<PvpFn> g_pvpFn{nullptr};
+std::atomic<NpcHitFn> g_npcHitFn{nullptr};
+std::atomic<DiscardFn> g_discardFn{nullptr};
+// WO-132: attacker entity ids whose hits on the local player are discarded
+// (the joiner's engaged copies of host NPCs). Main thread writes.
+constexpr int kMaxDiscard = 64;
+std::atomic<uint32_t> g_discard[kMaxDiscard]{};
+bool is_discard_attacker(uint32_t eid) {
+    if (!eid) return false;
+    for (auto& d : g_discard) if (d.load(std::memory_order_relaxed) == eid) return true;
+    return false;
+}
+std::atomic<bool> g_npcWatch{true};
 
 // Recently-hit souls (main thread only).
 std::unordered_map<void*, double> g_hitSouls;
@@ -113,7 +141,8 @@ std::unordered_map<uint64_t, double> g_engaged;
 std::unordered_map<std::string, uint32_t> g_nameEids;
 
 std::atomic<uint32_t> c_melee{0}, c_missile{0}, c_avatarHits{0}, c_restored{0}, c_ffQueued{0}, c_marks{0},
-    c_attrib{0}, c_attribHistory{0}, c_skirmish{0}, c_pvpIn{0}, c_faults{0};
+    c_attrib{0}, c_attribHistory{0}, c_skirmish{0}, c_pvpIn{0}, c_faults{0},
+    c_npcAvatarHits{0}, c_npcHitsSent{0}, c_discardHits{0}, c_discarded{0}, c_skirmishKept{0}, c_skirmishRemove{0};
 
 double now_s() { LARGE_INTEGER q, f; QueryPerformanceCounter(&q); QueryPerformanceFrequency(&f); return double(q.QuadPart) / double(f.QuadPart); }
 
@@ -151,12 +180,32 @@ void* hit_common(bool missile, HitFn orig, void* self, void* out, const uint8_t*
         // every frame for kWatchS, every drop is put back at once, and the
         // total is what friendly fire forwards. Other attackers: untouched.
         const bool byPlayer = aw != 0 && aw == g_playerWuid.load(std::memory_order_relaxed);
+        // WO-132: an NPC's hit is watched the same way, so the owner gets the
+        // hit's own damage -- never a bleed tick or any other drop between hits.
+        const bool byNpc = !byPlayer && aeid != 0 && g_npcWatch.load(std::memory_order_relaxed);
+        if (byNpc) c_npcAvatarHits.fetch_add(1, std::memory_order_relaxed);
         float hp0 = 0, st0 = 0;
-        const bool r0 = byPlayer && rttr::soul_state(vsoul, "health", &hp0) && rttr::soul_state(vsoul, "stamina", &st0);
+        const bool r0 = (byPlayer || byNpc) && rttr::soul_state(vsoul, "health", &hp0) && rttr::soul_state(vsoul, "stamina", &st0);
         void* res = orig(self, out, data);
         if (r0) {
             std::lock_guard<std::mutex> lock(g_qMutex);
-            g_newWatches.push_back({vsoul, veid, hp0, st0, static_cast<uint8_t>(missile ? 0x02 : 0), mat});
+            g_newWatches.push_back({vsoul, veid, hp0, st0, static_cast<uint8_t>(missile ? 0x02 : 0), mat,
+                                    static_cast<uint8_t>(byPlayer ? kWatchPvp : kWatchNpc), byPlayer ? 0u : aeid});
+        }
+        return res;
+    }
+    // WO-132: on a joiner, an engaged copy of a host NPC hitting the local
+    // player -- the host's world decides the joiner's damage, so this local
+    // blow is measured and put back (the reaction still plays).
+    if (veid && veid == g_playerEid.load(std::memory_order_relaxed) && is_discard_attacker(aeid)) {
+        c_discardHits.fetch_add(1, std::memory_order_relaxed);
+        void* psoul = rttr::read_player_soul();
+        float hp0 = 0, st0 = 0;
+        const bool r0 = psoul && rttr::soul_state(psoul, "health", &hp0) && rttr::soul_state(psoul, "stamina", &st0);
+        void* res = orig(self, out, data);
+        if (r0) {
+            std::lock_guard<std::mutex> lock(g_qMutex);
+            g_newWatches.push_back({psoul, veid, hp0, st0, static_cast<uint8_t>(missile ? 0x02 : 0), mat, static_cast<uint8_t>(kWatchDiscard), aeid});
         }
         return res;
     }
@@ -208,6 +257,28 @@ bool find_name_visit(void* e, void* ctx) {
     buf[i] = 0;
     if (_stricmp(buf, f->name) == 0) { f->eid = engine::entity_id(e); return true; }
     return false;
+}
+
+// WO-132: is this NPC's combat opponent (combat model +0x1118) the local player?
+bool npc_fights_local_player(void* actor) {
+    void* pca = motion::player_combat_actor();
+    if (!actor || !pca) return false;
+    void* ca = nullptr;
+    if (!rd(actor, 0x300, &ca) || !ca) return false;   // m_pCombatActor (motion.cpp kActorCombatField)
+    void* model = nullptr;
+    void* opp = nullptr;
+    if (!rd(ca, 0x2F0, &model) || !model || !rd(model, 0x1118, &opp) || !opp) return false;
+    return opp == pca || static_cast<char*>(opp) - 8 == pca;
+}
+
+void copy_name(uint32_t eid, char* out, size_t n) {
+    out[0] = 0;
+    void* e = eid ? engine::entity_by_id(eid) : nullptr;
+    const char* s = e ? engine::entity_name(e) : nullptr;
+    if (!s) return;
+    size_t i = 0;
+    __try { for (; i + 1 < n && s[i]; ++i) out[i] = s[i]; } __except (EXCEPTION_EXECUTE_HANDLER) { i = 0; }
+    out[i] = 0;
 }
 
 uint32_t eid_by_name(const std::string& name) {
@@ -348,11 +419,19 @@ AttribResult apply_attributed(const uint8_t* body, size_t len) {
         if (it == g_engaged.end() || now - it->second > kEngagementS) {
             void* mgr = nullptr;
             if (call_getter(g_fnSkirmishGetter, &mgr) && is_a(mgr, g_vftSkirmish)) {
+                // WO-132: override 1 makes the avatar the NPC's target and
+                // opponent. When the NPC is already fighting the local player
+                // (the host), that took the host's fight away from him (the
+                // field: the guard never turned to the host); then the avatar
+                // only joins the skirmish (override 0) and the NPC keeps the host.
+                const bool fightsHost = npc_fights_local_player(victimActor);
+                const uint8_t ovr = fightsHost ? 0 : 1;
+                if (fightsHost) c_skirmishKept.fetch_add(1);
                 uint64_t rv = 0;
-                if (call_add_soul(g_vftSkirmish[kSmAddSoul / 8], mgr, victimSoulA, avatarSoul, 1, &rv)) {
+                if (call_add_soul(g_vftSkirmish[kSmAddSoul / 8], mgr, victimSoulA, avatarSoul, ovr, &rv)) {
                     r.steps |= 4; c_skirmish.fetch_add(1);
-                    logf("WO121-HITS attributed npc=%s avatar_eid=0x%X skirmish add (override 1) -> 0x%llX", name.c_str(), avatarEid,
-                         static_cast<unsigned long long>(rv));
+                    logf("WO121-HITS attributed npc=%s avatar_eid=0x%X skirmish add (override %u%s) -> 0x%llX", name.c_str(), avatarEid, ovr,
+                         fightsHost ? ": it already fights the host, who keeps it" : "", static_cast<unsigned long long>(rv));
                 } else c_faults.fetch_add(1);
             }
             g_engaged[key] = now;
@@ -389,6 +468,53 @@ bool hit_by_player(void* soul, double withinS) {
 }
 
 void set_pvp_callback(PvpFn fn) { g_pvpFn.store(fn); }
+void set_npc_hit_callback(NpcHitFn fn) { g_npcHitFn.store(fn); }
+void set_discard_callback(DiscardFn fn) { g_discardFn.store(fn); }
+
+void note_player_damage(float st, float hp) {
+    // A forwarded host hit landed on the local player: a discard watch open
+    // right now must not put it back.
+    for (auto& w : g_watches) if (w.kind == kWatchDiscard) { w.hp0 -= hp; w.st0 -= st; }
+}
+
+bool discard_from(uint32_t eid, bool on) {
+    if (!eid) return false;
+    for (auto& d : g_discard) if (d.load() == eid) { if (!on) d.store(0); return true; }
+    if (!on) return true;
+    for (auto& d : g_discard) { uint32_t z = 0; if (d.compare_exchange_strong(z, eid)) return true; }
+    return false;
+}
+
+int discard_count() { int n = 0; for (auto& d : g_discard) if (d.load()) ++n; return n; }
+
+bool skirmish_ready() { return g_attribArmed && g_fnSkirmishGetter && g_vftSkirmish; }
+
+bool skirmish_add(void* soul, void* reference, uint8_t ovr, uint64_t* rv) {
+    if (!skirmish_ready() || !soul || !reference) return false;
+    void* mgr = nullptr;
+    if (!call_getter(g_fnSkirmishGetter, &mgr) || !is_a(mgr, g_vftSkirmish)) return false;
+    uint64_t r = 0;
+    if (!call_add_soul(g_vftSkirmish[kSmAddSoul / 8], mgr, soul, reference, ovr, &r)) { c_faults.fetch_add(1); return false; }
+    if (rv) *rv = r;
+    return true;
+}
+
+bool skirmish_remove(void* soul, uint64_t* rv) {
+    if (!skirmish_ready() || !soul) return false;
+    void* mgr = nullptr;
+    if (!call_getter(g_fnSkirmishGetter, &mgr) || !is_a(mgr, g_vftSkirmish)) return false;
+    uint64_t r = 0;
+    if (!call_remove_soul(g_vftSkirmish[kSmRemoveSoul / 8], mgr, soul, &r)) { c_faults.fetch_add(1); return false; }
+    c_skirmishRemove.fetch_add(1);
+    if (rv) *rv = r;
+    return true;
+}
+
+void* soul_of_eid(uint32_t eid) { return soul_of_actor(actor_by_eid(eid)); }
+
+void set_npc_watch(bool on) { g_npcWatch = on; }
+
+uint32_t eid_of_name(const char* name) { return name && *name ? eid_by_name(name) : 0; }
 
 void tick() {
     // The player's WUID for the hook (a load changes the entity, not the id,
@@ -397,7 +523,7 @@ void tick() {
     const double now = now_s();
     if (now - s_lastWuid > 1.0) {
         s_lastWuid = now;
-        if (void* e = engine::entity_by_id(0x7777)) g_playerWuid = actions::entity_wuid(e);
+        if (void* e = engine::entity_by_id(0x7777)) { g_playerWuid = actions::entity_wuid(e); g_playerEid = engine::entity_id(e); }
     }
     std::vector<PvpHit> pvp;
     std::vector<PlayerHitMark> marks;
@@ -410,14 +536,20 @@ void tick() {
     }
     for (const auto& n : nw) {
         bool merged = false;   // a second hit inside the window: same baseline, longer window
-        for (auto& w : g_watches) if (w.soul == n.soul) { w.t0 = now; w.flags |= n.flags; merged = true; break; }
-        if (!merged) g_watches.push_back({n.soul, n.eid, n.hp0, n.st0, 0, 0, n.flags, n.material, now});
+        for (auto& w : g_watches) if (w.soul == n.soul && w.kind == n.kind) { w.t0 = now; w.flags |= n.flags; merged = true; break; }
+        if (!merged) {
+            Watch w{n.soul, n.eid, n.hp0, n.st0, 0, 0, n.flags, n.material, now};
+            w.kind = n.kind; w.attackerEid = n.attackerEid;
+            g_watches.push_back(w);
+        }
     }
+    std::vector<Watch> npcDone;
     for (auto it = g_watches.begin(); it != g_watches.end();) {
         Watch& w = *it;
         ++w.frames;
         // The soul must still be this avatar's (a release or a respawn ends the watch).
-        const bool live = avatar_soul(w.eid) == w.soul;
+        // A discard watch is on the local player's soul (a load replaces it).
+        const bool live = w.kind == kWatchDiscard ? rttr::read_player_soul() == w.soul : avatar_soul(w.eid) == w.soul;
         float hp = 0, st = 0;
         if (live && rttr::soul_state(w.soul, "health", &hp) && rttr::soul_state(w.soul, "stamina", &st)) {
             bool dropped = false;
@@ -426,10 +558,29 @@ void tick() {
             if (dropped) { c_restored.fetch_add(1); if (w.landedAt < 0) w.landedAt = w.frames; }
         }
         if (live && now - w.t0 < kWatchS) { ++it; continue; }
-        logf("WO121-HITS player hit on avatar eid=0x%X measured hp -%.2f st -%.2f (landed at frame %d of %d) -> %s", w.eid, w.dh, w.ds,
-             w.landedAt, w.frames, !live ? "avatar gone, dropped" : (w.dh > 0 || w.ds > 0) ? (g_ff.load() ? "forwarded" : "dropped (friendly fire off)") : "no damage, nothing sent");
-        if (live && (w.dh > 0 || w.ds > 0)) pvp.push_back({w.eid, w.ds, w.dh, w.flags, w.material});
+        if (w.kind == kWatchPvp) {
+            logf("WO121-HITS player hit on avatar eid=0x%X measured hp -%.2f st -%.2f (landed at frame %d of %d) -> %s", w.eid, w.dh, w.ds,
+                 w.landedAt, w.frames, !live ? "avatar gone, dropped" : (w.dh > 0 || w.ds > 0) ? (g_ff.load() ? "forwarded" : "dropped (friendly fire off)") : "no damage, nothing sent");
+            if (live && (w.dh > 0 || w.ds > 0)) pvp.push_back({w.eid, w.ds, w.dh, w.flags, w.material});
+        } else if (w.kind == kWatchNpc) {
+            logf("WO132-HITS npc hit on avatar eid=0x%X by eid=0x%X measured hp -%.2f st -%.2f (landed at frame %d of %d) -> %s", w.eid, w.attackerEid,
+                 w.dh, w.ds, w.landedAt, w.frames, !live ? "avatar gone, dropped" : (w.dh > 0 || w.ds > 0) ? "to the agent" : "no damage, nothing sent");
+            if (live && (w.dh > 0 || w.ds > 0)) npcDone.push_back(w);
+        } else {
+            c_discarded.fetch_add(1);
+            logf("WO132-HITS local hit on the player by engaged copy eid=0x%X discarded: hp -%.2f st -%.2f put back (landed at frame %d of %d)",
+                 w.attackerEid, w.dh, w.ds, w.landedAt, w.frames);
+            if (DiscardFn fn = g_discardFn.load()) fn(w.attackerEid, w.ds, w.dh);
+        }
         it = g_watches.erase(it);
+    }
+    if (NpcHitFn fn = g_npcHitFn.load()) {
+        for (const auto& w : npcDone) {
+            char name[64]{};
+            copy_name(w.attackerEid, name, sizeof name);
+            fn(w.eid, w.ds, w.dh, w.attackerEid, w.flags, name);
+            c_npcHitsSent.fetch_add(1);
+        }
     }
     for (const auto& m : marks) {
         if (void* soul = soul_of_actor(actor_by_eid(m.victimEid))) {
@@ -459,10 +610,13 @@ void tick() {
 int status_text(char* out, int n) {
     return std::snprintf(out, n,
         "hit_slot=%s attribution=%s ff=%d attrib_cfg=%d melee=%u missile=%u avatar_hits=%u restored=%u ff_sent=%u player_marks=%u "
-        "attributed=%u history=%u skirmish=%u pvp_in=%u hit_faults=%u",
+        "attributed=%u history=%u skirmish=%u pvp_in=%u hit_faults=%u npc_watch=%s npc_avatar_hits=%u npc_hits_sent=%u "
+        "discard_hits=%u discarded=%u discard_eids=%d skirmish_kept_host=%u skirmish_remove=%u",
         g_hookArmed ? "armed" : "off", g_attribArmed ? "armed" : "off", g_ff.load() ? 1 : 0, g_attribution.load() ? 1 : 0,
         c_melee.load(), c_missile.load(), c_avatarHits.load(), c_restored.load(), c_ffQueued.load(), c_marks.load(),
-        c_attrib.load(), c_attribHistory.load(), c_skirmish.load(), c_pvpIn.load(), c_faults.load());
+        c_attrib.load(), c_attribHistory.load(), c_skirmish.load(), c_pvpIn.load(), c_faults.load(),
+        (g_hookArmed && g_npcWatch.load()) ? "armed" : "off", c_npcAvatarHits.load(), c_npcHitsSent.load(),
+        c_discardHits.load(), c_discarded.load(), discard_count(), c_skirmishKept.load(), c_skirmishRemove.load());
 }
 
 } // namespace kcdmp::hits

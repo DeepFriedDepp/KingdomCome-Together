@@ -76,6 +76,11 @@ public sealed class CombatPipe : IAsyncDisposable
     private const byte SetPartner        = 0x20;   // [valid][x:4f][y:4f][z:4f][radius:4f] -> 0x81
     private const byte Wo131             = 0x21;   // WO-131 [op][...] -> 0x98 [ok][seq][op][reason][payload] (native wo131.h)
     private const byte Wo131Reply        = 0x98;
+    private const byte Wo132             = 0x22;   // WO-132 [op][...] -> 0x99 [ok][seq][op][reason][payload] (native wo132.h)
+    private const byte Wo132Reply        = 0x99;
+    private const byte NpcAvatarHit      = 0x9A;   // WO-132, unsolicited: [victimEid:4][st:4f][hp:4f][attackerEid:4][flags][nameLen][name]
+    private const byte NpcCombatOut      = 0x9B;   // WO-132, unsolicited: a watched NPC's combat state (wo132.h)
+    private const byte DiscardedHit      = 0x9C;   // WO-132, unsolicited: [attackerEid:4][st:4f][hp:4f]
 
     private const int GuidLen = 16;
 
@@ -105,6 +110,15 @@ public sealed class CombatPipe : IAsyncDisposable
 
     /// <summary>WO-121: the local player hit a peer's avatar: victim eid, stamina, health (what the hit took), flags, material.</summary>
     public Func<uint, float, float, byte, byte, Task>? OnPvpHit { get; set; }
+
+    /// <summary>WO-132: an NPC hit a peer's avatar (measured over the hit window, put back): victim eid, stamina, health, attacker eid, flags, attacker name.</summary>
+    public Func<uint, float, float, uint, byte, string, Task>? OnNpcAvatarHit { get; set; }
+
+    /// <summary>WO-132: a watched NPC's combat state changed (or its 1 s heartbeat in combat).</summary>
+    public Func<NpcCombatState, Task>? OnNpcCombat { get; set; }
+
+    /// <summary>WO-132: an engaged copy's local hit on the player was put back (attacker eid, stamina, health).</summary>
+    public Func<uint, float, float, Task>? OnDiscardedHit { get; set; }
 
     /// <summary>WO-118: the DLL's native writer stopped a bound puppet on its own (reason, name).</summary>
     public Func<byte, string, Task>? OnNpcDropped { get; set; }
@@ -603,6 +617,81 @@ public sealed class CombatPipe : IAsyncDisposable
         return r is { Ok: true } v ? Encoding.ASCII.GetString(v.Payload) : null;
     }
 
+    // ---- WO-132 (native wo132.h) ---------------------------------------------
+
+    /// <summary>One WO-132 op: (ok, reason, payload after the 4-byte head), or null when the DLL did not answer.</summary>
+    public async Task<(bool Ok, byte Reason, byte[] Payload)?> Wo132Async(byte op, byte[] args, CancellationToken ct = default)
+    {
+        var p = new byte[1 + args.Length];
+        p[0] = op; args.CopyTo(p, 1);
+        var (body, _) = await SendAndAwaitAsync(Wo132, p, Wo132Reply, ct);
+        if (body is null || body.Length < 4) return null;
+        return (body[0] == 1, body[3], body.AsSpan(4).ToArray());
+    }
+
+    /// <summary>op 1: this body leaves its skirmish (eid 0 = the local player); the fight goes on.</summary>
+    public async Task<(bool Ok, byte Reason)> Wo132LeaveFightAsync(uint eid, CancellationToken ct = default)
+    {
+        var a = new byte[4];
+        BinaryPrimitives.WriteUInt32LittleEndian(a, eid);
+        var r = await Wo132Async(1, a, ct);
+        return r is { } v ? (v.Ok, v.Reason) : (false, (byte)255);
+    }
+
+    /// <summary>op 2: engage (or release) a bound copy against the local player with the host NPC's combat state.</summary>
+    public async Task<(bool Ok, bool First, bool Skirmish, float DistM, byte Reason)> Wo132EngageAsync(bool on, uint eid, BodyState2 st, CancellationToken ct = default)
+    {
+        var a = new byte[1 + 4 + BodyState2.Len];
+        a[0] = B(on);
+        BinaryPrimitives.WriteUInt32LittleEndian(a.AsSpan(1), eid);
+        st.Write(a.AsSpan(5));
+        var r = await Wo132Async(2, a, ct);
+        if (r is not { } v) return (false, false, false, -1, 255);
+        float dist = v.Payload.Length >= 6 ? BinaryPrimitives.ReadSingleLittleEndian(v.Payload.AsSpan(2)) : -1;
+        return (v.Ok, v.Payload.Length > 0 && v.Payload[0] == 1, v.Payload.Length > 1 && v.Payload[1] == 1, dist, v.Reason);
+    }
+
+    /// <summary>op 3: the host watches (or stops watching) one NPC's combat state, by name; the entity id, or null.</summary>
+    public async Task<uint?> Wo132WatchAsync(bool on, string name, CancellationToken ct = default)
+    {
+        byte[] nb = Encoding.ASCII.GetBytes(name ?? "");
+        if (nb.Length == 0 || nb.Length > 63) return null;
+        var a = new byte[6 + nb.Length];
+        a[0] = B(on); a[5] = (byte)nb.Length; nb.CopyTo(a, 6);
+        var r = await Wo132Async(3, a, ct);
+        if (r is not { Ok: true } v || v.Payload.Length < 4) return null;
+        return BinaryPrimitives.ReadUInt32LittleEndian(v.Payload);
+    }
+
+    /// <summary>op 4: the native counters (text), or null.</summary>
+    public async Task<string?> Wo132StatusAsync(CancellationToken ct = default)
+    {
+        var r = await Wo132Async(4, [], ct);
+        return r is { Ok: true } v ? Encoding.ASCII.GetString(v.Payload) : null;
+    }
+
+    /// <summary>op 5: this copy's hits on the local player are measured and put back (joiner).</summary>
+    public async Task<bool> Wo132DiscardAsync(bool on, uint eid, CancellationToken ct = default)
+    {
+        var a = new byte[5];
+        a[0] = B(on); BinaryPrimitives.WriteUInt32LittleEndian(a.AsSpan(1), eid);
+        var r = await Wo132Async(5, a, ct);
+        return r is { Ok: true };
+    }
+
+    /// <summary>op 6: one combat-state read (eid 0 = the local player), or null.</summary>
+    public async Task<NpcCombatState?> Wo132ReadAsync(uint eid, CancellationToken ct = default)
+    {
+        var a = new byte[4];
+        BinaryPrimitives.WriteUInt32LittleEndian(a, eid);
+        var r = await Wo132Async(6, a, ct);
+        if (r is not { Ok: true } v || v.Payload.Length < 12) return null;
+        var b = v.Payload;
+        return new NpcCombatState(eid, b[1] == 1, Z(b[2]), Z(b[3]), Z(b[4]), b[5] == 1, b[6] == 1, BinaryPrimitives.ReadUInt32LittleEndian(b.AsSpan(8)), "", b[0] == 1);
+    }
+
+    private static sbyte Z(byte v) => v == 0xFF ? (sbyte)-1 : (sbyte)v;
+
     private static byte B(bool v) => v ? (byte)1 : (byte)0;
 
     /// <summary>Round-trip check that the DLL is alive and pumping frames.</summary>
@@ -659,7 +748,7 @@ public sealed class CombatPipe : IAsyncDisposable
                 var (type, body) = await ReadFrameAsync(CancellationToken.None);
                 // WO-118: replies are logged by their callers; 0x81/0x86/0x89
                 // arrive at frame-feed and heartbeat rates and would flood.
-                if (type is not (Result or LocalStateReply or NpcStatusReply or BodyStateReply or LocalAction or PvpHitOut))
+                if (type is not (Result or LocalStateReply or NpcStatusReply or BodyStateReply or LocalAction or PvpHitOut or NpcCombatOut or Wo132Reply or Wo131Reply))
                     Console.WriteLine($"[combat] pipe frame 0x{type:X2} ({body.Length} bytes)");
                 if (type == LocalHit && body.Length >= 24)
                 {
@@ -732,6 +821,34 @@ public sealed class CombatPipe : IAsyncDisposable
                                     BinaryPrimitives.ReadSingleLittleEndian(body.AsSpan(8)), body[12], body[13]);
                         }
                         catch (Exception ex) { Console.WriteLine($"[wo121] pvp hit not sent: {ex.Message}"); }
+                    }
+                }
+                else if (type == NpcAvatarHit && body.Length >= 18 && body.Length == 18 + body[17])
+                {
+                    // WO-132: never awaited on this reader (the WO-131 deadlock trap:
+                    // a handler that makes a pipe request would wait on this loop).
+                    if (OnNpcAvatarHit is { } h)
+                    {
+                        uint v = BinaryPrimitives.ReadUInt32LittleEndian(body.AsSpan(0));
+                        float st = BinaryPrimitives.ReadSingleLittleEndian(body.AsSpan(4)), hp = BinaryPrimitives.ReadSingleLittleEndian(body.AsSpan(8));
+                        uint at = BinaryPrimitives.ReadUInt32LittleEndian(body.AsSpan(12));
+                        byte fl = body[16];
+                        string an = Encoding.ASCII.GetString(body, 18, body[17]);
+                        _ = Task.Run(async () => { try { await h(v, st, hp, at, fl, an); } catch (Exception ex) { Console.WriteLine($"[wo132] npc avatar hit not handled: {ex.Message}"); } });
+                    }
+                }
+                else if (type == NpcCombatOut && NpcCombatState.TryParse(body, out var ncs))
+                {
+                    if (OnNpcCombat is { } h)
+                        _ = Task.Run(async () => { try { await h(ncs); } catch (Exception ex) { Console.WriteLine($"[wo132] npc combat not handled: {ex.Message}"); } });
+                }
+                else if (type == DiscardedHit && body.Length == 12)
+                {
+                    if (OnDiscardedHit is { } h)
+                    {
+                        uint at = BinaryPrimitives.ReadUInt32LittleEndian(body.AsSpan(0));
+                        float st = BinaryPrimitives.ReadSingleLittleEndian(body.AsSpan(4)), hp = BinaryPrimitives.ReadSingleLittleEndian(body.AsSpan(8));
+                        _ = Task.Run(async () => { try { await h(at, st, hp); } catch { } });
                     }
                 }
                 else if (type == NpcDropped && body.Length >= 2 && body.Length == 2 + body[1])

@@ -280,6 +280,14 @@ constexpr int     kSetPartnerLen      = 17;
 // WO-131: combat and bodies (wo131.h): [op][...] -> 0x98 [ok][seq][op][reason][payload]
 constexpr uint8_t kWo131              = 0x21;
 constexpr uint8_t kWo131Reply         = 0x98;
+// WO-132: [op][...] -> 0x99 [ok][seq][op][reason][payload] (wo132.h), and three
+// unsolicited frames: 0x9A an NPC's hit on an avatar (measured, put back),
+// 0x9B a watched NPC's combat state, 0x9C an engaged copy's discarded hit.
+constexpr uint8_t kWo132              = 0x22;
+constexpr uint8_t kWo132Reply         = 0x99;
+constexpr uint8_t kNpcAvatarHit       = 0x9A;   // [victimEid:4][st:4f][hp:4f][attackerEid:4][flags][nameLen][name]
+constexpr uint8_t kNpcCombatOut       = 0x9B;   // wo132.h
+constexpr uint8_t kDiscardedHit       = 0x9C;   // [attackerEid:4][st:4f][hp:4f]
 constexpr uint8_t kSaveListReply      = 0x8D;   // [ok][seq][listed][idx:2][count:2][current][contPl][contIdx:2][nameLen][contName]
 constexpr uint8_t kLocalAction        = 0x96;   // unsolicited: [kind][phase][ic][zone][type][flags][guid:16][eid:4][nameLen][name]
 constexpr uint8_t kPvpHitOut          = 0x97;   // unsolicited: [victimEid:4][st:4f][hp:4f][flags][material]

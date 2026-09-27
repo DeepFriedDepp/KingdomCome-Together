@@ -18,7 +18,7 @@
 //        SynthPeer --join-host125 ...               (WO-125: the continuity host, Host125.cs)
 // plan lines:
 //   line <npc> <x0> <y0> <z0> <ux> <uy> <len> <speed> [pingpong]
-//   hold <npc> <x> <y> <z> <yaw>
+//   hold <npc> <x> <y> <z> <yaw> [drawn]                       (WO-132: drawn = the weapon-drawn bit 0x04)
 //   dead <npc> <x> <y> <z> <yaw>                                (WO-122: a corpse: hold + dead bit 0x01, hp 0)
 //   saved <t> <kind> <playline> <idx>                           (WO-122: a WorldSaved 0x46 at stream time t, as the host)
 //   path <npc> <speed> <x1> <y1> <z1> <x2> <y2> <z2> ...        (ping-pong)
@@ -29,6 +29,10 @@
 //   start <seconds>                                             (delay before streaming)
 //   die <t_s> <npc>                                             (WO-131: that mover streams dead, hp 0, from t on)
 //   hp <t_s> <npc> <hp>                                         (WO-131: that mover streams this hp from t on)
+//   ncombat <t0_s> <t1_s> <npc> <host|avatar:N|other|none> [gz] [gs] [block] [atk]
+//                                                               (WO-132: the host NPC's combat state, NpcCombat on the
+//                                                                action channel, every 1 s from t0 to t1 with combat on,
+//                                                                then one "off"; zones are table ids, -1 none)
 //   raw <t_s> <typeHex> <payloadHex> [stampOffset]              (WO-131: send this packet as-is at stream time t;
 //                                                                 the 4 bytes at stampOffset are re-stamped with this
 //                                                                 peer's clock -- a recorded host stream replayed,
@@ -44,6 +48,12 @@ static class P
 {
     static string Arg(string[] a, string k, string d) { int i = Array.IndexOf(a, k); return i >= 0 && i + 1 < a.Length ? a[i + 1] : d; }
     static float F(string s) => float.Parse(s, CultureInfo.InvariantCulture);
+
+    sealed class NCombat
+    {
+        public double T0, T1, LastSent = -1e9; public string Npc = ""; public NpcCombatTarget Target; public byte Ghost;
+        public int Gz, Gs = -1, Atk = -1; public bool Block, OffSent, Logged;
+    }
 
     abstract class Mover
     {
@@ -73,7 +83,7 @@ static class P
     }
     sealed class Hold : Mover
     {
-        public float X, Y, Z, Yaw; public bool Dead;
+        public float X, Y, Z, Yaw; public bool Dead, Drawn;
         public override (float, float, float, float) At(double t) => (X, Y, Z, Yaw);
     }
     sealed class PathM : Mover
@@ -205,6 +215,7 @@ static class P
         var rows = new List<(double T, string Npc, Guid Row)>();
         var saves = new List<(double T, byte Kind, byte Playline, ushort Idx)>(); uint wsSeq = 0;
         var raws = new List<(double T, byte Type, byte[] Body, int Stamp)>();   // WO-131
+        var ncombats = new List<NCombat>();   // WO-132
         var dies = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);   // WO-131
         var hps = new Dictionary<string, List<(double T, float Hp)>>(StringComparer.OrdinalIgnoreCase);   // WO-131
         foreach (var raw in File.ReadAllLines(Arg(a, "--plan", "plan.txt")))
@@ -214,7 +225,7 @@ static class P
             switch (f[0])
             {
                 case "line": movers.Add(new Line { Name = f[1], X0 = F(f[2]), Y0 = F(f[3]), Z0 = F(f[4]), Ux = F(f[5]), Uy = F(f[6]), Len = F(f[7]), Speed = F(f[8]), PingPong = f.Length > 9 && f[9] == "pingpong" }); break;
-                case "hold": movers.Add(new Hold { Name = f[1], X = F(f[2]), Y = F(f[3]), Z = F(f[4]), Yaw = F(f[5]) }); break;
+                case "hold": movers.Add(new Hold { Name = f[1], X = F(f[2]), Y = F(f[3]), Z = F(f[4]), Yaw = F(f[5]), Drawn = f.Length > 6 && f[6] == "drawn" }); break;
                 case "dead": movers.Add(new Hold { Name = f[1], X = F(f[2]), Y = F(f[3]), Z = F(f[4]), Yaw = F(f[5]), Dead = true }); break;
                 case "path":
                 {
@@ -245,6 +256,20 @@ static class P
                 case "hp":
                     if (!hps.TryGetValue(f[2], out var hl2)) hps[f[2]] = hl2 = new();
                     hl2.Add((double.Parse(f[1], CultureInfo.InvariantCulture), F(f[3]))); break;
+                case "ncombat":
+                {
+                    var tg = f[4].Split(':');
+                    var nc = new NCombat
+                    {
+                        T0 = double.Parse(f[1], CultureInfo.InvariantCulture), T1 = double.Parse(f[2], CultureInfo.InvariantCulture), Npc = f[3],
+                        Target = tg[0] switch { "host" => NpcCombatTarget.Host, "avatar" => NpcCombatTarget.Avatar, "other" => NpcCombatTarget.Other, _ => NpcCombatTarget.None },
+                        Ghost = tg.Length > 1 ? byte.Parse(tg[1], CultureInfo.InvariantCulture) : (byte)0,
+                        Gz = f.Length > 5 ? int.Parse(f[5], CultureInfo.InvariantCulture) : 0, Gs = f.Length > 6 ? int.Parse(f[6], CultureInfo.InvariantCulture) : -1,
+                        Block = f.Length > 7 && f[7] == "1", Atk = f.Length > 8 ? int.Parse(f[8], CultureInfo.InvariantCulture) : -1,
+                    };
+                    ncombats.Add(nc);
+                    break;
+                }
                 case "raw": raws.Add((double.Parse(f[1], CultureInfo.InvariantCulture), Convert.ToByte(f[2], 16), Convert.FromHexString(f[3]), f.Length > 4 ? int.Parse(f[4]) : -1)); break;
             }
         }
@@ -310,6 +335,21 @@ static class P
                     Console.WriteLine(FormattableString.Invariant($"SYNTH t={t:F1}s NpcAttack npc={rows[ri].Npc} row={rows[ri].Row}"));
                     rows.RemoveAt(ri);
                 }
+                // WO-132: the host NPC's combat state, 1 Hz while on, one "off" at the end.
+                foreach (var nc in ncombats)
+                {
+                    if (t < nc.T0 || nc.OffSent) continue;
+                    bool on = t < nc.T1;
+                    if (on && t - nc.LastSent < 1.0) continue;
+                    nc.LastSent = t;
+                    var bits = on ? BodyState2Bits.CombatMode | (nc.Block ? BodyState2Bits.BlockHeld : 0) | (nc.Target != NpcCombatTarget.None ? BodyState2Bits.Locked : 0) : BodyState2Bits.None;
+                    var st2 = new BodyState2(0, 0, bits, Protocol.ZoneFromTableId(nc.Gz), Protocol.StanceFromTableId(nc.Gs), Protocol.ZoneFromTableId(nc.Atk), 0, 0, 0);
+                    var ev = new NpcCombatEvent(unchecked((uint)(Stopwatch.GetTimestamp() * 1000 / Stopwatch.Frequency)), st2, on ? nc.Target : NpcCombatTarget.None, nc.Ghost, nc.Npc);
+                    await st.WriteAsync(s_actions.Build(ActionKind.NpcCombat, ActionPhase.Commit, ev.ToBytes()));
+                    if (!on) nc.OffSent = true;
+                    if (!on || !nc.Logged) Console.WriteLine(FormattableString.Invariant($"SYNTH t={t:F1}s NpcCombat {ev}"));
+                    nc.Logged = true;
+                }
                 // WO-131: a recorded host stream, in order.
                 int rawSent = 0;
                 while (raws.Count > 0 && raws[0].T <= t)
@@ -350,7 +390,7 @@ static class P
                     m.SentDead = deadNow; m.SentHp = hpNow;
                     m.LastSent = now; m.LastSentX = x; m.LastSentY = y; m.LastSentZ = z;
                     m.Seq++;
-                    byte fl = m is Fight fm ? fm.FlagsAt(t) : m is Hold { Dead: true } ? Protocol.NpcStateFlagDead : (byte)0;
+                    byte fl = m is Fight fm ? fm.FlagsAt(t) : m is Hold { Dead: true } ? Protocol.NpcStateFlagDead : m is Hold { Drawn: true } ? (byte)0x04 : (byte)0;
                     if (deadNow) fl = Protocol.NpcStateFlagDead;
                     uint sms = senderClock == "tick" ? unchecked((uint)Environment.TickCount64)
                              : unchecked((uint)(Stopwatch.GetTimestamp() * 1000 / Stopwatch.Frequency));

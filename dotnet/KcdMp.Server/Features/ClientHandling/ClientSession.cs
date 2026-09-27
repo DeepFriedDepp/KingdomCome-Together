@@ -571,6 +571,13 @@ public class ClientSession
                             _clientHandler.CountDrop(Protocol.ActionUp, "session-setting-not-host");
                             continue;
                         }
+                        // WO-132: an NPC's combat state speaks for the host's world,
+                        // so only the host (the damage authority) may send it.
+                        if (body[0] == (byte)ActionKind.NpcCombat && !_clientHandler.IsDamageAuthority(this))
+                        {
+                            _clientHandler.CountDrop(Protocol.ActionUp, "npc-combat-not-host");
+                            continue;
+                        }
                         _broadcastService.BroadcastAction(this, body);
                     }
                     continue;

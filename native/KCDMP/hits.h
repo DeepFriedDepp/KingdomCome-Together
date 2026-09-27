@@ -58,6 +58,26 @@ bool hit_by_player(void* soul, double withinS);
 using PvpFn = void (*)(uint32_t victimEid, float stamina, float health, uint8_t flags, uint8_t material);
 void set_pvp_callback(PvpFn fn);
 
+// WO-132: an NPC's hit on an avatar, measured over the watch window and put
+// back (pipe frame 0x9A -> the agent forwards it to the avatar's owner).
+using NpcHitFn = void (*)(uint32_t victimEid, float stamina, float health, uint32_t attackerEid, uint8_t flags, const char* attackerName);
+void set_npc_hit_callback(NpcHitFn fn);
+void set_npc_watch(bool on);
+// WO-132: an engaged copy's local hit on the player was put back (logs only, 0x9C).
+using DiscardFn = void (*)(uint32_t attackerEid, float stamina, float health);
+void set_discard_callback(DiscardFn fn);
+// WO-132 (joiner, main thread): hits by this attacker on the local player are discarded.
+bool discard_from(uint32_t eid, bool on);
+int discard_count();
+// WO-132: a forwarded host hit just landed on the local player (main thread).
+void note_player_damage(float stamina, float health);
+// WO-132 (main thread): the skirmish manager's own add / remove-one-soul.
+bool skirmish_ready();
+bool skirmish_add(void* soul, void* reference, uint8_t overrideRelation, uint64_t* rv);
+bool skirmish_remove(void* soul, uint64_t* rv);
+void* soul_of_eid(uint32_t eid);
+uint32_t eid_of_name(const char* name);   // one entity walk per name, cached and re-verified
+
 void tick();   // main thread: drain the hook's queue, resolve victims
 int status_text(char* out, int n);
 

@@ -18,6 +18,7 @@
 #include "savelist.h"
 #include "leash.h"
 #include "wo131.h"
+#include "wo132.h"
 #include "log.h"
 
 #include <windows.h>
@@ -222,6 +223,33 @@ void send_pvp_hit(uint32_t victimEid, float st, float hp, uint8_t flags, uint8_t
     std::memcpy(body + 8, &hp, 4);
     body[12] = flags; body[13] = material;
     send_unsolicited(kPvpHitOut, body, sizeof(body), "PvpHit");
+}
+
+// WO-132: an NPC's hit on an avatar (main thread, hits::tick).
+void send_npc_avatar_hit(uint32_t victimEid, float st, float hp, uint32_t attackerEid, uint8_t flags, const char* name) {
+    BYTE body[18 + 63]{};
+    const size_t n = name ? std::strlen(name) : 0;
+    if (n > 63) return;
+    std::memcpy(body, &victimEid, 4);
+    std::memcpy(body + 4, &st, 4);
+    std::memcpy(body + 8, &hp, 4);
+    std::memcpy(body + 12, &attackerEid, 4);
+    body[16] = flags;
+    body[17] = static_cast<BYTE>(n);
+    if (n) std::memcpy(body + 18, name, n);
+    send_unsolicited(kNpcAvatarHit, body, static_cast<uint16_t>(18 + n), "NpcAvatarHit");
+}
+
+// WO-132: a watched NPC's combat state (main thread, wo132::tick).
+void send_npc_combat(const uint8_t* body, uint16_t len) { send_unsolicited(kNpcCombatOut, body, len, "NpcCombat"); }
+
+// WO-132: an engaged copy's local hit on the player was put back (main thread).
+void send_discarded(uint32_t attackerEid, float st, float hp) {
+    BYTE body[12]{};
+    std::memcpy(body, &attackerEid, 4);
+    std::memcpy(body + 4, &st, 4);
+    std::memcpy(body + 8, &hp, 4);
+    send_unsolicited(kDiscardedHit, body, sizeof(body), "DiscardedHit");
 }
 
 // WO-118 Phase 5: a trace CSV was written (main thread).
@@ -547,6 +575,10 @@ void serve(HANDLE h) {
                     [guid, stamina, health, suppress](bool& result) {
                         result = rttr::apply_damage(guid.data(), stamina, health, suppress);
                         if (result) rttr::note_remote_damage(guid.data(), health);
+                        // WO-132: a forwarded hit on the local player (player_henry's
+                        // soul id) is never put back by a discard watch.
+                        static const unsigned char kHenry[16] = {0xfb, 0xcf, 0x2d, 0x4c, 0xa1, 0xde, 0x63, 0x62, 0x72, 0xd7, 0xb3, 0x9f, 0x4d, 0xb2, 0xd8, 0xb5};
+                        if (result && std::memcmp(guid.data(), kHenry, 16) == 0) kcdmp::hits::note_player_damage(stamina, health);
                     }, "ApplyDamage", ok, &faultedFlag);
                 if (!ran) logf("PIPE: ApplyDamage timed out waiting for a frame");
                 logf("PIPE: ApplyDamage stamina=%.2f health=%.2f -> %s",
@@ -1087,6 +1119,25 @@ void serve(HANDLE h) {
                 LeaveCriticalSection(&g_write_lock);
                 break;
             }
+            case kWo132: {
+                std::vector<uint8_t> copy(body, body + len);
+                struct R { uint8_t reason = kcdmp::wo132::kRFailed; uint8_t op = 0; uint8_t buf[256]{}; size_t n = 0; };
+                R r{};
+                bool faulted = false;
+                const bool ran = run_sync_bounded<R>(
+                    [copy](R& out) {
+                        out.op = copy.empty() ? 0 : copy[0];
+                        out.reason = kcdmp::wo132::handle(copy.data(), copy.size(), out.buf, sizeof(out.buf), &out.n);
+                    }, "Wo132", r, &faulted);
+                if (!ran) { r.reason = faulted ? kReasonTaskFaulted : kcdmp::wo132::kRFailed; r.n = 0; r.op = len ? body[0] : 0; }
+                BYTE rb[4 + 256]{};
+                rb[0] = (ran && r.reason == kcdmp::wo132::kROk) ? 1 : 0; rb[1] = seq; rb[2] = r.op; rb[3] = r.reason;
+                if (r.n) std::memcpy(rb + 4, r.buf, r.n);
+                EnterCriticalSection(&g_write_lock);
+                send_frame(h, kWo132Reply, rb, static_cast<uint16_t>(4 + r.n));
+                LeaveCriticalSection(&g_write_lock);
+                break;
+            }
             case kLeashSample: {
                 kcdmp::leash::Result page{};
                 uint8_t n = len >= 5 ? body[4] : 0;
@@ -1133,6 +1184,7 @@ void serve(HANDLE h) {
     logf("PIPE: agent disconnected");
     // WO-118: no agent, no stream -- every native binding is dropped.
     npcdrive::on_pipe_closed();
+    main_thread::post([] { kcdmp::wo132::on_pipe_closed(); });   // WO-132: engaged copies let go (main-thread state)
     // WO-113: no agent, no session -- the death guard stands down (vanilla).
     respawn::set_session(false, "pipe closed");
     // WO-114: no agent, no partner -- a death wakes by today's rule.
@@ -1210,6 +1262,10 @@ bool start() {
     // WO-121: committed actions and friendly-fire hits become unsolicited frames.
     kcdmp::motion::set_action_callback(&send_local_action);
     kcdmp::hits::set_pvp_callback(&send_pvp_hit);
+    // WO-132: NPC hits on avatars, watched NPCs' combat state, discarded copy hits.
+    kcdmp::hits::set_npc_hit_callback(&send_npc_avatar_hit);
+    kcdmp::hits::set_discard_callback(&send_discarded);
+    kcdmp::wo132::set_combat_callback(&send_npc_combat);
 
     // WO-118: the native writer's and the trace's unsolicited frames.
     npcdrive::set_drop_callback(&send_npc_dropped);

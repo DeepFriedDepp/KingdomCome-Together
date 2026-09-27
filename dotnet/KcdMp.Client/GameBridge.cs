@@ -1650,6 +1650,10 @@ public partial class GameBridge(ClientConfig config)
                     // another, and nothing in a field log distinguished "this
                     // path fired and did nothing" from "this path never fired".
                     bool ghostTarget = npcName is not null;   // i.e. a kcd2mp_ body
+                    // WO-132: one path per hit. An avatar's hits already go by 0x21
+                    // (an NPC's) and friendly fire (a player's); this second send
+                    // was the joiner's "soul not loaded / failed" twin of every hit.
+                    if (ghostTarget && Wo132DropGhostGuidRoute(soul, npcName, health)) { _stats.DmgOutDropped++; return; }
                     if (!ghostTarget && Wo131JoinerActive)
                     {
                         // WO-131 1b: a body the joiner cannot even name is never the host's NPC.
@@ -1736,6 +1740,7 @@ public partial class GameBridge(ClientConfig config)
         Wo124OnConnect(stream, cts.Token);   // WO-124: the session mode, the joiner's side of the join
         Wo114OnConnect(stream, cts.Token);   // WO-114: the leash (host decides; joiner is brought back)
         Wo131OnConnect(cts.Token);           // WO-131: combat and bodies (the copy guard, the hit gate, perception)
+        Wo132OnConnect(cts.Token);           // WO-132: damage safety, combat engagement
         _ = _combat.NpcConfigAsync(_nativeWriteOn, _nativeSenderClock, cts.Token);
         _ = RespawnHeartbeatAsync(stream, announceGraves: true, cts.Token);
         // WO-99 Phase 0: learn who the local player is before the first hit.
@@ -2236,6 +2241,7 @@ public partial class GameBridge(ClientConfig config)
             await Wo124OnDisconnectAsync();   // WO-124: a joiner in the host's world leaves it
             await Wo114OnDisconnectAsync();   // WO-114: the leash, the partner, the fast-travel block
             await Wo131OnDisconnectAsync();   // WO-131: copy guards off, parked bodies given back
+            Wo132OnDisconnect();              // WO-132: engaged copies released
             _myOpenDrops.Clear();
             // WO-113: no relay, no session -- the DLL's guard stands down
             // (vanilla death), and every peer's mirror gravestone goes.
@@ -3683,6 +3689,7 @@ public partial class GameBridge(ClientConfig config)
     {
         _localDowned = on;
         _localDownedKind = kind;
+        if (on) _w132LocalGate.Down(DateTime.UtcNow); else _w132LocalGate.Up(DateTime.UtcNow);   // WO-132
         Console.WriteLine($"[respawn] local player {(on ? "DOWNED" : "back up")} kind={Protocol.RespawnReasonName(kind)} -- 0x1F unconscious bit {(on ? "set" : "cleared")}");
         return Task.CompletedTask;
     }
@@ -3690,6 +3697,7 @@ public partial class GameBridge(ClientConfig config)
     /// <summary>Puts one PlayerRespawnedUp (0x3E) on the wire.</summary>
     private async Task SendPlayerRespawnedAsync(Stream stream, float x, float y, float z, byte reason, CancellationToken ct)
     {
+        _w132LocalGate.Up(DateTime.UtcNow);   // WO-132: the grace runs from the wake
         try
         {
             var packet = new byte[3 + Protocol.PlayerRespawnedUpPayloadLen];
@@ -4158,6 +4166,7 @@ public partial class GameBridge(ClientConfig config)
         // so a reconnecting agent keeps a continuous clock.
         var packet = NpcStateCodec.BuildUp(npcName, x, y, z, rotZ, health, flags, seq, SenderMsNow());
         if ((flags & Protocol.NpcStateFlagResync) != 0) _resyncEmitted++;
+        if (!asClaim) Wo132NoteNpcState(npcName, flags);   // WO-132: a drawn NPC's combat state is watched
         try { await WritePacketAsync(stream, packet, ct); if (!asClaim) { _stats.NpcStateOut++; Wo127NoteSent(npcName); } }   // WO-110 Phase 6: a SENT packet, not a hand-off
         catch (Exception ex) { Console.WriteLine($"[npcsync] send failed: {ex.Message}"); }
     }
@@ -4211,6 +4220,7 @@ public partial class GameBridge(ClientConfig config)
     private async Task ApplyPlayerHitAsync(float healthLoss, float staminaLoss, CancellationToken ct)
     {
         if (healthLoss <= 0 && staminaLoss <= 0) return;
+        if (Wo132RefuseLocal(healthLoss)) return;   // WO-132: never while I am down or waking
 
         // A stamina reading the sender could not obtain arrives as
         // Protocol.UnknownStat; passing that straight into TakeDamage would
@@ -4783,7 +4793,7 @@ public partial class GameBridge(ClientConfig config)
                     string who = _ghostNames.TryGetValue(sourceId, out var rn) ? rn : $"player {sourceId}";
                     Console.WriteLine(FormattableString.Invariant(
                         $"[respawn] {who} respawned at ({rx:F1}, {ry:F1}, {rz:F1}) reason={Protocol.RespawnReasonName(payload[13])}"));
-                    _ = Wo131OnPeerDownOrUpAsync(sourceId, "respawned");   // WO-131 1g
+                    _ = Wo132OnPeerUpAsync(sourceId, "respawned");   // WO-132 (was WO-131 1g's StopFight)
                 }
                 else if (type == Protocol.GraveAddDown && payloadLen == Protocol.GraveAddDownPayloadLen)
                 {
@@ -4810,7 +4820,7 @@ public partial class GameBridge(ClientConfig config)
                     byte sourceId = payload[0];
                     string who = _ghostNames.TryGetValue(sourceId, out var dn) ? dn : $"player {sourceId}";
                     Console.WriteLine($"[death] {who} died and is reloading their own save");
-                    _ = Wo131OnPeerDownOrUpAsync(sourceId, "died");   // WO-131 1g
+                    _ = Wo132OnPeerDownAsync(sourceId, "died");   // WO-132 (was WO-131 1g's StopFight)
                     try
                     {
                         await ExecLuaAsync($"KCD2MP_SetGhostDead(\"{sourceId}\", true)");
@@ -5264,6 +5274,7 @@ public partial class GameBridge(ClientConfig config)
     /// </summary>
     private async Task ApplyGhostVitalsAsync(byte ghostId, float health, float stamina, byte flags, CancellationToken ct)
     {
+        Wo132OnPeerVitals(ghostId, health, flags);   // WO-132: the downed bit's edges
         string h = health.ToString("F1", CultureInfo.InvariantCulture);
         string s = stamina.ToString("F1", CultureInfo.InvariantCulture);
         try
@@ -5507,6 +5518,13 @@ public partial class GameBridge(ClientConfig config)
             return;
         }
 
+        if (name == "w132_check")
+        {
+            // WO-132 live checks (mp_w132_check in the console): block on|off, read <name|me>.
+            _ = Wo132CheckAsync(arg);
+            return;
+        }
+
         if (name is "npc_native" or "npc_native_hold" or "npc_native_cfg" or "npc_trace")
         {
             // WO-118: consumed regardless of interaction-session state, like npcid.
@@ -5636,6 +5654,10 @@ public partial class GameBridge(ClientConfig config)
                 }
                 var send = _sendPlayerHit;
                 if (send is null) break;
+                // WO-132: the sampler sees every drop, a bleed tick too. With the
+                // DLL's hit watch armed the real hits come from the hit chokepoint
+                // (0x9A); otherwise only a drop of 1 hp or more outside a down.
+                if (!Wo132AllowGhostHit(hitGhostId, loss)) break;
                 _ = send(hitGhostId, loss, 0f)
                     .ContinueWith(_ => Wo131RestoreAvatarAsync(hitGhostId), TaskScheduler.Default);   // WO-131 1e
                 break;

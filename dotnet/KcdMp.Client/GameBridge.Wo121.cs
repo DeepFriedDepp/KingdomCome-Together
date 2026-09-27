@@ -316,6 +316,9 @@ public partial class GameBridge
     {
         switch (a.Kind)
         {
+            case ActionKind.NpcCombat:
+                await Wo132OnNpcCombatInAsync(a, ct);   // WO-132: the host's NPC in a fight
+                return true;
             case ActionKind.SessionSetting:
                 if (a.Payload.Length >= 2 && a.Payload[0] == SessionSettingKey.FriendlyFire)
                 {

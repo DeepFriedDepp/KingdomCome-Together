@@ -5,6 +5,7 @@
 
 #include "motion.h"
 #include "hits.h"
+#include "wo132.h"
 #include "concept_read.h"
 #include "dice_hook.h"
 #include "log.h"
@@ -192,6 +193,7 @@ DWORD WINAPI plugin_main(LPVOID) {
     // WO-121: drain the capture / friendly-fire queues, avatar jumps.
     kcdmp::main_thread::post_repeating(&kcdmp::motion::tick);
     kcdmp::main_thread::post_repeating(&kcdmp::hits::tick);
+    kcdmp::main_thread::post_repeating(&kcdmp::wo132::tick);   // WO-132: the host's NPC combat-state watch
     // WO-124: the joiner's placement gives the fall damage back; the save-list
     // research trigger (kcdmp-savelist-test.txt, opt-in, absent = idle).
     // Observed: this tick runs at the MAIN MENU too on 1.5.5 (the pipe is up
