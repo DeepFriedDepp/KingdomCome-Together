@@ -45,7 +45,8 @@ constexpr uint8_t kOpWatch      = 3;
 constexpr uint8_t kOpStatus     = 4;
 constexpr uint8_t kOpDiscard    = 5;
 constexpr uint8_t kOpRead       = 6;
-constexpr uint8_t kOpPlayerBlock = 7;   // [on:1] live checks only: the player's block via SetBlockMode (no input)
+constexpr uint8_t kOpPlayerBlock = 7;
+constexpr uint8_t kOpTestFight  = 8;   // [npcEid:4][targetEid:4][override:1] live checks only: a test NPC fights (skirmish + combat + automation)   // [on:1] live checks only: the player's block via SetBlockMode (no input)
 
 constexpr uint8_t kROk         = 0;
 constexpr uint8_t kRBadRequest = 1;

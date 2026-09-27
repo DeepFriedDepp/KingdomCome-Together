@@ -125,7 +125,7 @@ host's world (time, NPCs, quests).
 * Try it: the joiner rides away from the host past 650 m and waits; then the
   host fast-travels once.
 
-## Fights together (from 0.30.5, WO-131)
+## Fights together (from 0.30.5, WO-131; 0.30.7, WO-132)
 
 * **The joiner never runs NPCs of their own.** Every NPC of the host's world is
   driven by the host's stream or parked on the joiner (suspended + hidden).
@@ -148,14 +148,30 @@ host's world (time, NPCs, quests).
 * **Perception (host):** avatars are never AI-ignorant in a shared world and
   join the host player's faction (`MP-WO131 avatar N -> the player's faction:
   joined`); `mp_avatar_perceive off` goes back to the old rule.
-* **After a death:** StopFight on the dead player's skirmish (`WO131-STOPFIGHT`
-  in kcdmp-native.log; `MP-WO131 peer N died|respawned: StopFight` on the host).
+* **After a death (0.30.7, WO-132):** only the dead player leaves the fight.
+  Host agent log: `MP-W132 peer N downed|died: its avatar left its skirmish ->
+  removed`; native: `WO132-LEAVEFIGHT` (the host's own death too; StopFight
+  only as the fallback). The avatar is healed of bleeding and hidden where it
+  fell (`WO132-AVATAR down`), shown again after the wake (`WO132-AVATAR up`).
 * **No stuck poses:** a copy ragdolled by a local blow while the host has it
   standing is stood up (`WO131-STANDUP npc=... why=not-living`).
 * **Leash:** the countdown is cancelled only back under 630 m; a dialogue hold
   needs a real conversation (the DialogTwin stand-in), not chatter.
-* Counters every 60 s in the agent log: `MP-WO131-STATS`.
-* Two-player checklist: `docs/WO-131-findings.md`, section 7.
+* **Nobody is hit while dead or waking (0.30.7):** the host forwards nothing
+  to a player from their down until 5 s after their wake (`MP-W132 npc hit on
+  avatar N ... NOT forwarded: its player is down|waking`); the joiner refuses
+  one in the same window itself (`[playerhit] ... REFUSED`).
+* **Only real hits (0.30.7):** an NPC's hit on the partner's figure is measured
+  at the hit itself (`WO132-HITS npc hit on avatar` in kcdmp-native.log, `MP-W132
+  npc hit on avatar N by <npc> ... forwarded` in the host agent log); bleeding
+  is never sent. One path per hit (`reason=wo132-one-path` for the old second).
+* **Combat mode on the joiner (0.30.7):** a host NPC in a fight near the
+  joiner is engaged on the joiner's side (`MP-W132 engage on <npc>` / `engage
+  off`; native `WO132-ENGAGE`): the game's own direction indicator and block,
+  the copy still held and paused. The host watches its drawn NPCs (`MP-W132
+  watching`, `npc-combat out`).
+* Counters every 60 s in the agent log: `MP-WO131-STATS`, `MP-W132-STATS`.
+* Two-player checklist: `docs/WO-132-findings.md`, section 7 (and WO-131's).
 
 ## Expected not to work yet
 

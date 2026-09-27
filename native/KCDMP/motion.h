@@ -109,6 +109,9 @@ bool npc_engaged(uint32_t eid);
 // WO-132 (live checks only): the local player's held block through the engine's
 // own SetBlockMode -- the function the block button calls; no input is made.
 bool player_block(bool on);
+// WO-132 (live checks only): a test NPC fights -- combat mode, the guard-request
+// flag and its combat automation ON (what the shipped combat autotests use).
+bool test_fight(uint32_t eid);
 size_t npc_engaged_count();
 
 // WO-132 (host, main thread): one NPC's combat state, read from its combat model.

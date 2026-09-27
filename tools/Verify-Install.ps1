@@ -119,7 +119,11 @@ $AsmMarkers = @(
     # the pipe 0x21 ops, the ragdoll drop and the death StopFight (native).
     @{ File = 'KcdMpClient.dll'; Marker = 'MP-WO131-STATS';         Owner = 'WO-131 hit gate / copy guard (agent half)' },
     @{ File = 'KCDMP.dll';       Marker = 'WO131-STOPFIGHT';        Owner = 'WO-131 StopFight on deaths (native)' },
-    @{ File = 'KCDMP.dll';       Marker = 'WO131-FACTION';          Owner = 'WO-131 avatar in the player faction (native)' }
+    @{ File = 'KCDMP.dll';       Marker = 'WO131-FACTION';          Owner = 'WO-131 avatar in the player faction (native)' },
+    @{ File = 'KcdMpClient.dll'; Marker = 'MP-W132-STATS';          Owner = 'WO-132 damage safety / engagement (agent half)' },
+    @{ File = 'KCDMP.dll';       Marker = 'WO132-LEAVEFIGHT';       Owner = 'WO-132 one soul leaves its skirmish (native)' },
+    @{ File = 'KCDMP.dll';       Marker = 'WO132-ENGAGE';           Owner = 'WO-132 copy engagement on a joiner (native)' },
+    @{ File = 'KCDMP.dll';       Marker = 'WO132-HITS';             Owner = 'WO-132 NPC hits on avatars measured at the chokepoint (native)' }
 )
 
 $PakMarkers = @(

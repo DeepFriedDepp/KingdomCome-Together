@@ -35,6 +35,10 @@ constexpr size_t kMaxWatch = 48;
 double g_lastSample = 0;
 std::atomic<CombatFn> g_combatFn{nullptr};
 
+// Live checks: test NPCs held in a fight (main thread).
+struct TestFight { uint32_t eid; double until; double last = 0; };
+std::vector<TestFight> g_testFights;
+
 // Joiner: the engaged copies (main thread).
 std::vector<uint32_t> g_engaged;
 bool is_engaged(uint32_t eid) { for (uint32_t e : g_engaged) if (e == eid) return true; return false; }
@@ -184,6 +188,24 @@ uint8_t handle(const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t
         logf("WO132-CHECK player block %s -> %s", a[0] ? "on" : "off", ok ? "set" : "FAILED");
         return ok ? kROk : kRFailed;
     }
+    case kOpTestFight: {
+        // [npcEid:4][targetEid:4 (0 = the local player)][override:1]
+        if (n != 9) return kRBadRequest;
+        const uint32_t npc = get_u32(a);
+        uint32_t tgt = get_u32(a + 4);
+        if (!tgt) tgt = player_eid();
+        void* ns = hits::soul_of_eid(npc);
+        void* ts = hits::soul_of_eid(tgt);
+        if (!ns || !ts) return kRNoActor;
+        uint64_t rv = 0;
+        const bool sk = hits::skirmish_add(ns, ts, a[8], &rv);
+        const bool f = motion::test_fight(npc);
+        bool have = false;
+        for (auto& t : g_testFights) if (t.eid == npc) { t.until = now_s() + 300; have = true; }
+        if (!have) g_testFights.push_back({npc, now_s() + 300});   // held for 5 min (re-asserted every 0.25 s)
+        logf("WO132-CHECK test fight npc=0x%X target=0x%X: skirmish %s (override %u), combat+automation %s", npc, tgt, sk ? "added" : "NOT added", a[8], f ? "on" : "FAILED");
+        return sk && f ? kROk : kRFailed;
+    }
     case kOpRead: {
         if (n != 4) return kRBadRequest;
         uint32_t eid = get_u32(a);
@@ -212,8 +234,17 @@ uint8_t handle(const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t
 }
 
 void tick() {
-    if (g_watch.empty()) return;
     const double now = now_s();
+    for (auto it = g_testFights.begin(); it != g_testFights.end();) {
+        if (now > it->until || !engine::entity_by_id(it->eid)) { it = g_testFights.erase(it); continue; }
+        if (now - it->last >= 0.25) {
+            it->last = now;
+            motion::NpcCombat c{};
+            if (motion::read_npc_combat(it->eid, &c) && !c.combat) motion::test_fight(it->eid);
+        }
+        ++it;
+    }
+    if (g_watch.empty()) return;
     if (now - g_lastSample < 0.1) return;
     g_lastSample = now;
     for (auto it = g_watch.begin(); it != g_watch.end();) {

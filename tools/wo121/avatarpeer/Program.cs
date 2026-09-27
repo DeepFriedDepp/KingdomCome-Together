@@ -26,7 +26,7 @@
 //                                              placed (on), refuse as busy, or report not-placed (fail)
 //   at <t> death                               (WO-131) a PlayerDeath (0x23): "I died"
 //   at <t> respawned <x> <y> <z>               (WO-131) a PlayerRespawned (0x3E), then stand there
-//   at <t> vitals <hp> <st>                    (WO-131) a PlayerState (0x1F): the owner's own health (hp > 0 clears
+//   at <t> vitals <hp> <st> [downed]           (WO-131; WO-132 downed = the unconscious bit 0x01) a PlayerState (0x1F): the owner's own health (hp > 0 clears
 //                                              the host's death tag, as a real joiner's vitals do); also sent
 //                                              every 2 s at 100/100 once `vitals` or `respawned` ran
 //   at <t> appearance mirror|<guid,...>        (WO-131) an Appearance (0x1A): the host's own item classes
@@ -116,6 +116,10 @@ static class P
                     if (t2 == Protocol.AppearanceDown && b2.Length >= 2 && b2[0] != myId) hostAppearance = b2.AsSpan(1).ToArray();   // [src][count][classes]
                     if (t2 == Protocol.Name && b2.Length >= 2 && b2[0] != myId) { joiner ??= b2[0]; }
                     else if (t2 == Protocol.Ghost && b2.Length >= 1 && b2[0] != myId) joiner ??= b2[0];
+                    else if (t2 == Protocol.PlayerHitDown && b2.Length == Protocol.PlayerHitDownPayloadLen)   // WO-132: an NPC's hit on my avatar, from the host
+                        Console.WriteLine(FormattableString.Invariant($"PEER t={recClock.Elapsed.TotalSeconds:F1} got NPC hit (0x22) hp={BinaryPrimitives.ReadSingleLittleEndian(b2):F2} st={BinaryPrimitives.ReadSingleLittleEndian(b2.AsSpan(4)):F2}"));
+                    else if (t2 == Protocol.DamageDown && b2.Length == Protocol.DamageDownPayloadLen)   // WO-132: the guid route (a second path per hit)
+                        Console.WriteLine(FormattableString.Invariant($"PEER t={recClock.Elapsed.TotalSeconds:F1} got GUID-ROUTE damage (0x13) from={b2[0]} soul={new Guid(b2.AsSpan(1, 16))} hp={BinaryPrimitives.ReadSingleLittleEndian(b2.AsSpan(21)):F2}"));
                     else if (t2 == Protocol.PlayerHitV8Down && PlayerHitV8.TryDecodeDown(b2, out byte att, out var h))
                         Console.WriteLine($"PEER got PlayerHit from ghost {att}: {h}");
                     else if (t2 == Protocol.ActionDown && inbox.Accept(b2, out _) is InboundAction ia)
@@ -136,6 +140,7 @@ static class P
         BodyState2? lastSent = null; double lastSentT = -9, lastPos = -9, lastPing = 0; int si = 0; bool placed = false, frozen = false;
         double lastT = 0;
         float vitalsHp = -1, vitalsSt = -1; double lastVitals = -9;   // WO-131
+        byte vitalsFlags = 0;   // WO-132: vitals <hp> <st> downed -> the unconscious bit (0x01), as a floored joiner sends
         // WO-114: the joiner's side of the leash (off until "leash on").
         bool leashOn = false; ushort leashFlags = Protocol.LeashFlagInWorld; string leashObey = "on";
         byte leashSeq = 0, leashResult = 0; ushort leashFrom = 0, leashTo = 0, leashRes = 0; double lastLeash = -9;
@@ -271,7 +276,8 @@ static class P
                         break;
                     case "vitals":   // WO-131
                         vitalsHp = F(f[1]); vitalsSt = F(f[2]); lastVitals = -9;
-                        Console.WriteLine($"PEER t={t:F1} vitals {vitalsHp}/{vitalsSt}");
+                        vitalsFlags = f.Length > 3 && f[3] == "downed" ? Protocol.PlayerStateFlagUnconscious : (byte)0;
+                        Console.WriteLine($"PEER t={t:F1} vitals {vitalsHp}/{vitalsSt}{(vitalsFlags != 0 ? " DOWNED" : "")}");
                         break;
                     case "death":   // WO-131
                     {
@@ -290,7 +296,7 @@ static class P
                         await Send(st, rp);
                         await Send(st, PositionCodec.BuildPosition(x, y, z, yaw, false, false, null, Ms()));
                         lastPos = t;
-                        vitalsHp = 100; vitalsSt = 100; lastVitals = -9;
+                        vitalsHp = 100; vitalsSt = 100; lastVitals = -9; vitalsFlags = 0;
                         Console.WriteLine(FormattableString.Invariant($"PEER t={t:F1} respawned at ({x:F1}, {y:F1}, {z:F1})"));
                         break;
                     }
@@ -351,6 +357,7 @@ static class P
                 var vp = new byte[3 + Protocol.PlayerStateUpPayloadLen]; vp[0] = Protocol.PlayerStateUp;
                 BinaryPrimitives.WriteUInt16LittleEndian(vp.AsSpan(1), (ushort)Protocol.PlayerStateUpPayloadLen);
                 BinaryPrimitives.WriteSingleLittleEndian(vp.AsSpan(3), vitalsHp); BinaryPrimitives.WriteSingleLittleEndian(vp.AsSpan(7), vitalsSt);
+                vp[11] = vitalsFlags;
                 await Send(st, vp);
             }
             if (!placed || frozen) { await Task.Delay(5); continue; }

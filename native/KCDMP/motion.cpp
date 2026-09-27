@@ -1117,6 +1117,18 @@ int status_text(char* out, int n) {
         g_engage.size(), c_engageHolds.load(), c_engageReleases.load());
 }
 
+bool test_fight(uint32_t eid) {
+    if (!g_combat) return false;
+    void* actor = actor_by_eid(eid);
+    void* ca = actor ? combat_actor_of(actor, true) : nullptr;
+    if (!ca) return false;
+    uint64_t r = 0;
+    if (!call_trystart(A.fnTryStart, ca, &r)) return false;
+    void* model = nullptr;
+    if (rd(ca, kCaModel, &model) && model) call_setflag(A.fnSetFlag, static_cast<char*>(model) + kModelFlags, kGuardRequestScope, 1);
+    return call_auto(A.fnAuto, g_autoCmdOn, ca, true);
+}
+
 bool player_block(bool on) {
     void* pca = g_playerCa.load();
     if (!g_combat || !pca || !A.fnSetBlock) return false;

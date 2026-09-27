@@ -340,6 +340,8 @@ static class P
                 {
                     if (t < nc.T0 || nc.OffSent) continue;
                     bool on = t < nc.T1;
+                    // back-to-back windows for one NPC: the next one takes over, no "off" in between
+                    if (!on && ncombats.Any(o => o != nc && o.Npc == nc.Npc && o.T0 <= t && t < o.T1)) { nc.OffSent = true; continue; }
                     if (on && t - nc.LastSent < 1.0) continue;
                     nc.LastSent = t;
                     var bits = on ? BodyState2Bits.CombatMode | (nc.Block ? BodyState2Bits.BlockHeld : 0) | (nc.Target != NpcCombatTarget.None ? BodyState2Bits.Locked : 0) : BodyState2Bits.None;

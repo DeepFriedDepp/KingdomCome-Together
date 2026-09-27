@@ -342,6 +342,28 @@ public partial class GameBridge
             var r = await _combat.Wo132Async(7, [(byte)(p[1] == "on" ? 1 : 0)]);
             Console.WriteLine($"MP-W132 check: player block {p[1]} -> {(r is { Ok: true } ? "set (SetBlockMode, no input)" : "FAILED")}");
         }
+        else if (p.Length == 2 && p[0] == "hostile" && p[1].StartsWith("wo132_", StringComparison.Ordinal))
+        {
+            // Live checks only, test NPCs only (the wo132_ prefix): the WO-17 hostile-donor faction attach
+            // on a spawned test soul, so it attacks the player's faction unprovoked (a real hostile).
+            Guid? g = await ResolveLocalSoulGuidAsync(p[1], CancellationToken.None);
+            (bool Ok, byte Reason) r = g is Guid gg ? await _combat.Wo131FactionAsync(gg, 1) : (false, (byte)255);
+            Console.WriteLine($"MP-W132 check: {p[1]} -> the hostile faction: {(r.Ok ? "attached" : $"FAILED (reason {r.Reason})")}");
+        }
+        else if (p.Length >= 3 && p[0] == "fight" && p[1].StartsWith("wo132_", StringComparison.Ordinal))
+        {
+            // fight <wo132_npc> host|avatar:N [override]: a test NPC (never a world NPC) fights that body.
+            uint npcEid = await _combat.Wo132WatchAsync(true, p[1]) ?? 0;
+            uint tgt = 0;
+            if (p[2].StartsWith("avatar:", StringComparison.Ordinal) && !_ghostEntityIds.TryGetValue(p[2][7..], out tgt)) { Console.WriteLine($"MP-W132 check: no avatar {p[2]}"); return; }
+            byte ovr = p.Length > 3 ? byte.Parse(p[3], CultureInfo.InvariantCulture) : (byte)1;
+            var a = new byte[9];
+            System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(a, npcEid);
+            System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(a.AsSpan(4), tgt);
+            a[8] = ovr;
+            var r = npcEid == 0 ? null : await _combat.Wo132Async(8, a);
+            Console.WriteLine($"MP-W132 check: {p[1]} fights {p[2]} (override {ovr}) -> {(r is { Ok: true } ? "on" : $"FAILED (reason {r?.Reason})")}");
+        }
         else if (p.Length == 2 && p[0] == "read")
         {
             uint eid = 0;
