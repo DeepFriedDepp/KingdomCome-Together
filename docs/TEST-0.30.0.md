@@ -100,6 +100,25 @@ Watch for these; note the time of anything that still looks like 0.29.9.
   **sunk into the ground** to the knees or more, note where (the village or
   road) and the time.
 
+## Staying together (the next build, not in 0.30.0)
+
+From the build after 0.30.0 the partner can't wander off on their own; the
+world is only alive around the host.
+
+* **600 m:** the partner sees "You're getting far from your host. Head back,
+  or you'll be brought back." The host sees "<partner> is getting far away."
+* **650 m:** "Bringing you back to your host in 10..." counts down. Walk back
+  inside and it stops. At zero the partner is put beside the host (off the
+  horse first; the horse stays where it was).
+* Nobody is brought back while dead, loading, talking, in a cutscene or in a
+  menu; the countdown waits and carries on after.
+* **Only the host fast-travels.** When the host arrives, the partner is
+  brought along ("Your host fast-travelled."). The partner's fast travel is
+  refused: "Only the host can fast travel in co-op."
+* A death wakes you near the other player, not at the same spot every time.
+* Host settings: `mp_leash on|off`, `mp_leash_warn_m`, `mp_leash_pull_m`
+  (please leave the distances as they are).
+
 ## 6. Play normally
 
 Ride, go into towns and houses, wander apart (far apart) and come back

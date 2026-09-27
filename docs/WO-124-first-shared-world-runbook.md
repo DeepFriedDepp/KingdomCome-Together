@@ -111,6 +111,20 @@ host's world (time, NPCs, quests).
 * Joiner console: `mp_henry_files` lists the host worlds your character is
   stored for.
 
+## Staying together (from the build after 0.30.0, WO-114)
+
+* The joiner past **600 m** from the host: a warning on both screens, once.
+* Past **650 m**: a 10 s countdown on the joiner's screen; back inside stops
+  it; at zero the joiner is put 3 m beside the host (dismounted first). Log:
+  `MP-LEASH pulled from=<m> to=<m> residual=<m>` (joiner), `MP-LEASH host:`
+  lines (host).
+* Never while either player is dead, loading, talking, in a cutscene or a
+  menu (the countdown waits, then resumes).
+* Only the host fast-travels: the joiner comes along on arrival; the joiner's
+  own fast travel is refused with a message.
+* Try it: the joiner rides away from the host past 650 m and waits; then the
+  host fast-travels once.
+
 ## Expected not to work yet
 
 * **No "back to the main menu"** in KCD2. If the host leaves, or a check

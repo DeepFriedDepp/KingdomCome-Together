@@ -30,8 +30,9 @@ decision unworkable reports that instead of editing it here.
 | fist knockdown | not a death: no grave, wake in place |
 | grave | lootable **by anyone for 3 in-game days**, then gone for everyone |
 | execution | a death: respawn outside that town + grave; **the crime is cleared** |
-| distance | **leash** (WO-114); no far-apart play |
-| respawn placement | pending WO-114's measured leash: wake at the nearest spot within the leash of the other player, else next to them |
+| distance | **leash** (WO-114): a warning at **600 m**, a 10 s countdown past **650 m**, then the joiner is brought beside the host (the maintainer's numbers; the host decides, the joiner is the one brought back); no far-apart play |
+| respawn placement | (WO-114) a death wakes at the spot nearest the other player within 600 m of them, at least 100 m from the death and not the same spot as last time; none: beside them. No partner: the nearest spot ≥ 100 m |
+| fast travel | (WO-114) **only the host fast-travels**; the joiner is brought along when the host arrives; the joiner's own fast travel is refused with a message |
 | friendly fire | **on by default**, host lever `mp_friendly_fire on/off`, session-wide; shipped in 0.29.0 (WO-121). A partner's fist knockdown is never a death |
 | pausing | **no pausing in a co-op session, either direction**: neither player's menu, dialogue or cutscene stops the other's world (planned) |
 | cutscenes | whether story cutscenes play for both at once belongs to quest sync (later) |
