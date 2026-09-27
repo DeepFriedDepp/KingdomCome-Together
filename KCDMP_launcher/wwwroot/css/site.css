@@ -38,7 +38,7 @@
 }
 
 body {
-    background-image: linear-gradient(rgba(var(--kcd-shadow-rgb), 0.7), rgba(var(--kcd-shadow-rgb), 0.7)), url('../img/kcd2_bg.jpg');
+    background-image: linear-gradient(rgba(var(--kcd-shadow-rgb), 0.7), rgba(var(--kcd-shadow-rgb), 0.7)), url('../img/background.jpg');   /* WO-134: the Kingdom Come: Together art (tools/Build-Branding.py) */
     background-size: cover;
     background-position: center;
     background-repeat: no-repeat;

@@ -50,6 +50,14 @@ art commit), tree clean, fast-forward only. No force-push.
 - Final live runs on the final build: H2 (drops 9/9; same-frame races; the slot
   item stays gone), J2 (a restore join after a full restart; the ledgers; drops
   9/9).
+- The maintainer's review of the installed 0.30.9 build: the desktop shortcut
+  still showed the old logo (Windows' icon cache: the exe kept its path) and the
+  taskbar clipped the small "KC" icon. Fixed: the shortcuts name `app.ico`
+  directly and Setup refreshes Explorer's icons; the small sizes put the letters
+  at 84 % of the width on a blended fill. At the maintainer's request the banner
+  header became the text title **Kingdom Come: Together**, and the new
+  `Banner3_Filter-background.png` replaced the launcher's page background.
+  Installer rebuilt.
 - `tools\Build-Installer.ps1`: the first run stopped at the agent unit tests
   (`Wo123Tests.Join_wire_table_is_consistent` had the join channel's range
   hard-coded to 0x5B); widened to 0x5F; the second run green end to end.

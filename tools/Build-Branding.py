@@ -1,13 +1,13 @@
 """Builds the sized copies of the "Kingdom Come: Together" art (WO-134 Phase 6a).
 
 The maintainer's originals stay in docs/branding/ only (15 MB each; never in the
-build): Logo_Filter.png (the square logo, 3256x3256) and Banner_Filter.png (the
-banner, 3840x2160). This writes:
+build): Logo_Filter.png (the square logo, 3256x3256), Banner_Filter.png (the
+banner, 3840x2160) and Banner3_Filter-background.png (the launcher's background,
+3840x2160). This writes:
 
-  KCDMP_launcher/wwwroot/img/banner-header.jpg  the launcher header: a strip of the
-                                                banner that keeps the whole title
-                                                ("Kingdom Come" + the TOGETHER plaque)
-                                                and the riders, 1920 wide
+  KCDMP_launcher/wwwroot/img/background.jpg     the launcher's page background,
+                                                1920x1080 (replaces kcd2_bg.jpg; the
+                                                title above the server list is text)
   KCDMP_launcher/wwwroot/img/logo-128.png       the square logo for the launcher's
                                                 status bar
   KCDMP_launcher/app.ico                        the window / taskbar / installer /
@@ -27,14 +27,13 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 B = os.path.join(ROOT, 'docs', 'branding')
 logo = Image.open(os.path.join(B, 'Logo_Filter.png')).convert('RGBA')
 banner = Image.open(os.path.join(B, 'Banner_Filter.png')).convert('RGB')
+background = Image.open(os.path.join(B, 'Banner3_Filter-background.png')).convert('RGB')
 
-# ---- the launcher header: rows 14%..62% of the banner (the title sits at 25%..52%)
-W, H = banner.size
-strip = banner.crop((0, int(H * 0.14), W, int(H * 0.62)))
-strip = strip.resize((1920, round(1920 * strip.size[1] / strip.size[0])), Image.LANCZOS)
-out = os.path.join(ROOT, 'KCDMP_launcher', 'wwwroot', 'img', 'banner-header.jpg')
-strip.save(out, 'JPEG', quality=84, optimize=True, progressive=True)
-print(out, strip.size, os.path.getsize(out), 'bytes')
+# ---- the launcher's page background
+bg = background.resize((1920, 1080), Image.LANCZOS)
+out = os.path.join(ROOT, 'KCDMP_launcher', 'wwwroot', 'img', 'background.jpg')
+bg.save(out, 'JPEG', quality=82, optimize=True, progressive=True)
+print(out, bg.size, os.path.getsize(out), 'bytes')
 
 # ---- README / tester pages
 web = banner.resize((1280, 720), Image.LANCZOS)
@@ -49,16 +48,25 @@ print(out, os.path.getsize(out), 'bytes')
 
 # ---- the icon
 L = logo.size[0]
-# The "KC" letters alone: x 13%..87%, y 16%..60% of the logo, centred on a dark
-# square of the logo's own night-blue (a square crop around them would take in the
-# top of the plaque, unreadable at these sizes).
-kc_rect = logo.crop((int(L * 0.13), int(L * 0.16), int(L * 0.87), int(L * 0.60)))
+# The "KC" letters alone (measured: the white letters span x 14%..86%, y 17%..61%
+# of the logo), with margin, centred on a dark square of the logo's own
+# night-blue at 84% of its width: edge to edge they were clipped on the taskbar
+# (maintainer's report). A square crop around them would take in the top of the
+# plaque, unreadable at these sizes.
+kc_rect = logo.crop((int(L * 0.10), int(L * 0.13), int(L * 0.90), int(L * 0.65)))
 def small(size):
-    sq = Image.new('RGBA', (size, size), (28, 32, 46, 255))
-    w = size; h = max(1, round(size * kc_rect.size[1] / kc_rect.size[0]))
+    from PIL import ImageFilter, ImageOps
+    # the background: the same crop, blurred, covering the square (no hard band)
+    big = 256
+    cover = ImageOps.fit(kc_rect, (big, big), Image.LANCZOS).filter(ImageFilter.GaussianBlur(24))
+    bg = Image.alpha_composite(cover, Image.new("RGBA", (big, big), (20, 24, 36, 200)))
+    # the letters: only the white pixels of the crop, at 84% of the width, centred
+    w = round(big * 0.84); h = round(w * kc_rect.size[1] / kc_rect.size[0])
     letters = kc_rect.resize((w, h), Image.LANCZOS)
-    sq.alpha_composite(letters, (0, (size - h) // 2))
-    return sq
+    lum = letters.convert('L').point(lambda v: 0 if v < 170 else min(255, (v - 170) * 4))
+    white = Image.new('RGBA', (w, h), (255, 255, 255, 255))
+    bg.paste(white, ((big - w) // 2, (big - h) // 2), lum)
+    return bg.resize((size, size), Image.LANCZOS)
 entries = []
 for size in (16, 24, 32, 48, 64, 128, 256):
     im = small(size) if size <= 32 else logo.resize((size, size), Image.LANCZOS)

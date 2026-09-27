@@ -69,6 +69,11 @@ OutputDir=..\release
 OutputBaseFilename=KingdomComeTogether-Setup-{#AppVersion}
 ; WO-134: the installer's own icon (the launcher's multi-size .ico, built by tools\Build-Branding.py)
 SetupIconFile=..\KCDMP_launcher\app.ico
+; WO-134: the exe keeps its path across the rename, so Windows' icon cache kept showing the
+; old logo on the upgraded shortcuts (maintainer's report). The shortcuts name app.ico
+; directly (a path the cache has not seen), and Setup tells Explorer to refresh icons at
+; the end (ChangesAssociations = SHChangeNotify(SHCNE_ASSOCCHANGED); nothing is registered).
+ChangesAssociations=yes
 Compression=lzma2/max
 SolidCompression=yes
 ArchitecturesAllowed=x64compatible
@@ -129,9 +134,9 @@ Source: "..\kdcmp\Data\kdcmp.pak"; DestDir: "{code:GetKdcmpTargetDir}\Data"; Fla
 [Icons]
 ; WorkingDir matters and is not decoration: settings.json is a bare relative
 ; filename in the launcher, so it lands wherever the process was started from.
-Name: "{group}\{#ShortcutName}"; Filename: "{app}\{#AppExeName}"; WorkingDir: "{app}"; Comment: "{#Disclaimer}"
+Name: "{group}\{#ShortcutName}"; Filename: "{app}\{#AppExeName}"; WorkingDir: "{app}"; IconFilename: "{app}\app.ico"; Comment: "{#Disclaimer}"
 Name: "{group}\Uninstall {#ShortcutName}"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\{#ShortcutName}"; Filename: "{app}\{#AppExeName}"; WorkingDir: "{app}"; Tasks: desktopicon; Comment: "{#Disclaimer}"
+Name: "{autodesktop}\{#ShortcutName}"; Filename: "{app}\{#AppExeName}"; WorkingDir: "{app}"; IconFilename: "{app}\app.ico"; Tasks: desktopicon; Comment: "{#Disclaimer}"
 
 [InstallDelete]
 ; WO-134: an upgrade from a build before the rename replaces its shortcuts, so the

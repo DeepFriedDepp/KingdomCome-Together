@@ -19,8 +19,8 @@ Not yet played by two people. The numbers are in `docs/WO-134-findings.md`
 
 ## The new name
 
-- The project is now **Kingdom Come: Together**: the launcher's window, banner,
-  logo and bottom bar, the installer, the Start menu and desktop shortcuts
+- The project is now **Kingdom Come: Together**: the launcher's window, title,
+  background art, icon, logo and bottom bar, the installer, the Start menu and desktop shortcuts
   ("Kingdom Come Together"), the entry in Windows' apps list, the in-game
   messages that name the mod, and the Discord hover text.
 - The installer is `KingdomComeTogether-Setup-<version>.exe`. It upgrades an

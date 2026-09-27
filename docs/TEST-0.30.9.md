@@ -25,9 +25,10 @@ carry on or stop, then send what section 7 lists.
   settings are still there. **Both** computers need it: 0.30.9 refuses every
   other version.
 * Open the launcher (the Start menu and desktop shortcut are now called
-  **Kingdom Come Together**). The window title says **Kingdom Come: Together**,
-  the banner is at the top, the bottom bar shows the logo and
-  **Kingdom Come: Together v 0.30.9** on both computers.
+  **Kingdom Come Together**). The window title and the title above the server
+  list say **Kingdom Come: Together** over the new background art; the icon on
+  the desktop, the Start menu and the taskbar is the new "KC" logo; the bottom
+  bar shows the logo and **Kingdom Come: Together v 0.30.9** on both computers.
 
 ## 2. Connect
 
