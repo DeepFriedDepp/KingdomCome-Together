@@ -210,6 +210,40 @@ Logs:
   `mp_loot_chests` (`off` = the 0.30.7 behaviour for that part). Counters
   every 60 s: `MP-WO134-STATS`.
 
+## The partner's avatar, knocked-out enemies, crouching, saves (from 0.40.0, WO-135)
+
+In plain words:
+
+* **Your saves must be from the Modding Tools build.** A character is only
+  brought into a world of the same game version. If all your saves come from
+  the regular game, the launcher says: "Your saves are from game version X, but
+  your host's game is version Y. Start or load a game in the Modding Tools
+  build and save once, then join again." Nothing is asked of the host until you
+  have one. If only Bring or only Start fresh can work, only that button shows.
+* **The partner's avatar is seen, never heard.** Enemies see and attack it and
+  guards notice it in a fight it is in, but it never speaks, never witnesses a
+  crime, never reacts, never blocks on its own: its guard and block are the
+  partner's own.
+* **Knocked-out enemies are shared.** One knocked out on the host's screen lies
+  in the same place on the partner's; either of you can loot it; it gets up on
+  both screens when the host's does. The partner's "kill" on a lying body is
+  done in the host's world by the partner's avatar.
+* **Crouching shows** on the other screen.
+* **Outfits** reach the other screen within a few seconds, fighting or not.
+
+Logs:
+
+* host kcd.log / native log: `WO135-QUIET body=kcd2mp_N group=... set`,
+  `WO135-DIALOG gate armed`, `WO135-DIALOG refused #n` (an avatar bark that never
+  started), `WO135-STANDUP avatar=` (a knocked-down avatar got up),
+  `WO135-TAKEDOWN host npc=... -> done`.
+* joiner: `WO135-KO npc=... knocked out|woken`, `WO135-TAKEDOWN ask|result`.
+* both: `WO135-CROUCH local crouch=1 (source: ...)`; agent `[appearance] ghost N:
+  +a -r (against its real equipped set of n)`; joiner agent `MP-HENRY joiner:
+  skipping N save(s) of game build ...`.
+* switches: `mp_avatar_quiet 0..15` (default 15), `mp_npc_ko_sync on|off`;
+  status `mp_w135_status`, counters every 60 s `MP-WO135-STATS`.
+
 ## Expected not to work yet
 
 * **No "back to the main menu"** in KCD2. If the host leaves, or a check
