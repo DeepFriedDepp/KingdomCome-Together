@@ -419,6 +419,10 @@ using FactionSetParent = void (*)(void* self, const void* shared_ptr_faction);
 // MUST be called on the game's main thread, same as apply_damage/apply_death.
 bool set_ghost_faction_hostile(const unsigned char ghost_guid[16], bool hostile);
 
+// WO-131 1d: re-parent the avatar's faction node onto the local player's own
+// faction (SoulList.PlayerSoul's FactionNode.Parent). Main thread. Read back.
+bool set_ghost_faction_player(const unsigned char ghost_guid[16]);
+
 // WO-43 Phase 1 (docs/WO-42-findings.md §9.5/§9.6, docs/WO-43-findings.md):
 // replicates C_ScriptBindHuman::PlayAnim's native mechanism directly --
 // resolve a C_Actor*, check the guard at actor[+0x28]->vtbl[0x80](), call

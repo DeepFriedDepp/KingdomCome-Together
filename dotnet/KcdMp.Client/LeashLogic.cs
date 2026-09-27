@@ -29,6 +29,8 @@ public sealed class LeashLogic
 {
     public const int CountdownSeconds = 10;
     public const float RearmMarginM = 50f;
+    /// <summary>WO-131 Phase 3: a running countdown is cancelled only back under PullM minus this (650 -> 630): no flapping on the line.</summary>
+    public const float CancelMarginM = 20f;
     public const int PullTimeoutMs = 12_000;
     public const int FailCooldownMs = 20_000;
     public const int MaxFailures = 3;
@@ -146,7 +148,7 @@ public sealed class LeashLogic
 
         if (_remainingMs is int rem)
         {
-            if (!hold.HasFlag(Hold.NoJoinerPosition) && d < _cfg.PullM)
+            if (!hold.HasFlag(Hold.NoJoinerPosition) && d < _cfg.PullM - CancelMarginM)
             {
                 _remainingMs = null; _holdNoted = Hold.None;
                 acts.Add(new Action(Act.Cancel, Note: "back-inside"));

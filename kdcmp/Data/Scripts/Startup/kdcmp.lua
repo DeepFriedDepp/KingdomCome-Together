@@ -4186,6 +4186,9 @@ end
 -- is the 0.26.3 behaviour (resume the moment the puppet drops).
 local function mp_wo102_release(name, why)
     if not KCD2MP._npcPaused[name] then return end
+    -- WO-131 1a: on a joiner under the copy guard a released copy is parked
+    -- (suspended + hidden), never resumed: a resumed copy is a free brain.
+    if KCD2MP_W131ParkReleased and KCD2MP_W131ParkReleased(name, why) then return end
     local dwell = (KCD2MP.wo1025 and KCD2MP.wo1025.resumeDwellS) or 0
     if dwell <= 0 then mp_wo102_resume(name, why); return end
     if not KCD2MP._npcResumePending[name] then
@@ -4198,6 +4201,7 @@ local function mp_wo102_resume_all(why)
     local names = {}
     for name in pairs(KCD2MP._npcPaused) do names[#names + 1] = name end
     for _, name in ipairs(names) do mp_wo102_resume(name, why) end
+    if KCD2MP_W131UnparkAll then KCD2MP_W131UnparkAll(why) end   -- WO-131
 end
 
 -- Every KCD2MP_NpcSyncTick (100 ms): dwell deadlines.
@@ -4247,6 +4251,7 @@ function KCD2MP_OnChainDeadRestart(key)
         mp_pause_log(name, "forget", "none", "chain-dead-restart", "?", at and (now - at) or 0)
     end
     KCD2MP._pauseStats.forgot = (KCD2MP._pauseStats.forgot or 0) + dwells
+    if KCD2MP.w131 then KCD2MP.w131.reassert = true end   -- WO-131: re-park on the next sweep
     local puppets = 0
     for pname, p in pairs(KCD2MP.npcPuppets or {}) do
         puppets = puppets + 1
@@ -4329,6 +4334,16 @@ local function mp_wo102_reconcile_pauses()
     for _, g in ipairs(gaps) do
         local name, reason, age = g[1], g[2], g[3]
         KCD2MP._pauseStats.gap = KCD2MP._pauseStats.gap + 1
+        -- WO-131 1a: the same rule for the safety net -- parked, never resumed.
+        local parkIt = KCD2MP_W131IsActive and KCD2MP_W131IsActive()
+        if parkIt then
+            if reason == "no-writes" then
+                local gp = KCD2MP.npcPuppets[name]
+                if gp then KCD2MP_NpcNativeSync(name, gp, nil, false, "pause-gap") end
+                KCD2MP.npcPuppets[name] = nil
+            end
+            KCD2MP_W131ParkReleased(name, "reconcile-" .. reason)
+        else
         mp_log(string.format("MP-PAUSE-GAP npc=%s reason=%s age_s=%.1f -- paused but not being written; resuming (WO-108 coverage-gap detector)",
             tostring(name), reason, age or 0))
         if reason == "no-writes" then
@@ -4338,6 +4353,7 @@ local function mp_wo102_reconcile_pauses()
         end
         mp_wo102_resume(name, reason == "untracked" and "reconcile" or "gap-no-writes")
         mp_log("WO102-AUTHORITY reconcile: resumed " .. tostring(name) .. " (paused but no longer a tracked puppet)")
+        end
     end
     if reload then
         KCD2MP._pauseReassertedAt = now
@@ -5396,6 +5412,7 @@ function KCD2MP_Wo114Countdown(n)
 end
 
 function KCD2MP_Wo114DrawUI()
+    pcall(KCD2MP_W131Backstop)   -- WO-131: give parked bodies back if the agent went silent
     local w = KCD2MP.w114
     -- A line queued while a menu held the timers (the map after a refused fast
     -- travel): shown now, for the usual 5 s, instead of expiring unseen.
@@ -5413,7 +5430,8 @@ end
 -- In a dialogue? On a horse? (the local player)
 function KCD2MP_Wo114BusyRead()
     local d, m = 0, 0
-    pcall(function() if player and player.human and player.human:IsInDialog() then d = 1 end end)
+    -- WO-131 Phase 3: a bark or chatter near a rider is not a dialogue hold.
+    if KCD2MP_W131InConversation and KCD2MP_W131InConversation() then d = 1 end
     pcall(function() if player and player.human and player.human:IsMounted() then m = 1 end end)
     if m == 0 and KCD2MP.isRiding then m = 1 end
     return d, m
@@ -5611,6 +5629,317 @@ function KCD2MP_ProbeNpcPause()
             end)
         end)
     end)
+end
+
+-- ===== WO-131: combat and bodies (docs/WO-131-findings.md) ======================
+-- One world, the host's. On the JOINER, every NPC of the host's world is either
+-- driven by the host's stream (a puppet) or suspended AND hidden ("parked"):
+-- its brain never runs here, and nothing of it can be fought, looted or robbed
+-- where the host's NPC is not. The 0.30.2 field split (a wandering NPC alive on
+-- the joiner 470 m from the host's copy, killed there, the kill forwarded)
+-- came from two gaps closed here:
+--   * a puppet whose stream went silent (the host culls past 60 m) was
+--     RESUMED after the 10 s dwell -- a free brain at a stale spot;
+--   * an NPC the host never streamed was never touched at all.
+-- Parked = wh_ai_PauseNPC + Hide(1). Hidden rather than parked in view: a
+-- parked body stands where the JOINER's world put it, which is not where the
+-- host's NPC is, so showing it would be a second, wrong copy (fought at, talked
+-- to, looted). The host streams every NPC within its cull radius of the joiner
+-- at full rate and out to w131.farBandM on a 2 s heartbeat, so the joiner still
+-- sees the host's real NPCs around it; only NPCs the host has elsewhere vanish.
+--
+-- Active only while the agent says so (KCD2MP_W131Tick, once a second): this
+-- machine connected, not the NPC authority, host authority on, a shared world.
+-- No tick for aliveTimeoutS (agent gone, crashed) -> everything is given back:
+-- unhidden and resumed. Horses and animals are left alone (a horse has a
+-- rider's own rules; animals are local herds, not host-owned NPCs).
+--
+--   WO131-GUARD park|unpark npc=<name> why=<w> [exec=ok|err]
+--   WO131-GUARD state=on|off why=<w> parked=<n>
+--   WO131-LOOT blocked npc=<name> kind=loot|pickpocket
+KCD2MP.w131 = {
+    guard = true,             -- mp_npc_guard on|off (the joiner copy guard)
+    guardRadiusM = 200.0,     -- the sweep radius around the joiner (the leash recorder's radius)
+    aliveTimeoutS = 10.0,     -- no agent tick for this long -> give everything back
+    joiner = false, shared = false, aliveAt = nil,
+    active = false,
+    parked = {},              -- name -> { at = os.clock(), why = }
+    reassert = false,         -- a load dropped every suspension and every Hide
+    logN = 0,
+    stats = { park = 0, unpark = 0, reassert = 0, sweeps = 0, released = 0, lootBlocked = 0 },
+    farBandM = 150.0,         -- host: past the cull radius, a 2 s heartbeat out to this (shared world)
+    lootBlock = true,         -- joiner: bodies and pockets of host-owned NPCs are the host's to loot
+    perceive = true,          -- host, shared world: avatars are never AI-ignorant
+}
+
+function KCD2MP_W131IsActive()
+    local w = KCD2MP.w131
+    if not (w.guard and w.joiner and w.aliveAt) then return false end
+    if (os.clock() - w.aliveAt) > w.aliveTimeoutS then return false end
+    if KCD2MP.hitSensorOn then return false end
+    if not (KCD2MP.wo102 and KCD2MP.wo102.authorityHost) then return false end
+    return w.shared == true
+end
+
+local function w131_log(line)
+    local w = KCD2MP.w131
+    w.logN = w.logN + 1
+    if w.logN <= 60 or (w.logN % 200) == 0 then mp_log(line) end
+end
+
+local function w131_body(name)
+    local e = nil
+    pcall(function() e = System.GetEntityByName(name) end)
+    return e
+end
+
+-- A host-owned NPC body of this world that the guard may park.
+function KCD2MP_W131Guardable(e)
+    if not e then return false end
+    local cls = e.class
+    if cls ~= "NPC" and cls ~= "NPC_Female" then return false end
+    if mp_is_mod_entity(e) then return false end
+    local name = nil
+    pcall(function() name = e:GetName() end)
+    if not name or not string.find(name, "^[%w_]+$") or mp_is_excluded_npc_name(name) then return false end
+    return true, name
+end
+
+local function w131_park(name, e, why)
+    local w = KCD2MP.w131
+    local ok, err = pcall(System.ExecuteCommand, "wh_ai_PauseNPC " .. tostring(name))
+    pcall(function() e:Hide(1) end)
+    w.parked[name] = { at = os.clock(), why = why }
+    w.stats.park = w.stats.park + 1
+    w131_log(string.format("WO131-GUARD park npc=%s why=%s exec=%s", name, tostring(why), ok and "ok" or ("err:" .. tostring(err))))
+end
+
+-- The puppet path's hook: the stream now drives this body -- show it again.
+-- The pause stays (the puppet start's own mp_wo102_pause re-issues it).
+function KCD2MP_W131Unpark(name, why)
+    local w = KCD2MP.w131
+    if not w.parked[name] then return false end
+    w.parked[name] = nil
+    local e = w131_body(name)
+    if e then pcall(function() e:Hide(0) end) end
+    w.stats.unpark = w.stats.unpark + 1
+    w131_log(string.format("WO131-GUARD unpark npc=%s why=%s", name, tostring(why)))
+    return true
+end
+
+-- The release hook (mp_wo102_release / the reconcile sweep): while the guard is
+-- active a copy the stream stopped driving is parked, never resumed. The
+-- engine suspension is already set; the name leaves the lever's own tables so
+-- nothing there resumes it later.
+function KCD2MP_W131ParkReleased(name, why)
+    if not KCD2MP_W131IsActive() then return false end
+    KCD2MP._npcResumePending[name] = nil
+    KCD2MP._npcPaused[name] = nil
+    local e = w131_body(name)
+    if not e then return true end
+    KCD2MP.w131.stats.released = KCD2MP.w131.stats.released + 1
+    w131_park(name, e, "released:" .. tostring(why))
+    return true
+end
+
+-- Everything back: unhidden and resumed (the guard went off, the agent left).
+function KCD2MP_W131UnparkAll(why)
+    local w = KCD2MP.w131
+    local n = 0
+    for name in pairs(w.parked) do
+        local e = w131_body(name)
+        if e then pcall(function() e:Hide(0) end) end
+        pcall(System.ExecuteCommand, "wh_ai_ResumeNPC " .. tostring(name))
+        n = n + 1
+    end
+    w.parked = {}
+    if n > 0 or w.active then
+        mp_log(string.format("WO131-GUARD state=off why=%s parked=%d -- given back (unhidden, resumed)", tostring(why), n))
+    end
+    w.active = false
+end
+
+local function w131_sweep()
+    local w = KCD2MP.w131
+    if not player then return end
+    local pp = nil
+    pcall(function() pp = player:GetWorldPos() end)
+    if not pp then return end
+    w.stats.sweeps = w.stats.sweeps + 1
+    -- Never while the player talks to someone: the conversation partner is left
+    -- as it is until the dialogue ends (the next sweep then decides).
+    local inDialog = false
+    pcall(function() inDialog = player.human and player.human:IsInDialog() == true end)
+    local ents = {}
+    pcall(function() ents = System.GetEntitiesInSphere(pp, w.guardRadiusM) or {} end)
+    for _, e in ipairs(ents) do
+        local ok, name = KCD2MP_W131Guardable(e)
+        if ok and not KCD2MP.npcPuppets[name] then
+            local parked = w.parked[name]
+            if not parked then
+                local dead = false
+                pcall(function() dead = e.actor and e.actor:IsDead() == true end)
+                -- A corpse has no brain to stop; its pockets are guarded by the loot rule.
+                if not dead and not inDialog then w131_park(name, e, "not-streamed") end
+            elseif w.reassert then
+                pcall(System.ExecuteCommand, "wh_ai_PauseNPC " .. tostring(name))
+                pcall(function() e:Hide(1) end)
+                w.stats.reassert = w.stats.reassert + 1
+            else
+                local hidden = true
+                pcall(function() hidden = e:IsHidden() == true end)
+                if not hidden then pcall(function() e:Hide(1) end) end
+            end
+        end
+    end
+    if w.reassert then
+        w.reassert = false
+        mp_log("WO131-GUARD reassert -- a load dropped every suspension and Hide; parked bodies around the joiner re-parked")
+    end
+    -- forget names whose entity is gone
+    for name in pairs(w.parked) do
+        if not w131_body(name) then w.parked[name] = nil end
+    end
+end
+
+-- The agent, once a second while in the world: (joiner, shared) = this machine
+-- is connected as a non-authority, and the session is the host's shared world.
+function KCD2MP_W131Tick(joiner, shared)
+    local w = KCD2MP.w131
+    w.joiner = joiner == true
+    w.shared = shared == true
+    w.aliveAt = os.clock()
+    pcall(KCD2MP_W131InstallLootBlock)
+    local now = KCD2MP_W131IsActive()
+    if now and not w.active then
+        w.active = true
+        mp_log("WO131-GUARD state=on -- every host-owned NPC here is the host's stream or parked (suspended + hidden)")
+    elseif not now and w.active then
+        KCD2MP_W131UnparkAll("inactive")
+    end
+    if w.active then pcall(w131_sweep) end
+end
+
+-- Liveness backstop from the 8 ms draw loop: the agent went away without a
+-- disconnect call (a crash) -> give everything back once the tick is stale.
+function KCD2MP_W131Backstop()
+    local w = KCD2MP.w131
+    if w.active and not KCD2MP_W131IsActive() then KCD2MP_W131UnparkAll("agent-silent") end
+end
+
+function KCD2MP_W131Status()
+    local w = KCD2MP.w131
+    local parked = 0
+    for _ in pairs(w.parked) do parked = parked + 1 end
+    local s = w.stats
+    mp_log(string.format("WO131-STATUS guard=%s active=%s joiner=%s shared=%s parked=%d park=%d unpark=%d released=%d reassert=%d sweeps=%d loot_blocked=%d perceive=%s far_band_m=%.0f",
+        w.guard and "on" or "off", tostring(w.active), tostring(w.joiner), tostring(w.shared), parked, s.park, s.unpark,
+        s.released, s.reassert, s.sweeps, s.lootBlocked, KCD2MP_W131Perceive() and "yes" or "no", w.farBandM))
+end
+
+-- mp_npc_guard on|off (default on). Off gives every parked body back at once.
+function KCD2MP_SetNpcGuard(arg)
+    local v = KCD2MP_Wo122ParseBool(arg)
+    if v == "bad" then mp_log("mp_npc_guard: expected on|off, got '" .. tostring(arg) .. "'"); return false end
+    if v ~= nil then
+        KCD2MP.w131.guard = v
+        if not v then KCD2MP_W131UnparkAll("mp_npc_guard off") end
+    end
+    KCD2MP_W131Status()
+    return true
+end
+
+-- ---- looting and pickpocketing (1c) ---------------------------------------------
+-- A joiner never takes items from a host-owned NPC: those items still exist on
+-- the host's copy, so taking them here would duplicate them. The game builds
+-- the interaction from BasicAIActions.OnLoot / OnPickpocketing each time the
+-- player looks at a body, so wrapping the two functions covers every body and
+-- every living NPC. Only while the guard is active; everything else (the
+-- host, solo, separate worlds, graves, animals, horses) calls straight through.
+function KCD2MP_W131LootAllowed(body, kind)
+    local w = KCD2MP.w131
+    if not (w.lootBlock and KCD2MP_W131IsActive()) then return true end
+    local ok, name = KCD2MP_W131Guardable(body)
+    if not ok then return true end
+    w.stats.lootBlocked = w.stats.lootBlocked + 1
+    mp_log(string.format("WO131-LOOT blocked npc=%s kind=%s -- host-owned; only the host loots for now", tostring(name), kind))
+    KCD2MP_ShowNativeToast(kind == "pickpocket" and "Only the host can pickpocket in co-op for now."
+                           or "Only the host can loot bodies in co-op for now.")
+    return false
+end
+
+function KCD2MP_W131InstallLootBlock()
+    if type(BasicAIActions) ~= "table" then return end
+    local w = KCD2MP.w131
+    if type(BasicAIActions.OnLoot) == "function" and BasicAIActions.OnLoot ~= w.lootWrap then
+        local orig = BasicAIActions.OnLoot
+        w.lootOrig = orig
+        w.lootWrap = function(self, user, slot)
+            if not KCD2MP_W131LootAllowed(self, "loot") then return end
+            return orig(self, user, slot)
+        end
+        BasicAIActions.OnLoot = w.lootWrap
+        mp_log("WO131-LOOT wrapped BasicAIActions.OnLoot")
+    end
+    if type(BasicAIActions.OnPickpocketing) == "function" and BasicAIActions.OnPickpocketing ~= w.pickWrap then
+        local orig = BasicAIActions.OnPickpocketing
+        w.pickOrig = orig
+        w.pickWrap = function(self, user, slot)
+            if not KCD2MP_W131LootAllowed(self, "pickpocket") then return end
+            return orig(self, user, slot)
+        end
+        BasicAIActions.OnPickpocketing = w.pickWrap
+        mp_log("WO131-LOOT wrapped BasicAIActions.OnPickpocketing")
+    end
+end
+
+-- ---- perception (1d) ------------------------------------------------------------
+-- On the host of a shared world an avatar is never AI-ignorant: the host's NPCs
+-- see the joiner all the time, not only for 30 s after an attributed hit. What
+-- keeps the avatar from barking, starting fights or reading as a crime victim
+-- when the players spar is unchanged: its combat automation is off natively and
+-- its crime/switch contexts stay set (motion.cpp kAvatarContexts,
+-- script_context.cpp's civic contexts). The agent also puts the avatar in the
+-- player's own faction (WO131-FACTION), so Henry's enemies are its enemies.
+function KCD2MP_W131Perceive()
+    return KCD2MP.w131.perceive and KCD2MP.hitSensorOn == true
+        and KCD2MP.w122 ~= nil and KCD2MP.w122.sharedWorld == true
+end
+
+function KCD2MP_GhostIgnorantWanted()
+    return KCD2MP.ghostsIgnorant == true and not KCD2MP_W131Perceive()
+end
+
+-- mp_avatar_perceive on|off (host; default on in a shared world).
+function KCD2MP_SetAvatarPerceive(arg)
+    local v = KCD2MP_Wo122ParseBool(arg)
+    if v == "bad" then mp_log("mp_avatar_perceive: expected on|off, got '" .. tostring(arg) .. "'"); return false end
+    if v ~= nil then KCD2MP.w131.perceive = v end
+    mp_log(string.format("WO131-PERCEIVE perceive=%s effective=%s -- %s", KCD2MP.w131.perceive and "on" or "off",
+        KCD2MP_W131Perceive() and "yes" or "no",
+        KCD2MP_W131Perceive() and "avatars are never AI-ignorant here (the host of a shared world)"
+                               or "avatars follow mp_ghost_ignorant (+30 s after an attributed hit)"))
+    pcall(KCD2MP_ReassertGhostIgnorance)
+    KCD2MP_EmitEvent("w131_cfg", string.format("perceive=%s", KCD2MP.w131.perceive and "on" or "off"))
+    return true
+end
+
+-- ---- the leash's dialogue hold (Phase 3) -----------------------------------------
+-- A conversation the player is IN: human:IsInDialog() AND the engine's
+-- conversation stand-in for the local player exists (DialogTwin_<player>,
+-- WO-90: the conversation camera hangs from it). A bark or nearby chatter can
+-- flip IsInDialog (field: on and off while riding past NPCs) but spawns no
+-- twin.
+function KCD2MP_W131InConversation()
+    local d = false
+    pcall(function() d = player and player.human and player.human:IsInDialog() == true end)
+    if not d then return false end
+    local pn = nil
+    pcall(function() pn = player:GetName() end)
+    if not pn then return false end
+    local twin = nil
+    pcall(function() twin = System.GetEntityByName("DialogTwin_" .. pn) end)
+    return twin ~= nil
 end
 
 -- ===== WO-102 Phase 6: NPC resync burst (the sleep / fast-travel / reload net) =====
@@ -6574,8 +6903,18 @@ function KCD2MP_NpcSyncTick()
                     if da < dCull then dCull = da end
                 end
                 if dCull > KCD2MP.wo1025.cullRadius then
-                    t.culled = true
-                    return
+                    -- WO-131 1a: in a shared world an owned NPC past the cull
+                    -- radius but inside w131.farBandM of a player still goes
+                    -- out on the 2 s heartbeat (and on death / life changes),
+                    -- so the joiner binds the host's real NPC there instead of
+                    -- parking a copy it cannot see the truth of.
+                    local band = KCD2MP.w131 and KCD2MP.w122 and KCD2MP.w122.sharedWorld and KCD2MP.w131.farBandM or 0
+                    local hbDue = not t.lastSentAt or (now - t.lastSentAt) >= KCD2MP.npcSync.heartbeatS
+                    if dCull > band or not (hbDue or (dead and not t.sentDead) or (ko ~= (t.sentKo or false))) then
+                        t.culled = true
+                        return
+                    end
+                    t.farBand = true
                 end
             end
             if t.culled then
@@ -7121,6 +7460,7 @@ function KCD2MP_ApplyNpcState(name, x, y, z, rot, hp, flags, src, seq, senderMs)
                      at = os.clock() - KCD2MP_NpcSmoothDelayS() } }
         KCD2MP.npcPuppets[name] = p
         mp_log("NPC-SYNC puppet start " .. name)
+        if KCD2MP_W131Unpark then KCD2MP_W131Unpark(name, "streamed") end   -- WO-131 1a: the stream drives it now
         p.owner, p.ownerSince = src, os.clock()
         mp_auth_log(name, "acquire", src == nil and "?" or src, "stream", 0)   -- WO-102
         mp_wo102_pause(name, p)   -- WO-102 Phase 4: no-op unless authorityHost + authorityPause
@@ -8546,7 +8886,7 @@ function KCD2MP_SpawnGhost(id, x, y, z, rotZ)
     -- failed SetIgnorant leaves the ghost's brain fully perceptive -- a real
     -- crime witness -- and no log line ever recorded whether the one
     -- spawn-time call actually ran (Thread C: the caught-stealing kill).
-    if KCD2MP.ghostsIgnorant then
+    if KCD2MP_GhostIgnorantWanted() then   -- WO-131: never on the host of a shared world
         local igOk, igErr = pcall(function() AI.SetIgnorant(entity.id, 1) end)
         System.LogAlways("[KCD2-MP] SetIgnorant at spawn for ghost " .. tostring(id)
             .. " ok=" .. tostring(igOk) .. (igOk and "" or (" err=" .. tostring(igErr))))
@@ -12999,13 +13339,16 @@ end
 -- same-value write as a no-op, and a FAILURE is logged once per ghost id so
 -- a field bundle finally shows whether this lever works when it matters.
 function KCD2MP_ReassertGhostIgnorance()
-    if not KCD2MP.ghostsIgnorant then return end
+    -- WO-131 1d: the host of a shared world keeps every avatar perceivable
+    -- (flag 0, re-asserted here too); otherwise the WO-59 rule as before.
+    local want = KCD2MP_GhostIgnorantWanted() and 1 or 0
+    if want == 0 and not KCD2MP_W131Perceive() then return end
     KCD2MP._ignorantFailLogged = KCD2MP._ignorantFailLogged or {}
     local engaged = KCD2MP.w121Engaged or {}
     for id, ghost in pairs(KCD2MP.ghosts) do
         -- WO-121 Phase 5: an avatar in an attributed engagement stays perceivable.
-        if ghost.entity and not engaged[tostring(id)] then
-            local ok, err = pcall(function() AI.SetIgnorant(ghost.entity.id, 1) end)
+        if ghost.entity and (want == 0 or not engaged[tostring(id)]) then
+            local ok, err = pcall(function() AI.SetIgnorant(ghost.entity.id, want) end)
             if not ok and not KCD2MP._ignorantFailLogged[id] then
                 KCD2MP._ignorantFailLogged[id] = true
                 System.LogAlways("[KCD2-MP] ReassertGhostIgnorance: SetIgnorant FAILED for ghost "
@@ -13033,7 +13376,7 @@ function KCD2MP_Wo121Engage(id, on)
         System.LogAlways("[KCD2-MP] WO121-ENGAGE ghost=" .. key .. " on=" .. tostring(on) .. " -- no ghost body")
         return
     end
-    local flag = (on or not KCD2MP.ghostsIgnorant) and 0 or 1
+    local flag = (on or not KCD2MP_GhostIgnorantWanted()) and 0 or 1   -- WO-131
     local ok, err = pcall(function() AI.SetIgnorant(g.entity.id, flag) end)
     System.LogAlways(string.format("[KCD2-MP] WO121-ENGAGE ghost=%s %s -> SetIgnorant(%d) ok=%s%s", key,
         on and "engaged" or "released", flag, tostring(ok), ok and "" or (" err=" .. tostring(err))))
@@ -13760,6 +14103,9 @@ local ok, err = pcall(function()
     -- WO-127: the leash recorder (off unless turned on; the tester page says: host, for the session).
     System.AddCCommand("mp_leash_trace",         'KCD2MP_SetLeashTrace(%line)',           "WO-127: record, once a second, every NPC within 200 m of either player and every simulation signal the game exposes cheaply, to a CSV beside agent.log (for WO-128): mp_leash_trace on|off; bare = report")
     -- WO-114: the leash (HOST values decide; default on, 600 m warning, 650 m pull).
+    System.AddCCommand("mp_npc_guard",           'KCD2MP_SetNpcGuard(%line)',             "WO-131 1a (JOINER): every NPC of the host's world is the host's stream or parked here (suspended + hidden) -- never a free copy: mp_npc_guard on|off (default on); bare = report")
+    System.AddCCommand("mp_avatar_perceive",     'KCD2MP_SetAvatarPerceive(%line)',       "WO-131 1d (HOST of a shared world): the partner's avatar is always perceivable by NPCs (never AI-ignorant) and in the player's faction: mp_avatar_perceive on|off (default on); bare = report")
+    System.AddCCommand("mp_w131_status",         'KCD2MP_W131Status()',                   "WO-131: the copy guard, loot block and perception state (WO131-STATUS in kcd.log)")
     System.AddCCommand("mp_leash",               'KCD2MP_SetLeash(%line)',                "WO-114: keep the joiner near the host (HOST only -- the host's value is the session's): a warning past mp_leash_warn_m, a 10 s countdown past mp_leash_pull_m, then the joiner is brought beside the host: mp_leash on|off (default on); bare = report")
     System.AddCCommand("mp_leash_warn_m",        'KCD2MP_SetLeashWarn(%line)',            "WO-114: the leash warning distance in metres (HOST; default 600; below mp_leash_pull_m): mp_leash_warn_m <metres>; bare = report")
     System.AddCCommand("mp_leash_pull_m",        'KCD2MP_SetLeashPull(%line)',            "WO-114: the leash pull distance in metres (HOST; default 650; above mp_leash_warn_m): mp_leash_pull_m <metres>; bare = report")

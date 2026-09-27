@@ -742,6 +742,16 @@ void step_executor(DWORD now) {
                 g_immuneUntil = now + kKnockdownImmuneMs;
                 logf("MP-RESPAWN targeting exclusion %s for %lu ms after the wake", ex ? "ON" : "UNAVAILABLE",
                      static_cast<unsigned long>(kKnockdownImmuneMs));
+                // WO-131 1g: a death ends the fight, as the knockdown always
+                // did -- the game's own StopFight on the player's skirmish, so
+                // the NPCs that were fighting drop it instead of chasing the
+                // woken player. Crime is not touched (its own rules).
+                if (g_x.kind == Kind::Death || g_x.kind == Kind::Execution) {
+                    void* ps = rttr::read_player_soul();
+                    const bool stopped = ps && actions::stop_fight(buffs::as_c_soul(ps) ? buffs::as_c_soul(ps) : ps);
+                    logf("WO131-STOPFIGHT the local player's death -> StopFight %s",
+                         stopped ? "sent to the player's skirmish" : (actions::stop_fight_available() ? "FAULTED" : "NOT armed"));
+                }
             }
             g_x.phase = Phase::Idle;
             g_floorHits = 0;

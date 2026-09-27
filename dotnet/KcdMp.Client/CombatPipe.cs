@@ -74,6 +74,8 @@ public sealed class CombatPipe : IAsyncDisposable
     private const byte LeashReply        = 0x8F;
     // WO-114 Phase 2: the other player's position for the death wake choice (respawn.h set_partner)
     private const byte SetPartner        = 0x20;   // [valid][x:4f][y:4f][z:4f][radius:4f] -> 0x81
+    private const byte Wo131             = 0x21;   // WO-131 [op][...] -> 0x98 [ok][seq][op][reason][payload] (native wo131.h)
+    private const byte Wo131Reply        = 0x98;
 
     private const int GuidLen = 16;
 
@@ -510,6 +512,94 @@ public sealed class CombatPipe : IAsyncDisposable
         var (body, _) = await SendAndAwaitAsync(JoinGuard, [], JoinGuardReply, ct);
         if (body is null || body.Length < 5 || body[0] != 1) return null;
         return (body[2] == 1, body[3] == 1, body[4] == 1);
+    }
+
+    // ---- WO-131 (native wo131.h) ---------------------------------------------
+
+    /// <summary>One WO-131 op: (ok, reason, payload after the 4-byte head), or null when the DLL did not answer.</summary>
+    public async Task<(bool Ok, byte Reason, byte[] Payload)?> Wo131Async(byte op, byte[] args, CancellationToken ct = default)
+    {
+        var p = new byte[1 + args.Length];
+        p[0] = op; args.CopyTo(p, 1);
+        var (body, _) = await SendAndAwaitAsync(Wo131, p, Wo131Reply, ct);
+        if (body is null || body.Length < 4) return null;
+        return (body[0] == 1, body[3], body.AsSpan(4).ToArray());
+    }
+
+    /// <summary>op 1: the joiner's hit gate facts for one NPC copy (null = no answer).</summary>
+    public async Task<Wo131HitCheck?> Wo131HitCheckAsync(Guid soul, string name, CancellationToken ct = default)
+    {
+        byte[] nb = Encoding.ASCII.GetBytes(name ?? "");
+        if (nb.Length == 0 || nb.Length > 63) return null;
+        var a = new byte[16 + 1 + nb.Length];
+        WriteSoulGuid(soul, a);
+        a[16] = (byte)nb.Length; nb.CopyTo(a, 17);
+        var r = await Wo131Async(1, a, ct);
+        if (r is not { Ok: true } ok || ok.Payload.Length < 13) return null;
+        var b = ok.Payload;
+        return new Wo131HitCheck(b[0] == 1, BinaryPrimitives.ReadUInt16LittleEndian(b.AsSpan(1)),
+            BinaryPrimitives.ReadSingleLittleEndian(b.AsSpan(3)), b[7], BinaryPrimitives.ReadSingleLittleEndian(b.AsSpan(8)),
+            b[12] == 0xFF ? null : b[12] == 1);
+    }
+
+    /// <summary>op 2: the copy guard (imm+upr) on an NPC copy by entity id; (ok, present-after).</summary>
+    public async Task<(bool Ok, bool Present, byte Reason)> Wo131CopyGuardAsync(bool on, uint eid, CancellationToken ct = default)
+    {
+        var a = new byte[5];
+        a[0] = B(on); BinaryPrimitives.WriteUInt32LittleEndian(a.AsSpan(1), eid);
+        var r = await Wo131Async(2, a, ct);
+        if (r is not { } v) return (false, false, 255);
+        return (v.Ok, v.Payload.Length > 0 && v.Payload[0] == 1, v.Reason);
+    }
+
+    /// <summary>op 3: set a copy's health to the host's (credited, never below 1); (ok, before, after).</summary>
+    public async Task<(bool Ok, float Before, float After, byte Reason)> Wo131FollowHpAsync(Guid soul, float hp, CancellationToken ct = default)
+    {
+        var a = new byte[20];
+        WriteSoulGuid(soul, a);
+        BinaryPrimitives.WriteSingleLittleEndian(a.AsSpan(16), hp);
+        var r = await Wo131Async(3, a, ct);
+        if (r is not { } v) return (false, -1, -1, 255);
+        if (!v.Ok || v.Payload.Length < 8) return (false, -1, -1, v.Reason);
+        return (true, BinaryPrimitives.ReadSingleLittleEndian(v.Payload), BinaryPrimitives.ReadSingleLittleEndian(v.Payload.AsSpan(4)), 0);
+    }
+
+    /// <summary>op 4: StopFight on a body's soul (eid 0 = the local player).</summary>
+    public async Task<(bool Ok, byte Reason)> Wo131StopFightAsync(uint eid, CancellationToken ct = default)
+    {
+        var a = new byte[4];
+        BinaryPrimitives.WriteUInt32LittleEndian(a, eid);
+        var r = await Wo131Async(4, a, ct);
+        return r is { } v ? (v.Ok, v.Reason) : (false, (byte)255);
+    }
+
+    /// <summary>op 5: put an avatar's health back to <paramref name="hp"/>; (ok, before, after).</summary>
+    public async Task<(bool Ok, float Before, float After, byte Reason)> Wo131RestoreHpAsync(uint eid, float hp, CancellationToken ct = default)
+    {
+        var a = new byte[8];
+        BinaryPrimitives.WriteUInt32LittleEndian(a, eid);
+        BinaryPrimitives.WriteSingleLittleEndian(a.AsSpan(4), hp);
+        var r = await Wo131Async(5, a, ct);
+        if (r is not { } v) return (false, -1, -1, 255);
+        if (!v.Ok || v.Payload.Length < 8) return (false, -1, -1, v.Reason);
+        return (true, BinaryPrimitives.ReadSingleLittleEndian(v.Payload), BinaryPrimitives.ReadSingleLittleEndian(v.Payload.AsSpan(4)), 0);
+    }
+
+    /// <summary>op 6: an avatar's faction (0 detach, 1 the hostile donor, 2 the player's faction).</summary>
+    public async Task<(bool Ok, byte Reason)> Wo131FactionAsync(Guid avatarSoul, byte mode, CancellationToken ct = default)
+    {
+        var a = new byte[17];
+        WriteSoulGuid(avatarSoul, a);
+        a[16] = mode;
+        var r = await Wo131Async(6, a, ct);
+        return r is { } v ? (v.Ok, v.Reason) : (false, (byte)255);
+    }
+
+    /// <summary>op 7: the native counters (text), or null.</summary>
+    public async Task<string?> Wo131StatusAsync(CancellationToken ct = default)
+    {
+        var r = await Wo131Async(7, [], ct);
+        return r is { Ok: true } v ? Encoding.ASCII.GetString(v.Payload) : null;
     }
 
     private static byte B(bool v) => v ? (byte)1 : (byte)0;

@@ -1,0 +1,201 @@
+// WO-131 -- see wo131.h.
+#include "wo131.h"
+
+#include <windows.h>
+#include <atomic>
+#include <cmath>
+#include <cstdio>
+#include <cstring>
+
+#include "buffs.h"
+#include "engine.h"
+#include "log.h"
+#include "npc_drive.h"
+#include "respawn_actions.h"
+#include "rttr_abi.h"
+
+namespace kcdmp::wo131 {
+namespace {
+
+constexpr size_t kActorGetSoul = 0x6E0;   // hits.cpp / motion.cpp
+constexpr const char* kGuardGuidText = "4b43444d-7121-4d67-b1a5-9e2f6d8c0a15";   // kcdmp_avatar_guard (buff__kcdmp.xml)
+
+template <class T> bool rd(const void* base, size_t off, T* out) {
+    __try { *out = *reinterpret_cast<const T*>(static_cast<const char*>(base) + off); return true; }
+    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+void* vslot(void* obj, size_t off) {
+    void* vt = nullptr; void* fn = nullptr;
+    if (!obj || !rd(obj, 0, &vt) || !vt || !rd(vt, off, &fn)) return nullptr;
+    return fn;
+}
+bool call_p0(void* fn, void* self, void** out) {
+    __try { *out = reinterpret_cast<void* (__fastcall*)(void*)>(fn)(self); return true; }
+    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+bool call_p1u(void* fn, void* self, uint32_t a, void** out) {
+    __try { *out = reinterpret_cast<void* (__fastcall*)(void*, uint32_t)>(fn)(self, a); return true; }
+    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+void* actor_by_eid(uint32_t eid) {
+    void* gi = engine::game_iface();
+    void* am = nullptr;
+    if (!gi || !rd(gi, 0x188, &am) || !am) return nullptr;
+    void* fn = vslot(am, 0x18);
+    void* actor = nullptr;
+    if (!fn || !call_p1u(fn, am, eid, &actor)) return nullptr;
+    return actor;
+}
+void* soul_of_eid(uint32_t eid) {
+    void* actor = actor_by_eid(eid);
+    void* fn = actor ? vslot(actor, kActorGetSoul) : nullptr;
+    void* soul = nullptr;
+    return fn && call_p0(fn, actor, &soul) ? soul : nullptr;
+}
+
+unsigned char g_guard[16]{};
+bool g_guardParsed = false;
+const unsigned char* guard_guid() {
+    if (!g_guardParsed) g_guardParsed = buffs::parse_guid(kGuardGuidText, g_guard);
+    return g_guardParsed ? g_guard : nullptr;
+}
+
+std::atomic<uint32_t> c_checks{0}, c_guardOn{0}, c_guardOff{0}, c_follow{0}, c_followCredit{0},
+                      c_stopFight{0}, c_restore{0}, c_faction{0}, c_fail{0};
+
+void put_f(uint8_t* p, float v) { std::memcpy(p, &v, 4); }
+float get_f(const uint8_t* p) { float v; std::memcpy(&v, p, 4); return v; }
+uint32_t get_u32(const uint8_t* p) { uint32_t v; std::memcpy(&v, p, 4); return v; }
+
+} // namespace
+
+uint8_t handle(const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t* outLen) {
+    *outLen = 0;
+    if (len < 1 || cap < 32) return kRBadRequest;
+    const uint8_t op = body[0];
+    const uint8_t* a = body + 1;
+    const size_t n = len - 1;
+    switch (op) {
+    case kOpHitCheck: {
+        if (n < 17 || n != static_cast<size_t>(17 + a[16]) || a[16] > 63) return kRBadRequest;
+        char name[64]{};
+        std::memcpy(name, a + 17, a[16]);
+        npcdrive::HitCheck hc{};
+        npcdrive::hit_check(name, &hc);
+        float hp = -1;
+        void* soul = rttr::find_soul_by_guid(a);
+        if (soul) rttr::soul_state(soul, "health", &hp);
+        int guarded = -1;
+        if (hc.eid && guard_guid() && buffs::ready()) {
+            void* cs = soul_of_eid(hc.eid);
+            if (cs) guarded = buffs::has(buffs::as_c_soul(cs) ? buffs::as_c_soul(cs) : cs, guard_guid());
+        }
+        c_checks.fetch_add(1);
+        const double ageMs = hc.ageS < 0 ? 65535.0 : hc.ageS * 1000.0;
+        const uint16_t age = static_cast<uint16_t>(ageMs > 65535.0 ? 65535.0 : ageMs);
+        out[0] = hc.bound ? 1 : 0;
+        std::memcpy(out + 1, &age, 2);
+        put_f(out + 3, hc.distM);
+        out[7] = hc.flags;
+        put_f(out + 8, hp);
+        out[12] = static_cast<uint8_t>(guarded < 0 ? 0xFF : guarded);
+        *outLen = 13;
+        return kROk;
+    }
+    case kOpCopyGuard: {
+        if (n != 5) return kRBadRequest;
+        const bool on = a[0] != 0;
+        const uint32_t eid = get_u32(a + 1);
+        if (!guard_guid() || !buffs::ready()) { c_fail.fetch_add(1); return kRUnarmed; }
+        void* soul = soul_of_eid(eid);
+        if (!soul) { c_fail.fetch_add(1); return kRNoActor; }
+        void* cs = buffs::as_c_soul(soul) ? buffs::as_c_soul(soul) : soul;
+        if (on) {
+            if (buffs::has(cs, guard_guid()) <= 0 && !buffs::add(cs, guard_guid())) { c_fail.fetch_add(1); return kRFailed; }
+            c_guardOn.fetch_add(1);
+        } else {
+            buffs::remove_all(cs, guard_guid());
+            c_guardOff.fetch_add(1);
+        }
+        out[0] = static_cast<uint8_t>(buffs::has(cs, guard_guid()) > 0 ? 1 : 0);
+        *outLen = 1;
+        return kROk;
+    }
+    case kOpFollowHp: {
+        if (n != 20) return kRBadRequest;
+        const float want = get_f(a + 16);
+        if (!std::isfinite(want) || want < 0) return kRBadRequest;
+        void* soul = rttr::find_soul_by_guid(a);
+        if (!soul) { c_fail.fetch_add(1); return kRNoSoul; }
+        float before = -1, after = -1;
+        if (!rttr::soul_state(soul, "health", &before)) { c_fail.fetch_add(1); return kRFailed; }
+        // Never below 1: the host's death comes as its own order (op 2 off, then
+        // ApplyDeath); a follow is never the thing that kills a copy.
+        const float target = want < 1.0f ? 1.0f : want;
+        if (std::fabs(target - before) < 0.5f) { put_f(out, before); put_f(out + 4, before); *outLen = 8; return kROk; }
+        if (target < before) { rttr::note_remote_damage(a, before - target); c_followCredit.fetch_add(1); }
+        if (!rttr::soul_set_state(soul, "health", target)) { c_fail.fetch_add(1); return kRFailed; }
+        rttr::soul_state(soul, "health", &after);
+        c_follow.fetch_add(1);
+        put_f(out, before); put_f(out + 4, after);
+        *outLen = 8;
+        return kROk;
+    }
+    case kOpStopFight: {
+        if (n != 4) return kRBadRequest;
+        const uint32_t eid = get_u32(a);
+        if (!actions::stop_fight_available()) { c_fail.fetch_add(1); return kRUnarmed; }
+        void* soul = eid == 0 ? rttr::read_player_soul() : soul_of_eid(eid);
+        if (!soul) { c_fail.fetch_add(1); return kRNoActor; }
+        void* cs = buffs::as_c_soul(soul) ? buffs::as_c_soul(soul) : soul;
+        const bool ok = actions::stop_fight(cs);
+        logf("WO131-STOPFIGHT eid=0x%X (%s) -> %s", eid, eid == 0 ? "the local player" : "a body", ok ? "called" : "FAILED");
+        if (!ok) { c_fail.fetch_add(1); return kRFailed; }
+        c_stopFight.fetch_add(1);
+        return kROk;
+    }
+    case kOpRestoreHp: {
+        if (n != 8) return kRBadRequest;
+        const uint32_t eid = get_u32(a);
+        const float want = get_f(a + 4);
+        if (!std::isfinite(want) || want <= 0) return kRBadRequest;
+        void* soul = soul_of_eid(eid);
+        if (!soul) { c_fail.fetch_add(1); return kRNoActor; }
+        void* cs = buffs::as_c_soul(soul) ? buffs::as_c_soul(soul) : soul;
+        float before = -1, after = -1;
+        rttr::soul_state(cs, "health", &before);
+        if (!rttr::soul_set_state(cs, "health", want)) { c_fail.fetch_add(1); return kRFailed; }
+        rttr::soul_state(cs, "health", &after);
+        c_restore.fetch_add(1);
+        put_f(out, before); put_f(out + 4, after);
+        *outLen = 8;
+        return kROk;
+    }
+    case kOpFaction: {
+        if (n != 17) return kRBadRequest;
+        const uint8_t mode = a[16];
+        bool ok = false;
+        if (mode == 2) ok = rttr::set_ghost_faction_player(a);
+        else ok = rttr::set_ghost_faction_hostile(a, mode == 1);
+        if (!ok) { c_fail.fetch_add(1); return kRFailed; }
+        c_faction.fetch_add(1);
+        return kROk;
+    }
+    case kOpStatus: {
+        char t[240];
+        int m = std::snprintf(t, sizeof(t),
+            "wo131 checks=%u guard_on=%u guard_off=%u follow=%u follow_credit=%u stopfight=%u restore=%u faction=%u fail=%u buffs=%s stopfight_armed=%s",
+            c_checks.load(), c_guardOn.load(), c_guardOff.load(), c_follow.load(), c_followCredit.load(), c_stopFight.load(),
+            c_restore.load(), c_faction.load(), c_fail.load(), buffs::ready() ? "ready" : "no", actions::stop_fight_available() ? "yes" : "no");
+        if (m < 0) m = 0;
+        if (static_cast<size_t>(m) > cap) m = static_cast<int>(cap);
+        std::memcpy(out, t, m);
+        *outLen = static_cast<size_t>(m);
+        return kROk;
+    }
+    default:
+        return kRBadRequest;
+    }
+}
+
+} // namespace kcdmp::wo131

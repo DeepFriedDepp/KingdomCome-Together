@@ -1529,6 +1529,66 @@ bool set_ghost_faction_hostile(const unsigned char ghost_guid[16], bool hostile)
     return true;
 }
 
+// WO-131 1d: the avatar joins the PLAYER's faction -- whatever the local
+// player's own faction node hangs from (read fresh from SoulList.PlayerSoul),
+// the avatar's orphan node is re-parented onto it, exactly the WO-16/17
+// attach with a different donor. Enemies of Henry are then enemies of the
+// avatar by the game's own relation tables. Read back like the attach above.
+bool set_ghost_faction_player(const unsigned char ghost_guid[16]) {
+    if (!g_walked || !g_souls) { logf("WO131-FACTION: no SoulList"); return false; }
+    Api api{};
+    if (!resolve(api)) { logf("WO131-FACTION: resolve incomplete"); return false; }
+    HMODULE rpg = GetModuleHandleA("RPGModule.dll");
+    if (!rpg) { logf("WO131-FACTION: RPGModule.dll not loaded"); return false; }
+    auto set_parent = reinterpret_cast<FactionSetParent>(
+        find_export(module_exports(rpg), "?SetParent@C_FactionBase@rpgmodule@wh@@"));
+    if (!set_parent) { logf("WO131-FACTION: SetParent export not found"); return false; }
+    void* ghost_soul = find_soul_by_guid(ghost_guid);
+    if (!ghost_soul) { logf("WO131-FACTION: avatar soul not found"); return false; }
+    void* donor_soul = read_player_soul();
+    if (!plausible_pointer(donor_soul)) { logf("WO131-FACTION: player soul unreadable"); return false; }
+    void* ghost_node = read_object_property(api, "wh::rpgmodule::Soul", ghost_soul, "FactionNode", g_layout);
+    void* donor_node = read_object_property(api, "wh::rpgmodule::Soul", donor_soul, "FactionNode", g_layout);
+    if (!plausible_pointer(ghost_node) || !plausible_pointer(donor_node)) {
+        logf("WO131-FACTION: faction node missing (avatar %p, player %p)", ghost_node, donor_node);
+        return false;
+    }
+    const std::string_view npcf{"wh::rpgmodule::NPCFaction"};
+    Type t_npcf{};
+    bool nok = false;
+    if (!call_get_by_name(api.get_by_name, &t_npcf, &npcf) ||
+        !call_is_valid(api.type_is_valid, &t_npcf, &nok) || !nok) {
+        logf("WO131-FACTION: NPCFaction type did not resolve");
+        return false;
+    }
+    const std::string_view par{"Parent"};
+    InstanceBuf ginst{}, dinst{};
+    ginst.build(g_layout, t_npcf, ghost_node);
+    dinst.build(g_layout, t_npcf, donor_node);
+    Variant parent_v{};
+    if (!call_get_property_value(api.get_property_value, &t_npcf, &parent_v, &par, dinst.bytes)) {
+        logf("WO131-FACTION: FAULT reading the player's faction Parent");
+        return false;
+    }
+    void* fp = nullptr;
+    std::memcpy(&fp, parent_v.data, sizeof(fp));
+    if (!plausible_pointer(fp)) {
+        logf("WO131-FACTION: the player's faction node has no parent -- nothing to join");
+        call_variant_dtor(api.variant_dtor, &parent_v);
+        return false;
+    }
+    call_set_parent(set_parent, ghost_node, parent_v.data);   // ownership passes to SetParent (WO-15)
+    Variant after_v{};
+    void* after_fp = nullptr;
+    if (call_get_property_value(api.get_property_value, &t_npcf, &after_v, &par, ginst.bytes)) {
+        std::memcpy(&after_fp, after_v.data, sizeof(after_fp));
+        call_variant_dtor(api.variant_dtor, &after_v);
+    }
+    logf("WO131-FACTION: avatar joined the player's faction %p -- read back %p (%s)", fp, after_fp,
+         after_fp == fp ? "match" : "MISMATCH");
+    return after_fp == fp;
+}
+
 // ---------------------------------------------------------------------------
 // Outbound detection by sampling
 // ---------------------------------------------------------------------------

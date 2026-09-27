@@ -30,6 +30,7 @@
     savelist.cpp
     join_native.cpp
     leash.cpp
+    wo131.cpp
 )
 
 target_include_directories(KCDMP PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

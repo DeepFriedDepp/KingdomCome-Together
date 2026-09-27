@@ -136,4 +136,12 @@ bool physics_status(void* e, PhysicsStatus* out);
 // seconds since the last accepted sample (-1 none), and whether it drives a body.
 bool stream_info(const char* name, double* ageS, bool* bound);
 
+// WO-131 1b: is a hit on this name's local body a hit on the host's NPC? Main
+// thread. bound = this DLL drives the body; ageS = seconds since the newest
+// accepted sample (-1 none); distM = the body's current position to that
+// newest sample, horizontal (-1 when there is no body or no sample); flags =
+// the newest sample's stream flags (bit 0 dead).
+struct HitCheck { bool bound = false; double ageS = -1; float distM = -1; uint8_t flags = 0; uint32_t eid = 0; };
+bool hit_check(const char* name, HitCheck* out);
+
 } // namespace kcdmp::npcdrive

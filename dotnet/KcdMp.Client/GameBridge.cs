@@ -1619,6 +1619,11 @@ public partial class GameBridge(ClientConfig config)
 
                 if (npcName is not null && !npcName.StartsWith("kcd2mp_", StringComparison.Ordinal))
                 {
+                    // WO-131 1b/1c: on a joiner, only a hit on the host's NPC where
+                    // the host has it goes out, and never as a kill.
+                    var (w131Send, w131Health, w131Fatal) = await Wo131GateOutboundAsync(soul, npcName, health, died);
+                    if (!w131Send) { _stats.DmgOutDropped++; return; }
+                    health = w131Health; died = w131Fatal;
                     await SendNpcDamageAsync(stream, npcName, stamina, health, suppressHitReaction: true, fatal: died,
                                              attributed: byPlayer && _npcAttribution);   // WO-121 Phase 5
                     if (byPlayer && _npcAttribution) _w121AttribOut++;
@@ -1645,6 +1650,14 @@ public partial class GameBridge(ClientConfig config)
                     // another, and nothing in a field log distinguished "this
                     // path fired and did nothing" from "this path never fired".
                     bool ghostTarget = npcName is not null;   // i.e. a kcd2mp_ body
+                    if (!ghostTarget && Wo131JoinerActive)
+                    {
+                        // WO-131 1b: a body the joiner cannot even name is never the host's NPC.
+                        _stats.DmgOutDropped++;
+                        Console.WriteLine(FormattableString.Invariant(
+                            $"MP-DMG dir=drop route=guid-fallback soul={soul} hp={health:F1} fatal={(died ? 1 : 0)} reason=wo131-unnamed-on-joiner"));
+                        return;
+                    }
                     if (!ghostTarget && !config.GuidDamageFallbackEnabled)
                     {
                         _stats.DmgOutDropped++;
@@ -1711,6 +1724,7 @@ public partial class GameBridge(ClientConfig config)
         Wo123OnConnect(stream, cts.Token);   // WO-123: the join (send the world, pause the host)
         Wo124OnConnect(stream, cts.Token);   // WO-124: the session mode, the joiner's side of the join
         Wo114OnConnect(stream, cts.Token);   // WO-114: the leash (host decides; joiner is brought back)
+        Wo131OnConnect(cts.Token);           // WO-131: combat and bodies (the copy guard, the hit gate, perception)
         _ = _combat.NpcConfigAsync(_nativeWriteOn, _nativeSenderClock, cts.Token);
         _ = RespawnHeartbeatAsync(stream, announceGraves: true, cts.Token);
         // WO-99 Phase 0: learn who the local player is before the first hit.
@@ -2210,6 +2224,7 @@ public partial class GameBridge(ClientConfig config)
             await Wo123OnDisconnectAsync();   // WO-123: a paused host resumes; a joiner's staging goes
             await Wo124OnDisconnectAsync();   // WO-124: a joiner in the host's world leaves it
             await Wo114OnDisconnectAsync();   // WO-114: the leash, the partner, the fast-travel block
+            await Wo131OnDisconnectAsync();   // WO-131: copy guards off, parked bodies given back
             _myOpenDrops.Clear();
             // WO-113: no relay, no session -- the DLL's guard stands down
             // (vanilla death), and every peer's mirror gravestone goes.
@@ -3580,6 +3595,7 @@ public partial class GameBridge(ClientConfig config)
             Console.WriteLine($"[npcdeath] in: '{npcName}' via {via} from ghost {sourceGhostId} -- no local soul answers to that name, cannot apply");
             return;
         }
+        await Wo131BeforeDeathAsync(npcName);   // WO-131 1c: the copy guard comes off for the host's death
         bool applied = false;
         try { applied = await _combat.ApplyDeathAsync(lg, ct); }
         catch (Exception ex) { Console.WriteLine($"[npcdeath] ApplyDeath threw for '{npcName}': {ex.Message}"); }
@@ -4756,6 +4772,7 @@ public partial class GameBridge(ClientConfig config)
                     string who = _ghostNames.TryGetValue(sourceId, out var rn) ? rn : $"player {sourceId}";
                     Console.WriteLine(FormattableString.Invariant(
                         $"[respawn] {who} respawned at ({rx:F1}, {ry:F1}, {rz:F1}) reason={Protocol.RespawnReasonName(payload[13])}"));
+                    _ = Wo131OnPeerDownOrUpAsync(sourceId, "respawned");   // WO-131 1g
                 }
                 else if (type == Protocol.GraveAddDown && payloadLen == Protocol.GraveAddDownPayloadLen)
                 {
@@ -4782,6 +4799,7 @@ public partial class GameBridge(ClientConfig config)
                     byte sourceId = payload[0];
                     string who = _ghostNames.TryGetValue(sourceId, out var dn) ? dn : $"player {sourceId}";
                     Console.WriteLine($"[death] {who} died and is reloading their own save");
+                    _ = Wo131OnPeerDownOrUpAsync(sourceId, "died");   // WO-131 1g
                     try
                     {
                         await ExecLuaAsync($"KCD2MP_SetGhostDead(\"{sourceId}\", true)");
@@ -4916,6 +4934,8 @@ public partial class GameBridge(ClientConfig config)
                                 Interlocked.Increment(ref _nativeHolds);
                                 _ = _combat.NpcHoldAsync(npcName, 900, ct);
                             }
+
+                            Wo131OnNpcSample(npcName, nhp, nDead);   // WO-131 1c: the copy's health follows the host's
 
                             string npcLua = string.Format(CultureInfo.InvariantCulture,
                                 "if KCD2MP_ApplyNpcState then KCD2MP_ApplyNpcState(\"{0}\",{1:F3},{2:F3},{3:F3},{4:F4},{5:F1},{6},{7},{8},{9}) end",
@@ -5466,6 +5486,7 @@ public partial class GameBridge(ClientConfig config)
             {
                 _npcEntityIds[niParts[0]] = (uint)npcRawId;
                 Console.WriteLine($"[npcsync] puppet {niParts[0]} entity id 0x{npcRawId:X} cached for native swings");
+                _ = Wo131OnPuppetAsync(niParts[0], (uint)npcRawId);   // WO-131 1c: the copy cannot die here
                 RefreshNpcEquipped(niParts[0]);
             }
             else
@@ -5563,6 +5584,9 @@ public partial class GameBridge(ClientConfig config)
             case "wo114_ft_try":
                 Wo114OnEvent(name, arg);
                 return;
+            case "w131_cfg":         // WO-131: mp_avatar_perceive
+                Wo131OnCfg(arg);
+                return;
         }
 
         var interactions = Interactions;
@@ -5601,7 +5625,8 @@ public partial class GameBridge(ClientConfig config)
                 }
                 var send = _sendPlayerHit;
                 if (send is null) break;
-                _ = send(hitGhostId, loss, 0f);
+                _ = send(hitGhostId, loss, 0f)
+                    .ContinueWith(_ => Wo131RestoreAvatarAsync(hitGhostId), TaskScheduler.Default);   // WO-131 1e
                 break;
             }
 
@@ -5644,6 +5669,7 @@ public partial class GameBridge(ClientConfig config)
                 string deadName = dp[0];
                 string deadHp   = dp.Length > 1 ? dp[1] : "?";
                 string deadSrc  = dp.Length > 2 ? dp[2] : "lua";
+                if (Wo131BlockLocalDeath(deadName)) break;   // WO-131 1c: the host decides deaths
                 var sendDeath = _sendNpcDeath;
                 if (sendDeath is null) break;
                 Console.WriteLine($"[npcdeath] out: mod observed '{deadName}' die locally (hp={deadHp}, seen by {deadSrc}) -- sending FATAL{CatchupTag()}");

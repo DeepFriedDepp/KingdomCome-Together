@@ -79,12 +79,13 @@ public class Wo114Tests
     }
 
     [Fact]
-    public void Back_inside_650_during_the_countdown_cancels_it()
+    public void Back_inside_during_the_countdown_cancels_it()
     {
+        // WO-131 Phase 3: "inside" for a running countdown is under 630 m (650 - 20).
         var l = New(); long t = 0;
         Run(l, ref t, 3000, 700);
         Assert.True(l.CountdownActive);
-        var a = Run(l, ref t, 250, 649.9);
+        var a = Run(l, ref t, 250, 629.9);
         Assert.Equal(Act.Cancel, Assert.Single(a).Kind);
         Assert.False(l.CountdownActive);
         Assert.Empty(Run(l, ref t, 20_000, 640));      // warned already, inside the pull line: quiet, no pull

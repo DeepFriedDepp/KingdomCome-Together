@@ -277,6 +277,9 @@ constexpr size_t  kLeashPageBudget    = 7000;
 // Atomic setter (locked), no main-thread hop; the pipe closing clears it.
 constexpr uint8_t kSetPartner         = 0x20;
 constexpr int     kSetPartnerLen      = 17;
+// WO-131: combat and bodies (wo131.h): [op][...] -> 0x98 [ok][seq][op][reason][payload]
+constexpr uint8_t kWo131              = 0x21;
+constexpr uint8_t kWo131Reply         = 0x98;
 constexpr uint8_t kSaveListReply      = 0x8D;   // [ok][seq][listed][idx:2][count:2][current][contPl][contIdx:2][nameLen][contName]
 constexpr uint8_t kLocalAction        = 0x96;   // unsolicited: [kind][phase][ic][zone][type][flags][guid:16][eid:4][nameLen][name]
 constexpr uint8_t kPvpHitOut          = 0x97;   // unsolicited: [victimEid:4][st:4f][hp:4f][flags][material]

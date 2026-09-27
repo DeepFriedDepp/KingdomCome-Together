@@ -1054,4 +1054,24 @@ bool stream_info(const char* name, double* ageS, bool* bound) {
     return true;
 }
 
+bool hit_check(const char* name, HitCheck* out) {
+    *out = HitCheck{};
+    if (!name || !*name) return false;
+    const std::string key = lower(name);
+    auto st = g_streams.find(key);
+    const bool haveSample = st != g_streams.end() && st->second.lastAcceptedAt > 0 && st->second.n > 0;
+    if (haveSample) { out->ageS = now_s() - st->second.lastAcceptedAt; out->flags = st->second.flags; }
+    auto b = g_bound.find(key);
+    if (b == g_bound.end()) return true;
+    out->bound = true;
+    out->eid = b->second.eid;
+    float pos[3]{};
+    if (haveSample && b->second.ent && read_pos(b->second.ent, pos)) {
+        const RingSample& r = st->second.ring[st->second.n - 1];
+        const float dx = pos[0] - r.x, dy = pos[1] - r.y;
+        out->distM = std::sqrt(dx * dx + dy * dy);
+    }
+    return true;
+}
+
 } // namespace kcdmp::npcdrive

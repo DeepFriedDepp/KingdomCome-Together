@@ -38,7 +38,9 @@ constexpr size_t kExpGetCrouch        = 0xF0;
 constexpr size_t kExpRequestJump      = 0x100;
 constexpr size_t kCaTryStartCombat    = 0x360;
 constexpr size_t kCaModel             = 0x2F0;
-constexpr size_t kCaOwnerEntity       = 0x2D8;
+constexpr size_t kCaOwnerEntity       = 0x2D8;   // the owning C_Actor (WO-42 s9.5), not a CEntity
+constexpr size_t kActorGetName        = 0x490;   // C_Actor vftable: GetName() -> const char*
+constexpr size_t kActorEntityId       = 0x30;    // C_Actor: the entity id (u32; WO-42 s4.4)
 constexpr size_t kModelFlags          = 0xEE8;   // the guard-request flag set; SetFlag(this, index, value)
 constexpr size_t kModelOpponent       = 0x1118;
 constexpr size_t kModelBlockMax       = 0x865;   // max over the five per-scope block-mode bytes
@@ -161,6 +163,8 @@ struct Anchors {
     void* const* vftExp = nullptr;
     void* const* vftCa = nullptr;
     void* const* vftCa8 = nullptr;   // WO-129: C_CombatActor's secondary base (+8): an interface pointer to it carries this vptr
+    void* const* vftCp = nullptr;    // WO-131: C_CombatPlayer, the PLAYER's combat actor (a C_CombatActor subclass, own vftables)
+    void* const* vftCp8 = nullptr;
     void* fnSetPseudo = nullptr, *fnSetCrouch = nullptr, *fnGetCrouch = nullptr, *fnRequestJump = nullptr;
     void* fnTryStart = nullptr, *fnAuto = nullptr, *fnSetFlag = nullptr;
     void* fnSetGuardZone = nullptr, *fnSetAtkZone = nullptr, *fnSetBlock = nullptr;
@@ -300,14 +304,36 @@ void* expansion_of(void* actor) {
 // offsets 0 and 8), so a pointer typed as that base is the object + 8 and
 // carries the +8 vptr; comparing it to the primary vftable (the WO-121 code)
 // rejects it. Nothing else is accepted.
+// WO-131: the player's own combat actor is a C_CombatPlayer (RTTI: a
+// C_CombatActor subclass with its own vftables at 0 and 8). The exact-vptr
+// test rejected it -- the field's `owner-not-a-combat-actor ...
+// CombatModule+0x612B28` IS C_CombatPlayer's primary vftable (resolved
+// offline from the COL), so no player swing was ever captured and
+// g_playerCa read null. Both classes are accepted now, nothing else.
 void* as_combat_actor(void* p) {
     if (!p) return nullptr;
-    if (is_a(p, A.vftCa)) return p;
-    if (A.vftCa8) {
-        void* base = static_cast<char*>(p) - 8;
-        if (is_a(p, A.vftCa8) && is_a(base, A.vftCa)) return base;
-    }
+    if (is_a(p, A.vftCa) || is_a(p, A.vftCp)) return p;
+    void* base = static_cast<char*>(p) - 8;
+    if (A.vftCa8 && is_a(p, A.vftCa8) && is_a(base, A.vftCa)) return base;
+    if (A.vftCp8 && is_a(p, A.vftCp8) && is_a(base, A.vftCp)) return base;
     return nullptr;
+}
+
+// WO-131: the class name behind a vptr, from its RTTI Complete Object Locator
+// (vptr[-1]: signature, offset, cdOffset, TD rva, CHD rva, self rva; the
+// module base = COL - self rva; the name is TD + 0x10). Logs only.
+bool rtti_name_of(const void* vptr, char* out, size_t n) {
+    if (!vptr || n < 2) return false;
+    const void* col = nullptr;
+    if (!rd(vptr, static_cast<size_t>(-8), &col) || !col) return false;
+    uint32_t sig = 0, tdRva = 0, selfRva = 0;
+    if (!rd(col, 0, &sig) || sig != 1 || !rd(col, 12, &tdRva) || !rd(col, 20, &selfRva)) return false;
+    const char* base = static_cast<const char*>(col) - selfRva;
+    const char* name = base + tdRva + 0x10;
+    size_t i = 0;
+    for (; i + 1 < n; ++i) { char ch = 0; if (!rd(name, i, &ch) || !ch) break; out[i] = ch; }
+    out[i] = 0;
+    return i > 0;
 }
 
 void* combat_actor_of(void* actor, bool create) {
@@ -348,7 +374,8 @@ void note_drop(std::atomic<uint32_t>& counter, const char* why, uint8_t cls, con
     if (counter.fetch_add(1) >= 2) return;
     void* vp = nullptr; rd(raw, 0, &vp);
     char d[64]{}; anchor::describe(vp, d, sizeof d);
-    logf("WO129-CAPTURE drop reason=%s class=%u owner_ptr_vptr=%s (C_CombatActor primary/+8 expected)", why, cls, d);
+    char rn[96]{}; if (!rtti_name_of(vp, rn, sizeof rn)) std::snprintf(rn, sizeof rn, "?");
+    logf("WO129-CAPTURE drop reason=%s class=%u owner_ptr_vptr=%s rtti=%s (C_CombatActor / C_CombatPlayer, primary or +8, expected)", why, cls, d, rn);
 }
 
 void capture(uint8_t cls, void* action) {
@@ -380,12 +407,26 @@ void capture(uint8_t cls, void* action) {
         c.eid = 0;
         (cls == kClsAttack ? c_capAttack : c_capOther).fetch_add(1);
     } else {
-        void* ent = nullptr;
-        if (!rd(ca, kCaOwnerEntity, &ent) || !ent) { note_drop(c_dropNoOwner, "no-owner-entity", cls, raw); return; }
-        const char* n = engine::entity_name(ent);
+        // WO-131: ca+0x2D8 is the owning C_ACTOR (WO-42 s9.5 round trip), not
+        // a CEntity -- engine::entity_name refused it on every NPC swing (the
+        // field's `no-owner-name ... CombatModule+0x5BF030`, a plain
+        // C_CombatActor), so npc_rows_out stayed 0. The name is C_Actor
+        // vtbl[0x490] GetName, the entity id the u32 at actor+0x30 (WO-42 s4.4),
+        // cross-checked against the entity system before it is trusted.
+        void* owner = nullptr;
+        if (!rd(ca, kCaOwnerEntity, &owner) || !owner) { note_drop(c_dropNoOwner, "no-owner-entity", cls, raw); return; }
+        uint32_t oeid = 0;
+        void* ent = rd(owner, kActorEntityId, &oeid) && oeid ? engine::entity_by_id(oeid) : nullptr;
+        const char* n = ent ? engine::entity_name(ent) : nullptr;
+        if (!n) {
+            void* fn = vslot(owner, kActorGetName);
+            void* np = nullptr;
+            if (fn && call_p0(fn, owner, &np)) n = static_cast<const char*>(np);
+            ent = nullptr;
+        }
         if (!n || !copy_cstr(n, c.name, sizeof(c.name)) || !c.name[0]) { note_drop(c_dropNoOwner, "no-owner-name", cls, raw); return; }
         if (_strnicmp(c.name, "kcd2mp_", 7) == 0 || _strnicmp(c.name, "DialogTwin_", 11) == 0) { c_capOurs.fetch_add(1); return; }   // never ours
-        c.eid = engine::entity_id(ent);
+        c.eid = ent ? engine::entity_id(ent) : oeid;
         c_capNpc.fetch_add(1);
     }
     std::lock_guard<std::mutex> lock(g_capMutex);
@@ -717,6 +758,8 @@ void install() {
     // ---- combat: C_CombatActor + the shipped test commands' Execute ------------
     A.vftCa = anchor::find_vftable(cm, ".?AVC_CombatActor@combatmodule@wh@@", 0);
     A.vftCa8 = anchor::find_vftable(cm, ".?AVC_CombatActor@combatmodule@wh@@", 8);
+    A.vftCp = anchor::find_vftable(cm, ".?AVC_CombatPlayer@combatmodule@wh@@", 0);
+    A.vftCp8 = anchor::find_vftable(cm, ".?AVC_CombatPlayer@combatmodule@wh@@", 8);
     A.fnTryStart = slot_fn(A.vftCa, kCaTryStartCombat);
     auto exec_of = [&](const char* rtti) -> const void* {
         void* const* v = anchor::find_vftable(cm, rtti, 0);

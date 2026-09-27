@@ -17,6 +17,7 @@
 #include "join_native.h"
 #include "savelist.h"
 #include "leash.h"
+#include "wo131.h"
 #include "log.h"
 
 #include <windows.h>
@@ -1067,6 +1068,25 @@ void serve(HANDLE h) {
             }
 
             // WO-127: the leash recorder (read-only; nothing runs unless the trace is on).
+            case kWo131: {
+                std::vector<uint8_t> copy(body, body + len);
+                struct R { uint8_t reason = kcdmp::wo131::kRFailed; uint8_t op = 0; uint8_t buf[256]{}; size_t n = 0; };
+                R r{};
+                bool faulted = false;
+                const bool ran = run_sync_bounded<R>(
+                    [copy](R& out) {
+                        out.op = copy.empty() ? 0 : copy[0];
+                        out.reason = kcdmp::wo131::handle(copy.data(), copy.size(), out.buf, sizeof(out.buf), &out.n);
+                    }, "Wo131", r, &faulted);
+                if (!ran) { r.reason = faulted ? kReasonTaskFaulted : kcdmp::wo131::kRFailed; r.n = 0; r.op = len ? body[0] : 0; }
+                BYTE rb[4 + 256]{};
+                rb[0] = (ran && r.reason == kcdmp::wo131::kROk) ? 1 : 0; rb[1] = seq; rb[2] = r.op; rb[3] = r.reason;
+                if (r.n) std::memcpy(rb + 4, r.buf, r.n);
+                EnterCriticalSection(&g_write_lock);
+                send_frame(h, kWo131Reply, rb, static_cast<uint16_t>(4 + r.n));
+                LeaveCriticalSection(&g_write_lock);
+                break;
+            }
             case kLeashSample: {
                 kcdmp::leash::Result page{};
                 uint8_t n = len >= 5 ? body[4] : 0;
