@@ -57,7 +57,8 @@ _spec.loader.exec_module(rsa)
 
 STAT_STORY = 8
 CHUNK_RAW = 32768          # every game-written block inflates to 32 KB (last one shorter)
-ZLIB_LEVEL = 5             # 0x78 0x5E header, as the game writes
+ZLIB_LEVEL = 3             # the game's CompressDataBlock level (0x78 0x5E header), WO-132
+BLOCK_BUFFER = 0x8000      # the engine's per-block buffer; a deflate not smaller than it is written stored
 
 # --------------------------------------------------------------------------
 # node paths (tuples of (tag, off, len), outermost first)
@@ -152,8 +153,13 @@ def quest_classes(tables):
 
 
 def inventory_items(rec_bytes):
-    """[(node, instance guid str, class guid str)] of the 0x1301/0x0007 list."""
-    ch = field_chain(rec_bytes, 0x1301, 0x0007)
+    """[(node, instance guid str, class guid str)] of the 0x1301/0x0007 list.
+    (None, []) when the record holds no item list: an early-game Henry the story
+    has stripped (WO-132), an empty inventory rather than a malformed record."""
+    try:
+        ch = field_chain(rec_bytes, 0x1301, 0x0007)
+    except ValueError:
+        return None, []
     lst = ch[-1]
     items = []
     for node in rsa.children(rec_bytes, lst[1] + 6, lst[1] + 6 + lst[2]) or []:
@@ -215,6 +221,10 @@ def build_henry(host_raw, join_raw, qclasses, quest_mode, report):
 
     # quest-class items
     ch, items = inventory_items(rec)
+    if ch is None:                 # no item list: nothing to strip (WO-132)
+        report['quest_items_removed_from_joiner'] = []
+        report['quest_items_added_from_host'] = []
+        return rec
     eq = equipped(rec)
     drop = [(n, inst, cls) for n, inst, cls in items if cls in qclasses]
     for n, inst, cls in drop:
@@ -269,7 +279,10 @@ def deflate(desc_bytes, raw, footer_tail):
     for i in range(0, len(raw), CHUNK_RAW):
         part = raw[i:i + CHUNK_RAW]
         z = zlib.compress(part, ZLIB_LEVEL)
-        out += struct.pack('<ii', len(z), len(part)) + z
+        if len(z) >= BLOCK_BUFFER:   # WO-132: the game's writer stores such a block
+            out += struct.pack('<ii', -1, len(part)) + part
+        else:
+            out += struct.pack('<ii', len(z), len(part)) + z
     footer = bytearray(b'0XBP' + bytes(16) + footer_tail)
     md5 = hashlib.md5(bytes(out) + bytes(footer)).digest()
     footer[4:20] = md5

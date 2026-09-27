@@ -26,19 +26,30 @@ namespace KcdMp.Client;
 /// byte loaded silently), so <see cref="Verify"/> is the only protection
 /// against a bad transfer and must run at every step that moves a save.
 ///
-/// One deliberate difference from the Python splicer: the zlib encoder. The
-/// Python tool compresses with CPython's zlib (zlib-ng 2.2.4 on 3.14) at
-/// level 5; .NET 8 ships a different zlib and no level-5 knob, so the blocks
-/// here are deflated at <see cref="CompressionLevel.Optimal"/>. Every byte of
-/// the INFLATED stream, the block framing (32 KB raw per block), the
-/// description header and the footer tail are identical to the Python
-/// output; only the compressed bytes differ (docs/WO-122-findings.md s5).
+/// WO-132: the block rules are the engine's own (code-verified in the 1.5.5
+/// build). The writer (CryAction, the save output chunk) deflates each 32 KB
+/// piece with <c>ISystem::CompressDataBlock</c> at level 3 and keeps the result
+/// only when it is SMALLER than 0x8000 bytes; otherwise it writes the piece
+/// STORED (<c>[-1][rawLen][raw]</c>). The reader
+/// (<c>C_SaveInputZlibStream::ReadBlock</c>) refuses a compressed length over
+/// 0x8000 ("Invalid savegame block size: compressed .., uncompressed ..,
+/// buffer ..") and a stored length over 0x8000, and inflates into a 0x8000
+/// buffer. The field's failed joins were incompressible AI chunks deflated to
+/// 32770/32775 bytes and written compressed anyway.
+///
+/// The zlib level differs from the game's: .NET 8 has no level-3 knob, so the
+/// blocks are deflated at <see cref="CompressionLevel.Optimal"/>. The reader
+/// inflates any valid zlib; the limits above are what it checks
+/// (docs/WO-132-findings.md s1). Every byte of the INFLATED stream, the block
+/// framing, the description header and the footer tail are the same as the
+/// Python splicer's output; only the compressed bytes differ.
 /// </summary>
 public static partial class WhsSave
 {
     public const string HenrySoul = "4c2dcffb-dea1-6263-72d7-b39f4db2d8b5";   // soul__player.xml player_henry
     public const int StatStory = 8;
     public const int ChunkRaw = 32768;   // every game-written block inflates to 32 KB (last one shorter)
+    public const int BlockBuffer = 0x8000;   // the engine's per-block buffer: compressed, stored and inflated sizes all fit in it
     public const int FooterLen = 64;
 
     public readonly record struct Node(ushort Tag, int Off, int Len)
@@ -69,6 +80,8 @@ public static partial class WhsSave
             int clen = BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan((int)pos));
             int rlen = BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan((int)pos + 4));
             if (rlen < 0) throw new InvalidDataException("negative block length");
+            // WO-132: what the engine's reader refuses ("Invalid savegame block size").
+            if (rlen > BlockBuffer) throw new InvalidDataException($"block size: uncompressed {rlen} > buffer {BlockBuffer}");
             if (clen == -1)
             {
                 if (pos + 8 + rlen > data.Length - FooterLen) throw new InvalidDataException("raw block overruns the footer");
@@ -77,10 +90,13 @@ public static partial class WhsSave
             }
             else
             {
-                if (clen < 0 || pos + 8 + clen > data.Length - FooterLen) throw new InvalidDataException("zlib block overruns the footer");
+                if (clen < 0) throw new InvalidDataException($"block size: compressed length {clen} is neither stored (-1) nor valid");
+                if (clen > BlockBuffer) throw new InvalidDataException($"block size: compressed {clen}, uncompressed {rlen}, buffer {BlockBuffer}");
+                if (pos + 8 + clen > data.Length - FooterLen) throw new InvalidDataException("zlib block overruns the footer");
                 using var zin = new ZLibStream(new MemoryStream(data, (int)pos + 8, clen, writable: false), CompressionMode.Decompress);
                 long before = outMs.Length;
                 zin.CopyTo(outMs);
+                if (outMs.Length - before > BlockBuffer) throw new InvalidDataException($"block size: inflates to {outMs.Length - before} > buffer {BlockBuffer}");
                 if (outMs.Length - before != rlen) throw new InvalidDataException("block inflates to a different length than its header says");
                 pos += 8 + clen;
             }
@@ -149,7 +165,12 @@ public static partial class WhsSave
         return buf;
     }
 
-    /// <summary>Re-deflate a stream as the game frames it: 32 KB raw per zlib block, then the re-signed footer.</summary>
+    /// <summary>
+    /// Re-deflate a stream as the game frames it: 32 KB raw per block, then the
+    /// re-signed footer. A block whose deflate is not smaller than
+    /// <see cref="BlockBuffer"/> is written stored, exactly as the game's writer
+    /// does (WO-132).
+    /// </summary>
     public static byte[] Deflate(byte[] descBytes, byte[] raw, byte[] footerTail)
     {
         if (footerTail.Length != 44) throw new ArgumentException("the footer tail is 44 bytes", nameof(footerTail));
@@ -168,10 +189,11 @@ public static partial class WhsSave
                 using (var zs = new ZLibStream(zms, CompressionLevel.Optimal, leaveOpen: true)) zs.Write(raw, i, n);
                 z = zms.ToArray();
             }
-            BinaryPrimitives.WriteInt32LittleEndian(head, z.Length);
+            bool stored = z.Length >= BlockBuffer;
+            BinaryPrimitives.WriteInt32LittleEndian(head, stored ? -1 : z.Length);
             BinaryPrimitives.WriteInt32LittleEndian(head[4..], n);
             ms.Write(head);
-            ms.Write(z);
+            if (stored) ms.Write(raw, i, n); else ms.Write(z);
         }
         var body = ms.ToArray();
         var md5 = FooterMd5(body, footerTail);
@@ -571,6 +593,18 @@ public static partial class WhsSave
         return chain;
     }
 
+    /// <summary>
+    /// WO-132: an inventory record may hold no item list at all (an early-game
+    /// Henry the story has stripped: 16 of 117 1.5.5 saves on the test machine).
+    /// That is an empty inventory, not a malformed record.
+    /// </summary>
+    private static bool HasItemList(byte[] rec)
+    {
+        if (!HasField(rec, 0x1301)) return false;
+        try { FieldChain(rec, 0x1301, 0x0007); return true; }
+        catch (InvalidDataException) { return false; }
+    }
+
     private static (List<Node> Chain, List<(Node Node, string Inst, string Cls)> Items) InventoryItems(byte[] rec)
     {
         var ch = FieldChain(rec, 0x1301, 0x0007);
@@ -632,7 +666,7 @@ public static partial class WhsSave
         else rec = AppendField(rec, 0x12FF, Payload(hrec, hr));
 
         // quest-class items: the joiner's always go (they belong to the joiner's world)
-        if (!HasField(rec, 0x1301)) return rec;   // no inventory record (WO-125: the engine-default Henry)
+        if (!HasItemList(rec)) return rec;   // no inventory record (WO-125: the engine-default Henry) or no item list (WO-132)
         var (ch, items) = InventoryItems(rec);
         var eq = Equipped(rec);
         var drop = items.Where(it => qclasses.ContainsKey(it.Cls)).ToList();
@@ -645,7 +679,7 @@ public static partial class WhsSave
         rep.QuestItemsRemoved = drop.Select(d => qclasses[d.Cls]).ToList();
         if (mode == QuestItemMode.Host)
         {
-            var (_, hitems) = InventoryItems(hrec);
+            var hitems = HasItemList(hrec) ? InventoryItems(hrec).Items : [];
             foreach (var h in hitems)
                 if (qclasses.ContainsKey(h.Cls)) { body.AddRange(NodeBytes(hrec, h.Node)); rep.QuestItemsAdded.Add(qclasses[h.Cls]); }
         }
@@ -697,7 +731,7 @@ public static partial class WhsSave
     private static HashSet<string> HenryItemSet(byte[] raw) => RecordItemSet(NodeBytes(raw, HenryChain(raw)[^1]));
 
     private static HashSet<string> RecordItemSet(byte[] rec) =>
-        HasField(rec, 0x1301) ? InventoryItems(rec).Items.Select(i => i.Inst).ToHashSet() : [];
+        HasItemList(rec) ? InventoryItems(rec).Items.Select(i => i.Inst).ToHashSet() : [];
 
     /// <summary>The spliced stream: the host's, with the joiner's Henry record and side blocks put in.</summary>
     public static byte[] SpliceStream(byte[] hostRaw, byte[] joinRaw, Dictionary<string, string> qclasses, QuestItemMode mode, SpliceReport rep) =>

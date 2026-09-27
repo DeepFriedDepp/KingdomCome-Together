@@ -63,11 +63,19 @@ def inflate(data):
     out = bytearray()
     while pos + 8 <= len(data) - 64:
         clen, rlen = struct.unpack_from('<ii', data, pos)
+        # WO-132: the engine's reader refuses any block over its 0x8000 buffer.
+        if rlen < 0 or rlen > 0x8000:
+            raise ValueError('block size: uncompressed %d > buffer 32768' % rlen)
         if clen == -1:
             out += data[pos + 8:pos + 8 + rlen]
             pos += 8 + rlen
         else:
-            out += zlib.decompress(data[pos + 8:pos + 8 + clen])
+            if clen < 0 or clen > 0x8000:
+                raise ValueError('block size: compressed %d, uncompressed %d, buffer 32768' % (clen, rlen))
+            part = zlib.decompress(data[pos + 8:pos + 8 + clen])
+            if len(part) != rlen:
+                raise ValueError('block inflates to %d, header says %d' % (len(part), rlen))
+            out += part
             pos += 8 + clen
     if pos != len(data) - 64:
         raise ValueError('blocks do not end at the 64-byte footer')
