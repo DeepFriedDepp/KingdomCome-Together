@@ -125,7 +125,7 @@ host's world (time, NPCs, quests).
 * Try it: the joiner rides away from the host past 650 m and waits; then the
   host fast-travels once.
 
-## Fights together (the next build, WO-131)
+## Fights together (from 0.30.5, WO-131)
 
 * **The joiner never runs NPCs of their own.** Every NPC of the host's world is
   driven by the host's stream or parked on the joiner (suspended + hidden).

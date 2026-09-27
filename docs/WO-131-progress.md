@@ -8,7 +8,8 @@ their reason, as they were made. Evidence marks: (observed), (code-verified),
 
 - `origin` = `DeepFriedDepp/KingdomCome-Together`, `main`, clean, level with
   `origin/main` at `1bf8aee` (observed).
-- **Version note.** The prompt names the current release 0.30.5; the repo's
+- **Version note.** (After the WO the maintainer named this build **0.30.5**;
+  `VERSION` set to it and the installer built locally.) Original note: The prompt names the current release 0.30.5; the repo's
   `VERSION` file reads **0.30.2** and `origin/main` has no 0.30.3–0.30.5
   commit (observed). No version was given for this WO, so `VERSION` is left
   exactly as it is and no installer is built.

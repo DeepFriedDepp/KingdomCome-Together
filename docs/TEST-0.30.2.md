@@ -63,10 +63,10 @@ Note the time of anything that does not match.
 * The other player's legs move when walking, running and sprinting.
 * A partner's death leaves a grave with their things.
 
-## 5b. Fights together (the next build, WO-131)
+## 5b. Fights together (0.30.5, not in 0.30.2)
 
-Not in 0.30.2: this is for the first build that carries WO-131. What changed,
-in plain words:
+Not in 0.30.2: from 0.30.5 (`docs/TEST-0.30.5.md`). What changed, in plain
+words:
 
 * **One world.** On the partner's screen you only see the host's people.
   Someone the host's world has somewhere else is not shown to the partner,
