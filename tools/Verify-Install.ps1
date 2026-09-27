@@ -123,7 +123,11 @@ $AsmMarkers = @(
     @{ File = 'KcdMpClient.dll'; Marker = 'MP-W132-STATS';          Owner = 'WO-132 damage safety / engagement (agent half)' },
     @{ File = 'KCDMP.dll';       Marker = 'WO132-LEAVEFIGHT';       Owner = 'WO-132 one soul leaves its skirmish (native)' },
     @{ File = 'KCDMP.dll';       Marker = 'WO132-ENGAGE';           Owner = 'WO-132 copy engagement on a joiner (native)' },
-    @{ File = 'KCDMP.dll';       Marker = 'WO132-HITS';             Owner = 'WO-132 NPC hits on avatars measured at the chokepoint (native)' }
+    @{ File = 'KCDMP.dll';       Marker = 'WO132-HITS';             Owner = 'WO-132 NPC hits on avatars measured at the chokepoint (native)' },
+    # WO-133: the old quest layer off in a shared world; only the host moves the clock.
+    @{ File = 'KcdMpClient.dll'; Marker = 'KCD2MP_Wo133Gate';       Owner = 'WO-133 shared-world quest gate (agent half)' },
+    @{ File = 'KcdMpClient.dll'; Marker = "only the host's clock moves the world"; Owner = 'WO-133 host drops joiner time skips' },
+    @{ File = 'KCDMP.dll';       Marker = 'WO133-PORTGATE';         Owner = 'WO-133 file-armed port trigger never fires in a session (native)' }
 )
 
 $PakMarkers = @(
@@ -173,7 +177,10 @@ $PakMarkers = @(
     @{ Marker = 'function KCD2MP_W131Tick';        Owner = 'WO-131 joiner copy guard' },
     @{ Marker = 'function KCD2MP_W131StandIn';     Owner = 'WO-131 stand-ins for host-only NPCs' },
     @{ Marker = 'function KCD2MP_W131LootAllowed'; Owner = 'WO-131 joiner loot block' },
-    @{ Marker = 'function KCD2MP_Wo129SharedAnchors'; Owner = 'WO-129 every player an NPC scan anchor' }
+    @{ Marker = 'function KCD2MP_Wo129SharedAnchors'; Owner = 'WO-129 every player an NPC scan anchor' },
+    # WO-133: the old quest layer is off in a shared world.
+    @{ Marker = 'function KCD2MP_Wo133Gate';       Owner = 'WO-133 shared-world quest gate (mod half)' },
+    @{ Marker = 'Quest catch-up is off in a shared world.'; Owner = 'WO-133 the plain refusal line' }
 )
 
 function Test-Assembly($dir, $label) {

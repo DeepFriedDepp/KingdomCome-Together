@@ -1,5 +1,8 @@
 ﻿#include "concept_read.h"
 #include "log.h"
+#include "pipe_server.h"
+#include "port_gate.h"
+#include "respawn.h"
 
 #include "pe_exports.h"
 #include "rttr_abi.h"
@@ -751,6 +754,17 @@ void port_watch() {
          req.action == PortAction::Probe ? "probe" :
          req.action == PortAction::Read  ? "read"  : "trigger",
          req.path, req.port, req.confirmed ? "  [FIRE]" : "");
+    if (req.action == PortAction::Trigger) {
+        // WO-133 (H3): never armed in a session. The request is consumed (lastSeen):
+        // it does not fire later either -- rewrite the file after the session to retry.
+        const PortGate g = port_trigger_gate(respawn::session_active(), pipe::connected());
+        if (g != PortGate::Allowed) {
+            logf("WO133-PORTGATE: REFUSING the file-armed trigger %s :: %s -- %s; "
+                 "kcdmp-concept.txt triggers are solo research only (probe/read still work)",
+                 req.path, req.port, port_gate_text(g));
+            return;
+        }
+    }
     port_op(req.path, req.port, static_cast<int>(req.action), req.confirmed);
 }
 

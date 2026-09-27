@@ -15097,6 +15097,7 @@ function KCD2MP_QuestProximityTick()
     Q.lastTickAt = now
 
     KCD2MP_QuestWindowTick(now)
+    if KCD2MP.w133 and KCD2MP.w133.on then return end   -- WO-133: no deferred offers, no approach announcements in a shared world
     if KCD2MP_QuestWaitingTick then pcall(KCD2MP_QuestWaitingTick, now) end   -- WO-96: deferred offers
 
     if not Q.enabled or not Q.current or not player then return end
@@ -15143,6 +15144,7 @@ function KCD2MP_QuestShowPrompt(ghostId, who, beat, diverged, reason)
         mp_log("QUEST-PROMPT refused: '" .. beat .. "' is not a registered main-quest beat")
         return false
     end
+    if KCD2MP_QuestSharedOff("QUEST-PROMPT") then return false end   -- WO-133
     if not Q.enabled then
         mp_log("QUEST-PROMPT suppressed (mp_quest_sync off): " .. beat)
         return false
@@ -15324,6 +15326,7 @@ function KCD2MP_QuestDivergence(ghostId, who, peerQuestLower, peerObj, localObj,
     who = tostring(who or ("player " .. ghostId))
     peerObj, localObj = tostring(peerObj or "?"), tostring(localObj or "?")
     hintBeat = tostring(hintBeat or ""):gsub("%s+", "")
+    if KCD2MP_QuestSharedOff("QUEST-DIVERGENCE") then return "shared-world" end   -- WO-133: no peer comparison, no WAITING_FOR_PEER
     if not Q.enabled then
         mp_log("QUEST-DIVERGENCE ignored (mp_quest_sync off): " .. who)
         return "off"
@@ -15460,6 +15463,17 @@ function KCD2MP_QuestObjectiveGap(ghostId, who, questKey, questTitle, theyHave, 
     questKey = tostring(questKey or ""):lower()
     theyHave, weHave = tostring(theyHave or ""), tostring(weHave or "")
     theyHaveSpec = tostring(theyHaveSpec or "")
+    -- WO-133: no quest-gap toasts in a shared world (the joiner's side compares
+    -- its solo save), and mp_quest_off stops them too (it did not before).
+    if KCD2MP_QuestSharedOff("QUEST-GAP") then Q.gap[ghostId] = nil; return "shared-world" end
+    if not Q.enabled then
+        if Q.gap[ghostId] then Q.gap[ghostId] = nil end
+        if (os.clock() - (Q._gapOffToldAt or -1e9)) >= 30.0 then
+            Q._gapOffToldAt = os.clock()
+            mp_log("QUEST-GAP ignored (mp_quest_sync off): " .. who)
+        end
+        return "off"
+    end
     local key = theyHave .. "|" .. weHave
     local prev = Q.gap[ghostId]
     if theyHave == "" and weHave == "" then
@@ -15565,6 +15579,9 @@ end
 
 -- F11 / F12 / mp_quest_yes / mp_quest_no.
 function KCD2MP_QuestAnswer(yes)
+    -- WO-133: every route to an answer (F11/F12, confirm/cancel/ui_accept/ui_cancel
+    -- in the accept set, mp_quest_yes/no) arrives here; none may act in a shared world.
+    if KCD2MP_QuestSharedOff(yes and "mp_quest_yes" or "mp_quest_no", true) then Q.prompt = nil; return false end
     if KCD2MP.cutsceneActive then
         -- WO-98 Phase 5: the console path (mp_quest_yes) can reach here mid-cutscene; a
         -- Haste trigger during a cutscene is the WO-97 hazard class. The offer is parked.
@@ -15592,6 +15609,8 @@ end
 -- hazard window. mp_quest_fire <quest>.<trigger> reaches this directly for
 -- the live probe.
 function KCD2MP_QuestFire(beat, who)
+    -- WO-133 (hazard H1): the one Haste write never runs in a shared world, on either machine.
+    if KCD2MP_QuestSharedOff("mp_quest_fire", true) then return false end
     beat = tostring(beat or "")
     if not KCD2MP_QuestIsRegistryBeat(beat) then
         mp_log("QUEST-CATCHUP refused: '" .. beat .. "' is not a registered main-quest beat")
@@ -15735,8 +15754,8 @@ function KCD2MP_QuestSetSync(arg)
     elseif s == "off" then Q.enabled = false; Q.prompt = nil
     elseif s ~= "" and s ~= "%line" then mp_log("mp_quest_sync: expected on|off, got '" .. s .. "'"); return end
     local ix = questIndex()
-    mp_log(string.format("QUEST sync is %s (%d main quests, %d fireable beats, radius %.0fm, window %.0fs, prompt gap %.0fs; current=%s level=%s; %d approaches, %d divergences, %d waits, %d fires, %d hazard lines)",
-        Q.enabled and "ON" or "OFF", ix.nQuests, ix.nBeats, Q.radius, Q.windowS, Q.promptGapS, tostring(Q.current), tostring(Q.level),
+    mp_log(string.format("QUEST sync is %s%s (%d main quests, %d fireable beats, radius %.0fm, window %.0fs, prompt gap %.0fs; current=%s level=%s; %d approaches, %d divergences, %d waits, %d fires, %d hazard lines)",
+        Q.enabled and "ON" or "OFF", (KCD2MP.w133 and KCD2MP.w133.on) and " but OFF in this shared world (WO-133)" or "", ix.nQuests, ix.nBeats, Q.radius, Q.windowS, Q.promptGapS, tostring(Q.current), tostring(Q.level),
         Q.approachN or 0, Q.divergeN or 0, Q.waitN or 0, Q.fireN or 0, Q.hazardN or 0))
 end
 -- WO-96: #KCD2MP_QuestSetGap(<seconds>) -- minimum interval between prompts per peer.
@@ -15796,7 +15815,65 @@ function KCD2MP_QuestTestPrompt(arg)
             if q.beats and q.beats[1] then beat = q.name .. "." .. q.beats[1].t; break end
         end
     end
+    if KCD2MP_QuestSharedOff("mp_quest_test_prompt", true) then return false end
     return KCD2MP_QuestShowPrompt("test", "TestPeer", beat, 1, "test")
+end
+
+-- ===== WO-133: the old quest layer is off in a shared world ==========================
+-- docs/WO-133-findings.md. The WO-90..99.5 quest layer was built for separate
+-- worlds; in one shared world it acts on the wrong world (WO-126A s2, s6.3):
+-- F11 / mp_quest_fire fire Haste into the world the host saves (H1), the
+-- joiner's divergence and QUEST-GAP compare its SOLO world. So while the agent
+-- says a shared-world session is running (mp_shared_world on, the host's mode
+-- on a joiner, a session up), the prompt, the keys, the mp_quest_* fires, the
+-- proximity announcements, divergence / WAITING_FOR_PEER and the gap toasts do
+-- nothing, on both machines. Outside one (solo, mp_shared_world off) nothing
+-- here changes anything. Kept for quest sync: the registry, the cutscene edge,
+-- the hazard window, FindNode, the wire kinds.
+KCD2MP.w133 = { on = false, role = "none", why = "", blockedN = 0, toldAt = {}, pushes = 0 }
+KCD2MP_W133_OFF_TEXT = "Quest catch-up is off in a shared world."
+
+-- Agent -> mod on every change and as a heartbeat (a restarted game's fresh Lua).
+function KCD2MP_Wo133Gate(on, role, why)
+    local w = KCD2MP.w133
+    local v = (on == true)
+    w.pushes = w.pushes + 1
+    w.role, w.why = tostring(role or "none"), tostring(why or "")
+    if w.on == v then return v end
+    w.on = v
+    if v then
+        -- anything the old layer had standing goes now: nothing of it may act from here on
+        local dropped = (Q.prompt and 1 or 0) + (Q.pendingPrompt and 1 or 0)
+        local waits = 0
+        for _ in pairs(Q.waiting or {}) do waits = waits + 1 end
+        Q.prompt, Q.pendingPrompt = nil, nil
+        Q.waiting, Q.gap = {}, {}
+        mp_log(string.format("WO133-GATE shared world (%s, %s): the old quest layer is OFF -- no catch-up prompt, F11/F12, mp_quest_* fires, approach announcements, divergence or quest-gap toasts (cleared: %d prompt, %d waiting)",
+            w.role, w.why, dropped, waits))
+    else
+        mp_log(string.format("WO133-GATE no shared world (%s): the old quest layer behaves as before", w.why))
+    end
+    return v
+end
+
+function KCD2MP_QuestSharedWorld()
+    return KCD2MP.w133.on == true
+end
+
+-- true (and one log line per piece per 30 s) when the gate holds. typed=true is a
+-- player's console command: it also gets the plain on-screen line.
+function KCD2MP_QuestSharedOff(what, typed)
+    local w = KCD2MP.w133
+    if not w.on then return false end
+    w.blockedN = w.blockedN + 1
+    local now = os.clock()
+    what = tostring(what or "?")
+    if typed or (now - (w.toldAt[what] or -1e9)) >= 30.0 then
+        w.toldAt[what] = now
+        mp_log(string.format("WO133-OFF %s refused: %s (role=%s, %d refused so far)", what, KCD2MP_W133_OFF_TEXT, w.role, w.blockedN))
+    end
+    if typed then pcall(KCD2MP_ShowInteractionMsg, KCD2MP_W133_OFF_TEXT) end
+    return true
 end
 
 -- Drawn from KCD2MP_DrawInteractionUI (the 8 ms label loop). Two lines below

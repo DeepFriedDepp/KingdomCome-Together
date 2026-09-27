@@ -850,6 +850,7 @@ public partial class GameBridge(ClientConfig config)
     private void OnModInitDetected()
     {
         _questRepushDue = true;
+        _w133PushDue = true;                       // WO-133: the shared-world quest gate, too
         _dmgGuard.InvalidatePlayerGuid();          // WO-99 Phase 0
         _dmgGuardIdentityAtUtc = DateTime.MinValue;
         Console.WriteLine("[quest] mod Lua (re)initialised -- standing divergences will be re-pushed on the next re-arm");
@@ -3155,7 +3156,8 @@ public partial class GameBridge(ClientConfig config)
         _localObjective = marker;
         Console.WriteLine($"[story] local objective -> {StoryBeat.Humanize(marker)}");
 
-        _ = _sendStoryBeat?.Invoke(Protocol.StoryBeatKindObjective, marker);
+        if (!Wo133WithholdMarker())   // WO-133: a joiner's marker is its solo world's
+            _ = _sendStoryBeat?.Invoke(Protocol.StoryBeatKindObjective, marker);
 
         foreach (var kv in _peerObjective)
             ReportStoryDivergence(kv.Key, kv.Value);
@@ -3169,7 +3171,8 @@ public partial class GameBridge(ClientConfig config)
 
         // WO-96 Phase 2: the marker line IS the engine writing an autosave;
         // read it once it has landed and tell peers our objective states.
-        _ = Task.Run(() => FingerprintAfterSaveAsync(marker));
+        if (!Wo133SkipFingerprint("send"))   // WO-133: not on a joiner in a shared world
+            _ = Task.Run(() => FingerprintAfterSaveAsync(marker));
     }
 
     // -------------------------------------------------------------------------
@@ -3201,6 +3204,7 @@ public partial class GameBridge(ClientConfig config)
     private void RepushQuestDivergences()
     {
         if (_localObjective is not string mine) return;
+        if (Wo133SharedWorld) return;   // WO-133: nothing to re-push in a shared world
         foreach (var kv in _peerObjective)
             if (!string.Equals(kv.Value, mine, StringComparison.Ordinal))
                 SendQuestDivergence(kv.Key, kv.Value);
@@ -3309,6 +3313,7 @@ public partial class GameBridge(ClientConfig config)
     /// </summary>
     private void ComparePeerFingerprint(byte ghostId, string text)
     {
+        if (Wo133SkipFingerprint("compare")) return;   // WO-133: the joiner's side would read its solo save
         try
         {
             var reg = QuestObjectiveRegistry.Embedded;
@@ -3367,6 +3372,7 @@ public partial class GameBridge(ClientConfig config)
         // fired three times across five divergence windows. The trigger is
         // now the divergence signal; the hint only refines the destination.
         _peerApproach[ghostId] = path;
+        if (Wo133SkipDivergence("approach")) return;   // WO-133
         string who = _ghostNames.TryGetValue(ghostId, out var dn) ? dn : $"player {ghostId}";
         bool diverged = _peerObjective.TryGetValue(ghostId, out var theirs)
                         && _localObjective is not null
@@ -3401,6 +3407,7 @@ public partial class GameBridge(ClientConfig config)
     {
         if (_localObjective is not string mine) return;
         if (string.Equals(mine, peerMarker, StringComparison.Ordinal)) return;
+        if (Wo133SkipDivergence("divergence -> mod")) return;   // WO-133
         string who = _ghostNames.TryGetValue(ghostId, out var dn) ? dn : $"player {ghostId}";
         string rel = "unknown";
         if (_lastSharedObjective.TryGetValue(ghostId, out var shared))
@@ -3456,6 +3463,7 @@ public partial class GameBridge(ClientConfig config)
     /// </summary>
     private void ReportStoryDivergence(byte ghostId, string peerMarker)
     {
+        if (Wo133SkipDivergence("divergence")) return;   // WO-133: no peer comparison, no WAITING_FOR_PEER
         string who = _ghostNames.TryGetValue(ghostId, out var dn) ? dn : $"player {ghostId}";
         string? line = StoryBeat.DescribeDivergence(_localObjective, peerMarker, who);
 
@@ -4267,6 +4275,7 @@ public partial class GameBridge(ClientConfig config)
             : "[role] this client no longer holds NPC->player damage authority");
         try { await ExecLuaAsync($"if KCD2MP_SetHitSensor then KCD2MP_SetHitSensor({(isAuthority ? "true" : "false")}) end"); }
         catch (Exception ex) { Console.WriteLine($"[role] could not tell the mod: {ex.Message}"); }
+        await Wo133TickAsync();   // WO-133: the role decides the shared-world quest gate; tell the mod now, not on the next tick
     }
 
     private async Task SendAppearanceAsync(Stream stream, Guid[] itemClasses, CancellationToken ct)
@@ -4484,7 +4493,7 @@ public partial class GameBridge(ClientConfig config)
                         // WO-90: and tell the new arrival where we are in the
                         // story. Checkpoints are rare enough that waiting for
                         // our next one could mean they never hear it.
-                        if (_localObjective is string mine)
+                        if (_localObjective is string mine && !Wo133WithholdMarker())   // WO-133
                             _ = _sendStoryBeat?.Invoke(Protocol.StoryBeatKindObjective, mine);
                     }
                     _peerLastSeenUtc[ghostId] = DateTime.UtcNow;   // WO-40 Phase 4: live-peer gate for reload convergence
@@ -4849,7 +4858,12 @@ public partial class GameBridge(ClientConfig config)
                     byte  tsPhase  = payload[1];
                     byte  tsKind   = payload[2];
                     uint  tsTime   = BinaryPrimitives.ReadUInt32LittleEndian(payload.AsSpan(3));
-                    if (tsPhase == Protocol.TimeSkipPhaseStart)
+                    if (Wo133DropTimeSkip(tsSource, tsPhase, tsKind, tsTime))
+                    {
+                        // WO-133 (H2): the host of a shared world ignores a joiner's skip --
+                        // not applied, and not remembered for reload convergence either.
+                    }
+                    else if (tsPhase == Protocol.TimeSkipPhaseStart)
                     {
                         string tsWho = _ghostNames.TryGetValue(tsSource, out var tsName) ? tsName : $"player {tsSource}";
                         Console.WriteLine($"[timeskip] {tsWho} began a skip (kind={tsKind})");
@@ -5372,7 +5386,9 @@ public partial class GameBridge(ClientConfig config)
         // Consumed regardless of interaction-session state, like time_now.
         if (name == "quest_approach")
         {
-            if (StoryBeat.IsValidBeatPath(arg))
+            if (Wo133SharedWorld)
+                Console.WriteLine($"[quest] approach {arg} not sent: the old quest layer is off in a shared world (WO-133)");
+            else if (StoryBeat.IsValidBeatPath(arg))
             {
                 Console.WriteLine($"[quest] approaching {arg} -- telling peers");
                 _ = _sendStoryBeat?.Invoke(Protocol.StoryBeatKindApproach, arg);

@@ -82,6 +82,7 @@ public partial class GameBridge
         _wo122Connected = false;
         _wo122Stream = null;
         if (_lockHeld) await Wo122SetLockAsync(false, "disconnect");
+        await Wo133OnDisconnectAsync();   // WO-133: the old quest layer is back outside a session
     }
 
     private async Task Wo122LoopAsync(CancellationToken ct)
@@ -105,6 +106,8 @@ public partial class GameBridge
                     await ExecLuaAsync("if KCD2MP_HostOnlyLock then KCD2MP_HostOnlyLock(false, \"agent-start\") end");
                 }
                 if (want) _lockSwept = true;
+
+                await Wo133TickAsync();   // WO-133: the shared-world quest gate to the mod
 
                 // Phase 3: the host's scheduled world save.
                 if (_sharedWorld && _combatRoleApplied && _isDamageAuthority && _autosaveMinutes > 0
