@@ -1,9 +1,9 @@
 """Builds the sized copies of the "Kingdom Come: Together" art (WO-134 Phase 6a).
 
 The maintainer's originals stay in docs/branding/ only (15 MB each; never in the
-build): Logo_Filter.png (the square logo, 3256x3256), Banner_Filter.png (the
-banner, 3840x2160) and Banner3_Filter-background.png (the launcher's background,
-3840x2160). This writes:
+build): Logo_Filter.png (the square logo, 3256x3256) and Banner_Filter.png (the
+banner, 3840x2160; also the launcher's background, the maintainer's choice). This
+writes:
 
   KCDMP_launcher/wwwroot/img/background.jpg     the launcher's page background,
                                                 1920x1080 (replaces kcd2_bg.jpg; the
@@ -29,7 +29,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 B = os.path.join(ROOT, 'docs', 'branding')
 logo = Image.open(os.path.join(B, 'Logo_Filter.png')).convert('RGBA')
 banner = Image.open(os.path.join(B, 'Banner_Filter.png')).convert('RGB')
-background = Image.open(os.path.join(B, 'Banner3_Filter-background.png')).convert('RGB')
+background = banner   # the maintainer's choice for the launcher (Banner3_Filter-background.png before)
 
 # ---- the launcher's page background
 bg = background.resize((1920, 1080), Image.LANCZOS)

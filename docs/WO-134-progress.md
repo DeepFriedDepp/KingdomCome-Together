@@ -60,7 +60,9 @@ art commit), tree clean, fast-forward only. No force-push.
   The README's header became the maintainer's text logo (`KCT_txt.png`, a
   900 px transparent copy). The stale header and old background images were
   also cleared from the launcher's publish folder, which had carried them into
-  the payload. Installer rebuilt.
+  the payload. Installer rebuilt. Then, at the maintainer's request, the
+  launcher's background became `Banner_Filter.png` instead of
+  `Banner3_Filter-background.png`; installer rebuilt again.
 - `tools\Build-Installer.ps1`: the first run stopped at the agent unit tests
   (`Wo123Tests.Join_wire_table_is_consistent` had the join channel's range
   hard-coded to 0x5B); widened to 0x5F; the second run green end to end.
@@ -75,7 +77,7 @@ art commit), tree clean, fast-forward only. No force-push.
 | static checks | console placeholders 7/7, Lua locals 6/6 |
 | native unit tests | 53/53 |
 | local publish + payload coherence + smoke | pass |
-| installer | `release\KingdomComeTogether-Setup-0.30.9.exe`, 95.5 MB, sha256 `677b01b20c5363883d6ea0a15626e32c609c1de64c9964171c79e4e6d6c86df6` (the last rebuild, after the review fixes) |
+| installer | `release\KingdomComeTogether-Setup-0.30.9.exe`, 95.5 MB, sha256 `8ef7e14cff32fcada6c060a3e1cf3e146b6802bc56b9111beea3aaf838bf29b4` (the last rebuild: the banner as the launcher background) |
 
 Outside the release gates: `Test-ItemSyncRelay` 11/11 (baseline). The WO-134
 markers are present in the built payload and the shipped pak (checked).
