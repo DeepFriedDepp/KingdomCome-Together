@@ -61,9 +61,19 @@ public class Wo133Tests
     {
         bool host = Wo133Rules.HostOfSharedWorld(roleKnown: true, isHost: true, localShared: true);
         Assert.True(host);
-        Assert.True(Wo133Rules.DropInboundTimeSkip(host, sourceGhostId: 2, myGhostId: 1));
-        Assert.True(Wo133Rules.DropInboundTimeSkip(host, sourceGhostId: 3, myGhostId: 1));
-        Assert.False(Wo133Rules.DropInboundTimeSkip(host, sourceGhostId: 1, myGhostId: 1));   // an echo of our own
+        Assert.True(Wo133Rules.DropInboundTimeSkip(host, false, -1, sourceGhostId: 2, myGhostId: 1));
+        Assert.True(Wo133Rules.DropInboundTimeSkip(host, false, -1, sourceGhostId: 3, myGhostId: 1));
+        Assert.False(Wo133Rules.DropInboundTimeSkip(host, false, -1, sourceGhostId: 1, myGhostId: 1));   // an echo of our own
+    }
+
+    [Fact]
+    public void A_joiner_of_a_shared_world_applies_only_the_hosts_skips()
+    {
+        // host = ghost 0, this joiner = ghost 1, another joiner = ghost 2
+        Assert.False(Wo133Rules.DropInboundTimeSkip(false, joinerInSharedWorld: true, hostGhostId: 0, sourceGhostId: 0, myGhostId: 1));
+        Assert.True(Wo133Rules.DropInboundTimeSkip(false, joinerInSharedWorld: true, hostGhostId: 0, sourceGhostId: 2, myGhostId: 1));
+        // the host's id not known yet: as before (nothing to tell them apart by)
+        Assert.False(Wo133Rules.DropInboundTimeSkip(false, joinerInSharedWorld: true, hostGhostId: -1, sourceGhostId: 2, myGhostId: 1));
     }
 
     [Fact]
@@ -72,6 +82,6 @@ public class Wo133Tests
         Assert.False(Wo133Rules.HostOfSharedWorld(roleKnown: true, isHost: false, localShared: true));   // the joiner applies the host's skips
         Assert.False(Wo133Rules.HostOfSharedWorld(roleKnown: true, isHost: true, localShared: false));   // mp_shared_world off: any player's sleep counts
         Assert.False(Wo133Rules.HostOfSharedWorld(roleKnown: false, isHost: true, localShared: true));   // no session yet
-        Assert.False(Wo133Rules.DropInboundTimeSkip(false, sourceGhostId: 2, myGhostId: 1));
+        Assert.False(Wo133Rules.DropInboundTimeSkip(false, false, 0, sourceGhostId: 2, myGhostId: 1));   // separate worlds: any player's sleep counts
     }
 }

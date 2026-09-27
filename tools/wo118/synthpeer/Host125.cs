@@ -20,6 +20,7 @@
 //       leash pull [fast]         ... a pull beside the host's position (fast = the fast-travel reason)
 //       leash config on|off <warn> <pull>
 //       timeskip <worldTime>      (WO-114) a fast-travel time skip (TimeSkip start + done, kind fast-travel)
+//       story objective|fingerprint|approach <text>   (WO-133) a StoryBeatUp (0x37) of that kind
 //     [reseed] = a synthetic seed (hex) written into the save's body 0x01FB, re-signed: a second
 //     "playthrough" made from a copy. Files are COPIES of real host saves; never logged by path.
 //
@@ -241,6 +242,16 @@ static class Host125
                                     await W(pk);
                                 }
                                 Say($"TIMESKIP fast-travel start + done t={wt} sent");
+                                break;
+                            }
+                            case "story":   // WO-133: story objective|fingerprint|approach <text>
+                            {
+                                byte sk = p[1] switch { "fingerprint" => Protocol.StoryBeatKindFingerprint, "approach" => Protocol.StoryBeatKindApproach, _ => Protocol.StoryBeatKindObjective };
+                                var body = StoryBeat.BuildUpPayload(sk, string.Join(' ', p.Skip(2)));
+                                var sp = new byte[3 + body.Length]; sp[0] = Protocol.StoryBeatUp;
+                                BinaryPrimitives.WriteUInt16LittleEndian(sp.AsSpan(1), (ushort)body.Length); body.CopyTo(sp, 3);
+                                await W(sp);
+                                Say($"STORY {p[1]} sent ({body.Length} bytes)");
                                 break;
                             }
                             case "leave":

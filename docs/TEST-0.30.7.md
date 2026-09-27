@@ -106,6 +106,11 @@ Note the time of anything that does not match.
 Ride, go into towns and houses, trade, talk. Please do **not** attack
 townsfolk.
 
+**Don't press F11 or F12** outside a dice match, and don't type any
+`mp_quest_…` command. In 0.30.7 the old quest catch-up behind those keys can
+still jump the story forward in the host's world, and that goes into the
+host's saves. The next installer switches it off in a shared world.
+
 When you finish: `mp_leash_trace off` on both (or just quit; the file is
 kept).
 

@@ -31,6 +31,9 @@
 //                                              every 2 s at 100/100 once `vitals` or `respawned` ran
 //   at <t> appearance mirror|<guid,...>        (WO-131) an Appearance (0x1A): the host's own item classes
 //                                              as last received (mirror), or the given item-class GUIDs
+//   at <t> timeskip start|done|sync <kind> <worldTime>  (WO-133) a TimeSkipUp (0x28) as a joiner's sleep/wait/
+//                                              clock jump would send it (kind 0 sleep, 1 wait, 2 fast travel)
+//   at <t> story objective|fingerprint|approach <text>  (WO-133) a StoryBeatUp (0x37) of that kind
 //   end <t>                                    stop
 //
 // Position packets: every 30 ms while moving, 2 s heartbeat still; the state
@@ -124,6 +127,8 @@ static class P
                         Console.WriteLine($"PEER got PlayerHit from ghost {att}: {h}");
                     else if (t2 == Protocol.ActionDown && inbox.Accept(b2, out _) is InboundAction ia)
                         Console.WriteLine($"PEER got action kind={ia.Kind} phase={ia.Phase} from={ia.SourceGhostId} len={ia.Payload.Length}");
+                    else if (t2 == Protocol.TimeSkipDown && b2.Length == Protocol.TimeSkipDownPayloadLen)   // WO-133: the host's skips reach this peer
+                        Console.WriteLine(FormattableString.Invariant($"PEER t={recClock.Elapsed.TotalSeconds:F1} got TimeSkip from={b2[0]} phase={b2[1]} kind={b2[2]} t={BinaryPrimitives.ReadUInt32LittleEndian(b2.AsSpan(3))}"));
                     else if (t2 == Protocol.LeashDown && b2.Length > 1 + Protocol.JoinHeaderLen
                              && LeashCommand.TryDecode(b2.AsSpan(1 + Protocol.JoinHeaderLen), out var lc))
                         leashIn.Enqueue((b2[0], lc));   // WO-114: handled on the main loop
@@ -315,6 +320,27 @@ static class P
                         BinaryPrimitives.WriteUInt16LittleEndian(ap.AsSpan(1), (ushort)classes.Length); classes.CopyTo(ap, 3);
                         await Send(st, ap);
                         Console.WriteLine($"PEER t={t:F1} appearance sent ({classes[0]} item classes)");
+                        break;
+                    }
+                    case "timeskip":   // WO-133: timeskip start|done|sync <kind> <worldTime>
+                    {
+                        byte ph = f[1] switch { "start" => Protocol.TimeSkipPhaseStart, "sync" => Protocol.TimeSkipPhaseSync, _ => Protocol.TimeSkipPhaseDone };
+                        var tp = new byte[3 + Protocol.TimeSkipUpPayloadLen]; tp[0] = Protocol.TimeSkipUp;
+                        BinaryPrimitives.WriteUInt16LittleEndian(tp.AsSpan(1), (ushort)Protocol.TimeSkipUpPayloadLen);
+                        tp[3] = ph; tp[4] = byte.Parse(f[2], CultureInfo.InvariantCulture);
+                        BinaryPrimitives.WriteUInt32LittleEndian(tp.AsSpan(5), uint.Parse(f[3], CultureInfo.InvariantCulture));
+                        await Send(st, tp);
+                        Console.WriteLine($"PEER t={t:F1} timeskip sent {f[1]} kind={f[2]} t={f[3]}");
+                        break;
+                    }
+                    case "story":   // WO-133: story objective|fingerprint|approach <text>
+                    {
+                        byte sk = f[1] switch { "fingerprint" => Protocol.StoryBeatKindFingerprint, "approach" => Protocol.StoryBeatKindApproach, _ => Protocol.StoryBeatKindObjective };
+                        var body = StoryBeat.BuildUpPayload(sk, string.Join(' ', f.Skip(2)));
+                        var sp = new byte[3 + body.Length]; sp[0] = Protocol.StoryBeatUp;
+                        BinaryPrimitives.WriteUInt16LittleEndian(sp.AsSpan(1), (ushort)body.Length); body.CopyTo(sp, 3);
+                        await Send(st, sp);
+                        Console.WriteLine($"PEER t={t:F1} story sent {f[1]} ({body.Length} bytes)");
                         break;
                     }
                     case "leash":   // WO-114

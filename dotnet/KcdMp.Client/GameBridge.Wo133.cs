@@ -21,6 +21,7 @@ public partial class GameBridge
     private volatile bool _w133PushDue;    // the mod's Lua was reborn
     private DateTime _w133LastPushUtc = DateTime.MinValue;
     private long _w133SkipsDropped, _w133DivergencesSkipped, _w133FingerprintsSkipped, _w133MarkersWithheld;
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, long> _w133SkipByWhere = new(StringComparer.Ordinal);
     private static readonly TimeSpan W133Heartbeat = TimeSpan.FromSeconds(5);
 
     private bool Wo133SharedWorld => Wo133Rules.SharedWorldSession(_combatRoleApplied, _isDamageAuthority, _sharedWorld, JoinerSharedEffective);
@@ -62,9 +63,11 @@ public partial class GameBridge
     /// <summary>The host's drop of a joiner's time skip (any phase). True = dropped, logged.</summary>
     private bool Wo133DropTimeSkip(byte source, byte phase, byte kind, uint worldTime)
     {
-        if (!Wo133Rules.DropInboundTimeSkip(Wo133HostOfSharedWorld, source, _myGhostId)) return false;
+        bool host = Wo133HostOfSharedWorld;
+        int hostId = _hostModeKnown && _hostModeFrom != 0xFF ? _hostModeFrom : -1;
+        if (!Wo133Rules.DropInboundTimeSkip(host, Wo133JoinerQuiet, hostId, source, _myGhostId)) return false;
         long n = Interlocked.Increment(ref _w133SkipsDropped);
-        string who = _ghostNames.TryGetValue(source, out var dn) ? dn : $"player {source}";
+        string who = (_ghostNames.TryGetValue(source, out var dn) ? dn : $"player {source}") + (host ? "" : $" (not the host, ghost {hostId})");
         string ph = phase switch { Protocol.TimeSkipPhaseStart => "start", Protocol.TimeSkipPhaseSync => "sync", Protocol.TimeSkipPhaseDoneQuiet => "done-quiet", _ => "done" };
         Console.WriteLine($"[timeskip] DROPPED {who}'s time skip ({ph} kind={kind} t={worldTime}) -- WO-133: in a shared world only the host's clock moves the world (#{n}; our clock {(_lastPolledWorldTime is uint c ? c.ToString(System.Globalization.CultureInfo.InvariantCulture) : "?")})");
         return true;
@@ -75,7 +78,7 @@ public partial class GameBridge
     {
         if (!Wo133SharedWorld) return false;
         long n = Interlocked.Increment(ref _w133DivergencesSkipped);
-        if (n == 1 || n % 50 == 0)
+        if (W133FirstOrEvery(where, 50))
             Console.WriteLine($"[story] {where}: no peer comparison in a shared world (WO-133; {n} skipped)");
         return true;
     }
@@ -86,9 +89,16 @@ public partial class GameBridge
         // the host may still fingerprint its own saves; nobody compares
         if (where == "send" ? !Wo133JoinerQuiet : !Wo133SharedWorld) return false;
         long n = Interlocked.Increment(ref _w133FingerprintsSkipped);
-        if (n == 1 || n % 20 == 0)
+        if (W133FirstOrEvery("fingerprint " + where, 20))
             Console.WriteLine($"[quest] fingerprint {where} skipped in a shared world (WO-133; {n} skipped)");
         return true;
+    }
+
+    /// <summary>Log the first skip of each kind, then every Nth of that kind.</summary>
+    private bool W133FirstOrEvery(string where, int every)
+    {
+        long k = _w133SkipByWhere.AddOrUpdate(where, 1, (_, v) => v + 1);
+        return k == 1 || k % every == 0;
     }
 
     /// <summary>The joiner's story marker is its solo world's: not sent in a shared world.</summary>

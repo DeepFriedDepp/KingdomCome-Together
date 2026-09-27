@@ -21,13 +21,20 @@ public static class Wo133Rules
         => roleKnown && isHost && localShared;
 
     /// <summary>
-    /// The host drops every time skip that did not come from itself: only the
-    /// host's own clock moves the world (hazard H2). The relay may still route
-    /// a joiner's skip (first come); it stops here. A source equal to our own
-    /// ghost id (an echo) is never dropped by this rule.
+    /// Only the host's own clock moves a shared world (hazard H2). The relay
+    /// may still route a joiner's skip (first come); it stops at the receiver:
+    /// the host drops every skip that is not its own, and a joiner drops every
+    /// skip that is not the host's (another joiner's, in a 3+ player session)
+    /// once it knows the host's ghost id (-1 = not yet: applied as before). A
+    /// source equal to our own ghost id (an echo) is never dropped by this rule.
     /// </summary>
-    public static bool DropInboundTimeSkip(bool hostOfSharedWorld, byte sourceGhostId, byte myGhostId)
-        => hostOfSharedWorld && sourceGhostId != myGhostId;
+    public static bool DropInboundTimeSkip(bool hostOfSharedWorld, bool joinerInSharedWorld, int hostGhostId,
+                                           byte sourceGhostId, byte myGhostId)
+    {
+        if (sourceGhostId == myGhostId) return false;
+        if (hostOfSharedWorld) return true;
+        return joinerInSharedWorld && hostGhostId >= 0 && sourceGhostId != hostGhostId;
+    }
 
     /// <summary>
     /// The joiner in a shared world does not read or send save fingerprints and
