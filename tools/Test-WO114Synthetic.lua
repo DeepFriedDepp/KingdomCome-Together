@@ -172,8 +172,14 @@ clearLog()
 KCD2MP_Wo114Busy()
 check("f: idle: d=0 m=0", evtCount("wo114_busy", "d=0 m=0") == 1, lastLog("wo114_busy"))
 HUMAN.dialog = true; HUMAN.mounted = true
+-- WO-131 Phase 3: a conversation the player is IN also has the engine's
+-- DialogTwin_<player> stand-in (a bark near a rider has none: no hold).
+clearLog(); KCD2MP_Wo114Busy()
+check("f: IsInDialog alone (a bark) + mounted: no dialogue hold (WO-131)", evtCount("wo114_busy", "d=0 m=1") == 1, lastLog("wo114_busy"))
+ENTS["DialogTwin_Dude"] = { id = 991, GetName = function() return "DialogTwin_Dude" end }
 clearLog(); KCD2MP_Wo114Busy()
 check("f: dialogue + mounted", evtCount("wo114_busy", "d=1 m=1") == 1, lastLog("wo114_busy"))
+ENTS["DialogTwin_Dude"] = nil
 HUMAN.dialog = false; HUMAN.mounted = false; KCD2MP.isRiding = true
 clearLog(); KCD2MP_Wo114Busy()
 check("f: the riding detector counts as mounted", evtCount("wo114_busy", "d=0 m=1") == 1, lastLog("wo114_busy"))

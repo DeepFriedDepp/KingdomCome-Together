@@ -553,11 +553,12 @@ public sealed class CombatPipe : IAsyncDisposable
     }
 
     /// <summary>op 3: set a copy's health to the host's (credited, never below 1); (ok, before, after).</summary>
-    public async Task<(bool Ok, float Before, float After, byte Reason)> Wo131FollowHpAsync(Guid soul, float hp, CancellationToken ct = default)
+    public async Task<(bool Ok, float Before, float After, byte Reason)> Wo131FollowHpAsync(Guid soul, uint eid, float hp, CancellationToken ct = default)
     {
-        var a = new byte[20];
+        var a = new byte[24];
         WriteSoulGuid(soul, a);
-        BinaryPrimitives.WriteSingleLittleEndian(a.AsSpan(16), hp);
+        BinaryPrimitives.WriteUInt32LittleEndian(a.AsSpan(16), eid);
+        BinaryPrimitives.WriteSingleLittleEndian(a.AsSpan(20), hp);
         var r = await Wo131Async(3, a, ct);
         if (r is not { } v) return (false, -1, -1, 255);
         if (!v.Ok || v.Payload.Length < 8) return (false, -1, -1, v.Reason);

@@ -125,6 +125,38 @@ host's world (time, NPCs, quests).
 * Try it: the joiner rides away from the host past 650 m and waits; then the
   host fast-travels once.
 
+## Fights together (the next build, WO-131)
+
+* **The joiner never runs NPCs of their own.** Every NPC of the host's world is
+  driven by the host's stream or parked on the joiner (suspended + hidden).
+  Log (joiner kcd.log): `WO131-GUARD state=on`, `WO131-GUARD park|unpark
+  npc=<name>`; status `mp_w131_status`; off switch `mp_npc_guard off` (gives
+  every body back). The host streams NPCs past 60 m out to 150 m of either
+  player on a 2 s heartbeat.
+* **A joiner's hit counts only on the host's NPC where the host has it**
+  (bound, fresh, within 3 m). Refusals: `MP-DMG dir=drop ... reason=wo131-<why>`
+  in the joiner's agent log (`not-bound`, `far-from-host`, `stale-stream`,
+  `dead-on-host`, `no-answer`).
+* **Deaths are the host's.** A joiner's copy carries the imm guard, follows the
+  host's health (`MP-WO131 follow`), and dies only on the host's order at the
+  host's position (`MP-WO131 copy guard off <npc>: the host's death is applied
+  now`). A local death is never sent (`[npcdeath] out: ... NOT sent (WO-131`).
+* **Looting and pickpocketing host-owned NPCs is blocked on the joiner**
+  (`WO131-LOOT blocked npc=...`, and the game's own toast).
+* **Road encounters:** an NPC only the host has gets a stand-in under its own
+  name on the joiner (`WO131-STANDIN spawn npc=...`); `mp_npc_standin off`.
+* **Perception (host):** avatars are never AI-ignorant in a shared world and
+  join the host player's faction (`MP-WO131 avatar N -> the player's faction:
+  joined`); `mp_avatar_perceive off` goes back to the old rule.
+* **After a death:** StopFight on the dead player's skirmish (`WO131-STOPFIGHT`
+  in kcdmp-native.log; `MP-WO131 peer N died|respawned: StopFight` on the host).
+* **No stuck poses:** a copy ragdolled by a local blow while the host has it
+  standing is stood up (`WO131-STANDUP npc=... why=not-living`).
+* **Leash:** the countdown is cancelled only back under 630 m; a dialogue hold
+  needs a real conversation (the DialogTwin stand-in), not chatter.
+* Counters every 60 s in the agent log: `MP-WO131-STATS`.
+* Two-player checklist: `docs/WO-131-findings.md`, section 7.
+
 ## Expected not to work yet
 
 * **No "back to the main menu"** in KCD2. If the host leaves, or a check

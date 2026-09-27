@@ -14,7 +14,7 @@
 //                   The joiner's copy of a host NPC can never die or be knocked
 //                   out locally (1c): kcdmp_avatar_guard (imm=1, upr=1) on it,
 //                   removed before the host's death is applied.
-//   op 3 FollowHp   [guid:16][hp:4f] -> [before:4f][after:4f]
+//   op 3 FollowHp   [guid:16][eid:4][hp:4f] -> [before:4f][after:4f]
 //                   The copy's health follows the host's (1c). A drop we write
 //                   is credited to the LocalHit sampler first, so it never
 //                   goes back out as a hit.

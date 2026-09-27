@@ -24,6 +24,7 @@ public partial class GameBridge
     private volatile bool _w131Perceive = true;   // mirrors the mod's KCD2MP.w131.perceive (event w131_cfg)
     private readonly ConcurrentDictionary<string, uint> _w131Guarded = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, (float Hp, long AtMs)> _w131HpWritten = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, float> _w131StreamHp = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, Guid> _w131FactionDone = new();
     private readonly ConcurrentDictionary<string, long> _w131FactionTriedMs = new();
     private long _w131HitsForwarded, _w131HitsDropped, _w131DeathsBlocked, _w131GuardOn, _w131GuardFail,
@@ -106,6 +107,13 @@ public partial class GameBridge
             _w131DropReasons.AddOrUpdate(Wo131Rules.Tag(v), 1, (_, n) => n + 1);
             Console.WriteLine(FormattableString.Invariant(
                 $"MP-DMG dir=drop npc={npcName} hp={health:F1} fatal={(died ? 1 : 0)} reason=wo131-{Wo131Rules.Tag(v)} bound={(hc?.Bound == true ? 1 : 0)} age_ms={(hc?.AgeMs ?? 65535)} dist_m={(hc?.DistM ?? -1):F2} -- a hit counts only on the host's NPC where the host has it"));
+            // The refused blow leaves no trace on a guarded copy: its health goes
+            // straight back to the host's (credited, so it never echoes).
+            if (_w131Guarded.TryGetValue(npcName, out uint geid) && _w131StreamHp.TryGetValue(npcName, out float shp))
+            {
+                var (fok, fb, fa, _) = await _combat.Wo131FollowHpAsync(soul, geid, shp);
+                if (fok) Console.WriteLine(FormattableString.Invariant($"MP-WO131 refused hit on {npcName}: copy health put back {fb:F1} -> {fa:F1} (the host's)"));
+            }
             return (false, 0, false);
         }
         Interlocked.Increment(ref _w131HitsForwarded);
@@ -144,7 +152,8 @@ public partial class GameBridge
     /// <summary>1c: every host sample on the joiner -- the copy's health follows the host's.</summary>
     private void Wo131OnNpcSample(string name, float hp, bool dead)
     {
-        if (!Wo131JoinerActive || !_w131Guarded.ContainsKey(name)) return;
+        if (!dead && hp >= 0) _w131StreamHp[name] = hp;
+        if (!Wo131JoinerActive || !_w131Guarded.TryGetValue(name, out uint eid)) return;
         long now = W131NowMs();
         var last = _w131HpWritten.TryGetValue(name, out var l) ? l : (float.NaN, 0L);
         if (!Wo131Rules.FollowHpDue(last.Item1, hp, now - last.Item2, dead)) return;
@@ -153,7 +162,7 @@ public partial class GameBridge
         {
             Guid? g = await ResolveLocalSoulGuidAsync(name, CancellationToken.None);
             if (g is not Guid lg) return;
-            var (ok, before, after, reason) = await _combat.Wo131FollowHpAsync(lg, hp);
+            var (ok, before, after, reason) = await _combat.Wo131FollowHpAsync(lg, eid, hp);
             if (ok)
             {
                 long n = Interlocked.Increment(ref _w131Follow);

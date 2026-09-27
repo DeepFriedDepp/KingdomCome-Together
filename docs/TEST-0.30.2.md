@@ -63,6 +63,53 @@ Note the time of anything that does not match.
 * The other player's legs move when walking, running and sprinting.
 * A partner's death leaves a grave with their things.
 
+## 5b. Fights together (the next build, WO-131)
+
+Not in 0.30.2: this is for the first build that carries WO-131. What changed,
+in plain words:
+
+* **One world.** On the partner's screen you only see the host's people.
+  Someone the host's world has somewhere else is not shown to the partner,
+  instead of standing around as a second copy. The people near either of you
+  stand where the host's world has them.
+* **Your hits count in the host's world**, and only on a person who is really
+  there: a hit on anyone the host's world has elsewhere does nothing.
+* **Deaths and bodies are the host's.** A person dies when they die in the
+  host's world, and the body lies where they fell there. On the partner's side
+  nobody dies from their own blows alone.
+* **The partner cannot loot bodies or pickpocket yet.** The game says: "Only
+  the host can loot bodies in co-op for now." Everything is still on the body
+  for the host.
+* **Ambushes on the road** now show up for the partner (the robbers may look a
+  little different from the host's).
+* **The host's world sees the partner.** People always notice the partner's
+  figure now, not only right after a hit, and it counts as on the host's side
+  in a fight.
+* **A death ends the fight.** After you die and wake up, the people you were
+  fighting leave you alone (a crime stays a crime).
+* **No more sinking into the ground.** Someone knocked flat on the partner's
+  screen stands back up where the host's world has them standing.
+
+Still not working, do not report these as new:
+
+* On the partner's screen, people **do not swing** in a fight (they may stand
+  with their arms out). Their hits still land.
+* Your own swings showing on the other player's figure: still unproven.
+* How hard people hit the partner compared with the partner's own armour:
+  not measured yet.
+* Animals are separate in each game.
+
+**What to try (away from towns, never townsfolk or town guards):**
+
+1. The partner walks through a village: the villagers you both see are in the
+   same places; nobody appears twice.
+2. Fight bandits or wild animals together. Partner: note whether they attack
+   you, whether you can see every one that hits you, and whether they stand
+   up again after a hard blow.
+3. Kill one: the body lies in the same place on both screens. Partner: try to
+   loot it (you should get the message above); host: loot it normally.
+4. Get knocked down or die in a fight: after waking up, the fight is over.
+
 ## 6. Play normally
 
 Ride, go into towns and houses, trade, talk. Please do **not** attack

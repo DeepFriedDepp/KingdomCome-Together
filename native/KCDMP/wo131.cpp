@@ -82,13 +82,18 @@ uint8_t handle(const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t
         std::memcpy(name, a + 17, a[16]);
         npcdrive::HitCheck hc{};
         npcdrive::hit_check(name, &hc);
+        // Everything by the bound body's entity id: rttr::find_soul_by_guid is a
+        // full reflection walk of the soul list (seconds on a live world --
+        // the first live run timed the agent out), the actor's soul is two calls.
         float hp = -1;
-        void* soul = rttr::find_soul_by_guid(a);
-        if (soul) rttr::soul_state(soul, "health", &hp);
         int guarded = -1;
-        if (hc.eid && guard_guid() && buffs::ready()) {
-            void* cs = soul_of_eid(hc.eid);
-            if (cs) guarded = buffs::has(buffs::as_c_soul(cs) ? buffs::as_c_soul(cs) : cs, guard_guid());
+        if (hc.eid) {
+            void* s0 = soul_of_eid(hc.eid);
+            void* cs = s0 && buffs::as_c_soul(s0) ? buffs::as_c_soul(s0) : s0;
+            if (cs) {
+                rttr::soul_state(cs, "health", &hp);
+                if (guard_guid() && buffs::ready()) guarded = buffs::has(cs, guard_guid());
+            }
         }
         c_checks.fetch_add(1);
         const double ageMs = hc.ageS < 0 ? 65535.0 : hc.ageS * 1000.0;
@@ -122,10 +127,14 @@ uint8_t handle(const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t
         return kROk;
     }
     case kOpFollowHp: {
-        if (n != 20) return kRBadRequest;
-        const float want = get_f(a + 16);
+        // [guid:16][eid:4][hp:4f]: the soul by entity id (cheap); the GUID only
+        // keys the sampler's credit.
+        if (n != 24) return kRBadRequest;
+        const uint32_t eid = get_u32(a + 16);
+        const float want = get_f(a + 20);
         if (!std::isfinite(want) || want < 0) return kRBadRequest;
-        void* soul = rttr::find_soul_by_guid(a);
+        void* s0 = soul_of_eid(eid);
+        void* soul = s0 && buffs::as_c_soul(s0) ? buffs::as_c_soul(s0) : s0;
         if (!soul) { c_fail.fetch_add(1); return kRNoSoul; }
         float before = -1, after = -1;
         if (!rttr::soul_state(soul, "health", &before)) { c_fail.fetch_add(1); return kRFailed; }

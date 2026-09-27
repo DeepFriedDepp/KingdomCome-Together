@@ -1546,7 +1546,7 @@ public partial class GameBridge(ClientConfig config)
         // Outbound combat: the DLL notices a nearby NPC lose health and we put
         // it on the wire. Never fired for damage we applied on a peer's behalf —
         // the DLL credits those out — or two clients would echo a hit forever.
-        _combat.OnLocalHit = async (soul, stamina, health, died, byPlayer) =>
+        Func<Guid, float, float, bool, bool, Task> onLocalHitCore = async (soul, stamina, health, died, byPlayer) =>
         {
             // WO-86: a FATAL hit is never noise, whatever its delta -- the
             // DLL's sampler reports the drop that took the soul to zero, which
@@ -1704,6 +1704,17 @@ public partial class GameBridge(ClientConfig config)
                 foreach (var ghostId in _ghostNames.Keys)
                     _ = TriggerReactiveAggroAsync(ghostId, cts.Token);
             }
+        };
+        // WO-131: the pipe's reader loop AWAITS this handler, so a pipe request
+        // made inside it (the joiner's hit gate) waits for a reply only that
+        // same loop can deliver -- a deadlock until the 5 s deadline (live, run
+        // C: every gated hit dropped as "no-answer"). On a joiner the handler
+        // runs off the reader loop.
+        _combat.OnLocalHit = (soul, stamina, health, died, byPlayer) =>
+        {
+            if (!Wo131JoinerActive) return onLocalHitCore(soul, stamina, health, died, byPlayer);
+            _ = Task.Run(() => onLocalHitCore(soul, stamina, health, died, byPlayer));
+            return Task.CompletedTask;
         };
         // Connect now rather than lazily, so the DLL has somewhere to push hits
         // before the first inbound packet ever arrives.

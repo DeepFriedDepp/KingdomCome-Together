@@ -27,6 +27,12 @@
 //   ghost <x0> <y0> <z0> <ux> <uy> <len> <speed> [ms]          (a player position stream, ping-pong)
 //   ride <t0_s> <t1_s>                                         (WO-124 6a: the ghost rides between t0 and t1)
 //   start <seconds>                                             (delay before streaming)
+//   die <t_s> <npc>                                             (WO-131: that mover streams dead, hp 0, from t on)
+//   hp <t_s> <npc> <hp>                                         (WO-131: that mover streams this hp from t on)
+//   raw <t_s> <typeHex> <payloadHex> [stampOffset]              (WO-131: send this packet as-is at stream time t;
+//                                                                 the 4 bytes at stampOffset are re-stamped with this
+//                                                                 peer's clock -- a recorded host stream replayed,
+//                                                                 tools/wo131/replay.py)
 using System.Buffers.Binary;
 using System.Diagnostics;
 using System.Globalization;
@@ -44,6 +50,7 @@ static class P
         public string Name = "";
         public ushort Seq;
         public double LastSent = -1e9, LastSentX, LastSentY, LastSentZ;
+        public bool SentDead; public float SentHp = 100f;   // WO-131
         public abstract (float x, float y, float z, float yaw) At(double t);
     }
     sealed class Line : Mover
@@ -181,6 +188,9 @@ static class P
         string senderClock = Arg(a, "--sender-clock", "qpc");
         // The agent stamps every Position since the WO-118 follow-up; off = an older sender.
         bool ghostSenderMs = Arg(a, "--ghost-sender-ms", "on") != "off";
+        // WO-131: the ghost's Position carries the host-claim bit (0x40): against a real agent that
+        // claims host in its own world, the relay's tie-break (lowest id) keeps this peer the authority.
+        bool claimHost = a.Contains("--claim-host");
         string versionFile = Arg(a, "--version-file", FindUp("VERSION"));
         string release = File.ReadAllText(versionFile).Trim();
         // WO-123: the synthetic joiner and the transfer-ceiling host (JoinPeer.cs).
@@ -194,6 +204,9 @@ static class P
         // attack row at stream time t: an NpcAttack action event (v8).
         var rows = new List<(double T, string Npc, Guid Row)>();
         var saves = new List<(double T, byte Kind, byte Playline, ushort Idx)>(); uint wsSeq = 0;
+        var raws = new List<(double T, byte Type, byte[] Body, int Stamp)>();   // WO-131
+        var dies = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);   // WO-131
+        var hps = new Dictionary<string, List<(double T, float Hp)>>(StringComparer.OrdinalIgnoreCase);   // WO-131
         foreach (var raw in File.ReadAllLines(Arg(a, "--plan", "plan.txt")))
         {
             var t = raw.Trim(); if (t.Length == 0 || t.StartsWith('#')) continue;
@@ -228,9 +241,15 @@ static class P
                 case "start": startDelay = double.Parse(f[1], CultureInfo.InvariantCulture); break;
                 case "row": rows.Add((double.Parse(f[1], CultureInfo.InvariantCulture), f[2], Guid.Parse(f[3]))); break;
                 case "saved": saves.Add((double.Parse(f[1], CultureInfo.InvariantCulture), byte.Parse(f[2]), byte.Parse(f[3]), ushort.Parse(f[4]))); break;
+                case "die": dies[f[2]] = double.Parse(f[1], CultureInfo.InvariantCulture); break;
+                case "hp":
+                    if (!hps.TryGetValue(f[2], out var hl2)) hps[f[2]] = hl2 = new();
+                    hl2.Add((double.Parse(f[1], CultureInfo.InvariantCulture), F(f[3]))); break;
+                case "raw": raws.Add((double.Parse(f[1], CultureInfo.InvariantCulture), Convert.ToByte(f[2], 16), Convert.FromHexString(f[3]), f.Length > 4 ? int.Parse(f[4]) : -1)); break;
             }
         }
 
+        raws.Sort((p, q) => p.T.CompareTo(q.T));
         using var tcp = new TcpClient { NoDelay = true };
         await tcp.ConnectAsync(host, port);
         var st = tcp.GetStream();
@@ -256,6 +275,14 @@ static class P
                     if (rt == Protocol.WorldSavedDown && WorldSaved.TryDecode(rb2, down: true, out byte wsrc) is WorldSaved ws)
                         Console.WriteLine(FormattableString.Invariant(
                             $"SYNTH WorldSaved from={wsrc} file=playline{ws.Playline}/{ws.FileName} seq={ws.Seq} md5={Convert.ToHexString(ws.Md5)[..8].ToLowerInvariant()} age_ms={DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - ws.SenderUnixMs}"));
+                    else if (rt == Protocol.NpcDamageDown && rb2.Length >= 3 && rb2.Length >= 2 + rb2[1] + 9)
+                    {
+                        // WO-131: a joiner's forwarded hit, as the host would receive it.
+                        string dn = Encoding.UTF8.GetString(rb2, 2, rb2[1]);
+                        int o = 2 + rb2[1];
+                        Console.WriteLine(FormattableString.Invariant(
+                            $"SYNTH got hit from={rb2[0]} npc={dn} st={BinaryPrimitives.ReadSingleLittleEndian(rb2.AsSpan(o)):F1} hp={BinaryPrimitives.ReadSingleLittleEndian(rb2.AsSpan(o + 4)):F1} flags=0x{rb2[o + 8]:X2}"));
+                    }
                     else if (rt == Protocol.CombatRole && rb2.Length == 1)
                         Console.WriteLine($"SYNTH role={(rb2[0] == 1 ? "authority (host)" : "not the authority (joiner)")}");
                 }
@@ -283,6 +310,20 @@ static class P
                     Console.WriteLine(FormattableString.Invariant($"SYNTH t={t:F1}s NpcAttack npc={rows[ri].Npc} row={rows[ri].Row}"));
                     rows.RemoveAt(ri);
                 }
+                // WO-131: a recorded host stream, in order.
+                int rawSent = 0;
+                while (raws.Count > 0 && raws[0].T <= t)
+                {
+                    var r = raws[0]; raws.RemoveAt(0);
+                    var body = (byte[])r.Body.Clone();
+                    if (r.Stamp >= 0 && r.Stamp + 4 <= body.Length)
+                        BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(r.Stamp), unchecked((uint)(Stopwatch.GetTimestamp() * 1000 / Stopwatch.Frequency)));
+                    var rp = new byte[3 + body.Length]; rp[0] = r.Type;
+                    BinaryPrimitives.WriteUInt16LittleEndian(rp.AsSpan(1), (ushort)body.Length); body.CopyTo(rp, 3);
+                    await st.WriteAsync(rp);
+                    if (r.Type == Protocol.ActionUp) Console.WriteLine(FormattableString.Invariant($"SYNTH t={t:F1}s raw action kind={body[0]}"));
+                    rawSent++; sent++;
+                }
                 for (int si = saves.Count - 1; si >= 0; si--)
                 {
                     if (saves[si].T > t) continue;
@@ -301,13 +342,19 @@ static class P
                     var (x, y, z, yaw) = m.At(t);
                     double dx = x - m.LastSentX, dy = y - m.LastSentY, dz = z - m.LastSentZ;
                     bool moved = Math.Abs(dx) > 0.05 || Math.Abs(dy) > 0.05 || Math.Abs(dz) > 0.05;
-                    if (!moved && now - m.LastSent < 2000) continue;
+                    bool deadNow = dies.TryGetValue(m.Name, out double dieT) && t >= dieT;   // WO-131
+                    float hpNow = 100f;
+                    if (hps.TryGetValue(m.Name, out var hpl)) foreach (var (ht, hv) in hpl) if (t >= ht) hpNow = hv;
+                    bool lifeChanged = deadNow != m.SentDead || Math.Abs(hpNow - m.SentHp) > 0.5f;
+                    if (!moved && !lifeChanged && now - m.LastSent < 2000) continue;
+                    m.SentDead = deadNow; m.SentHp = hpNow;
                     m.LastSent = now; m.LastSentX = x; m.LastSentY = y; m.LastSentZ = z;
                     m.Seq++;
                     byte fl = m is Fight fm ? fm.FlagsAt(t) : m is Hold { Dead: true } ? Protocol.NpcStateFlagDead : (byte)0;
+                    if (deadNow) fl = Protocol.NpcStateFlagDead;
                     uint sms = senderClock == "tick" ? unchecked((uint)Environment.TickCount64)
                              : unchecked((uint)(Stopwatch.GetTimestamp() * 1000 / Stopwatch.Frequency));
-                    var pkt = BuildUp(m.Name, x, y, z, yaw, (fl & Protocol.NpcStateFlagDead) != 0 ? 0f : 100f, fl, m.Seq, sms);
+                    var pkt = BuildUp(m.Name, x, y, z, yaw, (fl & Protocol.NpcStateFlagDead) != 0 ? 0f : hpNow, fl, m.Seq, sms);
                     double d = delayMs + rng.NextDouble() * jitterMs + (rng.NextDouble() * 100 < spikePct ? spikeMs : 0);
                     queue.Enqueue(pkt, now + d);
                     emitted++;
@@ -325,6 +372,7 @@ static class P
                 double gt = ts - streamT0;
                 bool riding = rides.Any(r => gt >= r.T0 && gt < r.T1);
                 if (riding) gp[19] |= Protocol.PositionFlagRiding;
+                if (claimHost) gp[19] |= Protocol.PositionFlagHostClaim;
                 if (riding != ghostWasRiding) { Console.WriteLine(FormattableString.Invariant($"SYNTH ghost riding={(riding ? "ON" : "OFF")} at t={gt:F1}s")); ghostWasRiding = riding; }
                 // Stamped at the sample, before the injected delay: the jitter then
                 // shows as lateness against the stamp, exactly as on a real link.

@@ -1248,6 +1248,13 @@ public static partial class Protocol
     public const byte NpcStateFlagResync = 0x40;
 
     /// <summary>
+    /// WO-131: the body is not a human (the authority's Horse-class entities).
+    /// A joiner never builds a stand-in for a name carrying it (1f: a stand-in
+    /// is only made for a human NPC the host spawned at runtime).
+    /// </summary>
+    public const byte NpcStateFlagNotHuman = 0x80;
+
+    /// <summary>
     /// Per-entity NPC authority (WO-39 Phase 2): how long a non-authority's
     /// claim on one entity survives without a fresh NpcStateUp for it. The
     /// dragger's emitter sends at the ordinary npc emit cadence (250 ms) with

@@ -266,6 +266,7 @@ struct Puppet {
     float    velX = 0, velY = 0;    // WO-129: the same frame's planar velocity (the engine's direction tag input)
     uint64_t writes = 0;
     uint32_t frameNo = 0;
+    double   livingCheckAt = 0;     // WO-131 2b: when the body's physics was last checked for a ragdoll
     // MP-NPCPULL window
     double   winStart = 0;
     uint32_t winFrames = 0, winMoved = 0, winFlyChecks = 0, winFlying = 0, cosN = 0, winLag = 0;
@@ -933,6 +934,22 @@ void tick() {
             p.blendPending = true;   // it resumes from wherever the engine or the one-shot leaves the body
             ++it;
             continue;
+        }
+        // WO-131 2b: a local blow can ragdoll a bound copy (its physics stops
+        // being a CryPhysics living entity) while the host's NPC stands -- the
+        // stream says alive, awake, not carried (checked just above). Held at
+        // the stream's standing height, that body lay IN the ground (the
+        // field's "phasing"; live, run C). Checked twice a second: such a body
+        // is dropped with reason not-living, and Lua stands it up
+        // (actor:StandUp) before the bind is retried.
+        if (now - p.livingCheckAt > 0.5) {
+            p.livingCheckAt = now;
+            PhysicsStatus ps{};
+            if (physics_status(e, &ps) && ps.present && !ps.living) {
+                auto cur = it++;
+                drop(cur, kNotLiving, true);
+                continue;
+            }
         }
         // The jitter allowance, slewed: the render clock never runs more than
         // kLateSlew faster or slower than real time, so a change in the link's

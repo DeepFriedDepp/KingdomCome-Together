@@ -114,7 +114,12 @@ $AsmMarkers = @(
     # (native), the leash messages on the join channel (protocol v10).
     @{ File = 'KcdMpClient.dll'; Marker = 'MP-LEASH pulled from=';  Owner = 'WO-114 leash pull (agent half)' },
     @{ File = 'KCDMP.dll';       Marker = 'MP-RESPAWN-LEASH partner at'; Owner = 'WO-114 wake within the leash (native)' },
-    @{ File = 'KcdMp.Protocol.dll'; Marker = 'leash-state';         Owner = 'WO-114 leash wire rows (protocol v10)' }
+    @{ File = 'KcdMp.Protocol.dll'; Marker = 'leash-state';         Owner = 'WO-114 leash wire rows (protocol v10)' },
+    # WO-131: combat and bodies -- the joiner's hit gate and copy guard (agent),
+    # the pipe 0x21 ops, the ragdoll drop and the death StopFight (native).
+    @{ File = 'KcdMpClient.dll'; Marker = 'MP-WO131-STATS';         Owner = 'WO-131 hit gate / copy guard (agent half)' },
+    @{ File = 'KCDMP.dll';       Marker = 'WO131-STOPFIGHT';        Owner = 'WO-131 StopFight on deaths (native)' },
+    @{ File = 'KCDMP.dll';       Marker = 'WO131-FACTION';          Owner = 'WO-131 avatar in the player faction (native)' }
 )
 
 $PakMarkers = @(
@@ -161,6 +166,9 @@ $PakMarkers = @(
     # WO-114: the leash settings, the countdown row and the joiner's fast-travel switch.
     @{ Marker = 'function KCD2MP_Wo114Countdown';  Owner = 'WO-114 leash countdown row' },
     @{ Marker = 'function KCD2MP_Wo114FastTravelBlock'; Owner = 'WO-114 host-only fast travel' },
+    @{ Marker = 'function KCD2MP_W131Tick';        Owner = 'WO-131 joiner copy guard' },
+    @{ Marker = 'function KCD2MP_W131StandIn';     Owner = 'WO-131 stand-ins for host-only NPCs' },
+    @{ Marker = 'function KCD2MP_W131LootAllowed'; Owner = 'WO-131 joiner loot block' },
     @{ Marker = 'function KCD2MP_Wo129SharedAnchors'; Owner = 'WO-129 every player an NPC scan anchor' }
 )
 

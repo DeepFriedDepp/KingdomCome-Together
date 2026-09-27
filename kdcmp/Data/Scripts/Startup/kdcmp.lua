@@ -2925,6 +2925,10 @@ function KCD2MP_NpcNativeAck(name, ok, reason)
         p.lastWroteX, p.lastWroteY, p.lastWroteZ = nil, nil, nil
         mp_log(string.format("MP-NPCWRITE npc=%s native=%s reason=%s -- Lua writes it (retry in %.0fs)",
             tostring(name), was and "dropped" or "refused", tostring(reason), TUNE.NPC_NATIVE_RETRY_S))
+        -- WO-131 2b: a ragdolled copy the host has standing: stand it up, retry soon.
+        if tostring(reason) == "not-living" and KCD2MP_W131StandUpIfDown and KCD2MP_W131StandUpIfDown(name, "not-living") then
+            p.nativeRetryAt = os.clock() + 2.0
+        end
     end
 end
 
@@ -5659,12 +5663,13 @@ end
 --   WO131-LOOT blocked npc=<name> kind=loot|pickpocket
 KCD2MP.w131 = {
     guard = true,             -- mp_npc_guard on|off (the joiner copy guard)
-    guardRadiusM = 200.0,     -- the sweep radius around the joiner (the leash recorder's radius)
+    guardRadiusM = 220.0,     -- the sweep radius around the joiner (past the leash recorder's 200 m, so its edge never samples a body before a sweep)
     aliveTimeoutS = 10.0,     -- no agent tick for this long -> give everything back
     joiner = false, shared = false, aliveAt = nil,
     active = false,
     parked = {},              -- name -> { at = os.clock(), why = }
     reassert = false,         -- a load dropped every suspension and every Hide
+    repauseS = 10.0,          -- every parked body in range is re-paused this often (idempotent)
     logN = 0,
     stats = { park = 0, unpark = 0, reassert = 0, sweeps = 0, released = 0, lootBlocked = 0 },
     farBandM = 150.0,         -- host: past the cull radius, a 2 s heartbeat out to this (shared world)
@@ -5735,6 +5740,10 @@ function KCD2MP_W131ParkReleased(name, why)
     if not KCD2MP_W131IsActive() then return false end
     KCD2MP._npcResumePending[name] = nil
     KCD2MP._npcPaused[name] = nil
+    if KCD2MP.w131.standins and KCD2MP.w131.standins[name] then
+        KCD2MP_W131RemoveStandIn(name, "stream-stopped:" .. tostring(why))
+        return true
+    end
     local e = w131_body(name)
     if not e then return true end
     KCD2MP.w131.stats.released = KCD2MP.w131.stats.released + 1
@@ -5746,6 +5755,7 @@ end
 function KCD2MP_W131UnparkAll(why)
     local w = KCD2MP.w131
     local n = 0
+    for name in pairs(w.standins or {}) do KCD2MP_W131RemoveStandIn(name, why) end
     for name in pairs(w.parked) do
         local e = w131_body(name)
         if e then pcall(function() e:Hide(0) end) end
@@ -5772,6 +5782,8 @@ local function w131_sweep()
     pcall(function() inDialog = player.human and player.human:IsInDialog() == true end)
     local ents = {}
     pcall(function() ents = System.GetEntitiesInSphere(pp, w.guardRadiusM) or {} end)
+    local repause = (os.clock() - (w.repauseAt or -1e9)) >= w.repauseS
+    if repause then w.repauseAt = os.clock() end
     for _, e in ipairs(ents) do
         local ok, name = KCD2MP_W131Guardable(e)
         if ok and not KCD2MP.npcPuppets[name] then
@@ -5781,15 +5793,29 @@ local function w131_sweep()
                 pcall(function() dead = e.actor and e.actor:IsDead() == true end)
                 -- A corpse has no brain to stop; its pockets are guarded by the loot rule.
                 if not dead and not inDialog then w131_park(name, e, "not-streamed") end
-            elseif w.reassert then
-                pcall(System.ExecuteCommand, "wh_ai_PauseNPC " .. tostring(name))
-                pcall(function() e:Hide(1) end)
-                w.stats.reassert = w.stats.reassert + 1
             else
+                -- A parked body found shown again was reset by the engine (a load
+                -- re-creates entities; one streaming in after the load's own
+                -- re-assert carries neither the Hide nor the suspension -- live,
+                -- run D: hidden but brain running). Re-pause as well as re-hide,
+                -- and re-pause every parked body in range every repauseS anyway
+                -- (Suspend is idempotent; Lua cannot read it back).
                 local hidden = true
                 pcall(function() hidden = e:IsHidden() == true end)
-                if not hidden then pcall(function() e:Hide(1) end) end
+                if w.reassert or not hidden or repause then
+                    pcall(System.ExecuteCommand, "wh_ai_PauseNPC " .. tostring(name))
+                    pcall(function() e:Hide(1) end)
+                    w.stats.reassert = w.stats.reassert + 1
+                end
             end
+        end
+    end
+    for pname, p in pairs(KCD2MP.npcPuppets or {}) do
+        if not p.dead and not p.ko then
+            local pe = w131_body(pname)
+            local down = false
+            pcall(function() down = pe and pe.actor and pe.actor:IsUnconscious() == true end)
+            if down then KCD2MP_W131StandUpIfDown(pname, "local-knockout") end
         end
     end
     if w.reassert then
@@ -5847,6 +5873,121 @@ function KCD2MP_SetNpcGuard(arg)
     end
     KCD2MP_W131Status()
     return true
+end
+
+
+-- ---- stand-ins for NPCs the host spawned at runtime (1f) -----------------------
+-- A road encounter, a traveller, a hunt: the host's game spawned it, the
+-- joiner's never did, so a stream for its name found no body here and was
+-- dropped -- an attacker the joiner could not see. Now the joiner spawns a
+-- stand-in UNDER THAT EXACT NAME at the host's position: every by-name path
+-- (the puppet, the native bind, the hit gate, the host's death, the loot rule)
+-- then works unchanged, and the new body is an ordinary puppet (brain
+-- suspended, driven by the stream, the copy guard on). Its look is an
+-- approximation: the host's soul is a runtime soul the joiner does not have,
+-- so the stand-in wears an authored soul of the same kind (a road bandit for
+-- *bandit*/*prepaden*, a Cuman for *kuman*/*cuman*, otherwise a commoner from
+-- the avatar roster). Humans only: the host marks a horse's stream with flag
+-- 0x80 and animals are not streamed at all. Removed when the stream stops,
+-- and all of them when the guard goes off.
+--   WO131-STANDIN spawn|remove|fail npc=<name> soul=<guid8> why=<w>
+KCD2MP.w131.standIn = true          -- mp_npc_standin on|off
+KCD2MP.w131.standins = {}           -- host name -> { at = os.clock(), soul = }
+KCD2MP.w131.standinMax = 12
+KCD2MP.w131.standinLastAt = -1e9
+local W131_SOUL_BANDIT = "29f8bb4d-87f1-465e-9ba8-679f889d4de6"   -- prepadeni_bandit_1 (Tables.pak soul__prepadeni.xml)
+local W131_SOUL_CUMAN  = "6f136519-c809-45aa-a6fb-3a0806e218f6"   -- test_cuman_enemy (soul__autotests.xml)
+
+function KCD2MP_W131StandInSoul(name)
+    local l = string.lower(tostring(name or ""))
+    if string.find(l, "bandit") or string.find(l, "prepaden") or string.find(l, "lapk") then return W131_SOUL_BANDIT, "bandit" end
+    if string.find(l, "kuman") or string.find(l, "cuman") then return W131_SOUL_CUMAN, "cuman" end
+    return KCD2MP_PickFaceForPlayer(name).guid, "commoner"
+end
+
+function KCD2MP_W131StandIn(name, x, y, z, rot, flags)
+    local w = KCD2MP.w131
+    if not (w.standIn and KCD2MP_W131IsActive()) then return nil end
+    local f = tonumber(flags) or 0
+    if (math.floor(f / 128) % 2) == 1 then return nil end   -- a horse (the host's 0x80)
+    if (f % 2) == 1 then return nil end                     -- dead on the host: no body to invent
+    if not string.find(tostring(name), "^[%w_]+$") or mp_is_excluded_npc_name(name) then return nil end
+    if w.standins[name] then return w131_body(name) end
+    local n = 0
+    for _ in pairs(w.standins) do n = n + 1 end
+    local now = os.clock()
+    if n >= w.standinMax or (now - w.standinLastAt) < 0.5 then return nil end
+    w.standinLastAt = now
+    local soul, kind = KCD2MP_W131StandInSoul(name)
+    local ok, err = pcall(function()
+        XGenAIModule.SpawnEntity({ Name = name, ClassName = "NPC", Pos = { x, y, z }, SharedSoulGuid = soul })
+    end)
+    local e = w131_body(name)
+    if e then
+        w.standins[name] = { at = now, soul = soul }
+        pcall(function() e:SetWorldAngles({ x = 0, y = 0, z = tonumber(rot) or 0 }) end)
+        mp_log(string.format("WO131-STANDIN spawn npc=%s soul=%s kind=%s at=(%.1f,%.1f,%.1f) -- the host spawned it, this world never did",
+            name, string.sub(soul, 1, 8), kind, x, y, z))
+    else
+        mp_log(string.format("WO131-STANDIN fail npc=%s soul=%s ok=%s err=%s", name, string.sub(soul, 1, 8), tostring(ok), tostring(err)))
+    end
+    return e
+end
+
+function KCD2MP_W131RemoveStandIn(name, why)
+    local w = KCD2MP.w131
+    if not w.standins[name] then return false end
+    w.standins[name] = nil
+    w.parked[name] = nil
+    local e = w131_body(name)
+    if e then pcall(function() System.RemoveEntity(e.id) end) end
+    mp_log(string.format("WO131-STANDIN remove npc=%s why=%s", name, tostring(why)))
+    return true
+end
+
+function KCD2MP_SetNpcStandIn(arg)
+    local v = KCD2MP_Wo122ParseBool(arg)
+    if v == "bad" then mp_log("mp_npc_standin: expected on|off, got '" .. tostring(arg) .. "'"); return false end
+    if v ~= nil then KCD2MP.w131.standIn = v end
+    mp_log("WO131-STANDIN standin=" .. (KCD2MP.w131.standIn and "on" or "off"))
+    return true
+end
+
+
+-- ---- no stuck poses (2b) ---------------------------------------------------------
+-- A copy the host says is ALIVE and ON ITS FEET (stream: not dead, not KO) but
+-- whose local body is down -- a local blow ragdolled it (its physics is then
+-- no longer a living entity: the native bind refuses it as "not-living") or
+-- knocked it out -- was held at the stream's standing height by the Lua
+-- writer: the body lay IN the ground with only the head showing (the field's
+-- "phasing"; reproduced live, docs/wo131-shots). The engine's own
+-- actor:StandUp() puts it back on its feet (live: re-bound natively seconds
+-- later, walking). A copy the HOST has down (KO) is left down; a death is the
+-- host's ApplyDeath at the host's position.
+--   WO131-STANDUP npc=<name> why=<w> ok=<pcall>
+function KCD2MP_W131StandUpIfDown(name, why)
+    local p = KCD2MP.npcPuppets[name]
+    if not p or p.dead or p.ko then return false end
+    local now = os.clock()
+    if p.w131StandUpAt and (now - p.w131StandUpAt) < 3.0 then return false end
+    local e = w131_body(name)
+    if not (e and e.actor) then return false end
+    local localDead = false
+    pcall(function() localDead = e.actor:IsDead() == true end)
+    if localDead then return false end   -- a local death is a divergence the host resolves, never a stand-up
+    p.w131StandUpAt = now
+    if type(e.actor.StandUp) ~= "function" then
+        if not KCD2MP.w131.standUpMissingLogged then
+            KCD2MP.w131.standUpMissingLogged = true
+            mp_log("WO131-STANDUP actor:StandUp is not registered on this build -- a ragdolled copy stays down")
+        end
+        return false
+    end
+    local ok, err = pcall(function() e.actor:StandUp() end)
+    KCD2MP.w131.stats.standups = (KCD2MP.w131.stats.standups or 0) + 1
+    mp_log(string.format("WO131-STANDUP npc=%s why=%s ok=%s%s", tostring(name), tostring(why), tostring(ok),
+        ok and "" or (" err=" .. tostring(err))))
+    return ok
 end
 
 -- ---- looting and pickpocketing (1c) ---------------------------------------------
@@ -6895,6 +7036,7 @@ function KCD2MP_NpcSyncTick()
             -- values and sends immediately, at the entity's CURRENT position
             -- and life state (read fresh above, every tick, cull or not) --
             -- never a stale resume.
+            local farBand = false   -- WO-131: sent on the far-band heartbeat, still culled for full rate
             if isAuthority and KCD2MP.wo102.authorityHost and KCD2MP.wo1025.npcCull and not engaged then
                 local dCull = 1e9
                 for _, a in ipairs(KCD2MP._lastAnchors or {}) do
@@ -6914,10 +7056,10 @@ function KCD2MP_NpcSyncTick()
                         t.culled = true
                         return
                     end
-                    t.farBand = true
+                    farBand = true
                 end
             end
-            if t.culled then
+            if t.culled and not farBand then
                 t.culled = false
                 mp_log("WO1025-CULL re-entry " .. name)
             end
@@ -6937,6 +7079,7 @@ function KCD2MP_NpcSyncTick()
                 local flags = (dead and 1 or 0) + (ko and 2 or 0)
                     + (drawn and 4 or 0) + (swingCue and 8 or 0)
                     + (engaged and 32 or 0)
+                    + ((e.class == "Horse") and 128 or 0)   -- WO-131: not a human (no stand-in on the joiner)
                 -- npc_state rides the authority's default stream; npc_claim
                 -- (WO-60) is the same payload sent down the asClaim path, so
                 -- the agent's authority gate lets it through and sending it
@@ -7375,6 +7518,7 @@ function KCD2MP_ApplyNpcState(name, x, y, z, rot, hp, flags, src, seq, senderMs)
     end
 
     local e = KCD2MP_NpcBody(name)   -- WO-104: the replica while one drives this NPC, else the world NPC
+    if not e and KCD2MP_W131StandIn then e = KCD2MP_W131StandIn(name, x, y, z, rot, flags) end   -- WO-131 1f
     if not e then return end
 
     -- WO-38 Phase 5: a horse currently adopted as some ghost's mount is owned
@@ -14105,6 +14249,7 @@ local ok, err = pcall(function()
     -- WO-114: the leash (HOST values decide; default on, 600 m warning, 650 m pull).
     System.AddCCommand("mp_npc_guard",           'KCD2MP_SetNpcGuard(%line)',             "WO-131 1a (JOINER): every NPC of the host's world is the host's stream or parked here (suspended + hidden) -- never a free copy: mp_npc_guard on|off (default on); bare = report")
     System.AddCCommand("mp_avatar_perceive",     'KCD2MP_SetAvatarPerceive(%line)',       "WO-131 1d (HOST of a shared world): the partner's avatar is always perceivable by NPCs (never AI-ignorant) and in the player's faction: mp_avatar_perceive on|off (default on); bare = report")
+    System.AddCCommand("mp_npc_standin",         'KCD2MP_SetNpcStandIn(%line)',           "WO-131 1f (JOINER): an NPC the host spawned at runtime (road encounters) gets a stand-in here under its own name, driven by the host's stream: mp_npc_standin on|off (default on)")
     System.AddCCommand("mp_w131_status",         'KCD2MP_W131Status()',                   "WO-131: the copy guard, loot block and perception state (WO131-STATUS in kcd.log)")
     System.AddCCommand("mp_leash",               'KCD2MP_SetLeash(%line)',                "WO-114: keep the joiner near the host (HOST only -- the host's value is the session's): a warning past mp_leash_warn_m, a 10 s countdown past mp_leash_pull_m, then the joiner is brought beside the host: mp_leash on|off (default on); bare = report")
     System.AddCCommand("mp_leash_warn_m",        'KCD2MP_SetLeashWarn(%line)',            "WO-114: the leash warning distance in metres (HOST; default 600; below mp_leash_pull_m): mp_leash_warn_m <metres>; bare = report")

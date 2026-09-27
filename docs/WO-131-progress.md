@@ -74,9 +74,65 @@ their reason, as they were made. Evidence marks: (observed), (code-verified),
    engine's `DialogTwin_<player>` stand-in exists (WO-90: the conversation
    camera hangs from it; barks spawn none).
 
+10. **1f: stand-ins under the host NPC's exact name**, so every by-name path
+    (the puppet, the native bind and its WUID check, the hit gate, the host's
+    death, the loot rule) works unchanged. The look is approximate (a road
+    bandit wears an authored bandit soul, a Cuman a Cuman soul, anyone else a
+    roster commoner). Horses are flagged by the host (stream bit 0x80) and
+    never get one. Animals: not streamed, not done.
+11. **2b: stand up, never hold a lying body upright.** The native writer drops
+    a bound body whose physics stops being a living entity (checked twice a
+    second) with reason `not-living`; Lua calls `actor:StandUp()` when the
+    host's stream says alive and awake. A body the host has KO stays down.
+12. **Test rigs.** Spawned test souls (autotest bandits, a road-ambush soul)
+    never attack anyone on their own, not even Henry (they are homeless, no
+    situation); a live bandit camp's reactions are scripted on the player.
+    Wolves (the game's own spawn) were the only unprovoked attackers found
+    without input. This is why 1d/1e/2a are partly (inconclusive).
+
 ## Log
 
 - Stage 1 (code): native `wo131.cpp` (pipe 0x21 → 0x98), capture fixes in
   `motion.cpp`, respawn StopFight; agent `GameBridge.Wo131.cs` + `Wo131.cs`;
   Lua `KCD2MP.w131`; leash hysteresis. Agent tests 387/387 (12 new)
-  (synthetic). Nothing live yet.
+  (synthetic).
+- Run A (host, avatarpeer joiner, a forest 290 m from the nearest NPC, then a
+  bandit camp 1.9 km away): faction join read back `player`; wolves targeted
+  and bit the avatar and it joined Henry's side of their skirmish; perception
+  off: wolves still attack (not discriminating); spawned bandit souls attack
+  nobody; the live camp warned Henry at 4 m (`CAMP_TRESPASS_CHAT`, weapons
+  drawn — Henry moved away before it became a fight or a dialogue needing
+  input) and ignored the avatar at 4 m; the peer's death → StopFight → the wolf
+  dropped the fight. `RequestAction(attack/freeAttack)` null on NPC and player.
+  Tools added: avatarpeer `--record`, `death`, `respawned`, `vitals`,
+  `appearance mirror`; synthpeer `raw`, `die`, `hp`, `--claim-host`, and it
+  prints received hits. 5 autosaves the host agent wrote were moved out of the
+  playline (test files).
+- Run B (joiner): guard on (52 parked), identity binding, stand-in, hp follow,
+  host death at the host's position, loot block (toast), CSV 194 s: only the
+  200 m edge row. Phasing reproduced by a lethal local blow; the hit gate
+  dropped every hit as `no-answer` (a slow soul lookup; fixed by entity id).
+- Run C (joiner): the gate still `no-answer` → found the reader-loop deadlock
+  (the LocalHit handler awaited on the pipe's own reader); fixed, agent
+  hot-swapped: forward and `not-bound` both observed. Attack rows: no swing.
+  Manual `StandUp` fixes the phasing. The hard agent kill exercised the Lua
+  backstop (everything given back after 10 s). CSV 249 s: 0 free humans.
+- Run D (joiner, the native not-living drop): automatic stand-up observed;
+  save load re-parks in ~1 s; release → park observed; CSV found the re-pause
+  defect (bodies the load re-created, hidden but not suspended) — fixed.
+- Run E (joiner): the fix; a save load (3 far bodies free for one sample); the
+  local player's death (grave, wake inside the leash, StopFight sent).
+- **Focus incident (run E launch):** the game window came to the foreground by
+  itself while loading the save (`foreground=True` after the load). Nothing
+  was typed or clicked. Returned at once: minimise (the OS activates the next
+  window) and restore without activation at the bottom of the Z order;
+  `foreground=False` for the rest of the session (checked after every load).
+- Gates (no installer): relay 50/50, agent 387/387, 27 synthetic suites
+  green (WO-131 79/79; WO-114 and WO-118 adjusted, see the findings §6), both
+  static checks, native 47/47, local publish + payload smoke. The tracked
+  `kdcmp.pak` is rebuilt from the sources.
+- Run E CSV: 528 s, 72 names, 6 free human rows (one sample at a save load).
+- Clean-up: the test game's original `kdcmp.pak` restored (hash checked);
+  `kcdmp-combatwrite.txt` removed; 5 host autosaves (run A) and 1 (run B's
+  first, mis-roled start) moved out of playline1 into the session scratchpad;
+  no joiner run wrote a save.

@@ -24,6 +24,13 @@
 //   at <t> leash flags <flag,...>              change the reported flags (none = not in the world)
 //   at <t> leash obey on|busy|fail             what a Pull does: move 3 m east of the host and report
 //                                              placed (on), refuse as busy, or report not-placed (fail)
+//   at <t> death                               (WO-131) a PlayerDeath (0x23): "I died"
+//   at <t> respawned <x> <y> <z>               (WO-131) a PlayerRespawned (0x3E), then stand there
+//   at <t> vitals <hp> <st>                    (WO-131) a PlayerState (0x1F): the owner's own health (hp > 0 clears
+//                                              the host's death tag, as a real joiner's vitals do); also sent
+//                                              every 2 s at 100/100 once `vitals` or `respawned` ran
+//   at <t> appearance mirror|<guid,...>        (WO-131) an Appearance (0x1A): the host's own item classes
+//                                              as last received (mirror), or the given item-class GUIDs
 //   end <t>                                    stop
 //
 // Position packets: every 30 ms while moving, 2 s heartbeat still; the state
@@ -32,6 +39,9 @@
 //
 // usage: AvatarPeer --scenario s.txt [--host 127.0.0.1] [--port 7778] [--name wo121-peer] [--skew-ms N]
 //   --skew-ms N  (WO-129) every sender stamp this peer writes runs N ms ahead: an artificial clock skew
+//   --record F   (WO-131) append every NpcStateDown (0x27), ActionDown (0x3C) and NpcDamageDown (0x31)
+//                this peer receives to F as "<ms> <type hex> <payload hex>" -- the host's outgoing
+//                stream, for tools/wo131/replay.py -> synthpeer `raw` lines into a joiner game
 using System.Buffers.Binary;
 using System.Diagnostics;
 using System.Globalization;
@@ -90,6 +100,10 @@ static class P
         var leashIn = new System.Collections.Concurrent.ConcurrentQueue<(byte Src, LeashCommand C)>();   // WO-114
         using var cts = new CancellationTokenSource();
         var inbox = new ActionInbox();
+        string recPath = Arg(a, "--record", "");
+        StreamWriter? rec = recPath.Length > 0 ? new StreamWriter(recPath, append: true) { AutoFlush = true } : null;
+        var recClock = Stopwatch.StartNew();
+        byte[]? hostAppearance = null;   // WO-131: the last AppearanceDown classes (for `appearance mirror`)
         var reader = Task.Run(async () =>
         {
             try
@@ -97,6 +111,9 @@ static class P
                 while (!cts.IsCancellationRequested)
                 {
                     var (t2, b2) = await ReadPacket(st, cts.Token);
+                    if (rec is not null && (t2 == Protocol.NpcStateDown || t2 == Protocol.ActionDown || t2 == Protocol.NpcDamageDown))
+                        lock (rec) rec.WriteLine($"{recClock.ElapsedMilliseconds} {t2:X2} {Convert.ToHexString(b2)}");
+                    if (t2 == Protocol.AppearanceDown && b2.Length >= 2 && b2[0] != myId) hostAppearance = b2.AsSpan(1).ToArray();   // [src][count][classes]
                     if (t2 == Protocol.Name && b2.Length >= 2 && b2[0] != myId) { joiner ??= b2[0]; }
                     else if (t2 == Protocol.Ghost && b2.Length >= 1 && b2[0] != myId) joiner ??= b2[0];
                     else if (t2 == Protocol.PlayerHitV8Down && PlayerHitV8.TryDecodeDown(b2, out byte att, out var h))
@@ -118,6 +135,7 @@ static class P
         var s2 = new BodyState2(0, 0, BodyState2Bits.None, WireZone.Undefined, WireGuardStance.None, WireZone.Undefined, 0, 0, 0);
         BodyState2? lastSent = null; double lastSentT = -9, lastPos = -9, lastPing = 0; int si = 0; bool placed = false, frozen = false;
         double lastT = 0;
+        float vitalsHp = -1, vitalsSt = -1; double lastVitals = -9;   // WO-131
         // WO-114: the joiner's side of the leash (off until "leash on").
         bool leashOn = false; ushort leashFlags = Protocol.LeashFlagInWorld; string leashObey = "on";
         byte leashSeq = 0, leashResult = 0; ushort leashFrom = 0, leashTo = 0, leashRes = 0; double lastLeash = -9;
@@ -251,6 +269,48 @@ static class P
                         }
                         else Console.WriteLine($"PEER t={t:F1} hit: no joiner seen yet");
                         break;
+                    case "vitals":   // WO-131
+                        vitalsHp = F(f[1]); vitalsSt = F(f[2]); lastVitals = -9;
+                        Console.WriteLine($"PEER t={t:F1} vitals {vitalsHp}/{vitalsSt}");
+                        break;
+                    case "death":   // WO-131
+                    {
+                        var dp = new byte[3]; dp[0] = Protocol.PlayerDeathUp;
+                        await Send(st, dp);
+                        Console.WriteLine($"PEER t={t:F1} death sent");
+                        break;
+                    }
+                    case "respawned":   // WO-131: respawned <x> <y> <z>
+                    {
+                        x = F(f[1]); y = F(f[2]); z = zBase = F(f[3]); speed = 0; moveUntil = -1; placed = true; frozen = false;
+                        var rp = new byte[3 + Protocol.PlayerRespawnedUpPayloadLen]; rp[0] = Protocol.PlayerRespawnedUp;
+                        BinaryPrimitives.WriteUInt16LittleEndian(rp.AsSpan(1), (ushort)Protocol.PlayerRespawnedUpPayloadLen);
+                        BinaryPrimitives.WriteSingleLittleEndian(rp.AsSpan(3), x); BinaryPrimitives.WriteSingleLittleEndian(rp.AsSpan(7), y);
+                        BinaryPrimitives.WriteSingleLittleEndian(rp.AsSpan(11), z); rp[15] = 1;
+                        await Send(st, rp);
+                        await Send(st, PositionCodec.BuildPosition(x, y, z, yaw, false, false, null, Ms()));
+                        lastPos = t;
+                        vitalsHp = 100; vitalsSt = 100; lastVitals = -9;
+                        Console.WriteLine(FormattableString.Invariant($"PEER t={t:F1} respawned at ({x:F1}, {y:F1}, {z:F1})"));
+                        break;
+                    }
+                    case "appearance":   // WO-131: appearance mirror | <guid,...>
+                    {
+                        byte[]? classes = null;
+                        if (f.Length > 1 && f[1] == "mirror") classes = hostAppearance;
+                        else if (f.Length > 1)
+                        {
+                            var gs = f[1].Split(',', StringSplitOptions.RemoveEmptyEntries);
+                            classes = new byte[1 + gs.Length * 16]; classes[0] = (byte)gs.Length;
+                            for (int gi = 0; gi < gs.Length; gi++) Guid.Parse(gs[gi]).ToByteArray().CopyTo(classes, 1 + gi * 16);
+                        }
+                        if (classes is null) { Console.WriteLine($"PEER t={t:F1} appearance: nothing to mirror yet"); break; }
+                        var ap = new byte[3 + classes.Length]; ap[0] = Protocol.AppearanceUp;
+                        BinaryPrimitives.WriteUInt16LittleEndian(ap.AsSpan(1), (ushort)classes.Length); classes.CopyTo(ap, 3);
+                        await Send(st, ap);
+                        Console.WriteLine($"PEER t={t:F1} appearance sent ({classes[0]} item classes)");
+                        break;
+                    }
                     case "leash":   // WO-114
                         if (f.Length > 1 && f[1] is "on" or "off") { leashOn = f[1] == "on"; if (f.Length > 2) leashFlags = LeashFlagsOf(f[2]); lastLeash = -9; }
                         else if (f.Length > 2 && f[1] == "flags") { leashFlags = LeashFlagsOf(f[2]); lastLeash = -9; }
@@ -284,6 +344,14 @@ static class P
             {
                 lastLeash = t;
                 await Send(st, new LeashState(leashFlags, leashSeq, leashResult, leashFrom, leashTo, leashRes).Build());
+            }
+            if (vitalsHp >= 0 && t - lastVitals >= 2.0)
+            {
+                lastVitals = t;
+                var vp = new byte[3 + Protocol.PlayerStateUpPayloadLen]; vp[0] = Protocol.PlayerStateUp;
+                BinaryPrimitives.WriteUInt16LittleEndian(vp.AsSpan(1), (ushort)Protocol.PlayerStateUpPayloadLen);
+                BinaryPrimitives.WriteSingleLittleEndian(vp.AsSpan(3), vitalsHp); BinaryPrimitives.WriteSingleLittleEndian(vp.AsSpan(7), vitalsSt);
+                await Send(st, vp);
             }
             if (!placed || frozen) { await Task.Delay(5); continue; }
             bool moving = moveUntil > t && speed > 0;
