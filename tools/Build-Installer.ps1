@@ -5,7 +5,7 @@
 .DESCRIPTION
     Runs tools\Publish-Release.ps1 to assemble release\KCDMP, then compiles
     installer\KCDMP.iss with Inno Setup's command-line compiler into
-    release\KCDMP-Setup-<version>.exe.
+    release\KingdomComeTogether-Setup-<version>.exe (WO-134: the new name; KCDMP-Setup-<version>.exe before).
 
     The version comes from the VERSION file at the repo root and from nowhere
     else: it is stamped into the Setup filename, the installer's Add/Remove
@@ -176,7 +176,7 @@ Write-Host "Compiling $iss (version $Version) ..."
 & $iscc "/DAppVersion=$Version" $iss
 if ($LASTEXITCODE -ne 0) { throw "ISCC failed with exit code $LASTEXITCODE" }
 
-$setup = Join-Path $root "release\KCDMP-Setup-$Version.exe"
+$setup = Join-Path $root "release\KingdomComeTogether-Setup-$Version.exe"
 if (-not (Test-Path $setup)) { throw "ISCC reported success but $setup is missing" }
 
 $mb = [math]::Round((Get-Item $setup).Length / 1MB, 1)

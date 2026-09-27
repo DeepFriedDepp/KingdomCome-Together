@@ -20,18 +20,30 @@
     font-size: 48px;
     text-transform: uppercase;
     text-shadow: 0 4px 10px rgba(var(--kcd-shadow-rgb),0.9);
-    margin-bottom: 20px;
+    margin-bottom: 14px;
     letter-spacing: 5px;
     text-align: center;
     width: 100%;
     pointer-events: auto;
 }
 
+/* WO-134: the banner header. Height-bound so the server list keeps its room;
+   the image is never cropped (object-fit: contain), so the title is always whole. */
+.title-banner {
+    display: block;
+    margin: 0 auto;
+    height: 17vh;
+    max-width: 90vw;
+    object-fit: contain;
+    border: 1px solid var(--kcd-gold);
+    box-shadow: 0 6px 24px rgba(var(--kcd-shadow-rgb), 0.9);
+}
+
 /* Główne okno */
 .main-window {
     width: 90vw;
     max-width: 1600px;
-    height: 85vh; /* Z Twojego pliku */
+    height: 70vh; /* WO-134: 85vh before the banner header */
     display: flex;
     flex-direction: column;
     filter: drop-shadow(0 0 50px rgba(var(--kcd-shadow-rgb),1.0));

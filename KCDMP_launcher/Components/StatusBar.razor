@@ -1,4 +1,4 @@
-@using KCDMP_launcher.Components.Shared
+﻿@using KCDMP_launcher.Components.Shared
 <div class="status-bar">
     <div class="status-left">
         <span class="status-btn" @onclick="OnToggleFilters" style="color: var(--kcd-gold); font-weight: bold;">
@@ -21,7 +21,8 @@
     <div class="status-center">
         Master: <span class="@(Globals.IsMasterOnline ? "status-online" : "status-offline")">@(Globals.IsMasterOnline ? "Online" : "Offline")</span>
         <span class="sep">|</span>
-        <span>v @Globals.Version</span>
+        <img class="status-logo" src="img/logo-128.png" alt="" draggable="false" />
+        <span>Kingdom Come: Together v @Globals.Version</span>
     </div>
 
     <div class="status-right">
@@ -31,6 +32,7 @@
     </div>
 
     <div class="legal-footer">
+        Unofficial. Not affiliated with or endorsed by Warhorse Studios.
         Kingdom Come: Deliverance is a trademark of Warhorse Studios.
         This is a non-commercial fan project.
     </div>

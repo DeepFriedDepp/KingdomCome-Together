@@ -1,4 +1,9 @@
-# Testing `KCDMP-Setup-<version>.exe`
+# Testing `KingdomComeTogether-Setup-<version>.exe`
+
+> WO-134 (0.30.9): the installer is now `KingdomComeTogether-Setup-<version>.exe` and
+> installs as **Kingdom Come: Together** (same AppId, same install folder: it upgrades an
+> older `KCDMP-Setup` install in place, one entry in Windows' apps list). Older examples
+> below keep the old file names.
 
 Three tiers, and they are not interchangeable. Tier 1 runs on any dev machine
 and is green. Tier 2 needs a human sitting in front of the wizard. Tier 3
@@ -90,7 +95,7 @@ download, and the replace-a-foreign-`kdcmp` prompt are all unexercised by it.
 
 ## Tier 2 — interactive, one human, this machine
 
-Run `release\KCDMP-Setup-<version>.exe` by double-clicking it.
+Run `release\KingdomComeTogether-Setup-<version>.exe` by double-clicking it.
 
 - [ ] Welcome page appears; GPLv3 licence page shows the real licence text.
 - [ ] The Modding Tools page shows **Modding Tools found** and the correct
@@ -169,7 +174,7 @@ builds one at `%TEMP%\kcdmp-detect-fixtures`; run it once first, then:
       the game folder; answering No leaves it, answering Yes removes it.
 - [ ] Either way the game itself is untouched.
 - [ ] **With the launcher deliberately left running**, start the uninstaller:
-      it must refuse with "KCD2 Multiplayer is still running" and a
+      it must refuse with "Kingdom Come: Together is still running" and a
       Retry/Cancel choice, and Cancel must leave the install completely
       intact — not half-removed. Close the launcher, click Retry, and confirm
       it then completes cleanly with no leftover files in

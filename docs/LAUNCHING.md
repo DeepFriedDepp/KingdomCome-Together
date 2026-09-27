@@ -1,6 +1,6 @@
 # How to launch
 
-> **The normal way is `KCDMP-Setup-<version>.exe`** — download it, run it,
+> **The normal way is `KingdomComeTogether-Setup-<version>.exe`** — download it, run it,
 > done. It finds the game through Steam, deploys the mod, installs the
 > launcher and pre-fills the game path. See the Install section of
 > `README.md`. Everything below is the **fallback**: the manual flow, kept

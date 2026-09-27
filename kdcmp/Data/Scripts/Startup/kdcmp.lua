@@ -1,4 +1,4 @@
--- KCD2 Multiplayer - Mod Init Script
+-- Kingdom Come: Together (the mod: kcdmp / kdcmp.pak; internal names keep KCD2MP_) - Mod Init Script
 System.LogAlways("[KCD2-MP] === MOD INIT ===")
 
 KCD2MP = {}
@@ -2497,7 +2497,7 @@ function KCD2MP_SetCullRadius(arg)
     end
     if m > CULL_RADIUS_MAX then
         mp_log(string.format("WO1025-CULL-RADIUS %.1f EXCEEDS THE HARD CEILING -- clamped to %.0f m (WO-109 s4.3: the dense-town all-moving bound past this exceeds the joiner's Lua ingress)", m, CULL_RADIUS_MAX))
-        pcall(function() KCD2MP_ShowNativeToast(string.format("KCD2-MP: cull radius clamped to %.0f m", CULL_RADIUS_MAX)) end)
+        pcall(function() KCD2MP_ShowNativeToast(string.format("Kingdom Come: Together -- cull radius clamped to %.0f m", CULL_RADIUS_MAX)) end)
         m = CULL_RADIUS_MAX
     end
     local was = w.cullRadius
@@ -4441,7 +4441,7 @@ local function mp_wo102_violation(name, p, kind, distM, fx, fy)
     if KCD2MP_NpcReplicaConsider then KCD2MP_NpcReplicaConsider(name, p, kind) end
     if (now - (KCD2MP._authViolationToastAt or -1e9)) >= 300.0 then
         KCD2MP._authViolationToastAt = now
-        pcall(function() KCD2MP_ShowNativeToast("KCD2-MP: an NPC is being moved by this machine's own AI under host authority -- see kcd.log (MP-AUTHORITY-VIOLATION)") end)
+        pcall(function() KCD2MP_ShowNativeToast("Kingdom Come: Together -- an NPC is being moved by this machine's own AI under host authority -- see kcd.log (MP-AUTHORITY-VIOLATION)") end)
     end
 end
 
@@ -7889,7 +7889,7 @@ function KCD2MP_NpcPuppetTick(arg, gen)
                                     or " (observe-only; `mp_npc_chainfix on` to stop it)"))
             -- WO-78: the 2026-09-11 session logged this line on both machines
             -- and nobody could have known to act on it live. Surface it.
-            pcall(function() KCD2MP_ShowNativeToast("KCD2-MP: NPC puppet chain leak detected -- see kcd.log") end)
+            pcall(function() KCD2MP_ShowNativeToast("Kingdom Come: Together -- NPC puppet chain leak detected -- see kcd.log") end)
         end
         -- The fix, gated: a stale chain stops rescheduling and dies here.
         if KCD2MP.npcChainFix then return end
@@ -8360,7 +8360,7 @@ function KCD2MP_NpcPuppetTick(arg, gen)
                                     end
                                     pcall(function()
                                         KCD2MP_ShowNativeToast(
-                                            "KCD2-MP: your story and " .. peer .. "'s have diverged -- nearby NPCs"
+                                            "Kingdom Come: Together -- your story and " .. peer .. "'s have diverged -- nearby NPCs"
                                             .. " now follow your own game (e.g. " .. tostring(name) .. ")")
                                     end)
                                 end
@@ -10919,7 +10919,7 @@ function KCD2MP_InterpTick(arg, gen)
                 tostring(gen), tostring(KCD2MP.interpGen),
                 KCD2MP.ghostChainFix and " (stale chain exiting now)"
                                       or " (observe-only; `mp_ghost_chainfix on` to stop it)"))
-            pcall(function() KCD2MP_ShowNativeToast("KCD2-MP: ghost chain leak detected -- see kcd.log") end)
+            pcall(function() KCD2MP_ShowNativeToast("Kingdom Come: Together -- ghost chain leak detected -- see kcd.log") end)
         end
         if KCD2MP.ghostChainFix then return end   -- the stale chain stops rescheduling and dies here
     end
@@ -16560,7 +16560,7 @@ function KCD2MP_QuestFire(beat, who)
     -- call did not throw (WO-43), but a call that DID throw must not be
     -- toasted as a granted objective.
     if not ok then
-        KCD2MP_ShowNativeToast("KCD2-MP: catch-up command FAILED for " .. beat .. " -- see kcd.log")
+        KCD2MP_ShowNativeToast("Kingdom Come: Together -- catch-up command FAILED for " .. beat .. " -- see kcd.log")
     elseif fix then
         KCD2MP_ShowNativeToast("Granting objective " .. fix.o .. " (" .. fix.dir .. ") via " .. beat)
     else

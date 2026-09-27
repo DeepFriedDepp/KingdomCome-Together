@@ -127,7 +127,12 @@ $AsmMarkers = @(
     # WO-133: the old quest layer off in a shared world; only the host moves the clock.
     @{ File = 'KcdMpClient.dll'; Marker = 'KCD2MP_Wo133Gate';       Owner = 'WO-133 shared-world quest gate (agent half)' },
     @{ File = 'KcdMpClient.dll'; Marker = "only the host's clock moves the world"; Owner = 'WO-133 host drops joiner time skips' },
-    @{ File = 'KCDMP.dll';       Marker = 'WO133-PORTGATE';         Owner = 'WO-133 file-armed port trigger never fires in a session (native)' }
+    @{ File = 'KCDMP.dll';       Marker = 'WO133-PORTGATE';         Owner = 'WO-133 file-armed port trigger never fires in a session (native)' },
+    # WO-134: world items (bodies, loose items, chest ledgers) and the rebrand
+    @{ File = 'KcdMpClient.dll'; Marker = 'KCD2MP_W134BodyState';   Owner = 'WO-134 bodies shared in the host world (agent half)' },
+    @{ File = 'KcdMpClient.dll'; Marker = 'MP-WO134-STATS';         Owner = 'WO-134 chest ledgers and loot requests (agent half)' },
+    @{ File = 'KcdMp.Protocol.dll'; Marker = 'loot-host';           Owner = 'WO-134 loot messages on the join channel (wire)' },
+    @{ File = 'KCDMP_launcher.dll'; Marker = 'Kingdom Come: Together'; Owner = 'WO-134 rebrand (launcher window title)' }
 )
 
 $PakMarkers = @(
@@ -180,6 +185,10 @@ $PakMarkers = @(
     @{ Marker = 'function KCD2MP_Wo129SharedAnchors'; Owner = 'WO-129 every player an NPC scan anchor' },
     # WO-133: the old quest layer is off in a shared world.
     @{ Marker = 'function KCD2MP_Wo133Gate';       Owner = 'WO-133 shared-world quest gate (mod half)' },
+    @{ Marker = 'function KCD2MP_W134LootRequest'; Owner = 'WO-134 a joiner loot is a request to the host (mod half)' },
+    @{ Marker = 'function KCD2MP_W134HostItem';    Owner = 'WO-134 loose world items per world (mod half)' },
+    @{ Marker = 'function KCD2MP_W134ChestApply';  Owner = 'WO-134 chests per player across rejoins (mod half)' },
+    @{ Marker = 'function W134.takeAway';          Owner = 'WO-134 world items leave for good (no item-slot respawn)' },
     @{ Marker = 'Quest catch-up is off in a shared world.'; Owner = 'WO-133 the plain refusal line' }
 )
 

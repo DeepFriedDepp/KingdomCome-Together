@@ -141,8 +141,9 @@ host's world (time, NPCs, quests).
   host's health (`MP-WO131 follow`), and dies only on the host's order at the
   host's position (`MP-WO131 copy guard off <npc>: the host's death is applied
   now`). A local death is never sent (`[npcdeath] out: ... NOT sent (WO-131`).
-* **Looting and pickpocketing host-owned NPCs is blocked on the joiner**
-  (`WO131-LOOT blocked npc=...`, and the game's own toast).
+* **Looting host-owned bodies (0.30.9, WO-134):** no longer blocked; see
+  "Loot together" below. **Pickpocketing** a living host-owned NPC stays
+  blocked on the joiner (`WO131-LOOT blocked npc=... kind=pickpocket`).
 * **Road encounters:** an NPC only the host has gets a stand-in under its own
   name on the joiner (`WO131-STANDIN spawn npc=...`); `mp_npc_standin off`.
 * **Perception (host):** avatars are never AI-ignorant in a shared world and
@@ -172,6 +173,42 @@ host's world (time, NPCs, quests).
   watching`, `npc-combat out`).
 * Counters every 60 s in the agent log: `MP-WO131-STATS`, `MP-W132-STATS`.
 * Two-player checklist: `docs/WO-132-findings.md`, section 7 (and WO-131's).
+
+## Loot together (from 0.30.9, WO-134)
+
+In plain words:
+
+* **Things you drop for each other** work exactly as before: drop it, the other
+  player sees it, whoever picks it up first has it.
+* **Bodies are shared.** A body is the host's. When the joiner loots it, the
+  loot screen shows what the **host's** body holds; each thing the joiner takes
+  comes out of the host's body too. If the host (or anyone) took it a moment
+  earlier, the joiner gets "Someone already took that." and the item goes back.
+  When the host strips a body, it is stripped on the joiner's screen too.
+* **Loose things lying about** (food on a table, a tool, coins on the ground)
+  exist once. Whoever picks one up first has it; it is gone for both.
+  Something only one game has (it fell somewhere else there) stays as it was.
+  **Herbs you gather** are separate for each player.
+* **Chests are per player.** You each loot your own copy (you can both take
+  the same dice). It is remembered per world: after a join, what the host took
+  is back in the joiner's chests, and what the joiner took stays taken for him.
+  After the game's own restock period (usually 7 days) a chest refills on its
+  own, as it always did.
+
+Logs:
+
+* joiner kcd.log: `WO134-BODY open npc=<name>` → `state ... reason=open` →
+  `the loot screen opens on the host's items`; each take `WO134-BODY take`,
+  then `result ... ok` or `gone`. Loose items: `WO134-ITEM ask` → `ok` /
+  `gone` / `unmatched` (per machine); the host's pickups `WO134-ITEM host-gone`.
+* host kcd.log: `WO134-BODY host-take npc=... -> ok|gone`, `WO134-ITEM
+  host-take ... -> ok|gone|unknown`, `WO134-ITEM host-gone` (its own pickup).
+* chests, both: `WO134-CHEST take|put chest=...`; after a join the joiner's
+  `WO134-CHEST apply rows=N applied=... expired=... skipped=...`; agent logs
+  `MP-WO134 chests: ...` (the host ledger sent / arrived / applied).
+* status `mp_w134_status`; switches `mp_loot_bodies`, `mp_loot_items`,
+  `mp_loot_chests` (`off` = the 0.30.7 behaviour for that part). Counters
+  every 60 s: `MP-WO134-STATS`.
 
 ## Expected not to work yet
 

@@ -1,13 +1,14 @@
 <p align="center">
-  <img src="docs/branding/kcd2-mp-logo.png" alt="KCD2 Multiplayer" width="220">
+  <img src="docs/branding/banner-1280.jpg" alt="Kingdom Come: Together" width="720">
 </p>
 
 <h1 align="center">Kingdom Come: Together</h1>
-<p align="center"><em>An **unofficial** co-op mod for Kingdom Come: Deliverance II.</em></p>
+<p align="center"><em>An <strong>unofficial</strong> co-op mod for Kingdom Come: Deliverance II.</em><br>
+<strong>Unofficial. Not affiliated with or endorsed by Warhorse Studios.</strong></p>
 
 <p align="center">
-  <a href="docs/releases/RELEASE-NOTES-0.30.7.md"><img alt="main" src="https://img.shields.io/badge/main-0.30.7-b8860b?style=flat-square"></a>
-  <a href="https://github.com/DeepFriedDepp/kcd2-multiplayer_Reworked/releases/latest"><img alt="latest release" src="https://img.shields.io/github/v/release/DeepFriedDepp/kcd2-multiplayer_Reworked?label=latest%20release&color=8a3324&style=flat-square"></a>
+  <a href="docs/releases/RELEASE-NOTES-0.30.9.md"><img alt="main" src="https://img.shields.io/badge/main-0.30.9-b8860b?style=flat-square"></a>
+  <a href="https://github.com/DeepFriedDepp/KingdomCome-Together/releases/latest"><img alt="latest release" src="https://img.shields.io/github/v/release/DeepFriedDepp/KingdomCome-Together?label=latest%20release&color=8a3324&style=flat-square"></a>
   <a href="LICENSE"><img alt="License: GPLv3" src="https://img.shields.io/badge/license-GPLv3-2c3e50?style=flat-square"></a>
   <a href="docs/LAUNCHING.md"><img alt="Platform" src="https://img.shields.io/badge/platform-Windows-555555?style=flat-square"></a>
   <a href="https://discord.gg/WPCAcG4H4"><img alt="Discord" src="https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white&style=flat-square"></a>
@@ -27,7 +28,7 @@ against each other from inside the game itself.
 > **Two version numbers**. `main` (this
 > repo's source) is ahead of the last published installer; the feature list
 > below describes `main`. Installing from the
-> [releases page](https://github.com/DeepFriedDepp/kcd2-multiplayer_Reworked/releases)
+> [releases page](https://github.com/DeepFriedDepp/KingdomCome-Together/releases)
 > gets you that published build's feature set, not everything described
 > here — [Building from source](#building-from-source) gets you current
 > `main`.
@@ -65,6 +66,7 @@ known rough edges in [the detailed status table](#full-status-detail) below.
 | Reactive ghost combat (self-defense, joins nearby fights) | ⚠️ Working, but suppressed by default — `mp_ghost_isolate` (on by default since WO-68) disables it |
 | Proactive NPC aggro on ghosts (`mp_enable_aggro`) | ✅ Working, opt-in, off by default |
 | Dropped-item sync (shared pickups, race-safe) | ✅ Working |
+| Loot together (shared bodies, loose items once per world, chests per player) | 🚧 Built (0.30.9, WO-134) — solo live checks with a synthetic partner; ⚠️ unverified with 2 real humans |
 | Voice chat | ✅ Working, proximity-based |
 | Reconnect / mid-session save-reload recovery | ✅ Fixed, live-verified |
 | Time-of-day, weather and horse-identity sync | ✅ Working |
@@ -96,6 +98,7 @@ known rough edges in [the detailed status table](#full-status-detail) below.
 | Reactive ghost combat (self-defense, joining nearby fights) | **Working, but suppressed by default since WO-68.** A ghost has a real soul and brain, so *un-isolated* it defends itself when attacked (treats it as a crime, arms itself, lands real damage) and joins a fight already happening near it, independent of `mp_enable_aggro` below — verified taking a real player from 100 to 57 HP in one exchange, and separately pursuing and killing another ghost 340 m from where both spawned. But `mp_ghost_isolate`, on by default since WO-68, applies `switch_disabledHitBehavioralReaction` to every ghost, and WO-68 observed exactly this: **a ghost stopped fighting back once isolated.** Turn isolation off to get the behaviour above back. A knocked-out (un-isolated) ghost also gets back up on its own, usually within a minute. Its position is still pinned to its owner's real movement during a networked session, so it cannot step, close, or retreat — a real, unresolved gap. **A ghost's own attacks are not replicated to its owner** — a remote player's character can kill NPCs in your world that its owner never actually attacked, invisibly to them |
 | NPC aggro on ghosts (`mp_enable_aggro`) | **Working, opt-in, off by default** — this does NOT turn the reactive combat above on or off; that already happens regardless. What the toggle actually gates is *proactive, faction-wide* hostility: when on, a ghost that lands or receives a hit gets attached to one real hostile faction for ~20s, so *any* nearby NPC of an opposing faction — not just whoever it's already fighting — can recognize and attack it unprompted. When off, that native attach never fires. Verified end-to-end (synthetic peer → relay → agent → native plugin → game) via a live on/off comparison and repeated live fights; **unverified** with a second real human. **Known limits, not bugs** — see below |
 | NPC sync (`mp_npc_sync`) | **Working, ON by default** — up to 5 hand-placed NPCs within 30 m of a player mirror that player's world on everyone else's machine: position, walking/running animation, health, death. Costs less bandwidth than one player's position stream. **As of 0.18.2 (WO-60), tracking is proximity-based**: previously only the host's own surroundings were tracked, so an NPC fighting a joining player far from the host was never synced at all. Now whichever machine is actually near an NPC tracks and streams it, with a 15s "engagement hold" so an active fight can't bounce between machines through a brief packet gap. Wire-verified (35/35); **no live two-machine session has run this model yet** — rollback with `mp_npc_proximity off` on the joining machine if it behaves worse than the previous release. **Since 0.20.2 (WO-77)** the receiving side renders synced NPCs by time-based interpolation 120 ms behind the stream instead of a per-tick lerp, and the sender emits at 10 Hz for moving NPCs — this targets the reported "NPC dashes and pauses" jitter; `mp_npc_smooth off` restores the old renderer for a live A/B. Verified synthetically only (`tools\Test-NpcSmoothSynthetic.ps1`, 48/48); **not yet watched by a human in a two-machine session**. **WO-78 (0.20.6):** the update-loop duplication the field session confirmed on this path too (`NPC-SYNC CHAIN LEAK CONFIRMED` on both machines) is fixed at its shared cause; `mp_npc_chainfix` now defaults **on** and the leak line also raises an on-screen toast. **WO-84 (0.20.8):** a *second*, different update-loop leak on this path, which WO-78's gate cannot catch by design — when the sync loop runs out of NPCs it stops itself, having already scheduled its own next tick, and a packet arriving inside that window legitimately restarts it so the orphaned tick wakes inside the new loop and is blamed for a leak it did not cause (a menu widens that window from 50 ms to the whole menu). A loop that stops itself now retires its own pending tick; genuine leaks still report, still toast, and are now counted separately so a second one is not hidden behind the first. Verified synthetically. **Unverified** with a second real human; dialogue with an NPC *while* it is actively being driven is untested (before/after works). **WO-86 (0.21.1):** an NPC's *death* now crosses to the other machine. Until this build no NPC death was ever sent — the death packet had existed since the first combat layer with nobody calling it, so each machine decided "dead" alone from damage deltas and could disagree forever (the field report: a villager dead for the killer, alive and hurt for the other player). A killing blow now carries a FATAL flag and the other machine kills its own copy; a body that is dead only locally no longer follows a living stream (the same report's "corpse kept moving"). `mp_npc_deathsync off` restores the old behaviour. Verified synthetically (`tools\Test-WO86Synthetic.ps1`, 47/47); **not yet watched live** — needs pak, agent and `KCDMP.dll` from this build together |
+| Loot together (`mp_loot_bodies`, `mp_loot_items`, `mp_loot_chests`) | **Built (WO-134), ON by default in a shared world.** NPC bodies are the host's: the partner's loot screen shows the host body's own items, every take goes through the host, and the first one wins ("Someone already took that."); the host's looting strips the body on the partner's screen too. Loose items (food, tools, coins lying about) exist once: whoever picks one up first has it, it is gone for both. Chests are per player: each of you loots your own copy, and it is remembered per world across joins (the host's takes are put back for the partner, the partner's own takes stay taken). Items you drop for each other work exactly as before. Herbs you gather are per player. Solo live checks only |
 | Dropped-item sync (`mp_item_sync`) | **Working** — a player who drops an item shares it: peers see it appear at the same spot, anyone can pick it up, and the first pickup wins for everyone (a losing pickup rolls back automatically). Verified across food, a bandage stack, armor and weapons. Late joiners converge via a 30s re-broadcast; a save reload self-heals both directions. Deliberately **not** shared: chests and NPC pockets — each player keeps their own loot pool, only deliberate player-to-player handoffs sync |
 | Time-of-day, weather and horse-identity sync | **Working** — a connecting player's clock is pulled forward to match the session's within ~10s, weather is arbitrated and blended across machines (eyeball-verified end to end), and a ridden horse's real identity is adopted by a ghost when that horse is within 60m, falling back to a cosmetic proxy horse otherwise (a hard freeze in this path was diagnosed and fixed) |
 | Voice chat | **Working**, proximity-based |
@@ -108,7 +111,7 @@ known rough edges in [the detailed status table](#full-status-detail) below.
 | Duelling | **Not implemented** — the wire protocol reserves a slot for it, nothing behind it |
 | Master server (server browser backend) | **Working, live-tested** — a community-contributed C# service (`dotnet/KcdMp.MasterServer/`) replaced the never-run Flask service. Relay↔master↔launcher exercised end-to-end with the real code on all three sides: announce, live update, and delisting within ~1s of a relay disconnecting |
 | Launcher (host/join, dependency handling) | **Built but unverified end-to-end** — see below. Shares the in-game dice overlay's art direction (aged parchment, oak, gold) across every screen rather than looking like a generic dark app; has a **REPORT BUG** button in the status bar that opens this project's GitHub Issues or Discord; and warns you before you connect if you and your peer are on different mod versions, naming which side needs to update |
-| Installer (`KCDMP-Setup-<version>.exe`) | **Working** — silent install/upgrade/uninstall and Steam detection both covered by automated suites (41/41, 21/21) on one machine; the interactive wizard and any clean machine are **unverified**, see `docs/INSTALLER-TESTING.md`. **Hardened against half-applied updates**: Setup refuses to install while the launcher/agent/relay/game is running, verifies every installed file against a size manifest afterwards (verdict in `install-verify.txt`), and the launcher itself warns at startup if the install directory holds a mix of two builds |
+| Installer (`KingdomComeTogether-Setup-<version>.exe`) | **Working** — silent install/upgrade/uninstall and Steam detection both covered by automated suites (41/41, 21/21) on one machine; the interactive wizard and any clean machine are **unverified**, see `docs/INSTALLER-TESTING.md`. **Hardened against half-applied updates**: Setup refuses to install while the launcher/agent/relay/game is running, verifies every installed file against a size manifest afterwards (verdict in `install-verify.txt`), and the launcher itself warns at startup if the install directory holds a mix of two builds |
 
 **NPC aggro (`mp_enable_aggro`) — known limits, v1 scope, not bugs:**
 - **Hitting another player's ghost in a town is a crime.** A ghost is a real
@@ -146,8 +149,8 @@ forwarding), including exactly what address and port to share.
 
 ## Install
 
-1. Download **`KCDMP-Setup-<version>.exe`** from the
-   [releases page](https://github.com/DeepFriedDepp/kcd2-multiplayer_Reworked/releases).
+1. Download **`KingdomComeTogether-Setup-<version>.exe`** from the
+   [releases page](https://github.com/DeepFriedDepp/KingdomCome-Together/releases).
 2. Run it.
 3. That's it — use Host or Join as above.
 
@@ -192,7 +195,7 @@ Everyone you play with needs the same version, not just the host — an old and
 a new build won't connect to each other.
 
 Download **`KCDMP-DirectInstall-<version>.zip`** from the
-[releases page](https://github.com/DeepFriedDepp/kcd2-multiplayer_Reworked/releases)
+[releases page](https://github.com/DeepFriedDepp/KingdomCome-Together/releases)
 and unzip it. It contains two folders, `App` and `Mod`:
 
 1. Copy the **`App`** folder's contents into your existing install folder
@@ -206,7 +209,7 @@ and unzip it. It contains two folders, `App` and `Mod`:
 
 Close the launcher first. That's it — no need to run Setup.exe again, and
 nothing else on your PC is touched. Prefer a full reinstall? Running
-`KCDMP-Setup-<version>.exe` over the top does that and keeps your settings
+`KingdomComeTogether-Setup-<version>.exe` over the top does that and keeps your settings
 too.
 
 <details>
@@ -218,7 +221,7 @@ powershell -ExecutionPolicy Bypass -File tools\Build-DirectInstall.ps1 -SkipPubl
 ```
 
 The first publishes everything self-contained and compiles
-`release\KCDMP-Setup-<version>.exe`; the second zips that same published
+`release\KingdomComeTogether-Setup-<version>.exe`; the second zips that same published
 output into `release\KCDMP-DirectInstall-<version>.zip` (`App\` + `Mod\`, as
 above), reusing the publish the first one just did. Building the installer
 needs [Inno Setup 6](https://jrsoftware.org/isinfo.php)
@@ -518,7 +521,7 @@ Explorer's address bar:
 | Relay output | The `KcdMpServer.exe` console window on the **host's** PC | Nobody can join, or people get dropped |
 | Installer log | `%Temp%\Setup Log <date> #NNN.txt` — newest one | Anything that went wrong during install |
 
-Also useful: your version (Add/Remove Programs → *KCD2 Multiplayer*), whether
+Also useful: your version (Add/Remove Programs → *Kingdom Come: Together*), whether
 both players are on the same network, and — for anything that looks like the
 game ignoring the mod — confirmation that `<ModdingTools>\Mods\kdcmp\` exists
 and that you launched through the launcher rather than through Steam.

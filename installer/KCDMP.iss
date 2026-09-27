@@ -1,4 +1,4 @@
-﻿; KCD2 Multiplayer -- one-click installer.
+﻿; Kingdom Come: Together -- one-click installer (WO-134: the new name; before, "KCD2 Multiplayer").
 ;
 ; Compile with tools\Build-Installer.ps1, not by hand: this script installs
 ; the *output* of tools\Publish-Release.ps1 (release\KCDMP\) and will refuse
@@ -17,10 +17,17 @@
   #define AppVersion "0.0.0"
 #endif
 
-#define AppName "KCD2 Multiplayer"
+; WO-134: the name players see. The colon cannot be in a file name, so shortcuts and
+; the Start menu folder use ShortcutName. Never renamed (installs, saves and upgrades
+; depend on them): the AppId below, the install folder {localappdata}\KCDMP, the
+; HKCU\Software\KCDMP key, the kdcmp mod folder, the launcher's exe name.
+#define AppName "Kingdom Come: Together"
+#define ShortcutName "Kingdom Come Together"
+#define OldShortcutName "KCD2 Multiplayer"
+#define Disclaimer "Unofficial. Not affiliated with or endorsed by Warhorse Studios."
 #define AppExeName "KCDMP_launcher.exe"
-#define AppPublisher "KCD2-MP contributors"
-#define AppUrl "https://github.com/DeepFriedDepp/kcd2-multiplayer_Reworked"
+#define AppPublisher "Kingdom Come: Together contributors"
+#define AppUrl "https://github.com/DeepFriedDepp/KingdomCome-Together"
 
 ; ModdingToolsAppId is defined by SteamDetect.iss, included at the top of
 ; [Code] below, alongside the evidence it was read from.
@@ -53,11 +60,15 @@ DefaultDirName={localappdata}\KCDMP
 PrivilegesRequired=lowest
 UsePreviousAppDir=yes
 
-DefaultGroupName={#AppName}
+DefaultGroupName={#ShortcutName}
+; WO-134: an upgrade must use the NEW folder name, not the one the old install chose.
+UsePreviousGroup=no
 DisableProgramGroupPage=yes
 LicenseFile=..\LICENSE
 OutputDir=..\release
-OutputBaseFilename=KCDMP-Setup-{#AppVersion}
+OutputBaseFilename=KingdomComeTogether-Setup-{#AppVersion}
+; WO-134: the installer's own icon (the launcher's multi-size .ico, built by tools\Build-Branding.py)
+SetupIconFile=..\KCDMP_launcher\app.ico
 Compression=lzma2/max
 SolidCompression=yes
 ArchitecturesAllowed=x64compatible
@@ -70,6 +81,11 @@ CloseApplications=yes
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
+
+[Messages]
+; WO-134: the disclaimer on every renamed surface.
+WelcomeLabel2=This will install [name/ver] on your computer.%n%n{#Disclaimer}%n%nIt is recommended that you close the game, the launcher and any other applications before continuing.
+FinishedLabel=Setup has finished installing [name] on your computer. The application may be launched by selecting the installed shortcuts.%n%n{#Disclaimer}
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
@@ -113,9 +129,18 @@ Source: "..\kdcmp\Data\kdcmp.pak"; DestDir: "{code:GetKdcmpTargetDir}\Data"; Fla
 [Icons]
 ; WorkingDir matters and is not decoration: settings.json is a bare relative
 ; filename in the launcher, so it lands wherever the process was started from.
-Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExeName}"; WorkingDir: "{app}"
-Name: "{group}\Uninstall {#AppName}"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; WorkingDir: "{app}"; Tasks: desktopicon
+Name: "{group}\{#ShortcutName}"; Filename: "{app}\{#AppExeName}"; WorkingDir: "{app}"; Comment: "{#Disclaimer}"
+Name: "{group}\Uninstall {#ShortcutName}"; Filename: "{uninstallexe}"
+Name: "{autodesktop}\{#ShortcutName}"; Filename: "{app}\{#AppExeName}"; WorkingDir: "{app}"; Tasks: desktopicon; Comment: "{#Disclaimer}"
+
+[InstallDelete]
+; WO-134: an upgrade from a build before the rename replaces its shortcuts, so the
+; Start menu and the desktop never show both names. Only the old shortcut files and
+; the old folder once it is empty -- nothing else there is ours.
+Type: files; Name: "{autoprograms}\{#OldShortcutName}\{#OldShortcutName}.lnk"
+Type: files; Name: "{autoprograms}\{#OldShortcutName}\Uninstall {#OldShortcutName}.lnk"
+Type: dirifempty; Name: "{autoprograms}\{#OldShortcutName}"
+Type: files; Name: "{autodesktop}\{#OldShortcutName}.lnk"
 
 [Registry]
 ; Not settings -- just enough for the uninstaller to find the mod it deployed
@@ -606,7 +631,7 @@ begin
     UpdateGamePage()
   else if CurPageID = wpFinished then
     WizardForm.FinishedLabel.Caption :=
-      'KCD2 Multiplayer is installed and already knows where your game is.' + #13#10#13#10 +
+      'Kingdom Come: Together is installed and already knows where your game is.' + #13#10#13#10 +
       'To play together, one of you clicks HOST GAME and shares the address the' + #13#10 +
       'launcher shows; everyone else adds that address under Join. Same house is' + #13#10 +
       'enough on its own -- for playing across the internet see docs/NETWORKING.md' + #13#10 +
@@ -1206,7 +1231,7 @@ begin
       Break;
     end;
 
-    if MsgBox('KCD2 Multiplayer is still running.' + #13#10#13#10 +
+    if MsgBox('Kingdom Come: Together is still running.' + #13#10#13#10 +
               'Close the launcher (and the game, if it is open) first, then click Retry.' + #13#10 +
               'Uninstalling now would leave files behind that Windows will not let it delete.',
               mbConfirmation, MB_RETRYCANCEL) <> IDRETRY then

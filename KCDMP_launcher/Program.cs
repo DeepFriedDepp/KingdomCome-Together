@@ -54,7 +54,7 @@ class Program
             var app = appBuilder.Build();
 
             app.MainWindow
-                .SetTitle("KCD2 MP Launcher")
+                .SetTitle("Kingdom Come: Together")   // WO-134: the name players see (the log line above keeps its old tag)
                 .SetSize(1600, 900)
                 .SetMaximized(true)
                 .SetResizable(true)

@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     WO-74. Proves that Setup produces a correct install from every starting
     state a real machine can be in -- including one that a previous Setup
@@ -29,11 +29,11 @@
     not do it.
 
 .PARAMETER SetupExe
-    The installer under test. Defaults to release\KCDMP-Setup-<VERSION>.exe.
+    The installer under test. Defaults to release\KingdomComeTogether-Setup-<VERSION>.exe.
 
 .PARAMETER PreviousSetupExe
     The "clean previous release" for cell 2. Defaults to the
-    newest-versioned release\KCDMP-Setup-*.exe that is not the one under test.
+    newest-versioned release\KingdomComeTogether-Setup-*.exe or (before the WO-134 rename) KCDMP-Setup-*.exe that is not the one under test.
 
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File tools\Test-InstallerUpgrade.ps1
@@ -49,7 +49,7 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
 $version = (Get-Content (Join-Path $root 'VERSION') -TotalCount 1).Trim()
 
-if (-not $SetupExe) { $SetupExe = Join-Path $root "release\KCDMP-Setup-$version.exe" }
+if (-not $SetupExe) { $SetupExe = Join-Path $root "release\KingdomComeTogether-Setup-$version.exe" }
 if (-not (Test-Path $SetupExe)) { throw "Setup not found: $SetupExe  (run tools\Build-Installer.ps1 first)" }
 
 if (-not $PreviousSetupExe) {
@@ -57,9 +57,9 @@ if (-not $PreviousSetupExe) {
     # as text: "0.9.5" sorts above "0.18.8" as a string. Recursive, because
     # older releases get tidied into release\Old-Installers\ and a suite that
     # only looked at the top level would then have no previous release at all.
-    $PreviousSetupExe = Get-ChildItem (Join-Path $root 'release') -Filter 'KCDMP-Setup-*.exe' -Recurse |
+    $PreviousSetupExe = Get-ChildItem (Join-Path $root 'release') -Filter '*-Setup-*.exe' -Recurse |
         ForEach-Object {
-            if ($_.Name -match '^KCDMP-Setup-(\d+(?:\.\d+)+)\.exe$') {
+            if ($_.Name -match '^(?:KCDMP|KingdomComeTogether)-Setup-(\d+(?:\.\d+)+)\.exe$') {
                 [pscustomobject]@{ Path = $_.FullName; V = [version]$Matches[1] }
             }
         } |
@@ -262,7 +262,7 @@ $code = Invoke-Setup $SetupExe $appDir $steam 'cell4-base'
 Assert-That 'base install before damage' ($code -eq 0) "exit $code"
 
 Add-Type -AssemblyName System.IO.Compression.FileSystem
-$prevVersion = (Split-Path $PreviousSetupExe -Leaf) -replace '^KCDMP-Setup-(.+)\.exe$', '$1'
+$prevVersion = (Split-Path $PreviousSetupExe -Leaf) -replace '^(?:KCDMP|KingdomComeTogether)-Setup-(.+)\.exe$', '$1'
 $prevZip = Get-ChildItem (Join-Path $root 'release') -Filter "KCDMP-DirectInstall-$prevVersion.zip" -Recurse |
            Select-Object -First 1 -ExpandProperty FullName
 if (-not $prevZip) { $prevZip = Join-Path $root "release\KCDMP-DirectInstall-$prevVersion.zip" }

@@ -1,6 +1,6 @@
 ﻿<#
 .SYNOPSIS
-    Install / upgrade / uninstall lifecycle test for KCDMP-Setup-<version>.exe.
+    Install / upgrade / uninstall lifecycle test for KingdomComeTogether-Setup-<version>.exe.
 
 .DESCRIPTION
     Runs the real installer unattended into a temp directory and asserts what
@@ -42,7 +42,7 @@ $root = Split-Path $PSScriptRoot -Parent
 
 if (-not $SetupExe) {
     $version = (Get-Content (Join-Path $root "VERSION") -TotalCount 1).Trim()
-    $SetupExe = Join-Path $root "release\KCDMP-Setup-$version.exe"
+    $SetupExe = Join-Path $root "release\KingdomComeTogether-Setup-$version.exe"
 }
 if (-not (Test-Path $SetupExe)) {
     throw "Setup not found: $SetupExe  (run tools\Build-Installer.ps1 first)"
