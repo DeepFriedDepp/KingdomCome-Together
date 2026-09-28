@@ -310,6 +310,45 @@ Logs:
   `WO137-APPLY`, `WO137-TIMESET`.
 * status `mp_quest_status`; the partner's side: `mp_quest_talk on|off`.
 
+## Crime together (WO-139, in the next installer)
+
+In plain words:
+
+* **The partner's crimes are crimes in the host's world** — stealing, picking
+  locks, taking someone's horse, robbing a body, walking into someone's home.
+  Only what people of the host's world see counts; unseen is no crime, as in
+  the game. They are never counted against the host.
+* **Guards deal with the partner:** a guard who saw it, or who was told by a
+  witness (about 20 s later), comes up and arrests the partner. The arrest,
+  the fine, the punishment, the talk and the fight are the game's own, on the
+  partner's screen; the guard waits in the host's world meanwhile, and what is
+  decided counts for both.
+* **Violence:** the host's guards fight the partner for a fresh assault or
+  murder, or after the partner resisted an arrest (for about 5 minutes). Once
+  the partner is down, or later, the next guard arrests instead.
+* **Punishment moves no clock** (jail and the stocks keep the shared time).
+  **Execution** is the partner's death: they wake outside the town, near the
+  host, and the crime is gone.
+* **Nothing between the players is a crime**, and **you can't rob each other**
+  ("You can't steal from each other in co-op.").
+* **The host's horses** are free to ride for the partner.
+* **Off switch (host):** `mp_crime_shared off` stops sharing crimes;
+  `mp_crime_shared on` starts again.
+
+Logs:
+
+* host agent: `MP-W139 host: ghost …'s <crime> …: <n> witness(es), <n>
+  guard(s) in <settlement>`, `… stops ghost …`, `… attacks his avatar`,
+  `… stops fighting …`, `… cleared …`.
+* joiner agent: `MP-W139 joiner -> host crime #…`, `MP-W139 joiner: stop #…
+  by … -> <result>`, `MP-W139 joiner: the host cleared my record …`.
+* both: `MP-WO139-STATS` every 60 s.
+* kcd.log: `WO139-JUDGE`, `WO139-STOP start|planted|result|end`,
+  `WO139-PURSUE attack`, `WO139-PLACE`, `WO139-HORSE`, `WO139-SKIPTIME`,
+  `WO139-ROB`, `WO139-CRIME`; native `WO139-TRESPASS`, `WO139-PURSUE on|off`,
+  `WO139-CONTEXT`, `WO139-TIMESET`.
+* status `mp_crime_status`.
+
 ## Expected not to work yet
 
 * **No "back to the main menu"** in KCD2. If the host leaves, or a check
@@ -333,6 +372,11 @@ Logs:
   yet."). What to do there together is a later WO.
 * Already in a world when connecting? The joiner is told to quit, restart and
   wait at the main menu.
+* **The partner's crimes don't touch the host's reputation**; the partner's
+  own reputation changes on their own side (WO-139).
+* **A guard the partner resisted** may attack them on sight for a few minutes,
+  as in the game (WO-139).
+* **The host's guards never search the partner** for stolen goods (WO-139).
 
 ## If it goes wrong
 

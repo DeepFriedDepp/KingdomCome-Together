@@ -119,3 +119,56 @@ Lines worth a look:
 * partner: `MP-WO138 HOLD`, `WO138-HOLD`, `NPC-SYNC release`.
 
 `mp_w138_status` on either machine prints the state.
+
+## WO-139 — crime and guards
+
+Play together in a village with a guard walking about (Zelejov, or any town
+with guards in the street), in daylight. **Use a throwaway copy of the host's
+save:** crimes, fines and punishments are real. Keep some money on the partner
+(the fine).
+
+1. **The partner steals in view of a guard.** The partner takes an item that
+   is not theirs ("Steal", hold the key) while a guard can see them. The
+   partner gets "A guard saw that." Within seconds the guard comes to the
+   partner and calls out; the partner gets the "Reply" prompt. On the host's
+   screen the guard stands still next to the partner's figure meanwhile.
+2. **The partner pays the fine.** The partner presses Reply, surrenders, and
+   picks "I'll pay the fine" in the dialogue. The money leaves the partner, the
+   stolen item is taken, and the guard walks on — on both screens. Note the
+   time of day before and after: it must not jump.
+3. **Stealing where only townsfolk see it.** Steal again with no guard around
+   but a villager watching ("Someone saw that. The guards will hear of it.").
+   About 20 s later the next guard who sees the partner up close stops them.
+4. **Jail / the stocks don't move the clock.** Commit a crime, let a guard stop
+   the partner, and choose "I accept the punishment" (with no money, the only
+   choice). The partner is taken to the punishment; the time of day on both
+   screens must not jump (before this, the stocks skipped 2 to 10 hours).
+   Say what the partner saw (stocks, a beating, branding) and whether anything
+   played oddly.
+5. **Fighting the guard, and being arrested after.** The partner hits a
+   villager in front of a guard. The guard attacks the partner (on the host's
+   screen too). Let the partner be knocked out, or run far away and come back
+   a few minutes later: the next guard arrests the partner instead of fighting
+   (the crime still stands); pay or accept the punishment.
+6. **Execution respawns outside the town** (only if the partner gets there —
+   a murder with a branding already given). The partner wakes outside the
+   town, not far from the host; the crime is gone.
+7. **No robbing each other.** Each of you tries to loot or pickpocket the
+   other's figure (knocked out, or from behind): refused with "You can't steal
+   from each other in co-op." Also: a friendly-fire hit between you is no crime
+   (nobody reacts).
+8. **The host's horses.** The partner mounts the host's own horse: the prompt
+   says "Mount" (not "Mount and steal") and nobody calls it a theft. A
+   townsperson's horse is still a theft.
+9. **The host's own crimes work as before.** The host steals in view of a guard
+   and deals with it as usual (in a session the punishment does not move the
+   clock for the host either).
+
+Say for each whether it worked, and the time of anything odd.
+
+Lines worth a look:
+* host: `MP-W139 host:`, `WO139-JUDGE`, `WO139-PURSUE`, `WO139-PLACE`,
+  `WO137-HOLD … w139-stop`, `WO139-ROB`;
+* partner: `MP-W139 joiner:`, `WO139-TRESPASS`, `WO139-CRIME`,
+  `WO139-STOP start|planted|result|end`, `WO139-HORSE`, `WO139-SKIPTIME`;
+* both: `MP-WO139-STATS`; `mp_crime_status` prints the state.
