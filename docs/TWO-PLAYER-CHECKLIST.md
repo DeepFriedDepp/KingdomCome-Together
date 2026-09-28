@@ -83,3 +83,39 @@ Say for each whether it worked, and the time of anything odd.
 Lines worth a look (both machines): `MP-W137`, `MP-WO137-STATS`,
 `WO137-TALK`, `WO137-HOLD`, `WO137-DEAD`, `WO137-CHANGE`, `WO137-APPLY`,
 `WO137-TIMESET`, `MP-PAUSE … a-corpse-is-never-paused`.
+
+## WO-138 — nobody's menu stops the other's world
+
+Play together in a village, with people walking about near both of you. In a
+session, opening a menu no longer stops your own world either: your Henry
+stands there while you read, as in an online game, so do this somewhere quiet.
+
+1. **The host opens the inventory (Tab) for about 30 s.** The partner watches
+   the people around them: they **stay visible and keep walking**. Before this
+   fix they vanished until the host closed the inventory. The host sees them
+   keep walking too, behind the inventory screen.
+2. **The host opens the map, then the journal**, same check: nobody vanishes,
+   people keep moving.
+3. **The host opens the ESC menu for about 30 s.** Same check on both screens.
+   Then the host saves from the ESC menu once: the save works as before.
+4. **The partner opens their inventory, then the ESC menu.** Nothing changes
+   for the host. When the partner closes it, the people around them are where
+   the host sees them at once (no slow slide into place).
+5. **The host talks to someone** (a real conversation with choices) for a
+   while. The partner's world does not freeze: people walk, the partner can
+   move. Only the time of day stands still until the conversation ends.
+6. **A cutscene** (a rendered story video), if one comes up. The partner's
+   world keeps running; nobody vanishes.
+7. **Alone (no partner joined yet), the host opens the ESC menu:** the game
+   pauses as it always did.
+
+Say for each whether it worked, and the time of anything odd (a menu that
+behaves strangely with the world running behind it, people frozen or
+vanishing, a stutter when a menu opens).
+
+Lines worth a look:
+* host: `MP-WO138`, `WO138-LEVERS`, `WO138-PAUSE`, `WO138-WORLD`,
+  `[pause] local state`;
+* partner: `MP-WO138 HOLD`, `WO138-HOLD`, `NPC-SYNC release`.
+
+`mp_w138_status` on either machine prints the state.
