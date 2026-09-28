@@ -288,6 +288,11 @@ constexpr uint8_t kWo132Reply         = 0x99;
 constexpr uint8_t kNpcAvatarHit       = 0x9A;   // [victimEid:4][st:4f][hp:4f][attackerEid:4][flags][nameLen][name]
 constexpr uint8_t kNpcCombatOut       = 0x9B;   // wo132.h
 constexpr uint8_t kDiscardedHit       = 0x9C;   // [attackerEid:4][st:4f][hp:4f]
+// WO-137: shared quests (wo137.h): [op][...] -> 0x9D [ok][seq][op][reason][payload],
+// and the unsolicited 0x9E QuestChange (one per quest State change while detection is on).
+constexpr uint8_t kWo137              = 0x23;
+constexpr uint8_t kWo137Reply         = 0x9D;
+constexpr uint8_t kQuestChange        = 0x9E;
 constexpr uint8_t kSaveListReply      = 0x8D;   // [ok][seq][listed][idx:2][count:2][current][contPl][contIdx:2][nameLen][contName]
 constexpr uint8_t kLocalAction        = 0x96;   // unsolicited: [kind][phase][ic][zone][type][flags][guid:16][eid:4][nameLen][name]
 constexpr uint8_t kPvpHitOut          = 0x97;   // unsolicited: [victimEid:4][st:4f][hp:4f][flags][material]

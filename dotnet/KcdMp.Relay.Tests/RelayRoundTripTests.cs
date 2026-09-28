@@ -910,6 +910,43 @@ public class RelayRoundTripTests : IClassFixture<RelayFixture>
         Assert.True(await b.NoneOfAsync(Protocol.LootAskDown, Quiet));
     }
 
+    // ---- WO-137: shared quests 0x60..0x63 (join channel) --------------------
+
+    [Fact]
+    public async Task Quest_messages_cross_the_relay_host_to_joiner_and_joiner_to_host_only()
+    {
+        var (a, b) = await TwoPeersAsync();   // a = the host (damage authority), b = the joiner
+        await using var _a = a; await using var _b = b;
+        const string deer = "Barbora.trosecko.hledaniPsa.h.prozkoumat_misto_prepadeni.prozkoumatSrnku";
+
+        var change = new LootMsg(Protocol.QuestHostChange, 0, $"41 13 1 2 SetDone 27 {deer}");
+        await a.SendRawAsync(change.BuildUp(Protocol.QuestHostUp, b.Id));
+        var cd = await b.ReadUntilAsync(Protocol.QuestHostDown, Wait);
+        Assert.Equal(a.Id, cd[0]);
+        Assert.True(LootMsg.TryDecode(cd.AsSpan(1 + Protocol.JoinHeaderLen), out var cgot));
+        Assert.Equal(change, cgot);
+
+        var ask = new LootMsg(Protocol.QuestAskRequest, 9, $"13 1 2 SetDone 27 {deer}");
+        await b.SendRawAsync(ask.BuildUp(Protocol.QuestAskUp, Protocol.JoinTargetHost));
+        var ad = await a.ReadUntilAsync(Protocol.QuestAskDown, Wait);
+        Assert.Equal(b.Id, ad[0]);
+        Assert.True(LootMsg.TryDecode(ad.AsSpan(1 + Protocol.JoinHeaderLen), out var agot));
+        Assert.Equal(ask, agot);
+
+        // a checkpoint as long as a message may be crosses whole
+        var big = new LootMsg(Protocol.QuestHostCheckpoint, 0, "1 1 " + new string('x', Protocol.QuestTextMax - 4));
+        await a.SendRawAsync(big.BuildUp(Protocol.QuestHostUp, b.Id));
+        var bd = await b.ReadUntilAsync(Protocol.QuestHostDown, Wait);
+        Assert.True(LootMsg.TryDecode(bd.AsSpan(1 + Protocol.JoinHeaderLen), out var bgot));
+        Assert.Equal(big.Text, bgot.Text);
+
+        // a joiner cannot speak for the host's world; the host does not ask itself
+        await b.SendRawAsync(change.BuildUp(Protocol.QuestHostUp, a.Id));
+        await a.SendRawAsync(ask.BuildUp(Protocol.QuestAskUp, Protocol.JoinTargetHost));
+        Assert.True(await a.NoneOfAsync(Protocol.QuestHostDown, Quiet));
+        Assert.True(await b.NoneOfAsync(Protocol.QuestAskDown, Quiet));
+    }
+
     [Fact]
     public async Task A_whole_world_crosses_the_relay_windowed_and_byte_exact()
     {

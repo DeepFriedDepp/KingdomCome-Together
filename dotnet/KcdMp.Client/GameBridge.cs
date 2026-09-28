@@ -1749,6 +1749,7 @@ public partial class GameBridge(ClientConfig config)
         Wo131OnConnect(cts.Token);           // WO-131: combat and bodies (the copy guard, the hit gate, perception)
         Wo134OnConnect(cts.Token);           // WO-134: world items (bodies, loose items, chest ledgers)
         Wo132OnConnect(cts.Token);           // WO-132: damage safety, combat engagement
+        Wo137OnConnect(cts.Token);           // WO-137: shared quests (the mirror, the requests, talking)
         _ = _combat.NpcConfigAsync(_nativeWriteOn, _nativeSenderClock, cts.Token);
         _ = RespawnHeartbeatAsync(stream, announceGraves: true, cts.Token);
         // WO-99 Phase 0: learn who the local player is before the first hit.
@@ -1830,6 +1831,7 @@ public partial class GameBridge(ClientConfig config)
             tailForPause.GameplayStarted += Wo123OnGameplayStarted;  // WO-123: a host load ends a join
             tailForPause.LoadStarted += Wo123OnLoadStarted;          // WO-123: joins defer through a load
             tailForPause.GameplayStarted += Wo124OnGameplayStarted;  // WO-124: the joiner's load finished
+            tailForPause.QuestLine += Wo137OnQuestLine;              // WO-137: dialogue lines (talking), player switches
             tailForPause.LoadStarted += Wo124OnLoadStarted;          // WO-124
             tailForPause.GameQuit += Wo124OnGameQuit;                // WO-124: quitting from the host's world
             tailForPause.SaveLoadAccepted += Wo124OnSaveLoadAccepted;   // WO-124
@@ -2225,6 +2227,7 @@ public partial class GameBridge(ClientConfig config)
                 tailForPause2.GameplayStarted -= Wo123OnGameplayStarted; // WO-123
                 tailForPause2.LoadStarted -= Wo123OnLoadStarted;         // WO-123
                 tailForPause2.GameplayStarted -= Wo124OnGameplayStarted; // WO-124
+                tailForPause2.QuestLine -= Wo137OnQuestLine;              // WO-137
                 tailForPause2.LoadStarted -= Wo124OnLoadStarted;         // WO-124
                 tailForPause2.GameQuit -= Wo124OnGameQuit;               // WO-124
                 tailForPause2.SaveLoadAccepted -= Wo124OnSaveLoadAccepted;  // WO-124
@@ -2252,6 +2255,7 @@ public partial class GameBridge(ClientConfig config)
             await Wo134OnDisconnectAsync();   // WO-134: the host ledger flushed, the mod told
             Wo135OnDisconnect();              // WO-135
             Wo132OnDisconnect();              // WO-132: engaged copies released
+            await Wo137OnDisconnectAsync();   // WO-137: quest sync off, talk holds released
             _myOpenDrops.Clear();
             // WO-113: no relay, no session -- the DLL's guard stands down
             // (vanilla death), and every peer's mirror gravestone goes.
@@ -5700,6 +5704,11 @@ public partial class GameBridge(ClientConfig config)
             case "w136_torch":
             case "w136_check":
                 Wo136OnEvent(name, arg);
+                return;
+            case "w137_sync":        // WO-137: shared quests
+            case "w137_talk":
+            case "w137_status":
+                Wo137OnEvent(name, arg);
                 return;
         }
 

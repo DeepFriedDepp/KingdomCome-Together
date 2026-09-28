@@ -7,6 +7,7 @@
 #include "hits.h"
 #include "wo132.h"
 #include "wo135.h"
+#include "wo137.h"
 #include "concept_read.h"
 #include "dice_hook.h"
 #include "log.h"
@@ -159,6 +160,9 @@ DWORD WINAPI plugin_main(LPVOID) {
     // closed: WO135-DIALOG gate NOT armed). Off the main thread: the patch
     // suspends every other thread while it writes.
     kcdmp::wo135::install();
+    // WO-137: the quest State detector (two C_StateVariable vftable slots) and the
+    // Set<Value> apply. Fails closed (WO137-BUILD); silent until the agent turns it on.
+    kcdmp::wo137::install();
 
     if (kcdmp::dice::install_pause_hook()) {
         kcdmp::main_thread::post_repeating(&kcdmp::dice::sample_instance_if_changed);
@@ -206,6 +210,7 @@ DWORD WINAPI plugin_main(LPVOID) {
     // there), which the join's save-list rescan depends on.
     kcdmp::main_thread::post_repeating(&kcdmp::joinnative::tick);
     kcdmp::main_thread::post_repeating(&kcdmp::savelist::test_watch);
+    kcdmp::main_thread::post_repeating(&kcdmp::wo137::tick);   // WO-137: research file + the change queue
 
     kcdmp::pipe::start();
     return 0;

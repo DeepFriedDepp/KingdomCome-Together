@@ -81,6 +81,9 @@ public sealed class CombatPipe : IAsyncDisposable
     private const byte NpcAvatarHit      = 0x9A;   // WO-132, unsolicited: [victimEid:4][st:4f][hp:4f][attackerEid:4][flags][nameLen][name]
     private const byte NpcCombatOut      = 0x9B;   // WO-132, unsolicited: a watched NPC's combat state (wo132.h)
     private const byte DiscardedHit      = 0x9C;   // WO-132, unsolicited: [attackerEid:4][st:4f][hp:4f]
+    private const byte Wo137             = 0x23;   // WO-137 [op][...] -> 0x9D [ok][seq][op][reason][payload] (native wo137.h)
+    private const byte Wo137Reply        = 0x9D;
+    private const byte QuestChangeOut    = 0x9E;   // WO-137, unsolicited: one quest State change (QuestChange)
 
     private const int GuidLen = 16;
 
@@ -116,6 +119,11 @@ public sealed class CombatPipe : IAsyncDisposable
 
     /// <summary>WO-132: a watched NPC's combat state changed (or its 1 s heartbeat in combat).</summary>
     public Func<NpcCombatState, Task>? OnNpcCombat { get; set; }
+    /// <summary>
+    /// WO-137: one quest State change in this game's concept graph. Called ON the reader, in the
+    /// DLL's order, so it must only enqueue (it never makes a pipe request: the WO-131 deadlock trap).
+    /// </summary>
+    public Action<QuestChange>? OnQuestChange { get; set; }
 
     /// <summary>WO-132: an engaged copy's local hit on the player was put back (attacker eid, stamina, health).</summary>
     public Func<uint, float, float, Task>? OnDiscardedHit { get; set; }
@@ -728,6 +736,127 @@ public sealed class CombatPipe : IAsyncDisposable
         finally { _gate.Release(); }
     }
 
+    // ---- WO-137 (native wo137.h) ---------------------------------------------
+
+    /// <summary>One WO-137 op: (ok, reason, payload after the 4-byte head), or null when the DLL did not answer.</summary>
+    public async Task<(bool Ok, byte Reason, byte[] Payload)?> Wo137Async(byte op, byte[] args, CancellationToken ct = default)
+    {
+        var p = new byte[1 + args.Length];
+        p[0] = op; args.CopyTo(p, 1);
+        var (body, _) = await SendAndAwaitAsync(Wo137, p, Wo137Reply, ct);
+        if (body is null || body.Length < 4) return null;
+        return (body[0] == 1, body[3], body.AsSpan(4).ToArray());
+    }
+
+    /// <summary>op 1: detection on/off for this role (1 host, 2 joiner); flags 1 = the joiner's time gate.</summary>
+    public async Task<bool?> Wo137ConfigAsync(bool detect, byte role, byte flags, CancellationToken ct = default)
+    {
+        var r = await Wo137Async(1, [(byte)(detect ? 1 : 0), role, flags], ct);
+        return r?.Ok;
+    }
+
+    /// <summary>op 7: the detector keeps its records back (a load) or lets them go.</summary>
+    public async Task<bool?> Wo137HoldAsync(bool on, CancellationToken ct = default)
+    {
+        var r = await Wo137Async(7, [(byte)(on ? 1 : 0)], ct);
+        return r?.Ok;
+    }
+
+    public readonly record struct QuestApplied(byte Result, bool OldOk, int Old, bool NewOk, int New, string Type);
+
+    /// <summary>op 2: one Set&lt;Value&gt; pulse on a quest State (null = the DLL did not answer).</summary>
+    public async Task<QuestApplied?> Wo137ApplyAsync(uint tag, string path, string port, CancellationToken ct = default)
+    {
+        byte[] pb = Encoding.ASCII.GetBytes(path), qb = Encoding.ASCII.GetBytes(port);
+        if (pb.Length == 0 || pb.Length > 400 || qb.Length == 0 || qb.Length > 100) return null;
+        var a = new byte[4 + 2 + pb.Length + 1 + qb.Length];
+        BinaryPrimitives.WriteUInt32LittleEndian(a, tag);
+        BinaryPrimitives.WriteUInt16LittleEndian(a.AsSpan(4), (ushort)pb.Length);
+        pb.CopyTo(a, 6);
+        a[6 + pb.Length] = (byte)qb.Length;
+        qb.CopyTo(a, 7 + pb.Length);
+        var r = await Wo137Async(2, a, ct);
+        if (r is not { Ok: true } v || v.Payload.Length < 11) return null;
+        var b = v.Payload;
+        int tl = b[10];
+        string type = b.Length >= 11 + tl ? Encoding.ASCII.GetString(b, 11, tl) : "";
+        return new QuestApplied(b[0], b[1] != 0, BinaryPrimitives.ReadInt32LittleEndian(b.AsSpan(2)), b[6] != 0,
+                                BinaryPrimitives.ReadInt32LittleEndian(b.AsSpan(7)), type);
+    }
+
+    public readonly record struct QuestStateRead(bool Found, int Runtime, bool Ok, int Val);
+
+    /// <summary>op 3: the current values of these quest States (batched to the pipe's frame size; null = no answer).</summary>
+    public async Task<List<QuestStateRead>?> Wo137ReadStatesAsync(IReadOnlyList<string> paths, CancellationToken ct = default)
+    {
+        var all = new List<QuestStateRead>(paths.Count);
+        int i = 0;
+        while (i < paths.Count)
+        {
+            var batch = new List<byte[]>();
+            int size = 2;
+            while (i < paths.Count && batch.Count < 100)
+            {
+                var pb = Encoding.ASCII.GetBytes(paths[i]);
+                if (size + 2 + pb.Length > 1000) break;
+                batch.Add(pb); size += 2 + pb.Length; i++;
+            }
+            if (batch.Count == 0) return null;   // one path longer than a frame: never (paths are <= 400)
+            var a = new byte[1 + batch.Sum(x => 2 + x.Length)];
+            a[0] = (byte)batch.Count;
+            int o = 1;
+            foreach (var pb in batch) { BinaryPrimitives.WriteUInt16LittleEndian(a.AsSpan(o), (ushort)pb.Length); pb.CopyTo(a, o + 2); o += 2 + pb.Length; }
+            var r = await Wo137Async(3, a, ct);
+            if (r is not { Ok: true } v || v.Payload.Length < 1) return null;
+            var b = v.Payload;
+            int n = b[0];
+            if (b.Length < 1 + n * 7 || n != batch.Count) return null;
+            for (int k = 0; k < n; k++)
+            {
+                int q = 1 + k * 7;
+                all.Add(new QuestStateRead(b[q] != 0, b[q + 1] == 0xFF ? -1 : b[q + 1], b[q + 2] != 0, BinaryPrimitives.ReadInt32LittleEndian(b.AsSpan(q + 3))));
+            }
+        }
+        return all;
+    }
+
+    public readonly record struct QuestObjectiveRead(string Name, int Type, int Log, int Order, long Last);
+
+    /// <summary>op 4: a quest's objectives through the exported C_Quest / C_Objective getters (null = no answer).</summary>
+    public async Task<(bool Found, int Level, List<QuestObjectiveRead> Objectives)?> Wo137ReadQuestAsync(string path, CancellationToken ct = default)
+    {
+        var pb = Encoding.ASCII.GetBytes(path);
+        if (pb.Length == 0 || pb.Length > 400) return null;
+        var a = new byte[2 + pb.Length];
+        BinaryPrimitives.WriteUInt16LittleEndian(a, (ushort)pb.Length);
+        pb.CopyTo(a, 2);
+        var r = await Wo137Async(4, a, ct);
+        if (r is not { Ok: true } v || v.Payload.Length < 6) return null;
+        var b = v.Payload;
+        bool found = b[0] != 0;
+        int level = BinaryPrimitives.ReadInt32LittleEndian(b.AsSpan(1));
+        int count = b[5], o = 6;
+        var objs = new List<QuestObjectiveRead>(count);
+        for (int k = 0; k < count && o < b.Length; k++)
+        {
+            int nl = b[o++];
+            if (o + nl + 12 > b.Length) break;
+            string name = Encoding.ASCII.GetString(b, o, nl); o += nl;
+            int type = b[o++], log = b[o++];
+            int order = BinaryPrimitives.ReadUInt16LittleEndian(b.AsSpan(o)); o += 2;
+            long last = BinaryPrimitives.ReadInt64LittleEndian(b.AsSpan(o)); o += 8;
+            objs.Add(new QuestObjectiveRead(name, type, log, order, last));
+        }
+        return (found, level, objs);
+    }
+
+    /// <summary>op 5: the native side's counters.</summary>
+    public async Task<string?> Wo137StatusAsync(CancellationToken ct = default)
+    {
+        var r = await Wo137Async(5, [], ct);
+        return r is { Ok: true } v ? Encoding.ASCII.GetString(v.Payload) : null;
+    }
+
     /// <summary>
     /// Guid.ToByteArray already produces the little-endian field order Windows
     /// uses, which is exactly how the game holds a CryGUID in memory and how the
@@ -748,7 +877,7 @@ public sealed class CombatPipe : IAsyncDisposable
                 var (type, body) = await ReadFrameAsync(CancellationToken.None);
                 // WO-118: replies are logged by their callers; 0x81/0x86/0x89
                 // arrive at frame-feed and heartbeat rates and would flood.
-                if (type is not (Result or LocalStateReply or NpcStatusReply or BodyStateReply or LocalAction or PvpHitOut or NpcCombatOut or Wo132Reply or Wo131Reply))
+                if (type is not (Result or LocalStateReply or NpcStatusReply or BodyStateReply or LocalAction or PvpHitOut or NpcCombatOut or Wo132Reply or Wo131Reply or Wo137Reply or QuestChangeOut))
                     Console.WriteLine($"[combat] pipe frame 0x{type:X2} ({body.Length} bytes)");
                 if (type == LocalHit && body.Length >= 24)
                 {
@@ -841,6 +970,16 @@ public sealed class CombatPipe : IAsyncDisposable
                 {
                     if (OnNpcCombat is { } h)
                         _ = Task.Run(async () => { try { await h(ncs); } catch (Exception ex) { Console.WriteLine($"[wo132] npc combat not handled: {ex.Message}"); } });
+                }
+                else if (type == QuestChangeOut)
+                {
+                    // WO-137: in order -- the handler only enqueues (its work runs on the agent's own loop).
+                    if (QuestChange.TryParse(body, out var qc))
+                    {
+                        try { OnQuestChange?.Invoke(qc); }
+                        catch (Exception ex) { Console.WriteLine($"[wo137] quest change not queued: {ex.Message}"); }
+                    }
+                    else Console.WriteLine($"[wo137] malformed quest change frame ({body.Length} bytes)");
                 }
                 else if (type == DiscardedHit && body.Length == 12)
                 {

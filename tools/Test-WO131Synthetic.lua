@@ -288,10 +288,13 @@ do -- (i) stand-ins
     check("i: never for a horse (0x80)", #SPAWNS == 1 and ENTS["traveller_horse_3"] == nil)
     NOW = 602
     KCD2MP_ApplyNpcState("roadside_corpse_1", 40, 5, 0, 0, 0, 1, 0, 1, 1000)
-    check("i: never for a body already dead on the host", #SPAWNS == 1)
+    -- WO-137 Phase 2b replaced "never for a body already dead on the host": the stand-in is
+    -- created dead (spawned hidden, killed by the owner-death apply, shown once dead here).
+    check("i: a body already dead on the host: a stand-in, hidden until it is dead here (WO-137)",
+        #SPAWNS == 2 and SPAWNS[2].Name == "roadside_corpse_1" and ENTS["roadside_corpse_1"] ~= nil and ENTS["roadside_corpse_1"].hidden == true)
     NOW = 603
     KCD2MP_ApplyNpcState("traveller_man_2", 40, 5, 0, 0, 100, 0, 0, 1, 1000)
-    check("i: anyone else: a commoner from the avatar roster", #SPAWNS == 2 and SPAWNS[2].Name == "traveller_man_2")
+    check("i: anyone else: a commoner from the avatar roster", #SPAWNS == 3 and SPAWNS[3].Name == "traveller_man_2")
     KCD2MP.npcPuppets["prepadeniNaCeste_bandit_9"] = nil
     KCD2MP_W131ParkReleased("prepadeniNaCeste_bandit_9", "silence")
     check("i: removed (not parked) when its stream stops", ENTS["prepadeniNaCeste_bandit_9"] == nil

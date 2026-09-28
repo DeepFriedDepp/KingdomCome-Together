@@ -44,6 +44,12 @@
 //   at <t> ride <horseName>|off                (WO-136) mounted on that (host) horse: a HorseInfo (0x2A) and the riding
 //                                              flag on every Position packet; off = HorseInfo "-", riding cleared
 //   at <t> torch on|off                        (WO-136) the state block's torch bit (0x20): the player holds a lit torch
+//   at <t> quest request <flags> <old> <new> <port> <questLen> <path>   (WO-137) a QuestAsk Request to the host, as a
+//                                              joiner's agent sends its own quest step (tok = a counter)
+//   at <t> quest talk on|off <npc>             (WO-137) a QuestAsk Talk: this joiner talks to its copy of that NPC
+//   at <t> quest resync <why>                  (WO-137) a QuestAsk Resync: "my world has just loaded"
+//                                              every QuestHostDown (0x61) received is printed; --quest-rec F appends
+//                                              each Change's text to F (synthpeer `questfile F` replays it)
 //   end <t>                                    stop
 //
 // Position packets: every 30 ms while moving, 2 s heartbeat still; the state
@@ -114,6 +120,8 @@ static class P
         using var cts = new CancellationTokenSource();
         var inbox = new ActionInbox();
         string recPath = Arg(a, "--record", "");
+        string questRecPath = Arg(a, "--quest-rec", "");   // WO-137
+        StreamWriter? questRec = questRecPath.Length > 0 ? new StreamWriter(questRecPath, append: true) { AutoFlush = true } : null;
         StreamWriter? rec = recPath.Length > 0 ? new StreamWriter(recPath, append: true) { AutoFlush = true } : null;
         var recClock = Stopwatch.StartNew();
         byte[]? hostAppearance = null;   // WO-131: the last AppearanceDown classes (for `appearance mirror`)
@@ -156,6 +164,12 @@ static class P
                     else if (t2 == Protocol.LootHostDown && b2.Length > 1 + Protocol.JoinHeaderLen
                              && LootMsg.TryDecode(b2.AsSpan(1 + Protocol.JoinHeaderLen), out var lm))   // WO-134
                         Console.WriteLine($"PEER t={recClock.Elapsed.TotalSeconds:F1} got LootHost {Protocol.LootHostName(lm.Kind)} tok={lm.Tok} from={b2[0]}: {lm.Text}");
+                    else if (t2 == Protocol.QuestHostDown && b2.Length > 1 + Protocol.JoinHeaderLen
+                             && LootMsg.TryDecode(b2.AsSpan(1 + Protocol.JoinHeaderLen), out var qm))   // WO-137
+                    {
+                        Console.WriteLine($"PEER t={recClock.Elapsed.TotalSeconds:F1} got QuestHost {Protocol.QuestHostName(qm.Kind)} tok={qm.Tok} from={b2[0]}: {qm.Text}");
+                        if (questRec is not null && qm.Kind == Protocol.QuestHostChange) lock (questRec) questRec.WriteLine(qm.Text);
+                    }
                     else if (t2 == Protocol.LeashDown && b2.Length > 1 + Protocol.JoinHeaderLen
                              && LeashCommand.TryDecode(b2.AsSpan(1 + Protocol.JoinHeaderLen), out var lc))
                         leashIn.Enqueue((b2[0], lc));   // WO-114: handled on the main loop
@@ -426,6 +440,16 @@ static class P
                         await Send(st, PositionCodec.BuildPosition(x, y, z, yaw, riding, false, null, Ms()));
                         lastPos = t;
                         Console.WriteLine($"PEER t={t:F1} ride {(riding ? hn : "off")} (HorseInfo + the riding flag)");
+                        break;
+                    }
+                    case "quest":   // WO-137: quest request ... | talk on|off <npc> | resync <why>
+                    {
+                        lootTok++;
+                        byte k = f[1] switch { "request" => Protocol.QuestAskRequest, "talk" => Protocol.QuestAskTalk, "resync" => Protocol.QuestAskResync, _ => (byte)0 };
+                        if (k == 0) { Console.WriteLine($"PEER t={t:F1} quest: unknown verb {f[1]}"); break; }
+                        string text = string.Join(' ', f.Skip(2));
+                        await Send(st, new LootMsg(k, lootTok, text).BuildUp(Protocol.QuestAskUp, Protocol.JoinTargetHost));
+                        Console.WriteLine($"PEER t={t:F1} quest {Protocol.QuestAskName(k)} tok={lootTok}: {text}");
                         break;
                     }
                     case "torch":   // WO-136: torch on|off -- the state block's torch bit

@@ -306,6 +306,13 @@ public sealed class LogTailGameTransport : IGameTransport
     public event Action? GameQuit;
 
     /// <summary>
+    /// WO-137: the engine lines shared quests need, raw (Wo137Rules.TryParseQuestLine reads them):
+    /// the local player's dialogue request, a dialogue's start attempt and its end (the talk flow),
+    /// and "Switching to player N" (a Godwin stretch holds the quest mirror).
+    /// </summary>
+    public event Action<string>? QuestLine;
+
+    /// <summary>
     /// WO-124: "Loading saved game '%USER%/saves/playlineN/x.whs' ..." -- a save
     /// load was accepted (printed at once; from the main menu the level loads
     /// next and "[CryAction] LoadGame" follows ~40 s later). Argument: playlineN/x.whs.
@@ -604,6 +611,15 @@ public sealed class LogTailGameTransport : IGameTransport
         {
             try { LoadFailedToMenu.Invoke(); }
             catch (Exception ex) { Console.WriteLine($"[join] load-failed handler threw: {ex.Message}"); }
+        }
+
+        if (QuestLine is not null && (line.StartsWith("Soul 'Dude' requested dialog. ", StringComparison.Ordinal)
+                                      || line.StartsWith("Attempting to start new dialogue (runtime id '", StringComparison.Ordinal)
+                                      || (line.StartsWith("[ID: ", StringComparison.Ordinal) && line.IndexOf("] Dialog end", StringComparison.Ordinal) > 0)
+                                      || line.StartsWith("Switching to player ", StringComparison.Ordinal)))
+        {
+            try { QuestLine.Invoke(line.ToString()); }
+            catch (Exception ex) { Console.WriteLine($"[wo137] quest-line handler threw: {ex.Message}"); }
         }
 
         if (GameQuit is not null && line.StartsWith("CSystem::Quit invoked", StringComparison.Ordinal))

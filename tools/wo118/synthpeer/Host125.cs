@@ -40,6 +40,20 @@
 //                                 repeated every 1 s while on (the WO-132 heartbeat)
 //       hstate k=v ...            (WO-135/136) the host avatar's state block: crouch=0|1 torch=0|1 combat=0|1
 //       appearance <guid,...>     (WO-136) the host's outfit (an Appearance 0x1A)
+//       quest change <flags> <old> <new> <port|-> <questLen> <path>   (WO-137) a QuestHost Change to every joiner,
+//                                 numbered by this host (its own seq, from 1)
+//       quest mode on|off <why>   (WO-137) the host's quest sync (QuestHost Mode)
+//       quest hold on|off <npc>   (WO-137) a QuestHost Hold (tok 0)
+//       quest result <tok> <verdict> <hostVal> <port|-> <path>   (WO-137) a QuestHost Result by hand
+//       quest checkpoint          (WO-137) a Checkpoint of every State this host has sent or applied
+//       quest auto on|off         (WO-137) answer QuestAsk like a real host (default on): a Request is judged
+//                                 against this host's own table (unknown = at the joiner's old value) and applied
+//                                 (its Change goes out, mirror-flagged, then Result applied) / already / refused;
+//                                 a Talk is answered with a Hold; a Resync with a Checkpoint
+//       quest set <path> <val> <port|->   (WO-137) this host's own value for a State (no message)
+//       questfile <file>          (WO-137) replay a host's recorded Change texts ("<seq> <flags> <old> <new> <port|->
+//                                 <questLen> <path>" per line, as avatarpeer --quest-rec writes them), renumbered, in order
+//                                 (every QuestAskDown 0x63 received is logged: QUESTASK ...)
 //     [reseed] = a synthetic seed (hex) written into the save's body 0x01FB, re-signed: a second
 //     "playthrough" made from a copy. Files are COPIES of real host saves; never logged by path.
 //
@@ -112,6 +126,9 @@ static class Host125
         var npcCombatOn = new System.Collections.Concurrent.ConcurrentDictionary<string, NpcCombatEvent>(StringComparer.Ordinal);            // WO-136: npccombat
         var actOut = new ActionOutbox();                                                                                                      // WO-136: NpcAttack / NpcCombat                                                                                    // WO-135: hstate crouch=1 -- the host avatar's state block                                                                                      // WO-135: announced to every joiner every 10 s
         var ledger = new Wo134Rules.Ledger();
+        uint qseq = 0;                                                                                                                         // WO-137: this host's change numbers
+        bool qauto = true;                                                                                                                     // WO-137: quest auto on|off
+        var qstate = new System.Collections.Concurrent.ConcurrentDictionary<string, (int Val, string Port, int QuestLen)>(StringComparer.Ordinal);   // WO-137: this host's States
         var leashSeen = new Dictionary<byte, LeashState>();   // WO-114: the last LeashState per joiner
         var world = Load(Arg(a, "--join-host125", ""), Arg(a, "--reseed", ""));
         bool shared = true;
@@ -395,6 +412,73 @@ static class Host125
                                 Say($"APPEARANCE sent ({gs.Length} classes)");
                                 break;
                             }
+                            case "quest":   // WO-137
+                            {
+                                string rest = string.Join(' ', p.Skip(2));
+                                switch (p[1])
+                                {
+                                    case "change":
+                                    {
+                                        string text = $"{++qseq} {rest}";
+                                        if (!Wo137Rules.TryParseChangeText(text, out var qc)) { Say($"QUEST change refused (malformed): {rest}"); break; }
+                                        qstate[qc.Path] = (qc.New, qc.Port, qc.QuestLen);
+                                        for (byte g = 1; g < 8; g++) await W(new LootMsg(Protocol.QuestHostChange, 0, text).BuildUp(Protocol.QuestHostUp, g));
+                                        Say($"QUEST change #{qseq} sent: {text}");
+                                        break;
+                                    }
+                                    case "mode":
+                                    case "hold":
+                                    {
+                                        byte k = p[1] == "mode" ? Protocol.QuestHostMode : Protocol.QuestHostHold;
+                                        for (byte g = 1; g < 8; g++) await W(new LootMsg(k, 0, rest).BuildUp(Protocol.QuestHostUp, g));
+                                        Say($"QUEST {p[1]} sent: {rest}");
+                                        break;
+                                    }
+                                    case "result":
+                                    {
+                                        uint tk = uint.Parse(p[2], CultureInfo.InvariantCulture);
+                                        string text = string.Join(' ', p.Skip(3));
+                                        for (byte g = 1; g < 8; g++) await W(new LootMsg(Protocol.QuestHostResult, tk, text).BuildUp(Protocol.QuestHostUp, g));
+                                        Say($"QUEST result tok={tk} sent: {text}");
+                                        break;
+                                    }
+                                    case "checkpoint":
+                                        foreach (var t in Wo137Rules.CheckpointTexts(qstate.Select(kv => new Wo137Rules.CheckpointEntry(kv.Key, kv.Value.Val, kv.Value.Port)).ToList()))
+                                            for (byte g = 1; g < 8; g++) await W(new LootMsg(Protocol.QuestHostCheckpoint, 0, t).BuildUp(Protocol.QuestHostUp, g));
+                                        Say($"QUEST checkpoint of {qstate.Count} State(s) sent");
+                                        break;
+                                    case "auto":
+                                        qauto = p.Length > 2 && p[2] == "on";
+                                        Say($"QUEST auto {(qauto ? "on" : "off")}");
+                                        break;
+                                    case "set":
+                                        qstate[p[2]] = (int.Parse(p[3], CultureInfo.InvariantCulture), p[4] == "-" ? "" : p[4], p[2].IndexOf(".h.", StringComparison.Ordinal) is int hi and > 0 ? hi : 0);
+                                        Say($"QUEST set {p[2]} = {p[3]} ({p[4]})");
+                                        break;
+                                    default:
+                                        Say($"QUEST unknown verb {p[1]}");
+                                        break;
+                                }
+                                break;
+                            }
+                            case "questfile":   // WO-137: replay a recorded host change stream, renumbered, in order
+                            {
+                                int n = 0, bad = 0;
+                                foreach (var raw in File.ReadAllLines(p[1]))
+                                {
+                                    var q = raw.Trim();
+                                    if (q.Length == 0 || q.StartsWith('#')) continue;
+                                    var f5 = q.Split(' ', 2);
+                                    string text = $"{++qseq} {(f5.Length > 1 ? f5[1] : "")}";
+                                    if (!Wo137Rules.TryParseChangeText(text, out var qc)) { bad++; qseq--; continue; }
+                                    qstate[qc.Path] = (qc.New, qc.Port, qc.QuestLen);
+                                    for (byte g = 1; g < 8; g++) await W(new LootMsg(Protocol.QuestHostChange, 0, text).BuildUp(Protocol.QuestHostUp, g));
+                                    n++;
+                                    await Task.Delay(10, hard.Token);
+                                }
+                                Say($"QUESTFILE {Path.GetFileName(p[1])}: {n} recorded host change(s) replayed as #{qseq - n + 1}..#{qseq}{(bad > 0 ? $", {bad} malformed skipped" : "")}");
+                                break;
+                            }
                             case "npcflags":   // WO-135: npcflags <name> <flags> -- a running npc stream's flags (2 = knocked out, 0 = up, 1 = dead)
                                 npcFlags[p[1]] = byte.Parse(p[2], CultureInfo.InvariantCulture);
                                 Say($"NPCFLAGS {p[1]} = {p[2]}");
@@ -590,6 +674,48 @@ static class Host125
                             Say($"  -> ItemResult {v}");
                             break;
                         }
+                    }
+                    continue;
+                }
+                if (type == Protocol.QuestAskDown && LootMsg.TryDecode(body, out var qa))   // WO-137: answered like a real host
+                {
+                    Say($"QUESTASK {Protocol.QuestAskName(qa.Kind)} tok={qa.Tok} from {src}: {qa.Text}");
+                    if (!qauto) continue;
+                    switch (qa.Kind)
+                    {
+                        case Protocol.QuestAskRequest when Wo137Rules.TryParseRequestText(qa.Text, out var rq):
+                        {
+                            bool known = qstate.TryGetValue(rq.Path, out var cur);
+                            int hv = known ? cur.Val : rq.Old;
+                            var v = Wo137Rules.Judge(true, hv, rq.Old, rq.New);
+                            if (v == Wo137Rules.Verdict.Apply)
+                            {
+                                string ct = $"{++qseq} {QuestChange.FNotify | QuestChange.FOldOk | QuestChange.FNewOk | QuestChange.FMirror} {rq.Old} {rq.New} {rq.Port} {rq.QuestLen} {rq.Path}";
+                                qstate[rq.Path] = (rq.New, rq.Port, rq.QuestLen);
+                                for (byte g = 1; g < 8; g++) await W(new LootMsg(Protocol.QuestHostChange, 0, ct).BuildUp(Protocol.QuestHostUp, g));
+                                await W(new LootMsg(Protocol.QuestHostResult, qa.Tok, Wo137Rules.ResultText("applied", rq.New, rq.Port, rq.Path)).BuildUp(Protocol.QuestHostUp, src));
+                                Say($"  -> applied (change #{qseq} to every joiner, then Result applied)");
+                            }
+                            else
+                            {
+                                string verdict = v == Wo137Rules.Verdict.Already ? "already" : "refused";
+                                await W(new LootMsg(Protocol.QuestHostResult, qa.Tok, Wo137Rules.ResultText(verdict, hv, known ? cur.Port : "", rq.Path)).BuildUp(Protocol.QuestHostUp, src));
+                                Say($"  -> {verdict} (this host has {hv})");
+                            }
+                            break;
+                        }
+                        case Protocol.QuestAskTalk when Wo137Rules.TryParseTalkText(qa.Text, out bool ton, out string tnpc):
+                            await W(new LootMsg(Protocol.QuestHostHold, qa.Tok, Wo137Rules.TalkText(ton, tnpc)).BuildUp(Protocol.QuestHostUp, src));
+                            Say($"  -> Hold {(ton ? "on" : "off")} {tnpc} (this host's {tnpc} {(ton ? "is busy" : "is free again")})");
+                            break;
+                        case Protocol.QuestAskResync:
+                            foreach (var t in Wo137Rules.CheckpointTexts(qstate.Select(kv => new Wo137Rules.CheckpointEntry(kv.Key, kv.Value.Val, kv.Value.Port)).ToList()))
+                                await W(new LootMsg(Protocol.QuestHostCheckpoint, 0, t).BuildUp(Protocol.QuestHostUp, src));
+                            Say($"  -> Checkpoint of {qstate.Count} State(s)");
+                            break;
+                        default:
+                            Say("  -> not answered (malformed)");
+                            break;
                     }
                     continue;
                 }

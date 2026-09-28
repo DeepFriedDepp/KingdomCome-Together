@@ -19,6 +19,7 @@ using namespace kcdmp::gait;
 int wo114_wake_tests(int* passed);   // wo114_wake_tests.cpp
 int wo133_port_gate_tests(int* passed);   // wo133_port_gate_tests.cpp
 int wo136_rules_tests(int* passed);        // wo136_rules_tests.cpp
+int wo137_rules_tests(int* passed);        // wo137_rules_tests.cpp
 
 static int g_fail = 0, g_pass = 0;
 #define CHECK(cond, ...) do { if (cond) ++g_pass; else { ++g_fail; std::printf("FAIL  %s:%d  ", __FILE__, __LINE__); std::printf(__VA_ARGS__); std::printf("\n"); } } while (0)
@@ -124,6 +125,13 @@ int main() {
         const int rf = wo136_rules_tests(&rp);
         g_pass += rp;
         g_fail += rf;
+    }
+    // WO-137: quest time sets are the host's; quests only; the config logged on a change
+    {
+        int qp = 0;
+        const int qf = wo137_rules_tests(&qp);
+        g_pass += qp;
+        g_fail += qf;
     }
 
     std::printf("%d passed, %d failed\n", g_pass, g_fail);

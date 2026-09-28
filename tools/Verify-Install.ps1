@@ -137,6 +137,11 @@ $AsmMarkers = @(
     @{ File = 'KcdMpClient.dll'; Marker = 'MP-WO136-STATS';         Owner = 'WO-136 load hold, stand-ins, rider horse, torch (agent half)' },
     @{ File = 'KCDMP.dll';       Marker = 'WO136-HANDOVER';         Owner = 'WO-136 the fight goes on with the partner (native)' },
     @{ File = 'KCDMP.dll';       Marker = 'WO136-FORCED';           Owner = 'WO-136 enemies choose the joiner: combat_forcedTarget (native)' },
+    # WO-137: shared quests (the mirror, the requests, talking, dead is dead)
+    @{ File = 'KcdMpClient.dll'; Marker = 'MP-WO137-STATS';         Owner = 'WO-137 shared quests: mirror, requests, checkpoints (agent half)' },
+    @{ File = 'KCDMP.dll';       Marker = 'WO137-BUILD';            Owner = 'WO-137 quest State detector and Set-port apply (native)' },
+    @{ File = 'KCDMP.dll';       Marker = 'WO137-TIMESET';          Owner = "WO-137 quest time sets are the host's only (native time gate)" },
+    @{ File = 'KcdMp.Protocol.dll'; Marker = 'quest-host';          Owner = 'WO-137 quest messages on the join channel (wire)' },
     @{ File = 'KcdMp.Protocol.dll'; Marker = 'loot-host';           Owner = 'WO-134 loot messages on the join channel (wire)' },
     @{ File = 'KCDMP_launcher.dll'; Marker = 'Kingdom Come: Together'; Owner = 'WO-134 rebrand (launcher window title)' }
 )
@@ -200,6 +205,10 @@ $PakMarkers = @(
     @{ Marker = 'function KCD2MP_W136Hold';        Owner = 'WO-136 the load hold (mod half)' },
     @{ Marker = 'function KCD2MP_W136RideTake';    Owner = 'WO-136 the rider owns the horse (mod half)' },
     @{ Marker = 'function KCD2MP_W136AvatarTorch'; Owner = 'WO-136 the avatar holds the torch (mod half)' },
+    @{ Marker = 'function KCD2MP_W137Session';     Owner = 'WO-137 shared quests: the session and mp_quest_sync (mod half)' },
+    @{ Marker = 'function KCD2MP_W137TalkResume';  Owner = "WO-137 the joiner talks to the host's NPC (mod half)" },
+    @{ Marker = 'function KCD2MP_W137HostHold';    Owner = "WO-137 the host holds its NPC busy (mod half)" },
+    @{ Marker = 'function KCD2MP_W137DeadBody';    Owner = 'WO-137 dead is dead: a corpse is never paused (mod half)' },
     @{ Marker = 'Quest catch-up is off in a shared world.'; Owner = 'WO-133 the plain refusal line' }
 )
 

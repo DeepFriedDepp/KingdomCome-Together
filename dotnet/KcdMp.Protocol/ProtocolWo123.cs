@@ -81,6 +81,9 @@ public static partial class Protocol
         // WO-134: world items (ProtocolWo134.cs)
         (LootAskUp,     LootAskDown,     "loot-ask",     JoinHeaderLen + LootFixedLen + 1, JoinHeaderLen + LootFixedLen + LootTextMax, JoinFrom.Joiner),
         (LootHostUp,    LootHostDown,    "loot-host",    JoinHeaderLen + LootFixedLen + 1, JoinHeaderLen + LootFixedLen + LootTextMax, JoinFrom.Host),
+        // WO-137: shared quests (ProtocolWo137.cs) -- the LootMsg shape, [kind][tok][text]
+        (QuestHostUp,   QuestHostDown,   "quest-host",   JoinHeaderLen + LootFixedLen + 1, JoinHeaderLen + LootFixedLen + QuestTextMax, JoinFrom.Host),
+        (QuestAskUp,    QuestAskDown,    "quest-ask",    JoinHeaderLen + LootFixedLen + 1, JoinHeaderLen + LootFixedLen + QuestTextMax, JoinFrom.Joiner),
     };
 
     /// <summary>The JoinWire row for an up type, or null.</summary>

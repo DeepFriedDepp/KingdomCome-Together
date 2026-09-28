@@ -534,6 +534,7 @@ public partial class GameBridge
 
             // ---- the load, from the menu
             j.Phase = "loading";
+            Wo137OnJoinLoading(j.JoinId);   // WO-137: host quest changes from before this world are in it already
             SetJoinUi("loading", "Loading your host's world...");
             j.LoadStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
             j.GameplayStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);

@@ -3203,6 +3203,19 @@ function KCD2MP_NpcDetach(name, p, why)
     pcall(function() e = System.GetEntityByName(name) end)
     if not e then return end
     local st = KCD2MP._npcDetachStats
+    -- WO-137 Phase 2b ("dead is dead"): never a corpse. A dead body's lying pose
+    -- IS its Unstance (the game's special_deadBody_common behaviour); resetting it
+    -- stood the Find Mutt bandit up on the joiner while the host had it lying
+    -- (field: result=DeadBody_BeingInteracted_Waiting->MotionIdle why=puppet-start).
+    local dead = p.dead == true or p.deadHint == true
+    if not dead then pcall(function() dead = e.actor ~= nil and e.actor:IsDead() == true end) end
+    if dead then
+        st.skipped = st.skipped + 1
+        p.detachPending = nil
+        mp_log(string.format("MP-DETACH npc=%s stance=skipped unstance=skipped result=skipped-dead changed=0 why=%s",
+            tostring(name), tostring(why)))
+        return
+    end
     local inDialog = false
     if not pcall(function() if e.human and e.human.IsInDialog then inDialog = e.human:IsInDialog() == true end end) then
         KCD2MP_DialogGuardFailed(name, "detach")
@@ -4141,9 +4154,17 @@ end
 -- is a puppet this machine is writing -- never on radius entry, never from a
 -- roster scan, never on the authority (its brains ARE the truth). A coverage
 -- gap therefore produces a jittery NPC (today's behaviour), never a statue.
-local function mp_wo102_pause(name, p)
+local function mp_wo102_pause(name, p, why)
     if not (KCD2MP.wo102.authorityHost and KCD2MP.wo102.authorityPause) then return end
     if KCD2MP_W136Held and KCD2MP_W136Held() then return end   -- WO-136: never while a world loads
+    -- WO-137 Phase 4: the copy the local player is talking to runs its own brain
+    -- for the conversation (KCD2MP_W137TalkResume); paused again at its end.
+    if KCD2MP.w137 and KCD2MP.w137.talking[name] then return end
+    -- WO-137 Phase 2b: a corpse is never paused. It has no brain to stop, and a
+    -- body the host streams dead has to run its own dead-body behaviour (the
+    -- lying pose, the kill of a scripted body); the owner-death apply (WO-122)
+    -- kills a copy that is still alive here.
+    if KCD2MP_W137DeadBody and KCD2MP_W137DeadBody(name, p) then return end
     if KCD2MP.hitSensorOn then
         KCD2MP._pauseStats.refusedAuthority = KCD2MP._pauseStats.refusedAuthority + 1
         if not KCD2MP._pauseRefusedAuthLogged then
@@ -4172,9 +4193,9 @@ local function mp_wo102_pause(name, p)
     local exec = ok and "ok" or ("err:" .. tostring(err))
     KCD2MP._npcPauseExec[name] = exec
     mp_auth_log(name, "pause", p and p.owner or "?", "wh_ai_PauseNPC", 0)
-    mp_pause_log(name, "pause", exec, "puppet-start", p and p.owner or "?", 0)
+    mp_pause_log(name, "pause", exec, why or "puppet-start", p and p.owner or "?", 0)
     if not ok then mp_log("WO102-PAUSE ExecuteCommand failed for " .. tostring(name) .. ": " .. tostring(err)) end
-    if ok then KCD2MP_NpcDetach(name, p, "puppet-start") end   -- WO-118 Phase 3
+    if ok then KCD2MP_NpcDetach(name, p, why or "puppet-start") end   -- WO-118 Phase 3
 end
 
 -- The unconditional resume: wh_ai_ResumeNPC now, forget the name.
@@ -5427,6 +5448,7 @@ end
 
 function KCD2MP_Wo114DrawUI()
     pcall(KCD2MP_W131Backstop)   -- WO-131: give parked bodies back if the agent went silent
+    pcall(KCD2MP_W137Backstop)   -- WO-137: talking copies and the host's holds back if the agent went silent
     local w = KCD2MP.w114
     -- A line queued while a menu held the timers (the map after a refused fast
     -- travel): shown now, for the usual 5 s, instead of expiring unseen.
@@ -5751,6 +5773,9 @@ end
 -- nothing there resumes it later.
 function KCD2MP_W131ParkReleased(name, why)
     if not KCD2MP_W131IsActive() then return false end
+    -- WO-137 Phase 4: never mid-conversation; the talk's end parks it (KCD2MP_W137TalkEnd).
+    local tk = KCD2MP.w137 and KCD2MP.w137.talking[name]
+    if tk then tk.parkAfter = tostring(why); return true end
     KCD2MP._npcResumePending[name] = nil
     KCD2MP._npcPaused[name] = nil
     if KCD2MP.w131.standins and KCD2MP.w131.standins[name] then
@@ -5969,7 +5994,10 @@ function KCD2MP_W131StandIn(name, x, y, z, rot, flags)
     if not (w.standIn and KCD2MP_W131IsActive()) then return nil end
     local f = tonumber(flags) or 0
     local notHuman = (math.floor(f / 128) % 2) == 1   -- the host's 0x80: a horse or (WO-136) an encounter animal
-    if (f % 2) == 1 then return nil end                     -- dead on the host: no body to invent
+    -- WO-137 Phase 2b: dead on the host = a stand-in that is created dead (spawned
+    -- hidden, killed by the owner-death apply, shown once it reads dead here).
+    local deadOnHost = (f % 2) == 1
+    if deadOnHost and not (KCD2MP_W137DeadStandInOk and KCD2MP_W137DeadStandInOk(name)) then return nil end
     if not string.find(tostring(name), "^[%w_]+$") or mp_is_excluded_npc_name(name) then return nil end
     if w.standins[name] then return w131_body(name) end
     -- WO-136 Phase 2: the host's own soul and class (animals too); nil = wait for it / a horse.
@@ -5991,6 +6019,7 @@ function KCD2MP_W131StandIn(name, x, y, z, rot, flags)
         pcall(function() e:SetWorldAngles({ x = 0, y = 0, z = tonumber(rot) or 0 }) end)
         mp_log(string.format("WO131-STANDIN spawn npc=%s soul=%s class=%s kind=%s at=(%.1f,%.1f,%.1f) -- the host spawned it, this world never did",
             name, string.sub(soul, 1, 8), tostring(cls), kind, x, y, z))
+        if deadOnHost and KCD2MP_W137DeadStandInSpawned then KCD2MP_W137DeadStandInSpawned(name, e, w.standins[name]) end
     else
         mp_log(string.format("WO131-STANDIN fail npc=%s soul=%s ok=%s err=%s", name, string.sub(soul, 1, 8), tostring(ok), tostring(err)))
     end
@@ -6812,6 +6841,461 @@ end
 -- mp_w136_check <verb ...>: live checks through the agent (fights, threat, handover, swing, ...).
 function KCD2MP_W136Check(arg)
     KCD2MP_EmitEvent("w136_check", tostring(arg or ""))
+end
+
+-- ===== WO-137: shared quests -- the mod's half (docs/WO-137-findings.md) ==========
+-- The quest graph is the DLL's and the agent's (native wo137.cpp and
+-- GameBridge.Wo137.cs): every quest State change in the host's world is applied
+-- to the joiner's copy in the host's order, and the joiner's own steps go to the
+-- host as requests. What Lua does for it:
+--   * the session state and the kill switch: mp_quest_sync on|off (the HOST's
+--     value is the session's; a joiner's own off stops only its side);
+--   * talking (JOINER): a copy of a host NPC is suspended (WO-102/108), so a
+--     conversation request to it waits until the engine drops it (20 s). The
+--     local player's Talk/Chat on a copy gives the copy its brain back for the
+--     conversation (the request then starts: Q4, observed), tells the host (its
+--     NPC is held busy there), and suspends the copy again when the dialogue
+--     ends ("Dialog ending", relayed by the agent), when it never started in
+--     talkStartS, when this player has been out of dialogue for 3 s, or past
+--     talkMaxS. A conversation the game forces on a copy (its quest logic, which
+--     follows the host's) runs on the suspended copy (Q6, observed) and is
+--     tracked the same way. Only while the quest sync is active: the outcome of
+--     a conversation counts because its quest steps reach the host;
+--   * the host's hold (HOST): the host's own NPC is suspended while a joiner
+--     talks to its copy (no second conversation, no walking off), released at
+--     the end, after heldMaxS, or when the agent goes away;
+--   * dead is dead (JOINER): a corpse is never paused or detached, a paused one
+--     gets its brain back, a stand-in the host streams dead is created dead.
+--   WO137-SESSION host=<b> joiner=<b> active=<b> sync=<on|off> talk=<on|off>
+--   WO137-SYNC on|off -- <what it means>
+--   WO137-TALK resume|start|forced|end npc=<n> id=<dialog id> via=<w> ...
+--   WO137-HOLD on|off|refused npc=<n> peer=<id> why=<w> exec=<ok|err|..>
+--   WO137-DEAD resumed|standin-hidden|standin-shown|standin-removed npc=<n> ...
+KCD2MP.w137 = {
+    sync = true,               -- mp_quest_sync (default ON: fail-closed pieces ship on)
+    talkOn = true,             -- mp_quest_talk on|off (joiner)
+    host = false, joiner = false, active = false, aliveAt = nil,
+    talking = {},              -- copy name -> { since, via, id, started, resumed, forced, sawDialog, notInDialogSince, parkAfter }
+    talkStartS = 25.0,         -- the engine drops a request after wh_dlg_RequestTimeout (20 s)
+    talkOutS = 3.0,            -- started, and this player out of dialogue this long: it is over
+    talkMaxS = 900.0,
+    talkRangeM = 3.0,          -- the request fallback's reach (wh_dlg_RequestMaxDistance is 2.5 m)
+    held = {},                 -- host: npc -> { peer, since, why, at }
+    heldMaxS = 300.0,
+    heldRepauseS = 10.0,       -- a load forgets suspensions (WO-108 Phase 0): re-issued this often
+    deadRefused = {},          -- name -> true once "not paused: a corpse" was logged
+    deadStandinFail = {},      -- name -> os.clock() when a dead stand-in never died here
+    deadStandinWaitS = 15.0,
+    aliveTimeoutS = 10.0,
+    stats = { talks = 0, started = 0, forced = 0, ended = 0, timeouts = 0, fallbacks = 0, holds = 0, releases = 0,
+              deadRefused = 0, deadResumed = 0, deadStandins = 0, deadShown = 0, deadRemoved = 0 },
+}
+
+-- ---- dead is dead (Phase 2b) ---------------------------------------------------
+-- mp_wo102_pause's gate: true = this body is a corpse (the host streams it dead,
+-- or it is dead here) and must not be paused.
+function KCD2MP_W137DeadBody(name, p)
+    local why = nil
+    if p and (p.dead or p.deadHint) then why = "dead-on-host" end
+    if not why then
+        local e, dead = nil, false
+        pcall(function() e = System.GetEntityByName(name) end)
+        if e and e.actor then pcall(function() dead = e.actor:IsDead() == true end) end
+        if dead then why = "dead-here" end
+    end
+    if not why then return false end
+    local w = KCD2MP.w137
+    if not w.deadRefused[name] then
+        w.deadRefused[name] = true
+        w.stats.deadRefused = w.stats.deadRefused + 1
+        mp_pause_log(name, "refused", "none", why .. ":a-corpse-is-never-paused", p and p.owner or "?", 0)
+    end
+    return true
+end
+
+-- From the puppet tick, for a body that is dead here or on the host.
+function KCD2MP_W137DeadTick(name, p, e, locallyDead)
+    local w = KCD2MP.w137
+    if locallyDead and KCD2MP._npcPaused[name] then
+        mp_wo102_resume(name, "dead-body")
+        w.stats.deadResumed = w.stats.deadResumed + 1
+        mp_log(string.format("WO137-DEAD resumed npc=%s -- a corpse is never paused: its own dead-body behaviour holds it where it lies", name))
+    end
+    local si = KCD2MP.w131.standins and KCD2MP.w131.standins[name]
+    if not (si and si.deadPending) then return end
+    local now = os.clock()
+    if locallyDead then
+        si.deadPending = nil
+        local pos = nil
+        pcall(function() pos = e:GetWorldPos() end)
+        pcall(function() e:Hide(0) end)
+        w.stats.deadShown = w.stats.deadShown + 1
+        mp_log(string.format("WO137-DEAD standin-shown npc=%s after_s=%.1f at=(%.1f,%.1f,%.1f) host=(%.1f,%.1f,%.1f) -- created dead, lying where the host has it",
+            name, now - si.at, pos and pos.x or 0, pos and pos.y or 0, pos and pos.z or 0, p.tx or 0, p.ty or 0, p.tz or 0))
+    elseif (now - si.at) > w.deadStandinWaitS then
+        w.deadStandinFail[name] = now
+        w.stats.deadRemoved = w.stats.deadRemoved + 1
+        mp_log(string.format("WO137-DEAD standin-removed npc=%s -- not dead here %.0f s after its spawn (the owner-death apply did not land); a hidden body is never shown alive; no new try for 120 s",
+            name, w.deadStandinWaitS))
+        KCD2MP_W131RemoveStandIn(name, "dead-never-died")
+    end
+end
+
+-- KCD2MP_W131StandIn's gate for a name the host streams dead.
+function KCD2MP_W137DeadStandInOk(name)
+    local failAt = KCD2MP.w137.deadStandinFail[name]
+    if failAt and (os.clock() - failAt) < 120.0 then return false end
+    return KCD2MP.w122 ~= nil and KCD2MP.w122.ownerDeath == true and KCD2MP.npcDeathSync == true
+end
+
+function KCD2MP_W137DeadStandInSpawned(name, e, si)
+    pcall(function() e:Hide(1) end)
+    si.deadPending = true
+    KCD2MP.w137.stats.deadStandins = KCD2MP.w137.stats.deadStandins + 1
+    mp_log(string.format("WO137-DEAD standin-hidden npc=%s -- dead on the host: hidden until it is dead here too (the owner-death apply), then shown", name))
+end
+
+-- ---- the session, the kill switch ------------------------------------------------
+-- The agent, once a second: host / joiner (in the host's world) / the mirror runs.
+function KCD2MP_W137Session(host, joiner, active)
+    local w = KCD2MP.w137
+    host, joiner, active = host == true, joiner == true, active == true
+    local now = os.clock()
+    local fresh = not w.aliveAt or (now - w.aliveAt) > w.aliveTimeoutS
+    w.aliveAt = now
+    if fresh then
+        -- the agent (re)connected: it follows this toggle (it keeps no value of its own across restarts)
+        KCD2MP_EmitEvent("w137_sync", w.sync and "on" or "off")
+    end
+    local wasHost, wasJoiner = w.host, w.joiner
+    if fresh or host ~= w.host or joiner ~= w.joiner or active ~= w.active then
+        mp_log(string.format("WO137-SESSION host=%s joiner=%s active=%s sync=%s talk=%s",
+            tostring(host), tostring(joiner), tostring(active), w.sync and "on" or "off", w.talkOn and "on" or "off"))
+    end
+    w.host, w.joiner, w.active = host, joiner, active
+    pcall(KCD2MP_W137InstallTalk)
+    if wasJoiner and not joiner then KCD2MP_W137TalkEndAll("no-longer-joiner") end
+    if wasHost and not host then KCD2MP_W137HoldReleaseAll("no-longer-host") end
+    pcall(KCD2MP_W137TalkTick)
+    pcall(KCD2MP_W137HoldTick)
+end
+
+-- The 8 ms draw loop: the agent went away without telling (a crash) -> give back.
+function KCD2MP_W137Backstop()
+    local w = KCD2MP.w137
+    if not w.aliveAt or (os.clock() - w.aliveAt) <= w.aliveTimeoutS then return end
+    if next(w.talking) == nil and next(w.held) == nil then return end
+    KCD2MP_W137TalkEndAll("agent-silent")
+    KCD2MP_W137HoldReleaseAll("agent-silent")
+end
+
+-- mp_quest_sync on|off (the kill switch). The host's value is the session's: off
+-- there stops the mirror and every joiner's requests at once (the agent announces
+-- it); a reload or a rejoin still re-syncs exactly (the coarse fallback).
+function KCD2MP_SetQuestSync(arg)
+    local v = KCD2MP_Wo122ParseBool(arg)
+    if v == "bad" then mp_log("mp_quest_sync: expected on|off, got '" .. tostring(arg) .. "'"); return false end
+    local w = KCD2MP.w137
+    if v ~= nil then w.sync = v end
+    if not w.sync then KCD2MP_W137TalkEndAll("mp_quest_sync-off") end
+    mp_log(string.format("WO137-SYNC %s -- %s", w.sync and "on" or "off",
+        w.sync and "all quests are shared: the host's changes reach every joiner, a joiner's own steps go to the host"
+               or "the quest mirror and the requests stop at once (the old quest layer stays off, WO-133); a reload or a rejoin re-syncs"))
+    KCD2MP_EmitEvent("w137_sync", w.sync and "on" or "off")
+    return true
+end
+
+-- mp_quest_talk on|off (joiner): talking to a host copy frees it for the conversation.
+function KCD2MP_SetQuestTalk(arg)
+    local v = KCD2MP_Wo122ParseBool(arg)
+    if v == "bad" then mp_log("mp_quest_talk: expected on|off, got '" .. tostring(arg) .. "'"); return false end
+    local w = KCD2MP.w137
+    if v ~= nil then w.talkOn = v end
+    if not w.talkOn then KCD2MP_W137TalkEndAll("mp_quest_talk-off") end
+    mp_log("WO137-TALK talk=" .. (w.talkOn and "on" or "off"))
+    return true
+end
+
+function KCD2MP_W137Status()
+    local w, s = KCD2MP.w137, KCD2MP.w137.stats
+    local talking, held = {}, {}
+    for n in pairs(w.talking) do talking[#talking + 1] = n end
+    for n in pairs(w.held) do held[#held + 1] = n end
+    mp_log(string.format("WO137-STATUS sync=%s talk=%s host=%s joiner=%s active=%s talking=%s held=%s talks=%d started=%d forced=%d ended=%d timeouts=%d fallbacks=%d holds=%d releases=%d dead_refused=%d dead_resumed=%d dead_standins=%d dead_shown=%d dead_removed=%d",
+        w.sync and "on" or "off", w.talkOn and "on" or "off", tostring(w.host), tostring(w.joiner), tostring(w.active),
+        #talking > 0 and table.concat(talking, ",") or "-", #held > 0 and table.concat(held, ",") or "-",
+        s.talks, s.started, s.forced, s.ended, s.timeouts, s.fallbacks, s.holds, s.releases,
+        s.deadRefused, s.deadResumed, s.deadStandins, s.deadShown, s.deadRemoved))
+    KCD2MP_EmitEvent("w137_status", "1")
+end
+
+-- ---- talking (Phase 4, JOINER) -----------------------------------------------------
+-- The game builds an NPC's interactions from BasicAIActions each time the player
+-- looks at it (the WO-131 loot wrap's route): wrapping the talk and chat entry
+-- points covers every NPC. Only a host copy (a puppet) is touched.
+KCD2MP.w137.TALK_FNS = { "OnTalk", "OnChat", "OnChatWithFocus", "OnChatRequestAccepted", "OnChatOpen" }
+function KCD2MP_W137InstallTalk()
+    local w = KCD2MP.w137
+    if type(BasicAIActions) ~= "table" then return end
+    w.talkWraps = w.talkWraps or {}
+    for _, fn in ipairs(w.TALK_FNS) do
+        local cur = BasicAIActions[fn]
+        if type(cur) == "function" and cur ~= w.talkWraps[fn] then
+            local orig = cur
+            local via = fn
+            local wrap = function(self, user, slot)
+                pcall(KCD2MP_W137BeforeTalk, self, user, via)
+                return orig(self, user, slot)
+            end
+            w.talkWraps[fn] = wrap
+            BasicAIActions[fn] = wrap
+            mp_log("WO137-TALK wrapped BasicAIActions." .. fn)
+        end
+    end
+end
+
+function KCD2MP_W137TalkWanted()
+    local w = KCD2MP.w137
+    return w.joiner and w.active and w.talkOn and w.sync
+end
+
+function KCD2MP_W137BeforeTalk(npc, user, via)
+    if not KCD2MP_W137TalkWanted() then return end
+    if not (npc and user and player and user.id == player.id) then return end
+    local name = nil
+    pcall(function() name = npc:GetName() end)
+    if not name or not KCD2MP.npcPuppets[name] then return end   -- only the host's NPC (its copy is a puppet here)
+    KCD2MP_W137TalkResume(name, via)
+end
+
+function KCD2MP_W137TalkResume(name, via)
+    local w = KCD2MP.w137
+    local t = w.talking[name]
+    if t then t.via = tostring(via); return t end
+    local wasPaused = KCD2MP._npcPaused[name] ~= nil
+    t = { since = os.clock(), via = tostring(via), resumed = wasPaused }
+    w.talking[name] = t
+    if wasPaused then mp_wo102_resume(name, "w137-talk") end
+    w.stats.talks = w.stats.talks + 1
+    mp_log(string.format("WO137-TALK resume npc=%s via=%s paused_before=%s -- this copy runs its own brain for the conversation; the host holds its NPC busy",
+        name, tostring(via), tostring(wasPaused)))
+    KCD2MP_EmitEvent("w137_talk", "on " .. name)
+    return t
+end
+
+-- The nearest living host copy within reach of this player (the request fallback).
+function KCD2MP_W137NearestCopy(rangeM)
+    if not player then return nil end
+    local pp = nil
+    pcall(function() pp = player:GetWorldPos() end)
+    if not pp then return nil end
+    local best, bestD = nil, rangeM * rangeM
+    for name, p in pairs(KCD2MP.npcPuppets) do
+        if not (p.dead or p.ko) then
+            local e = nil
+            pcall(function() e = System.GetEntityByName(name) end)
+            local pos = nil
+            if e then pcall(function() pos = e:GetWorldPos() end) end
+            if pos then
+                local d = (pos.x - pp.x) ^ 2 + (pos.y - pp.y) ^ 2
+                if d < bestD then best, bestD = name, d end
+            end
+        end
+    end
+    return best
+end
+
+-- "Soul 'Dude' requested dialog. Assigned id is N" (the agent relays it).
+function KCD2MP_W137TalkRequest(id)
+    if not KCD2MP_W137TalkWanted() then return end
+    local w = KCD2MP.w137
+    local now = os.clock()
+    local best, bestAt = nil, -1
+    for name, t in pairs(w.talking) do
+        if not t.id and t.since > bestAt and (now - t.since) < 5.0 then best, bestAt = name, t.since end
+    end
+    if best then w.talking[best].id = tonumber(id); return end
+    -- a request that did not come through the wrapped actions: the copy in reach
+    local name = KCD2MP_W137NearestCopy(w.talkRangeM)
+    if not name then return end
+    w.stats.fallbacks = w.stats.fallbacks + 1
+    local t = KCD2MP_W137TalkResume(name, "request-fallback")
+    if t then t.id = tonumber(id) end
+end
+
+-- A dialogue with this player: the soul name is the copy's entity name.
+function KCD2MP_W137CopyForSoul(soul)
+    if KCD2MP.npcPuppets[soul] then return soul end
+    return nil
+end
+
+-- "Attempting to start new dialogue (runtime id 'N') with souls '...'" with Dude in it.
+function KCD2MP_W137TalkAttempt(id, souls)
+    local w = KCD2MP.w137
+    if not w.joiner then return end
+    id = tonumber(id)
+    for soul in string.gmatch(tostring(souls or ""), "[%w_]+") do
+        local name = soul ~= "Dude" and KCD2MP_W137CopyForSoul(soul) or nil
+        if name then
+            local t = w.talking[name]
+            if t then
+                if not t.started then
+                    t.started, t.id = true, id or t.id
+                    w.stats.started = w.stats.started + 1
+                    mp_log(string.format("WO137-TALK start npc=%s id=%s after_s=%.1f via=%s -- the conversation runs on this copy",
+                        name, tostring(id), os.clock() - t.since, tostring(t.via)))
+                end
+            elseif KCD2MP_W137TalkWanted() then
+                -- forced on this copy by the game (its quest logic follows the host's): it runs on the
+                -- suspended copy (Q6); tracked so the host holds its NPC and the end is seen
+                w.talking[name] = { since = os.clock(), via = "forced", id = id, started = true, resumed = false, forced = true }
+                w.stats.forced = w.stats.forced + 1
+                mp_log(string.format("WO137-TALK forced npc=%s id=%s -- a conversation the game started on this copy; the host holds its NPC",
+                    name, tostring(id)))
+                KCD2MP_EmitEvent("w137_talk", "on " .. name)
+            end
+        end
+    end
+end
+
+-- "[ID: N] Dialog ending [Ex0: a Ex1: b state: ...]" (the agent relays it).
+function KCD2MP_W137DialogEnd(id, souls)
+    local w = KCD2MP.w137
+    id = tonumber(id)
+    local names = {}
+    for soul in string.gmatch(tostring(souls or ""), "[%w_]+") do names[soul] = true end
+    local ending = {}
+    for name, t in pairs(w.talking) do
+        if (id and t.id == id) or (names[name] and names.Dude) then ending[#ending + 1] = name end
+    end
+    for _, name in ipairs(ending) do KCD2MP_W137TalkEnd(name, "dialog-ended") end
+end
+
+function KCD2MP_W137TalkEnd(name, why)
+    local w = KCD2MP.w137
+    local t = w.talking[name]
+    if not t then return end
+    w.talking[name] = nil
+    w.stats.ended = w.stats.ended + 1
+    local p = KCD2MP.npcPuppets[name]
+    local how
+    if p then
+        if t.resumed or not KCD2MP._npcPaused[name] then mp_wo102_pause(name, p, "w137-talk-end") end
+        how = KCD2MP._npcPaused[name] and "paused again" or "not paused (a corpse, or the pause lever is off)"
+    elseif KCD2MP_W131IsActive and KCD2MP_W131IsActive() then
+        KCD2MP_W131ParkReleased(name, "talk-ended:" .. tostring(t.parkAfter or "no-stream"))
+        how = "parked (the host's stream stopped meanwhile)"
+    else
+        how = "left as it is (not a copy any more)"
+    end
+    mp_log(string.format("WO137-TALK end npc=%s id=%s why=%s held_s=%.1f started=%s via=%s -- %s",
+        name, tostring(t.id), tostring(why), os.clock() - t.since, tostring(t.started == true), tostring(t.via), how))
+    KCD2MP_EmitEvent("w137_talk", "off " .. name)
+end
+
+function KCD2MP_W137TalkEndAll(why)
+    local names = {}
+    for name in pairs(KCD2MP.w137.talking) do names[#names + 1] = name end
+    for _, name in ipairs(names) do KCD2MP_W137TalkEnd(name, why) end
+end
+
+function KCD2MP_W137TalkTick()
+    local w = KCD2MP.w137
+    if next(w.talking) == nil then return end
+    local now = os.clock()
+    local inDialog = false
+    pcall(function() inDialog = player ~= nil and player.human ~= nil and player.human:IsInDialog() == true end)
+    local ending = {}
+    for name, t in pairs(w.talking) do
+        local age = now - t.since
+        if inDialog then t.notInDialogSince, t.sawDialog = nil, true
+        else t.notInDialogSince = t.notInDialogSince or now end
+        if not (t.started or t.sawDialog) and not inDialog and age > w.talkStartS then
+            w.stats.timeouts = w.stats.timeouts + 1
+            ending[#ending + 1] = { name, "never-started" }
+        elseif (t.started or t.sawDialog) and t.notInDialogSince and (now - t.notInDialogSince) > w.talkOutS then
+            ending[#ending + 1] = { name, "player-out-of-dialogue" }
+        elseif age > w.talkMaxS then
+            ending[#ending + 1] = { name, "max-time" }
+        end
+    end
+    for _, x in ipairs(ending) do KCD2MP_W137TalkEnd(x[1], x[2]) end
+end
+
+-- ---- the host's hold (Phase 4, HOST) ------------------------------------------------
+-- A joiner talks to its copy of this NPC: the host's own is suspended meanwhile
+-- (busy: no conversation here, no walking off). An NPC in a conversation with
+-- the host is left running and suspended once that ends (the hold tick).
+function KCD2MP_W137HostHold(on, npc, peer, why)
+    local w = KCD2MP.w137
+    npc = tostring(npc or "")
+    if not string.find(npc, "^[%w_]+$") then return false end
+    local now = os.clock()
+    if on then
+        local e = nil
+        pcall(function() e = System.GetEntityByName(npc) end)
+        if not e then
+            mp_log(string.format("WO137-HOLD refused npc=%s peer=%s why=%s -- no such NPC in the host's world", npc, tostring(peer), tostring(why)))
+            return false
+        end
+        local h = w.held[npc]
+        if not h then
+            h = { peer = peer, since = now, why = tostring(why) }
+            w.held[npc] = h
+            w.stats.holds = w.stats.holds + 1
+        end
+        local exec = KCD2MP_W137HoldPause(npc, e, h)
+        mp_log(string.format("WO137-HOLD on npc=%s peer=%s why=%s exec=%s -- the host's NPC is busy while the partner talks to it",
+            npc, tostring(peer), tostring(why), exec))
+        return true
+    end
+    local h = w.held[npc]
+    if not h then return false end
+    w.held[npc] = nil
+    w.stats.releases = w.stats.releases + 1
+    local exec = "ok"
+    if KCD2MP.w123 and KCD2MP.w123.paused and KCD2MP.w123.npcs[npc] then
+        exec = "left-to-the-join-pause"   -- a join paused the world meanwhile: its resume wakes it
+    elseif h.paused then
+        local ok, err = pcall(System.ExecuteCommand, "wh_ai_ResumeNPC " .. npc)
+        exec = ok and "ok" or ("err:" .. tostring(err))
+    else
+        exec = "was-not-paused"
+    end
+    mp_log(string.format("WO137-HOLD off npc=%s peer=%s why=%s held_s=%.1f exec=%s", npc, tostring(h.peer), tostring(why), now - h.since, exec))
+    return true
+end
+
+function KCD2MP_W137HoldPause(npc, e, h)
+    local busy = false
+    pcall(function() busy = e.human ~= nil and e.human:IsInDialog() == true end)
+    h.at = os.clock()
+    if busy then return "waits:in-a-conversation-here" end
+    local ok, err = pcall(System.ExecuteCommand, "wh_ai_PauseNPC " .. npc)
+    if ok then h.paused = true end
+    return ok and "ok" or ("err:" .. tostring(err))
+end
+
+function KCD2MP_W137HoldTick()
+    local w = KCD2MP.w137
+    if next(w.held) == nil then return end
+    local now = os.clock()
+    local over = {}
+    for npc, h in pairs(w.held) do
+        if (now - h.since) > w.heldMaxS then over[#over + 1] = npc
+        elseif (now - (h.at or 0)) >= w.heldRepauseS or not h.paused then
+            local e = nil
+            pcall(function() e = System.GetEntityByName(npc) end)
+            if e then KCD2MP_W137HoldPause(npc, e, h) end
+        end
+    end
+    for _, npc in ipairs(over) do KCD2MP_W137HostHold(false, npc, w.held[npc].peer, "max-time") end
+end
+
+function KCD2MP_W137HoldReleaseAll(why)
+    local names = {}
+    for npc in pairs(KCD2MP.w137.held) do names[#names + 1] = npc end
+    for _, npc in ipairs(names) do KCD2MP_W137HostHold(false, npc, KCD2MP.w137.held[npc].peer, why) end
 end
 
 -- ===== WO-102 Phase 6: NPC resync burst (the sleep / fast-travel / reload net) =====
@@ -8353,6 +8837,9 @@ function KCD2MP_ApplyNpcState(name, x, y, z, rot, hp, flags, src, seq, senderMs)
         if KCD2MP_W131Unpark then KCD2MP_W131Unpark(name, "streamed") end   -- WO-131 1a: the stream drives it now
         p.owner, p.ownerSince = src, os.clock()
         mp_auth_log(name, "acquire", src == nil and "?" or src, "stream", 0)   -- WO-102
+        -- WO-137 Phase 2b: the dead bit is known before the pause decides (it was
+        -- parsed only further down, after the pause and its detach had run).
+        p.deadHint = (math.floor(tonumber(flags) or 0) % 2) == 1
         mp_wo102_pause(name, p)   -- WO-102 Phase 4: no-op unless authorityHost + authorityPause
         -- WO-49: report this world's copy's entity id so the agent can
         -- address it on the native swing path. Same tostring-hex idiom as
@@ -8406,6 +8893,7 @@ function KCD2MP_ApplyNpcState(name, x, y, z, rot, hp, flags, src, seq, senderMs)
     local wasKo = p.ko
     local wasDead = p.dead
     p.dead  = (math.floor(f) % 2) == 1          -- bit 0
+    p.deadHint = nil                            -- WO-137: p.dead is the reading from here on
     p.ko    = (math.floor(f / 2) % 2) == 1      -- bit 1 (WO-38 Phase 6: knocked out in the authority's world)
     p.drawn = (math.floor(f / 4) % 2) == 1      -- bit 2 (WO-40 Phase 6: weapon out in the authority's world)
     local swingCue = (math.floor(f / 8) % 2) == 1  -- bit 3 (WO-40 Phase 6: it just landed a hit there)
@@ -8726,6 +9214,10 @@ function KCD2MP_NpcPuppetTick(arg, gen)
             else
                 KCD2MP_OwnerDeathCheck(name, p.dead == true, locallyDead, p.tx, p.ty, p.tz, p.owner, "puppet")
             end
+            -- WO-137 Phase 2b: a corpse here gets its brain back (its own dead-body
+            -- behaviour holds the pose); a stand-in the host streams dead is shown
+            -- only once it is dead here, where the host has it.
+            if (locallyDead or p.dead) and KCD2MP_W137DeadTick then KCD2MP_W137DeadTick(name, p, lifeE, locallyDead) end
             -- WO-104 Phase 1: resolution. A dead/KO NPC demotes at once so the
             -- real corpse is the one on the ground; a fight is over when the
             -- owner's stream has had the weapon away for sheathedDemoteS.
@@ -16031,6 +16523,9 @@ local ok, err = pcall(function()
     System.AddCCommand("mp_w136_status",         'KCD2MP_W136Status()',                   "WO-136: the load hold, stand-ins by kind, rides, the local torch")
     System.AddCCommand("mp_w135_ko",             'KCD2MP_W135TestKo(%line)',              "WO-135 live checks (host): knock a wo13* TEST npc out or wake it with the game's own unconsciousness: mp_w135_ko <npc> on|off")
     System.AddCCommand("mp_w135_status",         'KCD2MP_W135Status()',                   "WO-135: quiet groups, knockout sync and takedown request counters")
+    -- WO-137: shared quests (default on; the host's mp_quest_sync is the session's).
+    System.AddCCommand("mp_quest_sync",          'KCD2MP_SetQuestSync(%line)',            "WO-137: all quests are shared in the host's world -- the host's quest changes reach every joiner, a joiner's own steps are applied by the host. The HOST's value is the session's kill switch: mp_quest_sync on|off (default on); bare = report")
+    System.AddCCommand("mp_quest_talk",          'KCD2MP_SetQuestTalk(%line)',            "WO-137 (JOINER): talking to the host's NPC frees its copy for the conversation (the host holds its own busy): mp_quest_talk on|off (default on)")
     System.AddCCommand("mp_npc_standin",         'KCD2MP_SetNpcStandIn(%line)',           "WO-131 1f (JOINER): an NPC the host spawned at runtime (road encounters) gets a stand-in here under its own name, driven by the host's stream: mp_npc_standin on|off (default on)")
     System.AddCCommand("mp_w131_status",         'KCD2MP_W131Status()',                   "WO-131: the copy guard, loot block and perception state (WO131-STATUS in kcd.log)")
     System.AddCCommand("mp_w134_status",         'KCD2MP_W134Status()',                   "WO-134: world items -- bodies, loose items, chests (WO134-STATUS in kcd.log)")
@@ -16086,12 +16581,13 @@ local ok, err = pcall(function()
     -- template below is therefore f(%line), unquoted: `cmd x y` runs f("x y"),
     -- a bare `cmd` runs f() with arg nil, and every handler accepts nil.
     -- tools\Test-WO106ConsolePlaceholder.ps1 now fails on a quoted %line.
-    System.AddCCommand("mp_quest_sync",   'KCD2MP_QuestSetSync("")',        "WO-94: status line for the main-quest readiness prompt (toggle with mp_quest_on / mp_quest_off)")
+    -- WO-137 took the name mp_quest_sync for its kill switch (the work order's); WO-94's
+    -- status line it replaced is still printed by mp_quest_status (below).
     System.AddCCommand("mp_quest_on",     'KCD2MP_QuestSetSync("on")',      "WO-94: enable the main-quest readiness prompt (default)")
     System.AddCCommand("mp_quest_off",    'KCD2MP_QuestSetSync("off")',     "WO-94: disable the main-quest readiness prompt (rollback: no detection, no prompt)")
     System.AddCCommand("mp_quest_radius", 'KCD2MP_QuestSetRadius(%line)', "WO-94: set the main-quest co-location detection radius: mp_quest_radius <metres> (default 35)")
     System.AddCCommand("mp_quest_window", 'KCD2MP_QuestSetWindow(%line)', "WO-94: set the main-quest readiness prompt window: mp_quest_window <seconds> (default 120)")
-    System.AddCCommand("mp_quest_status", "KCD2MP_QuestStatus()",           "WO-94: log quest sync state and the current quest's beats with distances")
+    System.AddCCommand("mp_quest_status", "KCD2MP_QuestStatusAll()",        "WO-137 + WO-94: the shared quests' state (WO137-STATUS, and MP-WO137-STATS in agent.log), then the old readiness prompt's state and the current quest's beats with distances")
     System.AddCCommand("mp_quest_yes",    "KCD2MP_QuestAnswer(true)",       "WO-94: answer the readiness prompt YES (same as F11) -- fires wh_concept_HasteTrigger for the peer's beat")
     System.AddCCommand("mp_quest_no",     "KCD2MP_QuestAnswer(false)",      "WO-94: answer the readiness prompt NO (same as F12)")
     System.AddCCommand("mp_quest_fire",   'KCD2MP_QuestFire(%line)', "WO-94 live probe: mp_quest_fire <quest.trigger> (disposable save!)")
@@ -17543,6 +18039,12 @@ function KCD2MP_QuestStatus()
     for beat in pairs(Q.fired) do mp_log("  spent this session: " .. beat) end
     local w, where = KCD2MP_QuestWindow()
     if w then mp_log(string.format("  hazard window open (%s): %s by %s, %.0fs left", where, w.beat, w.who, w.untilT - os.clock())) end
+end
+
+-- mp_quest_status (WO-137): the shared quests first, then WO-94's readiness prompt.
+function KCD2MP_QuestStatusAll()
+    pcall(KCD2MP_W137Status)
+    KCD2MP_QuestStatus()
 end
 
 -- mp_quest_test_prompt <beat> -- puts a prompt on screen with no peer, so the
