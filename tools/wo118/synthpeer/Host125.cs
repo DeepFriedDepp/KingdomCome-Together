@@ -69,6 +69,13 @@
 //                                 (every SleepVoteDown 0x69 received is logged: SLEEPVOTE ...)
 //       clock <worldTime>         (WO-140) this host's clock announce (TimeSkip sync, kind unknown)
 //       sleeptime <worldTime>     (WO-140) this host's own sleep: TimeSkip start + done, kind sleep
+//       activity npc <name> none|stance <id> <objGuidHex>|unstance <id> <locGuidHex> [stance <id> <objGuidHex>]
+//                                 (WO-141) an ActivityHost NPC row to every joiner (what the host's DLL reads)
+//       activity player none|stance <id> <objGuidHex>|unstance <id> <locGuidHex>
+//                                 (WO-141) this host's own body (its avatar on the joiner)
+//       activityfile <path>       (WO-141) replay a recorded ActivityHost stream (avatarpeer --record lines
+//                                 "<ms> 6B <hex>"), in order, with the recorded spacing
+//                                 (every ActivityPeerDown 0x6D received is logged: ACTIVITY ...)
 //     [reseed] = a synthetic seed (hex) written into the save's body 0x01FB, re-signed: a second
 //     "playthrough" made from a copy. Files are COPIES of real host saves; never logged by path.
 //
@@ -523,6 +530,48 @@ static class Host125
                                 }
                                 break;
                             }
+                            case "activity":   // WO-141
+                            {
+                                if (p.Length < 3) { Say("ACTIVITY usage: activity npc <name> ... | activity player ..."); break; }
+                                bool npcRow = p[1] == "npc";
+                                int at = npcRow ? 3 : 2;
+                                string aname = npcRow ? p[2] : "";
+                                var act = ActivityState.None;
+                                for (int i = at; i < p.Length; )
+                                {
+                                    if (i < p.Length && p[i] == "none") { i++; continue; }
+                                    if (i + 2 < p.Length && p[i] == "stance")
+                                    { act = act with { Stance = byte.Parse(p[i + 1], CultureInfo.InvariantCulture), StanceObj = ulong.Parse(p[i + 2], NumberStyles.HexNumber, CultureInfo.InvariantCulture) }; i += 3; continue; }
+                                    if (i + 2 < p.Length && p[i] == "unstance")
+                                    { act = act with { Unstance = ushort.Parse(p[i + 1], CultureInfo.InvariantCulture), UnstanceObj = ulong.Parse(p[i + 2], NumberStyles.HexNumber, CultureInfo.InvariantCulture) }; i += 3; continue; }
+                                    break;
+                                }
+                                act = act.Normalised();
+                                var arow = new List<ActivityRow> { new(npcRow ? Protocol.ActivityPeerNone : myGhost, aname, act) };
+                                for (byte g = 1; g < 8; g++) if (g != myGhost) await W(ActivityCodec.BuildUp(Protocol.ActivityHostUp, g, npcRow ? Protocol.ActivityKindNpc : Protocol.ActivityKindPlayer, arow));
+                                Say($"ACTIVITY {(npcRow ? "npc " + aname : "player")} sent: {act}");
+                                break;
+                            }
+                            case "activityfile":   // WO-141: a recorded ActivityHost stream, in order, with its spacing
+                            {
+                                var alines = File.ReadAllLines(string.Join(' ', p.Skip(1)));
+                                long prevMs = -1; int sent = 0;
+                                foreach (var aline in alines)
+                                {
+                                    var q = aline.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                                    if (q.Length < 3 || q[1] != "6B") continue;
+                                    long ms = long.Parse(q[0], CultureInfo.InvariantCulture);
+                                    var pay = Convert.FromHexString(q[2]);   // [src][target][joinId:4][body]
+                                    if (pay.Length < 1 + Protocol.JoinHeaderLen) continue;
+                                    if (prevMs >= 0 && ms > prevMs) await Task.Delay((int)Math.Min(ms - prevMs, 5000));
+                                    prevMs = ms;
+                                    var body2 = pay.AsSpan(1 + Protocol.JoinHeaderLen).ToArray();
+                                    for (byte g = 1; g < 8; g++) if (g != myGhost) await W(Protocol.BuildJoinUp(Protocol.ActivityHostUp, g, 0, body2));
+                                    sent++;
+                                }
+                                Say($"ACTIVITYFILE {sent} recorded ActivityHost message(s) replayed");
+                                break;
+                            }
                             case "crime":   // WO-139
                             {
                                 byte ck = p[1] switch
@@ -807,6 +856,11 @@ static class Host125
                         await W(new LootMsg(Protocol.SleepAnswer, sv.Tok, Wo140Text.Answer(sleepAuto, sAsker)).BuildUp(Protocol.SleepVoteUp, src));
                         Say($"  -> answered {sleepAuto} (auto) to {sAsker}'s {sKind}");
                     }
+                    continue;
+                }
+                if (type == Protocol.ActivityPeerDown && ActivityCodec.TryDecode(body, out byte apk, out var aprows))   // WO-141: logged
+                {
+                    foreach (var r in aprows) Say($"ACTIVITY player {src}: {r.A}");
                     continue;
                 }
                 if (type == Protocol.CrimeAskDown && LootMsg.TryDecode(body, out var ca))   // WO-139: logged (the test drives the answers)

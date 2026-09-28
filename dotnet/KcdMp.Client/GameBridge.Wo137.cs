@@ -632,6 +632,7 @@ public partial class GameBridge
                 }
                 return;
             case "w137_talk":      // on|off <npc> <dialogId>: the joiner resumed / re-paused a host copy for a conversation
+                if (f.Length >= 2 && f[0] is "on" or "off" && Wo137Text.IsNpc(f[1])) Wo141OnTalk(f[0] == "on", f[1]);   // WO-141: its activity waits
                 if (f.Length >= 2 && f[0] is "on" or "off" && Wo137Text.IsNpc(f[1]) && W137Joiner)
                 {
                     uint tok = Interlocked.Increment(ref _w137Tok);

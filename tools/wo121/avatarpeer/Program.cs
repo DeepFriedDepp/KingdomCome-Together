@@ -145,7 +145,7 @@ static class P
                 while (!cts.IsCancellationRequested)
                 {
                     var (t2, b2) = await ReadPacket(st, cts.Token);
-                    if (rec is not null && (t2 == Protocol.NpcStateDown || t2 == Protocol.ActionDown || t2 == Protocol.NpcDamageDown || t2 == Protocol.PauseDown))   // WO-138: + the pause announcement
+                    if (rec is not null && (t2 == Protocol.NpcStateDown || t2 == Protocol.ActionDown || t2 == Protocol.NpcDamageDown || t2 == Protocol.PauseDown || t2 == Protocol.ActivityHostDown))   // WO-138: + the pause announcement; WO-141: + activities
                         lock (rec) rec.WriteLine($"{recClock.ElapsedMilliseconds} {t2:X2} {Convert.ToHexString(b2)}");
                     if (t2 == Protocol.AppearanceDown && b2.Length >= 2 && b2[0] != myId) hostAppearance = b2.AsSpan(1).ToArray();   // [src][count][classes]
                     if (t2 == Protocol.Name && b2.Length >= 2 && b2[0] != myId) { joiner ??= b2[0]; }
@@ -185,6 +185,12 @@ static class P
                     else if (t2 == Protocol.CrimeHostDown && b2.Length > 1 + Protocol.JoinHeaderLen
                              && LootMsg.TryDecode(b2.AsSpan(1 + Protocol.JoinHeaderLen), out var cm))   // WO-139
                         Console.WriteLine($"PEER t={recClock.Elapsed.TotalSeconds:F1} got CrimeHost {Protocol.CrimeHostName(cm.Kind)} tok={cm.Tok} from={b2[0]}: {cm.Text}");
+                    else if (t2 == Protocol.ActivityHostDown && b2.Length > 1 + Protocol.JoinHeaderLen
+                             && ActivityCodec.TryDecode(b2.AsSpan(1 + Protocol.JoinHeaderLen), out byte akind, out var arows))   // WO-141
+                    {
+                        foreach (var ar in arows)
+                            Console.WriteLine($"PEER t={recClock.Elapsed.TotalSeconds:F1} got Activity {(akind == Protocol.ActivityKindNpc ? "npc " + ar.Name : "player " + ar.Peer)}: {ar.A}");
+                    }
                     else if (t2 == Protocol.SleepVoteDown && b2.Length > 1 + Protocol.JoinHeaderLen
                              && LootMsg.TryDecode(b2.AsSpan(1 + Protocol.JoinHeaderLen), out var svm))   // WO-140
                     {
@@ -496,6 +502,18 @@ static class P
                         else { ctok = ++lootTok; text = string.Join(' ', f.Skip(2)); }
                         await Send(st, new LootMsg(k, ctok, text).BuildUp(Protocol.CrimeAskUp, Protocol.JoinTargetHost));
                         Console.WriteLine($"PEER t={t:F1} crime {Protocol.CrimeAskName(k)} tok={ctok}: {text}");
+                        break;
+                    }
+                    case "activity":   // WO-141: activity none | stance <id> <objGuidHex> [cart] | unstance <id> <locGuidHex> -- this peer's own body
+                    {
+                        var act = ActivityState.None;
+                        if (f.Length >= 4 && f[1] == "stance")
+                            act = act with { Stance = byte.Parse(f[2], CultureInfo.InvariantCulture), StanceObj = ulong.Parse(f[3], NumberStyles.HexNumber, CultureInfo.InvariantCulture) };
+                        else if (f.Length >= 4 && f[1] == "unstance")
+                            act = act with { Unstance = ushort.Parse(f[2], CultureInfo.InvariantCulture), UnstanceObj = ulong.Parse(f[3], NumberStyles.HexNumber, CultureInfo.InvariantCulture) };
+                        act = act.Normalised();
+                        await Send(st, ActivityCodec.BuildUp(Protocol.ActivityPeerUp, Protocol.JoinTargetHost, Protocol.ActivityKindPlayer, [new ActivityRow(myId, "", act)]));
+                        Console.WriteLine($"PEER t={t:F1} activity {act}");
                         break;
                     }
                     case "torch":   // WO-136: torch on|off -- the state block's torch bit

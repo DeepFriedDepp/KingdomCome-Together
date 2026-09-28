@@ -50,6 +50,7 @@
 // EntityModule.dll / CombatModule.dll this session (docs/WO-44-findings.md).
 
 #include "combat_swing.h"
+#include "engine.h"
 #include "pe_exports.h"
 #include "log.h"
 
@@ -179,6 +180,15 @@ bool call_vtbl_ptr_arg(void* obj, size_t vtblByteOffset, void* arg, void** out) 
     __try {
         auto* vtbl = *reinterpret_cast<void***>(obj);
         auto fn = reinterpret_cast<void* (*)(void*, void*)>(vtbl[vtblByteOffset / 8]);
+        *out = fn(obj, arg);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+
+bool call_vtbl_u32(void* obj, size_t vtblByteOffset, uint32_t arg, void** out) {
+    __try {
+        auto* vtbl = *reinterpret_cast<void***>(obj);
+        auto fn = reinterpret_cast<void* (*)(void*, uint32_t)>(vtbl[vtblByteOffset / 8]);
         *out = fn(obj, arg);
         return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
@@ -378,6 +388,19 @@ void* resolve_actor(HMODULE entityModule, const std::vector<ExportEntry>& export
             return nullptr;
         }
     }
+    return actor;
+}
+
+// WO-141: any actor by entity id -- the actor system's own lookup (the game
+// interface's +0x188, vtbl[0x18](entityId)), the one FUN_180B3C2D0 makes before
+// its human-only predicate. A wolf, a dog, a boar resolve here, where the human
+// bind answers null (WO-136's "target-missing"). Checked against the human
+// resolver on the first human swing (both must return the same pointer).
+void* resolve_any_actor(uint32_t entityId) {
+    void* gi = engine::game_iface();
+    void* am = nullptr; void* actor = nullptr;
+    if (!gi || !read_ptr(gi, 0x188, &am) || !am) return nullptr;
+    if (!call_vtbl_u32(am, 0x18, entityId, &actor)) return nullptr;
     return actor;
 }
 
@@ -805,6 +828,18 @@ SwingResult ghost_swing(uint32_t entityId, const char* fragSpec) {
         return SwingResult::NoExports;
     }
     void* actor = resolve_actor(entityModule, exports, /*wantPlayer*/ false, entityId);
+    static bool s_agreeChecked = false;
+    if (actor && !s_agreeChecked) {
+        s_agreeChecked = true;
+        void* any = resolve_any_actor(entityId);
+        logf("SWING: actor lookups %s (human bind %p, actor system %p) -- WO-141's animal route %s",
+             any == actor ? "agree" : "DIFFER", actor, any, any == actor ? "is the same actor" : "would hand a different pointer");
+    }
+    if (!actor) {
+        // WO-141: not a human (a wolf, a dog, a boar): the actor system's own actor.
+        actor = resolve_any_actor(entityId);
+        if (actor) logf("SWING: entity=%u is not a human -- the actor system's own actor %p (an animal's attack)", entityId, actor);
+    }
     if (!actor) {
         logf("SWING: entity=%u -- actor did not resolve (despawned or stale id)", entityId);
         return SwingResult::ActorNotResolved;

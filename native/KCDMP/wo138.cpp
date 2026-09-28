@@ -518,6 +518,10 @@ uint8_t op_track(const uint8_t* b, size_t len, uint8_t* out, size_t cap, size_t*
 
 void set_frame_callback(FrameFn fn) { g_frameFn = fn; }
 
+void for_each_tracked(void (*fn)(const char* name, uint32_t eid, void* ctx), void* ctx) {
+    for (const auto& t : g_tracked) if (t.eid) fn(t.name.c_str(), t.eid, ctx);
+}
+
 void install() {
     HMODULE ca = GetModuleHandleA("CryAction.dll");
     if (!ca) { g_gateWhy = "CryAction.dll not loaded"; logf("WO138-GATE NOT armed -- %s", g_gateWhy); return; }

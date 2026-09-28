@@ -1753,6 +1753,7 @@ public partial class GameBridge(ClientConfig config)
         Wo138OnConnect(cts.Token);           // WO-138: no pausing (the levers, the hold) + the native NPC sender
         Wo139OnConnect(cts.Token);           // WO-139: crime and guards (the joiner's crimes in the host's world, the stop, no robbing)
         Wo140OnConnect(cts.Token);           // WO-140: sleeping together, the own-world trap
+        Wo141OnConnect(cts.Token);           // WO-141: activities (NPCs and players, the game's own state)
         _ = _combat.NpcConfigAsync(_nativeWriteOn, _nativeSenderClock, cts.Token);
         _ = RespawnHeartbeatAsync(stream, announceGraves: true, cts.Token);
         // WO-99 Phase 0: learn who the local player is before the first hit.
@@ -2263,6 +2264,7 @@ public partial class GameBridge(ClientConfig config)
             await Wo138OnDisconnectAsync();   // WO-138: the native sender, the levers and the hold off
             await Wo139OnDisconnectAsync();   // WO-139: holds released, the detector and the punishment gate off
             await Wo140OnDisconnectAsync();   // WO-140: the sleep gate off, no vote kept
+            await Wo141OnDisconnectAsync();   // WO-141: no capture, no apply, the writer takes every body back
             _myOpenDrops.Clear();
             // WO-113: no relay, no session -- the DLL's guard stands down
             // (vanilla death), and every peer's mirror gravestone goes.
@@ -5743,6 +5745,9 @@ public partial class GameBridge(ClientConfig config)
                 return;
             case "mp_mark":          // WO-140: the checklist's markers (mark_<word>)
                 Console.WriteLine($"MP-MARK {(arg ?? "").Trim()} -- the tester's marker (typed on this machine)");
+                return;
+            case "w141":             // WO-141: mp_activities on|off / kinds <n> / status
+                Wo141OnModLine(arg);
                 return;
             case "w140_ask":         // WO-140: sleeping together
             case "w140_answer":

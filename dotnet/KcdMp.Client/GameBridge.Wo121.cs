@@ -398,8 +398,15 @@ public partial class GameBridge
                     Console.WriteLine($"MP-ACTION section=inbound kind=NpcAttack npc={ne.Name} dispatch=dropped-no-entity (not a puppet here)");
                     return true;
                 }
+                bool animal = _w141Animals.ContainsKey(ne.Name);
+                if (animal && !_w141Bites)
+                {
+                    Console.WriteLine($"MP-ACTION section=inbound kind=NpcAttack npc={ne.Name} row={ne.Row} dispatch=off (mp_animal_attacks off: an animal's attack is not animated here; its damage still comes through the host)");
+                    return true;
+                }
                 _ = _combat.NpcHoldAsync(ne.Name, 900, ct);
                 var r = await _combat.GhostSwingForResultAsync(neid, row.Spec, ct);
+                if (animal) Interlocked.Increment(ref _w141Bite);
                 Console.WriteLine($"MP-ACTION section=inbound kind=NpcAttack npc={ne.Name} row={ne.Row} spec=\"{row.Spec}\" dispatch=native-row result={r.ReasonTag}");
                 if (r.Ok) await ExecLuaAsync($"if KCD2MP_NpcNativeSwingHold then KCD2MP_NpcNativeSwingHold(\"{ne.Name}\") end");
                 return true;

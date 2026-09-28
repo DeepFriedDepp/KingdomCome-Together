@@ -269,6 +269,10 @@ public partial class GameBridge
             case Protocol.SleepVoteDown:    // WO-140
                 await Wo140OnFrameAsync(src, body);
                 return;
+            case Protocol.ActivityHostDown: // WO-141
+            case Protocol.ActivityPeerDown:
+                await Wo141OnFrameAsync(type, src, body);
+                return;
             case Protocol.WorldOfferDown:
                 await OnWorldOfferInAsync(src, joinId, body, ct);
                 return;

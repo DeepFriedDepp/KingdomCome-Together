@@ -241,6 +241,7 @@ public partial class GameBridge
     /// <summary>Every NpcStateDown on the joiner: the host NPC's dead/knocked-out bits (the engagement never beats them).</summary>
     private void Wo136NoteNpcFlags(string npc, byte flags)
     {
+        if ((flags & Protocol.NpcStateFlagNotHuman) != 0) _w141Animals[npc] = true;   // WO-141: its attack rows are an animal's
         bool down = Wo136Rules.Down(flags);
         bool was = _w136HostDown.TryGetValue(npc, out bool d0) && d0;
         _w136HostDown[npc] = down;

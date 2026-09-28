@@ -16,6 +16,7 @@
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace kcdmp::npcdrive {
@@ -778,6 +779,15 @@ void set_hold_all(bool on) {
 }
 bool hold_all() { return g_holdAll.load(std::memory_order_relaxed); }
 
+// WO-141: bodies an activity holds (main thread only: wo141's reconcile and this tick).
+std::unordered_set<uint32_t> g_activityHeld;
+void set_activity_hold(uint32_t eid, bool on) {
+    if (!eid) return;
+    if (on) { if (g_activityHeld.insert(eid).second) logf("MP-NPCWRITE eid=%u event=activity-hold (the activity owns the body)", eid); }
+    else if (g_activityHeld.erase(eid)) logf("MP-NPCWRITE eid=%u event=activity-release (the stream takes the body back)", eid);
+}
+bool activity_held(uint32_t eid) { return eid && g_activityHeld.count(eid) != 0; }
+
 bool parse_bind(const uint8_t* body, size_t len, BindRequest* out) {
     // [on:1][eid:4][wuid:8][ax:4f][ay:4f][az:4f][delayMs:2][nameLen:1][name]
     if (len < 1 + 4 + 8 + 12 + 2 + 1 + 1) return false;
@@ -940,7 +950,7 @@ void tick() {
         // picked up) has LOCAL coordinates: never written until it is free.
         void* parent = nullptr;
         const bool parented = get_parent(e, &parent) && parent != nullptr;
-        if ((s.flags & (0x01 | 0x02 | 0x10)) != 0 || now < p.holdUntil || parented) {
+        if ((s.flags & (0x01 | 0x02 | 0x10)) != 0 || now < p.holdUntil || parented || activity_held(p.eid)) {
             // Dead / unconscious / carried stay on Lua's own behaviour; a swing
             // one-shot owns the body for its hold. Neither is a pull.
             p.haveLast = false;

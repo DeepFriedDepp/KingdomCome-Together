@@ -738,7 +738,7 @@ public class ClientSession
                         _logger.Warning("[join] {Kind} from '{Name}' (id={Id}) to {Target} dropped: {Why}.", jw.Name, Name, Id, body[0], why);
                         continue;
                     }
-                    if (type != Protocol.WorldChunkUp && type != Protocol.WorldAckUp)
+                    if (type != Protocol.WorldChunkUp && type != Protocol.WorldAckUp && type != Protocol.ActivityHostUp && type != Protocol.ActivityPeerUp)   // WO-141: rows every few seconds, counted not logged
                         _logger.Information("[join] {Kind} '{Name}' (id={Id}) -> id={Dest} join=0x{Join:X8} ({Len} B).",
                             jw.Name, Name, Id, dest.Id, BinaryPrimitives.ReadUInt32LittleEndian(body.AsSpan(1)), payloadLen);
                     continue;

@@ -87,6 +87,12 @@ void on_pipe_closed();
 // resume, not from the last sample before the pause. Any thread.
 void set_hold_all(bool on);
 bool hold_all();
+// WO-141: an activity owns this body's position (a bed, a seat, a kneeler, a cart
+// slot, an aligned unstance): the writer neither writes nor drives its gait while
+// set, and blends back from wherever the activity leaves the body when cleared.
+// Main thread.
+void set_activity_hold(uint32_t eid, bool on);
+bool activity_held(uint32_t eid);
 
 // ---- 0x11 bind, main thread (the pipe marshals it) ---------------------------
 // [on:1][eid:4][wuid:8][ax:4f][ay:4f][az:4f][delayMs:2][nameLen:1][name]

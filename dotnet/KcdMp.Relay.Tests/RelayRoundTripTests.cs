@@ -1020,6 +1020,51 @@ public class RelayRoundTripTests : IClassFixture<RelayFixture>
         Assert.True(await b.NoneOfAsync(Protocol.SleepVoteDown, Quiet));
     }
 
+    // ---- WO-141: activities 0x6A..0x6D (join channel) -----------------------
+
+    [Fact]
+    public async Task Activities_cross_the_relay_host_to_joiner_and_joiner_to_host_only()
+    {
+        var (a, b) = await TwoPeersAsync();   // a = the host (damage authority), b = the joiner
+        await using var _a = a; await using var _b = b;
+
+        // the host's NPCs (a guard in his bed, a woman leaning on a wall) reach the joiner, from the host
+        var bed = new ActivityState(ActivityState.Lying, 0, 0x0A1B2C3D4E5F6071, ActivityState.NoUnstance, 0, ActivityState.NoMinigame, 0, 0).Normalised();
+        var lean = new ActivityState(0, 0, 0, 168, 0x069FF2CFB2012C0F, ActivityState.NoMinigame, 0, 0).Normalised();
+        var npcRows = new[] { new ActivityRow(Protocol.ActivityPeerNone, "rattay_guard_3", bed), new ActivityRow(Protocol.ActivityPeerNone, "tzel_woman_2", lean) };
+        await a.SendRawAsync(ActivityCodec.BuildUp(Protocol.ActivityHostUp, b.Id, Protocol.ActivityKindNpc, npcRows));
+        var hd = await b.ReadUntilAsync(Protocol.ActivityHostDown, Wait);
+        Assert.Equal(a.Id, hd[0]);
+        Assert.True(ActivityCodec.TryDecode(hd.AsSpan(1 + Protocol.JoinHeaderLen), out byte kind, out var got));
+        Assert.Equal(Protocol.ActivityKindNpc, kind);
+        Assert.Equal(npcRows, got);
+
+        // the joiner's own body (washing at the trough) reaches the host, from the joiner
+        var wash = new ActivityState(0, 0, 0, 195, 0x069FF2CFB2012C0F, ActivityState.NoMinigame, 0, 0).Normalised();
+        await b.SendRawAsync(ActivityCodec.BuildUp(Protocol.ActivityPeerUp, Protocol.JoinTargetHost, Protocol.ActivityKindPlayer, new[] { new ActivityRow(b.Id, "", wash) }));
+        var pd = await a.ReadUntilAsync(Protocol.ActivityPeerDown, Wait);
+        Assert.Equal(b.Id, pd[0]);
+        Assert.True(ActivityCodec.TryDecode(pd.AsSpan(1 + Protocol.JoinHeaderLen), out kind, out var pgot));
+        Assert.Equal(Protocol.ActivityKindPlayer, kind);
+        Assert.Equal(wash, pgot[0].A);
+        Assert.True(pgot[0].A.OwnsPosition);
+
+        // the biggest body (12 rows, 64-character names) crosses whole
+        var many = Enumerable.Range(0, Protocol.ActivityMaxRows)
+            .Select(i => new ActivityRow(Protocol.ActivityPeerNone, (i.ToString("D2") + new string('n', Protocol.MaxNpcNameLen)).Substring(0, Protocol.MaxNpcNameLen), bed)).ToArray();
+        await a.SendRawAsync(ActivityCodec.BuildUp(Protocol.ActivityHostUp, b.Id, Protocol.ActivityKindNpc, many));
+        var md = await b.ReadUntilAsync(Protocol.ActivityHostDown, Wait);
+        Assert.Equal(Protocol.JoinHeaderLen + Protocol.ActivityBodyMax, md.Length - 1);
+        Assert.True(ActivityCodec.TryDecode(md.AsSpan(1 + Protocol.JoinHeaderLen), out _, out var mgot));
+        Assert.Equal(many, mgot);
+
+        // a joiner never speaks for the host's NPCs; the host never sends a joiner's message
+        await b.SendRawAsync(ActivityCodec.BuildUp(Protocol.ActivityHostUp, a.Id, Protocol.ActivityKindNpc, npcRows));
+        await a.SendRawAsync(ActivityCodec.BuildUp(Protocol.ActivityPeerUp, Protocol.JoinTargetHost, Protocol.ActivityKindPlayer, new[] { new ActivityRow(a.Id, "", wash) }));
+        Assert.True(await a.NoneOfAsync(Protocol.ActivityHostDown, Quiet));
+        Assert.True(await b.NoneOfAsync(Protocol.ActivityPeerDown, Quiet));
+    }
+
     [Fact]
     public async Task A_whole_world_crosses_the_relay_windowed_and_byte_exact()
     {

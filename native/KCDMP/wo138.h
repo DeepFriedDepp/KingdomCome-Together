@@ -111,4 +111,7 @@ void set_frame_callback(FrameFn fn);   // 0xA0 / 0xA1 go out through it
 
 void on_pipe_closed();   // any thread: sender off, gate off, hold off
 
+// WO-141: every tracked name with a live entity (main thread).
+void for_each_tracked(void (*fn)(const char* name, uint32_t eid, void* ctx), void* ctx);
+
 } // namespace kcdmp::wo138

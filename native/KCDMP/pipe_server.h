@@ -310,6 +310,11 @@ constexpr uint8_t kCrimeOut           = 0xA3;
 constexpr uint8_t kWo140              = 0x26;
 constexpr uint8_t kWo140Reply         = 0xA4;
 constexpr uint8_t kSleepOut           = 0xA5;
+// WO-141: activities (native wo141.h): 0x27 [op][...] -> 0xA6 [ok][seq][op][reason][payload],
+// and the unsolicited 0xA7 Activity (the host's tracked NPCs and the local player).
+constexpr uint8_t kWo141              = 0x27;
+constexpr uint8_t kWo141Reply         = 0xA6;
+constexpr uint8_t kActivityOut        = 0xA7;
 constexpr uint8_t kSaveListReply      = 0x8D;   // [ok][seq][listed][idx:2][count:2][current][contPl][contIdx:2][nameLen][contName]
 constexpr uint8_t kLocalAction        = 0x96;   // unsolicited: [kind][phase][ic][zone][type][flags][guid:16][eid:4][nameLen][name]
 constexpr uint8_t kPvpHitOut          = 0x97;   // unsolicited: [victimEid:4][st:4f][hp:4f][flags][material]

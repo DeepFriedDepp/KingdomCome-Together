@@ -94,6 +94,9 @@ public sealed class CombatPipe : IAsyncDisposable
     private const byte Wo140             = 0x26;   // WO-140 [op][...] -> 0xA4 [ok][seq][op][reason][payload] (native wo140.h)
     private const byte Wo140Reply        = 0xA4;
     private const byte SleepOut          = 0xA5;   // WO-140, unsolicited: a held picker, a C_SkipTime state edge
+    private const byte Wo141             = 0x27;   // WO-141 [op][...] -> 0xA6 [ok][seq][op][reason][payload] (native wo141.h)
+    private const byte Wo141Reply        = 0xA6;
+    private const byte ActivityOut       = 0xA7;   // WO-141, unsolicited: activity rows (the host's NPCs, the local player)
 
     private const int GuidLen = 16;
 
@@ -158,6 +161,9 @@ public sealed class CombatPipe : IAsyncDisposable
     /// edge, id, hours, state) a C_SkipTime edge. Called ON the reader: no pipe request here.
     /// </summary>
     public Action<Wo140Frame>? OnSleepFrame { get; set; }
+
+    /// <summary>WO-141: 0xA7 -- activity rows the DLL read: (kind 1 an NPC | 2 the local player, name, activity).</summary>
+    public Action<List<Wo141DllRow>>? OnActivityFrame { get; set; }
 
     /// <summary>WO-118: the DLL's native writer stopped a bound puppet on its own (reason, name).</summary>
     public Func<byte, string, Task>? OnNpcDropped { get; set; }
@@ -854,6 +860,74 @@ public sealed class CombatPipe : IAsyncDisposable
         return r is { } x ? x.Ok : null;
     }
 
+    // ---- WO-141 (native wo141.h) ---------------------------------------------
+
+    /// <summary>One WO-141 op: (ok, reason, payload after the 4-byte head), or null when the DLL did not answer.</summary>
+    public async Task<(bool Ok, byte Reason, byte[] Payload)?> Wo141Async(byte op, byte[] args, CancellationToken ct = default)
+    {
+        var p = new byte[1 + args.Length];
+        p[0] = op; args.CopyTo(p, 1);
+        var (body, _) = await SendAndAwaitAsync(Wo141, p, Wo141Reply, ct);
+        if (body is null || body.Length < 4) return null;
+        return (body[0] == 1, body[3], body.AsSpan(4).ToArray());
+    }
+
+    /// <summary>op 1: capture (bit 0 the tracked NPCs, bit 1 the local player), apply, the period. (readArmed, applyArmed) or null.</summary>
+    public async Task<(bool Read, bool Apply)?> Wo141ConfigAsync(byte capture, bool apply, ushort periodMs, CancellationToken ct = default)
+    {
+        var r = await Wo141Async(1, [capture, (byte)(apply ? 1 : 0), (byte)(periodMs & 0xFF), (byte)(periodMs >> 8)], ct);
+        return r is { Payload.Length: >= 1 } x ? ((x.Payload[0] & 1) != 0, (x.Payload[0] & 2) != 0) : null;
+    }
+
+    /// <summary>op 2: the body with this name takes the activity (reconciled until changed). True = it was already known.</summary>
+    public async Task<bool?> Wo141ApplyAsync(string name, ActivityState a, CancellationToken ct = default)
+    {
+        var r = await Wo141Async(2, Wo141Codec.NameAndActivity(name, a), ct);
+        return r is { Ok: true, Payload.Length: >= 1 } x ? x.Payload[0] == 1 : null;
+    }
+
+    /// <summary>op 3: the body leaves its activity (stands up; the writer takes it back). True = it had one.</summary>
+    public async Task<bool?> Wo141LeaveAsync(string name, CancellationToken ct = default)
+    {
+        var r = await Wo141Async(3, Wo141Codec.Name(name), ct);
+        return r is { Ok: true, Payload.Length: >= 1 } x ? x.Payload[0] == 1 : null;
+    }
+
+    /// <summary>op 4: one status line, or null.</summary>
+    public async Task<string?> Wo141StatusAsync(CancellationToken ct = default)
+    {
+        var r = await Wo141Async(4, [], ct);
+        return r is { } x ? System.Text.Encoding.ASCII.GetString(x.Payload) : null;
+    }
+
+    /// <summary>op 5: one read (name empty = the local player): the activity, or null when the body has no context.</summary>
+    public async Task<ActivityState?> Wo141ReadAsync(string name, CancellationToken ct = default)
+    {
+        var r = await Wo141Async(5, Wo141Codec.Name(name), ct);
+        return r is { Payload.Length: >= 1 + Protocol.ActivityBytes } x && x.Payload[0] == 1 && ActivityState.TryRead(x.Payload.AsSpan(1), out var a) ? a : null;
+    }
+
+    /// <summary>op 6: every desired activity dropped (no apply). The count, or null.</summary>
+    public async Task<int?> Wo141ForgetAsync(CancellationToken ct = default)
+    {
+        var r = await Wo141Async(6, [], ct);
+        return r is { Ok: true, Payload.Length: >= 2 } x ? BinaryPrimitives.ReadUInt16LittleEndian(x.Payload) : null;
+    }
+
+    /// <summary>op 7: the host's capture sends every activity again on its next tick.</summary>
+    public async Task<bool> Wo141ResyncAsync(CancellationToken ct = default)
+    {
+        var r = await Wo141Async(7, [], ct);
+        return r is { Ok: true };
+    }
+
+    /// <summary>op 8: the local player's captured activity is this NPC unstance at this object for tenths/10 s (0 ends it). True = shown.</summary>
+    public async Task<bool?> Wo141ShowAsync(string unstance, string objectName, byte tenths, CancellationToken ct = default)
+    {
+        var r = await Wo141Async(8, Wo141Codec.Show(unstance, objectName, tenths), ct);
+        return r is { Payload.Length: >= 1 } x ? x.Ok && x.Payload[0] == 1 : null;
+    }
+
     // ---- WO-140 (native wo140.h) ---------------------------------------------
 
     /// <summary>One WO-140 op: (ok, reason, payload after the 4-byte head), or null when the DLL did not answer.</summary>
@@ -1174,6 +1248,12 @@ public sealed class CombatPipe : IAsyncDisposable
                 else if (type == WorldOut)
                 {
                     if (Wo138Codec.TryParseWorld(body, out var ws)) { try { OnWorld?.Invoke(ws); } catch { } }
+                }
+                else if (type == ActivityOut)
+                {
+                    // WO-141: [count]{[kind][nameLen][name][activity:30]}
+                    if (Wo141Codec.TryParseFrame(body, out var rows)) { try { OnActivityFrame?.Invoke(rows); } catch (Exception ex) { Console.WriteLine($"[wo141] activity rows not handled: {ex.Message}"); } }
+                    else Console.WriteLine($"[wo141] malformed Activity frame ({body.Length} bytes)");
                 }
                 else if (type == SleepOut)
                 {

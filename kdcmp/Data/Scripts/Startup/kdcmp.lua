@@ -12576,6 +12576,17 @@ function KCD2MP_InterpTick(arg, gen)
                 -- NPCÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢player damage authority.
                 sampleGhostHealth(id, ghost)
                 local labelZ = sz + (istate.isRiding and 1.1 or 1.8)
+                -- WO-141: while an activity holds the avatar (a bench, a bed), its body is on
+                -- the object, not at the stream's point: the nameplate goes over the BODY,
+                -- at a sitting / lying head height.
+                local w141st = KCD2MP.w141 and KCD2MP.w141.avatarStance and KCD2MP.w141.avatarStance[id]
+                if w141st and w141st ~= 0 and ghost.entity then
+                    local okp, bp = pcall(function() return ghost.entity:GetWorldPos() end)
+                    if okp and bp then
+                        x, y = bp.x, bp.y
+                        labelZ = bp.z + ((w141st == 2 and 0.75) or (w141st == 3 and 1.35) or (w141st == 4 and 1.25) or 1.8)
+                    end
+                end
                 local labelSize = 0  -- 0 = hidden (too far)
                 if _playerPos then
                     local dx = x - _playerPos.x
@@ -16838,7 +16849,8 @@ end
 KCD2MP_MARKS = { "setup", "join", "fight", "fightboth", "ko", "hostdown", "horse", "horsetheft", "talk", "mutt", "muttstep",
     "dead", "mainquest", "reward", "nodouble", "questoff", "animals", "outfit", "torch", "crouch", "loot", "inventory", "map",
     "esc", "partnermenu", "dialogue", "cutscene", "solo", "steal", "fine", "townsfolk", "jail", "guardfight", "execution",
-    "norob", "hostcrime", "sleep", "sleepno", "sleeptimeout", "sleepjoiner", "wait", "clock", "ownworld", "odd" }
+    "norob", "hostcrime", "sleep", "sleepno", "sleeptimeout", "sleepjoiner", "wait", "clock", "ownworld",
+    "grindstone", "trough", "bench", "bed", "npcsit", "npcsleep", "garden", "workstation", "standup", "npcfight", "wolfbite", "odd" }
 function KCD2MP_Mark(word)
     word = tostring(word or "odd"):gsub("[^%w_]", "")
     if word == "" then word = "odd" end
@@ -16857,6 +16869,120 @@ function KCD2MP_W140Status()
         w.held and tostring(w.held.name) or "-", w.waiting and "yes" or "no", w.prompt and string.format("%.0f", w.prompt.id) or "-", w.sep and "yes" or "no",
         s.held, s.go, s.dropped, s.prompts, s.answers, s.sepSaid, s.restSaves))
     KCD2MP_EmitEvent("w140_status", "")
+end
+
+-- ===== WO-141: activities and animal attacks (docs/WO-141-findings.md) ============
+-- Sync what the activity is, not the animation: the DLL reads every body's NPC
+-- state (sitting on this bench, lying in this bed, leaning on this spot, working
+-- at this bench) and the other machine's copy -- or the player's avatar -- takes
+-- the same activity on the same object through the game's own NPC-state machine.
+-- The agent carries it (MP-W141 lines); nothing here runs per frame.
+KCD2MP.w141 = KCD2MP.w141 or {}
+KCD2MP.w141.on = (KCD2MP.w141.on == nil) and true or KCD2MP.w141.on           -- mp_activities (default ON)
+KCD2MP.w141.bites = (KCD2MP.w141.bites == nil) and true or KCD2MP.w141.bites  -- mp_animal_attacks (default ON)
+
+-- mp_activities on|off (default on): off = the other screen shows bodies standing
+-- where they are, as before.
+function KCD2MP_SetActivities(arg)
+    local v = KCD2MP_Wo122ParseBool(arg)
+    if v == "bad" then mp_log("mp_activities: expected on|off, got '" .. tostring(arg) .. "'"); return false end
+    local w = KCD2MP.w141
+    if v ~= nil then w.on = v end
+    mp_log(string.format("WO141-ACTIVITIES %s -- %s", w.on and "on" or "off",
+        w.on and "sitting, sleeping, leaning and working show on the other screen" or "bodies stand where they are on the other screen"))
+    KCD2MP_EmitEvent("w141", w.on and "on" or "off")
+    return true
+end
+
+-- mp_animal_attacks on|off (default on): a wolf's (dog's, boar's) bite plays on the
+-- joiner's copy of it; the bite's damage always comes through the host.
+function KCD2MP_SetAnimalAttacks(arg)
+    local v = KCD2MP_Wo122ParseBool(arg)
+    if v == "bad" then mp_log("mp_animal_attacks: expected on|off, got '" .. tostring(arg) .. "'"); return false end
+    local w = KCD2MP.w141
+    if v ~= nil then w.bites = v end
+    mp_log(string.format("WO141-BITES %s", w.bites and "on -- the host's animals' attacks play on this screen" or "off -- animals walk, their attacks are not animated here"))
+    KCD2MP_EmitEvent("w141", w.bites and "bites on" or "bites off")
+    return true
+end
+
+-- The agent asks now and then (every few seconds while connected): the switches as
+-- this game has them, so a switch typed before the agent connected still counts.
+function KCD2MP_W141Sync(agentOn, agentBites)
+    local w = KCD2MP.w141
+    if agentOn ~= w.on then KCD2MP_EmitEvent("w141", w.on and "on" or "off") end
+    if agentBites ~= w.bites then KCD2MP_EmitEvent("w141", w.bites and "bites on" or "bites off") end
+    pcall(KCD2MP_W141Install)
+end
+
+-- ---- the player's one-shots at an object ----------------------------------------
+-- Sitting, lying and working are in the player's NPC state and the DLL reads them.
+-- A trigger's "Animation" action is not: the trough's wash is
+-- ActionTrigger:ReportUse -> PlayerStateHandler.PlayAnimationAction(trough,
+-- "WashFace") and nothing else (observed: the player's animation state reads
+-- WashFace for 5.2 s). The wrap tells the agent which action at which object; the
+-- agent shows the ones the game has an NPC activity for (the trough's wash as the
+-- NPCs' own housekeeper_faceWash at the same trough) and drops the rest. The
+-- instances resolve ReportUse through their class table (WO-140's beds), and the
+-- trough class holds its own copy of the function (table.Merge), so each class is
+-- wrapped by name.
+--   WO141-INSTALL <class>.ReportUse wrapped   WO141-ANIM <action> at <object>
+KCD2MP_W141_TRIGGER_CLASSES = { "WaterTubeActionTrigger", "ActionTrigger" }
+
+function KCD2MP_W141Install()
+    local w = KCD2MP.w141
+    w.wrapped = w.wrapped or {}
+    for _, cls in ipairs(KCD2MP_W141_TRIGGER_CLASSES) do
+        local t = _G[cls]
+        local rec = w.wrapped[cls]
+        if type(t) == "table" and type(t.ReportUse) == "function" and not (rec and t.ReportUse == rec.wrapper) then
+            local orig = t.ReportUse
+            local r = { orig = orig }
+            r.wrapper = function(self, user, item, action)
+                local res = r.orig(self, user, item, action)
+                pcall(KCD2MP_W141OnTriggerUse, self, user, action)
+                return res
+            end
+            t.ReportUse = r.wrapper
+            w.wrapped[cls] = r
+            mp_log("WO141-INSTALL " .. cls .. ".ReportUse wrapped (the player's one-shots at an object show on the other screen)")
+        end
+    end
+end
+
+function KCD2MP_W141OnTriggerUse(self, user, action)
+    local w = KCD2MP.w141
+    if not w.on or type(action) ~= "table" or action.esActionType ~= "Animation" then return end
+    if not (user ~= nil and player ~= nil and (user == player or user.id == player.id)) then return end
+    local link = self.GetLinkedSmartObject and self:GetLinkedSmartObject()
+    local obj = link and link.GetName and link:GetName()
+    local act = tostring(action.sAction or "")
+    if act == "" or not obj or obj == "" then return end
+    mp_log(string.format("WO141-ANIM %s at %s", act, obj))
+    KCD2MP_EmitEvent("w141", "anim " .. act .. " " .. obj)
+end
+
+-- The agent, when a player's activity reaches this machine's avatar of him: the
+-- stance (0 none, 2 lying, 3 sitting, 4 kneeling) -- only for the nameplate.
+function KCD2MP_W141AvatarStance(id, stance)
+    local w = KCD2MP.w141
+    w.avatarStance = w.avatarStance or {}
+    local n = tonumber(id)
+    if n == nil then return end
+    -- keyed like KCD2MP.ghosts / labelCache: the ghost id as a string ("0"), observed
+    w.avatarStance[tostring(math.floor(n))] = tonumber(stance) or 0
+end
+
+function KCD2MP_W141Status()
+    local w = KCD2MP.w141
+    local wrapped = {}
+    for _, cls in ipairs(KCD2MP_W141_TRIGGER_CLASSES) do
+        local t, rec = _G[cls], w.wrapped and w.wrapped[cls]
+        wrapped[#wrapped + 1] = cls .. "=" .. tostring(type(t) == "table" and rec ~= nil and t.ReportUse == rec.wrapper)
+    end
+    mp_log(string.format("WO141-STATUS activities=%s animal_attacks=%s wrapped %s (MP-W141 stats and the DLL's line in agent.log)",
+        w.on and "on" or "off", w.bites and "on" or "off", table.concat(wrapped, " ")))
+    KCD2MP_EmitEvent("w141", "status")
 end
 
 -- ===== WO-139: crime and guards (docs/WO-139-findings.md) =========================
@@ -18082,6 +18208,9 @@ local ok, err = pcall(function()
     System.AddCCommand("mp_sleep_yes", "KCD2MP_W140Answer(true)", "WO-140: answer the other player's sleep request YES (same as F11)")
     System.AddCCommand("mp_sleep_no", "KCD2MP_W140Answer(false)", "WO-140: answer the other player's sleep request NO (same as F12)")
     System.AddCCommand("mp_sleep_vote", 'KCD2MP_SetSleepVote(%line)', "WO-140: in a shared world a sleep or a wait waits for everyone's yes (default on): mp_sleep_vote on|off")
+    System.AddCCommand("mp_activities", 'KCD2MP_SetActivities(%line)', "WO-141: sitting, sleeping, leaning and working (NPCs and players) show on the other screen, the game's own way (default on): mp_activities on|off")
+    System.AddCCommand("mp_animal_attacks", 'KCD2MP_SetAnimalAttacks(%line)', "WO-141: the host's wolves', dogs' and boars' attacks play on the joiner's screen (default on): mp_animal_attacks on|off")
+    System.AddCCommand("mp_activity_status", "KCD2MP_W141Status()", "WO-141: activities and animal attacks (WO141-STATUS here, MP-W141 stats and the DLL's line in agent.log)")
     System.AddCCommand("mp_sleep_status", "KCD2MP_W140Status()", "WO-140: sleeping together -- the bed hold, the prompt, the own-world line (WO140-STATUS here, MP-WO140-STATS and WO140-NATIVE in agent.log)")
     System.AddCCommand("mp_crime_shared", 'KCD2MP_SetCrimeShared(%line)', "WO-139: the joiner's crimes are crimes in the host's world (never the host's), guards deal with him; the host's value is the session's (default on): mp_crime_shared on|off")
     System.AddCCommand("mp_crime_status", "KCD2MP_W139Status()", "WO-139: crime and guards -- this machine's role, the joiner's own crimes, a running stop, the legal horses, the punishment's skip-time gate (WO139-STATUS here, MP-WO139-STATS in agent.log)")

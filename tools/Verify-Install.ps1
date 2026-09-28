@@ -162,6 +162,14 @@ $AsmMarkers = @(
     @{ File = 'KcdMp.Protocol.dll'; Marker = 'sleep-vote';          Owner = 'WO-140 the sleep vote on the join channel (wire)' },
     @{ File = 'KCDMP_launcher.dll'; Marker = "Stay at the main menu. Don't load a save."; Owner = "WO-140 the joiner's Ready-to-connect line (launcher)" },
     @{ File = 'KCDMP_launcher.dll'; Marker = 'YOU LOADED YOUR OWN SAVE'; Owner = 'WO-140 the own-world modal (launcher)' },
+    # WO-141: activities (sitting, lying, leaning, working, the trough's wash) and animal attacks
+    @{ File = 'KcdMpClient.dll'; Marker = 'MP-W141 stats:';         Owner = 'WO-141 activities: the rows, the players, the one-shots (agent half)' },
+    @{ File = 'KcdMpClient.dll'; Marker = 'leaves its activity first'; Owner = 'WO-141 a copy leaves its activity for a fight, a talk, a knockout or a death (agent half)' },
+    @{ File = 'KCDMP.dll';       Marker = 'WO141-BUILD';            Owner = "WO-141 the NPC-state read and the game's own placement (native)" },
+    @{ File = 'KCDMP.dll';       Marker = 'WO141-APPLY';            Owner = 'WO-141 the reconcile: a copy takes the activity, the writer yields (native)' },
+    @{ File = 'KCDMP.dll';       Marker = 'WO141-SHOW';             Owner = "WO-141 the player's one-shot shown as an NPC activity (native)" },
+    @{ File = 'KCDMP.dll';       Marker = 'is not a human -- the actor system'; Owner = "WO-141 an animal's bite plays on the joiner's copy (native)" },
+    @{ File = 'KcdMp.Protocol.dll'; Marker = 'activity-host';       Owner = 'WO-141 activities on the join channel (wire)' },
     @{ File = 'KCDMP_launcher.dll'; Marker = 'Kingdom Come: Together'; Owner = 'WO-134 rebrand (launcher window title)' }
 )
 
@@ -239,7 +247,12 @@ $PakMarkers = @(
     @{ Marker = 'function KCD2MP_W140ReportUse';   Owner = "WO-140 the bed held before the lie-down (mod half)" },
     @{ Marker = 'function KCD2MP_W140Prompt';      Owner = "WO-140 the other player's sleep prompt (mod half)" },
     @{ Marker = 'function KCD2MP_W140Separate';    Owner = 'WO-140 the own-world message (mod half)' },
-    @{ Marker = 'Other players are not ready to sleep yet!'; Owner = 'WO-140 the plain refusal line' }
+    @{ Marker = 'Other players are not ready to sleep yet!'; Owner = 'WO-140 the plain refusal line' },
+    # WO-141: activities and animal attacks
+    @{ Marker = 'function KCD2MP_SetActivities';   Owner = 'WO-141 mp_activities (mod half)' },
+    @{ Marker = 'function KCD2MP_SetAnimalAttacks'; Owner = 'WO-141 mp_animal_attacks (mod half)' },
+    @{ Marker = 'function KCD2MP_W141OnTriggerUse'; Owner = "WO-141 the player's one-shots at an object reach the agent (mod half)" },
+    @{ Marker = 'function KCD2MP_W141AvatarStance'; Owner = "WO-141 the nameplate over a sitting or lying avatar (mod half)" }
 )
 
 function Test-Assembly($dir, $label) {

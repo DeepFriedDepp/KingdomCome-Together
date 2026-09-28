@@ -11,6 +11,7 @@
 #include "wo138.h"
 #include "wo139.h"
 #include "wo140.h"
+#include "wo141.h"
 #include "concept_read.h"
 #include "dice_hook.h"
 #include "log.h"
@@ -175,6 +176,9 @@ DWORD WINAPI plugin_main(LPVOID) {
     // WO-140: the sleep gate (C_SkipTime::ShowDialog) and the clock pull. Fails
     // closed (WO140-BUILD); off until the agent's Config for a session with a partner.
     kcdmp::wo140::install();
+    // WO-141: activities -- the NPC-state context read (stance / unstance / hands /
+    // minigame) and its apply. Anchors fail closed (WO141-BUILD).
+    kcdmp::wo141::install();
 
     if (kcdmp::dice::install_pause_hook()) {
         kcdmp::main_thread::post_repeating(&kcdmp::dice::sample_instance_if_changed);
@@ -226,6 +230,7 @@ DWORD WINAPI plugin_main(LPVOID) {
     kcdmp::main_thread::post_repeating(&kcdmp::wo138::tick);   // WO-138: the frame meter + the native NPC sender
     kcdmp::main_thread::post_repeating(&kcdmp::wo139::tick);   // WO-139: a new trespass level goes to the agent
     kcdmp::main_thread::post_repeating(&kcdmp::wo140::tick);   // WO-140: the sleep picker's edges go to the agent
+    kcdmp::main_thread::post_repeating(&kcdmp::wo141::tick);   // WO-141: activities
 
     kcdmp::pipe::start();
     return 0;

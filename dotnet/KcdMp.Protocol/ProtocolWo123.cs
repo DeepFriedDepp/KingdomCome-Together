@@ -89,6 +89,9 @@ public static partial class Protocol
         (CrimeHostUp,   CrimeHostDown,   "crime-host",   JoinHeaderLen + LootFixedLen + 1, JoinHeaderLen + LootFixedLen + CrimeTextMax, JoinFrom.Host),
         // WO-140: sleeping together (ProtocolWo140.cs) -- the LootMsg shape; a joiner's goes to the host, the host's to one joiner
         (SleepVoteUp,   SleepVoteDown,   "sleep-vote",   JoinHeaderLen + LootFixedLen + 1, JoinHeaderLen + LootFixedLen + SleepTextMax, JoinFrom.Either),
+        // WO-141: activities (ProtocolWo141.cs) -- the host's NPCs and players' own bodies; a joiner's own body to the host
+        (ActivityHostUp, ActivityHostDown, "activity-host", JoinHeaderLen + ActivityBodyMin, JoinHeaderLen + ActivityBodyMax, JoinFrom.Host),
+        (ActivityPeerUp, ActivityPeerDown, "activity-peer", JoinHeaderLen + ActivityBodyMin, JoinHeaderLen + ActivityBodyMax, JoinFrom.Joiner),
     };
 
     /// <summary>The JoinWire row for an up type, or null.</summary>
