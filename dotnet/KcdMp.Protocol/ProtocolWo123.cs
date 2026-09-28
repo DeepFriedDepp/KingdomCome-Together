@@ -84,6 +84,9 @@ public static partial class Protocol
         // WO-137: shared quests (ProtocolWo137.cs) -- the LootMsg shape, [kind][tok][text]
         (QuestHostUp,   QuestHostDown,   "quest-host",   JoinHeaderLen + LootFixedLen + 1, JoinHeaderLen + LootFixedLen + QuestTextMax, JoinFrom.Host),
         (QuestAskUp,    QuestAskDown,    "quest-ask",    JoinHeaderLen + LootFixedLen + 1, JoinHeaderLen + LootFixedLen + QuestTextMax, JoinFrom.Joiner),
+        // WO-139: crime and guards (ProtocolWo139.cs) -- the LootMsg shape, [kind][tok][text]
+        (CrimeAskUp,    CrimeAskDown,    "crime-ask",    JoinHeaderLen + LootFixedLen + 1, JoinHeaderLen + LootFixedLen + CrimeTextMax, JoinFrom.Joiner),
+        (CrimeHostUp,   CrimeHostDown,   "crime-host",   JoinHeaderLen + LootFixedLen + 1, JoinHeaderLen + LootFixedLen + CrimeTextMax, JoinFrom.Host),
     };
 
     /// <summary>The JoinWire row for an up type, or null.</summary>

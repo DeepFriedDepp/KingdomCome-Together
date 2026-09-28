@@ -300,6 +300,11 @@ constexpr uint8_t kWo138              = 0x24;
 constexpr uint8_t kWo138Reply         = 0x9F;
 constexpr uint8_t kNpcStreamOut       = 0xA0;
 constexpr uint8_t kWorldOut           = 0xA1;
+// WO-139: crime and guards (wo139.h): [op][...] -> 0xA2 [ok][seq][op][reason][payload],
+// and the unsolicited 0xA3 Crime (a new trespass level).
+constexpr uint8_t kWo139              = 0x25;
+constexpr uint8_t kWo139Reply         = 0xA2;
+constexpr uint8_t kCrimeOut           = 0xA3;
 constexpr uint8_t kSaveListReply      = 0x8D;   // [ok][seq][listed][idx:2][count:2][current][contPl][contIdx:2][nameLen][contName]
 constexpr uint8_t kLocalAction        = 0x96;   // unsolicited: [kind][phase][ic][zone][type][flags][guid:16][eid:4][nameLen][name]
 constexpr uint8_t kPvpHitOut          = 0x97;   // unsolicited: [victimEid:4][st:4f][hp:4f][flags][material]

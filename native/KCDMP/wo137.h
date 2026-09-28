@@ -107,4 +107,13 @@ void on_disconnect();
 // The pipe server's sender for the unsolicited 0x9E frames.
 void set_send_callback(void (*fn)(const uint8_t* body, uint16_t len));
 
+// WO-139: the punishment's time sets (either machine, a session with a partner).
+// On: a quest time set (the same C_Function hook as the joiner's time gate)
+// whose node lies under the open-world punishment (wo137rules::is_punishment_path)
+// runs nothing -- OnExec still fires, the punishment goes on, the clock does
+// not move. Independent of the quest sync. False when the hook is not armed.
+bool set_punish_gate(bool on);
+bool punish_gate_armed();
+uint32_t punish_skipped();
+
 } // namespace kcdmp::wo137

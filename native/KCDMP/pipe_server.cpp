@@ -21,6 +21,7 @@
 #include "wo132.h"
 #include "wo137.h"
 #include "wo138.h"
+#include "wo139.h"
 #include "log.h"
 
 #include <windows.h>
@@ -250,6 +251,8 @@ void send_quest_change(const uint8_t* body, uint16_t len) { send_unsolicited(kQu
 void send_wo138_frame(uint8_t type, const uint8_t* body, uint16_t len) {
     send_unsolicited(type, body, len, type == kNpcStreamOut ? "NpcStream" : "World");
 }
+// WO-139: a crime event from this machine (wo139.h), main thread.
+void send_wo139_frame(const uint8_t* body, uint16_t len) { send_unsolicited(kCrimeOut, body, len, "Crime"); }
 
 // WO-132: an engaged copy's local hit on the player was put back (main thread).
 void send_discarded(uint32_t attackerEid, float st, float hp) {
@@ -1184,6 +1187,25 @@ void serve(HANDLE h) {
                 LeaveCriticalSection(&g_write_lock);
                 break;
             }
+            case kWo139: {
+                std::vector<uint8_t> copy(body, body + len);
+                struct R { uint8_t reason = kcdmp::wo139::kRFailed; uint8_t op = 0; uint8_t buf[300]{}; size_t n = 0; };
+                R r{};
+                bool faulted = false;
+                const bool ran = run_sync_bounded<R>(
+                    [copy](R& out) {
+                        out.op = copy.empty() ? 0 : copy[0];
+                        out.reason = kcdmp::wo139::handle(copy.data(), copy.size(), out.buf, sizeof(out.buf), &out.n);
+                    }, "Wo139", r, &faulted);
+                if (!ran) { r.reason = faulted ? kReasonTaskFaulted : kcdmp::wo139::kRFailed; r.n = 0; r.op = len ? body[0] : 0; }
+                BYTE rb[4 + 300]{};
+                rb[0] = (ran && r.reason == kcdmp::wo139::kROk) ? 1 : 0; rb[1] = seq; rb[2] = r.op; rb[3] = r.reason;
+                if (r.n) std::memcpy(rb + 4, r.buf, r.n);
+                EnterCriticalSection(&g_write_lock);
+                send_frame(h, kWo139Reply, rb, static_cast<uint16_t>(4 + r.n));
+                LeaveCriticalSection(&g_write_lock);
+                break;
+            }
             case kLeashSample: {
                 kcdmp::leash::Result page{};
                 uint8_t n = len >= 5 ? body[4] : 0;
@@ -1233,6 +1255,7 @@ void serve(HANDLE h) {
     main_thread::post([] { kcdmp::wo132::on_pipe_closed(); });   // WO-132: engaged copies let go (main-thread state)
     kcdmp::wo137::on_disconnect();   // WO-137: no agent -- no quest frames, no HUD proxy
     kcdmp::wo138::on_pipe_closed();  // WO-138: no agent -- the native sender, the pause gate and the hold go off
+    kcdmp::wo139::on_pipe_closed();  // WO-139: no agent -- the trespass detector off
     // WO-113: no agent, no session -- the death guard stands down (vanilla).
     respawn::set_session(false, "pipe closed");
     // WO-114: no agent, no partner -- a death wakes by today's rule.
@@ -1317,6 +1340,7 @@ bool start() {
     // WO-137: quest State changes.
     kcdmp::wo137::set_send_callback(&send_quest_change);
     kcdmp::wo138::set_frame_callback(&send_wo138_frame);
+    kcdmp::wo139::set_frame_callback(&send_wo139_frame);
 
     // WO-118: the native writer's and the trace's unsolicited frames.
     npcdrive::set_drop_callback(&send_npc_dropped);

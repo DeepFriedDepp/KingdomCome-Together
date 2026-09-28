@@ -71,7 +71,7 @@ public class Wo123Tests : IDisposable
         foreach (var r in Protocol.JoinWire)
         {
             Assert.Equal(r.Up + 1, r.Down);
-            Assert.True(r.Up >= 0x48 && r.Down <= 0x63, $"{r.Name} outside 0x48..0x63");   // WO-114 added 0x58..0x5B, WO-134 0x5C..0x5F, WO-137 0x60..0x63
+            Assert.True(r.Up >= 0x48 && r.Down <= 0x67, $"{r.Name} outside 0x48..0x67");   // WO-114 added 0x58..0x5B, WO-134 0x5C..0x5F, WO-137 0x60..0x63, WO-139 0x64..0x67
             Assert.True(r.Min >= Protocol.JoinHeaderLen && r.Max >= r.Min && r.Max + 1 <= ushort.MaxValue, r.Name);
             Assert.True(Protocol.IsJoinDown(r.Down, r.Min + 1));
             Assert.True(Protocol.IsJoinDown(r.Down, r.Max + 1));

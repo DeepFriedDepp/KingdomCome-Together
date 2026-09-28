@@ -599,11 +599,35 @@ void step_act() {
         const hangover::Spot* spot = nullptr;
         const char* rule = "nearest";
         if (k == Kind::Execution) {
+            // WO-139: with the other player in the world, the wake keeps the
+            // leash: of the spots outside every settlement, the one nearest the
+            // partner within the leash radius, >= kDeathMinDist from the death
+            // (wake_pick.h's rules on that subset).
+            float ep[3]{}, eradius = 0;
+            if (partner_get(ep, &eradius)) {
+                const hangover::Spot* list = nullptr;
+                const int n = hangover::spots(&list);
+                static wake::Cand ecands[hangover::kMaxSpots];
+                const int m = n < hangover::kMaxSpots ? n : hangover::kMaxSpots;
+                int outside = 0;
+                for (int i = 0; i < m; ++i) {
+                    ecands[i].x = list[i].nx; ecands[i].y = list[i].ny; ecands[i].z = list[i].nz;
+                    ecands[i].id = list[i].wuid;
+                    ecands[i].usable = list[i].onNavmesh && outside_settlement(list[i], nullptr);
+                    if (ecands[i].usable) ++outside;
+                }
+                const wake::Pick pk = wake::pick(ecands, m, d, ep, eradius, kDeathMinDist, g_lastWakeId);
+                logf("MP-RESPAWN-LEASH execution: partner at (%.1f, %.1f, %.1f) radius=%.0f: spots=%d outside_settlements=%d far_enough=%d in_leash=%d -> %s",
+                     ep[0], ep[1], ep[2], eradius, m, outside, pk.farEnough, pk.inLeash, pk.index >= 0 ? "picked" : "none (today's rule)");
+                if (pk.index >= 0) { spot = &list[pk.index]; rule = "outside a settlement, within the leash (WO-139)"; }
+            }
             // "Respawn outside that settlement": the nearest spot the game's
             // own area-label test puts outside every settlement/crime district;
             // failing that, the nearest one kExecutionMinDist away.
-            spot = hangover::nearest_where(d[0], d[1], d[2], &outside_settlement, nullptr);
-            rule = "nearest outside a settlement (area labels)";
+            if (!spot) {
+                spot = hangover::nearest_where(d[0], d[1], d[2], &outside_settlement, nullptr);
+                rule = "nearest outside a settlement (area labels)";
+            }
             if (!spot) {
                 spot = hangover::nearest(d[0], d[1], d[2], kExecutionMinDist, d[0], d[1]);
                 rule = "nearest beyond the execution-distance fallback";

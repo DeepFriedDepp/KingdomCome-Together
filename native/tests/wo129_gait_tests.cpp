@@ -21,6 +21,7 @@ int wo133_port_gate_tests(int* passed);   // wo133_port_gate_tests.cpp
 int wo136_rules_tests(int* passed);        // wo136_rules_tests.cpp
 int wo137_rules_tests(int* passed);        // wo137_rules_tests.cpp
 int wo138_rules_tests(int* passed);        // wo138_rules_tests.cpp
+int wo139_rules_tests(int* passed);        // wo139_rules_tests.cpp
 
 static int g_fail = 0, g_pass = 0;
 #define CHECK(cond, ...) do { if (cond) ++g_pass; else { ++g_fail; std::printf("FAIL  %s:%d  ", __FILE__, __LINE__); std::printf(__VA_ARGS__); std::printf("\n"); } } while (0)
@@ -140,6 +141,13 @@ int main() {
         const int nf = wo138_rules_tests(&np);
         g_pass += np;
         g_fail += nf;
+    }
+    // WO-139: trespass levels, the context allow-list, the punishment's time sets
+    {
+        int cp = 0;
+        const int cf = wo139_rules_tests(&cp);
+        g_pass += cp;
+        g_fail += cf;
     }
 
     std::printf("%d passed, %d failed\n", g_pass, g_fail);

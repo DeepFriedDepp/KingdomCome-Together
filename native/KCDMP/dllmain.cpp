@@ -9,6 +9,7 @@
 #include "wo135.h"
 #include "wo137.h"
 #include "wo138.h"
+#include "wo139.h"
 #include "concept_read.h"
 #include "dice_hook.h"
 #include "log.h"
@@ -167,6 +168,9 @@ DWORD WINAPI plugin_main(LPVOID) {
     // WO-138: the PauseGame gate (CCryAction::PauseGame; off until the agent turns
     // the levers on for a session with a partner). Fails closed (WO138-GATE).
     kcdmp::wo138::install();
+    // WO-139: the trespass detector (the HUD's own trespass listener, gated
+    // pass-through). Fails closed (WO139-BUILD); off until the agent turns it on.
+    kcdmp::wo139::install();
 
     if (kcdmp::dice::install_pause_hook()) {
         kcdmp::main_thread::post_repeating(&kcdmp::dice::sample_instance_if_changed);
@@ -216,6 +220,7 @@ DWORD WINAPI plugin_main(LPVOID) {
     kcdmp::main_thread::post_repeating(&kcdmp::savelist::test_watch);
     kcdmp::main_thread::post_repeating(&kcdmp::wo137::tick);   // WO-137: research file + the change queue
     kcdmp::main_thread::post_repeating(&kcdmp::wo138::tick);   // WO-138: the frame meter + the native NPC sender
+    kcdmp::main_thread::post_repeating(&kcdmp::wo139::tick);   // WO-139: a new trespass level goes to the agent
 
     kcdmp::pipe::start();
     return 0;

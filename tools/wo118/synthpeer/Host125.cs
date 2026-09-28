@@ -59,6 +59,10 @@
 //                                 stream is really silent), or sends again; everything else keeps going
 //       linkquiet on|off          (WO-138) NOTHING goes out any more (position heartbeats too): the host's link is lost
 //                                 (every QuestAskDown 0x63 received is logged: QUESTASK ...)
+//       crime stop <tok> <guard> <crimes> <fine>   (WO-139) a CrimeHost Stop to every joiner: that guard stops him
+//       crime judged <tok> <text> | pursue <on|off> <guard> | mode <on|off> <why> | cleared <why> <st|-> |
+//             horses <name,name|-> | record <text>  (WO-139) the other CrimeHost kinds, verbatim
+//                                 (every CrimeAskDown 0x65 received is logged: CRIMEASK ...)
 //     [reseed] = a synthetic seed (hex) written into the save's body 0x01FB, re-signed: a second
 //     "playthrough" made from a copy. Files are COPIES of real host saves; never logged by path.
 //
@@ -482,6 +486,24 @@ static class Host125
                                 }
                                 break;
                             }
+                            case "crime":   // WO-139
+                            {
+                                byte ck = p[1] switch
+                                {
+                                    "stop" => Protocol.CrimeHostStop, "judged" => Protocol.CrimeHostJudged, "pursue" => Protocol.CrimeHostPursue,
+                                    "mode" => Protocol.CrimeHostMode, "cleared" => Protocol.CrimeHostCleared, "horses" => Protocol.CrimeHostHorses,
+                                    "record" => Protocol.CrimeHostRecord, _ => (byte)0,
+                                };
+                                if (ck == 0) { Say($"CRIME unknown verb {p[1]}"); break; }
+                                uint ctk = 0;
+                                string ctext;
+                                if (ck is Protocol.CrimeHostStop or Protocol.CrimeHostJudged) { ctk = uint.Parse(p[2], CultureInfo.InvariantCulture); ctext = string.Join(' ', p.Skip(3)); }
+                                else if (ck == Protocol.CrimeHostHorses) ctext = $"1 1 {(p.Length > 2 ? p[2] : "-")}";
+                                else ctext = string.Join(' ', p.Skip(2));
+                                for (byte g = 1; g < 8; g++) await W(new LootMsg(ck, ctk, ctext).BuildUp(Protocol.CrimeHostUp, g));
+                                Say($"CRIME {Protocol.CrimeHostName(ck)} tok={ctk} sent: {ctext}");
+                                break;
+                            }
                             case "questfile":   // WO-137: replay a recorded host change stream, renumbered, in order
                             {
                                 int n = 0, bad = 0;
@@ -738,6 +760,11 @@ static class Host125
                             Say("  -> not answered (malformed)");
                             break;
                     }
+                    continue;
+                }
+                if (type == Protocol.CrimeAskDown && LootMsg.TryDecode(body, out var ca))   // WO-139: logged (the test drives the answers)
+                {
+                    Say($"CRIMEASK {Protocol.CrimeAskName(ca.Kind)} tok={ca.Tok} from {src}: {ca.Text}");
                     continue;
                 }
                 if (type == Protocol.JoinRequestDown) { Say($"JoinRequest 0x{jid:x8} from {src}"); await joinQ.Writer.WriteAsync((src, jid)); }

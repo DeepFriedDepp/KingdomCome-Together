@@ -1735,7 +1735,7 @@ public partial class GameBridge(ClientConfig config)
         // out on THIS connection's stream, so the handlers are re-bound per
         // connection like OnLocalHit.
         _combat.OnLocalDowned = OnLocalDownedAsync;
-        _combat.OnLocalRespawned = (x, y, z, reason) => SendPlayerRespawnedAsync(stream, x, y, z, reason, cts.Token);
+        _combat.OnLocalRespawned = (x, y, z, reason) => { Wo139OnLocalRespawned(reason); return SendPlayerRespawnedAsync(stream, x, y, z, reason, cts.Token); };   // WO-139: an execution clears the joiner's record
         _combat.OnLocalGrave = (add, id, x, y, z) => SendGraveAsync(stream, add, id, x, y, z, cts.Token);
         // WO-118: the native writer's own drops and the trace's completion go
         // to Lua (the drop makes Lua write that puppet again at once).
@@ -1751,6 +1751,7 @@ public partial class GameBridge(ClientConfig config)
         Wo132OnConnect(cts.Token);           // WO-132: damage safety, combat engagement
         Wo137OnConnect(cts.Token);           // WO-137: shared quests (the mirror, the requests, talking)
         Wo138OnConnect(cts.Token);           // WO-138: no pausing (the levers, the hold) + the native NPC sender
+        Wo139OnConnect(cts.Token);           // WO-139: crime and guards (the joiner's crimes in the host's world, the stop, no robbing)
         _ = _combat.NpcConfigAsync(_nativeWriteOn, _nativeSenderClock, cts.Token);
         _ = RespawnHeartbeatAsync(stream, announceGraves: true, cts.Token);
         // WO-99 Phase 0: learn who the local player is before the first hit.
@@ -2258,6 +2259,7 @@ public partial class GameBridge(ClientConfig config)
             Wo132OnDisconnect();              // WO-132: engaged copies released
             await Wo137OnDisconnectAsync();   // WO-137: quest sync off, talk holds released
             await Wo138OnDisconnectAsync();   // WO-138: the native sender, the levers and the hold off
+            await Wo139OnDisconnectAsync();   // WO-139: holds released, the detector and the punishment gate off
             _myOpenDrops.Clear();
             // WO-113: no relay, no session -- the DLL's guard stands down
             // (vanilla death), and every peer's mirror gravestone goes.
@@ -4948,7 +4950,7 @@ public partial class GameBridge(ClientConfig config)
                     {
                         string npcName = Encoding.UTF8.GetString(payload, 2, nameLen);
                         if (!NpcNamePattern.IsMatch(npcName)) CountDrop(type, "name-rejected");   // WO-110 R9
-                        if (NpcNamePattern.IsMatch(npcName) && !Wo136DropRidden(npcName))   // WO-136 Phase 3: the rider owns the horse
+                        if (NpcNamePattern.IsMatch(npcName) && !Wo136DropRidden(npcName) && !Wo139DropStopped(npcName))   // WO-136 Phase 3: the rider owns the horse; WO-139: a guard stopping this player
                         {
                             Wo127NoteRecv(npcName);   // WO-127: age of the host's last update, for the leash recorder
                             int o = 2 + nameLen;
@@ -5716,6 +5718,18 @@ public partial class GameBridge(ClientConfig config)
             case "w137_talk":
             case "w137_status":
                 Wo137OnEvent(name, arg);
+                return;
+            case "w139_cfg":         // WO-139: crime and guards
+            case "w139_crime":
+            case "w139_judged":
+            case "w139_guards":
+            case "w139_horses":
+            case "w139_outcome":
+            case "w139_stop":
+            case "w139_horse":
+            case "w139_punish":
+            case "w139_status":
+                Wo139OnEvent(name, arg);
                 return;
         }
 

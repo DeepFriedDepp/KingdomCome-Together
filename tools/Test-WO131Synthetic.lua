@@ -235,8 +235,13 @@ do -- (g) looting and pickpocketing
     local h = mkEntity("ttkc_horse_2", 3, 0, 0); h.class = "Horse"
     BasicAIActions.OnLoot(h, player)
     check("g: a horse's saddlebags: straight through", calls[1] == "loot:ttkc_horse_2")
+    BasicAIActions.OnLoot(mkEntity("DialogTwin_ttkc_man_9", 3, 0, 0), player)
+    check("g: a name the guard does not own (a dialogue stand-in): straight through", calls[2] == "loot:DialogTwin_ttkc_man_9")
+    -- WO-139: our avatar is the other player -- never looted, on either machine
     BasicAIActions.OnLoot(mkEntity("kcd2mp_1", 3, 0, 0), player)
-    check("g: a name the guard does not own (our avatar): straight through", calls[2] == "loot:kcd2mp_1")
+    local robLine = false
+    for _, t in ipairs(TOASTS) do if t == "You can't steal from each other in co-op." then robLine = true end end
+    check("g: our avatar: refused since WO-139, with the co-op line", calls[3] == nil and robLine)
     KCD2MP_W131Tick(false, true)
     BasicAIActions.OnLoot(body, player)
     check("g: the host loots as ever", calls[3] == "loot:ttkc_man_7")

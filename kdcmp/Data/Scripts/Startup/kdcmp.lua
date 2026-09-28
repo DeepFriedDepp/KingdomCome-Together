@@ -5449,6 +5449,7 @@ end
 function KCD2MP_Wo114DrawUI()
     pcall(KCD2MP_W131Backstop)   -- WO-131: give parked bodies back if the agent went silent
     pcall(KCD2MP_W137Backstop)   -- WO-137: talking copies and the host's holds back if the agent went silent
+    pcall(KCD2MP_W139Backstop)   -- WO-139: a stop, the legal horses and the skip-time data back if the agent went silent
     local w = KCD2MP.w114
     -- A line queued while a menu held the timers (the map after a refused fast
     -- travel): shown now, for the usual 5 s, instead of expiring unseen.
@@ -5824,6 +5825,7 @@ local function w131_sweep()
     if repause then w.repauseAt = os.clock() end
     for _, e in ipairs(ents) do
         local ok, name = KCD2MP_W131Guardable(e)
+        if ok and KCD2MP_W139StopHeld and KCD2MP_W139StopHeld(name) then ok = false end   -- WO-139: a guard stopping this player
         if ok and not KCD2MP.npcPuppets[name] then
             local parked = w.parked[name]
             if not parked then
@@ -6090,10 +6092,13 @@ end
 -- every living NPC. Only while the guard is active; everything else (the
 -- host, solo, separate worlds, graves, animals, horses) calls straight through.
 function KCD2MP_W131LootAllowed(body, kind, orig, user, slot)
+    -- WO-139 Phase 4: the players never rob each other (both machines, host or joiner)
+    if KCD2MP_W139RobRefused and KCD2MP_W139RobRefused(body, kind) then return false end
     local w = KCD2MP.w131
     if not (w.lootBlock and KCD2MP_W131IsActive()) then return true end
     local ok, name = KCD2MP_W131Guardable(body)
     if not ok then return true end
+    if kind == "loot" and KCD2MP_W139RobBody then pcall(KCD2MP_W139RobBody, body) end   -- WO-139: "Rob body" is a crime
     -- WO-134: a body's loot is a request to the host (its list, then the loot screen);
     -- pickpocketing a living NPC stays blocked.
     if kind == "loot" and orig and KCD2MP_W134LootRequest and KCD2MP_W134LootRequest(body, orig, user, slot) then return false end
@@ -8755,6 +8760,8 @@ function KCD2MP_ApplyNpcState(name, x, y, z, rot, hp, flags, src, seq, senderMs)
     end
     -- WO-136 Phase 3: the horse this player rides is the rider's, not the host's stream.
     if KCD2MP_W136Ridden and KCD2MP_W136Ridden(name) then return end
+    -- WO-139 Phase 3: a guard stopping this player runs its own brain here for the stop.
+    if KCD2MP_W139StopHeld and KCD2MP_W139StopHeld(name) then return end
 
     local e = KCD2MP_NpcBody(name)   -- WO-104: the replica while one drives this NPC, else the world NPC
     if not e and KCD2MP_W131StandIn then e = KCD2MP_W131StandIn(name, x, y, z, rot, flags) end   -- WO-131 1f
@@ -16092,6 +16099,9 @@ function KCD2MP_W134ItemResult(tok, verdict)
         W134.bypass = true
         local ok, res = pcall(function() return r.orig(r.ent, player, r.slot) end)
         W134.bypass = false
+        local steal = nil
+        pcall(function() steal = r.ent.__w139steal end)
+        if ok and steal and KCD2MP_W139Stole then pcall(KCD2MP_W139Stole, steal) end   -- WO-139
         W134.log(string.format("WO134-ITEM %s tok=%s cls=%s -- picked up here ok=%s res=%s%s", verdict == "ok" and "ok" or "unmatched", tok, tostring(r.cls),
             tostring(ok), tostring(res), verdict == "ok" and " (the host's copy is gone)" or " (the host has no such item: per machine, as before)"))
     elseif verdict == "mine" then
@@ -16130,9 +16140,13 @@ function W134.installPickup()
         local orig = PickableItem.OnUsed
         w.useOrig = orig
         w.useWrap = function(self, user, slot)
+            local steal = KCD2MP_W139PickupSteal and KCD2MP_W139PickupSteal(self, user)   -- WO-139: a theft? (before the pickup)
+            if steal then pcall(function() self.__w139steal = steal end) end
             local handled, r = W134.onPickup(self, user, slot, false, orig)
             if handled then return r end
-            return orig(self, user, slot)
+            local res = orig(self, user, slot)
+            if steal then pcall(KCD2MP_W139Stole, steal) end
+            return res
         end
         PickableItem.OnUsed = w.useWrap
         mp_log("WO134-ITEM wrapped PickableItem.OnUsed")
@@ -16141,9 +16155,13 @@ function W134.installPickup()
         local orig = PickableItem.OnUsedHold
         w.holdOrig = orig
         w.holdWrap = function(self, user, slot)
+            local steal = KCD2MP_W139PickupSteal and KCD2MP_W139PickupSteal(self, user)   -- WO-139: a theft? (before the pickup)
+            if steal then pcall(function() self.__w139steal = steal end) end
             local handled, r = W134.onPickup(self, user, slot, true, orig)
             if handled then return r end
-            return orig(self, user, slot)
+            local res = orig(self, user, slot)
+            if steal then pcall(KCD2MP_W139Stole, steal) end
+            return res
         end
         PickableItem.OnUsedHold = w.holdWrap
         mp_log("WO134-ITEM wrapped PickableItem.OnUsedHold")
@@ -16573,6 +16591,990 @@ function KCD2MP_W138Status()
     KCD2MP_EmitEvent("w138", "status")
 end
 
+-- ===== WO-139: crime and guards (docs/WO-139-findings.md) =========================
+-- The joiner's crimes are crimes in the host's world, and his own problem:
+-- never pinned on the host's Henry. Nothing between the two players is a crime,
+-- and they can't rob each other.
+--
+-- ---- no robbing each other (Phase 4, both machines) ----------------------------
+-- The other player's avatar is an NPC here, so the game offers the usual
+-- pickpocket and loot actions on it (BasicAIActions, wrapped by WO-131). Its
+-- pockets are not the partner's real inventory: taking from them duplicates
+-- items. Refused with a plain line, host or joiner, in any session.
+--   WO139-ROB refused kind=<loot|pickpocket> avatar=<name>
+KCD2MP.w139 = KCD2MP.w139 or {}
+KCD2MP.w139.stats = KCD2MP.w139.stats or { robRefused = 0 }
+KCD2MP.w139.ROB_LINE = "You can't steal from each other in co-op."
+
+function KCD2MP_W139IsAvatar(e)
+    if not e then return false end
+    for _, g in pairs(KCD2MP.ghosts or {}) do
+        if g.entity == e then return true end
+    end
+    local n = nil
+    pcall(function() n = e:GetName() end)
+    return n ~= nil and string.find(n, "^kcd2mp_%d+$") ~= nil
+end
+
+function KCD2MP_W139RobRefused(body, kind)
+    if not KCD2MP_W139IsAvatar(body) then return false end
+    local w = KCD2MP.w139
+    w.stats.robRefused = w.stats.robRefused + 1
+    local n = "?"
+    pcall(function() n = body:GetName() end)
+    mp_log(string.format("WO139-ROB refused kind=%s avatar=%s -- the players never rob each other", tostring(kind), tostring(n)))
+    KCD2MP_ShowNativeToast(w.ROB_LINE)
+    return true
+end
+local W139 = {}   -- WO-139 helpers (one main-chunk local: the WO-110 budget)
+--
+-- ---- the session --------------------------------------------------------------
+-- The agent, once a second: host (a shared world with a partner), joiner (in the
+-- host's world), on (mp_crime_shared: the HOST's value is the session's).
+--   WO139-SESSION host=<b> joiner=<b> on=<b>
+KCD2MP.w139.shared = (KCD2MP.w139.shared == nil) and true or KCD2MP.w139.shared   -- mp_crime_shared (default ON)
+KCD2MP.w139.host = false
+KCD2MP.w139.joiner = false
+KCD2MP.w139.on = false
+KCD2MP.w139.aliveTimeoutS = 10.0
+KCD2MP.w139.crimes = KCD2MP.w139.crimes or {}      -- joiner: my crimes here { kind, cls, victim, x, y, z, at }
+KCD2MP.w139.legal = KCD2MP.w139.legal or {}        -- joiner: host-legal horse name -> { orig = mountIsLegal before }
+KCD2MP.w139.skipOrig = KCD2MP.w139.skipOrig or {} -- both: skip-time data name -> { dur, target }
+KCD2MP.w139.stopped = KCD2MP.w139.stopped or {}   -- joiner: guard name -> untilAt (its host stream ignored)
+KCD2MP.w139.stopRange = 30.0                       -- a stop's guard must be this close (m) when it starts here
+KCD2MP.w139.stopMaxS = 240.0                       -- a stop that never resolves ends after this
+KCD2MP.w139.stopReturnS = 3.0                      -- after the stop, the host's stream is ignored this much longer
+KCD2MP.w139.sightM = 25.0                          -- host: witnesses within this range (the sight test)
+KCD2MP.w139.guardScanM = 45.0                      -- host: guards around an avatar with a record
+for k, v in pairs({ reports = 0, stealsWorld = 0, stealsStash = 0, lockpicks = 0, horseThefts = 0, robBodies = 0,
+                    stops = 0, outcomes = 0, judged = 0, witnessed = 0, violent = 0, placed = 0, horsesLegal = 0,
+                    skipGated = 0, resolveSeen = 0, attacks = 0 }) do
+    if KCD2MP.w139.stats[k] == nil then KCD2MP.w139.stats[k] = v end
+end
+-- The punishment's skip-time cutscene data (Troskovice and Kuttenberg): the
+-- game reads Duration / TargetTime from these entities' script properties when
+-- the cutscene starts (GUIModule C_SkipTimeCutscene::InitializeDuration builds
+-- the two property names and parses the strings; code-verified). In a session
+-- they are set to one second; the originals come back when the session ends.
+KCD2MP.w139.SKIP_PREFIX = "crime_punishment_skipTime_"
+KCD2MP.w139.SKIP_DURATION = "0h0m1s"
+
+function KCD2MP_W139Fresh()
+    local w = KCD2MP.w139
+    return w.aliveAt ~= nil and (os.clock() - w.aliveAt) <= w.aliveTimeoutS
+end
+
+function KCD2MP_W139JoinerActive()
+    local w = KCD2MP.w139
+    return w.joiner and w.on and KCD2MP_W139Fresh()
+end
+
+function KCD2MP_W139HostActive()
+    local w = KCD2MP.w139
+    return w.host and w.on and KCD2MP_W139Fresh()
+end
+
+function KCD2MP_W139Session(host, joiner, on)
+    local w = KCD2MP.w139
+    host, joiner, on = host == true, joiner == true, on == true
+    local fresh = not KCD2MP_W139Fresh()
+    w.aliveAt = os.clock()
+    if fresh then KCD2MP_EmitEvent("w139_cfg", "shared=" .. (w.shared and "on" or "off")) end
+    if fresh or host ~= w.host or joiner ~= w.joiner or on ~= w.on then
+        mp_log(string.format("WO139-SESSION host=%s joiner=%s on=%s shared=%s", tostring(host), tostring(joiner), tostring(on), w.shared and "on" or "off"))
+    end
+    local wasJoiner = w.joiner
+    w.host, w.joiner, w.on = host, joiner, on
+    pcall(KCD2MP_W139Install)
+    pcall(KCD2MP_W139SkipTimeGate, (host or joiner) and on)
+    if wasJoiner and not joiner then
+        pcall(KCD2MP_W139StopEnd, "no-longer-joiner", "nostop")
+        pcall(KCD2MP_W139LegalHorses, "")
+    end
+    if joiner and on then
+        pcall(KCD2MP_W139StashTick)
+        pcall(KCD2MP_W139StopTick)
+    end
+end
+
+-- The 8 ms draw loop: the agent went away without telling (a crash) -> give back.
+function KCD2MP_W139Backstop()
+    local w = KCD2MP.w139
+    if w.aliveAt == nil or KCD2MP_W139Fresh() then return end
+    w.aliveAt = nil
+    pcall(KCD2MP_W139StopEnd, "agent-silent", "nostop")
+    pcall(KCD2MP_W139LegalHorses, "")
+    pcall(KCD2MP_W139SkipTimeGate, false)
+end
+
+-- mp_crime_shared on|off (the host's value is the session's; default on).
+function KCD2MP_SetCrimeShared(arg)
+    local v = KCD2MP_Wo122ParseBool(arg)
+    if v == "bad" then mp_log("mp_crime_shared: expected on|off, got '" .. tostring(arg) .. "'"); return false end
+    local w = KCD2MP.w139
+    if v ~= nil then w.shared = v end
+    mp_log(string.format("WO139-SHARED %s -- %s", w.shared and "on" or "off",
+        w.shared and "the joiner's crimes are crimes in the host's world (never the host's); guards deal with him"
+                 or "the joiner's crimes are not reported to the host (each machine's own game, as before)"))
+    KCD2MP_EmitEvent("w139_cfg", "shared=" .. (w.shared and "on" or "off"))
+    return true
+end
+
+function KCD2MP_W139Status()
+    local w, s = KCD2MP.w139, KCD2MP.w139.stats
+    local legal, stopped = 0, 0
+    for _ in pairs(w.legal) do legal = legal + 1 end
+    for _ in pairs(w.stopped) do stopped = stopped + 1 end
+    mp_log(string.format("WO139-STATUS shared=%s host=%s joiner=%s on=%s my_crimes=%d stop=%s legal_horses=%d stopped=%d skip_gate=%s | reports=%d world=%d stash=%d lockpick=%d horse=%d robbody=%d stops=%d outcomes=%d judged=%d witnessed=%d violent=%d placed=%d rob_refused=%d resolve_seen=%d attacks=%d",
+        w.shared and "on" or "off", tostring(w.host), tostring(w.joiner), tostring(w.on), #w.crimes,
+        w.stop and (w.stop.guard .. "#" .. tostring(w.stop.id)) or "-", legal, stopped, tostring(w.skipGate == true),
+        s.reports, s.stealsWorld, s.stealsStash, s.lockpicks, s.horseThefts, s.robBodies, s.stops, s.outcomes,
+        s.judged, s.witnessed, s.violent, s.placed, s.robRefused, s.resolveSeen, s.attacks or 0))
+    KCD2MP_EmitEvent("w139_status", "1")
+end
+
+-- ---- joiner: what his own game knows is a crime (Phase 2) ------------------------
+-- Each goes to the host as w139_crime <kind> <x> <y> <z> <victim|-> <item|-> <where>;
+-- the host raises it in its world. Recorded here too: a stop plants these crimes
+-- in the guard's own memory on this machine.
+--   WO139-CRIME <kind> where=<w> victim=<v> item=<cls> at=(x,y,z)
+function W139.name(e)
+    local n = nil
+    pcall(function() n = e:GetName() end)
+    if n and string.find(n, "^[%w_]+$") then return n end
+    return nil
+end
+
+function W139.pos(e)
+    local p = nil
+    pcall(function() p = e:GetWorldPos() end)
+    return p
+end
+
+-- The NPC an owner WUID names (the host's NPC of the same name owns the same thing).
+function W139.ownerName(wuid)
+    if not wuid then return nil end
+    local e = nil
+    pcall(function() if Framework.IsValidWUID(wuid) then e = XGenAIModule.GetEntityByWUID(wuid) end end)
+    return e and W139.name(e) or nil
+end
+
+function KCD2MP_W139Report(kind, x, y, z, victim, cls, where)
+    local w = KCD2MP.w139
+    if not KCD2MP_W139JoinerActive() then return false end
+    x, y, z = tonumber(x) or 0, tonumber(y) or 0, tonumber(z) or 0
+    victim = (victim and string.find(tostring(victim), "^[%a][%w_]*$")) and tostring(victim) or "-"
+    cls = (cls and string.find(tostring(cls), "^%x%x%x%x%x%x%x%x%-")) and tostring(cls) or "-"
+    w.crimes[#w.crimes + 1] = { kind = kind, cls = cls ~= "-" and cls or nil, victim = victim ~= "-" and victim or nil,
+                                x = x, y = y, z = z, at = os.clock(), where = where }
+    while #w.crimes > 40 do table.remove(w.crimes, 1) end
+    w.stats.reports = w.stats.reports + 1
+    mp_log(string.format("WO139-CRIME %s where=%s victim=%s item=%s at=(%.1f,%.1f,%.1f) -- sent to the host's world",
+        kind, tostring(where), victim, cls, x, y, z))
+    KCD2MP_EmitEvent("w139_crime", string.format("%s %.2f %.2f %.2f %s %s %s", kind, x, y, z, victim, cls, tostring(where)))
+    return true
+end
+
+-- A loose item: the game's own "steal" (PickableItem CanSteal). Called by the
+-- WO-134 pickup wrappers BEFORE the pickup (the item is gone after it).
+function KCD2MP_W139PickupSteal(item, user)
+    if not (item and user and player and user == player) then return nil end
+    if not KCD2MP_W139JoinerActive() then return nil end
+    local can = false
+    pcall(function() can = item.item:CanSteal(player.id) == true end)
+    if not can then return nil end
+    local p = W139.pos(item) or { x = 0, y = 0, z = 0 }
+    local cls = nil
+    pcall(function() cls = item.Properties.sItemClassId end)
+    local owner = nil
+    pcall(function() owner = W139.ownerName(item.item:GetOwnerId()) end)
+    local had = nil
+    pcall(function() had = cls and player.inventory:GetCountOfClass(cls) or nil end)
+    return { id = item.id, cls = cls, x = p.x, y = p.y, z = p.z, owner = owner, had = had }
+end
+
+-- ... and after it: the game's own OnSteal only STARTS the pick (an animation);
+-- the piece reaches this Henry's inventory when it ends. Reported once it is there
+-- (one more of that class than before; checked 1.5 s apart, three times). A pick
+-- that failed is no theft -- it can leave the piece hidden in the world and in no
+-- inventory (observed: a failed pick animation), so the world is not asked.
+--   WO139-CRIME theft not reported: <cls> never reached this Henry (the pick did not happen)
+function KCD2MP_W139Stole(rec)
+    if not rec then return end
+    local tries = 0
+    local function check()
+        tries = tries + 1
+        local gone = false
+        if rec.cls and rec.had then
+            local now = nil
+            pcall(function() now = player.inventory:GetCountOfClass(rec.cls) end)
+            gone = (tonumber(now) or 0) > rec.had
+        else
+            local still = nil
+            pcall(function() still = rec.id and System.GetEntity(rec.id) or nil end)
+            gone = still == nil
+        end
+        if gone then
+            KCD2MP.w139.stats.stealsWorld = KCD2MP.w139.stats.stealsWorld + 1
+            KCD2MP_W139Report("theft", rec.x, rec.y, rec.z, rec.owner, rec.cls, "world")
+        elseif tries < 3 then
+            Script.SetTimer(1500, check)
+        else
+            mp_log(string.format("WO139-CRIME theft not reported: %s never reached this Henry (the pick did not happen)", tostring(rec.cls)))
+        end
+    end
+    Script.SetTimer(1500, check)
+end
+
+-- A stash the game offers as a crime ("Steal from", Stash:UsesStealUiPrompt: an
+-- owner that is not the player and not a public enemy). Every piece taken while
+-- it is open is a theft.
+function KCD2MP_W139StashOpened(stash)
+    local w = KCD2MP.w139
+    if not KCD2MP_W139JoinerActive() then return end
+    local crime = false
+    pcall(function() crime = stash:UsesStealUiPrompt() == true end)
+    if not crime then return end
+    local owner = nil
+    pcall(function() owner = W139.ownerName(EntityModule.GetInventoryOwner(stash:GetInventoryToOpen())) end)
+    w.stash = { ent = stash, name = W139.name(stash), owner = owner, snap = W134.counts(W134.items(stash)), at = os.clock(), closedTicks = 0 }
+    mp_log(string.format("WO139-STASH open name=%s owner=%s -- a stash the game offers as theft; what is taken is reported",
+        tostring(w.stash.name), tostring(owner)))
+end
+
+function KCD2MP_W139StashTick()
+    local w = KCD2MP.w139
+    local s = w.stash
+    if not s then return end
+    local now = W134.counts(W134.items(s.ent))
+    local p = W139.pos(s.ent) or { x = 0, y = 0, z = 0 }
+    for cls, n in pairs(s.snap) do
+        local m = now[cls] or 0
+        if m < n then
+            for _ = 1, math.min(n - m, 5) do
+                w.stats.stealsStash = w.stats.stealsStash + 1
+                KCD2MP_W139Report("theft", p.x, p.y, p.z, s.owner, cls, "stash")
+            end
+        end
+    end
+    s.snap = now
+    local open = false
+    pcall(function() open = s.ent.bOpened == 1 end)
+    local pp = player and W139.pos(player)
+    local far = pp and ((pp.x - p.x) ^ 2 + (pp.y - p.y) ^ 2) > 25
+    if not open or far then s.closedTicks = s.closedTicks + 1 end
+    if s.closedTicks >= 2 or (os.clock() - s.at) > 600 then
+        mp_log("WO139-STASH closed name=" .. tostring(s.name))
+        w.stash = nil
+    end
+end
+
+-- Lockpicking a lock the game treats as someone's: a stash with the steal
+-- prompt, a door into a private area, a lockpickable object. Unowned locks are
+-- no crime.
+function KCD2MP_W139Lockpick(id)
+    if not KCD2MP_W139JoinerActive() then return end
+    local e = nil
+    pcall(function() e = System.GetEntity(id) end)
+    if not e then return end
+    local where, crime, owner = "lock", false, nil
+    if e.class == "Stash" then
+        where = "stash"
+        pcall(function() crime = e:UsesStealUiPrompt() == true end)
+        pcall(function() owner = W139.ownerName(EntityModule.GetInventoryOwner(e:GetInventoryToOpen())) end)
+    elseif e.class == "AnimDoor" then
+        where = "door"
+        pcall(function() crime = e.animDoor:IsEndPointInPrivateArea() == true end)
+    else
+        crime = true
+    end
+    if not crime then return end
+    local p = W139.pos(e) or { x = 0, y = 0, z = 0 }
+    KCD2MP.w139.stats.lockpicks = KCD2MP.w139.stats.lockpicks + 1
+    KCD2MP_W139Report("lockpick", p.x, p.y, p.z, owner, nil, where)
+end
+
+-- Mounting a horse that is not this player's and not legal to ride ("Mount and
+-- steal"): a horse the host's Henry may ride is legal for the joiner too
+-- (KCD2MP_W139LegalHorses); a townsperson's horse stays theft.
+function KCD2MP_W139Mount(horse, user)
+    if not (horse and user and player and user == player) then return end
+    if not KCD2MP_W139JoinerActive() then return end
+    local name = W139.name(horse)
+    if not name or KCD2MP.w139.legal[name] then return end
+    local legal = false
+    pcall(function() legal = horse:IsMountLegal() == true end)
+    pcall(function() legal = legal or (player.player:GetHorseId() == horse.id) end)
+    if legal then return end
+    local p = W139.pos(horse) or { x = 0, y = 0, z = 0 }
+    KCD2MP.w139.stats.horseThefts = KCD2MP.w139.stats.horseThefts + 1
+    KCD2MP_W139Report("horsetheft", p.x, p.y, p.z, name, nil, "horse")
+end
+
+-- Looting a host body the game says is not legal to loot ("Rob body").
+function KCD2MP_W139RobBody(body)
+    if not KCD2MP_W139JoinerActive() then return end
+    local legal = true
+    pcall(function() legal = body.soul:IsLegalToLoot() == true end)
+    if legal then return end
+    local p = W139.pos(body) or { x = 0, y = 0, z = 0 }
+    KCD2MP.w139.stats.robBodies = KCD2MP.w139.stats.robBodies + 1
+    KCD2MP_W139Report("robbody", p.x, p.y, p.z, W139.name(body), nil, "body")
+end
+
+-- The game's entry points, wrapped once (re-checked every session tick).
+function KCD2MP_W139Install()
+    local w = KCD2MP.w139
+    if type(Stash) == "table" and type(Stash.OnUsed) == "function" and Stash.OnUsed ~= w.stashWrap then
+        local orig = Stash.OnUsed
+        w.stashOrig = orig
+        w.stashWrap = function(self, user, slot)
+            local opening = false
+            pcall(function() opening = self.bOpened ~= 1 and self.bLocked ~= true end)
+            local r = orig(self, user, slot)
+            if opening and user == player then pcall(KCD2MP_W139StashOpened, self) end
+            return r
+        end
+        Stash.OnUsed = w.stashWrap
+        mp_log("WO139-CRIME wrapped Stash.OnUsed")
+    end
+    if type(Minigame) == "table" and type(Minigame.StartLockPicking) == "function" and Minigame.StartLockPicking ~= w.lpWrap then
+        local orig = Minigame.StartLockPicking
+        w.lpOrig = orig
+        w.lpWrap = function(id, ...)
+            pcall(KCD2MP_W139Lockpick, id)
+            return orig(id, ...)
+        end
+        Minigame.StartLockPicking = w.lpWrap
+        mp_log("WO139-CRIME wrapped Minigame.StartLockPicking")
+    end
+    if type(Horse) == "table" and type(Horse.OnMount) == "function" and Horse.OnMount ~= w.mountWrap then
+        local orig = Horse.OnMount
+        w.mountOrig = orig
+        w.mountWrap = function(self, user, slot)
+            pcall(KCD2MP_W139Mount, self, user)
+            return orig(self, user, slot)
+        end
+        Horse.OnMount = w.mountWrap
+        mp_log("WO139-CRIME wrapped Horse.OnMount")
+    end
+    if type(Crime) == "table" and type(Crime.SendResolveDialogResult) == "function" and Crime.SendResolveDialogResult ~= w.resolveWrap then
+        local orig = Crime.SendResolveDialogResult
+        w.resolveOrig = orig
+        w.resolveWrap = function(dc, action)
+            pcall(KCD2MP_W139Resolved, dc, action)
+            return orig(dc, action)
+        end
+        Crime.SendResolveDialogResult = w.resolveWrap
+        mp_log("WO139-CRIME wrapped Crime.SendResolveDialogResult")
+    end
+end
+
+-- ---- joiner: a guard stops him (Phase 3) -----------------------------------------
+-- The host saw one of its guards who knows the joiner's crime near his avatar.
+-- On this machine that guard is a copy: suspended, bound to the host's stream.
+-- For the stop it gets its brain back and is freed from the stream (like WO-136's
+-- ridden horse); the crimes are planted in its own memory with the game's own
+-- stimulus messages -- on this machine the local player is the joiner's Henry,
+-- and a crime the game holds is always the local player's -- and the game does
+-- the rest: the guard's call, the arrest chat, the crime dialogue (fine,
+-- punishment, a skill check, a fight). Its result comes back through the
+-- dialogue's own Crime.SendResolveDialogResult. At the end the copy is suspended
+-- again and the host's stream takes it back from where the stop left it.
+--   WO139-STOP start|planted|result|end guard=<n> id=<id> ...
+KCD2MP.w139.RESULTS = { [0] = "paid", [2] = "punished", [3] = "punished", [4] = "persuaded", [5] = "fought", [6] = "punished", [1] = "talked" }
+
+function KCD2MP_W139StopHeld(name)
+    local w = KCD2MP.w139
+    local u = w.stopped[name]
+    if not u then return false end
+    if u ~= true and os.clock() > u then
+        w.stopped[name] = nil
+        mp_log(string.format("WO139-STOP return npc=%s -- the host's stream takes it back", name))
+        return false
+    end
+    return true
+end
+
+function W139.stim(kind)
+    local t = nil
+    pcall(function() t = XGenAIModule.MakeTableFromType(kind) end)
+    return t
+end
+
+function W139.send(guard, kind, t)
+    local ok, err = pcall(function() XGenAIModule.SendMessageToEntityData(guard.this.id, kind, t) end)
+    return ok, err
+end
+
+-- One crime into the guard's memory. theft: the game's theft stimulus with a
+-- stolen item of that class in this Henry's inventory (the stimulus needs an item
+-- wuid); trespass: escalatedTrespass; lockpick / horse theft / robbing a body have
+-- no stimulus of their own the crime tree consumes: a disturbance with the crime
+-- table's fine for that crime (priceOverride). Returns what was planted.
+function KCD2MP_W139Plant(guard, c)
+    local kind = c.kind
+    if kind == "theft" then
+        local itemW = nil
+        if c.cls then
+            for _, it in ipairs(W134.items(player)) do if it.cls == c.cls then itemW = it.w; break end end
+        end
+        if itemW then
+            local t = W139.stim("switch:stimulus:theft")
+            if not t then return nil end
+            t.method = (enum_crime_theftMethod and enum_crime_theftMethod.pick) or 5
+            t.pivot = itemW
+            t.count = 1
+            t.immediate = true
+            t.information.perceivedWuid = itemW
+            local owner = c.victim and System.GetEntityByName(c.victim)
+            if owner and owner.this then t.owner = owner.this.id end
+            local ok = W139.send(guard, "switch:stimulus:theft", t)
+            return ok and "theft" or nil
+        end
+        -- the stolen piece is no longer on this Henry: the fine only
+        kind = "theft-gone"
+    end
+    if kind == "trespass" then
+        local t = W139.stim("switch:stimulus:escalatedTrespass")
+        if not t then return nil end
+        t.wuidType = (enum_crime_trespassInformationWuid and enum_crime_trespassInformationWuid.none) or 0
+        t.stimulusKind = (enum_crime_stimulusKind and enum_crime_stimulusKind.trespass) or 40
+        local ok = W139.send(guard, "switch:stimulus:escalatedTrespass", t)
+        return ok and "trespass" or nil
+    end
+    -- Violent crimes reach a stop only once they are no longer fresh (the guards attacked
+    -- for them before, on the host): no stimulus carries an assault or a murder the
+    -- guard's tree holds without the fight itself, so they are disturbances at the crime
+    -- table's fine. Murder is one decagroschen over the dialogue's branding threshold
+    -- (crime_punishmentFineThresholdForBranding 20000; a fine-reduction perk can bring it
+    -- under, then the dialogue picks a milder punishment).
+    local fines = { lockpick = 600, horsetheft = 2000, robbody = 500, ["theft-gone"] = 500,
+                    assault = 1500, knockout = 1500, murder = 20001 }
+    local fine = fines[kind]
+    if not fine then return nil end
+    local t = W139.stim("switch:stimulus:disturbance")
+    if not t then return nil end
+    t.perceivedWuid = player.this.id
+    t.priceOverride = fine
+    local ok = W139.send(guard, "switch:stimulus:disturbance", t)
+    return ok and ("disturbance:" .. fine) or nil
+end
+
+function KCD2MP_W139Stop(id, guard, crimesCsv)
+    local w = KCD2MP.w139
+    guard = tostring(guard or "")
+    if w.stop then
+        KCD2MP_EmitEvent("w139_outcome", string.format("%s nostop %s 0", tostring(id), guard))
+        mp_log(string.format("WO139-STOP refused guard=%s id=%s -- a stop by %s is running", guard, tostring(id), w.stop.guard))
+        return false
+    end
+    local e = nil
+    pcall(function() e = System.GetEntityByName(guard) end)
+    local pp, gp = player and W139.pos(player), e and W139.pos(e)
+    local d = (pp and gp) and math.sqrt((pp.x - gp.x) ^ 2 + (pp.y - gp.y) ^ 2) or 999
+    local busy = false
+    pcall(function() busy = player.human:IsInDialog() == true end)
+    local why = nil
+    if not KCD2MP_W139JoinerActive() then why = "not-a-joiner-session"
+    elseif not (e and e.soul) then why = "no-such-guard-here"
+    elseif d > w.stopRange then why = string.format("guard-%.0fm-away", d)
+    elseif busy then why = "in-a-conversation" end
+    if why then
+        mp_log(string.format("WO139-STOP not now guard=%s id=%s -- %s", guard, tostring(id), why))
+        KCD2MP_EmitEvent("w139_outcome", string.format("%s nostop %s 0", tostring(id), guard))
+        return false
+    end
+    -- the copy: out of the host's stream, its brain back, shown
+    local p = KCD2MP.npcPuppets[guard]
+    if p then
+        KCD2MP_NpcNativeSync(guard, p, nil, false, "w139-stop")
+        KCD2MP.npcPuppets[guard] = nil
+    end
+    if KCD2MP.w131 then KCD2MP.w131.parked[guard] = nil end
+    KCD2MP._npcResumePending[guard] = nil
+    w.stopped[guard] = true
+    mp_wo102_resume(guard, "w139-stop")
+    pcall(System.ExecuteCommand, "wh_ai_ResumeNPC " .. guard)
+    pcall(function() e:Hide(0) end)
+    local money = 0
+    pcall(function() money = player.inventory:GetMoney() or 0 end)
+    w.stop = { id = tostring(id), guard = guard, since = os.clock(), money0 = money, planted = {}, result = nil, sawDialog = false }
+    w.stats.stops = w.stats.stops + 1
+    mp_log(string.format("WO139-STOP start guard=%s id=%s dist=%.1f crimes=%s -- this copy runs its own brain: the game's own arrest, against this Henry",
+        guard, tostring(id), d, tostring(crimesCsv)))
+    KCD2MP_EmitEvent("w139_stop", "on " .. guard)
+    -- the crimes: the host's list -- what the guards of that settlement know (a crime
+    -- nobody saw, or one already paid for, is not in it). This machine's own record
+    -- only names the stolen pieces: a theft is planted with its item when he still
+    -- carries one of that class. No list (an older host): this machine's record.
+    local planted = {}
+    local mine, used = {}, {}
+    for kind, n in string.gmatch(tostring(crimesCsv or ""), "(%a+):(%d+)") do
+        for _ = 1, math.min(tonumber(n) or 1, 5) do
+            local c = { kind = kind }
+            if kind == "theft" then
+                for i, m in ipairs(w.crimes) do
+                    if not used[i] and m.kind == "theft" and m.cls then used[i] = true; c.cls = m.cls; c.victim = m.victim; break end
+                end
+            end
+            mine[#mine + 1] = c
+        end
+    end
+    if #mine == 0 then for _, c in ipairs(w.crimes) do mine[#mine + 1] = c end end
+    for _, c in ipairs(mine) do
+        local what = KCD2MP_W139Plant(e, c)
+        if what then planted[#planted + 1] = what end
+    end
+    w.stop.planted = planted
+    mp_log(string.format("WO139-STOP planted guard=%s id=%s %s -- in the guard's own memory (the local player's crimes)",
+        guard, tostring(id), #planted > 0 and table.concat(planted, ",") or "NOTHING (no crime the guard's tree can hold)"))
+    if #planted == 0 then KCD2MP_W139StopEnd("nothing-planted", "nostop") end
+    return true
+end
+
+-- The crime dialogue's own result (the wrapped Crime.SendResolveDialogResult).
+function KCD2MP_W139Resolved(dc, action)
+    local w = KCD2MP.w139
+    w.stats.resolveSeen = w.stats.resolveSeen + 1
+    local s = w.stop
+    local res = w.RESULTS[tonumber(action) or -1] or "talked"
+    mp_log(string.format("WO139-STOP result action=%s -> %s stop=%s", tostring(action), res, s and (s.guard .. "#" .. s.id) or "-"))
+    if not s then return end
+    s.result = res
+    s.resultAt = os.clock()
+end
+
+function KCD2MP_W139StopTick()
+    local w = KCD2MP.w139
+    local s = w.stop
+    if not s then return end
+    local now = os.clock()
+    local inDialog = false
+    pcall(function() inDialog = player.human:IsInDialog() == true end)
+    if inDialog then s.sawDialog, s.outSince = true, nil elseif s.sawDialog then s.outSince = s.outSince or now end
+    local e = nil
+    pcall(function() e = System.GetEntityByName(s.guard) end)
+    local dead = false
+    pcall(function() dead = player.actor:IsDead() == true end)
+    if dead then KCD2MP_W139StopEnd("the-player-died", "fought"); return end
+    if not e then KCD2MP_W139StopEnd("guard-gone", s.result or "nostop"); return end
+    -- a fight: the guard's own resisting-arrest attack, or a refused / ignored chat.
+    -- An arresting guard may draw his weapon without fighting; the player's own
+    -- combat danger (a skirmish against him) is the fight.
+    local danger = false
+    pcall(function() danger = player.soul:IsInCombatDanger() == true end)
+    if danger and not inDialog and (now - s.since) > 3.0 then
+        KCD2MP_W139StopEnd("the-guard-attacks", s.result == "fought" and "fought" or "fled"); return
+    end
+    if s.result and not inDialog and (now - (s.resultAt or now)) > 2.0 then KCD2MP_W139StopEnd("resolved", s.result); return end
+    if s.sawDialog and s.outSince and (now - s.outSince) > 6.0 and not s.result then KCD2MP_W139StopEnd("dialogue-ended-without-a-result", "talked"); return end
+    if (now - s.since) > w.stopMaxS then KCD2MP_W139StopEnd("max-time", s.result or "nostop") end
+end
+
+function KCD2MP_W139StopEnd(why, result)
+    local w = KCD2MP.w139
+    local s = w.stop
+    if not s then return end
+    w.stop = nil
+    w.stats.outcomes = w.stats.outcomes + 1
+    local e = nil
+    pcall(function() e = System.GetEntityByName(s.guard) end)
+    local gp = e and W139.pos(e) or { x = 0, y = 0, z = 0 }
+    local money = 0
+    pcall(function() money = player.inventory:GetMoney() or 0 end)
+    local paid = math.max(0, math.floor(((s.money0 or 0) - money) * 10 + 0.5))   -- decagroschen
+    result = result or s.result or "nostop"
+    -- "paid" is the dialogue's fine choice; the game takes the money right after it.
+    -- None left this Henry: no fine was paid -- the host's record stands.
+    local unpaid = ""
+    if result == "paid" and paid <= 0 then
+        result = "talked"
+        unpaid = " -- a fine result, but no money left this Henry: the record stands"
+    end
+    -- Suspended again; the host's stream takes it back once the host has placed its
+    -- guard here. A fight here ends first: a copy suspended in the middle of its attack
+    -- keeps it and picks it up the next time it runs (observed). The game's own
+    -- stopFight (the attack interrupt's combat_stopFight inbox: the fight pauses at
+    -- once and is done within 4 s), then the suspension.
+    local fighting = false
+    pcall(function() fighting = e.soul:IsInCombatMode() == true end)
+    local ended = ""
+    if e and (fighting or result == "fled" or result == "fought") then
+        local t = W139.stim("stopFight")
+        if t then
+            t.soulCount = 1
+            t.messageId = "w139stop" .. tostring(s.id)
+            if W139.send(e, "stopFight", t) then ended = " -- its fight ended first (stopFight)" end
+        end
+        local guard = s.guard
+        w.stopped[guard] = true
+        Script.SetTimer(4500, function()
+            pcall(System.ExecuteCommand, "wh_ai_PauseNPC " .. guard)
+            KCD2MP.w139.stopped[guard] = os.clock() + KCD2MP.w139.stopReturnS
+        end)
+    else
+        pcall(System.ExecuteCommand, "wh_ai_PauseNPC " .. s.guard)
+        w.stopped[s.guard] = os.clock() + w.stopReturnS
+    end
+    if result == "paid" or result == "punished" or result == "persuaded" or result == "executed" then w.crimes = {} end
+    mp_log(string.format("WO139-STOP end guard=%s id=%s why=%s result=%s paid=%d held_s=%.1f planted=%s -- the copy is suspended again; the host's guard stands where this one ended%s",
+        s.guard, s.id, tostring(why), result, paid, os.clock() - s.since, table.concat(s.planted or {}, ","), ended .. unpaid))
+    KCD2MP_EmitEvent("w139_stop", "off " .. s.guard)
+    KCD2MP_EmitEvent("w139_outcome", string.format("%s %s %s %d %.2f %.2f %.2f", s.id, result, s.guard, paid, gp.x, gp.y, gp.z))
+end
+
+-- The host cleared this player's record (a resolution with its guards, or an
+-- execution): this machine's own record goes too -- it only named stolen pieces.
+--   WO139-CLEARED by the host (<why>) -- my record here: <n> -> 0
+function KCD2MP_W139Cleared(why)
+    local w = KCD2MP.w139
+    local n = #w.crimes
+    w.crimes = {}
+    mp_log(string.format("WO139-CLEARED by the host (%s) -- my record here: %d -> 0", tostring(why), n))
+end
+
+-- An execution (WO-113's respawn, GameOver 44) ended the stop's punishment.
+function KCD2MP_W139Executed()
+    local w = KCD2MP.w139
+    w.crimes = {}
+    if w.stop then KCD2MP_W139StopEnd("executed", "executed") end
+end
+
+-- ---- joiner: the host's horses are legal to ride (Phase 3) ------------------------
+-- The host sends the horses its own Henry may ride (his horse, and any its world
+-- says is legal). On this machine they get the game's own two levers: the mount
+-- prompt (Horse:SetMountIsLegal -- "Mount", not "Mount and steal") and, through
+-- the agent, the crime side (crime_ignoredHorseTheft_Horse on the horse).
+-- Given back when the session ends.
+--   WO139-HORSE legal|restored npc=<n>
+function KCD2MP_W139LegalHorses(csv)
+    local w = KCD2MP.w139
+    local want = {}
+    for n in string.gmatch(tostring(csv or ""), "[%w_]+") do want[n] = true end
+    for n, rec in pairs(w.legal) do
+        if not want[n] then
+            local h = nil
+            pcall(function() h = System.GetEntityByName(n) end)
+            if h then pcall(function() h:SetMountIsLegal(rec.orig == true) end) end
+            w.legal[n] = nil
+            mp_log("WO139-HORSE restored npc=" .. n)
+            KCD2MP_EmitEvent("w139_horse", n .. " 0")
+        end
+    end
+    for n in pairs(want) do
+        if not w.legal[n] then
+            local h = nil
+            pcall(function() h = System.GetEntityByName(n) end)
+            if h and h.class == "Horse" then
+                local orig = false
+                pcall(function() orig = h.mountIsLegal == true end)
+                pcall(function() h:SetMountIsLegal(true) end)
+                w.legal[n] = { orig = orig }
+                w.stats.horsesLegal = w.stats.horsesLegal + 1
+                mp_log("WO139-HORSE legal npc=" .. n .. " -- a horse of the host's world the host may ride: riding it is no theft")
+                KCD2MP_EmitEvent("w139_horse", n .. " 1")
+            end
+        end
+    end
+end
+
+-- ---- both: the punishment moves no clock ----------------------------------------
+function KCD2MP_W139SkipTimeGate(on)
+    local w = KCD2MP.w139
+    local ents = {}
+    pcall(function() ents = System.GetEntitiesByClass("SkipTimeCutsceneData") or {} end)
+    for _, e in ipairs(ents) do
+        local n = W139.name(e)
+        if n and string.sub(n, 1, #w.SKIP_PREFIX) == w.SKIP_PREFIX and e.Properties then
+            if on then
+                if not w.skipOrig[n] then w.skipOrig[n] = { dur = e.Properties.Duration, target = e.Properties.TargetTime } end
+                if e.Properties.Duration ~= w.SKIP_DURATION or (e.Properties.TargetTime or "") ~= "" then
+                    e.Properties.Duration = w.SKIP_DURATION
+                    e.Properties.TargetTime = ""
+                    w.stats.skipGated = w.stats.skipGated + 1
+                    mp_log(string.format("WO139-SKIPTIME %s -> Duration=%s TargetTime='' (was %s / %s) -- no time skip for punishment in co-op",
+                        n, w.SKIP_DURATION, tostring(w.skipOrig[n].dur), tostring(w.skipOrig[n].target)))
+                end
+            elseif w.skipOrig[n] then
+                e.Properties.Duration = w.skipOrig[n].dur
+                e.Properties.TargetTime = w.skipOrig[n].target
+                mp_log(string.format("WO139-SKIPTIME %s restored (Duration=%s TargetTime=%s)", n, tostring(w.skipOrig[n].dur), tostring(w.skipOrig[n].target)))
+                w.skipOrig[n] = nil
+            end
+        end
+    end
+    if on ~= w.skipGate then
+        w.skipGate = on
+        KCD2MP_EmitEvent("w139_punish", on and "1" or "0")
+    end
+end
+
+-- ---- host: the joiner's crime in this world (Phase 2) ----------------------------
+-- A crime nobody sees is no crime (the game's own rule). The witnesses are this
+-- world's NPCs who can see the partner's avatar at that spot: alive, awake, not a
+-- player's avatar, within sightM, the avatar in front of them and a ray from
+-- their eyes reaching it (Physics.RayWorldIntersection -- the engine's own
+-- perception has no Lua read, and AI.IsAgentInAgentFOV answers false for every
+-- NPC on this build). Guards among them are crime_isAuthority (the game's own
+-- context). Nothing is written into this game's crime memory: every crime the
+-- engine holds is the local player's, and the joiner's crime is never the host's.
+--   w139_judged <src> <id> <kind> <witnesses> <guards> <settlement|-> <guard,guard|->
+function W139.settlementOf(e)
+    local f = nil
+    pcall(function() f = e.soul:GetFactionID() end)
+    if type(f) ~= "string" then return nil end
+    local a, b, c = string.match(f, "^([%w]+)_(settlements)_([%w]+)")
+    if a then return a .. "_" .. b .. "_" .. c end
+    local x, y = string.match(f, "^([%w]+)_([%w]+)")
+    if x then return x .. "_" .. y end
+    return nil
+end
+
+function W139.isGuard(e)
+    local g = false
+    pcall(function() g = e.soul:HasScriptContext("crime_isAuthority") == true end)
+    return g
+end
+
+function W139.onDuty(e)
+    local g = false
+    pcall(function() g = e.soul:HasScriptContext("crime_isAuthorityOnDuty") == true or e.soul:HasScriptContext("crime_isAuthorityOnStationaryDuty") == true end)
+    return g
+end
+
+-- Does npc see the target (an entity, or a point when target is nil)?
+function KCD2MP_W139Sees(npc, target, tp, maxM)
+    local np = W139.pos(npc)
+    if not (np and tp) then return false end
+    local dx, dy, dz = tp.x - np.x, tp.y - np.y, (tp.z + 1.2) - (np.z + 1.6)
+    local d = math.sqrt(dx * dx + dy * dy + dz * dz)
+    if d > (maxM or KCD2MP.w139.sightM) then return false end
+    if d > 2.0 then
+        local fwd = nil
+        pcall(function() fwd = npc:GetDirectionVector(1) end)
+        if fwd then
+            local dot = (fwd.x * dx + fwd.y * dy) / math.max(0.01, math.sqrt(dx * dx + dy * dy))
+            if dot < -0.25 then return false end   -- behind it (a wide ~210 degree field)
+        end
+    end
+    local hits = nil
+    pcall(function() hits = Physics.RayWorldIntersection({ x = np.x, y = np.y, z = np.z + 1.6 }, { x = dx, y = dy, z = dz }, 1, ent_all, npc.id) end)
+    if type(hits) ~= "table" or #hits == 0 then return true end
+    local h = hits[1]
+    local hitE = nil
+    pcall(function() hitE = h.entity end)
+    if target and hitE == target then return true end
+    return (tonumber(h.dist) or 0) >= d - 0.5
+end
+
+function W139.aliveAwake(e)
+    local ok = true
+    pcall(function() ok = not e.actor:IsDead() and not e.actor:IsUnconscious() end)
+    if not ok then return false end
+    local sleeping = false
+    pcall(function() sleeping = e.human:IsSleeping() == true end)
+    return not sleeping
+end
+
+function KCD2MP_W139Witnesses(avatar, tp, victimName)
+    local w = KCD2MP.w139
+    local ents = {}
+    pcall(function() ents = System.GetEntitiesInSphere(tp, w.sightM) or {} end)
+    local n, guards, gnames, settlement, civ = 0, 0, {}, nil, nil
+    for _, e in ipairs(ents) do
+        if (e.class == "NPC" or e.class == "NPC_Female") and e ~= avatar and not KCD2MP_W139IsAvatar(e) and W139.aliveAwake(e) then
+            local enemy = false
+            pcall(function() enemy = e.soul:IsPublicEnemy() == true end)
+            if not enemy and KCD2MP_W139Sees(e, avatar, tp) then
+                n = n + 1
+                local nm = W139.name(e)
+                if W139.isGuard(e) then
+                    guards = guards + 1
+                    if nm then gnames[#gnames + 1] = nm end
+                    settlement = settlement or W139.settlementOf(e)
+                end
+                if not settlement and nm == victimName then settlement = W139.settlementOf(e) end
+                if not civ then
+                    local cs = W139.settlementOf(e)
+                    if cs and string.find(cs, "_settlements_", 1, true) then civ = cs end
+                end
+            end
+        end
+    end
+    return n, guards, gnames, settlement, civ
+end
+
+function KCD2MP_W139AvatarOf(src)
+    local g = KCD2MP.ghosts and (KCD2MP.ghosts[tostring(src)] or KCD2MP.ghosts[tonumber(src) or -1])
+    return g and g.entity or nil
+end
+
+function KCD2MP_W139HostJudge(src, id, kind, x, y, z, victim, item, where)
+    local w = KCD2MP.w139
+    w.stats.judged = w.stats.judged + 1
+    local av = KCD2MP_W139AvatarOf(src)
+    local tp = { x = tonumber(x) or 0, y = tonumber(y) or 0, z = tonumber(z) or 0 }
+    local ap = av and W139.pos(av)
+    -- the avatar stands where the joiner is (his position stream); a report of a spot far from it is judged at the spot
+    local target = av
+    if ap and ((ap.x - tp.x) ^ 2 + (ap.y - tp.y) ^ 2) < 36 then tp = ap else target = nil end
+    local ve = nil
+    if victim and victim ~= "-" then pcall(function() ve = System.GetEntityByName(victim) end) end
+    local n, guards, gnames, settlement, civ = KCD2MP_W139Witnesses(target, tp, victim)
+    if not settlement and ve then settlement = W139.settlementOf(ve) end
+    -- no guard saw it and no victim names a place: the townsfolk who saw it are
+    -- that settlement's (a trespass in a house, a theft from an owned place) -- their
+    -- report reaches that settlement's guards
+    settlement = settlement or civ
+    if n > 0 then w.stats.witnessed = w.stats.witnessed + 1 end
+    mp_log(string.format("WO139-JUDGE src=%s id=%s %s at=(%.1f,%.1f,%.1f) witnesses=%d guards=%d settlement=%s by=%s -- %s",
+        tostring(src), tostring(id), tostring(kind), tp.x, tp.y, tp.z, n, guards, tostring(settlement),
+        target and "the avatar" or "the spot", n > 0 and "a crime in this world, the joiner's" or "nobody saw it: no crime"))
+    KCD2MP_EmitEvent("w139_judged", string.format("%s %s %s %d %d %s %s", tostring(src), tostring(id), tostring(kind), n, guards,
+        settlement or "-", #gnames > 0 and table.concat(gnames, ",") or "-"))
+end
+
+-- A violent crime of the joiner the host sees itself: his avatar's hit on (or
+-- takedown of) one of this world's NPCs. Not a crime: a public enemy (a bandit),
+-- or someone already fighting that avatar (self-defence).
+function KCD2MP_W139HostViolent(src, npc, kind)
+    local w = KCD2MP.w139
+    if not KCD2MP_W139HostActive() then return end
+    local e = nil
+    pcall(function() e = System.GetEntityByName(npc) end)
+    if not e or KCD2MP_W139IsAvatar(e) then return end
+    local enemy, fighting = false, false
+    pcall(function() enemy = e.soul:IsPublicEnemy() == true end)
+    pcall(function() fighting = e.soul:IsInCombatMode() == true end)
+    if enemy or (fighting and kind == "assault") then
+        mp_log(string.format("WO139-JUDGE src=%s %s on %s -- not a crime (%s)", tostring(src), kind, tostring(npc), enemy and "a public enemy" or "already fighting: self-defence"))
+        return
+    end
+    w.stats.violent = w.stats.violent + 1
+    local p = W139.pos(e) or { x = 0, y = 0, z = 0 }
+    KCD2MP_W139HostJudge(src, 0, kind, p.x, p.y, p.z, npc, "-", "body")
+end
+
+-- A pursuit starts: the game's own attack interrupt on the host's guard, aimed at the
+-- joiner's avatar -- the switch tree's inbox crime_attackInitiatedByConcept runs
+-- callInterrupt_attack target=<it> (relationOverride, priority 160; male NPCs only).
+-- combat_forcedTarget (the DLL, op 3) keeps him on it; the forced target alone never
+-- starts a fight (observed: the guard walked on). Observed with this: a guard 60 m
+-- away ran to the avatar and fought it within seconds.
+--   WO139-PURSUE attack guard=<n> avatar=<name> sent=<b>
+function KCD2MP_W139HostAttack(guard, src)
+    local e, av = nil, KCD2MP_W139AvatarOf(src)
+    pcall(function() e = System.GetEntityByName(tostring(guard)) end)
+    local t = (e and av and av.this) and W139.stim("crime:attackInitiatedByConcept") or nil
+    local ok = false
+    if t then
+        t.target = av.this.id
+        t.priorityTarget = true
+        ok = W139.send(e, "crime:attackInitiatedByConcept", t)
+    end
+    if ok then KCD2MP.w139.stats.attacks = KCD2MP.w139.stats.attacks + 1 end
+    mp_log(string.format("WO139-PURSUE attack guard=%s avatar=%s sent=%s%s", tostring(guard), av and (W139.name(av) or "?") or "-",
+        tostring(ok), ok and " -- the game's own attack interrupt, at the joiner's avatar" or
+        (" -- " .. (not e and "no such guard" or not av and "no avatar" or "no such message type"))))
+    return ok
+end
+
+-- Guards around an avatar with a record: w139_guards <src> <guard:settlement:dist:sees:duty,...|->
+function KCD2MP_W139HostGuards(src)
+    local w = KCD2MP.w139
+    local av = KCD2MP_W139AvatarOf(src)
+    local ap = av and W139.pos(av)
+    if not ap then KCD2MP_EmitEvent("w139_guards", tostring(src) .. " -"); return end
+    local ents = {}
+    pcall(function() ents = System.GetEntitiesInSphere(ap, w.guardScanM) or {} end)
+    local out = {}
+    for _, e in ipairs(ents) do
+        if (e.class == "NPC" or e.class == "NPC_Female") and not KCD2MP_W139IsAvatar(e) and W139.isGuard(e) and W139.aliveAwake(e) then
+            local nm = W139.name(e)
+            local p = W139.pos(e)
+            if nm and p and #out < 12 then
+                local d = math.sqrt((p.x - ap.x) ^ 2 + (p.y - ap.y) ^ 2)
+                out[#out + 1] = string.format("%s:%s:%.0f:%d:%d", nm, W139.settlementOf(e) or "-", d,
+                    KCD2MP_W139Sees(e, av, ap) and 1 or 0, W139.onDuty(e) and 1 or 0)
+            end
+        end
+    end
+    KCD2MP_EmitEvent("w139_guards", tostring(src) .. " " .. (#out > 0 and table.concat(out, ",") or "-"))
+end
+
+-- The horses the host's Henry may ride, near either player: w139_horses <name,name|->
+function KCD2MP_W139HostHorses()
+    local names, seen = {}, {}
+    local own = nil
+    pcall(function() own = player.player:GetHorseId() end)
+    local centers = {}
+    if player then centers[#centers + 1] = W139.pos(player) end
+    for _, g in pairs(KCD2MP.ghosts or {}) do if g.entity then centers[#centers + 1] = W139.pos(g.entity) end end
+    for _, c in ipairs(centers) do
+        local ents = {}
+        if c then pcall(function() ents = System.GetEntitiesInSphere(c, 300) or {} end) end
+        for _, h in ipairs(ents) do
+            if h.class == "Horse" and not KCD2MP_W139IsAvatar(h) then
+                local n = W139.name(h)
+                if n and not seen[n] and not string.find(n, "^kcd2mp_") then
+                    seen[n] = true
+                    local legal = false
+                    pcall(function() legal = (own ~= nil and own ~= 0 and h.id == own) or h:IsMountLegal() == true end)
+                    if legal and #names < 60 then names[#names + 1] = n end
+                end
+            end
+        end
+    end
+    KCD2MP_EmitEvent("w139_horses", #names > 0 and table.concat(names, ",") or "-")
+end
+
+-- After a stop: the held guard stands where the joiner's copy of it ended.
+function KCD2MP_W139HostPlace(guard, x, y, z)
+    local e = nil
+    pcall(function() e = System.GetEntityByName(tostring(guard)) end)
+    x, y, z = tonumber(x), tonumber(y), tonumber(z)
+    if not (e and x and y and z) or (x == 0 and y == 0) then return false end
+    local p = W139.pos(e)
+    if p and ((p.x - x) ^ 2 + (p.y - y) ^ 2) > 900 then
+        mp_log(string.format("WO139-PLACE guard=%s not moved -- the stop ended %.0f m from it (a stale position)", tostring(guard), math.sqrt((p.x - x) ^ 2 + (p.y - y) ^ 2)))
+        return false
+    end
+    pcall(function() e:SetWorldPos({ x = x, y = y, z = z }) end)
+    KCD2MP.w139.stats.placed = KCD2MP.w139.stats.placed + 1
+    mp_log(string.format("WO139-PLACE guard=%s at=(%.1f,%.1f,%.1f) -- where the joiner's stop ended", tostring(guard), x, y, z))
+    return true
+end
+
+-- Live checks (no input exists): mp_w139_test <verb> ...
+--   stop <guard> <kind>     joiner: a stop as if the host had sent one (crimes: kind:1)
+--   crime <kind> [victim]   joiner: a report of that kind at this player's position
+--   judge <src> <kind>      host: judge a crime at that avatar's position
+--   guards <src>            host: the guard scan
+--   horses                  host: the legal-horse list
+--   resolve <action>        joiner: the dialogue's own result call, as the dialogue makes it
+function KCD2MP_W139Test(arg)
+    local verb, a, b = tostring(arg or ""):match("^%s*(%S+)%s*(%S*)%s*(%S*)")
+    local pp = player and W139.pos(player) or { x = 0, y = 0, z = 0 }
+    if verb == "stop" and a ~= "" then
+        return KCD2MP_W139Stop("t" .. tostring(math.floor(os.clock())), a, (b ~= "" and b or "theft") .. ":1")
+    elseif verb == "crime" and a ~= "" then
+        return KCD2MP_W139Report(a, pp.x, pp.y, pp.z, b ~= "" and b or nil, nil, "area")
+    elseif verb == "judge" and a ~= "" then
+        local av = KCD2MP_W139AvatarOf(a)
+        local ap = av and W139.pos(av) or pp
+        return KCD2MP_W139HostJudge(a, 0, b ~= "" and b or "theft", ap.x, ap.y, ap.z, "-", "-", "area")
+    elseif verb == "guards" and a ~= "" then
+        return KCD2MP_W139HostGuards(a)
+    elseif verb == "horses" then
+        return KCD2MP_W139HostHorses()
+    elseif verb == "resolve" and a ~= "" then
+        return KCD2MP_W139Resolved({}, tonumber(a))
+    end
+    mp_log("mp_w139_test: stop <guard> [kind] | crime <kind> [victim] | judge <src> [kind] | guards <src> | horses | resolve <action>")
+    return false
+end
+
 -- ===== Register Console Commands =====
 
 local ok, err = pcall(function()
@@ -16806,6 +17808,9 @@ local ok, err = pcall(function()
     System.AddCCommand("mp_w138_native", 'KCD2MP_W138SetNative(%line)', "WO-138: the host's NPC stream from the DLL's frame hook (default on); off = the Lua sender as before: mp_w138_native on|off")
     System.AddCCommand("mp_w138_levers", 'KCD2MP_W138SetLevers(%line)', "WO-138: in a session with a partner, no menu stops the world (the ESC menu's and a video's pause declined, the inventory's time-scale divide off); default on: mp_w138_levers on|off")
     System.AddCCommand("mp_w138_pausetest", 'KCD2MP_W138PauseTest(%line)', "WO-138 live checks: mp_w138_pausetest <source> on|off -- the engine's PauseGame from that source (7 = the ESC menu) through the DLL's gate, a stand-in for a menu")
+    System.AddCCommand("mp_crime_shared", 'KCD2MP_SetCrimeShared(%line)', "WO-139: the joiner's crimes are crimes in the host's world (never the host's), guards deal with him; the host's value is the session's (default on): mp_crime_shared on|off")
+    System.AddCCommand("mp_crime_status", "KCD2MP_W139Status()", "WO-139: crime and guards -- this machine's role, the joiner's own crimes, a running stop, the legal horses, the punishment's skip-time gate (WO139-STATUS here, MP-WO139-STATS in agent.log)")
+    System.AddCCommand("mp_w139_test", 'KCD2MP_W139Test(%line)', "WO-139 live checks (no input exists): mp_w139_test stop <guard> [kind] | crime <kind> [victim] | judge <src> [kind] | guards <src> | horses | resolve <action>")
     System.AddCCommand("mp_quest_status", "KCD2MP_QuestStatusAll()",        "WO-137 + WO-94: the shared quests' state (WO137-STATUS, and MP-WO137-STATS in agent.log), then the old readiness prompt's state and the current quest's beats with distances")
     System.AddCCommand("mp_quest_yes",    "KCD2MP_QuestAnswer(true)",       "WO-94: answer the readiness prompt YES (same as F11) -- fires wh_concept_HasteTrigger for the peer's beat")
     System.AddCCommand("mp_quest_no",     "KCD2MP_QuestAnswer(false)",      "WO-94: answer the readiness prompt NO (same as F12)")

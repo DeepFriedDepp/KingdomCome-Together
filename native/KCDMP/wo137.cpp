@@ -451,6 +451,8 @@ using FnInvokeFn = void* (*)(void* self, void* ret, void* out);
 FnInvokeFn g_origFnInvoke = nullptr;
 std::atomic<bool> g_timeGate{false};
 std::atomic<uint32_t> c_timeSkipped{0};
+std::atomic<bool> g_punishGate{false};      // WO-139
+std::atomic<uint32_t> c_punishSkipped{0};
 
 using wo137rules::is_time_method;   // wo137_rules.h (pinned by native/tests/wo137_rules_tests.cpp)
 bool call_variant_ctor(void* v) {
@@ -474,6 +476,19 @@ void* hooked_fn_invoke(void* self, void* ret, void* out) {
             c_timeSkipped.fetch_add(1);
             log_time_skip(self, m);
             return ret;
+        }
+    }
+    // WO-139: the punishment's own time sets, on either machine (only its nodes).
+    if (g_punishGate.load(std::memory_order_relaxed) && GetCurrentThreadId() == g_mainTid) {
+        const char* s = nullptr; char m[128];
+        if (rd(self, kOffFnMethodName, &s) && s && copy_cstr(s, m, sizeof m) && is_time_method(m)) {
+            char path[kMaxPath + 64] = "";
+            if (node_path(self, path, sizeof path) && wo137rules::is_punishment_path(path) && call_variant_ctor(ret)) {
+                c_punishSkipped.fetch_add(1);
+                logf("WO139-TIMESET punishment time set %s (%s) NOT run -- no time skip for punishment in co-op "
+                     "(its OnExec still fires: the punishment goes on)", canonical(path), m);
+                return ret;
+            }
         }
     }
     return g_origFnInvoke(self, ret, out);
@@ -1052,6 +1067,7 @@ void tick() {
 void on_disconnect() {
     g_send_on = false;
     g_timeGate = false;
+    g_punishGate = false;   // WO-139
     g_hold = false;
     g_detect = g_logAll.load();
     g_role = 0;
@@ -1187,5 +1203,15 @@ uint8_t handle(const uint8_t* req, size_t n, uint8_t* out, size_t cap, size_t* o
         return kRBadRequest;
     }
 }
+
+// WO-139 (wo137.h): the punishment scope of the same C_Function hook.
+bool set_punish_gate(bool on) {
+    if (on && !A.timeGate) return false;
+    const bool was = g_punishGate.exchange(on);
+    if (was != on) logf("WO139-CONFIG punishment time gate %s", on ? "ON (a session with a partner: the punishment moves no clock)" : "off");
+    return true;
+}
+bool punish_gate_armed() { return A.timeGate; }
+uint32_t punish_skipped() { return c_punishSkipped.load(); }
 
 } // namespace kcdmp::wo137

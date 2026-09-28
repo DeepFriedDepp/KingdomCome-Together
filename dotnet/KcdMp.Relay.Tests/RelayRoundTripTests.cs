@@ -947,6 +947,44 @@ public class RelayRoundTripTests : IClassFixture<RelayFixture>
         Assert.True(await b.NoneOfAsync(Protocol.QuestAskDown, Quiet));
     }
 
+    // ---- WO-139: crime and guards 0x64..0x67 (join channel) -----------------
+
+    [Fact]
+    public async Task Crime_messages_cross_the_relay_joiner_to_host_and_host_to_joiner_only()
+    {
+        var (a, b) = await TwoPeersAsync();   // a = the host (damage authority), b = the joiner
+        await using var _a = a; await using var _b = b;
+
+        // the joiner's crime goes to the host
+        var report = new LootMsg(Protocol.CrimeAskReport, 5, "theft 1766.20 1973.80 42.30 tzel_olbram 81494400-b654-4aa7-8f31-c95c689db5f6 world");
+        await b.SendRawAsync(report.BuildUp(Protocol.CrimeAskUp, Protocol.JoinTargetHost));
+        var rd = await a.ReadUntilAsync(Protocol.CrimeAskDown, Wait);
+        Assert.Equal(b.Id, rd[0]);
+        Assert.True(LootMsg.TryDecode(rd.AsSpan(1 + Protocol.JoinHeaderLen), out var rgot));
+        Assert.Equal(report, rgot);
+
+        // the host's guard stops that joiner
+        var stop = new LootMsg(Protocol.CrimeHostStop, 77, "tzel_man_7 theft:1 500");
+        await a.SendRawAsync(stop.BuildUp(Protocol.CrimeHostUp, b.Id));
+        var sd = await b.ReadUntilAsync(Protocol.CrimeHostDown, Wait);
+        Assert.Equal(a.Id, sd[0]);
+        Assert.True(LootMsg.TryDecode(sd.AsSpan(1 + Protocol.JoinHeaderLen), out var sgot));
+        Assert.Equal(stop, sgot);
+
+        // the longest text crosses whole
+        var big = new LootMsg(Protocol.CrimeHostHorses, 0, "1 1 " + new string('h', Protocol.CrimeTextMax - 4));
+        await a.SendRawAsync(big.BuildUp(Protocol.CrimeHostUp, b.Id));
+        var bd = await b.ReadUntilAsync(Protocol.CrimeHostDown, Wait);
+        Assert.True(LootMsg.TryDecode(bd.AsSpan(1 + Protocol.JoinHeaderLen), out var bgot));
+        Assert.Equal(big.Text, bgot.Text);
+
+        // a joiner can never stop anyone or clear a record; the host does not report to itself
+        await b.SendRawAsync(stop.BuildUp(Protocol.CrimeHostUp, a.Id));
+        await a.SendRawAsync(report.BuildUp(Protocol.CrimeAskUp, Protocol.JoinTargetHost));
+        Assert.True(await a.NoneOfAsync(Protocol.CrimeHostDown, Quiet));
+        Assert.True(await b.NoneOfAsync(Protocol.CrimeAskDown, Quiet));
+    }
+
     [Fact]
     public async Task A_whole_world_crosses_the_relay_windowed_and_byte_exact()
     {

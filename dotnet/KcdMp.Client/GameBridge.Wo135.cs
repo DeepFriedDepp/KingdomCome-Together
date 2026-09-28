@@ -70,6 +70,7 @@ public partial class GameBridge
                 {
                     Interlocked.Increment(ref _w135TdResOut);
                     Console.WriteLine($"MP-WO135 host: takedown {f[4]} on {f[3]} for ghost {to} -> {f[2]}");
+                    if (f[2] == "ok") Wo139OnTakedownDone(to, f[3], f[4]);   // WO-139: the joiner's knockout / killing, judged in this world
                     _ = Wo134SendAsync(Protocol.LootHostUp, to, Protocol.LootHostTakedownResult, tok, $"{f[2]} {f[3]} {f[4]}");
                 }
                 return;
@@ -135,6 +136,7 @@ public partial class GameBridge
             if (!Wo134HostRole || !Wo135Rules.TryParseTakedown(m.Text, out string n, out string k)) return false;
             Interlocked.Increment(ref _w135TdIn);
             Console.WriteLine($"MP-WO135 host: ghost {src} asks takedown {k} on {n} -- this world performs it");
+            await Wo139MarkTakedownVictimAsync(n, k);   // WO-139: the game's stealth-hit branch must never blame the host's player
             await ExecLuaAsync($"if KCD2MP_W135HostTakedown then KCD2MP_W135HostTakedown({src}, {m.Tok}, \"{n}\", \"{k}\") end");
             return true;
         }

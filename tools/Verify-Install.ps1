@@ -146,6 +146,12 @@ $AsmMarkers = @(
     @{ File = 'KcdMpClient.dll'; Marker = 'MP-WO138-STATS';         Owner = 'WO-138 native NPC sender, pause announcement, hold, levers (agent half)' },
     @{ File = 'KCDMP.dll';       Marker = 'WO138-GATE';             Owner = 'WO-138 no menu pauses the world in a session (native PauseGame gate)' },
     @{ File = 'KCDMP.dll';       Marker = 'WO138-SEND';             Owner = 'WO-138 the NPC stream at the frame hook (native sender)' },
+    # WO-139: crime and guards (the joiner's crimes in the host's world, the stop, the pursuit)
+    @{ File = 'KcdMpClient.dll'; Marker = 'MP-WO139-STATS';         Owner = 'WO-139 crime and guards: judging, stops, pursuits (agent half)' },
+    @{ File = 'KCDMP.dll';       Marker = 'WO139-TRESPASS';         Owner = "WO-139 the joiner's trespass from the HUD's own state (native)" },
+    @{ File = 'KCDMP.dll';       Marker = 'WO139-PURSUE';           Owner = "WO-139 the host's guards fight the joiner's avatar: combat_forcedTarget (native)" },
+    @{ File = 'KCDMP.dll';       Marker = 'WO139-TIMESET';          Owner = 'WO-139 the punishment moves no clock in a session (native time gate)' },
+    @{ File = 'KcdMp.Protocol.dll'; Marker = 'crime-host';          Owner = 'WO-139 crime messages on the join channel (wire)' },
     @{ File = 'KcdMp.Protocol.dll'; Marker = 'loot-host';           Owner = 'WO-134 loot messages on the join channel (wire)' },
     @{ File = 'KCDMP_launcher.dll'; Marker = 'Kingdom Come: Together'; Owner = 'WO-134 rebrand (launcher window title)' }
 )
@@ -215,6 +221,11 @@ $PakMarkers = @(
     @{ Marker = 'function KCD2MP_W137DeadBody';    Owner = 'WO-137 dead is dead: a corpse is never paused (mod half)' },
     @{ Marker = 'function KCD2MP_W138Hold';        Owner = "WO-138 hold, don't hide: the host's copies stay while it is paused (mod half)" },
     @{ Marker = 'function KCD2MP_W138PushTrack';   Owner = "WO-138 the rescan set for the DLL's NPC sender (mod half)" },
+    @{ Marker = 'function KCD2MP_W139Stop';        Owner = "WO-139 the stop: the game's own arrest against the joiner's Henry (mod half)" },
+    @{ Marker = 'function KCD2MP_W139HostJudge';   Owner = "WO-139 the host judges the joiner's crime: witnesses, guards (mod half)" },
+    @{ Marker = 'function KCD2MP_W139HostAttack';  Owner = "WO-139 the pursuit starts the guard's own attack (mod half)" },
+    @{ Marker = 'function KCD2MP_W139RobRefused';  Owner = 'WO-139 the players never rob each other (mod half)' },
+    @{ Marker = "You can't steal from each other in co-op."; Owner = 'WO-139 the plain refusal line' },
     @{ Marker = 'Quest catch-up is off in a shared world.'; Owner = 'WO-133 the plain refusal line' }
 )
 

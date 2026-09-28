@@ -37,4 +37,16 @@ inline bool time_gate_on(bool on, uint8_t role, uint8_t cfgFlags, bool armed) {
     return on && role == 2 && (cfgFlags & 1) != 0 && armed;
 }
 
+// WO-139: a node of the open-world punishment (IPL/Scripts Quests/Final/Barbora/open_world/
+// nextnextgenpunishment: the fast travel's AdvanceWorldTime 10h, the second arrest's 9h).
+// The path may carry a database segment above Barbora ("brambora.Barbora..."): matched anywhere.
+inline bool is_punishment_path(const char* p) {
+    if (!p) return false;
+    const char* key = "Barbora.open_world.nextnextgenpunishment";
+    const char* at = std::strstr(p, key);
+    if (!at) return false;
+    const char end = at[std::strlen(key)];
+    return end == 0 || end == '.';
+}
+
 } // namespace kcdmp::wo137rules

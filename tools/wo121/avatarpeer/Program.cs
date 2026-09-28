@@ -48,6 +48,10 @@
 //                                              joiner's agent sends its own quest step (tok = a counter)
 //   at <t> quest talk on|off <npc>             (WO-137) a QuestAsk Talk: this joiner talks to its copy of that NPC
 //   at <t> quest resync <why>                  (WO-137) a QuestAsk Resync: "my world has just loaded"
+//   at <t> crime report <kind> <x> <y> <z> <victim|-> <cls|-> <where>   (WO-139) a CrimeAsk Report: this joiner's
+//                                              crime, as his agent sends it (tok = a counter)
+//   at <t> crime outcome <stopTok> <result> <guard|-> <fine> <x> <y> <z>   (WO-139) a CrimeAsk Outcome: the stop's end
+//   at <t> crime resync <why>                  (WO-139) a CrimeAsk Resync; every CrimeHostDown (0x67) received is printed
 //                                              every QuestHostDown (0x61) received is printed; --quest-rec F appends
 //                                              each Change's text to F (synthpeer `questfile F` replays it)
 //   end <t>                                    stop
@@ -170,6 +174,9 @@ static class P
                         Console.WriteLine($"PEER t={recClock.Elapsed.TotalSeconds:F1} got QuestHost {Protocol.QuestHostName(qm.Kind)} tok={qm.Tok} from={b2[0]}: {qm.Text}");
                         if (questRec is not null && qm.Kind == Protocol.QuestHostChange) lock (questRec) questRec.WriteLine(qm.Text);
                     }
+                    else if (t2 == Protocol.CrimeHostDown && b2.Length > 1 + Protocol.JoinHeaderLen
+                             && LootMsg.TryDecode(b2.AsSpan(1 + Protocol.JoinHeaderLen), out var cm))   // WO-139
+                        Console.WriteLine($"PEER t={recClock.Elapsed.TotalSeconds:F1} got CrimeHost {Protocol.CrimeHostName(cm.Kind)} tok={cm.Tok} from={b2[0]}: {cm.Text}");
                     else if (t2 == Protocol.LeashDown && b2.Length > 1 + Protocol.JoinHeaderLen
                              && LeashCommand.TryDecode(b2.AsSpan(1 + Protocol.JoinHeaderLen), out var lc))
                         leashIn.Enqueue((b2[0], lc));   // WO-114: handled on the main loop
@@ -450,6 +457,18 @@ static class P
                         string text = string.Join(' ', f.Skip(2));
                         await Send(st, new LootMsg(k, lootTok, text).BuildUp(Protocol.QuestAskUp, Protocol.JoinTargetHost));
                         Console.WriteLine($"PEER t={t:F1} quest {Protocol.QuestAskName(k)} tok={lootTok}: {text}");
+                        break;
+                    }
+                    case "crime":   // WO-139: crime report ... | outcome <tok> ... | resync <why>
+                    {
+                        byte k = f[1] switch { "report" => Protocol.CrimeAskReport, "outcome" => Protocol.CrimeAskOutcome, "resync" => Protocol.CrimeAskResync, _ => (byte)0 };
+                        if (k == 0) { Console.WriteLine($"PEER t={t:F1} crime: unknown verb {f[1]}"); break; }
+                        uint ctok;
+                        string text;
+                        if (k == Protocol.CrimeAskOutcome) { ctok = uint.Parse(f[2], CultureInfo.InvariantCulture); text = string.Join(' ', f.Skip(3)); }
+                        else { ctok = ++lootTok; text = string.Join(' ', f.Skip(2)); }
+                        await Send(st, new LootMsg(k, ctok, text).BuildUp(Protocol.CrimeAskUp, Protocol.JoinTargetHost));
+                        Console.WriteLine($"PEER t={t:F1} crime {Protocol.CrimeAskName(k)} tok={ctok}: {text}");
                         break;
                     }
                     case "torch":   // WO-136: torch on|off -- the state block's torch bit

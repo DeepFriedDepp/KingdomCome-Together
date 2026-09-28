@@ -88,6 +88,9 @@ public sealed class CombatPipe : IAsyncDisposable
     private const byte Wo138Reply        = 0x9F;
     private const byte NpcStreamOut      = 0xA0;   // WO-138, unsolicited: the native sender's NPC rows
     private const byte WorldOut          = 0xA1;   // WO-138, unsolicited: this machine's world running / slowed / frozen
+    private const byte Wo139             = 0x25;   // WO-139 [op][...] -> 0xA2 [ok][seq][op][reason][payload] (native wo139.h)
+    private const byte Wo139Reply        = 0xA2;
+    private const byte CrimeOut          = 0xA3;   // WO-139, unsolicited: a new trespass level of the local player
 
     private const int GuidLen = 16;
 
@@ -140,6 +143,12 @@ public sealed class CombatPipe : IAsyncDisposable
 
     /// <summary>WO-138: the 0xA1 world state (on a change, and every 2 s).</summary>
     public Action<Wo138WorldState>? OnWorld { get; set; }
+
+    /// <summary>
+    /// WO-139: 0xA3 kind 1 -- the local player's new trespass level (0 public .. 4 prohibited)
+    /// and position. Called ON the reader: it must not make a pipe request (the WO-131 trap).
+    /// </summary>
+    public Action<byte, byte, float, float, float>? OnTrespass { get; set; }
 
     /// <summary>WO-118: the DLL's native writer stopped a bound puppet on its own (reason, name).</summary>
     public Func<byte, string, Task>? OnNpcDropped { get; set; }
@@ -775,6 +784,67 @@ public sealed class CombatPipe : IAsyncDisposable
         return r is { } x ? Encoding.ASCII.GetString(x.Payload) : null;
     }
 
+    // ---- WO-139 (native wo139.h) ---------------------------------------------
+
+    /// <summary>One WO-139 op: (ok, reason, payload after the 4-byte head), or null when the DLL did not answer.</summary>
+    public async Task<(bool Ok, byte Reason, byte[] Payload)?> Wo139Async(byte op, byte[] args, CancellationToken ct = default)
+    {
+        var p = new byte[1 + args.Length];
+        p[0] = op; args.CopyTo(p, 1);
+        var (body, _) = await SendAndAwaitAsync(Wo139, p, Wo139Reply, ct);
+        if (body is null || body.Length < 4) return null;
+        return (body[0] == 1, body[3], body.AsSpan(4).ToArray());
+    }
+
+    /// <summary>op 1: the trespass detector on/off. (armed, last level) or null.</summary>
+    public async Task<(bool Armed, byte Level)?> Wo139ConfigAsync(bool on, CancellationToken ct = default)
+    {
+        var r = await Wo139Async(1, [(byte)(on ? 1 : 0)], ct);
+        if (r is not { } x || x.Payload.Length < 2) return null;
+        return (x.Payload[0] == 1, x.Payload[1]);
+    }
+
+    /// <summary>op 2: the native status line.</summary>
+    public async Task<string?> Wo139StatusAsync(CancellationToken ct = default)
+    {
+        var r = await Wo139Async(2, [], ct);
+        return r is { Ok: true } x ? Encoding.ASCII.GetString(x.Payload) : null;
+    }
+
+    /// <summary>op 3: a guard fights (on) / stops fighting (off) an avatar. 1 done, 0 already, 2 no such, 3 refused; null = no answer.</summary>
+    public async Task<byte?> Wo139PursueAsync(bool on, uint avatarEid, string guard, CancellationToken ct = default)
+    {
+        var name = Encoding.ASCII.GetBytes(guard);
+        if (name.Length is < 1 or > 63) return null;
+        var a = new byte[1 + 4 + 1 + name.Length];
+        a[0] = (byte)(on ? 1 : 0);
+        BinaryPrimitives.WriteUInt32LittleEndian(a.AsSpan(1), avatarEid);
+        a[5] = (byte)name.Length;
+        name.CopyTo(a, 6);
+        var r = await Wo139Async(3, a, ct);
+        return r is { Ok: true } x && x.Payload.Length >= 1 ? x.Payload[0] : null;
+    }
+
+    /// <summary>op 4: one allowed entity context on a named NPC / horse. 1 written, 0 already, 2 no such, 3 refused, 4 not allowed.</summary>
+    public async Task<byte?> Wo139ContextAsync(bool on, string context, string entity, CancellationToken ct = default)
+    {
+        var c = Encoding.ASCII.GetBytes(context); var n = Encoding.ASCII.GetBytes(entity);
+        if (c.Length is < 1 or > 63 || n.Length is < 1 or > 63) return null;
+        var a = new byte[1 + 1 + c.Length + 1 + n.Length];
+        a[0] = (byte)(on ? 1 : 0);
+        a[1] = (byte)c.Length; c.CopyTo(a, 2);
+        a[2 + c.Length] = (byte)n.Length; n.CopyTo(a, 3 + c.Length);
+        var r = await Wo139Async(4, a, ct);
+        return r is { Ok: true } x && x.Payload.Length >= 1 ? x.Payload[0] : null;
+    }
+
+    /// <summary>op 5: the punishment's time sets run nothing (on). True = taken; false = not armed; null = no answer.</summary>
+    public async Task<bool?> Wo139PunishGateAsync(bool on, CancellationToken ct = default)
+    {
+        var r = await Wo139Async(5, [(byte)(on ? 1 : 0)], ct);
+        return r is { } x ? x.Ok : null;
+    }
+
     // ---- WO-137 (native wo137.h) ---------------------------------------------
 
     /// <summary>One WO-137 op: (ok, reason, payload after the 4-byte head), or null when the DLL did not answer.</summary>
@@ -1028,6 +1098,17 @@ public sealed class CombatPipe : IAsyncDisposable
                 else if (type == WorldOut)
                 {
                     if (Wo138Codec.TryParseWorld(body, out var ws)) { try { OnWorld?.Invoke(ws); } catch { } }
+                }
+                else if (type == CrimeOut)
+                {
+                    // WO-139: [kind=1][level][prev][x:4f][y:4f][z:4f]
+                    if (body.Length == 15 && body[0] == 1)
+                    {
+                        float tx = BinaryPrimitives.ReadSingleLittleEndian(body.AsSpan(3)), ty = BinaryPrimitives.ReadSingleLittleEndian(body.AsSpan(7)),
+                              tz = BinaryPrimitives.ReadSingleLittleEndian(body.AsSpan(11));
+                        try { OnTrespass?.Invoke(body[1], body[2], tx, ty, tz); } catch (Exception ex) { Console.WriteLine($"[wo139] trespass edge not handled: {ex.Message}"); }
+                    }
+                    else Console.WriteLine($"[wo139] malformed Crime frame ({body.Length} bytes)");
                 }
                 else if (type == DiscardedHit && body.Length == 12)
                 {

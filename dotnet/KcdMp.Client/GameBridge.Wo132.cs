@@ -212,6 +212,7 @@ public partial class GameBridge
         if (!W132Gate(ghost).Down(DateTime.UtcNow)) return;
         Console.WriteLine($"MP-W132 peer {ghost} {why}: nothing is forwarded to it until 5 s after it wakes");
         if (!_isDamageAuthority) return;
+        await Wo139OnPeerDownAsync(ghost, why);   // WO-139: the guards fighting its avatar stop
         await Wo132AvatarLeaveFightAsync(ghost, why);
         // Its state on the host: bleeding and health reset, hidden at the death spot.
         await ExecLuaAsync($"if KCD2MP_W132AvatarDown then KCD2MP_W132AvatarDown(\"{ghost}\", true) end");
