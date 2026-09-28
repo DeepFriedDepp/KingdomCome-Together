@@ -244,7 +244,7 @@ Logs:
 * switches: `mp_avatar_quiet 0..15` (default 15), `mp_npc_ko_sync on|off`;
   status `mp_w135_status`, counters every 60 s `MP-WO135-STATS`.
 
-## Animals, horses, fights, torches, loading (WO-136, in the next installer)
+## Animals, horses, fights, torches, loading (WO-136, 0.41.7)
 
 In plain words:
 
@@ -252,8 +252,8 @@ In plain words:
   ends normally; the host's NPCs appear a couple of seconds after the world
   does.
 * **The host's animals are on both screens** (wolves, wild dogs, boars), in
-  their own shape. The partner does not see their bites animate yet; the bites
-  still hurt.
+  their own shape, and since WO-141 their bites play on the partner's screen
+  too.
 * **The rider owns the horse.** The partner can ride the host's horse; getting
   off, it stays there on both screens.
 * **Knockouts win over a fight**: an enemy knocked out mid-fight goes down on
@@ -277,7 +277,7 @@ Logs:
 * status `mp_w136_status`; counters every 60 s `MP-WO136-STATS`; live checks
   `mp_w136_check fights on|off | status`.
 
-## Questing together (WO-137, in the next installer)
+## Questing together (WO-137, 0.41.7)
 
 In plain words:
 
@@ -310,7 +310,7 @@ Logs:
   `WO137-APPLY`, `WO137-TIMESET`.
 * status `mp_quest_status`; the partner's side: `mp_quest_talk on|off`.
 
-## Crime together (WO-139, in the next installer)
+## Crime together (WO-139, 0.41.7)
 
 In plain words:
 
@@ -349,7 +349,7 @@ Logs:
   `WO139-CONTEXT`, `WO139-TIMESET`.
 * status `mp_crime_status`.
 
-## Sleeping together, and the "own world" trap (WO-140, in the next installer)
+## Sleeping together, and the "own world" trap (WO-140, 0.41.7)
 
 In plain words:
 
@@ -387,6 +387,42 @@ Logs:
   `WO140-START`, `WO140-STOP`, `WO140-PULL`.
 * status `mp_sleep_status`.
 
+## Sitting, sleeping, working, and animals' bites (WO-141, 0.41.7)
+
+In plain words:
+
+* **What people do with things shows on the other screen.** A sleeper lies in
+  the same bed on the joiner's screen, a sitter sits on the same bench, a
+  leaner leans on the same wall, a guard stands at his post — before, they
+  stood next to it or inside it. The joiner's copy is put there by the game's
+  own state machine, the way a loaded save puts people back in their beds.
+* **The same for the two players.** Sitting or lying down shows on the other
+  screen, with the name above the figure. Washing at a water trough shows as a
+  wash at that trough.
+* **A copy leaves its activity first** when the host's NPC fights, talks, is
+  knocked out or dies, and goes back to it after.
+* **A wolf's bite** plays on the joiner's screen (dogs and boars take the same
+  path; not seen yet).
+* **Not shown yet:** work that needs a tool in the hand (the person stands at
+  the spot; the field hoer walks without the hoe), and the grindstone,
+  smithing, alchemy, reading and dice (the figure stands at the spot).
+* **Off switches:** `mp_activities off` (bodies stand where they are, as
+  before), `mp_animal_attacks off` (bites not animated on the joiner's screen).
+
+Logs:
+
+* agent: `MP-W141 activities ON (host: …| joiner: …)`, `MP-W141 this player:
+  <activity>`, `MP-W141 <npc> leaves its activity first (<fight|talk|down>)`,
+  `MP-W141 anim WashFace at <trough>: shown as housekeeper_faceWash …`,
+  `MP-W141 stats:` every 60 s.
+* kcd.log: `WO141-ACTIVITIES`, `WO141-BITES`, `WO141-INSTALL`, `WO141-ANIM`,
+  `WO141-STATUS`, `MP-MARK <word>`.
+* native: `WO141-BUILD` (armed or not), `WO141-CONFIG`, `WO141-CAPTURE`,
+  `WO141-APPLY <name> -> <result> … wanted …; now …`, `WO141-LEAVE`,
+  `WO141-SHOW`, `MP-NPCWRITE eid=… event=activity-hold`, `SWING: entity=… is
+  not a human -- the actor system's own actor`.
+* status `mp_activity_status`.
+
 ## Expected not to work yet
 
 * **No "back to the main menu"** in KCD2. If the host leaves, or a check
@@ -400,9 +436,11 @@ Logs:
 * **Cutscenes** play only for the player who triggers them (WO-137).
 * **NPCs don't fight back when the joiner hits them:** they turn, but don't
   swing (WO-121).
-* **NPCs stand instead of sitting** on the joiner's screen.
-* **Animals' bites don't animate** on the joiner's screen (WO-136); they still
-  hurt.
+* **Work that needs a tool in the hand** (a woodworker's, a sweeper's, the
+  field hoe) shows the person standing at the spot or walking the field on the
+  joiner's screen (WO-141).
+* **The grindstone, smithing, alchemy, reading and dice** of the other player
+  show the figure standing at the spot (WO-141).
 * **Mounting the host's horse may say "Mount and steal"** on the joiner's
   screen (WO-136, not tried with the key): say what happens.
 * **The prologue and Godwin's part of the story:** no join while the host
