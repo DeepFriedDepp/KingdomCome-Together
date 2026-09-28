@@ -244,6 +244,39 @@ Logs:
 * switches: `mp_avatar_quiet 0..15` (default 15), `mp_npc_ko_sync on|off`;
   status `mp_w135_status`, counters every 60 s `MP-WO135-STATS`.
 
+## Animals, horses, fights, torches, loading (WO-136, in the next installer)
+
+In plain words:
+
+* **While a world loads nothing touches NPCs.** The joiner's loading screen
+  ends normally; the host's NPCs appear a couple of seconds after the world
+  does.
+* **The host's animals are on both screens** (wolves, wild dogs, boars), in
+  their own shape. The partner does not see their bites animate yet; the bites
+  still hurt.
+* **The rider owns the horse.** The partner can ride the host's horse; getting
+  off, it stays there on both screens.
+* **Knockouts win over a fight**: an enemy knocked out mid-fight goes down on
+  the partner's screen too.
+* **Enemies fight the partner**: they turn to whoever keeps hitting them, and
+  when the host goes down they keep fighting the partner.
+* **Clothes, torches and crouching** show on the other screen.
+* **"Someone already took that"** only when the other player did.
+
+Logs:
+
+* joiner kcd.log: `WO136-HOLD on why=load-join` … `WO136-HOLD off why=gameplay+settle
+  held_s=… replayed=…`; agent `MP-W136 load hold released after … s`;
+  `WO136-STANDIN soul npc=… class=Wolf`; `WO136-RIDE take|dismount|return`;
+  agent `MP-W136 …: the host's NPC is knocked out -> the engagement ends FIRST`.
+* host native log: `WO136-TARGET npc=… -> avatar:… taken (read back after … ms)`,
+  `WO136-FORCED … set (read back)`, `WO136-HANDOVER npc=… -> avatar … taken`.
+* both: `WO136-TORCH local=1|0`, `WO136-TORCH avatar id=N on|off -> …`,
+  `WO136-CROUCH query armed`, `WO136-OUTFIT spawn … bare preset ok=true`,
+  `WO134-BODY not-a-put` (the loot screen's own key, not sent).
+* status `mp_w136_status`; counters every 60 s `MP-WO136-STATS`; live checks
+  `mp_w136_check fights on|off | status`.
+
 ## Expected not to work yet
 
 * **No "back to the main menu"** in KCD2. If the host leaves, or a check
@@ -255,6 +288,10 @@ Logs:
 * **NPCs don't fight back when the joiner hits them:** they turn, but don't
   swing (WO-121).
 * **NPCs stand instead of sitting** on the joiner's screen.
+* **Animals' bites don't animate** on the joiner's screen (WO-136); they still
+  hurt.
+* **Mounting the host's horse may say "Mount and steal"** on the joiner's
+  screen (WO-136, not tried with the key): say what happens.
 * **The prologue and Godwin's part of the story:** no join while the host
   plays one of them ("Your host is in a part of the story where you can't join
   yet."). What to do there together is a later WO.
