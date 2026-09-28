@@ -220,6 +220,7 @@ public partial class GameBridge
             if (sendCfg) await Wo114SendAsync(id, new LeashCommand(Protocol.LeashKindConfig, (byte)(_leashEnabled ? 1 : 0),
                                                          LeashCommand.Metres(_leashWarnM), _lastX, _lastY, _lastZ, LeashCommand.Metres(_leashPullM)));
 
+            if ((DateTime.UtcNow - at).TotalSeconds < LeashFreshS && Wo140HostSkipsLeash(id, st.Flags)) continue;   // WO-140: not in this world
             var logic = _leashByJoiner.GetOrAdd(id, _ => new LeashLogic());
             logic.Config = new LeashLogic.Settings(_leashEnabled, _leashWarnM, _leashPullM);
             bool stateFresh = (DateTime.UtcNow - at).TotalSeconds < LeashFreshS;
@@ -383,6 +384,7 @@ public partial class GameBridge
     {
         ushort f = 0;
         if (_joinedWorld) f |= Protocol.LeashFlagInWorld;
+        if (_w140Separate) f |= Protocol.LeashFlagSeparate;   // WO-140: in its own world -- the host does not leash it
         if (_localDowned) f |= Protocol.LeashFlagDowned;
         if (_jj is not null || _rewinding || _where is GameWhere.Loading or GameWhere.Menu) f |= Protocol.LeashFlagLoading;
         if (_localCutsceneActive) f |= Protocol.LeashFlagCutscene;

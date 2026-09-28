@@ -1154,6 +1154,7 @@ function KCD2MP_DrawInteractionUI()
     if KCD2MP_QuestDrawUI then pcall(KCD2MP_QuestDrawUI) end
     if KCD2MP_JoinDrawUI then pcall(KCD2MP_JoinDrawUI) end   -- WO-123: "<partner> is joining..."
     if KCD2MP_Wo114DrawUI then pcall(KCD2MP_Wo114DrawUI) end -- WO-114: "Bringing you back to your host in N..."
+    if KCD2MP_W140DrawUI then pcall(KCD2MP_W140DrawUI) end   -- WO-140: "Waiting for other players...", the sleep prompt, the own-world line
     mp_screen_frame_end()   -- WO-98 Phase 6: rows that vanished this frame log text=""
 end
 
@@ -5450,6 +5451,7 @@ function KCD2MP_Wo114DrawUI()
     pcall(KCD2MP_W131Backstop)   -- WO-131: give parked bodies back if the agent went silent
     pcall(KCD2MP_W137Backstop)   -- WO-137: talking copies and the host's holds back if the agent went silent
     pcall(KCD2MP_W139Backstop)   -- WO-139: a stop, the legal horses and the skip-time data back if the agent went silent
+    pcall(KCD2MP_W140Backstop)   -- WO-140: nothing stays held if the agent went silent
     local w = KCD2MP.w114
     -- A line queued while a menu held the timers (the map after a refused fast
     -- travel): shown now, for the usual 5 s, instead of expiring unseen.
@@ -16591,6 +16593,272 @@ function KCD2MP_W138Status()
     KCD2MP_EmitEvent("w138", "status")
 end
 
+-- ===== WO-140: sleeping together, the own-world trap (docs/WO-140-findings.md) =====
+-- One clock: the host's. Sleep together, or not at all.
+--
+-- ---- the bed, held before the lie-down -------------------------------------------
+-- KCD2's beds are BedTrigger entities: the interaction calls TriggerBase.OnUsed /
+-- OnUsedHold -> self:OnAction -> self:ReportUse(user, items, action), and a lying
+-- action there is the lie-down that ends in the game's sleep picker (ActionTrigger:
+-- PlayerStateHandler.ChangeStance(bed, "lying"), observed). The instances resolve
+-- ReportUse through the class table (observed: a wrapped BedTrigger.ReportUse is
+-- what every bed calls), so one wrap holds every bed. While the agent says a vote
+-- is needed (KCD2MP_W140Session(true): a partner, the shared world) a lying action
+-- the game would allow (its own CanSleep first) is held: nothing happens on screen
+-- but "Waiting for other players...", and the agent asks (w140_ask). On everyone's
+-- yes the held call runs unchanged (KCD2MP_W140Go: the lie-down, the picker); on a
+-- no or no answer it is dropped (KCD2MP_W140Drop) and he never lay down.
+--   WO140-HOLD bed=<name> save=<0|1>   WO140-GO   WO140-DROP <why>
+-- The DLL's gate (wo140.cpp) catches every other way into the picker (the Wait
+-- key, sleeping from a bed one sits on, reading).
+--
+-- ---- the prompt -------------------------------------------------------------------
+-- The other player's screen: "<name> wants to sleep. Sleep too?" -- F11 yes, F12
+-- no (the keys every prompt of the mod uses), or mp_sleep_yes / mp_sleep_no; the
+-- agent counts 30 s and a missing answer is a no.
+--
+-- ---- the own-world trap -----------------------------------------------------------
+-- A joiner who loaded his own save and connected from it: a big line, every frame,
+-- and the game's own centered text every few seconds (the agent re-sends it).
+KCD2MP.w140 = KCD2MP.w140 or {}
+KCD2MP.w140.on = false
+KCD2MP.w140.vote = (KCD2MP.w140.vote == nil) and true or KCD2MP.w140.vote   -- mp_sleep_vote (default ON)
+KCD2MP.w140.aliveTimeoutS = 10.0
+KCD2MP.w140.heldMaxS = 60.0         -- a held bed nobody answered for is dropped (the agent's vote lasts 30 s)
+KCD2MP.w140.stats = KCD2MP.w140.stats or { held = 0, go = 0, dropped = 0, prompts = 0, answers = 0, sepSaid = 0, restSaves = 0 }
+KCD2MP_W140_WAITING = "Waiting for other players..."
+KCD2MP_W140_NOT_READY = "Other players are not ready to sleep yet!"
+
+function KCD2MP_W140Fresh()
+    local w = KCD2MP.w140
+    return w.aliveAt ~= nil and (os.clock() - w.aliveAt) <= w.aliveTimeoutS
+end
+
+function KCD2MP_W140Active()
+    local w = KCD2MP.w140
+    return w.on and w.vote and KCD2MP_W140Fresh()
+end
+
+-- The one wrap (re-checked every session tick: a script reload would replace it).
+function KCD2MP_W140Install()
+    local w = KCD2MP.w140
+    if not BedTrigger or type(BedTrigger.ReportUse) ~= "function" then return false end
+    if w.wrapper ~= nil and BedTrigger.ReportUse == w.wrapper then return true end
+    w.origReport = BedTrigger.ReportUse
+    w.wrapper = function(self, user, item, action)
+        return KCD2MP_W140ReportUse(self, user, item, action)
+    end
+    BedTrigger.ReportUse = w.wrapper
+    mp_log("WO140-INSTALL BedTrigger.ReportUse wrapped (every bed's lie-down is held while a vote is needed)")
+    return true
+end
+
+function KCD2MP_W140ReportUse(self, user, item, action)
+    local w = KCD2MP.w140
+    local lying = false
+    pcall(function() lying = self:IsLyingAction(action) == true end)
+    local isPlayer = user ~= nil and player ~= nil and (user == player or user.id == player.id)
+    if not (lying and isPlayer and KCD2MP_W140Active()) then
+        return w.origReport(self, user, item, action)
+    end
+    -- the game's own refusal first (combat, trespass, low health...): it says why, as always
+    local can = true
+    pcall(function() can = self:CanSleep(user, true) ~= false end)
+    if not can then return w.origReport(self, user, item, action) end
+    if w.held then
+        KCD2MP_ShowNativeToast(KCD2MP_W140_WAITING)
+        return
+    end
+    local save, name = 0, "?"
+    pcall(function() if EntityModule.WillSleepingOnThisBedSave(self.id) then save = 1 end end)
+    pcall(function() name = self:GetName() end)
+    w.held = { self = self, user = user, item = item, action = action, at = os.clock(), name = name }
+    w.stats.held = w.stats.held + 1
+    mp_log(string.format("WO140-HOLD bed=%s save=%d -- the lie-down waits for everyone's yes", tostring(name), save))
+    KCD2MP_EmitEvent("w140_ask", "sleep " .. save)
+end
+
+-- The agent: everyone said yes. The held call runs unchanged (the lie-down, the picker).
+function KCD2MP_W140Go()
+    local w = KCD2MP.w140
+    w.waiting = nil
+    local h = w.held
+    w.held = nil
+    if not h then return false end
+    w.stats.go = w.stats.go + 1
+    mp_log(string.format("WO140-GO bed=%s -- everyone said yes: the lie-down and the picker, as the game does", tostring(h.name)))
+    local ok, err = pcall(w.origReport, h.self, h.user, h.item, h.action)
+    if not ok then mp_log("WO140-GO failed: " .. tostring(err)) end
+    return ok
+end
+
+-- The agent: a no, no answer, or someone asked first. Nothing happens; one plain line.
+function KCD2MP_W140Drop(msg, native)
+    local w = KCD2MP.w140
+    w.waiting = nil
+    local h = w.held
+    w.held = nil
+    w.stats.dropped = w.stats.dropped + 1
+    mp_log(string.format("WO140-DROP %s -- no sleep, no time skip, no rest", h and ("bed=" .. tostring(h.name)) or (native and "the kept picker" or "nothing held")))
+    if native then
+        -- The gate held a picker: the Wait key never lay him down; sleeping from a bed one sits on
+        -- leaves him lying in it, exactly as the picker's own Back does (observed: the game's Cancel,
+        -- OnBedStop and OnBedInterrupt all leave the player lying; he gets up with the usual key).
+        mp_log("WO140-DROP the kept picker (a sleep from a bed he lay on stays lying, as after the game's own Back)")
+    end
+    if msg and msg ~= "" then KCD2MP_ShowNativeToast(tostring(msg)) end
+end
+
+function KCD2MP_W140Waiting(on, text)
+    local w = KCD2MP.w140
+    if on then
+        w.waiting = { text = tostring(text or KCD2MP_W140_WAITING), at = os.clock() }
+        KCD2MP_ShowNativeToast(w.waiting.text)
+    else
+        w.waiting = nil
+    end
+end
+
+function KCD2MP_W140Prompt(id, text, secs)
+    local w = KCD2MP.w140
+    w.prompt = { id = tonumber(id) or 0, text = tostring(text), deadline = os.clock() + (tonumber(secs) or 30) }
+    w.stats.prompts = w.stats.prompts + 1
+    mp_log(string.format('WO140-PROMPT %.0f "%s" (F11 yes / F12 no)', w.prompt.id, w.prompt.text))
+    KCD2MP_ShowNativeToast(w.prompt.text)
+end
+
+function KCD2MP_W140PromptHide(id)
+    local w = KCD2MP.w140
+    if w.prompt and (id == nil or w.prompt.id == tonumber(id)) then w.prompt = nil end
+end
+
+-- F11 / F12 / mp_sleep_yes / mp_sleep_no. True = a prompt took it.
+function KCD2MP_W140Answer(yes)
+    local w = KCD2MP.w140
+    local p = w.prompt
+    if not p then
+        mp_log("WO140-ANSWER no sleep prompt is up")
+        return false
+    end
+    w.prompt = nil
+    w.stats.answers = w.stats.answers + 1
+    mp_log(string.format("WO140-ANSWER %.0f %s", p.id, yes and "yes" or "no"))
+    KCD2MP_EmitEvent("w140_answer", string.format("%.0f %s", p.id, yes and "yes" or "no"))
+    return true
+end
+
+function KCD2MP_W140Separate(on, text)
+    local w = KCD2MP.w140
+    if on then
+        local first = w.sep == nil
+        w.sep = { text = tostring(text), at = os.clock() }
+        w.stats.sepSaid = w.stats.sepSaid + 1
+        if first then mp_log('WO140-SEPARATE "' .. w.sep.text .. '"') end
+        KCD2MP_ShowNativeToast(w.sep.text)
+    elseif w.sep then
+        w.sep = nil
+        mp_log("WO140-SEPARATE off")
+    end
+end
+
+-- The host after a shared sleep in a joiner's bed that saves: the game's own rest save.
+function KCD2MP_W140RestSave()
+    local w = KCD2MP.w140
+    w.stats.restSaves = w.stats.restSaves + 1
+    local ok, err = pcall(function() Game.SaveGameViaResting() end)
+    mp_log("WO140-RESTSAVE Game.SaveGameViaResting " .. (ok and "called" or ("FAILED " .. tostring(err))))
+end
+
+function KCD2MP_W140Session(on)
+    local w = KCD2MP.w140
+    on = on == true
+    local fresh = not KCD2MP_W140Fresh()
+    w.aliveAt = os.clock()
+    if fresh then KCD2MP_EmitEvent("w140_cfg", "vote=" .. (w.vote and "on" or "off")) end
+    if fresh or on ~= w.on then
+        mp_log(string.format("WO140-SESSION vote_needed=%s mp_sleep_vote=%s", tostring(on), w.vote and "on" or "off"))
+    end
+    w.on = on
+    pcall(KCD2MP_W140Install)
+    if w.held and (os.clock() - w.held.at) > w.heldMaxS then
+        mp_log("WO140-DROP a held bed got no answer in " .. w.heldMaxS .. " s")
+        KCD2MP_W140Drop(KCD2MP_W140_NOT_READY, false)
+    end
+end
+
+-- The 8 ms draw loop: the agent went silent (a crash) -> nothing stays held.
+function KCD2MP_W140Backstop()
+    local w = KCD2MP.w140
+    if w.aliveAt == nil or KCD2MP_W140Fresh() then return end
+    w.aliveAt = nil
+    w.on = false
+    w.prompt = nil
+    if w.held then KCD2MP_W140Drop(KCD2MP_W140_NOT_READY, false) end
+    w.waiting = nil
+    w.sep = nil
+end
+
+function KCD2MP_W140DrawUI()
+    local w = KCD2MP.w140
+    if w.waiting and (os.clock() - w.waiting.at) > 45 then w.waiting = nil end   -- never left behind (the vote lasts 30 s)
+    if w.waiting then mp_draw_row("w140_waiting", 10, 236, w.waiting.text, 2) end
+    local p = w.prompt
+    if p then
+        local left = math.ceil(p.deadline - os.clock())
+        if left < 0 then
+            w.prompt = nil
+        else
+            mp_draw_row("w140_prompt", 10, 236, p.text .. "  (" .. left .. "s)", 2, p.text)
+            mp_draw_row("w140_prompt_keys", 10, 262, "F11 yes / F12 no  (or mp_sleep_yes / mp_sleep_no)", 1.6)
+        end
+    end
+    if w.sep then
+        mp_draw_row("w140_separate", 10, 300, w.sep.text, 2.2)
+        mp_draw_row("w140_separate2", 10, 330, "You and your host are in separate worlds right now.", 1.8)
+    end
+end
+
+-- mp_sleep_vote on|off (default on): off = sleep and wait alone, as before (the clock
+-- still follows the host's).
+function KCD2MP_SetSleepVote(arg)
+    local v = KCD2MP_Wo122ParseBool(arg)
+    if v == "bad" then mp_log("mp_sleep_vote: expected on|off, got '" .. tostring(arg) .. "'"); return false end
+    local w = KCD2MP.w140
+    if v ~= nil then w.vote = v end
+    mp_log(string.format("WO140-VOTE %s -- %s", w.vote and "on" or "off",
+        w.vote and "a sleep or a wait waits for everyone's yes" or "sleep and wait alone (the host's clock still rules)"))
+    KCD2MP_EmitEvent("w140_cfg", "vote=" .. (w.vote and "on" or "off"))
+    return true
+end
+
+-- ---- the checklist's markers (docs/TWO-PLAYER-CHECKLIST.md) ------------------------
+-- A tester types mark_<word> in the console when an item starts: one line in this
+-- game's log and (through the agent) in the agent's, so both machines' logs line up
+-- with the list afterwards.   MP-MARK <word>
+KCD2MP_MARKS = { "setup", "join", "fight", "fightboth", "ko", "hostdown", "horse", "horsetheft", "talk", "mutt", "muttstep",
+    "dead", "mainquest", "reward", "nodouble", "questoff", "animals", "outfit", "torch", "crouch", "loot", "inventory", "map",
+    "esc", "partnermenu", "dialogue", "cutscene", "solo", "steal", "fine", "townsfolk", "jail", "guardfight", "execution",
+    "norob", "hostcrime", "sleep", "sleepno", "sleeptimeout", "sleepjoiner", "wait", "clock", "ownworld", "odd" }
+function KCD2MP_Mark(word)
+    word = tostring(word or "odd"):gsub("[^%w_]", "")
+    if word == "" then word = "odd" end
+    local t = 0
+    pcall(function() t = Calendar.GetWorldTime() end)
+    mp_log(string.format("MP-MARK %s world_time=%.0f -- the tester's marker", word, t))
+    KCD2MP_EmitEvent("mp_mark", word)
+    KCD2MP_ShowInteractionMsg("Marked: " .. word)
+end
+
+function KCD2MP_W140Status()
+    local w = KCD2MP.w140
+    local s = w.stats
+    mp_log(string.format("WO140-STATUS session=%s fresh=%s vote=%s wrapped=%s held=%s waiting=%s prompt=%s separate=%s | held=%d go=%d dropped=%d prompts=%d answers=%d sep_said=%d rest_saves=%d",
+        tostring(w.on), tostring(KCD2MP_W140Fresh()), w.vote and "on" or "off", tostring(w.wrapper ~= nil and BedTrigger ~= nil and BedTrigger.ReportUse == w.wrapper),
+        w.held and tostring(w.held.name) or "-", w.waiting and "yes" or "no", w.prompt and string.format("%.0f", w.prompt.id) or "-", w.sep and "yes" or "no",
+        s.held, s.go, s.dropped, s.prompts, s.answers, s.sepSaid, s.restSaves))
+    KCD2MP_EmitEvent("w140_status", "")
+end
+
 -- ===== WO-139: crime and guards (docs/WO-139-findings.md) =========================
 -- The joiner's crimes are crimes in the host's world, and his own problem:
 -- never pinned on the host's Henry. Nothing between the two players is a crime,
@@ -17808,6 +18076,13 @@ local ok, err = pcall(function()
     System.AddCCommand("mp_w138_native", 'KCD2MP_W138SetNative(%line)', "WO-138: the host's NPC stream from the DLL's frame hook (default on); off = the Lua sender as before: mp_w138_native on|off")
     System.AddCCommand("mp_w138_levers", 'KCD2MP_W138SetLevers(%line)', "WO-138: in a session with a partner, no menu stops the world (the ESC menu's and a video's pause declined, the inventory's time-scale divide off); default on: mp_w138_levers on|off")
     System.AddCCommand("mp_w138_pausetest", 'KCD2MP_W138PauseTest(%line)', "WO-138 live checks: mp_w138_pausetest <source> on|off -- the engine's PauseGame from that source (7 = the ESC menu) through the DLL's gate, a stand-in for a menu")
+    for _, w in ipairs(KCD2MP_MARKS) do
+        System.AddCCommand("mark_" .. w, "KCD2MP_Mark('" .. w .. "')", "Checklist marker: writes MP-MARK " .. w .. " into this game's and the agent's logs")
+    end
+    System.AddCCommand("mp_sleep_yes", "KCD2MP_W140Answer(true)", "WO-140: answer the other player's sleep request YES (same as F11)")
+    System.AddCCommand("mp_sleep_no", "KCD2MP_W140Answer(false)", "WO-140: answer the other player's sleep request NO (same as F12)")
+    System.AddCCommand("mp_sleep_vote", 'KCD2MP_SetSleepVote(%line)', "WO-140: in a shared world a sleep or a wait waits for everyone's yes (default on): mp_sleep_vote on|off")
+    System.AddCCommand("mp_sleep_status", "KCD2MP_W140Status()", "WO-140: sleeping together -- the bed hold, the prompt, the own-world line (WO140-STATUS here, MP-WO140-STATS and WO140-NATIVE in agent.log)")
     System.AddCCommand("mp_crime_shared", 'KCD2MP_SetCrimeShared(%line)', "WO-139: the joiner's crimes are crimes in the host's world (never the host's), guards deal with him; the host's value is the session's (default on): mp_crime_shared on|off")
     System.AddCCommand("mp_crime_status", "KCD2MP_W139Status()", "WO-139: crime and guards -- this machine's role, the joiner's own crimes, a running stop, the legal horses, the punishment's skip-time gate (WO139-STATUS here, MP-WO139-STATS in agent.log)")
     System.AddCCommand("mp_w139_test", 'KCD2MP_W139Test(%line)', "WO-139 live checks (no input exists): mp_w139_test stop <guard> [kind] | crime <kind> [victim] | judge <src> [kind] | guards <src> | horses | resolve <action>")
@@ -18124,6 +18399,11 @@ local function handleAction(action, activation, value)
     -- so the three prompts can never double-consume one press. Like every
     -- branch in this hook it runs AFTER the game's own handler and cannot
     -- block or intercept any other input.
+    -- WO-140: the sleep prompt (F11 yes / F12 no), before the quest prompt (off in a shared world anyway).
+    if KCD2MP.w140 and KCD2MP.w140.prompt and activation == "press" then
+        if ACTS.ACCEPT_ACTIONS[action] then pcall(KCD2MP_W140Answer, true); return end
+        if ACTS.DECLINE_ACTIONS[action] then pcall(KCD2MP_W140Answer, false); return end
+    end
     if KCD2MP.quest and KCD2MP.quest.prompt and activation == "press" then
         if ACTS.ACCEPT_ACTIONS[action] then
             pcall(KCD2MP_QuestAnswer, true)

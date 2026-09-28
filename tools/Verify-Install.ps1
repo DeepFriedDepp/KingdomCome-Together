@@ -153,6 +153,15 @@ $AsmMarkers = @(
     @{ File = 'KCDMP.dll';       Marker = 'WO139-TIMESET';          Owner = 'WO-139 the punishment moves no clock in a session (native time gate)' },
     @{ File = 'KcdMp.Protocol.dll'; Marker = 'crime-host';          Owner = 'WO-139 crime messages on the join channel (wire)' },
     @{ File = 'KcdMp.Protocol.dll'; Marker = 'loot-host';           Owner = 'WO-134 loot messages on the join channel (wire)' },
+    # WO-140: sleeping together (the vote, everyone's sleep screen, one clock) and the own-world trap
+    @{ File = 'KcdMpClient.dll'; Marker = 'MP-WO140-STATS';         Owner = 'WO-140 sleeping together: the vote, the Begin, the pin (agent half)' },
+    @{ File = 'KcdMpClient.dll'; Marker = 'connected from its own world -- NOT joined (separate)'; Owner = 'WO-140 the own-world trap: nothing of the host applied (agent half)' },
+    @{ File = 'KCDMP.dll';       Marker = 'WO140-HELD';             Owner = "WO-140 the sleep gate on the game's own picker (native)" },
+    @{ File = 'KCDMP.dll';       Marker = 'WO140-START';            Owner = "WO-140 the accepter's own sleep, no bed (native)" },
+    @{ File = 'KCDMP.dll';       Marker = 'WO140-PULL';             Owner = "WO-140 one clock: a joiner ahead is pulled back (native)" },
+    @{ File = 'KcdMp.Protocol.dll'; Marker = 'sleep-vote';          Owner = 'WO-140 the sleep vote on the join channel (wire)' },
+    @{ File = 'KCDMP_launcher.dll'; Marker = "Stay at the main menu. Don't load a save."; Owner = "WO-140 the joiner's Ready-to-connect line (launcher)" },
+    @{ File = 'KCDMP_launcher.dll'; Marker = 'YOU LOADED YOUR OWN SAVE'; Owner = 'WO-140 the own-world modal (launcher)' },
     @{ File = 'KCDMP_launcher.dll'; Marker = 'Kingdom Come: Together'; Owner = 'WO-134 rebrand (launcher window title)' }
 )
 
@@ -226,7 +235,11 @@ $PakMarkers = @(
     @{ Marker = 'function KCD2MP_W139HostAttack';  Owner = "WO-139 the pursuit starts the guard's own attack (mod half)" },
     @{ Marker = 'function KCD2MP_W139RobRefused';  Owner = 'WO-139 the players never rob each other (mod half)' },
     @{ Marker = "You can't steal from each other in co-op."; Owner = 'WO-139 the plain refusal line' },
-    @{ Marker = 'Quest catch-up is off in a shared world.'; Owner = 'WO-133 the plain refusal line' }
+    @{ Marker = 'Quest catch-up is off in a shared world.'; Owner = 'WO-133 the plain refusal line' },
+    @{ Marker = 'function KCD2MP_W140ReportUse';   Owner = "WO-140 the bed held before the lie-down (mod half)" },
+    @{ Marker = 'function KCD2MP_W140Prompt';      Owner = "WO-140 the other player's sleep prompt (mod half)" },
+    @{ Marker = 'function KCD2MP_W140Separate';    Owner = 'WO-140 the own-world message (mod half)' },
+    @{ Marker = 'Other players are not ready to sleep yet!'; Owner = 'WO-140 the plain refusal line' }
 )
 
 function Test-Assembly($dir, $label) {

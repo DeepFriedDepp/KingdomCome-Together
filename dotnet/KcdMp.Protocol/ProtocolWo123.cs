@@ -87,6 +87,8 @@ public static partial class Protocol
         // WO-139: crime and guards (ProtocolWo139.cs) -- the LootMsg shape, [kind][tok][text]
         (CrimeAskUp,    CrimeAskDown,    "crime-ask",    JoinHeaderLen + LootFixedLen + 1, JoinHeaderLen + LootFixedLen + CrimeTextMax, JoinFrom.Joiner),
         (CrimeHostUp,   CrimeHostDown,   "crime-host",   JoinHeaderLen + LootFixedLen + 1, JoinHeaderLen + LootFixedLen + CrimeTextMax, JoinFrom.Host),
+        // WO-140: sleeping together (ProtocolWo140.cs) -- the LootMsg shape; a joiner's goes to the host, the host's to one joiner
+        (SleepVoteUp,   SleepVoteDown,   "sleep-vote",   JoinHeaderLen + LootFixedLen + 1, JoinHeaderLen + LootFixedLen + SleepTextMax, JoinFrom.Either),
     };
 
     /// <summary>The JoinWire row for an up type, or null.</summary>

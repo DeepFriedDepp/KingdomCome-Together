@@ -985,6 +985,41 @@ public class RelayRoundTripTests : IClassFixture<RelayFixture>
         Assert.True(await b.NoneOfAsync(Protocol.CrimeAskDown, Quiet));
     }
 
+    // ---- WO-140: the sleep vote 0x68/0x69 (join channel, either way) --------
+
+    [Fact]
+    public async Task The_sleep_vote_crosses_the_relay_joiner_to_host_and_host_to_one_joiner()
+    {
+        var (a, b) = await TwoPeersAsync();   // a = the host (damage authority), b = the joiner
+        await using var _a = a; await using var _b = b;
+
+        // the joiner asks: it reaches the host (target 0xFF), with the joiner's id
+        var ask = new LootMsg(Protocol.SleepAsk, 0x00020001u, Wo140Text.Ask("sleep", b.Id, true));
+        await b.SendRawAsync(ask.BuildUp(Protocol.SleepVoteUp, Protocol.JoinTargetHost));
+        var ad = await a.ReadUntilAsync(Protocol.SleepVoteDown, Wait);
+        Assert.Equal(b.Id, ad[0]);
+        Assert.True(LootMsg.TryDecode(ad.AsSpan(1 + Protocol.JoinHeaderLen), out var agot));
+        Assert.Equal(ask, agot);
+
+        // the host answers that joiner by id
+        var yes = new LootMsg(Protocol.SleepAnswer, 0x00020001u, Wo140Text.Answer("yes", b.Id));
+        await a.SendRawAsync(yes.BuildUp(Protocol.SleepVoteUp, b.Id));
+        var yd = await b.ReadUntilAsync(Protocol.SleepVoteDown, Wait);
+        Assert.Equal(a.Id, yd[0]);
+        Assert.True(LootMsg.TryDecode(yd.AsSpan(1 + Protocol.JoinHeaderLen), out var ygot));
+        Assert.Equal(yes, ygot);
+
+        // the host's own ask and the joiner's Begin cross too
+        var begin = new LootMsg(Protocol.SleepBegin, 0x00020001u, Wo140Text.Begin("sleep", b.Id, 7f, true));
+        await b.SendRawAsync(begin.BuildUp(Protocol.SleepVoteUp, Protocol.JoinTargetHost));
+        var bd = await a.ReadUntilAsync(Protocol.SleepVoteDown, Wait);
+        Assert.True(LootMsg.TryDecode(bd.AsSpan(1 + Protocol.JoinHeaderLen), out var bgot));
+        Assert.Equal(begin, bgot);
+
+        // nobody gets his own message back
+        Assert.True(await b.NoneOfAsync(Protocol.SleepVoteDown, Quiet));
+    }
+
     [Fact]
     public async Task A_whole_world_crosses_the_relay_windowed_and_byte_exact()
     {

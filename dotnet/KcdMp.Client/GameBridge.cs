@@ -1752,6 +1752,7 @@ public partial class GameBridge(ClientConfig config)
         Wo137OnConnect(cts.Token);           // WO-137: shared quests (the mirror, the requests, talking)
         Wo138OnConnect(cts.Token);           // WO-138: no pausing (the levers, the hold) + the native NPC sender
         Wo139OnConnect(cts.Token);           // WO-139: crime and guards (the joiner's crimes in the host's world, the stop, no robbing)
+        Wo140OnConnect(cts.Token);           // WO-140: sleeping together, the own-world trap
         _ = _combat.NpcConfigAsync(_nativeWriteOn, _nativeSenderClock, cts.Token);
         _ = RespawnHeartbeatAsync(stream, announceGraves: true, cts.Token);
         // WO-99 Phase 0: learn who the local player is before the first hit.
@@ -1800,7 +1801,8 @@ public partial class GameBridge(ClientConfig config)
                 // via the clock-jump watcher as an instant skip).
                 // (This event only ever fires on the log-tail transport, so
                 // there is no third case to consider here.)
-                _localSkipKind = _nearBed ? Protocol.TimeSkipKindSleep : Protocol.TimeSkipKindWait;
+                _localSkipKind = W140SharedSkip ? (_w140SharedKind == "wait" ? Protocol.TimeSkipKindWait : Protocol.TimeSkipKindSleep)   // WO-140: the shared sleep's kind
+                    : _nearBed ? Protocol.TimeSkipKindSleep : Protocol.TimeSkipKindWait;
                 _ = _sendTimeSkip?.Invoke(Protocol.TimeSkipPhaseStart, _localSkipKind, 0);
             }
             else
@@ -2260,6 +2262,7 @@ public partial class GameBridge(ClientConfig config)
             await Wo137OnDisconnectAsync();   // WO-137: quest sync off, talk holds released
             await Wo138OnDisconnectAsync();   // WO-138: the native sender, the levers and the hold off
             await Wo139OnDisconnectAsync();   // WO-139: holds released, the detector and the punishment gate off
+            await Wo140OnDisconnectAsync();   // WO-140: the sleep gate off, no vote kept
             _myOpenDrops.Clear();
             // WO-113: no relay, no session -- the DLL's guard stands down
             // (vanilla death), and every peer's mirror gravestone goes.
@@ -2934,6 +2937,7 @@ public partial class GameBridge(ClientConfig config)
     private void OnWorldTimeReading(uint worldTime)
     {
         var now = DateTime.UtcNow;
+        Wo140CheckClock(worldTime);   // WO-140: a joiner's clock ahead of the host's is pulled back at once
 
         if (_awaitSkipDoneTime)
         {
@@ -3904,7 +3908,10 @@ public partial class GameBridge(ClientConfig config)
     /// </summary>
     private async Task ApplyTimeSkipAsync(byte sourceId, byte kind, uint worldTime, bool quiet, CancellationToken ct)
     {
-        if (_localSkipActive || _awaitSkipDoneTime)
+        // WO-140: this game's own C_SkipTime runs (the DLL's edges -- the log's AfterSkipTime marker only
+        // comes at the end): a clock write now reaches the skip's target and ends it (observed: the host's
+        // result written 1 s into the joiner's shared sleep ended it, with almost no rest). Held for the end.
+        if (_localSkipActive || _awaitSkipDoneTime || _w140LocalSkipping)
         {
             lock (_timeSkipLock)
             {
@@ -3934,7 +3941,7 @@ public partial class GameBridge(ClientConfig config)
         {
             await ExecLuaAsync(string.Format(CultureInfo.InvariantCulture,
                 "if KCD2MP_ApplyTimeSkip then KCD2MP_ApplyTimeSkip(\"{0}\",{1},{2},{3}) end",
-                EscapeLua(who), kind, worldTime, quiet ? "true" : "false"));
+                EscapeLua(who), kind, worldTime, quiet || W140SharedSkip ? "true" : "false"));   // WO-140: both slept -- no "slept till" toast
             // WO-102 Phase 6: a peer's announced sleep/wait/fast travel is a
             // resync point here too (quiet clock reports are not).
             if (!quiet)
@@ -4409,6 +4416,7 @@ public partial class GameBridge(ClientConfig config)
     {
         // WO-136: while a world loads nothing is bound or written natively either (the replay feeds it later).
         if (!replay && Wo136HeldType(type) && Wo136Holding) return;
+        if (_w140Separate && Wo140Rules.DroppedWhenSeparate(type)) return;   // WO-140: a joiner in its own world (counted by the processor)
         if (type == Protocol.NpcStateDown
             && payload.Length >= 1 + 1 + 1 + Protocol.NpcStateFixedTail
             && payload.Length <= 1 + 1 + Protocol.MaxNpcNameLen + Protocol.NpcStateFixedTail)
@@ -4474,6 +4482,7 @@ public partial class GameBridge(ClientConfig config)
                 if (frame.Type == FlushTickType) { Wo136ReplayIfReleased(); await FlushDueNpcLuaPushesAsync(); continue; }
                 Wo136ReplayIfReleased();          // WO-136: the moment the hold ends, what it kept goes first
                 if (Wo136Defer(frame)) continue;   // WO-136: the host's NPCs and avatars wait for the world to load
+                if (Wo140DropSeparate(frame.Type)) continue;   // WO-140: nothing of the host's world reaches a joiner in its own
                 int type       = frame.Type;
                 var payload    = frame.Payload;
                 int payloadLen = payload.Length;
@@ -4913,6 +4922,7 @@ public partial class GameBridge(ClientConfig config)
                     byte  tsPhase  = payload[1];
                     byte  tsKind   = payload[2];
                     uint  tsTime   = BinaryPrimitives.ReadUInt32LittleEndian(payload.AsSpan(3));
+                    Wo140NoteHostClock(tsSource, tsPhase, tsTime);   // WO-140: the host's clock, for the joiner's pin
                     if (Wo133DropTimeSkip(tsSource, tsPhase, tsKind, tsTime))
                     {
                         // WO-133 (H2): the host of a shared world ignores a joiner's skip --
@@ -5730,6 +5740,15 @@ public partial class GameBridge(ClientConfig config)
             case "w139_punish":
             case "w139_status":
                 Wo139OnEvent(name, arg);
+                return;
+            case "mp_mark":          // WO-140: the checklist's markers (mark_<word>)
+                Console.WriteLine($"MP-MARK {(arg ?? "").Trim()} -- the tester's marker (typed on this machine)");
+                return;
+            case "w140_ask":         // WO-140: sleeping together
+            case "w140_answer":
+            case "w140_cfg":
+            case "w140_status":
+                Wo140OnEvent(name, arg);
                 return;
         }
 

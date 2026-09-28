@@ -91,6 +91,9 @@ public sealed class CombatPipe : IAsyncDisposable
     private const byte Wo139             = 0x25;   // WO-139 [op][...] -> 0xA2 [ok][seq][op][reason][payload] (native wo139.h)
     private const byte Wo139Reply        = 0xA2;
     private const byte CrimeOut          = 0xA3;   // WO-139, unsolicited: a new trespass level of the local player
+    private const byte Wo140             = 0x26;   // WO-140 [op][...] -> 0xA4 [ok][seq][op][reason][payload] (native wo140.h)
+    private const byte Wo140Reply        = 0xA4;
+    private const byte SleepOut          = 0xA5;   // WO-140, unsolicited: a held picker, a C_SkipTime state edge
 
     private const int GuidLen = 16;
 
@@ -149,6 +152,12 @@ public sealed class CombatPipe : IAsyncDisposable
     /// and position. Called ON the reader: it must not make a pipe request (the WO-131 trap).
     /// </summary>
     public Action<byte, byte, float, float, float>? OnTrespass { get; set; }
+
+    /// <summary>
+    /// WO-140: 0xA5 -- (kind 1 Held: id) a sleep / wait picker the gate kept; (kind 2 State:
+    /// edge, id, hours, state) a C_SkipTime edge. Called ON the reader: no pipe request here.
+    /// </summary>
+    public Action<Wo140Frame>? OnSleepFrame { get; set; }
 
     /// <summary>WO-118: the DLL's native writer stopped a bound puppet on its own (reason, name).</summary>
     public Func<byte, string, Task>? OnNpcDropped { get; set; }
@@ -845,6 +854,73 @@ public sealed class CombatPipe : IAsyncDisposable
         return r is { } x ? x.Ok : null;
     }
 
+    // ---- WO-140 (native wo140.h) ---------------------------------------------
+
+    /// <summary>One WO-140 op: (ok, reason, payload after the 4-byte head), or null when the DLL did not answer.</summary>
+    public async Task<(bool Ok, byte Reason, byte[] Payload)?> Wo140Async(byte op, byte[] args, CancellationToken ct = default)
+    {
+        var p = new byte[1 + args.Length];
+        p[0] = op; args.CopyTo(p, 1);
+        var (body, _) = await SendAndAwaitAsync(Wo140, p, Wo140Reply, ct);
+        if (body is null || body.Length < 4) return null;
+        return (body[0] == 1, body[3], body.AsSpan(4).ToArray());
+    }
+
+    /// <summary>op 1: the sleep gate and the state edges on/off. (armed, state) or null.</summary>
+    public async Task<(bool Armed, byte State)?> Wo140ConfigAsync(bool on, CancellationToken ct = default)
+    {
+        var r = await Wo140Async(1, [(byte)(on ? 1 : 0)], ct);
+        return r is { Payload.Length: >= 2 } x ? (x.Payload[0] == 1, x.Payload[1]) : null;
+    }
+
+    /// <summary>op 2: one status line, or null.</summary>
+    public async Task<string?> Wo140StatusAsync(CancellationToken ct = default)
+    {
+        var r = await Wo140Async(2, [], ct);
+        return r is { } x ? System.Text.Encoding.ASCII.GetString(x.Payload) : null;
+    }
+
+    /// <summary>op 3: the next picker passes (ms window); a kept one is shown again. True = a kept picker opened.</summary>
+    public async Task<bool?> Wo140ApproveAsync(uint ms, CancellationToken ct = default)
+    {
+        var a = new byte[4]; BinaryPrimitives.WriteUInt32LittleEndian(a, ms);
+        var r = await Wo140Async(3, a, ct);
+        return r is { Ok: true, Payload.Length: >= 1 } x ? x.Payload[0] == 1 : null;
+    }
+
+    /// <summary>op 4: the kept picker forgotten, the approval cleared. True = one was kept.</summary>
+    public async Task<bool?> Wo140DropAsync(CancellationToken ct = default)
+    {
+        var r = await Wo140Async(4, [], ct);
+        return r is { Ok: true, Payload.Length: >= 1 } x ? x.Payload[0] == 1 : null;
+    }
+
+    /// <summary>op 5: this game's own skip (no bed): 1 started, 0 the game said no, 2 busy, 3 bad hours; null = no answer / not armed.</summary>
+    public async Task<byte?> Wo140StartAsync(byte id, float hours, CancellationToken ct = default)
+    {
+        var a = new byte[5]; a[0] = id; BinaryPrimitives.WriteSingleLittleEndian(a.AsSpan(1), hours);
+        var r = await Wo140Async(5, a, ct);
+        return r is { Ok: true, Payload.Length: >= 1 } x ? x.Payload[0] : null;
+    }
+
+    /// <summary>op 6: the running skip ends now. True = one was running.</summary>
+    public async Task<bool?> Wo140StopAsync(CancellationToken ct = default)
+    {
+        var r = await Wo140Async(6, [], ct);
+        return r is { Ok: true, Payload.Length: >= 1 } x ? x.Payload[0] == 1 : null;
+    }
+
+    /// <summary>op 7: the clock back to the host's (world seconds). (result 1 pulled / 0 not needed / 2 mismatch, before, after) or null.</summary>
+    public async Task<(byte Result, uint Before, uint After)?> Wo140PullAsync(uint expect, uint target, CancellationToken ct = default)
+    {
+        var a = new byte[8];
+        BinaryPrimitives.WriteUInt32LittleEndian(a, expect); BinaryPrimitives.WriteUInt32LittleEndian(a.AsSpan(4), target);
+        var r = await Wo140Async(7, a, ct);
+        return r is { Ok: true, Payload.Length: >= 9 } x
+            ? (x.Payload[0], BinaryPrimitives.ReadUInt32LittleEndian(x.Payload.AsSpan(1)), BinaryPrimitives.ReadUInt32LittleEndian(x.Payload.AsSpan(5)))
+            : null;
+    }
+
     // ---- WO-137 (native wo137.h) ---------------------------------------------
 
     /// <summary>One WO-137 op: (ok, reason, payload after the 4-byte head), or null when the DLL did not answer.</summary>
@@ -1098,6 +1174,12 @@ public sealed class CombatPipe : IAsyncDisposable
                 else if (type == WorldOut)
                 {
                     if (Wo138Codec.TryParseWorld(body, out var ws)) { try { OnWorld?.Invoke(ws); } catch { } }
+                }
+                else if (type == SleepOut)
+                {
+                    // WO-140: [kind=1 Held][id] | [kind=2 State][edge][id][hours:4f][state]
+                    if (Wo140Frame.TryParse(body, out var sf)) { try { OnSleepFrame?.Invoke(sf); } catch (Exception ex) { Console.WriteLine($"[wo140] sleep frame not handled: {ex.Message}"); } }
+                    else Console.WriteLine($"[wo140] malformed Sleep frame ({body.Length} bytes)");
                 }
                 else if (type == CrimeOut)
                 {

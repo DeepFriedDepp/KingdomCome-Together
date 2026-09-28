@@ -52,6 +52,8 @@ namespace KCDMP_launcher.Models
         /// <summary>WO-135: only the choice that has a save of the host's game version.</summary>
         public bool ShowBring => JoinState is "choose" or "choose-bring";
         public bool ShowFresh => JoinState is "choose" or "choose-fresh";
+        /// <summary>WO-140: a joiner connected from its own save (the agent's "own-world" state): the launcher shows a modal once.</summary>
+        public bool OwnWorld => JoinState == "own-world";
 
         private string _lastConnState = "";
         private double _lastReadAt = double.NaN;

@@ -22,6 +22,7 @@ int wo136_rules_tests(int* passed);        // wo136_rules_tests.cpp
 int wo137_rules_tests(int* passed);        // wo137_rules_tests.cpp
 int wo138_rules_tests(int* passed);        // wo138_rules_tests.cpp
 int wo139_rules_tests(int* passed);        // wo139_rules_tests.cpp
+int wo140_rules_tests(int* passed);        // wo140_rules_tests.cpp
 
 static int g_fail = 0, g_pass = 0;
 #define CHECK(cond, ...) do { if (cond) ++g_pass; else { ++g_fail; std::printf("FAIL  %s:%d  ", __FILE__, __LINE__); std::printf(__VA_ARGS__); std::printf("\n"); } } while (0)
@@ -148,6 +149,13 @@ int main() {
         const int cf = wo139_rules_tests(&cp);
         g_pass += cp;
         g_fail += cf;
+    }
+    // WO-140: the gated skip ids, the picker's edges, the thunk frame, the clock pull
+    {
+        int sp = 0;
+        const int sf = wo140_rules_tests(&sp);
+        g_pass += sp;
+        g_fail += sf;
     }
 
     std::printf("%d passed, %d failed\n", g_pass, g_fail);

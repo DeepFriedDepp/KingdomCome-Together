@@ -54,6 +54,9 @@ namespace KCDMP_launcher.Pages
         // WO-123: the joiner's world transfer ("Receiving the world... 62%"), polled from the agent.
         private string joinStatusMessage = "";
         private string joinStatusState = "idle";   // WO-125: "choose" shows the first-join buttons
+        // WO-140: a joiner waits at the main menu and joins the host's world from there.
+        internal const string JoinerReadyText = "Stay at the main menu. Don't load a save. Click CONNECT -- you'll join your host's world automatically.";
+        private bool ownWorldModalShown;           // WO-140: the "you loaded your own save" modal, once per stretch
 
         private DotNetObjectReference<Home>? objRef;
         private AppSettings settings = new AppSettings();
@@ -554,7 +557,12 @@ namespace KCDMP_launcher.Pages
                 pendingGameProcess = gameProcess;
                 pendingServer = server;
                 pendingDllPath = dllFullPath;
-                launchStatusMessage = "Load into your save, then click CONNECT once you can see and move your character.";
+                // WO-140: the joiner's flow is the main menu (a joiner who loads his own save plays alone,
+                // in a separate world -- the field trap); only the host loads a save first.
+                bool hostingNow = hostedRelayProcess != null && !hostedRelayProcess.HasExited;
+                launchStatusMessage = hostingNow
+                    ? "Load into your save, then click CONNECT once you can see and move your character."
+                    : JoinerReadyText;
                 StateHasChanged();
             }
             catch (Exception ex)

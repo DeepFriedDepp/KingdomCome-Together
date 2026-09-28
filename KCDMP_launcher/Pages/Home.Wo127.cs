@@ -313,6 +313,14 @@ namespace KCDMP_launcher.Pages
                         SyncAgentBanner();
                         await InvokeAsync(StateHasChanged);
                     }
+                    // WO-140: a joiner connected from his own save -- a modal once, besides the in-game line
+                    if (agentBanner.OwnWorld && !ownWorldModalShown)
+                    {
+                        ownWorldModalShown = true;
+                        Log.Information("Agent status: this game is in its own world, not the host's -- the own-world modal shown");
+                        ShowMessage("YOU LOADED YOUR OWN SAVE", agentBanner.JoinMessage, "");
+                    }
+                    else if (!agentBanner.OwnWorld) ownWorldModalShown = false;
                 }
                 catch (Exception ex)
                 {

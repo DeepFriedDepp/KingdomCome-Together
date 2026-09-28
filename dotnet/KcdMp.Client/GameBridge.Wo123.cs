@@ -266,6 +266,9 @@ public partial class GameBridge
             case Protocol.CrimeAskDown:
                 await Wo139OnFrameAsync(type, src, body);
                 return;
+            case Protocol.SleepVoteDown:    // WO-140
+                await Wo140OnFrameAsync(src, body);
+                return;
             case Protocol.WorldOfferDown:
                 await OnWorldOfferInAsync(src, joinId, body, ct);
                 return;

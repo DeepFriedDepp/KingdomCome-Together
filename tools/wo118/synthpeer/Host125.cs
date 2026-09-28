@@ -63,6 +63,12 @@
 //       crime judged <tok> <text> | pursue <on|off> <guard> | mode <on|off> <why> | cleared <why> <st|-> |
 //             horses <name,name|-> | record <text>  (WO-139) the other CrimeHost kinds, verbatim
 //                                 (every CrimeAskDown 0x65 received is logged: CRIMEASK ...)
+//       sleep auto yes|no|busy|none   (WO-140) answer a joiner's SleepVote Ask like a host (default none: no answer)
+//       sleep ask sleep|wait <save>   (WO-140) this host asks every joiner (tok = id<<16 | n)
+//       sleep answer <tokHex> <ans> <askerId> | begin <tokHex> <hours> <save> | cancel <tokHex> <why>   (WO-140) by hand
+//                                 (every SleepVoteDown 0x69 received is logged: SLEEPVOTE ...)
+//       clock <worldTime>         (WO-140) this host's clock announce (TimeSkip sync, kind unknown)
+//       sleeptime <worldTime>     (WO-140) this host's own sleep: TimeSkip start + done, kind sleep
 //     [reseed] = a synthetic seed (hex) written into the save's body 0x01FB, re-signed: a second
 //     "playthrough" made from a copy. Files are COPIES of real host saves; never logged by path.
 //
@@ -171,6 +177,7 @@ static class Host125
         Say($"host connected id={ack[0]} world={world.Label} ({world.Bytes.Length} B) tag={Tag(world)} player={world.Player} henry={(world.Henry ? "yes" : "no")} md5={world.Md5[..8]}");
         var wlock = new SemaphoreSlim(1, 1);
         bool npcQuiet = false, linkQuiet = false;   // WO-138
+        string sleepAuto = "none"; uint sleepN = 0; byte myGhost = ack[0];   // WO-140
         async Task W(byte[] pkt) { if (linkQuiet) return; await wlock.WaitAsync(); try { await st.WriteAsync(pkt, hard.Token); } finally { wlock.Release(); } }
         async Task Announce()
         {
@@ -284,6 +291,36 @@ static class Host125
                                 for (byte g = 1; g < 8; g++)
                                     await W(new LeashCommand(kind, sq, arg, hp[0], hp[1], hp[2], dist).Build(g));
                                 Say(FormattableString.Invariant($"LEASH {Protocol.LeashKindName(kind)} seq={sq} arg={arg} host=({hp[0]:F1}, {hp[1]:F1}, {hp[2]:F1}) sent"));
+                                break;
+                            }
+                            case "sleep":   // WO-140
+                            {
+                                if (p[1] == "auto") { sleepAuto = p[2]; Say($"SLEEP auto={sleepAuto}"); break; }
+                                byte sk; uint stk; string stx; byte target = 0xFE;
+                                if (p[1] == "ask") { sk = Protocol.SleepAsk; stk = ((uint)myGhost << 16) | (++sleepN & 0xFFFF); stx = Wo140Text.Ask(p[2], myGhost, p[3] == "1"); }
+                                else if (p[1] == "answer") { sk = Protocol.SleepAnswer; stk = Convert.ToUInt32(p[2], 16); stx = Wo140Text.Answer(p[3], byte.Parse(p[4], CultureInfo.InvariantCulture)); target = byte.Parse(p[4], CultureInfo.InvariantCulture); }
+                                else if (p[1] == "begin") { sk = Protocol.SleepBegin; stk = Convert.ToUInt32(p[2], 16); stx = Wo140Text.Begin("sleep", myGhost, float.Parse(p[3], CultureInfo.InvariantCulture), p[4] == "1"); }
+                                else if (p[1] == "cancel") { sk = Protocol.SleepCancel; stk = Convert.ToUInt32(p[2], 16); stx = Wo140Text.Cancel(p[3], myGhost); }
+                                else { Say($"SLEEP unknown verb {p[1]}"); break; }
+                                if (target != 0xFE) await W(new LootMsg(sk, stk, stx).BuildUp(Protocol.SleepVoteUp, target));
+                                else for (byte g = 1; g < 8; g++) if (g != myGhost) await W(new LootMsg(sk, stk, stx).BuildUp(Protocol.SleepVoteUp, g));
+                                Say($"SLEEP {Protocol.SleepVoteName(sk)} tok=0x{stk:X8} sent: {stx}");
+                                break;
+                            }
+                            case "clock":       // WO-140: the host's clock announce
+                            case "sleeptime":   // WO-140: the host's own sleep's result
+                            {
+                                uint wt = uint.Parse(p[1], CultureInfo.InvariantCulture);
+                                var phases = p[0] == "clock" ? new[] { Protocol.TimeSkipPhaseSync } : new[] { Protocol.TimeSkipPhaseStart, Protocol.TimeSkipPhaseDone };
+                                foreach (byte ph in phases)
+                                {
+                                    var pk = new byte[3 + Protocol.TimeSkipUpPayloadLen];
+                                    pk[0] = Protocol.TimeSkipUp; BinaryPrimitives.WriteUInt16LittleEndian(pk.AsSpan(1), Protocol.TimeSkipUpPayloadLen);
+                                    pk[3] = ph; pk[4] = p[0] == "clock" ? Protocol.TimeSkipKindUnknown : Protocol.TimeSkipKindSleep;
+                                    BinaryPrimitives.WriteUInt32LittleEndian(pk.AsSpan(5), ph == Protocol.TimeSkipPhaseStart ? 0 : wt);
+                                    await W(pk);
+                                }
+                                Say($"{(p[0] == "clock" ? "CLOCK sync" : "SLEEPTIME sleep start + done")} t={wt} sent");
                                 break;
                             }
                             case "timeskip":   // WO-114: the host's fast travel's time skip
@@ -759,6 +796,16 @@ static class Host125
                         default:
                             Say("  -> not answered (malformed)");
                             break;
+                    }
+                    continue;
+                }
+                if (type == Protocol.SleepVoteDown && LootMsg.TryDecode(body, out var sv))   // WO-140: logged; `sleep auto` answers an Ask
+                {
+                    Say($"SLEEPVOTE {Protocol.SleepVoteName(sv.Kind)} tok=0x{sv.Tok:X8} from {src}: {sv.Text}");
+                    if (sv.Kind == Protocol.SleepAsk && sleepAuto is "yes" or "no" or "busy" && Wo140Text.TryAsk(sv.Text, out var sKind, out byte sAsker, out _))
+                    {
+                        await W(new LootMsg(Protocol.SleepAnswer, sv.Tok, Wo140Text.Answer(sleepAuto, sAsker)).BuildUp(Protocol.SleepVoteUp, src));
+                        Say($"  -> answered {sleepAuto} (auto) to {sAsker}'s {sKind}");
                     }
                     continue;
                 }

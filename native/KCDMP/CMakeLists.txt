@@ -37,6 +37,7 @@
     wo137.cpp
     wo138.cpp
     wo139.cpp
+    wo140.cpp
 )
 
 target_include_directories(KCDMP PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

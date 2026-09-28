@@ -54,6 +54,11 @@
 //   at <t> crime resync <why>                  (WO-139) a CrimeAsk Resync; every CrimeHostDown (0x67) received is printed
 //                                              every QuestHostDown (0x61) received is printed; --quest-rec F appends
 //                                              each Change's text to F (synthpeer `questfile F` replays it)
+//   at <t> sleep auto yes|no|busy|none        (WO-140) answer every SleepVote Ask by itself (default none: no answer)
+//   at <t> sleep ask sleep|wait <save 0|1>     (WO-140) this joiner asks the host to sleep (tok = id<<16 | n)
+//   at <t> sleep answer <tok> yes|no|busy      (WO-140) answer an Ask
+//   at <t> sleep begin <tok> <hours> <save>    (WO-140) this joiner (the asker) chose the length
+//   at <t> sleep cancel <tok> <why>            (WO-140) backed-out | woke | ...; every SleepVoteDown (0x69) is printed
 //   end <t>                                    stop
 //
 // Position packets: every 30 ms while moving, 2 s heartbeat still; the state
@@ -121,6 +126,9 @@ static class P
 
         byte? joiner = null;
         var leashIn = new System.Collections.Concurrent.ConcurrentQueue<(byte Src, LeashCommand C)>();   // WO-114
+        var sleepIn = new System.Collections.Concurrent.ConcurrentQueue<(byte Src, LootMsg M)>();        // WO-140
+        string sleepAuto = "none";
+        uint sleepN = 0;
         using var cts = new CancellationTokenSource();
         var inbox = new ActionInbox();
         string recPath = Arg(a, "--record", "");
@@ -177,6 +185,12 @@ static class P
                     else if (t2 == Protocol.CrimeHostDown && b2.Length > 1 + Protocol.JoinHeaderLen
                              && LootMsg.TryDecode(b2.AsSpan(1 + Protocol.JoinHeaderLen), out var cm))   // WO-139
                         Console.WriteLine($"PEER t={recClock.Elapsed.TotalSeconds:F1} got CrimeHost {Protocol.CrimeHostName(cm.Kind)} tok={cm.Tok} from={b2[0]}: {cm.Text}");
+                    else if (t2 == Protocol.SleepVoteDown && b2.Length > 1 + Protocol.JoinHeaderLen
+                             && LootMsg.TryDecode(b2.AsSpan(1 + Protocol.JoinHeaderLen), out var svm))   // WO-140
+                    {
+                        Console.WriteLine($"PEER t={recClock.Elapsed.TotalSeconds:F1} got SleepVote {Protocol.SleepVoteName(svm.Kind)} tok=0x{svm.Tok:X8} from={b2[0]}: {svm.Text}");
+                        sleepIn.Enqueue((b2[0], svm));
+                    }
                     else if (t2 == Protocol.LeashDown && b2.Length > 1 + Protocol.JoinHeaderLen
                              && LeashCommand.TryDecode(b2.AsSpan(1 + Protocol.JoinHeaderLen), out var lc))
                         leashIn.Enqueue((b2[0], lc));   // WO-114: handled on the main loop
@@ -207,7 +221,7 @@ static class P
                 {
                     "in-world" => Protocol.LeashFlagInWorld, "downed" => Protocol.LeashFlagDowned, "loading" => Protocol.LeashFlagLoading,
                     "cutscene" => Protocol.LeashFlagCutscene, "dialogue" => Protocol.LeashFlagDialogue, "menu" => Protocol.LeashFlagMenu,
-                    "mounted" => Protocol.LeashFlagMounted, _ => (ushort)0,
+                    "mounted" => Protocol.LeashFlagMounted, "separate" => Protocol.LeashFlagSeparate, _ => (ushort)0,   // WO-140: in its own world
                 };
             return f;
         }
@@ -459,6 +473,19 @@ static class P
                         Console.WriteLine($"PEER t={t:F1} quest {Protocol.QuestAskName(k)} tok={lootTok}: {text}");
                         break;
                     }
+                    case "sleep":   // WO-140: sleep auto|ask|answer|begin|cancel
+                    {
+                        if (f.Length > 2 && f[1] == "auto") { sleepAuto = f[2]; Console.WriteLine($"PEER t={t:F1} sleep auto={sleepAuto}"); break; }
+                        byte sk; uint stok; string stext;
+                        if (f[1] == "ask" && f.Length > 3) { sk = Protocol.SleepAsk; stok = ((uint)myId << 16) | (++sleepN & 0xFFFF); stext = Wo140Text.Ask(f[2], myId, f[3] == "1"); }
+                        else if (f[1] == "answer" && f.Length > 3) { sk = Protocol.SleepAnswer; stok = Convert.ToUInt32(f[2], 16); stext = Wo140Text.Answer(f[3], (byte)(stok >> 16)); }
+                        else if (f[1] == "begin" && f.Length > 4) { sk = Protocol.SleepBegin; stok = Convert.ToUInt32(f[2], 16); stext = Wo140Text.Begin("sleep", myId, float.Parse(f[3], CultureInfo.InvariantCulture), f[4] == "1"); }
+                        else if (f[1] == "cancel" && f.Length > 3) { sk = Protocol.SleepCancel; stok = Convert.ToUInt32(f[2], 16); stext = Wo140Text.Cancel(f[3], myId); }
+                        else { Console.WriteLine($"PEER t={t:F1} sleep: bad verb"); break; }
+                        await Send(st, new LootMsg(sk, stok, stext).BuildUp(Protocol.SleepVoteUp, Protocol.JoinTargetHost));
+                        Console.WriteLine($"PEER t={t:F1} sleep {Protocol.SleepVoteName(sk)} tok=0x{stok:X8}: {stext}");
+                        break;
+                    }
                     case "crime":   // WO-139: crime report ... | outcome <tok> ... | resync <why>
                     {
                         byte k = f[1] switch { "report" => Protocol.CrimeAskReport, "outcome" => Protocol.CrimeAskOutcome, "resync" => Protocol.CrimeAskResync, _ => (byte)0 };
@@ -482,6 +509,14 @@ static class P
                         Console.WriteLine($"PEER t={t:F1} leash on={leashOn} flags={Protocol.LeashFlagsText(leashFlags)} obey={leashObey}");
                         break;
                 }
+            }
+            // WO-140: the host's sleep votes; with `sleep auto` every Ask is answered here.
+            while (sleepIn.TryDequeue(out var svq))
+            {
+                if (svq.M.Kind != Protocol.SleepAsk || sleepAuto is not ("yes" or "no" or "busy")) continue;
+                if (!Wo140Text.TryAsk(svq.M.Text, out var sKind, out byte sAsker, out _)) continue;
+                await Send(st, new LootMsg(Protocol.SleepAnswer, svq.M.Tok, Wo140Text.Answer(sleepAuto, sAsker)).BuildUp(Protocol.SleepVoteUp, Protocol.JoinTargetHost));
+                Console.WriteLine($"PEER t={t:F1} sleep answer tok=0x{svq.M.Tok:X8}: {sleepAuto} (auto, to {sAsker}'s {sKind})");
             }
             // WO-114: the host's leash messages; a pull moves the avatar beside the host.
             while (leashIn.TryDequeue(out var li))

@@ -305,6 +305,11 @@ constexpr uint8_t kWorldOut           = 0xA1;
 constexpr uint8_t kWo139              = 0x25;
 constexpr uint8_t kWo139Reply         = 0xA2;
 constexpr uint8_t kCrimeOut           = 0xA3;
+// WO-140: sleeping together (wo140.h): [op][...] -> 0xA4 [ok][seq][op][reason][payload],
+// and the unsolicited 0xA5 Sleep (a held picker, a C_SkipTime state edge).
+constexpr uint8_t kWo140              = 0x26;
+constexpr uint8_t kWo140Reply         = 0xA4;
+constexpr uint8_t kSleepOut           = 0xA5;
 constexpr uint8_t kSaveListReply      = 0x8D;   // [ok][seq][listed][idx:2][count:2][current][contPl][contIdx:2][nameLen][contName]
 constexpr uint8_t kLocalAction        = 0x96;   // unsolicited: [kind][phase][ic][zone][type][flags][guid:16][eid:4][nameLen][name]
 constexpr uint8_t kPvpHitOut          = 0x97;   // unsolicited: [victimEid:4][st:4f][hp:4f][flags][material]

@@ -89,6 +89,7 @@ public partial class GameBridge
 
     private async Task Wo134SendAsync(byte type, byte target, byte kind, uint tok, string text)
     {
+        if (type == Protocol.LootAskUp && Wo140HoldOutbound($"a loot ask ({Protocol.LootAskName(kind)})")) return;   // WO-140: its own world
         try
         {
             await WriteJoinAsync(new LootMsg(kind, tok, text).BuildUp(type, target));

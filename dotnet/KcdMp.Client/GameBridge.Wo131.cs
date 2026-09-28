@@ -110,6 +110,7 @@ public partial class GameBridge
     /// </summary>
     private async Task<(bool Send, float Health, bool Fatal)> Wo131GateOutboundAsync(Guid soul, string npcName, float health, bool died)
     {
+        if (Wo140HoldOutbound($"a hit on {npcName}")) return (false, 0, false);   // WO-140: its own world, not the host's
         if (!Wo131JoinerActive) return (true, health, died);
         Wo131HitCheck? hc = null;
         try { hc = await _combat.Wo131HitCheckAsync(soul, npcName); } catch { }
