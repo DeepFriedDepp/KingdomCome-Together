@@ -349,6 +349,44 @@ Logs:
   `WO139-CONTEXT`, `WO139-TIMESET`.
 * status `mp_crime_status`.
 
+## Sleeping together, and the "own world" trap (WO-140, in the next installer)
+
+In plain words:
+
+* **Sleep together, or not at all.** Whoever picks "Sleep" at a bed (or waits)
+  does not lie down yet: "Waiting for other players...". The other gets
+  "<name> wants to sleep. Sleep too?" — **F11** yes, **F12** no, 30 s. On yes
+  the sleeper lies down and chooses how long; the moment the length is
+  confirmed the other player's game shows its own sleep screen for the same
+  hours, wherever they stand. Both are rested, both clocks move together. On a
+  no (or no answer): nothing happens, "Other players are not ready to sleep
+  yet!".
+* **One clock.** The host's clock is the world's; a partner's clock ahead of
+  it is pulled back at once. A partner's bed that saves: the host makes the
+  game's own rest save after the sleep.
+* **The joiner waits at the main menu** (the launcher now says so). A joiner
+  who loads their own save and connects is told, in the game (repeated) and in
+  a launcher window, to quit and wait at the menu; until then nothing of the
+  host's world is applied to theirs (no NPCs, fights, loot, quests, crime or
+  leash) and the host does not leash them.
+* **Off switch:** `mp_sleep_vote off` (each sleeps alone; the partner's clock
+  still follows the host's).
+
+Logs:
+
+* agent: `MP-W140 this player wants to sleep …`, `vote 0x… : everyone said
+  yes` / `no` / `timeout`, `… chose N h -- everyone's sleep starts now`,
+  `this player's sleep for N h -- the game's own sleep`, `this clock was N s
+  ahead of the host's -- pulled back`; the trap: `MP-JOIN joiner: connected
+  from its own world -- NOT joined (separate)` (every minute, with what was
+  dropped), `MP-LEASH host: joiner N is in its own world`.
+* both: `MP-WO140-STATS` every 60 s.
+* kcd.log: `WO140-HOLD`, `WO140-GO`, `WO140-DROP`, `WO140-PROMPT`,
+  `WO140-ANSWER`, `WO140-SEPARATE`, `WO140-RESTSAVE`, `MP-MARK <word>` (the
+  checklist's markers); native `WO140-HELD`, `WO140-APPROVE`, `WO140-STATE`,
+  `WO140-START`, `WO140-STOP`, `WO140-PULL`.
+* status `mp_sleep_status`.
+
 ## Expected not to work yet
 
 * **No "back to the main menu"** in KCD2. If the host leaves, or a check
