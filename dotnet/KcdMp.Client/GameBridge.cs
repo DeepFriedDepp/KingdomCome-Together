@@ -519,7 +519,7 @@ public partial class GameBridge(ClientConfig config)
     // WO-13 retired that outright -- see ApplyPeerPauseAsync.
     private bool _localAutoPaused;
     private bool _localManualPaused;
-    private bool? _lastSentPauseState;
+    private byte? _lastSentPauseState;   // WO-138: the reasons byte last sent (0 = running)
     private readonly SemaphoreSlim _pauseSendLock = new(1, 1);
 
     // WO-13 Phase 1. Script.SetTimer is frozen for the whole duration of a
@@ -1750,6 +1750,7 @@ public partial class GameBridge(ClientConfig config)
         Wo134OnConnect(cts.Token);           // WO-134: world items (bodies, loose items, chest ledgers)
         Wo132OnConnect(cts.Token);           // WO-132: damage safety, combat engagement
         Wo137OnConnect(cts.Token);           // WO-137: shared quests (the mirror, the requests, talking)
+        Wo138OnConnect(cts.Token);           // WO-138: no pausing (the levers, the hold) + the native NPC sender
         _ = _combat.NpcConfigAsync(_nativeWriteOn, _nativeSenderClock, cts.Token);
         _ = RespawnHeartbeatAsync(stream, announceGraves: true, cts.Token);
         // WO-99 Phase 0: learn who the local player is before the first hit.
@@ -2256,6 +2257,7 @@ public partial class GameBridge(ClientConfig config)
             Wo135OnDisconnect();              // WO-135
             Wo132OnDisconnect();              // WO-132: engaged copies released
             await Wo137OnDisconnectAsync();   // WO-137: quest sync off, talk holds released
+            await Wo138OnDisconnectAsync();   // WO-138: the native sender, the levers and the hold off
             _myOpenDrops.Clear();
             // WO-113: no relay, no session -- the DLL's guard stands down
             // (vanilla death), and every peer's mirror gravestone goes.
@@ -2883,16 +2885,18 @@ public partial class GameBridge(ClientConfig config)
         await _pauseSendLock.WaitAsync(ct);
         try
         {
-            bool aggregate = _localAutoPaused || _localManualPaused;
-            if (_lastSentPauseState == aggregate) return;
-            _lastSentPauseState = aggregate;
+            // WO-138: the state byte carries the reasons (0 = running); a change of
+            // reason is a new announcement too.
+            byte state = Wo138PauseState();
+            if (_lastSentPauseState == state) return;
+            _lastSentPauseState = state;
 
             var packet = new byte[3 + Protocol.PauseUpPayloadLen];
             packet[0] = Protocol.PauseUp;
             BinaryPrimitives.WriteUInt16LittleEndian(packet.AsSpan(1), Protocol.PauseUpPayloadLen);
-            packet[3] = aggregate ? Protocol.PauseStateEntered : Protocol.PauseStateExited;
+            packet[3] = state;
             await WritePacketAsync(stream, packet, ct);
-            Console.WriteLine($"[pause] local state -> {(aggregate ? "entered" : "exited")}");
+            Console.WriteLine($"[pause] local state -> {(state != 0 ? "paused: " + Wo138Codec.Describe(state) : "running")}");
         }
         catch (Exception ex) { Console.WriteLine($"[pause] send failed: {ex.Message}"); }
         finally { _pauseSendLock.Release(); }
@@ -4383,6 +4387,7 @@ public partial class GameBridge(ClientConfig config)
                 var payload    = new byte[payloadLen];
                 await ReadExactAsync(stream, payload, ct);
                 long arrival   = Stopwatch.GetTimestamp();
+                Wo138NoteArrival(type, payload);   // WO-138: the source's link is alive (the joiner's hold)
                 FeedNativeAtRead(type, payload, arrival);
                 frames.Writer.TryWrite(new InFrame(type, payload, arrival));
             }
@@ -4813,8 +4818,10 @@ public partial class GameBridge(ClientConfig config)
                 else if (type == Protocol.PauseDown && payloadLen == Protocol.PauseDownPayloadLen)
                 {
                     // PauseDown: [sourceGhostId:1][state:1]
+                    // WO-138: the state byte is 0 (running) or the sender's reasons.
                     byte sourceId = payload[0];
-                    bool paused = payload[1] == Protocol.PauseStateEntered;
+                    bool paused = payload[1] != Protocol.PauseStateExited;
+                    Wo138OnPeerPause(sourceId, payload[1]);
                     await ApplyPeerPauseAsync(sourceId, paused, ct);
                 }
                 else if (type == Protocol.PlayerStateDown && payloadLen == Protocol.PlayerStateDownPayloadLen)
@@ -5809,6 +5816,11 @@ public partial class GameBridge(ClientConfig config)
                 break;
             }
 
+            case "npc_track": Wo138OnTrackLine(arg); break;    // WO-138: the rescan set for the DLL's sender
+            case "w138_cfg": Wo138OnCfgLine(arg); break;       // WO-138: the sender's settings
+            case "w138_dialog": Wo138OnDialogLine(arg); break; // WO-138: the host's dialogue edge (a pause reason)
+            case "w138": Wo138OnModLine(arg); break;           // WO-138: mp_w138_native / mp_w138_levers / mp_w138_status
+
             case "npc_state":
             case "npc_drag":
             case "npc_claim":
@@ -5833,6 +5845,7 @@ public partial class GameBridge(ClientConfig config)
                     break;
                 }
                 byte nsflags = f.Length > 6 && byte.TryParse(f[6], out byte nf) ? nf : (byte)0;
+                if (name == "npc_state" && Wo138DropLuaLine(nsflags)) break;   // WO-138: the DLL streams (a resync passes)
                 var sendNpc = name == "npc_state" ? _sendNpcState : _sendNpcDrag;
                 if (sendNpc is null) break;
                 if (name == "npc_state") lock (_requestsIn) _ownedNpcSeenUtc[f[0]] = DateTime.UtcNow;   // WO-102 Phase 5

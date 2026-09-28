@@ -53,6 +53,11 @@
 //       quest set <path> <val> <port|->   (WO-137) this host's own value for a State (no message)
 //       questfile <file>          (WO-137) replay a host's recorded Change texts ("<seq> <flags> <old> <new> <port|->
 //                                 <questLen> <path>" per line, as avatarpeer --quest-rec writes them), renumbered, in order
+//       pause <hex>               (WO-138) a PauseUp (0x1C) with that state byte: 0 = running, else the reasons
+//                                 (01 menu, 02 inventory, 04 dialogue, 08 cutscene, 10 load, 20 skip-time, 40 frozen)
+//       npcquiet on|off           (WO-138) every running npc stream stops sending (the host's world stands still and its
+//                                 stream is really silent), or sends again; everything else keeps going
+//       linkquiet on|off          (WO-138) NOTHING goes out any more (position heartbeats too): the host's link is lost
 //                                 (every QuestAskDown 0x63 received is logged: QUESTASK ...)
 //     [reseed] = a synthetic seed (hex) written into the save's body 0x01FB, re-signed: a second
 //     "playthrough" made from a copy. Files are COPIES of real host saves; never logged by path.
@@ -161,7 +166,8 @@ static class Host125
         if (t0 != Protocol.Ack) { Say("refused by the relay"); return 1; }
         Say($"host connected id={ack[0]} world={world.Label} ({world.Bytes.Length} B) tag={Tag(world)} player={world.Player} henry={(world.Henry ? "yes" : "no")} md5={world.Md5[..8]}");
         var wlock = new SemaphoreSlim(1, 1);
-        async Task W(byte[] pkt) { await wlock.WaitAsync(); try { await st.WriteAsync(pkt, hard.Token); } finally { wlock.Release(); } }
+        bool npcQuiet = false, linkQuiet = false;   // WO-138
+        async Task W(byte[] pkt) { if (linkQuiet) return; await wlock.WaitAsync(); try { await st.WriteAsync(pkt, hard.Token); } finally { wlock.Release(); } }
         async Task Announce()
         {
             if (loading) return;
@@ -340,7 +346,7 @@ static class Host125
                                         double tn = Clock.Elapsed.TotalSeconds; float dt = (float)(tn - tl); tl = tn;
                                         if (npcVel.TryGetValue(nm, out var v)) { cx += v.Vx * dt; cy += v.Vy * dt; cz += v.Vz * dt; }
                                         float yaw2 = npcVel.TryGetValue(nm, out var v2) && (v2.Vx != 0 || v2.Vy != 0) ? MathF.Atan2(-v2.Vx, v2.Vy) : nyaw;
-                                        await W(P.BuildUp(nm, cx, cy, cz, yaw2, nhp, npcFlags.GetValueOrDefault(nm, nfl), ++nseq, (uint)Clock.ElapsedMilliseconds));
+                                        if (!npcQuiet) await W(P.BuildUp(nm, cx, cy, cz, yaw2, nhp, npcFlags.GetValueOrDefault(nm, nfl), ++nseq, (uint)Clock.ElapsedMilliseconds));
                                         await Task.Delay(npcVel.ContainsKey(nm) ? 100 : 200);
                                     }
                                     npcFlags.TryRemove(nm, out _);
@@ -348,6 +354,21 @@ static class Host125
                                 Say($"NPC {nm} streamed at {p[2]},{p[3]},{p[4]} hp={p[6]} flags={p[7]} for {secs} s");
                                 break;
                             }
+                            case "pause":   // WO-138: pause <hex> -- a PauseUp with that state byte
+                            {
+                                byte stt = Convert.ToByte(p[1], 16);
+                                await W([Protocol.PauseUp, 1, 0, stt]);
+                                Say($"PAUSE sent state=0x{stt:X2}");
+                                break;
+                            }
+                            case "npcquiet":   // WO-138
+                                npcQuiet = p.Length > 1 && p[1] == "on";
+                                Say($"NPCQUIET {(npcQuiet ? "on: the npc streams are silent" : "off: the npc streams send again")}");
+                                break;
+                            case "linkquiet":   // WO-138
+                                linkQuiet = p.Length > 1 && p[1] == "on";
+                                Say($"LINKQUIET {(linkQuiet ? "on: nothing goes out" : "off")}");
+                                break;
                             case "hstate":   // WO-135/136: hstate crouch=0|1 torch=0|1 combat=0|1 -- the host's state block rides its position packets (1 s heartbeat)
                             {
                                 var bits = hostSt2?.Bits ?? BodyState2Bits.None;

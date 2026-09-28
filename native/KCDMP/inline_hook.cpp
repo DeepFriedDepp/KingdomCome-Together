@@ -98,6 +98,10 @@ bool install_gate(void* target, const uint8_t* expect, size_t len, GateCallback 
     return install_impl(target, expect, len, reinterpret_cast<Callback>(cb), why, true);
 }
 
+bool install_gate4(void* target, const uint8_t* expect, size_t len, GateCallback4 cb, const char** why) {
+    return install_impl(target, expect, len, reinterpret_cast<Callback>(cb), why, true);
+}
+
 bool install_impl(void* target, const uint8_t* expect, size_t len, Callback cb, const char** why, bool gate) {
     const char* dummy = nullptr;
     if (!why) why = &dummy;

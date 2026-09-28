@@ -81,6 +81,12 @@ uint8_t on_hold(const uint8_t* body, size_t len);
 uint8_t on_config(const uint8_t* body, size_t len);
 // The agent disconnected: every binding is dropped (no stream will follow).
 void on_pipe_closed();
+// WO-138 (joiner): the host announced a pause and its link is alive -- every
+// bound copy stays where the stream left it: no silence drop while on. Turning
+// it off restarts every stream's silence clock, so the 4 s rule counts from the
+// resume, not from the last sample before the pause. Any thread.
+void set_hold_all(bool on);
+bool hold_all();
 
 // ---- 0x11 bind, main thread (the pipe marshals it) ---------------------------
 // [on:1][eid:4][wuid:8][ax:4f][ay:4f][az:4f][delayMs:2][nameLen:1][name]

@@ -41,4 +41,9 @@ bool run_sync(std::function<void()> work, unsigned timeout_ms, bool* faulted);
 // not on a live path, and everything queued will sit there forever.
 unsigned long long frame_count();
 
+// WO-138: the dt the game passed to the hooked C_ModulesManager::Update on the
+// latest frame (the game's own frame time: 0 while a PauseGame source holds the
+// game timer, divided while the Apse inventory slows it). Main thread.
+float last_dt();
+
 } // namespace kcdmp::main_thread

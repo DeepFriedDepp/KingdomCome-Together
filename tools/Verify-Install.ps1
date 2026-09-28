@@ -142,6 +142,10 @@ $AsmMarkers = @(
     @{ File = 'KCDMP.dll';       Marker = 'WO137-BUILD';            Owner = 'WO-137 quest State detector and Set-port apply (native)' },
     @{ File = 'KCDMP.dll';       Marker = 'WO137-TIMESET';          Owner = "WO-137 quest time sets are the host's only (native time gate)" },
     @{ File = 'KcdMp.Protocol.dll'; Marker = 'quest-host';          Owner = 'WO-137 quest messages on the join channel (wire)' },
+    # WO-138: no pausing + the host's NPC stream in the DLL
+    @{ File = 'KcdMpClient.dll'; Marker = 'MP-WO138-STATS';         Owner = 'WO-138 native NPC sender, pause announcement, hold, levers (agent half)' },
+    @{ File = 'KCDMP.dll';       Marker = 'WO138-GATE';             Owner = 'WO-138 no menu pauses the world in a session (native PauseGame gate)' },
+    @{ File = 'KCDMP.dll';       Marker = 'WO138-SEND';             Owner = 'WO-138 the NPC stream at the frame hook (native sender)' },
     @{ File = 'KcdMp.Protocol.dll'; Marker = 'loot-host';           Owner = 'WO-134 loot messages on the join channel (wire)' },
     @{ File = 'KCDMP_launcher.dll'; Marker = 'Kingdom Come: Together'; Owner = 'WO-134 rebrand (launcher window title)' }
 )
@@ -209,6 +213,8 @@ $PakMarkers = @(
     @{ Marker = 'function KCD2MP_W137TalkResume';  Owner = "WO-137 the joiner talks to the host's NPC (mod half)" },
     @{ Marker = 'function KCD2MP_W137HostHold';    Owner = "WO-137 the host holds its NPC busy (mod half)" },
     @{ Marker = 'function KCD2MP_W137DeadBody';    Owner = 'WO-137 dead is dead: a corpse is never paused (mod half)' },
+    @{ Marker = 'function KCD2MP_W138Hold';        Owner = "WO-138 hold, don't hide: the host's copies stay while it is paused (mod half)" },
+    @{ Marker = 'function KCD2MP_W138PushTrack';   Owner = "WO-138 the rescan set for the DLL's NPC sender (mod half)" },
     @{ Marker = 'Quest catch-up is off in a shared world.'; Owner = 'WO-133 the plain refusal line' }
 )
 

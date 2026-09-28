@@ -20,6 +20,7 @@ int wo114_wake_tests(int* passed);   // wo114_wake_tests.cpp
 int wo133_port_gate_tests(int* passed);   // wo133_port_gate_tests.cpp
 int wo136_rules_tests(int* passed);        // wo136_rules_tests.cpp
 int wo137_rules_tests(int* passed);        // wo137_rules_tests.cpp
+int wo138_rules_tests(int* passed);        // wo138_rules_tests.cpp
 
 static int g_fail = 0, g_pass = 0;
 #define CHECK(cond, ...) do { if (cond) ++g_pass; else { ++g_fail; std::printf("FAIL  %s:%d  ", __FILE__, __LINE__); std::printf(__VA_ARGS__); std::printf("\n"); } } while (0)
@@ -132,6 +133,13 @@ int main() {
         const int qf = wo137_rules_tests(&qp);
         g_pass += qp;
         g_fail += qf;
+    }
+    // WO-138: the native NPC sender's gates, the frame meter, the PauseGame gate
+    {
+        int np = 0;
+        const int nf = wo138_rules_tests(&np);
+        g_pass += np;
+        g_fail += nf;
     }
 
     std::printf("%d passed, %d failed\n", g_pass, g_fail);

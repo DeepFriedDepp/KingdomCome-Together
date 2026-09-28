@@ -58,7 +58,7 @@
 //
 // usage: AvatarPeer --scenario s.txt [--host 127.0.0.1] [--port 7778] [--name wo121-peer] [--skew-ms N]
 //   --skew-ms N  (WO-129) every sender stamp this peer writes runs N ms ahead: an artificial clock skew
-//   --record F   (WO-131) append every NpcStateDown (0x27), ActionDown (0x3C) and NpcDamageDown (0x31)
+//   --record F   (WO-131) append every NpcStateDown (0x27), ActionDown (0x3C), NpcDamageDown (0x31) and (WO-138) PauseDown (0x1D)
 //                this peer receives to F as "<ms> <type hex> <payload hex>" -- the host's outgoing
 //                stream, for tools/wo131/replay.py -> synthpeer `raw` lines into a joiner game
 using System.Buffers.Binary;
@@ -133,7 +133,7 @@ static class P
                 while (!cts.IsCancellationRequested)
                 {
                     var (t2, b2) = await ReadPacket(st, cts.Token);
-                    if (rec is not null && (t2 == Protocol.NpcStateDown || t2 == Protocol.ActionDown || t2 == Protocol.NpcDamageDown))
+                    if (rec is not null && (t2 == Protocol.NpcStateDown || t2 == Protocol.ActionDown || t2 == Protocol.NpcDamageDown || t2 == Protocol.PauseDown))   // WO-138: + the pause announcement
                         lock (rec) rec.WriteLine($"{recClock.ElapsedMilliseconds} {t2:X2} {Convert.ToHexString(b2)}");
                     if (t2 == Protocol.AppearanceDown && b2.Length >= 2 && b2[0] != myId) hostAppearance = b2.AsSpan(1).ToArray();   // [src][count][classes]
                     if (t2 == Protocol.Name && b2.Length >= 2 && b2[0] != myId) { joiner ??= b2[0]; }

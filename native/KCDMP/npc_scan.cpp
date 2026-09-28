@@ -334,4 +334,8 @@ bool for_each_in_radius(const Anchor* anchors, int anchorCount, float radius, Vi
     return true;
 }
 
+bool read_entity(const void* entity, float* x, float* y, float* z, float* yaw) {
+    return entity && x && y && z && yaw && read_pos_yaw(entity, x, y, z, yaw);
+}
+
 } // namespace kcdmp::npcscan

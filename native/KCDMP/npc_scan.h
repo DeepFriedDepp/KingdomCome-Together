@@ -108,4 +108,8 @@ using Visit = void (*)(void* entity, const char* name, float x, float y, float z
 bool for_each_in_radius(const Anchor* anchors, int anchorCount, float radius, Visit visit, void* ctx,
                         uint32_t* walked, uint8_t* refuse);
 
+// WO-138: one entity's world position and yaw, read exactly as scan() reads them
+// (m_worldTM), SEH-guarded. For the native NPC sender (wo138.cpp).
+bool read_entity(const void* entity, float* x, float* y, float* z, float* yaw);
+
 } // namespace kcdmp::npcscan

@@ -1108,4 +1108,21 @@ public class RelayRoundTripTests : IClassFixture<RelayFixture>
         var down = await b.ReadUntilAsync(Protocol.WorldSavedDown, Wait);
         Assert.Equal("save009.whs", WorldSaved.TryDecode(down, true, out _)!.Value.FileName);
     }
+
+    // ---- WO-138: the pause announcement carries its reasons (0 = running) -------
+
+    [Fact]
+    public async Task Pause_reasons_cross_the_relay_unchanged()
+    {
+        var (a, b) = await TwoPeersAsync();   // a = the host, b = the joiner
+        await using var _a = a; await using var _b = b;
+        foreach (byte state in new byte[] { 0x02, 0x04 | 0x40, 0x7F, 0x00 })
+        {
+            await a.SendRawAsync(Frame(Protocol.PauseUp, [state]));
+            var d = await b.ReadUntilAsync(Protocol.PauseDown, Wait);
+            Assert.Equal(Protocol.PauseDownPayloadLen, d.Length);
+            Assert.Equal(a.Id, d[0]);
+            Assert.Equal(state, d[1]);
+        }
+    }
 }

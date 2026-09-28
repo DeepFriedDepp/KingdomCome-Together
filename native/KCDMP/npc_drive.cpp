@@ -111,6 +111,8 @@ std::atomic<bool> g_armed{false};
 std::atomic<bool> g_nativeOn{true};       // mp_npc_native_write (default on, WO-118)
 std::atomic<bool> g_senderClock{true};    // mp_npc_senderclock mirror
 std::atomic<bool> g_dropAll{false};
+std::atomic<bool> g_holdAll{false};      // WO-138: the host is paused, hold every copy
+std::atomic<bool> g_holdEnded{false};    // WO-138: the hold just ended (restart the silence clocks)
 std::atomic<DropFn> g_dropFn{nullptr};
 
 void* const* g_vftEntity = nullptr;
@@ -767,7 +769,14 @@ uint8_t on_config(const uint8_t* body, size_t len) {
     return kOk;
 }
 
-void on_pipe_closed() { g_dropAll = true; }
+void on_pipe_closed() { g_dropAll = true; g_holdAll = false; }
+
+void set_hold_all(bool on) {
+    const bool was = g_holdAll.exchange(on);
+    if (was && !on) g_holdEnded = true;
+    if (was != on) logf("WO138-HOLD native copies %s", on ? "held (the host is paused: no silence drop)" : "released (silence clocks restart now)");
+}
+bool hold_all() { return g_holdAll.load(std::memory_order_relaxed); }
 
 bool parse_bind(const uint8_t* body, size_t len, BindRequest* out) {
     // [on:1][eid:4][wuid:8][ax:4f][ay:4f][az:4f][delayMs:2][nameLen:1][name]
@@ -905,11 +914,16 @@ void tick() {
         }
     }
 
+    // WO-138: a hold that just ended gives every stream a fresh silence clock.
+    if (g_holdEnded.exchange(false))
+        for (auto& kv : g_streams) if (kv.second.lastSampleAt < now) kv.second.lastSampleAt = now;
+    const bool holdAll = g_holdAll.load(std::memory_order_relaxed);
+
     uint16_t writing = 0;
     for (auto it = g_bound.begin(); it != g_bound.end();) {
         Puppet& p = it->second;
         auto sIt = g_streams.find(p.key);
-        if (sIt == g_streams.end() || now - sIt->second.lastSampleAt > kSilenceS) {
+        if (sIt == g_streams.end() || (!holdAll && now - sIt->second.lastSampleAt > kSilenceS)) {
             auto cur = it++;
             pull_flush(cur->second, now);
             drop(cur, kSilence, true);

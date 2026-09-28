@@ -463,6 +463,12 @@ public sealed class LogTailGameTransport : IGameTransport
 
     private bool AggregatePaused => _menuOpen || _inventoryOpen || _skipTimeActive || _cutsceneActive;
 
+    // WO-138: the four states one by one -- the host announces its pause with its reasons.
+    public bool MenuOpen => _menuOpen;
+    public bool InventoryOpen => _inventoryOpen;
+    public bool SkipTimeActive => _skipTimeActive;
+    public bool CutsceneActive => _cutsceneActive;
+
     /// <summary>
     /// Scans one raw (untagged) engine log line for the marker pairs found
     /// live in WO-11 (menu/inventory/skip-time) and WO-80 (Rendered

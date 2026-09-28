@@ -28,6 +28,7 @@ std::vector<std::function<void()>>  g_queue;
 std::vector<std::function<void()>>  g_repeating;
 std::condition_variable             g_drained;
 std::atomic<unsigned long long>     g_frames{0};
+std::atomic<float>                  g_lastDt{0.0f};   // WO-138
 DWORD                               g_main_thread_id = 0;
 
 constexpr const char* kImporter = "WHGame.dll";
@@ -58,6 +59,7 @@ void hooked_update(void* self, float dt) {
     if (g_original) g_original(self, dt);
 
     ++g_frames;
+    g_lastDt.store(dt, std::memory_order_relaxed);   // WO-138: the frame meter
     if (g_main_thread_id == 0) g_main_thread_id = GetCurrentThreadId();
 
     // Swap under the lock and run outside it: queued work may post more work,
@@ -200,5 +202,6 @@ bool run_sync(std::function<void()> work, unsigned timeout_ms, bool* faulted) {
 }
 
 unsigned long long frame_count() { return g_frames.load(std::memory_order_relaxed); }
+float last_dt() { return g_lastDt.load(std::memory_order_relaxed); }
 
 } // namespace kcdmp::main_thread

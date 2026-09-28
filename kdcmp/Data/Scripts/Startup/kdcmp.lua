@@ -4360,7 +4360,7 @@ local function mp_wo102_reconcile_pauses()
         local p = KCD2MP.npcPuppets[name]
         if not p then
             if not KCD2MP._npcResumePending[name] then gaps[#gaps + 1] = { name, "untracked", 0 } end
-        elseif (now - (p.lastPacketAt or 0)) > gapS then
+        elseif (now - (p.lastPacketAt or 0)) > gapS and not (KCD2MP_W138Holding and KCD2MP_W138Holding()) then   -- WO-138: held
             gaps[#gaps + 1] = { name, "no-writes", now - (p.lastPacketAt or 0) }
         elseif reload then
             reassert[#reassert + 1] = name
@@ -8102,6 +8102,8 @@ function KCD2MP_NpcSyncTick()
         if KCD2MP_NpcReplicaSweep then pcall(KCD2MP_NpcReplicaSweep) end   -- WO-104
     end
 
+    if KCD2MP_W138DialogTick then pcall(KCD2MP_W138DialogTick) end   -- WO-138: the host's dialogue edge (a pause reason)
+
     -- Gate at tick time, not start time: mp_npc_sync can flip and authority
     -- can migrate mid-session, and both must take effect without a restart.
     if not KCD2MP.npcSync.enabled then return end
@@ -8136,6 +8138,7 @@ function KCD2MP_NpcSyncTick()
         -- in the anchor list the rescan is about to build, not one tick late.
         pcall(mp_wo1025_colocation_tick)
         pcall(mp_npc_rescan)
+        if isAuthority and KCD2MP_W138PushTrack then pcall(KCD2MP_W138PushTrack) end   -- WO-138: the set the DLL samples
     end
 
     -- WO-40 Phase 6: an NPC's real swings are invisible to Lua, but the one
@@ -8306,9 +8309,15 @@ function KCD2MP_NpcSyncTick()
                 -- (WO-60) is the same payload sent down the asClaim path, so
                 -- the agent's authority gate lets it through and sending it
                 -- IS the claim.
+                -- WO-138: while the DLL streams this machine's NPCs (the agent
+                -- confirms it every 2 s) the authority's line stays in; the
+                -- bookkeeping below runs either way, so a fallback resumes
+                -- where the DLL left off.
+                if not (isAuthority and KCD2MP_W138NativeActive and KCD2MP_W138NativeActive()) then
                 KCD2MP_EmitEvent(isAuthority and "npc_state" or "npc_claim",
                     string.format("%s %.3f %.3f %.3f %.4f %.1f %d",
                     name, p.x, p.y, p.z, rot, hp, flags))
+                end
                 -- WO-110 R5: identity on the first emit per name too (the
                 -- acquire line fires at rescan time, before culling decided
                 -- whether the name is ever streamed).
@@ -9160,7 +9169,9 @@ function KCD2MP_NpcPuppetTick(arg, gen)
         pcall(function()
             -- Release on silence: the engine restores the NPC to its own
             -- schedule the moment we stop writing (observed live, WO-32).
-            if (now - (p.lastPacketAt or 0)) > KCD2MP.npcSync.releaseS then
+            -- WO-138: hold, don't hide -- not while the host announced a pause and its link is alive.
+            if (now - (p.lastPacketAt or 0)) > KCD2MP.npcSync.releaseS
+               and not (KCD2MP_W138KeepSilent and KCD2MP_W138KeepSilent(name)) then
                 KCD2MP_NpcReplicaDemote(name, "silence")   -- WO-104: the NPC returns before the puppet is dropped
                 KCD2MP_NpcNativeSync(name, p, nil, false, "silence")   -- WO-118
                 KCD2MP.npcPuppets[name] = nil
@@ -16358,6 +16369,210 @@ function KCD2MP_SetLootBodies(arg) return KCD2MP_SetLootRule("bodies", arg) end
 function KCD2MP_SetLootItems(arg) return KCD2MP_SetLootRule("items", arg) end
 function KCD2MP_SetLootChests(arg) return KCD2MP_SetLootRule("chests", arg) end
 
+-- ===== WO-138: no pausing + the host's NPC stream in the DLL =====
+-- docs/WO-138-findings.md. Three small jobs are left to the mod:
+--   * the host: the tracked set its rescan builds goes to the DLL (through the
+--     agent) as npc_track lines, with the sender's settings (w138_cfg). The DLL
+--     samples and sends every 100 ms at the frame hook, whatever the Lua timers
+--     do; while the agent confirms that (KCD2MP_W138NativeSend), the Lua sender
+--     stops putting npc_state lines out. Without the DLL nothing changes.
+--   * the host: its own dialogue is one of the pause reasons the agent
+--     announces (w138_dialog 1|0 on the edge; dialogue does not stop Lua).
+--   * the joiner: while the host announced a pause and its link is alive, no
+--     puppet is released for silence (hold, don't hide). The hold ends when the
+--     host resumes (each puppet's silence clock restarts then) or when the host
+--     is really gone (no grace: the 3 s rule applies at once).
+KCD2MP.w138 = {
+    nativeUntil = 0,          -- os.clock() until which the DLL sends (the agent refreshes it)
+    nativeOn    = true,       -- mp_w138_native on|off (the agent's switch mirrors it)
+    trackGen    = 0,
+    trackKey    = "",
+    trackAt     = -1e9,
+    trackRefreshS = 10.0,     -- the set again every 10 s even when unchanged (a restarted agent / DLL)
+    chunkChars  = 1200,       -- one npc_track line stays far under the console/log ceilings
+    dialog      = nil,        -- the last reported IsInDialog
+    hold        = false,
+    holdUntil   = 0,          -- the agent re-asserts a hold every 2 s; it lapses 8 s after the last one
+    holdReasons = 0,
+    holdStartedAt = 0,
+    held        = 0,          -- puppets kept past the silence rule (counted, logged)
+}
+
+-- The DLL is sending (the agent calls this every 2 s while its status says so).
+function KCD2MP_W138NativeSend(seconds)
+    local w = KCD2MP.w138
+    local was = os.clock() < w.nativeUntil
+    w.nativeUntil = (seconds and seconds > 0) and (os.clock() + seconds) or 0
+    local now = os.clock() < w.nativeUntil
+    if was ~= now then
+        mp_log("WO138-SEND " .. (now and "native: the DLL streams this machine's NPCs (the Lua sender is quiet)"
+            or "lua: the Lua sender streams again (the DLL is absent or stopped)"))
+    end
+end
+
+function KCD2MP_W138NativeActive()
+    local w = KCD2MP.w138
+    return w.nativeOn and os.clock() < w.nativeUntil
+end
+
+-- Host: the tracked set to the DLL. Called after every rescan (2 s); sends
+-- when the set changed, and every trackRefreshS anyway.
+function KCD2MP_W138PushTrack()
+    local w = KCD2MP.w138
+    if not KCD2MP.hitSensorOn then return end
+    local names = {}
+    for name in pairs(KCD2MP.npcTracked or {}) do names[#names + 1] = name end
+    table.sort(names)
+    local parts, cur = {}, {}
+    local curLen = 0
+    local keyParts = {}
+    for _, name in ipairs(names) do
+        local e = System.GetEntityByName(name)
+        local nh = (e and e.class ~= "NPC" and e.class ~= "NPC_Female") and 1 or 0
+        local item = name .. ":" .. nh
+        keyParts[#keyParts + 1] = item
+        if curLen + #item + 1 > w.chunkChars and #cur > 0 then
+            parts[#parts + 1] = table.concat(cur, ",")
+            cur, curLen = {}, 0
+        end
+        cur[#cur + 1] = item
+        curLen = curLen + #item + 1
+    end
+    if #cur > 0 then parts[#parts + 1] = table.concat(cur, ",") end
+    local key = table.concat(keyParts, ",")
+    local now = os.clock()
+    if key == w.trackKey and (now - w.trackAt) < w.trackRefreshS then return end
+    w.trackKey, w.trackAt = key, now
+    w.trackGen = (w.trackGen % 65535) + 1
+    -- The sender's settings ride with every set (the same values the Lua sender uses).
+    local ns, c = KCD2MP.npcSync, KCD2MP.wo1025
+    local shared = KCD2MP.w122 and KCD2MP.w122.sharedWorld
+    local farBand = (shared and KCD2MP.w131 and KCD2MP.w131.farBandM) or 0
+    local cull = (KCD2MP.wo102 and KCD2MP.wo102.authorityHost and c and c.npcCull) and 1 or 0
+    KCD2MP_EmitEvent("w138_cfg", string.format("%d %d %d %d %d %d %d",
+        ns.emitMs, math.floor(ns.heartbeatS * 1000 + 0.5), math.floor(ns.moveEps * 1000 + 0.5),
+        cull, math.floor((c and c.cullRadius or 60) + 0.5), math.floor(farBand + 0.5), 12))
+    if #parts == 0 then parts[1] = "-" end
+    for i, p in ipairs(parts) do
+        KCD2MP_EmitEvent("npc_track", string.format("%d %d %d %s", w.trackGen, i - 1, #parts, p))
+    end
+end
+
+-- Host: the dialogue edge (one of the pause reasons the agent announces).
+function KCD2MP_W138DialogTick()
+    local inDialog = false
+    local h = player and player.human
+    if not (h and h.IsInDialog) then return end
+    pcall(function() inDialog = h:IsInDialog() == true end)
+    local w = KCD2MP.w138
+    if w.dialog ~= inDialog then
+        w.dialog = inDialog
+        KCD2MP_EmitEvent("w138_dialog", inDialog and "1" or "0")
+    end
+end
+
+-- Joiner: the agent's hold. on = the host announced a pause and its link is alive.
+-- grace (on release): true = the host resumed, every puppet's silence clock
+-- restarts now; false = the host is gone, the 3 s rule applies at once.
+function KCD2MP_W138Hold(on, reasons, grace)
+    local w = KCD2MP.w138
+    local now = os.clock()
+    if on then
+        if not w.hold then
+            w.holdStartedAt, w.held = now, 0
+            local n = 0
+            for _ in pairs(KCD2MP.npcPuppets or {}) do n = n + 1 end
+            mp_log(string.format("WO138-HOLD on: the host is paused (reasons 0x%02X) -- %d copies are held visible where the stream left them", reasons or 0, n))
+        end
+        w.hold, w.holdReasons, w.holdUntil = true, reasons or 0, now + 8.0
+        return
+    end
+    if w.hold then
+        w.hold = false
+        if grace then
+            for _, p in pairs(KCD2MP.npcPuppets or {}) do p.lastPacketAt = now end
+        end
+        mp_log(string.format("WO138-HOLD off after %.1f s (%s): %d silence releases were skipped meanwhile",
+            now - w.holdStartedAt, grace and "the host resumed -- silence clocks restart now" or "the host's link is lost -- the 3 s rule applies", w.held))
+    end
+end
+
+function KCD2MP_W138Holding()
+    local w = KCD2MP.w138
+    if not w.hold then return false end
+    if os.clock() > w.holdUntil then
+        -- The agent stopped re-asserting (it went away): hold no longer.
+        KCD2MP_W138Hold(false, 0, false)
+        return false
+    end
+    return true
+end
+
+-- The silence rule's one exception (KCD2MP_NpcPuppetTick, the reconcile sweep).
+function KCD2MP_W138KeepSilent(name)
+    if not KCD2MP_W138Holding() then return false end
+    KCD2MP.w138.held = KCD2MP.w138.held + 1
+    return true
+end
+
+function KCD2MP_W138SetNative(arg)
+    local s = tostring(arg or ""):lower()
+    local w = KCD2MP.w138
+    if s:find("off") then w.nativeOn = false elseif s:find("on") then w.nativeOn = true end
+    KCD2MP_EmitEvent("w138", "native " .. (w.nativeOn and "on" or "off"))
+    mp_log("WO138 native sender " .. (w.nativeOn and "on" or "off") .. " (mp_w138_native)")
+end
+
+function KCD2MP_W138SetLevers(arg)
+    local s = tostring(arg or ""):lower()
+    if s:find("off") then KCD2MP_EmitEvent("w138", "levers off")
+    elseif s:find("on") then KCD2MP_EmitEvent("w138", "levers on") end
+end
+
+-- Both: the inventory's time-scale divide (the Apse screens -- inventory, map,
+-- journal -- divide the game's time scale by wh_ui_ApsePauseRatio, 1000 on
+-- 1.5.5: the world, the Lua timers and the NPCs all but stop). In a session with
+-- a partner the agent sets it to 1 (the world runs on while a menu is open); the
+-- original value is remembered here and put back when the session ends, and by
+-- the next agent if this one went away with it set.
+function KCD2MP_W138ApseRatio(on)
+    local w = KCD2MP.w138
+    local cur = nil
+    pcall(function() cur = System.GetCVar("wh_ui_ApsePauseRatio") end)
+    if cur == nil then return end
+    if on then
+        if w.apseOrig == nil then w.apseOrig = cur end
+        if tonumber(cur) ~= 1 then
+            pcall(function() System.SetCVar("wh_ui_ApsePauseRatio", 1) end)
+            mp_log("WO138-LEVERS inventory: wh_ui_ApsePauseRatio " .. tostring(cur) .. " -> " .. tostring(System.GetCVar("wh_ui_ApsePauseRatio")) .. " (the world runs while a menu is open)")
+        end
+    elseif w.apseOrig ~= nil then
+        pcall(function() System.SetCVar("wh_ui_ApsePauseRatio", tonumber(w.apseOrig) or w.apseOrig) end)
+        mp_log("WO138-LEVERS inventory: wh_ui_ApsePauseRatio back to " .. tostring(System.GetCVar("wh_ui_ApsePauseRatio")))
+        w.apseOrig = nil
+    end
+end
+
+-- Live checks only: CCryAction::PauseGame(on, source) through the DLL's gate
+-- (source 7 = the ESC menu, 4 = a video) -- a stand-in for a menu when no input
+-- can be sent. "mp_w138_pausetest 7 on", then "mp_w138_pausetest 7 off".
+function KCD2MP_W138PauseTest(arg)
+    local src, onoff = tostring(arg or ""):match("(%d+)%s+(%a+)")
+    if not src then mp_log("WO138 usage: mp_w138_pausetest <source> on|off"); return end
+    KCD2MP_EmitEvent("w138", "pausetest " .. src .. " " .. (onoff == "on" and "1" or "0"))
+end
+
+function KCD2MP_W138Status()
+    local w = KCD2MP.w138
+    local n = 0
+    for _ in pairs(KCD2MP.npcTracked or {}) do n = n + 1 end
+    local line = string.format("WO138-STATUS sender=%s (switch %s) tracked=%d gen=%d dialog=%s hold=%s reasons=0x%02X held=%d",
+        KCD2MP_W138NativeActive() and "native" or "lua", w.nativeOn and "on" or "off", n, w.trackGen,
+        tostring(w.dialog), tostring(KCD2MP_W138Holding()), w.holdReasons, w.held)
+    System.LogAlways(line)
+    KCD2MP_EmitEvent("w138", "status")
+end
+
 -- ===== Register Console Commands =====
 
 local ok, err = pcall(function()
@@ -16587,6 +16802,10 @@ local ok, err = pcall(function()
     System.AddCCommand("mp_quest_off",    'KCD2MP_QuestSetSync("off")',     "WO-94: disable the main-quest readiness prompt (rollback: no detection, no prompt)")
     System.AddCCommand("mp_quest_radius", 'KCD2MP_QuestSetRadius(%line)', "WO-94: set the main-quest co-location detection radius: mp_quest_radius <metres> (default 35)")
     System.AddCCommand("mp_quest_window", 'KCD2MP_QuestSetWindow(%line)', "WO-94: set the main-quest readiness prompt window: mp_quest_window <seconds> (default 120)")
+    System.AddCCommand("mp_w138_status", "KCD2MP_W138Status()",    "WO-138: the native NPC sender (native or lua), the tracked set, the host's dialogue edge, the joiner's hold (WO138-STATUS here, MP-WO138 in agent.log)")
+    System.AddCCommand("mp_w138_native", 'KCD2MP_W138SetNative(%line)', "WO-138: the host's NPC stream from the DLL's frame hook (default on); off = the Lua sender as before: mp_w138_native on|off")
+    System.AddCCommand("mp_w138_levers", 'KCD2MP_W138SetLevers(%line)', "WO-138: in a session with a partner, no menu stops the world (the ESC menu's and a video's pause declined, the inventory's time-scale divide off); default on: mp_w138_levers on|off")
+    System.AddCCommand("mp_w138_pausetest", 'KCD2MP_W138PauseTest(%line)', "WO-138 live checks: mp_w138_pausetest <source> on|off -- the engine's PauseGame from that source (7 = the ESC menu) through the DLL's gate, a stand-in for a menu")
     System.AddCCommand("mp_quest_status", "KCD2MP_QuestStatusAll()",        "WO-137 + WO-94: the shared quests' state (WO137-STATUS, and MP-WO137-STATS in agent.log), then the old readiness prompt's state and the current quest's beats with distances")
     System.AddCCommand("mp_quest_yes",    "KCD2MP_QuestAnswer(true)",       "WO-94: answer the readiness prompt YES (same as F11) -- fires wh_concept_HasteTrigger for the peer's beat")
     System.AddCCommand("mp_quest_no",     "KCD2MP_QuestAnswer(false)",      "WO-94: answer the readiness prompt NO (same as F12)")

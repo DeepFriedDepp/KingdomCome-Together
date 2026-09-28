@@ -84,6 +84,10 @@ public sealed class CombatPipe : IAsyncDisposable
     private const byte Wo137             = 0x23;   // WO-137 [op][...] -> 0x9D [ok][seq][op][reason][payload] (native wo137.h)
     private const byte Wo137Reply        = 0x9D;
     private const byte QuestChangeOut    = 0x9E;   // WO-137, unsolicited: one quest State change (QuestChange)
+    private const byte Wo138             = 0x24;   // WO-138 [op][...] -> 0x9F [ok][seq][op][reason][payload] (native wo138.h)
+    private const byte Wo138Reply        = 0x9F;
+    private const byte NpcStreamOut      = 0xA0;   // WO-138, unsolicited: the native sender's NPC rows
+    private const byte WorldOut          = 0xA1;   // WO-138, unsolicited: this machine's world running / slowed / frozen
 
     private const int GuidLen = 16;
 
@@ -127,6 +131,15 @@ public sealed class CombatPipe : IAsyncDisposable
 
     /// <summary>WO-132: an engaged copy's local hit on the player was put back (attacker eid, stamina, health).</summary>
     public Func<uint, float, float, Task>? OnDiscardedHit { get; set; }
+
+    /// <summary>
+    /// WO-138: one 0xA0 frame of the DLL's NPC rows. Called ON the reader, so it only
+    /// enqueues the sends (never a pipe request: the WO-131 deadlock trap).
+    /// </summary>
+    public Action<IReadOnlyList<Wo138Row>>? OnNpcStream { get; set; }
+
+    /// <summary>WO-138: the 0xA1 world state (on a change, and every 2 s).</summary>
+    public Action<Wo138WorldState>? OnWorld { get; set; }
 
     /// <summary>WO-118: the DLL's native writer stopped a bound puppet on its own (reason, name).</summary>
     public Func<byte, string, Task>? OnNpcDropped { get; set; }
@@ -736,6 +749,32 @@ public sealed class CombatPipe : IAsyncDisposable
         finally { _gate.Release(); }
     }
 
+    // ---- WO-138 (native wo138.h) ---------------------------------------------
+
+    /// <summary>One WO-138 op: (ok, reason, payload after the 4-byte head), or null when the DLL did not answer.</summary>
+    public async Task<(bool Ok, byte Reason, byte[] Payload)?> Wo138Async(byte op, byte[] args, CancellationToken ct = default)
+    {
+        var p = new byte[1 + args.Length];
+        p[0] = op; args.CopyTo(p, 1);
+        var (body, _) = await SendAndAwaitAsync(Wo138, p, Wo138Reply, ct);
+        if (body is null || body.Length < 4) return null;
+        return (body[0] == 1, body[3], body.AsSpan(4).ToArray());
+    }
+
+    /// <summary>op 4: the sender / meter / gate status, or null (no DLL, or a pre-WO-138 one).</summary>
+    public async Task<Wo138Status?> Wo138StatusAsync(CancellationToken ct = default)
+    {
+        var r = await Wo138Async(Wo138Codec.OpStatus, [], ct);
+        return r is { Ok: true } ok && Wo138Codec.TryParseStatus(ok.Payload, out var s) ? s : null;
+    }
+
+    /// <summary>op 7: the status as one line.</summary>
+    public async Task<string?> Wo138TextAsync(CancellationToken ct = default)
+    {
+        var r = await Wo138Async(Wo138Codec.OpText, [], ct);
+        return r is { } x ? Encoding.ASCII.GetString(x.Payload) : null;
+    }
+
     // ---- WO-137 (native wo137.h) ---------------------------------------------
 
     /// <summary>One WO-137 op: (ok, reason, payload after the 4-byte head), or null when the DLL did not answer.</summary>
@@ -980,6 +1019,15 @@ public sealed class CombatPipe : IAsyncDisposable
                         catch (Exception ex) { Console.WriteLine($"[wo137] quest change not queued: {ex.Message}"); }
                     }
                     else Console.WriteLine($"[wo137] malformed quest change frame ({body.Length} bytes)");
+                }
+                else if (type == NpcStreamOut)
+                {
+                    if (Wo138Codec.TryParseStream(body, out var rows)) { try { OnNpcStream?.Invoke(rows); } catch (Exception ex) { Console.WriteLine($"[wo138] rows not queued: {ex.Message}"); } }
+                    else Console.WriteLine($"[wo138] malformed NpcStream frame ({body.Length} bytes)");
+                }
+                else if (type == WorldOut)
+                {
+                    if (Wo138Codec.TryParseWorld(body, out var ws)) { try { OnWorld?.Invoke(ws); } catch { } }
                 }
                 else if (type == DiscardedHit && body.Length == 12)
                 {
