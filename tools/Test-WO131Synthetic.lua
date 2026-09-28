@@ -272,6 +272,12 @@ end
 do -- (i) stand-ins
     reset(); clearLog(); NOW = 600
     KCD2MP_W131Tick(true, true)
+    -- WO-136: a stand-in first asks the agent for the host's own soul (w136_soul);
+    -- these synthetic names are not in the game's tables, so the answer is
+    -- "unknown" and WO-131's guess stands in, exactly as before.
+    for _, n in ipairs({ "prepadeniNaCeste_bandit_9", "traveller_horse_3", "roadside_corpse_1", "traveller_man_2", "prepadeniNaCeste_bandit_7" }) do
+        KCD2MP_W136SoulFor(n, "", "")
+    end
     KCD2MP_ApplyNpcState("prepadeniNaCeste_bandit_9", 40, 5, 0, 0, 100, 4, 0, 1, 1000)
     check("i: a host-only NPC gets a stand-in under its own name", SPAWNS[1] ~= nil and SPAWNS[1].Name == "prepadeniNaCeste_bandit_9"
         and ENTS["prepadeniNaCeste_bandit_9"] ~= nil)

@@ -2731,7 +2731,8 @@ public partial class GameBridge(ClientConfig config)
     private async Task ConvergeAppearanceAsync(byte ghostId, Guid[] target, CancellationToken ct)
     {
         string soulName = $"kcd2mp_{ghostId}";
-        var known = _ghostKnownItemClasses.GetOrAdd(ghostId, static _ => [.. GhostSpawnPresetItems]);
+        // WO-136 Phase 5: the avatar spawns bare (the empty preset) -- nothing is in its inventory until created here.
+        var known = _ghostKnownItemClasses.GetOrAdd(ghostId, static _ => []);
         var applied = _ghostAppearance.GetOrAdd(ghostId, static _ => []);
         var unwearable = _ghostUnwearable.GetOrAdd(ghostId, static _ => new Wo135Rules.Unwearable());
         var targetSet = new HashSet<Guid>(target);
@@ -2800,6 +2801,7 @@ public partial class GameBridge(ClientConfig config)
     {
         List<Guid> pending = [];
         HashSet<Guid>? last = null;
+        bool presetCleared = false;   // WO-136
         foreach (int delayMs in AppearanceRetryDelaysMs)
         {
             await Task.Delay(delayMs, ct);
@@ -2811,6 +2813,24 @@ public partial class GameBridge(ClientConfig config)
             var extra = Wo135Rules.AppearanceRemovals(actual, target);
             if (pending.Count == 0 && extra.Count == 0) { lock (applied) { applied.Clear(); applied.UnionWith(target); } return; }
             Console.WriteLine($"[appearance] ghost {ghostId}: {pending.Count} item(s) still not worn, {extra.Count} still worn that should not be -- retrying");
+            // WO-136 Phase 5: a piece that stays worn after an unequip is a preset's (not an
+            // inventory item: "UnequipItem failed. Item was not found"). The engine's own way
+            // off is the empty preset -- once per converge -- and then the outfit again.
+            if (extra.Count > 0 && !presetCleared)
+            {
+                presetCleared = true;
+                Console.WriteLine($"[appearance] ghost {ghostId}: {extra.Count} piece(s) cannot be unequipped ({string.Join(", ", extra.Take(4))}) -- a preset's; taking the preset off the engine's way (the empty preset), then the outfit again");
+                await Wo136ClearPresetAsync(ghostId, "unremovable pieces");
+                await Task.Delay(300, ct);
+                foreach (var cls in target)
+                {
+                    bool create2;
+                    lock (known) create2 = known.Add(cls);
+                    try { await _transport.EquipItemOnGhostAsync(soulName, cls, createIfMissing: create2, ct); }
+                    catch (Exception ex) { Console.WriteLine($"[appearance] re-equip {cls} on {soulName} failed: {ex.Message}"); }
+                }
+                continue;
+            }
             foreach (var cls in extra)
             {
                 try { await _transport.UnequipItemOnGhostAsync(soulName, cls, ct); }
@@ -2836,8 +2856,8 @@ public partial class GameBridge(ClientConfig config)
             bool first;
             lock (unwearable) first = unwearable.Mark(cls);
             if (first)
-                Console.WriteLine($"[appearance] ghost {ghostId}: {cls} can't be worn by this avatar -- the game refused it for {AppearanceRetryDelaysMs.Sum()} ms of retries " +
-                                  $"(kcd.log names the reason on a \"Can't equip\" line, e.g. a layer it needs underneath). Skipped until this outfit changes; the rest of the outfit is worn.");
+                Console.WriteLine($"[appearance] ghost {ghostId}: {await Wo136DescribeRefusalAsync(cls)} can't be worn by this avatar -- the game refused it for {AppearanceRetryDelaysMs.Sum()} ms of retries " +
+                                  $"(kcd.log may name the reason on a \"Can't equip\" line, e.g. a layer it needs underneath). Skipped until this outfit changes; the rest of the outfit is worn.");
         }
     }
 
@@ -4331,6 +4351,7 @@ public partial class GameBridge(ClientConfig config)
     private async Task ReceiveLoopAsync(Stream stream, CancellationToken ct)
     {
         var frames = Channel.CreateUnbounded<InFrame>(new UnboundedChannelOptions { SingleReader = true });
+        _frameWriter = frames.Writer;   // WO-136: the load hold replays held frames through here
         var processor = ProcessFramesAsync(frames.Reader, ct);
         // The coalescer's clock: a pending Lua push must go out once it is due
         // even when no further frame for that NPC arrives (a puppet that just
@@ -4373,8 +4394,10 @@ public partial class GameBridge(ClientConfig config)
     /// decode and name rules as the processor's handlers (which drop what this
     /// drops, and count it); anything malformed is simply not fed.
     /// </summary>
-    private void FeedNativeAtRead(int type, byte[] payload, long arrival)
+    private void FeedNativeAtRead(int type, byte[] payload, long arrival, bool replay = false)
     {
+        // WO-136: while a world loads nothing is bound or written natively either (the replay feeds it later).
+        if (!replay && Wo136HeldType(type) && Wo136Holding) return;
         if (type == Protocol.NpcStateDown
             && payload.Length >= 1 + 1 + 1 + Protocol.NpcStateFixedTail
             && payload.Length <= 1 + 1 + Protocol.MaxNpcNameLen + Protocol.NpcStateFixedTail)
@@ -4383,6 +4406,7 @@ public partial class GameBridge(ClientConfig config)
             if (payload.Length != 2 + nameLen + Protocol.NpcStateFixedTail) return;
             string npcName = Encoding.UTF8.GetString(payload, 2, nameLen);
             if (!NpcNamePattern.IsMatch(npcName)) return;
+            if (!_w136Ridden.IsEmpty && Wo136Rules.DropRidden(_w136Ridden, npcName, DateTime.UtcNow)) return;   // WO-136: the rider's horse
             int o = 2 + nameLen;
             _nativeFeed.Enqueue(new NativeNpcSample(payload[0], npcName,
                 ReadFloat(payload, o), ReadFloat(payload, o + 4), ReadFloat(payload, o + 8), ReadFloat(payload, o + 12),
@@ -4436,7 +4460,9 @@ public partial class GameBridge(ClientConfig config)
         {
             await foreach (var frame in frames.ReadAllAsync(ct))
             {
-                if (frame.Type == FlushTickType) { await FlushDueNpcLuaPushesAsync(); continue; }
+                if (frame.Type == FlushTickType) { Wo136ReplayIfReleased(); await FlushDueNpcLuaPushesAsync(); continue; }
+                Wo136ReplayIfReleased();          // WO-136: the moment the hold ends, what it kept goes first
+                if (Wo136Defer(frame)) continue;   // WO-136: the host's NPCs and avatars wait for the world to load
                 int type       = frame.Type;
                 var payload    = frame.Payload;
                 int payloadLen = payload.Length;
@@ -4490,7 +4516,7 @@ public partial class GameBridge(ClientConfig config)
                     // clears its body state on a call without one) gets the
                     // newest block's derivation, held while the sender's 1 s
                     // heartbeat keeps it fresh.
-                    if (gs.State2 is BodyState2 st2n) { _peerState2At[ghostId] = DateTime.UtcNow; _peerLastState2[ghostId] = st2n; }
+                    if (gs.State2 is BodyState2 st2n) { _peerState2At[ghostId] = DateTime.UtcNow; _peerLastState2[ghostId] = st2n; Wo136OnPeerState2(ghostId, st2n); }
                     else if (_peerLastState2.TryGetValue(ghostId, out var st2h) && _peerState2At.TryGetValue(ghostId, out var st2t)
                              && (DateTime.UtcNow - st2t).TotalSeconds < 3.0)
                         body = st2h.ToLegacy(gs.IsRiding);
@@ -4911,7 +4937,7 @@ public partial class GameBridge(ClientConfig config)
                     {
                         string npcName = Encoding.UTF8.GetString(payload, 2, nameLen);
                         if (!NpcNamePattern.IsMatch(npcName)) CountDrop(type, "name-rejected");   // WO-110 R9
-                        if (NpcNamePattern.IsMatch(npcName))
+                        if (NpcNamePattern.IsMatch(npcName) && !Wo136DropRidden(npcName))   // WO-136 Phase 3: the rider owns the horse
                         {
                             Wo127NoteRecv(npcName);   // WO-127: age of the host's last update, for the leash recorder
                             int o = 2 + nameLen;
@@ -4921,6 +4947,7 @@ public partial class GameBridge(ClientConfig config)
                             float nrot  = ReadFloat(payload, o + 12);
                             float nhp   = ReadFloat(payload, o + 16);
                             byte nflags = payload[o + Protocol.NpcStateFlagsOffset];
+                            if (!_isDamageAuthority) Wo136NoteNpcFlags(npcName, nflags);   // WO-136 Phase 4: a knockout or a death ends the engagement first
                             ushort nseq = BinaryPrimitives.ReadUInt16LittleEndian(payload.AsSpan(o + Protocol.NpcStateSeqOffset));      // WO-110 R6
                             uint nSenderMs = BinaryPrimitives.ReadUInt32LittleEndian(payload.AsSpan(o + Protocol.NpcStateSenderMsOffset));
 
@@ -5667,6 +5694,12 @@ public partial class GameBridge(ClientConfig config)
             case "w134_chest":
             case "w134_applied":
                 Wo134OnEvent(name, arg);
+                return;
+            case "w136_soul":        // WO-136: world presence
+            case "w136_ride":
+            case "w136_torch":
+            case "w136_check":
+                Wo136OnEvent(name, arg);
                 return;
         }
 

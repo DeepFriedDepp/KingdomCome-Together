@@ -248,6 +248,7 @@ public partial class GameBridge
     private void Wo124OnLoadStarted()
     {
         _where = GameWhere.Loading;
+        Wo136OnLoadSeen("load");   // WO-136: nothing touches an NPC until the world has loaded
         if (_jj is { LoadStarted: not null } j) { if (j.LoadGameUtc == default) j.LoadGameUtc = DateTime.UtcNow; }
     }
 
@@ -255,6 +256,7 @@ public partial class GameBridge
     private void Wo124OnSaveLoadAccepted(string display)
     {
         _where = GameWhere.Loading;
+        Wo136OnLoadSeen("accepted");   // WO-136
         if (_combatRoleApplied && _isDamageAuthority) { Wo125HostOnLoadAccepted(display); return; }   // WO-125: the host's world changes
         if (_jj is { LoadStarted: { } t } j && display.Equals($"playline{j.Playline}/{j.Name}.whs", StringComparison.OrdinalIgnoreCase))
         {
@@ -309,6 +311,7 @@ public partial class GameBridge
     private void Wo124OnGameplayStarted()
     {
         _where = GameWhere.World;
+        Wo136OnGameplayStarted();   // WO-136: the settle, then the held frames
         Wo125HostOnGameplayStarted();
         if (_ownLoadExpected) { _ownLoadExpected = false; _leaveInProgress = false; Console.WriteLine("MP-JOIN joiner: back in this player's own world (Gameplay started)"); }
         if (_jj is { } j && j.GameplayStarted is { } t) { j.GameplayUtc = DateTime.UtcNow; t.TrySetResult(true); }

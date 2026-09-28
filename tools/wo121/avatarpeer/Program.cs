@@ -41,6 +41,9 @@
 //                                              (WO-134) a LootAsk (0x5C) to the host, as a joiner's agent sends it (tok = a counter);
 //                                              every LootHostDown (0x5F) received is printed
 //   at <t> takedown <body> <mercy|knockout|stealth>  (WO-135) a LootAsk Takedown (0x5C kind 5): the game's takedown on a host NPC
+//   at <t> ride <horseName>|off                (WO-136) mounted on that (host) horse: a HorseInfo (0x2A) and the riding
+//                                              flag on every Position packet; off = HorseInfo "-", riding cleared
+//   at <t> torch on|off                        (WO-136) the state block's torch bit (0x20): the player holds a lit torch
 //   end <t>                                    stop
 //
 // Position packets: every 30 ms while moving, 2 s heartbeat still; the state
@@ -168,6 +171,7 @@ static class P
         double jumpT0 = -1, jumpDur = 0.8; float jumpH = 0.5f, zBase = 0;
         var s2 = new BodyState2(0, 0, BodyState2Bits.None, WireZone.Undefined, WireGuardStance.None, WireZone.Undefined, 0, 0, 0);
         BodyState2? lastSent = null; double lastSentT = -9, lastPos = -9, lastPing = 0; int si = 0; bool placed = false, frozen = false;
+        bool riding = false;   // WO-136: ride <horse>
         double lastT = 0;
         float vitalsHp = -1, vitalsSt = -1; double lastVitals = -9;   // WO-131
         byte vitalsFlags = 0;   // WO-132: vitals <hp> <st> downed -> the unconscious bit (0x01), as a floored joiner sends
@@ -229,7 +233,7 @@ static class P
                         foreach (var kv in f[1..])
                         {
                             var p = kv.Split('='); if (p.Length != 2) continue;
-                            BodyState2Bits Bit(string k) => k switch { "crouch" => BodyState2Bits.Crouched, "combat" => BodyState2Bits.CombatMode, "block" => BodyState2Bits.BlockHeld, "locked" => BodyState2Bits.Locked, _ => 0 };
+                            BodyState2Bits Bit(string k) => k switch { "crouch" => BodyState2Bits.Crouched, "combat" => BodyState2Bits.CombatMode, "block" => BodyState2Bits.BlockHeld, "locked" => BodyState2Bits.Locked, "torch" => BodyState2Bits.TorchLit, _ => 0 };
                             switch (p[0])
                             {
                                 case "gz": s2 = s2 with { GuardZone = Zone(p[1]) }; break;
@@ -410,6 +414,24 @@ static class P
                         Console.WriteLine($"PEER t={t:F1} takedown tok={lootTok}: {text}");
                         break;
                     }
+                    case "ride":   // WO-136: ride <horse>|off
+                    {
+                        string hn = f.Length > 1 && f[1] != "off" ? f[1] : "-";
+                        riding = hn != "-";
+                        var hnb = Encoding.UTF8.GetBytes(hn);
+                        var hip = new byte[3 + 1 + hnb.Length]; hip[0] = Protocol.HorseInfoUp;
+                        BinaryPrimitives.WriteUInt16LittleEndian(hip.AsSpan(1), (ushort)(1 + hnb.Length));
+                        hip[3] = (byte)hnb.Length; hnb.CopyTo(hip, 4);
+                        await Send(st, hip);
+                        await Send(st, PositionCodec.BuildPosition(x, y, z, yaw, riding, false, null, Ms()));
+                        lastPos = t;
+                        Console.WriteLine($"PEER t={t:F1} ride {(riding ? hn : "off")} (HorseInfo + the riding flag)");
+                        break;
+                    }
+                    case "torch":   // WO-136: torch on|off -- the state block's torch bit
+                        s2 = s2 with { Bits = f.Length > 1 && f[1] == "on" ? s2.Bits | BodyState2Bits.TorchLit : s2.Bits & ~BodyState2Bits.TorchLit };
+                        Console.WriteLine($"PEER t={t:F1} torch {(f.Length > 1 ? f[1] : "?")} state {s2}");
+                        break;
                     case "leash":   // WO-114
                         if (f.Length > 1 && f[1] is "on" or "off") { leashOn = f[1] == "on"; if (f.Length > 2) leashFlags = LeashFlagsOf(f[2]); lastLeash = -9; }
                         else if (f.Length > 2 && f[1] == "flags") { leashFlags = LeashFlagsOf(f[2]); lastLeash = -9; }
@@ -482,7 +504,7 @@ static class P
                 lastPos = t;
                 BodyState2? block = due ? s2 : null;
                 if (due) { lastSent = s2; lastSentT = t; }
-                await Send(st, PositionCodec.BuildPosition(x, y, z, yaw, false, false, block, Ms()));
+                await Send(st, PositionCodec.BuildPosition(x, y, z, yaw, riding, false, block, Ms()));
             }
             if (t - lastPing > 2) { lastPing = t; var ping = new byte[11]; ping[0] = Protocol.Ping; BinaryPrimitives.WriteUInt16LittleEndian(ping.AsSpan(1), 8); await Send(st, ping); }
             await Task.Delay(5);

@@ -1121,7 +1121,7 @@ void serve(HANDLE h) {
             }
             case kWo132: {
                 std::vector<uint8_t> copy(body, body + len);
-                struct R { uint8_t reason = kcdmp::wo132::kRFailed; uint8_t op = 0; uint8_t buf[256]{}; size_t n = 0; };
+                struct R { uint8_t reason = kcdmp::wo132::kRFailed; uint8_t op = 0; uint8_t buf[512]{}; size_t n = 0; };   // WO-136: the status carries wo136 too
                 R r{};
                 bool faulted = false;
                 const bool ran = run_sync_bounded<R>(
@@ -1130,7 +1130,7 @@ void serve(HANDLE h) {
                         out.reason = kcdmp::wo132::handle(copy.data(), copy.size(), out.buf, sizeof(out.buf), &out.n);
                     }, "Wo132", r, &faulted);
                 if (!ran) { r.reason = faulted ? kReasonTaskFaulted : kcdmp::wo132::kRFailed; r.n = 0; r.op = len ? body[0] : 0; }
-                BYTE rb[4 + 256]{};
+                BYTE rb[4 + 512]{};
                 rb[0] = (ran && r.reason == kcdmp::wo132::kROk) ? 1 : 0; rb[1] = seq; rb[2] = r.op; rb[3] = r.reason;
                 if (r.n) std::memcpy(rb + 4, r.buf, r.n);
                 EnterCriticalSection(&g_write_lock);

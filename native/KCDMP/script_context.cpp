@@ -33,6 +33,15 @@ constexpr size_t kVtblHasEntityContext   = 0x38;   // C_ScriptContextManager slo
 constexpr uintptr_t kRvaManagerVftable   = 0x32AAD0;
 constexpr uintptr_t kRvaSetEntityContext = 0x6BE80;
 constexpr uintptr_t kRvaHasEntityContext = 0x6C4A0;
+// WO-136: the relation pair (docs/WO-68-findings.md section 4, re-read for WO-136):
+// SetRelationContext(this, bool=DL, wuid from=R8, wuid to=R9, node=[rsp+0x28])
+// and HasRelationContext(this, from=RDX, to=R8, node=R9).
+constexpr size_t kVtblSetRelationContext  = 0x20;   // slot [4]
+constexpr size_t kVtblHasRelationContext  = 0x40;   // slot [8]
+constexpr uintptr_t kRvaSetRelationContext = 0x6BF60;
+constexpr uintptr_t kRvaHasRelationContext = 0x6C620;
+constexpr uint8_t kPrologueSetRel[12] = {0x48,0x89,0x5C,0x24,0x10,0x55,0x56,0x57,0x48,0x81,0xEC,0xA0};
+constexpr uint8_t kPrologueHasRel[12] = {0x48,0x89,0x5C,0x24,0x08,0x48,0x89,0x6C,0x24,0x20,0x4C,0x89};
 
 // First bytes of both functions, read out of the file (not out of memory).
 constexpr uint8_t kPrologueSet[12] = {0x48,0x89,0x5C,0x24,0x10,0x55,0x56,0x57,0x48,0x81,0xEC,0x90};
@@ -44,6 +53,7 @@ constexpr uint8_t kPrologueHas[12] = {0x48,0x89,0x5C,0x24,0x08,0x48,0x89,0x74,0x
 constexpr size_t kOffNodeName  = 0x00;
 constexpr size_t kOffNodeClass = 0x08;
 constexpr int    kContextClassEntity = 1;
+constexpr int    kContextClassRelation = 2;   // E_ContextClass: Game 0, Entity 1, Relation 2 (read back per node, logged)
 
 // The soul field the scriptbind hands to the manager as the entity key.
 constexpr size_t kOffSoulWuid = 0x40;
@@ -221,6 +231,24 @@ bool call_set_entity_context(void* mgr, bool value, uint64_t wuid, const void* n
         auto fn = reinterpret_cast<void (*)(void*, bool, uint64_t, const void*)>(
             vtbl[kVtblSetEntityContext / 8]);
         fn(mgr, value, wuid, node);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+
+bool call_has_relation_context(void* mgr, uint64_t from, uint64_t to, const void* node, bool* out) {
+    __try {
+        auto* vtbl = *reinterpret_cast<void***>(mgr);
+        auto fn = reinterpret_cast<bool (*)(void*, uint64_t, uint64_t, const void*)>(vtbl[kVtblHasRelationContext / 8]);
+        *out = fn(mgr, from, to, node);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+
+bool call_set_relation_context(void* mgr, bool value, uint64_t from, uint64_t to, const void* node) {
+    __try {
+        auto* vtbl = *reinterpret_cast<void***>(mgr);
+        auto fn = reinterpret_cast<void (*)(void*, bool, uint64_t, uint64_t, const void*)>(vtbl[kVtblSetRelationContext / 8]);
+        fn(mgr, value, from, to, node);
         return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
@@ -403,7 +431,7 @@ bool resolve_chain(Chain* out, bool* permanent = nullptr) {
 // name -> node, with the two integrity reads that make a non-null answer mean
 // something: the node's own name must equal what was asked for, and its Class
 // must be Entity(1).
-const void* lookup_node(const Chain& c, const char* name, bool verbose) {
+const void* lookup_node(const Chain& c, const char* name, bool verbose, int expectClass = kContextClassEntity) {
     StaticCryStr s{};
     if (!make_cry_string(&s, name)) {
         logf("SCTX: context name too long for the static CryString buffer: %s", name);
@@ -436,9 +464,9 @@ const void* lookup_node(const Chain& c, const char* name, bool verbose) {
         logf("SCTX: node for \"%s\" does not carry that name -- treating as unresolved", name);
         return nullptr;
     }
-    if (!haveCls || cls != kContextClassEntity) {
-        logf("SCTX: node for \"%s\" has class=%d, expected %d (Entity) -- not an entity context",
-             name, haveCls ? cls : -1, kContextClassEntity);
+    if (!haveCls || cls != expectClass) {
+        logf("SCTX: node for \"%s\" has class=%d, expected %d (%s) -- refused",
+             name, haveCls ? cls : -1, expectClass, expectClass == kContextClassEntity ? "Entity" : "Relation");
         return nullptr;
     }
     return node;
@@ -821,6 +849,43 @@ int set_soul_context(void* soul, const char* name, bool on) {
     if (!call_has_entity_context(c.mgr, wuid, node, &after)) { disarm("HasEntityContext faulted after a write"); return -1; }
     logf("SCTX: %s \"%s\" on wuid=0x%016llX -> readback=%s", on ? "set" : "clear", name,
          static_cast<unsigned long long>(wuid), after ? "true" : "false");
+    return after == on ? 1 : -1;
+}
+
+int set_soul_relation(void* fromSoul, void* toSoul, const char* name, bool on) {
+    if (!g_isolationArmed || !fromSoul || !toSoul || !name) return -1;
+    Chain c{};
+    bool permanent = false;
+    if (!resolve_chain(&c, &permanent)) {
+        if (permanent) disarm("chain integrity check failed");
+        return -1;
+    }
+    // The relation pair is checked on its own: a mismatch refuses only this call.
+    static int s_relOk = 0;   // 0 unchecked, 1 verified, -1 refused
+    if (s_relOk == 0) {
+        void* setFn = nullptr; void* hasFn = nullptr;
+        const bool read = read_vtbl_slot(c.mgr, kVtblSetRelationContext, &setFn) && read_vtbl_slot(c.mgr, kVtblHasRelationContext, &hasFn);
+        const bool at = read && setFn == reinterpret_cast<char*>(c.whgame) + kRvaSetRelationContext &&
+                        hasFn == reinterpret_cast<char*>(c.whgame) + kRvaHasRelationContext;
+        const bool pro = at && prologue_matches(setFn, kPrologueSetRel, sizeof(kPrologueSetRel)) &&
+                         prologue_matches(hasFn, kPrologueHasRel, sizeof(kPrologueHasRel));
+        s_relOk = pro ? 1 : -1;
+        logf("SCTX: relation slots [4]/[8] %s (WHGame+0x%llX / +0x%llX)", pro ? "verified (address + prologue)" : "MISMATCH -- relation contexts refused",
+             static_cast<unsigned long long>(kRvaSetRelationContext), static_cast<unsigned long long>(kRvaHasRelationContext));
+    }
+    if (s_relOk != 1) return -1;
+    uint64_t from = 0, to = 0;
+    if (!read_u64(fromSoul, kOffSoulWuid, &from) || !from || !read_u64(toSoul, kOffSoulWuid, &to) || !to) return -1;
+    const void* node = lookup_node(c, name, /*verbose=*/false, kContextClassRelation);
+    if (!node) { logf("SCTX: relation context \"%s\" unresolved on this build", name); return -1; }
+    bool has = false;
+    if (!call_has_relation_context(c.mgr, from, to, node, &has)) { disarm("HasRelationContext faulted"); return -1; }
+    if (has == on) return 0;   // refcounted store: never stack a second count
+    if (!call_set_relation_context(c.mgr, on, from, to, node)) { disarm("SetRelationContext faulted"); return -1; }
+    bool after = !on;
+    if (!call_has_relation_context(c.mgr, from, to, node, &after)) { disarm("HasRelationContext faulted after a write"); return -1; }
+    logf("SCTX: %s relation \"%s\" 0x%016llX -> 0x%016llX -> readback=%s", on ? "set" : "clear", name,
+         static_cast<unsigned long long>(from), static_cast<unsigned long long>(to), after ? "true" : "false");
     return after == on ? 1 : -1;
 }
 

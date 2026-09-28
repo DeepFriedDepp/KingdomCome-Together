@@ -77,9 +77,14 @@ public partial class GameBridge
                 // engine's timeout ("Loading screen timeouted while still in post load
                 // reconstruction", observed on a join, run J1). The load drops every suspension
                 // anyway; the first tick after Gameplay started re-parks (the reassert path).
-                if (_where == GameWhere.Loading) continue;
+                // WO-136: and not in the settle after it, nor at the menu -- the load hold.
+                if (Wo136Holding) continue;
+                await Wo136TellModAsync();
                 bool joiner = _combatRoleApplied && !_isDamageAuthority && _hostAuthority;
-                bool shared = joiner ? JoinerSharedEffective : _sharedWorld;
+                // WO-136 (J2): a shared-world joiner back in its own world (after a leave, before
+                // the next join) has none of the host's NPCs -- no copy guard, no stand-ins there
+                // (a wolf stand-in was spawned into the player's own world, observed).
+                bool shared = joiner ? JoinerSharedEffective && _joinedWorld : _sharedWorld;
                 _ = ExecLuaAsync($"if KCD2MP_W131Tick then KCD2MP_W131Tick({(joiner ? "true" : "false")}, {(shared ? "true" : "false")}) end");
                 if (Wo131HostPerceiveActive) await Wo131FactionSweepAsync(ct);
                 if (W131NowMs() - lastStats >= 60_000)
@@ -89,6 +94,7 @@ public partial class GameBridge
                     string? nat = await _combat.Wo131StatusAsync(ct);
                     Console.WriteLine(FormattableString.Invariant(
                         $"MP-WO131-STATS joiner={(Wo131JoinerActive ? 1 : 0)} perceive_host={(Wo131HostPerceiveActive ? 1 : 0)} hits_fwd={_w131HitsForwarded} hits_drop={_w131HitsDropped} [{reasons}] deaths_blocked={_w131DeathsBlocked} guard_on={_w131GuardOn} guard_fail={_w131GuardFail} follow={_w131Follow} follow_fail={_w131FollowFail} restore={_w131Restore} restore_fail={_w131RestoreFail} stopfight={_w131StopFights} faction_ok={_w131FactionOk} faction_fail={_w131FactionFail} | {nat ?? "native: no answer"}"));
+                    Console.WriteLine(Wo136StatsLine());   // WO-136
                 }
             }
             catch (Exception ex) { Console.WriteLine($"MP-WO131 tick failed: {ex.GetType().Name}: {ex.Message}"); }

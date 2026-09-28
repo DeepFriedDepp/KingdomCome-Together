@@ -34,6 +34,12 @@
 //                                 secs (default 30): flags 1 = dead (the joiner applies the host's death to its copy)
 //       ledger <rows|->           (WO-134) the host's chest ledger (container|cls|n|hp|worldT|restockDays;...),
 //                                 sent to the joiner at every Ready (and at once with ledgersend)
+//       npcmove <name> <vx> <vy> [vz]  (WO-136) a running npc stream moves at that velocity (m/s) from now on
+//       npcrow <name> <rowGuid>   (WO-136) the host's NPC committed that attack row (ActionKind.NpcAttack)
+//       npccombat <name> on|off [host|avatar:N|none] [gz]  (WO-136) the host's NPC combat state (ActionKind.NpcCombat),
+//                                 repeated every 1 s while on (the WO-132 heartbeat)
+//       hstate k=v ...            (WO-135/136) the host avatar's state block: crouch=0|1 torch=0|1 combat=0|1
+//       appearance <guid,...>     (WO-136) the host's outfit (an Appearance 0x1A)
 //     [reseed] = a synthetic seed (hex) written into the save's body 0x01FB, re-signed: a second
 //     "playthrough" made from a copy. Files are COPIES of real host saves; never logged by path.
 //
@@ -101,7 +107,10 @@ static class Host125
         var witems = new List<(Guid Cls, float X, float Y, float Z, bool Taken)>();
         var npcFlags = new System.Collections.Concurrent.ConcurrentDictionary<string, byte>(StringComparer.Ordinal);   // WO-135: a running npc stream's flags, changeable
         string? hostBuild = null;
-        BodyState2? hostSt2 = null;                                                                                    // WO-135: hstate crouch=1 -- the host avatar's state block                                                                                      // WO-135: announced to every joiner every 10 s
+        BodyState2? hostSt2 = null;
+        var npcVel = new System.Collections.Concurrent.ConcurrentDictionary<string, (float Vx, float Vy, float Vz)>(StringComparer.Ordinal);   // WO-136: npcmove
+        var npcCombatOn = new System.Collections.Concurrent.ConcurrentDictionary<string, NpcCombatEvent>(StringComparer.Ordinal);            // WO-136: npccombat
+        var actOut = new ActionOutbox();                                                                                                      // WO-136: NpcAttack / NpcCombat                                                                                    // WO-135: hstate crouch=1 -- the host avatar's state block                                                                                      // WO-135: announced to every joiner every 10 s
         var ledger = new Wo134Rules.Ledger();
         var leashSeen = new Dictionary<byte, LeashState>();   // WO-114: the last LeashState per joiner
         var world = Load(Arg(a, "--join-host125", ""), Arg(a, "--reseed", ""));
@@ -307,23 +316,83 @@ static class Host125
                                 npcFlags[nm] = nfl;
                                 if (!running) _ = Task.Run(async () =>
                                 {
-                                    ushort nseq = 0; var t0 = Clock.Elapsed.TotalSeconds;
+                                    ushort nseq = 0; var t0 = Clock.Elapsed.TotalSeconds; double tl = t0;
+                                    float cx = nx, cy = ny, cz = nz;
                                     while (Clock.Elapsed.TotalSeconds - t0 < secs && !hard.IsCancellationRequested)
                                     {
-                                        await W(P.BuildUp(nm, nx, ny, nz, nyaw, nhp, npcFlags.GetValueOrDefault(nm, nfl), ++nseq, (uint)Clock.ElapsedMilliseconds));
-                                        await Task.Delay(200);
+                                        double tn = Clock.Elapsed.TotalSeconds; float dt = (float)(tn - tl); tl = tn;
+                                        if (npcVel.TryGetValue(nm, out var v)) { cx += v.Vx * dt; cy += v.Vy * dt; cz += v.Vz * dt; }
+                                        float yaw2 = npcVel.TryGetValue(nm, out var v2) && (v2.Vx != 0 || v2.Vy != 0) ? MathF.Atan2(-v2.Vx, v2.Vy) : nyaw;
+                                        await W(P.BuildUp(nm, cx, cy, cz, yaw2, nhp, npcFlags.GetValueOrDefault(nm, nfl), ++nseq, (uint)Clock.ElapsedMilliseconds));
+                                        await Task.Delay(npcVel.ContainsKey(nm) ? 100 : 200);
                                     }
                                     npcFlags.TryRemove(nm, out _);
                                 });
                                 Say($"NPC {nm} streamed at {p[2]},{p[3]},{p[4]} hp={p[6]} flags={p[7]} for {secs} s");
                                 break;
                             }
-                            case "hstate":   // WO-135: hstate crouch=0|1 -- the host's state block rides its position packets (1 s heartbeat)
+                            case "hstate":   // WO-135/136: hstate crouch=0|1 torch=0|1 combat=0|1 -- the host's state block rides its position packets (1 s heartbeat)
                             {
-                                bool cr = p.Length > 1 && p[1] == "crouch=1";
-                                hostSt2 = new BodyState2(0, 0, cr ? BodyState2Bits.Crouched : BodyState2Bits.None, WireZone.Undefined, WireGuardStance.None, WireZone.Undefined, 0, 0, 0);
+                                var bits = hostSt2?.Bits ?? BodyState2Bits.None;
+                                foreach (var kv in p.Skip(1))
+                                {
+                                    var q = kv.Split('='); if (q.Length != 2) continue;
+                                    var b = q[0] switch { "crouch" => BodyState2Bits.Crouched, "torch" => BodyState2Bits.TorchLit, "combat" => BodyState2Bits.CombatMode, _ => BodyState2Bits.None };
+                                    bits = q[1] == "1" ? bits | b : bits & ~b;
+                                }
+                                hostSt2 = new BodyState2(0, 0, bits, WireZone.Undefined, WireGuardStance.None, WireZone.Undefined, 0, 0, 0);
                                 await W(PositionCodec.BuildPosition(hp[0], hp[1], hp[2], 0, false, false, hostSt2, hostClaim: true));
-                                Say($"HSTATE crouch={(cr ? 1 : 0)}");
+                                Say($"HSTATE bits={bits}");
+                                break;
+                            }
+                            case "npcmove":   // WO-136: npcmove <name> <vx> <vy> [vz]
+                                npcVel[p[1]] = (float.Parse(p[2], CultureInfo.InvariantCulture), float.Parse(p[3], CultureInfo.InvariantCulture),
+                                                p.Length > 4 ? float.Parse(p[4], CultureInfo.InvariantCulture) : 0f);
+                                Say($"NPCMOVE {p[1]} v=({p[2]},{p[3]})");
+                                break;
+                            case "npcrow":   // WO-136: npcrow <name> <rowGuid>
+                                await W(actOut.Build(ActionKind.NpcAttack, ActionPhase.Commit, new RowEvent((uint)Clock.ElapsedMilliseconds, 0, Guid.Parse(p[2]), p[1]).ToBytes()));
+                                Say($"NPCROW {p[1]} row={p[2]}");
+                                break;
+                            case "npccombat":   // WO-136: npccombat <name> on|off [host|avatar:N|none] [gz]
+                            {
+                                bool on = p[2] == "on";
+                                var tg = p.Length > 3 && p[3].StartsWith("avatar:", StringComparison.Ordinal) ? NpcCombatTarget.Avatar
+                                       : p.Length > 3 && p[3] == "none" ? NpcCombatTarget.None : NpcCombatTarget.Host;
+                                byte tgh = tg == NpcCombatTarget.Avatar ? byte.Parse(p[3][7..], CultureInfo.InvariantCulture) : (byte)0;
+                                var gz = p.Length > 4 ? (WireZone)byte.Parse(p[4], CultureInfo.InvariantCulture) : WireZone.UpperRight;
+                                var ev = new NpcCombatEvent((uint)Clock.ElapsedMilliseconds,
+                                    new BodyState2(0, 0, on ? BodyState2Bits.CombatMode | BodyState2Bits.Locked : BodyState2Bits.None, gz, WireGuardStance.Left, gz, 0, 0, 0),
+                                    on ? tg : NpcCombatTarget.None, tgh, p[1]);
+                                await W(actOut.Build(ActionKind.NpcCombat, ActionPhase.Commit, ev.ToBytes()));
+                                if (on && !npcCombatOn.ContainsKey(p[1]))
+                                {
+                                    npcCombatOn[p[1]] = ev;
+                                    string cn = p[1];
+                                    _ = Task.Run(async () =>
+                                    {
+                                        while (npcCombatOn.TryGetValue(cn, out var e) && !hard.IsCancellationRequested)
+                                        {
+                                            await Task.Delay(1000);
+                                            if (!npcCombatOn.TryGetValue(cn, out e)) break;
+                                            await W(actOut.Build(ActionKind.NpcCombat, ActionPhase.Commit, (e with { SenderMs = (uint)Clock.ElapsedMilliseconds }).ToBytes()));
+                                        }
+                                    });
+                                }
+                                else if (on) npcCombatOn[p[1]] = ev;
+                                else npcCombatOn.TryRemove(p[1], out _);
+                                Say($"NPCCOMBAT {p[1]} {(on ? "on" : "off")} target={tg}{(tg == NpcCombatTarget.Avatar ? ":" + tgh : "")}");
+                                break;
+                            }
+                            case "appearance":   // WO-136: appearance <guid,...> -- the host's outfit
+                            {
+                                var gs = p[1].Split(',', StringSplitOptions.RemoveEmptyEntries);
+                                var ap = new byte[3 + 1 + gs.Length * 16]; ap[0] = Protocol.AppearanceUp;
+                                BinaryPrimitives.WriteUInt16LittleEndian(ap.AsSpan(1), (ushort)(1 + gs.Length * 16));
+                                ap[3] = (byte)gs.Length;
+                                for (int gi = 0; gi < gs.Length; gi++) Guid.Parse(gs[gi]).ToByteArray().CopyTo(ap, 4 + gi * 16);
+                                await W(ap);
+                                Say($"APPEARANCE sent ({gs.Length} classes)");
                                 break;
                             }
                             case "npcflags":   // WO-135: npcflags <name> <flags> -- a running npc stream's flags (2 = knocked out, 0 = up, 1 = dead)

@@ -1,4 +1,5 @@
 #include "respawn.h"
+#include "wo136.h"
 #include "respawn_actions.h"
 #include "engine.h"
 #include "buffs.h"
@@ -435,6 +436,11 @@ void start(Kind k, int gameOverId) {
          g_x.deathPos[0], g_x.deathPos[1], g_x.deathPos[2],
          gameOverId >= 0 ? " (from a swallowed Game Over)" : "");
     if (g_ev.downed) g_ev.downed(true, k);
+    // WO-136 Phase 4: the fight goes on while someone is still in it. Before the
+    // downed player is moved away (the engine then reads him as fled:
+    // TargetEscaped -> PlayerFlee -> SkirmishVictory, the field log) every NPC
+    // fighting him is handed to a partner's avatar beside it, and he leaves.
+    if (k == Kind::Death || k == Kind::Execution) kcdmp::wo136::handover_fights(true, "the host's death");
     if (k == Kind::Knockdown && g_knockMode == KnockMode::GameKnockout) {
         // No fade of ours: the game's knockout presents itself, and while any
         // fader is up the game puts perk_player_fader_protection (upr=1) on

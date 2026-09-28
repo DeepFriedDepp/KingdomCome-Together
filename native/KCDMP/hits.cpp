@@ -20,6 +20,7 @@
 #include "respawn.h"
 #include "respawn_actions.h"
 #include "rttr_abi.h"
+#include "wo136.h"
 
 namespace kcdmp::hits {
 namespace {
@@ -431,7 +432,7 @@ AttribResult apply_attributed(const uint8_t* body, size_t len) {
                 if (call_add_soul(g_vftSkirmish[kSmAddSoul / 8], mgr, victimSoulA, avatarSoul, ovr, &rv)) {
                     r.steps |= 4; c_skirmish.fetch_add(1);
                     logf("WO121-HITS attributed npc=%s avatar_eid=0x%X skirmish add (override %u%s) -> 0x%llX", name.c_str(), avatarEid, ovr,
-                         fightsHost ? ": it already fights the host, who keeps it" : "", static_cast<unsigned long long>(rv));
+                         fightsHost ? ": it fights the host -- WO-136's threat decides whether it turns" : "", static_cast<unsigned long long>(rv));
                 } else c_faults.fetch_add(1);
             }
             g_engaged[key] = now;
@@ -439,6 +440,9 @@ AttribResult apply_attributed(const uint8_t* body, size_t len) {
             it->second = now;   // a running engagement stays one engagement
             r.steps |= 4;
         }
+        // WO-136: the hit the engine cannot perceive (no hit volume) counts as the
+        // avatar's threat; the NPC turns to it the way it would to a real attacker.
+        kcdmp::wo136::note_threat(veid, avatarEid, 2, "avatar-hit");
     }
     r.ok = (r.steps & 1) != 0;
     return r;
@@ -511,6 +515,17 @@ bool skirmish_remove(void* soul, uint64_t* rv) {
 }
 
 void* soul_of_eid(uint32_t eid) { return soul_of_actor(actor_by_eid(eid)); }
+
+int avatar_list(uint32_t* eids, void** souls, int max) {
+    int n = 0;
+    for (auto& a : g_avatars) {
+        if (n >= max) break;
+        const uint32_t e = a.eid.load(std::memory_order_relaxed);
+        if (!e) continue;
+        eids[n] = e; souls[n] = a.soul.load(std::memory_order_relaxed); ++n;
+    }
+    return n;
+}
 
 void set_npc_watch(bool on) { g_npcWatch = on; }
 
@@ -590,6 +605,7 @@ void tick() {
             if (void* c = buffs::as_c_soul(soul)) g_hitSouls[c] = now;
             c_marks.fetch_add(1);
         }
+        kcdmp::wo136::note_threat(m.victimEid, 0, 2, "host-hit");   // WO-136: the host's real hit, its threat
     }
     if (g_hitSouls.size() > 256)
         for (auto it = g_hitSouls.begin(); it != g_hitSouls.end();) it = (now - it->second > 5.0) ? g_hitSouls.erase(it) : ++it;

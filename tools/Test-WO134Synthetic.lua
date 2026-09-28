@@ -282,7 +282,12 @@ check("B3 host says gone: the coat is taken back off Henry", player.inventory:Ge
 check("B3 ... with the plain line", lastToast() == "Someone already took that.", lastToast())
 KCD2MP_W134BodyState("bandit_7", "update", 1, 1, 1, {})
 check("B4 the host's looting empties the copy", #b.inventory.list == 0)
-b.inventory:CreateItem(APPLE, 1, 1)
+-- WO-136: a put is an item out of the player's own pack (the game's own additions are not puts).
+player.inventory:CreateItem(APPLE, 1, 1)
+LOG = {}; loop()
+local aw = nil
+for _, w in ipairs(player.inventory.list) do if ITEMS[w].class == APPLE then aw = w end end
+player.inventory:RemoveItem(aw); b.inventory:AddItem(aw)
 LOG = {}; loop()
 check("B5 a put into the body goes to the host", events("w134_put")[1] ~= nil and string.find(events("w134_put")[1], "bandit_7 " .. APPLE .. " 1", 1, true) ~= nil, events("w134_put")[1])
 local v = mkBody("villager_3", 102, 100, 10); v.dead = false

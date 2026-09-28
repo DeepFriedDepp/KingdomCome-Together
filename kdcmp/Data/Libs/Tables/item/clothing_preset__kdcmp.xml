@@ -41,5 +41,12 @@
 				<Guid>00cca9e3-8ef2-46db-8cbf-86ec51930919</Guid>
 			</Items>
 		</clothing_preset>
+		<!-- WO-136: nothing. An avatar spawns in this and wears only its player's own
+		     items (the appearance sync); a preset's pieces are not inventory items and
+		     cannot be taken off one by one, so this is also how one is removed. -->
+		<clothing_preset clothing_preset_id="dc000004-0000-0000-0000-000000000000" clothing_preset_name="kcd2mp_bare" gender="Male" prefers_hood_on="false">
+			<Items>
+			</Items>
+		</clothing_preset>
 	</clothing_presets>
 </database>

@@ -296,6 +296,9 @@ public partial class GameBridge
         uint eid = guarded ? geid : _npcEntityIds.TryGetValue(ev.Name, out uint pe) ? pe : 0;
         bool engaged = _w132Engaged.TryGetValue(ev.Name, out var cur);
         var v = Wo132Rules.JudgeEngage(ev, Wo131JoinerActive, guarded, bound, engaged);
+        // WO-136 Phase 4: a knockout (or a death) beats the engagement -- never engaged while down.
+        if (!Wo136Rules.MayEngage(Wo136HostNpcDown(ev.Name)) && v != Wo132Rules.EngageVerdict.Ignore)
+            v = engaged ? Wo132Rules.EngageVerdict.Release : Wo132Rules.EngageVerdict.Ignore;
         if (v == Wo132Rules.EngageVerdict.Ignore) return;
         if (v == Wo132Rules.EngageVerdict.Release)
         {

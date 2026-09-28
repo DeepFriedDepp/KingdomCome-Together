@@ -228,6 +228,7 @@ public partial class GameBridge
     {
         due = false;
         if (nat?.State2 is not BodyState2 c) return null;
+        c = Wo136WithTorch(c);   // WO-136 Phase 5: the torch in the hand rides the state block
         bool changed = _st2LastSent is not BodyState2 l
             || Math.Abs(l.SpeedCm - c.SpeedCm) >= 10 || Math.Abs(l.MoveDir - c.MoveDir) >= 3
             || l.Bits != c.Bits || l.GuardZone != c.GuardZone || l.GuardStance != c.GuardStance || l.AtkZone != c.AtkZone
@@ -360,6 +361,7 @@ public partial class GameBridge
                 if (!AttackEvent.TryFromBytes(a.Payload, out var ae)) { Console.WriteLine($"MP-ACTION section=inbound ghost={a.SourceGhostId} kind=Attack dispatch=dropped-malformed len={a.Payload.Length}"); return true; }
                 _peerV8AttackAt[a.SourceGhostId] = DateTime.UtcNow;
                 await PlayAvatarRowAsync(a, ae.Row, catalog, ae.ToString(), ct);
+                Wo136OnAvatarAttack(a.SourceGhostId);   // WO-136 Phase 4: the avatar fights what it swings at; the swing threatens it
                 return true;
             }
             case ActionKind.BlockImpulse:

@@ -65,7 +65,7 @@ public partial class GameBridge
             try { await Task.Delay(1000, ct); } catch { return; }
             try
             {
-                if (_where == GameWhere.Menu) continue;
+                if (_where == GameWhere.Menu || Wo136Holding) continue;   // WO-136: bodies and chests wait for the world
                 bool joiner = Wo134JoinerRole;
                 bool host = Wo134HostRole;
                 bool shared = joiner ? JoinerSharedEffective : _sharedWorld;
@@ -128,12 +128,12 @@ public partial class GameBridge
             case "w134_bstate":    // <peer> <tok> <body> <reason> <flags> <part> <nparts> <items>
                 if (f.Length == 8 && Wo134HostRole) _ = Wo134HostBodyStateAsync(f);
                 return;
-            case "w134_tres":      // <peer> <tok> <ok|gone> <body> <cls> <amt>
-                if (f.Length == 6 && Wo134HostRole && byte.TryParse(f[0], out byte tp) && f[2] is "ok" or "gone")
+            case "w134_tres":      // <peer> <tok> <ok|gone|mine|none> <body> <cls> <amt> (WO-136: mine/none = no notice)
+                if (f.Length == 6 && Wo134HostRole && byte.TryParse(f[0], out byte tp) && Wo136Rules.IsTakeVerdict(f[2]))
                     _ = Wo134SendAsync(Protocol.LootHostUp, tp, Protocol.LootHostTakeResult, U(f[1]), $"{f[2]} {f[3]} {f[4]} {f[5]}");
                 return;
-            case "w134_ires":      // <peer> <tok> <ok|gone|unknown> <cls> <x> <y> <z>
-                if (f.Length == 7 && Wo134HostRole && byte.TryParse(f[0], out byte ip) && f[2] is "ok" or "gone" or "unknown")
+            case "w134_ires":      // <peer> <tok> <ok|gone|unknown|mine> <cls> <x> <y> <z>
+                if (f.Length == 7 && Wo134HostRole && byte.TryParse(f[0], out byte ip) && Wo136Rules.IsItemVerdict(f[2]))
                 {
                     _ = Wo134SendAsync(Protocol.LootHostUp, ip, Protocol.LootHostItemResult, U(f[1]), $"{f[2]} {f[3]} {f[4]} {f[5]} {f[6]}");
                     if (f[2] == "ok")   // gone for every other joiner too
@@ -235,10 +235,10 @@ public partial class GameBridge
                     && Wo134Rules.ParseItems(f[5]) is { } items:
                 await ExecLuaAsync($"if KCD2MP_W134BodyState then KCD2MP_W134BodyState(\"{f[0]}\", \"{f[1]}\", {flags}, {part}, {np}, {Wo134Rules.LuaItems(items)}) end");
                 return;
-            case Protocol.LootHostTakeResult when f.Length == 4 && f[0] is "ok" or "gone" && Wo134Rules.BodyName.IsMatch(f[1]):
+            case Protocol.LootHostTakeResult when f.Length == 4 && Wo136Rules.IsTakeVerdict(f[0]) && Wo134Rules.BodyName.IsMatch(f[1]):
                 await ExecLuaAsync($"if KCD2MP_W134TakeResult then KCD2MP_W134TakeResult(\"{m.Tok}\", \"{f[0]}\", \"{f[1]}\") end");
                 return;
-            case Protocol.LootHostItemResult when f.Length == 5 && f[0] is "ok" or "gone" or "unknown":
+            case Protocol.LootHostItemResult when f.Length == 5 && Wo136Rules.IsItemVerdict(f[0]):
                 await ExecLuaAsync($"if KCD2MP_W134ItemResult then KCD2MP_W134ItemResult(\"{m.Tok}\", \"{f[0]}\") end");
                 return;
             case Protocol.LootHostItemGone when f.Length == 4 && Wo134Rules.TryClass(f[0], out var gcls) && Wo134Rules.TryCoord(f[1], out float gx)

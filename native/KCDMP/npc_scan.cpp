@@ -116,6 +116,9 @@ bool read_pos_yaw(const void* entity, float* x, float* y, float* z, float* yaw) 
 void* g_classNpc = nullptr;
 void* g_classNpcFemale = nullptr;
 void* g_classHorse = nullptr;
+// WO-136 Phase 2: the encounter creatures (wolves, wild dogs, boars) travel too,
+// as not-human bodies. Optional: a class this build lacks is simply not scanned.
+void* g_classAnimal[3] = {};
 bool  g_classesResolved = false;
 bool  g_announced = false;
 uint8_t g_lastRefuse = 0xFF;
@@ -131,9 +134,20 @@ bool resolve_classes(void* entitySystem) {
     if (!call_vtbl1(kVtblClassRegistryFindClass, registry, npcF, &cNpcF) || !cNpcF) return false;
     if (!call_vtbl1(kVtblClassRegistryFindClass, registry, horse, &cHorse) || !cHorse) return false;
     g_classNpc = cNpc; g_classNpcFemale = cNpcF; g_classHorse = cHorse;
+    static const char* const kAnimals[3] = { "Wolf", "WildDog", "Boar" };
+    for (int i = 0; i < 3; ++i) {
+        void* c = nullptr;
+        if (call_vtbl1(kVtblClassRegistryFindClass, registry, kAnimals[i], &c) && c) g_classAnimal[i] = c;
+    }
     g_classesResolved = true;
-    logf("NPCSCAN: class registry resolved NPC=%p NPC_Female=%p Horse=%p", cNpc, cNpcF, cHorse);
+    logf("NPCSCAN: class registry resolved NPC=%p NPC_Female=%p Horse=%p Wolf=%p WildDog=%p Boar=%p (WO-136: encounter animals travel as not-human)",
+         cNpc, cNpcF, cHorse, g_classAnimal[0], g_classAnimal[1], g_classAnimal[2]);
     return true;
+}
+
+bool is_animal_class(void* cls) {
+    for (void* a : g_classAnimal) if (a && cls == a) return true;
+    return false;
 }
 
 } // namespace
@@ -204,7 +218,8 @@ bool scan(const Anchor* anchors, int anchorCount, float radius, ScanResult* out)
 
         void* cls = nullptr;
         if (!call_vtbl(kVtblEntityGetClass, entity, &cls) || !cls) continue;
-        const bool isHorse = (cls == g_classHorse);
+        // WO-136: an encounter animal is reported like a horse (not human); the mod reads the class.
+        const bool isHorse = (cls == g_classHorse) || is_animal_class(cls);
         const bool isHuman = (cls == g_classNpc || cls == g_classNpcFemale);
         if (!isHorse && !isHuman) continue;
 

@@ -15,6 +15,7 @@
 #include "motion.h"
 #include "npc_drive.h"
 #include "rttr_abi.h"
+#include "wo136.h"
 
 namespace kcdmp::wo132 {
 namespace {
@@ -216,13 +217,37 @@ uint8_t handle(const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t
         *outLen = 12;
         return kROk;
     }
+    case kOpHandOver: {
+        if (n != 1) return kRBadRequest;
+        out[0] = static_cast<uint8_t>(kcdmp::wo136::handover_fights(a[0] != 0, "live check"));
+        *outLen = 1;
+        return kROk;
+    }
+    case kOpAvatarSwing: {
+        if (n != 4) return kRBadRequest;
+        const uint32_t npc = kcdmp::wo136::avatar_swing(get_u32(a));
+        std::memcpy(out, &npc, 4);
+        *outLen = 4;
+        return npc ? kROk : kRNoActor;
+    }
+    case kOpFights: {
+        if (n != 1) return kRBadRequest;
+        kcdmp::wo136::set_enabled(a[0] != 0);
+        logf("WO136-FIGHTS %s -- the threat rule and the hand-over at the host's down", a[0] ? "on" : "off");
+        return kROk;
+    }
+    case kOpHostThreat: {
+        if (n != 5) return kRBadRequest;
+        return kcdmp::wo136::test_host_threat(get_u32(a), a[4]) ? kROk : kRFailed;
+    }
     case kOpStatus: {
-        char t[240];
+        char t[480];
         int m = std::snprintf(t, sizeof(t),
             "wo132 far=%u leave=%u leave_fail=%u engage_on=%u engage_off=%u engage_skirmish=%u engaged=%zu watched=%zu watch_out=%u discard_eids=%d fail=%u skirmish=%s",
             c_far.load(), c_leave.load(), c_leaveFail.load(), c_engageOn.load(), c_engageOff.load(), c_engageSkirmish.load(), g_engaged.size(),
             g_watch.size(), c_watchOut.load(), hits::discard_count(), c_fail.load(), hits::skirmish_ready() ? "ready" : "no");
         if (m < 0) m = 0;
+        if (static_cast<size_t>(m) < sizeof(t) - 2) { t[m++] = ' '; int k = kcdmp::wo136::status_text(t + m, static_cast<int>(sizeof(t)) - m); if (k > 0) m += k; if (m > static_cast<int>(sizeof(t)) - 1) m = static_cast<int>(sizeof(t)) - 1; }
         if (static_cast<size_t>(m) > cap) m = static_cast<int>(cap);
         std::memcpy(out, t, m);
         *outLen = static_cast<size_t>(m);
@@ -235,6 +260,7 @@ uint8_t handle(const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t
 
 void tick() {
     const double now = now_s();
+    kcdmp::wo136::tick();   // WO-136: queued hand-overs
     for (auto it = g_testFights.begin(); it != g_testFights.end();) {
         if (now > it->until || !engine::entity_by_id(it->eid)) { it = g_testFights.erase(it); continue; }
         if (now - it->last >= 0.25) {

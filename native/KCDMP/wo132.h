@@ -46,6 +46,11 @@ constexpr uint8_t kOpStatus     = 4;
 constexpr uint8_t kOpDiscard    = 5;
 constexpr uint8_t kOpRead       = 6;
 constexpr uint8_t kOpPlayerBlock = 7;
+// WO-136 Phase 4 (host; docs/WO-136-findings.md, wo136.h):
+constexpr uint8_t kOpHandOver    = 9;    // [removePlayer:1] -> [handed:1]   the host's fights to the partners' avatars (live checks; the death path calls it itself)
+constexpr uint8_t kOpAvatarSwing = 10;   // [avatarEid:4] -> [npcEid:4]      a joiner's committed attack: its avatar fights that NPC, the swing threatens it
+constexpr uint8_t kOpFights      = 11;   // [on:1] -> []                     mp_w136_fights on|off (the threat rule and the hand-over)
+constexpr uint8_t kOpHostThreat  = 12;   // [npcEid:4][weight:1] -> []       live checks only: a threat the host "makes" (no input exists)
 constexpr uint8_t kOpTestFight  = 8;   // [npcEid:4][targetEid:4][override:1] live checks only: a test NPC fights (skirmish + combat + automation)   // [on:1] live checks only: the player's block via SetBlockMode (no input)
 
 constexpr uint8_t kROk         = 0;

@@ -85,6 +85,11 @@ bool apply_isolation(const unsigned char guid[16], bool on);
 // MUST run on the game's main thread.
 int set_soul_context(void* soul, const char* name, bool on);
 
+// WO-136: the same for a Relation-class context from one soul to another
+// (combat_forcedTarget: the game's own "fight this one", the battle
+// controller's and the quest fights' lever). Same return values.
+int set_soul_relation(void* fromSoul, void* toSoul, const char* name, bool on);
+
 // False once the feature has disarmed itself for this process.
 bool isolation_enabled();
 

@@ -30,6 +30,14 @@ namespace {
 constexpr size_t kActorSetPseudoSpeed = 0x448;   // C_Actor vftable slot (body: mov rax,[rbx+0x7E8] .. movss [rax+0x18],xmm6)
 constexpr size_t kActorGetSoul        = 0x6E0;
 constexpr size_t kActorExpHolder      = 0x980;   // returns actor+0x308, the state-expansion holder
+// WO-136 Phase 6: the actor's OWN "am I crouched" -- stance component (actor
+// +0xAC0 via slot 0xB78) state == 1. What the game itself asks: the player's
+// per-frame update feeds its `player_in_crouch` stat from it, RequestJump
+// checks it. The crouch key (toggle_crouch, EntityModule C_EntityActions+0x50)
+// goes through the actor action system (C_ActorActionCrouch), which changes
+// this stance and never the expansion's desire byte WO-135 read -- the
+// field's 0 crouch edges with real crouching.
+constexpr size_t kActorIsCrouched     = 0xAF8;
 constexpr size_t kActorCombatActor    = 0x970;   // GetOrCreateCombatActor (what every combat test command calls)
 constexpr size_t kActorPseudoComp     = 0x7E8;   // AI-animation component; pseudo-speed at +0x18
 constexpr size_t kActorReqVel         = 0x574;   // requested velocity x,y,z (FinalizeMovementRequest caches it)
@@ -381,9 +389,31 @@ void* player_actor() {
 // logged and counted (cap_crouch), and a read that cannot happen says why once
 // -- the field's `crouch=0` could not tell a capture that never saw a crouch
 // from an apply that never ran.
-std::atomic<uint32_t> c_capCrouch{0};
+std::atomic<uint32_t> c_capCrouch{0}, c_capStance{0};
 bool g_localCrouch = false;
 bool g_crouchWhyLogged = false;
+
+// WO-136 Phase 6: actor slot 0xAF8 (validated once: EntityModule code that calls
+// [rax+0xB78], the stance component getter, and compares its state with 1).
+void* g_fnIsCrouched = nullptr;
+int g_isCrouchedState = 0;   // 0 unknown, 1 validated, -1 refused
+bool actor_is_crouched(void* actor, bool* out) {
+    void* fn = vslot(actor, kActorIsCrouched);
+    if (!fn) return false;
+    if (g_isCrouchedState == 0 || fn != g_fnIsCrouched) {
+        HMODULE em = GetModuleHandleA("EntityModule.dll");
+        static const uint8_t kCallStance[] = {0xFF, 0x90, 0x78, 0x0B, 0x00, 0x00};   // call [rax+0xB78] (the stance component)
+        static const uint8_t kCmpOne[] = {0x3C, 0x01};                                 // cmp al,1 (state 1 = crouched)
+        const bool ok = em && anchor::function_has_bytes(em, fn, kCallStance, sizeof kCallStance)
+                        && anchor::function_has_bytes(em, fn, kCmpOne, sizeof kCmpOne);
+        g_fnIsCrouched = fn;
+        g_isCrouchedState = ok ? 1 : -1;
+        char d[64]{};
+        anchor::describe(fn, d, sizeof d);
+        logf("WO136-CROUCH the actor's own crouch query (slot 0xAF8) = %s -> %s", d, ok ? "armed (the stance the crouch key changes)" : "REFUSED (not the disassembled stance check)");
+    }
+    return g_isCrouchedState == 1 && call_ret_b(fn, actor, out);
+}
 void note_local_crouch(void* actor, void* exp, bool readOk, bool crouched, const char* src) {
     if (!readOk) {
         if (g_crouchWhyLogged) return;
@@ -403,7 +433,8 @@ void note_local_crouch(void* actor, void* exp, bool readOk, bool crouched, const
     if (crouched == g_localCrouch) return;
     g_localCrouch = crouched;
     if (crouched) c_capCrouch.fetch_add(1);
-    logf("WO135-CROUCH local crouch=%d (source: %s -- the state expansion's crouch byte / the Mannequin stealth stance tag)", crouched ? 1 : 0, crouched ? src : "-");
+    if (crouched && std::strstr(src, "stance")) c_capStance.fetch_add(1);
+    logf("WO135-CROUCH local crouch=%d (source: %s -- stance = the actor's own crouch query (WO-136), byte = the expansion's desire, tag = the Mannequin stealth stance)", crouched ? 1 : 0, crouched ? src : "-");
 }
 
 // ---- the capture hooks -----------------------------------------------------------
@@ -1174,8 +1205,16 @@ bool read_local_state2(State2* out, float facingYaw) {
         kcdmp::mannequin::BodyState bs{};
         const bool tagOk = kcdmp::mannequin::read_body_state(true, 0, &bs);
         const bool tagCrouch = tagOk && bs.stance == kcdmp::mannequin::kStanceStealth;
-        if ((readOk && cr) || tagCrouch) out->bits |= kBitCrouch;
-        note_local_crouch(actor, exp, readOk || tagOk, (readOk && cr) || tagCrouch, (readOk && cr) ? (tagCrouch ? "byte+tag" : "byte") : "tag");
+        // WO-136: the actor's own crouch (the key's path), first.
+        bool stance = false;
+        const bool stanceOk = actor_is_crouched(actor, &stance);
+        const bool byteC = readOk && cr != 0;
+        const bool any = (stanceOk && stance) || byteC || tagCrouch;
+        if (any) out->bits |= kBitCrouch;
+        char src[32];
+        std::snprintf(src, sizeof src, "%s%s%s%s%s", (stanceOk && stance) ? "stance" : "", ((stanceOk && stance) && byteC) ? "+" : "",
+                      byteC ? "byte" : "", (((stanceOk && stance) || byteC) && tagCrouch) ? "+" : "", tagCrouch ? "tag" : "");
+        note_local_crouch(actor, exp, readOk || tagOk || stanceOk, any, src);
     }
     if (ca) {
         void* model = nullptr;
@@ -1248,7 +1287,7 @@ int status_text_motion(char* out, int n) {
         "combat_starts=%u automation_off=%u guard_zone=%u atk_zone=%u block=%u cap_attack=%u cap_npc=%u cap_jump=%u cap_other=%u "
         "cap_dropped=%u buff_adds=%u ctx_set=%u ctx_fail=%u faults=%u tags=%s tags_applied=%u gait_slots=%d "
         "cap_drop_notca=%u cap_drop_nodesc=%u cap_drop_noguid=%u cap_drop_noowner=%u cap_via_base8=%u cap_ours=%u "
-        "engaged=%zu engage_holds=%u engage_releases=%u cap_crouch=%u crouch_fail=%u quiet=0x%X quiet_set=%u quiet_fail=%u",
+        "engaged=%zu engage_holds=%u engage_releases=%u cap_crouch=%u cap_stance=%u crouch_query=%s crouch_fail=%u quiet=0x%X quiet_set=%u quiet_fail=%u",
         g_gait ? "armed" : "off", g_moves ? "armed" : "off", g_combat ? "armed" : "off", g_capture ? "armed" : "off",
         g_cfgAvatarGait.load(), g_cfgNpcGait.load(), g_cfgMoves.load(), g_cfgCombat.load(), g_cfgNpcRows.load(), g_bodies.size(),
         c_gaitWrites.load(), c_crouch.load(), c_jumps.load(), c_jumpFail.load(), c_combatStarts.load(), c_autoOff.load(),
@@ -1257,7 +1296,8 @@ int status_text_motion(char* out, int n) {
         g_tags ? "armed" : "off", c_tagApplied.load(), g_gaitTable.live(),
         c_dropNotCa.load(), c_dropNoDesc.load(), c_dropNoGuid.load(), c_dropNoOwner.load(), c_capViaBase8.load(), c_capOurs.load(),
         g_engage.size(), c_engageHolds.load(), c_engageReleases.load(),
-        c_capCrouch.load(), c_crouchApplyFail.load(), g_cfgQuiet.load(), c_quietSet.load(), c_quietFail.load());
+        c_capCrouch.load(), c_capStance.load(), g_isCrouchedState == 1 ? "armed" : g_isCrouchedState < 0 ? "refused" : "unread",
+        c_crouchApplyFail.load(), g_cfgQuiet.load(), c_quietSet.load(), c_quietFail.load());
 }
 
 // WO-135 test verb: the player's own crouch setter -- the function the crouch

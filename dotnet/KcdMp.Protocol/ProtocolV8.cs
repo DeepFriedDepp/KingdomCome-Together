@@ -81,6 +81,8 @@ public enum BodyState2Bits : byte
     RangedAim = 0x08,
     /// <summary>The sender is locked on an opponent (combat model opponent pointer set).</summary>
     Locked = 0x10,
+    /// <summary>WO-136: the sender holds a lit torch (its hand holds the game's torch item); the avatar holds one too.</summary>
+    TorchLit = 0x20,
 }
 
 /// <summary>WO-121: the 12 replicated-state bytes (Position/Ghost flag 0x10).</summary>

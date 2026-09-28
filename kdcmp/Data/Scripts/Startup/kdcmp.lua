@@ -4143,6 +4143,7 @@ end
 -- gap therefore produces a jittery NPC (today's behaviour), never a statue.
 local function mp_wo102_pause(name, p)
     if not (KCD2MP.wo102.authorityHost and KCD2MP.wo102.authorityPause) then return end
+    if KCD2MP_W136Held and KCD2MP_W136Held() then return end   -- WO-136: never while a world loads
     if KCD2MP.hitSensorOn then
         KCD2MP._pauseStats.refusedAuthority = KCD2MP._pauseStats.refusedAuthority + 1
         if not KCD2MP._pauseRefusedAuthLogged then
@@ -4327,6 +4328,9 @@ local function mp_wo102_pause_gap_s()
     return ((KCD2MP.npcSync and KCD2MP.npcSync.releaseS) or 3.0) + NPC_RECONCILE_INTERVAL_S
 end
 local function mp_wo102_reconcile_pauses()
+    -- WO-136 Phase 1: the post-load re-pause waits for the world (the reload
+    -- flag stays set, so the first sweep after the hold does it).
+    if KCD2MP_W136Held and KCD2MP_W136Held() then return end
     local now = os.clock()
     local gapS = mp_wo102_pause_gap_s()
     local reload = KCD2MP._chainDeadRestartAt ~= nil and KCD2MP._chainDeadRestartAt > (KCD2MP._pauseReassertedAt or 0)
@@ -5548,6 +5552,9 @@ function KCD2MP_Wo124LoadGame(pl, name, why)
         return false
     end
     mp_log(string.format("WO124-LOAD wh_sys_LoadGame %d %s (%s)", n, f, tostring(why)))
+    -- WO-136 Phase 1: set before the load starts (the agent's own calls may not
+    -- reach the game once it loads); lifted 2 s after "Gameplay started".
+    if KCD2MP_W136Hold then pcall(KCD2MP_W136Hold, true, 240, "load-" .. tostring(why)) end
     local ok, err = pcall(System.ExecuteCommand, string.format("wh_sys_LoadGame %d %s", n, f))
     if not ok then mp_log("WO124-LOAD ExecuteCommand failed: " .. tostring(err)) end
     return ok
@@ -5887,6 +5894,7 @@ function KCD2MP_W131Tick(joiner, shared)
     w.aliveAt = os.clock()
     pcall(KCD2MP_W131InstallLootBlock)
     pcall(KCD2MP_W135InstallTakedowns)   -- WO-135
+    if KCD2MP_W136Held and KCD2MP_W136Held() then return end   -- WO-136: no park, sweep or knockout while a world loads
     local now = KCD2MP_W131IsActive()
     if now and not w.active then
         w.active = true
@@ -5960,25 +5968,29 @@ function KCD2MP_W131StandIn(name, x, y, z, rot, flags)
     local w = KCD2MP.w131
     if not (w.standIn and KCD2MP_W131IsActive()) then return nil end
     local f = tonumber(flags) or 0
-    if (math.floor(f / 128) % 2) == 1 then return nil end   -- a horse (the host's 0x80)
+    local notHuman = (math.floor(f / 128) % 2) == 1   -- the host's 0x80: a horse or (WO-136) an encounter animal
     if (f % 2) == 1 then return nil end                     -- dead on the host: no body to invent
     if not string.find(tostring(name), "^[%w_]+$") or mp_is_excluded_npc_name(name) then return nil end
     if w.standins[name] then return w131_body(name) end
+    -- WO-136 Phase 2: the host's own soul and class (animals too); nil = wait for it / a horse.
+    local soul, cls, kind = KCD2MP_W136StandInSpec(name, notHuman)
+    if not soul then return nil end
     local n = 0
     for _ in pairs(w.standins) do n = n + 1 end
     local now = os.clock()
     if n >= w.standinMax or (now - w.standinLastAt) < 0.5 then return nil end
     w.standinLastAt = now
-    local soul, kind = KCD2MP_W131StandInSoul(name)
+    local st = KCD2MP.w136.stats
+    if kind == "exact" then st.exact = st.exact + 1 elseif kind == "animal" then st.animal = st.animal + 1 else st.guess = st.guess + 1 end
     local ok, err = pcall(function()
-        XGenAIModule.SpawnEntity({ Name = name, ClassName = "NPC", Pos = { x, y, z }, SharedSoulGuid = soul })
+        XGenAIModule.SpawnEntity({ Name = name, ClassName = cls, Pos = { x, y, z }, SharedSoulGuid = soul })
     end)
     local e = w131_body(name)
     if e then
         w.standins[name] = { at = now, soul = soul }
         pcall(function() e:SetWorldAngles({ x = 0, y = 0, z = tonumber(rot) or 0 }) end)
-        mp_log(string.format("WO131-STANDIN spawn npc=%s soul=%s kind=%s at=(%.1f,%.1f,%.1f) -- the host spawned it, this world never did",
-            name, string.sub(soul, 1, 8), kind, x, y, z))
+        mp_log(string.format("WO131-STANDIN spawn npc=%s soul=%s class=%s kind=%s at=(%.1f,%.1f,%.1f) -- the host spawned it, this world never did",
+            name, string.sub(soul, 1, 8), tostring(cls), kind, x, y, z))
     else
         mp_log(string.format("WO131-STANDIN fail npc=%s soul=%s ok=%s err=%s", name, string.sub(soul, 1, 8), tostring(ok), tostring(err)))
     end
@@ -6444,6 +6456,364 @@ do
     end
 end
 
+-- ===== WO-136: world presence (docs/WO-136-findings.md) ============================
+--
+-- Phase 1: nothing touches an NPC while a world loads. The field's joins held
+-- the loading screen ~55 s ("Loading screen timeouted while still in post load
+-- reconstruction") because the host's NPC stream was applied in the window
+-- between EntityModuleOnPostLoadGame and "Gameplay started": puppets started,
+-- wh_ai_PauseNPC landed on bodies the AI was still reconstructing, and the
+-- reload-reset re-paused puppets the moment the timers came back (the Lua
+-- timers DO fire in that window). WO-135 stopped only the copy guard. Now one
+-- hold covers every path: the agent holds the host's frames (queued, the
+-- newest per NPC), and this hold stops every Lua path that pauses, puppets,
+-- binds, parks, stands in or writes an NPC or an avatar. The join's own load
+-- call sets it before the load starts; the agent lifts it two seconds after
+-- "Gameplay started" (and keeps re-telling it); a hold nobody lifts expires.
+-- Held NpcState calls are kept (the newest per name) and replayed on release.
+--   WO136-HOLD on why=<w> ttl_s=<n> | off why=<w> held_s=<F1> replayed=<n>
+KCD2MP.w136 = {
+    hold = false, holdUntil = 0, holdSince = 0, holdWhy = nil,
+    queue = {}, queueN = 0,
+    stats = { holds = 0, queued = 0, replayed = 0, expired = 0, rides = 0 },
+}
+
+function KCD2MP_W136Held()
+    local w = KCD2MP.w136
+    if not w.hold then return false end
+    if os.clock() > w.holdUntil then
+        w.stats.expired = w.stats.expired + 1
+        KCD2MP_W136Hold(false, 0, "expired")
+        return false
+    end
+    return true
+end
+
+-- on = true|false; ttlS = how long a hold may last unlifted (default 240 s:
+-- the field's join took 112 s from the command to "Gameplay started").
+function KCD2MP_W136Hold(on, ttlS, why)
+    local w = KCD2MP.w136
+    local now = os.clock()
+    if on then
+        local ttl = tonumber(ttlS) or 240
+        if not w.hold then
+            w.hold, w.holdSince, w.holdWhy = true, now, tostring(why or "?")
+            w.holdUntil = 0   -- a new hold: an old hold's deadline never carries over
+            w.stats.holds = w.stats.holds + 1
+            mp_log(string.format("WO136-HOLD on why=%s ttl_s=%d -- no NPC is paused, puppeted, bound, parked or written until the world has loaded",
+                w.holdWhy, ttl))
+        end
+        w.holdUntil = math.max(w.holdUntil, now + ttl)
+        return true
+    end
+    if not w.hold then return false end
+    w.hold = false
+    local q = w.queue
+    w.queue, w.queueN = {}, 0
+    local n = 0
+    for _, args in pairs(q) do
+        n = n + 1
+        pcall(KCD2MP_ApplyNpcState, args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9], args[10])
+    end
+    w.stats.replayed = w.stats.replayed + n
+    mp_log(string.format("WO136-HOLD off why=%s held_s=%.1f replayed=%d -- NPCs are the host's stream again",
+        tostring(why or "?"), now - (w.holdSince or now), n))
+    return true
+end
+
+-- KCD2MP_ApplyNpcState under the hold: the newest sample per name is kept.
+function KCD2MP_W136Queue(name, x, y, z, rot, hp, flags, src, seq, senderMs)
+    local w = KCD2MP.w136
+    if not w.queue[name] then w.queueN = w.queueN + 1 end
+    w.queue[name] = { name, x, y, z, rot, hp, flags, src, seq, senderMs }
+    w.stats.queued = w.stats.queued + 1
+end
+
+function KCD2MP_W136Status()
+    local w, s = KCD2MP.w136, KCD2MP.w136.stats
+    mp_log(string.format("WO136-STATUS hold=%s why=%s queued_now=%d holds=%d queued=%d replayed=%d expired=%d souls=%d standins_exact=%d standins_animal=%d standins_guess=%d rides=%d torch=%s",
+        tostring(w.hold), tostring(w.holdWhy), w.queueN, s.holds, s.queued, s.replayed, s.expired,
+        w.soulN, s.exact, s.animal, s.guess, s.rides, tostring(w.torchLocal)))
+end
+
+-- Phase 2: the host's runtime spawns, animals included. WO-131's stand-in wore
+-- an approximate soul and refused every not-human body, so the field's encounter
+-- wolves (prepadeniNaCeste_wolf_*, crimeScene_wolf_4) bit the host's world
+-- while the joiner saw nothing ("dropped-no-entity"). The game's soul tables
+-- name every such spawn: the host NPC's name IS its soul's name, and the soul's
+-- archetype IS the entity class (NPC, NPC_Female, Horse, Wolf, WildDog, Boar).
+-- The agent reads them (Tables.pak) and answers w136_soul <name>; the stand-in
+-- is then the host's own soul in its own class, under the same name, and every
+-- by-name path (the puppet, the native bind, the copy guard, the hit gate, the
+-- host-only death) works unchanged. A horse never gets one (both worlds have
+-- the host's horses); an unknown name falls back to WO-131's guess (humans) or
+-- a species soul by name (wolf / dog / boar).
+--   WO136-STANDIN soul npc=<name> class=<cls> soul=<guid8> | unknown npc=<name>
+KCD2MP.w136.souls = {}          -- name -> { guid = , cls = } | false (the tables do not know it)
+KCD2MP.w136.soulAsked = {}      -- name -> os.clock() of the last ask
+KCD2MP.w136.soulN = 0
+KCD2MP.w136.soulWaitS = 1.5     -- a human waits this long for its exact soul, then WO-131's guess
+KCD2MP.w136.stats.exact, KCD2MP.w136.stats.animal, KCD2MP.w136.stats.guess = 0, 0, 0
+KCD2MP.w136.ANIMAL = { Wolf = true, WildDog = true, Boar = true }
+KCD2MP.w136.SPECIES = {         -- a species soul when the tables do not know the name (Tables.pak soul__animal.xml)
+    { pat = "wolf", cls = "Wolf",    soul = "e1579e78-de5f-4f68-ad76-e9f5f3fad485" },   -- animal_wolf_trosecko
+    { pat = "dog",  cls = "WildDog", soul = "4ffab0bb-617a-a998-8c03-73d409edc8b2" },   -- animal_wild_dog
+    { pat = "boar", cls = "Boar",    soul = "9988bac0-35be-4e4c-b1af-2fc16c4168c2" },   -- animal_boar
+    { pat = "kanec", cls = "Boar",   soul = "9988bac0-35be-4e4c-b1af-2fc16c4168c2" },
+}
+
+function KCD2MP_W136IsAnimalClass(cls)
+    return cls ~= nil and KCD2MP.w136.ANIMAL[tostring(cls)] == true
+end
+
+-- Agent -> mod: the answer to w136_soul (guid "" = the tables do not know the name).
+function KCD2MP_W136SoulFor(name, guid, cls)
+    local w = KCD2MP.w136
+    name, guid, cls = tostring(name), tostring(guid or ""), tostring(cls or "")
+    if w.souls[name] == nil then w.soulN = w.soulN + 1 end
+    if guid ~= "" and cls ~= "" then
+        w.souls[name] = { guid = guid, cls = cls }
+        if w.soulN <= 40 then mp_log(string.format("WO136-STANDIN soul npc=%s class=%s soul=%s -- the host's own spawn", name, cls, string.sub(guid, 1, 8))) end
+    else
+        w.souls[name] = false
+        if w.soulN <= 40 then mp_log("WO136-STANDIN unknown npc=" .. name .. " -- not in the soul tables; the guess stands in") end
+    end
+end
+
+-- What to spawn for a name the host streams and this world lacks: soul, class,
+-- kind (exact | animal | guess) -- or nil (wait for the agent's answer, or
+-- nothing to stand in: a horse).
+function KCD2MP_W136StandInSpec(name, notHuman)
+    local w = KCD2MP.w136
+    local known = w.souls[name]
+    local now = os.clock()
+    if known == nil then
+        local asked = w.soulAsked[name]
+        if not asked or (now - asked) > 10.0 then
+            w.soulAsked[name] = now
+            KCD2MP_EmitEvent("w136_soul", name)
+            return nil
+        end
+        if notHuman or (now - asked) < w.soulWaitS then return nil end
+    end
+    if known then
+        if known.cls == "Horse" then return nil end
+        if KCD2MP_W136IsAnimalClass(known.cls) then return known.guid, known.cls, "animal" end
+        if known.cls == "NPC" or known.cls == "NPC_Female" then return known.guid, known.cls, "exact" end
+        return nil
+    end
+    if notHuman then
+        local l = string.lower(name)
+        for _, sp in ipairs(w.SPECIES) do
+            if string.find(l, sp.pat, 1, true) then return sp.soul, sp.cls, "animal" end
+        end
+        return nil   -- a horse or a creature this file does not know
+    end
+    local soul, kind = KCD2MP_W131StandInSoul(name)
+    return soul, "NPC", "guess:" .. tostring(kind)
+end
+
+-- Phase 3: the rider owns the horse (docs/DECISIONS-coop-design.md). The
+-- field: the joiner mounted a host horse copy (the mount HUD showed), the
+-- horse "freaked out" and vanished -- it was still the host's puppet: paused,
+-- natively bound to the host's (standing) horse every frame, and parked
+-- (hidden) when the host's stream for it went quiet. Now the moment this
+-- player is on a horse the host streams, that horse is released here at once:
+-- unbound, its brain given back (a ridden horse is the rider's), shown, the
+-- host's stream for it ignored (the agent drops it too) and the copy guard
+-- lifted. The rider's own position stream carries it (riding + horse_info):
+-- the host's world moves its horse with the avatar. Dismounted: after a short
+-- settle the host's stream is taken again, from where the rider left it -- the
+-- host's horse is there too, so nothing is teleported back.
+--   WO136-RIDE take npc=<horse> | return npc=<horse> after_s=<F1>
+KCD2MP.w136.ridden = {}          -- horse name -> { at = os.clock(), until = nil | release time }
+KCD2MP.w136.rideReturnS = 3.0    -- after the dismount, the host's stream is ignored this much longer
+
+function KCD2MP.w136.body(name)
+    local e = nil
+    pcall(function() e = System.GetEntityByName(name) end)
+    return e
+end
+
+-- The horse this player sits on (IsMounted + GetHorse), by authored name.
+function KCD2MP_W136MountedHorse()
+    if not (player and player.human) then return nil end
+    local mounted = false
+    pcall(function() mounted = player.human:IsMounted() == true end)
+    if not mounted then return nil end
+    local hid = nil
+    pcall(function() hid = player.human:GetHorse() end)
+    local h = nil
+    if hid then pcall(function() h = System.GetEntity(hid) end) end
+    -- GetHorse returns the horse's WUID (a userdata), not an entity id (J1)
+    if hid and not h then pcall(function() h = XGenAIModule.GetEntityByWUID(hid) end) end
+    if not h then return nil end
+    local n = nil
+    pcall(function() n = h:GetName() end)
+    if n and string.find(n, "^[%w_]+$") and not string.find(n, "^kcd2mp_") then return n end
+    return nil
+end
+
+-- Is this host-streamed horse ridden here (its host stream ignored)?
+function KCD2MP_W136Ridden(name)
+    local r = KCD2MP.w136.ridden[name]
+    if not r then return false end
+    if r.untilAt and os.clock() > r.untilAt then
+        KCD2MP.w136.ridden[name] = nil
+        mp_log(string.format("WO136-RIDE return npc=%s after_s=%.1f -- the host's world has its horse again (bound where the rider left it)",
+            name, os.clock() - (r.at or os.clock())))
+        KCD2MP_EmitEvent("w136_ride", name .. " 0")
+        return false
+    end
+    return true
+end
+
+function KCD2MP_W136RideTake(name)
+    local w = KCD2MP.w136
+    if w.ridden[name] and not w.ridden[name].untilAt then return end
+    local p = KCD2MP.npcPuppets[name]
+    local wasPuppet = p ~= nil
+    local wasParked = KCD2MP.w131 and KCD2MP.w131.parked[name] ~= nil
+    if not (wasPuppet or wasParked or w.ridden[name]) then return end   -- not the host's horse copy: an ordinary local ride
+    w.ridden[name] = { at = os.clock() }
+    w.stats.rides = w.stats.rides + 1
+    if p then
+        KCD2MP_NpcNativeSync(name, p, nil, false, "ridden")
+        KCD2MP.npcPuppets[name] = nil
+    end
+    if KCD2MP.w131 then KCD2MP.w131.parked[name] = nil end
+    KCD2MP._npcResumePending[name] = nil
+    mp_wo102_resume(name, "ridden")
+    pcall(System.ExecuteCommand, "wh_ai_ResumeNPC " .. tostring(name))
+    local e = KCD2MP.w136.body(name)
+    if e then pcall(function() e:Hide(0) end) end
+    mp_log(string.format("WO136-RIDE take npc=%s puppet=%s parked=%s -- the rider owns the horse: unbound, its brain back, shown, the host's stream for it ignored",
+        name, tostring(wasPuppet), tostring(wasParked)))
+    KCD2MP_EmitEvent("w136_ride", name .. " 1")
+end
+
+function KCD2MP_W136RideEnd(name)
+    local r = KCD2MP.w136.ridden[name]
+    if not r or r.untilAt then return end
+    r.untilAt = os.clock() + KCD2MP.w136.rideReturnS
+    mp_log(string.format("WO136-RIDE dismount npc=%s -- the host's stream takes it back in %.1f s (the host's horse follows the rider there)",
+        name, KCD2MP.w136.rideReturnS))
+end
+
+-- From the interp tick's riding check (100 ms): a mount / a dismount of a host horse copy.
+function KCD2MP_W136RideTick()
+    local w = KCD2MP.w136
+    if not (KCD2MP.w131 and KCD2MP_W131IsActive and KCD2MP_W131IsActive()) and next(w.ridden) == nil then return end
+    local on = KCD2MP_W136MountedHorse()
+    if on and KCD2MP_W131IsActive() then KCD2MP_W136RideTake(on) end
+    for name, r in pairs(w.ridden) do
+        if name ~= on and not r.untilAt then KCD2MP_W136RideEnd(name) end
+        if r.untilAt then KCD2MP_W136Ridden(name) end
+    end
+end
+
+-- Host: a horse a partner's avatar rides is streamed by that rider, not by
+-- this world's NPC stream (the joiner ignores its own copy's stream anyway).
+function KCD2MP_W136AvatarRides(name)
+    if not name then return false end
+    for _, hd in pairs(KCD2MP.horseGhosts or {}) do
+        if hd.isWorldHorse and hd.worldName == name then return true end
+    end
+    return false
+end
+
+-- Phase 5: the partner's avatar wears what the partner wears -- nothing else.
+-- The field: the host's avatar stayed in "guard armour" on the joiner ("4
+-- still worn that should not be -- retrying"): the spawn applied a clothing
+-- PRESET (white_red) whose pieces are not inventory items, so the agent's
+-- UnequipItem ("Item was not found") could never take them off, and they held
+-- the slots the host's own hose needed. The engine's way to take a preset off
+-- is another preset: an empty one (kcd2mp_bare, clothing_preset__kdcmp.xml).
+-- The avatar spawns bare and wears the partner's real items (the appearance
+-- sync); the agent clears again if an unremovable piece ever shows up.
+--   WO136-OUTFIT clear id=<n> why=<w> ok=<pcall>
+KCD2MP.w136.PRESET_BARE = "dc000004-0000-0000-0000-000000000000"
+function KCD2MP_W136ClearPreset(id, why)
+    local g = KCD2MP.ghosts and KCD2MP.ghosts[tostring(id)]
+    local e = g and g.entity
+    if not (e and e.actor) then mp_log("WO136-OUTFIT clear id=" .. tostring(id) .. " -- no avatar"); return false end
+    local ok, err = pcall(function() e.actor:EquipClothingPreset(KCD2MP.w136.PRESET_BARE) end)
+    mp_log(string.format("WO136-OUTFIT clear id=%s why=%s ok=%s%s -- the spawn preset is off; only the partner's own items are worn",
+        tostring(id), tostring(why), tostring(ok), ok and "" or (" err=" .. tostring(err))))
+    return ok
+end
+
+-- Phase 5: the torch. Sender: this player's torch in hand -> w136_torch 1|0
+-- (the agent puts it in the state block, bit 0x20). Receiver: the avatar holds
+-- the game's own torch item (ui_nm_torch) in its left hand, lit, while the
+-- partner's is out.
+--   WO136-TORCH local=<0|1> (<class>) | avatar id=<n> on|off -> <how>
+KCD2MP.w136.TORCHES = { ["4cea28a0-0814-405a-bf24-4fd711f7eb63"] = true, ["cfec1446-ce8d-4c9c-aa9a-56fc8b10bc0e"] = true }
+KCD2MP.w136.TORCH_ITEM = "4cea28a0-0814-405a-bf24-4fd711f7eb63"
+KCD2MP.w136.torchLocal = false
+KCD2MP.w136.avatarTorch = {}   -- ghost id -> true while its torch is out
+
+function KCD2MP.w136.handClass(e, hand)
+    local cls = nil
+    pcall(function()
+        local it = e.human:GetItemInHand(hand)
+        if it then
+            local item = ItemManager.GetItem(it)
+            if item then cls = tostring(item.class) end
+        end
+    end)
+    return cls
+end
+
+function KCD2MP_W136TorchTick()
+    if not (player and player.human) then return end
+    local w = KCD2MP.w136
+    local cls = w.handClass(player, 1) or w.handClass(player, 0)
+    local on = cls ~= nil and w.TORCHES[cls] == true
+    if on ~= w.torchLocal then
+        w.torchLocal = on
+        mp_log(string.format("WO136-TORCH local=%d (%s) -- rides the state block to the partner", on and 1 or 0, tostring(cls)))
+        KCD2MP_EmitEvent("w136_torch", on and "1" or "0")
+    end
+end
+
+function KCD2MP_W136AvatarTorch(id, on)
+    id = tostring(id)
+    local w = KCD2MP.w136
+    local g = KCD2MP.ghosts and KCD2MP.ghosts[id]
+    local e = g and g.entity
+    if not (e and e.human and e.inventory) then return false end
+    local how = "?"
+    if on then
+        local it = nil
+        pcall(function() it = e.inventory:FindItem(w.TORCH_ITEM) end)
+        if not it then
+            pcall(function() e.inventory:CreateItem(w.TORCH_ITEM, 1, 1) end)
+            pcall(function() it = e.inventory:FindItem(w.TORCH_ITEM) end)
+        end
+        local ok = it ~= nil and pcall(function() e.human:DrawFromInventory(it, 1, true) end)
+        how = it and (ok and "drawn into the left hand" or "draw FAILED") or "no torch item"
+        w.avatarTorch[id] = ok or nil
+    else
+        local cls = w.handClass(e, 1)
+        if cls and w.TORCHES[cls] then
+            pcall(function() e.human:HolsterToInventory(1, true) end)   -- (hand, animate): the game's own put-away
+            local left = w.handClass(e, 1)
+            how = (left and w.TORCHES[left]) and "put-away FAILED (still in hand)" or "put away"
+        else
+            how = "no torch in hand"
+        end
+        w.avatarTorch[id] = nil
+    end
+    mp_log(string.format("WO136-TORCH avatar id=%s %s -> %s", id, on and "on" or "off", how))
+    return true
+end
+
+-- mp_w136_check <verb ...>: live checks through the agent (fights, threat, handover, swing, ...).
+function KCD2MP_W136Check(arg)
+    KCD2MP_EmitEvent("w136_check", tostring(arg or ""))
+end
+
 -- ===== WO-102 Phase 6: NPC resync burst (the sleep / fast-travel / reload net) =====
 --
 -- The owner (damage authority, host authority on) emits ONE npc_state sample
@@ -6480,7 +6850,7 @@ function KCD2MP_NpcResyncBurst(reason)
         for _, e in ipairs(System.GetEntitiesInSphere(a, MP_NPC_RESYNC_RADIUS) or {}) do
             if n >= MP_NPC_RESYNC_MAX then break end
             local cls = e.class
-            local isHorse = (cls == "Horse")
+            local isHorse = (cls == "Horse") or KCD2MP_W136IsAnimalClass(cls)   -- WO-136: encounter animals too (not human)
             if (cls == "NPC" or cls == "NPC_Female" or isHorse) and not mp_is_mod_entity(e)
                and not (isHorse and KCD2MP._mountedHorseName and e:GetName() == KCD2MP._mountedHorseName) then
                 local name = e:GetName()
@@ -6498,6 +6868,7 @@ function KCD2MP_NpcResyncBurst(reason)
                         end
                         pcall(function() drawn = e.human and e.human:IsWeaponDrawn() == true end)
                         local flags = (dead and 1 or 0) + (ko and 2 or 0) + (drawn and 4 or 0) + 64
+                            + (isHorse and 128 or 0)   -- WO-136: a resync of a horse or an animal says so too
                         KCD2MP_EmitEvent("npc_state", string.format("%s %.3f %.3f %.3f %.4f %.1f %d",
                             name, ep.x, ep.y, ep.z, rot, hp, flags))
                         n = n + 1
@@ -6810,7 +7181,7 @@ function KCD2MP_NpcScanCompare()
             if not seenEnt[key] then
                 seenEnt[key] = true
                 local cls = e.class
-                local isHorse = (cls == "Horse")
+                local isHorse = (cls == "Horse") or KCD2MP_W136IsAnimalClass(cls)   -- WO-136
                 local isHuman = (cls == "NPC" or cls == "NPC_Female")
                 if (isHuman or isHorse) and not mp_is_mod_entity(e)
                    and not (isHorse and KCD2MP._mountedHorseName and e:GetName() == KCD2MP._mountedHorseName) then
@@ -7040,6 +7411,10 @@ local function mp_npc_rescan()
     end
     for _, e in ipairs(ents) do
         local cls = e.class
+        -- WO-136 Phase 2: so do the encounter animals (Wolf, WildDog, Boar): an
+        -- attacker the joiner cannot see is never acceptable. They travel as
+        -- not-human (0x80) like horses; the joiner tells them apart by the host
+        -- NPC's own soul (its archetype is the entity class).
         -- WO-38 Phase 5: Horse-class entities travel on the same channel --
         -- an idle horse both worlds have (authored name) converges exactly
         -- like a wandering NPC, which is what makes a peer's unmounted horse
@@ -7049,8 +7424,10 @@ local function mp_npc_rescan()
         -- the ghost-mount path -- streaming it here too would double-drive.
         local isHorse = (cls == "Horse")
         local isHuman = (cls == "NPC" or cls == "NPC_Female")
-        if (isHuman or isHorse) and not mp_is_mod_entity(e)
+        local isAnimal = KCD2MP_W136IsAnimalClass(cls)
+        if (isHuman or isHorse or isAnimal) and not mp_is_mod_entity(e)
            and not (isHorse and KCD2MP._mountedHorseName and e:GetName() == KCD2MP._mountedHorseName)
+           and not (isHorse and KCD2MP_W136AvatarRides and KCD2MP_W136AvatarRides(e:GetName()))   -- WO-136 Phase 3: its rider streams it
            and not KCD2MP.npcPuppets[e:GetName() or ""] then
             local name = e:GetName()
             -- Only plain authored names travel: they are the cross-client
@@ -7440,7 +7817,7 @@ function KCD2MP_NpcSyncTick()
                 local flags = (dead and 1 or 0) + (ko and 2 or 0)
                     + (drawn and 4 or 0) + (swingCue and 8 or 0)
                     + (engaged and 32 or 0)
-                    + ((e.class == "Horse") and 128 or 0)   -- WO-131: not a human (no stand-in on the joiner)
+                    + ((e.class ~= "NPC" and e.class ~= "NPC_Female") and 128 or 0)   -- WO-131: not a human (WO-136: a horse or an encounter animal)
                 -- npc_state rides the authority's default stream; npc_claim
                 -- (WO-60) is the same payload sent down the asClaim path, so
                 -- the agent's authority gate lets it through and sending it
@@ -7878,6 +8255,14 @@ function KCD2MP_ApplyNpcState(name, x, y, z, rot, hp, flags, src, seq, senderMs)
         return
     end
 
+    -- WO-136 Phase 1: a world still loading gets nothing; the newest sample waits.
+    if KCD2MP_W136Held and KCD2MP_W136Held() then
+        KCD2MP_W136Queue(name, x, y, z, rot, hp, flags, src, seq, senderMs)
+        return
+    end
+    -- WO-136 Phase 3: the horse this player rides is the rider's, not the host's stream.
+    if KCD2MP_W136Ridden and KCD2MP_W136Ridden(name) then return end
+
     local e = KCD2MP_NpcBody(name)   -- WO-104: the replica while one drives this NPC, else the world NPC
     if not e and KCD2MP_W131StandIn then e = KCD2MP_W131StandIn(name, x, y, z, rot, flags) end   -- WO-131 1f
     if not e then return end
@@ -8220,6 +8605,9 @@ function KCD2MP_NpcPuppetTick(arg, gen)
         Script.SetTimer(KCD2MP.npcPuppetTickMs, function() KCD2MP_NpcPuppetTick(nil, gen) end)  -- reschedule FIRST, rate read fresh every tick (mp_puppet_rate)
         KCD2MP._npcPuppetAliveAt = os.clock()
     end
+
+    -- WO-136 Phase 1: the chain stays alive, but writes nothing while a world loads.
+    if KCD2MP_W136Held and KCD2MP_W136Held() then return end
 
     local now = os.clock()
 
@@ -9296,7 +9684,14 @@ function KCD2MP_SpawnGhost(id, x, y, z, rotZ)
     -- let the soul's own authored outfit stand. The male path is unchanged.
     if facePick.className ~= "NPC_Female" then
         local p = KCD2MP.armorPresets.white_red
-        pcall(function() entity.actor:EquipClothingPreset(p.preset) end)
+        -- WO-136 Phase 5: the avatar spawns bare (the empty preset takes the
+        -- soul's own authored outfit off too); the partner's real items arrive
+        -- with the appearance sync. The white_red CLOTHING preset pieces were
+        -- not inventory items and could never be taken off (the field's
+        -- "guard armour"). The weapon preset stays: a drawable weapon for the
+        -- swing path until the partner's own weapon is equipped.
+        local okBare = pcall(function() entity.actor:EquipClothingPreset(KCD2MP.w136.PRESET_BARE) end)
+        mp_log(string.format("WO136-OUTFIT spawn ghost '%s': bare preset ok=%s -- it wears only the partner's own items from here", tostring(id), tostring(okBare)))
         pcall(function() entity.actor:EquipWeaponPreset(p.weapons) end)
     end
     local ghostName = name
@@ -9830,6 +10225,10 @@ end
 -- runs for that sample. No version negotiation, no probe: absence is the
 -- signal.
 function KCD2MP_UpdateGhost(id, x, y, z, rotZ, isRiding, bPace, bDir, bStance, bSpeedCenti)
+    -- WO-136 Phase 1: no avatar is spawned or moved while a world loads (the
+    -- field: a spawn in that window came up with no model); the next sample
+    -- after the hold does it.
+    if KCD2MP_W136Held and KCD2MP_W136Held() then return end
     local ghost = KCD2MP.ghosts[id]
 
     -- Spawn if doesn't exist yet, then fall through to process isRiding on same call.
@@ -11262,6 +11661,9 @@ function KCD2MP_InterpTick(arg, gen)
         mp_log("TICK_ALIVE #" .. KCD2MP._tickN .. " ghosts=" .. gc)
     end
 
+    -- WO-136 Phase 1: no avatar is written while a world loads.
+    if KCD2MP_W136Held and KCD2MP_W136Held() then return end
+
     -- Fetch player position once per tick for label distance calculations.
     local _playerPos = nil
     if player then pcall(function() _playerPos = player:GetWorldPos(SCRATCH.INTERPTICK_PLAYERPOS_SCRATCH) end) end
@@ -11758,6 +12160,8 @@ function KCD2MP_InterpTick(arg, gen)
                 KCD2MP._horseInfoSentAt = nowC
                 KCD2MP_EmitEvent("horse_info", wire)
             end
+            pcall(KCD2MP_W136RideTick)    -- WO-136 Phase 3: the rider owns the horse
+            pcall(KCD2MP_W136TorchTick)   -- WO-136 Phase 5: the torch in hand
         end
     end
 
@@ -14856,6 +15260,59 @@ function W134.hpOf(list, cls)
     return 1
 end
 
+-- ---- WO-136 Phase 7: who took what from a host body (host) ------------------------
+-- takes[name][cls][peer] = pieces this peer took ("host" = the host's own looting);
+-- seen[name][cls] = the most of that class the body was ever seen holding;
+-- counts[name] = the counts after the last change this file accounted for.
+W134.bodyLedger = { takes = {}, seen = {}, counts = {} }
+
+function W134.noteSeen(name, list)
+    local L = W134.bodyLedger
+    L.seen[name] = L.seen[name] or {}
+    for cls, n in pairs(W134.counts(list)) do
+        if n > (L.seen[name][cls] or 0) then L.seen[name][cls] = n end
+    end
+end
+
+function W134.noteCounts(name, e)
+    local list = W134.items(e)
+    W134.noteSeen(name, list)
+    W134.bodyLedger.counts[name] = W134.counts(list)
+end
+
+function W134.noteTake(name, cls, peer, amt)
+    local L = W134.bodyLedger
+    L.takes[name] = L.takes[name] or {}
+    L.takes[name][cls] = L.takes[name][cls] or {}
+    L.takes[name][cls][peer] = (L.takes[name][cls][peer] or 0) + amt
+end
+
+-- The host's own looting: a class that went down with no joiner take behind it.
+function W134.noteHostLoot(name, list)
+    local L = W134.bodyLedger
+    local now = W134.counts(list)
+    local before = L.counts[name]
+    if before then
+        for cls, n in pairs(before) do
+            local m = now[cls] or 0
+            if m < n then W134.noteTake(name, cls, "host", n - m) end
+        end
+    end
+    W134.noteSeen(name, list)
+    L.counts[name] = now
+end
+
+function W134.goneWhy(name, cls, peer, have)
+    local L = W134.bodyLedger
+    local t = (L.takes[name] or {})[cls] or {}
+    local others = 0
+    for who, n in pairs(t) do if who ~= peer then others = others + n end end
+    if others > 0 then return "gone" end
+    if (t[peer] or 0) > 0 then return "mine" end
+    if ((L.seen[name] or {})[cls] or 0) == 0 and (have or 0) == 0 then return "none" end
+    return "gone"
+end
+
 -- A loot session: what left the body since the last look went to the player
 -- (a take, sent to the host); what arrived was put in by the player.
 function W134.diffSession(name, sess, e)
@@ -14873,9 +15330,25 @@ function W134.diffSession(name, sess, e)
             W134.log(string.format("WO134-BODY take npc=%s cls=%s amt=%d tok=%s -- sent to the host", name, cls, n - m, tok))
         end
     end
+    -- WO-136 Phase 7: a put is an item that came out of the player's own pack
+    -- (item ids survive the move). The loot screen itself adds the NPC's home key
+    -- as it opens (field: key_home 62 ms after the screen, reported as a put; the
+    -- host's echo made it two, "take all" asked for 2 -> a false "Someone already
+    -- took that"): an item from nowhere is the game's own, never sent.
+    local before = {}
+    for _, it in ipairs(sess.snap or {}) do before[tostring(it.w)] = true end
+    local fromPack = {}
+    for _, it in ipairs(now) do
+        local wk = tostring(it.w)
+        if not before[wk] and sess.pinv and sess.pinv[wk] then fromPack[it.cls] = true end
+    end
     for cls, m in pairs(b) do
         local n = a[cls] or 0
-        if m > n then
+        if m > n and not fromPack[cls] then
+            w.stats.phantomPuts = (w.stats.phantomPuts or 0) + 1
+            W134.log(string.format("WO134-BODY not-a-put npc=%s cls=%s amt=%d -- it did not come out of the player's pack (the game's own, e.g. the loot screen's key); not sent", name, cls, m - n))
+        end
+        if m > n and fromPack[cls] then
             local tok = W134.tok()
             local hp = W134.hpOf(now, cls)
             sess.puts[tok] = { cls = cls, amt = m - n, hp = hp, at = os.clock() }
@@ -14900,10 +15373,18 @@ function KCD2MP_W134TakeResult(tok, verdict, name)
             if verdict == "ok" then
                 w.stats.takeOk = w.stats.takeOk + 1
                 W134.log(string.format("WO134-BODY result npc=%s tok=%s ok -- out of the host's body, kept", bname, tok))
+            elseif verdict == "mine" or verdict == "none" then
+                -- WO-136 Phase 7: a duplicate of my own earlier take (take all +
+                -- a single take, a retry) or an item the host's body never held
+                -- (the copy's own): taken back quietly -- nobody else got anything.
+                w.stats.takeDup = (w.stats.takeDup or 0) + 1
+                local n = W134.deleteClass(player, t.cls, t.amt, t.hp, t.pinv)
+                W134.log(string.format("WO134-BODY result npc=%s tok=%s %s -- %s: %d of %d taken back off Henry, no notice", bname, tok, verdict,
+                    verdict == "mine" and "already mine (a duplicate of my own take)" or "never in the host's body", n, t.amt))
             else
                 w.stats.takeGone = w.stats.takeGone + 1
                 local n = W134.deleteClass(player, t.cls, t.amt, t.hp, t.pinv)
-                W134.log(string.format("WO134-BODY result npc=%s tok=%s gone -- someone took it first: %d of %d taken back off Henry", bname, tok, n, t.amt))
+                W134.log(string.format("WO134-BODY result npc=%s tok=%s gone -- someone else took it first: %d of %d taken back off Henry", bname, tok, n, t.amt))
                 KCD2MP_ShowNativeToast("Someone already took that.")
             end
             return
@@ -14929,6 +15410,7 @@ function W134.hostSend(peer, tok, name, reason)
     else
         flags = 2   -- no such body on the host
     end
+    if e then W134.noteSeen(name, list); if not W134.bodyLedger.counts[name] then W134.bodyLedger.counts[name] = W134.counts(list) end end   -- WO-136
     local enc = W134.encode(list)
     local nparts = math.max(1, math.ceil(#enc / 10))
     for p = 1, nparts do
@@ -14957,6 +15439,12 @@ function KCD2MP_W134HostTake(peer, tok, name, cls, amt, hp)
         local n = W134.deleteClass(e, cls, amt, tonumber(hp) or 1, nil)
         if n >= amt then verdict = "ok" end
     end
+    -- WO-136 Phase 7: a refused take names who got it -- mine (this joiner's own
+    -- earlier take), none (this body never held it), else gone (someone else: the
+    -- host or another joiner). Only "gone" shows the notice on the joiner.
+    if verdict == "ok" then W134.noteTake(tostring(name), tostring(cls), tostring(peer), amt)
+    else verdict = W134.goneWhy(tostring(name), tostring(cls), tostring(peer), have) end
+    if e then W134.noteCounts(tostring(name), e) end
     w.stats.hostTakes = w.stats.hostTakes + 1
     KCD2MP_EmitEvent("w134_tres", string.format("%s %s %s %s %s %d", tostring(peer), tostring(tok), verdict, tostring(name), tostring(cls), amt))
     W134.log(string.format("WO134-BODY host-take npc=%s cls=%s amt=%d from=%s -> %s (had %d)", tostring(name), tostring(cls), amt, tostring(peer), verdict, have))
@@ -14995,6 +15483,7 @@ function W134.hostWatch()
                 seen[name] = true
                 local list = W134.items(e)
                 local sig = W134.sig(list)
+                if w.bodySig[name] ~= sig then W134.noteHostLoot(name, list) end   -- WO-136 Phase 7
                 if w.bodySig[name] ~= sig and sent < 4 then
                     w.bodySig[name] = sig
                     sent = sent + 1
@@ -15070,11 +15559,15 @@ function KCD2MP_W134HostItem(peer, tok, cls, x, y, z, body)
     local how = ""
     if e then
         verdict = "ok"
-        w.hostTaken[#w.hostTaken + 1] = { cls = cls, x = x, y = y, z = z, at = os.clock() }
+        w.hostTaken[#w.hostTaken + 1] = { cls = cls, x = x, y = y, z = z, at = os.clock(), by = tostring(peer) }
         how = W134.takeAway(e, peer)
     else
         for _, t in ipairs(w.hostTaken) do
-            if t.cls == cls and (t.x - x) ^ 2 + (t.y - y) ^ 2 + (t.z - z) ^ 2 <= tol * tol then verdict = "gone" break end
+            if t.cls == cls and (t.x - x) ^ 2 + (t.y - y) ^ 2 + (t.z - z) ^ 2 <= tol * tol then
+                -- WO-136 Phase 7: this joiner's own earlier take is not "someone else's"
+                verdict = (t.by == tostring(peer)) and "mine" or "gone"
+                break
+            end
         end
     end
     KCD2MP_EmitEvent("w134_ires", string.format("%s %s %s %s %.3f %.3f %.3f", tostring(peer), tostring(tok), verdict, tostring(cls), x, y, z))
@@ -15098,10 +15591,15 @@ function KCD2MP_W134ItemResult(tok, verdict)
         W134.bypass = false
         W134.log(string.format("WO134-ITEM %s tok=%s cls=%s -- picked up here ok=%s res=%s%s", verdict == "ok" and "ok" or "unmatched", tok, tostring(r.cls),
             tostring(ok), tostring(res), verdict == "ok" and " (the host's copy is gone)" or " (the host has no such item: per machine, as before)"))
+    elseif verdict == "mine" then
+        -- WO-136 Phase 7: my own earlier take of it (a retry): removed here, no notice.
+        w.stats.itemDup = (w.stats.itemDup or 0) + 1
+        W134.takeAway(r.ent)
+        W134.log(string.format("WO134-ITEM mine tok=%s cls=%s -- already mine (my own earlier take); removed here, no notice", tok, tostring(r.cls)))
     else
         w.stats.itemGone = w.stats.itemGone + 1
         W134.takeAway(r.ent)
-        W134.log(string.format("WO134-ITEM gone tok=%s cls=%s -- someone took it first; removed here", tok, tostring(r.cls)))
+        W134.log(string.format("WO134-ITEM gone tok=%s cls=%s -- someone else took it first; removed here", tok, tostring(r.cls)))
         KCD2MP_ShowNativeToast("Someone already took that.")
     end
 end
@@ -15259,6 +15757,7 @@ function W134.loop()
     Script.SetTimer(w.loopMs, W134.loop)   -- reschedule FIRST
     KCD2MP._w134LoopAliveAt = os.clock()
     if not player then return end
+    if KCD2MP_W136Held and KCD2MP_W136Held() then return end   -- WO-136: bodies and chests wait for the world
     local now = os.clock()
     -- joiner: loot sessions (a session ends 5 m away or after 10 min)
     for name, sess in pairs(w.sessions) do
@@ -15528,6 +16027,8 @@ local ok, err = pcall(function()
     System.AddCCommand("mp_avatar_quiet",        'KCD2MP_W135SetQuiet(%line)',            "WO-135 (host): the partner's avatar is a puppet -- which groups of its own reactions are off: 1 speech (barks, dialogue), 2 witness (crime), 4 react (perception, hits), 8 defence (its own blocks); mp_avatar_quiet 0..15|on|off (default 15 = all); bare = report")
     System.AddCCommand("mp_npc_ko_sync",         'KCD2MP_W135SetKoSync(%line)',           "WO-135 (joiner): the host's knocked-out NPCs go down on this screen too, and get up when they do: mp_npc_ko_sync on|off (default on)")
     System.AddCCommand("mp_w135_check",          'KCD2MP_W135Check(%line)',               "WO-135 live checks: mp_w135_check crouch on|off (the player's own crouch setter, no input) | status")
+    System.AddCCommand("mp_w136_check",          'KCD2MP_W136Check(%line)',               "WO-136 live checks: mp_w136_check fights on|off | handover | threat <npc> [weight] | swing <ghost> | torch <ghost> on|off | clear <ghost> | status")
+    System.AddCCommand("mp_w136_status",         'KCD2MP_W136Status()',                   "WO-136: the load hold, stand-ins by kind, rides, the local torch")
     System.AddCCommand("mp_w135_ko",             'KCD2MP_W135TestKo(%line)',              "WO-135 live checks (host): knock a wo13* TEST npc out or wake it with the game's own unconsciousness: mp_w135_ko <npc> on|off")
     System.AddCCommand("mp_w135_status",         'KCD2MP_W135Status()',                   "WO-135: quiet groups, knockout sync and takedown request counters")
     System.AddCCommand("mp_npc_standin",         'KCD2MP_SetNpcStandIn(%line)',           "WO-131 1f (JOINER): an NPC the host spawned at runtime (road encounters) gets a stand-in here under its own name, driven by the host's stream: mp_npc_standin on|off (default on)")

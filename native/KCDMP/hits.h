@@ -75,6 +75,8 @@ void note_player_damage(float stamina, float health);
 bool skirmish_ready();
 bool skirmish_add(void* soul, void* reference, uint8_t overrideRelation, uint64_t* rv);
 bool skirmish_remove(void* soul, uint64_t* rv);
+// WO-136: the avatars (entity id, soul) the hook knows; returns the count.
+int avatar_list(uint32_t* eids, void** souls, int max);
 void* soul_of_eid(uint32_t eid);
 uint32_t eid_of_name(const char* name);   // one entity walk per name, cached and re-verified
 

@@ -18,6 +18,7 @@ using namespace kcdmp::gait;
 
 int wo114_wake_tests(int* passed);   // wo114_wake_tests.cpp
 int wo133_port_gate_tests(int* passed);   // wo133_port_gate_tests.cpp
+int wo136_rules_tests(int* passed);        // wo136_rules_tests.cpp
 
 static int g_fail = 0, g_pass = 0;
 #define CHECK(cond, ...) do { if (cond) ++g_pass; else { ++g_fail; std::printf("FAIL  %s:%d  ", __FILE__, __LINE__); std::printf(__VA_ARGS__); std::printf("\n"); } } while (0)
@@ -116,6 +117,13 @@ int main() {
         const int pf = wo133_port_gate_tests(&pp);
         g_pass += pp;
         g_fail += pf;
+    }
+    // WO-136: who an NPC turns to in a fight with both players; who takes over at the host's death
+    {
+        int rp = 0;
+        const int rf = wo136_rules_tests(&rp);
+        g_pass += rp;
+        g_fail += rf;
     }
 
     std::printf("%d passed, %d failed\n", g_pass, g_fail);

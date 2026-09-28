@@ -134,6 +134,9 @@ $AsmMarkers = @(
     @{ File = 'KcdMpClient.dll'; Marker = 'MP-WO135-STATS';         Owner = 'WO-135 avatar puppet, knockouts, same-build Henry (agent half)' },
     @{ File = 'KCDMP.dll';       Marker = 'WO135-DIALOG';           Owner = 'WO-135 the avatar is never heard (native dialogue gate)' },
     @{ File = 'KCDMP.dll';       Marker = 'WO135-QUIET';            Owner = 'WO-135 the avatar puppet contexts (native)' },
+    @{ File = 'KcdMpClient.dll'; Marker = 'MP-WO136-STATS';         Owner = 'WO-136 load hold, stand-ins, rider horse, torch (agent half)' },
+    @{ File = 'KCDMP.dll';       Marker = 'WO136-HANDOVER';         Owner = 'WO-136 the fight goes on with the partner (native)' },
+    @{ File = 'KCDMP.dll';       Marker = 'WO136-FORCED';           Owner = 'WO-136 enemies choose the joiner: combat_forcedTarget (native)' },
     @{ File = 'KcdMp.Protocol.dll'; Marker = 'loot-host';           Owner = 'WO-134 loot messages on the join channel (wire)' },
     @{ File = 'KCDMP_launcher.dll'; Marker = 'Kingdom Come: Together'; Owner = 'WO-134 rebrand (launcher window title)' }
 )
@@ -194,6 +197,9 @@ $PakMarkers = @(
     @{ Marker = 'function W134.takeAway';          Owner = 'WO-134 world items leave for good (no item-slot respawn)' },
     @{ Marker = 'function KCD2MP_W135KoTick';      Owner = 'WO-135 knockouts follow the host (mod half)' },
     @{ Marker = 'function KCD2MP_W135HostTakedown'; Owner = 'WO-135 takedowns are requests to the host (mod half)' },
+    @{ Marker = 'function KCD2MP_W136Hold';        Owner = 'WO-136 the load hold (mod half)' },
+    @{ Marker = 'function KCD2MP_W136RideTake';    Owner = 'WO-136 the rider owns the horse (mod half)' },
+    @{ Marker = 'function KCD2MP_W136AvatarTorch'; Owner = 'WO-136 the avatar holds the torch (mod half)' },
     @{ Marker = 'Quest catch-up is off in a shared world.'; Owner = 'WO-133 the plain refusal line' }
 )
 
