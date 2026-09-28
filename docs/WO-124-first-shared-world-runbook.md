@@ -277,14 +277,50 @@ Logs:
 * status `mp_w136_status`; counters every 60 s `MP-WO136-STATS`; live checks
   `mp_w136_check fights on|off | status`.
 
+## Questing together (WO-137, in the next installer)
+
+In plain words:
+
+* **Every quest is shared** — main quests and side quests like "Find Mutt!".
+  The host's world holds the story. A step either of you makes (examining,
+  picking up, a conversation's outcome) updates both journals; the host's
+  world decides, and a step that is already done counts once.
+* **The partner can talk to people.** The person the partner talks to waits
+  for the partner in the host's world meanwhile; what is decided in the
+  conversation counts for both.
+* **Dead stays dead** on both screens, also bodies the story placed and people
+  the story kills.
+* **Rewards are each player's own.** Time is the host's: a quest step on the
+  partner's side never moves the clock.
+* **Off switch (host):** `mp_quest_sync off` stops sharing at once;
+  `mp_quest_sync on` starts it again (the partner's journal is compared and put
+  right at once). A rejoin always loads the story exactly as the host has it.
+
+Logs:
+
+* both agents: `MP-W137 quest sync ON -- host: …` / `-- joiner: …`,
+  `MP-WO137-STATS` every 60 s.
+* host agent: `MP-W137 host change #…`, `MP-W137 host: request #… from ghost …:
+  … APPLIED | already done … counted once | refused …`, `MP-W137 host: ghost …
+  talks to … -- … HELD`.
+* joiner agent: `MP-W137 joiner applied host change #…`, `MP-W137 joiner ->
+  host request #…`, `MP-W137 MISMATCH …`, `checkpoint part …`.
+* kcd.log: `WO137-TALK resume|start|end`, `WO137-HOLD on|off`, `WO137-DEAD …`,
+  `MP-PAUSE … a-corpse-is-never-paused`; native `WO137-BUILD`, `WO137-CHANGE`,
+  `WO137-APPLY`, `WO137-TIMESET`.
+* status `mp_quest_status`; the partner's side: `mp_quest_talk on|off`.
+
 ## Expected not to work yet
 
 * **No "back to the main menu"** in KCD2. If the host leaves, or a check
   fails, the joiner is told and their **own** newest save loads. With no save
   of their own at all, the game drops to the main menu with a "Game load
   failed" box: press OK. That is intended.
-* **Talking to NPCs near the host:** on the joiner's machine those NPCs are
-  held still (suspended), so the joiner can't talk to them (WO-112).
+* **Surrendering enemies** don't kneel on the joiner's screen (WO-137); talking
+  to one is an ordinary conversation there.
+* **A conversation topic you used** can still be offered to the other player;
+  asking again changes nothing in the quest (WO-137).
+* **Cutscenes** play only for the player who triggers them (WO-137).
 * **NPCs don't fight back when the joiner hits them:** they turn, but don't
   swing (WO-121).
 * **NPCs stand instead of sitting** on the joiner's screen.
@@ -295,7 +331,6 @@ Logs:
 * **The prologue and Godwin's part of the story:** no join while the host
   plays one of them ("Your host is in a part of the story where you can't join
   yet."). What to do there together is a later WO.
-* Quest progress does not reach the other player live (a later WO).
 * Already in a world when connecting? The joiner is told to quit, restart and
   wait at the main menu.
 

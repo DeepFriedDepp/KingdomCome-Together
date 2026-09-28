@@ -45,3 +45,41 @@ host's relay log. Lines worth a look: `WO136-HOLD`, `MP-W136`, `MP-WO136-STATS`,
 `WO136-STANDIN`, `WO136-RIDE`, `WO136-TARGET`, `WO136-HANDOVER`,
 `WO136-FORCED`, `WO136-TORCH`, `WO136-CROUCH`, `WO136-OUTFIT`,
 `WO134-BODY not-a-put`.
+
+## WO-137 — questing together
+
+Use a save where both of you have **"Find Mutt!"** not yet started or just
+started (the host's world decides), and the main quest active. A throwaway
+copy of the host's save is best. Do the WO-136 list above in the same session.
+
+1. **The host advances, the partner's journal follows.** The host makes a step
+   (examines the dead deer at the ambush site). The partner's journal shows
+   the same update within a few seconds, without doing anything.
+2. **The partner advances, the host's journal follows.** The partner makes the
+   next step (examines the bandit's body, or picks up a quest item). The host's
+   journal updates; the partner's too.
+3. **The partner talks, it counts for both.** The partner talks to the quest's
+   person (in Find Mutt: the herbwoman). The conversation plays on the
+   partner's screen; the person stands still in the host's world meanwhile
+   (the host can't start a second conversation with them). After it, both
+   journals show the step. Also try an ordinary villager.
+4. **Rewards per player.** When a step gives money or an item, each of you gets
+   your own on your own character. Note who got what.
+5. **No step twice.** Both of you examine the same thing, one after the other.
+   The journal updates once; nothing is given twice.
+6. **A side quest: "Find Mutt!"** — play several of its steps together, some
+   by the host, some by the partner.
+7. **A main-quest step** — make one step of the main quest together (either of
+   you); both journals move.
+8. **Dead stays dead.** At the Find Mutt ambush site the bandit lies dead on
+   both screens (it stood up on the partner's screen before). A person the
+   story kills lies dead on both.
+9. **The off switch (host).** Host: console `mp_quest_sync off`, make a step —
+   the partner's journal does not follow. Then `mp_quest_sync on`: the
+   partner's journal catches up at once.
+
+Say for each whether it worked, and the time of anything odd.
+
+Lines worth a look (both machines): `MP-W137`, `MP-WO137-STATS`,
+`WO137-TALK`, `WO137-HOLD`, `WO137-DEAD`, `WO137-CHANGE`, `WO137-APPLY`,
+`WO137-TIMESET`, `MP-PAUSE … a-corpse-is-never-paused`.
