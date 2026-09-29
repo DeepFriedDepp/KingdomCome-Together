@@ -1,9 +1,132 @@
-# The next two-player session: the combined checklist
+<p align="center"><img src="branding/banner-1280.jpg" alt="Kingdom Come: Together" width="640"></p>
 
-One list for the host and the partner, built up by WO-136 to WO-143. The same
-list, with what is new, is the tester page for 0.42.0: `docs/TEST-0.42.0.md`.
-Tick what you saw, write the time next to anything odd, and send the logs
-listed at the end.
+# Testing 0.42.0 (both players)
+
+**Kingdom Come: Together.** Unofficial. Not affiliated with or endorsed by
+Warhorse Studios.
+
+One page for the host and the partner. Plan on an evening: the four "most
+wanted" checks first (fights together, horses, talking, "Find Mutt!"), then as
+much of the rest as you like. Tick what you saw, write the time next to
+anything odd, and send what the last section lists.
+
+0.42.0 carries WO-136 to WO-143. New since 0.41.7 (WO-143): what people hold
+and do shows on the other screen — the tool in a villager's hand, a farmer
+hoeing, a guest's drink, a dice player's reaction — and so do the other
+player's grindstone, reading, alchemy, herbs, lockpicking, digging and
+smithing.
+
+## Install
+
+Both of you: run `KingdomComeTogether-Setup-0.42.0.exe` (the maintainer sends
+it; it is not on GitHub). It installs over 0.41.7 or 0.40.0. Both computers
+need it: 0.42.0 refuses every other version, 0.41.7 included. Afterwards,
+`tools\Verify-Install.ps1` (if you have it) must end with "all present".
+
+## What's new in 0.42.0
+
+- **Tools in hands.** A villager carrying a saw, a bucket, a broom or a hoe
+  carries it on the partner's screen too, in the same hand.
+- **Farmers hoe.** A farmer working a field hoes along the row, bent over the
+  hoe, as on the host's screen, and holds it still at the row's end.
+- **Tavern life.** Seated guests drink and dice players react on the partner's
+  screen, and stay in their seats.
+- **The other player's minigames.** At a grindstone the other player's figure
+  sits on the seat and grinds; reading, alchemy, picking herbs, picking a lock,
+  digging and smithing show as themselves. When the minigame ends, the figure
+  gets up.
+- **Quieter logs.** Something the game refuses to show is logged three times,
+  then once a minute.
+
+> **If something looks wrong, turn it off with…** (the console, `~`; `on`
+> switches it back; nothing else changes)
+>
+> | what looks wrong | type |
+> |---|---|
+> | a tool in someone's hand (floating, jumping, the wrong one) | `mp_hand_items off` |
+> | a farmer's hoeing walk, or a drunk or injured walk | `mp_activity_gaits off` |
+> | a guest's drink, a dice reaction, someone's short gesture | `mp_oneshots off` |
+> | the other player's figure at a grindstone, a book, an anvil… | `mp_player_minigames off` |
+> | heads turning oddly | `mp_idles off` |
+> | anyone sitting, lying, leaning or working (0.41.7's part) | `mp_activities off` |
+>
+> Say which one you switched off, and when (`mark_odd` first).
+
+## Also new since 0.40.0 (in 0.41.7 already)
+
+**Joining**
+
+- **The partner waits at the main menu.** Start the game from the launcher and
+  **don't load a save**: click CONNECT at the menu and you join your host's
+  world by yourself. Only the host loads a save first.
+- **If you load your own save by mistake,** the game and the launcher tell you
+  plainly: "You loaded your own save. To play in your host's world, quit the
+  game, start it again and wait at the main menu." Until you do, nothing of the
+  host's world happens in yours.
+
+**Playing together**
+
+- **What people do shows on both screens.** A villager asleep in bed lies in the
+  same bed on the partner's screen, one on a bench sits on it, a woman leaning
+  on a wall leans on it, a guard stands at his post — instead of standing next
+  to it. Someone who is doing something gets up first when a fight, a
+  conversation or a knockout comes.
+- **The same for the two of you.** Sit on a bench or lie in a bed and your
+  figure does the same on the other screen, with your name above it. Washing
+  your face at a water trough shows as a wash at that trough.
+- **Wolves bite on both screens.** An animal's attack on the host plays on the
+  partner's screen too, instead of a frozen animal.
+- **Sleeping together.** When one of you picks "Sleep" at a bed (or waits), the
+  other is asked first: "<name> wants to sleep. Sleep too?" — F11 yes, F12 no.
+  Until the answer comes, nothing happens but "Waiting for other players...".
+  On a yes, both of you see the sleep screen for the same hours, wherever the
+  other one stands, and you wake together, rested, at the same time of day. On a
+  no (or nothing in 30 s): "Other players are not ready to sleep yet!".
+- **One clock for both.** The host's clock is the world's; the partner's can no
+  longer run ahead of it.
+- **Nobody's menu stops the other's world.** The inventory, the map, the
+  journal, the ESC menu, a conversation or a cutscene of one player no longer
+  freezes the other's world. (Alone, the game pauses as it always did.)
+- **Quests are shared.** Main quests and side quests like "Find Mutt!" live in
+  the host's world: when either of you makes a step, both journals update. The
+  partner can talk to people. A step counts once, rewards are your own, and
+  dead stays dead.
+- **Crimes count in the host's world.** If the host's people see the partner
+  steal, pick a lock, take a horse or trespass, the host's guards deal with the
+  partner — the game's own arrest, fine, punishment or fight. Punishment no
+  longer skips hours. You can't rob each other; the host's horses are free to
+  ride for the partner.
+- **The world is there for both of you.** The host's animals appear for the
+  partner; enemies fight both of you (and keep fighting the partner if the host
+  goes down); knocked-out enemies go down on both screens; whoever rides a horse
+  owns it; clothes, torches and crouching show on the other screen; "Someone
+  already took that" only when the other really took it. Joining is calmer.
+
+**Off switches** (the console, `~`): the five above, and `mp_activities off`
+(bodies stand where they are, as before 0.41.7), `mp_animal_attacks off`
+(bites not animated on the partner's screen), `mp_sleep_vote off` (each of you
+sleeps alone), `mp_quest_sync off` (host: quests not shared), `mp_crime_shared
+off` (host: crimes not shared). `on` switches each back.
+
+**Still known**
+
+- Work at a bench or a desk that needs a tool (a carpenter debarking, a sawyer,
+  a scribe) is not shown: on the partner's screen the person stands at the spot.
+- A seated guest's tankard is not in the hand (the drink plays).
+- A barmaid serving or wiping a table, or someone busy on the way somewhere,
+  may not show that gesture on the partner's screen.
+- A cart's horses can walk ahead of the cart on the partner's screen (the cart
+  itself is not sent yet).
+- At the grindstone the blade is not in the other player's figure's hands.
+- Stone throwing and archery are not shown: the figure stands.
+- A surrendering enemy does not kneel on the partner's screen yet.
+- A sleep in a bed that isn't yours (a stranger's house, a barn) can be woken
+  early by the owner or a guard, as in the game.
+- If you are already well rested, the game cuts a sleep short (or refuses it),
+  also for the one who said yes.
+- Waiting (instead of sleeping) together has not been tried by two players yet.
+
+# The checklist
 
 **Markers.** Each item has a one-word marker. When you start an item, open the
 console (`~`) and type it, for example `mark_fight`. It writes one line

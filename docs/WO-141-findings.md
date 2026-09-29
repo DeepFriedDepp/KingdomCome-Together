@@ -121,6 +121,10 @@ WO-40/136's.
 
 ## 4. Coverage against the census (`docs/WO-141A-activity-census.md`)
 
+**Updated by WO-143** (0.42.0) for the rows it covers — tools in hand, the
+field hoe and the other gaits, one-shots, the players' minigames, looks and
+carts: `docs/WO-143-findings.md` §4. The rows below are WO-141's.
+
 "Shown" = the other screen shows it; "stands" = the body stands at the spot on
 the other screen (as before WO-141); "walks" = the stream walks it without the
 activity's pose or tool.
