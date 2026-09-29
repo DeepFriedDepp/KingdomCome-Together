@@ -121,6 +121,21 @@ inline bool decode(const uint8_t* p, size_t n, Activity* out) {
 // again; a body the game keeps refusing backs off so one bad object cannot
 // storm the frame.
 struct Pace { double nextAt = 0; int misses = 0; };
+
+// WO-143: the writer stays off a body the game places -- in step, or while it
+// is tried. One the game keeps refusing here is written again once the retries
+// back off (held, it stood wherever the stream had left it, and a forced look
+// turned it bodily); each backed-off retry is held again. A cart stance stays
+// held even when refused: its cart is not streamed, and a written cart horse
+// walks off without it.
+inline bool hold_wanted(bool owns, bool matched, int misses, bool waiting, uint8_t stance);
+
+// WO-143: tools ride the apply only for a body that does not sit, lie or kneel
+// on an object (the game's path to a seated tool goes through standing: the
+// guest was stood up and sat down again), and not once the game has refused
+// them three times with this activity (then shown exactly as WO-141 shows it).
+constexpr int kHandsTriesBeforeDrop = 3;
+inline bool hands_ride(bool handsSet, bool dropped, uint8_t stance);
 constexpr double kRecheckS = 1.5;
 constexpr double kBackoffS = 15.0;
 constexpr int    kMissesBeforeBackoff = 4;
@@ -131,6 +146,15 @@ inline double next_delay(int misses) { return misses < kMissesBeforeBackoff ? kR
 constexpr double kRefreshS = 10.0;
 inline bool send_due(bool changed, bool isNone, double sinceSentS) {
     return changed || (!isNone && sinceSentS >= kRefreshS);
+}
+
+// ---- WO-143 (declared beside Pace) -----------------------------------------
+inline bool hold_wanted(bool owns, bool matched, int misses, bool waiting, uint8_t stance) {
+    if (!owns) return false;
+    return matched || misses < kMissesBeforeBackoff || !waiting || stance == kCart;
+}
+inline bool hands_ride(bool handsSet, bool dropped, uint8_t stance) {
+    return handsSet && !dropped && !object_stance(stance);
 }
 
 } // namespace kcdmp::wo141rules

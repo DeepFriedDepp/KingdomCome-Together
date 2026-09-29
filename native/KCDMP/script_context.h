@@ -85,6 +85,14 @@ bool apply_isolation(const unsigned char guid[16], bool on);
 // MUST run on the game's main thread.
 int set_soul_context(void* soul, const char* name, bool on);
 
+// WO-143: read one entity context on a soul (the host's NPCs' actorCondition_*
+// gaits). 1 = set, 0 = not set, -1 = not possible. Read-only. Main thread.
+// `name` must be a string with static storage (the node cache keeps the pointer).
+int has_soul_context(void* soul, const char* name);
+// WO-143: set_soul_context without the per-call chain log (the frequent gait
+// writes); the same refcount rule and return values. The caller logs.
+int set_soul_context_quiet(void* soul, const char* name, bool on);
+
 // WO-136: the same for a Relation-class context from one soul to another
 // (combat_forcedTarget: the game's own "fight this one", the battle
 // controller's and the quest fights' lever). Same return values.

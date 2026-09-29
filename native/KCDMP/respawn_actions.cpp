@@ -1473,4 +1473,62 @@ bool brain_state(void* ent, uint64_t* wuidOut, int* state, int* mask) {
     return true;
 }
 
+// WO-143: items by what they are. The anchors are the graves' (C_EntityModule
+// exports, RTTI C_ItemManager / C_Item / C_Inventory); the slots were read out
+// of C_ScriptBindInventory::FindItem (EntityModule +0xB3F9E0): the inventory's
+// slot 0x178 walks its items comparing item->vtbl[0x18]() (the 16-byte class
+// id) and the scriptbind hands back item->vtbl[0x08]() (item+0x30, the WUID).
+constexpr size_t kItemGetWuidPtr  = 0x08;
+constexpr size_t kItemGetClassId  = 0x18;
+constexpr size_t kInvFindByClass  = 0x178;
+
+void* item_by_wuid(uint64_t wuid) {
+    if (!g_invArmed || !wuid) return nullptr;
+    void* im = item_manager(); void* item = nullptr;
+    if (!im || !vcall(im, kImGetItem, &item, wuid) || !is_a(item, g_vftItem)) return nullptr;
+    return item;
+}
+
+uint64_t item_wuid(void* item) {
+    uint64_t w = 0;
+    return is_a(item, g_vftItem) && rd64(item, kItemWuid, &w) ? w : 0;
+}
+
+bool item_class_id(void* item, uint8_t out[16]) {
+    std::memset(out, 0, 16);
+    const void* p = nullptr;
+    if (!is_a(item, g_vftItem) || !vcall(item, kItemGetClassId, &p) || !p) return false;
+    uint64_t a = 0, b = 0;
+    if (!rd64(p, 0, &a) || !rd64(p, 8, &b)) return false;
+    std::memcpy(out, &a, 8); std::memcpy(out + 8, &b, 8);
+    return (a | b) != 0;
+}
+
+void* soul_inventory(void* soul) {
+    void* inv = nullptr;
+    if (!g_invArmed || !soul || !vcall(soul, kSoulGetInventory, &inv)) return nullptr;
+    return is_a(inv, g_vftInventory) ? inv : nullptr;
+}
+
+void* inventory_find_class(void* inv, const uint8_t cls[16]) {
+    if (!is_a(inv, g_vftInventory)) return nullptr;
+    alignas(8) uint8_t g[16];
+    std::memcpy(g, cls, 16);
+    void* item = nullptr;
+    if (!vcall(inv, kInvFindByClass, &item, static_cast<const void*>(g))) return nullptr;
+    return is_a(item, g_vftItem) ? item : nullptr;
+}
+
+int inventory_items(void* inv, void** out, int max) {
+    void* b = nullptr; void* e = nullptr;
+    if (!is_a(inv, g_vftInventory) || !rd(inv, kInvPresentBegin, &b) || !rd(inv, kInvPresentEnd, &e) || !b || e < b) return -1;
+    size_t n = (static_cast<char*>(e) - static_cast<char*>(b)) / 8;
+    int k = 0;
+    for (size_t i = 0; i < n && k < max; ++i) {
+        void* item = nullptr;
+        if (rd(b, i * 8, &item) && is_a(item, g_vftItem)) out[k++] = item;
+    }
+    return k;
+}
+
 } // namespace kcdmp::actions

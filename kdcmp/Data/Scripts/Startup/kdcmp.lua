@@ -16850,7 +16850,8 @@ KCD2MP_MARKS = { "setup", "join", "fight", "fightboth", "ko", "hostdown", "horse
     "dead", "mainquest", "reward", "nodouble", "questoff", "animals", "outfit", "torch", "crouch", "loot", "inventory", "map",
     "esc", "partnermenu", "dialogue", "cutscene", "solo", "steal", "fine", "townsfolk", "jail", "guardfight", "execution",
     "norob", "hostcrime", "sleep", "sleepno", "sleeptimeout", "sleepjoiner", "wait", "clock", "ownworld",
-    "grindstone", "trough", "bench", "bed", "npcsit", "npcsleep", "garden", "workstation", "standup", "npcfight", "wolfbite", "odd" }
+    "grindstone", "trough", "bench", "bed", "npcsit", "npcsleep", "garden", "workstation", "standup", "npcfight", "wolfbite",
+    "tool", "hoe", "gait", "oneshot", "look", "minigame", "cart", "floating", "tpose", "odd" }
 function KCD2MP_Mark(word)
     word = tostring(word or "odd"):gsub("[^%w_]", "")
     if word == "" then word = "odd" end
@@ -16983,6 +16984,190 @@ function KCD2MP_W141Status()
     mp_log(string.format("WO141-STATUS activities=%s animal_attacks=%s wrapped %s (MP-W141 stats and the DLL's line in agent.log)",
         w.on and "on" or "off", w.bites and "on" or "off", table.concat(wrapped, " ")))
     KCD2MP_EmitEvent("w141", "status")
+end
+
+-- ===== WO-143: activities, part 2 (docs/WO-143-findings.md) =======================
+-- What else the bodies do, said the game's own way: the tool in each hand, the
+-- gait (hoeing, drunk, injured), the one-shots (serving beer, drinking at a
+-- trough, a dog's howl), the players' minigames on the avatar, and who a
+-- standing NPC looks at. The DLL reads and applies them (native wo143.cpp) and
+-- the agent carries them (MP-W143 lines). What Lua does: the five switches, the
+-- temporary tool a copy is given when it does not own the host's (its own
+-- inventory, never a world item, never the host's), and the forced look.
+-- Every switch defaults ON (the maintainer's rule) and fails quietly: off, or
+-- refused by the game, the body looks as it did before.
+KCD2MP.w143 = KCD2MP.w143 or {}
+KCD2MP.w143.hands = (KCD2MP.w143.hands == nil) and true or KCD2MP.w143.hands            -- mp_hand_items
+KCD2MP.w143.gaits = (KCD2MP.w143.gaits == nil) and true or KCD2MP.w143.gaits            -- mp_activity_gaits
+KCD2MP.w143.oneshots = (KCD2MP.w143.oneshots == nil) and true or KCD2MP.w143.oneshots   -- mp_oneshots
+KCD2MP.w143.minigames = (KCD2MP.w143.minigames == nil) and true or KCD2MP.w143.minigames -- mp_player_minigames
+KCD2MP.w143.idles = (KCD2MP.w143.idles == nil) and true or KCD2MP.w143.idles            -- mp_idles
+KCD2MP.w143.temps = KCD2MP.w143.temps or {}    -- copy name -> class id -> the temporary item's id
+KCD2MP.w143.looks = KCD2MP.w143.looks or {}    -- copy name -> who it is made to look at
+KCD2MP.w143.stats = KCD2MP.w143.stats or { provided = 0, released = 0, inhand = 0, looks = 0, cleared = 0 }
+
+KCD2MP_W143_SWITCHES = {
+    { key = "hands", cmd = "mp_hand_items", on = "the tools in NPCs' hands show on the other screen (a woodworker's saw, a farmer's hoe)",
+      off = "copies hold nothing; tool trades stand as before" },
+    { key = "gaits", cmd = "mp_activity_gaits", on = "hoeing, drunk and injured walks show on the other screen",
+      off = "copies walk their plain walk" },
+    { key = "oneshots", cmd = "mp_oneshots", on = "NPCs' one-shots show on the other screen (serving beer, a drink at a trough, a dog's howl)",
+      off = "copies skip them" },
+    { key = "minigames", cmd = "mp_player_minigames", on = "the partner's grindstone, smithing, alchemy, reading and dice show on his avatar",
+      off = "the avatar stands at the spot" },
+    { key = "idles", cmd = "mp_idles", on = "standing NPCs look at who they look at on the host's screen",
+      off = "copies look straight ahead" },
+}
+
+function KCD2MP_W143Set(key, arg)
+    local sw = nil
+    for _, s in ipairs(KCD2MP_W143_SWITCHES) do if s.key == key then sw = s end end
+    if not sw then return false end
+    local v = KCD2MP_Wo122ParseBool(arg)
+    if v == "bad" then mp_log(sw.cmd .. ": expected on|off, got '" .. tostring(arg) .. "'"); return false end
+    local w = KCD2MP.w143
+    if v ~= nil then w[key] = v end
+    mp_log(string.format("WO143-SWITCH %s %s -- %s", sw.cmd, w[key] and "on" or "off", w[key] and sw.on or sw.off))
+    KCD2MP_EmitEvent("w143", key .. " " .. (w[key] and "on" or "off"))
+    if key == "idles" and not w[key] then pcall(KCD2MP_W143ClearLooks) end
+    return true
+end
+function KCD2MP_SetHandItems(arg) return KCD2MP_W143Set("hands", arg) end
+function KCD2MP_SetActivityGaits(arg) return KCD2MP_W143Set("gaits", arg) end
+function KCD2MP_SetOneShots(arg) return KCD2MP_W143Set("oneshots", arg) end
+function KCD2MP_SetPlayerMinigames(arg) return KCD2MP_W143Set("minigames", arg) end
+function KCD2MP_SetIdles(arg) return KCD2MP_W143Set("idles", arg) end
+
+-- The agent asks every few seconds: the switches as this game has them, so a
+-- switch typed before the agent connected still counts.
+function KCD2MP_W143Sync(hands, gaits, oneshots, minigames, idles)
+    local w = KCD2MP.w143
+    local agent = { hands = hands, gaits = gaits, oneshots = oneshots, minigames = minigames, idles = idles }
+    for _, s in ipairs(KCD2MP_W143_SWITCHES) do
+        if agent[s.key] ~= w[s.key] then KCD2MP_EmitEvent("w143", s.key .. " " .. (w[s.key] and "on" or "off")) end
+    end
+end
+
+-- ---- temporary tools --------------------------------------------------------
+-- The host's NPC holds a tool its copy here does not own (the field hoe lives in
+-- a world item slot, not in the farmer's pockets): the copy gets one of the same
+-- class in its OWN inventory, the DLL's placement puts it in the hand, and it is
+-- deleted once the hand is empty again. Never a world item; never the host's.
+--   WO143-TEMP give <copy> <class> -> <item>   WO143-TEMP take <copy> <class>
+function KCD2MP_W143Provide(name, cls)
+    local w = KCD2MP.w143
+    if not w.hands then return end
+    local e = System.GetEntityByName(tostring(name))
+    if not (e and e.inventory) or mp_is_mod_entity(e) then return end
+    local have = nil
+    pcall(function() have = e.inventory:FindItem(cls) end)
+    if have then mp_log(string.format("WO143-TEMP %s already owns a %s (%s): not given", name, cls, tostring(have))); return end
+    local ok = pcall(function() e.inventory:CreateItem(cls, 1, 1) end)
+    local it = nil
+    pcall(function() it = e.inventory:FindItem(cls) end)
+    if not (ok and it) then mp_log(string.format("WO143-TEMP give %s %s FAILED (CreateItem bound nothing)", name, cls)); return end
+    w.temps[name] = w.temps[name] or {}
+    w.temps[name][cls] = it
+    w.stats.provided = w.stats.provided + 1
+    mp_log(string.format("WO143-TEMP give %s %s -> %s (a temporary tool in its own inventory)", name, cls, tostring(it)))
+end
+
+function KCD2MP_W143InHand(e, cls)
+    for h = 0, 1 do
+        local held = nil
+        pcall(function()
+            local it = e.human:GetItemInHand(h)
+            local item = it and ItemManager.GetItem(it)
+            if item then held = tostring(item.class) end
+        end)
+        if held == cls then return true end
+    end
+    return false
+end
+
+function KCD2MP_W143Release(name, cls, tries)
+    local w = KCD2MP.w143
+    local t = w.temps[name]
+    local it = t and t[cls]
+    if not it then return end
+    local e = System.GetEntityByName(tostring(name))
+    if e and e.human and KCD2MP_W143InHand(e, cls) then
+        w.stats.inhand = w.stats.inhand + 1
+        KCD2MP_EmitEvent("w143", string.format("inhand %s %s %d", name, cls, tonumber(tries) or 0))
+        return
+    end
+    if e and e.inventory then pcall(function() e.inventory:DeleteItem(it) end) end
+    t[cls] = nil
+    w.stats.released = w.stats.released + 1
+    mp_log(string.format("WO143-TEMP take %s %s (%s deleted)", name, cls, tostring(it)))
+    KCD2MP_EmitEvent("w143", string.format("released %s %s", name, cls))
+end
+
+-- The session ends (or mp_hand_items off): every temporary tool that is out of
+-- a hand goes; one still in a hand stays (it is the copy's for this session).
+function KCD2MP_W143ReleaseAll()
+    local w = KCD2MP.w143
+    local n, kept = 0, 0
+    for name, t in pairs(w.temps) do
+        local e = System.GetEntityByName(tostring(name))
+        for cls, it in pairs(t) do
+            if e and e.human and KCD2MP_W143InHand(e, cls) then kept = kept + 1
+            else
+                if e and e.inventory then pcall(function() e.inventory:DeleteItem(it) end) end
+                t[cls] = nil
+                n = n + 1
+            end
+        end
+    end
+    mp_log(string.format("WO143-TEMP take-all: %d deleted, %d still in a hand", n, kept))
+end
+
+-- ---- looks -----------------------------------------------------------------
+-- The host's NPC looks at someone: its copy here looks at the same body (the
+-- actor's own forced look -- it turns a paused copy's head, WO-143 r1). "" = at
+-- nobody (cleared); "player" = this machine's own player.
+function KCD2MP_W143Look(name, target)
+    local w = KCD2MP.w143
+    local e = System.GetEntityByName(tostring(name))
+    if not (e and e.actor) then return end
+    target = tostring(target or "")
+    if not w.idles then target = "" end
+    -- WO-143 J3: a forced look on a paused copy (a puppet the host drives) swings its head between frames and
+    -- flashes its sheathed weapon, whoever the target; such a copy is never forced to look
+    if KCD2MP.npcPuppets and KCD2MP.npcPuppets[tostring(name)] then
+        if target ~= "" then w.stats.skipped = (w.stats.skipped or 0) + 1 end
+        target = ""
+    end
+    local t = nil
+    if target == "player" then t = player elseif target ~= "" then t = System.GetEntityByName(target) end
+    if t and t.id and t ~= e then
+        local ok = pcall(function() e.actor:SetForcedLookObjectId(t.id) end)
+        if ok then w.looks[name] = target; w.stats.looks = w.stats.looks + 1 end
+    elseif w.looks[name] then
+        pcall(function() e.actor:ClearForcedLookObjectId() end)
+        w.looks[name] = nil
+        w.stats.cleared = w.stats.cleared + 1
+    end
+end
+
+function KCD2MP_W143ClearLooks()
+    local w = KCD2MP.w143
+    for name, _ in pairs(w.looks) do
+        local e = System.GetEntityByName(tostring(name))
+        if e and e.actor then pcall(function() e.actor:ClearForcedLookObjectId() end) end
+    end
+    w.looks = {}
+end
+
+function KCD2MP_W143Status()
+    local w = KCD2MP.w143
+    local temps, looks = 0, 0
+    for _, t in pairs(w.temps) do for _ in pairs(t) do temps = temps + 1 end end
+    for _ in pairs(w.looks) do looks = looks + 1 end
+    mp_log(string.format("WO143-STATUS hands=%s gaits=%s oneshots=%s minigames=%s idles=%s | temporary tools %d (given %d, taken %d, in hand %d) | looks %d (set %d, cleared %d) (MP-W143 stats and the DLL's line in agent.log)",
+        w.hands and "on" or "off", w.gaits and "on" or "off", w.oneshots and "on" or "off", w.minigames and "on" or "off", w.idles and "on" or "off",
+        temps, w.stats.provided, w.stats.released, w.stats.inhand, looks, w.stats.looks, w.stats.cleared))
+    KCD2MP_EmitEvent("w143", "status")
 end
 
 -- ===== WO-139: crime and guards (docs/WO-139-findings.md) =========================
@@ -18211,6 +18396,12 @@ local ok, err = pcall(function()
     System.AddCCommand("mp_activities", 'KCD2MP_SetActivities(%line)', "WO-141: sitting, sleeping, leaning and working (NPCs and players) show on the other screen, the game's own way (default on): mp_activities on|off")
     System.AddCCommand("mp_animal_attacks", 'KCD2MP_SetAnimalAttacks(%line)', "WO-141: the host's wolves', dogs' and boars' attacks play on the joiner's screen (default on): mp_animal_attacks on|off")
     System.AddCCommand("mp_activity_status", "KCD2MP_W141Status()", "WO-141: activities and animal attacks (WO141-STATUS here, MP-W141 stats and the DLL's line in agent.log)")
+    System.AddCCommand("mp_hand_items", 'KCD2MP_SetHandItems(%line)', "WO-143: the tools in NPCs' hands show on the other screen (default on): mp_hand_items on|off")
+    System.AddCCommand("mp_activity_gaits", 'KCD2MP_SetActivityGaits(%line)', "WO-143: hoeing, drunk and injured walks show on the other screen (default on): mp_activity_gaits on|off")
+    System.AddCCommand("mp_oneshots", 'KCD2MP_SetOneShots(%line)', "WO-143: NPCs' one-shots (serving, drinking, a dog's howl) show on the other screen (default on): mp_oneshots on|off")
+    System.AddCCommand("mp_player_minigames", 'KCD2MP_SetPlayerMinigames(%line)', "WO-143: the partner's grindstone, smithing, alchemy, reading and dice show on his avatar (default on): mp_player_minigames on|off")
+    System.AddCCommand("mp_idles", 'KCD2MP_SetIdles(%line)', "WO-143: standing NPCs look at who they look at on the host's screen (default on): mp_idles on|off")
+    System.AddCCommand("mp_activity2_status", "KCD2MP_W143Status()", "WO-143: hands, gaits, one-shots, minigames, looks (WO143-STATUS here, MP-W143 stats and the DLL's line in agent.log)")
     System.AddCCommand("mp_sleep_status", "KCD2MP_W140Status()", "WO-140: sleeping together -- the bed hold, the prompt, the own-world line (WO140-STATUS here, MP-WO140-STATS and WO140-NATIVE in agent.log)")
     System.AddCCommand("mp_crime_shared", 'KCD2MP_SetCrimeShared(%line)', "WO-139: the joiner's crimes are crimes in the host's world (never the host's), guards deal with him; the host's value is the session's (default on): mp_crime_shared on|off")
     System.AddCCommand("mp_crime_status", "KCD2MP_W139Status()", "WO-139: crime and guards -- this machine's role, the joiner's own crimes, a running stop, the legal horses, the punishment's skip-time gate (WO139-STATUS here, MP-WO139-STATS in agent.log)")

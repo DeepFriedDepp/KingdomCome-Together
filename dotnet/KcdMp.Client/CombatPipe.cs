@@ -97,6 +97,9 @@ public sealed class CombatPipe : IAsyncDisposable
     private const byte Wo141             = 0x27;   // WO-141 [op][...] -> 0xA6 [ok][seq][op][reason][payload] (native wo141.h)
     private const byte Wo141Reply        = 0xA6;
     private const byte ActivityOut       = 0xA7;   // WO-141, unsolicited: activity rows (the host's NPCs, the local player)
+    private const byte Wo143             = 0x28;   // WO-143 [op][...] -> 0xA8 [ok][seq][op][reason][payload] (native wo143.h)
+    private const byte Wo143Reply        = 0xA8;
+    private const byte ExtraOut          = 0xA9;   // WO-143, unsolicited: hands, gaits, looks, one-shots, need-item, one-shot done
 
     private const int GuidLen = 16;
 
@@ -164,6 +167,9 @@ public sealed class CombatPipe : IAsyncDisposable
 
     /// <summary>WO-141: 0xA7 -- activity rows the DLL read: (kind 1 an NPC | 2 the local player, name, activity).</summary>
     public Action<List<Wo141DllRow>>? OnActivityFrame { get; set; }
+
+    /// <summary>WO-143: 0xA9 -- the host's capture (hands, gaits, looks, one-shots) and the joiner's asks (need-item, one-shot done).</summary>
+    public Action<Wo143DllFrame>? OnExtraFrame { get; set; }
 
     /// <summary>WO-118: the DLL's native writer stopped a bound puppet on its own (reason, name).</summary>
     public Func<byte, string, Task>? OnNpcDropped { get; set; }
@@ -928,6 +934,83 @@ public sealed class CombatPipe : IAsyncDisposable
         return r is { Payload.Length: >= 1 } x ? x.Ok && x.Payload[0] == 1 : null;
     }
 
+    // ---- WO-143 (native wo143.h) ---------------------------------------------
+
+    /// <summary>One WO-143 op: (ok, reason, payload after the 4-byte head), or null when the DLL did not answer.</summary>
+    public async Task<(bool Ok, byte Reason, byte[] Payload)?> Wo143Async(byte op, byte[] args, CancellationToken ct = default)
+    {
+        var p = new byte[1 + args.Length];
+        p[0] = op; args.CopyTo(p, 1);
+        var (body, _) = await SendAndAwaitAsync(Wo143, p, Wo143Reply, ct);
+        if (body is null || body.Length < 4) return null;
+        return (body[0] == 1, body[3], body.AsSpan(4).ToArray());
+    }
+
+    /// <summary>op 1: capture and apply masks (Wo143Rules.Bit*). The armed bits (Wo143Rules.Armed*), or null.</summary>
+    public async Task<byte?> Wo143ConfigAsync(byte capture, byte apply, CancellationToken ct = default)
+    {
+        var r = await Wo143Async(1, [capture, apply], ct);
+        return r is { Ok: true, Payload.Length: >= 1 } x ? x.Payload[0] : null;
+    }
+
+    /// <summary>op 2: the copy with this name holds these tools (WO-141's reconcile carries them). The reason byte, or null.</summary>
+    public async Task<byte?> Wo143HandsAsync(string name, byte[] left, byte[] right, CancellationToken ct = default)
+    {
+        var r = await Wo143Async(2, Wo143Codec.Hands(name, left, right), ct);
+        return r?.Reason;
+    }
+
+    /// <summary>op 3: the copy's gait contexts := the host's mask (only pairs the DLL set are cleared). (set, cleared), or null.</summary>
+    public async Task<(ushort Set, ushort Cleared)?> Wo143GaitsAsync(string name, ushort mask, CancellationToken ct = default)
+    {
+        var r = await Wo143Async(3, Wo143Codec.Gaits(name, mask), ct);
+        return r is { Ok: true, Payload.Length: >= 4 } x ? (BinaryPrimitives.ReadUInt16LittleEndian(x.Payload), BinaryPrimitives.ReadUInt16LittleEndian(x.Payload.AsSpan(2))) : null;
+    }
+
+    /// <summary>op 4: play a one-shot on the body (a copy, or an avatar's minigame). The engine's request id (-1.. refused), or null.</summary>
+    public async Task<int?> Wo143OneShotAsync(string name, string fragment, string tags, ulong alignGuid, byte flags, CancellationToken ct = default)
+    {
+        var r = await Wo143Async(4, Wo143Codec.OneShot(name, fragment, tags, alignGuid, flags), ct);
+        return r is { Payload.Length: >= 4 } x ? BinaryPrimitives.ReadInt32LittleEndian(x.Payload) : null;
+    }
+
+    /// <summary>op 5: one status line, or null.</summary>
+    public async Task<string?> Wo143StatusAsync(CancellationToken ct = default)
+    {
+        var r = await Wo143Async(5, [], ct);
+        return r is { } x ? System.Text.Encoding.ASCII.GetString(x.Payload) : null;
+    }
+
+    /// <summary>op 6: a world loads -- the gait bookkeeping and running one-shots go (hands are WO-141's Forget).</summary>
+    public async Task<int?> Wo143ForgetAsync(CancellationToken ct = default)
+    {
+        var r = await Wo143Async(6, [], ct);
+        return r is { Ok: true, Payload.Length: >= 2 } x ? BinaryPrimitives.ReadUInt16LittleEndian(x.Payload) : null;
+    }
+
+    /// <summary>op 7: the host's capture sends every hand, gait and look row again on its next tick.</summary>
+    public async Task<bool> Wo143ResyncAsync(CancellationToken ct = default)
+    {
+        var r = await Wo143Async(7, [], ct);
+        return r is { Ok: true };
+    }
+
+    /// <summary>op 9: the writer stays off this body (on) while its minigame lasts; off releases only what op 9 set.</summary>
+    public async Task<bool> Wo143HoldAsync(string name, bool on, CancellationToken ct = default)
+    {
+        var n = Wo141Codec.Name(name);
+        var p = new byte[n.Length + 1]; n.CopyTo(p, 0); p[^1] = (byte)(on ? 1 : 0);
+        var r = await Wo143Async(9, p, ct);
+        return r is { Ok: true };
+    }
+
+    /// <summary>op 8: end the body's running one-shot or loop (a request with no extra action).</summary>
+    public async Task<bool> Wo143StopAsync(string name, CancellationToken ct = default)
+    {
+        var r = await Wo143Async(8, Wo141Codec.Name(name), ct);
+        return r is { Ok: true };
+    }
+
     // ---- WO-140 (native wo140.h) ---------------------------------------------
 
     /// <summary>One WO-140 op: (ok, reason, payload after the 4-byte head), or null when the DLL did not answer.</summary>
@@ -1254,6 +1337,12 @@ public sealed class CombatPipe : IAsyncDisposable
                     // WO-141: [count]{[kind][nameLen][name][activity:30]}
                     if (Wo141Codec.TryParseFrame(body, out var rows)) { try { OnActivityFrame?.Invoke(rows); } catch (Exception ex) { Console.WriteLine($"[wo141] activity rows not handled: {ex.Message}"); } }
                     else Console.WriteLine($"[wo141] malformed Activity frame ({body.Length} bytes)");
+                }
+                else if (type == ExtraOut)
+                {
+                    // WO-143: [kind][...]
+                    if (Wo143DllFrame.TryParse(body, out var xf)) { try { OnExtraFrame?.Invoke(xf); } catch (Exception ex) { Console.WriteLine($"[wo143] extra frame not handled: {ex.Message}"); } }
+                    else Console.WriteLine($"[wo143] malformed extra frame ({body.Length} bytes)");
                 }
                 else if (type == SleepOut)
                 {

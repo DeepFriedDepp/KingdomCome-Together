@@ -145,7 +145,7 @@ static class P
                 while (!cts.IsCancellationRequested)
                 {
                     var (t2, b2) = await ReadPacket(st, cts.Token);
-                    if (rec is not null && (t2 == Protocol.NpcStateDown || t2 == Protocol.ActionDown || t2 == Protocol.NpcDamageDown || t2 == Protocol.PauseDown || t2 == Protocol.ActivityHostDown))   // WO-138: + the pause announcement; WO-141: + activities
+                    if (rec is not null && (t2 == Protocol.NpcStateDown || t2 == Protocol.ActionDown || t2 == Protocol.NpcDamageDown || t2 == Protocol.PauseDown || t2 == Protocol.ActivityHostDown || t2 == Protocol.ActivityExtraDown))   // WO-138: + the pause announcement; WO-141: + activities; WO-143: + hands, gaits, one-shots, looks
                         lock (rec) rec.WriteLine($"{recClock.ElapsedMilliseconds} {t2:X2} {Convert.ToHexString(b2)}");
                     if (t2 == Protocol.AppearanceDown && b2.Length >= 2 && b2[0] != myId) hostAppearance = b2.AsSpan(1).ToArray();   // [src][count][classes]
                     if (t2 == Protocol.Name && b2.Length >= 2 && b2[0] != myId) { joiner ??= b2[0]; }
@@ -185,6 +185,18 @@ static class P
                     else if (t2 == Protocol.CrimeHostDown && b2.Length > 1 + Protocol.JoinHeaderLen
                              && LootMsg.TryDecode(b2.AsSpan(1 + Protocol.JoinHeaderLen), out var cm))   // WO-139
                         Console.WriteLine($"PEER t={recClock.Elapsed.TotalSeconds:F1} got CrimeHost {Protocol.CrimeHostName(cm.Kind)} tok={cm.Tok} from={b2[0]}: {cm.Text}");
+                    else if (t2 == Protocol.ActivityExtraDown && b2.Length > 1 + Protocol.JoinHeaderLen
+                             && ExtraCodec.TryDecode(b2.AsSpan(1 + Protocol.JoinHeaderLen), out byte xkind, out var xrows))   // WO-143
+                    {
+                        foreach (var xr in xrows)
+                            Console.WriteLine($"PEER t={recClock.Elapsed.TotalSeconds:F1} got Extra kind={xkind} npc {xr.Name}: " + xkind switch
+                            {
+                                Protocol.ExtraKindHands => $"L={ExtraRow.ClassText(xr.Left)} R={ExtraRow.ClassText(xr.Right)}",
+                                Protocol.ExtraKindGaits => $"gaits=0x{xr.Gaits:X3}",
+                                Protocol.ExtraKindOneShot => $"one-shot {xr.Fragment} tags '{xr.Tags}' align {xr.AlignGuid:X16} flags {xr.Flags}",
+                                _ => $"looks at kind {xr.TargetKind} '{xr.Target}'",
+                            });
+                    }
                     else if (t2 == Protocol.ActivityHostDown && b2.Length > 1 + Protocol.JoinHeaderLen
                              && ActivityCodec.TryDecode(b2.AsSpan(1 + Protocol.JoinHeaderLen), out byte akind, out var arows))   // WO-141
                     {
@@ -511,6 +523,12 @@ static class P
                             act = act with { Stance = byte.Parse(f[2], CultureInfo.InvariantCulture), StanceObj = ulong.Parse(f[3], NumberStyles.HexNumber, CultureInfo.InvariantCulture) };
                         else if (f.Length >= 4 && f[1] == "unstance")
                             act = act with { Unstance = ushort.Parse(f[2], CultureInfo.InvariantCulture), UnstanceObj = ulong.Parse(f[3], NumberStyles.HexNumber, CultureInfo.InvariantCulture) };
+                        else if (f.Length >= 4 && f[1] == "minigame")   // WO-143: activity minigame <type> <objGuidHex> [stance <id> <objGuidHex>]
+                        {
+                            act = act with { Minigame = byte.Parse(f[2], CultureInfo.InvariantCulture), MinigameObj = ulong.Parse(f[3], NumberStyles.HexNumber, CultureInfo.InvariantCulture) };
+                            if (f.Length >= 7 && f[4] == "stance")
+                                act = act with { Stance = byte.Parse(f[5], CultureInfo.InvariantCulture), StanceObj = ulong.Parse(f[6], NumberStyles.HexNumber, CultureInfo.InvariantCulture) };
+                        }
                         act = act.Normalised();
                         await Send(st, ActivityCodec.BuildUp(Protocol.ActivityPeerUp, Protocol.JoinTargetHost, Protocol.ActivityKindPlayer, [new ActivityRow(myId, "", act)]));
                         Console.WriteLine($"PEER t={t:F1} activity {act}");

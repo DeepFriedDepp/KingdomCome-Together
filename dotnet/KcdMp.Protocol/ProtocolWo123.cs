@@ -92,6 +92,8 @@ public static partial class Protocol
         // WO-141: activities (ProtocolWo141.cs) -- the host's NPCs and players' own bodies; a joiner's own body to the host
         (ActivityHostUp, ActivityHostDown, "activity-host", JoinHeaderLen + ActivityBodyMin, JoinHeaderLen + ActivityBodyMax, JoinFrom.Host),
         (ActivityPeerUp, ActivityPeerDown, "activity-peer", JoinHeaderLen + ActivityBodyMin, JoinHeaderLen + ActivityBodyMax, JoinFrom.Joiner),
+        // WO-143: activities part 2 (ProtocolWo143.cs) -- the host's NPCs' hands, gaits, one-shots and looks
+        (ActivityExtraUp, ActivityExtraDown, "activity-extra", JoinHeaderLen + ExtraBodyMin, JoinHeaderLen + ExtraBodyMax, JoinFrom.Host),
     };
 
     /// <summary>The JoinWire row for an up type, or null.</summary>

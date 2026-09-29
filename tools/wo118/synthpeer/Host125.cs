@@ -76,6 +76,10 @@
 //       activityfile <path>       (WO-141) replay a recorded ActivityHost stream (avatarpeer --record lines
 //                                 "<ms> 6B <hex>"), in order, with the recorded spacing
 //                                 (every ActivityPeerDown 0x6D received is logged: ACTIVITY ...)
+//       extra hands <npc> <left|-> <right|-> | gaits <npc> <maskHex> | shot <npc> <frag> <tags|-> <alignGuidHex> [flags]
+//             | look <npc> <kind 0..3> [target]
+//                                 (WO-143) one ActivityExtra row to every joiner (what the host's DLL reads);
+//                                 activityfile replays recorded ActivityExtra (6F) lines too, in the same order
 //     [reseed] = a synthetic seed (hex) written into the save's body 0x01FB, re-signed: a second
 //     "playthrough" made from a copy. Files are COPIES of real host saves; never logged by path.
 //
@@ -544,6 +548,8 @@ static class Host125
                                     { act = act with { Stance = byte.Parse(p[i + 1], CultureInfo.InvariantCulture), StanceObj = ulong.Parse(p[i + 2], NumberStyles.HexNumber, CultureInfo.InvariantCulture) }; i += 3; continue; }
                                     if (i + 2 < p.Length && p[i] == "unstance")
                                     { act = act with { Unstance = ushort.Parse(p[i + 1], CultureInfo.InvariantCulture), UnstanceObj = ulong.Parse(p[i + 2], NumberStyles.HexNumber, CultureInfo.InvariantCulture) }; i += 3; continue; }
+                                    if (i + 2 < p.Length && p[i] == "minigame")   // WO-143: the player's minigame (C_MinigameElement type, its object)
+                                    { act = act with { Minigame = byte.Parse(p[i + 1], CultureInfo.InvariantCulture), MinigameObj = ulong.Parse(p[i + 2], NumberStyles.HexNumber, CultureInfo.InvariantCulture) }; i += 3; continue; }
                                     break;
                                 }
                                 act = act.Normalised();
@@ -552,24 +558,54 @@ static class Host125
                                 Say($"ACTIVITY {(npcRow ? "npc " + aname : "player")} sent: {act}");
                                 break;
                             }
-                            case "activityfile":   // WO-141: a recorded ActivityHost stream, in order, with its spacing
+                            case "activityfile":   // WO-141: a recorded ActivityHost stream, in order, with its spacing (WO-143: + ActivityExtra 6F)
                             {
                                 var alines = File.ReadAllLines(string.Join(' ', p.Skip(1)));
-                                long prevMs = -1; int sent = 0;
+                                long prevMs = -1; int sent = 0, extra = 0;
                                 foreach (var aline in alines)
                                 {
                                     var q = aline.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-                                    if (q.Length < 3 || q[1] != "6B") continue;
+                                    if (q.Length < 3 || (q[1] != "6B" && q[1] != "6F")) continue;
                                     long ms = long.Parse(q[0], CultureInfo.InvariantCulture);
                                     var pay = Convert.FromHexString(q[2]);   // [src][target][joinId:4][body]
                                     if (pay.Length < 1 + Protocol.JoinHeaderLen) continue;
                                     if (prevMs >= 0 && ms > prevMs) await Task.Delay((int)Math.Min(ms - prevMs, 5000));
                                     prevMs = ms;
                                     var body2 = pay.AsSpan(1 + Protocol.JoinHeaderLen).ToArray();
-                                    for (byte g = 1; g < 8; g++) if (g != myGhost) await W(Protocol.BuildJoinUp(Protocol.ActivityHostUp, g, 0, body2));
-                                    sent++;
+                                    byte up = q[1] == "6B" ? Protocol.ActivityHostUp : Protocol.ActivityExtraUp;
+                                    for (byte g = 1; g < 8; g++) if (g != myGhost) await W(Protocol.BuildJoinUp(up, g, 0, body2));
+                                    if (up == Protocol.ActivityExtraUp) extra++; else sent++;
                                 }
-                                Say($"ACTIVITYFILE {sent} recorded ActivityHost message(s) replayed");
+                                Say($"ACTIVITYFILE {sent} recorded ActivityHost and {extra} ActivityExtra message(s) replayed");
+                                break;
+                            }
+                            case "extra":   // WO-143: extra hands <npc> <left|-> <right|-> | gaits <npc> <maskHex> | shot <npc> <frag> <tags|-> <alignGuidHex> [flags] | look <npc> <kind> [target]
+                            {
+                                if (p.Length < 3) { Say("EXTRA usage: extra hands|gaits|shot|look <npc> ..."); break; }
+                                byte ek = 0; ExtraRow er = new();
+                                switch (p[1])
+                                {
+                                    case "hands" when p.Length >= 5:
+                                        ek = Protocol.ExtraKindHands;
+                                        er = new ExtraRow { Name = p[2], Left = p[3] == "-" ? new byte[16] : ExtraRow.ClassBytes(p[3]), Right = p[4] == "-" ? new byte[16] : ExtraRow.ClassBytes(p[4]) };
+                                        break;
+                                    case "gaits" when p.Length >= 4:
+                                        ek = Protocol.ExtraKindGaits;
+                                        er = new ExtraRow { Name = p[2], Gaits = ushort.Parse(p[3], NumberStyles.HexNumber, CultureInfo.InvariantCulture) };
+                                        break;
+                                    case "shot" when p.Length >= 6:
+                                        ek = Protocol.ExtraKindOneShot;
+                                        er = new ExtraRow { Name = p[2], Fragment = p[3], Tags = p[4] == "-" ? "" : p[4], AlignGuid = ulong.Parse(p[5], NumberStyles.HexNumber, CultureInfo.InvariantCulture),
+                                                            Flags = p.Length > 6 ? byte.Parse(p[6], CultureInfo.InvariantCulture) : (byte)0 };
+                                        break;
+                                    case "look" when p.Length >= 4:
+                                        ek = Protocol.ExtraKindLooks;
+                                        er = new ExtraRow { Name = p[2], TargetKind = byte.Parse(p[3], CultureInfo.InvariantCulture), Target = p.Length > 4 ? p[4] : "" };
+                                        break;
+                                }
+                                if (ek == 0) { Say($"EXTRA unknown or incomplete: {string.Join(' ', p)}"); break; }
+                                for (byte g = 1; g < 8; g++) if (g != myGhost) await W(ExtraCodec.BuildUp(g, ek, new List<ExtraRow> { er }));
+                                Say($"EXTRA {p[1]} {p[2]} sent");
                                 break;
                             }
                             case "crime":   // WO-139

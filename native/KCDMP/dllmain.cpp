@@ -12,6 +12,7 @@
 #include "wo139.h"
 #include "wo140.h"
 #include "wo141.h"
+#include "wo143.h"
 #include "concept_read.h"
 #include "dice_hook.h"
 #include "log.h"
@@ -179,6 +180,10 @@ DWORD WINAPI plugin_main(LPVOID) {
     // WO-141: activities -- the NPC-state context read (stance / unstance / hands /
     // minigame) and its apply. Anchors fail closed (WO141-BUILD).
     kcdmp::wo141::install();
+    // WO-143: hands, gaits, one-shots and look targets on top of WO-141 (the
+    // RequestStateChange capture gate is patched here, off the main thread).
+    // Fails closed per piece (WO143-BUILD).
+    kcdmp::wo143::install();
 
     if (kcdmp::dice::install_pause_hook()) {
         kcdmp::main_thread::post_repeating(&kcdmp::dice::sample_instance_if_changed);
@@ -231,6 +236,7 @@ DWORD WINAPI plugin_main(LPVOID) {
     kcdmp::main_thread::post_repeating(&kcdmp::wo139::tick);   // WO-139: a new trespass level goes to the agent
     kcdmp::main_thread::post_repeating(&kcdmp::wo140::tick);   // WO-140: the sleep picker's edges go to the agent
     kcdmp::main_thread::post_repeating(&kcdmp::wo141::tick);   // WO-141: activities
+    kcdmp::main_thread::post_repeating(&kcdmp::wo143::tick);   // WO-143: hands, gaits, one-shots, looks
 
     kcdmp::pipe::start();
     return 0;

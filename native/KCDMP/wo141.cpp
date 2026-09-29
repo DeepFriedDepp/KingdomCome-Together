@@ -1,8 +1,11 @@
 #include "wo141.h"
 #include "wo141_rules.h"
+#include "wo143_rules.h"
+#include "npcstate.h"
 #include "anchors.h"
 #include "combat_swing.h"
 #include "engine.h"
+#include "hits.h"
 #include "local_state.h"
 #include "log.h"
 #include "npc_drive.h"
@@ -18,11 +21,13 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace kcdmp::wo141 {
 
 namespace R = kcdmp::wo141rules;
+namespace KH = kcdmp::wo143rules;
 
 namespace {
 
@@ -159,6 +164,8 @@ void* const* g_vftStanceReq = nullptr;
 void* const* g_vftUnstance = nullptr;
 void* const* g_vftMinigame = nullptr;
 void* const* g_vftRequired = nullptr;
+void* const* g_vftHand = nullptr;      // WO-143: C_HandContentElement (current state)
+void* const* g_vftHandReq = nullptr;   // WO-143: C_HandContentElementRequired (the loaded state's)
 void* g_execLoaded = nullptr;
 void* g_clearSearch = nullptr;
 void* g_stateToString = nullptr;
@@ -208,7 +215,8 @@ using VariantDtorFn = void (*)(RVariant* self);
 GetByNameFn   g_getByName = nullptr;
 TypeCreateFn  g_typeCreate = nullptr;
 VariantDtorFn g_variantDtor = nullptr;
-RType g_tStanceReq{}, g_tUnstance{};
+RType g_tStanceReq{}, g_tUnstance{}, g_tHandReq{};
+bool g_handsArmed = false;   // WO-143: hand content rides this apply
 
 bool bind_type(const char* name, RType* out) {
     std::string_view nm(name);
@@ -390,6 +398,18 @@ std::string describe(const R::Activity& a) {
     return buf;
 }
 
+// WO-143: an item class id as the game prints it (Lua ItemManager.GetItem(..).class).
+std::string class_text(const KH::ClassId& c) {
+    if (c.empty()) return "-";
+    uint32_t d1 = 0; uint16_t d2 = 0, d3 = 0;
+    std::memcpy(&d1, c.b, 4); std::memcpy(&d2, c.b + 4, 2); std::memcpy(&d3, c.b + 6, 2);
+    char b[48];
+    _snprintf_s(b, sizeof b, _TRUNCATE, "%08x-%04x-%04x-%02x%02x-%02x%02x%02x%02x%02x%02x", d1, d2, d3, c.b[8], c.b[9], c.b[10], c.b[11],
+                c.b[12], c.b[13], c.b[14], c.b[15]);
+    return b;
+}
+std::string hands_text(const KH::Hands& h) { return " hands L=" + class_text(h.left) + " R=" + class_text(h.right); }
+
 // ---------------------------------------------------------------------------
 // Apply: the loaded state := the activity; the game's own post-load placement.
 // ---------------------------------------------------------------------------
@@ -400,27 +420,117 @@ const char* applied_name(uint8_t r) {
     return "?";
 }
 
-uint8_t apply_now(uint32_t eid, const R::Activity& want, uint8_t* execResult) {
-    *execResult = 0;
+// ---- WO-143: hand content ------------------------------------------------------
+// C_HandContentElement / ...Required: +0x28 the item's WUID, +0x48 the hand
+// (1 left, 2 right) -- its GameLoad reads exactly these (docs/WO-143-findings.md).
+constexpr size_t kHandWuid = 0x28;
+constexpr size_t kHandType = 0x48;
+constexpr size_t kUnstHandRight = 0x60;   // C_UnstanceElement's hand items (its text function, XGenAI +0x187D540)
+constexpr size_t kUnstHandLeft  = 0x68;
+
+bool read_hand_class(void* state, unsigned slot, KH::ClassId* out) {
+    *out = KH::ClassId{};
+    void* b = nullptr; void* e = nullptr; void* el = nullptr;
+    if (!rd(state, kStateElemsB, &b) || !rd(state, kStateElemsE, &e) || !b) return false;
+    if (static_cast<size_t>(static_cast<char*>(e) - static_cast<char*>(b)) / 16 <= slot) return false;
+    if (!rd(b, slot * 16, &el) || !el) return true;                       // an empty hand
+    if (!is_a(el, g_vftHand) && !is_a(el, g_vftHandReq)) return true;
+    uint64_t w = 0;
+    if (!rd64(el, kHandWuid, &w) || !wuid_valid(w)) return true;
+    void* item = actions::item_by_wuid(w);
+    if (item) actions::item_class_id(item, out->b);
+    return true;
+}
+
+bool read_hands(uint32_t eid, KH::Hands* out) {
+    *out = KH::Hands{};
+    void* ctx = ctx_of_eid(eid);
+    if (!ctx || !g_vftHand) return false;
+    void* st = static_cast<char*>(ctx) + kCtxCurrent;
+    return read_hand_class(st, KH::kSlotLeft, &out->left) && read_hand_class(st, KH::kSlotRight, &out->right);
+}
+
+using NeedItemFn = void (*)(const char* name, const KH::ClassId& cls);
+NeedItemFn g_needItem = nullptr;
+// WO-143: told after every apply that carried tools (a paused copy's NPC state
+// then settles the take under WO-143's tick)
+using HandAppliedFn = void (*)(uint32_t eid);
+HandAppliedFn g_handApplied = nullptr;
+
+// An item of this class the body itself holds (its own inventory -- never a
+// world item, never anyone else's): its WUID, or 0.
+uint64_t own_item_of_class(uint32_t eid, const KH::ClassId& cls) {
+    void* soul = hits::soul_of_eid(eid);
+    void* inv = soul ? actions::soul_inventory(soul) : nullptr;
+    void* item = inv ? actions::inventory_find_class(inv, cls.b) : nullptr;
+    return item ? actions::item_wuid(item) : 0;
+}
+
+// The body's loaded state (the context's search state) holds this activity and
+// these tools, nothing else. hands: null = no hand element (WO-141 as before).
+uint8_t build_loaded(uint32_t eid, const R::Activity& want, const KH::Hands* hands, const char* name, KH::Hands* missing,
+                     void** ctxOut) {
+    if (missing) *missing = KH::Hands{};
     if (!g_applyArmed) return kApNotArmed;
     void* ctx = ctx_of_eid(eid);
     if (!ctx) return kApNoBody;
+    *ctxOut = ctx;
     void* loaded = static_cast<char*>(ctx) + kCtxLoaded;
     if (!is_a(loaded, g_vftRequired)) return kApBuild;
     const R::Activity a = R::normalised(want);
     uint64_t sW = 0, uW = 0;
     if (a.stance && a.stanceObj) { sW = wuid_of_guid(a.stanceObj); if (!sW) return kApNoObject; }
     if (a.unstance != R::kNoUnstance && a.unstanceObj) { uW = wuid_of_guid(a.unstanceObj); if (!uW) return kApNoObject; }
-    SharedPtr s{}, u{};
+    SharedPtr s{}, u{}, hl{}, hr{};
     if (a.stance && !sp_create(g_tStanceReq, g_vftStanceReq, &s)) return kApBuild;
     if (a.unstance != R::kNoUnstance && !sp_create(g_tUnstance, g_vftUnstance, &u)) { sp_release(s.ctrl); return kApBuild; }
     if (s.p) { wr32(s.p, kElId, a.stance); wr64(s.p, kElObj, sW); wr8(s.p, kElSlot, a.cart); }
     if (u.p) { wr32(u.p, kElId, a.unstance); wr64(u.p, kElObj, uW); }
+    // WO-143: the tool in each hand -- an item of that class the body owns; a
+    // class it does not own is reported (the mod gives it a temporary one) and
+    // this apply goes on without it
+    uint64_t handW[2] = {0, 0};
+    if (hands && g_handsArmed) {
+        const KH::ClassId* want2[2] = {&hands->left, &hands->right};
+        SharedPtr* el[2] = {&hl, &hr};
+        for (int i = 0; i < 2; ++i) {
+            if (want2[i]->empty()) continue;
+            const uint64_t iw = own_item_of_class(eid, *want2[i]);
+            if (!iw) {
+                if (missing) (i == 0 ? missing->left : missing->right) = *want2[i];
+                if (g_needItem && name) g_needItem(name, *want2[i]);
+                continue;
+            }
+            if (!sp_create(g_tHandReq, g_vftHandReq, el[i])) continue;
+            wr64(el[i]->p, kHandWuid, iw);
+            wr8(el[i]->p, kHandType, i == 0 ? KH::kHandLeft : KH::kHandRight);
+            handW[i] = iw;
+        }
+    }
+    // The object use names the tools it is done with (C_UnstanceElement +0x60
+    // right, +0x68 left: its own text, "Hand items: R: .. L: .."). Left at the
+    // invalid WUID, a tool trade finds no path (J1: the carpenter at the
+    // debarking bench, the sawyer, the scribe -- "can't find a path from actions").
+    if (u.p) {
+        if (handW[1]) wr64(u.p, kUnstHandRight, handW[1]);
+        if (handW[0]) wr64(u.p, kUnstHandLeft, handW[0]);
+    }
     // the save's leftovers go (contexts, links, buffs, equipment of whatever the
     // body was loaded in); the stance and unstance are ours
     fcall_void(vslot(loaded, kStateClear), loaded);
-    const bool ok = state_set_slot(loaded, 0, s) && state_set_slot(loaded, 3, u);
-    if (!ok) return kApBuild;
+    bool ok = state_set_slot(loaded, 0, s) && state_set_slot(loaded, 3, u);
+    if (hl.p) ok = state_set_slot(loaded, KH::kSlotLeft, hl) && ok;
+    if (hr.p) ok = state_set_slot(loaded, KH::kSlotRight, hr) && ok;
+    return ok ? kApOk : kApBuild;
+}
+
+// hands: null = WO-141's apply exactly as before (no hand element).
+uint8_t apply_now(uint32_t eid, const R::Activity& want, uint8_t* execResult, const KH::Hands* hands = nullptr,
+                  const char* name = nullptr, KH::Hands* missing = nullptr) {
+    *execResult = 0;
+    void* ctx = nullptr;
+    const uint8_t b = build_loaded(eid, want, hands, name, missing, &ctx);
+    if (b != kApOk) return b;
     uint8_t res = 0;
     if (!fcall(g_execLoaded, &res, ctx)) return kApExec;
     *execResult = res;
@@ -447,7 +557,22 @@ struct Desired {
     bool held = false;
     bool matched = false;
     uint64_t applies = 0;
+    // WO-143: the tool in each hand (handsSet = the host sends them for this body)
+    KH::Hands hands;
+    bool handsSet = false;
+    KH::LogPace logPace;
+    bool handsDropped = false;   // the game refused its tools with this activity: shown without them (WO-141's apply)
+    int handsTries = 0;          // applies with every tool owned that did not bring the body in step
 };
+std::unordered_set<std::string> g_seatedHandsNoted;   // bodies told once: seated, their hands stay as they are
+
+// WO-143: tools ride the apply only for a body that does not sit, lie or kneel on
+// an object (J1: a seated guest given his tankard is stood up by the game --
+// "Execution of 3 actions from load couldn't reach the loaded state", then
+// ForceIdleState clears 'sitting' -- and sat down again by the reconcile), and
+// not once the game has refused them three times with this activity (it is then
+// shown exactly as WO-141 shows it).
+bool hands_ride(const Desired& d) { return g_handsArmed && R::hands_ride(d.handsSet, d.handsDropped, d.a.stance); }
 std::unordered_map<std::string, Desired> g_desired;
 
 std::atomic<uint64_t> c_rowsSent{0}, c_applies{0}, c_applyOk{0}, c_applyFail{0}, c_leaves{0}, c_reads{0}, c_shows{0};
@@ -523,27 +648,56 @@ void reconcile_tick(double now) {
             d.eid = e ? engine::entity_id(e) : 0;
             if (!d.eid) { ++it; continue; }
         }
-        const bool wantHold = R::owns_position(d.a);
-        if (wantHold != d.held) { npcdrive::set_activity_hold(d.eid, wantHold); d.held = wantHold; }
+        // The writer stays off a body the game places (in step, or while it is tried). One the game keeps
+        // refusing here is written again once the retries back off (WO-143 J1: held, it stood wherever the
+        // stream had left it, and a forced look turned it bodily); each backed-off retry is held again.
+        const bool owns = R::owns_position(d.a);
+        auto hold_to = [&](bool want) { if (want != d.held) { npcdrive::set_activity_hold(d.eid, want); d.held = want; } };
         R::Activity cur;
-        if (!read_activity(d.eid, &cur)) { ++it; continue; }
-        if (R::same_body(cur, d.a)) {
-            if (!d.matched) logf("WO141-APPLY %s in step: %s", d.name.c_str(), describe(d.a).c_str());
-            d.matched = true; d.pace.misses = 0;
-            if (R::none(d.a)) { if (d.held) npcdrive::set_activity_hold(d.eid, false); it = g_desired.erase(it); continue; }
+        if (!read_activity(d.eid, &cur)) { hold_to(R::hold_wanted(owns, d.matched, d.pace.misses, true, d.a.stance)); ++it; continue; }
+        KH::Hands curHands;
+        if (d.handsSet && !d.hands.empty() && R::object_stance(d.a.stance) && g_seatedHandsNoted.insert(it->first).second)
+            logf("WO143-HANDS %s sits, lies or kneels: its hands stay as they are (a seated copy's take would stand it up)", d.name.c_str());
+        const bool useHands = hands_ride(d);
+        const bool handsOk = !useHands || (read_hands(d.eid, &curHands) && curHands == d.hands);
+        if (R::same_body(cur, d.a) && handsOk) {
+            hold_to(owns);
+            if (!d.matched) logf("WO141-APPLY %s in step: %s%s", d.name.c_str(), describe(d.a).c_str(), useHands ? hands_text(d.hands).c_str() : "");
+            d.matched = true; d.pace.misses = 0; KH::log_reset(d.logPace); d.handsTries = 0;
+            if (R::none(d.a) && (!d.handsSet || d.hands.empty())) { if (d.held) npcdrive::set_activity_hold(d.eid, false); it = g_desired.erase(it); continue; }
             ++it; continue;
         }
         d.matched = false;
-        if (now < d.pace.nextAt) { ++it; continue; }
+        const bool waiting = now < d.pace.nextAt;
+        hold_to(R::hold_wanted(owns, false, d.pace.misses, waiting, d.a.stance));   // (J3: a cart stance stays held)
+        if (waiting) { ++it; continue; }
         uint8_t res = 0;
-        const uint8_t r = apply_now(d.eid, d.a, &res);
+        KH::Hands missing;
+        if (useHands && d.handsTries >= R::kHandsTriesBeforeDrop && !d.hands.empty()) {
+            d.handsDropped = true;
+            logf("WO143-HANDS %s: the game refuses its tools with this activity (%d tries) -- shown without them, as WO-141 shows it",
+                 d.name.c_str(), d.handsTries);
+            ++it; continue;   // the next tick applies the activity alone
+        }
+        const uint8_t r = apply_now(d.eid, d.a, &res, useHands ? &d.hands : nullptr, d.name.c_str(), &missing);
+        if (useHands && missing.empty()) ++d.handsTries;   // a temporary tool still on its way does not count
         c_applies.fetch_add(1); ++d.applies;
+        if (r == kApOk && useHands && g_handApplied) g_handApplied(d.eid);
         (r == kApOk ? c_applyOk : c_applyFail).fetch_add(1);
         ++d.pace.misses;
         d.pace.nextAt = now + R::next_delay(d.pace.misses);
-        R::Activity after; read_activity(d.eid, &after);
-        logf("WO141-APPLY %s -> %s (exec %u, try %d): wanted %s; now %s", d.name.c_str(), applied_name(r), res, d.pace.misses,
-             describe(d.a).c_str(), describe(after).c_str());
+        // WO-143 Phase 7: the first three tries, then once a minute with the count
+        int suppressed = 0;
+        if (KH::log_due(d.logPace, now, &suppressed)) {
+            R::Activity after; read_activity(d.eid, &after);
+            KH::Hands afterHands; if (useHands) read_hands(d.eid, &afterHands);
+            char more[64] = "";
+            if (suppressed) _snprintf_s(more, sizeof more, _TRUNCATE, " (%d more tries since the last line)", suppressed);
+            logf("WO141-APPLY %s -> %s (exec %u, try %d%s): wanted %s%s%s; now %s%s", d.name.c_str(), applied_name(r), res, d.pace.misses, more,
+                 describe(d.a).c_str(), useHands ? hands_text(d.hands).c_str() : "",
+                 missing.empty() ? "" : " (a tool it does not own was asked for)", describe(after).c_str(),
+                 useHands ? hands_text(afterHands).c_str() : "");
+        }
         ++it;
     }
 }
@@ -695,7 +849,7 @@ void set_desired(const std::string& name, const R::Activity& a) {
     Desired& d = g_desired[lower(name.c_str())];
     const bool changed = d.name.empty() || !R::same(d.a, a);
     d.name = name;
-    if (changed) { d.a = R::normalised(a); d.pace = {}; d.matched = false; }
+    if (changed) { d.a = R::normalised(a); d.pace = {}; d.matched = false; d.handsDropped = false; d.handsTries = 0; }
 }
 
 } // namespace
@@ -739,6 +893,11 @@ void install() {
                        bind_type("wh::xgenaimodule::NPCState::UnstanceElement", &g_tUnstance);
     g_readArmed  = g_vftCtx && g_npcMgrSlot && g_wuidSvcSlot && g_vftStance && g_vftUnstance && g_vftMinigame;
     g_applyArmed = g_readArmed && g_execLoaded && g_vftRequired && g_vftStanceReq && types && g_typeCreate && g_variantDtor;
+    // WO-143: hand content rides this apply (the loaded state's HandContentElementRequired)
+    g_vftHand    = anchor::find_vftable(g_xg, ".?AVC_HandContentElement@NPCState@xgenaimodule@wh@@");
+    g_vftHandReq = anchor::find_vftable(g_xg, ".?AVC_HandContentElementRequired@NPCState@xgenaimodule@wh@@");
+    g_handsArmed = g_applyArmed && g_vftHand && g_vftHandReq && g_getByName &&
+                   bind_type("wh::xgenaimodule::NPCState::HandContentElementRequired", &g_tHandReq);
     logf("WO141-BUILD activities: read %s, apply %s (context %s, manager %s, WUID service %s, unstances %s, placement %s, "
          "required state %s, element classes %s, rttr %s; logs: text %s, stance names %s)",
          g_readArmed ? "ARMED" : "NOT ARMED", g_applyArmed ? "ARMED" : "NOT ARMED", g_vftCtx ? "ok" : "MISSING",
@@ -748,6 +907,106 @@ void install() {
 }
 
 bool armed() { return g_readArmed; }
+
+// ---- WO-143: the pieces WO-143 builds on (npcstate.h) ------------------------
+namespace x {
+HMODULE xgenai() { return g_xg; }
+void* npc_manager() { void* m = nullptr; return g_npcMgrSlot && rd(g_npcMgrSlot, 0, &m) ? m : nullptr; }
+void* context_of(uint32_t eid) { return ctx_of_eid(eid); }
+void* entity_named(const char* name) { return entity_by_name(name); }
+void* entity_of(uint64_t wuid) { return entity_of_wuid(wuid); }
+uint64_t guid_of(uint64_t wuid) { return wuid_valid(wuid) ? guid_of_wuid(wuid) : 0; }
+uint64_t wuid_of(uint64_t guid) { return wuid_of_guid(guid); }
+bool state_element(void* state, unsigned slot, void** el) {
+    void* b = nullptr; void* e = nullptr;
+    *el = nullptr;
+    if (!rd(state, kStateElemsB, &b) || !rd(state, kStateElemsE, &e) || !b) return false;
+    if (static_cast<size_t>(static_cast<char*>(e) - static_cast<char*>(b)) / 16 <= slot) return false;
+    return rd(b, slot * 16, el);
+}
+bool bind_rttr(const char* name, void** typeData) { RType t{}; if (!g_getByName || !bind_type(name, &t)) return false; *typeData = t.data; return true; }
+bool create_element(void* typeData, void* const* vft, void** p, void** ctrl) {
+    SharedPtr sp{}; RType t{typeData};
+    if (!sp_create(t, vft, &sp)) return false;
+    *p = sp.p; *ctrl = sp.ctrl;
+    return true;
+}
+void release(void* ctrl) { sp_release(ctrl); }
+bool apply_armed() { return g_applyArmed; }
+void* loaded_state(void* ctx) { void* l = ctx ? static_cast<char*>(ctx) + kCtxLoaded : nullptr; return l && is_a(l, g_vftRequired) ? l : nullptr; }
+void* current_state(void* ctx) { return ctx ? static_cast<char*>(ctx) + kCtxCurrent : nullptr; }
+bool clear_loaded(void* loaded) { return loaded && fcall_void(vslot(loaded, kStateClear), loaded); }
+bool set_loaded_slot(void* loaded, unsigned slot, void* p, void* ctrl) { return state_set_slot(loaded, slot, SharedPtr{p, ctrl}); }
+bool execute_loaded(void* ctx, uint8_t* res) { *res = 0; return g_execLoaded && ctx && fcall(g_execLoaded, res, ctx); }
+std::string describe_state(void* state) { return state_text(state); }
+const char* unstance_label(uint16_t id, char* buf, size_t n) { return unstance_name(id, buf, n); }
+int unstance_index(const char* name) { return unstance_id(name); }
+
+bool hands_armed() { return g_handsArmed; }
+bool read_body_hands(uint32_t eid, KH::Hands* out) { return read_hands(eid, out); }
+std::string hand_classes_text(const KH::Hands& h) { return hands_text(h); }
+std::string class_id_text(const KH::ClassId& c) { return class_text(c); }
+bool apply_on() { return g_applyOn.load(); }
+
+// The body with this name holds these tools (reconciled with its activity; a
+// body with no activity row gets "none" beside them). Empty hands put the
+// tools away (and then the entry goes, once in step).
+void set_hands(const std::string& name, const KH::Hands& h) {
+    Desired& d = g_desired[lower(name.c_str())];
+    if (d.name.empty()) { d.name = name; d.a = R::normalised(R::Activity{}); }
+    const bool changed = !d.handsSet || d.hands != h;
+    d.handsSet = true; d.hands = h;
+    if (changed) { d.pace = {}; d.matched = false; KH::log_reset(d.logPace); d.handsDropped = false; d.handsTries = 0; }
+}
+// mp_hand_items off: every body puts its tools away (the reconcile does it).
+int clear_all_hands() {
+    int n = 0;
+    for (auto& kv : g_desired) if (kv.second.handsSet && !kv.second.hands.empty()) { kv.second.hands = KH::Hands{}; kv.second.pace = {}; kv.second.matched = false; ++n; }
+    return n;
+}
+// What the reconcile wants for a body's hands (for the agent's temporary items).
+bool desired_hands(const std::string& name, KH::Hands* out) {
+    auto it = g_desired.find(lower(name.c_str()));
+    if (it == g_desired.end() || !it->second.handsSet) return false;
+    *out = it->second.hands;
+    return true;
+}
+void set_need_item_callback(void (*fn)(const char* name, const KH::ClassId& cls)) { g_needItem = fn; }
+void set_hand_applied_callback(void (*fn)(uint32_t eid)) { g_handApplied = fn; }
+// Research: the same tools taken again (put away, then taken) on the next ticks.
+bool retake_hands(const std::string& name) {
+    auto it = g_desired.find(lower(name.c_str()));
+    if (it == g_desired.end() || !it->second.handsSet || !it->second.eid) return false;
+    Desired& d = it->second;
+    uint8_t res = 0;
+    const uint8_t r1 = apply_now(d.eid, d.a, &res, nullptr, d.name.c_str(), nullptr);
+    d.pace = {}; d.matched = false;   // the reconcile takes them again at once
+    return r1 == kApOk;
+}
+
+// A one-shot's request (or its stop) makes the body keep only what its search
+// state requires -- empty, it drops the tool in its hands (H2: the avatar's sword
+// went at the request). The game's own requesters fill it first (the player's
+// state handler adds its elements right before RequestStateChange); so does
+// this: what WO-141 wants on the body, else what the body has now. Nothing is
+// executed here; false = nothing filled (the request as before).
+bool prepare_request(uint32_t eid, std::string* kept) {
+    if (kept) kept->clear();
+    if (!g_applyArmed || !eid) return false;
+    const Desired* d = nullptr;
+    for (const auto& kv : g_desired) if (kv.second.eid == eid) { d = &kv.second; break; }
+    R::Activity a; KH::Hands h; bool useHands = false;
+    if (d) { a = d->a; useHands = hands_ride(*d); if (useHands) h = d->hands; }
+    else {
+        if (!read_activity(eid, &a)) return false;
+        useHands = g_handsArmed && read_hands(eid, &h) && !h.empty();
+    }
+    void* ctx = nullptr;
+    if (build_loaded(eid, a, useHands ? &h : nullptr, nullptr, nullptr, &ctx) != kApOk) return false;
+    if (kept) *kept = describe(a) + (useHands ? hands_text(h) : std::string());
+    return true;
+}
+} // namespace x
 
 void tick() {
     static unsigned n = 0;

@@ -9,6 +9,8 @@
 #include <mutex>
 #include <string>
 #include "wo135.h"
+#include "wo143.h"
+#include "wo143_rules.h"
 #include "mannequin_read.h"
 #include <unordered_map>
 #include <vector>
@@ -878,11 +880,12 @@ int body_range(Body& b, double now) {
 }
 
 // WO-129: publish this frame's gait inputs for the tag-update hook.
-void publish_gait(Body& b, float cls) {
+void publish_gait(Body& b, float cls, float vx, float vy) {
     if (!g_gaitTable.holds(b.slot, b.actor)) b.slot = g_gaitTable.insert(b.actor, g_gaitTick.load(std::memory_order_relaxed));
     if (b.slot < 0) return;
-    g_gaitTable.publish(b.slot, cls, b.velX, b.velY, g_gaitTick.load(std::memory_order_relaxed));
+    g_gaitTable.publish(b.slot, cls, vx, vy, g_gaitTick.load(std::memory_order_relaxed));
 }
+void publish_gait(Body& b, float cls) { publish_gait(b, cls, b.velX, b.velY); }
 
 void unpublish_gait(Body& b) {
     if (g_gaitTable.holds(b.slot, b.actor)) g_gaitTable.remove(b.slot);
@@ -1124,10 +1127,16 @@ void body_frame(const char* key, void* ent, uint32_t eid, float renderSpeedMps, 
         if (!snap) { b.velX += (renderVx - b.velX) * 0.25f; b.velY += (renderVy - b.velY) * 0.25f; }
         // WO-129: pseudo-speed is a logical speed CLASS; clamp it to this body's own range.
         const int range = body_range(b, now);
-        const float cls = gait::clamp_class(gait::speed_class(s), range);
+        float cls = gait::clamp_class(gait::speed_class(s), range);
+        // WO-143: a copy the host shows hoeing creeps along its row (H1: 0.08-0.10 m/s, under the walking
+        // floor; read as standing, it stood with its hoe). While it creeps it walks, and the tags see the
+        // pace the game hoes at (J1: 0.4 m/s showed the hoeing walk; the stream still places the body).
+        float tvx = b.velX, tvy = b.velY;
+        if (!b.avatar && wo143::activity_locomotion(eid) && wo143rules::hoe_tags(b.velX, b.velY, &tvx, &tvy) && cls < 1.0f)
+            cls = gait::clamp_class(1.0f, range);
         b.cls = cls;
         apply_gait(b, cls);
-        publish_gait(b, cls);
+        publish_gait(b, cls, tvx, tvy);
         if (b.avatar && now - b.lastGaitLog >= 2.0) {
             b.lastGaitLog = now;
             void* comp = nullptr; float back = -1.0f;

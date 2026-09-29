@@ -273,6 +273,9 @@ public partial class GameBridge
             case Protocol.ActivityPeerDown:
                 await Wo141OnFrameAsync(type, src, body);
                 return;
+            case Protocol.ActivityExtraDown: // WO-143
+                await Wo143OnFrameAsync(src, body);
+                return;
             case Protocol.WorldOfferDown:
                 await OnWorldOfferInAsync(src, joinId, body, ct);
                 return;

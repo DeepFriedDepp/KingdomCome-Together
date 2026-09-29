@@ -137,4 +137,12 @@ uint64_t entity_wuid(void* ent);
 // -1/-1 when the entity has no intelligent object. Main thread, read-only.
 bool brain_state(void* ent, uint64_t* wuid, int* state, int* mask);
 
+// WO-143: items by what they are (the graves' anchors; main thread, read-only).
+void*    item_by_wuid(uint64_t wuid);                       // C_Item or null
+uint64_t item_wuid(void* item);
+bool     item_class_id(void* item, uint8_t out[16]);        // the item's class id (a CryGUID)
+void*    soul_inventory(void* soul);                        // the soul's C_Inventory or null
+void*    inventory_find_class(void* inv, const uint8_t cls[16]);   // the game's own find-by-class
+int      inventory_items(void* inv, void** out, int max);   // present items; -1 unreadable
+
 } // namespace kcdmp::actions

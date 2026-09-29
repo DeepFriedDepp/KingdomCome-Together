@@ -315,6 +315,11 @@ constexpr uint8_t kSleepOut           = 0xA5;
 constexpr uint8_t kWo141              = 0x27;
 constexpr uint8_t kWo141Reply         = 0xA6;
 constexpr uint8_t kActivityOut        = 0xA7;
+// WO-143: activities part 2 (native wo143.h): 0x28 [op][...] -> 0xA8 [ok][seq][op][reason][payload],
+// and the unsolicited 0xA9 Activity2 (the host's hands, gaits, looks and one-shots).
+constexpr uint8_t kWo143              = 0x28;
+constexpr uint8_t kWo143Reply         = 0xA8;
+constexpr uint8_t kActivity2Out       = 0xA9;
 constexpr uint8_t kSaveListReply      = 0x8D;   // [ok][seq][listed][idx:2][count:2][current][contPl][contIdx:2][nameLen][contName]
 constexpr uint8_t kLocalAction        = 0x96;   // unsolicited: [kind][phase][ic][zone][type][flags][guid:16][eid:4][nameLen][name]
 constexpr uint8_t kPvpHitOut          = 0x97;   // unsolicited: [victimEid:4][st:4f][hp:4f][flags][material]

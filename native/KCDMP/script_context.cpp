@@ -428,6 +428,37 @@ bool resolve_chain(Chain* out, bool* permanent = nullptr) {
     return true;
 }
 
+// WO-143: the same chain and the same integrity checks, silent -- for the
+// frequent reads and writes of the gait contexts. The first resolution (and
+// any later failure) goes through the verbose resolve_chain once, so the log
+// still says what the chain is and why it broke.
+bool resolve_chain_quiet(Chain* out, bool* permanent) {
+    static bool s_verified = false;
+    if (permanent) *permanent = false;
+    if (!s_verified) {
+        if (!resolve_chain(out, permanent)) return false;
+        s_verified = true;
+        return true;
+    }
+    out->whgame = GetModuleHandleA("WHGame.dll");
+    void* giFn = resolve_get_game_iface();
+    void* dbHolder = nullptr; void* mgrHolder = nullptr; void* mgrOwner = nullptr; void* vptr = nullptr;
+    void* setFn = nullptr; void* hasFn = nullptr;
+    const bool ok = out->whgame && giFn && call_get_game_iface(reinterpret_cast<GetGameIfaceFn>(giFn), &out->gi) && out->gi &&
+                    read_ptr(out->gi, kOffGiScriptCtxDbHolder, &dbHolder) && dbHolder &&
+                    call_vtbl_ptr(dbHolder, kVtblGetScriptContextDb, &out->db) && out->db &&
+                    read_ptr(out->gi, kOffGiManagerHolder, &mgrHolder) && mgrHolder &&
+                    call_vtbl_ptr(mgrHolder, kVtblGetManagerOwner, &mgrOwner) && mgrOwner &&
+                    call_vtbl_ptr(mgrOwner, kVtblGetManager, &out->mgr) && out->mgr &&
+                    read_vptr(out->mgr, &vptr) && vptr == reinterpret_cast<char*>(out->whgame) + kRvaManagerVftable &&
+                    read_vtbl_slot(out->mgr, kVtblSetEntityContext, &setFn) && read_vtbl_slot(out->mgr, kVtblHasEntityContext, &hasFn) &&
+                    setFn == reinterpret_cast<char*>(out->whgame) + kRvaSetEntityContext &&
+                    hasFn == reinterpret_cast<char*>(out->whgame) + kRvaHasEntityContext;
+    if (ok) return true;
+    s_verified = false;
+    return resolve_chain(out, permanent);   // says why, once
+}
+
 // name -> node, with the two integrity reads that make a non-null answer mean
 // something: the node's own name must equal what was asked for, and its Class
 // must be Entity(1).
@@ -849,6 +880,56 @@ int set_soul_context(void* soul, const char* name, bool on) {
     if (!call_has_entity_context(c.mgr, wuid, node, &after)) { disarm("HasEntityContext faulted after a write"); return -1; }
     logf("SCTX: %s \"%s\" on wuid=0x%016llX -> readback=%s", on ? "set" : "clear", name,
          static_cast<unsigned long long>(wuid), after ? "true" : "false");
+    return after == on ? 1 : -1;
+}
+
+// WO-143: the gait contexts' nodes, looked up once (the ScriptContext database
+// is a static table in XGenAIModule's data).
+const void* cached_node(const Chain& c, const char* name) {
+    struct E { const char* name; const void* node; };
+    static E s_cache[32]{};
+    static int s_n = 0;
+    for (int i = 0; i < s_n; ++i) if (!std::strcmp(s_cache[i].name, name)) return s_cache[i].node;
+    const void* node = lookup_node(c, name, /*verbose=*/false);
+    if (node && s_n < 32) s_cache[s_n++] = E{name, node};
+    return node;
+}
+
+int has_soul_context(void* soul, const char* name) {
+    if (!g_isolationArmed || !soul || !name) return -1;
+    Chain c{};
+    bool permanent = false;
+    if (!resolve_chain_quiet(&c, &permanent)) {
+        if (permanent) disarm("chain integrity check failed");
+        return -1;
+    }
+    uint64_t wuid = 0;
+    if (!read_u64(soul, kOffSoulWuid, &wuid) || wuid == 0) return -1;
+    const void* node = cached_node(c, name);
+    if (!node) return -1;
+    bool has = false;
+    if (!call_has_entity_context(c.mgr, wuid, node, &has)) { disarm("HasEntityContext faulted"); return -1; }
+    return has ? 1 : 0;
+}
+
+int set_soul_context_quiet(void* soul, const char* name, bool on) {
+    if (!g_isolationArmed || !soul || !name) return -1;
+    Chain c{};
+    bool permanent = false;
+    if (!resolve_chain_quiet(&c, &permanent)) {
+        if (permanent) disarm("chain integrity check failed");
+        return -1;
+    }
+    uint64_t wuid = 0;
+    if (!read_u64(soul, kOffSoulWuid, &wuid) || wuid == 0) return -1;
+    const void* node = cached_node(c, name);
+    if (!node) return -1;
+    bool has = false;
+    if (!call_has_entity_context(c.mgr, wuid, node, &has)) { disarm("HasEntityContext faulted"); return -1; }
+    if (has == on) return 0;   // refcounted store: never stack a second count
+    if (!call_set_entity_context(c.mgr, on, wuid, node)) { disarm("SetEntityContext faulted"); return -1; }
+    bool after = !on;
+    if (!call_has_entity_context(c.mgr, wuid, node, &after)) { disarm("HasEntityContext faulted after a write"); return -1; }
     return after == on ? 1 : -1;
 }
 

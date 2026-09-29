@@ -183,6 +183,7 @@ public partial class GameBridge
                     _w141PeerRows[r.Peer] = r.A;
                     await Wo141ApplyAsync(Wo141Rules.AvatarName(r.Peer), Wo141Rules.ForAvatar(r.A), $"player {r.Peer}");
                     await Wo141AvatarLabelAsync(r.Peer, Wo141Rules.ForAvatar(r.A));
+                    await Wo143OnPlayerRowAsync(r.Peer, r.A);   // WO-143: the player's minigame on the avatar
                 }
             }
             return;
@@ -195,6 +196,7 @@ public partial class GameBridge
             Console.WriteLine($"MP-W141 player {src}: {a}");
             await Wo141ApplyAsync(Wo141Rules.AvatarName(src), Wo141Rules.ForAvatar(a), $"player {src}");
             await Wo141AvatarLabelAsync(src, Wo141Rules.ForAvatar(a));
+            await Wo143OnPlayerRowAsync(src, a);   // WO-143: the player's minigame on the avatar
             var fwd = new List<ActivityRow> { new(src, "", a) };
             foreach (byte j in Wo134Peers())
                 if (j != src) { await Wo141SendAsync(Protocol.ActivityHostUp, j, Protocol.ActivityKindPlayer, fwd); Interlocked.Increment(ref _w141Forwarded); }

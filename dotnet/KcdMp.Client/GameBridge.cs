@@ -1754,6 +1754,7 @@ public partial class GameBridge(ClientConfig config)
         Wo139OnConnect(cts.Token);           // WO-139: crime and guards (the joiner's crimes in the host's world, the stop, no robbing)
         Wo140OnConnect(cts.Token);           // WO-140: sleeping together, the own-world trap
         Wo141OnConnect(cts.Token);           // WO-141: activities (NPCs and players, the game's own state)
+        Wo143OnConnect(cts.Token);           // WO-143: hands, gaits, one-shots, looks, the players' minigames on the avatars
         _ = _combat.NpcConfigAsync(_nativeWriteOn, _nativeSenderClock, cts.Token);
         _ = RespawnHeartbeatAsync(stream, announceGraves: true, cts.Token);
         // WO-99 Phase 0: learn who the local player is before the first hit.
@@ -2265,6 +2266,7 @@ public partial class GameBridge(ClientConfig config)
             await Wo139OnDisconnectAsync();   // WO-139: holds released, the detector and the punishment gate off
             await Wo140OnDisconnectAsync();   // WO-140: the sleep gate off, no vote kept
             await Wo141OnDisconnectAsync();   // WO-141: no capture, no apply, the writer takes every body back
+            await Wo143OnDisconnectAsync();   // WO-143: nothing captured or applied, the temporary tools taken back
             _myOpenDrops.Clear();
             // WO-113: no relay, no session -- the DLL's guard stands down
             // (vanilla death), and every peer's mirror gravestone goes.
@@ -5748,6 +5750,9 @@ public partial class GameBridge(ClientConfig config)
                 return;
             case "w141":             // WO-141: mp_activities on|off / kinds <n> / status
                 Wo141OnModLine(arg);
+                return;
+            case "w143":             // WO-143: hands|gaits|oneshots|minigames|idles on|off / status / the temporary tools' answers
+                Wo143OnModLine(arg);
                 return;
             case "w140_ask":         // WO-140: sleeping together
             case "w140_answer":

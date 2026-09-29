@@ -1065,6 +1065,58 @@ public class RelayRoundTripTests : IClassFixture<RelayFixture>
         Assert.True(await b.NoneOfAsync(Protocol.ActivityPeerDown, Quiet));
     }
 
+    // ---- WO-143: activities part 2, 0x6E / 0x6F (join channel) -----------------
+
+    [Fact]
+    public async Task Hands_gaits_oneshots_and_looks_cross_the_relay_from_the_host_only()
+    {
+        var (a, b) = await TwoPeersAsync();   // a = the host (damage authority), b = the joiner
+        await using var _a = a; await using var _b = b;
+
+        // the woodworker's saw (right hand) and the farmer's hoe (left hand)
+        var saw = ExtraRow.ClassBytes("49200aeb-5676-45eb-9fb2-402df0d09aa9");
+        var hoe = ExtraRow.ClassBytes("4d444b36-afde-42c9-8107-88ec448d4158");
+        var hands = new[] { new ExtraRow { Name = "ttkc_woodworker", Right = saw }, new ExtraRow { Name = "ttkc_man_28", Left = hoe } };
+        await a.SendRawAsync(ExtraCodec.BuildUp(b.Id, Protocol.ExtraKindHands, hands));
+        var hd = await b.ReadUntilAsync(Protocol.ActivityExtraDown, Wait);
+        Assert.Equal(a.Id, hd[0]);
+        Assert.True(ExtraCodec.TryDecode(hd.AsSpan(1 + Protocol.JoinHeaderLen), out byte kind, out var got));
+        Assert.Equal(Protocol.ExtraKindHands, kind);
+        Assert.Equal("49200aeb-5676-45eb-9fb2-402df0d09aa9", ExtraRow.ClassText(got[0].Right));
+        Assert.Equal("4d444b36-afde-42c9-8107-88ec448d4158", ExtraRow.ClassText(got[1].Left));
+        Assert.Equal("-", ExtraRow.ClassText(got[1].Right));
+
+        // the hoeing gait, a bartender's aligned serve, a guard looking at the joiner's avatar
+        await a.SendRawAsync(ExtraCodec.BuildUp(b.Id, Protocol.ExtraKindGaits, new[] { new ExtraRow { Name = "ttkc_man_28", Gaits = 0x001 } }));
+        var gd = await b.ReadUntilAsync(Protocol.ActivityExtraDown, Wait);
+        Assert.True(ExtraCodec.TryDecode(gd.AsSpan(1 + Protocol.JoinHeaderLen), out kind, out var ggot));
+        Assert.Equal(Protocol.ExtraKindGaits, kind);
+        Assert.Equal((ushort)1, ggot[0].Gaits);
+        var serve = new ExtraRow { Name = "ttkc_inkeeper", Fragment = "Bartender_ServeBeer", Tags = "fillDistClose,fillSideLeft", AlignGuid = 0xB76380EA26B349BA, Flags = 1 };
+        await a.SendRawAsync(ExtraCodec.BuildUp(b.Id, Protocol.ExtraKindOneShot, new[] { serve }));
+        var od = await b.ReadUntilAsync(Protocol.ActivityExtraDown, Wait);
+        Assert.True(ExtraCodec.TryDecode(od.AsSpan(1 + Protocol.JoinHeaderLen), out kind, out var ogot));
+        Assert.Equal(Protocol.ExtraKindOneShot, kind);
+        Assert.Equal(serve.Fragment, ogot[0].Fragment); Assert.Equal(serve.Tags, ogot[0].Tags); Assert.Equal(serve.AlignGuid, ogot[0].AlignGuid); Assert.Equal(1, ogot[0].Flags);
+        await a.SendRawAsync(ExtraCodec.BuildUp(b.Id, Protocol.ExtraKindLooks, new[] { new ExtraRow { Name = "ttkc_man_5", TargetKind = Protocol.LookPeer, Target = b.Id.ToString() } }));
+        var ld = await b.ReadUntilAsync(Protocol.ActivityExtraDown, Wait);
+        Assert.True(ExtraCodec.TryDecode(ld.AsSpan(1 + Protocol.JoinHeaderLen), out kind, out var lgot));
+        Assert.Equal(Protocol.LookPeer, lgot[0].TargetKind); Assert.Equal(b.Id.ToString(), lgot[0].Target);
+
+        // the biggest body (12 looks rows, two 64-character names each) crosses whole
+        string n64(int i) => (i.ToString("D2") + new string('n', Protocol.MaxNpcNameLen)).Substring(0, Protocol.MaxNpcNameLen);
+        var many = Enumerable.Range(0, Protocol.ExtraMaxRows).Select(i => new ExtraRow { Name = n64(i), TargetKind = Protocol.LookNpc, Target = n64(i + 50) }).ToArray();
+        await a.SendRawAsync(ExtraCodec.BuildUp(b.Id, Protocol.ExtraKindLooks, many));
+        var md = await b.ReadUntilAsync(Protocol.ActivityExtraDown, Wait);
+        Assert.Equal(Protocol.JoinHeaderLen + Protocol.ExtraBodyMax, md.Length - 1);
+        Assert.True(ExtraCodec.TryDecode(md.AsSpan(1 + Protocol.JoinHeaderLen), out _, out var mgot));
+        Assert.Equal(many.Select(r => r.Target), mgot.Select(r => r.Target));
+
+        // a joiner never speaks for the host's NPCs
+        await b.SendRawAsync(ExtraCodec.BuildUp(a.Id, Protocol.ExtraKindHands, hands));
+        Assert.True(await a.NoneOfAsync(Protocol.ActivityExtraDown, Quiet));
+    }
+
     [Fact]
     public async Task A_whole_world_crosses_the_relay_windowed_and_byte_exact()
     {

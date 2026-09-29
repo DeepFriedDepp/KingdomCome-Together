@@ -24,6 +24,7 @@ int wo138_rules_tests(int* passed);        // wo138_rules_tests.cpp
 int wo139_rules_tests(int* passed);        // wo139_rules_tests.cpp
 int wo140_rules_tests(int* passed);        // wo140_rules_tests.cpp
 int wo141_rules_tests(int* passed);        // wo141_rules_tests.cpp
+int wo143_rules_tests(int* passed);        // wo143_rules_tests.cpp
 
 static int g_fail = 0, g_pass = 0;
 #define CHECK(cond, ...) do { if (cond) ++g_pass; else { ++g_fail; std::printf("FAIL  %s:%d  ", __FILE__, __LINE__); std::printf(__VA_ARGS__); std::printf("\n"); } } while (0)
@@ -164,6 +165,13 @@ int main() {
         const int af = wo141_rules_tests(&ap);
         g_pass += ap;
         g_fail += af;
+    }
+    // WO-143: hands in step, the gait plan, the quieter log, the one-shot throttle, the look budget
+    {
+        int hp = 0;
+        const int hf = wo143_rules_tests(&hp);
+        g_pass += hp;
+        g_fail += hf;
     }
 
     std::printf("%d passed, %d failed\n", g_pass, g_fail);
