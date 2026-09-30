@@ -70,8 +70,8 @@ Steam Cloud: the folder has no other Steam file and no file changed. Whether the
 * No packages were installed.
 
 ## 5. Not done, and why
-* The clothing-preset effect and the keybind/profile overrides were not confirmed: that needs a screenshot or a key press, and both are ruled out.
-  Morning step for the maintainer (30 s): in the loaded world, open the console, type `mp_log_actions on`, press F9 and F11 once, then `mp_log_actions off`. A `kcd2mp_dice_*` action name in `kcd.log` confirms the overrides.
+* The clothing-preset effect was not confirmed: that needs a screenshot, which is ruled out.
+* The keybind/profile overrides were confirmed after the run, by the maintainer, not by me. In the loaded world they typed `mp_log_actions on`, pressed F9 and F11 once, then typed `mp_log_actions off`. `kcd.log` got `kcd2mp_dice_cast` and `kcd2mp_dice_bank` action lines (findings section 5.3), and I read them from a copy of `kcd.log` in `<scratch>`.
 * `wh_sys_AutoLoadLastSave` was not tried: it needs a restart, and the world was already loaded by then. It is the next candidate for a load without input.
 * Why retail's `Game.QuickSave` refuses was not investigated (native; part B).
 * `http_startserver` was not run (findings, Decisions 4).

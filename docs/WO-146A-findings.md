@@ -15,7 +15,7 @@ World: the throwaway playline `playline2`, confirmed by the maintainer before st
 
 1. **Our pak loads on retail, unchanged.** Retail accepts the manifest as it is: "has no version restrictions" / "is not limited to any game version, it will be enabled". It opens `mods\kdcmp\data\kdcmp.pak`, and `kdcmp.lua` runs by itself at start-up (`=== MOD INIT ===` at t = 10.8 s, `Commands OK`, `Player hooks OK`).
    Table patches work: our `buff__kcdmp.xml` buff id resolves in the world (`AddBuff` returns an instance; a made-up id in our range returns nil), and it was removed again.
-   **(observed)** The clothing-preset patch and the two `Libs/Config` overrides (dice keys) are **(inconclusive)**: no Lua read proves them, and proving the keys needs one key press (section 5.3).
+   The two `Libs/Config` overrides take too: a key test by the maintainer delivered our `kcd2mp_dice_cast` (F9) and `kcd2mp_dice_bank` (F11, press and release) actions to the mod. **(observed)** Only the clothing-preset patch is still **(inconclusive)** (section 5.3).
 2. **The safety switches work.** Yes: our `mp_*` console commands register on retail and run from its console, at the main menu and in a world. `mp_sleep_status` and `mp_quest_status` print their normal status lines, and so do `mp_shared_world`, `mp_friendly_fire`, `mp_summary` and the argument form `mp_entity_id <name>`. **(observed)**
 3. **What the agent can use: the RemoteConsole on `:4600`, and that is all it needs for Lua.** It runs `#`-prefixed Lua and plain console commands. A console command's output (including cvar reads) comes back in `kcd.log`, not on the socket. Round trip is 31–69 ms, avg 62, over 10 runs. **(observed)**
    `:1403` does not exist on retail (connection refused). The socket sends back only a banner frame and an autocomplete frame. The only outbound channel is the `kcd.log` tail, as on the Modding Tools build.
@@ -166,9 +166,11 @@ Loading lua init script for mod kdcmp ...
 |---|---|---|---|
 | `Libs/Tables/rpg/buff__kcdmp.xml` | in the world: `player.soul:AddBuff("<kcdmp_death_guard id>")`, then `RemoveAllBuffsByGuid` twice | instance returned; removed 1, then 0; a made-up id in our range returns nil. **The patch applied.** | observed |
 | `Libs/Tables/item/clothing_preset__kdcmp.xml` | `actor:EquipClothingPreset("kcd2mp_ghost_armor")` on one NPC | returns nil for ours and for a made-up name alike; the effect was not looked at (no screenshots) | inconclusive |
-| `Libs/Config/keybindSuperactions.xml`, `Libs/Config/defaultProfile.xml` | `System.IsFileExist` resolves both, but both also exist in `IPL_GameData.pak`; `sys_PakPriority` = 2, the same override path as the Modding Tools build | whether our actions registered needs one key press with `mp_log_actions on` | inconclusive |
+| `Libs/Config/keybindSuperactions.xml`, `Libs/Config/defaultProfile.xml` | after the run, the maintainer typed `mp_log_actions on` in the world, pressed F9 and F11 once, then `mp_log_actions off` | `ACT 'kcd2mp_dice_cast' a=press`, then the invite path (`No other player nearby to invite`); `ACT 'kcd2mp_dice_bank' a=press` / `a=release`, and `MP-KEY action=kcd2mp_dice_bank`. **Both overrides take**: our actions exist only through them (vanilla has neither). | observed |
 
-Both kinds of override come from the same mod pak through the same mod manager. The buff patch shows the table-patch path works on retail. That the clothing and keybind overrides take the same way is **(inferred)**.
+The buff patch and the key test show that both the table-patch path and the `Libs/Config` full-file override path work on retail. That the clothing-preset table patch takes the same way as the buff one is **(inferred)**.
+
+**A conflict worth knowing (observed):** with `-devmode`, the same F11 press also fired the engine's `toggleaidebugdraw` action (logged right before `kcd2mp_dice_bank`). Players never run `-devmode`, but the agent's retail transport needs it, so on a retail build F11 would also toggle the AI debug overlay. Whether the Modding Tools build binds F11 the same way was not checked. **(inconclusive)**
 
 ### 5.4 The safety switches, and getting back into a world
 **Yes: our `mp_*` commands register and run in retail's console, at the main menu and in a loaded world.** **(observed)** Every command below was sent as a plain console line over the RemoteConsole, the same way a player's console line runs:
