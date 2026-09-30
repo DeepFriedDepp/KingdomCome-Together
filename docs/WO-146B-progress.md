@@ -51,13 +51,17 @@ Placeholders: `<RETAIL>` the retail install, `<MT>` the Modding Tools install, `
 19. **Step 2 and step 5 re-run on the main thread** in the fresh process; the reflection and entity results reproduced. The NPC that had carried a full
     `C_NPC` object earlier had streamed down to `C_AIPuppet`, so the context walk was not repeated there (the earlier reading stands).
 20. **Slot 151's capture** collected 34 calls across 9 threads over five minutes before the counters were read out.
+21. **Step 4 completed, attended.** With both combat hooks armed, the maintainer drew a weapon, swung four times and hit a cow. `EnterImpl` fired
+    four times and the `C_CombatSoul` hit slot once, both on the main thread, each captured `this` confirmed by its own RTTI.
+22. **D-095 settled** in the same minute: the player's actor was walked again now that a combat actor existed, and `C_Actor+0x278` holds a
+    `C_CombatPlayer`. No save was written; the locks were still held.
 
 ## 2. Everything touched outside the repo
 
 | where | what | state at the end |
 |---|---|---|
 | the running game process | one inline detour on `C_ModulesManager::Update` (the frame hook) and, per process, up to three capture-only detours; a probe DLL loaded (up to seven copies across two processes) | gone with the process; nothing is ever unhooked, so each patch lived until the game exited |
-| the game world (`playline2`) | three `crime:attackInitiatedByConcept` messages sent between NPCs (one before the crash, two after); no NPC entered combat and no NPC was harmed — all four involved NPCs read `hp=100` afterwards. Two save locks held throughout. | left as found; **no save was written** |
+| the game world (`playline2`) | three `crime:attackInitiatedByConcept` messages sent between NPCs (one before the crash, two after); no NPC entered combat and no NPC was harmed — all four involved NPCs read `hp=100` afterwards. Then the maintainer's own four swings and one hit on a cow, at my request, to complete step 4. Two save locks held throughout. | left as found; **no save was written** |
 | `<RETAIL>\Mods\kdcmp\` | **not touched**; still the folder part A created | **still there — see §5** |
 | `<RETAIL>\kcd.log`, `logbackups\` | written by the game itself across three launches (one pre-existing, two in this session) | the game's own files; a copy of each log state is in `<scratch>` |
 | `<saves>` | **nothing written.** Save locks were held whenever the game was in a world. | 318 files, unchanged |
@@ -127,8 +131,8 @@ are written as "pid ending NNN". The playline name `playline2` is the game's own
 
 ## 7. Not done, and why
 
-* **Step 4 did not complete.** The hook points resolve and install; no combat could be produced from the console (findings §5). One attended swing settles it.
-* **`m_pCombatActor` on retail is still unknown**, because it is null on an idle actor by design and step 4 never produced a combat one.
+* **No NPC-vs-NPC fight could be produced from the console**, so step 4's capture was measured only for the player's own action (all of it
+  main-thread). Whether an NPC's swing arrives on a job worker is still open.
 * **An NPC's health was not read through reflection.** The registry and `type_data` read fine; the property path needs the reimplementation the findings describe.
 * **The quest / concept cluster was not probed at all** — out of this work order's five steps.
 * **`<RETAIL>\Mods` was not removed** (§5).

@@ -27,7 +27,7 @@ The three deciding facts:
 | | fact | verdict | mark |
 |---|---|---|---|
 | **Foundation** | The probe loaded, the build-identity gate passed, `C_ModulesManager::Update` was found from a string anchor with no RVA, hooked, and ticked **once per frame on one thread** for twenty minutes (98 fps focused, 30 fps unfocused). `gEnv` was derived from the same anchor chain and every one of its 43 members named by its own RTTI, including the entity system (+0xA0), the console (+0xA8), the job manager (+0x128) and the **main thread id (+0x1A8)**. The entity system answered live: `GetEntity(0x7777)` → `CEntity`, name `Dude` — the same value part A read through Lua. | **works** | **(observed)** |
-| **Drift** | The `C_Actor` vtable has **275 slots on retail against 409 on the Modding Tools build**. Slots up to ~95 are unmoved; after that they shift by −24, then −86, then −134. **Not one** of the plugin's four `UpdateMannequinTags` in-body byte checks matches any retail slot, and **not one** of the nine `C_Actor` methods the plugin uses shares a single 7-byte code run with any retail slot function. The tools build's `m_pCombatActor` offset (+0x300) holds a float on retail. | **works with changes — the expensive kind** | **(observed + data-verified)** |
+| **Drift** | The `C_Actor` vtable has **275 slots on retail against 409 on the Modding Tools build**. Slots up to ~95 are unmoved; after that they shift by −24, then −86, then −134. **Not one** of the plugin's four `UpdateMannequinTags` in-body byte checks matches any retail slot, and **not one** of the nine `C_Actor` methods the plugin uses shares a single 7-byte code run with any retail slot function. The tools build's `m_pCombatActor` offset (+0x300) holds a float on retail (the field is at **+0x278**). | **works with changes — the expensive kind** | **(observed + data-verified)** |
 | **NPC-state** | Reachable. `C_NPCContext` still has no RTTI, but every element class does, and the context is found *structurally*: from the entity to `C_NPC@xgenaimodule` (two pointer hops), then the offset whose `+0x90` is a state whose element vector holds objects with the element vftables. On retail that offset is **`C_NPC+0x740`** for the current state and **`+0x7E0`** for the required one, not the tools build's `+0x9C0`. One NPC's stance was read from both sides and agreed. | **works with changes** | **(observed)** |
 
 ### The conditions
@@ -36,8 +36,9 @@ The three deciding facts:
    on retail by what it *does*, not by what it looked like on the Modding Tools build. Signature-porting from `<MT>` does not work (section 3.3).
 2. **Two builds must not share one set of expected layouts.** The plugin's fail-closed pattern already exists; a retail build needs its own table
    and its own identity gate (the probe's gate is the shape: hash the game DLL, arm nothing on a mismatch).
-3. **The combat capture is unproven.** Its hook points resolve and install; no combat could be produced from the console in the time available, so
-   whether they capture is still open (section 5).
+3. **Combat capture works, but on the main thread.** Both hook points resolve, install and fire (section 5) — and the player's swing and hit both
+   arrived on the **main** thread, where the plugin treats these callbacks as "whichever thread the engine uses". A retail build should measure the
+   thread per hook rather than inherit the Modding Tools build's assumption.
 
 ---
 
@@ -248,15 +249,25 @@ actor hop itself had to be re-found: retail reaches it through `CEntity`'s compo
 | +0x990 / +0x9A8 | `C_ActorModel` / `C_MovementControllerAdapter@xgenaimodule` |
 | +0x9D0 / +0xA58 | `C_ItemAttachmentManager` / `C_HumanHandHelper` |
 
-**D-095 is not settled.** `+0x300` holds a float on retail, so the tools-build offset is gone; `+0x278` (the census's candidate) was **null**, but the
-NPC was idle and `m_pCombatActor` is null until combat begins, so a null there proves nothing. Settling it needs an actor in combat, which is step 4's
-open item. **(inconclusive)**
+**D-095 is settled: `m_pCombatActor` is at `C_Actor+0x278` on retail.** On the idle NPC above both candidates looked empty — `+0x300` holds a float,
+`+0x278` was null — because the field is null until combat begins. Read again on the player straight after the swings of section 5, `+0x278` holds a
+`C_CombatPlayer@combatmodule@wh@@`, confirmed by that object's own RTTI, while `+0x300` is still the float: **(observed)**
+
+```
+S3: the actor from the entity: ... at component[4] (.?AVC_Player@entitymodule@wh@@)
+S3: actor+0x300  m_pCombatActor (WO-44, +0x300)  = 000000003F800000  (no RTTI)     <- the float 1.0f
+S3: actor+0x278  the +0x278 candidate            = ...  .?AVC_CombatPlayer@combatmodule@wh@@
+S3: actor+0x668                                  = ...  .?AVC_Soul@rpgmodule@wh@@
+```
+
+The census's guess (WO-145 section 3.6, "retail is known to differ: +0x278") was right. What made it checkable was not the offset but the RTTI on the
+thing it points at — the same technique as the table above. The soul sits at +0x668 on the player exactly as on the NPC.
 
 ---
 
-## 5. Step 4 — one swing, one hit (D-365, D-343). **Verdict: inconclusive**
+## 5. Step 4 — one swing, one hit (D-365, D-343). **Verdict: works**
 
-What resolved, on both the first and the second game process: **(observed)**
+What resolved, identically on both game processes: **(observed)**
 
 | | |
 |---|---|
@@ -266,16 +277,30 @@ What resolved, on both the first and the second game process: **(observed)**
 | its melee hit slot 0x150 | → `WHGame+0x726DF4` |
 | capture hooks on both | installed, prologues copied at instruction-aligned lengths (20 and 22 bytes) |
 
-**Neither fired**, because no combat happened. The console stand-ins available on retail did not produce a fight: the game's own attack interrupt
-(`crime:attackInitiatedByConcept` through `XGenAIModule.SendMessageToEntityData`, the path the plugin's WO-139 guard pursuit uses) was accepted by both a
-plain NPC and a guard (`sent=true`), but neither entered combat mode within 40 s — the nearest human NPCs were 78–150 m from the player and the only
-bodies near the player were sheep. The combat test commands the plugin uses on the Modding Tools build (`C_SetRequestedAttackZone` and friends) do not
-exist in retail at all (WO-145 §3.5). **(observed)**
+**Both fired.** No console stand-in retail offers could produce a fight: the game's own attack interrupt (`crime:attackInitiatedByConcept` through
+`XGenAIModule.SendMessageToEntityData`, the path the plugin's WO-139 guard pursuit uses) was accepted by both a plain NPC and a guard (`sent=true`) and
+neither entered combat within 40 s — the nearest human NPCs were 78–150 m from the player — and the combat test commands the plugin drives on the
+Modding Tools build do not exist in retail at all (WO-145 section 3.5). The stand-in was therefore the player's own action: the maintainer drew a
+weapon, swung four times and hit a cow. **(observed)**
 
-So: the hook points are where the census said, they are unique, and they install cleanly. Whether they capture the right thing, and on which thread, is
-**open** — it needs one swing by a player standing next to something. That is a five-minute follow-up, not a work order.
+```
+S4: EnterImpl this=...5A0 (.?AVC_CombatActorActionAttack@combatmodule@wh@@)
+S4: EnterImpl this=...420 (.?AVC_CombatActorActionAttack@combatmodule@wh@@)
+S4: EnterImpl this=...4E0 (.?AVC_CombatActorActionAttack@combatmodule@wh@@)
+S4: EnterImpl this=...8C0 (.?AVC_CombatActorActionAttack@combatmodule@wh@@)
+S4: hit slot  this=...AA0 (.?AVC_CombatSoul@rpgmodule@wh@@)
+S4: EnterImpl calls 4 (thread 3140), hit calls 1 (thread 3140); main thread 3140
+```
 
----
+* **Four swings, four `EnterImpl` calls; one landed hit, one hit-slot call.** The `this` each hook captured was checked through its own RTTI and is a
+  real `C_CombatActorActionAttack` / `C_CombatSoul`, so slots 0x1C8 and 0x150 on the retail vftables are the functions the census named and the capture
+  the plugin's combat visibility is built on works on retail unchanged in shape. **(observed)**
+* **Both arrived on the main thread** (3140, the thread the frame hook runs on). Worth writing down: the plugin treats these callbacks as engine-any and
+  WO-145 section 7.1 lists them among the hooks with threading risk. For the *player's own* action on retail they are main-thread. Whether an NPC's swing
+  arrives on a job worker was not measured, because no NPC fight could be produced. **(observed; the NPC case inconclusive)**
+* Everything captured came from the player, so this run cannot separate the two classes of caller.
+
+**It settled D-095 as a side effect.** With a combat actor finally allocated, the player's `C_Actor+0x278` holds a `C_CombatPlayer` (section 4.4).
 
 ## 6. The one crash, and why it is worth writing down
 
@@ -362,7 +387,7 @@ part A settled the Lua, pak, console and save questions. The total does not move
 |---|---|--:|---|
 | Foundation (start-up gate, frame hook, `gEnv`, engine services) | 3–5 | **1–2** | Done and proven in this probe: the anchor chain, the tick, `gEnv` with every member named, the entity system live. What is left is productionising it. **cheaper** |
 | Reflection ABI (71 rows) | part of the above | **2–3** | The registry and `type_data` read directly and the layouts match; but 19 of 22 entry points have no function to call, so the client side is a reimplementation. **changed in kind, roughly the same size** |
-| Combat / animation (36 rows) | 4–6 | **5–8** | No slot, offset or byte check ports, and nothing can be signature-matched from `<MT>`. Each anchor is re-derivation against a running game, and the capture is still unproven. **harder** |
+| Combat / animation (36 rows) | 4–6 | **5–8** | Mixed. The RTTI-anchored half is proven: both capture points resolve and fire, and `m_pCombatActor` is found. The rest — every `C_Actor` slot and offset — has no anchor that ports and nothing that can be signature-matched from `<MT>`, so each is re-derivation against a running game. **harder overall; the visibility layer is de-risked** |
 | NPC-state / activities (36 rows) | part of 5–8 | **2–3** | Reachable structurally through classes retail keeps; needs one new offset and an element-layout pass. **cheaper and, more importantly, no longer a risk** |
 | Struct-field and vtable-slot rows across `C_Actor` and friends (≈142 rows) | part of 5–8 | **3–5** | The RTTI-named field walk makes this mechanical but not free: one pass per class, on a live body. **about as expected, now with a method** |
 | Quest / concept layer (46 rows) | part of 5–8 | **unmeasured** | Not probed. WO-145's static result stands. |
@@ -424,8 +449,8 @@ order's output portable instead of throwaway.
 
 | open question | why it is open | what would settle it |
 |---|---|---|
-| **Does the combat capture work?** (`EnterImpl` slot 0x1C8, `C_CombatSoul` hit slot 0x150) | The hooks install; no combat could be produced from the console, and the retail build has none of the combat test commands the Modding Tools build offers. | One swing by a player standing next to a body, with the two hooks armed. Five minutes, attended. |
-| **Where is `m_pCombatActor` on retail?** (D-095) | `+0x300` is a float there and `+0x278` was null on an *idle* actor, where the field is null by design. | The same RTTI field walk on an actor **in combat**: the combat actor will appear as the one field pointing at a `C_CombatActor`/`C_CombatPlayer`. Rides on the answer above. |
+| **Does an NPC's swing arrive on the same thread as the player's?** | Everything captured came from the player, and all of it was main-thread. No NPC fight could be produced from the console. | Two NPCs fighting inside the player's simulated radius, with the two hooks armed. |
+| **Is there a console route to a fight on retail at all?** | The attack interrupt was accepted by two NPCs 80–150 m out and produced nothing; the Modding Tools combat test commands do not exist in retail. | Try it on an NPC inside the player's simulated radius; otherwise a retail test harness needs a different lever. |
 | **Where is `UpdateMannequinTags`?** (D-415) | No byte check matches; the single structural candidate fires 34 times in five minutes, so it is something else. | Hook a handful of candidate slots at once and keep the one that fires per actor per frame; or find it from its caller (`C_ActorMovementController::Update`, whose class does have RTTI on retail). |
 | **Can a property be read through reflection?** | `type_data` resolves, but `get_property_value` and friends are inlined away. | Walk `type_data`'s own property list (the plugin's ABI notes put it behind vtable slot 0xB8, offsets +0x50/+0x58) and call a wrapper's `get_value` through its vtable. One probe session. |
 | **Where is the real `type::get_by_name`?** | The discriminator used selects the global-item map's lookup. | Among the 24 functions that call the registry accessor, the one that searches `registry+0x10`. Or skip it: reading the map directly is fewer moving parts. |
