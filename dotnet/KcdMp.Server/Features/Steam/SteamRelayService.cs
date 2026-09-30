@@ -141,7 +141,7 @@ public sealed class SteamRelayService : BackgroundService
 				int flags = conn.InfoFlags();
 				_status.AddPeer(1);
 				_logger.Information("[+] a Steam peer connected (relayed={Relayed}); handshake next", (flags & 16) != 0 ? 1 : 0);
-				var client = _runner.Create(RelayConnection.FromSteam(conn.GetStream()));
+				var client = _runner.Create(RelayConnection.FromSteam(conn.GetStream(), conn.PeerKey));   // WO-144: the same player's new connection replaces his old one
 				_runner.Start(client);
 				_ = WatchPeerAsync(conn);
 			}

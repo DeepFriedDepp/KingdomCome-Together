@@ -84,11 +84,15 @@ inline uint32_t float_bits(float f) { uint32_t u; std::memcpy(&u, &f, 4); return
 
 // The clock pull (the joiner's own copy only): refused unless the calendar reads
 // what the agent believes (within the slack), and only ever backward.
-enum class Pull : uint8_t { Pulled = 1, NotNeeded = 0, Mismatch = 2 };
+enum class Pull : uint8_t { Pulled = 1, NotNeeded = 0, Mismatch = 2, SkipRunning = 3 };
+// WO-144 3.3: a calendar further AHEAD than the agent read (its own skip ran on meanwhile -- the
+// field's "refused: the calendar reads otherwise", twice) is still ahead of the host's: pulled. Only
+// one that went BACK past the reading (a load, a rewind) is refused: the target may be stale then.
+// A skip running on this machine is the handler's to wait out (SkipRunning), never a pull mid-skip.
 inline Pull pull_verdict(int64_t curMs, uint32_t expectSec, uint32_t targetSec, uint32_t slackSec = 120) {
     const int64_t cur = curMs / 1000;
     const int64_t d = cur - static_cast<int64_t>(expectSec);
-    if (d > static_cast<int64_t>(slackSec) || d < -static_cast<int64_t>(slackSec)) return Pull::Mismatch;
+    if (d < -static_cast<int64_t>(slackSec)) return Pull::Mismatch;
     if (static_cast<int64_t>(targetSec) * 1000 >= curMs) return Pull::NotNeeded;
     return Pull::Pulled;
 }

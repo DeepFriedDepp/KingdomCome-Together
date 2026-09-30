@@ -65,6 +65,13 @@ public class ClientSession
     /// <summary>WO-127: "tcp" or "steam". A Steam session is never loopback.</summary>
     public string Transport => _conn.Transport;
 
+    /// <summary>WO-144: the machine on the other end (RelayConnection.IdentityKey). Never logged.</summary>
+    public string IdentityKey => _conn.IdentityKey;
+
+    /// <summary>WO-144: a newer connection of the same player took over -- this one closes now (its Disconnect goes out as usual).</summary>
+    public void Supersede(byte newerId) =>
+        AbortWriteQueue($"replaced by a new connection from the same player (id={newerId}) -- closed now instead of waiting for its timeout");
+
     /// <summary>
     /// WO-127: the client's latest Position carried the HOST CLAIM bit (it runs
     /// the session). Read by ClientHandler.PickAuthority; see ProtocolWo127.cs.
@@ -219,6 +226,15 @@ public class ClientSession
 
             _logger.Information("[+] '{Name}' connected (id={Id}, protocol v{Version}, release {Release}, loopback={Loopback}) from {ClientRemoteEndPoint}.",
                 Name, Id, clientVersion, ReleaseVersion ?? "(none)", IsLoopback ? 1 : 0, _conn.Remote);
+
+            // WO-144 1.1: the same player's older connection (a restarted game or
+            // agent) goes now, before anyone counts it as a second partner.
+            foreach (var old in _clientHandler.SupersededBy(this))
+            {
+                _logger.Information("[+] '{Name}' (id={Id}) replaces its older connection id={OldId} ({Transport}): the same player connected again.",
+                    Name, Id, old.Id, Transport);
+                old.Supersede(Id);
+            }
 
             // Broadcast this client's name to all others; send existing names to this client
             _broadcastService.BroadcastName(this);

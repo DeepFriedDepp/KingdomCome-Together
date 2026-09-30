@@ -67,6 +67,28 @@ inline Activity normalised(Activity a) {
     return a;
 }
 
+// WO-144 2.2: an avatar's crouch is the motion path's (WO-121/136: the partner's crouch bit,
+// the actor's own SetCrouch). WO-141 neither sends it (the player's row) nor applies or undoes it
+// on an avatar: the field's "wanted stance=none ... now stance=crouch" stood the avatar up every
+// time the partner crouched ("Execution of action CrouchUp has failed").
+inline Activity without_crouch(Activity a) {
+    if (a.stance == kCrouch) { a.stance = 0; a.stanceObj = 0; a.cart = 0; }
+    return normalised(a);
+}
+inline bool is_avatar_name(const char* n) {
+    return n && n[0] == 'k' && n[1] == 'c' && n[2] == 'd' && n[3] == '2' && n[4] == 'm' && n[5] == 'p' && n[6] == '_';
+}
+
+// WO-144 5: the player sits on a bed's edge (the game's own player sit, before he lies down or
+// gets up again). An NPC body has no way into it: "Couldn't find actions to get NPC into game
+// loaded state ... Stance: sitting Using object: smartObject[Bed/...]" (observed, every try).
+// Lying on the same bed is in step at once (observed), so an avatar is shown lying on it.
+inline bool is_bed_name(const char* n) { return n && std::strstr(n, "[Bed/") != nullptr; }
+inline Activity bed_sit_as_lying(Activity a, bool objIsBed) {
+    if (a.stance == kSitting && a.stanceObj && objIsBed) a.stance = kLying;
+    return normalised(a);
+}
+
 inline bool none(const Activity& a) {
     const Activity n = normalised(a);
     return n.stance == 0 && n.unstance == kNoUnstance && n.minigame == kNoMinigame;

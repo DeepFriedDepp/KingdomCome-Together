@@ -55,8 +55,20 @@ public static class Wo140Rules
             return Verdict.Pending;
         }
 
-        /// <summary>A member left the session: its answer can never come (counted as a no).</summary>
-        public void Left(byte who) { if (Members.Contains(who) && !Answers.ContainsKey(who)) Answers[who] = "left"; }
+        /// <summary>
+        /// A member left the session (or is loading, or in its own world now): its answer can never
+        /// come, so it is dropped from the vote and the others' answers decide (WO-144: it used to
+        /// count as a no -- with the phantom partner, every vote ended that way).
+        /// </summary>
+        public void Left(byte who)
+        {
+            if (!Members.Remove(who)) return;
+            Answers.Remove(who);
+            Dropped.Add(who);
+        }
+
+        /// <summary>WO-144: members dropped from the vote (Left), for the log.</summary>
+        public HashSet<byte> Dropped { get; } = new();
     }
 
     /// <summary>
@@ -101,7 +113,7 @@ public static class Wo140Rules
     /// faster than the ratio there, so the extrapolation would undershoot).
     /// </summary>
     public static uint? PullBackTarget(uint mine, uint hostAt, double hostAgeS, bool hostSkipping,
-                                       double ratio = 15.0, uint toleranceS = 300, double maxAgeS = 90)
+                                       double ratio = 15.0, uint toleranceS = 60, double maxAgeS = 90)   // WO-144 3.3: about one game-minute (was 300)
     {
         if (hostAt == 0 || hostSkipping || hostAgeS < 0 || hostAgeS > maxAgeS) return null;
         double hostNow = hostAt + hostAgeS * ratio;

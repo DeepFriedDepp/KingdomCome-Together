@@ -4197,6 +4197,7 @@ local function mp_wo102_pause(name, p, why)
     mp_pause_log(name, "pause", exec, why or "puppet-start", p and p.owner or "?", 0)
     if not ok then mp_log("WO102-PAUSE ExecuteCommand failed for " .. tostring(name) .. ": " .. tostring(err)) end
     if ok then KCD2MP_NpcDetach(name, p, why or "puppet-start") end   -- WO-118 Phase 3
+    if KCD2MP_W144ShowCopy then pcall(KCD2MP_W144ShowCopy, name) end   -- WO-144 2.3: a horse the host uses is shown here
 end
 
 -- The unconditional resume: wh_ai_ResumeNPC now, forget the name.
@@ -6827,6 +6828,9 @@ function KCD2MP_W136AvatarTorch(id, on)
             pcall(function() e.inventory:CreateItem(w.TORCH_ITEM, 1, 1) end)
             pcall(function() it = e.inventory:FindItem(w.TORCH_ITEM) end)
         end
+        -- WO-144 2.4: the NPC's own lamp in that hand is put away first -- drawing over it dropped it on the ground
+        local inHand = KCD2MP.w144 and KCD2MP.w144.lights and w.handClass(e, 1)
+        if inHand and not w.TORCHES[inHand] then pcall(function() e.human:HolsterToInventory(1, false) end) end
         local ok = it ~= nil and pcall(function() e.human:DrawFromInventory(it, 1, true) end)
         how = it and (ok and "drawn into the left hand" or "draw FAILED") or "no torch item"
         w.avatarTorch[id] = ok or nil
@@ -6887,6 +6891,12 @@ KCD2MP.w137 = {
     talkOutS = 3.0,            -- started, and this player out of dialogue this long: it is over
     talkMaxS = 900.0,
     talkRangeM = 3.0,          -- the request fallback's reach (wh_dlg_RequestMaxDistance is 2.5 m)
+    -- WO-144 3.2: a conversation that ends into a minigame (dice) keeps its copy running: the
+    -- game logs the dialogue's end BEFORE the minigame's fader, so an end waits this long first.
+    endDeferS = 2.5,
+    minigameMaxS = 1800.0,
+    mgAheadAt = nil,           -- a "...Minigame..." fader just started on this machine (the agent says so)
+    mgOn = false,              -- this player is in a minigame (the agent reads it from the DLL's player row)
     held = {},                 -- host: npc -> { peer, since, why, at }
     heldMaxS = 300.0,
     heldRepauseS = 10.0,       -- a load forgets suspensions (WO-108 Phase 0): re-issued this often
@@ -7084,10 +7094,31 @@ function KCD2MP_W137TalkResume(name, via)
     w.talking[name] = t
     if wasPaused then mp_wo102_resume(name, "w137-talk") end
     w.stats.talks = w.stats.talks + 1
-    mp_log(string.format("WO137-TALK resume npc=%s via=%s paused_before=%s -- this copy runs its own brain for the conversation; the host holds its NPC busy",
+    -- WO-144 1.3: nothing is held on the key press. The host holds its NPC only once this
+    -- conversation has really started (KCD2MP_W137TalkAttempt, the engine's own start line):
+    -- in the field a copy that never took the request held the host's NPC 25 s, six times.
+    mp_log(string.format("WO137-TALK resume npc=%s via=%s paused_before=%s -- this copy runs its own brain for the conversation; the host holds its NPC once it starts",
         name, tostring(via), tostring(wasPaused)))
-    KCD2MP_EmitEvent("w137_talk", "on " .. name)
     return t
+end
+
+-- WO-144 1.3: "Canceling dialog request id N ... Request timed out" (the agent relays it): the copy
+-- never took the request -- the talk ends now, not after talkStartS.
+function KCD2MP_W137TalkDropped(id)
+    local w = KCD2MP.w137
+    id = tonumber(id)
+    if not id then return false end
+    for name, t in pairs(w.talking) do
+        if t.id == id and not t.started then KCD2MP_W137TalkEnd(name, "never-started"); return true end
+    end
+    return false
+end
+
+-- WO-144 1.3: the hold goes to the host with the conversation's start, once.
+function KCD2MP_W137TalkHoldOn(name, t)
+    if t.holdSent then return end
+    t.holdSent = true
+    KCD2MP_EmitEvent("w137_talk", "on " .. name)
 end
 
 -- The nearest living host copy within reach of this player (the request fallback).
@@ -7149,17 +7180,20 @@ function KCD2MP_W137TalkAttempt(id, souls)
                 if not t.started then
                     t.started, t.id = true, id or t.id
                     w.stats.started = w.stats.started + 1
-                    mp_log(string.format("WO137-TALK start npc=%s id=%s after_s=%.1f via=%s -- the conversation runs on this copy",
+                    mp_log(string.format("WO137-TALK start npc=%s id=%s after_s=%.1f via=%s -- the conversation runs on this copy; the host holds its NPC once this player is in it",
                         name, tostring(id), os.clock() - t.since, tostring(t.via)))
                 end
+                -- WO-144 1.3: "Attempting to start" is not a start -- the engine can still drop it ("Canceling
+                -- dialog request id N ... Request timed out", observed J2): the hold waits for the player to be
+                -- in the conversation (the tick)
             elseif KCD2MP_W137TalkWanted() then
                 -- forced on this copy by the game (its quest logic follows the host's): it runs on the
                 -- suspended copy (Q6); tracked so the host holds its NPC and the end is seen
-                w.talking[name] = { since = os.clock(), via = "forced", id = id, started = true, resumed = false, forced = true }
+                local ft = { since = os.clock(), via = "forced", id = id, started = true, resumed = false, forced = true }
+                w.talking[name] = ft
                 w.stats.forced = w.stats.forced + 1
-                mp_log(string.format("WO137-TALK forced npc=%s id=%s -- a conversation the game started on this copy; the host holds its NPC",
+                mp_log(string.format("WO137-TALK forced npc=%s id=%s -- a conversation the game started on this copy; the host holds its NPC once this player is in it",
                     name, tostring(id)))
-                KCD2MP_EmitEvent("w137_talk", "on " .. name)
             end
         end
     end
@@ -7182,6 +7216,12 @@ function KCD2MP_W137TalkEnd(name, why)
     local w = KCD2MP.w137
     local t = w.talking[name]
     if not t then return end
+    -- WO-144 3.2: a conversation that ended well may be the start of a minigame with this NPC (dice):
+    -- the end waits endDeferS (KCD2MP_W137TalkTick finishes it, or it becomes the minigame's hold)
+    if why == "dialog-ended" and t.started and not t.endAt and not t.minigame then
+        t.endAt, t.endWhy = os.clock() + w.endDeferS, why
+        return
+    end
     w.talking[name] = nil
     w.stats.ended = w.stats.ended + 1
     local p = KCD2MP.npcPuppets[name]
@@ -7195,9 +7235,35 @@ function KCD2MP_W137TalkEnd(name, why)
     else
         how = "left as it is (not a copy any more)"
     end
-    mp_log(string.format("WO137-TALK end npc=%s id=%s why=%s held_s=%.1f started=%s via=%s -- %s",
-        name, tostring(t.id), tostring(why), os.clock() - t.since, tostring(t.started == true), tostring(t.via), how))
-    KCD2MP_EmitEvent("w137_talk", "off " .. name)
+    mp_log(string.format("WO137-TALK end npc=%s id=%s why=%s held_s=%.1f started=%s via=%s -- %s%s",
+        name, tostring(t.id), tostring(why), os.clock() - t.since, tostring(t.started == true or t.startedWas == true), tostring(t.via), how,
+        t.holdSent and "" or "; the host's NPC was never held"))
+    -- WO-144 1.3: an off only for a hold that went out (a conversation that never started held nothing)
+    if t.holdSent then KCD2MP_EmitEvent("w137_talk", "off " .. name) end
+    if why == "never-started" then
+        w.stats.neverStarted = (w.stats.neverStarted or 0) + 1
+        KCD2MP_ShowNativeToast("This person can't talk to you right now.")
+    end
+end
+
+-- WO-144 3.2: the end itself, never deferred (a minigame over, a timeout, a load)
+function KCD2MP_W137TalkEndNow(name, why)
+    local t = KCD2MP.w137.talking[name]
+    if not t then return end
+    t.started = false          -- skips the dialog-ended defer
+    t.startedWas = true
+    KCD2MP_W137TalkEnd(name, why)
+end
+
+-- WO-144 3.2: the agent: a "...Minigame..." fader started on this machine / this player's minigame on or off
+function KCD2MP_W137MinigameAhead(name)
+    KCD2MP.w137.mgAheadAt = os.clock()
+    mp_log("WO137-TALK minigame fader " .. tostring(name) .. " -- a minigame follows")
+end
+function KCD2MP_W137Minigame(on)
+    local w = KCD2MP.w137
+    w.mgOn = on and true or false
+    if w.mgOn then w.mgAheadAt = os.clock() end
 end
 
 function KCD2MP_W137TalkEndAll(why)
@@ -7210,12 +7276,37 @@ function KCD2MP_W137TalkTick()
     local w = KCD2MP.w137
     if next(w.talking) == nil then return end
     local now = os.clock()
+    -- WO-144 3.2: a deferred end becomes the minigame's hold, or ends now; a minigame hold ends with it
+    local finish = {}
+    for name, t in pairs(w.talking) do
+        if t.endAt and not t.minigame then
+            if w.mgOn or (w.mgAheadAt and w.mgAheadAt >= t.since) then
+                t.minigame, t.minigameSince, t.endAt = true, now, nil
+                w.stats.minigames = (w.stats.minigames or 0) + 1
+                mp_log(string.format("WO137-TALK minigame npc=%s id=%s -- the conversation led into a minigame: this copy keeps its brain to play, the host's NPC stays held until it ends",
+                    name, tostring(t.id)))
+            elseif now >= t.endAt then
+                finish[#finish + 1] = { name, t.endWhy or "dialog-ended" }
+            end
+        elseif t.minigame and ((not w.mgOn and now - (t.minigameSince or now) > 8.0) or now - (t.minigameSince or now) > w.minigameMaxS) then
+            finish[#finish + 1] = { name, w.mgOn and "minigame-max-time" or "minigame-over" }
+        end
+    end
+    for _, x in ipairs(finish) do
+        local t = w.talking[x[1]]
+        if t then t.endAt, t.minigame = nil, nil; t.finishing = true end
+        KCD2MP_W137TalkEndNow(x[1], x[2])
+    end
+    if next(w.talking) == nil then return end
     local inDialog = false
     pcall(function() inDialog = player ~= nil and player.human ~= nil and player.human:IsInDialog() == true end)
     local ending = {}
     for name, t in pairs(w.talking) do
+      if not (t.minigame or t.endAt) then   -- WO-144 3.2: a deferred end / a minigame hold is decided above
         local age = now - t.since
-        if inDialog then t.notInDialogSince, t.sawDialog = nil, true
+        if inDialog then
+            t.notInDialogSince, t.sawDialog = nil, true
+            if t.started then KCD2MP_W137TalkHoldOn(name, t) end   -- WO-144 1.3: in the conversation now: the host holds its NPC
         else t.notInDialogSince = t.notInDialogSince or now end
         if not (t.started or t.sawDialog) and not inDialog and age > w.talkStartS then
             w.stats.timeouts = w.stats.timeouts + 1
@@ -7225,6 +7316,7 @@ function KCD2MP_W137TalkTick()
         elseif age > w.talkMaxS then
             ending[#ending + 1] = { name, "max-time" }
         end
+      end
     end
     for _, x in ipairs(ending) do KCD2MP_W137TalkEnd(x[1], x[2]) end
 end
@@ -8110,6 +8202,9 @@ function KCD2MP_NpcSyncTick()
     end
 
     if KCD2MP_W138DialogTick then pcall(KCD2MP_W138DialogTick) end   -- WO-138: the host's dialogue edge (a pause reason)
+    if KCD2MP_W144ClockTick then pcall(KCD2MP_W144ClockTick) end     -- WO-144 3.3: the host's clock pause (the joiners' clocks stand with it)
+    if KCD2MP_W144LightTick then pcall(KCD2MP_W144LightTick) end     -- WO-144 2.4: an avatar holds a light only while its player does
+    if KCD2MP_W144FloatTick then pcall(KCD2MP_W144FloatTick) end     -- WO-144 5: a copy held far above the ground is logged
 
     -- Gate at tick time, not start time: mp_npc_sync can flip and authority
     -- can migrate mid-session, and both must take effect without a restart.
@@ -16489,6 +16584,262 @@ function KCD2MP_W138PushTrack()
     end
 end
 
+-- ===== WO-144 3.3: one clock (docs/WO-144-findings.md) =====
+-- The host's world clock stands while its player is in a conversation (the game's DialogInstance
+-- pause), a quest pauses it, a minigame or a cutscene runs. Only the host's clock moves the shared
+-- world (WO-133), so the joiner's used to run on and was pulled back again and again (the field:
+-- 356 .. 3527 s ahead). Now the host announces the edge (w144_clock 1|0, a pause reason the agent
+-- sends) and the joiner's clock stands with it: Calendar.SetWorldTimeRatio(0), the ratio it had put
+-- back on the resume -- the lever WO-112 T1 and WO-123 proved (the clock stands, NPCs and timers run).
+--   WO144-CLOCK host paused|running
+--   WO144-CLOCK follow on|off ratio_was=<r> ratio_now=<r> why=<w>
+KCD2MP.w144 = KCD2MP.w144 or { clockPaused = nil, follow = false, ratioWas = nil, followSince = nil, followMaxS = 900.0 }
+
+function KCD2MP_W144ClockTick()
+    local w = KCD2MP.w144
+    local paused = nil
+    pcall(function() if Calendar and Calendar.IsWorldTimePaused then paused = Calendar.IsWorldTimePaused() == true end end)
+    if paused == nil then return end
+    if w.clockPaused ~= paused then
+        w.clockPaused = paused
+        mp_log("WO144-CLOCK host " .. (paused and "paused" or "running"))
+        KCD2MP_EmitEvent("w144_clock", paused and "1" or "0")
+    end
+    -- the joiner's safety: never stand longer than followMaxS on a pause whose end never came
+    if w.follow and w.followSince and os.clock() - w.followSince > w.followMaxS then KCD2MP_W144FollowHostClock(false, "safety") end
+end
+
+function KCD2MP_W144FollowHostClock(on, why)
+    local w = KCD2MP.w144
+    why = tostring(why or "host")
+    if on and not w.follow then
+        local was = nil
+        pcall(function() was = Calendar.GetWorldTimeRatio() end)
+        if was == nil or was <= 0 then return false end   -- already standing (another lever): left alone
+        local ok = pcall(function() Calendar.SetWorldTimeRatio(0) end)
+        if not ok then return false end
+        w.follow, w.ratioWas, w.followSince = true, was, os.clock()
+        mp_log(string.format("WO144-CLOCK follow on ratio_was=%s ratio_now=0 why=%s -- this clock stands with the host's", tostring(was), why))
+        return true
+    elseif not on and w.follow then
+        local back = w.ratioWas or 15
+        pcall(function() Calendar.SetWorldTimeRatio(back) end)
+        local now = nil
+        pcall(function() now = Calendar.GetWorldTimeRatio() end)
+        w.follow, w.followSince = false, nil
+        mp_log(string.format("WO144-CLOCK follow off ratio_was=%s ratio_now=%s why=%s -- this clock runs with the host's again", tostring(back), tostring(now), why))
+        return true
+    end
+    return false
+end
+
+-- ===== WO-144 2.1 / 2.4: the avatar's clothes and lights (docs/WO-144-findings.md) =====
+-- 2.1: an avatar wears pieces from its OWN inventory, equipped through the actor. The agent's REST
+-- EquipItem(class) made a new piece on every call (the avatar's inventory grew by one per call) and
+-- those were the pieces the engine took off when the avatar walked crouched: the whole outfit went
+-- in one frame, no log line, and REST equips then failed silently for minutes ("7 item(s) still not
+-- worn"). Inventory items equipped with EquipInventoryItem stayed on through the same crouch walk,
+-- and went on while REST equips were failing (observed, both). One piece per class, made once.
+--   WO144-DRESS <avatar> <class> -> <item> (own|made) ok=<pcall>
+-- 2.4: an avatar holds a light only while its player does. Its soul is a real NPC's: the game's
+-- outfitting rules give most NPC classes a lamp or a torch (Storm inventory_additive_lamp / _torch),
+-- the mirrored outfit carried the player's torch too, and the NPC's own night behaviour draws one
+-- (observed: a lit torch in the avatar's hand at night, its player's torch off) -- the field's
+-- lantern; drawing the player's torch into that hand dropped the lamp on the ground. Every light an
+-- avatar owns is put away and taken out of its inventory while its player's torch is off; the
+-- player's torch goes into an empty hand, and is put away and taken out again when it goes.
+--   WO144-LIGHT avatar id=<n> took <class> (<kind>) out -- <why>
+if KCD2MP.w144.dress == nil then KCD2MP.w144.dress = true end
+if KCD2MP.w144.lights == nil then KCD2MP.w144.lights = true end
+KCD2MP.w144.LIGHTS = {
+    ["4cea28a0-0814-405a-bf24-4fd711f7eb63"] = "torch",   -- torch_weapon (the player's torch)
+    ["cfec1446-ce8d-4c9c-aa9a-56fc8b10bc0e"] = "torch",   -- the other torch weapon
+    ["e95bb3ae-38ce-41fd-948a-e471673b47e5"] = "torch",   -- torch_tool (an NPC's)
+    ["bdf14d9c-7264-434c-96af-748ff2779c1b"] = "lamp",    -- lamp_tool
+    ["d1a6946e-4184-42b7-bc15-1172e0c7de93"] = "lamp",    -- lamp_toolFancy
+}
+KCD2MP.w144.lightStats = KCD2MP.w144.lightStats or { took = 0, holstered = 0, dressed = 0, made = 0, dressFail = 0 }
+KCD2MP.w144.lightLogged = KCD2MP.w144.lightLogged or {}
+
+function KCD2MP_W144Equip(name, cls)
+    local w = KCD2MP.w144
+    name, cls = tostring(name), tostring(cls)
+    local e = System.GetEntityByName(name)
+    if not (e and e.inventory and e.actor) then mp_log("WO144-DRESS " .. name .. " " .. cls .. " -- no avatar"); return false end
+    if w.lights and w.LIGHTS[cls] then return false end   -- a light is the torch sync's, never an outfit piece
+    local it, how = nil, "own"
+    pcall(function() it = e.inventory:FindItem(cls) end)
+    if not it then
+        pcall(function() e.inventory:CreateItem(cls, 1, 1) end)
+        pcall(function() it = e.inventory:FindItem(cls) end)
+        how = "made"
+        if it then w.lightStats.made = w.lightStats.made + 1 end
+    end
+    if not it then
+        w.lightStats.dressFail = w.lightStats.dressFail + 1
+        mp_log(string.format("WO144-DRESS %s %s -> no item (CreateItem made nothing)", name, cls))
+        return false
+    end
+    local ok = pcall(function() e.actor:EquipInventoryItem(it) end)
+    if ok then w.lightStats.dressed = w.lightStats.dressed + 1 else w.lightStats.dressFail = w.lightStats.dressFail + 1 end
+    mp_log(string.format("WO144-DRESS %s %s -> %s (%s) ok=%s", name, cls, tostring(it), how, tostring(ok)))
+    return ok
+end
+
+-- The agent asks which soul is the live avatar's: its entity GUID's four 16-bit parts, as the last
+-- 8 bytes of the soul's key read them (little-endian, observed: b659fc773649cb90 for value0..3 =
+-- 0x59B6 0x77FC 0x4936 0x90CB). A saved soul of the same name answers SoulsByName instead.
+--   -> w144_avatar <id> <16 hex>
+function KCD2MP_W144AvatarKey(id)
+    id = tostring(id)
+    local g = KCD2MP.ghosts and KCD2MP.ghosts[id]
+    local e = g and g.entity
+    if not e then return false end
+    local guid = nil
+    pcall(function() guid = e:GetGUID() end)
+    if type(guid) ~= "table" then return false end
+    local function le(v) v = tonumber(v) or 0; return string.format("%02x%02x", v % 256, math.floor(v / 256) % 256) end
+    KCD2MP_EmitEvent("w144_avatar", id .. " " .. le(guid.value0) .. le(guid.value1) .. le(guid.value2) .. le(guid.value3))
+    return true
+end
+
+function KCD2MP_W144LightTick()
+    local w = KCD2MP.w144
+    if not w.lights then return end
+    local now = os.clock()
+    if w.lightNext and now < w.lightNext then return end
+    w.lightNext = now + 2.0
+    for id, g in pairs(KCD2MP.ghosts or {}) do
+        local e = g and g.entity
+        if e and e.inventory and e.human then
+            id = tostring(id)
+            local torchOut = KCD2MP.w136.avatarTorch[id] == true
+            local held = {}
+            for h = 0, 1 do
+                local cls = KCD2MP.w136.handClass(e, h)
+                local kind = cls and w.LIGHTS[cls]
+                if kind and not (torchOut and kind == "torch") then
+                    pcall(function() e.human:HolsterToInventory(h, false) end)   -- put away, never dropped
+                    w.lightStats.holstered = w.lightStats.holstered + 1
+                    local still = KCD2MP.w136.handClass(e, h)
+                    if still == cls then held[cls] = true end                   -- taken out on a later tick
+                end
+            end
+            local t = nil
+            pcall(function() t = e.inventory:GetInventoryTable() end)
+            for i = 1, #(t or {}) do
+                local item = nil
+                pcall(function() item = ItemManager.GetItem(t[i]) end)
+                local cls = item and tostring(item.class)
+                local kind = cls and w.LIGHTS[cls]
+                if kind and not held[cls] and not (torchOut and kind == "torch") then
+                    if pcall(function() e.inventory:DeleteItem(t[i], -1) end) then
+                        w.lightStats.took = w.lightStats.took + 1
+                        local key = id .. " " .. cls
+                        if not w.lightLogged[key] then
+                            w.lightLogged[key] = true
+                            mp_log(string.format("WO144-LIGHT avatar id=%s took %s (%s) out -- %s", id, cls, kind,
+                                kind == "lamp" and "the NPC soul's own lamp (its night behaviour draws it)" or "its player's torch is not out"))
+                        end
+                    end
+                end
+            end
+        end
+    end
+end
+
+-- WO-144 5: "random NPCs floating in the sky" (the maintainer, no log line yet). Every 5 s, each
+-- copy the host streams (a puppet) is checked against the terrain under it; one far above it is
+-- logged -- once per copy per 2 minutes -- with what the stream holds it at. A log line, not a
+-- fix: upper floors and castle walls are above the terrain too, so the line says how far.
+--   WO144-FLOAT npc=<name> z=<z> ground=<g> above_m=<d> target_z=<tz> -- held far above the ground
+KCD2MP.w144.floatTold = KCD2MP.w144.floatTold or {}
+function KCD2MP_W144FloatTick()
+    local w = KCD2MP.w144
+    local now = os.clock()
+    if w.floatNext and now < w.floatNext then return end
+    w.floatNext = now + 5.0
+    for name, p in pairs(KCD2MP.npcPuppets or {}) do
+        local e = nil
+        pcall(function() e = System.GetEntityByName(name) end)
+        local pos = nil
+        if e then pcall(function() pos = e:GetWorldPos() end) end
+        if pos then
+            local g = nil
+            pcall(function() g = System.GetTerrainElevation(pos) end)
+            local above = g and (pos.z - g) or 0
+            if g and above > 12.0 and (not w.floatTold[name] or now - w.floatTold[name] > 120) then
+                w.floatTold[name] = now
+                mp_log(string.format("WO144-FLOAT npc=%s z=%.1f ground=%.1f above_m=%.1f target_z=%s -- held far above the ground",
+                    name, pos.z, g, above, p and p.tz and string.format("%.1f", p.tz) or "?"))
+            end
+        end
+    end
+end
+
+-- WO-144 2.3: a horse or an animal the host streams is often HIDDEN here -- a stabled horse, an
+-- animal the joiner's world keeps out of sight (observed: ttac_horse_1 bound and written, but
+-- hidden=true active=false: nothing on the joiner's screen). The host's copy is in use, so the
+-- joiner's is shown (Hide(0), Activate(1): observed visible, and it stays). A copy with NO physics
+-- (a parked encounter: dummyWanderer horses, a spawner's wild dogs) is re-hidden by the game and
+-- cannot be bound: left as it is (the field's 'not-living ... no physics' binds).
+--   WO144-SHOW <name> (<class>) was hidden here -- shown: the host's copy is in use
+KCD2MP.w144.beastClasses = { Horse = true, Wolf = true, Dog = true, Boar = true, WildBoar = true, WildDog = true, Deer = true, RoeDeerHind = true, RoeDeerBuck = true }
+if KCD2MP.w144.showAnimals == nil then KCD2MP.w144.showAnimals = true end
+KCD2MP.w144.shown = KCD2MP.w144.shown or {}
+function KCD2MP_W144ShowCopy(name)
+    local w = KCD2MP.w144
+    if not w.showAnimals then return false end
+    local e = nil
+    pcall(function() e = System.GetEntityByName(tostring(name)) end)
+    if not e then return false end
+    local cls = tostring(e.class or "")
+    if not w.beastClasses[cls] then return false end
+    local hidden = false
+    pcall(function() hidden = e:IsHidden() == true end)
+    if not hidden then return false end
+    local ph = nil
+    pcall(function() ph = e:GetPhysicalStats() end)
+    if not (ph and ph.mass) then return false end   -- a parked encounter with no physics: left alone
+    pcall(function() e:Hide(0) end)
+    pcall(function() e:Activate(1) end)
+    if not w.shown[name] then
+        w.shown[name] = true
+        mp_log(string.format("WO144-SHOW %s (%s) was hidden here -- shown: the host's copy is in use", tostring(name), cls))
+    end
+    return true
+end
+function KCD2MP_SetShowAnimals(arg)
+    local v = KCD2MP_Wo122ParseBool(arg)
+    if v == "bad" then mp_log("mp_show_animals: expected on|off, got '" .. tostring(arg) .. "'"); return false end
+    if v ~= nil then KCD2MP.w144.showAnimals = v end
+    mp_log("WO144-SWITCH mp_show_animals " .. (KCD2MP.w144.showAnimals and "on -- a horse or animal the host streams is shown here even where this world keeps it hidden" or "off -- copies stay as this world has them (0.42.0)"))
+    return true
+end
+
+-- mp_avatar_dress on|off, mp_avatar_lights on|off (default on both).
+function KCD2MP_W144Set(key, arg)
+    local w = KCD2MP.w144
+    local v = KCD2MP_Wo122ParseBool(arg)
+    local cmd = key == "dress" and "mp_avatar_dress" or "mp_avatar_lights"
+    if v == "bad" then mp_log(cmd .. ": expected on|off, got '" .. tostring(arg) .. "'"); return false end
+    if v ~= nil then w[key] = v end
+    mp_log(string.format("WO144-SWITCH %s %s -- %s", cmd, w[key] and "on" or "off",
+        key == "dress" and (w[key] and "avatars wear pieces from their own inventory" or "avatars are dressed through REST EquipItem (0.42.0)")
+                        or (w[key] and "an avatar holds a light only while its player does" or "avatars keep their own lights (0.42.0)")))
+    KCD2MP_EmitEvent("w144", key .. " " .. (w[key] and "on" or "off"))
+    return true
+end
+function KCD2MP_SetAvatarDress(arg) return KCD2MP_W144Set("dress", arg) end
+function KCD2MP_SetAvatarLights(arg) return KCD2MP_W144Set("lights", arg) end
+
+-- The agent asks every few seconds (a switch typed before it connected still counts).
+function KCD2MP_W144Sync(dress, lights)
+    local w = KCD2MP.w144
+    if dress ~= w.dress then KCD2MP_EmitEvent("w144", "dress " .. (w.dress and "on" or "off")) end
+    if lights ~= w.lights then KCD2MP_EmitEvent("w144", "lights " .. (w.lights and "on" or "off")) end
+end
+
 -- Host: the dialogue edge (one of the pause reasons the agent announces).
 function KCD2MP_W138DialogTick()
     local inDialog = false
@@ -18401,6 +18752,9 @@ local ok, err = pcall(function()
     System.AddCCommand("mp_oneshots", 'KCD2MP_SetOneShots(%line)', "WO-143: NPCs' one-shots (serving, drinking, a dog's howl) show on the other screen (default on): mp_oneshots on|off")
     System.AddCCommand("mp_player_minigames", 'KCD2MP_SetPlayerMinigames(%line)', "WO-143: the partner's grindstone, smithing, alchemy, reading and dice show on his avatar (default on): mp_player_minigames on|off")
     System.AddCCommand("mp_idles", 'KCD2MP_SetIdles(%line)', "WO-143: standing NPCs look at who they look at on the host's screen (default on): mp_idles on|off")
+    System.AddCCommand("mp_avatar_dress", 'KCD2MP_SetAvatarDress(%line)', "WO-144: a partner's avatar wears pieces from its own inventory, equipped through the actor (default on; off = 0.42.0's REST EquipItem): mp_avatar_dress on|off")
+    System.AddCCommand("mp_show_animals", 'KCD2MP_SetShowAnimals(%line)', "WO-144: a horse or animal the host streams is shown here even where this world keeps it hidden (default on): mp_show_animals on|off")
+    System.AddCCommand("mp_avatar_lights", 'KCD2MP_SetAvatarLights(%line)', "WO-144: a partner's avatar holds a light only while its player does -- its own NPC lamps and torches are taken out (default on): mp_avatar_lights on|off")
     System.AddCCommand("mp_activity2_status", "KCD2MP_W143Status()", "WO-143: hands, gaits, one-shots, minigames, looks (WO143-STATUS here, MP-W143 stats and the DLL's line in agent.log)")
     System.AddCCommand("mp_sleep_status", "KCD2MP_W140Status()", "WO-140: sleeping together -- the bed hold, the prompt, the own-world line (WO140-STATUS here, MP-WO140-STATS and WO140-NATIVE in agent.log)")
     System.AddCCommand("mp_crime_shared", 'KCD2MP_SetCrimeShared(%line)', "WO-139: the joiner's crimes are crimes in the host's world (never the host's), guards deal with him; the host's value is the session's (default on): mp_crime_shared on|off")

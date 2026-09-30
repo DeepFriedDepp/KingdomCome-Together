@@ -191,7 +191,7 @@ public partial class GameBridge
         // synthetic host). The next tick after "Gameplay started" announces the loaded world.
         if (_hostLoadAnnounced) return;
         bool resendAll = (DateTime.UtcNow - _modeBroadcastUtc).TotalSeconds >= 30;
-        var peers = _peerLastSeenUtc.Keys.Concat(_ghostNames.Keys).Distinct().ToList();
+        var peers = LivePartners();   // WO-144: the relay's connections, never a stale name
         foreach (byte g in peers)
         {
             if (!resendAll && _modeTold.TryGetValue(g, out bool told) && told == _sharedWorld) continue;
@@ -649,13 +649,15 @@ public partial class GameBridge
             return;
         }
 
-        // 3. the Henry is the spliced one
+        // 3. the Henry is the spliced one. WO-144 1.4: money decides; items that differ (or a
+        // tutorial-era file that keeps no item list) are a warning, not an abort -- a tutorial join
+        // was sent home ~1 s after its load over an item count the file could not state.
         string henry = await AskModAsync("KCD2MP_Wo124Henry", 8000);
-        var (hOk, hWhy) = CompareHenry(j.Henry!, henry);
-        Console.WriteLine($"MP-JOIN joiner: join 0x{j.JoinId:x8} step 3 Henry check: {(hOk ? "MATCH" : "MISMATCH")} -- {hWhy}");
-        if (!hOk)
+        var (hv, hWhy) = JudgeHenry(j.Henry!, henry);
+        Console.WriteLine($"MP-JOIN joiner: join 0x{j.JoinId:x8} step 3 Henry check: {hv switch { HenryVerdict.Match => "MATCH", HenryVerdict.Warning => "WARNING (joined anyway)", _ => "MISMATCH" }} -- {hWhy}");
+        if (hv == HenryVerdict.Mismatch)
         {
-            await LeaveAfterFailedJoinAsync(j, Protocol.JoinAbortHenryMismatch, "henry-mismatch", "Your character did not arrive as expected.");
+            await LeaveAfterFailedJoinAsync(j, Protocol.JoinAbortHenryMismatch, "henry-mismatch", HenryAbortText(hWhy));
             return;
         }
 
@@ -682,6 +684,36 @@ public partial class GameBridge
     }
 
     private static double Dist(float[] a, float[] b) => Math.Sqrt((a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1]) + (a[2] - b[2]) * (a[2] - b[2]));
+
+    public enum HenryVerdict { Match, Warning, Mismatch }
+
+    /// <summary>
+    /// WO-144 1.4: the join's verdict on the live Henry. The live read incomplete, or money that
+    /// differs, is a mismatch (the join is left, with a plain line saying why). Items that differ
+    /// with the money matching, or a file with no item list to compare (a tutorial-era Henry,
+    /// WO-132), is a warning: the join goes on.
+    /// </summary>
+    public static (HenryVerdict Verdict, string Why) JudgeHenry(WhsSave.PlayerSoul file, string live)
+    {
+        var (ok, why) = CompareHenry(file, live);
+        if (ok) return (HenryVerdict.Match, why);
+        if (why.StartsWith("the live read is incomplete", StringComparison.Ordinal)) return (HenryVerdict.Mismatch, why);
+        // no item list at all: neither money nor items are in the file to compare
+        if (!file.HasItemList) return (HenryVerdict.Warning, why + "; the file keeps no item list: money and items not compared");
+        var m = Regex.Match(why, @"^money file=(-?\d+) live=(-?\d+)");
+        if (!m.Success || m.Groups[1].Value != m.Groups[2].Value) return (HenryVerdict.Mismatch, why);
+        // a tutorial-era Henry (the field's "0 vs 11"): the file lists his money and nothing else
+        bool onlyMoney = file.Inventory.All(i => i.Class == MoneyClass || i.Class == KeyringClass);
+        return (HenryVerdict.Warning, why + (onlyMoney
+            ? "; the file lists only his money (a tutorial-era Henry): items not compared"
+            : "; the money matches: items that differ are only a warning"));
+    }
+
+    /// <summary>WO-144 1.4: what the player reads when the Henry check sends him home.</summary>
+    public static string HenryAbortText(string why) =>
+        why.StartsWith("the live read is incomplete", StringComparison.Ordinal)
+            ? "Your character could not be read after loading your host's world."
+            : "Your character arrived in your host's world with different money than you have.";
 
     public const string MoneyClass = "5ef63059-322e-4e1b-abe8-926e100c770e";
     public const string KeyringClass = "b54eaa25-f0e9-425b-8b29-1fb14a71de56";
@@ -824,6 +856,7 @@ public partial class GameBridge
         _rewinding = false;
         _rejoinPending = false;
         await Wo122SetLockAsync(false, "left-shared-world");
+        Wo144ReleaseClock("left-shared-world");   // WO-144 3.3: a clock standing with the host's never stays standing
         string full = src is null ? message : $"{message} Going back to your own game.";
         SetJoinUi("left", full);
         Console.WriteLine($"MP-JOIN joiner: leaving the host's world ({why}) -> {(src is null ? "no own save (" + ownWhy + "): back to the main menu" : "loading " + src.Display)}");

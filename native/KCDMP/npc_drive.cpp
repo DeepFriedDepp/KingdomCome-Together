@@ -1,4 +1,5 @@
 #include "npc_drive.h"
+#include "npc_scan.h"   // WO-144 2.3: body_kind (a horse or an animal is entity-written)
 #include "anchors.h"
 #include "engine.h"
 #include "log.h"
@@ -270,6 +271,7 @@ struct Puppet {
     uint64_t writes = 0;
     uint32_t frameNo = 0;
     double   livingCheckAt = 0;     // WO-131 2b: when the body's physics was last checked for a ragdoll
+    bool     beast = false;         // WO-144 2.3: a horse or an encounter animal whose physics is not a living entity
     // MP-NPCPULL window
     double   winStart = 0;
     uint32_t winFrames = 0, winMoved = 0, winFlyChecks = 0, winFlying = 0, cosN = 0, winLag = 0;
@@ -841,7 +843,16 @@ uint8_t bind_main(const BindRequest& req) {
     if (!get_parent(e, &parent)) return refuse(kFault, "GetParent faulted");
     if (parent) return refuse(kParented, "");
     void* phys = get_physics(e);
-    if (!phys || !is_a(phys, g_vftLiving)) return refuse(kNotLiving, phys ? "physics is not a living entity" : "no physics");
+    // WO-144 2.3: a horse (or an encounter animal) is written through its entity like any body -- the field's
+    // "bind <horse> refused: not-living" left the host's own horse and every rider's to the Lua writer
+    // (the rider stood upright on the ground with no horse). A human whose physics is not living is a
+    // ragdoll and is still refused (WO-131 2b: Lua stands it up first).
+    bool beast = false;
+    if (!phys || !is_a(phys, g_vftLiving)) {
+        const int kind = npcscan::body_kind(e);
+        if (!phys || (kind != 1 && kind != 2)) return refuse(kNotLiving, phys ? "physics is not a living entity" : "no physics");
+        beast = true;
+    }
     if (g_bound.find(key) == g_bound.end() && g_bound.size() >= kMaxBound) return refuse(kTableFull, "");
 
     const double now = now_s();
@@ -849,6 +860,7 @@ uint8_t bind_main(const BindRequest& req) {
     const bool rebind = p.eid != 0;
     p = Puppet{};
     p.key = key; p.name = req.name; p.eid = req.eid; p.ent = e; p.wuid = nativeWuid ? nativeWuid : req.wuid;
+    p.beast = beast;
     std::memcpy(p.anchor, req.anchor, sizeof(p.anchor));
     p.delay = (req.delayMs >= 20 && req.delayMs <= 2000) ? req.delayMs / 1000.0 : 0.12;
     p.winStart = now;
@@ -863,8 +875,8 @@ uint8_t bind_main(const BindRequest& req) {
     }
     p.blendPending = true;   // the first write starts from the body, not from the stream (blend_start)
     g_statBound.store(static_cast<uint16_t>(g_bound.size()));
-    logf("MP-NPCBIND npc=%s result=ok%s eid=0x%X wuid=%016llX lua_wuid=%016llX anchor=(%.2f,%.2f,%.2f) delay_ms=%u jitter_allow_ms=%.0f bound=%zu",
-         req.name, rebind ? " rebind=1" : "", req.eid, static_cast<unsigned long long>(nativeWuid),
+    logf("MP-NPCBIND npc=%s result=ok%s%s eid=0x%X wuid=%016llX lua_wuid=%016llX anchor=(%.2f,%.2f,%.2f) delay_ms=%u jitter_allow_ms=%.0f bound=%zu",
+         req.name, rebind ? " rebind=1" : "", beast ? " body=horse-or-animal (entity-written)" : "", req.eid, static_cast<unsigned long long>(nativeWuid),
          static_cast<unsigned long long>(req.wuid), req.anchor[0], req.anchor[1], req.anchor[2], req.delayMs,
          p.lateApplied * 1000.0, g_bound.size());
     return kOk;
@@ -969,7 +981,7 @@ void tick() {
         if (now - p.livingCheckAt > 0.5) {
             p.livingCheckAt = now;
             PhysicsStatus ps{};
-            if (physics_status(e, &ps) && ps.present && !ps.living) {
+            if (!p.beast && physics_status(e, &ps) && ps.present && !ps.living) {   // WO-144: a horse's is never a living entity
                 auto cur = it++;
                 drop(cur, kNotLiving, true);
                 continue;

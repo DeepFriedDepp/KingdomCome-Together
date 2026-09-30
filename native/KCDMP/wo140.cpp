@@ -325,7 +325,11 @@ uint8_t handle(const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t
             void* cal = calendar();
             int64_t cur = 0;
             if (!cal || !rd(static_cast<uint8_t*>(cal) + kOffCalMs, &cur, 8)) return kRFailed;
-            const auto v = wo140rules::pull_verdict(cur, expect, target);
+            auto v = wo140rules::pull_verdict(cur, expect, target);
+            // WO-144 3.3: never mid-skip (a clock write ends a running skip, WO-140): the agent tries again
+            if (v == wo140rules::Pull::Pulled) {
+                if (void* inst = instance()) { uint32_t stt = 0; int sid = 0; float sh = 0; if (read_state(inst, &stt, &sid, &sh) && stt != 0) v = wo140rules::Pull::SkipRunning; }
+            }
             uint32_t before = static_cast<uint32_t>(cur / 1000), after = before;
             if (v == wo140rules::Pull::Pulled) {
                 const int64_t tms = static_cast<int64_t>(target) * 1000;
@@ -339,7 +343,8 @@ uint8_t handle(const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t
             std::memcpy(out + 1, &before, 4); std::memcpy(out + 5, &after, 4);
             *outLen = 9;
             logf("WO140-PULL the clock %u -> %u (target %u, the agent read %u): %s", before, after, target, expect,
-                 v == wo140rules::Pull::Pulled ? "pulled back to the host's" : v == wo140rules::Pull::NotNeeded ? "not ahead, nothing done" : "REFUSED: the calendar reads otherwise");
+                 v == wo140rules::Pull::Pulled ? "pulled back to the host's" : v == wo140rules::Pull::NotNeeded ? "not ahead, nothing done"
+                 : v == wo140rules::Pull::SkipRunning ? "waits: this game's own skip is running" : "REFUSED: the calendar went back past the agent's reading");
             return kROk;
         }
         case kOpClock: {

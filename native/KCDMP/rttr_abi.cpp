@@ -1123,6 +1123,74 @@ const void* object_vslot(void* obj, int index) {
     } __except (EXCEPTION_EXECUTE_HANDLER) { return nullptr; }
 }
 
+// WO-144 1.2 -- the host crash on an in-session reload, at the root. The theory
+// above was right after all. C_NPCFactionNode overrides SetParent (vtable slot
+// 11, RPGModule +0x443740): it takes the node out of its old parent's child
+// list (+0x1E8, a vector of weak_ptrs), stores the new parent, and puts the node
+// in the new parent's list. The base C_FactionBase::SetParent (the export, +0x43DF60)
+// only rewrites the node's parent pointer. Called on an avatar, the base left the
+// avatar in the child list of the faction it spawned into, with a parent pointer
+// that said otherwise; when the avatar's soul went (every load destroys it, a
+// removal too), the engine took it out of the list its parent pointer named --
+// not the one it was in -- and that faction kept an expired child.
+// C_Faction::IsPlayerNode (vtable slot 8, +0x439440) walks the child list and
+// calls through each entry without checking it: the next walk after the avatar
+// was gone -- a load's faction reload, or an AI relation query -- read address
+// 0. Three BugSplat minidumps show it (09-25, 09-27, and the field crash of
+// 09-29, all RPGModule+0x4394A4, all with an avatar attached).
+//
+// So the attach goes through the node's own SetParent. The slot is checked, not
+// assumed: 12 must be the exported GetParent and 13 the exported GetId (the
+// C_FactionBase layout both classes share), 11 must lie inside RPGModule and
+// must not be the base itself. Anything else refuses -- never the base call.
+// Ownership as WO-15: the callee releases the shared_ptr it is handed, so on a
+// refusal the caller keeps it and destroys it.
+struct NodeSetParent { FactionSetParent fn = nullptr; const char* why = nullptr; };
+
+NodeSetParent node_set_parent_slot(void* node) {
+    NodeSetParent r{};
+    HMODULE rpg = GetModuleHandleA("RPGModule.dll");
+    if (!rpg) { r.why = "RPGModule.dll not loaded"; return r; }
+    static void* s_base = nullptr;
+    static void* s_get_parent = nullptr;
+    static void* s_get_id = nullptr;
+    static uintptr_t s_lo = 0, s_hi = 0;
+    if (!s_get_parent) {
+        auto ex = module_exports(rpg);
+        s_base = find_export(ex, "?SetParent@C_FactionBase@rpgmodule@wh@@");
+        s_get_parent = find_export(ex, "?GetParent@C_FactionBase@rpgmodule@wh@@");
+        s_get_id = find_export(ex, "?GetId@C_FactionBase@rpgmodule@wh@@");
+        auto* base = reinterpret_cast<BYTE*>(rpg);
+        auto* dos = reinterpret_cast<IMAGE_DOS_HEADER*>(base);
+        auto* nt = reinterpret_cast<IMAGE_NT_HEADERS64*>(base + dos->e_lfanew);
+        if (dos->e_magic == IMAGE_DOS_SIGNATURE && nt->Signature == IMAGE_NT_SIGNATURE) {
+            s_lo = reinterpret_cast<uintptr_t>(base);
+            s_hi = s_lo + nt->OptionalHeader.SizeOfImage;
+        }
+    }
+    if (!s_base || !s_get_parent || !s_get_id || !s_lo) { r.why = "exports not found"; return r; }
+    const void* v11 = object_vslot(node, 11);
+    const void* v12 = object_vslot(node, 12);
+    const void* v13 = object_vslot(node, 13);
+    if (v12 != s_get_parent || v13 != s_get_id) { r.why = "vtable is not the C_FactionBase layout"; return r; }
+    auto a11 = reinterpret_cast<uintptr_t>(v11);
+    if (a11 < s_lo || a11 >= s_hi) { r.why = "slot 11 outside RPGModule"; return r; }
+    if (v11 == s_base) { r.why = "slot 11 is the base SetParent (not a node)"; return r; }
+    r.fn = reinterpret_cast<FactionSetParent>(const_cast<void*>(v11));
+    return r;
+}
+
+// True when the node's own SetParent was called (it then owns and releases `sp`).
+bool node_set_parent(void* node, const void* sp, const char* tag) {
+    NodeSetParent s = node_set_parent_slot(node);
+    if (!s.fn) {
+        logf("%s: SetParent REFUSED (%s) -- the avatar's faction is left as it is", tag, s.why);
+        return false;
+    }
+    call_set_parent(s.fn, node, sp);
+    return true;
+}
+
 } // namespace
 
 void probe_faction() {
@@ -1302,7 +1370,10 @@ void probe_faction() {
 
         logf("FACTION: calling SetParent(ghost_node=%p, donor_faction=%p) with an "
              "independently-owned copy", ghost_node, fp2);
-        call_set_parent(set_parent, ghost_node, parent_v2.data);
+        if (!node_set_parent(ghost_node, parent_v2.data, "FACTION")) {   // WO-144: the node's own SetParent
+            call_variant_dtor(api.variant_dtor, &parent_v2);
+            return;
+        }
         logf("FACTION: SetParent returned -- parent_v2 is now SetParent's to have "
              "destroyed, not ours; not calling variant_dtor on it");
 
@@ -1399,7 +1470,10 @@ void probe_faction() {
             return;
         }
         logf("FACTION: calling SetParent(ghost_node, faction) with an independently-owned copy");
-        call_set_parent(set_parent, ghost_node, fac_v2.data);
+        if (!node_set_parent(ghost_node, fac_v2.data, "FACTION")) {   // WO-144: the node's own SetParent
+            call_variant_dtor(api.variant_dtor, &fac_v2);
+            return;
+        }
         logf("FACTION: SetParent returned -- fac_v2 is SetParent's to have destroyed, not ours; "
              "verify ghost FactionNode/Parent/Name over HTTP, repeatedly, over an extended window");
     } else {
@@ -1476,7 +1550,7 @@ bool set_ghost_faction_hostile(const unsigned char ghost_guid[16], bool hostile)
         // uses, before trusting it beyond this session.
         unsigned char zero_sp[16] = {0};
         logf("AGGRO: detaching ghost from hostile faction");
-        call_set_parent(set_parent, ghost_node, zero_sp);
+        if (!node_set_parent(ghost_node, zero_sp, "AGGRO")) return false;   // WO-144: the node's own SetParent (a null arg owns nothing)
 
         Variant after_v{};
         if (call_get_property_value(api.get_property_value, &t_npcf, &after_v, &par, ginst.bytes)) {
@@ -1515,7 +1589,10 @@ bool set_ghost_faction_hostile(const unsigned char ghost_guid[16], bool hostile)
     }
 
     logf("AGGRO: attaching ghost to hostile faction %p", fp);
-    call_set_parent(set_parent, ghost_node, parent_v2.data);
+    if (!node_set_parent(ghost_node, parent_v2.data, "AGGRO")) {   // WO-144: the node's own SetParent, never the base
+        call_variant_dtor(api.variant_dtor, &parent_v2);
+        return false;
+    }
     // parent_v2 is now SetParent's to have destroyed, not ours -- do not
     // call variant_dtor on it (the exact WO-15 ownership fix, reapplied).
 
@@ -1577,7 +1654,12 @@ bool set_ghost_faction_player(const unsigned char ghost_guid[16]) {
         call_variant_dtor(api.variant_dtor, &parent_v);
         return false;
     }
-    call_set_parent(set_parent, ghost_node, parent_v.data);   // ownership passes to SetParent (WO-15)
+    // WO-144: the node's own SetParent (the base one left the avatar in its spawn faction's child
+    // list -- the reload crash); ownership passes to it (WO-15), kept here on a refusal.
+    if (!node_set_parent(ghost_node, parent_v.data, "WO131-FACTION")) {
+        call_variant_dtor(api.variant_dtor, &parent_v);
+        return false;
+    }
     Variant after_v{};
     void* after_fp = nullptr;
     if (call_get_property_value(api.get_property_value, &t_npcf, &after_v, &par, ginst.bytes)) {

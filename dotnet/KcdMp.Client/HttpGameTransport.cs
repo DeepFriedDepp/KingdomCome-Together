@@ -337,6 +337,53 @@ public sealed partial class HttpGameTransport(string gameApiBase, int timeoutMs 
     }
 
     // -------------------------------------------------------------------------
+    // WO-144 2.1: a live avatar's own soul
+    // -------------------------------------------------------------------------
+
+    /// <summary>
+    /// WO-144 2.1: the soul a REST call about an avatar goes to. The game's SoulsByName holds ONE soul
+    /// per name, the first registered: a world saved while a partner was connected carries that
+    /// avatar's soul (kcd2mp_N) in its soul list, and after a load SoulsByName/kcd2mp_N is that saved
+    /// soul -- not the live avatar (observed on a joiner: a second kcd2mp_0 at another place, in a
+    /// villager's preset). 0.42.0 dressed and read that soul: the partner stood there naked while the
+    /// agent's read-back said everything was worn. The bridge maps an avatar to its live soul's key
+    /// (SoulsByGuid) once it has found it; unmapped names keep SoulsByName.
+    /// </summary>
+    public System.Collections.Concurrent.ConcurrentDictionary<string, Guid> LiveSouls { get; } = new(StringComparer.Ordinal);
+
+    private string SoulPath(string soulName) =>
+        LiveSouls.TryGetValue(soulName, out var g) ? $"SoulsByGuid/{g}" : $"SoulsByName/{Uri.EscapeDataString(soulName)}";
+
+    /// <summary>Every soul key (SoulsByGuid, keys only: ~100 KB), or null when the read failed.</summary>
+    public async Task<List<Guid>?> ReadSoulKeysAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(TimeSpan.FromSeconds(10));
+            var xml = await new HttpClient { Timeout = TimeSpan.FromSeconds(10) }.GetStringAsync($"{gameApiBase}/api/rpg/SoulList/SoulsByGuid?depth=1", cts.Token);
+            var keys = new List<Guid>();
+            foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(xml, "Key=\"([0-9a-fA-F-]{36})\""))
+                if (Guid.TryParse(m.Groups[1].Value, out var g)) keys.Add(g);
+            return keys;
+        }
+        catch { return null; }
+    }
+
+    /// <summary>A soul's Name and Position by its key (null when the read failed).</summary>
+    public async Task<(string Name, string Position)?> ReadSoulNameAtAsync(Guid key, CancellationToken ct = default)
+    {
+        try
+        {
+            var xml = await _http.GetStringAsync($"{gameApiBase}/api/rpg/SoulList/SoulsByGuid/{key}?depth=1&exclude=DerivedStatsByName,Buffs,Roles,StaticData,PersistentData,Archetype,Inventory,CombatSoul,CompanionManager,EquipmentManager,FactionNode,SoulClass,SocialClass,StormDebug", ct);
+            var n = System.Text.RegularExpressions.Regex.Match(xml, "Name=\"([^\"]*)\"");
+            var p = System.Text.RegularExpressions.Regex.Match(xml, "Position=\"([^\"]*)\"");
+            return (n.Success ? n.Groups[1].Value : "", p.Success ? p.Groups[1].Value : "");
+        }
+        catch { return null; }
+    }
+
+    // -------------------------------------------------------------------------
     // Appearance (WO-9)
     // -------------------------------------------------------------------------
 
@@ -379,9 +426,9 @@ public sealed partial class HttpGameTransport(string gameApiBase, int timeoutMs 
     {
         string soul = Uri.EscapeDataString(ghostSoulName);
         var armor = await ReadItemClassMapAsync(
-            $"{gameApiBase}/api/rpg/SoulList/SoulsByName/{soul}/EquipmentManager/EquippedArmorsByClassId?depth=1", ct);
+            $"{gameApiBase}/api/rpg/SoulList/{SoulPath(ghostSoulName)}/EquipmentManager/EquippedArmorsByClassId?depth=1", ct);
         var weapons = await ReadItemClassMapAsync(
-            $"{gameApiBase}/api/rpg/SoulList/SoulsByName/{soul}/EquipmentManager/EquippedWeaponsByClassId?depth=1", ct);
+            $"{gameApiBase}/api/rpg/SoulList/{SoulPath(ghostSoulName)}/EquipmentManager/EquippedWeaponsByClassId?depth=1", ct);
         // WO-59: same null discipline as the player read above. The verify
         // path used to take a timed-out read for "nothing is equipped" and
         // mass-blacklist a whole batch of perfectly equippable items.
@@ -411,19 +458,19 @@ public sealed partial class HttpGameTransport(string gameApiBase, int timeoutMs 
             // and the only verification that matters is the equip that
             // follows actually taking effect.
             await _http.GetStringAsync(
-                $"{gameApiBase}/api/rpg/SoulList/SoulsByName/{soul}/Inventory/CreateItems" +
+                $"{gameApiBase}/api/rpg/SoulList/{SoulPath(ghostSoulName)}/Inventory/CreateItems" +
                 $"?ItemClass={cls}&Amount=1&ShowUINotification=false", ct);
         }
 
         await _http.GetStringAsync(
-            $"{gameApiBase}/api/rpg/SoulList/SoulsByName/{soul}/EquipmentManager/EquipItem?itemClassId={cls}", ct);
+            $"{gameApiBase}/api/rpg/SoulList/{SoulPath(ghostSoulName)}/EquipmentManager/EquipItem?itemClassId={cls}", ct);
     }
 
     public async Task UnequipItemOnGhostAsync(string ghostSoulName, Guid itemClass, CancellationToken ct = default)
     {
         string soul = Uri.EscapeDataString(ghostSoulName);
         await _http.GetStringAsync(
-            $"{gameApiBase}/api/rpg/SoulList/SoulsByName/{soul}/EquipmentManager/UnequipItem?itemClassId={itemClass}", ct);
+            $"{gameApiBase}/api/rpg/SoulList/{SoulPath(ghostSoulName)}/EquipmentManager/UnequipItem?itemClassId={itemClass}", ct);
     }
 
     /// <summary>
@@ -441,7 +488,7 @@ public sealed partial class HttpGameTransport(string gameApiBase, int timeoutMs 
         try
         {
             var xml = await _http.GetStringAsync(
-                $"{gameApiBase}/api/rpg/SoulList/SoulsByName/{soul}?depth=1&exclude=" +
+                $"{gameApiBase}/api/rpg/SoulList/{SoulPath(ghostSoulName)}?depth=1&exclude=" +
                 "DerivedStatsByName,Buffs,Roles,StaticData,PersistentData,Archetype,Inventory," +
                 "CombatSoul,CompanionManager,EquipmentManager,FactionNode,SoulClass,SocialClass,StormDebug", ct);
             var m = SoulGuidRegex().Match(xml);

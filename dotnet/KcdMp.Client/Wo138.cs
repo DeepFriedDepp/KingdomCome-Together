@@ -45,6 +45,7 @@ public static class Wo138Codec
     public const byte ReasonLoad      = 0x10;   // a save is loading
     public const byte ReasonSkipTime  = 0x20;   // sleep / wait / fast travel
     public const byte ReasonFrozen    = 0x40;   // the DLL's meter: this world does not run (whatever the cause)
+    public const byte ReasonClock     = 0x80;   // WO-144 3.3: this world's clock stands (Calendar.IsWorldTimePaused): a joiner's stands with it
 
     public static byte Reasons(bool menu, bool inventory, bool dialogue, bool cutscene, bool loading, bool skipTime, bool frozen) =>
         (byte)((menu ? ReasonMenu : 0) | (inventory ? ReasonInventory : 0) | (dialogue ? ReasonDialogue : 0) |
@@ -62,6 +63,7 @@ public static class Wo138Codec
         if ((r & ReasonLoad) != 0) p.Add("load");
         if ((r & ReasonSkipTime) != 0) p.Add("skip-time");
         if ((r & ReasonFrozen) != 0) p.Add("frozen");
+        if ((r & ReasonClock) != 0) p.Add("clock");
         return string.Join("+", p);
     }
 

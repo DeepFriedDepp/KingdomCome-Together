@@ -283,6 +283,23 @@ bool scan(const Anchor* anchors, int anchorCount, float radius, ScanResult* out)
     return true;
 }
 
+int body_kind(void* entity) {
+    if (!entity) return -1;
+    if (!g_classesResolved) {
+        HMODULE scriptSysMod = GetModuleHandleA("CryScriptSystem.dll");
+        void* gEnvPtr = nullptr; void* entitySystem = nullptr;
+        if (!scriptSysMod || !read_ptr(reinterpret_cast<const char*>(scriptSysMod) + kRvaCryScriptSystemGEnvPtr, 0, &gEnvPtr) || !gEnvPtr ||
+            !read_ptr(gEnvPtr, kOffGEnvEntitySystem, &entitySystem) || !entitySystem || !resolve_classes(entitySystem))
+            return -1;
+    }
+    void* cls = nullptr;
+    if (!call_vtbl(kVtblEntityGetClass, entity, &cls) || !cls) return -1;
+    if (cls == g_classNpc || cls == g_classNpcFemale) return 0;
+    if (cls == g_classHorse) return 1;
+    if (is_animal_class(cls)) return 2;
+    return -1;
+}
+
 bool for_each_in_radius(const Anchor* anchors, int anchorCount, float radius, Visit visit, void* ctx,
                         uint32_t* walked, uint8_t* refuse) {
     *walked = 0; *refuse = kOk;

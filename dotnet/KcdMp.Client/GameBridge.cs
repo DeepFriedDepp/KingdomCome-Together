@@ -158,7 +158,9 @@ public partial class GameBridge(ClientConfig config)
     public DiceClient? Dice { get; private set; }
 
     // ghostId → display name, from Name packets. Lets an invite prompt say who
-    // is asking instead of showing a bare relay id.
+    // is asking instead of showing a bare relay id. WO-144: removed at the
+    // relay's Disconnect (it never was -- the phantom partner); who is
+    // connected is _livePeers (GameBridge.Wo144.cs), not this.
     private readonly ConcurrentDictionary<byte, string> _ghostNames = new();
 
     // ghostId → CryEngine entity id, from the mod's spawn-time "ghostid"
@@ -840,6 +842,9 @@ public partial class GameBridge(ClientConfig config)
         if (!acts)
         {
             Console.WriteLine($"MP-CUTSCENE side=local state={(active ? "start" : "end")} type={type} name={name} peers={(peers.Length == 0 ? "-" : peers)} acted=0");
+            // WO-144 3.2: the dice game's own fader (dice_preMinigameFader): a minigame follows the conversation
+            if (active && type == "Fader" && name.Contains("minigame", StringComparison.OrdinalIgnoreCase))
+                _ = ExecLuaAsync($"if KCD2MP_W137MinigameAhead then KCD2MP_W137MinigameAhead(\"{EscapeLua(name)}\") end");
             return;
         }
         _localCutsceneActive = active;
@@ -1452,6 +1457,7 @@ public partial class GameBridge(ClientConfig config)
         // _aggroEnabled itself is a deliberate local user setting and
         // deliberately survives a reconnect.
         _ghostSoulGuidCache.Clear();
+        Wo144ForgetLiveSouls();   // WO-144 2.1
         _ghostHostileUntilUtc.Clear();
         _localAutoPaused = false;
         _localManualPaused = false;
@@ -1712,7 +1718,7 @@ public partial class GameBridge(ClientConfig config)
             // aggro is disabled.
             if (_aggroEnabled)
             {
-                foreach (var ghostId in _ghostNames.Keys)
+                foreach (var ghostId in LivePartners())   // WO-144
                     _ = TriggerReactiveAggroAsync(ghostId, cts.Token);
             }
         };
@@ -1771,6 +1777,7 @@ public partial class GameBridge(ClientConfig config)
         _sendNpcState = (npc, x, y, z, rot, hp, flags) => SendNpcStateAsync(stream, npc, x, y, z, rot, hp, flags, cts.Token);
         _sendNpcDrag = (npc, x, y, z, rot, hp, flags) => SendNpcStateAsync(stream, npc, x, y, z, rot, hp, flags, cts.Token, asClaim: true);
         _resyncStream = stream;   // WO-102 Phase 6
+        _w144ConnectedUtc = DateTime.UtcNow;   // WO-144 5: a non-hosting agent's claim waits for the host's word
         _sendNpcDeath = npc => SendNpcDamageAsync(stream, npc, 0f, 0f, suppressHitReaction: true, fatal: true);
         _sendHorseInfo = horseName => SendHorseInfoAsync(stream, horseName, cts.Token);
         _sendCombatEvent = (evt, sid) => SendCombatEventAsync(stream, evt, sid, cts.Token);
@@ -1838,6 +1845,7 @@ public partial class GameBridge(ClientConfig config)
             tailForPause.LoadStarted += Wo123OnLoadStarted;          // WO-123: joins defer through a load
             tailForPause.GameplayStarted += Wo124OnGameplayStarted;  // WO-124: the joiner's load finished
             tailForPause.QuestLine += Wo137OnQuestLine;              // WO-137: dialogue lines (talking), player switches
+            tailForPause.Wo144Line += Wo144OnEngineLine;             // WO-144: the engine's own reasons (refusals, dropped talks, scenes)
             tailForPause.LoadStarted += Wo124OnLoadStarted;          // WO-124
             tailForPause.GameQuit += Wo124OnGameQuit;                // WO-124: quitting from the host's world
             tailForPause.SaveLoadAccepted += Wo124OnSaveLoadAccepted;   // WO-124
@@ -1853,6 +1861,7 @@ public partial class GameBridge(ClientConfig config)
         var receiveTask     = ReceiveLoopAsync(stream, cts.Token);
         var pingTask        = PingLoopAsync(stream, cts.Token);
         var appearanceTask  = AppearanceLoopAsync(stream, cts.Token);
+        var outfitWatchTask = Wo144OutfitWatchAsync(cts.Token);   // WO-144 2.1: an avatar's outfit is checked every 10 s
 
         // --- Position push loop ---
         try
@@ -1941,7 +1950,7 @@ public partial class GameBridge(ClientConfig config)
                         // in Lua when the name is already applied, so this
                         // costs a stamp comparison on the same cadence as
                         // the other re-arms.
-                        foreach (var kv in _ghostNames)
+                        foreach (var kv in _ghostNames.Where(kv => IsLivePeer(kv.Key)))   // WO-144: never a gone peer's name
                             await ExecLuaAsync(
                                 $"if KCD2MP_SetGhostName then KCD2MP_SetGhostName(\"{kv.Key}\", \"{EscapeLua(kv.Value)}\") end");
                         // WO-94: level and current main quest survive in the
@@ -2212,6 +2221,7 @@ public partial class GameBridge(ClientConfig config)
             try { await receiveTask;     } catch { }
             try { await pingTask;        } catch { }
             try { await appearanceTask;  } catch { }
+            try { await outfitWatchTask; } catch { }
             _voice?.Stop();
             _voice?.Dispose();
             _voice = null;
@@ -2234,6 +2244,7 @@ public partial class GameBridge(ClientConfig config)
                 tailForPause2.LoadStarted -= Wo123OnLoadStarted;         // WO-123
                 tailForPause2.GameplayStarted -= Wo124OnGameplayStarted; // WO-124
                 tailForPause2.QuestLine -= Wo137OnQuestLine;              // WO-137
+                tailForPause2.Wo144Line -= Wo144OnEngineLine;             // WO-144
                 tailForPause2.LoadStarted -= Wo124OnLoadStarted;         // WO-124
                 tailForPause2.GameQuit -= Wo124OnGameQuit;               // WO-124
                 tailForPause2.SaveLoadAccepted -= Wo124OnSaveLoadAccepted;  // WO-124
@@ -2300,6 +2311,7 @@ public partial class GameBridge(ClientConfig config)
             _diceIpcServer = null;
             _ghostNames.Clear();
             _ghostReleaseVersions.Clear();
+            Wo144OnRelayLost();   // WO-144: no relay, no partners
             _discordPresence?.ResetForReconnect();
 
             // WO-110 R11 (docs/WO-109-audit.md R11): these two used to go into
@@ -2426,6 +2438,8 @@ public partial class GameBridge(ClientConfig config)
         {
             try
             {
+                // WO-144 2.1: no world, no Henry to read -- the menu and a load are not a failed read
+                if (_where is GameWhere.Menu or GameWhere.Loading) { await Task.Delay(1000, ct); continue; }
                 var current = await _transport.ReadEquippedItemClassesAsync(ct);
                 if (current is null)
                 {
@@ -2750,23 +2764,28 @@ public partial class GameBridge(ClientConfig config)
         var known = _ghostKnownItemClasses.GetOrAdd(ghostId, static _ => []);
         var applied = _ghostAppearance.GetOrAdd(ghostId, static _ => []);
         var unwearable = _ghostUnwearable.GetOrAdd(ghostId, static _ => new Wo135Rules.Unwearable());
-        var targetSet = new HashSet<Guid>(target);
+        var targetSet = Wo144WithoutLights(target);   // WO-144 2.4: lights are the torch sync's, never an outfit piece
         lock (unwearable) unwearable.OnTarget(targetSet);
         // What the peer wears (the swing catalog resolves its weapon from this).
         lock (applied) { applied.Clear(); applied.UnionWith(targetSet); }
 
+        await Wo144EnsureLiveSoulAsync(ghostId);   // WO-144 2.1: reads and writes go to the live avatar's own soul
         var actual = await ReadGhostSetAsync(soulName, ct);
+        if (actual is not null) actual = Wo144WithoutLights(actual);
         if (actual is null)
         {
             Console.WriteLine($"[appearance] ghost {ghostId}: its equipped set could not be read -- the next outfit packet or heartbeat tries again");
+            Wo144LiveSoulUnread(ghostId);   // WO-144 2.1
             return;
         }
         List<Guid> toRemove, toAdd;
+        long nowMs = Environment.TickCount64;
         lock (unwearable)
         {
             toRemove = Wo135Rules.AppearanceRemovals(actual, targetSet);
-            toAdd = Wo135Rules.AppearanceAdditions(actual, targetSet).Where(c => !unwearable.Skips(c)).ToList();
+            toAdd = Wo135Rules.AppearanceAdditions(actual, targetSet).Where(c => !unwearable.Skips(c, nowMs)).ToList();   // WO-144: a refusal backs off, then is tried again
         }
+        toAdd = await Wo144InLayerOrderAsync(toAdd);   // WO-144 2.1: under-layers first
         foreach (var cls in toRemove)
         {
             try { await _transport.UnequipItemOnGhostAsync(soulName, cls, ct); }
@@ -2776,7 +2795,7 @@ public partial class GameBridge(ClientConfig config)
         {
             bool createIfMissing;
             lock (known) createIfMissing = known.Add(cls);
-            try { await _transport.EquipItemOnGhostAsync(soulName, cls, createIfMissing, ct); }
+            try { await Wo144EquipOnGhostAsync(soulName, cls, createIfMissing, ct); }
             catch (Exception ex) { Console.WriteLine($"[appearance] equip {cls} on {soulName} failed: {ex.Message}"); lock (known) known.Remove(cls); }
         }
         if (toRemove.Count > 0 || toAdd.Count > 0)
@@ -2823,8 +2842,11 @@ public partial class GameBridge(ClientConfig config)
             if (_ghostWantedAppearance.TryGetValue(ghostId, out var newest) && !new HashSet<Guid>(newest).SetEquals(target)) return;   // a newer outfit: that apply takes over
             var actual = await ReadGhostSetAsync(soulName, ct);
             if (actual is null) { Console.WriteLine($"[appearance] ghost {ghostId}: verify read failed -- skipping this round"); continue; }
+            actual = Wo144WithoutLights(actual);   // WO-144 2.4
             last = actual;
-            lock (unwearable) pending = Wo135Rules.AppearanceAdditions(actual, target).Where(c => !unwearable.Skips(c)).ToList();
+            long vNow = Environment.TickCount64;
+            lock (unwearable) pending = Wo135Rules.AppearanceAdditions(actual, target).Where(c => !unwearable.Skips(c, vNow)).ToList();
+            pending = await Wo144InLayerOrderAsync(pending);   // WO-144 2.1
             var extra = Wo135Rules.AppearanceRemovals(actual, target);
             if (pending.Count == 0 && extra.Count == 0) { lock (applied) { applied.Clear(); applied.UnionWith(target); } return; }
             Console.WriteLine($"[appearance] ghost {ghostId}: {pending.Count} item(s) still not worn, {extra.Count} still worn that should not be -- retrying");
@@ -2837,11 +2859,11 @@ public partial class GameBridge(ClientConfig config)
                 Console.WriteLine($"[appearance] ghost {ghostId}: {extra.Count} piece(s) cannot be unequipped ({string.Join(", ", extra.Take(4))}) -- a preset's; taking the preset off the engine's way (the empty preset), then the outfit again");
                 await Wo136ClearPresetAsync(ghostId, "unremovable pieces");
                 await Task.Delay(300, ct);
-                foreach (var cls in target)
+                foreach (var cls in await Wo144InLayerOrderAsync(target))   // WO-144 2.1: under-layers first
                 {
                     bool create2;
                     lock (known) create2 = known.Add(cls);
-                    try { await _transport.EquipItemOnGhostAsync(soulName, cls, createIfMissing: create2, ct); }
+                    try { await Wo144EquipOnGhostAsync(soulName, cls, createIfMissing: create2, ct); }
                     catch (Exception ex) { Console.WriteLine($"[appearance] re-equip {cls} on {soulName} failed: {ex.Message}"); }
                 }
                 continue;
@@ -2855,7 +2877,7 @@ public partial class GameBridge(ClientConfig config)
             {
                 bool create;
                 lock (known) create = known.Add(cls);
-                try { await _transport.EquipItemOnGhostAsync(soulName, cls, createIfMissing: create, ct); }
+                try { await Wo144EquipOnGhostAsync(soulName, cls, createIfMissing: create, ct); }
                 catch (Exception ex) { Console.WriteLine($"[appearance] retry equip {cls} on {soulName} failed: {ex.Message}"); }
             }
         }
@@ -2868,11 +2890,23 @@ public partial class GameBridge(ClientConfig config)
                 Console.WriteLine($"[appearance] ghost {ghostId}: {cls} not worn yet -- the avatar is in combat; tried again by the next packet (nothing marked)");
                 continue;
             }
-            bool first;
-            lock (unwearable) first = unwearable.Mark(cls);
-            if (first)
-                Console.WriteLine($"[appearance] ghost {ghostId}: {await Wo136DescribeRefusalAsync(cls)} can't be worn by this avatar -- the game refused it for {AppearanceRetryDelaysMs.Sum()} ms of retries " +
-                                  $"(kcd.log may name the reason on a \"Can't equip\" line, e.g. a layer it needs underneath). Skipped until this outfit changes; the rest of the outfit is worn.");
+            // WO-144 2.1: a piece the table says an NPC body never wears (a quick-slot belt) is skipped for
+            // this outfit; any other refusal backs off and is tried again (20 s, 60 s, 3 min, then every
+            // 10 min -- the partner's outfit heartbeat is the timer), with the game's own reason.
+            var idx144 = await SoulIndexAsync();
+            string desc = await Wo136DescribeRefusalAsync(cls);
+            if (idx144?.UnwearableReason(cls) is not null)
+            {
+                bool first;
+                lock (unwearable) first = unwearable.Mark(cls);
+                if (first) Console.WriteLine($"[appearance] ghost {ghostId}: {desc} can't be worn by an avatar -- skipped for this outfit; the rest is worn.");
+                continue;
+            }
+            int marks;
+            lock (unwearable) { unwearable.MarkTimed(cls, Environment.TickCount64); marks = unwearable.Marks(cls); }
+            string? reason = idx144 is not null && idx144.TryGetItem(cls, out var itm) ? Wo144EquipReason(itm.Name) : null;
+            if (marks <= 3 || marks % 6 == 0)
+                Console.WriteLine($"[appearance] ghost {ghostId}: {desc} was not worn after {AppearanceRetryDelaysMs.Sum()} ms of retries -- the game says: {reason ?? "nothing (no \"Can't equip\" line)"}; tried again in {Wo144Rules.RefusalBackoffMs(marks) / 1000} s (refusal {marks}); the rest of the outfit is worn.");
         }
     }
 
@@ -4526,6 +4560,7 @@ public partial class GameBridge(ClientConfig config)
                     float rotZ     = gs.RotZ;
                     bool  isRiding = gs.IsRiding;
                     bool  isStale  = gs.IsStale;   // WO-99 Phase 1
+                    if (Wo144DropFromRemoved(ghostId)) continue;   // WO-144: a removed ghost stays removed
                     Wo127NoteGhost(ghostId, x, y, z, isRiding, isStale);   // WO-127: the joiner's avatar for the leash recorder
 
                     // WO-118 Phase 2b: the native writer already has this sample --
@@ -4651,6 +4686,7 @@ public partial class GameBridge(ClientConfig config)
                     byte ghostId = payload[0];
                     string gname = Encoding.UTF8.GetString(payload, 1, payloadLen - 1);
                     _ghostNames[ghostId] = gname;
+                    Wo144OnPeerConnected(ghostId, gname);   // WO-144: the relay's connection set, the only source of partners
                     await SetGhostNameAsync(ghostId.ToString(), gname);
                 }
                 else if (type == Protocol.ReleaseVersion && payloadLen >= 2)
@@ -4666,6 +4702,7 @@ public partial class GameBridge(ClientConfig config)
                     // Disconnect packet: [ghostId:1]
                     byte ghostId = payload[0];
                     Console.WriteLine($"[disconnect] ghost {ghostId} removed");
+                    Wo144OnPeerDisconnected(ghostId);   // WO-144: out of every partner loop at once
                     _peerLastSeenUtc.TryRemove(ghostId, out _);
                     _peerCutscene.TryRemove(ghostId, out _);   // WO-98 Phase 5
                     RefreshDiscordPeerCount();
@@ -4678,6 +4715,7 @@ public partial class GameBridge(ClientConfig config)
                     // WO-17: a respawned ghost gets a fresh Soul.Guid, and a
                     // gone ghost has nothing left to detach.
                     _ghostSoulGuidCache.TryRemove(ghostId, out _);
+                    Wo144ForgetLiveSoul(ghostId);   // WO-144 2.1
                     _ghostHostileUntilUtc.TryRemove(ghostId, out _);
                     // WO-94: a gone peer's prompt is moot and its catch-up
                     // window on our side is closed.
@@ -4708,6 +4746,7 @@ public partial class GameBridge(ClientConfig config)
                     try { await ExecLuaAsync($"KCD2MP_RemoveGhost(\"{ghostId}\")"); } catch { }
                     await Wo123OnPeerGoneAsync(ghostId);   // WO-123: a joiner gone mid-join resumes the host
                     await Wo124OnPeerGoneAsync(ghostId);   // WO-124: the host gone -> the joiner leaves its world
+                    Wo144AfterPeerGone(ghostId);           // WO-144: its name and per-partner rows go last (the handlers above read them)
                 }
                 else if (type == Protocol.VoiceDown && payloadLen == 1 + Protocol.VoiceFrameLen)
                 {
@@ -5531,6 +5570,13 @@ public partial class GameBridge(ClientConfig config)
                     _ghostKnownItemClasses.TryRemove(respawnedId, out _);
                     _ghostNeverEquips.TryRemove(respawnedId, out _);
                     _ghostUnwearable.TryRemove(respawnedId, out _);
+                    // WO-144: the new body has its own soul -- the cached guid and WO-131's
+                    // "already joined the player's faction" were the old body's (after a
+                    // host reload the avatar was never joined again).
+                    _ghostSoulGuidCache.TryRemove(respawnedId, out _);
+                    Wo144ForgetLiveSoul(respawnedId);   // WO-144 2.1: a new body, a new soul
+                    _w131FactionDone.TryRemove(giParts[0], out _);
+                    _w131FactionTriedMs.TryRemove(giParts[0], out _);
                     if (_ghostLastAppearance.TryGetValue(respawnedId, out var lastOutfit))
                     {
                         Console.WriteLine($"[appearance] ghost {respawnedId}: body respawned (entity 0x{prevId:X} -> 0x{rawId:X}) -- re-applying its last {lastOutfit.Length} item class(es)");
@@ -5754,6 +5800,9 @@ public partial class GameBridge(ClientConfig config)
             case "w143":             // WO-143: hands|gaits|oneshots|minigames|idles on|off / status / the temporary tools' answers
                 Wo143OnModLine(arg);
                 return;
+            case "w144":             // WO-144 2.1 / 2.4: mp_avatar_dress / mp_avatar_lights on|off
+                Wo144OnModLine(arg);
+                return;
             case "w140_ask":         // WO-140: sleeping together
             case "w140_answer":
             case "w140_cfg":
@@ -5862,6 +5911,8 @@ public partial class GameBridge(ClientConfig config)
             case "npc_track": Wo138OnTrackLine(arg); break;    // WO-138: the rescan set for the DLL's sender
             case "w138_cfg": Wo138OnCfgLine(arg); break;       // WO-138: the sender's settings
             case "w138_dialog": Wo138OnDialogLine(arg); break; // WO-138: the host's dialogue edge (a pause reason)
+            case "w144_clock": Wo144OnClockLine(arg); break;   // WO-144 3.3: this world's clock stands / runs
+            case "w144_avatar": _ = Wo144OnAvatarKeyAsync(arg); break;   // WO-144 2.1: which soul is the live avatar's
             case "w138": Wo138OnModLine(arg); break;           // WO-138: mp_w138_native / mp_w138_levers / mp_w138_status
 
             case "npc_state":

@@ -226,6 +226,11 @@ bool bind_type(const char* name, RType* out) {
 
 struct SharedPtr { void* p = nullptr; void* ctrl = nullptr; };
 
+// WO-144 2.1 / 4.5: the NPC state's equipment slot (ChangeEquipment) is kept through a placement
+constexpr unsigned kSlotEquipment = 4;
+bool g_keepEquipment = true;
+std::atomic<uint64_t> c_equipKept{0};
+
 // A new element of a reflected class: the variant holds std::shared_ptr<T>
 // inline (policy as_std_shared_ptr); one reference is taken for the caller.
 bool sp_create(const RType& t, void* const* wantVft, SharedPtr* out) {
@@ -521,6 +526,25 @@ uint8_t build_loaded(uint32_t eid, const R::Activity& want, const KH::Hands* han
     bool ok = state_set_slot(loaded, 0, s) && state_set_slot(loaded, 3, u);
     if (hl.p) ok = state_set_slot(loaded, KH::kSlotLeft, hl) && ok;
     if (hr.p) ok = state_set_slot(loaded, KH::kSlotRight, hr) && ok;
+    // WO-144 2.1 / 4.5: the body's own equipment element (slot 4: an NPC's sleep undress, an outfit
+    // change) goes into the loaded state as it is -- a placement or a one-shot never changes clothes.
+    // Cleared, the game looked for a way back into the default outfit and found none: "Execution of
+    // action ChangeEquipmentFromDefault has failed! Action for request 'KCDMP one-shot'", "Couldn't
+    // find actions to get NPC into game loaded state" with "ChangeEquipment ... sleepUnequip" in the
+    // current state (the field: 102 / 60 / 40 lines on three copies).
+    if (ok && g_keepEquipment) {
+        void* cur = static_cast<char*>(ctx) + kCtxCurrent;
+        void* cb = nullptr; void* ce = nullptr;
+        if (rd(cur, kStateElemsB, &cb) && rd(cur, kStateElemsE, &ce) && cb
+            && static_cast<size_t>(static_cast<char*>(ce) - static_cast<char*>(cb)) / 16 > kSlotEquipment) {
+            SharedPtr eq{};
+            rd(static_cast<char*>(cb) + kSlotEquipment * 16, 0, &eq.p);
+            rd(static_cast<char*>(cb) + kSlotEquipment * 16, 8, &eq.ctrl);
+            if (eq.p && eq.ctrl && ilock_add(static_cast<char*>(eq.ctrl) + 8, 1)) {   // the loaded state's own reference
+                if (state_set_slot(loaded, kSlotEquipment, eq)) c_equipKept.fetch_add(1, std::memory_order_relaxed);
+            }
+        }
+    }
     return ok ? kApOk : kApBuild;
 }
 
@@ -565,6 +589,7 @@ struct Desired {
     int handsTries = 0;          // applies with every tool owned that did not bring the body in step
 };
 std::unordered_set<std::string> g_seatedHandsNoted;   // bodies told once: seated, their hands stay as they are
+std::unordered_set<uint64_t> g_bedSitNoted;          // WO-144 5: beds told once (a player's bed-edge sit shown lying)
 
 // WO-143: tools ride the apply only for a body that does not sit, lie or kneel on
 // an object (J1: a seated guest given his tankard is stood up by the game --
@@ -611,7 +636,7 @@ void capture_one(uint8_t kind, const char* name, uint32_t eid, double now) {
     R::Activity a;
     if (!read_activity(eid, &a)) return;
     c_reads.fetch_add(1);
-    if (kind == kKindPlayer) a = R::with_shown(a, g_shown, now < g_shownUntil);
+    if (kind == kKindPlayer) a = R::without_crouch(R::with_shown(a, g_shown, now < g_shownUntil));   // WO-144 2.2: crouch rides the state block
     Sent& s = g_sent[kind == kKindPlayer ? std::string() : lower(name)];
     const bool changed = !s.have || !R::same(s.a, a);
     if (!R::send_due(changed || g_resync, R::none(a), now - s.at)) return;
@@ -655,6 +680,19 @@ void reconcile_tick(double now) {
         auto hold_to = [&](bool want) { if (want != d.held) { npcdrive::set_activity_hold(d.eid, want); d.held = want; } };
         R::Activity cur;
         if (!read_activity(d.eid, &cur)) { hold_to(R::hold_wanted(owns, d.matched, d.pace.misses, true, d.a.stance)); ++it; continue; }
+        if (R::is_avatar_name(d.name.c_str())) {
+            cur = R::without_crouch(cur); d.a = R::without_crouch(d.a);   // WO-144 2.2
+            if (d.a.stance == R::kSitting && d.a.stanceObj) {             // WO-144 5: a bed's edge -> lying on it
+                void* so = engine::entity_by_guid(d.a.stanceObj);
+                char sn[96] = "";
+                if (so && engine::entity_name(so)) rdstr(engine::entity_name(so), sn, sizeof sn);
+                if (R::is_bed_name(sn)) {
+                    d.a = R::bed_sit_as_lying(d.a, true);
+                    if (g_bedSitNoted.insert(d.a.stanceObj).second)
+                        logf("WO141-APPLY %s: its player sits on a bed (%s) -- an NPC body has no sit-down there; it lies on it", d.name.c_str(), sn);
+                }
+            }
+        }
         KH::Hands curHands;
         if (d.handsSet && !d.hands.empty() && R::object_stance(d.a.stance) && g_seatedHandsNoted.insert(it->first).second)
             logf("WO143-HANDS %s sits, lies or kneels: its hands stay as they are (a seated copy's take would stand it up)", d.name.c_str());
@@ -835,13 +873,13 @@ void research_watch() {
 std::string status_text() {
     char b[400];
     _snprintf_s(b, sizeof b, _TRUNCATE,
-                "read %s apply %s | capture npcs=%d player=%d period=%ums | apply %s desired=%zu | rows %llu reads %llu applies %llu (ok %llu fail %llu) leaves %llu shows %llu",
+                "read %s apply %s | capture npcs=%d player=%d period=%ums | apply %s desired=%zu | rows %llu reads %llu applies %llu (ok %llu fail %llu) leaves %llu shows %llu equip_kept %llu",
                 g_readArmed ? "armed" : "NOT ARMED", g_applyArmed ? "armed" : "NOT ARMED", g_captureNpcs.load() ? 1 : 0,
                 g_capturePlayer.load() ? 1 : 0, g_periodMs.load(), g_applyOn.load() ? "on" : "off", g_desired.size(),
                 static_cast<unsigned long long>(c_rowsSent.load()), static_cast<unsigned long long>(c_reads.load()),
                 static_cast<unsigned long long>(c_applies.load()), static_cast<unsigned long long>(c_applyOk.load()),
                 static_cast<unsigned long long>(c_applyFail.load()), static_cast<unsigned long long>(c_leaves.load()),
-                static_cast<unsigned long long>(c_shows.load()));
+                static_cast<unsigned long long>(c_shows.load()), static_cast<unsigned long long>(c_equipKept.load()));
     return b;
 }
 

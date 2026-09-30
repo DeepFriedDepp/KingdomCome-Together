@@ -87,20 +87,39 @@ public static class Wo135Rules
     {
         private HashSet<Guid>? _target;
         private readonly HashSet<Guid> _marked = [];
+        // WO-144 2.1: a refusal is retried on a timer, not only when the outfit changes (the field's
+        // six pieces stayed off until the joiner changed clothes): class -> (marks, retry-at ms).
+        private readonly Dictionary<Guid, (int Marks, long RetryAtMs)> _timed = [];
 
         public void OnTarget(IReadOnlySet<Guid> target)
         {
             if (_target is not null && _target.SetEquals(target)) return;
             _target = [.. target];
             _marked.Clear();
+            _timed.Clear();
         }
 
-        public bool Skips(Guid c) => _marked.Contains(c);
+        /// <summary>Skipped for this outfit for good (no time given), or still backing off.</summary>
+        public bool Skips(Guid c) => _marked.Contains(c) || _timed.ContainsKey(c);
+
+        /// <summary>WO-144: skipped for good, or until its back-off ends (then it is tried again).</summary>
+        public bool Skips(Guid c, long nowMs) =>
+            _marked.Contains(c) || (_timed.TryGetValue(c, out var t) && nowMs < t.RetryAtMs);
 
         /// <summary>True the first time a class is marked for this outfit (the one log line).</summary>
         public bool Mark(Guid c) => _marked.Add(c);
 
-        public int Count => _marked.Count;
+        /// <summary>WO-144: a refusal that is retried after 20 s, 60 s, 3 min, then every 10 min. True on the first.</summary>
+        public bool MarkTimed(Guid c, long nowMs)
+        {
+            int n = _timed.TryGetValue(c, out var t) ? t.Marks + 1 : 1;
+            _timed[c] = (n, nowMs + Wo144Rules.RefusalBackoffMs(n));
+            return n == 1;
+        }
+
+        public int Marks(Guid c) => _timed.TryGetValue(c, out var t) ? t.Marks : 0;
+
+        public int Count => _marked.Count + _timed.Count;
     }
 
     // ------------------------------------------------------------------ Phase 5

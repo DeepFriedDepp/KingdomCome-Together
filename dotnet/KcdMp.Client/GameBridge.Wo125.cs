@@ -174,7 +174,7 @@ public partial class GameBridge
     private void Wo125HostTick()
     {
         if (!_sharedWorld || _hostWorldSeed is not null || _where == GameWhere.Menu) return;
-        if (_peerLastSeenUtc.IsEmpty && _ghostNames.IsEmpty) return;
+        if (LivePartners().Count == 0) return;   // WO-144
         if ((DateTime.UtcNow - _identifyAskedUtc).TotalSeconds < 60 || Volatile.Read(ref _worldSaveBusy) != 0 || Wo123HostJoinActive) return;
         _identifyAskedUtc = DateTime.UtcNow;
         Console.WriteLine("MP-HENRY host: this world's seed is not known yet (no load or save seen since the agent started) -- one world save identifies it");
@@ -191,7 +191,7 @@ public partial class GameBridge
             if (m.Success) Wo125HostIdentify(Path.Combine(saves, $"playline{m.Groups[1].Value}", m.Groups[2].Value), loaded: true, "loaded");
         }
         _hostLoadAnnounced = true;
-        var peers = _peerLastSeenUtc.Keys.Concat(_ghostNames.Keys).Distinct().ToList();
+        var peers = LivePartners();   // WO-144: the relay's connections, never a stale name
         foreach (byte g in peers)
             _ = WriteJoinAsync(JoinStatusCodec.Build(g, 0, Protocol.JoinStateReloading, Protocol.JoinReasonId("reloading"), 0)).ContinueWith(_ => { });
         Console.WriteLine($"MP-HENRY host: a save load started ({display}) -- {peers.Count} peer(s) told 'your host is reloading'");

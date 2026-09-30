@@ -105,6 +105,7 @@ public partial class GameBridge
                 {
                     _w143SyncAtMs = t;
                     _ = ExecLuaAsync($"if KCD2MP_W143Sync then KCD2MP_W143Sync({B(_w143Hands)}, {B(_w143Gaits)}, {B(_w143Shots)}, {B(_w143Minigames)}, {B(_w143Idles)}) end");
+                    _ = ExecLuaAsync(Wo144SyncLua());   // WO-144: mp_avatar_dress / mp_avatar_lights as this game has them
                 }
                 if (t - lastStats >= 60_000) { lastStats = t; Console.WriteLine(Wo143StatsLine()); }
             }

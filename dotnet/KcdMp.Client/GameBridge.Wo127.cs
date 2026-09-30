@@ -18,17 +18,28 @@ namespace KcdMp.Client;
 public partial class GameBridge
 {
     private bool _hostClaimLatched;
+    private DateTime _w144ConnectedUtc = DateTime.MinValue;
+
+    /// <summary>
+    /// WO-144 5: another agent announced itself as the host of this session (its session mode):
+    /// this machine is a joiner and never claims -- not in its own world, not between a join's end
+    /// and its joined flag (the field's claim after each join).
+    /// </summary>
+    private bool Wo144HostHeard() => _hostModeKnown && _hostModeFrom != _myGhostId;
+
     private bool? _hostClaimLogged;
 
     private bool Wo127ClaimsHost()
     {
         bool claim;
         if (config.IsHosting) claim = true;
-        else if (!_sharedWorld || _joinedWorld || _jj is not null) { _hostClaimLatched = false; claim = false; }
+        else if (!_sharedWorld || _joinedWorld || _jj is not null || Wo144HostHeard()) { _hostClaimLatched = false; claim = false; }
         else
         {
             bool inOwnWorld = _where == GameWhere.World || (_where == GameWhere.Unknown && !_startedAtMenu);
-            if (inOwnWorld) _hostClaimLatched = true;
+            // WO-144 5: the latch waits for the host's word first -- a host announces its session mode
+            // to every new connection within a second or two; a joiner that hears it never claims
+            if (inOwnWorld && Wo144Rules.ClaimGraceOver(_w144ConnectedUtc, DateTime.UtcNow)) _hostClaimLatched = true;
             claim = _hostClaimLatched;
         }
         if (_hostClaimLogged != claim)

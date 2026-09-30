@@ -101,10 +101,11 @@ public class Wo140Tests
         Assert.Equal(Wo140Rules.Verdict.No, v.Evaluate(30_000));
         Assert.Equal("timeout", v.NoReason);
 
+        // WO-144: a member who left is dropped, not counted as a no (and never waited on)
         var l = Vote(2);
         l.Left(2);
-        Assert.Equal(Wo140Rules.Verdict.No, l.Evaluate(0));
-        Assert.Equal("left", l.NoReason);
+        Assert.Equal(Wo140Rules.Verdict.Go, l.Evaluate(0));
+        Assert.Contains((byte)2, l.Dropped);
         var b = Vote(2);
         b.Answer(2, "busy");
         Assert.Equal(Wo140Rules.Verdict.No, b.Evaluate(0));
@@ -166,7 +167,8 @@ public class Wo140Tests
     {
         // the host said 800000 ten seconds ago: now ~800150 (ratio 15)
         Assert.Equal(800150u, Wo140Rules.PullBackTarget(808000, 800000, 10, false));
-        Assert.Null(Wo140Rules.PullBackTarget(800400, 800000, 10, false));    // within the 300 s tolerance
+        Assert.Null(Wo140Rules.PullBackTarget(800200, 800000, 10, false));    // within the 60 s tolerance (WO-144: was 300)
+        Assert.Equal(800150u, Wo140Rules.PullBackTarget(800400, 800000, 10, false));   // WO-144: 250 s ahead is pulled now
         Assert.Null(Wo140Rules.PullBackTarget(790000, 800000, 10, false));    // behind: the forward sync's job
     }
 

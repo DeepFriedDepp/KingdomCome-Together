@@ -70,6 +70,20 @@ public sealed class SteamP2PConnection : IDisposable
     internal ulong RemoteSteamId { get; }
     public bool Incoming { get; }
 
+    /// <summary>
+    /// WO-144: who is on the other end, as a key the relay can compare (the same
+    /// player's new connection replaces his old one) -- a one-way hash of the
+    /// remote SteamID, never the id itself, so it can never reach a log as one.
+    /// </summary>
+    public string PeerKey
+    {
+        get
+        {
+            var h = System.Security.Cryptography.SHA256.HashData(BitConverter.GetBytes(RemoteSteamId ^ 0x6B63746F67657468UL));
+            return Convert.ToHexString(h, 0, 8);
+        }
+    }
+
     /// <summary>ESteamNetworkingConnectionState as last reported.</summary>
     public int State => _state;
     public bool IsConnected => _state == SteamNative.StateConnected;

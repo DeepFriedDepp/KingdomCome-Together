@@ -58,7 +58,8 @@ int wo140_rules_tests(int* passed) {
     SCHECK(pull_verdict(830000000, 830000, 829000) == Pull::Pulled, "ahead by 1000 s: pulled");
     SCHECK(pull_verdict(830000000, 830000, 830000) == Pull::NotNeeded, "equal: not needed");
     SCHECK(pull_verdict(830000000, 830000, 831000) == Pull::NotNeeded, "behind: not needed (forward is Lua's)");
-    SCHECK(pull_verdict(830000000, 829000, 828000) == Pull::Mismatch, "the calendar reads 1000 s off the agent: refused");
+    SCHECK(pull_verdict(830000000, 829000, 828000) == Pull::Pulled, "WO-144: the calendar 1000 s further ahead than the agent read: still pulled");
+    SCHECK(pull_verdict(820000000, 829000, 828000) == Pull::Mismatch, "the calendar went 9000 s back past the agent's reading (a load): refused");
     SCHECK(pull_verdict(830000000, 829900, 828000) == Pull::Pulled, "within the 120 s slack: pulled");
 
     *passed = g_pass;

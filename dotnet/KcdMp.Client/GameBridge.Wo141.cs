@@ -139,7 +139,9 @@ public partial class GameBridge
                 continue;
             }
             if ((_w141Kinds & Wo141Rules.KindPlayer) == 0) continue;
+            bool mgWas = _w141Mine.Minigame != ActivityState.NoMinigame, mgNow = r.A.Minigame != ActivityState.NoMinigame;
             _w141Mine = r.A;
+            if (mgWas != mgNow) _ = ExecLuaAsync($"if KCD2MP_W137Minigame then KCD2MP_W137Minigame({(mgNow ? "true" : "false")}) end");   // WO-144 3.2
             var mine = new List<ActivityRow> { new(_myGhostId, "", r.A) };
             Console.WriteLine($"MP-W141 this player: {r.A}");
             if (host) foreach (byte j in Wo134Peers()) await Wo141SendAsync(Protocol.ActivityHostUp, j, Protocol.ActivityKindPlayer, mine);

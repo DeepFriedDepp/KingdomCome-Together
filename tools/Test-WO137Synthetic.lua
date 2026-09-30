@@ -253,32 +253,46 @@ do -- (c) talking (joiner)
     BasicAIActions.OnTalk(e, player, 0)
     check("c: Talk on a copy: its brain back for the conversation", cmdCount("wh_ai_ResumeNPC tzel_olbram") == 1 and KCD2MP._npcPaused["tzel_olbram"] == nil)
     check("c: ...the game's own OnTalk still runs (the request)", TALKS[#TALKS] == "OnTalk:tzel_olbram", TALKS[#TALKS])
-    check("c: ...the host is told", countEvt("w137_talk", "on tzel_olbram", mark) == 1)
+    -- WO-144 1.3: the key press holds nothing on the host; the conversation's start does
+    check("c: ...the host is not told yet (WO-144: only once it starts)", countEvt("w137_talk", "on tzel_olbram", mark) == 0)
     tick(); tick(); tick()
     check("c: the puppet tick does not pause it again mid-conversation", cmdCount("wh_ai_PauseNPC tzel_olbram") == 1)
     BasicAIActions.OnTalk(e, player, 0)
-    check("c: a second Talk: no second resume, no second notice", cmdCount("wh_ai_ResumeNPC tzel_olbram") == 1 and countEvt("w137_talk", "on tzel_olbram", mark) == 1)
+    check("c: a second Talk: no second resume, no notice", cmdCount("wh_ai_ResumeNPC tzel_olbram") == 1 and countEvt("w137_talk", "on tzel_olbram", mark) == 0)
     KCD2MP_W137TalkRequest(241)
     check("c: the request id is attached", KCD2MP.w137.talking["tzel_olbram"].id == 241)
     KCD2MP_W137TalkAttempt(241, "Dude tzel_olbram")
     check("c: the start is seen", KCD2MP.w137.talking["tzel_olbram"].started == true and logCount("WO137-TALK start npc=tzel_olbram id=241") == 1)
+    -- WO-144 1.3: an attempt is not a start (the engine can still cancel it): told once this player is in it
+    check("c: ...the host is not told on the attempt alone", countEvt("w137_talk", "on tzel_olbram", mark) == 0)
     PLAYER_IN_DIALOG = true
+    KCD2MP_W137Session(false, true, true)
+    check("c: ...and the host is told once the player is in the conversation, once", countEvt("w137_talk", "on tzel_olbram", mark) == 1)
+    KCD2MP_W137TalkAttempt(241, "Dude tzel_olbram")
+    KCD2MP_W137Session(false, true, true)
+    check("c: ...a repeated start line: no second notice", countEvt("w137_talk", "on tzel_olbram", mark) == 1)
     NOW = NOW + 60; KCD2MP_W137Session(false, true, true)
     check("c: a long conversation is not cut while the player is in it", KCD2MP.w137.talking["tzel_olbram"] ~= nil)
     KCD2MP_W137DialogEnd(17, "tzel_farmhand_2 tzel_olbram")
     check("c: a conversation between NPCs ending does not end this player's", KCD2MP.w137.talking["tzel_olbram"] ~= nil)
     KCD2MP_W137DialogEnd(241, "Dude tzel_olbram")
     PLAYER_IN_DIALOG = false
+    -- WO-144 3.2: an end waits endDeferS (a minigame may follow the conversation)
+    check("c: the end waits a moment (WO-144: a minigame may follow)", KCD2MP.w137.talking["tzel_olbram"] ~= nil and cmdCount("wh_ai_PauseNPC tzel_olbram") == 1)
+    NOW = NOW + 3; KCD2MP_W137Session(false, true, true)
     check("c: the end: paused again", cmdCount("wh_ai_PauseNPC tzel_olbram") == 2 and KCD2MP._npcPaused["tzel_olbram"] ~= nil)
     check("c: ...the host is told", countEvt("w137_talk", "off tzel_olbram", mark) == 1)
     check("c: ...logged", logCount("WO137-TALK end npc=tzel_olbram id=241 why=dialog-ended") == 1, lastLog("WO137-TALK end"))
 
     -- never started (the engine dropped the request)
+    local markNs = #LOG
     BasicAIActions.OnTalk(e, player, 0)
     NOW = NOW + 10; KCD2MP_W137Session(false, true, true)
     check("c: not started after 10 s: still waiting", KCD2MP.w137.talking["tzel_olbram"] ~= nil)
     NOW = NOW + 16; KCD2MP_W137Session(false, true, true)
     check("c: never started in 25 s: paused again", logCount("why=never-started") == 1 and cmdCount("wh_ai_PauseNPC tzel_olbram") == 3)
+    check("c: ...and the host's NPC was never held (WO-144: no on, no off)", countEvt("w137_talk", "on tzel_olbram", markNs) == 0
+        and countEvt("w137_talk", "off tzel_olbram", markNs) == 0)
 
     -- started, then the player is out of the dialogue (the end line was missed)
     BasicAIActions.OnTalk(e, player, 0)
@@ -316,14 +330,17 @@ do -- (c) talking (joiner)
     check("c: a request by another path: the copy in reach is freed", cmdCount("wh_ai_ResumeNPC tzel_olbram") == 1
         and KCD2MP.w137.talking["tzel_olbram"] ~= nil and KCD2MP.w137.talking["tzel_olbram"].id == 400)
     KCD2MP_W137DialogEnd(400, "Dude tzel_olbram")
+    NOW = NOW + 3; KCD2MP_W137Session(false, true, true)   -- WO-144: past the deferred end
 
     -- a conversation the game forces on the (still paused) copy
     mark = #LOG; CMDS = {}
     KCD2MP_W137TalkAttempt(500, "Dude tzel_olbram")
+    PLAYER_IN_DIALOG = true; KCD2MP_W137Session(false, true, true); PLAYER_IN_DIALOG = false   -- WO-144 1.3: told once the player is in it
     local t = KCD2MP.w137.talking["tzel_olbram"]
     check("c: a forced conversation: tracked, the host told, no resume", t ~= nil and t.forced == true
         and countEvt("w137_talk", "on tzel_olbram", mark) == 1 and cmdCount("wh_ai_ResumeNPC") == 0)
     KCD2MP_W137DialogEnd(500, "Dude tzel_olbram")
+    NOW = NOW + 3; KCD2MP_W137Session(false, true, true)   -- WO-144: past the deferred end
     check("c: ...its end: nothing to pause again (it stayed paused)", cmdCount("wh_ai_PauseNPC") == 0 and countEvt("w137_talk", "off tzel_olbram", mark) == 1)
 
     -- the host's stream stops mid-conversation: never parked until it ends

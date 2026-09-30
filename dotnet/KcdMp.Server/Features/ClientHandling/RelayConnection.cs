@@ -28,25 +28,34 @@ public sealed class RelayConnection : IDisposable
     public bool IsLoopback { get; }
     public string Transport { get; }
 
-    public RelayConnection(Stream stream, string remote, bool isLoopback, string transport, Action dispose)
+    /// <summary>
+    /// WO-144: the machine on the other end, for "the same player connected
+    /// again" (ClientHandler.SupersededBy): the TCP address without its port, or
+    /// a hash of the Steam peer (SteamP2PConnection.PeerKey). Never logged.
+    /// </summary>
+    public string IdentityKey { get; }
+
+    public RelayConnection(Stream stream, string remote, bool isLoopback, string transport, Action dispose, string identityKey = "")
     {
         Stream = stream;
         Remote = remote;
         IsLoopback = isLoopback;
         Transport = transport;
         _dispose = dispose;
+        IdentityKey = identityKey;
     }
 
     public static RelayConnection FromTcp(TcpClient tcp)
     {
         var ep = tcp.Client.RemoteEndPoint;
         bool loop = ep is IPEndPoint ip && IPAddress.IsLoopback(ip.Address);
-        return new RelayConnection(tcp.GetStream(), ep?.ToString() ?? "(unknown)", loop, "tcp", tcp.Dispose);
+        string key = ep is IPEndPoint ip2 ? "tcp:" + (ip2.Address.IsIPv4MappedToIPv6 ? ip2.Address.MapToIPv4() : ip2.Address) : "tcp:?";
+        return new RelayConnection(tcp.GetStream(), ep?.ToString() ?? "(unknown)", loop, "tcp", tcp.Dispose, key);
     }
 
     /// <summary>A Steam P2P stream: never loopback, logged without an id.</summary>
-    public static RelayConnection FromSteam(Stream steamStream) =>
-        new(steamStream, "steam-peer", isLoopback: false, "steam", steamStream.Dispose);
+    public static RelayConnection FromSteam(Stream steamStream, string peerKey = "") =>
+        new(steamStream, "steam-peer", isLoopback: false, "steam", steamStream.Dispose, "steam:" + peerKey);
 
     public void Dispose()
     {

@@ -534,6 +534,8 @@ namespace KCDMP_launcher.Pages
                     WorkingDirectory = GameRootOf(settings.GamePath)
                 };
 
+                // WO-144: the previous launch's logs are kept before the game starts over them
+                LogBundle.KeepHistory(GameRootOf(settings.GamePath), Path.GetDirectoryName(agentPath) ?? "");
                 var gameProcess = Process.Start(gameStartInfo);
                 if (gameProcess == null)
                 {

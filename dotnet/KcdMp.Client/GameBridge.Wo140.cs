@@ -200,7 +200,7 @@ public partial class GameBridge
             DeadlineMs = Environment.TickCount64 + Protocol.SleepVoteTimeoutSeconds * 1000L,
         };
         bool host = _isDamageAuthority;
-        if (host) foreach (byte g in Wo134Peers()) v.Members.Add(g);
+        if (host) foreach (byte g in VotingPartners()) v.Members.Add(g);   // WO-144: connected and in this world
         else v.Members.Add(_hostModeFrom != 0xFF ? _hostModeFrom : (byte)0xFF);
         lock (_w140Lock) { _w140Mine = v; _w140MineSource = source; _w140MineApproved = false; }
         Interlocked.Increment(ref _w140Asks);
@@ -301,7 +301,7 @@ public partial class GameBridge
                 DeadlineMs = Environment.TickCount64 + Protocol.SleepVoteTimeoutSeconds * 1000L,
             };
             v.Members.Add(Wo140Rules.LocalMember);
-            foreach (byte g in Wo134Peers()) if (g != src) v.Members.Add(g);
+            foreach (byte g in VotingPartners()) if (g != src) v.Members.Add(g);   // WO-144
             lock (_w140Lock) _w140Collect = v;
             foreach (byte g in v.Members) if (g != Wo140Rules.LocalMember) await Wo140SendAsync(g, Protocol.SleepAsk, id, Wo140Text.Ask(kind, asker, save));
             Console.WriteLine($"MP-W140 {W140Name(asker)} wants to {kind} (vote 0x{id:X8}) -- asking this player{(v.Members.Count > 1 ? $" and {v.Members.Count - 1} other joiner(s)" : "")}");
@@ -592,7 +592,24 @@ public partial class GameBridge
         foreach (var vote in new[] { v, _w140Collect })
             if (vote is not null)
                 foreach (byte m in vote.Members.ToArray())
-                    if (m != Wo140Rules.LocalMember && m != 0xFF && !_ghostNames.ContainsKey(m)) vote.Left(m);
+                    if (m != Wo140Rules.LocalMember && m != 0xFF && !Wo144StillVoting(m))   // WO-144: left, or loading / in its own world now
+                    {
+                        vote.Left(m);
+                        Console.WriteLine($"MP-W140 vote 0x{vote.Id:X8}: {W140Name(m)} {(IsLivePeer(m) ? "is not in this world any more" : "left")} -- dropped from the vote (the others' answers decide)");
+                    }
+        // WO-144: a joiner's ask whose asker left has nobody to answer: dropped
+        Wo140Rules.Vote? col;
+        lock (_w140Lock) col = _w140Collect;
+        if (col is not null && col.ReplyTo != 0xFF && !IsLivePeer(col.ReplyTo))
+        {
+            lock (_w140Lock) if (ReferenceEquals(_w140Collect, col)) _w140Collect = null;
+            Console.WriteLine($"MP-W140 vote 0x{col.Id:X8}: the asker (ghost {col.ReplyTo}) left -- the vote is dropped");
+            foreach (var (who, a) in col.Answers)
+                if (a == "yes" && who != Wo140Rules.LocalMember) await Wo140SendAsync(who, Protocol.SleepCancel, col.Id, Wo140Text.Cancel("backed-out", col.Asker));
+            (uint Id, byte Asker, string Kind, byte ReplyTo, long DeadlineMs)? cpr;
+            lock (_w140Lock) { cpr = _w140Prompt; if (cpr is { } cq && cq.Id == col.Id) _w140Prompt = null; }
+            if (cpr is { } cq2 && cq2.Id == col.Id) await ExecLuaAsync($"if KCD2MP_W140PromptHide then KCD2MP_W140PromptHide({col.Id}) end");
+        }
     }
 
     // ---------------------------------------------------------------- events from the mod
@@ -670,7 +687,7 @@ public partial class GameBridge
                 _suppressJumpUntilUtc = DateTime.UtcNow.AddSeconds(30);
                 Console.WriteLine(FormattableString.Invariant($"MP-W140 this clock was {ok.Before - target} s ahead of the host's -- pulled back {ok.Before} -> {ok.After} (one clock: the host's)"));
             }
-            else Console.WriteLine(FormattableString.Invariant($"MP-W140 this clock is ahead of the host's ({worldTime} > {target}) but the pull {(r is null ? "got no answer (not armed?)" : r.Value.Result == 2 ? "was refused: the calendar reads otherwise" : "was not needed")}"));
+            else Console.WriteLine(FormattableString.Invariant($"MP-W140 this clock is ahead of the host's ({worldTime} > {target}) but the pull {(r is null ? "got no answer (not armed?)" : r.Value.Result == 2 ? "was refused: the calendar went back past this reading (a load)" : r.Value.Result == 3 ? "waits: this game's own skip is running (tried again after it)" : "was not needed")}"));
         });
         return true;
     }

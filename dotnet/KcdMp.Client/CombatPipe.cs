@@ -1677,8 +1677,11 @@ public sealed class CombatPipe : IAsyncDisposable
         frame[0] = type;
         BinaryPrimitives.WriteUInt16LittleEndian(frame.AsSpan(1), (ushort)payload.Length);
         payload.CopyTo(frame.AsSpan(3));
-        await _pipe!.WriteAsync(frame, ct);
-        await _pipe.FlushAsync(ct);
+        // WO-144 5: the reader can drop the pipe while a command waits at the gate; a null pipe
+        // here was the field's NullReferenceException in every tick after the game died
+        var pipe = _pipe ?? throw new IOException("pipe closed");
+        await pipe.WriteAsync(frame, ct);
+        await pipe.FlushAsync(ct);
     }
 
     private async Task<(byte Type, byte[] Body)> ReadFrameAsync(CancellationToken ct)
@@ -1696,7 +1699,8 @@ public sealed class CombatPipe : IAsyncDisposable
         int got = 0;
         while (got < buffer.Length)
         {
-            int n = await _pipe!.ReadAsync(buffer.AsMemory(got), ct);
+            var pipe = _pipe ?? throw new IOException("pipe closed");   // WO-144 5
+            int n = await pipe.ReadAsync(buffer.AsMemory(got), ct);
             if (n <= 0) throw new IOException("pipe closed");
             got += n;
         }
@@ -1704,6 +1708,7 @@ public sealed class CombatPipe : IAsyncDisposable
 
     private void Drop()
     {
+        bool had = _pipe is not null;   // WO-144 5: one line per lost connection, not one per caller
         _pipe?.Dispose();
         _pipe = null;
         // A reconnect gets a fresh channel and no sequence expectation: the
@@ -1712,7 +1717,7 @@ public sealed class CombatPipe : IAsyncDisposable
         _replies.Writer.TryComplete();
         _replies = NewReplyChannel();
         _expectedSeq = null;
-        Console.WriteLine("[combat] lost the connection to KCDMP.dll");
+        if (had) Console.WriteLine("[combat] lost the connection to KCDMP.dll");
     }
 
     public ValueTask DisposeAsync()

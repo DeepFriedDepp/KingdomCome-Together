@@ -93,6 +93,8 @@ public partial class GameBridge
         int n = 0;
         foreach (var f in replay)
         {
+            // WO-144: a peer who left while the world loaded is not brought back by its held frame.
+            if (f.Type == Protocol.Ghost && f.Payload.Length > 0 && Wo144DropFromRemoved(f.Payload[0])) continue;
             long now = Stopwatch.GetTimestamp();
             FeedNativeAtRead(f.Type, f.Payload, now, replay: true);
             if (w is not null && w.TryWrite(new InFrame(f.Type, f.Payload, now))) n++;

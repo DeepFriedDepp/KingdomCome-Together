@@ -392,6 +392,9 @@ public static partial class WhsSave
         public readonly SortedDictionary<string, string> Scalars = new(StringComparer.Ordinal);
         public readonly SortedDictionary<string, uint> StatXp = new(StringComparer.Ordinal);
         public readonly List<InvItem> Inventory = [];
+        /// <summary>WO-144 1.4: the record carries an item list (0x1301/0x0007). An early (tutorial-era)
+        /// Henry can have none (WO-132): its items are then not in the file to compare.</summary>
+        public bool HasItemList;
     }
 
     public static PlayerSoul DecodePlayerSoul(byte[] raw, Node rec)
@@ -449,6 +452,7 @@ public static partial class WhsSave
             var inv = KidsOf(raw, invf[0]);
             if (inv.TryGetValue(0x0007, out var lst))
             {
+                res.HasItemList = true;
                 foreach (var node in Children(raw, lst[0].PayloadOff, lst[0].End) ?? [])
                 {
                     var b = Payload(raw, node);

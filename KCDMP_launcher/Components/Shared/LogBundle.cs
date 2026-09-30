@@ -155,6 +155,18 @@ namespace KCDMP_launcher.Components.Shared
                 catch { }
             }
 
+            // WO-144: the logs of the launches before this one (KeepHistory), newest first -- a
+            // restart used to overwrite the only copy of a crash's or a black screen's logs.
+            try
+            {
+                var hist = new DirectoryInfo(HistoryFolder);
+                if (hist.Exists)
+                    foreach (var d in hist.GetDirectories("launch-*").OrderByDescending(d => d.Name).Take(HistoryKeep))
+                        foreach (var f in d.GetFiles())
+                            AddIfPresent(f.FullName, $"history/{d.Name}/{f.Name}");
+            }
+            catch { }
+
             // The launcher's real settings file (written by Home.SaveSettings
             // as a working-directory-relative "settings.json").
             AddIfPresent(Path.GetFullPath("settings.json"), "settings.json");
@@ -163,6 +175,63 @@ namespace KCDMP_launcher.Components.Shared
             AddIfPresent(Globals.ConfigFilePath, "config.json");
 
             return zipPath;
+        }
+
+        /// <summary>WO-144: where KeepHistory puts the logs of earlier launches (one folder per launch).</summary>
+        public static string HistoryFolder => Path.Combine(Globals.AppFolder, "log-history");
+
+        /// <summary>WO-144: how many earlier launches are kept.</summary>
+        public const int HistoryKeep = 6;
+
+        /// <summary>
+        /// WO-144 (log retention): called right before the game starts. The game writes a new kcd.log
+        /// at every start and keeps ONE backup; the DLL's logs start over at every injection. A second
+        /// restart after a crash therefore used to overwrite the only copy of the crash's logs. This
+        /// copies the logs as they are now -- the previous launch's -- into log-history\launch-&lt;time&gt;
+        /// and keeps the newest <see cref="HistoryKeep"/> launches. Never fatal.
+        /// </summary>
+        public static void KeepHistory(string gameRoot, string agentDirectory)
+        {
+            try
+            {
+                var files = new List<(string Path, string Name)>();
+                string? kcdLog = FindKcdLog(gameRoot);
+                if (kcdLog is not null)
+                {
+                    string kcdDir = Path.GetDirectoryName(kcdLog) ?? "";
+                    files.Add((kcdLog, "kcd.log"));
+                    files.Add((Path.Combine(kcdDir, "kcdmp-native.mirror.log"), "kcdmp-native.mirror.log"));
+                }
+                if (!string.IsNullOrWhiteSpace(agentDirectory))
+                    files.Add((Path.Combine(agentDirectory, "kcdmp-native.log"), "kcdmp-native.log"));
+                files = files.Where(f => File.Exists(f.Path)).ToList();
+                if (files.Count == 0) return;
+
+                // named by the time the previous launch's kcd.log was last written (its end)
+                DateTime stamp = files.Max(f => File.GetLastWriteTime(f.Path));
+                string dir = Path.Combine(HistoryFolder, $"launch-{stamp:yyyyMMdd-HHmmss}");
+                if (Directory.Exists(dir)) return;   // this launch's logs are kept already
+                Directory.CreateDirectory(dir);
+                foreach (var (path, name) in files)
+                {
+                    try
+                    {
+                        using var src = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                        using var dst = new FileStream(Path.Combine(dir, name), FileMode.CreateNew, FileAccess.Write);
+                        src.CopyTo(dst);
+                    }
+                    catch { }
+                }
+                foreach (var old in new DirectoryInfo(HistoryFolder).GetDirectories("launch-*")
+                             .OrderByDescending(d => d.Name).Skip(HistoryKeep))
+                {
+                    try { old.Delete(recursive: true); } catch { }
+                }
+            }
+            catch
+            {
+                // log retention must never stop a launch
+            }
         }
 
         /// <summary>

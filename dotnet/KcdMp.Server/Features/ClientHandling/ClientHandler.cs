@@ -175,6 +175,27 @@ public class ClientHandler
 	}
 
 	/// <summary>
+	/// WO-144 1.1: the older connections a newly ready client replaces -- the
+	/// same player (the same machine: TCP address or Steam peer, and the same
+	/// name) connecting again while his old connection is still here (his game
+	/// or agent restarted; a Steam connection lingers until its ~10-20 s
+	/// timeout, and for all that time the host counted a phantom partner). The
+	/// caller closes them at once; their Disconnect goes out as for any leave.
+	/// </summary>
+	public List<ClientSession> SupersededBy(ClientSession newer)
+	{
+		var list = new List<ClientSession>();
+		string key = newer.IdentityKey;
+		if (string.IsNullOrEmpty(key) || key.EndsWith(':') || key.EndsWith('?') || newer.Name is null) return list;
+		lock (_lock)
+			foreach (var c in _readyClients)
+				if (!ReferenceEquals(c, newer) && c.IsReady && c.IdentityKey == key
+				    && string.Equals(c.Name, newer.Name, StringComparison.Ordinal))
+					list.Add(c);
+		return list;
+	}
+
+	/// <summary>
 	/// Gets a copy of the client list to prevent outside manipulation.
 	/// </summary>
 	/// <returns></returns>

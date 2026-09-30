@@ -141,7 +141,7 @@ public partial class GameBridge
                 if (wasHolding && !holding && host) Wo137ReleaseHeldRequests();
                 wasHolding = holding;
                 long now = Environment.TickCount64;
-                if (host && _ghostNames.Count > 0)
+                if (host && LivePartners().Count > 0)
                 {
                     if (now - _w137ModeAtMs >= 10_000) { _w137ModeAtMs = now; await Wo137SendModeAsync("heartbeat"); }
                     if (!holding && _w137SyncOn && (now - _w137CheckpointAtMs) >= 30_000 && (_w137HostSeenDirty || now - _w137CheckpointAtMs >= 120_000))
@@ -173,7 +173,7 @@ public partial class GameBridge
 
     /// <summary>The quest mirror runs: a role, the kill switch on, the host's mode on (joiner), Henry (host), no load.</summary>
     private bool Wo137Active(bool holding) =>
-        Wo137Rules.MirrorActive(holding, _w137SyncOn, W137Host, W137Joiner, _w137HostPlayer, _ghostNames.Count, _w137HostModeOn);
+        Wo137Rules.MirrorActive(holding, _w137SyncOn, W137Host, W137Joiner, _w137HostPlayer, LivePartners().Count, _w137HostModeOn);
 
     private async Task Wo137PushConfigAsync(bool holding)
     {
@@ -422,6 +422,7 @@ public partial class GameBridge
                 Interlocked.Increment(ref _w137Applied);
                 Console.WriteLine(FormattableString.Invariant(
                     $"MP-W137 joiner applied host change #{c.Seq} {c.Path} {c.Port} {a.Old}->{a.New}{(a.New != c.New ? $" (the host had {c.New})" : "")}"));
+                if (c.Seq == 0 && a.New != c.New) Wo144CorrectionMissed(c.Path, c.Port, c.New, a.New);   // WO-144 4.1
                 break;
             case 1:
                 Interlocked.Increment(ref _w137Unchanged);   // already there: counted once
@@ -467,6 +468,9 @@ public partial class GameBridge
             mism++;
             Interlocked.Increment(ref _w137Mismatch);
             string? port = Wo137Rules.PortForCorrection(e.Port) ?? (_w137HostPort.TryGetValue(e.Path, out var p) ? p : null);
+            // WO-144 4.1: a port that did not land on the host's value last time is not fired again (the
+            // field re-ran SetAroundBoulder's consequences every 30 s: 0 -> 3 while the host had 15)
+            if (port is not null && Wo144CorrectionSkipped(e.Path, port, e.Val)) continue;
             Console.WriteLine(FormattableString.Invariant($"MP-W137 MISMATCH {e.Path}: this copy {l.Val}, the host {e.Val}{(port is null ? " -- no port to correct it (the next join loads it exactly)" : $" -- corrected toward the host ({port})")}"));
             if (port is null) continue;
             _w137Queue.EnqueueFront(new QuestChange(0, QuestChange.FNotify, l.Val, e.Val, port, "", e.Path, 0));

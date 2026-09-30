@@ -89,6 +89,27 @@ int wo141_rules_tests(int* passed) {
         ACHECK(same(with_shown(grind, wash, true), grind), "a minigame is not none: it wins too");
     }
 
+    // WO-144 2.2: an avatar's crouch is the motion path's, never WO-141's
+    {
+        Activity crouch; crouch.stance = kCrouch;
+        ACHECK(none(without_crouch(crouch)), "the player's crouch is not sent as an activity row");
+        ACHECK(same_body(without_crouch(crouch), Activity{}), "a crouched avatar with 'none' wanted is in step (no CrouchUp)");
+        ACHECK(same(without_crouch(bench(9)), bench(9)), "a seat is left as it is");
+        ACHECK(is_avatar_name("kcd2mp_2") && is_avatar_name("kcd2mp_0") && !is_avatar_name("tzel_man_5") && !is_avatar_name("kcd2m") && !is_avatar_name(nullptr),
+               "only the partners' avatars (kcd2mp_<id>)");
+    }
+
+    // WO-144 5: the player on a bed's edge is shown lying on that bed (an NPC body has no sit-down there)
+    {
+        ACHECK(is_bed_name("smartObject[Bed/bed_high2_04f3a2d6-405b-4f1c-b081-cea78c380284]") && !is_bed_name("smartObject[Bench.bench_3places1_9b3f]")
+               && !is_bed_name("") && !is_bed_name(nullptr), "a bed by the smart object's own name");
+        const Activity b = bed_sit_as_lying(bench(0x0D9DE4355D3B66DBull), true);
+        ACHECK(b.stance == kLying && b.stanceObj == 0x0D9DE4355D3B66DBull && b.flags == kFlagOwnsPos, "sitting on a bed -> lying on the same bed (it owns the body)");
+        ACHECK(same(bed_sit_as_lying(bench(7), false), bench(7)), "a bench stays a seat");
+        Activity lie; lie.stance = kLying; lie.stanceObj = 7;
+        ACHECK(same(bed_sit_as_lying(lie, true), normalised(lie)), "already lying: unchanged");
+    }
+
     *passed = g_pass;
     return g_fail;
 }

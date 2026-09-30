@@ -210,7 +210,7 @@ public partial class GameBridge
 
         foreach (var (id, (st, at)) in _leashJoinerState)
         {
-            if (!_ghostNames.ContainsKey(id) && (DateTime.UtcNow - at).TotalSeconds > 30)
+            if (!IsLivePeer(id))   // WO-144: gone is gone (was: no name and 30 s)
             {
                 _leashJoinerState.TryRemove(id, out _);
                 _leashByJoiner.TryRemove(id, out _);

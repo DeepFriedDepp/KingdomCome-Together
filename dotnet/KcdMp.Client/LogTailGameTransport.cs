@@ -313,6 +313,28 @@ public sealed class LogTailGameTransport : IGameTransport
     public event Action<string>? QuestLine;
 
     /// <summary>
+    /// WO-144: the engine's own words the field fixes need, raw (GameBridge.Wo144OnEngineLine):
+    /// why an avatar refused a piece, a talk request the engine dropped, a scene queued again,
+    /// the fader held black, a conversation interrupted, an invalid minigame object.
+    /// </summary>
+    public event Action<string>? Wo144Line;
+
+    public static readonly string[] Wo144Prefixes =
+    [
+        "[Warning] Can't equip armor '",
+        "Canceling dialog request id ",
+        "[Warning] [MinigameActivityComponent]:",
+        "Faders are faded out",
+    ];
+
+    public static readonly string[] Wo144Contains =
+    [
+        "' was added into waiting players",
+        "Dialog interrupted.",
+        "Dialog ends but no response was played",
+    ];
+
+    /// <summary>
     /// WO-124: "Loading saved game '%USER%/saves/playlineN/x.whs' ..." -- a save
     /// load was accepted (printed at once; from the main menu the level loads
     /// next and "[CryAction] LoadGame" follows ~40 s later). Argument: playlineN/x.whs.
@@ -626,6 +648,18 @@ public sealed class LogTailGameTransport : IGameTransport
         {
             try { QuestLine.Invoke(line.ToString()); }
             catch (Exception ex) { Console.WriteLine($"[wo137] quest-line handler threw: {ex.Message}"); }
+        }
+
+        if (Wo144Line is not null)
+        {
+            bool hit = false;
+            foreach (var pre in Wo144Prefixes) if (line.StartsWith(pre, StringComparison.Ordinal)) { hit = true; break; }
+            if (!hit) foreach (var mid in Wo144Contains) if (line.IndexOf(mid, StringComparison.Ordinal) >= 0) { hit = true; break; }
+            if (hit)
+            {
+                try { Wo144Line.Invoke(line.ToString()); }
+                catch (Exception ex) { Console.WriteLine($"[wo144] engine-line handler threw: {ex.Message}"); }
+            }
         }
 
         if (GameQuit is not null && line.StartsWith("CSystem::Quit invoked", StringComparison.Ordinal))

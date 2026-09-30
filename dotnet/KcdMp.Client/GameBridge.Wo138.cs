@@ -216,6 +216,7 @@ public partial class GameBridge
             frozen: _w138World.Frozen);
         // Without the log tail (the HTTP transport) the old aggregate is the menu bit.
         if (tail is null && _localAutoPaused) r |= Wo138Codec.ReasonMenu;
+        if (_w144ClockPaused && _isDamageAuthority) r |= Wo138Codec.ReasonClock;   // WO-144 3.3: the host's clock stands (the joiners' stand with it); a joiner's own is not the world's
         if (r != _w138LastReasons)
         {
             _w138LastReasons = r;
@@ -248,6 +249,7 @@ public partial class GameBridge
         if (sourceId != _w138HostId) return;
         byte was = _w138HostReasons;
         _w138HostReasons = state;
+        Wo144OnHostClock(was, state);   // WO-144 3.3: the host's clock stands -> this one stands with it
         if (was == 0 && state != 0) _w138HostPausedSinceMs = W138NowMs();
         Console.WriteLine($"MP-WO138 the host {(state == 0 ? "resumed" : "is paused: " + Wo138Codec.Describe(state))}");
         _ = Wo138ApplyHoldAsync(CancellationToken.None, force: true);

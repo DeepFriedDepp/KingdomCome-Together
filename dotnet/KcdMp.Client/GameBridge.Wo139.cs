@@ -203,7 +203,7 @@ public partial class GameBridge
     {
         foreach (var (peer, rec) in _w139Records.ToArray())
         {
-            if (!_ghostNames.ContainsKey(peer)) { _w139Records.TryRemove(peer, out _); continue; }
+            if (!IsLivePeer(peer)) { _w139Records.TryRemove(peer, out _); continue; }   // WO-144 (a reconnect gets it back: GameBridge.Wo144)
             foreach (var c in rec.Tick(now, 0))
                 Console.WriteLine($"MP-W139 host: ghost {peer}'s {c.Kind} in {(c.Settlement.Length > 0 ? c.Settlement : "the wilds")} is known to the guards now (a witness reported it)");
             if (rec.Open.Any(c => c.Known) || _w139Pursuits.Values.Any(p => p.Peer == peer))

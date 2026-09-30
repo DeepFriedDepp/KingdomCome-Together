@@ -69,7 +69,7 @@ public partial class GameBridge
                 bool joiner = Wo134JoinerRole;
                 bool host = Wo134HostRole;
                 bool shared = joiner ? JoinerSharedEffective : _sharedWorld;
-                int peers = _ghostNames.Count;
+                int peers = LivePartners().Count;   // WO-144
                 _ = ExecLuaAsync($"if KCD2MP_W134Tick then KCD2MP_W134Tick({B(joiner)}, {B(host)}, {B(shared)}, {peers}) end");
                 Wo134FlushHost();
                 Wo135HostTick();   // WO-135: the host world's build to every joiner
@@ -98,7 +98,7 @@ public partial class GameBridge
         catch (Exception ex) { Console.WriteLine($"MP-WO134 {(type == Protocol.LootAskUp ? Protocol.LootAskName(kind) : Protocol.LootHostName(kind))} not sent: {ex.Message}"); }
     }
 
-    private List<byte> Wo134Peers() => _ghostNames.Keys.Where(g => g != _myGhostId).ToList();
+    private List<byte> Wo134Peers() => LivePartners();   // WO-144: was every name ever seen (the phantom partner)
 
     // ---------------------------------------------------------------- events from the mod
 
