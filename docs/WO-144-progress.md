@@ -103,7 +103,10 @@ joiner.
 Relay round trip 59/59; agent unit tests 637/637; every `Test-*Synthetic.ps1`
 (39 suites; `Test-WO137Synthetic` 89/89); both static checks; native unit tests
 298/298; the local publish; the payload smoke. The installer build ran every
-gate again inside a fresh clone of `origin/main`.
+gate again inside a fresh clone of `origin/main` (at `7bcc28a`): all green, and
+`release\KingdomComeTogether-Setup-0.42.2.exe` (95.7 MB) sits beside 0.42.0's in
+the git-ignored release folder. Its payload (1,026 files) was swept: no player
+or Steam name, machine name, address or user path in any of them.
 
 ## Runbook: how the live runs were made
 

@@ -57,7 +57,7 @@ all four are fixed at their root:
 | 1.1 phantom partner | fixed | (observed) L0 reproduced `peers=2` on 0.42.0; L1/L1b: `replaces its older connection`, `peers=1`, the vote asked of one joiner and went through |
 | 1.2 host crash on an in-session load | fixed at the root | (observed) three identical dumps read; L0 crashed on 0.42.0's first load; L1b: 10 consecutive loads, each with the avatar attached, no crash |
 | 1.3 talk hold before the talk | fixed | (observed) J3: the host's NPC held only once the joiner was in the conversation, released at its end; a dropped request holds nothing |
-| 1.4 tutorial-era joins | fixed | (synthetic) a file that lists only money joins with a warning; (observed) J1–J3 joined with a tutorial-era save; aborts say why |
+| 1.4 tutorial-era joins | fixed | (code-verified) a file that lists only money joins with a warning, and aborts say why; (observed) J1–J3 joined with a tutorial-era save |
 | 2.1 clothes both ways | fixed | (observed) J2/J3: the host's avatar dressed on the joiner and stable; H2: the host screen, the outfit watch re-dresses within seconds |
 | 2.2 crouch | fixed | (observed) H2: crouched for 3 min, no flip back; the crouched walk is the sneak walk |
 | 2.3 horses | partly | (observed) a living horse copy is bound and now shown (it was hidden on the joiner); riding on the host's screen: horse and pose; parked encounter copies with no physics stay unbound (§2.3) |
@@ -203,7 +203,7 @@ character arrived in your host's world with different money than you have."
 **Proof.** Unit tests (the tutorial-era shape, no item list, other money).
 J1–J3 joined with a tutorial-era save as the character: `Henry check: MATCH`
 (the live Henry carried nothing either, so the warning path itself is unit-only).
-**(synthetic)**
+**(observed)** for the joins, **(code-verified)** for the warning and the messages.
 
 ---
 

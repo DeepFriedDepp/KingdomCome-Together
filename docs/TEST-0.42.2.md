@@ -60,6 +60,10 @@ you have it) must end with "all present".
 - A red icon at the top of the partner's screen after a crime can stay on
   (check 12 below).
 - The partner does not hear the host whistle, and the other way round.
+- An escort (the sheep in "Find Mutt!") follows only the player who leads it, on
+  that player's screen.
+- A cutscene can stay black on the partner's screen until the host's next step.
+- The journal's marker letters can differ between the two of you.
 - At the grindstone the blade is not in the other player's figure's hands.
 
 ## Setup (both of you)
