@@ -1,6 +1,6 @@
 # The next two-player session: the combined checklist
 
-One list for the host and the partner, built up by WO-136 to WO-143. The same
+One list for the host and the partner, built up by WO-136 to WO-144. The same
 list, with what is new, is the tester page for 0.42.0: `docs/TEST-0.42.0.md`.
 Tick what you saw, write the time next to anything odd, and send the logs
 listed at the end.
@@ -368,8 +368,63 @@ Lines worth a look — both: `MP-W143`, `MP-W143 stats`, `WO143-CONFIG`,
 `WO143-HANDS`, `WO143-GAIT`, `WO143-SHOT`, `WO143-TEMP`, and WO-141's
 `WO141-APPLY` (a refused apply: three lines, then one a minute with the count).
 
+## WO-144 — what the first real sessions found
+
+The fixes from the first two-player evenings on 0.42.0. Three new switches, all
+on: `mp_avatar_dress`, `mp_avatar_lights`, `mp_show_animals` (`off` goes back
+to 0.42.0's way for that piece).
+
+62. **A restart in the middle.** The partner quits the game and starts it again
+    (or restarts the launcher), then joins again. Marker: `mark_rejoin`.
+    * Host: then sleep in a bed. The question goes to the partner once, he says
+      yes, and you both sleep. (0.42.0: the question waited for a second,
+      invisible partner and timed out.)
+63. **Load a save in the session** (host). Save once, walk a bit, load it.
+    Marker: `mark_load`.
+    * Host: the game loads; the partner's figure comes back. (0.42.0 crashed
+      here.) Do it twice more.
+64. **Talk to someone** (partner), by day, then at night. Marker: `mark_talk`.
+    * Partner: the conversation plays. If someone does not answer, you get
+      "This person can't talk to you right now." and nothing else happens.
+    * Host: that person stands still only while the partner really talks to
+      them.
+65. **Clothes.** Both change clothes a few times: a hat on and off, armour on
+    and off, then crouch and sneak a few steps. Marker: `mark_clothes`.
+    * Both: the other player's figure wears what they wear, within a few
+      seconds, every time, and keeps it on while sneaking. Nobody is shown in
+      their underwear (`mark_odd` and the time if someone is).
+66. **Crouch.** Each crouches and sneaks for a minute. Marker: `mark_crouch`.
+    * The other: the figure stays crouched and sneaks; it never stands up by
+      itself.
+67. **Night.** Walk about at night without a torch, then with one. Marker:
+    `mark_torch`.
+    * The other: no lantern or torch in the figure's hand until its player
+      holds a torch; then the torch, and when it goes away nothing is left
+      lying on the ground.
+68. **Horses.** The host rides past the partner; then the partner rides past the
+    host. Marker: `mark_horse`.
+    * Both: the rider sits on a horse, in the riding pose. Horses standing
+      about on the host's screen are there on the partner's too.
+69. **Wolves or dogs** attack the partner. Marker: `mark_animals`.
+    * Partner: you can see them and hit them, and they die when they should.
+70. **Dice** with someone in a tavern (partner). Marker: `mark_dice`.
+    * Partner: after the conversation, the dice game starts and you can play.
+71. **The clock** (partner): once in a while compare the time with the host
+    (the host says it). Marker: `mark_time`.
+    * The two never differ by more than a minute or so, also while the host
+      talks to someone.
+72. **Sitting on a bed** (partner): sit on a bed's edge, then get up. Marker:
+    `mark_bed`.
+    * Host: the partner's figure lies on that bed while you sit, then gets up.
+73. **Wanted** (partner): if a red icon stays at the top of your screen, write
+    down when it came and send a screenshot. Marker: `mark_icon`.
+
+Lines worth a look — host: `MP-PEERS`, `replaces its older connection`,
+`WO131-FACTION`; both: `[appearance] ghost`, `WO144-DRESS`, `WO144-LIGHT`,
+`WO144-SHOW`, `WO144-CLOCK`, `WO144-FLOAT`, `MP-W144`, `WO137-TALK`.
+
 ## Logs to send afterwards
 
-Both machines, before starting the game again (the game keeps only one old
-log): `kcd.log` and `kcdmp-native.mirror.log` (the Modding Tools folder), the
-agent log, and the host's relay log.
+Both machines: Report a bug in the launcher. Since 0.42.2 it also collects the
+logs of the six launches before (the launcher keeps them), so a restart no
+longer loses the logs of a crash.

@@ -170,6 +170,16 @@ $AsmMarkers = @(
     @{ File = 'KCDMP.dll';       Marker = 'WO141-SHOW';             Owner = "WO-141 the player's one-shot shown as an NPC activity (native)" },
     @{ File = 'KCDMP.dll';       Marker = 'is not a human -- the actor system'; Owner = "WO-141 an animal's bite plays on the joiner's copy (native)" },
     @{ File = 'KcdMp.Protocol.dll'; Marker = 'activity-host';       Owner = 'WO-141 activities on the join channel (wire)' },
+    # WO-144: the field fixes (the partner set, the crash, the clothes, the lights, the claim)
+    @{ File = 'KcdMpClient.dll'; Marker = 'a removed ghost stays removed'; Owner = 'WO-144 partners only from live connections (agent half)' },
+    @{ File = 'KcdMpServer.dll'; Marker = 'replaces its older connection'; Owner = "WO-144 the relay replaces a player's old connection at once" },
+    @{ File = 'KCDMP.dll';       Marker = 'SetParent REFUSED';      Owner = "WO-144 the faction node's own SetParent (the load crash, native)" },
+    @{ File = 'KcdMpClient.dll'; Marker = 'is another soul too';    Owner = "WO-144 an avatar's live soul, not a saved one of the same name (agent half)" },
+    @{ File = 'KcdMpClient.dll'; Marker = 'came off since the last check'; Owner = "WO-144 the avatar's outfit read back every 10 s (agent half)" },
+    @{ File = 'KcdMpClient.dll'; Marker = 'not fired again for that value'; Owner = 'WO-144 a checkpoint correction that misses is not repeated (agent half)' },
+    @{ File = 'KCDMP.dll';       Marker = 'it lies on it';          Owner = "WO-144 a player's bed-edge sit shown lying (native)" },
+    @{ File = 'KCDMP.dll';       Marker = 'body=horse-or-animal (entity-written)'; Owner = 'WO-144 a horse or animal copy written like any body (native)' },
+    @{ File = 'KCDMP_launcher.dll'; Marker = 'log-history';         Owner = "WO-144 earlier launches' logs kept (launcher)" },
     @{ File = 'KCDMP_launcher.dll'; Marker = 'Kingdom Come: Together'; Owner = 'WO-134 rebrand (launcher window title)' }
 )
 
@@ -247,6 +257,12 @@ $PakMarkers = @(
     @{ Marker = 'function KCD2MP_W140ReportUse';   Owner = "WO-140 the bed held before the lie-down (mod half)" },
     @{ Marker = 'function KCD2MP_W140Prompt';      Owner = "WO-140 the other player's sleep prompt (mod half)" },
     @{ Marker = 'function KCD2MP_W140Separate';    Owner = 'WO-140 the own-world message (mod half)' },
+    @{ Marker = 'function KCD2MP_W144Equip';       Owner = "WO-144 an avatar dressed from its own inventory (mod half)" },
+    @{ Marker = 'function KCD2MP_W144AvatarKey';   Owner = "WO-144 the live avatar's entity key (mod half)" },
+    @{ Marker = 'function KCD2MP_W144LightTick';   Owner = 'WO-144 an avatar holds a light only while its player does (mod half)' },
+    @{ Marker = 'function KCD2MP_W144FollowHostClock'; Owner = "WO-144 the joiner's clock stands with the host's (mod half)" },
+    @{ Marker = 'function KCD2MP_W144ShowCopy';    Owner = 'WO-144 a hidden horse or animal copy shown (mod half)' },
+    @{ Marker = 'WO144-FLOAT';                     Owner = 'WO-144 a copy held far above the ground is logged (mod half)' },
     @{ Marker = 'Other players are not ready to sleep yet!'; Owner = 'WO-140 the plain refusal line' },
     # WO-141: activities and animal attacks
     @{ Marker = 'function KCD2MP_SetActivities';   Owner = 'WO-141 mp_activities (mod half)' },
