@@ -20,7 +20,7 @@ either for a long session: both have the bug this release fixes.
 **Verified:** in the built DLL's own machine code, by the native unit tests, and
 live on one machine: in a crowd and in a fight the game's stat bookkeeping stayed
 empty and the frame rate held. The cause, the evidence and the numbers:
-`docs/WO-148-findings.md` section 4.5.
+`docs/WO-148-findings.md` section 7.
 
 ---
 

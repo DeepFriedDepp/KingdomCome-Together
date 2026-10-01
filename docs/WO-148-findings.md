@@ -8,7 +8,8 @@ affiliated with or endorsed by Warhorse Studios or PLAION.
 game, no window) and, after the maintainer's go-ahead, Stage B (live, solo, on
 throwaway save copies of the Modding Tools build). 0.42.5 is bookmarked as the
 tag `v0.42.5` on `7dcd01a` (the commit its installer was built from), pushed
-before any code.
+before any code. **After the WO:** the frame-rate collapse seen in Stage B was
+found and fixed, **0.42.8** (section 7).
 
 Evidence marks: **(observed)** seen live in the game; **(synthetic)** the real
 game against a scripted partner or a synthetic host, or a console stand-in for a
@@ -63,6 +64,15 @@ test, not run live; **(pending)** the live run is planned for Stage B.
    The live runs found six defects, and preparing one found a seventh; each is
    fixed and covered by a test, and five reran live (section 4.4).
    **(observed; frames in `docs/wo148-shots/`)**
+5. **The frame-rate collapse was the mod's, and 0.42.8 fixes it** (after the WO).
+   WO-147's stamina reading in the DLL handed the game a value that no longer
+   existed, for every soul near the player after the first. The game faulted on
+   it after pushing onto one of its own stat stacks, the DLL's fault guard hid the
+   fault, and the stack grew for good: every stat read in the game then walked all
+   of it (4,578 entries: about 4.5 FPS). It is in 0.42.5 and 0.42.7 alike, and any
+   two or more souls within 15 m trigger it, not the carry. One declaration moved
+   fixes it: in a crowd and in a fight on 0.42.8 the stack stays empty and the
+   frame rate holds. **(observed; code-verified; section 7)**
 
 | item | status | evidence |
 |---|---|---|
@@ -78,6 +88,7 @@ test, not run live; **(pending)** the live run is planned for Stage B.
 | 3.1 the carry census | done | `docs/WO-148A-carry-census.md`; five of its seven open questions answered live, one in part (section 4.4) |
 | 3.2 carrying on the other screen | done | (observed) host and joiner runs H1, H2, J1–J3; (synthetic) the Lua suite, 112 checks; (code-verified) 26 agent test methods, two relay round-trip tests |
 | 3.3 quest reactions to a carried body | logged | (code-verified) `MP-CARRY quest-reaction`; no save of this machine reaches a burial step (section 4.4) |
+| after the WO: the frame rate | found; fixed in 0.42.8 | (observed) the game's stat stack read live: 4,578 entries on 0.42.7, 0 on 0.42.8 in a crowd and in a fight; (code-verified) the DLL's compiled code in 0.42.5, 0.42.7 and 0.42.8 (section 7) |
 
 ## 1. Attribution
 
@@ -389,73 +400,21 @@ within minutes of the first test body being killed and carried (H1: 74 → 6 FPS
 8 minutes; H2: 75 → 23 in 1.5 minutes, 4 later). Not the agent, the partner, the
 DLL's NPC sender (each A/B'd off: no change), the inactive-window throttle
 (foreground: 8.8 FPS) or memory (14 GB free, no paging); the engine's profile
-showed physics waits (185 ms), AI (88 ms) and audio (54 ms) per frame, and
+showed physics waits (185 ms), AI (88 ms) and audio (54 ms) per frame (symptoms,
+section 7.3), and
 removing the test body and loading another save did not restore it. The joiner
 sessions ran at 20–25 FPS. The DLL's NPC sender costs 5–7 ms a frame on a host by
 itself (its own counter). **Found after the WO: a stat stack in the game left growing by the DLL's
-stamina reading (section 4.5), fixed in 0.42.8.**
+stamina reading (section 7), fixed in 0.42.8.**
 
-### 4.5 The frame rate, found (after the WO; fixed in 0.42.8)
+### 4.5 The frame rate
 
-At the maintainer's request, after the WO. **The cause is ours:** WO-147's
-stamina reading in `rttr::sample_health` (`native/KCDMP/rttr_abi.cpp`), so it is
-in 0.42.5 and 0.42.7 alike.
-
-* **What the game was doing.** A sampling profiler on the game's main thread
-  (suspend, copy the used stack, resume: about 40 µs; walked offline): 79% of the
-  main thread inside RPGModule, under one function (`RPGModule+844e70`: a
-  mutex-guarded insert into two flat maps), called from the soul stat getter
-  behind `Soul::GetState` (`+7326d0`) — reached from the game's AI, from Lua
-  script binds and from the DLL alike. The getter pushes the stat's id onto a
-  thread-local stack, records a dependency pair for every id already on it,
-  reads the stat and pops. Read from outside, on the main thread, after a fight:
-  the stack held 4,578 entries, all the same id (`0x7270688d`), so every stat
-  read in the game made 4,578 locked inserts (about 4.5 FPS). Its depth is 0
-  between frames when nothing leaks.
-* **What left the entries.** The stamina state's value (`st_val`) was declared
-  inside a block; the argument built from it (`arg_st`) keeps a pointer to it
-  and is used in the loop after the block. In the built DLL — the 0.42.5 build
-  (rebuilt from `22b5a90`) and the 0.42.7 one alike — the compiler gave the
-  stamina reading the same stack slot (`[rsp+0x38]`). After the first soul
-  within 15 m, every `GetState` call got a stamina reading as its state. The game
-  read out of range and faulted after its push; the DLL's fault guard
-  (`call_invoke1`) swallowed the fault and returned false, so nothing was logged
-  and the pop never ran: one entry per wrong read, up to 16 passes a second,
-  never removed (a thread-local of the game's main thread: only a restart clears
-  it). A single soul near the player leaks nothing (observed: the stack stood
-  still with only one body within 15 m).
-* **Why it looked like the carry.** The first test bodies came from fights among
-  people. The stack grew with every person near the player and the game never
-  recovered, so "after the carry" was "after the fight". It is not combat as
-  such: any two or more souls near the player.
-* **Ruled out on the way.** The machine (reads of fixed cost kept the same µs
-  while the frame rate fell 77 → 13; one thread at 93% of a core, the other 85
-  idle), the log volume, memory, a Lua timer leak, the DLL's own per-frame tasks
-  (0.6 → 2.9 ms of a frame, by a per-task meter), and the game without the mod
-  (76 FPS three minutes after a kill without a fight).
-* **The fix (0.42.8).** `st_val` is declared beside `arg_st`. In the new build
-  the stamina state has its own slot (`[rsp+0x78]`), written once before the
-  loop; the reading is stored elsewhere. Native tests 328/328.
-* **Live check (0.42.8, one machine, the maintainer playing):**
-  * Three commoners spawned 2.5 m around the player (no AI, never saved), 100 s:
-    the DLL counted 3–4 souls within 15 m the whole time and read a real stamina
-    for every one of them (120.0, 123.3, 120.0; 136.7 and 153.3 for passers-by).
-    The game's stat stack stayed at depth 0 (one reading of 2: a nested read in
-    progress); 64–70 FPS throughout (69.6 before, 69.9 after).
-  * The same with their AI on, 90 s, one of them killed by the player in the
-    middle of it: depth 0 before and after the kill, 71–79 FPS.
-  * A fight: an unarmed bandit and the three commoners, five souls within 15 m,
-    about 100 s of fighting until the bandit won. The player's blows mostly fell
-    on his block (no health, 13–17 stamina each: WO-147's stamina-only blows,
-    reported as designed). Depth 0 throughout, 67–75 FPS (a dip to 25 during the
-    death's wake teleport, 74.6 after).
-  * For comparison, the same game on 0.42.7 after one fight among people: depth
-    4,578, about 4.5 FPS.
-* **Also seen, not investigated:** one soul the DLL tracks within 15 m follows
-  the player (through a 316 m wake teleport) with its health and stamina frozen
-  at the values the session started with (75.3, 118.0), and no entity of its own
-  near: a second, player-like soul. Harmless for the frame rate now; worth a look
-  if hits on "an NPC" that is really the player come back (WO-99).
+Found after the WO and fixed in 0.42.8. It was not the carry: WO-147's stamina
+reading in the DLL left an entry on one of the game's own stat stacks at every
+wrong read, and every stat read in the game then walked all of them. The whole
+story is section 7: the hunt, the game's mechanism, the bug, the fix, the live
+check, what the investigation did in the maintainer's game, the lessons and the
+proposed safeguards.
 
 ## 5. Decisions made unattended (Stage A)
 
@@ -505,4 +464,317 @@ in 0.42.5 and 0.42.7 alike.
 * **A save or a heavy hit in the middle of a carry**: not run.
 * **The dice keys**: the pak is built and the game opens it (observed); a key
   press is the checklist's (`mark_dice_keys`).
-* **The frame rate**: found and fixed after the WO, in 0.42.8 (section 4.5).
+* **The frame rate**: found and fixed after the WO, in 0.42.8 (section 7).
+
+## 7. The frame rate, after the WO: found, fixed and verified (0.42.8)
+
+Found and fixed after the WO, at the maintainer's request, on the maintainer's
+machine: the maintainer played, the game was read from outside. **The collapse
+was the mod's.** WO-147's stamina reading in the DLL left an entry on one of the
+game's own stat stacks at every read that went wrong, and from then on every stat
+read in the game walked all of them. The bug is in 0.42.5 and 0.42.7 alike; 0.42.8
+(`37ccea0`) fixes it. **(observed; code-verified)**
+
+### 7.1 What was seen, and what the maintainer asked
+
+* **Stage B (H1, H2):** the host fell from about 75 FPS to single digits within
+  minutes of the first test body (section 4.4). During Stage B the maintainer
+  called the frames horrific and, when asked, said to move on and deal with the
+  frame rate later; 0.42.7 was built with it as a known issue.
+* **After the WO** the maintainer noticed that the frames dropped "as soon as
+  someone picked up a body" and asked whether a real session would do the same,
+  asked to make sure it would not stay that way, to find what was flooding the
+  logs if it dropped, and whether the maintainer's own PC (a browser with tabs and
+  a chat app open) was to blame, and asked for a second kind of test: a bandit
+  spawned for the maintainer to fight by hand.
+* The maintainer **reinstalled 0.42.7 with its own installer** first (to rule out
+  stale files), loaded a save and fought an unarmed test bandit: the frames fell
+  **during the fight, before the kill**. In the slowed game the maintainer asked
+  whether a PC restart would fix it, noted that 0.42.5 had not shown it, and
+  suggested the spawned bandit as the cause. Section 7.11 answers each question.
+
+### 7.2 The hunt, step by step
+
+| step | what was measured | result | what it showed |
+|---|---|---|---|
+| Stage B | the frame rate over time; the agent, the partner and the DLL's NPC sender each switched off; the window in front; memory | 74 → 6 FPS (H1), 75 → 23 → 4 (H2); no change with each switched off; 8.8 FPS in front; 14 GB free | not those |
+| Stage B | the engine's profile (`profile 1`) | physics waits 185 ms, AI 88 ms, audio 54 ms a frame | symptoms (7.3): every system that reads stats was slow |
+| H3, H4 | a kill without a carry (the scripted partner's blow) | the same fall | not the carry |
+| V1 | the game without the mod: a scripted kill (`DealDamage`), no fight | 76 FPS three minutes later | the game alone did not degrade, but with no fight and no crowd this control proved less than it seemed (7.9) |
+| the logs | `kcd.log` lines, warnings and errors per 7-second window; the engine's trace file | the log's volume **fell** with the frame rate (about 600 lines a window at 75 FPS, 160 at 12 FPS), most of it the game's own behaviour-tree errors, present at full speed too; the trace grew 6 KB/s (the mod's data lines and the game's ambient monologues) | not a flood |
+| the machine | per-thread CPU in the slowed game; the DLL's reads that cost the same every time | one thread at 93% of a core (the game's main thread: the id in the DLL's log column), the other 85 idle; in the per-task meter's run (next row) the fixed-cost reads kept their time (139–159 µs, 89–105 µs, 61–70 µs) while the frame rate fell 77 → 13 | not the machine; specific work was growing |
+| the DLL's own cost | a per-task meter in the DLL's frame hook (a test build in this machine's own run, not shipped) | all of the DLL's per-frame work 0.6 → 2.9 ms, but `rttr::sample_health` 65 → 655 µs and the NPC sender's tick 68 → 1,490 µs grew 10–20×, and so did the game's own update under the hook (1.0 → 2.8 ms) | work that reads the game's souls grows |
+| the slowed game's profile | `profile 1` in the maintainer's slowed 0.42.7 session | `CCryAction::PreSystemUpdate` self time 92 ms, the Lua timers 46 ms, collision avoidance 12 ms, `C_Actor::Update` 7 ms a frame | the time is in code the profiler does not label |
+| Lua | every timer callback timed; the NPC-sync tick's parts timed | the 100 ms timer (`KCD2MP_NpcSyncTick`) took 53–61 ms a call over 82 tracked NPCs; its own parts 0–3 ms; NPC sync paused: 4.3 → 4.9 FPS | every engine call in the tick had slowed: a symptom |
+| sampling | the main thread's call stacks (7.3) | 79% inside RPGModule, under one dependency-insert function | a growing stat stack |
+| the stack | read from outside on the main thread | 4,578 entries, all `0x7270688d` | leaked, for good |
+| the queries | `IsCarryingCorpse`, `IsDead`, `IsUnconscious` and `GetState('health')`, ten calls each from the console | no growth | not WO-148's 5 Hz carry query |
+| the DLL | every read that can hand `GetState` a wrong state | `sample_health`'s stamina argument (7.4) | the cause |
+
+### 7.3 The game's side: a stat-evaluation stack
+
+Modding Tools build 1.5.5; the addresses are RPGModule offsets.
+
+* `+7326d0` is the getter behind `Soul::GetState`. Through RTTR it is a
+  one-argument float method: CrySystem's `rttr::method::invoke` → `+7bb650` →
+  `+7c2840` (which follows the argument's pointer and reads the 32-bit state behind
+  it) → `+7326d0`, which:
+  1. pushes `state + 0x117` onto a `thread_local std::vector<uint32_t>` (RPGModule's
+     TLS block `+0x1e0`, its `_tls_index` at `+0x1136EAC`);
+  2. when the stack holds two or more ids, calls `+844e70(top, id)` for every id
+     below the top;
+  3. reads `[soul + 0x780 + state × 4]`;
+  4. pops.
+* `+844e70(a, b)` takes a mutex (`_Mtx_lock`, an SRW lock) and inserts `a` into
+  `A[b]` and `b` into `B[a]`: two global flat maps (sorted 32-byte entries keyed by
+  id, each holding a sorted vector of ids), a registry of which stat depends on
+  which.
+* `+13caf0` (derived values, `index + 0x3d`) and the other evaluators use the same
+  stack in the same way: 66 function chunks in RPGModule touch it.
+* **Nothing pops on a fault.** None of these functions cleans up on an exception,
+  so a fault between the push and the pop leaves the entry for good. The stack
+  belongs to the main thread, which lives as long as the game: no load, save or
+  menu clears it.
+* **The cost:** every stat read in the game makes one locked insert per entry on the
+  stack. At 4,578 entries the sampler (1,610 samples of the main thread in 8 s,
+  each suspending it for about 40 µs) found:
+  * 79% of the main thread inside RPGModule, 78% under `+844e70`;
+  * the hottest code in its two lookups `+8acd00` (27%) and `+897040` (25%), then the
+    module's Just-My-Code check on every function entry (`+bc1014`,
+    `__CheckForDebuggerJustMyCode`, 9%), `_Mtx_lock`/`_Mtx_unlock` and the SRW lock
+    itself (about 11%), and waits for the lock held by another thread (2%);
+  * every reader of stats on the way in: the AI (CryAISystem → XGenAIModule →
+    `+5c7d10` → `+13caf0`: 16% of the samples), Lua script binds (EntityModule →
+    `+73dab0` / `+73da80`, the death and health checks → `+7326d0`: 20%), the DLL's
+    own reflection reads (15%) and the game's update; the engine's own sleep 12%.
+* That is why everything slowed at once, and why the engine's profile pointed at
+  physics, AI, audio and unlabelled time in `PreSystemUpdate`.
+
+### 7.4 Our side: the stamina argument (WO-147)
+
+`sample_health` in `native/KCDMP/rttr_abi.cpp`, 0.42.5 to 0.42.7:
+
+```cpp
+alignas(8) unsigned char arg_st[32];
+{
+    // ...
+    if (call_name_to_value(api.name_to_value, &en, &v_st, &sn)) {
+        uint64_t st_val = 0;                          // lives in this block only
+        std::memcpy(&st_val, v_st.data, sizeof(st_val));
+        call_variant_dtor(api.variant_dtor, &v_st);
+        build_argument(arg_st, &st_val, t_state);     // arg_st keeps &st_val
+        have_st = true;
+    }
+}
+for (int i = 0; i < g_tracked_count; ++i) {           // st_val no longer exists
+    // ...
+    if (have_st && t.nearPlayer) {
+        // ...
+        if (call_invoke1(api.invoke1, &m, &rs, inst.bytes, arg_st)) {   // reads it anyway
+```
+
+**The compiled code** (the shipped 0.42.7 DLL; the 0.42.5 DLL rebuilt from `22b5a90`
+is the same, 0x30 bytes earlier): `st_val` is `[rsp+0x38]`. It is written at
+`KCDMP.dll+a1bf` and its address put into `arg_st` at `+a1c9`, and in the loop the
+stamina reading is stored into the same slot (`+a375`, `+a38d`; read back at
+`+a3a2`).
+
+**What one sampling pass did** (every 60 ms on the main thread, once a frame below
+16 FPS), for the souls within 15 m (`kStaminaRadius`):
+
+1. the first soul: `GetState(stamina)`, right; its reading (a float) lands in
+   `[rsp+0x38]`;
+2. the next: `GetState(<that float's bits>)`. The getter pushes `bits + 0x117` and
+   reads gigabytes past the soul: either the memory is mapped (a garbage
+   "stamina", stored as the next index) or the read faults. The guard in
+   `call_invoke1` catches the fault and returns false, nothing is logged, and the
+   entry stays;
+3. every later soul in the pass: the same index, the same fault, one more entry.
+
+So one soul near the player leaks nothing (observed: no growth with only one body
+near), and n souls leak up to n − 1 entries a pass. With four people near at 60+
+FPS that is up to about 50 a second: thousands within minutes.
+
+* **Why always `0x7270688d`:** that is state `0x72706776`, which as a float is
+  4.8 × 10³⁰, no soul's stamina. Most likely the first garbage read (step 2)
+  returned the same bytes every time for the same souls, and that became the index
+  that faulted. Not proven; it does not change the fix.
+* **Why the frame rate never came back:** the entries stay on the main thread's
+  stack (7.3).
+* **Why it looked like the carry, then like combat:** the test bodies came from
+  fights among people, with the bandit, the partner's figure and bystanders near. A
+  crowd does the same without a fight.
+* **Why 0.42.5 seemed fine:** the 0.42.5 DLL has the identical compiled bug. It needs
+  two or more souls within 15 m for minutes, and the fall is gradual: in these
+  scenes each entry cost about 0.04 ms a frame, so a few hundred take 75 FPS to
+  about 40, and a session spent mostly alone on the road barely shows it. It does
+  not mean 0.42.5's testers never hit it.
+* **The same bug's side effects:** the stamina of the second and later souls near
+  the player was never read right, so WO-147's stamina-only blows on them could be
+  missed (a faulted read) or invented (a garbage reading compared with the last
+  one). Their health readings were right: that argument's value lives as long as
+  the loop.
+
+### 7.5 The fix and the release (0.42.8)
+
+* **The fix:** `st_val` is declared beside `arg_st` (one line moved, with a comment
+  that says why). In the new build the stamina state has its own slot,
+  `[rsp+0x78]`: written before the loop (`+a17d`, `+a1c4`), its address taken
+  (`+a1ce`), never written again, and the reading goes to `[rsp+0x38]`. The DLL in
+  the installer's payload shows the same three uses. **(code-verified)**
+* **The other arguments:** every other `build_argument` call in the DLL (25 sites)
+  keeps its value alive across the call.
+* **The commits on `main`:**
+  * `37ccea0`: the fix, VERSION 0.42.8 (the maintainer's number), the README badge,
+    the release notes, the tester page and the first version of this section. It
+    sits on top of the maintainer's two README edits made on GitHub, pulled first.
+  * `1f0782b`: the live check.
+  * The per-task frame-cost meter used in the hunt is not in the release (not
+    committed).
+* **The gates**, in a fresh clone of `origin/main` at `37ccea0`: all 41 synthetic
+  suites, both static checks (7/7, 6/6), the relay round trip 60/60, the agent
+  tests 769/769, the native tests 328/328, and the payload smoke
+  (`RELAY-SMOKE ok ... protocol=v10 release=0.42.8`).
+* **The installer:** `release\KingdomComeTogether-Setup-0.42.8.exe`, 100,459,063
+  bytes, SHA-256 `2dd2c994adf16b2dadb0fe4b3ecee807d2c8fae21b086f4dd7f909d4808066d7`.
+  It is local only: no GitHub release, no tag. Its 1,026 files were swept like
+  0.42.7's, and none of ours carries a private name, path or address (the only
+  hits: the NAudio DLLs' own build path, and the documented example address in
+  the master server's settings).
+
+### 7.6 The live check (0.42.8)
+
+One machine, the maintainer playing. Read from outside: the stack, and the DLL's
+own list of tracked souls (`g_tracked`: which souls it counts as within 15 m, and
+the stamina it last read for each).
+
+| time | what | souls within 15 m (the DLL's list) | stat stack | FPS |
+|---|---|---|---|---|
+| 14:20 | baseline | 0 | 0 | 75.4 |
+| 14:21–14:22 | three commoners spawned 2.5 m around the player (AI on, never saved), 90 s; one of them killed by the player at 14:22:43 (a fatal blow, logged by the DLL) | not read in this run | 0 throughout (one reading of 2: a nested read in progress) | 71–79 |
+| 14:24–14:26 | the same with their AI off, 100 s | 3–4 (the three at 2.5 m, and passers-by), every one with a real stamina (120.0, 123.3, 120.0; 136.7, 153.3) | 0 | 64.5–68.8 |
+| 14:29–14:31 | a fight: an unarmed bandit (all 12 of its items removed) among the three commoners | up to 5 | 0 | 67.7–75.2 |
+| 14:31 | the player dies; the mod's respawn (a grave, the wake 316 m away, 6.8 s) | none (the 316 m wake) | 0 | 57.0, then 24.6 during the wake teleport |
+| 14:32 | after, the test figures removed | none | 0 | 74.6 |
+| 13:38 (0.42.7) | the maintainer's session after one fight among people | (not read) | **4,578** | **about 4.5** |
+
+* **The check really ran the faulty path.** The proof is the DLL's own list: on
+  0.42.7 only the first soul near the player could get a real stamina, and on
+  0.42.8 every one did. The same spawned crowd was not run on 0.42.7: the
+  maintainer installed 0.42.8 directly.
+* **Not covered:** a two-player session (the tester page's checks 1 and 2).
+
+### 7.7 Also seen
+
+* **A second, player-like soul in the DLL's list.** It stays within 15 m of the
+  player all the time, even through the 316 m wake teleport, with its health and
+  stamina frozen at the values the session started with (75.3, 118.0), and with no
+  entity of its own near: the only soul-carrying entity within 15 m was the
+  player. Harmless for the frame rate now; worth a look if blows on "an NPC" that
+  is really the player come back (WO-99). Not investigated.
+* **"Bandits have a million health."** Of the last 15 blows the DLL reported before
+  the player's death, 13 did no health and 13–17 stamina each (the bandit's
+  block: WO-147's stamina-only blows, now read for every soul near), and two did
+  0.98 and 7.09; his health went 84 → 61. The respawn's classifier logged the
+  player as starving at the time, which weakens the player's blows. This is the
+  game's own combat, not the mod.
+* **The game's own log errors** (the behaviour-tree crime nodes of the village's
+  NPCs, 100–120 per 7-second window) are there at full speed too, before and after
+  the fix.
+
+### 7.8 What the investigation did in the maintainer's game
+
+* **Read from outside:** memory reads, and stack samples of the main thread (each
+  sample suspends it for about 40 µs; 1,610 samples once); console queries; three
+  Lua timing wrappers in the 0.42.7 session, put back afterwards.
+* **Spawned, all of them never saved and all removed afterwards:**
+  * the bandit `wo148_manual_1` in the 0.42.7 session: it killed the player once
+    (the mod's respawn), then the maintainer killed it; its body was left in that
+    session;
+  * the three commoners `wo148_repro_1` to `_3` in the 0.42.8 session, twice; the
+    player killed one;
+  * the bandit `wo148_manual_2` in the 0.42.8 session: it killed the player.
+* **The saves.** Both sessions ran on the maintainer's own `playline2`, not on a
+  throwaway copy: the 0.42.7 session loaded `autosave027` and the 0.42.8 session
+  `autosave038`. The investigation did not check which save was loaded before it
+  spawned test figures.
+  * The game autosaved every five minutes in both sessions: `playline2/autosave029`
+    to `038` (13:13–13:59, on 0.42.7) and `039` to `041` (14:24–14:34, on 0.42.8),
+    all of them after the first test death.
+  * They carry the tests' consequences: the two deaths (each time the mod's grave
+    at the fight's spot holding the inventory, 34 items, and the wake spot), and
+    possibly a crime for the killed commoner (from `039` on). The spawned figures
+    themselves were never saved.
+  * **Nothing older changed:** all 336 save files hashed at the start of WO-148
+    still match their SHA-256; the other new files are this WO's five throwaway
+    copies in `playline4`. `autosave027` (2026-09-26, the save loaded at 13:05) is
+    intact.
+  * Whether to keep `029` to `041` is the maintainer's call; nothing was deleted.
+* **One mistake earlier in the hunt:** a launch meant for this machine's own
+  throwaway session partly ran while the maintainer's game was up (12:56). It added
+  a save lock, injected a test DLL beside the launcher's, and started a relay and
+  an agent. They were stopped and the lock removed within minutes, the maintainer
+  restarted everything, and nothing of it remained (checked).
+* **The logs** of the slowed 0.42.7 session were copied before the next launch (a
+  launch overwrites them); they are kept outside the repo.
+
+### 7.9 Lessons
+
+1. **A swallowed fault is not safe.** The DLL's guard turned a crash into silent
+   damage to the game's own state, a little more every second, with no line in any
+   log. The guard was meant as protection; inside game code it hid the bug and let
+   the bug damage the game.
+2. **A lifetime rule in a comment is not a rule.** "Values must outlive the
+   arguments that point at them" is written beside the earlier calls in the same
+   file. The WO-147 change broke it, and nothing (not the compiler, not a test)
+   could notice.
+3. **Nothing measured the frame rate over time.** The checks test features; in
+   WO-148 the drop was blamed on the test setup and shipped as a known issue.
+4. **The baseline is the game without the mod, with the same trigger.** A
+   comparison with the previous release would have shown nothing (0.42.5 has the
+   same bug), and the no-mod control here (V1) was a scripted kill without a fight
+   or a crowd, so it proved less than it seemed.
+5. **The engine's profiler shows where time is billed, not why.** It pointed at
+   physics, AI, audio and unlabelled time in `PreSystemUpdate`; the A/B switches
+   and the per-task meter could only rule things out. A sampling profiler with
+   whole call stacks found the cause in minutes.
+6. **The first correlation was wrong twice:** "after the carry", then "in combat".
+   The trigger was two or more souls within 15 m.
+7. **A test in the maintainer's own session needs the loaded save checked first.**
+   The test figures went into a real playline whose autosaves now carry their
+   consequences (7.8).
+
+### 7.10 Safeguards proposed (not built; for the maintainer to choose)
+
+| # | safeguard | what it would have caught | notes |
+|---|---|---|---|
+| 1 | Fault guards that are not silent: log the first fault at each call site (rate-limited), count faults in the periodic status line, and switch the failing read off after a few | the first 0.42.5 session's log would have said `GetState faulted (stamina)` | small; every `call_invoke*`, property read and hook guard |
+| 2 | Arguments that own their value (an `Arg<T>` holding the value and the RTTR argument together) instead of pointing at the caller's variable; the 25 call sites converted | this bug, and every future one of its kind | a refactor of `rttr_abi.cpp` |
+| 3 | A watchdog on the game's stat stack: at the frame hook, where it must be empty, read its depth and log loudly when it is not; optionally clear it | the same symptom from any cause, ours or the game's | port-specific (this build's TLS index and offset), so verified at start like the hooks; log-only first |
+| 4 | A frame-rate soak before every installer: 10 minutes with spawned people within 15 m and a fight, scripted as in 7.6; it passes when the frame rate stays within about 10% of where it started and the stat stack stays empty, against the game without the mod | this release blocker, before any tester | a tool and a gate in the build |
+| 5 | The frame rate in the logs: the periodic heartbeat line carries the frame rate and the frame time | a slow decline in any tester's bug-report zip, even when nobody notices it | small |
+| 6 | Keep the diagnostics: the main-thread sampler, the stack reader and the near-list reader as read-only tools in the repo | the next hunt starts where this one ended | the per-task meter could ride behind a switch |
+| — | Process: an unexplained frame-rate drop of this size blocks the installer, and the assistant says so before building, even when told to move on; before any test action in the maintainer's own session, the loaded save is checked | — | adopted |
+
+### 7.11 The maintainer's questions, answered
+
+* **"Is it my PC?"** No. With the same programs open the game ran at 71–77 FPS
+  until a fight. In the slowed game one thread ran at 93% of a core while 85 others
+  idled, and the DLL's fixed-cost reads kept their speed. A PC restart does not
+  help; a game restart clears it (until the next crowd, on 0.42.7).
+* **"Is it for sure the mod?"** Yes: the DLL's stamina argument (7.4), fixed in
+  0.42.8 (7.5, 7.6).
+* **"It didn't happen in 0.42.5."** The 0.42.5 DLL has the same compiled bug. It
+  needs several souls near the player for a while (7.4).
+* **"Could it be the bandit you spawned?"** Only as one of the souls near the
+  player: any two or more do it, spawned or not.
+* **"Is it the carry?"** No: a kill without a carry did it (H3), and the frames fell
+  before the kill in the maintainer's own fight.
+* **"Should carrying animations actually work?"** Yes, as in section 4.3. The
+  carrier's figure picks the body up with the game's own pick-up, carries it on its
+  shoulder through the walk in the game's own carry pose, and sets it down with
+  the game's own call; a sack sits in the figure's right hand with the game's own
+  pick-up and place animations. This was seen live on one machine (a scripted
+  partner and a synthetic host), not yet with two real players; quests counting a
+  partner's carry are not built (section 6).
+* **"What lessons, so we don't break the game again?"** Sections 7.9 and 7.10.
