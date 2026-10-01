@@ -137,6 +137,7 @@ public partial class GameBridge
         }
         var send = _sendPlayerHit;
         if (send is null) return;
+        if (attacker.Length > 0) Wo147WatchFight(attacker, $"it hit avatar {g}");   // WO-147: the joiner gets combat mode against it
         await send(g, health, stamina);
         Interlocked.Increment(ref _w132HitsFwd);
         Wo132KeepAvatarUp(g, force: true);
@@ -253,7 +254,8 @@ public partial class GameBridge
     private void Wo132NoteNpcState(string npcName, byte flags)
     {
         if (!_isDamageAuthority || !_sharedWorld) return;
-        bool want = Wo132Rules.HostWatches(flags);
+        // WO-147: or it fights an avatar -- never a dead one (the live bandit was watched again after its death)
+        bool want = Wo132Rules.HostWatches(flags) || ((flags & Protocol.NpcStateFlagDead) == 0 && Wo147FightWatched(npcName));
         long now = Environment.TickCount64;
         if (want)
         {
@@ -296,7 +298,7 @@ public partial class GameBridge
         bool bound = _nativeBound.ContainsKey(ev.Name);
         uint eid = guarded ? geid : _npcEntityIds.TryGetValue(ev.Name, out uint pe) ? pe : 0;
         bool engaged = _w132Engaged.TryGetValue(ev.Name, out var cur);
-        var v = Wo132Rules.JudgeEngage(ev, Wo131JoinerActive, guarded, bound, engaged);
+        var v = Wo132Rules.JudgeEngage(ev, Wo131JoinerActive, guarded, bound, engaged, _myGhostId);   // WO-147: my avatar its target
         // WO-136 Phase 4: a knockout (or a death) beats the engagement -- never engaged while down.
         if (!Wo136Rules.MayEngage(Wo136HostNpcDown(ev.Name)) && v != Wo132Rules.EngageVerdict.Ignore)
             v = engaged ? Wo132Rules.EngageVerdict.Release : Wo132Rules.EngageVerdict.Ignore;

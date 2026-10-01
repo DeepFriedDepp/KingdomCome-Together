@@ -282,7 +282,10 @@ void tick() {
             continue;
         }
         const bool changed = !it->sent || !same(c, it->last);
-        const bool hb = c.combat && now - it->lastSent >= 1.0;
+        // WO-147: a fight with an avatar reads combat=0 (combat mode is the player's fight's): its opponent keeps
+        // the heartbeat too, or the joiner's engagement went stale after 3 s.
+        const bool fighting = c.combat || c.opponentIsPlayer || c.opponentEid != 0;
+        const bool hb = fighting && now - it->lastSent >= 1.0;
         if (changed || hb) {
             emit(it->eid, c);
             it->last = c; it->sent = true; it->lastSent = now;

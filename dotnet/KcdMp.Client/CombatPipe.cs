@@ -99,6 +99,8 @@ public sealed class CombatPipe : IAsyncDisposable
     private const byte ActivityOut       = 0xA7;   // WO-141, unsolicited: activity rows (the host's NPCs, the local player)
     private const byte Wo143             = 0x28;   // WO-143 [op][...] -> 0xA8 [ok][seq][op][reason][payload] (native wo143.h)
     private const byte Wo143Reply        = 0xA8;
+    private const byte Wo147             = 0x29;   // WO-147 [op][...] -> 0xAA [ok][seq][op][reason][payload] (native wo147.h)
+    private const byte Wo147Reply        = 0xAA;
     private const byte ExtraOut          = 0xA9;   // WO-143, unsolicited: hands, gaits, looks, one-shots, need-item, one-shot done
 
     private const int GuidLen = 16;
@@ -272,14 +274,19 @@ public sealed class CombatPipe : IAsyncDisposable
     }
 
     /// <summary>Apply damage from a remote peer to the soul with this SharedSoulGuid.</summary>
+    /// <summary>
+    /// WO-147: <paramref name="nonLethal"/> (flag 0x02) = the damage never takes the body under 1 hp -- a joiner
+    /// applying the host's non-fatal hit to its copy (the host decides deaths; the field's copy died of a hit
+    /// its guard should have floored, after a load had taken the guard away).
+    /// </summary>
     public Task<bool> ApplyDamageAsync(Guid soul, float stamina, float health,
-                                       bool suppressHitReaction, CancellationToken ct = default)
+                                       bool suppressHitReaction, CancellationToken ct = default, bool nonLethal = false)
     {
         var payload = new byte[GuidLen + 4 + 4 + 1];
         WriteSoulGuid(soul, payload);
         BinaryPrimitives.WriteSingleLittleEndian(payload.AsSpan(16), stamina);
         BinaryPrimitives.WriteSingleLittleEndian(payload.AsSpan(20), health);
-        payload[24] = suppressHitReaction ? (byte)0x01 : (byte)0x00;
+        payload[24] = (byte)((suppressHitReaction ? 0x01 : 0x00) | (nonLethal ? 0x02 : 0x00));
         return SendAsync(ApplyDamage, payload, ct);
     }
 
@@ -946,6 +953,39 @@ public sealed class CombatPipe : IAsyncDisposable
         return (body[0] == 1, body[3], body.AsSpan(4).ToArray());
     }
 
+    public async Task<(bool Ok, byte Reason, byte[] Payload)?> Wo147Async(byte op, byte[] args, CancellationToken ct = default)
+    {
+        var p = new byte[1 + args.Length];
+        p[0] = op; args.CopyTo(p, 1);
+        var (body, _) = await SendAndAwaitAsync(Wo147, p, Wo147Reply, ct);
+        if (body is null || body.Length < 4) return null;
+        return (body[0] == 1, body[3], body.AsSpan(4).ToArray());
+    }
+
+    /// <summary>
+    /// WO-147 op 1: a console stand-in for one landed swing of the local player on the body
+    /// <paramref name="eid"/> (marked as the player's blow, the damage taken with the player as the
+    /// attacker). (ok, reason, health before, health after); null = no answer.
+    /// </summary>
+    public async Task<(bool Ok, byte Reason, float Before, float After)?> Wo147TestPlayerHitAsync(uint eid, float hp, float st, CancellationToken ct = default)
+    {
+        var a = new byte[12];
+        BinaryPrimitives.WriteUInt32LittleEndian(a, eid);
+        BinaryPrimitives.WriteSingleLittleEndian(a.AsSpan(4), hp);
+        BinaryPrimitives.WriteSingleLittleEndian(a.AsSpan(8), st);
+        var r = await Wo147Async(1, a, ct);
+        if (r is not { } x) return null;
+        float before = x.Payload.Length >= 8 ? BinaryPrimitives.ReadSingleLittleEndian(x.Payload) : -1;
+        float after = x.Payload.Length >= 8 ? BinaryPrimitives.ReadSingleLittleEndian(x.Payload.AsSpan(4)) : -1;
+        return (x.Ok, x.Reason, before, after);
+    }
+
+    public async Task<string?> Wo147StatusAsync(CancellationToken ct = default)
+    {
+        var r = await Wo147Async(2, [], ct);
+        return r is { Ok: true } x ? System.Text.Encoding.ASCII.GetString(x.Payload) : null;
+    }
+
     /// <summary>op 1: capture and apply masks (Wo143Rules.Bit*). The armed bits (Wo143Rules.Armed*), or null.</summary>
     public async Task<byte?> Wo143ConfigAsync(byte capture, byte apply, CancellationToken ct = default)
     {
@@ -1160,6 +1200,38 @@ public sealed class CombatPipe : IAsyncDisposable
             }
         }
         return all;
+    }
+
+    /// <summary>
+    /// WO-147 op 8: up to 10 States' values WITH their value type's name (the type a correction's port is
+    /// derived from: "Set" + the name of the host's value in that type). Null = no answer; fewer entries
+    /// than asked = the reply ran out of room (the rest unread).
+    /// </summary>
+    public async Task<List<(bool Found, bool Ok, int Val, string Type)>?> Wo137ReadStateTypesAsync(IReadOnlyList<string> paths, CancellationToken ct = default)
+    {
+        if (paths.Count is < 1 or > 10) return null;
+        var pbs = paths.Select(p => Encoding.ASCII.GetBytes(p)).ToList();
+        if (pbs.Any(p => p.Length is 0 or > 400) || pbs.Sum(p => 2 + p.Length) + 2 > 1000) return null;
+        var a = new byte[1 + pbs.Sum(x => 2 + x.Length)];
+        a[0] = (byte)pbs.Count;
+        int o = 1;
+        foreach (var pb in pbs) { BinaryPrimitives.WriteUInt16LittleEndian(a.AsSpan(o), (ushort)pb.Length); pb.CopyTo(a, o + 2); o += 2 + pb.Length; }
+        var r = await Wo137Async(8, a, ct);
+        if (r is not { Ok: true } v || v.Payload.Length < 1) return null;
+        var b = v.Payload;
+        int n = b[0], q = 1;
+        var list = new List<(bool, bool, int, string)>(n);
+        for (int k = 0; k < n; k++)
+        {
+            if (q + 8 > b.Length) break;
+            bool found = b[q] != 0, ok = b[q + 2] != 0;
+            int val = BinaryPrimitives.ReadInt32LittleEndian(b.AsSpan(q + 3));
+            int tl = b[q + 7];
+            if (q + 8 + tl > b.Length) break;
+            list.Add((found, ok, val, Encoding.ASCII.GetString(b, q + 8, tl)));
+            q += 8 + tl;
+        }
+        return list;
     }
 
     public readonly record struct QuestObjectiveRead(string Name, int Type, int Log, int Order, long Last);

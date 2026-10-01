@@ -169,6 +169,7 @@ end
 
 -- Reset everything the puppet path keeps between scenarios.
 local function resetPuppets()
+    if KCD2MP.npcSilence then KCD2MP.npcSilence.tickAt = nil; KCD2MP.npcSilence.agentAt = -1e9; KCD2MP.npcSilence.silent = {} end   -- WO-147: each scenario starts from a fresh puppet chain (a tick that last ran in another scenario's time reads as a freeze)
     KCD2MP.npcPuppets = {}; KCD2MP.npcPuppetRunning = false; KCD2MP._npcPuppetAliveAt = nil
     KCD2MP._npcPuppetRetired = {}; KCD2MP._chainProbe = {}; KCD2MP._npcDivergeUntil = {}
     KCD2MP._npcDeathSeen = {}; KCD2MP._npcDeathRemote = {}; KCD2MP._npcDeathDiverged = {}

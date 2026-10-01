@@ -47,6 +47,18 @@ public static partial class Protocol
     // ---- Pull reasons (APPEND-ONLY) ----
     public const ushort LeashReasonDistance = 1, LeashReasonFastTravel = 2;
 
+    /// <summary>
+    /// WO-147: set on a pull's reason when the hold ran out (LeashLogic.HoldCapMs): the joiner is pulled
+    /// even through a dialogue (ended first) or a cutscene; only a load still refuses it.
+    /// </summary>
+    public const ushort LeashReasonForced = 0x0100;
+
+    /// <summary>WO-147: the reason without the forced bit.</summary>
+    public static ushort LeashReasonBase(ushort reason) => (ushort)(reason & 0x00FF);
+
+    public static string LeashReasonName(ushort reason) =>
+        (LeashReasonBase(reason) == LeashReasonFastTravel ? "fast-travel" : "distance") + ((reason & LeashReasonForced) != 0 ? ",forced" : "");
+
     // ---- LeashState flags ----
     public const ushort LeashFlagInWorld  = 0x0001,   // this game's world is the host's (joined)
                         LeashFlagDowned   = 0x0002,   // downed / respawning (WO-113)
@@ -56,7 +68,8 @@ public static partial class Protocol
                         LeashFlagMenu     = 0x0020,   // a menu or the emitter silent (WO-99)
                         LeashFlagMounted  = 0x0040,
                         LeashFlagFastTravelRefused = 0x0080,   // the joiner tried to fast travel (count bumps)
-                        LeashFlagSeparate = 0x0100;   // WO-140: this game is in its OWN world (connected from its own save): not leashed
+                        LeashFlagSeparate = 0x0100,   // WO-140: this game is in its OWN world (connected from its own save): not leashed
+                        LeashFlagFlying   = 0x0200;   // WO-147: this player moves faster than any horse, not a fast travel (the developer fly mode)
 
     // ---- Pull results (APPEND-ONLY) ----
     public const byte LeashResultNone = 0, LeashResultPlaced = 1, LeashResultBusy = 2, LeashResultNotPlaced = 3,
@@ -86,6 +99,7 @@ public static partial class Protocol
         if ((f & LeashFlagMounted) != 0) parts.Add("mounted");
         if ((f & LeashFlagFastTravelRefused) != 0) parts.Add("fast-travel-refused");
         if ((f & LeashFlagSeparate) != 0) parts.Add("separate-world");
+        if ((f & LeashFlagFlying) != 0) parts.Add("flying");
         return parts.Count == 0 ? "none" : string.Join(',', parts);
     }
 }

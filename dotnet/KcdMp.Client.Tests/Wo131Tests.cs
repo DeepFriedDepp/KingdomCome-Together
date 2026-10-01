@@ -42,7 +42,8 @@ public class Wo131Tests
     public void A_stale_stream_is_refused()
     {
         Assert.Equal(V.Forward, Wo131Rules.GateJoinerHit(Bound(ageMs: 2900), 10).Verdict);   // a 2 s heartbeat + jitter
-        Assert.Equal(V.DropStale, Wo131Rules.GateJoinerHit(Bound(ageMs: 3100), 10).Verdict);
+        Assert.Equal(V.Forward, Wo131Rules.GateJoinerHit(Bound(ageMs: 3538), 10).Verdict);   // WO-147: the field's standing archer
+        Assert.Equal(V.DropStale, Wo131Rules.GateJoinerHit(Bound(ageMs: 6100), 10).Verdict);
     }
 
     [Fact]

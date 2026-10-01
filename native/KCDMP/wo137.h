@@ -67,6 +67,8 @@ constexpr uint8_t kOpReadQuest = 4;
 constexpr uint8_t kOpStatus    = 5;
 constexpr uint8_t kOpHud       = 6;
 constexpr uint8_t kOpHold      = 7;
+// WO-147: op 3 with each State's value type too: [n]([len:2][path])* -> [n]([state][rt][ok][val:4][typeLen][type])*
+constexpr uint8_t kOpReadStateTyped = 8;
 
 constexpr uint8_t kROk         = 0;
 constexpr uint8_t kRBadRequest = 1;

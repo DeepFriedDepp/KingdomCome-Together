@@ -180,6 +180,17 @@ $AsmMarkers = @(
     @{ File = 'KCDMP.dll';       Marker = 'it lies on it';          Owner = "WO-144 a player's bed-edge sit shown lying (native)" },
     @{ File = 'KCDMP.dll';       Marker = 'body=horse-or-animal (entity-written)'; Owner = 'WO-144 a horse or animal copy written like any body (native)' },
     @{ File = 'KCDMP_launcher.dll'; Marker = 'log-history';         Owner = "WO-144 earlier launches' logs kept (launcher)" },
+    # WO-147: the joiner fights, the leash pulls, destructive quest steps checked
+    @{ File = 'KcdMpClient.dll'; Marker = 'MP-W147-STATS';          Owner = 'WO-147 the joiner fights, the leash, quest safety (agent half)' },
+    @{ File = 'KcdMpClient.dll'; Marker = 'is no enemy of this player'; Owner = "WO-147 only an enemy's copy is engaged (agent half)" },
+    @{ File = 'KcdMpClient.dll'; Marker = 'held until this world agrees'; Owner = 'WO-147 a destructive quest step waits for the host world (agent half)' },
+    @{ File = 'KcdMpClient.dll'; Marker = 'the hold is over: the countdown runs'; Owner = 'WO-147 the leash hold lasts at most 60 s (agent half)' },
+    @{ File = 'KcdMpClient.dll'; Marker = 'the engine cancelled the skip'; Owner = "WO-147 a cancelled skip ends the host's pause (agent half)" },
+    @{ File = 'KCDMP.dll';       Marker = 'ApplyDamage non-lethal'; Owner = "WO-147 the host's non-fatal hit never kills a copy (native)" },
+    @{ File = 'KCDMP.dll';       Marker = 'exact (no ground search)'; Owner = "WO-147 the leash's pull onto the host's own spot (native)" },
+    @{ File = 'KCDMP.dll';       Marker = 'WO147-TEST';             Owner = "WO-147 mp_test_hit, the stand-in for the player's blow (native)" },
+    @{ File = 'KcdMpClient.dll'; Marker = 'ghost_superseded=';      Owner = 'WO-147 the frame backlog: superseded samples skipped (agent half)' },
+    @{ File = 'KCDMP.dll';       Marker = 'no silence of the streams'; Owner = "WO-147 the frame backlog: a stall is no stream silence (native)" },
     @{ File = 'KCDMP_launcher.dll'; Marker = 'Kingdom Come: Together'; Owner = 'WO-134 rebrand (launcher window title)' }
 )
 
@@ -258,6 +269,10 @@ $PakMarkers = @(
     @{ Marker = 'function KCD2MP_W140Prompt';      Owner = "WO-140 the other player's sleep prompt (mod half)" },
     @{ Marker = 'function KCD2MP_W140Separate';    Owner = 'WO-140 the own-world message (mod half)' },
     @{ Marker = 'function KCD2MP_W144Equip';       Owner = "WO-144 an avatar dressed from its own inventory (mod half)" },
+    @{ Marker = 'function KCD2MP_W147Hostiles';    Owner = "WO-147 the enemies' copies near the joiner (mod half)" },
+    @{ Marker = 'function KCD2MP_W147EndDialog';   Owner = 'WO-147 a forced leash pull ends the conversation first (mod half)' },
+    @{ Marker = 'function KCD2MP_SetQuestSafety';  Owner = 'WO-147 mp_quest_safety (mod half)' },
+    @{ Marker = 'function KCD2MP_NpcSilenceRelease'; Owner = "WO-147 the frame backlog: a puppet released on the agent's word (mod half)" },
     @{ Marker = 'function KCD2MP_W144AvatarKey';   Owner = "WO-144 the live avatar's entity key (mod half)" },
     @{ Marker = 'function KCD2MP_W144LightTick';   Owner = 'WO-144 an avatar holds a light only while its player does (mod half)' },
     @{ Marker = 'function KCD2MP_W144FollowHostClock'; Owner = "WO-144 the joiner's clock stands with the host's (mod half)" },

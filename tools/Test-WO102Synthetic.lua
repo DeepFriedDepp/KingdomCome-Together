@@ -289,6 +289,9 @@ local function resetAll4()
     KCD2MP.ghosts = {}; KCD2MP._npcScanAnchors = nil
     -- WO-102.5 Phase 4
     KCD2MP.wo1025.together = false; KCD2MP._togetherWantSince = nil; KCD2MP._colocatePendingRelease = {}
+    -- WO-147 (the backlog fix): each scenario starts from a fresh puppet chain -- a tick that last ran in
+    -- another scenario's time would read as a freeze (a stretch the tick did not run is no silence).
+    if KCD2MP.npcSilence then KCD2MP.npcSilence.tickAt = nil; KCD2MP.npcSilence.agentAt = -1e9; KCD2MP.npcSilence.silent = {} end
 end
 
 do -- (m)

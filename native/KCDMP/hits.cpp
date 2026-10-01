@@ -531,6 +531,12 @@ void set_npc_watch(bool on) { g_npcWatch = on; }
 
 uint32_t eid_of_name(const char* name) { return name && *name ? eid_by_name(name) : 0; }
 
+void mark_player_hit(uint32_t victimEid) {
+    if (!victimEid) return;
+    std::lock_guard<std::mutex> lock(g_qMutex);
+    if (g_marks.size() < 128) g_marks.push_back({victimEid, 0});
+}
+
 void tick() {
     // The player's WUID for the hook (a load changes the entity, not the id,
     // but it is cheap to keep fresh).

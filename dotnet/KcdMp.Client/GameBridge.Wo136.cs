@@ -107,6 +107,7 @@ public partial class GameBridge
     /// <summary>"Loading saved game" / "[CryAction] LoadGame": the mod's hold, best effort (the join's own load call already set it).</summary>
     private void Wo136OnLoadSeen(string what)
     {
+        Wo147ForgetGuardsOnLoad(what);   // WO-147: a load re-creates the copies -- their guards are gone with the old ones
         _w136SettleUntilUtc = DateTime.MinValue;
         _w136LuaReleased = false;
         _ = ExecLuaAsync($"if KCD2MP_W136Hold then KCD2MP_W136Hold(true, 240, \"agent-{what}\") end");

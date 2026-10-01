@@ -1591,7 +1591,11 @@ public partial class GameBridge(ClientConfig config)
             // stamina to 0 on this path (pipe_server.cpp send_local_hit).
             // Anything under half a hit point is sensor noise, not combat
             // state worth a wire message and a peer-side game-thread apply.
-            if (health < 0.5f && stamina < 0.5f) return;
+            if (Wo147Rules.HitCarriesNothing(health, stamina)) return;
+            // WO-147: on a joiner only this player's own blows go to the host (the sampler reports any drop
+            // near the player: the field's host avatar hit a hidden local copy and the gate took it for the
+            // joiner's). And a blow that cost only stamina now goes too (a block, a broken weapon).
+            if (Wo147DropNotOwnBlow(byPlayer, health, stamina)) return;
             try
             {
                 // WO-40 Phase 5: per-save guids are unreliable across
@@ -1761,6 +1765,7 @@ public partial class GameBridge(ClientConfig config)
         Wo140OnConnect(cts.Token);           // WO-140: sleeping together, the own-world trap
         Wo141OnConnect(cts.Token);           // WO-141: activities (NPCs and players, the game's own state)
         Wo143OnConnect(cts.Token);           // WO-143: hands, gaits, one-shots, looks, the players' minigames on the avatars
+        Wo147OnConnect(cts.Token);           // WO-147: the joiner fights hostile copies, destructive quest steps checked, the leash's stats
         _ = _combat.NpcConfigAsync(_nativeWriteOn, _nativeSenderClock, cts.Token);
         _ = RespawnHeartbeatAsync(stream, announceGraves: true, cts.Token);
         // WO-99 Phase 0: learn who the local player is before the first hit.
@@ -4051,7 +4056,10 @@ public partial class GameBridge(ClientConfig config)
                     while (!cts.IsCancellationRequested)
                     {
                         try { await _transport.ExecuteNowAsync("KCD2MP_InterpPump()", cts.Token); }
-                        catch (OperationCanceledException) { break; }
+                        // WO-147: only the pump's own cancel stops it -- an ExecuteString timeout is an
+                        // OperationCanceledException too, and one stopped the field host's pump mid-menu for good.
+                        catch (OperationCanceledException) when (cts.IsCancellationRequested) { break; }
+                        catch (OperationCanceledException) { await Task.Delay(50); }
                         catch { /* a dropped frame is not worth stopping the pump for */ }
                         frames++;
                     }
@@ -4408,6 +4416,11 @@ public partial class GameBridge(ClientConfig config)
         var frames = Channel.CreateUnbounded<InFrame>(new UnboundedChannelOptions { SingleReader = true });
         _frameWriter = frames.Writer;   // WO-136: the load hold replays held frames through here
         var processor = ProcessFramesAsync(frames.Reader, ct);
+        // WO-147: the leash's own lane. In the field every leash message waited behind a minute of NPC
+        // frames in the one processor (the joiner's "[ping]" read 40-63 s): countdowns came in bursts,
+        // a pull's answer came after its timeout. Leash frames never wait for NPC traffic now.
+        var leashLane = Channel.CreateUnbounded<InFrame>(new UnboundedChannelOptions { SingleReader = true });
+        _ = Wo147LeashLaneAsync(leashLane.Reader, ct);
         // The coalescer's clock: a pending Lua push must go out once it is due
         // even when no further frame for that NPC arrives (a puppet that just
         // stopped). Through the channel, so the push state stays single-threaded.
@@ -4435,13 +4448,16 @@ public partial class GameBridge(ClientConfig config)
                 await ReadExactAsync(stream, payload, ct);
                 long arrival   = Stopwatch.GetTimestamp();
                 Wo138NoteArrival(type, payload);   // WO-138: the source's link is alive (the joiner's hold)
+                Wo147NotePositionAtRead(type, payload, arrival);   // WO-147: the leash's positions, stamped as they arrive
+                Wo147NoteNpcAtRead(type, payload, arrival);        // the backlog fix: the newest sample of each NPC/avatar, as read
+                if (Wo147IsLeashFrame(type)) { leashLane.Writer.TryWrite(new InFrame(type, payload, arrival)); continue; }
                 FeedNativeAtRead(type, payload, arrival);
                 frames.Writer.TryWrite(new InFrame(type, payload, arrival));
             }
         }
         catch (OperationCanceledException) { }
         catch (Exception ex) when (ex is IOException or SocketException or EndOfStreamException) { }
-        finally { frames.Writer.TryComplete(); }
+        finally { frames.Writer.TryComplete(); leashLane.Writer.TryComplete(); }
         await processor;
     }
 
@@ -4518,6 +4534,7 @@ public partial class GameBridge(ClientConfig config)
             await foreach (var frame in frames.ReadAllAsync(ct))
             {
                 if (frame.Type == FlushTickType) { Wo136ReplayIfReleased(); await FlushDueNpcLuaPushesAsync(); continue; }
+                Wo147NoteProcessing(frame.Arrival);   // the backlog fix: how far behind the reader this processor is
                 Wo136ReplayIfReleased();          // WO-136: the moment the hold ends, what it kept goes first
                 if (Wo136Defer(frame)) continue;   // WO-136: the host's NPCs and avatars wait for the world to load
                 if (Wo140DropSeparate(frame.Type)) continue;   // WO-140: nothing of the host's world reaches a joiner in its own
@@ -4617,7 +4634,9 @@ public partial class GameBridge(ClientConfig config)
                     }
                     _ghostLastPos[ghostId] = (x, y, z, DateTime.UtcNow);
                     _voice?.UpdateGhostPos(ghostId, x, y, z);
-                    await UpdateGhostAsync(ghostId.ToString(), x, y, z, rotZ, isRiding, body);
+                    // The backlog fix: behind, a sample a newer one supersedes (no state block of its own) is not pushed.
+                    if (!Wo147GhostSkip(ghostId, frame.Arrival, gs.State2 is not null))
+                        await UpdateGhostAsync(ghostId.ToString(), x, y, z, rotZ, isRiding, body);
                 }
                 else if (type == Protocol.ActionDown)
                 {
@@ -4767,7 +4786,7 @@ public partial class GameBridge(ClientConfig config)
                     bool  suppress = (payload[25] & Protocol.DamageFlagSuppressHitReaction) != 0;
 
                     bool applied = config.GuidDamageFallbackEnabled
-                                && await _combat.ApplyDamageAsync(soul, stamina, health, suppress, ct);
+                                && await _combat.ApplyDamageAsync(soul, stamina, health, suppress, ct, nonLethal: Wo131JoinerActive);   // WO-147
                     // WO-100.5 Phase 4: the receiving half of the same
                     // visibility. A guid that does not resolve here is the
                     // per-save-identity hazard WO-39/WO-40 measured, and it now
@@ -4828,8 +4847,9 @@ public partial class GameBridge(ClientConfig config)
                             bool? ndAttrib = ndHasDelta && localGuid is Guid alg
                                 ? await TryApplyAttributedAsync(ndSource, ndName, alg, ndStamina, ndHealth, payload[no + 8], ct)
                                 : null;
+                            // WO-147: on a joiner a non-fatal host hit never kills its copy (the host decides deaths).
                             bool ndApplied = ndAttrib ?? (ndHasDelta && localGuid is Guid lg
-                                && await _combat.ApplyDamageAsync(lg, ndStamina, ndHealth, ndSupp, ct));
+                                && await _combat.ApplyDamageAsync(lg, ndStamina, ndHealth, ndSupp, ct, nonLethal: Wo131JoinerActive && !ndFatal));
                             if (ndApplied || (ndFatal && localGuid is not null))
                                 _dmgGuard.NoteInboundApplied(ndName, ndApplied ? ndHealth : 0f, ndApplied ? ndStamina : 0f, ndFatal, DateTime.UtcNow);
                             // WO-86 Phase 1: every inbound NPC damage event, with
@@ -5016,6 +5036,11 @@ public partial class GameBridge(ClientConfig config)
                             if (!_isDamageAuthority) Wo136NoteNpcFlags(npcName, nflags);   // WO-136 Phase 4: a knockout or a death ends the engagement first
                             ushort nseq = BinaryPrimitives.ReadUInt16LittleEndian(payload.AsSpan(o + Protocol.NpcStateSeqOffset));      // WO-110 R6
                             uint nSenderMs = BinaryPrimitives.ReadUInt32LittleEndian(payload.AsSpan(o + Protocol.NpcStateSenderMsOffset));
+                            // The backlog fix (mp_npc_catchup): behind, a sample a newer one of this NPC with the same
+                            // flags supersedes says nothing the newer will not -- skipped whole (never a death, a
+                            // knockout, a weapon drawn, a swing cue or a resync row: those differ or are events).
+                            if (Wo147NpcSkip(npcName, nseq, payload[o + Protocol.NpcStateFlagsOffset], frame.Arrival)) continue;
+                            Wo147NpcProcessed(npcName, frame.Arrival);
 
                             // WO-49: a sheathed→drawn transition in the stream
                             // is the moment the local copy's hands change --
@@ -5740,6 +5765,12 @@ public partial class GameBridge(ClientConfig config)
             case "leash_trace":      // WO-127: mp_leash_trace on|off
             case "leash_ctx":
                 Wo127LeashOnEvent(name, arg);
+                return;
+            case "w147_cfg":         // WO-147: mp_hostile_engage, mp_quest_safety, mp_leash_cap_s
+                Wo147OnCfg(arg);
+                return;
+            case "w147_testhit":     // WO-147: mp_test_hit, the console stand-in for this player's blow
+                Wo147OnTestHit(arg);
                 return;
             case "wo114_cfg":        // WO-114: the leash settings (mp_leash, mp_leash_warn_m, mp_leash_pull_m)
             case "wo114_busy":

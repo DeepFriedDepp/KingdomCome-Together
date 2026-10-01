@@ -1684,12 +1684,16 @@ struct Tracked {
     float         credit;   // damage we applied for a peer, not yet cancelled out
     bool          dead;
     bool          seen;
+    bool          nearPlayer = false;   // WO-147: within kStaminaRadius at the last rescan
+    float         stamina = -1.0f;      // WO-147: the last reading (-1 = none yet)
 };
 
 constexpr int   kMaxTracked     = 64;
 constexpr float kTrackRadius    = 60.0f;
 constexpr DWORD kSampleEveryMs  = 60;
 constexpr float kMinReportable  = 0.01f;
+constexpr float kStaminaRadius  = 15.0f;   // WO-147: melee range and then some: stamina is read only this close
+constexpr float kMinStaminaDrop = 1.0f;    // WO-147: a blow's stamina cost, not the regeneration's noise
 
 Tracked g_tracked[kMaxTracked];
 int     g_tracked_count = 0;
@@ -1713,6 +1717,7 @@ struct Carry {
     float         health;
     float         credit;
     bool          dead;
+    float         stamina;   // WO-147
 };
 
 Carry g_carry[kMaxTracked];
@@ -1730,7 +1735,7 @@ void note_remote_damage(const unsigned char guid[16], float health_delta) {
     if (Tracked* t = find_tracked(guid)) t->credit += health_delta;
 }
 
-void sample_health(void (*on_hit)(const unsigned char[16], float, bool)) {
+void sample_health(void (*on_hit)(const unsigned char[16], void*, float, float, bool)) {
     const DWORD now = GetTickCount();
     if (now - g_last_sample < kSampleEveryMs) return;
     g_last_sample = now;
@@ -1832,6 +1837,7 @@ void sample_health(void (*on_hit)(const unsigned char[16], float, bool)) {
             c.health = g_tracked[i].health;
             c.credit = g_tracked[i].credit;
             c.dead   = g_tracked[i].dead;
+            c.stamina = g_tracked[i].stamina;
         }
 
         g_tracked_count = 0;
@@ -1877,6 +1883,7 @@ void sample_health(void (*on_hit)(const unsigned char[16], float, bool)) {
                                 Tracked& t = g_tracked[g_tracked_count++];
                                 std::memcpy(t.guid, ka, 16);
                                 t.soul = soul; t.seen = false;
+                                t.nearPlayer = dx*dx + dy*dy + dz*dz < kStaminaRadius * kStaminaRadius;   // WO-147
 
                                 const Carry* c = find_carry(t.guid);
                                 // Credit is carried unconditionally: it is our
@@ -1891,9 +1898,11 @@ void sample_health(void (*on_hit)(const unsigned char[16], float, bool)) {
                                 if (c && c->soul == soul) {
                                     t.health = c->health;
                                     t.dead   = c->dead;
+                                    t.stamina = t.nearPlayer ? c->stamina : -1.0f;   // WO-147
                                 } else {
                                     t.health = -1.0f;   // primed on the next pass
                                     t.dead   = false;
+                                    t.stamina = -1.0f;
                                 }
                             }
                         }
@@ -1930,6 +1939,22 @@ void sample_health(void (*on_hit)(const unsigned char[16], float, bool)) {
     alignas(8) unsigned char arg[32];
     build_argument(arg, &state_val, t_state);
 
+    // WO-147: the stamina state too (a blocked or stamina-only blow: the field's joiner broke his
+    // sword and every later blow did 0 health and 40 stamina -- nothing of it ever reached the host).
+    bool have_st = false;
+    alignas(8) unsigned char arg_st[32];
+    {
+        const std::string_view sn{"stamina"};
+        Variant v_st{};
+        if (call_name_to_value(api.name_to_value, &en, &v_st, &sn)) {
+            uint64_t st_val = 0;
+            std::memcpy(&st_val, v_st.data, sizeof(st_val));
+            call_variant_dtor(api.variant_dtor, &v_st);
+            build_argument(arg_st, &st_val, t_state);
+            have_st = true;
+        }
+    }
+
     for (int i = 0; i < g_tracked_count; ++i) {
         Tracked& t = g_tracked[i];
         InstanceBuf inst{};
@@ -1943,24 +1968,43 @@ void sample_health(void (*on_hit)(const unsigned char[16], float, bool)) {
         call_variant_dtor(api.variant_dtor, &res);
         if (!valid) continue;
 
+        // WO-147: the stamina reading, only near the player (a melee blow's range).
+        float st_drop = 0.0f;
+        if (have_st && t.nearPlayer) {
+            Variant rs{};
+            if (call_invoke1(api.invoke1, &m, &rs, inst.bytes, arg_st)) {
+                bool vs = false;
+                call_variant_valid(api.variant_is_valid, &rs, &vs);
+                float st = 0.0f;
+                if (vs) std::memcpy(&st, rs.data, sizeof(st));
+                call_variant_dtor(api.variant_dtor, &rs);
+                if (vs) {
+                    if (t.stamina >= 0.0f && t.stamina - st >= kMinStaminaDrop) st_drop = t.stamina - st;
+                    t.stamina = st;
+                }
+            }
+        }
+
         if (t.health < 0.0f) { t.health = hp; continue; }   // first sight
 
         const float drop = t.health - hp;
         t.health = hp;
-        if (drop <= kMinReportable) { if (drop < 0.0f) t.credit = 0.0f; continue; }
+        float reportable = 0.0f;
+        if (drop > kMinReportable) {
+            // Subtract anything we applied on a peer's behalf.
+            reportable = drop;
+            if (t.credit > 0.0f) {
+                const float used = (t.credit < reportable) ? t.credit : reportable;
+                t.credit    -= used;
+                reportable  -= used;
+            }
+        } else if (drop < 0.0f) t.credit = 0.0f;
+        if (reportable <= kMinReportable) reportable = 0.0f;
+        if (reportable <= 0.0f && st_drop <= 0.0f) continue;
 
-        // Subtract anything we applied on a peer's behalf.
-        float reportable = drop;
-        if (t.credit > 0.0f) {
-            const float used = (t.credit < reportable) ? t.credit : reportable;
-            t.credit    -= used;
-            reportable  -= used;
-        }
-        if (reportable <= kMinReportable) continue;
-
-        const bool died = (hp <= 0.0f) && !t.dead;
+        const bool died = reportable > 0.0f && (hp <= 0.0f) && !t.dead;
         if (died) t.dead = true;
-        if (on_hit) on_hit(t.guid, reportable, died);
+        if (on_hit) on_hit(t.guid, t.soul, reportable, st_drop, died);
     }
 }
 

@@ -25,6 +25,8 @@
 #include "wo140.h"
 #include "wo141.h"
 #include "wo143.h"
+#include "wo147.h"
+#include "buffs.h"
 #include "log.h"
 
 #include <windows.h>
@@ -120,11 +122,16 @@ bool send_frame(HANDLE h, uint8_t type, const void* payload, uint16_t len) {
 CRITICAL_SECTION g_write_lock;
 bool             g_write_lock_ready = false;
 
-void send_local_hit(const unsigned char guid[16], float health_delta, bool died) {
+void send_local_hit(const unsigned char guid[16], void* soul, float health_delta, float stamina_delta, bool died) {
+    // WO-147: the sampler hands over the soul it measured (the old per-hit soul-list walk is gone), and a
+    // stamina drop is kept only for the player's own blow (an NPC's swings and blocks cost it stamina too).
+    const bool byPlayer = soul && hits::hit_by_player(soul, 1.5);
+    if (!byPlayer) stamina_delta = 0.0f;
+    if (health_delta <= 0.0f && stamina_delta <= 0.0f) return;   // a stamina drop nobody's blow explains
     // Log the detection before the connectivity check, so a missing agent looks
     // different from a missed hit.
-    logf("PIPE: LocalHit %.2f%s guid=%02X%02X%02X%02X-...%s",
-         health_delta, died ? " (fatal)" : "",
+    logf("PIPE: LocalHit %.2f st %.2f%s%s guid=%02X%02X%02X%02X-...%s",
+         health_delta, stamina_delta, died ? " (fatal)" : "", byPlayer ? " by the player" : "",
          guid[3], guid[2], guid[1], guid[0],
          g_connected ? "" : "  [no agent attached, not sent]");
     if (!g_connected || g_pipe == INVALID_HANDLE_VALUE) return;
@@ -138,12 +145,10 @@ void send_local_hit(const unsigned char guid[16], float health_delta, bool died)
     // avatar as the attacker. An older agent reads 25 bytes and stops.
     unsigned char body[16 + 4 + 4 + 1 + 1];
     std::memcpy(body, guid, 16);
-    const float stamina = 0.0f;
-    std::memcpy(body + 16, &stamina, 4);
+    std::memcpy(body + 16, &stamina_delta, 4);
     std::memcpy(body + 20, &health_delta, 4);
     body[24] = died ? 1 : 0;
-    void* hitSoul = rttr::find_soul_by_guid(guid);
-    body[25] = hitSoul && hits::hit_by_player(hitSoul, 1.5) ? 1 : 0;
+    body[25] = byPlayer ? 1 : 0;
     EnterCriticalSection(&g_write_lock);
     const bool sent = send_frame(g_pipe, kLocalHit, body, sizeof(body));
     const DWORD err = sent ? 0 : GetLastError();
@@ -584,13 +589,28 @@ void serve(HANDLE h) {
                 std::memcpy(&stamina, body + 16, 4);
                 std::memcpy(&health,  body + 20, 4);
                 const bool suppress = (body[24] & kFlagSuppressHitReaction) != 0;
+                const bool nonLethal = (body[24] & kFlagNonLethal) != 0;   // WO-147
 
                 // Onto the game's thread, and wait so the agent gets a truthful
                 // result rather than an optimistic one.
                 bool ok = false;
                 bool faultedFlag = false;
                 const bool ran = run_sync_bounded<bool>(
-                    [guid, stamina, health, suppress](bool& result) {
+                    [guid, stamina, health, suppress, nonLethal](bool& result) {
+                        if (nonLethal) {
+                            // WO-147: the field's fist-fight opponent died on the joiner's copy from the host's
+                            // own non-fatal blow (9.35 on a copy the follow had just set to the host's 4.8).
+                            // The host decides deaths: this damage stops 1 hp short.
+                            void* s = rttr::find_soul_by_guid(guid.data());
+                            void* cs = s && kcdmp::buffs::as_c_soul(s) ? kcdmp::buffs::as_c_soul(s) : s;
+                            float cur = -1.0f, hp = health;
+                            if (cs) rttr::soul_state(cs, "health", &cur);
+                            if (cur >= 0.0f && cur - hp < 1.0f) hp = cur > 1.0f ? cur - 1.0f : 0.0f;
+                            result = s && rttr::apply_damage_soul(s, stamina, hp, nullptr);
+                            if (result) rttr::note_remote_damage(guid.data(), hp);
+                            if (hp != health) logf("PIPE: ApplyDamage non-lethal: %.2f of %.2f applied (health %.2f) -- the host decides deaths", hp, health, cur);
+                            return;
+                        }
                         result = rttr::apply_damage(guid.data(), stamina, health, suppress);
                         if (result) rttr::note_remote_damage(guid.data(), health);
                         // WO-132: a forwarded hit on the local player (player_henry's
@@ -1267,6 +1287,25 @@ void serve(HANDLE h) {
                 if (r.n) std::memcpy(rb + 4, r.buf, r.n);
                 EnterCriticalSection(&g_write_lock);
                 send_frame(h, kWo143Reply, rb, static_cast<uint16_t>(4 + r.n));
+                LeaveCriticalSection(&g_write_lock);
+                break;
+            }
+            case kWo147: {   // WO-147
+                std::vector<uint8_t> copy(body, body + len);
+                struct R { uint8_t reason = kcdmp::wo147::kRFailed; uint8_t op = 0; uint8_t buf[200]{}; size_t n = 0; };
+                R r{};
+                bool faulted = false;
+                const bool ran = run_sync_bounded<R>(
+                    [copy](R& out) {
+                        out.op = copy.empty() ? 0 : copy[0];
+                        out.reason = kcdmp::wo147::handle(copy.data(), copy.size(), out.buf, sizeof(out.buf), &out.n);
+                    }, "Wo147", r, &faulted);
+                if (!ran) { r.reason = faulted ? kReasonTaskFaulted : kcdmp::wo147::kRFailed; r.n = 0; r.op = len ? body[0] : 0; }
+                BYTE rb[4 + 200]{};
+                rb[0] = (ran && r.reason == kcdmp::wo147::kROk) ? 1 : 0; rb[1] = seq; rb[2] = r.op; rb[3] = r.reason;
+                if (r.n) std::memcpy(rb + 4, r.buf, r.n);
+                EnterCriticalSection(&g_write_lock);
+                send_frame(h, kWo147Reply, rb, static_cast<uint16_t>(4 + r.n));
                 LeaveCriticalSection(&g_write_lock);
                 break;
             }

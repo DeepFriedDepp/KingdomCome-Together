@@ -117,22 +117,23 @@ public class Wo114Tests
 
     // ---------------------------------------------------------------- holds
 
+    // WO-147: only what makes a pull unsafe for the joiner (or leaves no world to pull into) holds;
+    // the host's down, cutscene and menu and the joiner's menu no longer do (Wo147Tests).
     [Theory]
-    [InlineData(Hold.HostDowned)]
     [InlineData(Hold.JoinerDowned)]
     [InlineData(Hold.JoinerLoading)]
-    [InlineData(Hold.HostCutscene)]
+    [InlineData(Hold.JoinerCutscene)]
     [InlineData(Hold.JoinerDialogue)]
-    [InlineData(Hold.JoinerMenu)]
     [InlineData(Hold.NonHenry)]
     [InlineData(Hold.HostReloading)]
+    [InlineData(Hold.HostLoading)]
     public void A_hold_freezes_the_countdown_and_it_resumes_where_it_was(Hold h)
     {
         var l = New(); long t = 0;
         Run(l, ref t, 250, 700);                       // 10
         Run(l, ref t, 3000, 700);                      // ... 7 s left
         Assert.Equal(7, l.SecondsLeft);
-        var held = Run(l, ref t, 60_000, 700, h);      // a minute downed / in a dialogue / ...
+        var held = Run(l, ref t, 55_000, 700, h);      // most of a minute downed / in a dialogue / ... (WO-147: under the cap)
         var hold = Assert.Single(held);
         Assert.Equal(Act.Hold, hold.Kind);
         Assert.Equal(7, hold.Arg);

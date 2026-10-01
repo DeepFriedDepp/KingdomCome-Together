@@ -131,6 +131,7 @@ local function mkEntity(name, x, y, z)
 end
 
 local function reset()
+    if KCD2MP.npcSilence then KCD2MP.npcSilence.tickAt = nil; KCD2MP.npcSilence.agentAt = -1e9; KCD2MP.npcSilence.silent = {} end   -- WO-147: each scenario starts from a fresh puppet chain (a tick that last ran in another scenario's time reads as a freeze)
     KCD2MP.wo102.authorityHost = true; KCD2MP.wo102.authorityPause = true
     KCD2MP.wo102.npcScanNative = false; KCD2MP.wo102.posNative = false
     KCD2MP.hitSensorOn = false

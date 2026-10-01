@@ -17,8 +17,12 @@ public static class Wo131Rules
 {
     /// <summary>1b: a joiner's hit counts only on a copy this close to the host NPC's streamed position.</summary>
     public const float HitGateMaxDistM = 3.0f;
-    /// <summary>1b: ... whose newest host sample is this fresh (the heartbeat is 2 s).</summary>
-    public const int HitGateMaxAgeMs = 3000;
+    /// <summary>
+    /// 1b: ... whose newest host sample is this fresh. WO-147: 6 s (was 3 s) -- a standing NPC's stream is a
+    /// 2 s heartbeat, and 3 s left one second for every delay: the field dropped a hit on a standing archer
+    /// 0.00 m from its sample as stale (age 3,538 ms).
+    /// </summary>
+    public const int HitGateMaxAgeMs = 6000;
     /// <summary>1c: a guarded copy at or under this health took a blow it could not show (the imm floor is 1).</summary>
     public const float GuardFloorHp = 1.05f;
 

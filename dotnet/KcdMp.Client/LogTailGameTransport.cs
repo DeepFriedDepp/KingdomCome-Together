@@ -477,6 +477,14 @@ public sealed class LogTailGameTransport : IGameTransport
     private bool _menuOpen;
     private bool _inventoryOpen;
     private bool _skipTimeActive;
+    private DateTime _skipTimeSinceUtc;
+
+    /// <summary>
+    /// WO-147: the longest a skip-time marker may stay open without its end. A real skip resolves in seconds; the
+    /// field's quest sleep that the engine cancelled (it cut to a cutscene) left the flag set for 45 minutes -- the
+    /// host read "paused" all that time, the joiner was told so, and the leash held its pull.
+    /// </summary>
+    public const int SkipTimeMaxOpenSeconds = 180;
 
     // Rendered cutscene (WO-80). Independent for the same reason as the three
     // above -- a real field session shows a cutscene starting while a
@@ -533,16 +541,27 @@ public sealed class LogTailGameTransport : IGameTransport
         // travel has been confirmed live yet -- when one is, latch it into
         // LastSkipKind here, *before* the start edge fires, so the kind
         // rides the very first packet of the skip.
+        bool skipWas = _skipTimeActive;
         if (line.IndexOf("Readiness observer 'AfterSkipTime'") >= 0)
         {
-            bool skipBefore = _skipTimeActive;
-            if (line.IndexOf("started async waiting") >= 0) _skipTimeActive = true;
+            if (line.IndexOf("started async waiting") >= 0) { _skipTimeActive = true; _skipTimeSinceUtc = DateTime.UtcNow; }
             else if (line.IndexOf("is ready") >= 0) _skipTimeActive = false;
-            if (_skipTimeActive != skipBefore)
+            // WO-147: the engine can cancel the skip (a quest sleep that cuts to a cutscene) -- that ends it too.
+            else if (line.IndexOf("has canceled async waiting") >= 0)
             {
-                try { SkipTimeStateChanged?.Invoke(_skipTimeActive); }
-                catch (Exception ex) { Console.WriteLine($"[timeskip] handler threw: {ex.Message}"); }
+                _skipTimeActive = false;
+                if (skipWas) Console.WriteLine("[timeskip] the engine cancelled the skip (no 'is ready' follows) -- skip-time ended");
             }
+        }
+        else if (_skipTimeActive && (DateTime.UtcNow - _skipTimeSinceUtc).TotalSeconds > SkipTimeMaxOpenSeconds)
+        {
+            _skipTimeActive = false;   // WO-147: an end the log never showed -- never a pause for good
+            Console.WriteLine($"[timeskip] skip-time open for over {SkipTimeMaxOpenSeconds} s without its end marker -- cleared");
+        }
+        if (_skipTimeActive != skipWas)
+        {
+            try { SkipTimeStateChanged?.Invoke(_skipTimeActive); }
+            catch (Exception ex) { Console.WriteLine($"[timeskip] handler threw: {ex.Message}"); }
         }
 
         // Rendered cutscene (WO-80): CutscenePlayer::PlayCutscene / OnCutsceneEnd

@@ -79,6 +79,8 @@ bool skirmish_remove(void* soul, uint64_t* rv);
 int avatar_list(uint32_t* eids, void** souls, int max);
 void* soul_of_eid(uint32_t eid);
 uint32_t eid_of_name(const char* name);   // one entity walk per name, cached and re-verified
+// WO-147: as the hit hook marks a real blow of the local player's on this body (any thread).
+void mark_player_hit(uint32_t victimEid);
 
 void tick();   // main thread: drain the hook's queue, resolve victims
 int status_text(char* out, int n);

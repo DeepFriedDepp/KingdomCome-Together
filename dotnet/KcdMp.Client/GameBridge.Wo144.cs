@@ -150,7 +150,9 @@ public partial class GameBridge
             int sp = line.IndexOf(' ', drop.Length);
             if (int.TryParse(sp > 0 ? line[drop.Length..sp] : line[drop.Length..], NumberStyles.Integer, CultureInfo.InvariantCulture, out int id))
             {
-                Console.WriteLine($"MP-W137 the engine dropped this player's talk request {id} ({(line.Contains("timed out") ? "timed out" : "cancelled")}) -- the copy never took it; nothing was held on the host");
+                // WO-147: the engine prints this for every soul's cancelled request (the field: 162 lines on one host,
+                // 27 its player's); the mod ends a talk only when the id is this player's own (KCD2MP_W137TalkDropped).
+                Console.WriteLine($"MP-W137 the engine cancelled dialog request {id} ({(line.Contains("timed out") ? "timed out" : "cancelled")}) -- if it was this player's talk, it ends here and nothing was held on the host");
                 _ = ExecLuaAsync($"if KCD2MP_W137TalkDropped then KCD2MP_W137TalkDropped({id}) end");
             }
             return;

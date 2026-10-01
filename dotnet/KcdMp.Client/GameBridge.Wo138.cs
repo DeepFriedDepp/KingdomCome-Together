@@ -314,7 +314,9 @@ public partial class GameBridge
                     lastAnchors = now;
                     var anchors = new List<(float, float, float)>();
                     var cutoff = DateTime.UtcNow - TimeSpan.FromSeconds(5);
-                    foreach (var kv in _ghostLastPos) if (kv.Value.AtUtc >= cutoff && anchors.Count < 8) anchors.Add((kv.Value.X, kv.Value.Y, kv.Value.Z));
+                    // WO-147: not around a flying partner -- the field's flier dragged the stream across the map
+                    // (hundreds of new copies a minute on the joiner, its agent a minute behind).
+                    foreach (var kv in _ghostLastPos) if (kv.Value.AtUtc >= cutoff && anchors.Count < 8 && !Wo147PeerFlying(kv.Key)) anchors.Add((kv.Value.X, kv.Value.Y, kv.Value.Z));
                     await _combat.Wo138Async(Wo138Codec.OpAnchors, Wo138Codec.AnchorsBody(anchors), ct);
                 }
                 if (now - lastStatus >= 1000)

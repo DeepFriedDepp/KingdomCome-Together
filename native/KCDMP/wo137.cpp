@@ -1130,7 +1130,9 @@ uint8_t handle(const uint8_t* req, size_t n, uint8_t* out, size_t cap, size_t* o
         *outN = o;
         return kROk;
     }
-    case kOpReadState: {
+    case kOpReadState:
+    case kOpReadStateTyped: {   // WO-147: typed = each entry carries its value's type name (the correction port)
+        const bool typed = op == kOpReadStateTyped;
         if (n < 2) return kRBadRequest;
         const uint8_t count = req[1];
         size_t i = 2, o = 1;
@@ -1141,7 +1143,7 @@ uint8_t handle(const uint8_t* req, size_t n, uint8_t* out, size_t cap, size_t* o
             const uint16_t pl = get_u16(req + i); i += 2;
             if (pl == 0 || pl > kMaxPath || i + pl > n) return kRBadRequest;
             char path[kMaxPath + 1]{}; std::memcpy(path, req + i, pl); i += pl;
-            if (o + 7 > cap) break;
+            if (o + 7 + (typed ? 1 + 63 : 0) > cap) break;
             void* node = std::strncmp(path, "Barbora.", 8) == 0 ? find_node(path) : nullptr;
             Val v{};
             int rt = -1;
@@ -1151,6 +1153,12 @@ uint8_t handle(const uint8_t* req, size_t n, uint8_t* out, size_t cap, size_t* o
             out[o++] = static_cast<uint8_t>(rt & 0xFF);
             out[o++] = v.ok;
             std::memcpy(out + o, &v.i, 4); o += 4;
+            if (typed) {
+                size_t tl = std::strlen(v.type);
+                if (tl > 63) tl = 63;
+                out[o++] = static_cast<uint8_t>(tl);
+                std::memcpy(out + o, v.type, tl); o += tl;
+            }
             call_release(node);
             out[0]++;
         }

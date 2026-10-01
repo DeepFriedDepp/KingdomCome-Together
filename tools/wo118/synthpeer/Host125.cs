@@ -17,7 +17,8 @@
 //       pos <x> <y> <z>           (WO-114) the host's streamed position from now on
 //       leash warn|cancel         (WO-114) a Leash message to every joiner (0x58), with the current position
 //       leash countdown|hold <s>  ... seconds left
-//       leash pull [fast]         ... a pull beside the host's position (fast = the fast-travel reason)
+//       leash pull [fast] [forced] ... a pull beside the host's position (fast = the fast-travel reason; forced = WO-147's
+//                                 forced bit, the host's hold cap ran out: the joiner ends a dialogue first)
 //       leash config on|off <warn> <pull>
 //       timeskip <worldTime>      (WO-114) a fast-travel time skip (TimeSkip start + done, kind fast-travel)
 //       story objective|fingerprint|approach <text>   (WO-133) a StoryBeatUp (0x37) of that kind
@@ -36,6 +37,7 @@
 //                                 sent to the joiner at every Ready (and at once with ledgersend)
 //       npcmove <name> <vx> <vy> [vz]  (WO-136) a running npc stream moves at that velocity (m/s) from now on
 //       npcrow <name> <rowGuid>   (WO-136) the host's NPC committed that attack row (ActionKind.NpcAttack)
+//       npchit <name> <hp> <st> [fatal]  (WO-147) the host's own blow on its NPC (NpcDamageUp 0x30, as a host sends it)
 //       npccombat <name> on|off [host|avatar:N|none] [gz]  (WO-136) the host's NPC combat state (ActionKind.NpcCombat),
 //                                 repeated every 1 s while on (the WO-132 heartbeat)
 //       hstate k=v ...            (WO-135/136) the host avatar's state block: crouch=0|1 torch=0|1 combat=0|1
@@ -146,6 +148,7 @@ static class Host125
         var bodies = new Dictionary<string, List<Wo134Rules.Item>>(StringComparer.Ordinal);
         var witems = new List<(Guid Cls, float X, float Y, float Z, bool Taken)>();
         var npcFlags = new System.Collections.Concurrent.ConcurrentDictionary<string, byte>(StringComparer.Ordinal);   // WO-135: a running npc stream's flags, changeable
+        var npcHp = new System.Collections.Concurrent.ConcurrentDictionary<string, float>(StringComparer.Ordinal);   // WO-147: ... and its hp (a dead row carries 0)
         string? hostBuild = null;
         BodyState2? hostSt2 = null;
         var npcVel = new System.Collections.Concurrent.ConcurrentDictionary<string, (float Vx, float Vy, float Vz)>(StringComparer.Ordinal);   // WO-136: npcmove
@@ -296,7 +299,12 @@ static class Host125
                                 ushort arg = 0; byte sq = 0; ushort dist = 0;
                                 if (kind is Protocol.LeashKindCountdown or Protocol.LeashKindHold) arg = ushort.Parse(p[2], CultureInfo.InvariantCulture);
                                 if (kind == Protocol.LeashKindWarn) arg = 600;
-                                if (kind == Protocol.LeashKindPull) { sq = ++leashSeq; arg = p.Length > 2 && p[2] == "fast" ? Protocol.LeashReasonFastTravel : Protocol.LeashReasonDistance; }
+                                if (kind == Protocol.LeashKindPull)
+                                {
+                                    sq = ++leashSeq;
+                                    arg = p.Contains("fast") ? Protocol.LeashReasonFastTravel : Protocol.LeashReasonDistance;
+                                    if (p.Contains("forced")) arg |= Protocol.LeashReasonForced;   // WO-147: after the host's hold cap
+                                }
                                 if (kind == Protocol.LeashKindConfig) { sq = (byte)(p[2] == "on" ? 1 : 0); arg = ushort.Parse(p[3], CultureInfo.InvariantCulture); dist = ushort.Parse(p[4], CultureInfo.InvariantCulture); }
                                 if (kind == 0) { Say($"LEASH unknown kind {p[1]}"); break; }
                                 for (byte g = 1; g < 8; g++)
@@ -389,6 +397,7 @@ static class Host125
                                 double secs = p.Length > 8 ? double.Parse(p[8], CultureInfo.InvariantCulture) : 30;
                                 bool running = npcFlags.ContainsKey(nm);
                                 npcFlags[nm] = nfl;
+                                npcHp[nm] = nhp;
                                 if (!running) _ = Task.Run(async () =>
                                 {
                                     ushort nseq = 0; var t0 = Clock.Elapsed.TotalSeconds; double tl = t0;
@@ -398,10 +407,11 @@ static class Host125
                                         double tn = Clock.Elapsed.TotalSeconds; float dt = (float)(tn - tl); tl = tn;
                                         if (npcVel.TryGetValue(nm, out var v)) { cx += v.Vx * dt; cy += v.Vy * dt; cz += v.Vz * dt; }
                                         float yaw2 = npcVel.TryGetValue(nm, out var v2) && (v2.Vx != 0 || v2.Vy != 0) ? MathF.Atan2(-v2.Vx, v2.Vy) : nyaw;
-                                        if (!npcQuiet) await W(P.BuildUp(nm, cx, cy, cz, yaw2, nhp, npcFlags.GetValueOrDefault(nm, nfl), ++nseq, (uint)Clock.ElapsedMilliseconds));
+                                        if (!npcQuiet) await W(P.BuildUp(nm, cx, cy, cz, yaw2, npcHp.GetValueOrDefault(nm, nhp), npcFlags.GetValueOrDefault(nm, nfl), ++nseq, (uint)Clock.ElapsedMilliseconds));
                                         await Task.Delay(npcVel.ContainsKey(nm) ? 100 : 200);
                                     }
                                     npcFlags.TryRemove(nm, out _);
+                                    npcHp.TryRemove(nm, out _);
                                 });
                                 Say($"NPC {nm} streamed at {p[2]},{p[3]},{p[4]} hp={p[6]} flags={p[7]} for {secs} s");
                                 break;
@@ -440,6 +450,21 @@ static class Host125
                                                 p.Length > 4 ? float.Parse(p[4], CultureInfo.InvariantCulture) : 0f);
                                 Say($"NPCMOVE {p[1]} v=({p[2]},{p[3]})");
                                 break;
+                            case "npchit":   // WO-147: npchit <name> <hp> <st> [fatal] -- the host's own blow on its NPC (0x30), as a host sends it
+                            {
+                                var nhb = System.Text.Encoding.UTF8.GetBytes(p[1]);
+                                var pk = new byte[3 + 1 + nhb.Length + Protocol.NpcDamageFixedTail];
+                                pk[0] = Protocol.NpcDamageUp;
+                                BinaryPrimitives.WriteUInt16LittleEndian(pk.AsSpan(1), (ushort)(1 + nhb.Length + Protocol.NpcDamageFixedTail));
+                                pk[3] = (byte)nhb.Length; nhb.CopyTo(pk, 4);
+                                int o = 4 + nhb.Length;
+                                BinaryPrimitives.WriteSingleLittleEndian(pk.AsSpan(o), float.Parse(p[3], CultureInfo.InvariantCulture));
+                                BinaryPrimitives.WriteSingleLittleEndian(pk.AsSpan(o + 4), float.Parse(p[2], CultureInfo.InvariantCulture));
+                                pk[o + 8] = (byte)(Protocol.DamageFlagSuppressHitReaction | (p.Length > 4 && p[4] == "fatal" ? Protocol.NpcDamageFlagFatal : 0));
+                                await W(pk);
+                                Say($"NPCHIT {p[1]} hp={p[2]} st={p[3]}{(p.Length > 4 && p[4] == "fatal" ? " FATAL" : "")} sent (the host's own blow)");
+                                break;
+                            }
                             case "npcrow":   // WO-136: npcrow <name> <rowGuid>
                                 await W(actOut.Build(ActionKind.NpcAttack, ActionPhase.Commit, new RowEvent((uint)Clock.ElapsedMilliseconds, 0, Guid.Parse(p[2]), p[1]).ToBytes()));
                                 Say($"NPCROW {p[1]} row={p[2]}");
@@ -780,6 +805,16 @@ static class Host125
                 if (type == Protocol.ItemClaimDown && p.Length == Protocol.ItemClaimDownPayloadLen)   // WO-134
                 {
                     Say($"GOT ItemClaim claimer={p[0]} drop={BinaryPrimitives.ReadUInt32LittleEndian(p.AsSpan(1))}");
+                    continue;
+                }
+                // WO-147: a joiner's hit on the host's NPC ([src][nameLen][name][stamina:4f][health:4f][flags:1]) -- logged
+                // (a real host applies it; this one only shows it arrived).
+                if (type == Protocol.NpcDamageDown && p.Length >= 2 && p.Length == 2 + p[1] + 9)
+                {
+                    string dn = System.Text.Encoding.UTF8.GetString(p, 2, p[1]);
+                    int dof = 2 + p[1];
+                    Say(FormattableString.Invariant(
+                        $"GOT NpcDamage from={p[0]} npc={dn} hp={BinaryPrimitives.ReadSingleLittleEndian(p.AsSpan(dof + 4)):F2} st={BinaryPrimitives.ReadSingleLittleEndian(p.AsSpan(dof)):F2} flags=0x{p[dof + 8]:X2}"));
                     continue;
                 }
                 if (!Protocol.IsJoinDown(type, p.Length) || Split(p) is not var (src, jid, body)) continue;

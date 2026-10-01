@@ -63,7 +63,6 @@ public partial class GameBridge
     private DateTime _leashStateSentUtc = DateTime.MinValue;
     private DateTime _leashFtRefusedUtc = DateTime.MinValue;
     private bool _leashFtBlocked;
-    private (float X, float Y, DateTime AtUtc)? _leashPrevOwn;
 
     private const int LeashTickMs = 250;
     private const double LeashFreshS = 5.0;
@@ -83,7 +82,7 @@ public partial class GameBridge
         _leashHostId = 0xFF;
         _leashStateSent = 0xFFFF;
         _leashPrevLocal = null;
-        _leashPrevOwn = null;
+        Wo147LeashOnConnect();   // WO-147: the joiner's own motion, the partners' positions
         _ = ExecLuaAsync("if KCD2MP_Wo114CfgEmit then KCD2MP_Wo114CfgEmit() end");
         _ = Wo114LoopAsync(ct);
     }
@@ -159,6 +158,7 @@ public partial class GameBridge
                     if (kv == "m=1") m = true;
                 }
                 _leashLuaBusy = (d, m, DateTime.UtcNow);
+                if (d) _w147LastDialogueUtc = DateTime.UtcNow;   // WO-147: a conversation's outcome lands as it ends
                 return;
             }
             case "wo114_ft_try":
@@ -222,13 +222,22 @@ public partial class GameBridge
 
             if ((DateTime.UtcNow - at).TotalSeconds < LeashFreshS && Wo140HostSkipsLeash(id, st.Flags)) continue;   // WO-140: not in this world
             var logic = _leashByJoiner.GetOrAdd(id, _ => new LeashLogic());
-            logic.Config = new LeashLogic.Settings(_leashEnabled, _leashWarnM, _leashPullM);
             bool stateFresh = (DateTime.UtcNow - at).TotalSeconds < LeashFreshS;
             var hold = hostHold | (stateFresh ? LeashLogic.JoinerHold(st.Flags) : LeashLogic.Hold.JoinerLoading);
-            double? d = null;
-            if (_hasPushed && _ghostLastPos.TryGetValue(id, out var gp) && (DateTime.UtcNow - gp.AtUtc).TotalSeconds < LeashFreshS)
-                d = LeashLogic.Dist2D(_lastX, _lastY, gp.X, gp.Y);
-            foreach (var a in logic.Tick(now, d, hold))
+            // WO-147: the joiner's position as the leash may use it -- current on the joiner's own clock
+            // (never a backlog's burst of old samples) and read the moment it arrived.
+            double? d = _hasPushed ? Wo147LeashDistance(id, _lastX, _lastY) : null;
+            List<LeashLogic.Action> acts;
+            lock (logic)
+            {
+                logic.Config = new LeashLogic.Settings(_leashEnabled, _leashWarnM, _leashPullM);
+                // WO-147: a pull waits as long as the link needs: this machine's round trip, and how far the
+                // joiner's own samples run behind (the field's pull timed out behind a 20 s backlog).
+                logic.PullTimeoutMs = Math.Max(LeashLogic.TimeoutForRtt(_clockRttMedianMs), Wo147PeerLagTimeoutMs(id));
+                logic.CapMs = _w147LeashCapMs;   // WO-147: mp_leash_cap_s
+                acts = logic.Tick(now, d, hold);
+            }
+            foreach (var a in acts)
                 await Wo114HostActAsync(id, logic, a, d);
         }
     }
@@ -255,7 +264,7 @@ public partial class GameBridge
         _leashFastTravelUtc = DateTime.UtcNow;
         Console.WriteLine($"MP-LEASH host: {why} -- {_leashJoinerState.Count} joiner(s) come along");
         if (!_leashEnabled) { Console.WriteLine("MP-LEASH host: mp_leash is off -- nobody is brought along"); return; }
-        foreach (var id in _leashJoinerState.Keys) _leashByJoiner.GetOrAdd(id, _ => new LeashLogic()).NoteHostFastTravel();
+        foreach (var id in _leashJoinerState.Keys) { var l = _leashByJoiner.GetOrAdd(id, _ => new LeashLogic()); lock (l) l.NoteHostFastTravel(); }
     }
 
     /// <summary>"FastTravel: started..." / "FastTravel: ended..." on this machine (LogTailGameTransport).</summary>
@@ -325,13 +334,16 @@ public partial class GameBridge
                 await Wo114SendAsync(id, new LeashCommand(Protocol.LeashKindCancel, 0, 0, _lastX, _lastY, _lastZ, dm));
                 break;
             case LeashLogic.Act.Hold:
-                Console.WriteLine($"MP-LEASH host: joiner {id} held ({a.Note}) seconds_left={a.Arg}{(logic.FastTravelPending ? " fast-travel pull owed" : "")} d={ds} m -- no pull while it lasts");
+                Console.WriteLine($"MP-LEASH host: joiner {id} held ({a.Note}) seconds_left={a.Arg}{(logic.FastTravelPending ? " fast-travel pull owed" : "")} d={ds} m -- no pull while it lasts ({(logic.CapMs > 0 ? $"at most {logic.CapMs / 1000} s" : "no limit: mp_leash_cap_s 0")})");
                 if (a.Arg > 0 || logic.FastTravelPending)
                     await Wo114SendAsync(id, new LeashCommand(Protocol.LeashKindHold, 0, (ushort)a.Arg, _lastX, _lastY, _lastZ, dm));
                 break;
+            case LeashLogic.Act.HoldCapped:   // WO-147
+                Console.WriteLine($"MP-LEASH host: joiner {id} held {a.Arg} s ({a.Note}) -- the hold is over: the countdown runs and its pull is forced (a dialogue is ended first)");
+                break;
             case LeashLogic.Act.Pull:
                 Console.WriteLine(FormattableString.Invariant(
-                    $"MP-LEASH host: pull #{a.Arg} joiner {id} reason={(a.Reason == Protocol.LeashReasonFastTravel ? "fast-travel" : "distance")} d={ds} m -> beside ({_lastX:F1}, {_lastY:F1}, {_lastZ:F1})"));
+                    $"MP-LEASH host: pull #{a.Arg} joiner {id} reason={Protocol.LeashReasonName(a.Reason)} d={ds} m -> beside ({_lastX:F1}, {_lastY:F1}, {_lastZ:F1})"));
                 await Wo114SendAsync(id, new LeashCommand(Protocol.LeashKindPull, (byte)a.Arg, a.Reason, _lastX, _lastY, _lastZ, dm));
                 break;
             case LeashLogic.Act.PullResult:
@@ -339,10 +351,16 @@ public partial class GameBridge
                 if (a.Note == "placed") await Wo114SayAsync(LeashLogic.Text.HostPulled(LeashPartnerName(id)));
                 break;
             case LeashLogic.Act.Disarmed:
-                Console.WriteLine($"MP-LEASH host: {a.Arg} pulls in a row failed (last: {a.Note}) -- no more pulls this session, warnings stay (mp_leash off, then on, re-arms)");
+                Console.WriteLine($"MP-LEASH host: {a.Arg} pulls in a row failed (last: {a.Note}) -- the pulls pause {LeashLogic.FailPauseMs / 1000} s, warnings stay (mp_leash off, then on, re-arms at once)");
+                break;
+            case LeashLogic.Act.Rearmed:      // WO-147
+                Console.WriteLine($"MP-LEASH host: joiner {id}: the {a.Arg} s pause after failed pulls is over -- pulls again");
                 break;
             case LeashLogic.Act.AlreadyBeside:
                 Console.WriteLine($"MP-LEASH host: fast travel -- joiner {id} is already beside the host ({a.Note}); no pull");
+                break;
+            case LeashLogic.Act.FastTravelExpired:   // WO-147
+                Console.WriteLine($"MP-LEASH host: joiner {id}: the fast-travel pull was owed {a.Arg} s and lapsed (d={a.Note}) -- the distance rules decide from here");
                 break;
         }
     }
@@ -367,15 +385,28 @@ public partial class GameBridge
         if (first || prev.Flags != s.Flags)
             Console.WriteLine($"MP-LEASH host: joiner {src} state {Protocol.LeashFlagsText(s.Flags)}");
         if (first) _leashCfgSentUtc = DateTime.MinValue;
-        if (s.Result != Protocol.LeashResultNone && _leashByJoiner.TryGetValue(src, out var logic) && logic.PullInFlight && s.PullSeq == logic.PullSeq)
+        if (s.Result != Protocol.LeashResultNone && _leashByJoiner.TryGetValue(src, out var logic))
         {
-            Console.WriteLine(FormattableString.Invariant(
-                $"MP-LEASH host: joiner {src} reports pull #{s.PullSeq} {Protocol.LeashResultName(s.Result)} from={s.FromM} m to={s.ToM} m residual={s.ResidualCm / 100.0:F2} m"));
-            foreach (var a in logic.OnPullResult(LeashNowMs(), s.PullSeq, s.Result))
-                _ = Wo114HostActAsync(src, logic, a, s.ToM);
+            List<LeashLogic.Action>? acts = null;
+            lock (logic)   // WO-147: the leash lane and the leash loop share it
+            {
+                if (logic.PullInFlight && s.PullSeq == logic.PullSeq)
+                {
+                    Console.WriteLine(FormattableString.Invariant(
+                        $"MP-LEASH host: joiner {src} reports pull #{s.PullSeq} {Protocol.LeashResultName(s.Result)} from={s.FromM} m to={s.ToM} m residual={s.ResidualCm / 100.0:F2} m"));
+                    acts = logic.OnPullResult(LeashNowMs(), s.PullSeq, s.Result);
+                }
+            }
+            if (acts is not null)
+                foreach (var a in acts)
+                    _ = Wo114HostActAsync(src, logic, a, s.ToM);
         }
         if ((s.Flags & Protocol.LeashFlagFastTravelRefused) != 0 && (prev.Flags & Protocol.LeashFlagFastTravelRefused) == 0)
             Console.WriteLine($"MP-LEASH host: joiner {src} tried to fast travel -- refused on its side (only the host fast-travels)");
+        if ((s.Flags & Protocol.LeashFlagFlying) != (prev.Flags & Protocol.LeashFlagFlying))   // WO-147
+            Console.WriteLine((s.Flags & Protocol.LeashFlagFlying) != 0
+                ? $"MP-LEASH host: joiner {src} is flying (faster than any horse, no fast travel -- the developer fly mode): its distance changes that fast, the leash still counts it"
+                : $"MP-LEASH host: joiner {src} is on its feet again");
     }
 
     // ---------------------------------------------------------------- joiner
@@ -393,6 +424,7 @@ public partial class GameBridge
         if (_localAutoPaused || _localManualPaused) f |= Protocol.LeashFlagMenu;
         if (mounted) f |= Protocol.LeashFlagMounted;
         if ((DateTime.UtcNow - _leashFtRefusedUtc).TotalSeconds < 5) f |= Protocol.LeashFlagFastTravelRefused;
+        if (Wo147OwnFlying) f |= Protocol.LeashFlagFlying;   // WO-147
         return f;
     }
 
@@ -403,7 +435,7 @@ public partial class GameBridge
         if (wantBlock != _leashFtBlocked || (wantBlock && second && DateTime.UtcNow.Second % 5 == 0))
             await Wo114SetFastTravelBlockAsync(wantBlock, wantBlock ? "in the host's world" : "left the host's world");
 
-        Wo114JoinerJumpCheck();
+        Wo147JoinerMotionCheck();   // WO-147: a jump, a flight or a fast travel -- told apart (was Wo114JoinerJumpCheck)
 
         ushort f = JoinerLeashFlags();
         bool changed = f != _leashStateSent;
@@ -418,24 +450,6 @@ public partial class GameBridge
         _leashStateSentUtc = DateTime.UtcNow;
         try { await WriteJoinAsync(new LeashState(flags, _leashLastPullSeq, _leashLastResult, _leashFromM, _leashToM, _leashResidualCm).Build()); }
         catch (Exception ex) { Console.WriteLine($"MP-LEASH joiner: state not sent: {ex.Message}"); }
-    }
-
-    /// <summary>The joiner jumped 200 m or more by itself (not our pull, not a respawn or a load): a fast travel the block missed.</summary>
-    private void Wo114JoinerJumpCheck()
-    {
-        if (!_hasPushed || !_joinedWorld || _localDowned || _where is GameWhere.Loading or GameWhere.Menu || _jj is not null || _rewinding
-            || (DateTime.UtcNow - _leashPulledUtc).TotalSeconds < 5 || Volatile.Read(ref _leashPulling) != 0)
-        { _leashPrevOwn = null; _leashJumpQuietUntilUtc = DateTime.UtcNow.AddSeconds(5); return; }
-        if (DateTime.UtcNow < _leashJumpQuietUntilUtc) { _leashPrevOwn = null; return; }
-        var prev = _leashPrevOwn;
-        _leashPrevOwn = (_lastX, _lastY, DateTime.UtcNow);
-        if (prev is not { } p) return;
-        double jump = LeashLogic.Dist2D(p.X, p.Y, _lastX, _lastY);
-        if (jump < LeashJumpM) return;
-        _leashFtRefusedUtc = DateTime.UtcNow;
-        Console.WriteLine(FormattableString.Invariant(
-            $"MP-LEASH joiner: this game jumped {jump:F0} m by itself (a fast travel the block missed?) -- only the host fast-travels; the leash brings you back"));
-        _ = Wo114SayAsync(LeashLogic.Text.JoinerFastTravelBlocked);
     }
 
     private async Task Wo114SetFastTravelBlockAsync(bool block, string why)
@@ -488,13 +502,24 @@ public partial class GameBridge
         }
     }
 
-    /// <summary>Bring this player beside the host: never while down, loading, in a cutscene, a dialogue or a menu; dismount first; read the position back.</summary>
+    /// <summary>
+    /// Bring this player beside the host: dismount first; read the position back.
+    /// WO-147: refused only while a pull is unsafe for this player (a load, a dialogue, a cutscene, a down);
+    /// a menu is no reason (the world runs behind it since WO-138: the player is simply there when it
+    /// closes). A FORCED pull (the host's hold cap ran out) is refused only by a load: a dialogue is ended
+    /// first. Where the game has no ground beside the host (the area is not loaded here yet: the field's
+    /// "no ground in 8 directions", 1.2 and 1.9 km out) the player goes to a spot the host just stood on,
+    /// and to the ground beside the host once the area has loaded.
+    /// </summary>
     private async Task Wo114PullAsync(LeashCommand c)
     {
         if (Interlocked.Exchange(ref _leashPulling, 1) == 1) { Console.WriteLine($"MP-LEASH joiner: pull #{c.Seq} ignored -- a pull is already running"); return; }
-        string reason = c.Arg == Protocol.LeashReasonFastTravel ? "fast-travel" : "distance";
+        string reason = Protocol.LeashReasonName(c.Arg);
+        bool forced = (c.Arg & Protocol.LeashReasonForced) != 0;
         byte result = Protocol.LeashResultNone;
-        double from = _hasPushed ? LeashLogic.Dist2D(_lastX, _lastY, c.HostX, c.HostY) : -1, to = from;
+        // WO-147: the newest host position this machine has (the command's may have waited in a backlog).
+        var (hx, hy, hz) = Wo147PullTargetHost(c);
+        double from = _hasPushed ? LeashLogic.Dist2D(_lastX, _lastY, hx, hy) : -1, to = from;
         float residual = -1;
         try
         {
@@ -504,18 +529,26 @@ public partial class GameBridge
             bool dlg = busy.Contains("d=1"), mounted = busy.Contains("m=1") || (!busy.Contains("m=0") && _lastRiding);
             ushort f = JoinerLeashFlags();
             if (dlg) f |= Protocol.LeashFlagDialogue;
-            var why = LeashLogic.JoinerHold(f);
+            var why = Wo147Rules.JoinerRefusesPull(LeashLogic.JoinerHold(f), forced);
             if (why != LeashLogic.Hold.None)
             {
                 result = Protocol.LeashResultBusy;
                 Console.WriteLine($"MP-LEASH joiner: pull #{c.Seq} ({reason}) refused -- {LeashLogic.HoldText(why)}; never pulled while busy");
                 return;
             }
+            if (forced && dlg)
+            {
+                string ended = await AskModAsync("KCD2MP_W147EndDialog", 2000);   // WO-147: the hold ran out
+                Console.WriteLine($"MP-LEASH joiner: pull #{c.Seq} is forced (the host's hold ran out) -- the conversation is ended first: {ended}");
+                await Task.Delay(500);
+            }
             if (mounted)
             {
                 // WO-124 6a: dismount first and read it back; no teleport while still mounted.
                 // The engine's teleport-with-horse is a quest-graph behaviour only
                 // (PlayerAction_TeleportOnHorse, a tag-point destination): not reachable here.
+                // WO-147: decided -- the player is dismounted cleanly and the horse stays where it
+                // stood; its owner calls it back the game's own way.
                 bool off = false;
                 for (int i = 0; i < 6 && !off; i++)
                 {
@@ -532,25 +565,37 @@ public partial class GameBridge
                 }
                 await Task.Delay(300);
             }
-            var pr = await _combat.JoinPlaceAsync(c.HostX, c.HostY, c.HostZ, LeashPlaceDistM);
+            var pr = await _combat.JoinPlaceAsync(hx, hy, hz, LeashPlaceDistM);
             if (pr is null)
             {
                 result = Protocol.LeashResultNoPlugin;
                 Console.WriteLine($"MP-LEASH joiner: pull #{c.Seq} -- no answer from the plugin (not placed)");
                 return;
             }
+            bool fallback = false;
+            if (!pr.Ok && !pr.Snapped)
+            {
+                // WO-147: no ground beside the host here (not loaded this far out): a spot the host itself
+                // stood on, placed exactly (the DLL's dist 0), the fall damage held.
+                var spot = Wo147PullFallbackSpot(hx, hy, hz);
+                var fb = await _combat.JoinPlaceAsync(spot.X, spot.Y, spot.Z, 0f);
+                Console.WriteLine(FormattableString.Invariant(
+                    $"MP-LEASH joiner: pull #{c.Seq}: no ground beside the host here yet -- placed on a spot the host stood on ({spot.X:F1}, {spot.Y:F1}, {spot.Z:F1}): {(fb is { Ok: true } ? "placed" : "NOT placed")}"));
+                if (fb is not null) { pr = fb; fallback = true; }
+            }
             residual = pr.Residual;
-            to = LeashLogic.Dist2D(pr.After[0], pr.After[1], c.HostX, c.HostY);
-            if (from < 0) from = LeashLogic.Dist2D(pr.Before[0], pr.Before[1], c.HostX, c.HostY);
+            to = LeashLogic.Dist2D(pr.After[0], pr.After[1], hx, hy);
+            if (from < 0) from = LeashLogic.Dist2D(pr.Before[0], pr.Before[1], hx, hy);
             result = pr.Ok ? Protocol.LeashResultPlaced : Protocol.LeashResultNotPlaced;
             _leashPulledUtc = DateTime.UtcNow;
             Console.WriteLine(FormattableString.Invariant(
-                $"MP-LEASH pulled from={from:F0} to={to:F1} residual={pr.Residual:F2} -- pull #{c.Seq} reason={reason} {(pr.Ok ? "placed" : "NOT placed")} snapped={On114(pr.Snapped)} fall_held={On114(pr.FallHeld)} mounted_before={On114(mounted)} at ({pr.After[0]:F1}, {pr.After[1]:F1}, {pr.After[2]:F1})"));
+                $"MP-LEASH pulled from={from:F0} to={to:F1} residual={pr.Residual:F2} -- pull #{c.Seq} reason={reason} {(pr.Ok ? "placed" : "NOT placed")}{(fallback ? " (on the host's own spot)" : "")} snapped={On114(pr.Snapped)} fall_held={On114(pr.FallHeld)} mounted_before={On114(mounted)} at ({pr.After[0]:F1}, {pr.After[1]:F1}, {pr.After[2]:F1})"));
             if (pr.Ok)
-                await Wo114SayAsync(c.Arg == Protocol.LeashReasonFastTravel ? LeashLogic.Text.JoinerPulledFastTravel : LeashLogic.Text.JoinerPulledDistance);
+                await Wo114SayAsync(Protocol.LeashReasonBase(c.Arg) == Protocol.LeashReasonFastTravel ? LeashLogic.Text.JoinerPulledFastTravel : LeashLogic.Text.JoinerPulledDistance);
+            if (pr.Ok && fallback) _ = Wo147SettleBesideHostAsync(c.Seq);   // WO-147: the ground beside the host once it has loaded
             // Read it back once more after the landing settles (the emitter's position, 1.5 s on).
             _ = Task.Delay(1500).ContinueWith(_ => Console.WriteLine(FormattableString.Invariant(
-                $"MP-LEASH joiner: pull #{c.Seq} settled at ({_lastX:F1}, {_lastY:F1}, {_lastZ:F1}) -- {LeashLogic.Dist2D(_lastX, _lastY, c.HostX, c.HostY):F1} m from the host's spot")));
+                $"MP-LEASH joiner: pull #{c.Seq} settled at ({_lastX:F1}, {_lastY:F1}, {_lastZ:F1}) -- {LeashLogic.Dist2D(_lastX, _lastY, hx, hy):F1} m from the host's spot")));
         }
         catch (Exception ex)
         {

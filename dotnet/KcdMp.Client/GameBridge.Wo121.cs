@@ -519,6 +519,7 @@ public partial class GameBridge
         Console.WriteLine(FormattableString.Invariant(
             $"MP-ATTRIB npc={npcName} attacker_ghost={source} attacker_eid=0x{avatarEid:X} hp={health:F1} st={stamina:F1} result={(r.Ok ? "applied" : "failed")} {steps} brain_msg={(brain ? 1 : 0)} reason={r.Reason}"));
         if (r.Ok && (r.Steps & 1) != 0) Wo139OnAvatarHit(source, npcName, health);   // WO-139: the joiner's assault (or murder) in this world, if witnessed
+        if (r.Ok && (r.Steps & 1) != 0) Wo147WatchFight(npcName, $"avatar {source} hit it");   // WO-147: its fight with the avatar goes to the joiner
         return r.Ok && (r.Steps & 1) != 0;
     }
 

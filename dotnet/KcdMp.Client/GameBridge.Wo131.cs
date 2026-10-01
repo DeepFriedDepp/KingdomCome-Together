@@ -167,6 +167,7 @@ public partial class GameBridge
     /// <summary>1c: every host sample on the joiner -- the copy's health follows the host's.</summary>
     private void Wo131OnNpcSample(string name, float hp, bool dead)
     {
+        Wo147NoteStreamDead(name, dead);   // WO-147: a copy the host's stream calls dead is never engaged again
         if (!dead && hp >= 0) _w131StreamHp[name] = hp;
         if (!Wo131JoinerActive || !_w131Guarded.TryGetValue(name, out uint eid)) return;
         long now = W131NowMs();

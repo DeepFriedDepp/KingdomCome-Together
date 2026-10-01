@@ -280,6 +280,14 @@ struct Puppet {
 
 std::unordered_map<std::string, Stream> g_streams;
 std::unordered_map<std::string, Puppet> g_bound;
+
+// WO-147: a bound copy dropped because a blow ragdolled it (not-living) is still the host's copy while
+// it lies there -- the joiner's hit gate asks a moment after the blow (its own name and identity round
+// trips first), and the live run dropped exactly those blows as "not bound" (the drop came 0.3-0.7 s
+// after the blow, every time). hit_check answers "bound" for such a body this long.
+constexpr double kRagdollGraceS = 3.0;
+struct Ragdolled { uint32_t eid = 0; double at = 0; };
+std::unordered_map<std::string, Ragdolled> g_ragdolled;
 SenderClock g_clocks[256];
 double      g_lastPrune = 0;
 double      g_lastTickAt = 0;
@@ -305,6 +313,12 @@ void drop(std::unordered_map<std::string, Puppet>::iterator it, uint8_t reason, 
          it->second.eid, static_cast<unsigned long long>(it->second.writes));
     motion::body_released(it->second.key.c_str(), it->second.eid);   // WO-121: gait/combat hand the body back
     if (tell) notify_drop(reason, it->second.name);
+    if (reason == kNotLiving) {   // WO-147: remembered for the hit gate (a ragdoll is a moment, not a release)
+        const double t = now_s();
+        for (auto r = g_ragdolled.begin(); r != g_ragdolled.end();)
+            r = (t - r->second.at > kRagdollGraceS) ? g_ragdolled.erase(r) : std::next(r);
+        g_ragdolled[it->first] = Ragdolled{it->second.eid, t};
+    }
     g_bound.erase(it);
 }
 
@@ -901,9 +915,24 @@ void tick() {
     npctrace::frame_begin(now);
 
     if (!g_armed.load(std::memory_order_relaxed)) { npctrace::frame_end(); return; }
-    double dt = (g_lastTickAt > 0 && now > g_lastTickAt) ? now - g_lastTickAt : 0.0;
+    const double gap = (g_lastTickAt > 0 && now > g_lastTickAt) ? now - g_lastTickAt : 0.0;
+    double dt = gap;
     if (dt > 0.1) dt = 0.1;   // a hitch (a load, a menu) is not a reason to slew further
     g_lastTickAt = now;
+    // WO-147 (the frame backlog): a stretch this tick did not run -- the game's main thread stalled --
+    // is not the streams' silence; every stream's clock moves on by it, never past now. The field: after
+    // each freeze the writer dropped its copies for "silence" while their samples were on the way, and
+    // the agent and the mod took them over again (rides the native writer itself).
+    if (gap > 1.0) {
+        for (auto& kv : g_streams)
+            if (kv.second.lastSampleAt > 0) {
+                const double moved = kv.second.lastSampleAt + gap;
+                kv.second.lastSampleAt = moved < now ? moved : now;
+            }
+        static unsigned s_gaps = 0;
+        if (++s_gaps <= 20 || s_gaps % 100 == 0)
+            logf("MP-NPCWRITE tick gap %.1f s (a stall) -- no silence of the streams: their clocks move on (#%u)", gap, s_gaps);
+    }
 
     std::vector<InSample> samples;
     std::vector<InHold> holds;
@@ -1115,7 +1144,23 @@ bool hit_check(const char* name, HitCheck* out) {
     const bool haveSample = st != g_streams.end() && st->second.lastAcceptedAt > 0 && st->second.n > 0;
     if (haveSample) { out->ageS = now_s() - st->second.lastAcceptedAt; out->flags = st->second.flags; }
     auto b = g_bound.find(key);
-    if (b == g_bound.end()) return true;
+    if (b == g_bound.end()) {
+        // WO-147: a copy a blow ragdolled a moment ago (dropped for not-living, Lua stands it up and
+        // binds it again) is still the host's copy for the gate.
+        auto rd = g_ragdolled.find(key);
+        if (rd == g_ragdolled.end() || now_s() - rd->second.at > kRagdollGraceS) return true;
+        void* e = engine::entity_by_id(rd->second.eid);
+        if (!e) return true;
+        out->bound = true;
+        out->eid = rd->second.eid;
+        float rp[3]{};
+        if (haveSample && read_pos(e, rp)) {
+            const RingSample& r = st->second.ring[st->second.n - 1];
+            const float dx = rp[0] - r.x, dy = rp[1] - r.y;
+            out->distM = std::sqrt(dx * dx + dy * dy);
+        }
+        return true;
+    }
     out->bound = true;
     out->eid = b->second.eid;
     float pos[3]{};

@@ -364,8 +364,13 @@ void probe_dice_class();
 
 /// Sample tracked souls and report drops. Call from the main thread each tick;
 /// it rate-limits internally.
-void sample_health(void (*on_hit)(const unsigned char guid[16], float health_delta,
-                                  bool died));
+/// WO-147: the report carries the soul it measured (no second soul-list walk per
+/// hit) and, for a soul within 15 m of the player, its stamina drop too (a blocked
+/// or stamina-only blow; the receiver keeps it only when the player's blow caused
+/// it -- an NPC's own swings cost it stamina as well). health_delta 0 = a
+/// stamina-only candidate.
+void sample_health(void (*on_hit)(const unsigned char guid[16], void* soul, float health_delta,
+                                  float stamina_delta, bool died));
 
 /// Tell the sampler that a health change was caused by an inbound packet, so it
 /// is not reported back out.

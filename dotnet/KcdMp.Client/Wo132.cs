@@ -127,9 +127,13 @@ public static class Wo132Rules
     /// the host's (guarded and natively bound -- never a free copy); the DLL
     /// then refuses it past 15 m. Anything else releases an engaged copy.
     /// </summary>
-    public static EngageVerdict JudgeEngage(NpcCombatEvent e, bool joinerActive, bool guarded, bool nativeBound, bool engagedNow)
+    /// WO-147: also while the host's NPC fights THIS player's avatar (<paramref name="myGhost"/>): an NPC fighting
+    /// an avatar reads combat=0 on the host (its combat mode is the player's fight's; the field: every NpcCombat
+    /// with target=Avatar had combat=0), so the joiner it was hurting never got combat mode against it.
+    public static EngageVerdict JudgeEngage(NpcCombatEvent e, bool joinerActive, bool guarded, bool nativeBound, bool engagedNow, byte myGhost = 0xFF)
     {
-        bool want = joinerActive && e.InCombat && guarded && nativeBound;
+        bool mine = myGhost != 0xFF && e.Target == NpcCombatTarget.Avatar && e.TargetGhost == myGhost;
+        bool want = joinerActive && (e.InCombat || mine) && guarded && nativeBound;
         if (want) return EngageVerdict.Engage;
         return engagedNow ? EngageVerdict.Release : EngageVerdict.Ignore;
     }

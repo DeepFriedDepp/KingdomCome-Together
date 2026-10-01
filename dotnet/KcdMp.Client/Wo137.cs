@@ -287,7 +287,35 @@ public static class Wo137Rules
 
     // ------------------------------------------------------------------ the engine's dialogue lines
 
-    public readonly record struct QuestLineInfo(string Kind, int Id, string[] Souls, int Player);
+    /// <summary>WO-147: Bark = an attempt whose meta overrides are all combat shouts or the player's own barks
+    /// (<see cref="IsBarkAttempt"/>): never a conversation (the field held a hostile bandit on the host at every scream).</summary>
+    public readonly record struct QuestLineInfo(string Kind, int Id, string[] Souls, int Player, bool Bark = false);
+
+    /// <summary>
+    /// WO-147: a dialogue attempt that is a bark, not a conversation: at least one soul carries a
+    /// " - meta override: " and every override is a combat shout (COMBAT_*, SKIRMISH_*) or the player's own
+    /// bark (HRAC_*: tired, hungry, the horse). In the field's game logs 1,707 such attempts with the player
+    /// opened the dialogue camera twice (coincidences); other overrides are real conversations -- the dice
+    /// player's KOSTKAR_UNISEX opened it 31 times of 31, and bargaining (SMLOUVANI) is one too.
+    /// </summary>
+    public static bool IsBarkAttempt(string souls)
+    {
+        const string mo = " - meta override: ";
+        bool any = false;
+        int i = 0;
+        while ((i = souls.IndexOf(mo, i, StringComparison.Ordinal)) >= 0)
+        {
+            i += mo.Length;
+            int end = i;
+            while (end < souls.Length && (char.IsAsciiLetterOrDigit(souls[end]) || souls[end] == '_')) end++;
+            if (end == i) continue;   // an empty override says nothing
+            var tag = souls.AsSpan(i, end - i);
+            if (!(tag.StartsWith("COMBAT_", StringComparison.Ordinal) || tag.StartsWith("SKIRMISH_", StringComparison.Ordinal)
+                  || tag.StartsWith("HRAC_", StringComparison.Ordinal))) return false;
+            any = true;
+        }
+        return any;
+    }
 
     /// <summary>
     /// "Soul 'Dude' requested dialog. Assigned id is 241"                                 -> request 241
@@ -326,7 +354,7 @@ public static class Wo137Rules
                 if (sp > 0) t = t[..sp];
                 if (Wo137Text.IsNpc(t)) names.Add(t);
             }
-            info = new QuestLineInfo("attempt", id, [.. names], -1);
+            info = new QuestLineInfo("attempt", id, [.. names], -1, IsBarkAttempt(souls));
             return true;
         }
         if (line.StartsWith("[ID: ", StringComparison.Ordinal))

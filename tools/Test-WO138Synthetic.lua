@@ -251,10 +251,13 @@ do -- (c) the dialogue edge
     check("c: the first state is reported", emitted("w138_dialog")[1] == "0", emitted("w138_dialog")[1])
     KCD2MP_W138DialogTick(); KCD2MP_W138DialogTick()
     check("c: no change, nothing more", #emitted("w138_dialog") == 1)
+    -- WO-147: a bark (a combat shout) sets IsInDialog too, without the dialogue camera's twin: no edge
     PLAYER_IN_DIALOG = true; KCD2MP_W138DialogTick()
-    PLAYER_IN_DIALOG = false; KCD2MP_W138DialogTick()
+    check("c: a bark (no dialogue camera) is no dialogue", #emitted("w138_dialog") == 1)
+    ENTS["DialogTwin_Dude"] = mkEntity("DialogTwin_Dude", 0, 0, 0); KCD2MP_W138DialogTick()
+    PLAYER_IN_DIALOG = false; ENTS["DialogTwin_Dude"] = nil; KCD2MP_W138DialogTick()
     local d = emitted("w138_dialog")
-    check("c: in and out of a dialogue: one edge each", #d == 3 and d[2] == "1" and d[3] == "0", table.concat(d, ","))
+    check("c: in and out of a conversation: one edge each", #d == 3 and d[2] == "1" and d[3] == "0", table.concat(d, ","))
     noErrs("c")
 end
 

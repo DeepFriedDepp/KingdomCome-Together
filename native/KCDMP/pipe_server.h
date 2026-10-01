@@ -320,6 +320,9 @@ constexpr uint8_t kActivityOut        = 0xA7;
 constexpr uint8_t kWo143              = 0x28;
 constexpr uint8_t kWo143Reply         = 0xA8;
 constexpr uint8_t kActivity2Out       = 0xA9;
+// WO-147: the joiner can fight, the leash pulls (native wo147.h): 0x29 [op][...] -> 0xAA [ok][seq][op][reason][payload].
+constexpr uint8_t kWo147              = 0x29;
+constexpr uint8_t kWo147Reply         = 0xAA;
 constexpr uint8_t kSaveListReply      = 0x8D;   // [ok][seq][listed][idx:2][count:2][current][contPl][contIdx:2][nameLen][contName]
 constexpr uint8_t kLocalAction        = 0x96;   // unsolicited: [kind][phase][ic][zone][type][flags][guid:16][eid:4][nameLen][name]
 constexpr uint8_t kPvpHitOut          = 0x97;   // unsolicited: [victimEid:4][st:4f][hp:4f][flags][material]
@@ -341,6 +344,7 @@ constexpr int kScanNpcsAnchorMax        = 8;       // WO-102.5: self + up to 7 p
 constexpr int kScanNpcsMinLen           = 1 + 4 + 1 * 12;               // anchorCount + radius + >=1 anchor
 constexpr int kScanNpcsMaxLen           = 1 + 4 + kScanNpcsAnchorMax * 12;
 constexpr uint8_t kFlagSuppressHitReaction = 0x01;
+constexpr uint8_t kFlagNonLethal           = 0x02;   // WO-147: never under 1 hp (a joiner's copy: the host decides deaths)
 
 /// Start the listener thread. Safe to call once; returns false if it could not
 /// create the pipe.

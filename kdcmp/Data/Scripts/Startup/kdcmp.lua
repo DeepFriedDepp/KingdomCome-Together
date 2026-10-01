@@ -9207,6 +9207,27 @@ function KCD2MP_NpcPuppetTick(arg, gen)
         KCD2MP._npcPuppetAliveAt = os.clock()
     end
 
+    -- The backlog fix (mp_npc_catchup): a stretch over 6 s this tick did not run (the game froze, a load)
+    -- is no silence of the streams -- every puppet's packet clock moves on by it, never past now (the field:
+    -- 9-28 s freezes released every puppet the moment the game ran again, while their samples waited in the
+    -- agent). A shorter hitch is left to the agent's word, which outlives it.
+    local ns = KCD2MP.npcSilence
+    do
+        local tnow = os.clock()
+        if KCD2MP.w147.npcCatchup and ns.tickAt and tnow - ns.tickAt > ns.stallS then
+            local gap = tnow - ns.tickAt
+            for _, pp in pairs(KCD2MP.npcPuppets) do
+                if pp.lastPacketAt then pp.lastPacketAt = math.min(tnow, pp.lastPacketAt + gap) end
+            end
+            if ns.agentAt > 0 then ns.agentAt = math.min(tnow, ns.agentAt + gap) end
+            ns.gaps = ns.gaps + 1
+            if ns.gaps <= 20 or ns.gaps % 100 == 0 then
+                mp_log(string.format("NPC-SYNC tick gap %.1f s (a freeze or a load) -- no silence of the streams: their clocks move on (#%d)", gap, ns.gaps))
+            end
+        end
+        ns.tickAt = tnow
+    end
+
     -- WO-136 Phase 1: the chain stays alive, but writes nothing while a world loads.
     if KCD2MP_W136Held and KCD2MP_W136Held() then return end
 
@@ -9274,8 +9295,12 @@ function KCD2MP_NpcPuppetTick(arg, gen)
             -- Release on silence: the engine restores the NPC to its own
             -- schedule the moment we stop writing (observed live, WO-32).
             -- WO-138: hold, don't hide -- not while the host announced a pause and its link is alive.
-            if (now - (p.lastPacketAt or 0)) > KCD2MP.npcSync.releaseS
+            -- The backlog fix: while the agent's word is fresh, the stream is silent when the agent says so
+            -- (it sees the samples arrive; this mod sees them only once the agent's queue hands them on);
+            -- its own 3 s clock rule decides when the agent is gone or mp_npc_catchup is off.
+            if KCD2MP_NpcSilenceRelease(name, p, now)
                and not (KCD2MP_W138KeepSilent and KCD2MP_W138KeepSilent(name)) then
+                ns.silent[name] = nil
                 KCD2MP_NpcReplicaDemote(name, "silence")   -- WO-104: the NPC returns before the puppet is dropped
                 KCD2MP_NpcNativeSync(name, p, nil, false, "silence")   -- WO-118
                 KCD2MP.npcPuppets[name] = nil
@@ -9852,6 +9877,7 @@ function KCD2MP_NpcPuppetTick(arg, gen)
             local orphan = KCD2MP.npcPuppetGen
             if orphan then KCD2MP._npcPuppetRetired[orphan] = true end
             mp_log("NPC-SYNC puppet tick stopped (no puppets)")
+            ns.tickAt = nil   -- the backlog fix: a stopped chain is no freeze
         end
     end
 end
@@ -16845,7 +16871,10 @@ function KCD2MP_W138DialogTick()
     local inDialog = false
     local h = player and player.human
     if not (h and h.IsInDialog) then return end
-    pcall(function() inDialog = h:IsInDialog() == true end)
+    -- WO-147: a real conversation (IsInDialog AND the engine's dialogue camera twin), as the leash's
+    -- hold reads it -- a combat shout sets IsInDialog too, and every one of them told the joiner "the host
+    -- is paused" (its copies held where the stream left them) in the middle of the field's fights.
+    pcall(function() inDialog = KCD2MP_W131InConversation() == true end)
     local w = KCD2MP.w138
     if w.dialog ~= inDialog then
         w.dialog = inDialog
@@ -16953,6 +16982,186 @@ function KCD2MP_W138Status()
         tostring(w.dialog), tostring(KCD2MP_W138Holding()), w.holdReasons, w.held)
     System.LogAlways(line)
     KCD2MP_EmitEvent("w138", "status")
+end
+
+-- ===== WO-147: the joiner can fight, and the leash pulls (docs/WO-147-findings.md) =====
+-- Three switches (the agent reads them through w147_cfg; each is its player's own):
+--   mp_hostile_engage on|off  (joiner, default on) an enemy's copy near this player
+--       comes into the game's own combat mode while this player's weapon is out,
+--       whether or not the host is fighting it (lock on, block, swing); a friend's
+--       copy never does. Off = only what the host's NPC fights (WO-132).
+--   mp_quest_safety on|off    (host, default on) a joiner's step that fails a
+--       quest, cancels an objective or marks someone dead or down applies only
+--       when this world agrees (or it came out of the joiner's own conversation).
+--   mp_leash_cap_s <seconds>  (host, default 60; 0 = never) the longest a hold
+--       (the joiner in a dialogue, a cutscene, down) keeps a due pull back.
+KCD2MP.w147 = { hostileEngage = true, questSafety = true, leashCapS = 60, rangeM = 12, relMax = -0.1, npcCatchup = true }
+
+function KCD2MP_W147CfgEmit()
+    local w = KCD2MP.w147
+    KCD2MP_EmitEvent("w147_cfg", string.format("hostile_engage=%s quest_safety=%s leash_cap_s=%d range_m=%d rel_max=%.2f npc_catchup=%s",
+        w.hostileEngage and "on" or "off", w.questSafety and "on" or "off", w.leashCapS, w.rangeM, w.relMax, w.npcCatchup and "on" or "off"))
+end
+
+-- ---- the frame backlog (mp_npc_catchup; agent: GameBridge.Wo147.cs) ----------------------------
+-- The agent says once a second how far its queue runs behind (its word: fresh for ttlS), and which
+-- NPC streams fell silent where it reads them -- after this mod has had their last sample. While the
+-- word is fresh (10 s) a puppet is released only on that say-so (or after fallbackS of quiet: a safety);
+-- otherwise the 3 s rule (KCD2MP.npcSync.releaseS) decides, as before.
+--   NPC-SYNC agent silence word on|off (lag <ms>)        NPC-SYNC tick gap <s> (a freeze or a load) ...
+KCD2MP.npcSilence = { agentAt = -1e9, ttlS = 10, fallbackS = 30, stallS = 6, silent = {}, nSilent = 0, lagMs = 0,
+                      tickAt = nil, gaps = 0, wordOn = false, lagToldAt = -1e9 }
+
+function KCD2MP_NpcSilenceAgent(lagMs)
+    local ns = KCD2MP.npcSilence
+    local lag = tonumber(lagMs) or -1
+    local on = lag >= 0
+    if on then ns.agentAt = os.clock(); ns.lagMs = lag else ns.agentAt = -1e9 end
+    if on ~= ns.wordOn then
+        ns.wordOn = on
+        mp_log(string.format("NPC-SYNC agent silence word %s (lag %d ms) -- %s", on and "on" or "off", math.floor(math.max(lag, 0)),
+            on and "a puppet is released when the agent says its stream is silent" or "the 3 s rule here decides"))
+    elseif on and lag >= 2000 and os.clock() - ns.lagToldAt >= 10 then
+        ns.lagToldAt = os.clock()
+        mp_log(string.format("NPC-SYNC the agent runs %d ms behind its reader -- no puppet released for that", math.floor(lag)))
+    end
+end
+
+function KCD2MP_NpcStreamSilent(name)
+    local ns = KCD2MP.npcSilence
+    if ns.nSilent > 500 then ns.silent, ns.nSilent = {}, 0 end
+    if ns.silent[name] == nil then ns.nSilent = ns.nSilent + 1 end
+    ns.silent[name] = os.clock()
+end
+
+-- Whether puppet `name` (p) is released for silence at `now`.
+function KCD2MP_NpcSilenceRelease(name, p, now)
+    local ns = KCD2MP.npcSilence
+    local quiet = now - (p.lastPacketAt or 0)
+    if KCD2MP.w147.npcCatchup and (now - ns.agentAt) < ns.ttlS then
+        local m = ns.silent[name]
+        return (m ~= nil and m >= (p.lastPacketAt or 0)) or quiet > ns.fallbackS
+    end
+    return quiet > KCD2MP.npcSync.releaseS
+end
+
+function KCD2MP_SetNpcCatchup(arg)
+    local v = KCD2MP_Wo122ParseBool(arg)
+    if v == "bad" then mp_log("mp_npc_catchup: expected on|off, got '" .. tostring(arg) .. "'"); return false end
+    if v ~= nil then KCD2MP.w147.npcCatchup = v end
+    mp_log("WO147-TOGGLE mp_npc_catchup npc_catchup=" .. (KCD2MP.w147.npcCatchup and "on" or "off"))
+    KCD2MP_W147CfgEmit()
+    return true
+end
+
+function KCD2MP_W147Report(what)
+    local w = KCD2MP.w147
+    mp_log(string.format("WO147-TOGGLE %s hostile_engage=%s quest_safety=%s leash_cap_s=%d", tostring(what),
+        w.hostileEngage and "on" or "off", w.questSafety and "on" or "off", w.leashCapS))
+end
+
+function KCD2MP_SetHostileEngage(arg)
+    local v = KCD2MP_Wo122ParseBool(arg)
+    if v == "bad" then mp_log("mp_hostile_engage: expected on|off, got '" .. tostring(arg) .. "'"); return false end
+    if v ~= nil then KCD2MP.w147.hostileEngage = v end
+    KCD2MP_W147Report("mp_hostile_engage"); KCD2MP_W147CfgEmit()
+    return true
+end
+
+function KCD2MP_SetQuestSafety(arg)
+    local v = KCD2MP_Wo122ParseBool(arg)
+    if v == "bad" then mp_log("mp_quest_safety: expected on|off, got '" .. tostring(arg) .. "'"); return false end
+    if v ~= nil then KCD2MP.w147.questSafety = v end
+    KCD2MP_W147Report("mp_quest_safety"); KCD2MP_W147CfgEmit()
+    return true
+end
+
+function KCD2MP_SetLeashCap(arg)
+    local s = tostring(arg or ""):gsub("^%s+", ""):gsub("%s+$", "")
+    if s ~= "" and s ~= "%line" and s ~= "nil" then
+        local n = tonumber(s)
+        if not n or n ~= math.floor(n) or n < 0 or n > 3600 then mp_log("mp_leash_cap_s: expected whole seconds 0..3600, got '" .. s .. "'"); return false end
+        KCD2MP.w147.leashCapS = n
+    end
+    KCD2MP_W147Report("mp_leash_cap_s"); KCD2MP_W147CfgEmit()
+    return true
+end
+
+-- Which of the host's copies near this player are its enemies: a public enemy
+-- (soul:IsPublicEnemy(): bandits, wolves) or an encounter animal reads -1, anyone
+-- else the game's own relationship, soul:GetRelationship(this player's soul) (-1
+-- the worst enemies .. 1 the best friends; live: a villager 0.21, the partner's
+-- avatar 0.5, a bandit 0). Asked by the agent once a second on a joiner.
+--   reply: <tok> drawn=<0|1> on=<0|1> n=<k> list=<name>:<rel>:<dist>:<alive>;...
+function KCD2MP_W147Hostiles(tok)
+    local w = KCD2MP.w147
+    local out, n = {}, 0
+    local pp, pid = nil, nil
+    pcall(function() pp = player:GetWorldPos(); pid = player.soul:GetId() end)
+    if pp and pid and w.hostileEngage then
+        for name, p in pairs(KCD2MP.npcPuppets or {}) do
+            if n >= 12 then break end
+            local e = nil
+            pcall(function() e = System.GetEntityByName(name) end)
+            if e and e.soul and not p.dead then
+                local ep = nil
+                pcall(function() ep = e:GetWorldPos() end)
+                if ep then
+                    local dx, dy = ep.x - pp.x, ep.y - pp.y
+                    local d = math.sqrt(dx * dx + dy * dy)
+                    if d <= w.rangeM then
+                        -- An enemy: the game's own public-enemy flag (bandits, wolves: a faction under the
+                        -- enemies' tree -- the crime judge's test too; their GetRelationship reads 0), an
+                        -- encounter animal, else the relationship to this player (a villager turned on him).
+                        local rel, enemy = nil, false
+                        pcall(function() enemy = e.soul:IsPublicEnemy() == true end)
+                        if enemy or (KCD2MP_W136IsAnimalClass and KCD2MP_W136IsAnimalClass(e.class)) then rel = -1
+                        else pcall(function() rel = tonumber(e.soul:GetRelationship(pid)) end) end
+                        local alive = 1
+                        pcall(function() if e.actor and (e.actor:IsDead() or e.actor:IsUnconscious()) then alive = 0 end end)
+                        if rel ~= nil then
+                            n = n + 1
+                            out[#out + 1] = string.format("%s:%.2f:%.1f:%d", name, rel, d, alive)
+                        end
+                    end
+                end
+            end
+        end
+    end
+    KCD2MP_EmitEvent("wo124_reply", string.format("%s drawn=%d on=%d n=%d list=%s", tostring(tok),
+        KCD2MP.weaponDrawn and 1 or 0, w.hostileEngage and 1 or 0, n, table.concat(out, ";")))
+end
+
+-- A console stand-in for this player's own landed blow (a live test needs no key): the DLL marks the
+-- hit as this player's and deals it on the named body with this player as the attacker, as the game's
+-- hit does; the rest (the sampler, the gate, the wire) runs as for a real swing.
+--   mp_test_hit <npc> [hp=10] [stamina=0]
+function KCD2MP_W147TestHit(arg)
+    local s = tostring(arg or "")
+    local name, hp, st = s:match("^%s*([%w_]+)%s*([%d%.]*)%s*([%d%.]*)%s*$")
+    if not name or name == "line" then mp_log("mp_test_hit: expected <npc> [hp] [stamina], got '" .. s .. "'"); return false end
+    local e = nil
+    pcall(function() e = System.GetEntityByName(name) end)
+    local hexid = e and string.match(tostring(e.id), "(%x+)%s*$")
+    if not hexid then mp_log("mp_test_hit: no entity '" .. name .. "'"); return false end
+    KCD2MP_EmitEvent("w147_testhit", string.format("%s %s %s %s", name, hexid, hp ~= "" and hp or "10", st ~= "" and st or "0"))
+    return true
+end
+
+-- The leash (agent: GameBridge.Wo114.cs / Wo147.cs). A hold lasts at most 60 s;
+-- then the host's pull is FORCED and this player's conversation is ended first.
+--   WO147-ENDDIALOG was=<yes|no> how=<interrupted|none|err> in_dialog=<yes|no>
+function KCD2MP_W147EndDialog(tok)
+    local was, how = "?", "none"
+    pcall(function() was = KCD2MP_W131InConversation() and "yes" or "no" end)
+    if was ~= "no" then
+        local ok, err = pcall(function() player.human:InterruptDialogs() end)
+        how = ok and "interrupted" or ("err:" .. tostring(err))
+    end
+    local now = "?"
+    pcall(function() now = KCD2MP_W131InConversation() and "yes" or "no" end)
+    mp_log(string.format("WO147-ENDDIALOG was=%s how=%s in_dialog=%s -- a forced leash pull (the host's hold ran out)", was, how, now))
+    KCD2MP_EmitEvent("wo124_reply", tostring(tok) .. " was=" .. was .. " how=" .. how .. " in_dialog=" .. now)
 end
 
 -- ===== WO-140: sleeping together, the own-world trap (docs/WO-140-findings.md) =====
@@ -17202,7 +17411,10 @@ KCD2MP_MARKS = { "setup", "join", "fight", "fightboth", "ko", "hostdown", "horse
     "esc", "partnermenu", "dialogue", "cutscene", "solo", "steal", "fine", "townsfolk", "jail", "guardfight", "execution",
     "norob", "hostcrime", "sleep", "sleepno", "sleeptimeout", "sleepjoiner", "wait", "clock", "ownworld",
     "grindstone", "trough", "bench", "bed", "npcsit", "npcsleep", "garden", "workstation", "standup", "npcfight", "wolfbite",
-    "tool", "hoe", "gait", "oneshot", "look", "minigame", "cart", "floating", "tpose", "odd" }
+    "tool", "hoe", "gait", "oneshot", "look", "minigame", "cart", "floating", "tpose", "odd",
+    -- WO-147: the 0.42.2 tester page's markers (never registered before) and 0.42.5's
+    "rejoin", "load", "clothes", "dice", "time", "icon",
+    "friendly", "block", "leash", "leash_talk", "leash_far", "fistfight", "questsleep", "town" }
 function KCD2MP_Mark(word)
     word = tostring(word or "odd"):gsub("[^%w_]", "")
     if word == "" then word = "odd" end
@@ -18684,6 +18896,14 @@ local ok, err = pcall(function()
     System.AddCCommand("mp_leash_pull_m",        'KCD2MP_SetLeashPull(%line)',            "WO-114: the leash pull distance in metres (HOST; default 650; above mp_leash_warn_m): mp_leash_pull_m <metres>; bare = report")
     mp_log("WO114-BUILD leash=on warn_m=600 pull_m=650 countdown_s=10 rearm_m=550 place_m=3 fast_travel=host-only wake=within-leash")
     KCD2MP_Wo114CfgEmit()
+    -- WO-147: the joiner can fight (hostile copies), destructive quest steps checked, the leash's hold cap.
+    System.AddCCommand("mp_hostile_engage",      'KCD2MP_SetHostileEngage(%line)',        "WO-147 (joiner): an enemy's copy near you comes into combat mode while your weapon is out, whether or not the host fights it (default on); a friend's never does: mp_hostile_engage on|off; bare = report")
+    System.AddCCommand("mp_quest_safety",        'KCD2MP_SetQuestSafety(%line)',          "WO-147 (host): a partner's quest step that fails a quest, cancels an objective or marks someone dead or down applies only when your world agrees, or out of the partner's own conversation (default on): mp_quest_safety on|off; bare = report")
+    System.AddCCommand("mp_leash_cap_s",         'KCD2MP_SetLeashCap(%line)',             "WO-147 (host): the longest a hold (the partner in a dialogue, a cutscene, down) keeps a due leash pull back, in seconds (default 60; 0 = no limit): mp_leash_cap_s <seconds>; bare = report")
+    System.AddCCommand("mp_npc_catchup",         'KCD2MP_SetNpcCatchup(%line)',           "The agent's frame backlog (default on): behind, a superseded NPC sample is skipped, and a puppet is released for silence on the agent's word (it sees the samples arrive); off = every sample, the 3 s rule here: mp_npc_catchup on|off; bare = report")
+    System.AddCCommand("mp_test_hit",            'KCD2MP_W147TestHit(%line)',             "WO-147 test: a stand-in for this player's own landed blow on a body (the DLL marks it as the player's and deals it; the rest runs as for a swing): mp_test_hit <npc> [hp] [stamina]")
+    mp_log("WO147-BUILD hostile_engage=on quest_safety=on leash_cap_s=60 -- the joiner can fight, the leash pulls")
+    KCD2MP_W147CfgEmit()
     System.AddCCommand("mp_npc_native_write",    'KCD2MP_SetNpcNativeWrite(%line)',           "WO-118: KCDMP.dll writes every bound NPC puppet every frame at its frame hook (default on); off = the 50 ms Lua path: mp_npc_native_write on|off; bare = report")
     System.AddCCommand("mp_npc_detach",          'KCD2MP_SetNpcDetach(%line)',                "WO-118: at puppet start, right after the pause, free the NPC from its seat/activity (wh_ai_NPCStateResetElement Stance + Unstance; default on): mp_npc_detach on|off")
     System.AddCCommand("mp_npc_trace",           'KCD2MP_NpcTrace(%line)',                    "WO-118: per-frame position of one named entity at the DLL's frame hook and at render, to a CSV in the game folder: mp_npc_trace <name> [seconds] | mp_npc_trace stop")

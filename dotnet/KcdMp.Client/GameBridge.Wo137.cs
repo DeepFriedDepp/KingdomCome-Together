@@ -243,9 +243,12 @@ public partial class GameBridge
             }
             uint tok = Interlocked.Increment(ref _w137Tok);
             _w137Asked[tok] = (c, Environment.TickCount64);
-            await Wo137SendAsync(Protocol.QuestAskUp, Protocol.JoinTargetHost, Protocol.QuestAskRequest, tok, Wo137Rules.RequestText(c));
+            Wo147LearnPortValue(c.Path, c.Port, c.New, c.Type);   // WO-147: what this port produced here
+            bool conv = Wo147InOwnConversation();                  // WO-147: a conversation's outcome is this player's
+            var sent = conv ? c with { Flags = (byte)(c.Flags | Wo147Rules.FlagConversation) } : c;
+            await Wo137SendAsync(Protocol.QuestAskUp, Protocol.JoinTargetHost, Protocol.QuestAskRequest, tok, Wo137Rules.RequestText(sent));
             Interlocked.Increment(ref _w137AsksOut);
-            Console.WriteLine(FormattableString.Invariant($"MP-W137 joiner -> host request #{tok}: {c.Path} {c.Port} {c.Old}->{c.New} ({c.Type}) -- this game's own step, the host applies it to the world"));
+            Console.WriteLine(FormattableString.Invariant($"MP-W137 joiner -> host request #{tok}: {c.Path} {c.Port} {c.Old}->{c.New} ({c.Type}{(conv ? ", from this player's conversation" : "")}) -- this game's own step, the host applies it to the world"));
         }
     }
 
@@ -389,6 +392,9 @@ public partial class GameBridge
     private async Task<bool> Wo137ApplyOneAsync(QuestChange c)
     {
         if (Wo137Rules.PerMachine(c)) { Wo137Veto("apply-per-machine"); return true; }
+        // WO-147: a correction fires only while this copy still differs from the host's value (the field's
+        // "carryingBags SetCart 4->2 (the host had 4)": an earlier correction's cascade had already put it on 4).
+        if (c.Seq == 0 && c.Port.Length > 0 && await Wo147CorrectionStillNeededAsync(c) == false) return true;
         if (c.Port.Length == 0)
         {
             Interlocked.Increment(ref _w137ApplyFail); Wo137Veto("apply-no-port");
@@ -420,12 +426,16 @@ public partial class GameBridge
         {
             case 0:
                 Interlocked.Increment(ref _w137Applied);
+                Wo147LearnPortValue(c.Path, c.Port, a.New, a.Type);   // WO-147
                 Console.WriteLine(FormattableString.Invariant(
                     $"MP-W137 joiner applied host change #{c.Seq} {c.Path} {c.Port} {a.Old}->{a.New}{(a.New != c.New ? $" (the host had {c.New})" : "")}"));
                 if (c.Seq == 0 && a.New != c.New) Wo144CorrectionMissed(c.Path, c.Port, c.New, a.New);   // WO-144 4.1
                 break;
             case 1:
                 Interlocked.Increment(ref _w137Unchanged);   // already there: counted once
+                // WO-147: a correction that moved nothing is remembered like a miss (the field fired the same no-op
+                // at every checkpoint: waitingForReactors x7, konfrontace.state30 x10, takedown tutorials x11).
+                if (c.Seq == 0 && a.New != c.New) Wo144CorrectionMissed(c.Path, c.Port, c.New, a.New);
                 break;
             default:
                 Interlocked.Increment(ref _w137ApplyFail);
@@ -444,8 +454,10 @@ public partial class GameBridge
         Console.WriteLine(FormattableString.Invariant($"MP-W137 joiner: request #{tok} {what}: the host says {verdict} (host value {hostVal})"));
         if (verdict is "refused" or "failed")
         {
-            string? port = Wo137Rules.PortForCorrection(hostPort) ?? (_w137HostPort.TryGetValue(path, out var p) ? p : null);
-            if (port is null) { Console.WriteLine($"MP-W137 joiner: {path} cannot be put back to the host's value {hostVal} (no port known) -- the next join loads it exactly"); return; }
+            // WO-147: only a port known to produce the host's value (was: the host's last port, which the
+            // field showed landing elsewhere).
+            string? port = await Wo147CorrectionPortAsync(path, hostVal, asked.Req.Type);
+            if (port is null) { Console.WriteLine($"MP-W137 joiner: {path} cannot be put back to the host's value {hostVal} (no port known to produce it) -- the next join loads it exactly"); return; }
             _w137Queue.EnqueueFront(new QuestChange(0, QuestChange.FNotify, asked.Req.New, hostVal, port, "", path, asked.Req.QuestLen));
             Interlocked.Increment(ref _w137Corrected);
             Console.WriteLine(FormattableString.Invariant($"MP-W137 joiner: {path} goes back toward the host's value {hostVal} ({port}) -- this copy never keeps a step the host's world refused"));
@@ -467,7 +479,9 @@ public partial class GameBridge
             if (!l.Found || !l.Ok || l.Val == e.Val) continue;
             mism++;
             Interlocked.Increment(ref _w137Mismatch);
-            string? port = Wo137Rules.PortForCorrection(e.Port) ?? (_w137HostPort.TryGetValue(e.Path, out var p) ? p : null);
+            // WO-147: only a port known to produce the host's value (the field: "carryingBags SetCart 4->2
+            // (the host had 3)" -- the host's last port, not the one for its value).
+            string? port = await Wo147CorrectionPortAsync(e.Path, e.Val, null);
             // WO-144 4.1: a port that did not land on the host's value last time is not fired again (the
             // field re-ran SetAroundBoulder's consequences every 30 s: 0 -> 3 while the host had 15)
             if (port is not null && Wo144CorrectionSkipped(e.Path, port, e.Val)) continue;
@@ -518,6 +532,17 @@ public partial class GameBridge
                 Console.WriteLine(FormattableString.Invariant($"{head}: refused -- the host's world is at {h.Val}, not {req.Old} (a step already past, or not reached)"));
                 return;
         }
+        // WO-147: a step that fails a quest, cancels an objective or marks someone dead or down is checked
+        // against this world first (the field: the joiner's copy of a fist-fight opponent "died" there
+        // while he was only down here, and SetNpcIsDead / SetNone / SetFailed failed the quest here).
+        if (await Wo147DestructiveGateAsync(src, tok, req, h.Val, hostPort, head)) return;
+        await Wo137ApplyRequestAsync(src, tok, req, h.Val, hostPort, head);
+    }
+
+    /// <summary>The apply half of a joiner's request (WO-147: also after a destructive step's check).</summary>
+    private async Task Wo137ApplyRequestAsync(byte src, uint tok, QuestChange req, int hostVal, string hostPort, string head)
+    {
+        var h = (Val: hostVal, Ok: true);
         var a = await _combat.Wo137ApplyAsync(tok, req.Path, req.Port);
         if (a is { Result: 0 })
         {
@@ -608,6 +633,7 @@ public partial class GameBridge
                 if (W137Joiner) _ = ExecLuaAsync(FormattableString.Invariant($"if KCD2MP_W137TalkRequest then KCD2MP_W137TalkRequest({q.Id}) end"));
                 return;
             case "attempt":
+                if (q.Bark) { Wo137Veto("attempt-bark"); return; }   // WO-147: a combat shout or a bark is no conversation
                 if (W137Joiner && q.Souls.Contains("Dude"))
                     _ = ExecLuaAsync(FormattableString.Invariant($"if KCD2MP_W137TalkAttempt then KCD2MP_W137TalkAttempt({q.Id}, \"{string.Join(' ', q.Souls)}\") end"));
                 return;
