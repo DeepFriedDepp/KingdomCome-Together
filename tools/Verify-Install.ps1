@@ -197,6 +197,7 @@ $AsmMarkers = @(
     @{ File = 'KCDMP.dll';       Marker = 'the player is on the ground (or 60 s passed)'; Owner = "WO-147 the pull's fall hold lasts until there is ground under the player (native)" },
     # WO-148: carrying on the other screen, the dice keys from the player's own game, the hooks' boundary check
     @{ File = 'KcdMpClient.dll'; Marker = 'MP-WO148-STATS';         Owner = 'WO-148 carrying on the other screen (agent half)' },
+    @{ File = 'KcdMpClient.dll'; Marker = 'the carry this player just lost'; Owner = "WO-148 a loser's late Held is no new grab (the live race fix, agent half)" },
     @{ File = 'KcdMpClient.dll'; Marker = 'KEYS-PAK';               Owner = "WO-148 the dice keys built from the player's own game files (agent --keys-pak)" },
     @{ File = 'KcdMpClient.dll'; Marker = "titles from the game's own localisation"; Owner = "WO-148 quest titles read from the player's own game (agent half)" },
     @{ File = 'KCDMP.dll';       Marker = 'ends inside an instruction'; Owner = "WO-148 a hook refused unless its patch ends on an instruction boundary (native)" },
@@ -287,6 +288,8 @@ $PakMarkers = @(
     @{ Marker = 'function KCD2MP_W148Apply';       Owner = "WO-148 a partner's carry shown on its avatar (mod half)" },
     @{ Marker = 'function KCD2MP_W148Holds';       Owner = "WO-148 a carried body is the carrier's: the stream leaves it alone (mod half)" },
     @{ Marker = 'WO148-BUILD';                     Owner = 'WO-148 the carrying build line (mod half)' },
+    @{ Marker = 'waiting for the game';            Owner = "WO-148 an avatar's pick-up waits for the game's CanGrabCorpse (the live race fix)" },
+    @{ Marker = 'attached to the right hand';      Owner = "WO-148 the sack on the carrier's avatar's hand (the live fix)" },
     @{ Marker = 'function KCD2MP_W144AvatarKey';   Owner = "WO-144 the live avatar's entity key (mod half)" },
     @{ Marker = 'function KCD2MP_W144LightTick';   Owner = 'WO-144 an avatar holds a light only while its player does (mod half)' },
     @{ Marker = 'function KCD2MP_W144FollowHostClock'; Owner = "WO-144 the joiner's clock stands with the host's (mod half)" },

@@ -18825,7 +18825,7 @@ do
     W.tickAt = W.tickAt or 0
     W.HOLD_GRACE_S = 5.0       -- after a set-down the stream waits this long (the other machine settles too)
     W.SETTLE_S = 1.6           -- the put-down animation and the ragdoll settle before the rest is read
-    W.REACH_M = 6.0            -- a copy further than this from the avatar is fetched (if near the pick spot) ...
+    W.REACH_M = 2.5            -- a copy further than this from the avatar is fetched (if near the pick spot) ... (live: the game refuses a pick-up from farther)
     W.FETCH_M = 30.0           -- ... when it lies within this of where the carrier picked it up
     W.LAND_SNAP_M = 0.5        -- Wo148Rules.LandSnapM
     W.GROUND_BELOW_M = 0.8     -- Wo148Rules.GroundBelowM
@@ -19065,7 +19065,15 @@ do
             if not e and pp then e = find_carried(pp) end
             local name = nil
             if e then pcall(function() name = e:GetName() end) end
-            if name and KCD2MP_W148IsName(name) then
+            if name and W.loserAt and W.loserAt[name] and (now - W.loserAt[name]) < 4.0 then
+                -- the put-down of a carry the host's world just gave to someone else is still running
+                -- (IsCarryingCorpse stays true through it): not a new carry
+            elseif name and e and not body_state(e) then
+                -- a living NPC on the shoulder (a quest's CarryLivingActor carry): the other screens never
+                -- move anything alive, so nothing goes out
+                W.mine = { name = nil, at = now }
+                w148_log("local carry of a living NPC (" .. tostring(name) .. ", a quest's carry) -- not shown on the other screens: nothing alive is moved there")
+            elseif name and KCD2MP_W148IsName(name) then
                 -- where it lay: the interaction saw it on the ground; otherwise (the stealth route) at the
                 -- player's feet -- the body is already on the shoulder when the tick sees the carry
                 W.mine = { name = name, what = body_state(e) or "dead", pick = (g and g.name == name and g.pick) or pp or pos_of(e), at = now, heldAt = now }
@@ -19154,23 +19162,55 @@ do
                     return
                 end
             end
-            local can = nil
-            pcall(function() can = av.actor:CanGrabCorpse(e.id) end)
-            local ok, ret = pcall(function() return av.actor:RequestGrabCorpse(e.id) end)
             W.av[key] = { name = name, what = state, pick = fetched and spot or here, at = os.clock(), took = false }
             W.holds[name] = math.huge
             st.avGrab = st.avGrab + 1
-            w148_log(string.format("avatar %s grab %s %s at %s%s -> RequestGrabCorpse ok=%s ret=%s can=%s",
-                key, state, name, fmt(here), fetched and " (fetched to the carrier's pick-up spot)" or "", tostring(ok), tostring(ret), tostring(can)))
-            Script.SetTimer(2500, function()
+            -- The game reports the carry only once the pick-up animation is over (about 3 s live, more
+            -- at a low frame rate): asked at 2.5 s and then every second, until 6.5 s.
+            local confirm
+            -- Only a pick-up the game allows (its own interaction asks CanGrabCorpse first). The live race
+            -- picked up while the loser's put-down was still running (can=false): on that screen the avatar
+            -- took the carry pose and the body hung beside it. Asked now and every 0.5 s for 6 s.
+            local function try_grab(tries)
+                local a = W.av[key]
+                if not (a and a.name == name) then return end
+                local av2, e2 = avatar_of(src), by_name(name)
+                if not (av2 and av2.actor and e2) then return end
+                local can = nil
+                pcall(function() can = av2.actor:CanGrabCorpse(e2.id) end)
+                if can == false or can == 0 then
+                    a.waiting = true   -- a Held meanwhile leaves the pick-up to this wait
+                    if tries > 1 then Script.SetTimer(500, function() try_grab(tries - 1) end); return end
+                    a.waiting = nil
+                    st.avGrabFail = st.avGrabFail + 1
+                    w148_log(string.format("avatar %s grab %s -> NOT taken: the game refuses the pick-up (CanGrabCorpse false for 6 s) -- the body stays, its set-down still lands it", key, name))
+                    result(src, "grab", name, "nottaken", "-")
+                    return
+                end
+                local ok, ret = pcall(function() return av2.actor:RequestGrabCorpse(e2.id) end)
+                a.at = os.clock()
+                a.waiting = nil
+                w148_log(string.format("avatar %s grab %s %s at %s%s -> RequestGrabCorpse ok=%s ret=%s can=%s%s",
+                    key, state, name, fmt(here), fetched and " (fetched to the carrier's pick-up spot)" or "", tostring(ok), tostring(ret), tostring(can),
+                    tries < 12 and string.format(" (after %.1f s waiting for the game)", (12 - tries) * 0.5) or ""))
+                Script.SetTimer(2500, function() confirm(5) end)
+            end
+            confirm = function(tries)
                 local a = W.av[key]
                 if not (a and a.name == name) then return end
                 local av2 = avatar_of(src)
                 a.took = carrying(av2)
+                if not a.took and tries > 1 then
+                    Script.SetTimer(1000, function() confirm(tries - 1) end)
+                    return
+                end
                 if not a.took then st.avGrabFail = st.avGrabFail + 1 end
-                w148_log(string.format("avatar %s grab %s -> %s", key, name, a.took and "carrying (IsCarryingCorpse)" or "NOT carrying: the body stays, its set-down still lands it"))
+                w148_log(string.format("avatar %s grab %s -> %s", key, name, a.took
+                    and string.format("carrying (IsCarryingCorpse, %.1f s after the grab)", os.clock() - a.at)
+                    or "NOT carrying: the body stays, its set-down still lands it"))
                 result(src, "grab", name, a.took and "ok" or "nottaken", "-")
-            end)
+            end
+            try_grab(12)
             return
         end
         if op == "held" then
@@ -19180,14 +19220,20 @@ do
             if not a then return KCD2MP_W148Apply(src, "grab", what, name, x, y, z) end
             if a.name ~= name then return end
             local av = avatar_of(src)
-            if av and not carrying(av) and (os.clock() - a.at) > 4.0 and (a.regrabs or 0) < 3 then
+            if av and not a.waiting and not carrying(av) and (os.clock() - a.at) > 4.0 and (a.regrabs or 0) < 3 then
                 local e = by_name(name)
                 if e and body_state(e) then
                     a.regrabs = (a.regrabs or 0) + 1
                     a.at = os.clock()
                     if dist(pos_of(e), pos_of(av)) > W.REACH_M then set_pos(e, pos_of(av)) end
-                    local ok = pcall(function() av.actor:RequestGrabCorpse(e.id) end)
-                    w148_log(string.format("avatar %s held %s -> it was not carrying here: grab again (#%d, ok=%s)", key, name, a.regrabs, tostring(ok)))
+                    local can = nil
+                    pcall(function() can = av.actor:CanGrabCorpse(e.id) end)
+                    if can == false or can == 0 then
+                        w148_log(string.format("avatar %s held %s -> it was not carrying here, and the game refuses the pick-up now (#%d): the next Held asks again", key, name, a.regrabs))
+                    else
+                        local ok = pcall(function() av.actor:RequestGrabCorpse(e.id) end)
+                        w148_log(string.format("avatar %s held %s -> it was not carrying here: grab again (#%d, ok=%s)", key, name, a.regrabs, tostring(ok)))
+                    end
                 end
             end
             return
@@ -19199,7 +19245,16 @@ do
             local e = by_name(name)
             st.avPut = st.avPut + 1
             if av and carrying(av) then pcall(function() av.actor:RequestPutCorpse() end) end
-            w148_log(string.format("avatar %s %s %s %s -> RequestPutCorpse%s", key, op, tostring(what), tostring(name), (av and a and a.took) and "" or " (it was not carrying here)"))
+            -- A set-down of a carry this machine never showed (its grab was refused here: far, alive,
+            -- no avatar, no body) moves nothing: a body is only moved during a carry shown here. The
+            -- first live run's far refusal was followed by a put that moved the body 41 m.
+            if not (a and a.name == name) then
+                w148_log(string.format("avatar %s %s %s %s -> not shown here: left where it lies", key, op, tostring(what), tostring(name)))
+                W.holds[name] = nil
+                result(src, op, name, "refused", "unshown")
+                return
+            end
+            w148_log(string.format("avatar %s %s %s %s -> RequestPutCorpse%s", key, op, tostring(what), tostring(name), (av and a.took) and "" or " (it was not carrying here)"))
             if not e then result(src, op, name, "refused", "no-body"); W.holds[name] = nil; return end
             Script.SetTimer(math.floor(W.SETTLE_S * 1000 + 400), function()
                 local e2 = by_name(name)
@@ -19226,6 +19281,8 @@ do
     function KCD2MP_W148Loser(name, why)
         local m = W.mine
         W.stats.loser = W.stats.loser + 1
+        W.loserAt = W.loserAt or {}
+        W.loserAt[tostring(name)] = os.clock()
         local pick = m and m.name == name and m.pick or nil
         if m and m.name == name then W.mine = nil end
         if W.ended and W.ended.name == name then W.ended = nil end
@@ -19249,6 +19306,7 @@ do
     -- A partner left (or its carry fell silent): its avatar sets everything down where it is.
     function KCD2MP_W148AvatarGone(src)
         local key = tostring(src)
+        if W.HandSackOff and W.HandSackOff(src) then w148_log("avatar " .. key .. " gone while holding a sack -> the sack goes with it") end
         local a = W.av[key]
         if not a then return end
         local av = avatar_of(src)
@@ -19419,6 +19477,49 @@ do
         end
     end
 
+    -- The carrier's avatar holds the game's sack: its model as a prop (no physics, never saved) on the
+    -- avatar's right hand by the game's own Human.AttachEntityToHand -- it walks with the hand. (The
+    -- DLL's hand content refuses on a host: the first live run showed the avatar's hands empty.)
+    W.handProps = W.handProps or {}   -- [ghost id] = the entity id of the sack in that avatar's hand
+    local function hand_sack_on(src)
+        local key = tostring(src)
+        local av = avatar_of(src)
+        if not (av and av.human and av.human.AttachEntityToHand) then return false, "no avatar here" end
+        local cur = W.handProps[key]
+        if cur then
+            local still = nil
+            pcall(function() still = System.GetEntity(cur) end)
+            if still then return true, "still held" end
+            W.handProps[key] = nil   -- a load removed it
+        end
+        local p = nil
+        pcall(function() p = av:GetBonePos("RightHand") end)
+        p = p or pos_of(av)
+        if not (p and p.x) then return false, "no position" end
+        W.propN = W.propN + 1
+        local ok, e = pcall(System.SpawnEntity, { class = "BasicEntity", name = "kcd2mp_sack_hand_" .. W.propN, position = { x = p.x, y = p.y, z = p.z },
+            properties = { object_Model = W.SACK_MODEL, Physics = { bPhysicalize = false, bRigidBody = false } } })
+        if not (ok and e) then return false, "the prop did not spawn" end
+        mp_set_no_save(e)
+        if not pcall(function() av.human:AttachEntityToHand(e.id, 1) end) then
+            pcall(System.RemoveEntity, e.id)
+            return false, "AttachEntityToHand failed"
+        end
+        W.handProps[key] = e.id
+        return true, "attached to the right hand"
+    end
+    local function hand_sack_off(src)
+        local key = tostring(src)
+        local id = W.handProps[key]
+        if not id then return false end
+        W.handProps[key] = nil
+        local av = avatar_of(src)
+        if av and av.human and av.human.DetachFromHand then pcall(function() av.human:DetachFromHand(1) end) end
+        pcall(System.RemoveEntity, id)
+        return true
+    end
+    W.HandSackOff = hand_sack_off
+
     local function prop_remove_near(p, why)
         for k, pr in pairs(W.props) do
             if dist(pr.pos, p) <= 1.5 then
@@ -19436,9 +19537,18 @@ do
         local p = { x = tonumber(x) or 0, y = tonumber(y) or 0, z = tonumber(z) or 0 }
         if op == "grab" then
             prop_remove_near(p, "player " .. tostring(src) .. " picked it up")
-            w148_log(string.format("avatar %s grab object %s at %s -> the avatar holds a sack", tostring(src), tostring(name), fmt(p)))
+            local held, why = hand_sack_on(src)
+            w148_log(string.format("avatar %s grab object %s at %s -> %s", tostring(src), tostring(name), fmt(p),
+                held and ("the avatar holds a sack (" .. why .. ")") or ("no sack in its hand: " .. tostring(why))))
             return
         end
+        if op == "held" then
+            -- every 2 s while carried: the sack is still in the hand (a load removes the prop)
+            local held, why = hand_sack_on(src)
+            if why == "attached to the right hand" then w148_log("avatar " .. tostring(src) .. " held object " .. tostring(name) .. " -> the sack is in its hand again") end
+            return
+        end
+        hand_sack_off(src)
         if op == "put" and how == "drop" then
             if not reachable(p, ground_at(p)) then
                 local av = avatar_of(src)

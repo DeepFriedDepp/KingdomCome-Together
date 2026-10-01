@@ -18,7 +18,8 @@ fallback (the tag `v0.42.5`).
 
 **Verified solo:** one machine, the real game as the host with a scripted
 partner and as the partner with a synthetic host, console stand-ins for the
-player's keys. Numbers and frames: `docs/WO-148-findings.md`.
+player's keys. Numbers and frames: `docs/WO-148-findings.md` and
+`docs/wo148-shots/`.
 
 ---
 
@@ -63,6 +64,9 @@ From 0.42.5: `mp_hostile_engage`, `mp_quest_safety`, `mp_leash_cap_s`,
 
 ## Still known
 
+- The host's frame rate fell over the solo test sessions (from about 75 to under
+  10 frames a second within minutes; not the agent, the partner or the DLL's NPC
+  sender, by A/B): being looked into. `docs/WO-148-findings.md` section 4.4.
 - The partner's carrying does not count for the host's quests yet (a burial,
   sacks to deliver); crimes for carrying a body are not shared yet.
 - There is no throw in the game; "drop" is the put-down.

@@ -13,7 +13,7 @@
 > made from it are its releases. See [AUTHORS](AUTHORS).
 
 <p align="center">
-  <a href="docs/releases/RELEASE-NOTES-0.42.5.md"><img alt="main" src="https://img.shields.io/badge/main-0.42.5-b8860b?style=flat-square"></a>
+  <a href="docs/releases/RELEASE-NOTES-0.42.7.md"><img alt="main" src="https://img.shields.io/badge/main-0.42.7-b8860b?style=flat-square"></a>
   <a href="https://github.com/DeepFriedDepp/KingdomCome-Together/releases/latest"><img alt="latest release" src="https://img.shields.io/github/v/release/DeepFriedDepp/KingdomCome-Together?label=latest%20release&color=8a3324&style=flat-square"></a>
   <a href="LICENSE"><img alt="License: GPLv3" src="https://img.shields.io/badge/license-GPLv3-2c3e50?style=flat-square"></a>
   <a href="docs/LAUNCHING.md"><img alt="Platform" src="https://img.shields.io/badge/platform-Windows-555555?style=flat-square"></a>
@@ -101,6 +101,7 @@ and weather. Each feature below says how far it is proven:
 | Crime and guards | The host's guards judge the partner's crimes; hitting a bandit is no crime | ✅ |
 | Looting | Bodies are the host's (first come, first served); loose items exist once; chests are per player | ✅ |
 | Dropping items for each other | What one drops, the other can pick up; the first pickup wins | ✅ |
+| Carrying | A body (dead or knocked out) or a sack one player carries is carried by that player's figure on the other screen and lies where it was put down; one carrier at a time, decided by the host's world | 🧪 new in 0.42.7 |
 | Fast travel | Only the host fast travels; the partner is told why | ✅ |
 | The leash | A partner more than 650 m from the host is brought back after a countdown | 🧪 fixed in 0.42.5 (in the field it never brought anyone back) |
 
@@ -124,7 +125,8 @@ and weather. Each feature below says how far it is proven:
 
 ### Not built yet, and known gaps
 
-- **Carrying** a body or an object shows only on the carrier's screen.
+- **Carrying and quests:** a quest does not count the partner's carrying yet (a
+  burial, sacks to deliver), and crimes for carrying a body are not shared.
 - **Animals' positions:** where the host's animals are (a wolf pack, a deer)
   can differ on the partner's screen until they come close, and an animal
   from a random encounter on the host's side may be missing there.

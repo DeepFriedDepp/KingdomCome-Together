@@ -25,7 +25,7 @@ There are three carry systems, and every quest carry is one of them:
 |---|---|---|---|---|---|
 | A | a **body** on the shoulder: dead, unconscious, or (a few quests) a living NPC with a script context | `C_ActorCarryCorpse`, `C_PlayerCarryCorpse`, `C_ActorActionCarryCorpse`; the body runs `C_ActorActionCarried` | actor state `carryCorpse` (the body: `carried`) | action map `carry_corpse_carrying` | shown: the partner's avatar carries this machine's copy with the game's own pick-up and set-down |
 | B | **holding** a body after a stealth takedown (the clinch) | CombatModule stealth sync actions | combat guard `stealthGrab` | action map `combat_stealth` | the takedown itself goes through the host (WO-135); "pick up body" from the hold becomes kind A and is shown as A; "drop body" leaves it knocked out (WO-135's knockout sync) |
-| C | an **item**: sacks, jugs, "bag and take" piles (carcasses, debris, dung) | `C_ActorActionCarryItem` with `C_CarryItemPile` / `C_CarryableItem` | actor state `carryItem` | action map `carry_item` | shown: the avatar holds the game's own NPC sack; a dropped one lies where it landed (a prop on the other screen) |
+| C | an **item**: sacks, jugs, "bag and take" piles (carcasses, debris, dung) | `C_ActorActionCarryItem` with `C_CarryItemPile` / `C_CarryableItem` | actor state `carryItem` | action map `carry_item` | shown: the avatar holds the game's sack model on its right hand; a dropped one lies where it landed (a prop on the other screen) |
 | D | quest carries | A or C inside quest graphs; two scripted joined-animation carries | — | — | A and C are shown; what the quest counts is the next phase |
 | E | burial | A, then a quest's own "bury" hold prompt (the hole-digging minigame is separate) | `carryCorpse`, then the quest | — | the carry to the grave is shown; the burial is the quest's |
 
@@ -223,7 +223,7 @@ is not a carry. **(data)**
 |---|---|---|---|
 | A body | the `OnGrabCorpse` wrap names the body; `IsCarryingCorpse` polled at 5 Hz; the stealth route found by the `carriedBody` link, else the nearest dead or unconscious body; the set-down read after a 1.6 s settle | the carrier's avatar runs `RequestGrabCorpse` on this machine's copy, carries it while the stream moves the avatar, `RequestPutCorpse` at the set-down; the body is then moved to where the carrier's game left it (or back to its pick-up spot if that would be in the air or under the ground) | decides who carries; a joiner's carry moves the host's real body |
 | B hold | the takedown is the host's (WO-135); a "pick up body" from the hold is kind A | as A | as A |
-| C item | the pile / ground pick-up and deposit wraps, the `put_item` key, the hand item | the avatar holds `sack_miller` (hand content, the DLL's WO-143 path) with the game's pick-up / place one-shots; a dropped sack is a prop where it landed | no pile changes (the quest side) |
+| C item | the pile / ground pick-up and deposit wraps, the `put_item` key | the avatar holds the game's sack model on its right hand (`Human.AttachEntityToHand`) with the game's pick-up / place one-shots; a dropped sack is a prop where it landed | no pile changes (the quest side) |
 | D quest | as A and C | as A and C | what a quest counts is the next phase |
 | E burial | the carry is A | the carry is A | the burial is the quest's |
 
@@ -236,3 +236,15 @@ is not a carry. **(data)**
 5. Do the carry walk fragments play on an avatar the native writer moves (gait by pseudo-speed)?
 6. Does a host quest react to its real body arriving somewhere because a joiner carried it there?
 7. Save and load mid-carry; a carried knocked-out body that wakes; a heavy hit on a carrying avatar.
+
+**Answered live (WO-148 Stage B, the Modding Tools game; `docs/WO-148-findings.md`
+section 4.4):** (1) yes for the player — the link names the carried body; none
+for an avatar; (2) yes on both sides, when `CanGrabCorpse` allows it (false while
+another actor holds or puts down the body); the carry is reported once the pick-up
+animation ends, 3.5–4.4 s after the request; (3) at the avatar's feet, 0.5–1.6 m
+from where the carrier's game left it; (4) `GetItemInHand` returns a null handle
+for a borrowed sack; hand content on an avatar is refused on a host, while the
+game's sack model attached by `Human.AttachEntityToHand` walks with the hand; (5)
+yes, the carry pose and walk play on an avatar the stream moves; (7, in part) a
+knocked-out body that wakes ends the carry itself and stands up. Open: (6) and
+the rest of (7).

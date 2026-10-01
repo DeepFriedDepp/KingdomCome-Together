@@ -1,6 +1,9 @@
 // Copyright (C) 2026 the Kingdom Come: Together contributors (AUTHORS). SPDX-License-Identifier: GPL-3.0-only
 // GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
+using System.Globalization;
+using KcdMp.Wire;
+
 namespace KcdMp.Client;
 
 /// <summary>
@@ -21,6 +24,15 @@ public sealed class CarryLedger
     public sealed record Entry(byte Carrier, string What, uint Tok, long SinceMs, long HeardMs, float Px, float Py, float Pz);
 
     private readonly Dictionary<string, Entry> _byBody = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, long> _lostAt = new(StringComparer.Ordinal);
+
+    /// <summary>A Held from this player's own game this soon after it lost the body (the host gave it to someone
+    /// else, or refused it) is that lost carry's last word, not a new grab: the live race sent one, the host
+    /// refused it, and the player was told twice.</summary>
+    public const long LostQuietMs = 5000;
+
+    /// <summary>This player lost the body (LocalLoses, OnRefused) less than LostQuietMs ago.</summary>
+    public bool JustLost(string body, long nowMs) => _lostAt.TryGetValue(body, out long at) && nowMs - at < LostQuietMs;
 
     public int Count => _byBody.Count;
     public IReadOnlyDictionary<string, Entry> All => _byBody;
@@ -71,6 +83,7 @@ public sealed class CarryLedger
             // a joiner: the grab arrived from the host (its own or forwarded) -- the host's word
             bool mine = e.Carrier == me;
             _byBody[body] = new Entry(carrier, what, tok, nowMs, nowMs, x, y, z);
+            if (mine) _lostAt[body] = nowMs;
             return mine ? Verdict.LocalLoses : Verdict.Apply;
         }
         _byBody[body] = new Entry(carrier, what, tok, nowMs, nowMs, x, y, z);
@@ -89,10 +102,11 @@ public sealed class CarryLedger
     public bool OnLocalPut(byte me, string body) => OnPut(me, body);
 
     /// <summary>The host refused this player's carry: true when this player still held it (put it down and back).</summary>
-    public bool OnRefused(byte me, string body)
+    public bool OnRefused(byte me, string body, long nowMs = 0)
     {
         if (!_byBody.TryGetValue(body, out var e) || e.Carrier != me) return false;
         _byBody.Remove(body);
+        _lostAt[body] = nowMs;
         return true;
     }
 
@@ -136,7 +150,7 @@ public sealed class CarryLedger
     public List<(string Body, Entry Entry)> Mine(byte me) =>
         _byBody.Where(kv => kv.Value.Carrier == me).Select(kv => (kv.Key, kv.Value)).ToList();
 
-    public void Clear() => _byBody.Clear();
+    public void Clear() { _byBody.Clear(); _lostAt.Clear(); }
 }
 
 /// <summary>WO-148: the landing rule, shared by the agent's tests and mirrored in kdcmp.lua (KCD2MP_W148Landing).</summary>
@@ -149,7 +163,7 @@ public static class Wo148Rules
     /// <summary>... and not more than this above it (a body under the ground).</summary>
     public const float GroundAboveM = 0.6f;
     /// <summary>A carried copy further than this from the carrier's avatar is not picked up from where it lies.</summary>
-    public const float GrabReachM = 6.0f;
+    public const float GrabReachM = 2.5f;   // live: the game refuses a pick-up from farther (CanGrabCorpse false)
     /// <summary>... but a copy within this of where the carrier picked it up is moved there first (the same body, drifted).</summary>
     public const float GrabFetchM = 30.0f;
 
@@ -181,5 +195,40 @@ public static class Wo148Rules
     {
         if (ground is not float g || !float.IsFinite(g) || !float.IsFinite(z)) return false;
         return z - g <= GroundBelowM && g - z <= GroundAboveM;
+    }
+}
+
+/// <summary>
+/// WO-148: the mod's w148_carry event (kdcmp.lua: KCD2MP_W148Tick and the object tick):
+/// "grab &lt;what&gt; &lt;name&gt; x y z", "held &lt;what&gt; &lt;name&gt; x y z" (the game's 2 s
+/// confirmation) or "put &lt;how&gt; &lt;what&gt; &lt;name&gt; x y z". The first live run found the
+/// agent counting these one word short, so every one of them was "malformed" and this player's
+/// own carry never left the machine; the format lives here, pinned by a test with the strings
+/// the game logged.
+/// </summary>
+public sealed record CarryLocalEvent(string Op, string How, string What, string Name, float X, float Y, float Z)
+{
+    public bool IsGrab => Op == "grab";
+    public bool IsHeld => Op == "held";
+    public bool IsPut => Op == "put";
+
+    public static bool TryParse(string? arg, out CarryLocalEvent ev)
+    {
+        ev = null!;
+        var p = (arg ?? "").Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        int o;   // the index of <what>
+        string how = "";
+        if (p.Length == 6 && (p[0] == "grab" || p[0] == "held")) o = 1;
+        else if (p.Length == 7 && p[0] == "put") { o = 2; how = p[1]; }
+        else return false;
+        string what = p[o], name = p[o + 1];
+        if (!float.TryParse(p[o + 2], NumberStyles.Float, CultureInfo.InvariantCulture, out float x)
+            || !float.TryParse(p[o + 3], NumberStyles.Float, CultureInfo.InvariantCulture, out float y)
+            || !float.TryParse(p[o + 4], NumberStyles.Float, CultureInfo.InvariantCulture, out float z)
+            || !float.IsFinite(x) || !float.IsFinite(y) || !float.IsFinite(z)
+            || !CarryText.IsWhat(what) || !CarryText.IsName(name) || (o == 2 && !CarryText.IsHow(how)))
+            return false;
+        ev = new CarryLocalEvent(p[0], how, what, name, x, y, z);
+        return true;
     }
 }

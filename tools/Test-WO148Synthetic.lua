@@ -43,6 +43,7 @@ System.DrawText = function(x, y, text, size) DRAWS[#DRAWS + 1] = { x = x, y = y,
 System.RemoveEntity = function(eid) for n, e in pairs(ENTS) do if e.id == eid then ENTS[n] = nil end end end
 System.AddCCommand = function(name, body, help) CCMDS[name] = { body = tostring(body), help = tostring(help or "") } end
 System.GetTerrainElevation = function(p) return TERRAIN_Z end
+System.GetEntity = function(id) for _, e in pairs(ENTS) do if e.id == id then return e end end return nil end
 Script = mkstub()
 Script.SetTimer = function(ms, f) TIMERS[#TIMERS + 1] = { ms = ms, f = f, at = NOW } end
 Game = mkstub(); AI = mkstub(); Sound = mkstub(); Physics = mkstub(); Terrain = mkstub()
@@ -176,6 +177,10 @@ local function mkEntity(name, x, y, z)
     e.actor.StandUp = function() end
     e.soul = { DealDamage = function() end }
     e.SetFlags = function() end
+    -- WO-148: the game's Human.AttachEntityToHand(id, hand) / DetachFromHand(hand), the hand bone
+    e.human.AttachEntityToHand = function(self, id, hand) e.inHand = { id = id, hand = hand } end
+    e.human.DetachFromHand = function(self, hand) e.inHand = nil end
+    e.GetBonePos = function(self, b) if b == "RightHand" then return { x = e.px + 0.3, y = e.py, z = e.pz + 0.9 } end return nil end
     return e
 end
 mkEntityLate = mkEntity
@@ -218,6 +223,8 @@ local function reset()
     W.av = {}; W.holds = {}; W.mine = nil; W.ended = nil; W.lastGrab = nil; W.tickAt = 0
     W.objPick = nil; W.objMine = nil; W.objDeposit = nil; W.putItemAt = nil; W.depositAt = nil
     for k, pr in pairs(W.props) do W.props[k] = nil end
+    for k in pairs(W.handProps or {}) do W.handProps[k] = nil end
+    W.loserAt = {}
     KCD2MP_W148Session(true, true)
 end
 
@@ -256,6 +263,17 @@ do
     advance(0.5)
     check("a: without a session nothing goes out", #carries(from) == 0)
     check("a: ...the local line is still written", logCount("MP-CARRY local grab ko villager_9", from) == 1)
+    -- a quest's living NPC on this player's shoulder (CarryLivingActor): nothing goes out
+    reset()
+    local hunter = mkEntity("zranenylovci_hunter", 1, 1, 0); ENTS["zranenylovci_hunter"] = hunter
+    from = #LOG
+    BasicAIActions.OnGrabCorpse(hunter, player, 0)
+    advance(0.5)
+    check("a: a living NPC carried by this player is shown nowhere", #carries(from) == 0 and KCD2MP.w148.mine ~= nil and KCD2MP.w148.mine.name == nil)
+    check("a: ...logged", logCount("local carry of a living NPC (zranenylovci_hunter", from) == 1, lastLog("local carry"))
+    PLAYER_CARRYING = false
+    advance(2.5)
+    check("a: ...and its set-down sends nothing either", #carries(from) == 0)
     -- a load replaced the world mid-carry: lost, not put
     reset()
     local b3 = mkEntity("corpse_q", 1, 1, 0); b3.dead = true; ENTS["corpse_q"] = b3
@@ -285,6 +303,58 @@ do
     KCD2MP_W148Apply("2", "grab", "dead", "bandit_camp_3", 11, 10, 0)
     check("b: a repeat changes nothing", av.grabs == 1)
 
+    -- the game reports the carry only after the pick-up animation (live: about 3 s): confirmed late
+    reset()
+    av = avatar(2, 0, 0, 0); av.takes = false
+    local slow = mkEntity("corpse_slow", 1, 0, 0); slow.dead = true; ENTS["corpse_slow"] = slow
+    from = #LOG
+    KCD2MP_W148Apply("2", "grab", "dead", "corpse_slow", 1, 0, 0)
+    advance(3.2)
+    check("b: not carrying at 2.5 s yet: no verdict", logCount("avatar 2 grab corpse_slow -> ", from) == 0)
+    av.carrying = true
+    advance(1.5)
+    check("b: a carry the game reports at 4 s is confirmed", logCount("avatar 2 grab corpse_slow -> carrying", from) == 1, lastLog("avatar 2 grab corpse_slow ->"))
+    check("b: ...and told as taken", emitted("w148_result", from)[1] == "2 grab corpse_slow ok -", emitted("w148_result", from)[1])
+    -- only a pick-up the game allows: the live race picked up while the loser's put-down still ran
+    -- (CanGrabCorpse false) and the body hung beside the avatar on that screen
+    reset()
+    av = avatar(2, 0, 0, 0)
+    local allow = false
+    av.actor.CanGrabCorpse = function() return allow end
+    local waitB = mkEntity("corpse_wait", 1, 0, 0); waitB.dead = true; ENTS["corpse_wait"] = waitB
+    from = #LOG
+    KCD2MP_W148Apply("2", "grab", "dead", "corpse_wait", 1, 0, 0)
+    check("b: the game refuses the pick-up: not asked for yet", av.grabs == 0)
+    advance(1.0)
+    KCD2MP_W148Apply("2", "held", "dead", "corpse_wait", 1, 0, 0)
+    check("b: ...a Held meanwhile does not pick it up either", av.grabs == 0)
+    allow = true
+    advance(0.6)
+    check("b: once the game allows it, picked up", av.grabs == 1
+        and logCount("avatar 2 grab dead corpse_wait at (1.00, 0.00, 0.00) -> RequestGrabCorpse ok=true ret=true can=true (after 1.5 s waiting for the game)", from) == 1, lastLog("avatar 2 grab dead corpse_wait"))
+    advance(3.0)
+    check("b: ...and confirmed", logCount("avatar 2 grab corpse_wait -> carrying", from) == 1, lastLog("avatar 2 grab corpse_wait ->"))
+    -- never allowed: never picked up
+    reset()
+    av = avatar(2, 0, 0, 0)
+    av.actor.CanGrabCorpse = function() return false end
+    local noB = mkEntity("corpse_no", 1, 0, 0); noB.dead = true; ENTS["corpse_no"] = noB
+    from = #LOG
+    KCD2MP_W148Apply("2", "grab", "dead", "corpse_no", 1, 0, 0)
+    advance(7.0)
+    check("b: a pick-up the game never allows is never asked for", av.grabs == 0
+        and logCount("avatar 2 grab corpse_no -> NOT taken: the game refuses the pick-up (CanGrabCorpse false for 6 s)", from) == 1
+        and emitted("w148_result", from)[1] == "2 grab corpse_no nottaken -", lastLog("avatar 2 grab corpse_no"))
+    -- a carry the game never reports: one verdict, after 6.5 s
+    reset()
+    av = avatar(2, 0, 0, 0); av.takes = false
+    local never = mkEntity("corpse_never", 1, 0, 0); never.dead = true; ENTS["corpse_never"] = never
+    from = #LOG
+    KCD2MP_W148Apply("2", "grab", "dead", "corpse_never", 1, 0, 0)
+    advance(7.0)
+    check("b: never reported: one NOT verdict after 6.5 s", logCount("avatar 2 grab corpse_never -> NOT carrying", from) == 1
+        and #emitted("w148_result", from) == 1 and emitted("w148_result", from)[1] == "2 grab corpse_never nottaken -", lastLog("avatar 2 grab corpse_never ->"))
+
     -- alive: never
     reset()
     av = avatar(2, 0, 0, 0)
@@ -307,6 +377,14 @@ do
     KCD2MP_W148Apply("2", "grab", "dead", "corpse_f", 1, 0, 0)
     check("b: a copy far from the avatar and the pick-up spot is not moved", far.px == 200 and av.grabs == 0)
     check("b: ...refused as far", emitted("w148_result", from)[1] == "2 grab corpse_f refused far")
+    -- its set-down moves nothing either (the first live run: a put after a far refusal moved the body 41 m)
+    local farMoves = far.moves or 0
+    KCD2MP_W148Apply("2", "put", "dead", "corpse_f", 1, 0, 0, "put")
+    advance(2.5)
+    check("b: the set-down of a carry refused here moves nothing", far.px == 200 and (far.moves or 0) == farMoves, string.format("%.1f moves=%d", far.px, far.moves or 0))
+    check("b: ...logged and told", logCount("avatar 2 put dead corpse_f -> not shown here: left where it lies", from) == 1
+        and emitted("w148_result", from)[2] == "2 put corpse_f refused unshown", emitted("w148_result", from)[2])
+    check("b: ...and a lost one neither", (function() KCD2MP_W148Apply("2", "lost", "dead", "corpse_f", 1, 0, 0); advance(2.5); return far.px == 200 end)())
     -- no avatar, no body
     reset()
     from = #LOG
@@ -431,6 +509,34 @@ do
     check("e: ...logged", logCount("loser corpse_y -> player 1's avatar has it now: not put back", from) == 1)
     advance(6.0)
     check("e: ...and the body stays held while the avatar carries it", KCD2MP_W148Holds("corpse_y"))
+    -- the race as it ran live: the host's avatar waits until this player's put-down is over
+    reset()
+    local avR = avatar(1, 0, 0, 0)
+    avR.actor.CanGrabCorpse = function() return not PLAYER_CARRYING end   -- the game: someone still carries it
+    local bR = mkEntity("corpse_race", 1, 0, 0); bR.dead = true; ENTS["corpse_race"] = bR
+    BasicAIActions.OnGrabCorpse(bR, player, 0)
+    advance(0.3)
+    player.actor.RequestPutCorpse = function() PLAYER_PUTS = PLAYER_PUTS + 1; Script.SetTimer(1500, function() PLAYER_CARRYING = false end); return true end
+    from = #LOG
+    KCD2MP_W148Apply("1", "grab", "dead", "corpse_race", 1, 0, 0)
+    check("e: the race: this player puts it down, the avatar waits", PLAYER_PUTS == 1 and avR.grabs == 0)
+    advance(2.2)
+    check("e: ...then the avatar picks it up, once the game allows it", avR.grabs == 1, avR.grabs)
+    player.actor.RequestPutCorpse = function() PLAYER_PUTS = PLAYER_PUTS + 1; PLAYER_CARRYING = false; return true end
+    -- the loser's put-down animation still running (IsCarryingCorpse true through it): no new carry
+    reset()
+    local av2 = avatar(1, 0, 0, 0)
+    local b5 = mkEntity("corpse_r", 1, 0, 0); b5.dead = true; ENTS["corpse_r"] = b5
+    BasicAIActions.OnGrabCorpse(b5, player, 0)
+    advance(0.3)
+    from = #LOG
+    KCD2MP_W148Apply("1", "grab", "dead", "corpse_r", 1, 0, 0)
+    LINKS = { "w_r" }; WUIDS["w_r"] = b5   -- the game's carriedBody link still names it (live: FindLinks finds it)
+    PLAYER_CARRYING = true      -- the put-down is not over yet
+    advance(1.5)
+    check("e: the loser's running put-down starts no new carry", #carries(from) == 0 and logCount("MP-CARRY local grab", from) == 0, lastLog("MP-CARRY local"))
+    PLAYER_CARRYING = false
+    advance(1.0)
     -- a carrier who leaves
     reset()
     av = avatar(2, 0, 0, 0)
@@ -499,11 +605,28 @@ do
     advance(2.0)
     g = emitted("w148_carry", from)
     check("g: a dropped sack is a drop where the game's sack lies", g[1] == "put drop object mlyn_pytle_source 0.500 0.800 0.000", g[1])
-    -- the other screen: a partner's dropped sack lies there; his next pick-up takes it away
+    -- the other screen: the partner's avatar holds the game's sack in its right hand (the first live
+    -- run: the DLL's hand content refuses on a host, the hands stayed empty)
     reset()
     local av = avatar(2, 0, 0, 0)
+    from = #LOG
     KCD2MP_W148Apply("2", "grab", "object", "mlyn_pytle_source", 5, 5, 0, "-")
+    local hid = KCD2MP.w148.handProps["2"]
+    local hprop = SPAWNS[#SPAWNS]
+    check("g: the partner's avatar holds a sack: the game's sack model on its right hand", hid ~= nil and av.inHand ~= nil and av.inHand.id == hid and av.inHand.hand == 1
+        and hprop.class == "BasicEntity" and hprop.properties.object_Model == KCD2MP.w148.SACK_MODEL and hprop.properties.Physics.bPhysicalize == false)
+    check("g: ...spawned at the hand, logged", hprop.position.x == 0.3 and hprop.position.z == 0.9
+        and logCount("avatar 2 grab object mlyn_pytle_source at (5.00, 5.00, 0.00) -> the avatar holds a sack (attached to the right hand)", from) == 1, lastLog("avatar 2 grab object"))
+    local nSp = #SPAWNS
+    KCD2MP_W148Apply("2", "held", "object", "mlyn_pytle_source", 5, 5, 0, "-")
+    check("g: a Held while it is in the hand spawns nothing", #SPAWNS == nSp and KCD2MP.w148.handProps["2"] == hid)
+    ENTS[hprop.name] = nil   -- a load removed the prop
+    KCD2MP_W148Apply("2", "held", "object", "mlyn_pytle_source", 5, 5, 0, "-")
+    check("g: after a load the next Held puts the sack back in the hand", #SPAWNS == nSp + 1 and KCD2MP.w148.handProps["2"] ~= hid
+        and logCount("avatar 2 held object mlyn_pytle_source -> the sack is in its hand again", from) == 1)
+    local hid2 = KCD2MP.w148.handProps["2"]
     KCD2MP_W148Apply("2", "put", "object", "mlyn_pytle_source", 1, 1, 0, "drop")
+    check("g: the drop takes the sack out of the hand", av.inHand == nil and KCD2MP.w148.handProps["2"] == nil and System.GetEntity(hid2) == nil)
     local prop = nil
     for _, s in ipairs(SPAWNS) do if s.class == "BasicEntity" then prop = s end end
     check("g: a partner's dropped sack is shown where it landed", prop ~= nil and prop.position.x == 1 and prop.position.y == 1)
@@ -522,6 +645,11 @@ do
     KCD2MP_W148Apply("2", "put", "object", "x", 3, 3, 9, "drop")
     local last = SPAWNS[#SPAWNS]
     check("g: a drop spot in the air is shown at the avatar's feet instead", last.class == "BasicEntity" and last.position.x == 7)
+    -- a partner who leaves with a sack in the hand: the sack goes with the avatar
+    KCD2MP_W148Apply("2", "grab", "object", "sack", 4, 4, 0, "-")
+    local hid3 = KCD2MP.w148.handProps["2"]
+    KCD2MP_W148AvatarGone("2")
+    check("g: a leaver's sack goes with its avatar", hid3 ~= nil and KCD2MP.w148.handProps["2"] == nil and System.GetEntity(hid3) == nil and av.inHand == nil)
     -- objects off
     KCD2MP_W148SetCarryObjects("off")
     local before = #SPAWNS

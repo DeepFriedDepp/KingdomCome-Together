@@ -11,11 +11,11 @@ The answer and the evidence: `docs/WO-148-findings.md`. The census:
 |---|---|---|
 | 0 — the bookmark | done | the tag `v0.42.5` on `7dcd01a` (the commit the 0.42.5 installer was built from, `docs/WO-147-progress.md`), pushed before any code |
 | 1 — attribution and the content audit | done (Stage A); the release and history findings left to the maintainer | findings §1, §2 |
-| 2 — the port-aware setup | done (Stage A); all hooks arming live: Stage B | findings §3 |
-| 3.1 — the carry census | done | `docs/WO-148A-carry-census.md` |
-| 3.2 — carrying on the other screen | built and tested offline; the live proof: Stage B | findings §4 |
-| 3.4 — the live runs | **waiting for the maintainer's go-ahead** | "Stage B plan" below |
-| gates, docs, build | Stage A gates green; the installer after Stage B | "Gates" below |
+| 2 — the port-aware setup | done; all seven hooks armed live | findings §3 |
+| 3.1 — the carry census | done; five of its seven questions answered live, one in part | `docs/WO-148A-carry-census.md` |
+| 3.2 — carrying on the other screen | done, proven live both ways (solo) | findings §4 |
+| 3.4 — the live runs | done after the maintainer's OK: H1, H2, J1–J3 | "Stage B" below |
+| gates, docs, build | done | "Gates and the build" below |
 
 ## Stage A (no game, no window)
 
@@ -112,47 +112,61 @@ empty under Windows PowerShell 5.1 when the script is started with `-File` and h
 with `[CmdletBinding()]` empty both ways, without it set; `Publish-Release.ps1`
 has none), so the payload is passed explicitly.
 
-## Stage B plan (after the maintainer's OK)
+## Stage B (live, after the maintainer's OK)
 
-What it touches: **the saves folder** (a full backup first, with a sha256 list;
-one throwaway playline of save copies, deleted afterwards), **the Modding Tools
-`Mods\kdcmp` folder** (the current one backed up, the test build installed, the
-original put back at the end), **the game window** (the Modding Tools game,
-started minimized, never brought to the front, captured with PrintWindow only;
-one push-down at most after a load), a relay on a free local port, our agent and
-the scripted peers. No key or mouse input: console stand-ins only. The retail
-game is never launched or touched.
+The maintainer answered "OK" to the Stage A stop. The runs, what they showed and
+the defects they found: `docs/WO-148-findings.md` section 4.4. Frames:
+`docs/wo148-shots/`.
 
-* **Saves**: the throwaway copies come from the old 1.1.1 playthrough
-  (`playline0`), never from the prologue (`permanent001`): a save in a sack task
-  (the tracked quest `karelNesePytel`, its sack to carry and drop), a save in a
-  burial quest (`sedmStatecnych2` or `zachrana`), and a save near dead bodies for
-  the plain body runs.
-* **H1 — host + scripted partner** (the real game hosts; `avatarpeer` joins as the
-  partner): the partner's avatar stands by a dead body; `carry grab dead <body>`
-  → the host's real body on the avatar's shoulder (frame); `move` → the avatar
-  walks with it (frames); `carry put put <body> x y z` → the body lands there
-  (`MP-CARRY land`, the body's position, a frame). Then an unconscious body
-  (knocked out by the console), a far copy (fetch), a refusal (the host's own
-  player carries it by `mp_carry_test grab`, then the partner's grab is refused:
-  `refused: this host's player carries it`), a body set down in the air (put
-  back), the partner leaving mid-carry, and the sack (`carry grab object …`, the
-  avatar's hands; `carry put drop …`, the prop).
-* **J1 — joiner + synthetic host** (the real game joins from the main menu;
-  `synthpeer --join-host125` hosts from a reseeded copy): `npc <body> … 1` streams
-  a dead body; `carry grab dead <body>` and `walk` → on the joiner's screen the
-  host's avatar picks up the joiner's copy and carries it (frames); `carry put` →
-  it lands; then the joiner's own carry (`mp_carry_test grab <body>`) refused by
-  the host (`carry refuse`) → put down and back; both grabbing the same body (the
-  joiner carrying, the host's grab arrives) → the joiner loses; the sack on the
-  host's avatar.
-* **The quest reaction (3.3)**: in the burial save, the partner carries the
-  quest's body to the grave on the host; whatever the host's world does is logged
-  (`MP-CARRY quest-reaction`).
-* **The hooks arm**: every shipped hook's install line in the DLL's log (the
-  boundary check passes them all), and the new log column.
-* **The dice keys**: the game loads `kdcmp_keys.pak` (`[Mod] Opening paks in …`
-  in kcd.log) and our actions exist (the action-map list cvar, by frame).
-* Then the payload smoke, every gate again, the docs, the version (0.42.7) and the
-  installer from a fresh clone of `origin/main`, with the privacy sweep of the
-  payload.
+**What it touched, and how it was put back:**
+
+* **Saves**: every playline backed up first (318 files, sha256 list). One
+  throwaway playline, `playline4`, of copies of four Modding Tools saves of
+  `playline1` (an open field near a village, the sack task `socky` at "carry the
+  sacks", the hunter quest at "save the hunter", an early `zachrana` step), under
+  a save lock in every session (re-added after each load: a lock does not survive
+  one). The plan's `playline0` saves were not used: their headers lack the
+  Modding Tools build's `Configuration` attribute — they are the retail game's,
+  which the standing rules forbid (the 173 saves at 1.5.5 carry it). The game
+  autosaved once into `playline4` while a save loaded (before the lock was back).
+  After every session: no real playline file new or changed; at the end
+  `playline4` was moved out to the scratchpad and the full check read **318 of
+  318 files unchanged, none missing, none new**.
+* **The Modding Tools `Mods\kdcmp` folder**: backed up (SHA-1 `9ba56db…` for the
+  pak, `18de23e…` for the manifest, as WO-147 recorded them); each test build's
+  pak installed with the game closed, and `kdcmp_keys.pak` built there by the test
+  agent (`--keys-pak`: written, 10 actions, from `IPL_GameData.pak`); at the end
+  the original pak and manifest were put back (the same SHA-1s) and the keys pak
+  removed. The folder's other mod was not touched.
+* **The game window**: the Modding Tools game, started minimized each time; it
+  restored itself full-screen and took the foreground at every start (the game's
+  own doing); one push-down after the load each time (to the bottom of the
+  window order, without activating it), nothing more. No key or mouse input:
+  `mp_carry_test` and the game's own Lua callbacks as stand-ins. Frames by
+  PrintWindow of the game window only; the camera by `PlayerSetViewAngles`.
+* **Steam**: the first start failed (`SteamApi_Init failed`, the game quit at
+  once: the Modding Tools game needs the Steam client); the maintainer started
+  Steam, which was left running.
+* **The game folder**: one NPC trace file the seventh hook's check wrote was
+  moved to the scratchpad; the DLL's logs and `kcd.log` as every run writes them
+  (the earlier `kcd.log` was copied first).
+* **Processes**: a relay on TCP 7779 / HTTP 5274, the agent, the scripted partner
+  or the synthetic host, all from the scratchpad builds; all stopped after every
+  session. The maintainer's launcher, agent and relay were not running; nothing
+  of theirs was stopped.
+* **Hot loading**: the fixes of H2 and J1 were proven by loading the mod's
+  WO-148 section into the running game (WO-48's method), then on fresh builds
+  (J2, J3: `w148d`, `w148e`).
+* **The frame rate** fell during the host sessions (findings section 4.4); the
+  maintainer asked for it to be left for later.
+
+## Gates and the build
+
+On the final tree (VERSION 0.42.7, the maintainer's number; the mod pak rebuilt
+from it): all 41 `Test-*Synthetic.ps1` suites (`Test-WO148Synthetic` 112/112),
+both static checks (7/7, 6/6), the relay round trip 60/60, the agent unit tests
+769/769, the native unit tests 328/328 (the boundary check included) — 46 gates,
+all green; the local publish and the payload smoke (`RELAY-SMOKE ok ...
+protocol=v10 release=0.42.7`, no load failure in either log); `Verify-Install.ps1`
+against the payload: all 24 WO-148 marker checks present (only the two installer
+layers fail on a folder no Setup ran on).

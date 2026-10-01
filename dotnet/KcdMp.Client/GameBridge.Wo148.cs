@@ -176,20 +176,14 @@ public partial class GameBridge
 
     // ---------------------------------------------------------------- out (this player)
 
-    /// <summary>The mod's w148_carry: "grab &lt;what&gt; &lt;name&gt; x y z" or "put &lt;how&gt; &lt;what&gt; &lt;name&gt; x y z".</summary>
+    /// <summary>The mod's w148_carry: "grab|held &lt;what&gt; &lt;name&gt; x y z" or "put &lt;how&gt; &lt;what&gt; &lt;name&gt; x y z" (CarryLocalEvent).</summary>
     private async Task Wo148OnLocalAsync(string? arg)
     {
-        var p = (arg ?? "").Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        bool held = p.Length == 5 && p[0] == "held";
-        bool grab = p.Length == 5 && (p[0] == "grab" || held), put = p.Length == 6 && p[0] == "put";
-        if (!grab && !put) { Interlocked.Increment(ref _w148Malformed); Console.WriteLine($"MP-CARRY local event malformed: '{arg}'"); return; }
-        int o = grab ? 2 : 3;
-        string what = p[o - 1], name = p[o];
-        if (!float.TryParse(p[o + 1], NumberStyles.Float, CultureInfo.InvariantCulture, out float x)
-            || !float.TryParse(p[o + 2], NumberStyles.Float, CultureInfo.InvariantCulture, out float y)
-            || !float.TryParse(p[o + 3], NumberStyles.Float, CultureInfo.InvariantCulture, out float z)
-            || !CarryText.IsWhat(what) || !CarryText.IsName(name) || (put && !CarryText.IsHow(p[1])))
+        if (!CarryLocalEvent.TryParse(arg, out var ev))
         { Interlocked.Increment(ref _w148Malformed); Console.WriteLine($"MP-CARRY local event malformed: '{arg}'"); return; }
+        bool held = ev.IsHeld, grab = ev.IsGrab || ev.IsHeld;
+        string what = ev.What, name = ev.Name, how = ev.How;
+        float x = ev.X, y = ev.Y, z = ev.Z;
 
         long now = Environment.TickCount64;
         if (what == "object")
@@ -199,15 +193,16 @@ public partial class GameBridge
             uint otok = grab ? Interlocked.Increment(ref _w148Tok) : _w148Tok;
             if (grab) { Interlocked.Increment(ref _w148GrabsOut); _w148ObjectMine = (name, otok); }
             else { Interlocked.Increment(ref _w148PutsOut); _w148ObjectMine = null; }
-            Console.WriteLine(FormattableString.Invariant($"MP-CARRY local {(grab ? "grab" : "put " + p[1])} object {name} at ({x:F2}, {y:F2}, {z:F2})"));
+            Console.WriteLine(FormattableString.Invariant($"MP-CARRY local {(grab ? "grab" : "put " + how)} object {name} at ({x:F2}, {y:F2}, {z:F2})"));
             await Wo148SendAllAsync(grab ? Protocol.CarryGrab : Protocol.CarryPut, otok,
-                grab ? CarryText.Grab(_myGhostId, "object", name, x, y, z) : CarryText.Put(_myGhostId, p[1], "object", name, x, y, z));
+                grab ? CarryText.Grab(_myGhostId, "object", name, x, y, z) : CarryText.Put(_myGhostId, how, "object", name, x, y, z));
             return;
         }
         if (held)
         {
-            bool known;
-            lock (_w148Lock) known = _w148Ledger.OnLocalHeld(_myGhostId, name, now, x, y, z);
+            bool known, justLost;
+            lock (_w148Lock) { known = _w148Ledger.OnLocalHeld(_myGhostId, name, now, x, y, z); justLost = !known && _w148Ledger.JustLost(name, now); }
+            if (justLost) { Console.WriteLine($"MP-CARRY local held {what} {name}: the carry this player just lost (its put-down is running) -- not a new grab"); return; }
             _w148MineLast[name] = (x, y, z);
             if (known) return;
             Console.WriteLine($"MP-CARRY local held {what} {name}: no carry of this player's is held here (it was set down for silence) -- a new grab");
@@ -225,7 +220,6 @@ public partial class GameBridge
         }
         else
         {
-            string how = p[1];
             CarryLedger.Entry? e;
             lock (_w148Lock) { e = _w148Ledger.Of(name); _w148Ledger.OnLocalPut(_myGhostId, name); }
             W148Hold(name, false);
@@ -340,7 +334,7 @@ public partial class GameBridge
                 if (W148Host) return;   // only the host refuses
                 Interlocked.Increment(ref _w148RefusedIn);
                 bool mine;
-                lock (_w148Lock) mine = _w148Ledger.OnRefused(_myGhostId, t.Name);
+                lock (_w148Lock) mine = _w148Ledger.OnRefused(_myGhostId, t.Name, Environment.TickCount64);
                 Console.WriteLine($"MP-CARRY the host refused this player's carry of {t.Name} ({t.Why}){(mine ? " -- put down and back" : " -- nothing held any more")}");
                 if (mine && t.Why == "carried")
                 {
@@ -372,25 +366,21 @@ public partial class GameBridge
 
     // ---------------------------------------------------------------- objects on the avatar
 
-    /// <summary>sack_miller: the game's own NPC sack (an NPC tool, the player's sack model) -- held in the right hand it walks
-    /// with the sack the way the millers do (r_sack). Tables item.xml.</summary>
-    private static readonly byte[] W148SackClass = ExtraRow.ClassBytes("596ccaec-2415-4754-8a39-eaaccb27361b");
     private readonly ConcurrentDictionary<byte, bool> _w148AvatarHolds = new();
 
-    /// <summary>The carrier's avatar holds the game's sack (hold) or puts it away, with the game's own pick-up or place one-shot
-    /// (the DLL's WO-143 hand content and one-shot; the same as the host's NPCs' tools on a joiner's copies).</summary>
+    /// <summary>The carrier's avatar picks a sack up or puts it away with the game's own pick-up or place one-shot (the DLL's
+    /// WO-143 one-shot). The sack in its hand is the mod's (KCD2MP_W148ApplyObject: the game's sack model on the avatar's right
+    /// hand): the DLL's hand content refuses on a host (kRNotArmed), and the first live run showed the hands empty.</summary>
     private async Task Wo148AvatarObjectAsync(byte carrier, bool hold, string why)
     {
         bool was = _w148AvatarHolds.TryGetValue(carrier, out bool h) && h;
         if (was == hold && why == "held") return;
         _w148AvatarHolds[carrier] = hold;
         string av = $"kcd2mp_{carrier}";
-        var empty = new byte[16];
-        byte? hands = null; int? shot = null;
-        try { hands = await _combat.Wo143HandsAsync(av, empty, hold ? W148SackClass : empty); } catch { }
-        if (why is "grab" or "put")
+        int? shot = null;
+        if (why is "grab" or "put" or "drop")
             try { shot = await _combat.Wo143OneShotAsync(av, hold ? "CarryItemPickup" : "CarryItemPlace", "", 0, 0); } catch { }
-        Console.WriteLine($"MP-CARRY avatar {carrier} {(hold ? "holds a sack" : "puts the sack away")} ({why}): hands={(hands is byte r ? r.ToString() : "no answer")} one-shot={(shot is int q ? q.ToString() : "-")}");
+        Console.WriteLine($"MP-CARRY avatar {carrier} {(hold ? "picks a sack up" : "puts the sack away")} ({why}): one-shot={(shot is int q ? q.ToString() : "-")}");
     }
 
     // ---------------------------------------------------------------- the mod's answers, and quest reactions

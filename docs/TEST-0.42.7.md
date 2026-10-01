@@ -48,6 +48,9 @@ you have it) must end with "all present".
 
 **Still known**
 
+- The game can get slow after a while for the host (seen in the solo tests,
+  being looked into). If it does, type `mark_odd`, write down the time and send
+  the logs.
 - The partner's carrying does not count for the host's quests yet (a burial,
   sacks to deliver): only the host's own carrying does.
 - Crimes for carrying a body are not shared yet.

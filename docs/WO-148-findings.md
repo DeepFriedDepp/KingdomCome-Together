@@ -4,10 +4,11 @@ Kingdom Come: Together. Official repository:
 https://github.com/DeepFriedDepp/KingdomCome-Together. Unofficial; not
 affiliated with or endorsed by Warhorse Studios or PLAION.
 
-**Version: 0.42.7** (the maintainer's number). Status: **Stage A done** (no game,
-no window); **Stage B (the live runs) waits for the maintainer's go-ahead.**
-0.42.5 is bookmarked as the tag `v0.42.5` on `7dcd01a` (the commit its installer
-was built from), pushed before any code.
+**Version: 0.42.7** (the maintainer's number). Status: **done** — Stage A (no
+game, no window) and, after the maintainer's go-ahead, Stage B (live, solo, on
+throwaway save copies of the Modding Tools build). 0.42.5 is bookmarked as the
+tag `v0.42.5` on `7dcd01a` (the commit its installer was built from), pushed
+before any code.
 
 Evidence marks: **(observed)** seen live in the game; **(synthetic)** the real
 game against a scripted partner or a synthetic host, or a console stand-in for a
@@ -45,16 +46,23 @@ test, not run live; **(pending)** the live run is planned for Stage B.
    patch ends on an instruction boundary** of the exact image, with no relative
    branch and no RIP-relative operand inside. The decoder agrees with capstone
    on all 4,102 decodable test vectors; all seven of the shipped DLL's hook
-   prologues pass offline. **(code-verified; that they all arm live: pending)**
-4. **Carrying shows on the other screen** — built, unit- and suite-tested, the
-   live proof pending. A body: the carrier's avatar picks up this machine's copy
-   with the game's own pick-up (`RequestGrabCorpse`), carries it while the stream
-   moves it, and sets it down with the game's own call; the body then lands where
-   the carrier's game left it, or back where it was picked up when that would be
-   in the air or under the ground. The host's world decides who carries; the
-   loser's game is put back. Nothing alive is ever moved. A sack: the avatar
-   holds the game's own NPC sack and a dropped one lies where it landed (shown
-   only). **(synthetic in the Lua suite, code-verified; live: pending)**
+   prologues pass, and **all seven armed on the live game** (six at start, the
+   NPC trace's render hook on its first use). **(code-verified; observed)**
+4. **Carrying shows on the other screen, both ways** — proven live, solo (the real
+   game as the host with a scripted partner, and as the joiner of a synthetic
+   host; console stand-ins for the keys). A body, dead or knocked out: the
+   carrier's figure picks up this machine's copy with the game's own pick-up,
+   carries it on its shoulder while it walks, and sets it down with the game's
+   own call; the body then lies where the carrier's game left it. The host's
+   world decides who carries: the host's own player's body is refused to a
+   partner, a joiner's carry the host refuses is put back, and in a race the
+   joiner's game puts its carry down while the host's figure takes it. A partner
+   who leaves mid-carry leaves the body lying where the figure stood. Nothing
+   alive is ever moved. A sack: the carrier's figure holds the game's sack in its
+   right hand and walks with it; a dropped sack lies where it fell (shown only).
+   The live runs found six defects, and preparing one found a seventh; each is
+   fixed and covered by a test, and five reran live (section 4.4).
+   **(observed; frames in `docs/wo148-shots/`)**
 
 | item | status | evidence |
 |---|---|---|
@@ -66,10 +74,10 @@ test, not run live; **(pending)** the live run is planned for Stage B.
 | 1.5 the separation from Warhorse and PLAION next to every copyright line | done | AUTHORS, NOTICE, README, the template, every file header, the About box |
 | 1.6 the audit | done; fixes partly (section 2) | the scans in section 2 |
 | 2.1 thread id on every native log line | done | (code-verified) `log.h`, a unit test pins the column |
-| 2.2 the hook boundary check | done | (code-verified) 4,102 capstone vectors, 7/7 hook prologues; (pending) all arm live |
-| 3.1 the carry census | done | `docs/WO-148A-carry-census.md` |
-| 3.2 carrying on the other screen | built | (synthetic: the Lua suite, 88 checks; code-verified: 23 agent test methods, two relay round-trip tests); (pending) the live runs 3.4 |
-| 3.3 quest reactions to a carried body | logged | (code-verified) `MP-CARRY quest-reaction`; (pending) a live burial |
+| 2.2 the hook boundary check | done | (code-verified) 4,102 capstone vectors, 7/7 hook prologues; (observed) all seven armed live |
+| 3.1 the carry census | done | `docs/WO-148A-carry-census.md`; five of its seven open questions answered live, one in part (section 4.4) |
+| 3.2 carrying on the other screen | done | (observed) host and joiner runs H1, H2, J1–J3; (synthetic) the Lua suite, 112 checks; (code-verified) 26 agent test methods, two relay round-trip tests |
+| 3.3 quest reactions to a carried body | logged | (code-verified) `MP-CARRY quest-reaction`; no save of this machine reaches a burial step (section 4.4) |
 
 ## 1. Attribution
 
@@ -220,7 +228,14 @@ return inside. The seven hooks' expected bytes moved into one header,
   CryAction, GUIModule, PlayerModule, XGenAIModule). WO-146B's crash case (a
   length that cuts an instruction) is refused; so are a RIP-relative operand, a
   relative call, a short jump, a `ret`, an already-patched entry and EVEX.
-  **(code-verified; live: pending)**
+  **(code-verified)**
+* Live, on the Modding Tools game (every session): the motion tags
+  (EntityModule+0x94750), the dialogue gate (DialogModule+0x98290), the pause gate
+  (CryAction+0x86EC0), the trespass listener (GUIModule+0x27E4C0), the sleep gate
+  (PlayerModule+0x4C5BF0) and the NPC-state request hook (XGenAIModule) armed at
+  start; the NPC trace's render hook (CrySystem+0x20BDD0) armed on the first
+  `mp_npc_trace`. None refused; every line carries the thread id column.
+  **(observed)**
 
 ## 4. Carrying on the other screen
 
@@ -250,35 +265,45 @@ them; sacks on NPCs are hand content.
   them to the other joiners. On a joiner every grab that arrives is the host's
   word, and its own carry of the same body loses: put down, and back where it was
   picked up — unless the winner's figure has it here by then (the put-back would
-  move a carried body). A carrier who leaves, or whose Held stops for 10 s, sets it down;
+  move a carried body); its own Held arriving after the loss is not a new grab, and
+  its running put-down starts no new carry. A carrier who leaves, or whose Held stops for 10 s, sets it down;
   a carry the carrier's own game stops confirming for 2 minutes is set down
   elsewhere and picked up again on the next confirmation.
 * **Shown here**: the carrier's avatar runs the game's own `RequestGrabCorpse` on
-  this machine's copy and `RequestPutCorpse` at the set-down. A copy far from the
-  avatar is fetched only from within 30 m of where the carrier picked it up, and
-  only to a spot a body can lie on. While carried (and 5 s after) the host's NPC
-  stream, a resync, the puppet tick, the silence release and the copy guard leave
-  the body alone. A Held for an avatar that dropped it on the way picks it up
-  again (at most three times).
+  this machine's copy — only once the game's `CanGrabCorpse` allows it (asked
+  every 0.5 s for up to 6 s; never allowed: not picked up, the set-down still
+  lands it) — and `RequestPutCorpse` at the set-down. The game reports the carry
+  once the pick-up animation is over (3.5–4.4 s live); the mod asks until 6.5 s. A
+  copy more than 2.5 m from the avatar is first fetched to where the carrier picked
+  it up (only from within 30 m of it, and only to a spot a body can lie on). While
+  carried (and 5 s after) the host's NPC stream, a resync, the puppet tick, the
+  silence release and the copy guard leave the body alone. A Held for an avatar
+  that dropped it on the way picks it up again (at most three times, with the same
+  permission). A set-down of a carry this machine never showed (its grab refused
+  here) moves nothing.
 * **The landing** (`Wo148Rules`, mirrored in the mod): the carrier's own resting
   spot wins when a body can lie there and the body is more than 0.5 m from it; a
   body that would stay in the air (more than 0.8 m above the first surface under
   it) or under the ground (more than 0.6 m below it) goes back where it was
   picked up; logged as `MP-CARRY land ...`.
-* **Never alive**: a grab of a body that is alive here is refused (`alive`), and a
-  body that woke on the way is never moved.
+* **Never alive**: a grab of a body that is alive here is refused (`alive`), a
+  body that woke on the way is never moved, and this player's own carry of a
+  living NPC (a quest's `CarryLivingActor`) is not sent at all.
 * **Sacks**: the pile and ground pick-up and deposit callbacks are wrapped, the
-  `put_item` key marks a drop; the avatar holds `sack_miller` (the DLL's WO-143
-  hand content) with the game's `CarryItemPickup` / `CarryItemPlace` one-shots; a
-  dropped sack is a prop (the game's sack model, no physics, never saved) where it
-  landed, removed when the carrier picks it up again. Nothing of the other world's
-  piles changes (the quest side).
+  `put_item` key marks a drop; the carrier's avatar plays the game's
+  `CarryItemPickup` / `CarryItemPlace` one-shots and holds the game's sack model
+  (a prop: no physics, never saved) on its right hand by the game's own
+  `Human.AttachEntityToHand`, so it walks with the hand; a dropped sack is the same
+  prop where it landed, removed when the carrier picks it up again. Nothing of the
+  other world's piles changes (the quest side). (Stage A's `sack_miller` hand
+  content is refused by the DLL on a host; the live run showed empty hands.)
 * **Switches**: `mp_carry_sync` (bodies and the whole layer) and
-  `mp_carry_objects` (sacks), both on in this build pending the live proof (the
-  work order: "default on only when proven" — a part not proven in Stage B goes
-  off); `mp_carry_test grab <body> | put | status` (the console stand-ins);
-  `mp_carry_status`; checklist markers `mark_carry`, `mark_carry_host`,
-  `mark_carry_both`, `mark_sack`, `mark_bury`, `mark_dice_keys`.
+  `mp_carry_objects` (sacks), both **on**: each ran live solo, both ways, and
+  fails closed (the work order's "default on only when proven", read as WO-147
+  read it: proven live, solo); `mp_carry_test grab <body> | put | status` (the
+  console stand-ins); `mp_carry_status`; checklist markers `mark_carry`,
+  `mark_carry_host`, `mark_carry_both`, `mark_sack`, `mark_bury`,
+  `mark_dice_keys`.
 * **Quest reactions (3.3)**: on the host, a quest change made by its own world
   while a partner carries a body, or within 30 s of a set-down, is logged as
   `MP-CARRY quest-reaction ...`; WO-147's quest safety still guards destructive
@@ -289,13 +314,85 @@ them; sacks on NPCs are hand content.
 
 | kind | shown | evidence |
 |---|---|---|
-| a dead body: pick-up, carry walk, set-down | built | (synthetic: suite (a)–(f)); (pending) H-runs and J-runs |
-| an unconscious body | built (the same path) | (synthetic); (pending) |
-| a quest's living NPC (`CarryLivingActor`) | not shown: nothing alive is moved | (code-verified) |
-| the stealth hold, then "pick up body" | built as a body carry (the link route) | (synthetic: suite (h)); (pending) |
-| a sack from a pile, a deposit, a drop | built | (synthetic: suite (g)); (pending: needs a save in a sack task) |
+| a dead body: pick-up, carry walk, set-down, on the host's screen (a partner's) | **shown** | (observed) H1, H2: frame 1; the body 1.4 m up on the figure's shoulder through a 7 m walk, landed at the partner's spot |
+| the same on the joiner's screen (the host's) | **shown** | (observed) J1–J3: frame 4; on the shoulder through the walk (0.14–0.20 m off the figure's centre) |
+| an unconscious body | **shown** | (observed) H2: frame 2; still knocked out where it landed |
+| an unconscious body that wakes while carried | never moved alive | (observed) H2: the game ended the carry itself, the NPC stood up beside the figure, the set-down left it alone |
+| one carrier at a time: the host's own player has it | the partner's grab refused | (observed) H2 |
+| a joiner's carry the host refuses | put down and back | (observed) J1 |
+| both grab the same body | the joiner loses, the host's figure takes it | (observed) J1, J3 (after the fix): frame 5 |
+| a partner who leaves mid-carry | the body lies where the figure stood | (observed) H2 |
+| a drifted copy / a copy far from both | fetched to the pick-up spot / refused, not moved | (observed) H2 |
+| a living NPC (a hare, live; a quest's `CarryLivingActor`) | never moved | (observed) H2 for a partner's grab; (synthetic) this player's own carry is not sent |
+| the stealth hold, then "pick up body" | as a body carry (the game's link, which live names the body) | (synthetic: suite (h)); the link (observed) H2; the takedown itself not run (it needs input) |
+| a sack: the carrier's figure holds it, walks with it, drops it | **shown** | (observed) H2 and J1: frames 3 and 6; the drop logged where it fell (dusk and grass hid it in the frame) |
+| this player's sack from a quest pile, into the quest's wagon | sent and received | (observed) H2 in the sack task's save (`socky`): the partner received Grab, Held, Put |
 | a throw | none exists in the game | (code-verified: the census) |
-| the burial's "bury" step | not shown: the quest's | (code-verified) |
+| the burial's "bury" step | the quest's (not shown) | (code-verified); no save of this machine reaches it |
+
+### 4.4 The live runs (Stage B)
+
+All solo on one machine, the Modding Tools game, saves copied into a throwaway
+`playline4` (Modding Tools saves only: the 1.1.1 saves of `playline0` are the
+retail game's, see the progress page), the game started minimized and never
+brought to the front, no key or mouse input (the console stand-ins
+`mp_carry_test` and the game's own callbacks), frames by window capture.
+
+| run | what | build |
+|---|---|---|
+| H1 | the real game hosts, a scripted partner (`avatarpeer`): a test bandit (a bandit soul: no crime) killed by the partner's blow, the partner's pick-up, walk, put-down; the host's own carry | w148a |
+| H2 | again with the fixes: the same; the host's carry refused to the partner, the knocked-out body, the wake on the way, a living animal, a drifted copy fetched, a far copy refused, the partner leaving mid-carry, the sack on the figure's hand; the NPC trace (the seventh hook); the sack task's save: this player's sack from the quest's pile into its wagon | w148b + the mod's section loaded into the running game |
+| J1 | the real game joins a synthetic host from the menu: the host's carry of a streamed dead body, the joiner's own carry refused, the race, the host's sack | w148c (+ the section) |
+| J2, J3 | the race again on the final builds | w148d, w148e |
+
+**Defects found live, each fixed, tested and rerun:**
+
+1. **The agent dropped this player's own carry** (`MP-CARRY local event malformed`):
+   it counted the mod's event words one short, so a carry never left the
+   machine. The parser is a tested function now (`CarryLocalEvent`, pinned with
+   the logged strings). (H1 → H2)
+2. **The avatar's pick-up was judged at 2.5 s**, before the game reports it
+   (about 3.5 s): every carry logged "NOT carrying". Asked until 6.5 s. (H1 → H2)
+3. **A set-down of a carry refused here moved the body**: after a far refusal the
+   put moved it 41 m. Such a set-down moves nothing now. (H2, rerun H2)
+4. **The sack never showed**: the DLL's hand content refuses on a host. The game's
+   sack model on the avatar's hand instead. (H2, rerun H2 and J1)
+5. **In the race the avatar picked up while the loser still held the body**
+   (`can=false`): on the joiner's screen the host's figure took the carry pose and
+   the body hung beside it or over its head (the maintainer's frames). The pick-up
+   waits for the game's permission now, and a copy beyond 2.5 m is fetched first.
+   (J1, J2 → J3: the body on the shoulder through the race and the walk)
+6. **The loser's late Held became a new grab**, refused by the host, and the
+   player was told twice. The ledger remembers a loss for 5 s. (J1; unit-tested;
+   the races of J2 and J3 told the player once, but their Held came before the
+   loss, so this path did not run live again)
+7. **This player's carry of a living NPC would go out as "dead"**: not sent now
+   (found while preparing the quest's hunter save; the other screens refused it
+   anyway).
+
+**The census's open questions, answered live:** (1) `FindLinks(player,
+'carriedBody')` names the carried body for the player (none for an avatar);
+(2) `RequestGrabCorpse` works on an avatar on both sides when `CanGrabCorpse`
+allows it (false while another actor holds or puts down the body); (3)
+`RequestPutCorpse` leaves the body at the avatar's feet, 0.5–1.6 m from the
+carrier's own spot, so the landing rule moves it there; (4) `GetItemInHand`
+returns a null handle for a borrowed sack, and hand content on an avatar is
+refused on a host (the sack model on the hand works); (5) the carry pose and walk
+play on an avatar the stream moves; (7, in part) a carried knocked-out body that
+wakes ends the carry itself. Not reached: (6) a quest's reaction to a body a
+joiner carried (no save at a burial step), and the rest of (7) (a save or a heavy
+hit mid-carry).
+
+**The frame rate (for the maintainer; not investigated further, at the
+maintainer's instruction):** in both host sessions the game started at about 75 FPS and fell
+within minutes of the first test body being killed and carried (H1: 74 → 6 FPS in
+8 minutes; H2: 75 → 23 in 1.5 minutes, 4 later). Not the agent, the partner, the
+DLL's NPC sender (each A/B'd off: no change), the inactive-window throttle
+(foreground: 8.8 FPS) or memory (14 GB free, no paging); the engine's profile
+showed physics waits (185 ms), AI (88 ms) and audio (54 ms) per frame, and
+removing the test body and loading another save did not restore it. The joiner
+sessions ran at 20–25 FPS. The DLL's NPC sender costs 5–7 ms a frame on a host by
+itself (its own counter).
 
 ## 5. Decisions made unattended (Stage A)
 
@@ -318,10 +415,31 @@ them; sacks on NPCs are hand content.
   texts; the payload's file set. They are recorded above for the maintainer.
 * **No history rewrite, no release edits, no log scrubbing**: recorded for the
   maintainer.
-* **The carry layer's defaults** are on until Stage B says otherwise.
 
-## 6. Stage B
+**Stage B (live):**
 
-Planned live runs (one machine, throwaway save copies, the Modding Tools build,
-the game started minimized and never brought to the front, no key pressed): see
-`docs/WO-148-progress.md`, "Stage B plan".
+* **Only Modding Tools saves**: the Stage A plan named the 1.1.1 saves of
+  `playline0`; their headers lack the Modding Tools build's own `Configuration`
+  attribute — they are the retail game's, which the standing rules forbid — so
+  the throwaway saves came from `playline1` (1.5.5, the Modding Tools build).
+* **The defaults stay on** (section 4.2).
+* **The sack on the avatar's hand** is the game's sack model as a prop on the hand
+  (`Human.AttachEntityToHand`), not the DLL's hand content (refused on a host).
+* **The reach** for a pick-up where the copy lies is 2.5 m (was 6 m): the game
+  refuses a pick-up from farther, and a farther copy is fetched to the carrier's
+  pick-up spot first.
+* **The fixes were proven by loading the mod's section into the running game**
+  (WO-48's method) and then on fresh builds (J2, J3).
+
+## 6. Not done
+
+* **A quest counting a partner's carry** (a burial, sacks delivered) and **crime
+  for a carried body**: the next phase, as the work order says; the host's quest
+  reactions are logged (`MP-CARRY quest-reaction`), but no save of this machine
+  reaches a burial step, and the sack task's counter is not readable from the log.
+* **The stealth takedown** that leads into a carry needs input; its "pick up body"
+  rides the game's link, which works live.
+* **A save or a heavy hit in the middle of a carry**: not run.
+* **The dice keys**: the pak is built and the game opens it (observed); a key
+  press is the checklist's (`mark_dice_keys`).
+* **The frame rate** (section 4.4): the maintainer's, later.

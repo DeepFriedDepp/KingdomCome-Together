@@ -14,6 +14,41 @@ public class Wo148Tests
 {
     private const byte Host = 1, Joiner = 2, Joiner2 = 3;
 
+    // ---------------------------------------------------------------- the mod's own event (w148_carry)
+
+    // The first three strings are verbatim from the first live run's kcd.log, where the agent
+    // rejected every one of them as malformed (it counted the words one short).
+    [Theory]
+    [InlineData("grab dead wo148_body_1 2106.300 2823.000 131.100", "grab", "", "dead", "wo148_body_1", 2106.3f, 2823.0f, 131.1f)]
+    [InlineData("held dead wo148_body_1 2103.731 2822.778 132.127", "held", "", "dead", "wo148_body_1", 2103.731f, 2822.778f, 132.127f)]
+    [InlineData("put put dead wo148_body_1 2104.216 2822.921 130.956", "put", "put", "dead", "wo148_body_1", 2104.216f, 2822.921f, 130.956f)]
+    [InlineData("grab object sack 1.000 -2.500 3.000", "grab", "", "object", "sack", 1.0f, -2.5f, 3.0f)]
+    [InlineData("put drop object sack 1.000 2.000 3.000", "put", "drop", "object", "sack", 1.0f, 2.0f, 3.0f)]
+    [InlineData("put lost ko villager_9 -1.5 2 3", "put", "lost", "ko", "villager_9", -1.5f, 2.0f, 3.0f)]
+    public void The_mods_own_carry_events_parse(string line, string op, string how, string what, string name, float x, float y, float z)
+    {
+        Assert.True(CarryLocalEvent.TryParse(line, out var ev), line);
+        Assert.Equal((op, how, what, name), (ev.Op, ev.How, ev.What, ev.Name));
+        Assert.Equal(x, ev.X, 3); Assert.Equal(y, ev.Y, 3); Assert.Equal(z, ev.Z, 3);
+        Assert.Equal(op == "grab", ev.IsGrab); Assert.Equal(op == "held", ev.IsHeld); Assert.Equal(op == "put", ev.IsPut);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("grab dead wo148_body_1 2106.3 2823.0")]                 // a word short (the old count)
+    [InlineData("put dead wo148_body_1 2104.2 2822.9 130.9")]            // no how
+    [InlineData("grab dead wo148_body_1 2106.3 2823.0 131.1 extra")]
+    [InlineData("grab alive wo148_body_1 1 2 3")]                         // not a kind
+    [InlineData("put throwit dead wo148_body_1 1 2 3")]                   // not a how
+    [InlineData("grab dead bad-name 1 2 3")]                              // not a wire name
+    [InlineData("grab dead wo148_body_1 1 NaN 3")]
+    [InlineData("drop dead wo148_body_1 1 2 3")]
+    public void A_bad_carry_event_is_refused(string? line)
+    {
+        Assert.False(CarryLocalEvent.TryParse(line, out _));
+    }
+
     // ---------------------------------------------------------------- the wire
 
     [Fact]
@@ -100,6 +135,27 @@ public class Wo148Tests
         Assert.Equal(Host, joiner.Of("corpse_1")!.Carrier);
         // the refusal the host also sent finds nothing left to undo
         Assert.False(joiner.OnRefused(Joiner, "corpse_1"));
+    }
+
+    [Fact]
+    public void A_carry_this_player_just_lost_is_remembered_for_its_late_held()
+    {
+        // the live race: the joiner carried, the host's grab arrived (the joiner loses), and the joiner's own
+        // 2 s Held came after -- read as a new grab, the host refused it and the player was told twice
+        var j = new CarryLedger();
+        j.OnLocalGrab(Joiner, "corpse_r", "dead", 1, 1000, 0, 0, 0);
+        Assert.Equal(CarryLedger.Verdict.LocalLoses, j.OnPeerGrab(Joiner, false, Host, "corpse_r", "dead", 2, 2000, 0, 0, 0, false));
+        Assert.False(j.OnLocalHeld(Joiner, "corpse_r", 3000, 0, 0, 0));   // not this player's any more
+        Assert.True(j.JustLost("corpse_r", 3000));
+        Assert.True(j.JustLost("corpse_r", 2000 + CarryLedger.LostQuietMs - 1));
+        Assert.False(j.JustLost("corpse_r", 2000 + CarryLedger.LostQuietMs));
+        Assert.False(j.JustLost("other", 3000));
+        // a refusal is a loss too
+        j.OnLocalGrab(Joiner, "corpse_s", "dead", 3, 10_000, 0, 0, 0);
+        Assert.True(j.OnRefused(Joiner, "corpse_s", 10_500));
+        Assert.True(j.JustLost("corpse_s", 11_000));
+        j.Clear();
+        Assert.False(j.JustLost("corpse_s", 11_000));
     }
 
     [Fact]
