@@ -68,7 +68,7 @@ test, not run live; **(pending)** the live run is planned for Stage B.
 | 2.1 thread id on every native log line | done | (code-verified) `log.h`, a unit test pins the column |
 | 2.2 the hook boundary check | done | (code-verified) 4,102 capstone vectors, 7/7 hook prologues; (pending) all arm live |
 | 3.1 the carry census | done | `docs/WO-148A-carry-census.md` |
-| 3.2 carrying on the other screen | built | (synthetic: the Lua suite, 85 checks; code-verified: 24 agent tests, a relay round trip); (pending) the live runs 3.4 |
+| 3.2 carrying on the other screen | built | (synthetic: the Lua suite, 88 checks; code-verified: 23 agent test methods, two relay round-trip tests); (pending) the live runs 3.4 |
 | 3.3 quest reactions to a carried body | logged | (code-verified) `MP-CARRY quest-reaction`; (pending) a live burial |
 
 ## 1. Attribution
