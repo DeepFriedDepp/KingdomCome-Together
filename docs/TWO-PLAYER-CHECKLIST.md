@@ -459,7 +459,7 @@ back to 0.42.2's way.
 80. **Far away.** The partner rides or runs a long way (a kilometre or more)
     before the countdown ends. Marker: `mark_leash_far`.
     * Partner: you land beside the host, or on a spot the host just stood on,
-      and never fall hurt.
+      without fall damage.
 81. **The map and fast travel** (partner): open the map a few times, try to fast
     travel once. Marker: `mark_map`.
     * Partner: "Only the host can fast travel in co-op." Nothing else happens;
@@ -483,7 +483,8 @@ Lines worth a look — host: `MP-LEASH host:` (`held`, `the hold is over`,
 `[timeskip] the engine cancelled the skip`; partner: `MP-W147 engage on`,
 `is no enemy of this player`, `MP-DMG dir=out`, `MP-LEASH pulled`,
 `placed on a spot the host stood on`, `ApplyDamage non-lethal` (native log),
-`MP-W147-STATS`.
+`MP-W147-STATS`; after a load in the session: `WO147-REANNOUNCE`,
+`WO147-NEWBODY` (kcd.log) and `MP-WO131 copy guard on` (agent log).
 
 ## Logs to send afterwards
 

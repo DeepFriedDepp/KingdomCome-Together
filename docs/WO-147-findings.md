@@ -4,9 +4,10 @@ Kingdom Come: Together. Unofficial; not affiliated with or endorsed by Warhorse
 Studios.
 
 **Version: 0.42.5** (the maintainer's number). Every gate is green; the
-installer `release\KingdomComeTogether-Setup-0.42.5.exe` is built from a fresh
-clone of `origin/main` (section 6). No GitHub release. 0.42.2 stays the
-fallback, bookmarked as the tag `v0.42.2` on `7bcc28a`.
+installer `release\KingdomComeTogether-Setup-0.42.5.exe` (95.8 MB) is built from
+a fresh clone of `origin/main` at `7dcd01a`, where every gate ran green again
+(section 6). No GitHub release. 0.42.2 stays the fallback, bookmarked as the
+tag `v0.42.2` on `7bcc28a`.
 
 Evidence marks: **(observed)** seen live in the game, in frames or in its own
 log lines; **(synthetic)** the real game against a scripted partner or a
@@ -254,7 +255,7 @@ taken off the horse cleanly and pulled; the horse stays.
   60 s, `the hold is over`, `pull #2 reason=distance,forced`, placed. The
   partner at 92 m/s: `flying`. **(synthetic)**
 * **J1–J4:** a pull with no ground beside the host: `placed on a spot the host
-  stood on`. With my harness's made-up host height (55 m, later 117 m above the
+  stood on`. With the harness's made-up host height (55 m, later 117 m above the
   ground) the joiner died of the fall after the 6 s hold (J1, J2), and then hung
   in the air where the engine held the body (J3, J4): the hold now lasts until
   there is ground under the joiner (J4: held the full 60 s while hanging). With

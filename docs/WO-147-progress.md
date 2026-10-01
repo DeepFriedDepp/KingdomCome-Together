@@ -140,7 +140,17 @@ the compass (J1).
 On the final tree (VERSION 0.42.5): relay round trip 59/59, agent unit tests
 729/729, all 40 `Test-*Synthetic.ps1` suites (`Test-WO147Synthetic` 59/59), both
 static checks, native unit tests 298/298, the local publish and the payload
-smoke — 47 gates, all green. @@BUILD@@
+smoke — 47 gates, all green. The installer build ran every gate again inside
+a fresh clone of `origin/main` (at `7dcd01a`): all green there too (the native
+DLL built from scratch, the smoke relay at `release=0.42.5`), and
+`release\KingdomComeTogether-Setup-0.42.5.exe` (95.8 MB, SHA-256
+`b2b58c0c…6cbb6a`) sits beside 0.42.2's in the git-ignored release folder. No
+GitHub release. Its payload (1,026 files) was swept for the field bundles'
+player and Steam names, the Windows user names, the addresses, and any profile
+path or private address: none of ours in any file. The only profile path is
+inside the six NAudio DLLs, which are the NuGet package's own files unchanged
+(the library author's build path); the only private-range address is the
+documented example in the master server's settings comment.
 
 ## Decisions made unattended
 
@@ -169,7 +179,7 @@ smoke — 47 gates, all green. @@BUILD@@
 * **The leave target** (WO-124/125) takes only saves of the build of the world
   the game runs: J3's leave picked a 1.5.6 save (the retail game shares the
   saves folder), which the 1.5.5 game refused ("needs newer game"). No save
-  was written; found because my reload test changed the world's identity.
+  was written; found because the reload test changed the world's identity.
 * **`mp_test_hit`** (the console stand-in for the player's blow) ships in the
   mod like the other test commands.
 * **The re-created copies (J4/J5's logs)** were fixed after the planned runs
