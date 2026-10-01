@@ -392,7 +392,51 @@ DLL's NPC sender (each A/B'd off: no change), the inactive-window throttle
 showed physics waits (185 ms), AI (88 ms) and audio (54 ms) per frame, and
 removing the test body and loading another save did not restore it. The joiner
 sessions ran at 20–25 FPS. The DLL's NPC sender costs 5–7 ms a frame on a host by
-itself (its own counter).
+itself (its own counter). **Found after the WO: a stat stack in the game left growing by the DLL's
+stamina reading (section 4.5), fixed in 0.42.8.**
+
+### 4.5 The frame rate, found (after the WO; fixed in 0.42.8)
+
+At the maintainer's request, after the WO. **The cause is ours:** WO-147's
+stamina reading in `rttr::sample_health` (`native/KCDMP/rttr_abi.cpp`), so it is
+in 0.42.5 and 0.42.7 alike.
+
+* **What the game was doing.** A sampling profiler on the game's main thread
+  (suspend, copy the used stack, resume: about 40 µs; walked offline): 79% of the
+  main thread inside RPGModule, under one function (`RPGModule+844e70`: a
+  mutex-guarded insert into two flat maps), called from the soul stat getter
+  behind `Soul::GetState` (`+7326d0`) — reached from the game's AI, from Lua
+  script binds and from the DLL alike. The getter pushes the stat's id onto a
+  thread-local stack, records a dependency pair for every id already on it,
+  reads the stat and pops. Read from outside, on the main thread, after a fight:
+  the stack held 4,578 entries, all the same id (`0x7270688d`), so every stat
+  read in the game made 4,578 locked inserts (about 4.5 FPS). Its depth is 0
+  between frames when nothing leaks.
+* **What left the entries.** The stamina state's value (`st_val`) was declared
+  inside a block; the argument built from it (`arg_st`) keeps a pointer to it
+  and is used in the loop after the block. In the built DLL — the 0.42.5 build
+  (rebuilt from `22b5a90`) and the 0.42.7 one alike — the compiler gave the
+  stamina reading the same stack slot (`[rsp+0x38]`). After the first soul
+  within 15 m, every `GetState` call got a stamina reading as its state. The game
+  read out of range and faulted after its push; the DLL's fault guard
+  (`call_invoke1`) swallowed the fault and returned false, so nothing was logged
+  and the pop never ran: one entry per wrong read, up to 16 passes a second,
+  never removed (a thread-local of the game's main thread: only a restart clears
+  it). A single soul near the player leaks nothing (observed: the stack stood
+  still with only one body within 15 m).
+* **Why it looked like the carry.** The first test bodies came from fights among
+  people. The stack grew with every person near the player and the game never
+  recovered, so "after the carry" was "after the fight". It is not combat as
+  such: any two or more souls near the player.
+* **Ruled out on the way.** The machine (reads of fixed cost kept the same µs
+  while the frame rate fell 77 → 13; one thread at 93% of a core, the other 85
+  idle), the log volume, memory, a Lua timer leak, the DLL's own per-frame tasks
+  (0.6 → 2.9 ms of a frame, by a per-task meter), and the game without the mod
+  (76 FPS three minutes after a kill without a fight).
+* **The fix (0.42.8).** `st_val` is declared beside `arg_st`. In the new build
+  the stamina state has its own slot (`[rsp+0x78]`), written once before the
+  loop; the reading is stored elsewhere. Native tests 328/328.
+* **Live check:** to follow.
 
 ## 5. Decisions made unattended (Stage A)
 
@@ -442,4 +486,4 @@ itself (its own counter).
 * **A save or a heavy hit in the middle of a carry**: not run.
 * **The dice keys**: the pak is built and the game opens it (observed); a key
   press is the checklist's (`mark_dice_keys`).
-* **The frame rate** (section 4.4): the maintainer's, later.
+* **The frame rate**: found and fixed after the WO, in 0.42.8 (section 4.5).

@@ -1945,12 +1945,18 @@ void sample_health(void (*on_hit)(const unsigned char[16], void*, float, float, 
     // WO-147: the stamina state too (a blocked or stamina-only blow: the field's joiner broke his
     // sword and every later blow did 0 health and 40 stamina -- nothing of it ever reached the host).
     bool have_st = false;
+    // arg_st points at st_val, so st_val must live as long as arg_st. Declared inside the block
+    // below (0.42.5-0.42.7), its stack slot was reused for the stamina reading: from the second
+    // soul near the player on, GetState got the last stamina value as its state, read out of
+    // range and faulted after the game had pushed it onto its stat-evaluation stack. The fault
+    // guard swallowed it, the pop never ran, and every later stat read in the game walked the
+    // ever-longer stack under a lock -- the frame rate fell in every fight and never came back.
+    uint64_t st_val = 0;
     alignas(8) unsigned char arg_st[32];
     {
         const std::string_view sn{"stamina"};
         Variant v_st{};
         if (call_name_to_value(api.name_to_value, &en, &v_st, &sn)) {
-            uint64_t st_val = 0;
             std::memcpy(&st_val, v_st.data, sizeof(st_val));
             call_variant_dtor(api.variant_dtor, &v_st);
             build_argument(arg_st, &st_val, t_state);
