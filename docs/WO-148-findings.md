@@ -465,6 +465,10 @@ proposed safeguards.
 * **The dice keys**: the pak is built and the game opens it (observed); a key
   press is the checklist's (`mark_dice_keys`).
 * **The frame rate**: found and fixed after the WO, in 0.42.8 (section 7).
+* **The safeguards against another such bug**: no silent fault guards, reflection
+  arguments that own their value and a frame-rate soak before every installer
+  (required), a watchdog on the game's stat stack, the frame rate in the logs and
+  the hunt's diagnostics kept (recommended): the next WO's scope, section 7.12.
 
 ## 7. The frame rate, after the WO: found, fixed and verified (0.42.8)
 
@@ -622,8 +626,9 @@ FPS that is up to about 50 a second: thousands within minutes.
   `[rsp+0x78]`: written before the loop (`+a17d`, `+a1c4`), its address taken
   (`+a1ce`), never written again, and the reading goes to `[rsp+0x38]`. The DLL in
   the installer's payload shows the same three uses. **(code-verified)**
-* **The other arguments:** every other `build_argument` call in the DLL (25 sites)
-  keeps its value alive across the call.
+* **The other arguments:** every other `build_argument` call in the DLL (the
+  other 20 of its 21 sites, all in `rttr_abi.cpp`) keeps its value alive across
+  the call.
 * **The commits on `main`:**
   * `37ccea0`: the fix, VERSION 0.42.8 (the maintainer's number), the README badge,
     the release notes, the tester page and the first version of this section. It
@@ -744,12 +749,12 @@ the stamina it last read for each).
    The test figures went into a real playline whose autosaves now carry their
    consequences (7.8).
 
-### 7.10 Safeguards proposed (not built; for the maintainer to choose)
+### 7.10 Safeguards proposed (not built; the next WO's scope is 7.12)
 
 | # | safeguard | what it would have caught | notes |
 |---|---|---|---|
-| 1 | Fault guards that are not silent: log the first fault at each call site (rate-limited), count faults in the periodic status line, and switch the failing read off after a few | the first 0.42.5 session's log would have said `GetState faulted (stamina)` | small; every `call_invoke*`, property read and hook guard |
-| 2 | Arguments that own their value (an `Arg<T>` holding the value and the RTTR argument together) instead of pointing at the caller's variable; the 25 call sites converted | this bug, and every future one of its kind | a refactor of `rttr_abi.cpp` |
+| 1 | Fault guards that are not silent: log the first fault at each call site (rate-limited), count faults in the periodic status line, and switch the failing read off after a few | the first 0.42.5 session's log would have said `GetState faulted (stamina)` | 303 guards in 36 files; the calls into game code first |
+| 2 | Arguments that own their value (an `Arg<T>` holding the value and the RTTR argument together) instead of pointing at the caller's variable; the 21 call sites converted | this bug, and every future one of its kind | a refactor of `rttr_abi.cpp` |
 | 3 | A watchdog on the game's stat stack: at the frame hook, where it must be empty, read its depth and log loudly when it is not; optionally clear it | the same symptom from any cause, ours or the game's | port-specific (this build's TLS index and offset), so verified at start like the hooks; log-only first |
 | 4 | A frame-rate soak before every installer: 10 minutes with spawned people within 15 m and a fight, scripted as in 7.6; it passes when the frame rate stays within about 10% of where it started and the stat stack stays empty, against the game without the mod | this release blocker, before any tester | a tool and a gate in the build |
 | 5 | The frame rate in the logs: the periodic heartbeat line carries the frame rate and the frame time | a slow decline in any tester's bug-report zip, even when nobody notices it | small |
@@ -777,4 +782,138 @@ the stamina it last read for each).
   pick-up and place animations. This was seen live on one machine (a scripted
   partner and a synthetic host), not yet with two real players; quests counting a
   partner's carry are not built (section 6).
-* **"What lessons, so we don't break the game again?"** Sections 7.9 and 7.10.
+* **"What lessons, so we don't break the game again?"** Sections 7.9 and 7.10;
+  what the next WO builds is 7.12.
+
+### 7.12 For the next WO: the safeguards to build, in order
+
+The recommended scope. The maintainer decides the WO, its number and its version.
+Items 1, 2 and 4 are **required**: each would have stopped this release on its
+own. Item 5 makes a decline visible in the field, and items 3 and 6 make the next
+hunt short. Every new behaviour gets an `mp_` switch like the others, and its
+default is the maintainer's call under the standing rule "default on only when
+proven". Nothing proven by WO-131 to WO-148 (or by 0.42.8's fix) may regress.
+
+**1. No silent fault guards (required).**
+
+* **Scope:** the DLL's 303 `__try` guards in 36 files, 36 of them in
+  `rttr_abi.cpp`. 239 of their handlers are one line that returns quietly. The
+  guards around calls into game code come first (reflection invokes, property
+  reads, method calls, the hooks' trampolines), then those around our own reads
+  of game memory.
+* **Build:** one guard helper, used everywhere, carrying a site name.
+  * Its filter records the exception code and the faulting address as
+    module+offset.
+  * The first fault at a site is logged at once (for example `FAULT
+    rttr::sample_health/GetState(stamina): 0xC0000005 at RPGModule+0x7327df
+    (1st)`), and again at the 10th and the 100th.
+  * While any count is non-zero, a line every 60 s sums them.
+  * After 8 faults at one site in a session, that site is switched off (its call
+    returns "failed" without calling the game) and the log says so. A fault inside
+    game code may have left the game's own state half-changed: that is this
+    hunt's whole lesson.
+* **Switch:** the logging always runs. Switching a site off is the new behaviour;
+  recommended on, since it only stops our own reads.
+* **Done when:**
+  * native unit tests drive the helper with a deliberate fault: the counts, the
+    lines' text, the switch-off at the 8th, the reset in a new session;
+  * the gate script fails a build that adds a raw `__try` outside the helper;
+  * live, a crowd and a fight (7.6) log no `FAULT` line.
+
+**2. Reflection arguments that own their value (required).**
+
+* **Scope:** `build_argument` (`rttr_abi.h`) and its 21 call sites, all in
+  `rttr_abi.cpp`. They make 11 reflected calls: `GetState` ×3 (the health and
+  stamina sampler, `soul_state`), `SetState`, `TakeDamage` ×4, and
+  `HasCombatHistoryWithSoul` ×2 (two probes and the WO-147 combat history), and
+  `GetFaction`.
+* **Build:** an argument object that holds a copy of the value next to the RTTR
+  argument that points at it, neither copyable nor movable. The pointer-taking
+  `build_argument` goes away. An argument can then no longer outlive its value:
+  they are one object, and the compiler refuses any use of it outside its scope.
+* **Done when:**
+  * all 21 sites are converted;
+  * a unit test pins that the argument points into its own object;
+  * the gate fails a build with a raw `build_argument(`;
+  * live, with WO-119's combat harness, everything it touches still works:
+    * the health and stamina reads (the crowd of 7.6);
+    * a blow and a stamina-only blow, both reported;
+    * the partner's damage applied (`TakeDamage`);
+    * a faction read.
+* **Risk:** it touches every reflection call the DLL makes, combat damage
+  included. The live check above is not optional.
+
+**3. A watchdog on the game's stat stack (recommended).**
+
+* **Build:** at the DLL's frame hook the main thread is inside no stat evaluation,
+  so the stack must be empty there.
+  * Read its depth (RPGModule's TLS index, and the vector at its block `+0x1e0`;
+    see 7.3).
+  * When it is not 0, log it (for example `STATSTACK depth 12, top id 0x...:
+    leaking`), then again every 10 s while it grows.
+  * Port-aware, like the hooks: the TLS index's address is found from the code of
+    the stack's accessor (`+844e00`), checked against its expected bytes at start.
+    Another build (retail, a patch) leaves the watchdog off and logs why.
+* **Optional, behind its own switch:** clear the stack when it is not empty at the
+  start of a frame (it must be empty there). This would have given the frame rate
+  back without a restart; it writes game memory, so it is proven before it is on.
+* **Done when:**
+  * a unit test covers the byte check and the depth arithmetic;
+  * live, in a crowd and a fight, the depth is 0 and the watchdog logs nothing;
+  * a test-only console command that leaks one entry on purpose (an invalid state
+    through the guarded invoke) is logged within a second; with the clearing on,
+    the depth goes back to 0.
+
+**4. A frame-rate soak before every installer (required).**
+
+* **Build:** a script grown from this hunt's crowd and fight checks (7.6). On a
+  throwaway save, for 10 minutes, it:
+  * puts three commoners within 15 m (no AI, never saved), then starts a fight
+    with an unarmed bandit;
+  * every 10 s reads the frame rate, the stat stack (item 3, or the outside reader)
+    and the native log's `FAULT` lines, and writes them as a table;
+  * removes everything it spawned.
+* **Pass:**
+  * the frame rate over the last 2 minutes is within 10% of the first 2 minutes,
+    and of the same scene in the game without the mod (no pak, no DLL);
+  * the stat stack is 0 throughout;
+  * no `FAULT` line.
+* **The rule around it:**
+  * the progress page records the table;
+  * `Build-Installer.ps1` is not run before the soak passes;
+  * the script checks the loaded save first (7.8) and runs only on a throwaway
+    copy.
+
+**5. The frame rate in the logs (recommended, small).**
+
+* **Build:** a line every 60 s from the DLL's frame hook with the frame count and
+  the mean and worst frame times, reusing the frame accounting of the hunt's
+  per-task meter. The launcher's Report Bug zip carries the native log, so any
+  tester's zip shows a decline even when nobody noticed one.
+* **Done when:** a unit test of the arithmetic passes, and the line appears in a
+  live session.
+
+**6. Keep the diagnostics (recommended).**
+
+* **The tools:** this hunt's read-only tools go into `tools/perf/` with a README,
+  cleaned of machine paths:
+  * the main-thread sampler and its call-tree analysis;
+  * the stat-stack reader;
+  * the reader of the DLL's near list, with its offsets taken from the DLL's own
+    code instead of hard-coded;
+  * the string and TLS-user finders.
+* **The meter:** the per-task frame-cost meter in the DLL (built and tested in the
+  hunt, not committed) goes behind an `mp_` switch, off by default.
+* **Done when:** each tool runs against a live game, and the privacy scan is clean.
+
+**Process, adopted now and to be written into the next WO's rules:**
+
+* An unexplained frame-rate drop of this size blocks the installer. The assistant
+  says so before building, even when told to move on.
+* Before any test action in a session this machine did not start, the loaded save
+  is checked; a real playline means asking first.
+* A performance comparison is against the game without the mod, with the same
+  trigger.
+
+**Not in it:** the second, player-like soul (7.7) needs its own look, and the hit
+sampler's other reads are out of scope beyond what items 1 and 2 touch.
