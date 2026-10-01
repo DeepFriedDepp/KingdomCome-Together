@@ -17,9 +17,10 @@ GitHub. The tester page is `docs/TEST-0.42.8.md`.
 other version at the handshake, 0.42.7 and 0.42.5 included. Don't go back to
 either for a long session: both have the bug this release fixes.
 
-**Verified:** the fix in the built DLL's own machine code, and the native unit
-tests. The cause, the evidence and the live check: `docs/WO-148-findings.md`
-section 4.5.
+**Verified:** in the built DLL's own machine code, by the native unit tests, and
+live on one machine: in a crowd and in a fight the game's stat bookkeeping stayed
+empty and the frame rate held. The cause, the evidence and the numbers:
+`docs/WO-148-findings.md` section 4.5.
 
 ---
 

@@ -436,7 +436,26 @@ in 0.42.5 and 0.42.7 alike.
 * **The fix (0.42.8).** `st_val` is declared beside `arg_st`. In the new build
   the stamina state has its own slot (`[rsp+0x78]`), written once before the
   loop; the reading is stored elsewhere. Native tests 328/328.
-* **Live check:** to follow.
+* **Live check (0.42.8, one machine, the maintainer playing):**
+  * Three commoners spawned 2.5 m around the player (no AI, never saved), 100 s:
+    the DLL counted 3–4 souls within 15 m the whole time and read a real stamina
+    for every one of them (120.0, 123.3, 120.0; 136.7 and 153.3 for passers-by).
+    The game's stat stack stayed at depth 0 (one reading of 2: a nested read in
+    progress); 64–70 FPS throughout (69.6 before, 69.9 after).
+  * The same with their AI on, 90 s, one of them killed by the player in the
+    middle of it: depth 0 before and after the kill, 71–79 FPS.
+  * A fight: an unarmed bandit and the three commoners, five souls within 15 m,
+    about 100 s of fighting until the bandit won. The player's blows mostly fell
+    on his block (no health, 13–17 stamina each: WO-147's stamina-only blows,
+    reported as designed). Depth 0 throughout, 67–75 FPS (a dip to 25 during the
+    death's wake teleport, 74.6 after).
+  * For comparison, the same game on 0.42.7 after one fight among people: depth
+    4,578, about 4.5 FPS.
+* **Also seen, not investigated:** one soul the DLL tracks within 15 m follows
+  the player (through a 316 m wake teleport) with its health and stamina frozen
+  at the values the session started with (75.3, 118.0), and no entity of its own
+  near: a second, player-like soul. Harmless for the frame rate now; worth a look
+  if hits on "an NPC" that is really the player come back (WO-99).
 
 ## 5. Decisions made unattended (Stage A)
 
