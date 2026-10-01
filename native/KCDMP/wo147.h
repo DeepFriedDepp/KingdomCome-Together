@@ -10,6 +10,11 @@
 //       is the real path: the health sampler reports the drop as the player's
 //       LocalHit, the agent's gate judges it, the host applies it.
 //   2 Status         -> text
+//   3 SoulGuidOfEid  [eid:4] -> [guid:16]
+//       The soul a body really holds. A by-name soul lookup answers with ANY soul of
+//       that name: for a stand-in copy of a host-spawned NPC it is the game's own
+//       unplaced soul of the same name (Position 0,0,0) -- the live run killed that
+//       one five times while the copy stood at 70 hp.
 #pragma once
 #include <cstddef>
 #include <cstdint>
@@ -18,6 +23,7 @@ namespace kcdmp::wo147 {
 
 constexpr uint8_t kOpTestPlayerHit = 1;
 constexpr uint8_t kOpStatus = 2;
+constexpr uint8_t kOpSoulGuidOfEid = 3;
 
 constexpr uint8_t kROk = 0, kRBadRequest = 1, kRNoActor = 2, kRFailed = 3;
 

@@ -356,6 +356,91 @@ do -- (e) a freeze is no silence
     noErrs("e")
 end
 
+do -- (f) the render lag: behind, the renderer stays behind by the agent's own lag
+    local function lagWord() KCD2MP_NpcSilenceAgent(1200) end
+    local function sparseWalk(name, x0, from)
+        -- a steady 1 m/s walk that reaches this mod only once a second (the newest sample of each
+        -- second: what a lagging agent hands on); returns the sprint lines it drew
+        local mark = #LOG
+        local x = x0
+        for i = 1, 6 do
+            x = x + 1.0
+            KCD2MP_ApplyNpcState(name, x, 0, 0, 0, 100, 0, 0, from + i, math.floor(NOW * 1000))
+            run(1.0, lagWord)
+        end
+        local n = 0
+        for i = mark + 1, #LOG do if LOG[i]:find("NPC-SYNC anim " .. name .. " -> sprint", 1, true) then n = n + 1 end end
+        return n
+    end
+    reset(); clearLog(); freshSilence(); NOW = 2000
+    KCD2MP.npcSilence.lagSmooth = 0
+    KCD2MP.w147.npcCatchup = false
+    puppet("tzel_man_30", 3)
+    local before = sparseWalk("tzel_man_30", 3, 10)
+    check("f: switched off (as before): a sparse walk dashes", before > 0, before)
+    KCD2MP.w147.npcCatchup = true
+
+    reset(); clearLog(); freshSilence(); NOW = 2100
+    KCD2MP.npcSilence.lagSmooth = 0
+    puppet("tzel_man_31", 3)
+    run(4.0, lagWord)
+    check("f: the render lag is the agent's lag plus 0.25 s, at once", math.abs(KCD2MP.npcSilence.lagSmooth - 1.45) < 0.01, KCD2MP.npcSilence.lagSmooth)
+    local after = sparseWalk("tzel_man_31", 3, 10)
+    check("f: on: the same sparse walk never dashes", after == 0, after)
+    check("f: on: the walker is still a puppet (the agent's word keeps it)", KCD2MP.npcPuppets["tzel_man_31"] ~= nil)
+
+    KCD2MP_NpcSilenceAgent(10000); run(10.0, function() KCD2MP_NpcSilenceAgent(10000) end)
+    check("f: the render lag is capped at 3 s", math.abs(KCD2MP.npcSilence.lagSmooth - 3.0) < 0.05, KCD2MP.npcSilence.lagSmooth)
+    run(17.0)   -- no word any more
+    check("f: no word: the render lag decays to 0", KCD2MP.npcSilence.lagSmooth == 0, KCD2MP.npcSilence.lagSmooth)
+    reset(); clearLog(); freshSilence(); NOW = 2300
+    KCD2MP.npcSilence.lagSmooth = 0
+    puppet("tzel_man_32", 3)
+    run(2.0, function() KCD2MP_NpcSilenceAgent(40) end)
+    check("f: keeping up (40 ms behind): no render lag at all", KCD2MP.npcSilence.lagSmooth == 0, KCD2MP.npcSilence.lagSmooth)
+    noErrs("f")
+end
+
+do -- (g) a live puppet's new body is reported again (a load, a stand-in spawned again)
+    reset(); clearLog(); freshSilence(); NOW = 3000
+    puppet("tzel_man_40", 3)
+    local first = emitted("npcid")
+    check("g: the puppet start reports its body", #first == 1, first[1])
+    local mark = #LOG
+    KCD2MP_ApplyNpcState("tzel_man_40", 3.1, 0, 0, 0, 100, 0, 0, 2, math.floor(NOW * 1000))
+    check("g: the same body: nothing more", #emitted("npcid", mark) == 0)
+    ENTS["tzel_man_40"] = mkEntity("tzel_man_40", 3.2, 0, 0)   -- the body made anew (a new entity id)
+    KCD2MP_ApplyNpcState("tzel_man_40", 3.2, 0, 0, 0, 100, 0, 0, 3, math.floor(NOW * 1000))
+    local again = emitted("npcid", mark)
+    check("g: a new body is reported again", #again == 1 and again[1] ~= first[1], again[1])
+    check("g: ...and logged", logCount("WO147-NEWBODY npc=tzel_man_40") == 1, lastLog("WO147-NEWBODY"))
+
+    -- a load: the puppet stays, its body is gone until its stream comes back, then it comes with the SAME id
+    -- (the live run's stand-ins after a reload)
+    local old = ENTS["tzel_man_40"]
+    ENTS["tzel_man_40"] = nil
+    mark = #LOG
+    KCD2MP_W147ReannouncePuppets("load test")
+    check("g: the re-announce names the copy with no body yet", logCount("WO147-REANNOUNCE 0 puppet(s) after load test, 1 when their bodies come", mark) == 1, lastLog("WO147-REANNOUNCE"))
+    local same = mkEntity("tzel_man_40", 3.3, 0, 0)
+    same.id = old.id   -- the load gave the new body the old entity id
+    ENTS["tzel_man_40"] = same
+    KCD2MP_ApplyNpcState("tzel_man_40", 3.3, 0, 0, 0, 100, 0, 0, 4, math.floor(NOW * 1000))
+    local back = emitted("npcid", mark)
+    check("g: the new body with the old id is reported anyway", #back == 1 and back[1] == again[1], back[1])
+    KCD2MP_ApplyNpcState("tzel_man_40", 3.4, 0, 0, 0, 100, 0, 0, 5, math.floor(NOW * 1000))
+    check("g: ...once", #emitted("npcid", mark) == 1)
+
+    -- a body that is there at the re-announce is reported then, and not again
+    mark = #LOG
+    KCD2MP_W147ReannouncePuppets("load test 2")
+    check("g: a body that is there is reported by the re-announce", #emitted("npcid", mark) == 1
+        and logCount("WO147-REANNOUNCE 1 puppet(s) after load test 2, 0 when their bodies come", mark) == 1, lastLog("WO147-REANNOUNCE"))
+    KCD2MP_ApplyNpcState("tzel_man_40", 3.5, 0, 0, 0, 100, 0, 0, 6, math.floor(NOW * 1000))
+    check("g: ...and not again by its next sample", #emitted("npcid", mark) == 1)
+    noErrs("g")
+end
+
 local pass, fail = 0, 0
 for _, r in ipairs(RESULTS) do if r:sub(1, 4) == "PASS" then pass = pass + 1 else fail = fail + 1 end end
 OUT = table.concat(RESULTS, "\n") .. string.format("\n%d passed, %d failed", pass, fail)

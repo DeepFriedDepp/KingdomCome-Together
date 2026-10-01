@@ -2553,6 +2553,23 @@ void* rpg_module() {
     return plausible_pointer(rpg) ? rpg : nullptr;
 }
 
+bool soul_guid(void* soul, unsigned char out[16]) {
+    const Api* api = cached_api();
+    if (!api || !plausible_pointer(soul) || !out) return false;
+    Type t{};
+    if (!type_named(*api, "wh::rpgmodule::Soul", &t)) return false;
+    InstanceBuf inst{};
+    inst.build(g_layout, t, soul);
+    const std::string_view gp{"Guid"};
+    Variant v{};
+    if (!call_get_property_value(api->get_property_value, &t, &v, &gp, inst.bytes)) return false;
+    bool valid = false;
+    call_variant_valid(api->variant_is_valid, &v, &valid);
+    if (valid) std::memcpy(out, v.data, 16);
+    call_variant_dtor(api->variant_dtor, &v);
+    return valid;
+}
+
 bool soul_state(void* soul, const char* state, float* out) {
     const Api* api = cached_api();
     if (!api || !plausible_pointer(soul) || !out) return false;

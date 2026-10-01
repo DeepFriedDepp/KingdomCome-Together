@@ -191,6 +191,7 @@ $AsmMarkers = @(
     @{ File = 'KCDMP.dll';       Marker = 'WO147-TEST';             Owner = "WO-147 mp_test_hit, the stand-in for the player's blow (native)" },
     @{ File = 'KcdMpClient.dll'; Marker = 'ghost_superseded=';      Owner = 'WO-147 the frame backlog: superseded samples skipped (agent half)' },
     @{ File = 'KCDMP.dll';       Marker = 'no silence of the streams'; Owner = "WO-147 the frame backlog: a stall is no stream silence (native)" },
+    @{ File = 'KCDMP.dll';       Marker = 'the player is on the ground (or 60 s passed)'; Owner = "WO-147 the pull's fall hold lasts until there is ground under the player (native)" },
     @{ File = 'KCDMP_launcher.dll'; Marker = 'Kingdom Come: Together'; Owner = 'WO-134 rebrand (launcher window title)' }
 )
 
@@ -273,6 +274,7 @@ $PakMarkers = @(
     @{ Marker = 'function KCD2MP_W147EndDialog';   Owner = 'WO-147 a forced leash pull ends the conversation first (mod half)' },
     @{ Marker = 'function KCD2MP_SetQuestSafety';  Owner = 'WO-147 mp_quest_safety (mod half)' },
     @{ Marker = 'function KCD2MP_NpcSilenceRelease'; Owner = "WO-147 the frame backlog: a puppet released on the agent's word (mod half)" },
+    @{ Marker = 'when their bodies come';          Owner = 'WO-147 a copy re-created by a load is reported whatever its id (mod half)' },
     @{ Marker = 'function KCD2MP_W144AvatarKey';   Owner = "WO-144 the live avatar's entity key (mod half)" },
     @{ Marker = 'function KCD2MP_W144LightTick';   Owner = 'WO-144 an avatar holds a light only while its player does (mod half)' },
     @{ Marker = 'function KCD2MP_W144FollowHostClock'; Owner = "WO-144 the joiner's clock stands with the host's (mod half)" },

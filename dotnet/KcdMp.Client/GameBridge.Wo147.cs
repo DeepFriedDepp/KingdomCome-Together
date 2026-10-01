@@ -209,9 +209,10 @@ public partial class GameBridge
     private volatile bool _w147Catchup = true;   // mp_npc_catchup (the mod's w147_cfg)
     private readonly ConcurrentDictionary<string, (ushort Seq, byte Flags, long AtMs)> _w147NpcNewest = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, long> _w147NpcProcessedMs = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, long> _w147NpcPushedAtMs = new(StringComparer.Ordinal);   // when a sample last went through (processor clock)
     private readonly ConcurrentDictionary<string, bool> _w147SilentSent = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<byte, long> _w147GhostNewestMs = new();
-    private long _w147ReadAtMs, _w147ProcAtMs, _w147LagMaxMs;
+    private long _w147ReadAtMs, _w147ProcAtMs, _w147LagMaxMs, _w147LagWinMs;
     private long _w147Superseded, _w147GhostSuperseded, _w147SilentNotes;
     private bool _w147CatchupToldOff;
 
@@ -239,20 +240,27 @@ public partial class GameBridge
         long lag = W147StampMs(Stopwatch.GetTimestamp()) - at;
         long max;
         while (lag > (max = Interlocked.Read(ref _w147LagMaxMs)) && Interlocked.CompareExchange(ref _w147LagMaxMs, lag, max) != max) { }
+        while (lag > (max = Interlocked.Read(ref _w147LagWinMs)) && Interlocked.CompareExchange(ref _w147LagWinMs, lag, max) != max) { }
     }
 
     /// <summary>True: this NPC sample is superseded and the processor is behind -- skip it whole.</summary>
     private bool Wo147NpcSkip(string name, ushort seq, byte rawFlags, long arrival)
     {
         if (!_w147Catchup || !_w147NpcNewest.TryGetValue(name, out var nw)) return false;
-        double lag = (Stopwatch.GetTimestamp() - arrival) * 1000.0 / Stopwatch.Frequency;
-        if (!Wo147Rules.SupersededUnderLag(true, lag, seq, rawFlags, nw.Seq, nw.Flags)) return false;
+        long nowMs = W147StampMs(Stopwatch.GetTimestamp());
+        double lag = nowMs - W147StampMs(arrival);
+        double since = _w147NpcPushedAtMs.TryGetValue(name, out long last) ? nowMs - last : double.MaxValue;
+        if (!Wo147Rules.SupersededUnderLag(true, lag, seq, rawFlags, nw.Seq, nw.Flags, since)) return false;
         Interlocked.Increment(ref _w147Superseded);
         return true;
     }
 
     /// <summary>The processor handed the mod this NPC's sample read at <paramref name="arrival"/>.</summary>
-    private void Wo147NpcProcessed(string name, long arrival) => _w147NpcProcessedMs[name] = W147StampMs(arrival);
+    private void Wo147NpcProcessed(string name, long arrival)
+    {
+        _w147NpcProcessedMs[name] = W147StampMs(arrival);
+        _w147NpcPushedAtMs[name] = W147StampMs(Stopwatch.GetTimestamp());
+    }
 
     /// <summary>True: this avatar sample is superseded (no state block of its own) and the processor is behind -- no Lua push.</summary>
     private bool Wo147GhostSkip(byte ghostId, long arrival, bool hasStateBlock)
@@ -279,11 +287,13 @@ public partial class GameBridge
         }
         _w147CatchupToldOff = false;
         long now = W147StampMs(Stopwatch.GetTimestamp());
-        long behind = Math.Max(0, Volatile.Read(ref _w147ReadAtMs) - Volatile.Read(ref _w147ProcAtMs));
+        // how far behind: now, or the worst of the last second (what the mod's renderer has to cover)
+        long behind = Math.Max(Math.Max(0, Volatile.Read(ref _w147ReadAtMs) - Volatile.Read(ref _w147ProcAtMs)),
+                               Interlocked.Exchange(ref _w147LagWinMs, 0));
         await ExecLuaAsync(FormattableString.Invariant($"if KCD2MP_NpcSilenceAgent then KCD2MP_NpcSilenceAgent({behind}) end"));
         foreach (var (name, nw) in _w147NpcNewest)
         {
-            if (now - nw.AtMs > 120_000) { _w147NpcNewest.TryRemove(name, out _); _w147NpcProcessedMs.TryRemove(name, out _); _w147SilentSent.TryRemove(name, out _); continue; }
+            if (now - nw.AtMs > 120_000) { _w147NpcNewest.TryRemove(name, out _); _w147NpcProcessedMs.TryRemove(name, out _); _w147NpcPushedAtMs.TryRemove(name, out _); _w147SilentSent.TryRemove(name, out _); continue; }
             long done = _w147NpcProcessedMs.TryGetValue(name, out long d) ? d : -1;
             if (!Wo147Rules.SilenceDue(now, nw.AtMs, done, _w147SilentSent.ContainsKey(name))) continue;
             _w147SilentSent[name] = true;
@@ -510,6 +520,9 @@ public partial class GameBridge
     /// </summary>
     private void Wo147ForgetGuardsOnLoad(string what)
     {
+        // The souls read from the copies' bodies go too: a load reuses entity ids (the live run's stand-ins came
+        // back with their old ids), so a cached (id, soul) pair named the dead old soul.
+        _copySoulGuid.Clear();
         int n = _w131Guarded.Count;
         if (n == 0) return;
         _w131Guarded.Clear();
@@ -696,7 +709,7 @@ public partial class GameBridge
     /// <summary>After a fallback placement: the ground beside the host, once this area has loaded (two tries).</summary>
     private async Task Wo147SettleBesideHostAsync(byte seq)
     {
-        foreach (int waitMs in new[] { 1500, 3000 })
+        foreach (int waitMs in new[] { 1500, 3000, 4000, 6000, 10000 })
         {
             await Task.Delay(waitMs);
             byte hid = _leashHostId != 0xFF ? _leashHostId : _hostModeFrom;

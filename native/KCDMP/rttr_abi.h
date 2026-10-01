@@ -452,6 +452,9 @@ void* rpg_module();
 /// Soul::GetState(<name>) -- "health", "stamina", "hunger", "exhaust".
 bool soul_state(void* soul, const char* state, float* out);
 
+// WO-147: the reflected Guid of a soul pointer (the C_Soul an actor holds). Main thread.
+bool soul_guid(void* soul, unsigned char out[16]);
+
 /// Soul::SetState(<name>, value). True only when the invoke returned a valid
 /// variant (a signature mismatch is an invalid variant, not a fault).
 bool soul_set_state(void* soul, const char* state, float value);

@@ -52,6 +52,16 @@ uint8_t handle(const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t
         *outLen = 8;
         return kROk;
     }
+    case kOpSoulGuidOfEid: {
+        if (n != 4 || cap < 16) return kRBadRequest;
+        uint32_t eid = 0;
+        std::memcpy(&eid, a, 4);
+        void* soul = eid ? c_soul_of(hits::soul_of_eid(eid)) : nullptr;
+        if (!soul) return kRNoActor;
+        if (!rttr::soul_guid(soul, out)) return kRFailed;
+        *outLen = 16;
+        return kROk;
+    }
     case kOpStatus: {
         char t[160];
         int m = std::snprintf(t, sizeof(t), "wo147 test_hits=%u test_fail=%u", c_testHits.load(), c_testFail.load());

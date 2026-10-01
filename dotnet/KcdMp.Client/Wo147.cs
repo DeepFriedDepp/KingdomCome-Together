@@ -172,14 +172,21 @@ public static class Wo147Rules
     /// <summary>A swing cue (0x08) is an event, a resync row (0x40) a one-off: a sample carrying either is never skipped.</summary>
     public const byte TransientNpcFlags = 0x08 | Protocol.NpcStateFlagResync;
 
+    /// <summary>Behind, every NPC still gets a sample through this often (a superseded one included).</summary>
+    public const int CatchupMinPushMs = 300;
+
     /// <summary>
     /// A sample of <paramref name="seq"/> while the processor is behind, when the newest one read for the same NPC
     /// is another (a later) sample with exactly the same flags: everything it says the newer one says too (a
-    /// position, a heading, health) -- skipped. Never when the flags differ (a death, a knockout, a weapon drawn)
-    /// or carry an event; never when the processor keeps up.
+    /// position, a heading, health) -- skipped, unless this NPC has had nothing through for
+    /// <see cref="CatchupMinPushMs"/> (under a sustained lag every sample is superseded by the time it is taken:
+    /// the live A/B starved walkers for up to 38 s). Never when the flags differ (a death, a knockout, a weapon
+    /// drawn) or carry an event; never when the processor keeps up.
     /// </summary>
-    public static bool SupersededUnderLag(bool on, double lagMs, ushort seq, byte flags, ushort newestSeq, byte newestFlags) =>
-        on && lagMs >= CatchupLagMs && newestSeq != seq && newestFlags == flags && (flags & TransientNpcFlags) == 0;
+    public static bool SupersededUnderLag(bool on, double lagMs, ushort seq, byte flags, ushort newestSeq, byte newestFlags,
+                                          double sinceLastPushMs = 0) =>
+        on && lagMs >= CatchupLagMs && newestSeq != seq && newestFlags == flags && (flags & TransientNpcFlags) == 0
+        && sinceLastPushMs < CatchupMinPushMs;
 
     /// <summary>
     /// The agent's word that an NPC's stream fell silent: nothing read for it for <paramref name="releaseMs"/>, and

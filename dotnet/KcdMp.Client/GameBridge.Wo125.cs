@@ -492,7 +492,11 @@ public partial class GameBridge
         why = "";
         if (TestNoOwnSave) { why = "KCDMP_TEST_NO_OWN_SAVE=1 (test: no own save)"; Console.WriteLine("MP-HENRY TEST KCDMP_TEST_NO_OWN_SAVE=1 -- acting as if this player had no save of their own"); return null; }
         if (ResolveSavesDirForJoin() is not string saves) { why = "no saves folder"; return null; }
-        foreach (var s in OwnSaves(saves, HostSeedForOwn(), l => Console.WriteLine(l)))
+        var own = OwnSaves(saves, HostSeedForOwn(), l => Console.WriteLine(l));
+        // WO-147: only a save this game can load -- of the build of the world it runs. The live run's leave picked a
+        // newer build's save (the retail game shares the saves folder): "needs newer game", and the joiner stayed.
+        if (Wo135TargetBuild() is string build) own = SameBuildSaves(own, build, l => Console.WriteLine(l));
+        foreach (var s in own)
         {
             var v = WhsSave.VerifyFile(s.Save.FullPath);
             if (v.Ok) return s.Save;

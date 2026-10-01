@@ -377,6 +377,15 @@ public class Wo147Tests
         Assert.False(Wo147Rules.SupersededUnderLag(false, 900, 10, 0x04, 14, 0x04));
     }
 
+    [Fact]
+    public void Behind_every_npc_still_gets_a_sample_through_every_300_ms()
+    {
+        // the live A/B: under a sustained lag every sample is superseded by the time it is taken -- walkers starved
+        Assert.True(Wo147Rules.SupersededUnderLag(true, 900, 10, 0x04, 14, 0x04, sinceLastPushMs: 120));
+        Assert.False(Wo147Rules.SupersededUnderLag(true, 900, 10, 0x04, 14, 0x04, sinceLastPushMs: Wo147Rules.CatchupMinPushMs));
+        Assert.False(Wo147Rules.SupersededUnderLag(true, 900, 10, 0x04, 14, 0x04, sinceLastPushMs: double.MaxValue));   // never pushed yet
+    }
+
     [Theory]
     [InlineData(0x04, 0x05)]   // the newer one is dead: this one (alive) carries the transition -- kept
     [InlineData(0x00, 0x04)]   // the weapon drawn in between

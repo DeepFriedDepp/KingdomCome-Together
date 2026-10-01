@@ -980,6 +980,15 @@ public sealed class CombatPipe : IAsyncDisposable
         return (x.Ok, x.Reason, before, after);
     }
 
+    /// <summary>WO-147 op 3: the guid of the soul the body <paramref name="eid"/> really holds; null = none.</summary>
+    public async Task<Guid?> Wo147SoulGuidOfEidAsync(uint eid, CancellationToken ct = default)
+    {
+        var a = new byte[4];
+        BinaryPrimitives.WriteUInt32LittleEndian(a, eid);
+        var r = await Wo147Async(3, a, ct);
+        return r is { Ok: true, Payload.Length: 16 } x ? new Guid(x.Payload) : null;
+    }
+
     public async Task<string?> Wo147StatusAsync(CancellationToken ct = default)
     {
         var r = await Wo147Async(2, [], ct);

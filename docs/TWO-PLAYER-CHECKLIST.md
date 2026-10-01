@@ -423,6 +423,68 @@ Lines worth a look — host: `MP-PEERS`, `replaces its older connection`,
 `WO131-FACTION`; both: `[appearance] ghost`, `WO144-DRESS`, `WO144-LIGHT`,
 `WO144-SHOW`, `WO144-CLOCK`, `WO144-FLOAT`, `MP-W144`, `WO137-TALK`.
 
+## WO-147 — the partner fights, the leash pulls, the host's quests are safe
+
+The fixes from the first long evening on 0.42.2. Four new switches, all on:
+`mp_hostile_engage` (partner), `mp_quest_safety` (host), `mp_leash_cap_s`
+(host, seconds; 0 = no limit), `mp_npc_catchup` (partner). `off` (or 0) goes
+back to 0.42.2's way.
+
+74. **Bandits fight the partner.** Find bandits (or let them find you). The
+    partner draws a weapon near one the host is *not* fighting. Marker:
+    `mark_fight`.
+    * Partner: you can lock on to the bandit, block and hit it; it fights you
+      back. Your hits hurt it on the host's screen too.
+    * Host: the bandit turns on the partner's figure. Nobody gets a crime for it.
+75. **Wolves or dogs** attack the partner while the host stands away. Marker:
+    `mark_animals`.
+    * Partner: you can lock on to them and kill them; they die on the host's
+      screen too.
+76. **A friendly person** stays friendly: the partner walks past villagers with
+    the weapon drawn. Marker: `mark_friendly`.
+    * Partner: no villager comes into combat with you on its own.
+77. **Blocks count.** The partner blocks a bandit's blows, then hits back with a
+    damaged or blunt weapon. Marker: `mark_block`.
+    * Host: the bandit tires on your screen too (its stamina), not only its
+      health.
+78. **The leash while the host is in a menu.** The partner walks off, past
+    650 m, while the host sits in the inventory or the map. Marker:
+    `mark_leash`.
+    * Partner: the countdown runs down and you are brought back beside the host,
+      standing on the ground.
+79. **The leash while the partner talks.** The partner walks past 650 m and
+    starts a conversation there. Marker: `mark_leash_talk`.
+    * Partner: after about a minute the conversation ends and you are brought
+      back.
+80. **Far away.** The partner rides or runs a long way (a kilometre or more)
+    before the countdown ends. Marker: `mark_leash_far`.
+    * Partner: you land beside the host, or on a spot the host just stood on,
+      and never fall hurt.
+81. **The map and fast travel** (partner): open the map a few times, try to fast
+    travel once. Marker: `mark_map`.
+    * Partner: "Only the host can fast travel in co-op." Nothing else happens;
+      nobody is brought anywhere.
+82. **A fist fight** (the partner's quest with one). Marker: `mark_fistfight`.
+    * Both: a knocked-out fighter is knocked out on both screens, never dead on
+      one of them; the quest does not fail for the host.
+83. **The host sleeps a quest's sleep** (one that cuts to a scene). Marker:
+    `mark_questsleep`.
+    * Partner: afterwards your figures move normally; nothing says "the host is
+      paused" for long.
+84. **A busy town** (both): ten minutes together in the biggest town. Marker:
+    `mark_town`.
+    * Partner: the villagers walk on smoothly; nobody freezes and then jumps;
+      the game keeps its speed. (Agent log: `MP-W147-STATS ... catchup=on
+      lag_max_ms=` stays low; kcd.log has few `NPC-SYNC release ... (stream
+      silent)` lines.)
+
+Lines worth a look — host: `MP-LEASH host:` (`held`, `the hold is over`,
+`pull #`), `MP-W147 watching`, `MP-ATTRIB`, `WO139-JUDGE`, `DESTRUCTIVE`,
+`[timeskip] the engine cancelled the skip`; partner: `MP-W147 engage on`,
+`is no enemy of this player`, `MP-DMG dir=out`, `MP-LEASH pulled`,
+`placed on a spot the host stood on`, `ApplyDamage non-lethal` (native log),
+`MP-W147-STATS`.
+
 ## Logs to send afterwards
 
 Both machines: Report a bug in the launcher. Since 0.42.2 it also collects the

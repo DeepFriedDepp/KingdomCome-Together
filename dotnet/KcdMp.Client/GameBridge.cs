@@ -3642,8 +3642,20 @@ public partial class GameBridge(ClientConfig config)
     }
 
     /// <summary>Soul name → this install's per-save guid, cached (receiver side of 0x31).</summary>
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, (uint Eid, Guid Guid)> _copySoulGuid = new(StringComparer.Ordinal);   // WO-147
+
     private async Task<Guid?> ResolveLocalSoulGuidAsync(string npcName, CancellationToken ct)
     {
+        // WO-147: a puppet copy's soul is the one its body holds. The by-name lookup answers with any soul of
+        // that name -- for a stand-in of a host-spawned NPC, the game's own unplaced soul of the same name: the
+        // host's death and damage landed there (the live run: that soul killed five times, the copy at 70 hp).
+        if (_npcEntityIds.TryGetValue(npcName, out uint copyEid) && copyEid != 0)
+        {
+            if (_copySoulGuid.TryGetValue(npcName, out var cg) && cg.Eid == copyEid) return cg.Guid;
+            Guid? byBody = null;
+            try { byBody = await _combat.Wo147SoulGuidOfEidAsync(copyEid, ct); } catch { }
+            if (byBody is Guid bg) { _copySoulGuid[npcName] = (copyEid, bg); return bg; }
+        }
         var now = DateTime.UtcNow;
         if (_soulGuidByName.TryGetValue(npcName, out var hit)
             && now - hit.At < (hit.Guid is null ? SoulLookupNegativeTtl : SoulLookupPositiveTtl))
@@ -3717,6 +3729,7 @@ public partial class GameBridge(ClientConfig config)
         try { applied = await _combat.ApplyDeathAsync(lg, ct); }
         catch (Exception ex) { Console.WriteLine($"[npcdeath] ApplyDeath threw for '{npcName}': {ex.Message}"); }
         if (applied) _npcDeathAppliedUtc[npcName] = DateTime.UtcNow;   // WO-110 Phase 6: dedupe only a death that landed
+        else _copySoulGuid.TryRemove(npcName, out _);   // WO-147: the next try reads the body's soul anew
         // WO-99 Phase 0: the lethal apply's own drop will surface as a
         // LocalHit(fatal) from the DLL (ApplyDeath books no credit); the
         // guard drops that echo for EchoWindow.
@@ -5665,6 +5678,7 @@ public partial class GameBridge(ClientConfig config)
                 && npcRawId is > 0 and <= uint.MaxValue)
             {
                 _npcEntityIds[niParts[0]] = (uint)npcRawId;
+                _copySoulGuid.TryRemove(niParts[0], out _);   // WO-147: a reported body is read anew (a load reuses entity ids)
                 Console.WriteLine($"[npcsync] puppet {niParts[0]} entity id 0x{npcRawId:X} cached for native swings");
                 _ = Wo131OnPuppetAsync(niParts[0], (uint)npcRawId);   // WO-131 1c: the copy cannot die here
                 RefreshNpcEquipped(niParts[0]);

@@ -2656,7 +2656,14 @@ local function mp_npc_smooth_render(p, now)
     local n = ring and #ring or 0
     if n == 0 then return nil end
     local delay = p.nativeOwned and TUNE.NPC_NATIVE_LUA_DELAY_S or KCD2MP_NpcSmoothDelayS()
-    local grace = p.nativeOwned and TUNE.NPC_NATIVE_ANIM_GRACE_S or TUNE.NPC_SMOOTH_ANIM_GRACE_S
+    -- The backlog fix (mp_npc_catchup): the agent's samples come as late as its queue runs behind (and,
+    -- behind, only the newest of each NPC): render that much further back, or every gap between them read
+    -- as a stop and then a dash (the live A/B: walkers flickering idle/sprint). 0 when nothing lags.
+    local ns = KCD2MP.npcSilence
+    local lagS = (ns and ns.lagSmooth and ns.lagSmooth > 0) and ns.lagSmooth or 0
+    delay = delay + lagS
+    -- ...and a sample that late is not yet a stop either (the live A/B: walkers dropping to idle between samples)
+    local grace = (p.nativeOwned and TUNE.NPC_NATIVE_ANIM_GRACE_S or TUNE.NPC_SMOOTH_ANIM_GRACE_S) + lagS
     local renderAt = now - delay
     local a, b
     if renderAt >= ring[n].at then
@@ -6038,6 +6045,8 @@ function KCD2MP_W131RemoveStandIn(name, why)
     w.parked[name] = nil
     local e = w131_body(name)
     if e then pcall(function() System.RemoveEntity(e.id) end) end
+    local p = KCD2MP.npcPuppets[name]
+    if p and p.idHex then p.idHex = "?" end   -- WO-147: its next body is a new one, whatever its id
     mp_log(string.format("WO131-STANDIN remove npc=%s why=%s", name, tostring(why)))
     return true
 end
@@ -6555,7 +6564,33 @@ function KCD2MP_W136Hold(on, ttlS, why)
     w.stats.replayed = w.stats.replayed + n
     mp_log(string.format("WO136-HOLD off why=%s held_s=%.1f replayed=%d -- NPCs are the host's stream again",
         tostring(why or "?"), now - (w.holdSince or now), n))
+    if KCD2MP_W147ReannouncePuppets then KCD2MP_W147ReannouncePuppets("load " .. tostring(why or "?")) end   -- WO-147
     return true
+end
+
+-- WO-147: after a load the puppet table (Lua state survives a load) still names every copy, but the bodies
+-- are new: their entity ids go to the agent again, which guards them (the field: the joiner's rejoin kept the
+-- fist fighter's puppet, no puppet start, so no new guard -- and the host's next blow killed the new body).
+-- A copy with no body yet (a stand-in is spawned again only when its stream comes back) is reported when its
+-- body comes, WHATEVER its id: the live run's stand-ins came back with their old entity ids, so the id
+-- compare saw nothing new -- the wolf stayed unguarded, the bandit's death went to the old soul for 135 s.
+--   WO147-REANNOUNCE <n> puppet(s) after <why>, <m> when their bodies come -- the agent guards the re-created bodies
+function KCD2MP_W147ReannouncePuppets(why)
+    local n, later = 0, 0
+    for name, p in pairs(KCD2MP.npcPuppets or {}) do
+        local e = nil
+        pcall(function() e = System.GetEntityByName(name) end)
+        local hexid = e and string.match(tostring(e.id), "(%x+)%s*$")
+        if hexid then
+            KCD2MP_EmitEvent("npcid", name .. " " .. hexid); n = n + 1
+            p.idHex = hexid
+        else
+            p.idHex = "?"; later = later + 1   -- never an id: the next body is reported
+        end
+    end
+    mp_log(string.format("WO147-REANNOUNCE %d puppet(s) after %s, %d when their bodies come -- the agent guards the re-created bodies",
+        n, tostring(why), later))
+    return n
 end
 
 -- KCD2MP_ApplyNpcState under the hold: the newest sample per name is kept.
@@ -8960,6 +8995,19 @@ function KCD2MP_ApplyNpcState(name, x, y, z, rot, hp, flags, src, seq, senderMs)
         -- above 2^24 in this float32 sandbox.
         local hexid = string.match(tostring(e.id), "(%x+)%s*$")
         if hexid then KCD2MP_EmitEvent("npcid", name .. " " .. hexid) end
+        p.idHex = hexid   -- WO-147
+    else
+        -- WO-147: a live puppet whose body was made anew (a load re-created it, a stand-in spawned again after
+        -- its removal) reports the new body: the agent guards it (the live run: the old id kept, the new body
+        -- unguarded; the field's fist fighter the same after a rejoin).
+        local hexid = string.match(tostring(e.id), "(%x+)%s*$")
+        if hexid and hexid ~= p.idHex then
+            if p.idHex ~= nil then
+                KCD2MP_EmitEvent("npcid", name .. " " .. hexid)
+                mp_log(string.format("WO147-NEWBODY npc=%s id %s -> %s -- reported again (the agent guards the new body)", name, tostring(p.idHex), hexid))
+            end
+            p.idHex = hexid
+        end
     end
     -- WO-95: did this packet carry MOTION, or is it the emitter's idle
     -- heartbeat? The emitter gate (KCD2MP_NpcSyncTick) sends a moving NPC
@@ -9214,6 +9262,17 @@ function KCD2MP_NpcPuppetTick(arg, gen)
     local ns = KCD2MP.npcSilence
     do
         local tnow = os.clock()
+        -- the render lag follows the agent's (fresh) word, at most 0.5 s per second, never past lagCapS
+        local tdt = ns.tickAt and math.max(0, math.min(tnow - ns.tickAt, 1.0)) or 0   -- never negative (a clock set back)
+        -- (behind at all: the agent's worst of its last second plus 0.25 s, so a sample's wait never shows as a
+        -- stop; up at once, down 0.5 s per second)
+        local want = 0
+        if KCD2MP.w147.npcCatchup and (tnow - ns.agentAt) < ns.ttlS and (ns.lagMs or 0) >= 100 then
+            want = math.min(ns.lagCapS, (ns.lagMs or 0) / 1000 + 0.25)
+        end
+        local cur = ns.lagSmooth or 0
+        if want > cur then cur = want else cur = math.max(want, cur - 0.5 * tdt) end
+        ns.lagSmooth = cur
         if KCD2MP.w147.npcCatchup and ns.tickAt and tnow - ns.tickAt > ns.stallS then
             local gap = tnow - ns.tickAt
             for _, pp in pairs(KCD2MP.npcPuppets) do
@@ -9877,7 +9936,7 @@ function KCD2MP_NpcPuppetTick(arg, gen)
             local orphan = KCD2MP.npcPuppetGen
             if orphan then KCD2MP._npcPuppetRetired[orphan] = true end
             mp_log("NPC-SYNC puppet tick stopped (no puppets)")
-            ns.tickAt = nil   -- the backlog fix: a stopped chain is no freeze
+            ns.tickAt = nil; ns.lagSmooth = 0   -- the backlog fix: a stopped chain is no freeze, and renders nothing
         end
     end
 end
@@ -17010,7 +17069,7 @@ end
 -- otherwise the 3 s rule (KCD2MP.npcSync.releaseS) decides, as before.
 --   NPC-SYNC agent silence word on|off (lag <ms>)        NPC-SYNC tick gap <s> (a freeze or a load) ...
 KCD2MP.npcSilence = { agentAt = -1e9, ttlS = 10, fallbackS = 30, stallS = 6, silent = {}, nSilent = 0, lagMs = 0,
-                      tickAt = nil, gaps = 0, wordOn = false, lagToldAt = -1e9 }
+                      tickAt = nil, gaps = 0, wordOn = false, lagToldAt = -1e9, lagSmooth = 0, lagCapS = 3.0 }
 
 function KCD2MP_NpcSilenceAgent(lagMs)
     local ns = KCD2MP.npcSilence
