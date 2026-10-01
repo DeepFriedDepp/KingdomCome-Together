@@ -170,3 +170,14 @@ all green; the local publish and the payload smoke (`RELAY-SMOKE ok ...
 protocol=v10 release=0.42.7`, no load failure in either log); `Verify-Install.ps1`
 against the payload: all 24 WO-148 marker checks present (only the two installer
 layers fail on a folder no Setup ran on).
+
+The installer build ran every gate again inside a fresh clone of `origin/main`
+(at `8981dd3`): all green there too (the native DLL built from scratch, the
+smoke relay at `release=0.42.7`), and `release\KingdomComeTogether-Setup-0.42.7.exe`
+(95.8 MB, SHA-256 `02714b92…f80b7ac`) sits beside 0.42.5's in the git-ignored
+release folder. No GitHub release. Its payload (1,026 files) was swept for the
+field bundles' player and Steam names, the Windows user names, the addresses,
+and any profile path or private address: none of ours in any file. The only
+profile path is inside the six NAudio DLLs (the NuGet package's own files,
+unchanged: the library author's build path); the only private-range address is
+the documented example in the master server's settings.
