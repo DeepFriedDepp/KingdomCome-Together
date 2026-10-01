@@ -547,10 +547,7 @@ this project, not the original author's code.
 **Whose game it is.** This project's copyright covers only its own code.
 Kingdom Come: Deliverance II, its assets and its content belong to Warhorse
 Studios and PLAION. Kingdom Come: Together is unofficial and free, and is not
-affiliated with or endorsed by Warhorse Studios or PLAION. The two game files
-the dice keys need (`Libs/Config/defaultProfile.xml` and `keybindSuperactions.xml`)
-are not shipped: Setup and the launcher build them on the player's machine, from
-the player's own copy of the game.
+affiliated with or endorsed by Warhorse Studios or PLAION.
 
 **Lineage** ([AUTHORS](AUTHORS)):
 
