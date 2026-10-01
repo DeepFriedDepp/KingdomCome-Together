@@ -4,13 +4,7 @@
 
 <h1 align="center">Kingdom Come: Together</h1>
 <p align="center"><em>An <strong>unofficial</strong>, free co-op mod for Kingdom Come: Deliverance II.</em><br>
-<strong>Official repository: <a href="https://github.com/DeepFriedDepp/KingdomCome-Together">github.com/DeepFriedDepp/KingdomCome-Together</a></strong><br>
-<strong>Unofficial. Not affiliated with or endorsed by Warhorse Studios or PLAION.</strong></p>
-
-> **Official repository:** https://github.com/DeepFriedDepp/KingdomCome-Together —
-> maintained by DeepFriedDepp. Other repositories may carry the same name (copies
-> and forks of earlier versions); only this one is the project, and only builds
-> made from it are its releases. See [AUTHORS](AUTHORS).
+<strong>Not affiliated with or endorsed by Warhorse Studios or PLAION.</strong></p>
 
 <p align="center">
   <a href="docs/releases/RELEASE-NOTES-0.42.7.md"><img alt="main" src="https://img.shields.io/badge/main-0.42.7-b8860b?style=flat-square"></a>
