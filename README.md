@@ -3,8 +3,14 @@
 </p>
 
 <h1 align="center">Kingdom Come: Together</h1>
-<p align="center"><em>An <strong>unofficial</strong> co-op mod for Kingdom Come: Deliverance II.</em><br>
-<strong>Unofficial. Not affiliated with or endorsed by Warhorse Studios.</strong></p>
+<p align="center"><em>An <strong>unofficial</strong>, free co-op mod for Kingdom Come: Deliverance II.</em><br>
+<strong>Official repository: <a href="https://github.com/DeepFriedDepp/KingdomCome-Together">github.com/DeepFriedDepp/KingdomCome-Together</a></strong><br>
+<strong>Unofficial. Not affiliated with or endorsed by Warhorse Studios or PLAION.</strong></p>
+
+> **Official repository:** https://github.com/DeepFriedDepp/KingdomCome-Together —
+> maintained by DeepFriedDepp. Other repositories may carry the same name (copies
+> and forks of earlier versions); only this one is the project, and only builds
+> made from it are its releases. See [AUTHORS](AUTHORS).
 
 <p align="center">
   <a href="docs/releases/RELEASE-NOTES-0.42.5.md"><img alt="main" src="https://img.shields.io/badge/main-0.42.5-b8860b?style=flat-square"></a>
@@ -21,9 +27,9 @@ other over proximity voice chat, can land shared damage on each other and on
 the world's NPCs, and can play a full relay-authoritative game of Farkle dice
 against each other from inside the game itself.
 
-> **Not affiliated with, endorsed by, or supported by Warhorse Studios.**
-> Kingdom Come: Deliverance is a trademark of Warhorse Studios; this is a
-> non-commercial fan project.
+> **Not affiliated with, endorsed by, or supported by Warhorse Studios or PLAION.**
+> Kingdom Come: Deliverance II, its assets and its content belong to Warhorse
+> Studios and PLAION; this is a free, non-commercial fan project.
 
 > **Two version numbers**. `main` (this
 > repo's source) is ahead of the last published installer; the feature list
@@ -534,14 +540,34 @@ Please redact your public IP from logs if you were playing over the internet.
 
 ## License and provenance
 
-Licensed under the [GNU General Public License v3.0](LICENSE).
+Copyright (C) 2026 the Kingdom Come: Together contributors. Licensed under
+the [GNU General Public License version 3](LICENSE), with two additional terms
+under its section 7 for this project's own material ([NOTICE](NOTICE)): keep the
+author credits and the "Official repository" notice, and mark a modified
+version as different from the original — it must not present itself as the
+official repository or its releases. These terms cover only material added by
+this project, not the original author's code.
 
-This is a fork of [`marczukmichal/kcd2-multiplayer`](https://github.com/marczukmichal/kcd2-multiplayer),
-**continued here with the original developer's permission**, including
-permission to upstream changes back if the two projects converge. All
-credit for the original concept and implementation goes to marczukmichal —
-this fork exists to keep building on that work, not to replace it. The
-upstream repository carries no license of its own; that's a fact about the
-upstream project, not a claim that it was itself GPL-licensed. This fork's
-own code, from the point of forking onward, is licensed under GPLv3 as
-stated above.
+**Whose game it is.** This project's copyright covers only its own code.
+Kingdom Come: Deliverance II, its assets and its content belong to Warhorse
+Studios and PLAION. Kingdom Come: Together is unofficial and free, and is not
+affiliated with or endorsed by Warhorse Studios or PLAION. The two game files
+the dice keys need (`Libs/Config/defaultProfile.xml` and `keybindSuperactions.xml`)
+are not shipped: Setup and the launcher build them on the player's machine, from
+the player's own copy of the game.
+
+**Lineage** ([AUTHORS](AUTHORS)):
+
+1. The original project, [`marczukmichal/kcd2-multiplayer`](https://github.com/marczukmichal/kcd2-multiplayer),
+   by marczukmichal — **continued here with the original developer's
+   permission**, including permission to upstream changes back if the two
+   projects converge. All credit for the original concept and implementation
+   goes to marczukmichal; this project exists to keep building on that work,
+   not to replace it. The original author and that project's contributors keep
+   the copyright on their code that remains here. The upstream repository
+   carries no license of its own; that's a fact about the upstream project,
+   not a claim that it was itself GPL-licensed.
+2. This project, [`DeepFriedDepp/KingdomCome-Together`](https://github.com/DeepFriedDepp/KingdomCome-Together),
+   maintained by DeepFriedDepp. Its own code, from the point of forking
+   onward, is licensed under GPLv3 as stated above; every contributor is in
+   the git history.

@@ -1,0 +1,64 @@
+@* Copyright (C) 2026 the Kingdom Come: Together contributors (AUTHORS). SPDX-License-Identifier: GPL-3.0-only
+   GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
+   content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them. *@
+@inherits ModalBase
+@using KCDMP_launcher.Components.Shared
+
+@* WO-148: who made this, where the official copy lives, and whose game it is. The same words as
+   AUTHORS and NOTICE at the repo root; GPLv3 section 7(b) asks that they stay in every copy. *@
+@if (IsVisible)
+{
+    <div class="modal-overlay @(isClosing ? "closing" : "")">
+        <div class="modal-box" @onclick:stopPropagation="true" style="max-width: 600px;">
+
+            <div class="modal-frame-top modal-frame-bg"></div>
+
+            <div class="modal-content" style="text-align: left;">
+                <div class="modal-title" style="text-align: center;">ABOUT KINGDOM COME: TOGETHER</div>
+
+                <p style="text-align: center;">Version @Globals.Version</p>
+
+                <p>
+                    <strong>Official repository:</strong>
+                    <a href="javascript:void(0)" @onclick="OpenRepo">@OfficialRepoUrl</a><br />
+                    Other repositories may carry the same name (copies and forks of earlier
+                    versions). Only this one is the project, and only its builds are ours.
+                </p>
+
+                <p>
+                    Made by the Kingdom Come: Together contributors and maintained by DeepFriedDepp.
+                    It continues the original project, marczukmichal/kcd2-multiplayer, with its
+                    developer's permission; the original author keeps the copyright on their code
+                    that remains here.
+                </p>
+
+                <p>
+                    Free software under the GNU General Public License version 3, with two additional
+                    terms for this project's own material (section 7): keep the author credits and this
+                    official-repository notice, and mark a modified version as different from the
+                    original. The full text is in LICENSE and NOTICE.
+                </p>
+
+                <p style="opacity: 0.85;">
+                    This project's copyright covers only its own code. Kingdom Come: Deliverance II, its
+                    assets and its content belong to Warhorse Studios and PLAION. Kingdom Come: Together is
+                    unofficial and free, and is not affiliated with or endorsed by Warhorse Studios or PLAION.
+                </p>
+
+                <div class="modal-actions">
+                    <button class="kcd-btn primary" @onclick="OpenRepo">OPEN THE OFFICIAL REPOSITORY</button>
+                    <button class="kcd-btn" @onclick="CloseModalAsync">CLOSE</button>
+                </div>
+            </div>
+
+            <div class="modal-frame-bottom modal-frame-bg"></div>
+        </div>
+    </div>
+}
+
+@code {
+    // The one right value, like ReportBugModal's links: not a setting.
+    public const string OfficialRepoUrl = "https://github.com/DeepFriedDepp/KingdomCome-Together";
+
+    private void OpenRepo() => UrlLauncher.Open(OfficialRepoUrl);
+}

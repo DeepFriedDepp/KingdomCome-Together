@@ -1,3 +1,6 @@
+// Copyright (C) 2026 the Kingdom Come: Together contributors (AUTHORS). SPDX-License-Identifier: GPL-3.0-only
+// GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
+// content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 // WO-44: for each given data address (a vtable slot holding a function ptr),
 // walk backwards to the nearest preceding primary symbol (the vtable label),
 // and report the byte offset of the slot within it. This answers "which class's

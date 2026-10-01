@@ -1,4 +1,7 @@
-﻿#include "concept_read.h"
+﻿// Copyright (C) 2026 the Kingdom Come: Together contributors (AUTHORS). SPDX-License-Identifier: GPL-3.0-only
+// GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
+// content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
+#include "concept_read.h"
 #include "log.h"
 #include "pipe_server.h"
 #include "port_gate.h"

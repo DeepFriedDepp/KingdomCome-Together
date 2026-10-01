@@ -1,3 +1,6 @@
+// Copyright (C) 2026 the Kingdom Come: Together contributors (AUTHORS). SPDX-License-Identifier: GPL-3.0-only
+// GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
+// content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 // WO-135 -- see wo135.h.
 #include "wo135.h"
 
@@ -7,6 +10,7 @@
 #include <cstring>
 
 #include "anchors.h"
+#include "hook_prologues.h"
 #include "inline_hook.h"
 #include "log.h"
 
@@ -16,11 +20,7 @@ namespace {
 constexpr size_t kSoulIdOff = 0x40;           // script_context.h: the soul's WUID, the id dialogue requests carry
 constexpr size_t kReqExBegin = 0x58, kReqExEnd = 0x60;
 constexpr int kMaxAvatars = 16;
-constexpr uint8_t kPrologue[20] = {
-    0x40, 0x55, 0x53, 0x56, 0x41, 0x55, 0x41, 0x57,   // push rbp/rbx/rsi/r13/r15
-    0x48, 0x8D, 0x6C, 0x24, 0xC9,                     // lea rbp, [rsp-0x37]
-    0x48, 0x81, 0xEC, 0xC0, 0x00, 0x00, 0x00,         // sub rsp, 0xC0
-};
+constexpr auto& kPrologue = hookpro::kDialogueGate;   // hook_prologues.h (WO-148): push x5; lea rbp,[rsp-37h]; sub rsp,0C0h
 
 std::atomic<uint64_t> g_ids[kMaxAvatars];     // 0 = free slot
 std::atomic<bool> g_armed{false};

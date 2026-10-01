@@ -1,4 +1,7 @@
-﻿; Kingdom Come: Together -- one-click installer (WO-134: the new name; before, "KCD2 Multiplayer").
+﻿; Copyright (C) 2026 the Kingdom Come: Together contributors (AUTHORS). SPDX-License-Identifier: GPL-3.0-only
+; GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
+; content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
+; Kingdom Come: Together -- one-click installer (WO-134: the new name; before, "KCD2 Multiplayer").
 ;
 ; Compile with tools\Build-Installer.ps1, not by hand: this script installs
 ; the *output* of tools\Publish-Release.ps1 (release\KCDMP\) and will refuse
@@ -117,7 +120,7 @@ Source: "..\release\KCDMP\*"; DestDir: "{app}"; Flags: ignoreversion overwritere
 ; wildcard over kdcmp\.
 ;
 ; kdcmp\Data\ also holds the pak's *sources* -- Libs\Tables\...,
-; Libs\Config\..., Scripts\Startup\kdcmp.lua -- which tools\Build-And-Install-
+; Scripts\Startup\kdcmp.lua -- which tools\Build-And-Install-
 ; Mod.ps1 packs into kdcmp.pak and deliberately does not copy. Deploying them
 ; loose as well breaks the game outright: a loose Data\Libs\Tables directory
 ; inside a mod takes over the engine's table root, and every base table then
@@ -360,7 +363,7 @@ end;
 
   A foreign kdcmp still gets the full RemoveModFolder after the explicit ask:
   keeping half of somebody else's mod would be worse than replacing it. }
-procedure PruneDirTo(const Dir: String; const KeepFile: String);
+procedure PruneDirTo(const Dir: String; const KeepFile, KeepFile2: String);
 var
   FindRec: TFindRec;
   Full: String;
@@ -373,7 +376,7 @@ begin
       Full := Dir + '\' + FindRec.Name;
       if (FindRec.Attributes and FILE_ATTRIBUTE_DIRECTORY) <> 0 then
         DelTree(Full, True, True, True)
-      else if CompareText(FindRec.Name, KeepFile) <> 0 then
+      else if (CompareText(FindRec.Name, KeepFile) <> 0) and (CompareText(FindRec.Name, KeepFile2) <> 0) then
       begin
         { Clear read-only first, for the same reason [Files] carries
           overwritereadonly: a flagged file must not stop the install. }
@@ -403,7 +406,9 @@ begin
       if (FindRec.Attributes and FILE_ATTRIBUTE_DIRECTORY) <> 0 then
       begin
         if CompareText(FindRec.Name, 'Data') = 0 then
-          PruneDirTo(Full, 'kdcmp.pak')
+          { WO-148: kdcmp_keys.pak is ours too (built here from the game's own files); kept so a
+            failed rebuild after the copy leaves the previous keys working. }
+          PruneDirTo(Full, 'kdcmp.pak', 'kdcmp_keys.pak')
         else
           DelTree(Full, True, True, True);
       end
@@ -1161,6 +1166,30 @@ begin
   end;
 end;
 
+// WO-148: the dice keys. Setup carries none of the game's files: the agent's
+// --keys-pak verb reads the player's own Libs/Config/defaultProfile.xml and
+// keybindSuperactions.xml out of the game's Data paks, adds our lines, and
+// writes Mods\kdcmp\Data\kdcmp_keys.pak (dotnet\KcdMp.Client\KeybindPak.cs).
+// Not part of the verdict: a failure costs the keys only (the console commands
+// still work), and the launcher runs it again before every game start.
+procedure BuildKeysPak();
+var
+  ResultCode: Integer;
+  Agent, Params: String;
+begin
+  Agent := ExpandConstant('{app}\KcdMpClient.exe');
+  if (DetectedGameRoot = '') or not FileExists(Agent) then
+  begin
+    Log('keys pak: skipped (no game root or no agent)');
+    Exit;
+  end;
+  Params := '--keys-pak --game-root "' + DetectedGameRoot + '" --mod-dir "' + GetKdcmpTargetDir('') + '"';
+  if Exec(Agent, Params, ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+    Log('keys pak: agent exit ' + IntToStr(ResultCode) + ' (0 = kdcmp_keys.pak in place)')
+  else
+    Log('keys pak: the agent could not be started (' + SysErrorMessage(ResultCode) + ')');
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssInstall then
@@ -1168,6 +1197,7 @@ begin
   else if CurStep = ssPostInstall then
   begin
     VerifyInstalledFiles();
+    if not VerifyFailed then BuildKeysPak();
     SeedSettings();
   end;
 end;

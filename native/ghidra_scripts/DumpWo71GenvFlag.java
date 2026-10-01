@@ -1,3 +1,6 @@
+// Copyright (C) 2026 the Kingdom Come: Together contributors (AUTHORS). SPDX-License-Identifier: GPL-3.0-only
+// GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
+// content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 // WO-71: find every read/write of a fixed byte offset off a global pointer
 // (gEnv), across a module. Usage:
 //   -postScript DumpWo71GenvFlag.java <outFile> <hexOffset> [<hexOffset> ...]

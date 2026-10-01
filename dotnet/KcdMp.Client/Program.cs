@@ -1,3 +1,7 @@
+// Copyright (C) 2026 the Kingdom Come: Together contributors (AUTHORS). SPDX-License-Identifier: GPL-3.0-only
+// GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
+// content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
+// Portions from the original project, marczukmichal/kcd2-multiplayer; its author keeps their copyright (AUTHORS).
 using KcdMp.Client;
 using Microsoft.Win32;
 using System.Text.RegularExpressions;
@@ -7,6 +11,12 @@ using System.Text.RegularExpressions;
 // rotates or overwrites the agent's own log.
 if (args.Contains("--save-tool"))
     return WhsSave.RunCli(args, Console.Out);
+
+// --keys-pak (WO-148): builds Mods\kdcmp\Data\kdcmp_keys.pak from the player's own game files plus
+// our dice-key lines (KeybindPak.cs). Run by Setup and by the launcher before a game start; like
+// --save-tool it runs before the config load, so it never writes a file next to the exe.
+if (args.Contains("--keys-pak"))
+    return KeybindPak.RunCli(args, Console.Out);
 
 // Settings live in kcdmp-client.json next to the executable; it is created with
 // defaults on first run. Everything can still be overridden on the command line:

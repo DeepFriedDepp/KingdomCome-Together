@@ -1,3 +1,6 @@
+// Copyright (C) 2026 the Kingdom Come: Together contributors (AUTHORS). SPDX-License-Identifier: GPL-3.0-only
+// GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
+// content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 // WO-125 live test tool (tools/wo118, never shipped): a synthetic HOST for the
 // continuity tests. The real game is the joiner; this plays a WO-125 host agent:
 //   * announces its session mode WITH its world's identity (JoinStatus state 8:
@@ -82,6 +85,16 @@
 //             | look <npc> <kind 0..3> [target]
 //                                 (WO-143) one ActivityExtra row to every joiner (what the host's DLL reads);
 //                                 activityfile replays recorded ActivityExtra (6F) lines too, in the same order
+//       carry grab <dead|ko|object> <body> [x y z]   (WO-148) this host picked its body up: a Carry Grab to every
+//                                 joiner (x y z = where it lay, default the host's position); a Held every 2 s with the
+//                                 host's position until the put
+//       carry put <put|drop|throw|lost> <body> [x y z]  (WO-148) set it down there (default the host's position + 1 m north)
+//       carry held on|off         (WO-148) stop or resume the Held heartbeat
+//       carry refuse <joinerId> <body> <why>   (WO-148) the host's world says no to that joiner's carry
+//       carry auto on|off         (WO-148) answer a joiner's Grab like a host (default on): refused when this host
+//                                 carries that body itself, else nothing (the host shows it)
+//       walk <vx> <vy> <secs> [vz] (WO-148) the host walks: its position moves at that velocity, streamed at 10 Hz
+//                                 (every CarryDown 0x71 received is logged: CARRY ...)
 //     [reseed] = a synthetic seed (hex) written into the save's body 0x01FB, re-signed: a second
 //     "playthrough" made from a copy. Files are COPIES of real host saves; never logged by path.
 //
@@ -192,6 +205,8 @@ static class Host125
         var wlock = new SemaphoreSlim(1, 1);
         bool npcQuiet = false, linkQuiet = false;   // WO-138
         string sleepAuto = "none"; uint sleepN = 0; byte myGhost = ack[0];   // WO-140
+        uint carryTok = 0; string? carryBody = null, carryWhat = null; bool carryHeld = true, carryAuto = true;   // WO-148
+        double walkUntil = 0; float wvx = 0, wvy = 0, wvz = 0;                                                   // WO-148: walk
         async Task W(byte[] pkt) { if (linkQuiet) return; await wlock.WaitAsync(); try { await st.WriteAsync(pkt, hard.Token); } finally { wlock.Release(); } }
         async Task Announce()
         {
@@ -229,6 +244,9 @@ static class Host125
                 {
                     await W(PositionCodec.BuildPosition(hp[0], hp[1], hp[2], 0, false, false, hostSt2, hostClaim: true));   // WO-127: the synthetic host claims the session like a real one (WO-135: + its state block)
                     if (n++ % 5 == 0) await Announce();
+                    if (carryBody is not null && carryHeld && n % 2 == 0)   // WO-148: still carrying (every 2 s)
+                        for (byte g = 1; g < 8; g++)
+                            if (g != myGhost) await W(new LootMsg(Protocol.CarryHeld, carryTok, CarryText.Held(myGhost, carryWhat ?? "dead", carryBody, hp[0], hp[1], hp[2])).BuildUp(Protocol.CarryUp, g));
                     await Task.Delay(1000, hard.Token);
                 }
             }
@@ -287,6 +305,50 @@ static class Host125
                                 await Announce();
                                 Say($"MODE {(shared ? "shared-world" : "separate")} announced");
                                 break;
+                            case "walk":   // WO-148: walk <vx> <vy> <secs> [vz] -- streamed at 10 Hz on its own task
+                            {
+                                wvx = float.Parse(p[1], CultureInfo.InvariantCulture); wvy = float.Parse(p[2], CultureInfo.InvariantCulture);
+                                wvz = p.Length > 4 ? float.Parse(p[4], CultureInfo.InvariantCulture) : 0;
+                                walkUntil = Clock.Elapsed.TotalSeconds + double.Parse(p[3], CultureInfo.InvariantCulture);
+                                Say(FormattableString.Invariant($"WALK v=({wvx:F2}, {wvy:F2}, {wvz:F2}) for {p[3]} s from ({hp[0]:F1}, {hp[1]:F1}, {hp[2]:F1})"));
+                                _ = Task.Run(async () =>
+                                {
+                                    while (Clock.Elapsed.TotalSeconds < walkUntil && !hard.IsCancellationRequested)
+                                    {
+                                        hp = [hp[0] + wvx * 0.1f, hp[1] + wvy * 0.1f, hp[2] + wvz * 0.1f];
+                                        float yawW = (float)Math.Atan2(-wvx, wvy);
+                                        await W(PositionCodec.BuildPosition(hp[0], hp[1], hp[2], yawW, false, false, hostSt2, hostClaim: true));
+                                        try { await Task.Delay(100, hard.Token); } catch { break; }
+                                    }
+                                    Say(FormattableString.Invariant($"WALK done at ({hp[0]:F1}, {hp[1]:F1}, {hp[2]:F1})"));
+                                });
+                                break;
+                            }
+                            case "carry":   // WO-148
+                            {
+                                if (p.Length > 2 && p[1] == "held") { carryHeld = p[2] == "on"; Say($"CARRY held heartbeat {(carryHeld ? "on" : "off")}"); break; }
+                                if (p.Length > 2 && p[1] == "auto") { carryAuto = p[2] == "on"; Say($"CARRY auto {(carryAuto ? "on" : "off")}"); break; }
+                                if (p.Length > 4 && p[1] == "refuse")
+                                {
+                                    byte rj = byte.Parse(p[2], CultureInfo.InvariantCulture);
+                                    string rt = CarryText.Refuse(rj, p[3], p[4]);
+                                    await W(new LootMsg(Protocol.CarryRefuse, 0, rt).BuildUp(Protocol.CarryUp, rj));
+                                    Say($"CARRY refuse sent to {rj}: {rt}");
+                                    break;
+                                }
+                                if (p.Length < 4 || (p[1] != "grab" && p[1] != "put")) { Say("CARRY usage: carry grab <what> <body> [x y z] | put <how> <body> [x y z] | held on|off | refuse <id> <body> <why> | auto on|off"); break; }
+                                bool grab = p[1] == "grab";
+                                float cx = p.Length > 6 ? float.Parse(p[4], CultureInfo.InvariantCulture) : hp[0];
+                                float cy = p.Length > 6 ? float.Parse(p[5], CultureInfo.InvariantCulture) : grab ? hp[1] : hp[1] + 1f;
+                                float cz = p.Length > 6 ? float.Parse(p[6], CultureInfo.InvariantCulture) : hp[2];
+                                string ctext;
+                                if (grab) { carryTok++; carryBody = p[3]; carryWhat = p[2]; ctext = CarryText.Grab(myGhost, p[2], p[3], cx, cy, cz); }
+                                else { ctext = CarryText.Put(myGhost, p[2], carryWhat ?? "dead", p[3], cx, cy, cz); carryBody = null; }
+                                byte ck = grab ? Protocol.CarryGrab : Protocol.CarryPut;
+                                for (byte g = 1; g < 8; g++) if (g != myGhost) await W(new LootMsg(ck, carryTok, ctext).BuildUp(Protocol.CarryUp, g));
+                                Say($"CARRY {Protocol.CarryKindName(ck)} tok={carryTok} sent: {ctext}");
+                                break;
+                            }
                             case "pos":   // WO-114
                                 hp = [float.Parse(p[1], CultureInfo.InvariantCulture), float.Parse(p[2], CultureInfo.InvariantCulture), float.Parse(p[3], CultureInfo.InvariantCulture)];
                                 await W(PositionCodec.BuildPosition(hp[0], hp[1], hp[2], 0, false, false, null, hostClaim: true));
@@ -926,6 +988,17 @@ static class Host125
                     {
                         await W(new LootMsg(Protocol.SleepAnswer, sv.Tok, Wo140Text.Answer(sleepAuto, sAsker)).BuildUp(Protocol.SleepVoteUp, src));
                         Say($"  -> answered {sleepAuto} (auto) to {sAsker}'s {sKind}");
+                    }
+                    continue;
+                }
+                if (type == Protocol.CarryDown && LootMsg.TryDecode(body, out var cym))   // WO-148: logged; `carry auto` refuses a grab of the host's own carry
+                {
+                    Say($"CARRY {Protocol.CarryKindName(cym.Kind)} tok={cym.Tok} from {src}: {cym.Text}");
+                    if (carryAuto && (cym.Kind == Protocol.CarryGrab || cym.Kind == Protocol.CarryHeld) && CarryText.TryParse(cym.Kind, cym.Text, out var cyt)
+                        && carryBody is not null && cyt.Name == carryBody)
+                    {
+                        await W(new LootMsg(Protocol.CarryRefuse, cym.Tok, CarryText.Refuse(cyt.Carrier, cyt.Name, "carried")).BuildUp(Protocol.CarryUp, src));
+                        Say($"  -> refused (auto): this host carries {cyt.Name}");
                     }
                     continue;
                 }

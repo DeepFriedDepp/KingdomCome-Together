@@ -1,3 +1,6 @@
+// Copyright (C) 2026 the Kingdom Come: Together contributors (AUTHORS). SPDX-License-Identifier: GPL-3.0-only
+// GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
+// content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 using System.Buffers.Binary;
 using System.Net;
 using System.Net.Sockets;
@@ -1018,6 +1021,61 @@ public class RelayRoundTripTests : IClassFixture<RelayFixture>
 
         // nobody gets his own message back
         Assert.True(await b.NoneOfAsync(Protocol.SleepVoteDown, Quiet));
+    }
+
+    // ---- WO-148: carrying, 0x70 / 0x71 (join channel) -----------------------
+
+    [Fact]
+    public async Task Carry_messages_cross_the_relay_joiner_to_host_and_host_to_one_joiner()
+    {
+        var (a, b) = await TwoPeersAsync();   // a = the host (damage authority), b = the joiner
+        await using var _a = a; await using var _b = b;
+
+        // the joiner picks a body up: it reaches the host (target 0xFF), with the joiner's id
+        var grab = new LootMsg(Protocol.CarryGrab, 0x00020001u, CarryText.Grab(b.Id, "dead", "bandit_camp_3", 1234.5f, -50.25f, 33.125f));
+        await b.SendRawAsync(grab.BuildUp(Protocol.CarryUp, Protocol.JoinTargetHost));
+        var gd = await a.ReadUntilAsync(Protocol.CarryDown, Wait);
+        Assert.Equal(b.Id, gd[0]);
+        Assert.True(LootMsg.TryDecode(gd.AsSpan(1 + Protocol.JoinHeaderLen), out var ggot));
+        Assert.Equal(grab, ggot);
+        Assert.True(CarryText.TryParse(ggot.Kind, ggot.Text, out var gt));
+        Assert.Equal(("bandit_camp_3", b.Id), (gt.Name, gt.Carrier));
+
+        // the host refuses that joiner by id, and its own carry reaches the joiner
+        var refuse = new LootMsg(Protocol.CarryRefuse, 0x00020001u, CarryText.Refuse(b.Id, "bandit_camp_3", "carried"));
+        await a.SendRawAsync(refuse.BuildUp(Protocol.CarryUp, b.Id));
+        var rd = await b.ReadUntilAsync(Protocol.CarryDown, Wait);
+        Assert.Equal(a.Id, rd[0]);
+        Assert.True(LootMsg.TryDecode(rd.AsSpan(1 + Protocol.JoinHeaderLen), out var rgot));
+        Assert.Equal(refuse, rgot);
+
+        // the longest set-down (a 64-character name, the widest numbers) crosses whole
+        var put = new LootMsg(Protocol.CarryPut, 0x00010007u,
+            CarryText.Put(a.Id, "throw", "object", new string('n', Protocol.MaxNpcNameLen), -99999.999f, -99999.999f, -99999.999f));
+        await a.SendRawAsync(put.BuildUp(Protocol.CarryUp, b.Id));
+        var pd = await b.ReadUntilAsync(Protocol.CarryDown, Wait);
+        Assert.True(LootMsg.TryDecode(pd.AsSpan(1 + Protocol.JoinHeaderLen), out var pgot));
+        Assert.Equal(put, pgot);
+
+        // the Held heartbeat crosses like the rest (the relay only leaves it out of its log)
+        var held = new LootMsg(Protocol.CarryHeld, 0x00020001u, CarryText.Held(b.Id, "dead", "bandit_camp_3", 1235f, -50f, 33f));
+        await b.SendRawAsync(held.BuildUp(Protocol.CarryUp, Protocol.JoinTargetHost));
+        var hd = await a.ReadUntilAsync(Protocol.CarryDown, Wait);
+        Assert.True(LootMsg.TryDecode(hd.AsSpan(1 + Protocol.JoinHeaderLen), out var hgot));
+        Assert.Equal(held, hgot);
+
+        // nobody gets his own message back
+        Assert.True(await b.NoneOfAsync(Protocol.CarryDown, Quiet));
+        Assert.True(await a.NoneOfAsync(Protocol.CarryDown, Quiet));
+
+        // a carry text one byte over the limit is dropped, and the framing survives it
+        var over = new byte[Protocol.LootFixedLen + Protocol.CarryTextMax + 1];
+        over[0] = Protocol.CarryGrab;
+        for (int i = Protocol.LootFixedLen; i < over.Length; i++) over[i] = (byte)'a';
+        await b.SendRawAsync(Protocol.BuildJoinUp(Protocol.CarryUp, Protocol.JoinTargetHost, 0, over));
+        Assert.True(await a.NoneOfAsync(Protocol.CarryDown, Quiet));
+        await b.SendRawAsync(grab.BuildUp(Protocol.CarryUp, Protocol.JoinTargetHost));
+        Assert.NotNull(await a.ReadUntilAsync(Protocol.CarryDown, Wait));
     }
 
     // ---- WO-141: activities 0x6A..0x6D (join channel) -----------------------

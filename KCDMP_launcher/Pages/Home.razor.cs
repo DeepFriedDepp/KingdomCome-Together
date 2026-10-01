@@ -1,4 +1,8 @@
-﻿using System;
+﻿// Copyright (C) 2026 the Kingdom Come: Together contributors (AUTHORS). SPDX-License-Identifier: GPL-3.0-only
+// GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
+// content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
+// Portions from the original project, marczukmichal/kcd2-multiplayer; its author keeps their copyright (AUTHORS).
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -48,6 +52,7 @@ namespace KCDMP_launcher.Pages
         private bool showSettings = false;
         private bool showHostInfo = false;
         private bool showReportBug = false;
+        private bool showAbout = false;   // WO-148
         private bool showVersionMismatch = false;
         private string versionMismatchMessage = "";
         private CancellationTokenSource? versionPollCts;
@@ -536,6 +541,7 @@ namespace KCDMP_launcher.Pages
 
                 // WO-144: the previous launch's logs are kept before the game starts over them
                 LogBundle.KeepHistory(GameRootOf(settings.GamePath), Path.GetDirectoryName(agentPath) ?? "");
+                await RefreshKeysPakAsync(agentPath, GameRootOf(settings.GamePath));
                 var gameProcess = Process.Start(gameStartInfo);
                 if (gameProcess == null)
                 {

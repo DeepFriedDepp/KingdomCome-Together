@@ -1,6 +1,10 @@
+// Copyright (C) 2026 the Kingdom Come: Together contributors (AUTHORS). SPDX-License-Identifier: GPL-3.0-only
+// GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
+// content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 #include "npc_trace.h"
 #include "anchors.h"
 #include "engine.h"
+#include "hook_prologues.h"
 #include "inline_hook.h"
 #include "log.h"
 #include "npc_drive.h"
@@ -22,7 +26,7 @@ namespace {
 // CSystem::Render's first instructions on this build (docs/WO-118-findings.md
 // s0): push rsi; push r14; sub rsp,0xD8; mov rsi,rcx -- 14 bytes, no
 // RIP-relative operand, no branch. Anything else refuses the hook.
-constexpr uint8_t kRenderPrologue[14] = {0x40, 0x56, 0x41, 0x56, 0x48, 0x81, 0xEC, 0xD8, 0x00, 0x00, 0x00, 0x48, 0x8B, 0xF1};
+constexpr auto& kRenderPrologue = hookpro::kTraceRender;   // hook_prologues.h (WO-148)
 
 struct Row {
     uint64_t frame;

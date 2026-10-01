@@ -1,3 +1,6 @@
+// Copyright (C) 2026 the Kingdom Come: Together contributors (AUTHORS). SPDX-License-Identifier: GPL-3.0-only
+// GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
+// content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 using System.Buffers.Binary;
 using System.Security.Cryptography;
 using KcdMp.Wire;
@@ -71,7 +74,7 @@ public class Wo123Tests : IDisposable
         foreach (var r in Protocol.JoinWire)
         {
             Assert.Equal(r.Up + 1, r.Down);
-            Assert.True(r.Up >= 0x48 && r.Down <= 0x6F, $"{r.Name} outside 0x48..0x6F");   // WO-114 added 0x58..0x5B, WO-134 0x5C..0x5F, WO-137 0x60..0x63, WO-139 0x64..0x67, WO-140 0x68/0x69, WO-141 0x6A..0x6D, WO-143 0x6E/0x6F
+            Assert.True(r.Up >= 0x48 && r.Down <= 0x71, $"{r.Name} outside 0x48..0x71");   // WO-114 added 0x58..0x5B, WO-134 0x5C..0x5F, WO-137 0x60..0x63, WO-139 0x64..0x67, WO-140 0x68/0x69, WO-141 0x6A..0x6D, WO-143 0x6E/0x6F, WO-148 0x70/0x71
             Assert.True(r.Min >= Protocol.JoinHeaderLen && r.Max >= r.Min && r.Max + 1 <= ushort.MaxValue, r.Name);
             Assert.True(Protocol.IsJoinDown(r.Down, r.Min + 1));
             Assert.True(Protocol.IsJoinDown(r.Down, r.Max + 1));

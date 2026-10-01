@@ -1,3 +1,6 @@
+// Copyright (C) 2026 the Kingdom Come: Together contributors (AUTHORS). SPDX-License-Identifier: GPL-3.0-only
+// GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
+// content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 using System.Collections.Concurrent;
 using System.Globalization;
 using System.Threading.Channels;
@@ -226,6 +229,7 @@ public partial class GameBridge
             string text = Wo137Rules.ChangeText(c);
             var peers = Wo134Peers();
             foreach (byte g in peers) await Wo137SendAsync(Protocol.QuestHostUp, g, Protocol.QuestHostChange, 0, text);
+            Wo148NoteQuestChange($"#{c.Seq} {c.Path} {c.Old}->{c.New}");   // WO-148 3.3: a quest reacting to a partner's carry is logged
             Console.WriteLine(FormattableString.Invariant(
                 $"MP-W137 host change #{c.Seq} {c.Path} {(c.Port.Length > 0 ? c.Port : "-")} {c.Old}->{c.New} ({c.Type}{(c.Cascade ? ", cascade" : ", root")}{(c.Mirror ? ", from a request" : "")}) -> {peers.Count} joiner(s)"));
             return;

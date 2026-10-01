@@ -1,3 +1,6 @@
+-- Copyright (C) 2026 the Kingdom Come: Together contributors (AUTHORS). SPDX-License-Identifier: GPL-3.0-only
+-- GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
+-- content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 -- WO-94 synthetic test for Shared Quests (the main-story readiness prompt):
 --   (a) the registry is bounded: exactly 32 M-coded main quests, every
 --       registered beat path validates, side-quest / DLC / made-up paths

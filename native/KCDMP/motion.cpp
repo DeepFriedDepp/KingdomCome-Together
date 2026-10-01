@@ -1,3 +1,6 @@
+// Copyright (C) 2026 the Kingdom Come: Together contributors (AUTHORS). SPDX-License-Identifier: GPL-3.0-only
+// GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
+// content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 // WO-121 -- movement and combat on native-written bodies. See motion.h.
 #include "motion.h"
 
@@ -19,6 +22,7 @@
 #include "buffs.h"
 #include "engine.h"
 #include "gait_logic.h"
+#include "hook_prologues.h"
 #include "inline_hook.h"
 #include "log.h"
 #include "hits.h"
@@ -76,7 +80,7 @@ constexpr size_t kGiSpeedHolder       = 0x138;   // GetGameIface()+0x138 -> vtbl
 constexpr size_t kHolderGetSpeedMgr   = 0x100;
 constexpr size_t kSpeedMgrCount       = 0x08;    // count(soul, kind): how many logical speeds this body has
 constexpr size_t kSpeedMgrMap         = 0x78;    // id = (int)(pseudo + 0.5) - 1 (checked by bytes at install)
-const uint8_t kTagsPrologue[18] = {0x48, 0x89, 0x54, 0x24, 0x10, 0x53, 0x57, 0x41, 0x55, 0x41, 0x57, 0x48, 0x81, 0xEC, 0xA8, 0x00, 0x00, 0x00};
+constexpr auto& kTagsPrologue = hookpro::kMotionTags;   // hook_prologues.h (WO-148)
 
 // Combat-model properties, each names itself at +0x30 (WO-119 s7); value at +8.
 struct Prop { size_t off; const char* name; };

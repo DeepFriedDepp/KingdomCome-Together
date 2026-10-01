@@ -1,3 +1,6 @@
+// Copyright (C) 2026 the Kingdom Come: Together contributors (AUTHORS). SPDX-License-Identifier: GPL-3.0-only
+// GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
+// content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 // WO-143: engine-free checks of activities part 2 (native/KCDMP/wo143_rules.h):
 // hand classes and "in step", the gait plan (only pairs this DLL set are
 // cleared), the quieter log of a refused activity, the one-shot throttle, the

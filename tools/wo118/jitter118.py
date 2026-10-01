@@ -1,3 +1,6 @@
+# Copyright (C) 2026 the Kingdom Come: Together contributors (AUTHORS). SPDX-License-Identifier: GPL-3.0-only
+# GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
+# content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 """WO-118 trace analysis (kcdmp-trace-<npc>-<hhmmss>.csv from mp_npc_trace).
 
 usage: python jitter118.py <csv> [line x0 y0 ux uy len] [hold x y]

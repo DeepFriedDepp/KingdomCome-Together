@@ -1,3 +1,6 @@
+// Copyright (C) 2026 the Kingdom Come: Together contributors (AUTHORS). SPDX-License-Identifier: GPL-3.0-only
+// GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
+// content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 #pragma once
 // WO-118: an entry hook that calls back and then runs the original function,
 // for debug tooling only (mp_npc_trace's render-side sample).
@@ -15,6 +18,12 @@
 //
 // Nothing is ever unpatched: the callback is expected to be cheap and to
 // check its own on/off state.
+//
+// WO-148: before patching, the live prologue is decoded (x64_len.h) and the hook
+// is refused -- fail closed, the reason in *why -- unless `len` ends exactly on an
+// instruction boundary with no relative branch, call, return or RIP-relative
+// operand inside. The expected bytes of every shipped hook live in
+// hook_prologues.h, where native/tests checks them the same way.
 
 #include <cstddef>
 #include <cstdint>

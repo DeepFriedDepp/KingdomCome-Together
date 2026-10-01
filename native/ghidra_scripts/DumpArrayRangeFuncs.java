@@ -1,3 +1,6 @@
+// Copyright (C) 2026 the Kingdom Come: Together contributors (AUTHORS). SPDX-License-Identifier: GPL-3.0-only
+// GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
+// content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 // WO-6 R2: decompile rttr::type::get_methods / get_properties (and a few
 // neighbors) to recover array_range<T>'s real layout from how these
 // functions fill in their hidden sret return buffer. Read-only analysis of

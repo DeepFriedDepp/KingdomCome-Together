@@ -1,7 +1,10 @@
+# Copyright (C) 2026 the Kingdom Come: Together contributors (AUTHORS). SPDX-License-Identifier: GPL-3.0-only
+# GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
+# content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 <#
 .SYNOPSIS
     WO-96: generate the main-quest OBJECTIVE registry -- for each of the 32
-    main quests (M01-M51), every journal objective with its English title,
+    main quests (M01-M51), every journal objective with its localisation key,
     its marker key and the path(s) of its display node inside the engine's
     ConceptState save tree -- as an embedded JSON resource for the agent
     (dotnet/KcdMp.Client/mainquest-objectives.json) and a review CSV
@@ -21,7 +24,15 @@
 
     Discovery reuses WO-94's method exactly (Build-MainQuestRegistry.ps1):
     the 32 <Quest ProductionCode="M.."> roots under Quests/Final, their
-    <Definition File> subtree, English titles from Localization\English_xml.pak.
+    <Definition File> subtree.
+
+    WO-148 (the content audit): the journal's English and Czech TEXTS are the
+    game's, so neither file carries them any more -- only their localisation
+    keys (the objective's StringName, the quest's qname_ key). The agent reads
+    the English titles at run time from the player's own
+    Localization\English_xml.pak (QuestObjectiveRegistry.LocalizeFrom); with
+    no game there a label is the internal name, as before. -LocalizationPak is
+    only used to count how many keys resolve (nothing of it is written).
 
     The display-node path is the chain of module INSTANCE names (each node's
     Name attribute, which already carries the _1 suffix a duplicated instance
@@ -266,15 +277,16 @@ foreach ($q in $roots) {
     $totalObj += $objectives.Count; $totalWithNode += $withNode; $totalNodes += $nodes; $totalTitled += $titled
     Write-Host ("    {0,-4} {1,-26} {2,-11} objectives {3,3}  with display node {4,3}  nodes {5,3}  titled {6,3}" -f $q.Code, $q.Name, $q.Level, $objectives.Count, $withNode, $nodes, $titled)
 
+    # WO-148: keys only -- the texts are the game's (resolved at run time from the player's own pak)
     [void]$questsOut.Add([ordered]@{
-        code = $q.Code; name = $q.Name; key = $q.Key; level = $q.Level; title = $q.Title
-        objectives = @($objectives | ForEach-Object { [ordered]@{ n = $_.n; k = $_.k; t = $_.t; optional = $_.optional; paths = @($_.paths) } })
+        code = $q.Code; name = $q.Name; key = $q.Key; level = $q.Level; qk = $q.QKey
+        objectives = @($objectives | ForEach-Object { [ordered]@{ n = $_.n; k = $_.k; optional = $_.optional; paths = @($_.paths) } })
     })
     $i = 0
     foreach ($o in $objectives) {
         [void]$rows.Add([pscustomobject]@{
             code = $q.Code; quest = $q.Name; markerKey = $q.Key; index = $i; objective = $o.n; type = $o.type; optional = $o.optional
-            stringName = $o.k; english = $o.t; czech = $o.cz; displayNodes = $o.paths.Count; paths = ($o.paths -join ';')
+            stringName = $o.k; displayNodes = $o.paths.Count; paths = ($o.paths -join ';')   # WO-148: no game text
         })
         $i++
     }

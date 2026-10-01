@@ -1,3 +1,6 @@
+// Copyright (C) 2026 the Kingdom Come: Together contributors (AUTHORS). SPDX-License-Identifier: GPL-3.0-only
+// GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
+// content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 // WO-139 -- see wo139.h.
 #include "wo139.h"
 
@@ -12,6 +15,7 @@
 #include "hits.h"
 #include "main_thread.h"
 #include "script_context.h"
+#include "hook_prologues.h"
 #include "inline_hook.h"
 #include "log.h"
 #include "npc_drive.h"
@@ -27,9 +31,7 @@ constexpr uint8_t kImplPrologue[17] = {
 };
 // The listener (this, uint8 level): mov [rsp+8],rbx; push rdi; sub rsp,20h; mov rdi,rcx; movzx ebx,dl
 // (16 bytes, instruction-aligned, no RIP-relative operand: the next instruction is the first lea [rip+]).
-constexpr uint8_t kListenerPrologue[16] = {
-    0x48, 0x89, 0x5C, 0x24, 0x08, 0x57, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0xF9, 0x0F, 0xB6, 0xDA,
-};
+constexpr auto& kListenerPrologue = hookpro::kTrespassListener;   // hook_prologues.h (WO-148)
 constexpr uint32_t kPlayerEid = 0x7777;
 
 std::atomic<bool> g_armed{false};

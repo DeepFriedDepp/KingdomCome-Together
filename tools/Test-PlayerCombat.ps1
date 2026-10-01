@@ -1,4 +1,7 @@
-﻿<#
+﻿# Copyright (C) 2026 the Kingdom Come: Together contributors (AUTHORS). SPDX-License-Identifier: GPL-3.0-only
+# GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
+# content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
+<#
 .SYNOPSIS
     WO-28 relay-level tests for the shared player combat layer (0x1F-0x25):
     continuous player health, NPC->player hits, player death, and the

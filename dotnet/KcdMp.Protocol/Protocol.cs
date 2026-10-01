@@ -1,3 +1,6 @@
+// Copyright (C) 2026 the Kingdom Come: Together contributors (AUTHORS). SPDX-License-Identifier: GPL-3.0-only
+// GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
+// content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 namespace KcdMp.Wire;
 
 /// <summary>
@@ -738,10 +741,11 @@ namespace KcdMp.Wire;
 /// Protocol.Version stays 7 -- but the release-version check (0x3D) already
 /// refuses a mixed pair, and both machines must run the same build.
 ///
-/// Free type bytes for new features: 0x70 and up (0x44/0x45 are WO-121 PlayerHit, ProtocolV8.cs;
+/// Free type bytes for new features: 0x72 and up (0x44/0x45 are WO-121 PlayerHit, ProtocolV8.cs;
 /// 0x46/0x47 WO-122 WorldSaved, ProtocolWo122.cs; 0x48-0x57 the WO-123 join, ProtocolWo123.cs;
 /// 0x58-0x5B WO-114 leash; 0x5C-0x5F WO-134 loot; 0x60-0x63 WO-137 quests; 0x64-0x67 WO-139 crime;
-/// 0x68/0x69 WO-140 sleep vote; 0x6A-0x6D WO-141 activities; 0x6E/0x6F WO-143 activities part 2).
+/// 0x68/0x69 WO-140 sleep vote; 0x6A-0x6D WO-141 activities; 0x6E/0x6F WO-143 activities part 2;
+/// 0x70/0x71 WO-148 carrying, ProtocolWo148.cs).
 ///
 /// **Protocol.Version is deliberately NOT bumped for this layer.** Everything
 /// above is additive: a client that predates it never sends 0x1F/0x21/0x23 and

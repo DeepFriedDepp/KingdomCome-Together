@@ -1,3 +1,6 @@
+-- Copyright (C) 2026 the Kingdom Come: Together contributors (AUTHORS). SPDX-License-Identifier: GPL-3.0-only
+-- GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
+-- content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 -- WO-84 synthetic test for the three fixes this work order shipped:
 --   * the ghost animation throttle (mp_anim_loop / KCD2MP_UpdateAnimation)
 --   * puppet-chain generation retirement on a self-stop (KCD2MP_NpcPuppetTick)

@@ -1,3 +1,6 @@
+// Copyright (C) 2026 the Kingdom Come: Together contributors (AUTHORS). SPDX-License-Identifier: GPL-3.0-only
+// GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
+// content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 // WO-42: raw disassembly dump for named addresses.
 // A decompilation is an interpretation; the register-level truth (which arg
 // rides in xmm2 vs r8, which vtable slot is called) only shows up in the

@@ -1,4 +1,8 @@
-﻿using System.Buffers.Binary;
+﻿// Copyright (C) 2026 the Kingdom Come: Together contributors (AUTHORS). SPDX-License-Identifier: GPL-3.0-only
+// GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
+// content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
+// Portions from the original project, marczukmichal/kcd2-multiplayer; its author keeps their copyright (AUTHORS).
+using System.Buffers.Binary;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
@@ -1766,6 +1770,7 @@ public partial class GameBridge(ClientConfig config)
         Wo141OnConnect(cts.Token);           // WO-141: activities (NPCs and players, the game's own state)
         Wo143OnConnect(cts.Token);           // WO-143: hands, gaits, one-shots, looks, the players' minigames on the avatars
         Wo147OnConnect(cts.Token);           // WO-147: the joiner fights hostile copies, destructive quest steps checked, the leash's stats
+        Wo148OnConnect(cts.Token);           // WO-148: carrying on the other screen (the carrier owns the body; the host's world decides)
         _ = _combat.NpcConfigAsync(_nativeWriteOn, _nativeSenderClock, cts.Token);
         _ = RespawnHeartbeatAsync(stream, announceGraves: true, cts.Token);
         // WO-99 Phase 0: learn who the local player is before the first hit.
@@ -2283,6 +2288,7 @@ public partial class GameBridge(ClientConfig config)
             await Wo140OnDisconnectAsync();   // WO-140: the sleep gate off, no vote kept
             await Wo141OnDisconnectAsync();   // WO-141: no capture, no apply, the writer takes every body back
             await Wo143OnDisconnectAsync();   // WO-143: nothing captured or applied, the temporary tools taken back
+            await Wo148OnDisconnectAsync();   // WO-148: every partner's carry set down here
             _myOpenDrops.Clear();
             // WO-113: no relay, no session -- the DLL's guard stands down
             // (vanilla death), and every peer's mirror gravestone goes.
@@ -4493,6 +4499,7 @@ public partial class GameBridge(ClientConfig config)
             string npcName = Encoding.UTF8.GetString(payload, 2, nameLen);
             if (!NpcNamePattern.IsMatch(npcName)) return;
             if (!_w136Ridden.IsEmpty && Wo136Rules.DropRidden(_w136Ridden, npcName, DateTime.UtcNow)) return;   // WO-136: the rider's horse
+            if (!_w148Held.IsEmpty && Wo148DropCarried(npcName)) return;   // WO-148: a carried body is the carrier's
             int o = 2 + nameLen;
             _nativeFeed.Enqueue(new NativeNpcSample(payload[0], npcName,
                 ReadFloat(payload, o), ReadFloat(payload, o + 4), ReadFloat(payload, o + 8), ReadFloat(payload, o + 12),
@@ -4735,6 +4742,7 @@ public partial class GameBridge(ClientConfig config)
                     byte ghostId = payload[0];
                     Console.WriteLine($"[disconnect] ghost {ghostId} removed");
                     Wo144OnPeerDisconnected(ghostId);   // WO-144: out of every partner loop at once
+                    Wo148OnPeerGone(ghostId);           // WO-148: its avatar sets down what it carried
                     _peerLastSeenUtc.TryRemove(ghostId, out _);
                     _peerCutscene.TryRemove(ghostId, out _);   // WO-98 Phase 5
                     RefreshDiscordPeerCount();
@@ -5036,7 +5044,7 @@ public partial class GameBridge(ClientConfig config)
                     {
                         string npcName = Encoding.UTF8.GetString(payload, 2, nameLen);
                         if (!NpcNamePattern.IsMatch(npcName)) CountDrop(type, "name-rejected");   // WO-110 R9
-                        if (NpcNamePattern.IsMatch(npcName) && !Wo136DropRidden(npcName) && !Wo139DropStopped(npcName))   // WO-136 Phase 3: the rider owns the horse; WO-139: a guard stopping this player
+                        if (NpcNamePattern.IsMatch(npcName) && !Wo136DropRidden(npcName) && !Wo139DropStopped(npcName) && !Wo148DropCarried(npcName))   // WO-136 Phase 3: the rider owns the horse; WO-139: a guard stopping this player; WO-148: the carrier owns the body
                         {
                             Wo127NoteRecv(npcName);   // WO-127: age of the host's last update, for the leash recorder
                             int o = 2 + nameLen;
@@ -5782,6 +5790,15 @@ public partial class GameBridge(ClientConfig config)
                 return;
             case "w147_cfg":         // WO-147: mp_hostile_engage, mp_quest_safety, mp_leash_cap_s
                 Wo147OnCfg(arg);
+                return;
+            case "w148_cfg":         // WO-148: mp_carry_sync
+                Wo148OnCfg(arg);
+                return;
+            case "w148_carry":       // WO-148: this player picked something up / set it down
+                _ = Wo148OnLocalAsync(arg);
+                return;
+            case "w148_result":      // WO-148: a partner's carry as shown here
+                Wo148OnResult(arg);
                 return;
             case "w147_testhit":     // WO-147: mp_test_hit, the console stand-in for this player's blow
                 Wo147OnTestHit(arg);

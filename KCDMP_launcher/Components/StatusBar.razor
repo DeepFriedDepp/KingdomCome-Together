@@ -1,4 +1,8 @@
-﻿@using KCDMP_launcher.Components.Shared
+﻿@* Copyright (C) 2026 the Kingdom Come: Together contributors (AUTHORS). SPDX-License-Identifier: GPL-3.0-only
+   GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
+   content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
+   Portions from the original project, marczukmichal/kcd2-multiplayer; its author keeps their copyright (AUTHORS). *@
+@using KCDMP_launcher.Components.Shared
 <div class="status-bar">
     <div class="status-left">
         <span class="status-btn" @onclick="OnToggleFilters" style="color: var(--kcd-gold); font-weight: bold;">
@@ -15,6 +19,10 @@
         <span class="sep">|</span>
         <span class="status-btn" @onclick="OnReportBug">
             REPORT BUG
+        </span>
+        <span class="sep">|</span>
+        <span class="status-btn" @onclick="OnAbout">
+            ABOUT
         </span>
     </div>
 
@@ -48,4 +56,5 @@
     [Parameter] public EventCallback OnHostGame { get; set; }
     [Parameter] public EventCallback OnJoinSteam { get; set; }   // WO-127
     [Parameter] public EventCallback OnReportBug { get; set; }
+    [Parameter] public EventCallback OnAbout { get; set; }   // WO-148
 }

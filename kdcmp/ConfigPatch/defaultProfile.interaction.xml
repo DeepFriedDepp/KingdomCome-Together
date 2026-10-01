@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="us-ascii"?>
+<!-- Copyright (C) 2026 the Kingdom Come: Together contributors (AUTHORS). SPDX-License-Identifier: GPL-3.0-only
+     GPLv3 section 7 additional terms: NOTICE. This project's own material only; Kingdom Come: Deliverance II and
+     its content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
+
+     WO-148: only OUR additions to the game's Libs/Config/defaultProfile.xml. The game's own file is never shipped.
+     On the player's machine the agent's keys-pak verb (KcdMpClient.exe, run by Setup and by the
+     launcher before every game start) reads the player's own copy out of the game's Data paks,
+     inserts the lines between the kdcmp_patch tags just before the end of its actionmap named "interaction", and writes the result into
+     Mods\kdcmp\Data\kdcmp_keys.pak (dotnet/KcdMp.Client/KeybindPak.cs). -->
+<kdcmp_patch target="Libs/Config/defaultProfile.xml" insert="end-of-actionmap:interaction">
+		<!-- KCD2MP (WO-6): dice board input. keybindSuperactions.xml (this mod's
+		     own pak) supplies the actual key for each of these via
+		     keyboard="_keybinds_ref_": an action declared there with no
+		     matching entry HERE is never registered with the live action-map
+		     system at all, which is why the first attempt produced total
+		     silence (not even a rejected/ignored press) until this was added.
+		     bank/yield need onRelease too: KCD2MP_DiceHoldBegin/End (Lua) key
+		     off the press/release pair to run hold-to-confirm. -->
+		<action name="kcd2mp_dice_mark_1" onPress="1" keyboard="_keybinds_ref_" />
+		<action name="kcd2mp_dice_mark_2" onPress="1" keyboard="_keybinds_ref_" />
+		<action name="kcd2mp_dice_mark_3" onPress="1" keyboard="_keybinds_ref_" />
+		<action name="kcd2mp_dice_mark_4" onPress="1" keyboard="_keybinds_ref_" />
+		<action name="kcd2mp_dice_mark_5" onPress="1" keyboard="_keybinds_ref_" />
+		<action name="kcd2mp_dice_mark_6" onPress="1" keyboard="_keybinds_ref_" />
+		<action name="kcd2mp_dice_cast" onPress="1" keyboard="_keybinds_ref_" />
+		<action name="kcd2mp_dice_bank" onPress="1" onRelease="1" keyboard="_keybinds_ref_" />
+		<action name="kcd2mp_dice_yield" onPress="1" onRelease="1" keyboard="_keybinds_ref_" />
+		<action name="kcd2mp_dice_cancel" onPress="1" keyboard="_keybinds_ref_" />
+</kdcmp_patch>

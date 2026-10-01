@@ -486,6 +486,47 @@ Lines worth a look — host: `MP-LEASH host:` (`held`, `the hold is over`,
 `MP-W147-STATS`; after a load in the session: `WO147-REANNOUNCE`,
 `WO147-NEWBODY` (kcd.log) and `MP-WO131 copy guard on` (agent log).
 
+## WO-148 — carrying on the other screen
+
+When one of you picks up a body or a sack, the other now sees it. Two new
+switches, both on: `mp_carry_sync` (bodies, and the whole carry layer) and
+`mp_carry_objects` (sacks). `off` goes back to 0.42.5's way: a carry shows only on
+the carrier's own screen. The dice keys are now made on each machine from its own
+game files, by Setup and by the launcher before every start; nothing to do.
+
+85. **The partner carries a body.** After a fight, the partner picks up a dead
+    body, carries it twenty steps or so and puts it down. Then the same with
+    someone knocked out. Marker: `mark_carry`.
+    * Host: the partner's figure lifts the body onto its shoulder, walks with it
+      and puts it down. The body lies where the partner put it, on both screens.
+    * A knocked-out person who wakes up on the way is left alone; nobody alive is
+      ever moved.
+86. **The host carries a body.** The same the other way round. Marker:
+    `mark_carry_host`.
+    * Partner: the host's figure carries it; it lies where the host put it down.
+87. **Both reach for the same body.** Stand by one body and pick it up at the
+    same moment. Marker: `mark_carry_both`.
+    * Both: only one of you ends up carrying it. On the other's screen the body
+      is put down ("Your partner has that body in the host's world.") and the
+      winner's figure picks it up.
+88. **A sack.** If one of you has a task with sacks to carry, carry a few and drop
+    one on the way. Marker: `mark_sack`.
+    * The other: the figure holds a sack while it carries one; a dropped sack
+      lies where it fell and goes away when it is picked up again. It is only
+      shown: the other's task does not count it.
+89. **A burial** (a quest where a body is carried to a grave). The partner carries
+    the body while the host watches. Marker: `mark_bury`.
+    * Host: write down what the quest does (nothing, moves on, or fails). The
+      partner's carrying is only shown; it does not count for the host's quest
+      yet. The host's own carrying counts as always.
+90. **The dice keys.** Play dice once each. Marker: `mark_dice_keys`.
+    * Both: picking and throwing the dice work with the keys, as before.
+
+Lines worth a look — host: `MP-CARRY player`, `refused:`, `MP-CARRY
+quest-reaction`; both: `MP-CARRY land`, `MP-CARRY avatar`, `MP-CARRY loser`,
+`WO148-BUILD` (kcd.log), `MP-WO148-STATS` (agent log), `keys pak:` (launcher
+log).
+
 ## Logs to send afterwards
 
 Both machines: Report a bug in the launcher. Since 0.42.2 it also collects the

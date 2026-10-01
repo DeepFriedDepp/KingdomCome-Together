@@ -1,3 +1,6 @@
+// Copyright (C) 2026 the Kingdom Come: Together contributors (AUTHORS). SPDX-License-Identifier: GPL-3.0-only
+// GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
+// content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 // WO-138: no pausing, and the host's NPC stream in the DLL. See wo138.h.
 #include "wo138.h"
 #include "wo138_rules.h"
@@ -20,6 +23,7 @@
 #include "anchors.h"
 #include "engine.h"
 #include "hits.h"
+#include "hook_prologues.h"
 #include "inline_hook.h"
 #include "log.h"
 #include "main_thread.h"
@@ -62,8 +66,7 @@ constexpr uint8_t kWorld     = 0xA1;
 // ---------------------------------------------------------------------------
 constexpr const char* kPauseString = "CCryAction::PauseGame(), source:%d pause:%c, nFadeOutInMS:%d";
 // mov [rsp+8],rbx; mov [rsp+18h],rsi; mov [rsp+20h],rdi -- no RIP-relative operand.
-constexpr uint8_t kPrologue[15] = { 0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x18,
-                                    0x48, 0x89, 0x7C, 0x24, 0x20 };
+constexpr auto& kPrologue = hookpro::kPauseGame;   // hook_prologues.h (WO-148)
 constexpr size_t kCountersOff = 8;
 
 const char* source_name(uint16_t s) {

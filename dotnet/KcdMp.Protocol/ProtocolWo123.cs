@@ -1,3 +1,6 @@
+// Copyright (C) 2026 the Kingdom Come: Together contributors (AUTHORS). SPDX-License-Identifier: GPL-3.0-only
+// GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
+// content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 using System.Buffers.Binary;
 
 namespace KcdMp.Wire;
@@ -94,6 +97,8 @@ public static partial class Protocol
         (ActivityPeerUp, ActivityPeerDown, "activity-peer", JoinHeaderLen + ActivityBodyMin, JoinHeaderLen + ActivityBodyMax, JoinFrom.Joiner),
         // WO-143: activities part 2 (ProtocolWo143.cs) -- the host's NPCs' hands, gaits, one-shots and looks
         (ActivityExtraUp, ActivityExtraDown, "activity-extra", JoinHeaderLen + ExtraBodyMin, JoinHeaderLen + ExtraBodyMax, JoinFrom.Host),
+        // WO-148: carrying (ProtocolWo148.cs) -- the LootMsg shape; a joiner's goes to the host, the host's to one joiner
+        (CarryUp,       CarryDown,       "carry",        JoinHeaderLen + LootFixedLen + 1, JoinHeaderLen + LootFixedLen + CarryTextMax, JoinFrom.Either),
     };
 
     /// <summary>The JoinWire row for an up type, or null.</summary>

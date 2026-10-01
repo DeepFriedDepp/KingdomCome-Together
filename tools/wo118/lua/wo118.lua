@@ -1,3 +1,6 @@
+-- Copyright (C) 2026 the Kingdom Come: Together contributors (AUTHORS). SPDX-License-Identifier: GPL-3.0-only
+-- GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
+-- content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 -- WO-118 live-test helpers (tools/wo118). Load with: python live.py luaf lua/wo118.lua
 -- Every result is a [WO118...] line in kcd.log. Plans come out in SynthPeer's plan syntax.
 --   WO118_Plan(name, dist, speed)        line plan from the NPC's spot along a clear direction

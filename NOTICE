@@ -1,0 +1,44 @@
+Kingdom Come: Together
+======================
+
+Official repository: https://github.com/DeepFriedDepp/KingdomCome-Together
+
+Copyright (C) 2026 the Kingdom Come: Together contributors (see AUTHORS).
+Portions: the original project marczukmichal/kcd2-multiplayer, whose author
+and contributors keep the copyright on their code (see AUTHORS).
+
+This project's copyright covers only its own code. Kingdom Come: Deliverance
+II, its assets and its content belong to Warhorse Studios and PLAION.
+Kingdom Come: Together is unofficial and free, and is not affiliated with or
+endorsed by Warhorse Studios or PLAION.
+
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU General Public License as published by the Free Software
+Foundation, version 3 (the file LICENSE), with the additional terms below.
+This program is distributed in the hope that it will be useful, but WITHOUT
+ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+
+
+Additional terms under section 7 of the GNU General Public License version 3
+----------------------------------------------------------------------------
+
+These terms apply only to material added by this project -- the code, data,
+documents and images contributed to DeepFriedDepp/KingdomCome-Together by its
+contributors. They do not apply to the original author's code from
+marczukmichal/kcd2-multiplayer, and they add nothing to the terms of that code.
+
+(b) Attribution. Every copy and every modified version of this material must
+    preserve the author attributions in AUTHORS and in the source files'
+    headers, and the "Official repository" notice (in README.md, in NOTICE, in
+    the launcher's About box and in the release notes), as far as the
+    material that carries them is kept.
+
+(c) Origin. Nobody may misrepresent the origin of this material. A modified
+    version must be marked in reasonable ways as different from the original
+    version: its name or its About text and its release notes must say that it
+    is a modified version and not the official one, and it must not present
+    itself as the official repository, its maintainer or its releases.
+
+A source file whose header points to this file ("GPLv3 section 7 additional
+terms: NOTICE") is covered by these terms for this project's material in it.

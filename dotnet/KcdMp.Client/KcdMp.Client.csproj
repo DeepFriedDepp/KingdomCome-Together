@@ -50,6 +50,13 @@
     <EmbeddedResource Include="mainquest-objectives.json" LogicalName="KcdMp.Client.mainquest-objectives.json" />
   </ItemGroup>
 
+  <!-- WO-148: our dice-key lines only (the game's two Libs/Config files are built on the player's
+       machine from the player's own copies; KeybindPak.cs). -->
+  <ItemGroup>
+    <EmbeddedResource Include="..\..\kdcmp\ConfigPatch\defaultProfile.interaction.xml" LogicalName="KcdMp.Client.ConfigPatch.defaultProfile.interaction.xml" />
+    <EmbeddedResource Include="..\..\kdcmp\ConfigPatch\keybindSuperactions.append.xml" LogicalName="KcdMp.Client.ConfigPatch.keybindSuperactions.append.xml" />
+  </ItemGroup>
+
   <ItemGroup>
     <Using Include="KcdMp.Wire" />
   </ItemGroup>

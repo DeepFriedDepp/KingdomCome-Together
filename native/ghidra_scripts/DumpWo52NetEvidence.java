@@ -1,3 +1,6 @@
+// Copyright (C) 2026 the Kingdom Come: Together contributors (AUTHORS). SPDX-License-Identifier: GPL-3.0-only
+// GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
+// content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 // WO-52: verify CryNetwork.dll's multiplayer classes are linked code, not orphan strings.
 // 1) For each needle string, find defined-string instances and the functions that
 //    reference them (the project's proven __FUNCTION__ identification method).

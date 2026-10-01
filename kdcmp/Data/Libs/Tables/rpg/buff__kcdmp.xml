@@ -1,4 +1,7 @@
 <?xml version="1.0" encoding="us-ascii"?>
+<!-- Copyright (C) 2026 the Kingdom Come: Together contributors (AUTHORS). SPDX-License-Identifier: GPL-3.0-only
+     GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
+     content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them. -->
 <database xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" name="barbora" xsi:noNamespaceSchemaLocation="../database.xsd">
 	<buffs version="1">
 		<!-- WO-113: the KCD2-MP death guard. A copy of the shipped death_protection_cutscene

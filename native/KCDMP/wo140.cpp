@@ -1,3 +1,6 @@
+// Copyright (C) 2026 the Kingdom Come: Together contributors (AUTHORS). SPDX-License-Identifier: GPL-3.0-only
+// GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
+// content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 // WO-140 -- see wo140.h.
 #include "wo140.h"
 
@@ -8,6 +11,7 @@
 #include <cstring>
 
 #include "anchors.h"
+#include "hook_prologues.h"
 #include "inline_hook.h"
 #include "log.h"
 #include "main_thread.h"
@@ -19,9 +23,7 @@ namespace {
 
 // C_SkipTime::ShowDialog: mov rax,rsp; mov [rax+8],rbx; mov [rax+10h],rsi; mov [rax+18h],rdi; push rbp
 // (16 bytes, instruction-aligned, no RIP-relative operand; the next is lea rbp,[rax-18h]).
-constexpr uint8_t kShowPrologue[16] = {
-    0x48, 0x8B, 0xC4, 0x48, 0x89, 0x58, 0x08, 0x48, 0x89, 0x70, 0x10, 0x48, 0x89, 0x78, 0x18, 0x55,
-};
+constexpr auto& kShowPrologue = hookpro::kSkipTimeShow;   // hook_prologues.h (WO-148)
 // C_Calendar::SetWorldTime(this, int64 ms): mov [rsp+8],rbx; mov [rsp+10h],rsi; push rdi; sub rsp,40h; mov rbx,rcx; mov rdi,rdx
 constexpr uint8_t kSetTimePrologue[21] = {
     0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10, 0x57, 0x48, 0x83, 0xEC, 0x40, 0x48, 0x8B, 0xD9, 0x48, 0x8B, 0xFA,

@@ -1,3 +1,6 @@
+# Copyright (C) 2026 the Kingdom Come: Together contributors (AUTHORS). SPDX-License-Identifier: GPL-3.0-only
+# GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
+# content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 <#
 .SYNOPSIS
     Rebuilds kdcmp.pak from source and installs the mod into the KCD2 Modding
@@ -44,10 +47,13 @@ $Manifest = Join-Path $RepoRoot 'kdcmp\mod.manifest'
 $Files = @(
     'Scripts\Startup\kdcmp.lua',
     'Libs\Tables\item\clothing_preset__kdcmp.xml',
-    'Libs\Tables\rpg\buff__kcdmp.xml',   # WO-113: the death-guard buff row
-    'Libs\Config\keybindSuperactions.xml',
-    'Libs\Config\defaultProfile.xml'
+    'Libs\Tables\rpg\buff__kcdmp.xml'    # WO-113: the death-guard buff row
 )
+# WO-148: no Libs\Config files any more. They were full copies of the game's own
+# defaultProfile.xml and keybindSuperactions.xml with our dice keys added; the repo
+# and Setup carry only our lines now (kdcmp\ConfigPatch\), and the agent's
+# --keys-pak verb builds Mods\kdcmp\Data\kdcmp_keys.pak from the player's own
+# copies (dotnet\KcdMp.Client\KeybindPak.cs). The install step below runs it.
 
 Write-Host '=== KCD2-MP build and install ===' -ForegroundColor Cyan
 
@@ -183,6 +189,25 @@ $null = New-Item -ItemType Directory -Force -Path (Join-Path $dest 'Data')
 
 Copy-Item $Manifest (Join-Path $dest 'mod.manifest') -Force
 Copy-Item $PakPath  (Join-Path $dest 'Data\kdcmp.pak') -Force
+
+# WO-148: the dice keys -- the game's own two Libs\Config files plus our lines, built
+# here from this game's paks (nothing of the game's is in the repo). The agent from
+# the newest local build does it; without one the keys stay missing until the
+# launcher (or Setup) runs it.
+$agent = @(
+    (Join-Path $RepoRoot 'release\KCDMP\KcdMpClient.exe'),
+    (Join-Path $RepoRoot 'dotnet\KcdMp.Client\bin\Release\net8.0\KcdMpClient.exe'),
+    (Join-Path $RepoRoot 'dotnet\KcdMp.Client\bin\Debug\net8.0\KcdMpClient.exe')
+) | Where-Object { Test-Path $_ } | Sort-Object { (Get-Item $_).LastWriteTime } -Descending | Select-Object -First 1
+if ($agent) {
+    if (-not $env:DOTNET_ROOT -and (Test-Path "$env:USERPROFILE\.dotnet-sdk8")) { $env:DOTNET_ROOT = "$env:USERPROFILE\.dotnet-sdk8" }
+    $keys = & $agent --keys-pak --game-root $GameDir --mod-dir $dest
+    $keys | ForEach-Object { "  $_" }
+    if ($LASTEXITCODE -ne 0) { Write-Host 'WARNING: kdcmp_keys.pak was not built; the dice keys will be missing.' -ForegroundColor Yellow }
+} else {
+    Write-Host 'WARNING: no built agent (KcdMpClient.exe) found; kdcmp_keys.pak not built -- the dice keys' -ForegroundColor Yellow
+    Write-Host '  stay missing until the launcher runs it. Build the agent and rerun this script.' -ForegroundColor Yellow
+}
 
 Write-Host 'Installed:' -ForegroundColor Green
 Get-ChildItem $dest -Recurse -File | ForEach-Object {

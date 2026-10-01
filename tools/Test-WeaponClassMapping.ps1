@@ -1,3 +1,6 @@
+# Copyright (C) 2026 the Kingdom Come: Together contributors (AUTHORS). SPDX-License-Identifier: GPL-3.0-only
+# GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
+# content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 # Test-WeaponClassMapping.ps1 -- WO-47 Phase 1: does the appearance-sync
 # "class id" space (ItemClass GUIDs in EquippedWeaponsByClassId) map onto the
 # combat tables' r_weapon_class_id space (small ints)?

@@ -1,3 +1,6 @@
+// Copyright (C) 2026 the Kingdom Come: Together contributors (AUTHORS). SPDX-License-Identifier: GPL-3.0-only
+// GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
+// content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 // WO-114 Phase 2: engine-free checks of the wake spot within the leash
 // (native/KCDMP/wake_pick.h). Linked into KCDMP_NativeTests; wo114_wake_tests()
 // returns the number of failures.

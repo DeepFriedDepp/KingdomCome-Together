@@ -1,3 +1,6 @@
+// Copyright (C) 2026 the Kingdom Come: Together contributors (AUTHORS). SPDX-License-Identifier: GPL-3.0-only
+// GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
+// content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 // WO-129: engine-free checks of the gait fix's pure half (native/KCDMP/gait_logic.h).
 // Exit code 0 = all passed. Run by tools\Build-Installer.ps1.
 //
@@ -25,6 +28,7 @@ int wo139_rules_tests(int* passed);        // wo139_rules_tests.cpp
 int wo140_rules_tests(int* passed);        // wo140_rules_tests.cpp
 int wo141_rules_tests(int* passed);        // wo141_rules_tests.cpp
 int wo143_rules_tests(int* passed);        // wo143_rules_tests.cpp
+int wo148_x64_tests(int* passed);          // wo148_x64_tests.cpp
 
 static int g_fail = 0, g_pass = 0;
 #define CHECK(cond, ...) do { if (cond) ++g_pass; else { ++g_fail; std::printf("FAIL  %s:%d  ", __FILE__, __LINE__); std::printf(__VA_ARGS__); std::printf("\n"); } } while (0)
@@ -172,6 +176,13 @@ int main() {
         const int hf = wo143_rules_tests(&hp);
         g_pass += hp;
         g_fail += hf;
+    }
+    // WO-148: the hooks' instruction-boundary check, every shipped hook's prologue, the log's thread column
+    {
+        int xp = 0;
+        const int xf = wo148_x64_tests(&xp);
+        g_pass += xp;
+        g_fail += xf;
     }
 
     std::printf("%d passed, %d failed\n", g_pass, g_fail);

@@ -1,3 +1,6 @@
+# Copyright (C) 2026 the Kingdom Come: Together contributors (AUTHORS). SPDX-License-Identifier: GPL-3.0-only
+# GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
+# content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 """WO-118 Phase 6 scale: N walking puppets, frame time with the native writer on / off / on.
 usage: python scale_run.py <tag> <N> [radius_m]      (N=0: baseline trace, no peer)
 Environment: EMIT_MS (default 100) -- the peer's per-NPC emit period. At 100 ms the

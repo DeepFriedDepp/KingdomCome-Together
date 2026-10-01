@@ -1,3 +1,6 @@
+// Copyright (C) 2026 the Kingdom Come: Together contributors (AUTHORS). SPDX-License-Identifier: GPL-3.0-only
+// GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
+// content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 #pragma once
 // Deliberately not using the engine's logger. At the point this DLL loads we
 // have not resolved anything yet, and a logger that depends on the thing we are
@@ -41,6 +44,22 @@ inline std::string mirror_log_path() {
     return p + "kcdmp-native.mirror.log";
 }
 
+// WO-148: every line carries the id of the thread that wrote it, in one fixed
+// column right after the time:
+//   [HH:MM:SS.mmm] tNNNNNN text
+// six digits, zero-padded (Windows thread ids are far below a million in
+// practice; a larger one would widen its own line only). The text starts at
+// column 23 (kLogPrefixLen). Parsers that search for a substring are unaffected;
+// one that needs the thread reads the seven characters after the "] ".
+constexpr int kLogPrefixLen = 23;
+
+// Writes the prefix (no terminator past it) into out[0..kLogPrefixLen) and returns
+// the count written. Pure, so the native unit tests can pin the column.
+inline int format_log_prefix(char* out, size_t cap, int hour, int minute, int second, int ms,
+                             unsigned long tid) {
+    return std::snprintf(out, cap, "[%02d:%02d:%02d.%03d] t%06lu ", hour, minute, second, ms, tid);
+}
+
 inline void logf(const char* fmt, ...) {
     std::lock_guard<std::mutex> lock(log_mutex());
     static FILE* f = nullptr;
@@ -59,10 +78,13 @@ inline void logf(const char* fmt, ...) {
     if (!f && !mirror) return;
     SYSTEMTIME st{};
     GetLocalTime(&st);
+    char prefix[48];
+    format_log_prefix(prefix, sizeof prefix, st.wHour, st.wMinute, st.wSecond, st.wMilliseconds,
+                      static_cast<unsigned long>(GetCurrentThreadId()));
     va_list args;
     for (FILE* dst : { f, mirror }) {
         if (!dst) continue;
-        fprintf(dst, "[%02d:%02d:%02d.%03d] ", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
+        fputs(prefix, dst);
         va_start(args, fmt);
         vfprintf(dst, fmt, args);
         va_end(args);

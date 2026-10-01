@@ -1,4 +1,8 @@
 <?xml version="1.0" encoding="us-ascii"?>
+<!-- Copyright (C) 2026 the Kingdom Come: Together contributors (AUTHORS). SPDX-License-Identifier: GPL-3.0-only
+     GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
+     content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
+     Portions from the original project, marczukmichal/kcd2-multiplayer; its author keeps their copyright (AUTHORS). -->
 <database xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" name="barbora" xsi:noNamespaceSchemaLocation="../database.xsd">
 	<clothing_presets version="2">
 		<!-- GambesonShort01_m04_D2 + Cuirass07_m01_A4 -->

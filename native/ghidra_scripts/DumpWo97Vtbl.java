@@ -1,3 +1,6 @@
+// Copyright (C) 2026 the Kingdom Come: Together contributors (AUTHORS). SPDX-License-Identifier: GPL-3.0-only
+// GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
+// content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 // WO-97 Phase 2: dump C++ vtables by symbol-name substring, resolving each slot
 // to the function it points at. Used to confirm which virtual slot a call like
 // `(*(code **)(*(longlong *)port + 0x78))(port)` actually lands on, rather than

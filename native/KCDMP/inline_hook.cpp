@@ -1,4 +1,8 @@
+// Copyright (C) 2026 the Kingdom Come: Together contributors (AUTHORS). SPDX-License-Identifier: GPL-3.0-only
+// GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
+// content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 #include "inline_hook.h"
+#include "x64_len.h"
 
 #include <windows.h>
 #include <tlhelp32.h>
@@ -102,6 +106,20 @@ bool install_gate4(void* target, const uint8_t* expect, size_t len, GateCallback
     return install_impl(target, expect, len, reinterpret_cast<Callback>(cb), why, true);
 }
 
+// Copies up to `n` bytes of live code into `out`; returns how many were readable.
+// Its own function: __try cannot share a frame with objects that need unwinding.
+static size_t read_code(const uint8_t* src, uint8_t* out, size_t n) {
+    size_t i = 0;
+    __try {
+        for (; i < n; ++i) out[i] = src[i];
+    } __except (EXCEPTION_EXECUTE_HANDLER) {}
+    return i;
+}
+
+// WO-148: the refusal text for a patch length that is not on an instruction
+// boundary (per thread: callers log `why` right after the call).
+static thread_local char t_why[160];
+
 bool install_impl(void* target, const uint8_t* expect, size_t len, Callback cb, const char** why, bool gate) {
     const char* dummy = nullptr;
     if (!why) why = &dummy;
@@ -110,6 +128,22 @@ bool install_impl(void* target, const uint8_t* expect, size_t len, Callback cb, 
     __try {
         if (std::memcmp(tgt, expect, len) != 0) { *why = "prologue bytes differ from the expected ones"; return false; }
     } __except (EXCEPTION_EXECUTE_HANDLER) { *why = "prologue unreadable"; return false; }
+
+    // WO-148: decode the prologue of the exact image being patched. The copied
+    // bytes become the trampoline, so the length must end on an instruction
+    // boundary, and nothing inside may be relative to where it runs (a relative
+    // branch or a RIP-relative operand would point elsewhere from the copy).
+    // Fail closed: anything the decoder does not know refuses the hook.
+    {
+        uint8_t live[64];
+        const size_t got = read_code(tgt, live, sizeof live);
+        const x64::BoundaryResult b = x64::check_patch(live, got, len);
+        if (b.verdict != x64::Boundary::Ok) {
+            x64::describe(b, len, t_why, sizeof t_why);
+            *why = t_why;
+            return false;
+        }
+    }
 
     auto* mem = static_cast<uint8_t*>(VirtualAlloc(nullptr, 4096, MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE));
     if (!mem) { *why = "VirtualAlloc failed"; return false; }

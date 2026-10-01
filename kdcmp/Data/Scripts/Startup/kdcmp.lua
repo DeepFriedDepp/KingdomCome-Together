@@ -1,3 +1,7 @@
+-- Copyright (C) 2026 the Kingdom Come: Together contributors (AUTHORS). SPDX-License-Identifier: GPL-3.0-only
+-- GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
+-- content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
+-- Portions from the original project, marczukmichal/kcd2-multiplayer; its author keeps their copyright (AUTHORS).
 -- Kingdom Come: Together (the mod: kcdmp / kdcmp.pak; internal names keep KCD2MP_) - Mod Init Script
 System.LogAlways("[KCD2-MP] === MOD INIT ===")
 
@@ -5784,6 +5788,7 @@ end
 -- nothing there resumes it later.
 function KCD2MP_W131ParkReleased(name, why)
     if not KCD2MP_W131IsActive() then return false end
+    if KCD2MP_W148Holds and KCD2MP_W148Holds(name) then return true end   -- WO-148: a carried body stays shown
     -- WO-137 Phase 4: never mid-conversation; the talk's end parks it (KCD2MP_W137TalkEnd).
     local tk = KCD2MP.w137 and KCD2MP.w137.talking[name]
     if tk then tk.parkAfter = tostring(why); return true end
@@ -5836,6 +5841,7 @@ local function w131_sweep()
     for _, e in ipairs(ents) do
         local ok, name = KCD2MP_W131Guardable(e)
         if ok and KCD2MP_W139StopHeld and KCD2MP_W139StopHeld(name) then ok = false end   -- WO-139: a guard stopping this player
+        if ok and KCD2MP_W148Holds and KCD2MP_W148Holds(name) then ok = false end   -- WO-148: a carried body is never parked
         if ok and not KCD2MP.npcPuppets[name] then
             local parked = w.parked[name]
             if not parked then
@@ -8869,6 +8875,9 @@ end
 -- APPENDED parameter -- an agent older than this build calls with seven
 -- arguments and it arrives nil, which MP-AUTHORITY prints as owner=?.
 function KCD2MP_ApplyNpcState(name, x, y, z, rot, hp, flags, src, seq, senderMs)
+    -- WO-148: while it is carried (by this player, or a partner's avatar here) and 5 s after,
+    -- the carrier's game moves the body; the host's stream for it waits (the agent drops it too).
+    if KCD2MP_W148Holds and KCD2MP_W148Holds(name) then return end
     -- WO-90: refuse an inbound stream for a name that must never be synced,
     -- whatever the sender believes. The send-side exclusion above stops US
     -- emitting these; this stops a peer on an older build (or with the
@@ -9459,6 +9468,8 @@ function KCD2MP_NpcPuppetTick(arg, gen)
             if p.dead or p.ko or locallyDead or locallyKo or remoteDead then
                 -- WO-118: dead, unconscious and carried bodies keep this Lua behaviour.
                 KCD2MP_NpcNativeSync(name, p, e, false, "down")
+                -- WO-148: a carried body is the carrier's -- no follow, no placement while it is held
+                if KCD2MP_W148Holds and KCD2MP_W148Holds(name) then return end
                 -- WO-86, the safeguard. Body-follow below exists for ONE case:
                 -- the stream's owner is manipulating a body that is down in
                 -- THEIR world too (their packet carries the dead/KO bit). When
@@ -12865,6 +12876,7 @@ function KCD2MP_InterpTick(arg, gen)
             end
             pcall(KCD2MP_W136RideTick)    -- WO-136 Phase 3: the rider owns the horse
             pcall(KCD2MP_W136TorchTick)   -- WO-136 Phase 5: the torch in hand
+            pcall(KCD2MP_W148Tick)        -- WO-148: this player's own carry (a body, a sack)
         end
     end
 
@@ -17096,6 +17108,7 @@ end
 -- Whether puppet `name` (p) is released for silence at `now`.
 function KCD2MP_NpcSilenceRelease(name, p, now)
     local ns = KCD2MP.npcSilence
+    if KCD2MP_W148Holds and KCD2MP_W148Holds(name) then return false end   -- WO-148: carried -- the stream waits on purpose
     local quiet = now - (p.lastPacketAt or 0)
     if KCD2MP.w147.npcCatchup and (now - ns.agentAt) < ns.ttlS then
         local m = ns.silent[name]
@@ -17473,7 +17486,9 @@ KCD2MP_MARKS = { "setup", "join", "fight", "fightboth", "ko", "hostdown", "horse
     "tool", "hoe", "gait", "oneshot", "look", "minigame", "cart", "floating", "tpose", "odd",
     -- WO-147: the 0.42.2 tester page's markers (never registered before) and 0.42.5's
     "rejoin", "load", "clothes", "dice", "time", "icon",
-    "friendly", "block", "leash", "leash_talk", "leash_far", "fistfight", "questsleep", "town" }
+    "friendly", "block", "leash", "leash_talk", "leash_far", "fistfight", "questsleep", "town",
+    -- WO-148: carrying
+    "carry", "carry_host", "carry_both", "sack", "bury", "dice_keys" }
 function KCD2MP_Mark(word)
     word = tostring(word or "odd"):gsub("[^%w_]", "")
     if word == "" then word = "odd" end
@@ -18776,6 +18791,691 @@ function KCD2MP_W139Test(arg)
     return false
 end
 
+-- ===== WO-148: carrying on the other screen (docs/WO-148-findings.md) ======================
+-- The carrier owns the body while it is carried (WO-119 s3.4, the settled rule). This
+-- player's own game carries what this player picks up, as the game does; every other game
+-- makes this player's avatar pick up ITS copy of the body with the game's own pick-up
+-- (actor:RequestGrabCorpse -- the call the game's "grab body" interaction makes,
+-- BasicAIActions.OnGrabCorpse), carry it while the stream moves the avatar, and put it
+-- down (actor:RequestPutCorpse) where this player put it down. The host's world decides
+-- who carries (the agent's ledger, GameBridge.Wo148.cs): a joiner's grab goes to the host
+-- first, and a refused one is put back here.
+--   mp_carry_sync on|off   (default on) carrying shows on the other screens, and theirs here
+--   mp_carry_test grab <body> | put | status   console stand-ins for this player's own keys
+-- Fail-safe: nothing alive is ever moved; nothing is moved except at a carry's start (a
+-- copy fetched to where the carrier picked it up) and end (where it came to rest); a body
+-- that would end up in the air or under the ground goes back where it was picked up.
+-- Lines (kcd.log):
+--   MP-CARRY local grab|put ...    this player
+--   MP-CARRY avatar <id> grab|put ...   a partner's carry shown here
+--   MP-CARRY land <name> rest=(..) carrier=(..) -> keep|moved|put back (...)
+--   MP-CARRY loser <name> ...       the host's world gave it to someone else: put down and back
+KCD2MP.w148 = KCD2MP.w148 or {}
+do
+    local W = KCD2MP.w148
+    if W.carrySync == nil then W.carrySync = true end
+    W.session = W.session or false      -- the agent's word: a shared-world session with a partner
+    W.isHost = W.isHost or false
+    W.stats = W.stats or { grabs = 0, puts = 0, avGrab = 0, avGrabFail = 0, avPut = 0, refused = 0,
+                           kept = 0, moved = 0, putBack = 0, loser = 0, lost = 0, alive = 0, far = 0, fetched = 0 }
+    W.av = W.av or {}          -- [ghost id string] = { name, what, pick = {x,y,z}, at, took }
+    W.holds = W.holds or {}    -- [name] = os.clock() until which the stream and the puppet leave it alone
+    W.mine = W.mine            -- this player's own carry: { name, what, id, pick = {x,y,z}, at }
+    W.ended = W.ended          -- this player's carry ended, waiting for the body to settle: { ..., settleAt }
+    W.tickAt = W.tickAt or 0
+    W.HOLD_GRACE_S = 5.0       -- after a set-down the stream waits this long (the other machine settles too)
+    W.SETTLE_S = 1.6           -- the put-down animation and the ragdoll settle before the rest is read
+    W.REACH_M = 6.0            -- a copy further than this from the avatar is fetched (if near the pick spot) ...
+    W.FETCH_M = 30.0           -- ... when it lies within this of where the carrier picked it up
+    W.LAND_SNAP_M = 0.5        -- Wo148Rules.LandSnapM
+    W.GROUND_BELOW_M = 0.8     -- Wo148Rules.GroundBelowM
+    W.GROUND_ABOVE_M = 0.6     -- Wo148Rules.GroundAboveM
+
+    local function w148_log(line) mp_log("MP-CARRY " .. line) end
+
+    local function pos_of(e)
+        local p = nil
+        pcall(function() p = e:GetWorldPos() end)
+        if p then return { x = p.x, y = p.y, z = p.z } end
+        return nil
+    end
+
+    local function fmt(p)
+        if not p then return "(?)" end
+        return string.format("(%.2f, %.2f, %.2f)", p.x, p.y, p.z)
+    end
+
+    local function dist(a, b)
+        if not (a and b) then return 1e9 end
+        local dx, dy, dz = a.x - b.x, a.y - b.y, a.z - b.z
+        return math.sqrt(dx * dx + dy * dy + dz * dz)
+    end
+
+    local function by_name(name)
+        local e = nil
+        pcall(function() e = System.GetEntityByName(name) end)
+        return e
+    end
+
+    -- What a body is: "dead", "ko" (unconscious), or nil (alive or not an actor). Nothing alive is carried.
+    local function body_state(e)
+        if not (e and e.actor) then return nil end
+        local dead, ko = false, false
+        pcall(function() dead = e.actor:IsDead() == true end)
+        if dead then return "dead" end
+        pcall(function() ko = e.actor:IsUnconscious() == true end)
+        if ko then return "ko" end
+        return nil
+    end
+    W.BodyState = body_state
+
+    local function avatar_of(src)
+        local g = KCD2MP.ghosts and (KCD2MP.ghosts[tostring(src)] or KCD2MP.ghosts[tonumber(src) or -1])
+        return g and g.entity or nil
+    end
+
+    local function carrying(e)
+        local c = false
+        -- the method is looked up first: a build (or a test stub) without it is "not carrying", not an error
+        pcall(function() c = e and e.actor and e.actor.IsCarryingCorpse and e.actor:IsCarryingCorpse() == true end)
+        return c
+    end
+
+    -- The first surface under p (a downward ray from 1.2 m above it), else the terrain. Terrain and
+    -- static geometry only (ent_static | ent_terrain), one hit, and never the body itself (skipId):
+    -- a ray that hit the carried body would call a body in the air "lying on something".
+    W.RAY_TYPES = W.RAY_TYPES or 257
+    local function ground_at(p, skipId)
+        if not p then return nil end
+        local g = nil
+        pcall(function()
+            local hits = Physics.RayWorldIntersection({ x = p.x, y = p.y, z = p.z + 1.2 }, { x = 0, y = 0, z = -6 }, 1, W.RAY_TYPES, skipId)
+            local h = hits and hits[1]
+            local hp = h and (h.pt or h.pos or h.point)
+            if hp and hp.z then g = hp.z end
+        end)
+        if g == nil then pcall(function() g = System.GetTerrainElevation(p) end) end
+        return g
+    end
+
+    -- Wo148Rules.Reachable: lying on a surface, not floating above it, not sunk below it.
+    local function reachable(p, g)
+        if not (p and g) then return false end
+        return (p.z - g) <= W.GROUND_BELOW_M and (g - p.z) <= W.GROUND_ABOVE_M
+    end
+    W.Reachable = reachable
+
+    -- Wo148Rules.Decide: "keep" | "carrier" | "back".
+    function KCD2MP_W148Landing(rest, groundRest, car, groundCar)
+        local restOk = reachable(rest, groundRest)
+        local carOk = reachable(car, groundCar)
+        if carOk and dist(rest, car) > W.LAND_SNAP_M then return "carrier" end
+        if restOk then return "keep" end
+        if carOk then return "carrier" end
+        return "back"
+    end
+
+    local function set_pos(e, p)
+        local ok = pcall(function() e:SetWorldPos({ x = p.x, y = p.y, z = p.z }) end)
+        return ok
+    end
+
+    -- A set-down shown here (an avatar's, or this player's own carry the host's world took back):
+    -- where should the body end up? car = the carrier's own resting spot; nil = where it lies now
+    -- (a carrier who left), kept when reachable. back = true: always back where it was picked up
+    -- (a loser's: the carrier's game shows the real one).
+    local function land(name, e, car, pick, why, back)
+        local rest = pos_of(e)
+        local eid = e and e.id
+        local decision
+        if back then decision = "back"
+        elseif car then decision = KCD2MP_W148Landing(rest, ground_at(rest, eid), car, ground_at(car, eid))
+        else decision = reachable(rest, ground_at(rest, eid)) and "keep" or "back" end
+        local st = W.stats
+        if decision == "carrier" then
+            set_pos(e, car); st.moved = st.moved + 1
+        elseif decision == "back" then
+            if pick and reachable(pick, ground_at(pick, eid)) then set_pos(e, pick) else decision = "back-unreachable" end
+            st.putBack = st.putBack + 1
+        else
+            st.kept = st.kept + 1
+        end
+        w148_log(string.format("land %s rest=%s carrier=%s pick=%s -> %s (%s)", name, fmt(rest), fmt(car), fmt(pick),
+            decision == "carrier" and "moved to the carrier's spot" or decision == "back" and "put back where it was picked up"
+            or decision == "back-unreachable" and "LEFT where it is: the pick-up spot is unreachable too" or "keep", why))
+        W.holds[name] = os.clock() + W.HOLD_GRACE_S
+        return decision
+    end
+
+    function KCD2MP_W148Holds(name)
+        local u = name and W.holds[name]
+        if not u then return false end
+        if os.clock() < u then return true end
+        W.holds[name] = nil
+        return false
+    end
+
+    function KCD2MP_W148CfgEmit()
+        KCD2MP_EmitEvent("w148_cfg", "carry_sync=" .. (W.carrySync and "on" or "off") .. " carry_objects=" .. (W.carryObjects ~= false and "on" or "off"))
+    end
+
+    function KCD2MP_W148SetCarrySync(arg)
+        local v = KCD2MP_Wo122ParseBool(arg)
+        if v == "bad" then mp_log("mp_carry_sync: expected on|off, got '" .. tostring(arg) .. "'"); return false end
+        if v ~= nil then W.carrySync = v end
+        mp_log("WO148-TOGGLE mp_carry_sync carry_sync=" .. (W.carrySync and "on" or "off"))
+        KCD2MP_W148CfgEmit()
+        return true
+    end
+
+    -- The agent, every few seconds: a shared-world session with a partner (on), this player the host?
+    function KCD2MP_W148Session(on, isHost)
+        on = on == true
+        if on ~= W.session then w148_log("session " .. (on and "on" or "off") .. (on and (isHost and " (host)" or " (joiner)") or "")) end
+        W.session = on
+        W.isHost = isHost == true
+        pcall(KCD2MP_W148Install)
+        pcall(KCD2MP_W148InstallItems)
+    end
+
+    -- ---- this player: what is picked up ------------------------------------------------------
+    -- The game's own grab-body interaction names the body; the wrap only records it.
+    function KCD2MP_W148Install()
+        if type(BasicAIActions) ~= "table" then return end
+        local cur = BasicAIActions.OnGrabCorpse
+        if type(cur) ~= "function" or cur == W.grabWrap then return end
+        local orig = cur
+        W.grabOrig = orig
+        W.grabWrap = function(self, user, slot)
+            pcall(function()
+                if user and player and user.id == player.id and self and self.GetName then
+                    W.lastGrab = { id = self.id, name = self:GetName(), pick = pos_of(self), at = os.clock() }
+                end
+            end)
+            return orig(self, user, slot)
+        end
+        BasicAIActions.OnGrabCorpse = W.grabWrap
+        w148_log("wrapped BasicAIActions.OnGrabCorpse (this player's grab names its body)")
+    end
+
+    -- Which body this player carries, when the game's own interaction was not seen (the stealth
+    -- route's "Pick up body", a script, a load): the game's own link first (carriedBody, player ->
+    -- body; FindLinks returns WUIDs), else the nearest dead or unconscious body.
+    local function find_carried(pp)
+        local viaLink = nil
+        pcall(function()
+            local links = XGenAIModule.FindLinks(player.this.id, "carriedBody")
+            local w = links and links[1]
+            if w then viaLink = XGenAIModule.GetEntityByWUID(w) end
+        end)
+        if viaLink and body_state(viaLink) then W.viaLink = (W.viaLink or 0) + 1; return viaLink end
+        local best, bestD = nil, 2.5
+        local list = nil
+        pcall(function() list = System.GetEntitiesInSphere(pp, 3.0) end)
+        for _, e in ipairs(list or {}) do
+            if e ~= player and body_state(e) then
+                local d = dist(pos_of(e), pp)
+                if d < bestD then best, bestD = e, d end
+            end
+        end
+        return best
+    end
+
+    local function emit_grab(m)
+        W.stats.grabs = W.stats.grabs + 1
+        w148_log(string.format("local grab %s %s at %s", m.what, m.name, fmt(m.pick)))
+        if W.carrySync and W.session then
+            KCD2MP_EmitEvent("w148_carry", string.format("grab %s %s %.3f %.3f %.3f", m.what, m.name, m.pick.x, m.pick.y, m.pick.z))
+        end
+    end
+
+    local function emit_put(m, how, rest)
+        W.stats.puts = W.stats.puts + 1
+        w148_log(string.format("local put %s %s at %s", how, m.name, fmt(rest)))
+        if W.carrySync and W.session and rest then
+            KCD2MP_EmitEvent("w148_carry", string.format("put %s %s %s %.3f %.3f %.3f", how, m.what, m.name, rest.x, rest.y, rest.z))
+        end
+    end
+
+    -- Every 0.2 s (from the interpolation tick): this player's own carry, start and end.
+    function KCD2MP_W148Tick()
+        local now = os.clock()
+        if now < W.tickAt then return end
+        W.tickAt = now + 0.2
+        if not player then return end
+        local pp = pos_of(player)
+        -- a set-down waiting for the body to settle
+        if W.ended and now >= W.ended.settleAt then
+            local m = W.ended
+            W.ended = nil
+            local e = by_name(m.name)
+            -- the body is gone (a load replaced the world) or this player died: the carry is lost, not put
+            local dead = false
+            pcall(function() dead = player.actor:IsDead() == true end)
+            if not e or dead then m.how = "lost" end
+            emit_put(m, m.how, e and pos_of(e) or pp)
+            W.holds[m.name] = now + W.HOLD_GRACE_S
+        end
+        pcall(KCD2MP_W148ObjectTick, now, pp)
+        local c = carrying(player)
+        if c and not W.mine then
+            local g = W.lastGrab
+            local e = nil
+            if g and (now - g.at) < 8.0 then e = by_name(g.name) end
+            if not e and pp then e = find_carried(pp) end
+            local name = nil
+            if e then pcall(function() name = e:GetName() end) end
+            if name and KCD2MP_W148IsName(name) then
+                -- where it lay: the interaction saw it on the ground; otherwise (the stealth route) at the
+                -- player's feet -- the body is already on the shoulder when the tick sees the carry
+                W.mine = { name = name, what = body_state(e) or "dead", pick = (g and g.name == name and g.pick) or pp or pos_of(e), at = now, heldAt = now }
+                W.holds[name] = math.huge
+                emit_grab(W.mine)
+            else
+                W.mine = { name = nil, at = now }   -- carried, but not a body the wire can name: shown nowhere
+                w148_log("local grab of a body with no name the other screens know -- not shown there")
+            end
+            W.lastGrab = nil
+        elseif not c and W.mine then
+            local m = W.mine
+            W.mine = nil
+            if m.name then
+                m.how = m.how or "put"
+                m.settleAt = now + W.SETTLE_S
+                W.ended = m
+            end
+        elseif c and W.mine and W.mine.name and W.session and W.carrySync and (now - (W.mine.heldAt or 0)) >= 2.0 then
+            -- still carrying: the agent's word that this game confirms it (its Held to the others waits
+            -- for this; a carry not confirmed for 2 minutes is set down on the other screens, and a
+            -- confirmation after that picks it up there again)
+            W.mine.heldAt = now
+            local e = by_name(W.mine.name)
+            local p = (e and pos_of(e)) or pp
+            if p then KCD2MP_EmitEvent("w148_carry", string.format("held %s %s %.3f %.3f %.3f", W.mine.what, W.mine.name, p.x, p.y, p.z)) end
+        end
+    end
+
+    -- A load or a death ends this player's carry without a set-down the tick sees.
+    function KCD2MP_W148LocalLost(why)
+        local m = W.mine
+        if not (m and m.name) then W.mine = nil; return end
+        W.mine = nil
+        m.how = "lost"
+        m.settleAt = os.clock()
+        W.ended = m
+        W.stats.lost = W.stats.lost + 1
+        w148_log("local carry of " .. m.name .. " lost (" .. tostring(why) .. ")")
+    end
+
+    -- ---- a partner's carry, shown here ----------------------------------------------------------
+    local function result(src, op, name, res, why)
+        KCD2MP_EmitEvent("w148_result", string.format("%s %s %s %s %s", tostring(src), op, tostring(name), res, why or "-"))
+    end
+
+    -- op: grab (the carrier picked it up at x y z), put (set down; x y z = where it came to rest),
+    -- lost (the carrier's carry ended unseen; x y z = its last known place).
+    function KCD2MP_W148Apply(src, op, what, name, x, y, z, how)
+        local st = W.stats
+        local key = tostring(src)
+        if what == "object" then
+            if W.carrySync and W.carryObjects then KCD2MP_W148ApplyObject(src, op, name, x, y, z, how) end
+            return
+        end
+        local spot = { x = tonumber(x) or 0, y = tonumber(y) or 0, z = tonumber(z) or 0 }
+        if op == "grab" then
+            if not W.carrySync then result(src, op, name, "refused", "off"); return end
+            local av = avatar_of(src)
+            local e = by_name(name)
+            if not (av and av.actor) then result(src, op, name, "refused", "no-avatar"); w148_log("avatar " .. key .. " grab " .. tostring(name) .. " -> refused (no avatar here)"); return end
+            if not e then result(src, op, name, "refused", "no-body"); w148_log("avatar " .. key .. " grab " .. tostring(name) .. " -> refused (no such body here)"); return end
+            local state = body_state(e)
+            if not state then
+                st.alive = st.alive + 1
+                result(src, op, name, "refused", "alive")
+                w148_log("avatar " .. key .. " grab " .. name .. " -> refused (alive here: nothing alive is moved)")
+                return
+            end
+            local cur = W.av[key]
+            if cur and cur.name == name and carrying(av) then result(src, op, name, "ok", "same"); return end
+            if cur and cur.name ~= name and carrying(av) then pcall(function() av.actor:RequestPutCorpse() end) end
+            -- this player carries the same body: the host's world gave it to the partner (the agent decided)
+            if W.mine and W.mine.name == name then KCD2MP_W148Loser(name, "the host's world gave it to player " .. key) end
+            local here = pos_of(e)
+            local avp = pos_of(av)
+            local fetched = false
+            if dist(here, avp) > W.REACH_M then
+                if dist(here, spot) <= W.FETCH_M and reachable(spot, ground_at(spot, e.id)) then
+                    set_pos(e, spot); fetched = true; st.fetched = st.fetched + 1
+                else
+                    st.far = st.far + 1
+                    result(src, op, name, "refused", "far")
+                    w148_log(string.format("avatar %s grab %s -> refused (the copy is %.1f m from the avatar and %.1f m from where it was picked up)",
+                        key, name, dist(here, avp), dist(here, spot)))
+                    return
+                end
+            end
+            local can = nil
+            pcall(function() can = av.actor:CanGrabCorpse(e.id) end)
+            local ok, ret = pcall(function() return av.actor:RequestGrabCorpse(e.id) end)
+            W.av[key] = { name = name, what = state, pick = fetched and spot or here, at = os.clock(), took = false }
+            W.holds[name] = math.huge
+            st.avGrab = st.avGrab + 1
+            w148_log(string.format("avatar %s grab %s %s at %s%s -> RequestGrabCorpse ok=%s ret=%s can=%s",
+                key, state, name, fmt(here), fetched and " (fetched to the carrier's pick-up spot)" or "", tostring(ok), tostring(ret), tostring(can)))
+            Script.SetTimer(2500, function()
+                local a = W.av[key]
+                if not (a and a.name == name) then return end
+                local av2 = avatar_of(src)
+                a.took = carrying(av2)
+                if not a.took then st.avGrabFail = st.avGrabFail + 1 end
+                w148_log(string.format("avatar %s grab %s -> %s", key, name, a.took and "carrying (IsCarryingCorpse)" or "NOT carrying: the body stays, its set-down still lands it"))
+                result(src, "grab", name, a.took and "ok" or "nottaken", "-")
+            end)
+            return
+        end
+        if op == "held" then
+            -- the carrier still carries: if this avatar dropped it on the way (the game ended its carry),
+            -- pick it up again -- at most three times per carry
+            local a = W.av[key]
+            if not a then return KCD2MP_W148Apply(src, "grab", what, name, x, y, z) end
+            if a.name ~= name then return end
+            local av = avatar_of(src)
+            if av and not carrying(av) and (os.clock() - a.at) > 4.0 and (a.regrabs or 0) < 3 then
+                local e = by_name(name)
+                if e and body_state(e) then
+                    a.regrabs = (a.regrabs or 0) + 1
+                    a.at = os.clock()
+                    if dist(pos_of(e), pos_of(av)) > W.REACH_M then set_pos(e, pos_of(av)) end
+                    local ok = pcall(function() av.actor:RequestGrabCorpse(e.id) end)
+                    w148_log(string.format("avatar %s held %s -> it was not carrying here: grab again (#%d, ok=%s)", key, name, a.regrabs, tostring(ok)))
+                end
+            end
+            return
+        end
+        if op == "put" or op == "lost" then
+            local a = W.av[key]
+            W.av[key] = nil
+            local av = avatar_of(src)
+            local e = by_name(name)
+            st.avPut = st.avPut + 1
+            if av and carrying(av) then pcall(function() av.actor:RequestPutCorpse() end) end
+            w148_log(string.format("avatar %s %s %s %s -> RequestPutCorpse%s", key, op, tostring(what), tostring(name), (av and a and a.took) and "" or " (it was not carrying here)"))
+            if not e then result(src, op, name, "refused", "no-body"); W.holds[name] = nil; return end
+            Script.SetTimer(math.floor(W.SETTLE_S * 1000 + 400), function()
+                local e2 = by_name(name)
+                if not e2 then W.holds[name] = nil; return end
+                if not body_state(e2) then
+                    -- woke up on the way (a knockout ends): it walks off by itself; never moved alive
+                    st.alive = st.alive + 1
+                    w148_log("land " .. name .. " -> left alone (alive now)")
+                    W.holds[name] = nil
+                    return
+                end
+                -- a set-down lands where the carrier's game left it; a lost carry (the carrier's link or
+                -- game went away) is set down where the avatar stands, if a body can lie there
+                land(name, e2, op == "put" and spot or nil, a and a.pick, "player " .. key .. " " .. op)
+                result(src, op, name, "ok", "-")
+            end)
+            return
+        end
+        w148_log("apply: unknown op '" .. tostring(op) .. "'")
+    end
+
+    -- Joiner: the host's world gave this player's body to someone else, or refused it. Put down here,
+    -- and back where it was picked up (the carrier's game shows the real one).
+    function KCD2MP_W148Loser(name, why)
+        local m = W.mine
+        W.stats.loser = W.stats.loser + 1
+        local pick = m and m.name == name and m.pick or nil
+        if m and m.name == name then W.mine = nil end
+        if W.ended and W.ended.name == name then W.ended = nil end
+        if carrying(player) then pcall(function() player.actor:RequestPutCorpse() end) end
+        w148_log(string.format("loser %s -> put down and back at %s (%s)", tostring(name), fmt(pick), tostring(why)))
+        Script.SetTimer(math.floor(W.SETTLE_S * 1000 + 400), function()
+            -- the winner's avatar has it here by now (its grab comes with the loss): that carry lands it;
+            -- putting it back would move a carried body and end the avatar's hold
+            for k, a in pairs(W.av) do
+                if a.name == name then
+                    w148_log("loser " .. tostring(name) .. " -> player " .. tostring(k) .. "'s avatar has it now: not put back")
+                    return
+                end
+            end
+            local e = by_name(name)
+            if e and body_state(e) then land(name, e, nil, pick, "the host's world", true) end
+        end)
+        if KCD2MP_ShowNativeToast then pcall(KCD2MP_ShowNativeToast, "Your partner has that body in the host's world.") end
+    end
+
+    -- A partner left (or its carry fell silent): its avatar sets everything down where it is.
+    function KCD2MP_W148AvatarGone(src)
+        local key = tostring(src)
+        local a = W.av[key]
+        if not a then return end
+        local av = avatar_of(src)
+        local e = by_name(a.name)
+        local spot = e and pos_of(e) or nil
+        W.av[key] = nil
+        W.stats.lost = W.stats.lost + 1
+        if av and carrying(av) then pcall(function() av.actor:RequestPutCorpse() end) end
+        w148_log("avatar " .. key .. " gone while carrying " .. a.name .. " -> set down here")
+        Script.SetTimer(math.floor(W.SETTLE_S * 1000 + 400), function()
+            local e2 = by_name(a.name)
+            if e2 and body_state(e2) then land(a.name, e2, nil, a.pick, "the carrier left") else W.holds[a.name] = nil end
+        end)
+    end
+
+    -- Console stand-ins for this player's keys (a live test presses nothing).
+    function KCD2MP_W148Test(arg)
+        local verb, name = tostring(arg or ""):match("^%s*(%S+)%s*(%S*)")
+        if verb == "grab" and name ~= "" then
+            local e = by_name(name)
+            if not (e and player and player.actor) then mp_log("mp_carry_test: no body '" .. name .. "'"); return false end
+            local can = nil
+            pcall(function() can = player.actor:CanGrabCorpse(e.id) end)
+            W.lastGrab = { id = e.id, name = name, pick = pos_of(e), at = os.clock() }
+            local ok, ret = pcall(function() return player.actor:RequestGrabCorpse(e.id) end)
+            mp_log(string.format("mp_carry_test grab %s state=%s can=%s -> ok=%s ret=%s", name, tostring(body_state(e)), tostring(can), tostring(ok), tostring(ret)))
+            return true
+        elseif verb == "put" then
+            local can = nil
+            pcall(function() can = player.actor:CanPutCorpse() end)
+            local ok, ret = pcall(function() return player.actor:RequestPutCorpse() end)
+            mp_log(string.format("mp_carry_test put can=%s -> ok=%s ret=%s", tostring(can), tostring(ok), tostring(ret)))
+            return true
+        end
+        KCD2MP_W148Status()
+        return true
+    end
+
+    function KCD2MP_W148Status()
+        local st = W.stats
+        local avs = {}
+        for k, a in pairs(W.av) do avs[#avs + 1] = k .. ":" .. tostring(a.name) .. (a.took and "" or "(not taken)") end
+        local props = 0
+        for _ in pairs(W.props) do props = props + 1 end
+        mp_log(string.format("WO148-STATUS objects=%s object_mine=%s sack_props=%d via_link=%d", W.carryObjects and "on" or "off",
+            tostring(W.objMine and W.objMine.name), props, W.viaLink or 0))
+        mp_log(string.format("WO148-STATUS carry_sync=%s session=%s host=%s mine=%s carrying=%s avatars=%s grabs=%d puts=%d avatar_grabs=%d not_taken=%d avatar_puts=%d kept=%d moved=%d put_back=%d loser=%d lost=%d alive=%d far=%d fetched=%d",
+            W.carrySync and "on" or "off", tostring(W.session), tostring(W.isHost), tostring(W.mine and W.mine.name), tostring(carrying(player)),
+            #avs > 0 and table.concat(avs, ",") or "-", st.grabs, st.puts, st.avGrab, st.avGrabFail, st.avPut, st.kept, st.moved, st.putBack,
+            st.loser, st.lost, st.alive, st.far, st.fetched))
+    end
+
+    -- ---- objects: sacks, jugs, carcasses (the game's carry-item action) -----------------------
+    -- The carrier's own game: a pick-up from a pile (CarryItemPile:OnPickUp) or off the ground
+    -- (CarryableItem:OnPickUp), a set-down into a pile (CarryItemPile:OnDeposit) or on the ground
+    -- (the put_item key). The item stays its pile's (the game only lends it): nothing of the
+    -- other world's piles changes -- that is the quest side, the next phase. On the other screen
+    -- the carrier's avatar holds the game's own NPC sack (the agent: hand content, sack_miller,
+    -- which walks with the sack the way the millers do) and a sack it dropped lies where it
+    -- landed (a prop: no item, never saved), gone when the carrier picks it up again.
+    if W.carryObjects == nil then W.carryObjects = true end
+    W.SACK_MODEL = "Objects/manmade/common_furniture/sacks/sack_wearable.cgf"
+    W.props = W.props or {}     -- [n] = { id, pos, at } sacks partners dropped, shown here
+    W.propN = W.propN or 0
+
+    local function hand_item()
+        local h = nil
+        if not (player and player.human and player.human.GetItemInHand) then return nil end
+        pcall(function() h = player.human:GetItemInHand(1) end)
+        if h == nil then pcall(function() h = player.human:GetItemInHand(0) end) end
+        return h
+    end
+
+    function KCD2MP_W148InstallItems()
+        local function wrap(tbl, fname, kind)
+            if type(tbl) ~= "table" then return end
+            local cur = tbl[fname]
+            local key = kind .. fname
+            if type(cur) ~= "function" or cur == W[key .. "Wrap"] then return end
+            local orig = cur
+            W[key .. "Orig"] = orig
+            W[key .. "Wrap"] = function(self, user, slot)
+                pcall(function()
+                    if user and player and user.id == player.id and self and self.GetName then
+                        local nm = self:GetName()
+                        if fname == "OnDeposit" then
+                            W.objDeposit = { name = nm, pos = pos_of(self), at = os.clock() }
+                        else
+                            W.objPick = { name = (kind == "pile" and KCD2MP_W148IsName(nm)) and nm or "sack", src = kind, pick = pos_of(self), at = os.clock() }
+                        end
+                    end
+                end)
+                return orig(self, user, slot)
+            end
+            tbl[fname] = W[key .. "Wrap"]
+            w148_log("wrapped " .. (kind == "pile" and "CarryItemPile." or "CarryableItem.") .. fname)
+        end
+        wrap(CarryItemPile, "OnPickUp", "pile")
+        wrap(CarryItemPile, "OnDeposit", "pile")
+        wrap(CarryableItem, "OnPickUp", "ground")
+    end
+
+    -- The put_item / deposit_item / put_corpse keys (the shared action hook): what the set-down was.
+    function KCD2MP_W148OnAction(action, activation)
+        if activation ~= "press" and activation ~= "hold" then return end
+        if action == "put_item" then W.putItemAt = os.clock()
+        elseif action == "deposit_item" then W.depositAt = os.clock()
+        elseif action == "put_corpse" then W.putCorpseAt = os.clock() end
+    end
+
+    local function emit_obj(kind, m, how, p)
+        if not (W.carrySync and W.carryObjects and W.session and p) then return end
+        if kind == "grab" then
+            KCD2MP_EmitEvent("w148_carry", string.format("grab object %s %.3f %.3f %.3f", m.name, p.x, p.y, p.z))
+        else
+            KCD2MP_EmitEvent("w148_carry", string.format("put %s object %s %.3f %.3f %.3f", how, m.name, p.x, p.y, p.z))
+        end
+    end
+
+    -- Where a dropped sack lies: the game's own sack entity near the player, else at his feet.
+    local function dropped_sack_pos(pp)
+        local best, bestD = nil, 3.0
+        local list = nil
+        pcall(function() list = System.GetEntitiesInSphere(pp, 3.0) end)
+        for _, e in ipairs(list or {}) do
+            if e.class == "CarryableItem" then
+                local d = dist(pos_of(e), pp)
+                if d < bestD then best, bestD = e, d end
+            end
+        end
+        return best and pos_of(best) or pp
+    end
+
+    -- From KCD2MP_W148Tick: this player's object carry, start and end.
+    function KCD2MP_W148ObjectTick(now, pp)
+        if W.objPick and not W.objMine and (now - W.objPick.at) >= 1.2 then
+            W.objMine = W.objPick
+            W.objPick = nil
+            W.objMine.since = now
+            W.stats.grabs = W.stats.grabs + 1
+            w148_log(string.format("local grab object %s (%s) at %s", W.objMine.name, W.objMine.src, fmt(W.objMine.pick)))
+            emit_obj("grab", W.objMine, nil, W.objMine.pick)
+        end
+        local m = W.objMine
+        if not m then return end
+        local h = hand_item()
+        if h ~= nil and m.hand == nil and (now - m.since) < 6 then m.hand = h end
+        local dep = W.objDeposit
+        local ended, how, rest = false, nil, nil
+        if dep and dep.at >= m.since then
+            ended, how, rest = true, "put", dep.pos or pp
+            W.objDeposit = nil
+        elseif (W.putItemAt or 0) >= m.since and (now - W.putItemAt) >= 1.4 then
+            ended, how, rest = true, "drop", dropped_sack_pos(pp)
+        elseif m.hand ~= nil and h ~= m.hand then
+            m.goneAt = m.goneAt or now
+            if (now - m.goneAt) >= 1.4 then ended, how, rest = true, ((W.depositAt or 0) >= m.since) and "put" or "drop", dropped_sack_pos(pp) end
+        elseif (now - m.since) > 900 then
+            ended, how, rest = true, "lost", pp
+        else
+            m.goneAt = nil
+        end
+        if ended then
+            W.objMine = nil
+            W.stats.puts = W.stats.puts + 1
+            w148_log(string.format("local put %s object %s at %s", how, m.name, fmt(rest)))
+            emit_obj("put", m, how, rest)
+        end
+    end
+
+    local function prop_remove_near(p, why)
+        for k, pr in pairs(W.props) do
+            if dist(pr.pos, p) <= 1.5 then
+                pcall(System.RemoveEntity, pr.id)
+                W.props[k] = nil
+                w148_log("object prop removed near " .. fmt(p) .. " (" .. why .. ")")
+                return true
+            end
+        end
+        return false
+    end
+
+    -- A partner's object carry, the part this mod shows (the avatar's hands are the agent's).
+    function KCD2MP_W148ApplyObject(src, op, name, x, y, z, how)
+        local p = { x = tonumber(x) or 0, y = tonumber(y) or 0, z = tonumber(z) or 0 }
+        if op == "grab" then
+            prop_remove_near(p, "player " .. tostring(src) .. " picked it up")
+            w148_log(string.format("avatar %s grab object %s at %s -> the avatar holds a sack", tostring(src), tostring(name), fmt(p)))
+            return
+        end
+        if op == "put" and how == "drop" then
+            if not reachable(p, ground_at(p)) then
+                local av = avatar_of(src)
+                local ap = av and pos_of(av)
+                if ap and reachable(ap, ground_at(ap)) then p = ap else
+                    w148_log("object drop of " .. tostring(name) .. " at " .. fmt(p) .. " is unreachable here -- no sack shown"); return end
+            end
+            W.propN = W.propN + 1
+            local ok, e = pcall(System.SpawnEntity, { class = "BasicEntity", name = "kcd2mp_sack_" .. W.propN, position = p,
+                properties = { object_Model = W.SACK_MODEL, Physics = { bPhysicalize = false, bRigidBody = false } } })
+            if ok and e then
+                if mp_set_no_save then pcall(mp_set_no_save, e) end
+                W.props[W.propN] = { id = e.id, pos = p, at = os.clock() }
+                w148_log(string.format("avatar %s drop object %s -> a sack lies at %s (shown only)", tostring(src), tostring(name), fmt(p)))
+            else
+                w148_log("avatar " .. tostring(src) .. " drop object: the sack prop did not spawn (" .. tostring(e) .. ")")
+            end
+            return
+        end
+        w148_log(string.format("avatar %s %s %s object %s at %s", tostring(src), tostring(op), tostring(how), tostring(name), fmt(p)))
+    end
+
+    function KCD2MP_W148SetCarryObjects(arg)
+        local v = KCD2MP_Wo122ParseBool(arg)
+        if v == "bad" then mp_log("mp_carry_objects: expected on|off, got '" .. tostring(arg) .. "'"); return false end
+        if v ~= nil then W.carryObjects = v end
+        mp_log("WO148-TOGGLE mp_carry_objects carry_objects=" .. (W.carryObjects and "on" or "off"))
+        KCD2MP_W148CfgEmit()
+        return true
+    end
+
+    -- The wire's name rule (CarryText.IsName): [A-Za-z0-9_], 1..64.
+    function KCD2MP_W148IsName(s)
+        return type(s) == "string" and #s >= 1 and #s <= 64 and s:match("^[%w_]+$") ~= nil
+    end
+end
+
 -- ===== Register Console Commands =====
 
 local ok, err = pcall(function()
@@ -18963,6 +19663,13 @@ local ok, err = pcall(function()
     System.AddCCommand("mp_test_hit",            'KCD2MP_W147TestHit(%line)',             "WO-147 test: a stand-in for this player's own landed blow on a body (the DLL marks it as the player's and deals it; the rest runs as for a swing): mp_test_hit <npc> [hp] [stamina]")
     mp_log("WO147-BUILD hostile_engage=on quest_safety=on leash_cap_s=60 -- the joiner can fight, the leash pulls")
     KCD2MP_W147CfgEmit()
+    -- WO-148: carrying on the other screen (bodies and sacks; the host's world decides who carries).
+    System.AddCCommand("mp_carry_sync",          'KCD2MP_W148SetCarrySync(%line)',        "WO-148: when a player picks up, carries and puts down a body, the other sees it (the partner's figure carries its own copy, which lands where it was put down); the host's world decides who carries (default on): mp_carry_sync on|off; bare = report")
+    System.AddCCommand("mp_carry_objects",       'KCD2MP_W148SetCarryObjects(%line)',     "WO-148: the same for sacks and jugs (the partner's figure holds a sack; one dropped lies where it landed, shown only): mp_carry_objects on|off; bare = report")
+    System.AddCCommand("mp_carry_test",          'KCD2MP_W148Test(%line)',                "WO-148 test: a stand-in for this player's own keys: mp_carry_test grab <body> | put | status")
+    System.AddCCommand("mp_carry_status",        'KCD2MP_W148Status()',                   "WO-148: the carrying state (WO148-STATUS in kcd.log)")
+    mp_log("WO148-BUILD carry_sync=" .. (KCD2MP.w148.carrySync and "on" or "off") .. " carry_objects=" .. (KCD2MP.w148.carryObjects and "on" or "off") .. " -- carrying shows on the other screen")
+    KCD2MP_W148CfgEmit()
     System.AddCCommand("mp_npc_native_write",    'KCD2MP_SetNpcNativeWrite(%line)',           "WO-118: KCDMP.dll writes every bound NPC puppet every frame at its frame hook (default on); off = the 50 ms Lua path: mp_npc_native_write on|off; bare = report")
     System.AddCCommand("mp_npc_detach",          'KCD2MP_SetNpcDetach(%line)',                "WO-118: at puppet start, right after the pause, free the NPC from its seat/activity (wh_ai_NPCStateResetElement Stance + Unstance; default on): mp_npc_detach on|off")
     System.AddCCommand("mp_npc_trace",           'KCD2MP_NpcTrace(%line)',                    "WO-118: per-frame position of one named entity at the DLL's frame hook and at render, to a CSV in the game folder: mp_npc_trace <name> [seconds] | mp_npc_trace stop")
@@ -19231,7 +19938,8 @@ ACTS.DICE_INVITE_ACTIONS = { ["dialog_answer3"] = true, ["dialog_answer4"] = tru
 --   2. R (toggle_torch) turned out unreliable while seated -- exactly the
 --      position this feature is for.
 --
--- keybindSuperactions.xml (Libs/Config/, shipped in this mod's own pak) is
+-- keybindSuperactions.xml (Libs/Config/; since WO-148 built on the player's machine from the
+-- game's own copy plus our lines, kdcmp/ConfigPatch -> Mods\kdcmp\Data\kdcmp_keys.pak) is
 -- the actual fix: it is a plain, moddable XML action-map config, not
 -- hardcoded, and a key can carry MULTIPLE named actions across different
 -- `map=` contexts simultaneously. So instead of reusing an existing action
@@ -19298,6 +20006,7 @@ local function handleAction(action, activation, value)
     if KCD2MP.logActions then
         mp_log(string.format("ACT '%s' a=%s", tostring(action), tostring(activation)))
     end
+    if KCD2MP_W148OnAction then pcall(KCD2MP_W148OnAction, action, activation) end   -- WO-148: put_item / deposit_item / put_corpse
 
     -- Only consume these while a prompt is actually up, so they never interfere
     -- with normal dialogue or menus.

@@ -1,3 +1,6 @@
+// Copyright (C) 2026 the Kingdom Come: Together contributors (AUTHORS). SPDX-License-Identifier: GPL-3.0-only
+// GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
+// content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 // WO-137: engine-free checks of the shared-quests native rules (native/KCDMP/wo137_rules.h):
 // which C_Function calls are quest time sets (the joiner's time gate), which paths are quests,
 // when a config is logged, when the time gate is on. Linked into KCDMP_NativeTests;

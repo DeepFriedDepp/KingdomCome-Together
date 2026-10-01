@@ -1,3 +1,6 @@
+// Copyright (C) 2026 the Kingdom Come: Together contributors (AUTHORS). SPDX-License-Identifier: GPL-3.0-only
+// GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
+// content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 // WO-97: print every reference to a data address and decompile the referencing
 // functions. Used to recover the value of a runtime-constructed global -- the
 // C_ConceptPath tokenizer's separator string, which lives in .data and is

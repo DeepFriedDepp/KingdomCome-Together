@@ -1,3 +1,6 @@
+# Copyright (C) 2026 the Kingdom Come: Together contributors (AUTHORS). SPDX-License-Identifier: GPL-3.0-only
+# GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
+# content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 """WO-118 Phase 6 network noise: one walking puppet through the local relay, the
 synthetic peer injecting delay/jitter/spikes AFTER its sender stamp.
 Runs are spaced GAP s apart so the DLL's per-source clock (5 s) and sequence (2 s)

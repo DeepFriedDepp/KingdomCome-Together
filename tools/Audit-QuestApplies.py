@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright (C) 2026 the Kingdom Come: Together contributors (AUTHORS). SPDX-License-Identifier: GPL-3.0-only
+# GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
+# content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 """WO-137 Phase 6 (hazard H4) -- vet the quest ports shared quests applies.
 
 A shared-quests apply is the State's own Set<Value> port (native wo137.cpp): the

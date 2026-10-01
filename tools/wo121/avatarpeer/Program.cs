@@ -1,3 +1,6 @@
+// Copyright (C) 2026 the Kingdom Come: Together contributors (AUTHORS). SPDX-License-Identifier: GPL-3.0-only
+// GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
+// content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 // WO-121 live test tool (tools/wo121, never shipped): a synthetic v8 PEER whose
 // avatar does scripted things -- the stand-in for the second player in a solo
 // session. Connects to a real local relay FIRST (lowest id, so it is the
@@ -59,6 +62,12 @@
 //   at <t> sleep answer <tok> yes|no|busy      (WO-140) answer an Ask
 //   at <t> sleep begin <tok> <hours> <save>    (WO-140) this joiner (the asker) chose the length
 //   at <t> sleep cancel <tok> <why>            (WO-140) backed-out | woke | ...; every SleepVoteDown (0x69) is printed
+//   at <t> carry grab <dead|ko|object> <body> [x y z]   (WO-148) this joiner picked that host body up (a Carry Grab to
+//                                              the host, tok = a counter); x y z = where it lay (default: here). A Held
+//                                              follows every 2 s with the avatar's position until the put
+//   at <t> carry put <put|drop|throw|lost> <body> [x y z]   (WO-148) set it down there (default: 1 m ahead of the avatar)
+//   at <t> carry held on|off                   (WO-148) stop or resume the Held heartbeat (off tests the 10 s lost rule)
+//                                              every CarryDown (0x71) received is printed
 //   end <t>                                    stop
 //
 // Position packets: every 30 ms while moving, 2 s heartbeat still; the state
@@ -209,6 +218,9 @@ static class P
                         Console.WriteLine($"PEER t={recClock.Elapsed.TotalSeconds:F1} got SleepVote {Protocol.SleepVoteName(svm.Kind)} tok=0x{svm.Tok:X8} from={b2[0]}: {svm.Text}");
                         sleepIn.Enqueue((b2[0], svm));
                     }
+                    else if (t2 == Protocol.CarryDown && b2.Length > 1 + Protocol.JoinHeaderLen
+                             && LootMsg.TryDecode(b2.AsSpan(1 + Protocol.JoinHeaderLen), out var crm))   // WO-148
+                        Console.WriteLine($"PEER t={recClock.Elapsed.TotalSeconds:F1} got Carry {Protocol.CarryKindName(crm.Kind)} tok={crm.Tok} from={b2[0]}: {crm.Text}");
                     else if (t2 == Protocol.LeashDown && b2.Length > 1 + Protocol.JoinHeaderLen
                              && LeashCommand.TryDecode(b2.AsSpan(1 + Protocol.JoinHeaderLen), out var lc))
                         leashIn.Enqueue((b2[0], lc));   // WO-114: handled on the main loop
@@ -225,6 +237,7 @@ static class P
         var s2 = new BodyState2(0, 0, BodyState2Bits.None, WireZone.Undefined, WireGuardStance.None, WireZone.Undefined, 0, 0, 0);
         BodyState2? lastSent = null; double lastSentT = -9, lastPos = -9, lastPing = 0; int si = 0; bool placed = false, frozen = false;
         bool riding = false;   // WO-136: ride <horse>
+        uint carryTok = 0; string? carryBody = null, carryWhat = null; bool carryHeld = true; double lastCarry = -9;   // WO-148
         double lastT = 0;
         float vitalsHp = -1, vitalsSt = -1; double lastVitals = -9;   // WO-131
         byte vitalsFlags = 0;   // WO-132: vitals <hp> <st> downed -> the unconscious bit (0x01), as a floored joiner sends
@@ -534,6 +547,22 @@ static class P
                         Console.WriteLine($"PEER t={t:F1} activity {act}");
                         break;
                     }
+                    case "carry":   // WO-148: carry grab <what> <body> [x y z] | put <how> <body> [x y z] | held on|off
+                    {
+                        if (f.Length > 2 && f[1] == "held") { carryHeld = f[2] == "on"; Console.WriteLine($"PEER t={t:F1} carry held heartbeat {(carryHeld ? "on" : "off")}"); break; }
+                        if (f.Length < 4 || (f[1] != "grab" && f[1] != "put")) { Console.WriteLine($"PEER t={t:F1} carry: expected grab <what> <body> [x y z] | put <how> <body> [x y z] | held on|off"); break; }
+                        bool grab = f[1] == "grab";
+                        float cx = f.Length > 6 ? F(f[4]) : grab ? x : x - (float)Math.Sin(yaw);
+                        float cy = f.Length > 6 ? F(f[5]) : grab ? y : y + (float)Math.Cos(yaw);
+                        float cz = f.Length > 6 ? F(f[6]) : z;
+                        string text;
+                        if (grab) { carryTok++; carryBody = f[3]; carryWhat = f[2]; lastCarry = t; text = CarryText.Grab(myId, f[2], f[3], cx, cy, cz); }
+                        else { text = CarryText.Put(myId, f[2], carryWhat ?? "dead", f[3], cx, cy, cz); carryBody = null; }
+                        byte kind = grab ? Protocol.CarryGrab : Protocol.CarryPut;
+                        await Send(st, new LootMsg(kind, carryTok, text).BuildUp(Protocol.CarryUp, Protocol.JoinTargetHost));
+                        Console.WriteLine($"PEER t={t:F1} carry {Protocol.CarryKindName(kind)} tok={carryTok}: {text}");
+                        break;
+                    }
                     case "torch":   // WO-136: torch on|off -- the state block's torch bit
                         s2 = s2 with { Bits = f.Length > 1 && f[1] == "on" ? s2.Bits | BodyState2Bits.TorchLit : s2.Bits & ~BodyState2Bits.TorchLit };
                         Console.WriteLine($"PEER t={t:F1} torch {(f.Length > 1 ? f[1] : "?")} state {s2}");
@@ -574,6 +603,11 @@ static class P
                 }
                 Console.WriteLine($"PEER t={t:F1} MP-LEASH pulled from={leashFrom} to={leashTo} residual=0.00 result={Protocol.LeashResultName(leashResult)} (synthetic joiner)");
                 lastLeash = -9;
+            }
+            if (carryBody is not null && carryHeld && t - lastCarry >= Protocol.CarryHeldEveryMs / 1000.0)   // WO-148: still carrying
+            {
+                lastCarry = t;
+                await Send(st, new LootMsg(Protocol.CarryHeld, carryTok, CarryText.Held(myId, carryWhat ?? "dead", carryBody, x, y, z)).BuildUp(Protocol.CarryUp, Protocol.JoinTargetHost));
             }
             if (leashOn && t - lastLeash >= 1.0)
             {

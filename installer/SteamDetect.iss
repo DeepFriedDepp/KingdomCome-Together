@@ -1,4 +1,7 @@
-﻿// Steam library / Modding Tools discovery, factored out of KCDMP.iss so it can
+﻿// Copyright (C) 2026 the Kingdom Come: Together contributors (AUTHORS). SPDX-License-Identifier: GPL-3.0-only
+// GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
+// content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
+// Steam library / Modding Tools discovery, factored out of KCDMP.iss so it can
 // be compiled into a test harness as well as into the installer.
 //
 // #include this from inside a [Code] section. It defines no UI and touches no

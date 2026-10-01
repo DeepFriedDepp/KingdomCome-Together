@@ -1,3 +1,6 @@
+-- Copyright (C) 2026 the Kingdom Come: Together contributors (AUTHORS). SPDX-License-Identifier: GPL-3.0-only
+-- GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
+-- content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 -- WO-90 synthetic test for the never-synced entity-name exclusion:
 --   * mp_npc_rescan (via KCD2MP_NpcSyncTick) never tracks an engine
 --     conversation stand-in ("DialogTwin_*") or one of this mod's own ghost

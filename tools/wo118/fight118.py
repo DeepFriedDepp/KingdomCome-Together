@@ -1,3 +1,6 @@
+# Copyright (C) 2026 the Kingdom Come: Together contributors (AUTHORS). SPDX-License-Identifier: GPL-3.0-only
+# GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
+# content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 """WO-118 Phase 2 sinking check in a fight: a circling puppet with the combat flag and a swing cue every 2.5 s.
 usage: python fight118.py <trace.csv> <floor_z> <cz>
 Holds (the DLL leaves the body to the swing for ~900 ms) show as runs of wrote=0 frames."""

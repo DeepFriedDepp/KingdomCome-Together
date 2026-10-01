@@ -1,3 +1,6 @@
+// Copyright (C) 2026 the Kingdom Come: Together contributors (AUTHORS). SPDX-License-Identifier: GPL-3.0-only
+// GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
+// content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 // WO-100: dump vtable slots AND self-identify each slot from the __FUNCTION__
 // strings the Modding Tools build leaves inside every function (WO-42's key
 // discovery). DumpWo42Vtbl prints the target address and Ghidra's guessed

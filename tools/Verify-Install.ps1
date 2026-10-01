@@ -1,4 +1,7 @@
-﻿<#
+﻿# Copyright (C) 2026 the Kingdom Come: Together contributors (AUTHORS). SPDX-License-Identifier: GPL-3.0-only
+# GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
+# content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
+<#
 .SYNOPSIS
     Answers two different questions that are easy to confuse: did the build
     produce the right files, and did the installer actually put them on disk.
@@ -192,6 +195,12 @@ $AsmMarkers = @(
     @{ File = 'KcdMpClient.dll'; Marker = 'ghost_superseded=';      Owner = 'WO-147 the frame backlog: superseded samples skipped (agent half)' },
     @{ File = 'KCDMP.dll';       Marker = 'no silence of the streams'; Owner = "WO-147 the frame backlog: a stall is no stream silence (native)" },
     @{ File = 'KCDMP.dll';       Marker = 'the player is on the ground (or 60 s passed)'; Owner = "WO-147 the pull's fall hold lasts until there is ground under the player (native)" },
+    # WO-148: carrying on the other screen, the dice keys from the player's own game, the hooks' boundary check
+    @{ File = 'KcdMpClient.dll'; Marker = 'MP-WO148-STATS';         Owner = 'WO-148 carrying on the other screen (agent half)' },
+    @{ File = 'KcdMpClient.dll'; Marker = 'KEYS-PAK';               Owner = "WO-148 the dice keys built from the player's own game files (agent --keys-pak)" },
+    @{ File = 'KcdMpClient.dll'; Marker = "titles from the game's own localisation"; Owner = "WO-148 quest titles read from the player's own game (agent half)" },
+    @{ File = 'KCDMP.dll';       Marker = 'ends inside an instruction'; Owner = "WO-148 a hook refused unless its patch ends on an instruction boundary (native)" },
+    @{ File = 'KCDMP_launcher.dll'; Marker = 'keys pak:';           Owner = 'WO-148 the launcher refreshes the dice keys before a game start' },
     @{ File = 'KCDMP_launcher.dll'; Marker = 'Kingdom Come: Together'; Owner = 'WO-134 rebrand (launcher window title)' }
 )
 
@@ -275,6 +284,9 @@ $PakMarkers = @(
     @{ Marker = 'function KCD2MP_SetQuestSafety';  Owner = 'WO-147 mp_quest_safety (mod half)' },
     @{ Marker = 'function KCD2MP_NpcSilenceRelease'; Owner = "WO-147 the frame backlog: a puppet released on the agent's word (mod half)" },
     @{ Marker = 'when their bodies come';          Owner = 'WO-147 a copy re-created by a load is reported whatever its id (mod half)' },
+    @{ Marker = 'function KCD2MP_W148Apply';       Owner = "WO-148 a partner's carry shown on its avatar (mod half)" },
+    @{ Marker = 'function KCD2MP_W148Holds';       Owner = "WO-148 a carried body is the carrier's: the stream leaves it alone (mod half)" },
+    @{ Marker = 'WO148-BUILD';                     Owner = 'WO-148 the carrying build line (mod half)' },
     @{ Marker = 'function KCD2MP_W144AvatarKey';   Owner = "WO-144 the live avatar's entity key (mod half)" },
     @{ Marker = 'function KCD2MP_W144LightTick';   Owner = 'WO-144 an avatar holds a light only while its player does (mod half)' },
     @{ Marker = 'function KCD2MP_W144FollowHostClock'; Owner = "WO-144 the joiner's clock stands with the host's (mod half)" },
@@ -362,6 +374,29 @@ Test-Assembly $rel     'BUILT     app'
 Test-Assembly $AppDir  'INSTALLED app'
 Test-Pak (Join-Path $root 'kdcmp\Data\kdcmp.pak') 'BUILT     pak'
 Test-Pak (Join-Path $ModDir 'Data\kdcmp.pak')     'INSTALLED pak'
+
+# WO-148: the dice keys. The mod carries none of the game's two Libs/Config files any more; Setup
+# (and the launcher, before every game start) builds them from the player's own game into a second
+# pak beside kdcmp.pak. Missing = the dice keys (F2, F4-F9, F11, F12, U) do nothing; the console
+# commands still work. Rebuild it with: KcdMpClient.exe --keys-pak --game-root <the game folder>
+$keysPak = Join-Path $ModDir 'Data\kdcmp_keys.pak'
+Write-Host "`n[INSTALLED keys] $keysPak" -ForegroundColor Cyan
+if (-not (Test-Path $keysPak)) {
+    Write-Host '  MISSING -- the dice keys will do nothing (run the launcher once, or Setup again)' -ForegroundColor Red
+    $script:fail++
+} else {
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $kz = [IO.Compression.ZipFile]::OpenRead($keysPak)
+    try {
+        foreach ($entry in @('Libs/Config/defaultProfile.xml', 'Libs/Config/keybindSuperactions.xml')) {
+            $ke = $kz.Entries | Where-Object { $_.FullName -eq $entry }
+            $hit = $false
+            if ($ke) { $kr = New-Object IO.StreamReader($ke.Open()); $hit = $kr.ReadToEnd() -match 'kcd2mp_dice_cast'; $kr.Close() }
+            if (-not $hit) { $script:fail++ }
+            Write-Host ("  {0,-48} {1,-7} {2}" -f $entry, $(if($hit){'present'}else{'ABSENT'}), 'WO-148 the dice keys (built here from the game''s own file)') -ForegroundColor $(if($hit){'Green'}else{'Red'})
+        }
+    } finally { $kz.Dispose() }
+}
 
 # WO-74. The installer now proves itself and leaves the verdict behind, so the
 # first question here is no longer "do these two folders look alike" but "what

@@ -1,0 +1,96 @@
+<?xml version="1.0" encoding="us-ascii"?>
+<!-- Copyright (C) 2026 the Kingdom Come: Together contributors (AUTHORS). SPDX-License-Identifier: GPL-3.0-only
+     GPLv3 section 7 additional terms: NOTICE. This project's own material only; Kingdom Come: Deliverance II and
+     its content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
+
+     WO-148: only OUR additions to the game's Libs/Config/keybindSuperactions.xml. The game's own file is never shipped.
+     On the player's machine the agent's keys-pak verb (KcdMpClient.exe, run by Setup and by the
+     launcher before every game start) reads the player's own copy out of the game's Data paks,
+     inserts the lines between the kdcmp_patch tags just before the end of its keybinds root, and writes the result into
+     Mods\kdcmp\Data\kdcmp_keys.pak (dotnet/KcdMp.Client/KeybindPak.cs). -->
+<kdcmp_patch target="Libs/Config/keybindSuperactions.xml" insert="end-of-root:keybinds">
+	<!-- KCD2MP (WO-6): multiplayer dice board input. Every control below is
+	     confirmed unclaimed ANYWHERE else in this file (checked against the
+	     full sorted list of every input="..." value used), but that alone
+	     was NOT sufficient proof of safety, learned the hard way: the Numpad
+	     operator keys (originally used for cast/bank/yield) turned out to be
+	     bound to engine-level debug toggles (AI/animation debug draw) that
+	     live entirely outside this XML, invisible to any check of this file's
+	     own contents. F1 (photo mode), F3 (flight mode) and F10 (poly/anim
+	     debug) are the same story among the F-keys. Every key actually used
+	     below was pressed live, one at a time, and confirmed to visibly do
+	     NOTHING before being wired up: the only real proof. H is ALSO in the
+	     "confirmed unclaimed in this file" set and is NOT safe: it opens a
+	     Modding Tools debug menu, hardcoded outside this XML same as the
+	     Numpad-operator/F1/F3/F10 traps. Bank/yield moved off F11/F12 to U/Y
+	     on request, freeing F11/F12 for a future invite-accept/decline bind.
+	     Hidden from the rebind menu (no ui_name/ui_tooltip, keyboard="hidden")
+	     since these are fixed defaults, not meant for player rebinding;
+	     mp_dice_mark/cast/bank/yield/cancel remain the console fallback.
+	     map="interaction" observed active whether standing or seated.
+
+	     WO-33: kcd2mp_dice_cast (F9) / kcd2mp_dice_bank (F11) /
+	     kcd2mp_dice_yield (F12) are ALSO the real invite/accept/decline binds
+	     outside an active match; no new keys added, since kdcmp.lua's
+	     handleAction only routes these three to the dice-board meaning while
+	     KCD2MP.dice.open is true, and to invite/accept/decline otherwise.
+	     Reusing them cost no new live key-testing: all three were already
+	     confirmed safe and unclaimed elsewhere when first wired up above.
+	     mp_invite dice / mp_accept / mp_decline remain the console fallback.
+	     See kdcmp.lua handleAction. -->
+	<superaction name="kcd2mp_dice_mark_1" ui_group="" keyboard="hidden">
+		<action name="kcd2mp_dice_mark_1" map="interaction" />
+		<control input="f2" controller="keyboard" />
+	</superaction>
+
+	<superaction name="kcd2mp_dice_mark_2" ui_group="" keyboard="hidden">
+		<action name="kcd2mp_dice_mark_2" map="interaction" />
+		<control input="f4" controller="keyboard" />
+	</superaction>
+
+	<superaction name="kcd2mp_dice_mark_3" ui_group="" keyboard="hidden">
+		<action name="kcd2mp_dice_mark_3" map="interaction" />
+		<control input="f5" controller="keyboard" />
+	</superaction>
+
+	<superaction name="kcd2mp_dice_mark_4" ui_group="" keyboard="hidden">
+		<action name="kcd2mp_dice_mark_4" map="interaction" />
+		<control input="f6" controller="keyboard" />
+	</superaction>
+
+	<superaction name="kcd2mp_dice_mark_5" ui_group="" keyboard="hidden">
+		<action name="kcd2mp_dice_mark_5" map="interaction" />
+		<control input="f7" controller="keyboard" />
+	</superaction>
+
+	<superaction name="kcd2mp_dice_mark_6" ui_group="" keyboard="hidden">
+		<action name="kcd2mp_dice_mark_6" map="interaction" />
+		<control input="f8" controller="keyboard" />
+	</superaction>
+
+	<superaction name="kcd2mp_dice_cast" ui_group="" keyboard="hidden">
+		<action name="kcd2mp_dice_cast" map="interaction" />
+		<control input="f9" controller="keyboard" />
+	</superaction>
+
+	<!-- Back on F11/F12: U/Y worked fine, but np_decimal (below) turned out not
+	     to be a recognised control name at all: silently no-op, not a
+	     hidden debug bind like the earlier traps, just an unverified guess at
+	     this engine's name for that key. Simplest fix: use only keys already
+	     proven end-to-end (F11/F12), and put cancel on U, which is confirmed
+	     both unclaimed AND actually wired correctly. Y is unused again. -->
+	<superaction name="kcd2mp_dice_bank" ui_group="" keyboard="hidden">
+		<action name="kcd2mp_dice_bank" map="interaction" />
+		<control input="f11" controller="keyboard" />
+	</superaction>
+
+	<superaction name="kcd2mp_dice_yield" ui_group="" keyboard="hidden">
+		<action name="kcd2mp_dice_yield" map="interaction" />
+		<control input="f12" controller="keyboard" />
+	</superaction>
+
+	<superaction name="kcd2mp_dice_cancel" ui_group="" keyboard="hidden">
+		<action name="kcd2mp_dice_cancel" map="interaction" />
+		<control input="u" controller="keyboard" />
+	</superaction>
+</kdcmp_patch>
