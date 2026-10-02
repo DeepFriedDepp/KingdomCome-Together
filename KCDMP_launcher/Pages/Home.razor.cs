@@ -200,7 +200,7 @@ namespace KCDMP_launcher.Pages
             LoadFavorites();
             LoadSettings();
             LoadCustomServers();
-            CheckGamePathOnStartup();
+            StartSetupCheck();   // WO-150: in the background; replaces the old "open Settings when no game path" check
             CheckInstallIntegrity();
             Globals.OnStyleChanged += OnStyleChanged;
             await EnsureLocalMasterServerAsync();
@@ -239,35 +239,7 @@ namespace KCDMP_launcher.Pages
             catch (Exception ex) { Log.Debug(ex, "Could not apply the style profile"); }
         }
 
-        /// <summary>
-        /// The installer pre-seeds settings.json with the game path it found,
-        /// so the normal case never sees this. It exists for the person who
-        /// unzipped a release by hand, or whose game moved between Steam
-        /// libraries: rather than letting them find out at the moment they
-        /// press Launch, open Settings straight away and say what is wrong.
-        /// </summary>
-        private void CheckGamePathOnStartup()
-        {
-            if (string.IsNullOrWhiteSpace(settings.GamePath) || !File.Exists(settings.GamePath))
-            {
-                showSettings = true;
-                UiService.ShowError(
-                    "No game found yet. Point 'Game Path' at the KingdomCome.exe inside your " +
-                    "KCD2 Modding Tools install (…\\KCD2Mod\\Bin\\Win64ReleaseSteamLTO_DLL).");
-                return;
-            }
-
-            if (!IsModdingToolsBuild(settings.GamePath))
-            {
-                showSettings = true;
-                UiService.ShowError(
-                    "The saved game path is the retail build. KCD2 must be launched from the Modding " +
-                    "Tools build (KCD2Mod) — it is the only one with the debug API on port 1403 and the " +
-                    "separate module DLLs the plugin hooks.");
-            }
-        }
-
-        //CUSTOM SERVERS LOGIC 
+        //CUSTOM SERVERS LOGIC
         private void LoadCustomServers()
         {
             try
@@ -479,6 +451,8 @@ namespace KCDMP_launcher.Pages
         /// </summary>
         private async Task LaunchGame(ServerInfo server)
         {
+            if (!await EnsureSetupReadyAsync()) return;   // WO-150: Host and Join unlock at Ready!
+
             if (launchStage != LaunchStage.Idle && launchStage != LaunchStage.Failed)
             {
                 UiService.ShowError("A launch is already in progress.");
@@ -885,6 +859,8 @@ namespace KCDMP_launcher.Pages
         // of what address a friend uses to reach it).
         private async Task OpenHostModal()
         {
+            if (!await EnsureSetupReadyAsync()) return;   // WO-150: before a relay is started
+
             hostErrorMessage = "";
             hostLanAddresses = NetService.GetLocalIPv4Addresses();
 
@@ -1121,14 +1097,8 @@ namespace KCDMP_launcher.Pages
         /// exported from CrySystem.dll. So this tests for what is needed rather
         /// than for an install path.
         /// </summary>
-        public static bool IsModdingToolsBuild(string gamePath)
-        {
-            string dir = Path.GetDirectoryName(gamePath) ?? "";
-            if (dir.Length == 0) return false;
-
-            return File.Exists(Path.Combine(dir, "Framework.dll"))
-                && File.Exists(Path.Combine(dir, "CrySystem.dll"));
-        }
+        public static bool IsModdingToolsBuild(string gamePath) =>
+            KcdMp.Setup.GameLocator.IsModdingToolsBuild(gamePath);   // WO-150: the one copy, shared with Setup
 
         /// <summary>
         /// The install root, two levels above KingdomCome.exe
@@ -1260,6 +1230,7 @@ namespace KCDMP_launcher.Pages
         {
             versionPollCts?.Cancel();
             hostPollCts?.Cancel();
+            setupPollCts?.Cancel();   // WO-150
             StopHostedRelay();
             StopHostedMasterServer();
             Environment.Exit(0);

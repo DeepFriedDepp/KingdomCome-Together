@@ -135,8 +135,9 @@ namespace KCDMP_launcher.Pages
 
         // ------------------------------------------------------------ join through Steam
 
-        private void OpenJoinSteam()
+        private async Task OpenJoinSteam()
         {
+            if (!await EnsureSetupReadyAsync()) return;   // WO-150: Host and Join unlock at Ready!
             showJoinSteam = true;
             steamCodeInput = settings.LastSteamCode ?? "";
             steamResultMessage = "";

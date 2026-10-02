@@ -8,9 +8,12 @@
 ; to compile if that folder is not there.
 ;
 ; What it does that a plain file-copy installer does not:
-;   * finds the KCD2 Modding Tools through Steam's own metadata and refuses
-;     to continue until it has verified them (see "the gate", below),
-;   * deploys the game mod into <ModdingTools>\Mods\kdcmp,
+;   * finds Steam, the game, the KCD2 Modding Tools and their workspace with
+;     the launcher's own detection code (WO-150: KcdMpSetup.exe, see
+;     SteamDetect.iss), so the two can never disagree,
+;   * deploys the game mod into <ModdingTools>\Mods\kdcmp when the Modding
+;     Tools are installed AND set up; otherwise installs everything else and
+;     leaves the rest to the launcher's checklist (WO-150: no dead end),
 ;   * pre-seeds the launcher's settings.json with the game path it found, so
 ;     first launch needs zero configuration,
 ;   * installs the WebView2 runtime when missing, which the Photino-based
@@ -131,8 +134,18 @@ Source: "..\release\KCDMP\*"; DestDir: "{app}"; Flags: ignoreversion overwritere
 ; uninstaller silently deletes these files out of the player's game folder,
 ; which is not ours to do unasked. Removal is handled by the explicit
 ; question in CurUninstallStepChanged instead.
-Source: "..\kdcmp\mod.manifest"; DestDir: "{code:GetKdcmpTargetDir}"; Flags: ignoreversion overwritereadonly uninsneveruninstall
-Source: "..\kdcmp\Data\kdcmp.pak"; DestDir: "{code:GetKdcmpTargetDir}\Data"; Flags: ignoreversion overwritereadonly uninsneveruninstall
+;
+; WO-150: only when the Modding Tools are installed AND their workspace is
+; linked (Check: ShouldPlaceMod). Otherwise these two are held back: the
+; payload's staged copy (<app>\mod\kdcmp, from Build-Installer.ps1) is what
+; the launcher places after its checklist has linked the game's files.
+Source: "..\kdcmp\mod.manifest"; DestDir: "{code:GetKdcmpTargetDir}"; Flags: ignoreversion overwritereadonly uninsneveruninstall; Check: ShouldPlaceMod
+Source: "..\kdcmp\Data\kdcmp.pak"; DestDir: "{code:GetKdcmpTargetDir}\Data"; Flags: ignoreversion overwritereadonly uninsneveruninstall; Check: ShouldPlaceMod
+
+; WO-150: the setup helper, extracted to the temporary folder before anything is installed
+; (detection on the wizard's first page). It is also installed into the app folder by
+; the wildcard above, for the launcher's one UAC step.
+Source: "..\release\KCDMP\KcdMpSetup.exe"; Flags: dontcopy
 
 [Icons]
 ; WorkingDir matters and is not decoration: settings.json is a bare relative
@@ -159,8 +172,10 @@ Type: files; Name: "{autodesktop}\{#OldShortcutName}.lnk"
 ; were still present and left an orphan key behind.
 Root: HKCU; Subkey: "Software\KCDMP"; Flags: uninsdeletekey
 Root: HKCU; Subkey: "Software\KCDMP"; ValueType: string; ValueName: "InstallDir"; ValueData: "{app}"
-Root: HKCU; Subkey: "Software\KCDMP"; ValueType: string; ValueName: "GamePath"; ValueData: "{code:GetDetectedGameExe}"
-Root: HKCU; Subkey: "Software\KCDMP"; ValueType: string; ValueName: "ModsPath"; ValueData: "{code:GetKdcmpTargetDir}"
+; WO-150: written only when known/placed; the launcher writes both itself once its
+; checklist places a held-back mod (Home.Wo150.cs RecordModsPath).
+Root: HKCU; Subkey: "Software\KCDMP"; ValueType: string; ValueName: "GamePath"; ValueData: "{code:GetDetectedGameExe}"; Check: HaveGameExe
+Root: HKCU; Subkey: "Software\KCDMP"; ValueType: string; ValueName: "ModsPath"; ValueData: "{code:GetKdcmpTargetDir}"; Check: ShouldPlaceMod
 
 [Run]
 Filename: "{app}\{#AppExeName}"; WorkingDir: "{app}"; Description: "Launch {#AppName} now"; Flags: nowait postinstall skipifsilent
@@ -179,13 +194,18 @@ var
   GamePathLabel: TNewStaticText;
   GameHelpLabel: TNewStaticText;
   RecheckButton: TNewButton;
-  SteamButton: TNewButton;
   BrowseButton: TNewButton;
 
   DetectedGameExe: String;
   DetectedGameRoot: String;
   SteamFound: Boolean;
   ModdingToolsRegistered: Boolean;
+  // WO-150: the shared detection's verdict. True only when the Modding Tools are
+  // installed and their workspace linked; otherwise the mod is held back.
+  PlaceMod: Boolean;
+  DetectReason: String;
+  DetectWorked: Boolean;
+  BrowsedExe: String;
 
   // WO-74 -- post-install verification state. See VerifyInstalledFiles.
   // (Line comments, not brace ones: an Inno constant in braces inside a brace
@@ -315,6 +335,17 @@ begin
   Result := DetectedGameExe;
 end;
 
+{ WO-150 -- [Files]/[Registry] Check functions. }
+function ShouldPlaceMod(): Boolean;
+begin
+  Result := PlaceMod and (DetectedGameRoot <> '');
+end;
+
+function HaveGameExe(): Boolean;
+begin
+  Result := DetectedGameExe <> '';
+end;
+
 { DelTree is the normal path, but it was observed failing once on this folder
   while a handle was still open on it -- the same thing an Explorer window, a
   running game or an antivirus scan will do on a user's machine. So: try,
@@ -434,111 +465,76 @@ end;
 
 procedure UpdateGamePage();
 begin
-  if DetectedGameExe <> '' then
+  { WO-150: this page informs; it no longer gates. Whatever is missing, Setup
+    installs the launcher, and the launcher's checklist finishes the rest --
+    so a new player is never stopped here. }
+  if ShouldPlaceMod() then
   begin
-    GameStatusLabel.Caption := 'Modding Tools found.';
+    GameStatusLabel.Caption := 'Modding Tools found and set up.';
     GamePathLabel.Caption := DetectedGameExe;
     GameHelpLabel.Caption :=
       'The mod will be installed into:' + #13#10 +
       GetKdcmpTargetDir('') + #13#10#13#10 +
       'If this is not the copy you want to use, click Browse and pick the' + #13#10 +
       'KingdomCome.exe of your Modding Tools install.';
-    SteamButton.Visible := False;
   end
   else
   begin
-    if not SteamFound then
+    if DetectedGameExe <> '' then
+    begin
+      GameStatusLabel.Caption := 'Modding Tools found, but not set up yet.';
+      GamePathLabel.Caption := DetectedGameExe;
+    end
+    else if not SteamFound then
     begin
       GameStatusLabel.Caption := 'Steam was not found on this PC.';
-      GamePathLabel.Caption := '(install Steam, then Kingdom Come: Deliverance II and its Modding tools)';
-      GameHelpLabel.Caption :=
-        'This mod is installed into a game that comes from Steam, so Setup needs' + #13#10 +
-        'Steam here to find it.' + #13#10#13#10 +
-        'If you do have Steam but it lives somewhere unusual, use "Browse..." to' + #13#10 +
-        'point straight at the KingdomCome.exe inside your Modding Tools install.';
+      GamePathLabel.Caption := '(the launcher will walk you through it)';
     end
     else if ModdingToolsRegistered then
     begin
-      { Steam lists the app but the files are not there: a download that is
-        still running or was cancelled, or an install that got damaged. Telling
-        this person to "get it on Steam" would be useless advice. }
       GameStatusLabel.Caption := 'The Modding Tools are listed in Steam, but their files are missing.';
-      GamePathLabel.Caption := '(Steam knows about them; nothing is on disk yet)';
-      GameHelpLabel.Caption :=
-        'That usually means the download is still running, or was cancelled part' + #13#10 +
-        'way through.' + #13#10#13#10 +
-        'Open Steam and let it finish. If Steam thinks it is already done, right-' + #13#10 +
-        'click "Kingdom Come: Deliverance II Modding tools" in your library and' + #13#10 +
-        'choose Properties -> Installed Files -> Verify integrity.' + #13#10#13#10 +
-        'Then come back and click "Re-check". Setup cannot continue until the' + #13#10 +
-        'files are actually there.';
+      GamePathLabel.Caption := '(a download still running, or one that was cancelled)';
     end
     else
     begin
-      GameStatusLabel.Caption := 'The KCD2 Modding Tools are not installed.';
-      GamePathLabel.Caption := '(nothing found in any of your Steam libraries)';
-      GameHelpLabel.Caption :=
-        'This mod cannot run on the normal game. It needs the free "Kingdom Come:' + #13#10 +
-        'Deliverance II Modding tools" entry in your Steam library -- a separate' + #13#10 +
-        'download that comes with the debug interface and the split engine DLLs the' + #13#10 +
-        'mod hooks into. The retail game has neither.' + #13#10#13#10 +
-        'Click "Get it on Steam" to start that download, wait for Steam to finish,' + #13#10 +
-        'then click "Re-check". Setup cannot continue until it is there.';
+      GameStatusLabel.Caption := 'The KCD2 Modding Tools are not installed yet.';
+      GamePathLabel.Caption := '(the launcher will install them through Steam)';
     end;
-    SteamButton.Visible := True;
+    GameHelpLabel.Caption :=
+      DetectReason + #13#10#13#10 +
+      'You can continue now. When Setup finishes, open the launcher: it shows a' + #13#10 +
+      'checklist and does each step in the background, so you can keep using' + #13#10 +
+      'your PC while Steam downloads.';
   end;
 end;
 
 procedure RefreshDetection();
-var
-  SteamPath: String;
 begin
   { /STEAMROOT=<dir> makes detection read a fixture tree instead of the real
-    Steam install. This exists so the Modding-Tools gate can be exercised
+    Steam install. This exists so the installer's cases can be exercised
     without touching real Steam metadata -- renaming a live appmanifest to
     fake "not installed" costs a multi-gigabyte redownload, because Steam
     treats the missing manifest as "not installed" and drops the app's
     entitlement, and the game then refuses to start with a licence error.
-    Learned the expensive way. See docs\INSTALLER-TESTING.md. }
-  SteamPath := ExpandConstant('{param:steamroot|}');
-  if SteamPath <> '' then
-  begin
-    { A path that does not exist reproduces the "Steam is not installed"
-      page, so both failure pages are reachable from a fixture. }
-    SteamPath := BackslashPath(SteamPath);
-    if not DirExists(SteamPath) then SteamPath := '';
-  end
-  else
-    SteamPath := GetSteamPath();
-
-  SteamFound := SteamPath <> '';
-  ModdingToolsRegistered := ModdingToolsRegisteredIn(SteamPath);
-
-  if DetectModdingToolsIn(SteamPath, DetectedGameExe) then
-    DetectedGameRoot := GameRootOf(DetectedGameExe)
-  else
-    DetectedGameRoot := '';
-
+    Learned the expensive way. See docs\INSTALLER-TESTING.md. A path that
+    does not exist reproduces "Steam is not installed". }
+  DetectWorked := RunDetect(ExpandConstant('{param:steamroot|}'), BrowsedExe);
+  SteamFound := DetectValue('steam_found') = '1';
+  ModdingToolsRegistered := DetectValue('mt_registered') = '1';
+  DetectedGameExe := DetectValue('mt_exe');
+  DetectedGameRoot := DetectValue('mt_root');
+  PlaceMod := DetectValue('place_mod') = '1';
+  DetectReason := DetectValue('reason');
   if DetectedGameRoot = '' then
     DetectedGameExe := '';
+  if not DetectWorked then
+    DetectReason := 'Setup could not check your Steam library. The launcher will check it again and finish setup.';
 end;
 
 procedure RecheckClick(Sender: TObject);
 begin
   RefreshDetection();
   UpdateGamePage();
-  if DetectedGameExe = '' then
-    MsgBox('Still nothing. If Steam is still downloading the Modding tools, wait for it to finish and click Re-check again.',
-           mbInformation, MB_OK);
-end;
-
-procedure SteamClick(Sender: TObject);
-var
-  ResultCode: Integer;
-begin
-  if not ShellExec('open', 'steam://install/{#ModdingToolsAppId}', '', '', SW_SHOW, ewNoWait, ResultCode) then
-    MsgBox('Steam did not respond to the install link. Open Steam yourself and search your library for' + #13#10 +
-           '"Kingdom Come: Deliverance II Modding tools".', mbError, MB_OK);
 end;
 
 procedure BrowseClick(Sender: TObject);
@@ -550,26 +546,18 @@ begin
                          'KingdomCome.exe|KingdomCome.exe|All files|*.*', 'exe') then
     Exit;
 
-  if not IsModdingToolsBuild(FileName) then
+  if not CheckModdingToolsExe(FileName, Root) then
   begin
     MsgBox('That is not the Modding Tools build.' + #13#10#13#10 +
            'Framework.dll and CrySystem.dll are not next to that executable, which means it is the' + #13#10 +
            'retail game -- the mod has nothing to hook into there.',
            mbError, MB_OK);
+    RefreshDetection();
     Exit;
   end;
 
-  Root := GameRootOf(FileName);
-  if Root = '' then
-  begin
-    MsgBox('That executable passes the DLL check, but the game''s install root (the folder holding' + #13#10 +
-           'Data and Engine) could not be found above it, so there is nowhere to put the mod.',
-           mbError, MB_OK);
-    Exit;
-  end;
-
-  DetectedGameExe := FileName;
-  DetectedGameRoot := Root;
+  BrowsedExe := FileName;
+  RefreshDetection();
   UpdateGamePage();
 end;
 
@@ -578,7 +566,7 @@ end;
 procedure InitializeWizard();
 begin
   GamePage := CreateCustomPage(wpLicense, 'Kingdom Come: Deliverance II Modding Tools',
-                               'Setup needs the Modding Tools build of the game.');
+                               'The mod runs on the Modding Tools build of the game.');
 
   GameStatusLabel := TNewStaticText.Create(WizardForm);
   GameStatusLabel.Parent := GamePage.Surface;
@@ -614,15 +602,6 @@ begin
   RecheckButton.Caption := 'Re-check';
   RecheckButton.OnClick := @RecheckClick;
 
-  SteamButton := TNewButton.Create(WizardForm);
-  SteamButton.Parent := GamePage.Surface;
-  SteamButton.Left := ScaleX(100);
-  SteamButton.Top := RecheckButton.Top;
-  SteamButton.Width := ScaleX(130);
-  SteamButton.Height := ScaleY(24);
-  SteamButton.Caption := 'Get it on Steam';
-  SteamButton.OnClick := @SteamClick;
-
   BrowseButton := TNewButton.Create(WizardForm);
   BrowseButton.Parent := GamePage.Surface;
   BrowseButton.Left := GamePage.SurfaceWidth - ScaleX(90);
@@ -640,29 +619,25 @@ begin
   if CurPageID = GamePage.ID then
     UpdateGamePage()
   else if CurPageID = wpFinished then
-    WizardForm.FinishedLabel.Caption :=
-      'Kingdom Come: Together is installed and already knows where your game is.' + #13#10#13#10 +
-      'To play together, one of you clicks HOST GAME and shares the address the' + #13#10 +
-      'launcher shows; everyone else adds that address under Join. Same house is' + #13#10 +
-      'enough on its own -- for playing across the internet see docs/NETWORKING.md' + #13#10 +
-      'in the project repository.';
-end;
-
-{ The gate. Next stays dead until a real Modding Tools install has been
-  verified -- an installer cannot make Steam download anything, so detect,
-  deep-link and refuse to advance is as strong as this gets. }
-function NextButtonClick(CurPageID: Integer): Boolean;
-begin
-  Result := True;
-  if CurPageID = GamePage.ID then
   begin
-    Result := DetectedGameExe <> '';
-    if not Result then
-      MsgBox('Setup cannot continue until the KCD2 Modding Tools are installed.' + #13#10#13#10 +
-             'Use "Get it on Steam" to start the download, then "Re-check" once Steam has finished.' + #13#10 +
-             'If you already have them somewhere unusual, use "Browse..." to point at the' + #13#10 +
-             'KingdomCome.exe inside that install.',
-             mbError, MB_OK);
+    if ShouldPlaceMod() then
+      WizardForm.FinishedLabel.Caption :=
+        'Kingdom Come: Together is installed and already knows where your game is.' + #13#10#13#10 +
+        'To play together, one of you clicks HOST GAME and shares the address the' + #13#10 +
+        'launcher shows; everyone else adds that address under Join. Same house is' + #13#10 +
+        'enough on its own -- for playing across the internet see docs/NETWORKING.md' + #13#10 +
+        'in the project repository.'
+    else
+      { WO-150: the hand-off. The launcher's checklist installs what is missing
+        through Steam, links the workspace and places the mod; a Steam download
+        can take an hour, so none of it happens here. }
+      WizardForm.FinishedLabel.Caption :=
+        'Kingdom Come: Together is installed. One more thing before you can play:' + #13#10#13#10 +
+        'open the launcher (leave the box below ticked). It shows a short checklist' + #13#10 +
+        'and finishes setup for you -- the Modding Tools from Steam, linking the' + #13#10 +
+        'game''s files, and the mod itself -- step by step, in the background.' + #13#10#13#10 +
+        'You can keep using your PC meanwhile, and close the launcher at any time:' + #13#10 +
+        'it carries on where it stopped the next time you open it.';
   end;
 end;
 
@@ -773,13 +748,13 @@ var
 begin
   Result := '';
 
-  { Also covers /VERYSILENT, where the wizard page above never ran. }
-  if (DetectedGameExe = '') or (not IsModdingToolsBuild(DetectedGameExe)) then
-  begin
-    Result := 'The KCD2 Modding Tools were not found, so there is nowhere to install the mod.' + #13#10 +
-              'Install "Kingdom Come: Deliverance II Modding tools" from Steam and run Setup again.';
-    Exit;
-  end;
+  { WO-150: no refusal here any more, also under /VERYSILENT. Without set-up
+    Modding Tools the launcher, agent and the rest still install (with the
+    mod staged in the app folder), and the launcher's checklist finishes. }
+  if ShouldPlaceMod() then
+    Log('install: the Modding Tools are set up; the mod goes into ' + GetKdcmpTargetDir(''))
+  else
+    Log('install: the mod is held back for the launcher to place (' + DetectReason + ')');
 
   { The process gate, before anything is written -- see its comment above. }
   Result := EnsureNothingRunning();
@@ -787,6 +762,8 @@ begin
 
   Result := EnsureWebView2();
   if Result <> '' then Exit;
+
+  if not ShouldPlaceMod() then Exit;
 
   Target := GetKdcmpTargetDir('');
   if DirExists(Target) then
@@ -832,6 +809,8 @@ var
   Lines: TArrayOfString;
 begin
   Path := ExpandConstant('{app}\settings.json');
+  // WO-150: nothing found yet -- the launcher fills GamePath once its checklist finds the Modding Tools.
+  if DetectedGameExe = '' then Exit;
 
   if FileExists(Path) then
   begin
@@ -1101,7 +1080,11 @@ begin
         Log('verify FAIL: ' + Detail);
       end;
 
+    { WO-150: a held-back mod is verified where it was put -- the staged copy
+      in the app folder is an APP entry above; the game folder is the
+      launcher's to fill, after its checklist links the workspace. }
     ModDir := GetKdcmpTargetDir('');
+    if ShouldPlaceMod() then
     for I := 0 to GetArrayLength(ManMod) - 1 do
       if not VerifyEntry(ModDir, ManMod[I], Detail) then
       begin
@@ -1114,9 +1097,12 @@ begin
 
   { The verdict file is the record every tool reads: tools\Verify-Install.ps1,
     tools\Test-InstallerUpgrade.ps1, and anyone triaging a tester's machine. }
-  SetArrayLength(Verdict, FailCount + RemovedCount + 2);
+  SetArrayLength(Verdict, FailCount + RemovedCount + 3);
   Line := 0;
-  if FailCount = 0 then
+  if (FailCount = 0) and not ShouldPlaceMod() then
+    Verdict[0] := 'PASS  ' + IntToStr(GetArrayLength(ManApp)) +
+                  ' component(s) verified by sha256 against the install manifest; mod held back for the launcher'
+  else if FailCount = 0 then
     Verdict[0] := 'PASS  ' + IntToStr(GetArrayLength(ManApp) + GetArrayLength(ManMod)) +
                   ' component(s) verified by sha256 against the install manifest'
   else
@@ -1135,6 +1121,11 @@ begin
     Verdict[Line] := '  removed ' + Removed[I];
     Line := Line + 1;
   end;
+  // WO-150: read by tools\Verify-Install.ps1, which then expects no mod in the game folder yet.
+  if ShouldPlaceMod() then
+    Verdict[Line] := 'mod placed by Setup'
+  else
+    Verdict[Line] := 'mod held back: the launcher places it once the Modding Tools are set up';
   SaveStringsToFile(ExpandConstant('{app}\install-verify.txt'), Verdict, False);
 
   if FailCount = 0 then
@@ -1178,9 +1169,10 @@ var
   Agent, Params: String;
 begin
   Agent := ExpandConstant('{app}\KcdMpClient.exe');
-  if (DetectedGameRoot = '') or not FileExists(Agent) then
+  if (not ShouldPlaceMod()) or not FileExists(Agent) then
   begin
-    Log('keys pak: skipped (no game root or no agent)');
+    // WO-150: a held-back mod gets its keys from the launcher, after it places the mod.
+    Log('keys pak: skipped (mod held back, or no agent)');
     Exit;
   end;
   Params := '--keys-pak --game-root "' + DetectedGameRoot + '" --mod-dir "' + GetKdcmpTargetDir('') + '"';

@@ -1,0 +1,43 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    WO-150: KcdMpSetup.exe: the shared setup code (dotnet\KcdMp.Setup) as a
+    small native executable, for the two callers that cannot load it in-process:
+
+      * Setup.exe, before anything is installed (no .NET runtime yet), runs
+        "detect" so the installer and the launcher decide from the same code;
+      * the launcher's one UAC step runs "link" elevated.
+
+    WinExe on purpose: a console-subsystem exe started through UAC or by
+    Inno's Exec gets a console window, and WO-150 allows no window at all.
+    Output goes to the file named by out or status, never to a console.
+
+    NativeAOT (about 2 MB, no runtime needed). Publishing needs the MSVC
+    linker; ILCompiler finds it through vswhere, which lives in
+    "%ProgramFiles(x86)%\Microsoft Visual Studio\Installer": put that folder
+    on PATH first (tools\Publish-Release.ps1 does).
+  -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>KcdMpSetup</AssemblyName>
+    <RootNamespace>KcdMp.SetupHost</RootNamespace>
+    <PublishAot>true</PublishAot>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <NoWarn>$(NoWarn);CA1416</NoWarn>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <VersionFileContent Condition="Exists('$(MSBuildThisFileDirectory)..\..\VERSION')">$([System.IO.File]::ReadAllText('$(MSBuildThisFileDirectory)..\..\VERSION').Trim())</VersionFileContent>
+    <Version Condition="'$(VersionFileContent)' != ''">$(VersionFileContent)</Version>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\KcdMp.Setup\KcdMp.Setup.csproj" />
+  </ItemGroup>
+
+</Project>

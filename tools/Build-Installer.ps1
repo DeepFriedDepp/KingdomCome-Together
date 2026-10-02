@@ -93,6 +93,12 @@ if (-not $SkipPublish) {
     & dotnet test (Join-Path $root "dotnet\KcdMp.Client.Tests\KcdMp.Client.Tests.csproj") -c Release --nologo -v q
     if ($LASTEXITCODE -ne 0) { throw "agent unit tests FAILED. Not shipping." }
 
+    # WO-150: the first-run setup code Setup and the launcher share (manifest
+    # reading, link checks, the checklist, redaction, the fake-tool runs).
+    Write-Host "Setup unit tests (dotnet\KcdMp.Setup.Tests) ..."
+    & dotnet test (Join-Path $root "dotnet\KcdMp.Setup.Tests\KcdMp.Setup.Tests.csproj") -c Release --nologo -v q
+    if ($LASTEXITCODE -ne 0) { throw "setup unit tests FAILED. Not shipping." }
+
     # WO-110 R10 (docs/WO-109-audit.md): EVERY synthetic suite gates the
     # release, not four of them. Before this, WO-108's own suite, WO-86,
     # WO-99, NpcSmooth, GhostInterp, WO-106's static check and WO-90 (which
@@ -146,6 +152,33 @@ if (-not $SkipPublish) {
 if (-not (Test-Path (Join-Path $payload "KCDMP_launcher.exe"))) {
     throw "release payload incomplete: $payload\KCDMP_launcher.exe not found (run without -SkipPublish)"
 }
+# WO-150: Setup runs this before it installs anything; without it the installer cannot decide.
+if (-not (Test-Path (Join-Path $payload "KcdMpSetup.exe"))) {
+    throw "release payload incomplete: $payload\KcdMpSetup.exe not found (run without -SkipPublish)"
+}
+
+# WO-150: the staged mod. Setup always installs a copy of the two mod files
+# into <app>\mod\kdcmp; when the Modding Tools are not set up yet it places
+# nothing in the game folder, and the launcher's checklist places this copy
+# once the workspace is linked. Taken from the same bytes the MOD entries
+# below describe, after the pak rebuild (kdcmp.pak is not byte-deterministic).
+$staged = Join-Path $payload "mod\kdcmp"
+if (Test-Path $staged) { Remove-Item $staged -Recurse -Force }
+New-Item -ItemType Directory -Force -Path (Join-Path $staged "Data") | Out-Null
+Copy-Item (Join-Path $root "kdcmp\mod.manifest") $staged -Force
+Copy-Item (Join-Path $root "kdcmp\Data\kdcmp.pak") (Join-Path $staged "Data") -Force
+
+# WO-150: the installer's detection (the probe: the shipping wrapper + this
+# payload's helper, 26 checks) and its four cases end to end (a Setup compiled
+# from this KCDMP.iss, on fake Steam libraries, isolated from any real install;
+# it also compiles the unpatched script). Scratch under the git-ignored release\.
+$helper = Join-Path $payload "KcdMpSetup.exe"
+& powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Test-InstallerDetect.ps1") `
+    -WorkDir (Join-Path $root "release\wo150-detect-fixtures") -HelperExe $helper
+if ($LASTEXITCODE -ne 0) { throw "Test-InstallerDetect.ps1 FAILED. Not shipping." }
+& powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "wo150\Test-SetupCases.ps1") `
+    -WorkDir (Join-Path $root "release\wo150-setup-cases") -HelperExe $helper
+if ($LASTEXITCODE -ne 0) { throw "tools\wo150\Test-SetupCases.ps1 FAILED. Not shipping." }
 
 # WO-32 follow-up, rewritten in WO-74: write a manifest of everything this
 # Setup carries so the installer can prove, after installing, that every file

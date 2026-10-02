@@ -60,7 +60,17 @@
             OnJoinSteam="@OpenJoinSteam"
             OnReportBug="@(() => showReportBug = true)"
             OnAbout="@(() => showAbout = true)"
+            OnCheckSetup="@OpenSetupChecklist"
 />
+
+@* WO-150: the first-run checklist (and "Check setup"); hidden whenever setup is complete *@
+<SetupChecklistModal IsVisible="@showSetup"
+                     Steps="@setupSteps"
+                     Lines="@setupLines"
+                     Busy="@setupBusy"
+                     OnAction="@HandleSetupActionAsync"
+                     OnCheckAgain="@CheckSetupAgainAsync"
+                     OnClose="@CloseSetupChecklist" />
 
 @if (launchStage != LaunchStage.Idle)
 {

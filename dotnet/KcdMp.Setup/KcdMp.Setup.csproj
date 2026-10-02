@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    WO-150: first-run setup, shared by the launcher and the installer.
+
+    One detection code for both: the launcher references this library
+    directly, and Setup runs it through KcdMpSetup.exe (dotnet\KcdMp.SetupHost,
+    a NativeAOT build of this same code) before anything is installed. So the
+    two can never disagree about where Steam, the game, the Modding Tools and
+    the workspace are, or whether they are set up.
+
+    No UI types here: the launcher draws the checklist; this decides it.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <IsAotCompatible>true</IsAotCompatible>
+    <RootNamespace>KcdMp.Setup</RootNamespace>
+    <!-- Windows-only by nature (registry, links, Steam on Windows); the CA1416
+         noise this would otherwise raise at every call site says nothing new. -->
+    <NoWarn>$(NoWarn);CA1416</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="KcdMp.Setup.Tests" />
+  </ItemGroup>
+
+</Project>

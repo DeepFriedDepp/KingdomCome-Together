@@ -24,6 +24,10 @@
         <span class="status-btn" @onclick="OnAbout">
             ABOUT
         </span>
+        <span class="sep">|</span>
+        <span class="status-btn" @onclick="OnCheckSetup">
+            CHECK SETUP
+        </span>
     </div>
 
     <div class="status-center">
@@ -57,4 +61,5 @@
     [Parameter] public EventCallback OnJoinSteam { get; set; }   // WO-127
     [Parameter] public EventCallback OnReportBug { get; set; }
     [Parameter] public EventCallback OnAbout { get; set; }   // WO-148
+    [Parameter] public EventCallback OnCheckSetup { get; set; }   // WO-150
 }

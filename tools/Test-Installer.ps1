@@ -29,7 +29,10 @@
 .PARAMETER SteamRoot
     A fixture Steam directory to detect against, passed through as Setup's
     /STEAMROOT. When given, the real-game backup/restore is skipped because
-    nothing outside the fixture is touched.
+    nothing outside the fixture is touched. Since WO-150 the fixture needs the
+    game (app 1771300) and a linked workspace too, or Setup rightly holds the
+    mod back and the mod assertions here fail -- New-SteamFixture in
+    tools\Test-InstallerUpgrade.ps1 builds one that has both.
 
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File tools\Test-Installer.ps1

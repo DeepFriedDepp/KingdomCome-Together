@@ -1,0 +1,82 @@
+@* Copyright (C) 2026 the Kingdom Come: Together contributors (AUTHORS). SPDX-License-Identifier: GPL-3.0-only
+   GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
+   content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them. *@
+@using KcdMp.Setup
+@inherits ModalBase
+
+@* WO-150: the first-run checklist, also "Check setup". Drawn in the launcher's own modal frame;
+   every step is decided by KcdMp.Setup.SetupChecklist from the real state, never a saved flag. *@
+@if (IsVisible)
+{
+    <div class="modal-overlay @(isClosing ? "closing" : "")">
+        <div class="modal-box setup-box" @onclick:stopPropagation="true">
+
+            <div class="modal-frame-top modal-frame-bg"></div>
+
+            <div class="modal-content">
+                <div class="modal-title">@(Ready ? "READY!" : "SETUP")</div>
+
+                @if (!Ready)
+                {
+                    <p class="setup-intro">The launcher does each step for you, in the background. You can keep using your PC; this list updates by itself.</p>
+                }
+
+                <ol class="setup-steps">
+                    @foreach (var s in Steps)
+                    {
+                        <li class="setup-step setup-@s.Status.ToString().ToLowerInvariant()">
+                            <span class="setup-icon">@Icon(s.Status)</span>
+                            <div class="setup-body">
+                                <div class="setup-step-title">@s.Title</div>
+                                <div class="setup-detail">@s.Detail</div>
+                                @if (s.Progress is double p && s.Status == StepStatus.Working)
+                                {
+                                    <div class="setup-bar"><div class="setup-bar-fill" style="width: @((p * 100).ToString("0.#", System.Globalization.CultureInfo.InvariantCulture))%;"></div></div>
+                                }
+                                @if (s.Status == StepStatus.NeedsYou && s.Action != StepAction.None && s.ActionLabel is not null)
+                                {
+                                    <button class="kcd-btn setup-action" disabled="@Busy" @onclick="() => OnAction.InvokeAsync(s.Action)">@s.ActionLabel</button>
+                                }
+                            </div>
+                        </li>
+                    }
+                </ol>
+
+                @if (Lines.Count > 0 && !Ready)
+                {
+                    <div class="setup-lines">
+                        @foreach (var line in Lines)
+                        {
+                            <div>@line</div>
+                        }
+                    </div>
+                }
+
+                <div class="modal-actions">
+                    <button class="kcd-btn" disabled="@Busy" @onclick="OnCheckAgain">CHECK AGAIN</button>
+                    <button class="kcd-btn primary" @onclick="CloseModalAsync">@(Ready ? "PLAY" : "CLOSE")</button>
+                </div>
+            </div>
+
+            <div class="modal-frame-bottom modal-frame-bg"></div>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public IReadOnlyList<StepView> Steps { get; set; } = Array.Empty<StepView>();
+    [Parameter] public IReadOnlyList<string> Lines { get; set; } = Array.Empty<string>();
+    [Parameter] public bool Busy { get; set; }
+    [Parameter] public EventCallback<StepAction> OnAction { get; set; }
+    [Parameter] public EventCallback OnCheckAgain { get; set; }
+
+    private bool Ready => Steps.Count > 0 && SetupChecklist.IsReady(Steps);
+
+    private static string Icon(StepStatus s) => s switch
+    {
+        StepStatus.Done => "✅",
+        StepStatus.Working => "⏳",
+        StepStatus.NeedsYou => "❌",
+        _ => "·",
+    };
+}

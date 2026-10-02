@@ -1,22 +1,27 @@
-﻿// Copyright (C) 2026 the Kingdom Come: Together contributors (AUTHORS). SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 the Kingdom Come: Together contributors (AUTHORS). SPDX-License-Identifier: GPL-3.0-only
 // GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
-// Steam library / Modding Tools discovery, factored out of KCDMP.iss so it can
-// be compiled into a test harness as well as into the installer.
+// Steam / game / Modding Tools / workspace detection for the installer.
 //
-// #include this from inside a [Code] section. It defines no UI and touches no
-// installer state, so the harness in tests\SteamDetectProbe.iss exercises
-// exactly the code the installer runs.
+// WO-150: there is no detection code here any more. Setup asks the same code
+// the launcher runs (dotnet\KcdMp.Setup), through KcdMpSetup.exe -- a small
+// NativeAOT build of it that needs no .NET runtime, extracted to {tmp} before
+// anything is installed. So the installer and the launcher can never disagree
+// about where Steam, the game and the Modding Tools are, or whether the
+// workspace is linked. This file only runs the helper and reads its answer
+// (key=value lines, KcdMp.Setup.DetectReport).
+//
+// #include this from inside a [Code] section, in a script whose [Files] carries
+//   Source: "<...>\KcdMpSetup.exe"; Flags: dontcopy
+// tests\SteamDetectProbe.iss includes it exactly as KCDMP.iss does.
 
-// Steam application ID of "Kingdom Come: Deliverance II Modding tools", read
-// off a real appmanifest rather than from a search result:
-//   D:\SteamLibrary\steamapps\appmanifest_2429020.acf
-//     "appid"      "2429020"
-//     "name"       "Kingdom Come: Deliverance II Modding tools"
-//     "installdir" "KCD2Mod"
-// Retail KCD2 is a separate entry (1771300, installdir KingdomComeDeliverance2)
-// and cannot run this mod -- see docs/LAUNCHING.md.
+// Steam application ID of "Kingdom Come: Deliverance II Modding tools" (installdir
+// "KCD2Mod"); retail KCD2 is 1771300 and cannot run this mod -- see docs/LAUNCHING.md.
 #define ModdingToolsAppId "2429020"
+
+var
+  DetectKeys: TArrayOfString;
+  DetectValues: TArrayOfString;
 
 function BackslashPath(const S: String): String;
 begin
@@ -26,247 +31,113 @@ begin
     Result := Copy(Result, 1, Length(Result) - 1);
 end;
 
-{ Returns the Index'th double-quoted token on a line. Steam's VDF/ACF text
-  format is a flat sequence of "key" "value" pairs, so a value is token 2. }
-function QuotedToken(const Line: String; Index: Integer): String;
-var
-  I, Count, Start: Integer;
-  InQuote: Boolean;
+{ The helper, extracted once per Setup run. '' when it cannot be had. }
+function SetupHelperPath(): String;
 begin
-  Result := '';
-  Count := 0;
-  Start := 0;
-  InQuote := False;
-  for I := 1 to Length(Line) do
-  begin
-    if Line[I] = '"' then
-    begin
-      if not InQuote then
-      begin
-        InQuote := True;
-        Start := I + 1;
-      end
-      else
-      begin
-        InQuote := False;
-        Count := Count + 1;
-        if Count = Index then
-        begin
-          Result := Copy(Line, Start, I - Start);
-          Exit;
-        end;
-      end;
-    end;
+  Result := ExpandConstant('{tmp}\KcdMpSetup.exe');
+  if not FileExists(Result) then
+  try
+    ExtractTemporaryFile('KcdMpSetup.exe');
+  except
+    Log('detect: the setup helper could not be extracted: ' + GetExceptionMessage);
   end;
+  if not FileExists(Result) then Result := '';
 end;
 
-{ VDF escapes a path separator as a doubled backslash. }
-function UnescapeVdf(const S: String): String;
+procedure ClearDetect();
 begin
-  Result := S;
-  StringChangeEx(Result, '\\', '\', True);
+  SetArrayLength(DetectKeys, 0);
+  SetArrayLength(DetectValues, 0);
 end;
 
-function ValueForKey(const Lines: TArrayOfString; const Key: String): String;
+{ The value the last detection reported for Key, or ''. }
+function DetectValue(const Key: String): String;
 var
   I: Integer;
 begin
   Result := '';
-  for I := 0 to GetArrayLength(Lines) - 1 do
-    if QuotedToken(Lines[I], 1) = Key then
+  for I := 0 to GetArrayLength(DetectKeys) - 1 do
+    if CompareText(DetectKeys[I], Key) = 0 then
     begin
-      Result := UnescapeVdf(QuotedToken(Lines[I], 2));
+      Result := DetectValues[I];
       Exit;
     end;
 end;
 
-{ Both builds ship an executable called KingdomCome.exe, and both ship
-  WHGame.dll, so neither tells them apart. The Modding Tools build links its
-  engine modules separately (45 DLLs beside the exe) where retail is
-  monolithic (6). Framework.dll and CrySystem.dll are the two the plugin
-  actually needs -- the IAT hook rewrites WHGame.dll's import of
-  Framework.dll's C_ModulesManager::Update, and the rttr reflection ABI is
-  exported from CrySystem.dll. Same test as the launcher's own
-  Home.razor.cs:IsModdingToolsBuild, deliberately. }
-function IsModdingToolsBuild(const ExePath: String): Boolean;
+function LoadKeyValues(const FileName: String): Boolean;
 var
-  Dir: String;
+  Lines: TArrayOfString;
+  I, N, Eq: Integer;
+begin
+  ClearDetect();
+  Result := LoadStringsFromFile(FileName, Lines);
+  if not Result then Exit;
+  N := 0;
+  for I := 0 to GetArrayLength(Lines) - 1 do
+  begin
+    Eq := Pos('=', Lines[I]);
+    if Eq > 1 then
+    begin
+      N := N + 1;
+      SetArrayLength(DetectKeys, N);
+      SetArrayLength(DetectValues, N);
+      DetectKeys[N - 1] := Copy(Lines[I], 1, Eq - 1);
+      DetectValues[N - 1] := Copy(Lines[I], Eq + 1, Length(Lines[I]));
+    end;
+  end;
+end;
+
+{ Runs "KcdMpSetup.exe detect". SteamRoot '' = the registry's Steam (a
+  non-empty one that does not exist means "no Steam", as /STEAMROOT always
+  has); MtExe '' = find the Modding Tools through Steam. False when the helper
+  could not be run or said nothing: the caller then treats everything as
+  unknown, installs the launcher and holds the mod back. }
+function RunDetect(const SteamRoot, MtExe: String): Boolean;
+var
+  Helper, OutFile, Params: String;
+  ResultCode: Integer;
 begin
   Result := False;
-  if (ExePath = '') or (not FileExists(ExePath)) then Exit;
-  Dir := ExtractFileDir(ExePath);
-  Result := FileExists(Dir + '\Framework.dll') and FileExists(Dir + '\CrySystem.dll');
-end;
+  ClearDetect();
+  Helper := SetupHelperPath();
+  if Helper = '' then Exit;
 
-{ The install root, walking up from Bin\<config>\KingdomCome.exe. Found by
-  looking for two folders that root actually has rather than by counting
-  levels, so a differently-named Bin subfolder still resolves. }
-function GameRootOf(const ExePath: String): String;
-var
-  Dir: String;
-  I: Integer;
-begin
-  Result := '';
-  if ExePath = '' then Exit;
-  Dir := ExtractFileDir(ExePath);
-  for I := 1 to 4 do
+  OutFile := ExpandConstant('{tmp}\kcdmp-detect.txt');
+  DeleteFile(OutFile);
+  Params := 'detect --out "' + OutFile + '"';
+  if SteamRoot <> '' then Params := Params + ' --steam-root "' + BackslashPath(SteamRoot) + '"';
+  if MtExe <> '' then Params := Params + ' --mt-exe "' + MtExe + '"';
+
+  if not Exec(Helper, Params, ExpandConstant('{tmp}'), SW_HIDE, ewWaitUntilTerminated, ResultCode) then
   begin
-    if Dir = '' then Exit;
-    if DirExists(Dir + '\Data') and DirExists(Dir + '\Engine') then
-    begin
-      Result := Dir;
-      Exit;
-    end;
-    Dir := ExtractFileDir(Dir);
-  end;
-end;
-
-function FindGameExeUnder(const InstallDir: String): String;
-var
-  FindRec: TFindRec;
-  Candidate: String;
-begin
-  Result := '';
-  if InstallDir = '' then Exit;
-
-  { The layout the real install has; try it before scanning. }
-  Candidate := InstallDir + '\Bin\Win64ReleaseSteamLTO_DLL\KingdomCome.exe';
-  if IsModdingToolsBuild(Candidate) then
-  begin
-    Result := Candidate;
+    Log('detect: the setup helper could not be started (' + SysErrorMessage(ResultCode) + ')');
     Exit;
   end;
-
-  if FindFirst(InstallDir + '\Bin\*', FindRec) then
-  try
-    repeat
-      if ((FindRec.Attributes and FILE_ATTRIBUTE_DIRECTORY) <> 0)
-         and (FindRec.Name <> '.') and (FindRec.Name <> '..') then
-      begin
-        Candidate := InstallDir + '\Bin\' + FindRec.Name + '\KingdomCome.exe';
-        if IsModdingToolsBuild(Candidate) then
-        begin
-          Result := Candidate;
-          Exit;
-        end;
-      end;
-    until not FindNext(FindRec);
-  finally
-    FindClose(FindRec);
-  end;
+  Result := LoadKeyValues(OutFile) and (DetectValue('helper') = '1');
+  if Result then
+    Log('detect: steam=' + DetectValue('steam_found') + ' game=' + DetectValue('game_found') +
+        ' mt=' + DetectValue('mt_found') + ' workspace=' + DetectValue('workspace') +
+        ' (' + DetectValue('workspace_ok') + '/' + DetectValue('workspace_expected') + ')' +
+        ' place_mod=' + DetectValue('place_mod'))
+  else
+    Log('detect: the setup helper gave no answer (exit ' + IntToStr(ResultCode) + ')');
 end;
 
-function GetSteamPath(): String;
+{ Setup's Browse button: is this a Modding Tools KingdomCome.exe, and where is its root. }
+function CheckModdingToolsExe(const ExePath: String; var Root: String): Boolean;
 var
-  S: String;
-begin
-  Result := '';
-  { Steam writes this one with forward slashes, e.g. c:/program files (x86)/steam }
-  if RegQueryStringValue(HKCU, 'Software\Valve\Steam', 'SteamPath', S) and (S <> '') then
-  begin
-    Result := BackslashPath(S);
-    if DirExists(Result) then Exit;
-  end;
-  if RegQueryStringValue(HKLM32, 'SOFTWARE\Valve\Steam', 'InstallPath', S) and (S <> '') then
-  begin
-    Result := BackslashPath(S);
-    if DirExists(Result) then Exit;
-  end;
-  if RegQueryStringValue(HKLM64, 'SOFTWARE\Valve\Steam', 'InstallPath', S) and (S <> '') then
-  begin
-    Result := BackslashPath(S);
-    if DirExists(Result) then Exit;
-  end;
-  Result := '';
-end;
-
-{ Every library root Steam knows about: the install root itself plus each
-  "path" entry in steamapps\libraryfolders.vdf. A missing or malformed vdf
-  degrades to "just the Steam root" rather than failing -- a library that is
-  currently offline (external drive) is skipped by the DirExists test. }
-function GetSteamLibraries(const SteamPath: String): TArrayOfString;
-var
-  Lines, Libs: TArrayOfString;
-  I, N: Integer;
-  P: String;
-begin
-  SetArrayLength(Libs, 1);
-  Libs[0] := SteamPath;
-  N := 1;
-
-  if LoadStringsFromFile(SteamPath + '\steamapps\libraryfolders.vdf', Lines) then
-  begin
-    for I := 0 to GetArrayLength(Lines) - 1 do
-    begin
-      if QuotedToken(Lines[I], 1) = 'path' then
-      begin
-        P := BackslashPath(UnescapeVdf(QuotedToken(Lines[I], 2)));
-        if (P <> '') and (CompareText(P, SteamPath) <> 0) and DirExists(P) then
-        begin
-          N := N + 1;
-          SetArrayLength(Libs, N);
-          Libs[N - 1] := P;
-        end;
-      end;
-    end;
-  end;
-
-  Result := Libs;
-end;
-
-// True if any library holds an appmanifest for the Modding Tools at all,
-// regardless of whether the files it names are on disk. This is the
-// difference between "you do not have them" and "Steam knows about them but
-// the files are not there yet" -- what a download still running, a cancelled
-// one, and a damaged install all look like, and three very different things
-// to tell someone to do about it.
-function ModdingToolsRegisteredIn(const SteamPath: String): Boolean;
-var
-  Libs: TArrayOfString;
-  I: Integer;
+  Helper, OutFile: String;
+  ResultCode: Integer;
 begin
   Result := False;
-  if SteamPath = '' then Exit;
-
-  Libs := GetSteamLibraries(SteamPath);
-  for I := 0 to GetArrayLength(Libs) - 1 do
-    if FileExists(Libs[I] + '\steamapps\appmanifest_{#ModdingToolsAppId}.acf') then
-    begin
-      Result := True;
-      Exit;
-    end;
-end;
-
-{ True only if the Modding Tools were found AND pass the discriminator. Both
-  halves matter: an appmanifest can name an app whose files are gone, and a
-  folder can be the retail game wearing the same executable name. }
-function DetectModdingToolsIn(const SteamPath: String; var ExePath: String): Boolean;
-var
-  Acf, InstallDir, Exe: String;
-  Libs, Lines: TArrayOfString;
-  I: Integer;
-begin
-  Result := False;
-  ExePath := '';
-  if SteamPath = '' then Exit;
-
-  Libs := GetSteamLibraries(SteamPath);
-  for I := 0 to GetArrayLength(Libs) - 1 do
-  begin
-    Acf := Libs[I] + '\steamapps\appmanifest_{#ModdingToolsAppId}.acf';
-    if FileExists(Acf) and LoadStringsFromFile(Acf, Lines) then
-    begin
-      InstallDir := ValueForKey(Lines, 'installdir');
-      if InstallDir <> '' then
-      begin
-        Exe := FindGameExeUnder(Libs[I] + '\steamapps\common\' + InstallDir);
-        if Exe <> '' then
-        begin
-          ExePath := Exe;
-          Result := True;
-          Exit;
-        end;
-      end;
-    end;
-  end;
+  Root := '';
+  Helper := SetupHelperPath();
+  if Helper = '' then Exit;
+  OutFile := ExpandConstant('{tmp}\kcdmp-checkexe.txt');
+  DeleteFile(OutFile);
+  if not Exec(Helper, 'check-exe --exe "' + ExePath + '" --out "' + OutFile + '"', ExpandConstant('{tmp}'),
+              SW_HIDE, ewWaitUntilTerminated, ResultCode) then Exit;
+  if not LoadKeyValues(OutFile) then Exit;
+  Root := DetectValue('mt_root');
+  Result := (DetectValue('mt_build') = '1') and (Root <> '');
 end;

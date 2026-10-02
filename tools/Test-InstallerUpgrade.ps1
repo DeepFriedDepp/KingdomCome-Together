@@ -107,6 +107,21 @@ function New-SteamFixture($dir) {
 	"installdir"		"KCD2Mod"
 }
 '@
+    # WO-150: Setup places the mod only into a Modding Tools whose workspace is
+    # linked (installed is not set up), so the fixture carries the game too --
+    # one pak -- and the hard link the launcher would make for it.
+    $retail = Join-Path $steam 'steamapps\common\KingdomComeDeliverance2'
+    New-Item -ItemType Directory -Force -Path (Join-Path $retail 'Data') | Out-Null
+    Set-Content -Path (Join-Path $retail 'Data\Tables.pak') -Value 'fixture pak' -Encoding ASCII
+    Set-Content -Path (Join-Path $steam 'steamapps\appmanifest_1771300.acf') -Encoding ASCII -Value @'
+"AppState"
+{
+	"appid"		"1771300"
+	"StateFlags"		"4"
+	"installdir"		"KingdomComeDeliverance2"
+}
+'@
+    New-Item -ItemType HardLink -Path (Join-Path $game 'Data\Tables.pak') -Target (Join-Path $retail 'Data\Tables.pak') | Out-Null
     Set-Content -Path (Join-Path $steam 'steamapps\libraryfolders.vdf') -Encoding ASCII -Value (@'
 "libraryfolders"
 {

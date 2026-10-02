@@ -94,6 +94,21 @@ $masterServerOutDir = Join-Path $OutDir "MasterServer"
 New-Item -ItemType Directory -Path $masterServerOutDir -Force | Out-Null
 Copy-Item "$masterServerPublish\*" $masterServerOutDir -Recurse -Force
 
+# --- WO-150: KcdMpSetup.exe, the shared setup code as a NativeAOT exe. Setup
+#     runs it before anything is installed (no .NET runtime yet) and the
+#     launcher runs it for the one UAC step. Only the exe ships: AOT needs no
+#     runtime files beside it, and the pdb is not shipped. ILCompiler finds
+#     the MSVC linker through vswhere, which is not on PATH by default. ---
+$vsInstaller = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer"
+if ((Test-Path $vsInstaller) -and ($env:PATH -notlike "*$vsInstaller*")) { $env:PATH = "$vsInstaller;$env:PATH" }
+$setupHost = Join-Path $root "dotnet\KcdMp.SetupHost\KcdMp.SetupHost.csproj"
+Write-Output "Publishing $setupHost (NativeAOT) ..."
+& dotnet publish $setupHost -c Release 2>&1 | ForEach-Object { Write-Output $_ }
+if ($LASTEXITCODE -ne 0) { throw "publish failed: $setupHost" }
+$setupExe = Join-Path $root "dotnet\KcdMp.SetupHost\bin\Release\net8.0\win-x64\publish\KcdMpSetup.exe"
+if (-not (Test-Path $setupExe)) { throw "expected publish output not found: $setupExe" }
+Copy-Item $setupExe $OutDir -Force
+
 # --- Native plugin + injector ---
 # WO-110 R10 (docs/WO-109-audit.md s5.3): ALWAYS rebuilt, not only when
 # missing. A stale KCDMP.dll beside a fresh agent used to be prevented by the

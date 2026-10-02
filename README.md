@@ -14,6 +14,9 @@
   <a href="https://dsc.gg/kcd2-together"><img alt="Discord" src="https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white&style=flat-square"></a>
 </p>
 
+> **New here? [Quick start](docs/QUICKSTART.md):** install, open the launcher, follow its
+> checklist, then Host or Join.
+
 Two or more people play the same open world together at once: you see each
 other as ghost NPCs (position, animation, nameplates, and each other's
 actual equipped armor *and* weapons — not one fixed costume), hear each
@@ -172,34 +175,30 @@ forwarding), including exactly what address and port to share.
 
 1. Download **`KingdomComeTogether-Setup-<version>.exe`** from the
    [releases page](https://github.com/DeepFriedDepp/KingdomCome-Together/releases).
-2. Run it.
-3. That's it — use Host or Join as above.
+2. Run it, and leave "Launch Kingdom Come: Together now" ticked at the end.
+3. If anything is still missing, the launcher shows a checklist and finishes
+   setup for you (WO-150). Then use Host or Join as above.
 
-> **One-time step done by Steam/Warhorse's own tools, not ours — do this
-> before your first launch, regardless of the order you install things in.**
-> The KCD2 Modding Tools app does not ship with its own copy of the game's
-> data (animations, characters, tables, scripts, cinematics, and more) — only
-> a `Developer.pak`. The first time you install it, launch it **once through
-> Steam itself** (its own Play button, or the shortcut Steam creates for it)
-> and let **Workspace Setup**
-> (`Tools\ModdingWorkspaceSetup\WorkspaceSetup.exe`) run — it copies the
-> missing data from your base **Kingdom Come: Deliverance II** install into
-> the Modding Tools folder. You need to own and have the base game installed
-> too, since that's where the copy comes from.
->
-> Skip this and the game will start, then immediately crash:
-> *"Database system error — 114 tables are not loaded. See log for details.
-> Ensure you have latest tables."* This is **not** this mod and **not** our
-> installer — reproduced with the mod entirely removed, same crash. Our
-> `Setup.exe` currently has no way to detect it; see "Not done," below.
+The mod runs on the free **KCD2 Modding Tools** build of the game, whose
+folder has none of the game's own data until a one-time *workspace* step
+links it in from your Kingdom Come: Deliverance II install. Skipped, the game
+starts and then crashes with *"114 tables are not loaded"*. You no longer do
+any of that by hand: the launcher's checklist installs the game and the
+Modding Tools through Steam's own install window if they are missing, links
+the game's files into the Modding Tools (no console, no typing; at most one
+Windows permission prompt, and only when they are on different drives), and
+places the mod. When everything is already in place, the launcher just opens
+as normal; **CHECK SETUP** in its status bar shows the list any time. Details:
+[docs/QUICKSTART.md](docs/QUICKSTART.md), [docs/WO-150-findings.md](docs/WO-150-findings.md).
 
-The installer finds your game through Steam, deploys the mod into it,
-installs the launcher, writes the game path into the launcher's settings so
-there is nothing to configure, and puts a shortcut on your desktop. If the
-free **KCD2 Modding Tools** are not installed it will say so, offer a button
-that starts that download in Steam, and refuse to continue until they are
-there — the retail game genuinely cannot run this mod, it lacks the debug
-API and the module layout the plugin needs.
+The installer finds your game through Steam (with the same code the launcher
+uses), installs the launcher, writes the game path into its settings so there
+is nothing to configure, and puts a shortcut on your desktop. It deploys the
+mod straight into the game when the Modding Tools are installed and set up;
+otherwise it installs everything else and leaves the rest to the launcher's
+checklist — it never stops a new player at a missing download. The retail
+game genuinely cannot run this mod: it lacks the debug API and the module
+layout the plugin needs.
 
 You need Kingdom Come: Deliverance II on Steam, plus that Modding Tools
 entry (free, a separate item in your Steam library). Nothing else: the
@@ -494,14 +493,12 @@ rather than hardcoding it — never add a new literal version byte to a script.
   draw names are immediate-mode, one frame per call, and the update pump is
   not frame-locked to the renderer. Pumping them would strobe rather than
   render, so they stay off.
-- **The installer does not detect an incomplete Modding Tools data
-  install** — it verifies `Framework.dll`/`CrySystem.dll` exist beside
-  `KingdomCome.exe`, which proves the *engine binaries* are the right build.
-  It does not check for the actual game data (`Data\Tables.pak` and the
-  other mandatory paks), so a Modding Tools install that has never had its
-  one-time **Workspace Setup** step run (see Install, above) passes the gate
-  and then crashes the game with "114 tables are not loaded" — a real,
-  reproduced failure, not a hypothetical one.
+- ~~**The installer does not detect an incomplete Modding Tools data
+  install**~~ — done in WO-150: Setup and the launcher both check every
+  workspace link (the game's 91 paks on the maintainer's machine), Setup holds
+  the mod back when they are missing, and the launcher's checklist links them.
+  Not yet seen on a real fresh machine: a live Steam download of the Modding
+  Tools and a real UAC prompt (see docs/WO-150-findings.md, "Not verified").
 - **Installer code signing** — Setup.exe is unsigned, so a first download
   shows SmartScreen's "Windows protected your PC". Click *More info* →
   *Run anyway*.

@@ -398,7 +398,21 @@ Write-Host 'They disagree when an installer could not overwrite a file that was 
 Test-Assembly $rel     'BUILT     app'
 Test-Assembly $AppDir  'INSTALLED app'
 Test-Pak (Join-Path $root 'kdcmp\Data\kdcmp.pak') 'BUILT     pak'
-Test-Pak (Join-Path $ModDir 'Data\kdcmp.pak')     'INSTALLED pak'
+
+# WO-150: Setup holds the mod back when the Modding Tools are not set up yet (not installed, or
+# their workspace not linked) and says so in install-verify.txt; the launcher's checklist places
+# it later. Until then the game folder has no mod: one plain failure, not a page of them.
+$heldBack = $false
+$earlyVerdict = Join-Path $AppDir 'install-verify.txt'
+if ((Test-Path $earlyVerdict) -and (@(Get-Content $earlyVerdict) -like 'mod held back*') -and
+    -not (Test-Path (Join-Path $ModDir 'Data\kdcmp.pak'))) {
+    $heldBack = $true
+    Write-Host "`n[INSTALLED pak] HELD BACK -- Setup left the mod for the launcher (the Modding Tools were not set up)." -ForegroundColor Yellow
+    Write-Host "  Open the launcher: its checklist links the workspace and places the mod (or click CHECK SETUP)." -ForegroundColor Yellow
+    $script:fail++
+} else {
+    Test-Pak (Join-Path $ModDir 'Data\kdcmp.pak') 'INSTALLED pak'
+}
 
 # WO-148: the dice keys. The mod carries none of the game's two Libs/Config files any more; Setup
 # (and the launcher, before every game start) builds them from the player's own game into a second
@@ -406,7 +420,9 @@ Test-Pak (Join-Path $ModDir 'Data\kdcmp.pak')     'INSTALLED pak'
 # commands still work. Rebuild it with: KcdMpClient.exe --keys-pak --game-root <the game folder>
 $keysPak = Join-Path $ModDir 'Data\kdcmp_keys.pak'
 Write-Host "`n[INSTALLED keys] $keysPak" -ForegroundColor Cyan
-if (-not (Test-Path $keysPak)) {
+if ($heldBack) {
+    Write-Host '  (not checked: the mod is held back -- see above)' -ForegroundColor Yellow
+} elseif (-not (Test-Path $keysPak)) {
     Write-Host '  MISSING -- the dice keys will do nothing (run the launcher once, or Setup again)' -ForegroundColor Red
     $script:fail++
 } else {
@@ -457,6 +473,7 @@ if (-not (Test-Path $manifestPath)) {
         if ($line -eq '' -or $line.StartsWith('#')) { continue }
         $f = $line -split '\|'
         if ($f.Count -lt 4) { continue }
+        if ($heldBack -and $f[0] -eq 'MOD') { continue }   # WO-150: counted once, above
         $base = if ($f[0] -eq 'MOD') { $ModDir } else { $AppDir }
         if ($f[0] -eq 'APP') { [void]$appRel.Add($f[1]) }
         $full = Join-Path $base $f[1]

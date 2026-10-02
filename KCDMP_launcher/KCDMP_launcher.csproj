@@ -42,6 +42,8 @@
 		<!-- ReleaseVersionCompare (WO-19), the only piece of this project
 		     the launcher needs; it does not speak the wire protocol itself. -->
 		<ProjectReference Include="..\dotnet\KcdMp.Protocol\KcdMp.Protocol.csproj" />
+		<!-- WO-150: the first-run checklist; the same detection code Setup runs (KcdMpSetup.exe). -->
+		<ProjectReference Include="..\dotnet\KcdMp.Setup\KcdMp.Setup.csproj" />
 	</ItemGroup>
 
 	<ItemGroup>

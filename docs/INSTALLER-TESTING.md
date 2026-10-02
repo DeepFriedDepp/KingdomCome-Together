@@ -5,6 +5,17 @@
 > older `KCDMP-Setup` install in place, one entry in Windows' apps list). Older examples
 > below keep the old file names.
 
+> **WO-150: there is no Modding-Tools gate any more.** The Tier 2 and 3 boxes below about
+> "the gate", "Next is refused" and "Get it on Steam" describe the pre-WO-150 wizard. Now
+> the page only informs: Setup always installs the launcher, places the mod only when the
+> Modding Tools are installed **and** their workspace linked, and otherwise holds it back
+> for the launcher's checklist (`docs/WO-150-findings.md`). The automated proof of the four
+> cases is `tools\Test-InstallerDetect.ps1` (detection, 26 checks) and
+> `tools\wo150\Test-SetupCases.ps1` (a Setup compiled from the real script, isolated from
+> any real install, 41 checks); both are gates in `tools\Build-Installer.ps1`. Fixtures for
+> `Test-Installer.ps1 -SteamRoot` now need the game and a linked workspace too
+> (`New-SteamFixture` in `Test-InstallerUpgrade.ps1` builds both).
+
 Three tiers, and they are not interchangeable. Tier 1 runs on any dev machine
 and is green. Tier 2 needs a human sitting in front of the wizard. Tier 3
 needs a machine that is *not* a dev machine, and nothing in tier 3 has been
