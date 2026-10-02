@@ -30,7 +30,10 @@ param(
     [Parameter(Mandatory = $true)] [string] $OutDir,
     [string] $MtRoot,
     [string] $ToolExe,
-    [string] $HelperExe
+    [string] $HelperExe,
+    # Start the helper through UAC (one prompt): the shipped tool requires administrator
+    # rights, so only an elevated parent can start it with pipes at all.
+    [switch] $Elevated
 )
 
 $ErrorActionPreference = 'Stop'
@@ -86,7 +89,8 @@ Write-Host "before: $($before.Count) entries"
 $fgBefore = [Wo150.Win]::GetForegroundWindow()
 $toolArgs = @('tool', '--mt', "`"$MtRoot`"", '--delete-answer', 'N', '--out', "`"$OutDir\tool-run.txt`"")
 if ($ToolExe) { $toolArgs += @('--tool-exe', "`"$ToolExe`"") }
-$helper = Start-Process $HelperExe -ArgumentList $toolArgs -PassThru
+$helper = if ($Elevated) { Start-Process $HelperExe -ArgumentList $toolArgs -Verb RunAs -WindowStyle Hidden -PassThru }
+          else { Start-Process $HelperExe -ArgumentList $toolArgs -PassThru }
 
 $fgSeen = New-Object 'System.Collections.Generic.HashSet[string]'
 $fgOwners = New-Object 'System.Collections.Generic.HashSet[int]'

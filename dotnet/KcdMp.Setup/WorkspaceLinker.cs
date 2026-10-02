@@ -64,13 +64,18 @@ public static class WorkspaceLinker
 {
     public const string TempSuffix = ".kcdmp-link";
 
+    /// <param name="symlinksOnly">
+    /// Skip the hard-link attempt: the elevated step, which runs only because hard links were
+    /// impossible between these two folders (KcdMpSetup.exe link --kind symlink).
+    /// </param>
     public static LinkRun Link(WorkspaceReport report, ILinkPrimitives? primitives = null,
-                               IProgress<LinkProgress>? progress = null, CancellationToken ct = default)
+                               IProgress<LinkProgress>? progress = null, CancellationToken ct = default,
+                               bool symlinksOnly = false)
     {
         var io = primitives ?? Win32LinkPrimitives.Instance;
         var run = new LinkRun();
         var work = report.NeedingWork.ToList();
-        bool hardLinksRefused = false;
+        bool hardLinksRefused = symlinksOnly;
 
         for (int i = 0; i < work.Count; i++)
         {

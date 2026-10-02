@@ -33,15 +33,18 @@ public sealed record ToolRunOutcome(ToolRunResult Result, int? ExitCode, string 
 /// read keys when ... console input has been redirected"), or it went quiet
 /// for the stall window.
 ///
-/// The shipped tool (1.0.0.0, read 2026-10-02) reads every answer with
-/// Console.ReadKey, so on a real machine this ends in CannotDrive at the first
-/// prompt, before the tool has changed anything, and the caller links the
-/// files itself (<see cref="WorkspaceLinker"/>). It is still tried first so
-/// that a future version of the tool that reads standard input is used as
-/// Warhorse intends.
+/// The shipped tool (1.0.0.0, read 2026-10-02) cannot be driven at all, twice
+/// over: its manifest says requireAdministrator, so Windows refuses to start it
+/// with redirected streams from an unelevated process (ERROR_ELEVATION_REQUIRED:
+/// NotStarted, in milliseconds, nothing run); and started with pipes by an
+/// elevated parent it reads every answer with Console.ReadKey (CannotDrive at
+/// the first prompt). Either way nothing has changed, and the caller links the
+/// files itself (<see cref="WorkspaceLinker"/>). It is still tried first so that
+/// a future version that reads standard input is used as Warhorse intends.
 /// </summary>
 public static class WorkspaceToolRunner
 {
+    public const int ErrorElevationRequired = 740;
     public const string CopyOrLinkPrompt = "[C]opy packs or [S]ymlink";
     public const string DeletePrompt = "Delete File [Y]es/[N]o/Yes to [A]ll";
 
@@ -79,6 +82,14 @@ public static class WorkspaceToolRunner
         try
         {
             proc = Process.Start(psi) ?? throw new InvalidOperationException("Process.Start returned null");
+        }
+        catch (System.ComponentModel.Win32Exception ex) when (ex.NativeErrorCode == ErrorElevationRequired)
+        {
+            // The shipped tool's manifest says requireAdministrator (read 2026-10-02): Windows will not start
+            // it from an unelevated process with redirected streams, and an elevated start (ShellExecute
+            // "runas") cannot redirect them. Refused before it runs: nothing changed, no prompt, no window.
+            return new ToolRunOutcome(ToolRunResult.NotStarted, null,
+                "it requires administrator rights (its manifest asks for them), so it cannot be started with a pipe", 0);
         }
         catch (Exception ex)
         {

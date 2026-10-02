@@ -121,7 +121,7 @@ public static class ElevatedLinker
     public static ProcessStartInfo StartInfo(string helperExe, string gameRoot, string mtRoot, string statusFile) => new()
     {
         FileName = helperExe,
-        Arguments = $"link --game \"{gameRoot}\" --mt \"{mtRoot}\" --status \"{statusFile}\"",
+        Arguments = $"link --game \"{gameRoot}\" --mt \"{mtRoot}\" --kind symlink --status \"{statusFile}\"",
         UseShellExecute = true,
         Verb = "runas",
         WindowStyle = ProcessWindowStyle.Hidden,

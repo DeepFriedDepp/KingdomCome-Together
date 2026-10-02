@@ -6,14 +6,24 @@ synthetic test in this repo (fake Steam library, fake tool), **[U]** not verifie
 
 ## The answer
 
-1. **Warhorse's Workspace Setup cannot be driven through a pipe.** It reads both of its
-   answers with `Console.ReadKey()` **[R]**, and .NET's `ReadKey` throws
-   `InvalidOperationException: Cannot read keys when ... console input has been redirected`
-   the moment standard input is a pipe **[S]** (the fake tool, same call, fails in 0.26–0.4 s,
-   before it has changed anything). WO-150 allows no other way in (no keystrokes, no
-   visible console), so the launcher **tries the tool first, recognises this at once, and
-   then makes the same links itself**. If a future version of the tool reads standard input,
-   the same code drives it (proven with a pipe-drivable fake **[S]**).
+1. **Warhorse's Workspace Setup cannot be driven through a pipe — twice over.**
+   - Its manifest says **`requireAdministrator`** **[O]**. Windows refuses to start it from
+     a normal process with its streams redirected (`ERROR_ELEVATION_REQUIRED`, 740) — in
+     milliseconds, before anything runs, with no prompt and no window **[O]** (Stage B2, the
+     real tool against the real install). An elevated start through UAC ("runas") cannot
+     redirect streams at all.
+   - Started with pipes by an **elevated** parent, it reads its first answer with
+     `Console.ReadKey()` and dies: `InvalidOperationException: Cannot read keys when ...
+     console input has been redirected`, 544 ms, after printing its two folders and the
+     prompt and before changing anything **[O]** (Stage B2b, one UAC prompt; the `<MT>`
+     listing identical before and after, 95 entries).
+
+   WO-150 allows no other way in (no keystrokes, no visible console), so the launcher **tries
+   the tool first, recognises either refusal at once, and then makes the same links
+   itself**. If a future version reads standard input and drops the admin requirement, the
+   same code drives it (proven with a pipe-drivable fake **[S]**). The admin requirement also
+   explains the tool's own symlinks: started from Steam it always runs elevated, so `S` works
+   there without Developer Mode.
 2. **What the tool makes:** for every `*.pak` directly in `<GAME>\Data`,
    `<GAME>\Localization` and each `<GAME>\Data\Levels\<level>`, the same path under `<MT>`:
    a **symlink** if answered `S`, a **copy** if answered `C` **[R]**. Nothing else is touched
@@ -49,7 +59,8 @@ synthetic test in this repo (fake Steam library, fake tool), **[U]** not verifie
 ## How the tool works **[R]**
 
 `<MT>\Tools\ModdingWorkspaceSetup\WorkspaceSetup.exe` (assembly version 1.0.0.0, net6.0
-console app, 8.7 KB of IL, Facepunch.Steamworks beside it):
+console app, 8.7 KB of IL, Facepunch.Steamworks beside it; its exe manifest requests
+`requireAdministrator` **[O]**, so every normal start is a UAC prompt):
 
 1. Initialises Steam **as app 2429020** and asks Steam whether 1771300 and 2429020 are
    installed and where. Not installed: prints a line and waits for a key.
@@ -101,7 +112,9 @@ A tool that goes quiet for 20 s is stopped anyway (the stall route, **[S]** 2 s 
    running; otherwise a background process with **no window** (`CreateNoWindow`), stdin,
    stdout and stderr redirected, `S` written to the first prompt and `A` once to the delete
    prompt; its (redacted) output streams into the checklist and the log. Judged by
-   re-reading the workspace, never by its exit code.
+   re-reading the workspace, never by its exit code. The shipped tool ends here at once:
+   Windows refuses to start it unelevated with pipes (740), logged as "it requires
+   administrator rights (its manifest asks for them), so it cannot be started with a pipe".
 2. **The launcher's own links** — for whatever is still missing or stale: hard links, then
    symlinks across volumes.
 3. **One UAC prompt** — only if Windows refused a symlink: "Windows needs your permission to
@@ -146,12 +159,24 @@ appmanifest's `LastOwner` (a SteamID) is never read into memory at all **[S]**. 
 personal is in anything committed: the workspace map uses `<GAME>`/`<MT>`, and the fake
 tool prints an invalid placeholder ID.
 
-## Not verified yet (Stage B or later)
+## Stage B evidence (2026-10-02)
 
-- The real tool run through the pipe (expected: it stops at the first prompt, changes
-  nothing). Planned as Stage B run 2.
-- A real UAC prompt for the elevated step (this machine never needs it: one volume, a
-  complete workspace). Offered as an optional Stage B run on a scratch fixture.
+| Run | Result |
+|---|---|
+| B1a dry run, Steam side (`KcdMpSetup.exe check`) | Ready, 91/91 copies, 23 ms **[O]** |
+| B2 the real tool, unelevated, through the launcher's runner | refused by Windows (740, requires elevation) before it ran; 0 differences in 95 entries; no window; focus never on it **[O]** |
+| B2b the real tool, started with pipes by the helper elevated (one UAC prompt) | `CannotDrive` in 544 ms at the first prompt (`ReadKey` on a pipe); 0 differences; no window; focus never on it **[O]** |
+| B3 the product's elevation path on a fixture (hard links failing as on two drives, the real unelevated symlink refused with 1314, then `ElevatedLinker` through UAC) | twice **Declined** (once quickly, once after 122 s with the prompt up): the flow ended in the plain sentence with an "Ask again", nothing linked **[O]**. The **Yes** path is not yet observed |
+
+Evidence files (redacted, git-ignored): `release\wo150-evidence\`.
+
+## Not verified yet
+
+- **The UAC Yes path** of the elevated step (B3 ended Declined twice; the elevated `link`
+  verb itself is the same code the unit tests run unelevated).
+- **The dry run against the installed launcher** (B1b, `check --app-dir`): it has to run in
+  the maintainer's own session, because this shell's view of `%LOCALAPPDATA%\KCDMP` is
+  redirected.
 - A real Steam download's progress counters, and `steam -silent` starting Steam without a
   window. Need a machine without the Modding Tools.
 - From this shell, `HKCU\Software\KCDMP` and the install's uninstall entry are not visible

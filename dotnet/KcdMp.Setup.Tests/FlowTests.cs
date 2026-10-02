@@ -165,7 +165,7 @@ public class FlowTests
         Assert.Equal("runas", psi.Verb);
         Assert.True(psi.UseShellExecute);
         Assert.Equal(ProcessWindowStyle.Hidden, psi.WindowStyle);
-        Assert.Equal("link --game \"D:\\G\" --mt \"E:\\M\" --status \"C:\\App\\s.txt\"", psi.Arguments);
+        Assert.Equal("link --game \"D:\\G\" --mt \"E:\\M\" --kind symlink --status \"C:\\App\\s.txt\"", psi.Arguments);
     }
 
     [Fact]

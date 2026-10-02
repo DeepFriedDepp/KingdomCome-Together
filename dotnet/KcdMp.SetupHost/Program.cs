@@ -13,7 +13,7 @@ using KcdMp.Setup;
 //   check     --out <file> [--steam-root <dir>] [--app-dir <dir>] [--mt-exe <exe>]
 //             The whole checklist as text, and what the launcher would do next. Reads only;
 //             the dry run for a machine (docs/WO-150-progress.md).
-//   link      --game <root> --mt <root> [--status <file>]
+//   link      --game <root> --mt <root> [--kind symlink] [--status <file>]
 //             Make the missing workspace links. Run elevated by the launcher's one UAC step.
 //   tool      --mt <root> --out <file> [--delete-answer A|N] [--stall <s>] [--tool-exe <exe>]
 //             Run Warhorse's WorkspaceSetup.exe exactly as the launcher does (no window, a pipe);
@@ -99,7 +99,8 @@ static int Run(string[] args)
                     return 2;
                 }
                 var report = Workspace.Verify(game!, mt);
-                var run = WorkspaceLinker.Link(report);
+                bool symOnly = string.Equals(Get("kind"), "symlink", StringComparison.OrdinalIgnoreCase);
+                var run = WorkspaceLinker.Link(report, symlinksOnly: symOnly);
                 var after = Workspace.Verify(game!, mt);
                 var sb = new StringBuilder();
                 sb.Append($"result={(after.Complete ? "linked" : "incomplete")}\r\n");

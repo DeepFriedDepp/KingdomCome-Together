@@ -102,7 +102,27 @@ maximised window: a focus change).
 17. Setup and SetupHost are in `KCD2-MP.sln`; the tests are not (the repo's convention).
 18. Not pushed. Commits only, on `main`.
 
-## The stop — Stage B plan (waiting for the maintainer's OK)
+## Stage B — run after the maintainer's OK ("go ahead with everything", UAC allowed)
+
+- **B1a** dry run, Steam side: Ready, 91/91 copies, 23 ms.
+- **B1b** dry run with the installed launcher (`--app-dir`): **waiting for the maintainer**.
+  The app's Terminal panel never reached a prompt twice, so the command could not be run
+  in the maintainer's session from here.
+- **B2** the real tool, unelevated: **new finding** — its manifest says
+  `requireAdministrator`, so Windows refuses to start it with pipes (740) before it runs.
+  0 differences in 95 `<MT>` entries, no window, focus never on it. The runner now names
+  this case (`NotStarted`, "it requires administrator rights...").
+- **B2b** the real tool started with pipes by the helper elevated (one UAC prompt, answered
+  Yes): `CannotDrive` in 544 ms at `ReadKey`; 0 differences; no window; focus never on it.
+  `Run-RealToolEvidence.ps1 -Elevated` added for this.
+- **B3** the elevation path on a fixture, with `--kind symlink` added so the elevated step
+  goes straight to symlinks (it exists only where hard links are impossible): ended
+  **Declined** twice (the second after 122 s with the prompt up). The declined path is
+  observed and correct; the **Yes** path is not yet.
+- **B4** gates: 64/64 setup tests, 26/26 detection probe, 41/41 installer cases, 824/824 agent
+  tests, solution build 0 errors.
+
+## The stop — Stage B plan as approved
 
 Nothing below starts a game, touches a playline or stops the launcher, agent or relay. No
 window is brought to the front by any of it.

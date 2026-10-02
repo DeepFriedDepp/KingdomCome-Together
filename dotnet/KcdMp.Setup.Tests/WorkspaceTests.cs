@@ -220,6 +220,16 @@ public class LinkerTests
     }
 
     [Fact]
+    public void SymlinksOnlyNeverTriesAHardLink()
+    {
+        using var f = new FakeSteam("symonly").WithGame().WithModdingTools();
+        var io = new ScriptedPrimitives();
+        WorkspaceLinker.Link(Workspace.Verify(f.GameRoot, f.MtRoot), io, symlinksOnly: true);
+        Assert.Equal(0, io.HardLinkCalls);
+        Assert.True(io.SymlinkCalls >= 1);
+    }
+
+    [Fact]
     public void AFileHeldByTheGameIsReportedAsInUse()
     {
         using var f = new FakeSteam("inuse").WithGame().WithModdingTools();
