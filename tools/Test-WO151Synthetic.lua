@@ -430,7 +430,7 @@ do
     local function K(n) return KCD2MP.w151.doorNameHash(n) end
     AnimDoor = {}
     function AnimDoor:DoPlayAnimation(direction, forceTime, useSound, customAnim, usePlayerAnim, userId)
-        self.inUse = 1; self.nDirection = direction; self.lastUsedBy = userId
+        self.inUse = 1; self.nDirection = direction; self.lastUsedBy = userId; self.curAnim = "door_anim"
         self.plays[#self.plays + 1] = { dir = direction, force = forceTime, user = userId, playerAnim = usePlayerAnim }
     end
     function AnimDoor:IsInUse() return self.inUse == 1 end
@@ -504,8 +504,8 @@ do
     clearLog()
     KCD2MP_W151DoorAsked(1, K(lvl("h_door5")), 1, 0, 30, 0, 0)
     local p = d5.plays[#d5.plays]
-    check("h: host: a joiner's ask opens the host's door, in the avatar's name, no player animation",
-        d5.nDirection == 1 and p and p.user == av.id and not p.playerAnim, p and tostring(p.user))
+    check("h: host: a joiner's ask opens the host's door as the game's own Open (this player the user, no player animation)",
+        d5.nDirection == 1 and p and p.user == player.id and not p.playerAnim, p and tostring(p.user))
     e = doorEvts()
     check("h: host: ...and the host's result goes back to the joiners", #e == 1 and e[1] == "state " .. K(lvl("h_door5")) .. " 1 0 30.00 0.00 0.00", e[1])
     local d6 = mkDoor("h_door6", 40, 0, 0); d6.bLocked = true

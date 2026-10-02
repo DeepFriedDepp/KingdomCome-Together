@@ -20220,16 +20220,21 @@ do
     end
     W.findDoor = findDoor
 
-    -- Move/lock a door to a state, as the game's own Open/Close do (no player animation). userId: who
-    -- opens it (the door's animation side and its native reports) -- this machine's player for the
-    -- host's state on a joiner, the asking joiner's avatar on the host.
-    local function setDoor(door, dir, locked, userId)
+    -- Move/lock a door to a state, as the game's own engine-called Open/Close do: this machine's player is the
+    -- user (no player animation). Live L6: with the asking avatar as the user the game built NO animation
+    -- (BuildObjectAnimationName -> "", the player -> "door_l_b_c_player"): the state said open, the door stayed
+    -- shut, and the next move built the wrong swing.
+    local function setDoor(door, dir, locked)
         local cur, curLocked = doorState(door)
         W.doorApplying = true
         local ok = true
         if locked == false and curLocked then ok = pcall(function() door:Unlock() end) and ok end
         if (dir == 1 or dir == -1) and cur ~= dir then
-            ok = pcall(function() door:DoPlayAnimation(dir, nil, nil, nil, nil, userId) end) and ok
+            ok = pcall(function() door:DoPlayAnimation(dir, nil, nil, nil, nil, player and player.id) end) and ok
+            if ok and door.curAnim == "" and not door.bNoAnims then
+                W.doorStats.noAnim = (W.doorStats.noAnim or 0) + 1
+                mp_log("WO151-DOOR the engine started no animation for this door's move (its state moved, its mesh may not)")
+            end
         end
         if locked == true and not curLocked then ok = pcall(function() door:Lock(true) end) and ok end
         W.doorApplying = false
@@ -20251,12 +20256,7 @@ do
             Script.SetTimer(500, function() KCD2MP_W151DoorApply(name, dir, locked, x, y, z, (tries or 0) + 1) end)
             return
         end
-        if setDoor(door, tonumber(dir) or 0, tonumber(locked) == 1, player and player.id) then W.doorStats.applied = W.doorStats.applied + 1 end
-    end
-
-    local function avatarOf(src)
-        local g = KCD2MP.ghosts and (KCD2MP.ghosts[src] or KCD2MP.ghosts[tostring(src)] or KCD2MP.ghosts[tonumber(src) or -1])
-        return g and g.entity or nil
+        if setDoor(door, tonumber(dir) or 0, tonumber(locked) == 1) then W.doorStats.applied = W.doorStats.applied + 1 end
     end
 
     -- Host: a joiner asks for a door (open/close; unlock = his key or his lockpick opened it there).
@@ -20276,14 +20276,12 @@ do
             KCD2MP_W151DoorChanged(door, "refused")   -- the joiner's copy goes back to the host's
             return
         end
-        local av = avatarOf(src)
-        local userId = (av and av.id) or (player and player.id)
         W.doorAsking = true
-        local ok = setDoor(door, dir, (not unlocking) and curLocked or false, userId)
+        local ok = setDoor(door, dir, (not unlocking) and curLocked or false)
         W.doorAsking = false
         W.doorStats.askApplied = W.doorStats.askApplied + 1
-        mp_log(string.format("WO151-DOOR ask from %s for %s dir=%d unlock=%s: %s in the host's world (by %s)", tostring(src), tostring(name), dir,
-            tostring(unlocking), ok and "applied" or "FAILED", av and "the avatar" or "the host's player"))
+        mp_log(string.format("WO151-DOOR ask from %s for %s dir=%d unlock=%s: %s in the host's world (the game's own engine move)", tostring(src), tostring(name), dir,
+            tostring(unlocking), ok and "applied" or "FAILED"))
         KCD2MP_W151DoorChanged(door, "asked")   -- every joiner (the asker too) gets the host's result
     end
 

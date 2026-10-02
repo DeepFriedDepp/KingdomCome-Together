@@ -130,6 +130,16 @@ bool lift_manager_offset(void* giExport, void* lockExport, size_t* off) {
     int found = 0;
     size_t lifted = 0;
     bool disagree = false;
+    // WO-151: an import slot is 8-byte aligned and inside WHGame's own image. The scan meets FF 15 inside
+    // other instructions too; their "slots" pointed anywhere (live J2: 10 counted faults reading
+    // 0x7fff3144fd63-style addresses at the join's rescan) -- never read now.
+    const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(wh);
+    const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS64*>(reinterpret_cast<const uint8_t*>(wh) + dos->e_lfanew);
+    const anchor::Range image{reinterpret_cast<const uint8_t*>(wh), reinterpret_cast<const uint8_t*>(wh) + nt->OptionalHeader.SizeOfImage};
+    auto importSlot = [&](const void* slot) {
+        return (reinterpret_cast<uintptr_t>(slot) & 7) == 0 && image.contains(slot) &&
+               image.contains(static_cast<const uint8_t*>(slot) + sizeof(void*) - 1);
+    };
     KCDMP_FAULT_READ(site, "savelist::lift_manager_offset");
     if (!fault::guarded(site, [&] {
         for (const uint8_t* p = text.begin; p + 48 < text.end; ++p) {
@@ -137,7 +147,7 @@ bool lift_manager_offset(void* giExport, void* lockExport, size_t* off) {
             const int32_t d = *reinterpret_cast<const int32_t*>(p + 2);
             void* const* slot = reinterpret_cast<void* const*>(p + 6 + d);
             void* v = nullptr;
-            if (!seh_read_ptr(slot, &v) || v != giExport) continue;
+            if (!importSlot(slot) || !seh_read_ptr(slot, &v) || v != giExport) continue;
             // mov rcx,[rax+imm8] = 48 8B 48 ib ; mov rcx,[rax+imm32] = 48 8B 88 id
             for (const uint8_t* q = p + 6; q < p + 22; ++q) {
                 size_t o = 0; const uint8_t* after = nullptr;
@@ -148,7 +158,8 @@ bool lift_manager_offset(void* giExport, void* lockExport, size_t* off) {
                     if (r[0] != 0xFF || r[1] != 0x15) continue;
                     const int32_t d2 = *reinterpret_cast<const int32_t*>(r + 2);
                     void* v2 = nullptr;
-                    if (seh_read_ptr(reinterpret_cast<void* const*>(r + 6 + d2), &v2) && v2 == lockExport) {
+                    const void* slot2 = r + 6 + d2;
+                    if (importSlot(slot2) && seh_read_ptr(slot2, &v2) && v2 == lockExport) {
                         if (found && o != lifted) { disagree = true; return; }   // two binds disagree: not trusted
                         lifted = o; ++found;
                     }
