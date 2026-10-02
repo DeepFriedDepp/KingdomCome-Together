@@ -133,6 +133,13 @@ running; the game never in front (one push-down after J2's load). Between runs `
 13. **Phase 5.** Joint crime, one report per take, the forgetting.
 14. **Gates.** Every synthetic suite 0 failed; agent 824; relay 62; native 368; the three
     static checks; the soak (findings §0.3); the payload smoke (the installer build).
+16. **The installer.** Built in a fresh clone of `origin/main` (`b28ac78`), every gate again
+    green there; `release\KingdomComeTogether-Setup-0.43.0.exe` (100.5 MB, SHA-256
+    `70809b61...2affbfb9`); the payload smoke, the markers and the privacy sweep: findings §B. No
+    GitHub release.
+17. **Cleanup.** The maintainer's original mod pak back in the Modding Tools folder (SHA-1
+    `be0d63c6...`, the backup's); playline4's eight added saves moved out (its five original files
+    unchanged by SHA-256); 357 of 357 real save files unchanged.
 15. **Docs.** The findings, this page, the README (the weather line corrected; 0.43.0's rows),
     `docs/TWO-PLAYER-CHECKLIST.md` §WO-151 (91–103), `docs/TEST-0.43.0.md`,
     `docs/releases/RELEASE-NOTES-0.43.0.md`, `Verify-Install.ps1` markers.

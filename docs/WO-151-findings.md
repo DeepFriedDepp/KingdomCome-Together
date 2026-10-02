@@ -560,8 +560,32 @@ leaves gives his holds back (`mp_hold_freeze` off by default; on = WO-137's free
 | agent tests | 824 passed |
 | relay tests | 62 passed |
 | native tests | 368 passed |
-| the payload smoke | §B (the installer build) |
+| the payload smoke | pass (§B) |
 | the frame-rate soak | §0.3 table |
+
+## B. The installer
+
+Built by `tools/Build-Installer.ps1` inside a fresh clone of `origin/main` at `b28ac78`. Every
+gate ran again there and passed: the soak check ("soak PASS for this code"), agent 824, relay 62,
+the synthetic suites, and the native build from scratch.
+
+* The Setup: `release\KingdomComeTogether-Setup-0.43.0.exe`, 100.5 MB, SHA-256
+  `70809b61...2affbfb9`. It sits in the git-ignored release folder beside 0.42.8's. There is no
+  GitHub release.
+* **The payload smoke** passes (`Test-PayloadSmoke.ps1 -Payload release\KCDMP`): coherence over
+  1,065 assembly entries (16 informational version differences, as before), `RELAY-SMOKE ok
+  ... protocol=v10 release=0.43.0`, and no load failure in either log.
+* **`Verify-Install.ps1`** against the payload: every WO-151 marker is present. Only the two
+  layers that Setup itself writes (the dice keys and Setup's own verify file) fail, as on any
+  folder no Setup ran on.
+* **The privacy sweep** covered all 1,026 payload files, ASCII and UTF-16. It found none of the
+  field bundles' player or Steam names, Windows user names, Steam IDs, addresses or profile
+  paths of ours. The only hits are in stock files:
+  * "MooseCree" is a language name in a Microsoft culture table;
+  * `ToBinary...` and `AttemptingToBind...` are .NET method names;
+  * the NAudio author's own build path sits inside the six NuGet DLLs;
+  * `10.0.0.2` is the master server's documented example;
+  * the other 10.x "addresses" are assembly version numbers.
 
 ## L. Live runs (solo, throwaway saves, one machine)
 
