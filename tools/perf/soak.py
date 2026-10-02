@@ -56,6 +56,13 @@ def cmd(c, timeout=20):
             if e.code != 503:
                 raise
             time.sleep(0.05 + 0.05 * attempt)
+        except (ConnectionError, TimeoutError, urllib.error.URLError) as e:
+            # WO-151 L7: the game's console dropped one connection mid-run (WinError 10054) and the whole
+            # 10-minute soak died with it; a dropped connection is retried like a busy console (503)
+            if attempt == 39:
+                raise
+            time.sleep(0.25 + 0.1 * attempt)
+    raise RuntimeError('the console did not answer after 40 attempts')
 
 
 def tail(path, nbytes=600000):

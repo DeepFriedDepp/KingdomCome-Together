@@ -7,7 +7,7 @@
 <strong>Not affiliated with or endorsed by Warhorse Studios or PLAION.</strong></p>
 
 <p align="center">
-  <a href="docs/releases/RELEASE-NOTES-0.42.8.md"><img alt="main" src="https://img.shields.io/badge/main-0.42.8-b8860b?style=flat-square"></a>
+  <a href="docs/releases/RELEASE-NOTES-0.43.0.md"><img alt="main" src="https://img.shields.io/badge/main-0.43.0-b8860b?style=flat-square"></a>
   <a href="https://github.com/DeepFriedDepp/KingdomCome-Together/releases/latest"><img alt="latest release" src="https://img.shields.io/github/v/release/DeepFriedDepp/KingdomCome-Together?label=latest%20release&color=8a3324&style=flat-square"></a>
   <a href="LICENSE"><img alt="License: GPLv3" src="https://img.shields.io/badge/license-GPLv3-2c3e50?style=flat-square"></a>
   <a href="docs/LAUNCHING.md"><img alt="Platform" src="https://img.shields.io/badge/platform-Windows-555555?style=flat-square"></a>
@@ -70,6 +70,9 @@ and weather. Each feature below says how far it is proven:
 | Crouching, sneaking, torches | The figure crouches and sneaks with its player and holds a light only when its player does | 🧪 |
 | Riding | The rider sits on a horse on both screens | ✅ |
 | Nobody's menu stops the other | The host's world keeps running while either player is in a menu, the map or the inventory | ✅ |
+| Joining holds the host's world | While the partner joins, the host's world really stands still (until 0.42.8 it kept running) | 🧪 new in 0.43.0 |
+| Whistling | Your whistle (call your horse) is heard at your figure on the other screen | 🧪 new in 0.43.0 |
+| Riding the host's horses | The rider's horse is the rider's: nothing of the mod moves, pauses or animates it while it is ridden | 🧪 new in 0.43.0 |
 | Voice chat | Speech by distance | ⚠️ starts every session; nobody has confirmed hearing the other yet |
 
 ### Fighting
@@ -82,6 +85,7 @@ and weather. Each feature below says how far it is proven:
 | Blocks and tiring blows | A blow that only tires an enemy counts too | 🧪 new in 0.42.5 |
 | Animals | Wolves and dogs bite both players; their bites hurt | ✅ |
 | Knockouts and takedowns | A knocked-out NPC is down on both screens; takedowns go through the host | 🧪 |
+| One fight, the host's | An enemy both of you fight shows the host's own reactions on the partner's screen; no falling over by itself, no tools mid-fight | 🧪 new in 0.43.0 |
 | Dying | A grave with your things, and you wake up nearby; nobody's world reloads | ✅ |
 
 ### The world
@@ -90,12 +94,15 @@ and weather. Each feature below says how far it is proven:
 |---|---|---|
 | The host's people | Where the host's villagers walk, sit, work and sleep, on the partner's screen too | ✅ |
 | One clock | The partner's time follows the host's | ✅ |
-| Weather | The same weather for both | ✅ |
+| Weather | The host's own weather, read from the game as it changes; on the partner's screen only the host's weather blends | 🧪 new in 0.43.0 (until 0.42.8 one profile was picked at the start, then each game ran its own weather) |
+| Doors | The host's world owns every door: what opens, closes or locks there opens, closes or locks on the partner's screen; the partner's own door asks the host | 🧪 new in 0.43.0 |
 | Sleeping together | One player lies down, the other is asked, and both sleep | ✅ |
 | Crime and guards | The host's guards judge the partner's crimes; hitting a bandit is no crime | ✅ |
+| Crimes count for both | A crime by either player counts for both; a fine or punishment by either clears both, and the wanted icon goes with it (`mp_crime_mode individual` for the old way) | ⚠️ new in 0.43.0 |
 | Looting | Bodies are the host's (first come, first served); loose items exist once; chests are per player | ✅ |
 | Dropping items for each other | What one drops, the other can pick up; the first pickup wins | ✅ |
 | Carrying | A body (dead or knocked out) or a sack one player carries is carried by that player's figure on the other screen and lies where it was put down; one carrier at a time, decided by the host's world | 🧪 new in 0.42.7 |
+| Carrying a living quest person | A person a quest lets you carry alive (the wounded hunter) is carried the same way | ⚠️ new in 0.43.0 (built and tested in scripts; not seen in the game yet) |
 | Fast travel | Only the host fast travels; the partner is told why | ✅ |
 | The leash | A partner more than 650 m from the host is brought back after a countdown | 🧪 fixed in 0.42.5 (in the field it never brought anyone back) |
 
@@ -106,6 +113,9 @@ and weather. Each feature below says how far it is proven:
 | Shared quests | The partner's quest steps reach the host's world, the host's reach the partner's | ✅ |
 | Talking to the host's people | They wait for the partner while the partner talks to them | ✅ |
 | The host's quests are safe | A partner's step that would fail a quest or count someone as dead happens only if the host's world agrees | 🧪 new in 0.42.5 |
+| Catching up | After a join or the host's reload the partner acts only once their quests match the host's; a step the host has already done is never done again | 🧪 new in 0.43.0 |
+| Black screens after a scene | A scene that waits on the host's people is helped along and never leaves the partner on a black screen for long | ⚠️ new in 0.43.0 |
+| Smithing and other work | The partner at a forge or grindstone shows on the other screen where they stand; nobody's station looks taken | 🧪 new in 0.43.0 |
 | Dice with villagers | The dice game after a conversation starts on the partner's screen | 🧪 |
 
 ### Dice between players, and the tools
@@ -124,14 +134,19 @@ and weather. Each feature below says how far it is proven:
 - **Animals' positions:** where the host's animals are (a wolf pack, a deer)
   can differ on the partner's screen until they come close, and an animal
   from a random encounter on the host's side may be missing there.
-- **Cutscenes** play for each player separately; on the partner's screen one
-  can stay black until the host's next step.
+- **Cutscenes** play for each player separately. 0.43.0 helps a scene that waits
+  on the host's people, but a scene that waits for a quest step can still stay
+  black until the next load.
+- **Friendly fire:** the host's blow hurts the partner, but the partner's figure
+  shows no reaction yet.
+- **Wolves' bites** hurt, but the bite itself is not shown on the partner's
+  screen yet.
+- **Conversations and barks** are not heard by the other player.
 - **Escorts** (the sheep in "Find Mutt!") follow only the player who leads
   them, on that player's screen.
-- **Whistling** is not heard by the other player.
 - The journal's **marker letters** can differ between the two players.
 - At the **grindstone** the blade is not in the other figure's hands.
-- **Emotes** and **duels** are not built.
+- **Emotes** (other than the whistle) and **duels** are not built.
 
 Details per feature, with the evidence: the findings pages in `docs/`; the
 earlier detailed status table is kept in

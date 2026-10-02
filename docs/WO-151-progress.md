@@ -17,6 +17,24 @@ and recorded under "Decisions made unattended" in the findings.
 | 0.2 — arguments that own their value | built, unit-tested, live-checked | findings §0.2 |
 | 0.3 — the frame-rate soak | the tool and the gate built; dry run live | findings §0.3 |
 | 0.4 — the frame rate in the native log | built, unit-tested, live | findings §0.4 |
+| 1.1 — the same fight | built; live (L2–L4) | findings §1.1 |
+| 1.2 — friendly fire host → joiner | **not fixed** (the damage arrives; no reaction route) | findings §1.2, §F |
+| 1.3 — wolves | the knockdown fixed; the bite's row offset unknown | findings §1.3, §F |
+| 1.4 — the animation-queue flood | fixed (hysteresis); synthetic | findings §1.4 |
+| 2 — riding | built; live solo (J1, L4) | findings §2 |
+| 3.1 — catch-up | built; live (J2), unit | findings §3.1 |
+| 3.2 — living quest carries | built; synthetic | findings §3.2 |
+| 3.3 — conversation progress | partly built (no applies into an own scene's positioning) | findings §3.3 |
+| 3.4 — the scene guard | built; synthetic and unit | findings §3.4 |
+| 3.5 — whistle / voice / barks | the whistle built and live (J2); voice and barks not built | findings §3.5 |
+| 3.6 — holds | built; synthetic | findings §3.6 |
+| 3.7 — weather | built; live (L5, J2) | findings §3.7 |
+| 3.8 — the join pause | built; live (L5) | findings §3.8 |
+| 3.9 — doors | built; live (J2, L6) | findings §3.9 |
+| 4.1 — a guaranteed exit | the anvil fixed, `mp_unstuck`; the bed not reproduced | findings §4.1 |
+| 4.2 / 4.3 — the forge, smithing on the avatar | fixed; live (J2, frames) | findings §4.2 |
+| 5.1–5.3 — crime | built; synthetic | findings §5 |
+| gates, docs, the soak, the installer | see the work log | findings §G, §0.3 |
 
 ## Work log
 
@@ -69,3 +87,52 @@ maintainer's ports 7778/5273 were free and untouched.
   08:21:55): recorded in the findings; no save was written.
 * Results: findings §0 (the guard's first live line found a real silent fault;
   every check green).
+
+## Live sessions L2–L7, J1–J2 (2026-10-02, solo)
+
+Every session on throwaway playline4 saves (autosave111, the field save's copy), a save lock
+except where a host join needed a save (L5, L6: the joins' saves were written to playline4 and
+removed at the end); relay on 7779/5274; the maintainer's launcher, agent and relay were not
+running; the game never in front (one push-down after J2's load). Between runs `savecheck`:
+357 of 357 real save files unchanged. Details and frames: findings §L and each phase.
+
+* **L2–L4** (host): TakeDamage's arguments; copy contexts; hit-row capture and replay; the
+  sampler's freed-soul fix; the GetHorse WUID fix; avatar adoption.
+* **J1** (joiner): the joiner's own mount of a host horse; the J1 incident (findings §D 12).
+* **L5** (host): the weather hook; the engine join hold; the door names' real shape (the key
+  fix); no sync attack in a 70 s fight.
+* **J2** (joiner, `mp_join_henry` pinned to playline4): catch-up both paths, the weather gate,
+  doors from the host and the joiner's ask, the whistle, smithing on the avatar; the save
+  list's scan faults (fixed).
+* **L6** (host): a joiner's door ask applied and sent; the avatar-as-opener bug (fixed).
+* **L7** (host): two soak attempts with the mod that do not count. The first stopped at 72 s on
+  one dropped console connection (the tool now retries it). The second fell from 68 to 25 FPS
+  late in the run, after the game window was alt-tabbed out of (the maintainer's report; the
+  DLL's own cost stayed at 0.7 ms).
+* **L8** (no mod: `Mods\kdcmp` moved to the scratchpad and back, sha1s checked): the soak without
+  the mod, window focused: 71.7 → 70.7 FPS.
+* **L9** (host): the soak with the mod, window focused: 70.9 → 71.4 FPS; the verdict PASS
+  (`tools/perf/soak-record.json`, the trees of `b38a59d`).
+
+## Work log (continued)
+
+9. **Phase 1.** Copy contexts (pipe op 5), the 4-argument TakeDamage, NpcHit capture
+   (`motion.cpp`, per-class row paths, RTTI-checked) and replay, the sampler's alive check,
+   gallop hysteresis.
+10. **Phase 2.** `mp_ride_owner`: the ridden horse leaves every NPC path; the WUID fix.
+11. **Phase 3.** Holds (3.6); weather (`weather.cpp`, BlendToProfile gated pass-through, hook
+    prologue table + test); the engine join hold (`wo138.cpp` source 2, the DLL's deadline);
+    doors (DoorState 16 host-only, DoorAsk 17; pivot + name hash; the game's own Open/Close
+    shape); the whistle (Emote 3); the scene guard (the agent's stage parser, resume, rescue
+    save, the end edge at the release, the forced-dialogue resume); the living carry
+    (`living` on the carry wire); the catch-up (the mirror's hold through a host reload, the
+    caught-up gate, the passed-step verdict, the seen set's rebase, stashed parts, no applies
+    into an own scene's positioning).
+12. **Phase 4.** Minigame tutorials local; `mp_unstuck`; avatar minigames never aligned at a
+    station's object.
+13. **Phase 5.** Joint crime, one report per take, the forgetting.
+14. **Gates.** Every synthetic suite 0 failed; agent 824; relay 62; native 368; the three
+    static checks; the soak (findings §0.3); the payload smoke (the installer build).
+15. **Docs.** The findings, this page, the README (the weather line corrected; 0.43.0's rows),
+    `docs/TWO-PLAYER-CHECKLIST.md` §WO-151 (91–103), `docs/TEST-0.43.0.md`,
+    `docs/releases/RELEASE-NOTES-0.43.0.md`, `Verify-Install.ps1` markers.

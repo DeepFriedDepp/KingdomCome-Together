@@ -31,6 +31,12 @@ python tools/perf/soak.py verdict --mod tools/perf/runs/mod1.json --vanilla tool
   other trees than the ones being built.
 * The game without the mod: close the game, move `Mods\kdcmp` out of the Modding Tools
   folder (and do not inject the DLL), run, put it back.
+* **The window in the same state for both runs** (the 0.43.0 soak: focused all the way).
+  A window that loses focus mid-run caps the game's frame rate: an early 0.43.0 run fell
+  from 68 to 25 FPS after the game was alt-tabbed out of, and stayed there after the scene
+  was removed, while the DLL's own cost (`FRAME ... ours_us_mean`) stayed at 0.7 ms; the
+  focused rerun held 71 FPS to the end.
+* A dropped console connection is retried (the first 0.43.0 attempt died at 72 s on one).
 
 ## The stat-stack reader
 

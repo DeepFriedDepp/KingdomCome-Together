@@ -1,0 +1,68 @@
+{
+ "verdict": "PASS",
+ "version": "0.43.0",
+ "checks": [
+  [
+   "PASS",
+   "the last 2 minutes (71.4 FPS) within 10% of the first 2 (70.9)"
+  ],
+  [
+   "PASS",
+   "the first 2 minutes (70.9) within 10% of the game without the mod (71.6)"
+  ],
+  [
+   "PASS",
+   "the last 2 minutes (71.4) within 10% of the game without the mod (70.7)"
+  ],
+  [
+   "PASS",
+   "the stat stack 0 in every row (max 0)"
+  ],
+  [
+   "PASS",
+   "no FAULT line (0)"
+  ],
+  [
+   "PASS",
+   "both runs on the same throwaway playline (playline4/autosave111.whs, playline4/autosave111.whs)"
+  ],
+  [
+   "PASS",
+   "enough rows (56, 60)"
+  ]
+ ],
+ "mod": {
+  "label": "mod043",
+  "save": "playline4/autosave111.whs",
+  "when": "2026-10-02 12:56:26",
+  "first2_fps": 70.9,
+  "last2_fps": 71.4,
+  "pairs": 5,
+  "notes": [
+   "263s pair 1 attack sent=true hp 100/7",
+   "353s pair 2 attack sent=true hp 100/2",
+   "493s pair 3 attack sent=true hp 100/2",
+   "563s pair 4 attack sent=true hp 100/3"
+  ]
+ },
+ "vanilla": {
+  "label": "van043",
+  "save": "playline4/autosave111.whs",
+  "when": "2026-10-02 12:43:14",
+  "first2_fps": 71.6,
+  "last2_fps": 70.7
+ },
+ "git_head": "b38a59dca5114ae4553cc4a823f02c7848bd5f1f",
+ "trees": {
+  "native/KCDMP": "e30448832d36d7d6e44da2bef8bf137f3d059d9c",
+  "kdcmp/Data/Scripts": "a943371ca8f90798225185eb67f7e07cf909a457",
+  "kdcmp/Data/Libs": "6142c50fb9a37bea036767ab88c39c60bbe961ba",
+  "kdcmp/mod.manifest": "f3252427570d33f5638ebbe672e4e637b69a5db0",
+  "dotnet/KcdMp.Client": "6e9d676c1912217e5668900e2bcf31e88791e1b1",
+  "dotnet/KcdMp.Server": "80bb7f46cc77100a3f52b173fb7bf6a3a237d10e",
+  "dotnet/KcdMp.Protocol": "3d40ba5df3c791296cf756bc8a4d15b555f60bd8"
+ },
+ "dirty_at_verdict": [],
+ "table_mod": "| t (s) | FPS | stat stack | FAULT lines | phase | player hp |\n|---|---|---|---|---|---|\n| 12 | 70.8 | 0 | 0 | crowd | 72 |\n| 22 | 70.9 | 0 | 0 | crowd | 72 |\n| 32 | 70.8 | 0 | 0 | crowd | 72 |\n| 42 | 70.9 | 0 | 0 | crowd | 72 |\n| 52 | 70.9 | 0 | 0 | crowd | 72 |\n| 62 | 70.8 | 0 | 0 | crowd | 72 |\n| 72 | 70.8 | 0 | 0 | crowd | 72 |\n| 82 | 70.7 | 0 | 0 | crowd | 72 |\n| 92 | 70.7 | 0 | 0 | crowd | 72 |\n| 103 | 71.3 | 0 | 0 | crowd | 72 |\n| 112 | 71.3 | 0 | 0 | crowd | 72 |\n| 123 | 71.4 | 0 | 0 | crowd | 72 |\n| 133 | 71.3 | 0 | 0 | crowd | 72 |\n| 143 | 71.4 | 0 | 0 | crowd | 72 |\n| 153 | 71.3 | 0 | 0 | crowd | 72 |\n| 163 | 71.3 | 0 | 0 | crowd | 72 |\n| 173 | 71.4 | 0 | 0 | crowd | 72 |\n| 183 | 71.2 | 0 | 0 | crowd | 72 |\n| 203 | 71.1 | 0 | 0 | fight | 72 |\n| 213 | 71.0 | 0 | 0 | fight | 72 |\n| 223 | 71.2 | 0 | 0 | fight | 72 |\n| 233 | 71.2 | 0 | 0 | fight | 72 |\n| 243 | 71.2 | 0 | 0 | fight | 72 |\n| 253 | 71.2 | 0 | 0 | fight | 72 |\n| 263 | 71.1 | 0 | 0 | fight | 72 |\n| 273 | 71.7 | 0 | 0 | fight | 72 |\n| 293 | 71.7 | 0 | 0 | fight | 72 |\n| 303 | 71.6 | 0 | 0 | fight | 72 |\n| 313 | 71.6 | 0 | 0 | fight | 72 |\n| 323 | 71.8 | 0 | 0 | fight | 72 |\n| 333 | 71.7 | 0 | 0 | fight | 72 |\n| 343 | 71.7 | 0 | 0 | fight | 72 |\n| 353 | 71.7 | 0 | 0 | fight | 72 |\n| 373 | 71.7 | 0 | 0 | fight | 72 |\n| 383 | 71.7 | 0 | 0 | fight | 72 |\n| 393 | 71.5 | 0 | 0 | fight | 72 |\n| 403 | 71.5 | 0 | 0 | fight | 72 |\n| 413 | 71.5 | 0 | 0 | fight | 72 |\n| 423 | 71.6 | 0 | 0 | fight | 72 |\n| 433 | 71.6 | 0 | 0 | fight | 72 |\n| 443 | 71.6 | 0 | 0 | fight | 72 |\n| 453 | 71.6 | 0 | 0 | fight | 72 |\n| 463 | 71.5 | 0 | 0 | fight | 72 |\n| 473 | 71.6 | 0 | 0 | fight | 72 |\n| 483 | 71.5 | 0 | 0 | fight | 72 |\n| 493 | 71.5 | 0 | 0 | fight | 72 |\n| 503 | 71.4 | 0 | 0 | fight | 72 |\n| 513 | 71.4 | 0 | 0 | fight | 72 |\n| 523 | 71.3 | 0 | 0 | fight | 72 |\n| 533 | 71.3 | 0 | 0 | fight | 72 |\n| 543 | 71.4 | 0 | 0 | fight | 72 |\n| 553 | 71.5 | 0 | 0 | fight | 72 |\n| 563 | 71.3 | 0 | 0 | fight | 72 |\n| 573 | 71.4 | 0 | 0 | fight | 72 |\n| 593 | 71.2 | 0 | 0 | fight | 72 |\n| 603 | 71.0 | 0 | 0 | fight | 72 |\n",
+ "table_vanilla": "| t (s) | FPS | stat stack | FAULT lines | phase | player hp |\n|---|---|---|---|---|---|\n| 12 | 71.7 | 0 | 0 | crowd | 72 |\n| 22 | 71.7 | 0 | 0 | crowd | 72 |\n| 32 | 71.6 | 0 | 0 | crowd | 72 |\n| 42 | 71.6 | 0 | 0 | crowd | 72 |\n| 52 | 71.6 | 0 | 0 | crowd | 72 |\n| 62 | 71.8 | 0 | 0 | crowd | 72 |\n| 72 | 71.7 | 0 | 0 | crowd | 72 |\n| 82 | 71.6 | 0 | 0 | crowd | 72 |\n| 92 | 71.6 | 0 | 0 | crowd | 72 |\n| 102 | 71.4 | 0 | 0 | crowd | 72 |\n| 112 | 71.6 | 0 | 0 | crowd | 72 |\n| 122 | 71.5 | 0 | 0 | crowd | 72 |\n| 132 | 71.5 | 0 | 0 | crowd | 72 |\n| 142 | 71.5 | 0 | 0 | crowd | 72 |\n| 152 | 71.4 | 0 | 0 | crowd | 72 |\n| 162 | 71.5 | 0 | 0 | crowd | 72 |\n| 172 | 71.4 | 0 | 0 | crowd | 72 |\n| 182 | 71.4 | 0 | 0 | crowd | 72 |\n| 192 | 71.4 | 0 | 0 | fight | 72 |\n| 202 | 71.2 | 0 | 0 | fight | 72 |\n| 212 | 70.9 | 0 | 0 | fight | 72 |\n| 222 | 71.3 | 0 | 0 | fight | 72 |\n| 232 | 71.4 | 0 | 0 | fight | 72 |\n| 242 | 71.4 | 0 | 0 | fight | 72 |\n| 252 | 71.3 | 0 | 0 | fight | 72 |\n| 262 | 71.4 | 0 | 0 | fight | 72 |\n| 272 | 71.3 | 0 | 0 | fight | 72 |\n| 283 | 71.4 | 0 | 0 | fight | 72 |\n| 293 | 71.4 | 0 | 0 | fight | 72 |\n| 302 | 71.3 | 0 | 0 | fight | 72 |\n| 313 | 71.4 | 0 | 0 | fight | 72 |\n| 323 | 71.3 | 0 | 0 | fight | 72 |\n| 335 | 70.8 | 0 | 0 | fight | 72 |\n| 343 | 71.1 | 0 | 0 | fight | 72 |\n| 352 | 71.2 | 0 | 0 | fight | 72 |\n| 362 | 71.3 | 0 | 0 | fight | 72 |\n| 373 | 71.3 | 0 | 0 | fight | 72 |\n| 383 | 71.3 | 0 | 0 | fight | 72 |\n| 392 | 71.2 | 0 | 0 | fight | 72 |\n| 403 | 71.1 | 0 | 0 | fight | 72 |\n| 412 | 71.2 | 0 | 0 | fight | 72 |\n| 422 | 71.1 | 0 | 0 | fight | 72 |\n| 432 | 71.1 | 0 | 0 | fight | 72 |\n| 443 | 71.1 | 0 | 0 | fight | 72 |\n| 452 | 71.0 | 0 | 0 | fight | 72 |\n| 462 | 71.1 | 0 | 0 | fight | 72 |\n| 473 | 71.0 | 0 | 0 | fight | 72 |\n| 482 | 70.6 | 0 | 0 | fight | 72 |\n| 492 | 70.7 | 0 | 0 | fight | 72 |\n| 503 | 70.8 | 0 | 0 | fight | 72 |\n| 513 | 70.8 | 0 | 0 | fight | 72 |\n| 523 | 70.8 | 0 | 0 | fight | 72 |\n| 532 | 70.8 | 0 | 0 | fight | 72 |\n| 543 | 70.8 | 0 | 0 | fight | 72 |\n| 553 | 70.7 | 0 | 0 | fight | 72 |\n| 562 | 70.8 | 0 | 0 | fight | 72 |\n| 573 | 70.8 | 0 | 0 | fight | 72 |\n| 582 | 70.2 | 0 | 0 | fight | 72 |\n| 593 | 70.7 | 0 | 0 | fight | 72 |\n| 603 | 70.7 | 0 | 0 | fight | 72 |\n"
+}

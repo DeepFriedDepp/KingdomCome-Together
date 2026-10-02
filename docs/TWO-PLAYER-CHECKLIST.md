@@ -527,6 +527,61 @@ quest-reaction`; both: `MP-CARRY land`, `MP-CARRY avatar`, `MP-CARRY loser`,
 `WO148-BUILD` (kcd.log), `MP-WO148-STATS` (agent log), `keys pak:` (launcher
 log).
 
+## WO-151 — the long session's fixes
+
+0.43.0 changes what the 2026-10-01 evening showed. Every check below names its
+switch; each is on, and `off` goes back to 0.42.8's way. Everything here was
+seen working solo against a scripted partner; these checks need two people.
+
+91. **One fight.** Fight the same bandit together, for a while. Marker: `mark_fight_same`.
+    * Partner: the bandit shows the host's reactions (stagger, knockdown); it never
+      falls over by itself, sinks into the ground or takes out a tool, and its health
+      matches the host's. Switch: `mp_npc_reactions`, `mp_copy_fight`.
+92. **Friendly fire, host on partner.** With friendly fire on, the host hits the
+    partner a few times. Marker: `mark_ff`.
+    * Partner: health drops by the hit. (No reaction is played yet: known.)
+93. **Riding together.** Each of you mounts a horse (the partner one of the host's
+    if a quest gives one), rides, gallops, dismounts. Marker: `mark_ride`.
+    * Both: each rider sits on a horse on both screens, with the riding pose; the
+      partner can ride and gallop as in single player; no stutter at the gallop.
+      Frames of both screens, please: this is the trailer's shot. Switch: `mp_ride_owner`.
+94. **The host reloads.** Mid-quest, the host loads a recent save. Marker: `mark_reload`.
+    * Partner: after the rejoin, quest steps and conversations wait a few seconds
+      ("Catching up with the host's world"), then work; no step the host has already
+      done happens again. Switch: `mp_quest_catchup`.
+95. **A scene.** Play a quest scene together (a cutscene or a conversation that turns
+    into one). Marker: `mark_scene`.
+    * Partner: never black for long; write down how long if it is black at all.
+      Switch: `mp_scene_guard`.
+96. **A living person carried.** In a quest where you carry someone alive (the
+    wounded hunter), each of you carries him once. Marker: `mark_carry_alive`.
+    * The other: the carrier's figure carries him; nobody floats; "Grab body" is not
+      offered meanwhile. Switch: `mp_carry_living`.
+97. **The whistle.** Each of you calls your horse (the whistle). Marker: `mark_whistle`.
+    * The other: hears the whistle at the caller's figure. Switch: `mp_whistle`.
+98. **Weather.** Play an hour or more. Marker: `mark_weather` when it changes.
+    * Both: the same weather when it changes on the host's side. Switch: none (the
+      host's own game decides).
+99. **The join.** The partner joins while the host stands among people. Marker: `mark_join`.
+    * Host: the world stands still while the partner loads (nobody walks on), then
+      runs again. Switch: `mp_join_engine_hold`.
+100. **Doors.** The partner opens and closes a few doors; the host opens one the
+     partner can see; let an NPC walk through one. Marker: `mark_door`.
+     * Both: every door is open or shut the same on both screens. Switch: `mp_door_sync`.
+101. **The forge.** The partner forges a sword while the host watches, then the other
+     way round. Marker: `mark_forge`.
+     * The watcher: the figure works at the anvil where it stands; the anvil stays free
+       for the watcher. Both can always leave the minigame. Switch: `mp_minigame_align`
+       (off = never at the station's object).
+102. **A crime together.** One of you steals something seen by someone. Marker: `mark_crime`.
+     * Both are wanted; paying the fine (either of you) clears both, and the wanted icon
+       goes. Switch: `mp_crime_mode joint|individual`.
+103. **Stuck?** If either of you is stuck in a bed, a minigame or anything else, type
+     `mp_unstuck` (then `mp_unstuck hard`). Marker: `mark_stuck`.
+
+Lines worth a look: `MP-W151` (agent log), `WO151-` (kcd.log), `FRAME` and `FAULT`
+(kcdmp-native.log; a `FAULT` line is worth a report).
+
 ## Logs to send afterwards
 
 Both machines: Report a bug in the launcher. Since 0.42.2 it also collects the
