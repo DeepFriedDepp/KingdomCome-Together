@@ -215,7 +215,7 @@ public partial class GameBridge
                     break;
                 case Protocol.ExtraKindGaits:
                     _w143HostGaits[r.Name] = r.Gaits;
-                    if (W141Active && _w143Gaits) await _combat.Wo143GaitsAsync(r.Name, r.Gaits);
+                    if (W141Active && _w143Gaits && !W151InFight(r.Name)) await _combat.Wo143GaitsAsync(r.Name, r.Gaits);   // WO-151 1.1
                     break;
                 case Protocol.ExtraKindLooks:
                     if (W141Active && _w143Idles) await Wo143ApplyLookAsync(r.Name, Wo143Rules.LookTargetHere(r.TargetKind, r.Target, src, _myGhostId));
@@ -233,6 +233,8 @@ public partial class GameBridge
 
     private async Task Wo143ApplyHandsAsync(ExtraRow r)
     {
+        // WO-151 1.1: a copy in a fight holds no tool (its weapon is the fight's); the row waits for the fight's end
+        if (W151InFight(r.Name)) { Interlocked.Increment(ref _w151HandsHeld); return; }
         await _combat.Wo143HandsAsync(r.Name, r.Left, r.Right);
         // a temporary tool the copy no longer wants goes (once it is out of the hand: the mod checks)
         if (_w143Temps.TryGetValue(r.Name, out var set))
@@ -306,7 +308,10 @@ public partial class GameBridge
         if (show is null) return;
         var m = new W143Mini { Type = show.Type, Obj = a.MinigameObj, Show = show };
         _w143Mini[peer] = m;
-        var (frag, tags, aligned, phase) = Wo143Rules.FirstStep(show, a.MinigameObj);
+        // WO-151 4.2/4.3: never at the station's object unless mp_minigame_align on -- the field's smithing entry
+        // aligned at the anvil showed nothing on the host, floated the avatar and kept the partner's anvil "in use";
+        // the grindstone that worked played where he stood (the player's own place is at the station anyway)
+        var (frag, tags, aligned, phase) = Wo143Rules.FirstStep(show, _w151MinigameAlign ? a.MinigameObj : 0);
         Console.WriteLine($"MP-W143 player {peer}: {show.Name} -- the avatar plays {frag}{(aligned ? $" at the same object ({a.MinigameObj:X16})" : " where he stands")}, then {show.Loop}");
         if (aligned) m.Held = await _combat.Wo143HoldAsync(Wo141Rules.AvatarName(peer), true);
         await Wo143StepAsync(peer, m, frag, tags, aligned, phase);

@@ -36,3 +36,6 @@ wo120-probe-*.txt
 
 # Python bytecode from the save tools (Read-SaveAnatomy.py imported by scripts)
 tools/__pycache__/
+
+# WO-151: the frame-rate soak's raw runs (the committed record carries the tables)
+tools/perf/runs/

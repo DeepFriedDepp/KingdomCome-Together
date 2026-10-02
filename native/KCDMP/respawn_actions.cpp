@@ -2,6 +2,7 @@
 // GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 #include "respawn_actions.h"
+#include "fault_guard.h"
 #include "anchors.h"
 #include "engine.h"
 #include "hangover.h"
@@ -23,16 +24,16 @@ namespace {
 // SEH-isolated call helpers (no destructible locals in any __try frame).
 // ---------------------------------------------------------------------------
 bool rd(const void* base, size_t off, void** out) {
-    __try { *out = *reinterpret_cast<void* const*>(static_cast<const char*>(base) + off); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_READ(site, "respawn_actions::rd");
+    return fault::guarded(site, [&] { *out = *reinterpret_cast<void* const*>(static_cast<const char*>(base) + off); });
 }
 bool rd64(const void* base, size_t off, uint64_t* out) {
-    __try { *out = *reinterpret_cast<const uint64_t*>(static_cast<const char*>(base) + off); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_READ(site, "respawn_actions::rd64");
+    return fault::guarded(site, [&] { *out = *reinterpret_cast<const uint64_t*>(static_cast<const char*>(base) + off); });
 }
 bool rd8(const void* base, size_t off, uint8_t* out) {
-    __try { *out = *(static_cast<const uint8_t*>(base) + off); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_READ(site, "respawn_actions::rd8");
+    return fault::guarded(site, [&] { *out = *(static_cast<const uint8_t*>(base) + off); });
 }
 void* vslot(void* obj, size_t off) {
     void* vt = nullptr; void* fn = nullptr;
@@ -47,39 +48,41 @@ template <typename R, typename... A>
 bool vcall(void* obj, size_t off, R* out, A... a) {
     void* fn = vslot(obj, off);
     if (!fn) return false;
-    __try { *out = reinterpret_cast<R (*)(void*, A...)>(fn)(obj, a...); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "respawn_actions::vcall");
+    return fault::guarded(site, [&] { *out = reinterpret_cast<R (*)(void*, A...)>(fn)(obj, a...); });
 }
 template <typename... A>
 bool vcall_void(void* obj, size_t off, A... a) {
     void* fn = vslot(obj, off);
     if (!fn) return false;
-    __try { reinterpret_cast<void (*)(void*, A...)>(fn)(obj, a...); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "respawn_actions::vcall_void");
+    return fault::guarded(site, [&] { reinterpret_cast<void (*)(void*, A...)>(fn)(obj, a...); });
 }
 template <typename R, typename... A>
 bool fcall(void* fn, R* out, A... a) {
     if (!fn) return false;
-    __try { *out = reinterpret_cast<R (*)(A...)>(fn)(a...); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "respawn_actions::fcall");
+    return fault::guarded(site, [&] { *out = reinterpret_cast<R (*)(A...)>(fn)(a...); });
 }
 template <typename... A>
 bool fcall_void(void* fn, A... a) {
     if (!fn) return false;
-    __try { reinterpret_cast<void (*)(A...)>(fn)(a...); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "respawn_actions::fcall_void");
+    return fault::guarded(site, [&] { reinterpret_cast<void (*)(A...)>(fn)(a...); });
 }
 bool ilock_add(void* p, long delta, long* after) {
-    __try { *after = InterlockedAdd(static_cast<volatile long*>(p), delta); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_READ(site, "respawn_actions::ilock_add");
+    return fault::guarded(site, [&] { *after = InterlockedAdd(static_cast<volatile long*>(p), delta); });
 }
 bool copy_str(const char* s, char* out, size_t n) {
-    __try {
+    KCDMP_FAULT_READ(site, "respawn_actions::copy_str");
+    if (fault::guarded(site, [&] {
         size_t i = 0;
         for (; i + 1 < n && s[i]; ++i) out[i] = s[i];
         out[i] = 0;
-        return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) { if (n) out[0] = 0; return false; }
+    })) return true;
+    if (n) out[0] = 0;
+    return false;
 }
 
 // A CryStringT<char> the engine may retain: header {refcount, len, cap} at
@@ -737,8 +740,8 @@ void resolve_area() {
     static const uint8_t kPrologue[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x18, 0x57, 0x48, 0x81, 0xEC, 0xA0, 0x00, 0x00, 0x00};
     bool pro = false;
     if (core) {
-        __try { pro = std::memcmp(core, kPrologue, sizeof(kPrologue)) == 0; }
-        __except (EXCEPTION_EXECUTE_HANDLER) { pro = false; }
+        KCDMP_FAULT_READ(s_pro, "respawn_actions::area_core/prologue");
+        pro = fault::guarded_or<bool>(s_pro, false, [&]() -> bool { return std::memcmp(core, kPrologue, sizeof(kPrologue)) == 0; });
     }
     g_areaCore = pro ? core : nullptr;
     g_labelSettlement.set("settlement");
@@ -1371,8 +1374,8 @@ using StopFightFn = void (*)(const void* souls);
 void* g_stopFight = nullptr;
 
 bool call_stop_fight(void* fn, const void* souls) {
-    __try { reinterpret_cast<StopFightFn>(fn)(souls); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "respawn_actions::call_stop_fight");
+    return fault::guarded(site, [&] { reinterpret_cast<StopFightFn>(fn)(souls); });
 }
 
 void resolve_stopfight() {

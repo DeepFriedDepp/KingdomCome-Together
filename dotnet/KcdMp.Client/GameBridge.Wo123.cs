@@ -69,6 +69,7 @@ public partial class GameBridge
         public volatile string? CancelReason;
         public readonly Channel<(byte Type, byte[] Body)> Inbox = Channel.CreateUnbounded<(byte, byte[])>();
         public WorldSender? Sender;
+        public volatile bool EngineHeld;   // WO-151 3.8: the engine's own hold is on for this join
         public TaskCompletionSource<(string Kind, string Arg)>? LuaReply;
         public void Cancel(string reason) { CancelReason ??= reason; try { Cts.Cancel(); } catch (ObjectDisposedException) { } }
     }
@@ -457,6 +458,9 @@ public partial class GameBridge
             }
             var sender = new WorldSender(bytes, j.JoinId, j.Joiner, save.Seq, save.Md5);
             j.Sender = sender;
+            // WO-151 3.8: the world is truly held from here until the join ends (the mod's ratio 0 and NPC pauses
+            // never stopped the engine: the DLL read world=running scale=1.000 through a 76 s "pause").
+            await Wo151JoinHoldAsync(j, true);
             string sha = Convert.ToHexString(sender.Offer.Sha256).ToLowerInvariant();
             Console.WriteLine(FormattableString.Invariant(
                 $"MP-JOIN host: join 0x{j.JoinId:x8} world={save.Display} bytes={bytes.Length} chunks={sender.ChunkCount} sha256={sha[..16]} worldsaved_seq={save.Seq} md5={v.Md5[..8].ToLowerInvariant()} verify=ok save_ms={(DateTime.UtcNow - t0).TotalMilliseconds:F0}"));
@@ -586,7 +590,9 @@ public partial class GameBridge
     private async Task FinishHostJoinAsync(HostJoin j, string reason, byte abortReason)
     {
         double pausedS = j.PausedUtc is { } p ? (DateTime.UtcNow - p).TotalSeconds : 0;
-        // Resume first: nothing below may keep the host frozen.
+        // Resume first: nothing below may keep the host frozen. WO-151: the engine's own hold first of all
+        // (through the pipe -- the mod's Lua does not run while the engine is paused).
+        await Wo151JoinHoldAsync(j, false);
         if (j.PausedUtc is not null)
         {
             try { await ExecLuaAsync($"if KCD2MP_JoinResume then KCD2MP_JoinResume(\"{j.JoinId:x8}\", \"{EscapeLua(reason)}\") end"); }

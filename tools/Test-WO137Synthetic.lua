@@ -335,7 +335,10 @@ do -- (c) talking (joiner)
     KCD2MP_W137DialogEnd(400, "Dude tzel_olbram")
     NOW = NOW + 3; KCD2MP_W137Session(false, true, true)   -- WO-144: past the deferred end
 
-    -- a conversation the game forces on the (still paused) copy
+    -- a conversation the game forces on the (still paused) copy -- WO-137's own path (WO-151 3.4's
+    -- mp_scene_guard resumes the copy for it instead: Test-WO151Synthetic.lua (i))
+    local sceneGuardWas = KCD2MP.w151 and KCD2MP.w151.sceneGuard
+    if KCD2MP.w151 then KCD2MP.w151.sceneGuard = false end
     mark = #LOG; CMDS = {}
     KCD2MP_W137TalkAttempt(500, "Dude tzel_olbram")
     PLAYER_IN_DIALOG = true; KCD2MP_W137Session(false, true, true); PLAYER_IN_DIALOG = false   -- WO-144 1.3: told once the player is in it
@@ -345,6 +348,7 @@ do -- (c) talking (joiner)
     KCD2MP_W137DialogEnd(500, "Dude tzel_olbram")
     NOW = NOW + 3; KCD2MP_W137Session(false, true, true)   -- WO-144: past the deferred end
     check("c: ...its end: nothing to pause again (it stayed paused)", cmdCount("wh_ai_PauseNPC") == 0 and countEvt("w137_talk", "off tzel_olbram", mark) == 1)
+    if KCD2MP.w151 then KCD2MP.w151.sceneGuard = sceneGuardWas end
 
     -- the host's stream stops mid-conversation: never parked until it ends
     BasicAIActions.OnTalk(e, player, 0)
@@ -370,7 +374,10 @@ do -- (c) talking (joiner)
 end
 
 do -- (d) the host's hold
+    -- WO-151 3.6: a hold only refuses a second conversation by default (block-only, Test-WO151Synthetic.lua);
+    -- this is mp_hold_freeze on, the WO-137 freeze, whose rules must still hold.
     reset(); clearLog(); NOW = 900
+    KCD2MP.w151.holdFreeze = true
     KCD2MP.hitSensorOn = true
     KCD2MP_W137Session(true, false, true)
     local e = mkEntity("tzel_olbram", 1, 1, 0); ENTS["tzel_olbram"] = e
@@ -408,6 +415,7 @@ do -- (d) the host's hold
     KCD2MP_W137Session(false, false, false)
     check("d: no longer the host: released", KCD2MP.w137.held["tzel_olbram"] == nil and cmdCount("wh_ai_ResumeNPC tzel_olbram") == 1)
     KCD2MP.hitSensorOn = false
+    KCD2MP.w151.holdFreeze = false
     noErrs("d")
 end
 

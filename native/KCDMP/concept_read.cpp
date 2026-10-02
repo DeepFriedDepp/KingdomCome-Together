@@ -2,6 +2,7 @@
 // GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 #include "concept_read.h"
+#include "fault_guard.h"
 #include "log.h"
 #include "pipe_server.h"
 #include "port_gate.h"
@@ -62,37 +63,35 @@ using FindNodeFn = void* (*)(void* self, void* retSmartPtr, const void* cryStrRe
 // what MSVC requires and what the rest of this DLL already does.
 
 bool read_ptr(const void* base, size_t offset, void** out) {
-    __try {
-        *out = *reinterpret_cast<void* const*>(reinterpret_cast<const char*>(base) + offset);
-        return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_READ(site, "concept_read::read_ptr");
+    return fault::guarded(site, [&] { *out = *reinterpret_cast<void* const*>(reinterpret_cast<const char*>(base) + offset); });
 }
 
 bool prologue_matches(const void* fn, const uint8_t* expect, size_t n) {
-    __try { return std::memcmp(fn, expect, n) == 0; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_READ(site, "concept_read::prologue_matches");
+    return fault::guarded_or<bool>(site, false, [&]() -> bool { return std::memcmp(fn, expect, n) == 0; });
 }
 
 bool copy_cstr_guarded(const char* s, char* out, size_t n) {
-    __try {
+    KCDMP_FAULT_READ(site, "concept_read::copy_cstr_guarded");
+    return fault::guarded(site, [&] {
         size_t i = 0;
         for (; i + 1 < n && s[i]; ++i) out[i] = s[i];
         out[i] = 0;
-        return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    });
 }
 
 bool call_get_game_iface(GetGameIfaceFn fn, const void** out) {
-    __try { *out = fn(); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "concept_read::call_get_game_iface");
+    return fault::guarded(site, [&] { *out = fn(); });
 }
 
 bool call_find_node(FindNodeFn fn, void* self, void** outNode, const void* strRef) {
-    __try {
+    KCDMP_FAULT_CALL(site, "concept_read::call_find_node");
+    return fault::guarded(site, [&] {
         *outNode = nullptr;
         fn(self, outNode, strRef);
-        return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    });
 }
 
 // module+0xRVA, matching combat_construct.cpp / rttr_abi.cpp's log style.
@@ -367,28 +366,28 @@ using PortIsEmptyFn  = bool  (*)(const void* self);
 
 bool call_get_port(GetPortFn fn, void* self, const void* str, void** out) {
     void* sp = nullptr;
-    __try { fn(self, &sp, str); *out = sp; return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "concept_read::call_get_port");
+    return fault::guarded(site, [&] { fn(self, &sp, str); *out = sp; });
 }
 bool call_get_direction(GetDirectionFn fn, const void* self, int* out) {
-    __try { *out = fn(self); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "concept_read::call_get_direction");
+    return fault::guarded(site, [&] { *out = fn(self); });
 }
 bool call_is_empty(PortIsEmptyFn fn, const void* self, bool* out) {
-    __try { *out = fn(self); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "concept_read::call_is_empty");
+    return fault::guarded(site, [&] { *out = fn(self); });
 }
 bool call_get_name_ref(PortGetNameFn fn, const void* self, const void** out) {
-    __try { *out = fn(self); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "concept_read::call_get_name_ref");
+    return fault::guarded(site, [&] { *out = fn(self); });
 }
 bool call_port_read(PortReadFn fn, void* self, kcdmp::rttr::Variant* ret) {
-    __try { fn(self, ret); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "concept_read::call_port_read");
+    return fault::guarded(site, [&] { fn(self, ret); });
 }
 bool call_port_trigger(PortTriggerFn fn, void* self) {
-    __try { fn(self); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "concept_read::call_port_trigger");
+    return fault::guarded(site, [&] { fn(self); });
 }
 
 // Address -> exported symbol name, exact match. Null when the address is not an

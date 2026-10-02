@@ -3,6 +3,7 @@
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 // WO-121 -- movement and combat on native-written bodies. See motion.h.
 #include "motion.h"
+#include "fault_guard.h"
 
 #include <windows.h>
 #include <atomic>
@@ -93,8 +94,8 @@ constexpr Prop kPropReqInputClass{0x300, "RequestedInputClass"};
 
 // ---- SEH-isolated primitives (no destructible locals) --------------------------
 template <class T> bool rd(const void* base, size_t off, T* out) {
-    __try { *out = *reinterpret_cast<const T*>(static_cast<const char*>(base) + off); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_READ(site, "motion::rd");
+    return fault::guarded(site, [&] { *out = *reinterpret_cast<const T*>(static_cast<const char*>(base) + off); });
 }
 void* vslot(void* obj, size_t off) {
     void* vt = nullptr; void* fn = nullptr;
@@ -103,74 +104,76 @@ void* vslot(void* obj, size_t off) {
 }
 bool is_a(void* obj, void* const* vft) { void* vp = nullptr; return obj && vft && rd(obj, 0, &vp) && vp == static_cast<const void*>(vft); }
 bool call_p0(void* fn, void* self, void** out) {
-    __try { *out = reinterpret_cast<void* (__fastcall*)(void*)>(fn)(self); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "motion::call_p0");
+    return fault::guarded(site, [&] { *out = reinterpret_cast<void* (__fastcall*)(void*)>(fn)(self); });
 }
 bool call_p1u(void* fn, void* self, uint32_t a, void** out) {
-    __try { *out = reinterpret_cast<void* (__fastcall*)(void*, uint32_t)>(fn)(self, a); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "motion::call_p1u");
+    return fault::guarded(site, [&] { *out = reinterpret_cast<void* (__fastcall*)(void*, uint32_t)>(fn)(self, a); });
 }
 bool call_p1b(void* fn, void* self, bool a, void** out) {
-    __try { *out = reinterpret_cast<void* (__fastcall*)(void*, bool)>(fn)(self, a); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "motion::call_p1b");
+    return fault::guarded(site, [&] { *out = reinterpret_cast<void* (__fastcall*)(void*, bool)>(fn)(self, a); });
 }
 bool call_f(void* fn, void* self, float v) {
-    __try { reinterpret_cast<void (__fastcall*)(void*, float)>(fn)(self, v); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "motion::call_f");
+    return fault::guarded(site, [&] { reinterpret_cast<void (__fastcall*)(void*, float)>(fn)(self, v); });
 }
 bool call_bb(void* fn, void* self, bool a, bool b) {
-    __try { reinterpret_cast<void (__fastcall*)(void*, bool, bool)>(fn)(self, a, b); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "motion::call_bb");
+    return fault::guarded(site, [&] { reinterpret_cast<void (__fastcall*)(void*, bool, bool)>(fn)(self, a, b); });
 }
 bool call_ret_b(void* fn, void* self, bool* out) {
-    __try { *out = reinterpret_cast<bool (__fastcall*)(void*)>(fn)(self); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "motion::call_ret_b");
+    return fault::guarded(site, [&] { *out = reinterpret_cast<bool (__fastcall*)(void*)>(fn)(self); });
 }
 bool call_jump(bool (__fastcall* fn)(void*), void* self, bool* out) {
-    __try { *out = fn(self); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "motion::call_jump");
+    return fault::guarded(site, [&] { *out = fn(self); });
 }
 bool call_ret_u8(void* fn, void* self, uint8_t* out) {
-    __try { *out = reinterpret_cast<uint8_t (__fastcall*)(void*)>(fn)(self); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "motion::call_ret_u8");
+    return fault::guarded(site, [&] { *out = reinterpret_cast<uint8_t (__fastcall*)(void*)>(fn)(self); });
 }
 bool call_count(void* fn, void* mgr, void* soul, int32_t kind, uint64_t* out) {
-    __try { *out = reinterpret_cast<uint64_t (__fastcall*)(void*, void*, int32_t)>(fn)(mgr, soul, kind); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "motion::call_count");
+    return fault::guarded(site, [&] { *out = reinterpret_cast<uint64_t (__fastcall*)(void*, void*, int32_t)>(fn)(mgr, soul, kind); });
 }
 bool call_trystart(void* fn, void* ca, uint64_t* out) {
     struct { uint8_t has; uint8_t pad[3]; int32_t v; } opt{};   // optional<int>{has=false}
-    __try { *out = reinterpret_cast<uint64_t (__fastcall*)(void*, void*)>(fn)(ca, &opt); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "motion::call_trystart");
+    return fault::guarded(site, [&] { *out = reinterpret_cast<uint64_t (__fastcall*)(void*, void*)>(fn)(ca, &opt); });
 }
 bool call_auto(void* fn, void* cmd, void* ca, bool enable) {
-    __try { reinterpret_cast<void (__fastcall*)(void*, void*, char)>(fn)(cmd, ca, enable ? 1 : 0); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "motion::call_auto");
+    return fault::guarded(site, [&] { reinterpret_cast<void (__fastcall*)(void*, void*, char)>(fn)(cmd, ca, enable ? 1 : 0); });
 }
 bool call_setflag(void* fn, void* flags, int index, uint8_t value) {
-    __try { reinterpret_cast<void (__fastcall*)(void*, int, uint8_t)>(fn)(flags, index, value); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "motion::call_setflag");
+    return fault::guarded(site, [&] { reinterpret_cast<void (__fastcall*)(void*, int, uint8_t)>(fn)(flags, index, value); });
 }
 bool call_setguardzone(void* fn, void* ca, int zone, int stance) {
-    __try { reinterpret_cast<char (__fastcall*)(void*, int, int, char)>(fn)(ca, zone, stance, 0); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "motion::call_setguardzone");
+    return fault::guarded(site, [&] { reinterpret_cast<char (__fastcall*)(void*, int, int, char)>(fn)(ca, zone, stance, 0); });
 }
 bool call_setatkzone(void* fn, void* ca, int zone) {
-    __try { reinterpret_cast<void (__fastcall*)(void*, int)>(fn)(ca, zone); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "motion::call_setatkzone");
+    return fault::guarded(site, [&] { reinterpret_cast<void (__fastcall*)(void*, int)>(fn)(ca, zone); });
 }
 bool call_setblock(void* fn, void* ca, bool on, unsigned scope) {
-    __try { reinterpret_cast<void (__fastcall*)(void*, char, unsigned)>(fn)(ca, on ? 1 : 0, scope); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "motion::call_setblock");
+    return fault::guarded(site, [&] { reinterpret_cast<void (__fastcall*)(void*, char, unsigned)>(fn)(ca, on ? 1 : 0, scope); });
 }
 bool copy_cstr(const void* p, char* out, size_t n) {
-    __try {
+    KCDMP_FAULT_READ(site, "motion::copy_cstr");
+    if (fault::guarded(site, [&] {
         const char* s = static_cast<const char*>(p);
         size_t i = 0;
         for (; i + 1 < n && s[i]; ++i) out[i] = s[i];
         out[i] = 0;
-        return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) { out[0] = 0; return false; }
+    })) return true;
+    out[0] = 0;
+    return false;
 }
 
 // ---- anchors -------------------------------------------------------------------
@@ -185,6 +188,7 @@ struct Anchors {
     void* fnTryStart = nullptr, *fnAuto = nullptr, *fnSetFlag = nullptr;
     void* fnSetGuardZone = nullptr, *fnSetAtkZone = nullptr, *fnSetBlock = nullptr;
     void* const* vftAttack = nullptr, *const* vftDodge = nullptr, *const* vftPerfect = nullptr, *const* vftBlock = nullptr;
+    void* const* vftHit = nullptr, *const* vftSyncAttack = nullptr;   // WO-151: an NPC's hit reaction, an animal's paired bite
     bool actorLookup = false;   // gi+0x188 -> vtbl[0x18](eid): the engine's own route (the test commands)
 };
 Anchors A;
@@ -248,15 +252,15 @@ std::atomic<uint32_t> c_tagApplied{0};
 void* g_fnSpeedMap = nullptr;          // the manager's vtbl[0x78] body, byte-checked (the round(x)-1 mapper)
 
 bool write_tag_inputs(void* actor, float cls, float vx, float vy) {
-    __try {
+    KCDMP_FAULT_READ(site, "motion::write_tag_inputs");
+    return fault::guarded(site, [&] {
         void* comp = *reinterpret_cast<void**>(static_cast<char*>(actor) + kActorPseudoComp);
         if (comp) *reinterpret_cast<float*>(static_cast<char*>(comp) + 0x18) = cls;
         float* rv = reinterpret_cast<float*>(static_cast<char*>(actor) + kActorReqVel);
         rv[0] = vx; rv[1] = vy; rv[2] = 0.0f;
         float* mv = reinterpret_cast<float*>(static_cast<char*>(actor) + kActorMoveVec);
         mv[0] = vx; mv[1] = vy;
-        return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    });
 }
 
 // UpdateMannequinTags entry (any thread). Cheap when nothing is driven.
@@ -290,7 +294,7 @@ std::atomic<ActionFn> g_actionFn{nullptr};
 // Counters for the status reply.
 std::atomic<uint32_t> c_gaitWrites{0}, c_crouch{0}, c_jumps{0}, c_jumpFail{0}, c_combatStarts{0}, c_autoOff{0},
     c_guardZone{0}, c_atkZone{0}, c_block{0}, c_capAttack{0}, c_capNpc{0}, c_capJump{0}, c_capOther{0}, c_capDropped{0},
-    c_faults{0},
+    c_faults{0}, c_capHit{0}, c_capSync{0},
     // WO-129: why a capture was dropped (the first two-player session: cap_dropped 5 / 11, cap_attack 0)
     c_dropNotCa{0}, c_dropNoDesc{0}, c_dropNoGuid{0}, c_dropNoOwner{0}, c_capViaBase8{0}, c_capOurs{0};
 
@@ -444,7 +448,13 @@ void note_local_crouch(void* actor, void* exp, bool readOk, bool crouched, const
 }
 
 // ---- the capture hooks -----------------------------------------------------------
-enum Cls : uint8_t { kClsAttack = 0, kClsDodge = 1, kClsPerfect = 2, kClsBlock = 3, kClsCount = 4 };
+// WO-151: kClsHit -- an NPC's own hit reaction (C_CombatActorActionHit: CombatHit rows,
+// combat_action_hit.xml), sent as ActionKind.NpcHit so the joiner's copy shows the host's
+// reaction; kClsSyncAttack -- a paired attack (C_CombatActorActionSyncAttack: the wolves' bite
+// on a man, CombatAttackSyncGen rows, combat_action_sync_attack.xml), sent as an NPC attack.
+// NPCs only; the player's own are not captured.
+enum Cls : uint8_t { kClsAttack = 0, kClsDodge = 1, kClsPerfect = 2, kClsBlock = 3, kClsHit = 4, kClsSyncAttack = 5, kClsCount = 6 };
+constexpr uint8_t kKindNpcHit = 15;   // ActionKind.NpcHit (Protocol.cs)
 void* g_origEnter[kClsCount]{};
 uint8_t* g_thunks = nullptr;
 
@@ -458,22 +468,102 @@ void note_drop(std::atomic<uint32_t>& counter, const char* why, uint8_t cls, con
     logf("WO129-CAPTURE drop reason=%s class=%u owner_ptr_vptr=%s rtti=%s (C_CombatActor / C_CombatPlayer, primary or +8, expected)", why, cls, d, rn);
 }
 
+// WO-151: the first hit actions, dumped (guarded reads only) so the row behind them can be found by its
+// GUID offline: the action's first 0x100 bytes, and for every plausible pointer in it, 0x100 bytes there.
+std::atomic<int> g_hitDumps{0};
+void dump_hit_action(void* action) {
+    if (g_hitDumps.fetch_add(1) >= 4) return;
+    auto hex = [](const uint8_t* b, size_t n, char* out, size_t cap) {
+        size_t k = 0;
+        for (size_t i = 0; i < n && k + 3 < cap; ++i) k += std::snprintf(out + k, cap - k, "%02x", b[i]);
+        out[k < cap ? k : cap - 1] = 0;
+    };
+    uint8_t a[0x100]{};
+    for (size_t i = 0; i < sizeof a; i += 8) { uint64_t q = 0; if (rd(action, i, &q)) std::memcpy(a + i, &q, 8); }
+    char line[0x300]{};
+    hex(a, sizeof a, line, sizeof line);
+    logf("WO151-HITDUMP action %p +000: %s", action, line);
+    for (size_t i = 0; i < sizeof a; i += 8) {
+        uint64_t q = 0; std::memcpy(&q, a + i, 8);
+        if (q < 0x10000 || q > 0x00007FFFFFFFFFFFull || (q & 7)) continue;
+        uint8_t b[0x100]{};
+        bool any = false;
+        for (size_t j = 0; j < sizeof b; j += 8) { uint64_t v = 0; if (rd(reinterpret_cast<void*>(q), j, &v)) { std::memcpy(b + j, &v, 8); any = true; } }
+        if (!any) continue;
+        hex(b, sizeof b, line, sizeof line);
+        logf("WO151-HITDUMP action+0x%02zX -> %p: %s", i, reinterpret_cast<void*>(q), line);
+    }
+}
+
+// WO-151: where each class keeps its committed row. An attack (and its kin): the descriptor at
+// action+0x60, the row GUID at +0x84 (WO-121, live). A hit action keeps the combat actor of the
+// one who hit it at +0x60; its row is at +0x58 with the GUID at +0x7C (live, L3: 4 of 4 dumps held a
+// combat_action_hit.xml GUID exactly there). The row object has its own vftable, so for the new
+// classes the row is accepted only when its RTTI class name names the row type (checked once per
+// vptr, then by vptr equality); the agent checks every GUID against the game's tables as well.
+struct RowPath { size_t descOff; size_t guidOff; const char* rtti; };
+constexpr RowPath kPathAttack{kActionDescriptor, kDescRowGuid, nullptr};
+constexpr RowPath kPathHit{0x58, 0x7C, "CombatActionHitData"};
+constexpr RowPath kPathSync{0x60, 0x84, "CombatActionSyncAttackData"};
+const RowPath& row_path(uint8_t cls) { return cls == kClsHit ? kPathHit : cls == kClsSyncAttack ? kPathSync : kPathAttack; }
+std::atomic<void*> g_rowVptrOk[kClsCount]{};
+std::atomic<int> g_rowRttiLogged[kClsCount]{};
+std::atomic<uint32_t> c_dropRowType{0};
+
+// The row object behind `desc` is the type `path` names (or the path needs no check).
+bool row_type_ok(uint8_t cls, const RowPath& path, void* desc) {
+    if (!path.rtti) return true;
+    void* vp = nullptr;
+    if (!rd(desc, 0, &vp) || !vp) return false;
+    if (vp == g_rowVptrOk[cls].load(std::memory_order_relaxed)) return true;
+    char name[192]{};
+    const bool named = rtti_name_of(vp, name, sizeof name);
+    const bool ok = named && std::strstr(name, path.rtti) != nullptr;
+    if (ok) g_rowVptrOk[cls].store(vp);
+    if (g_rowRttiLogged[cls].fetch_add(1) < 3)
+        logf("WO151-CAPTURE row type class=%u at action+0x%zX: %s -> %s", cls, path.descOff, named ? name : "(no RTTI)",
+             ok ? "accepted" : "REFUSED (not the row type)");
+    return ok;
+}
+
+// WO-151 probe: a sync attack's row object (its RTTI is S_CombatActionSyncAttackData, live L4), its first
+// 0x200 bytes -- its GUID is not at +0x84 (the GUIDs read there were in no table).
+std::atomic<int> g_rowDumps{0};
+void dump_row(void* desc) {
+    if (g_rowDumps.fetch_add(1) >= 3) return;
+    uint8_t b[0x200]{};
+    for (size_t j = 0; j < sizeof b; j += 8) { uint64_t v = 0; if (rd(desc, j, &v)) std::memcpy(b + j, &v, 8); }
+    char line[0x500]{};
+    size_t k = 0;
+    for (size_t i = 0; i < sizeof b && k + 3 < sizeof line; ++i) k += std::snprintf(line + k, sizeof line - k, "%02x", b[i]);
+    logf("WO151-SYNCDUMP row %p: %s", desc, line);
+}
+
 void capture(uint8_t cls, void* action) {
     void* raw = nullptr;
     if (!rd(action, kActionCombatActor, &raw) || !raw) return;
     void* ca = as_combat_actor(raw);
     void* playerCa = g_playerCa.load(std::memory_order_relaxed);
     const bool isPlayer = ca && ca == playerCa;
-    if (!isPlayer && !(cls == kClsAttack && g_cfgNpcRows.load(std::memory_order_relaxed))) return;
+    const bool npcKind = cls == kClsAttack || cls == kClsHit || cls == kClsSyncAttack;
+    if (isPlayer && (cls == kClsHit || cls == kClsSyncAttack)) return;   // WO-151: NPCs only
+    if (!isPlayer && !(npcKind && g_cfgNpcRows.load(std::memory_order_relaxed))) return;
     if (!ca) { note_drop(c_dropNotCa, "owner-not-a-combat-actor", cls, raw); return; }
     if (ca != raw) c_capViaBase8.fetch_add(1);
     void* desc = nullptr;
     Captured c{};
-    if (!rd(action, kActionDescriptor, &desc) || !desc) { note_drop(c_dropNoDesc, "no-descriptor", cls, raw); return; }
+    const RowPath& path = row_path(cls);
+    if (!rd(action, path.descOff, &desc) || !desc) { note_drop(c_dropNoDesc, "no-descriptor", cls, raw); return; }
+    if (!row_type_ok(cls, path, desc)) {
+        c_dropRowType.fetch_add(1);
+        if (cls == kClsHit || cls == kClsSyncAttack) dump_hit_action(action);   // the first 4: where the row is, by content
+        return;
+    }
+    if (cls == kClsSyncAttack) dump_row(desc);   // WO-151 probe: where the sync row keeps its GUID (the first 3)
     uint64_t g0 = 0, g1 = 0;
-    if (!rd(desc, kDescRowGuid, &g0) || !rd(desc, kDescRowGuid + 8, &g1) || (g0 == 0 && g1 == 0)) { note_drop(c_dropNoGuid, "no-row-guid", cls, raw); return; }
+    if (!rd(desc, path.guidOff, &g0) || !rd(desc, path.guidOff + 8, &g1) || (g0 == 0 && g1 == 0)) { note_drop(c_dropNoGuid, "no-row-guid", cls, raw); return; }
     std::memcpy(c.guid, &g0, 8); std::memcpy(c.guid + 8, &g1, 8);
-    c.kind = cls == kClsAttack ? 1 : cls == kClsDodge ? 7 : 6;
+    c.kind = cls == kClsAttack || cls == kClsSyncAttack ? 1 : cls == kClsHit ? kKindNpcHit : cls == kClsDodge ? 7 : 6;
     c.flags = cls == kClsPerfect ? 0x01 : 0;
     c.ic = -1; c.zone = -1; c.type = -1;
     void* model = nullptr;
@@ -508,6 +598,8 @@ void capture(uint8_t cls, void* action) {
         if (_strnicmp(c.name, "kcd2mp_", 7) == 0 || _strnicmp(c.name, "DialogTwin_", 11) == 0) { c_capOurs.fetch_add(1); return; }   // never ours
         c.eid = ent ? engine::entity_id(ent) : oeid;
         c_capNpc.fetch_add(1);
+        if (cls == kClsHit) c_capHit.fetch_add(1);
+        else if (cls == kClsSyncAttack) c_capSync.fetch_add(1);
     }
     std::lock_guard<std::mutex> lock(g_capMutex);
     if (g_captured.size() < 256) g_captured.push_back(c); else c_capDropped.fetch_add(1);
@@ -1008,7 +1100,32 @@ void install() {
     A.vftDodge = anchor::find_vftable(cm, ".?AVC_CombatActorActionDodge@combatmodule@wh@@", 0);
     A.vftPerfect = anchor::find_vftable(cm, ".?AVC_CombatActorActionPerfectBlock@combatmodule@wh@@", 0);
     A.vftBlock = anchor::find_vftable(cm, ".?AVC_CombatActorActionBlock@combatmodule@wh@@", 0);
-    void* const* vfts[kClsCount] = {A.vftAttack, A.vftDodge, A.vftPerfect, A.vftBlock};
+    A.vftHit = anchor::find_vftable(cm, ".?AVC_CombatActorActionHit@combatmodule@wh@@", 0);
+    A.vftSyncAttack = anchor::find_vftable(cm, ".?AVC_CombatActorActionSyncAttack@combatmodule@wh@@", 0);
+    // WO-151: the two new classes are hooked only when their own constructor stores the combat
+    // actor at +0x78 (the field capture() reads): checked like the attack's, by the function
+    // that writes the class's vftable and holds the store (CombatModule 1.5.5: the hit ctor's
+    // base part `mov [rbx+0x78], rbp`, the sync attack's `mov [rbx+0x78], rsi`).
+    auto ctorStoresActor = [&](void* const* vftClass) -> bool {
+        static const uint8_t kStoreRbp[] = {0x48, 0x89, 0x6B, 0x78};   // mov [rbx+0x78], rbp
+        static const uint8_t kStoreRsi[] = {0x48, 0x89, 0x73, 0x78};   // mov [rbx+0x78], rsi
+        anchor::Range tx{};
+        if (!vftClass || !anchor::section(cm, ".text", &tx)) return false;
+        const auto* target = reinterpret_cast<const uint8_t*>(vftClass);
+        for (const uint8_t* q = tx.begin; q + 7 <= tx.end; ++q) {
+            if ((q[0] & 0xF8) != 0x48 || q[1] != 0x8D || (q[2] & 0xC7) != 0x05) continue;
+            int32_t d; std::memcpy(&d, q + 3, 4);
+            if (q + 7 + d != target) continue;
+            if (anchor::function_has_bytes(cm, q, kStoreRbp, sizeof kStoreRbp) || anchor::function_has_bytes(cm, q, kStoreRsi, sizeof kStoreRsi))
+                return true;
+        }
+        return false;
+    };
+    const bool hitOk = ctorStoresActor(A.vftHit), syncOk = ctorStoresActor(A.vftSyncAttack);
+    logf("WO151-CAPTURE hit reactions: C_CombatActorActionHit %s, C_CombatActorActionSyncAttack %s",
+         !A.vftHit ? "has no RTTI vftable" : hitOk ? "armed (its ctor stores the combat actor at +0x78)" : "REFUSED (no ctor store at +0x78)",
+         !A.vftSyncAttack ? "has no RTTI vftable" : syncOk ? "armed (its ctor stores the combat actor at +0x78)" : "REFUSED (no ctor store at +0x78)");
+    void* const* vfts[kClsCount] = {A.vftAttack, A.vftDodge, A.vftPerfect, A.vftBlock, hitOk ? A.vftHit : nullptr, syncOk ? A.vftSyncAttack : nullptr};
     std::string whyCap;
     if (!A.vftAttack || !A.vftCa) whyCap = "RTTI C_CombatActorActionAttack / C_CombatActor vftable missing";
     else {
@@ -1300,7 +1417,8 @@ int status_text_motion(char* out, int n) {
         "combat_starts=%u automation_off=%u guard_zone=%u atk_zone=%u block=%u cap_attack=%u cap_npc=%u cap_jump=%u cap_other=%u "
         "cap_dropped=%u buff_adds=%u ctx_set=%u ctx_fail=%u faults=%u tags=%s tags_applied=%u gait_slots=%d "
         "cap_drop_notca=%u cap_drop_nodesc=%u cap_drop_noguid=%u cap_drop_noowner=%u cap_via_base8=%u cap_ours=%u "
-        "engaged=%zu engage_holds=%u engage_releases=%u cap_crouch=%u cap_stance=%u crouch_query=%s crouch_fail=%u quiet=0x%X quiet_set=%u quiet_fail=%u",
+        "engaged=%zu engage_holds=%u engage_releases=%u cap_crouch=%u cap_stance=%u crouch_query=%s crouch_fail=%u quiet=0x%X quiet_set=%u quiet_fail=%u "
+        "cap_hit=%u cap_sync=%u cap_drop_rowtype=%u",
         g_gait ? "armed" : "off", g_moves ? "armed" : "off", g_combat ? "armed" : "off", g_capture ? "armed" : "off",
         g_cfgAvatarGait.load(), g_cfgNpcGait.load(), g_cfgMoves.load(), g_cfgCombat.load(), g_cfgNpcRows.load(), g_bodies.size(),
         c_gaitWrites.load(), c_crouch.load(), c_jumps.load(), c_jumpFail.load(), c_combatStarts.load(), c_autoOff.load(),
@@ -1310,7 +1428,8 @@ int status_text_motion(char* out, int n) {
         c_dropNotCa.load(), c_dropNoDesc.load(), c_dropNoGuid.load(), c_dropNoOwner.load(), c_capViaBase8.load(), c_capOurs.load(),
         g_engage.size(), c_engageHolds.load(), c_engageReleases.load(),
         c_capCrouch.load(), c_capStance.load(), g_isCrouchedState == 1 ? "armed" : g_isCrouchedState < 0 ? "refused" : "unread",
-        c_crouchApplyFail.load(), g_cfgQuiet.load(), c_quietSet.load(), c_quietFail.load());
+        c_crouchApplyFail.load(), g_cfgQuiet.load(), c_quietSet.load(), c_quietFail.load(),
+        c_capHit.load(), c_capSync.load(), c_dropRowType.load());
 }
 
 // WO-135 test verb: the player's own crouch setter -- the function the crouch

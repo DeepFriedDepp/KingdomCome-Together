@@ -76,6 +76,8 @@ public partial class GameBridge
         if (name is not null && _w139Records.TryRemove(id, out var rec) && rec.Count > 0)
             _w144ParkedCrime[name] = (rec, DateTime.UtcNow);
         Console.WriteLine($"MP-PEERS ghost {id} disconnected ({LivePartners().Count} partner(s) now) -- it stays removed until the relay names that id again");
+        // WO-151 3.6: a partner who left holds nothing here any more (his talks and stops ended with him)
+        _ = ExecLuaAsync($"if KCD2MP_W151ReleasePeerHolds then KCD2MP_W151ReleasePeerHolds({id}) end");
     }
 
     /// <summary>The Disconnect handler's last step: per-partner tables the gone-handlers still read.</summary>

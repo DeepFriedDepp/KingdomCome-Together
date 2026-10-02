@@ -11,6 +11,7 @@
 #include "wo132.h"
 #include "wo135.h"
 #include "wo137.h"
+#include "weather.h"
 #include "wo138.h"
 #include "wo139.h"
 #include "wo140.h"
@@ -174,6 +175,9 @@ DWORD WINAPI plugin_main(LPVOID) {
     // WO-138: the PauseGame gate (CCryAction::PauseGame; off until the agent turns
     // the levers on for a session with a partner). Fails closed (WO138-GATE).
     kcdmp::wo138::install();
+    // WO-151 3.7: the host's live weather (EnvironmentModule BlendToProfile, gated pass-through:
+    // recorded on the host, only the host's profile on a joiner). Fails closed (WO151-WEATHER).
+    kcdmp::weather::install();
     // WO-139: the trespass detector (the HUD's own trespass listener, gated
     // pass-through). Fails closed (WO139-BUILD); off until the agent turns it on.
     kcdmp::wo139::install();
@@ -189,7 +193,7 @@ DWORD WINAPI plugin_main(LPVOID) {
     kcdmp::wo143::install();
 
     if (kcdmp::dice::install_pause_hook()) {
-        kcdmp::main_thread::post_repeating(&kcdmp::dice::sample_instance_if_changed);
+        kcdmp::main_thread::post_repeating("dice::sample_instance_if_changed", &kcdmp::dice::sample_instance_if_changed);
     }
 
     // WO-44 follow-up: entity ids are assigned fresh every launch, so testing
@@ -198,48 +202,48 @@ DWORD WINAPI plugin_main(LPVOID) {
     // kcdmp-combat.txt on a timer instead of only once at attach, so a human
     // can spawn a ghost, read its id live, and drop it into the file without
     // a relaunch. No-ops whenever the file's content is unchanged.
-    kcdmp::main_thread::post_repeating(&kcdmp::rttr::probe_combat_construct_watch);
+    kcdmp::main_thread::post_repeating("rttr::probe_combat_construct_watch", &kcdmp::rttr::probe_combat_construct_watch);
     // Same live-reload treatment for WO-43's original PlayAnim diagnostic --
     // needed to pin down a live discrepancy found while re-testing WO-44's
     // ghost class-dispatch finding against a validated ghost.
-    kcdmp::main_thread::post_repeating(&kcdmp::rttr::probe_play_anim_watch);
+    kcdmp::main_thread::post_repeating("rttr::probe_play_anim_watch", &kcdmp::rttr::probe_play_anim_watch);
     // WO-68: same live-reload treatment, so a soul guid can be dropped into
     // kcdmp-contexts.txt after a ghost is already standing in the world.
-    kcdmp::main_thread::post_repeating(&kcdmp::sctx::probe_contexts_watch);
+    kcdmp::main_thread::post_repeating("sctx::probe_contexts_watch", &kcdmp::sctx::probe_contexts_watch);
     // WO-99.5: the quest-port probe. Same live-reload treatment, and the same
     // reason -- a node path is chosen after looking at what the running game
     // actually has. File-watched rather than pipe-driven on purpose: the pipe
     // has nMaxInstances = 1, so a pipe command would mean disconnecting the
     // client first (WO-97 s4.4's precondition), and this needs to run while a
     // session is live.
-    kcdmp::main_thread::post_repeating(&kcdmp::conceptread::port_watch);
+    kcdmp::main_thread::post_repeating("conceptread::port_watch", &kcdmp::conceptread::port_watch);
     // WO-100 Phase 0: the Mannequin tag-state read. Same file-watched,
     // opt-in convention and the same reason -- it has to run during a live
     // session while the maintainer walks, jogs, sprints and crouches, and the
     // pipe (nMaxInstances = 1) is occupied by the agent for the whole session.
-    kcdmp::main_thread::post_repeating(&kcdmp::mannequin::tag_watch);
+    kcdmp::main_thread::post_repeating("mannequin::tag_watch", &kcdmp::mannequin::tag_watch);
     // WO-100.5 Phase 1: the first combat WRITE. Same file-watched shape, but
     // ONE-SHOT rather than periodic -- a write that repeats at the tick rate
     // is a hook, not a probe. Idle until kcdmp-combatwrite.txt names a command.
-    kcdmp::main_thread::post_repeating(&kcdmp::combatwrite::write_watch);
+    kcdmp::main_thread::post_repeating("combatwrite::write_watch", &kcdmp::combatwrite::write_watch);
     // WO-113: the death guard's per-frame tick (rate-limits itself).
-    kcdmp::main_thread::post_repeating(&kcdmp::respawn::tick);
+    kcdmp::main_thread::post_repeating("respawn::tick", &kcdmp::respawn::tick);
     // WO-121: drain the capture / friendly-fire queues, avatar jumps.
-    kcdmp::main_thread::post_repeating(&kcdmp::motion::tick);
-    kcdmp::main_thread::post_repeating(&kcdmp::hits::tick);
-    kcdmp::main_thread::post_repeating(&kcdmp::wo132::tick);   // WO-132: the host's NPC combat-state watch
+    kcdmp::main_thread::post_repeating("motion::tick", &kcdmp::motion::tick);
+    kcdmp::main_thread::post_repeating("hits::tick", &kcdmp::hits::tick);
+    kcdmp::main_thread::post_repeating("wo132::tick", &kcdmp::wo132::tick);   // WO-132: the host's NPC combat-state watch
     // WO-124: the joiner's placement gives the fall damage back; the save-list
     // research trigger (kcdmp-savelist-test.txt, opt-in, absent = idle).
     // Observed: this tick runs at the MAIN MENU too on 1.5.5 (the pipe is up
     // there), which the join's save-list rescan depends on.
-    kcdmp::main_thread::post_repeating(&kcdmp::joinnative::tick);
-    kcdmp::main_thread::post_repeating(&kcdmp::savelist::test_watch);
-    kcdmp::main_thread::post_repeating(&kcdmp::wo137::tick);   // WO-137: research file + the change queue
-    kcdmp::main_thread::post_repeating(&kcdmp::wo138::tick);   // WO-138: the frame meter + the native NPC sender
-    kcdmp::main_thread::post_repeating(&kcdmp::wo139::tick);   // WO-139: a new trespass level goes to the agent
-    kcdmp::main_thread::post_repeating(&kcdmp::wo140::tick);   // WO-140: the sleep picker's edges go to the agent
-    kcdmp::main_thread::post_repeating(&kcdmp::wo141::tick);   // WO-141: activities
-    kcdmp::main_thread::post_repeating(&kcdmp::wo143::tick);   // WO-143: hands, gaits, one-shots, looks
+    kcdmp::main_thread::post_repeating("joinnative::tick", &kcdmp::joinnative::tick);
+    kcdmp::main_thread::post_repeating("savelist::test_watch", &kcdmp::savelist::test_watch);
+    kcdmp::main_thread::post_repeating("wo137::tick", &kcdmp::wo137::tick);   // WO-137: research file + the change queue
+    kcdmp::main_thread::post_repeating("wo138::tick", &kcdmp::wo138::tick);   // WO-138: the frame meter + the native NPC sender
+    kcdmp::main_thread::post_repeating("wo139::tick", &kcdmp::wo139::tick);   // WO-139: a new trespass level goes to the agent
+    kcdmp::main_thread::post_repeating("wo140::tick", &kcdmp::wo140::tick);   // WO-140: the sleep picker's edges go to the agent
+    kcdmp::main_thread::post_repeating("wo141::tick", &kcdmp::wo141::tick);   // WO-141: activities
+    kcdmp::main_thread::post_repeating("wo143::tick", &kcdmp::wo143::tick);   // WO-143: hands, gaits, one-shots, looks
 
     kcdmp::pipe::start();
     return 0;

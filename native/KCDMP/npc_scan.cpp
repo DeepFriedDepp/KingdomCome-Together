@@ -2,6 +2,7 @@
 // GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 #include "npc_scan.h"
+#include "fault_guard.h"
 #include "log.h"
 
 #include <windows.h>
@@ -44,21 +45,24 @@ using PtrFn1 = void* (*)(void*, const void*);
 using VecFn  = void* (*)(void*, void*);   // hidden-return getter, e.g. GetWorldPos(this, &out)
 
 bool call0(PtrFn0 fn, void* self, void** out) {
-    __try { *out = fn(self); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "npc_scan::call0");
+    return fault::guarded(site, [&] { *out = fn(self); });
 }
 bool call1(PtrFn1 fn, void* self, const void* arg, void** out) {
-    __try { *out = fn(self, arg); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "npc_scan::call1");
+    return fault::guarded(site, [&] { *out = fn(self, arg); });
 }
 bool call_vec(VecFn fn, void* self, void* outBuf) {
-    __try { fn(self, outBuf); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "npc_scan::call_vec");
+    return fault::guarded(site, [&] { fn(self, outBuf); });
 }
 bool read_ptr(const void* base, size_t off, void** out) {
-    __try { *out = *reinterpret_cast<void* const*>(static_cast<const char*>(base) + off); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_READ(site, "npc_scan::read_ptr");
+    return fault::guarded(site, [&] { *out = *reinterpret_cast<void* const*>(static_cast<const char*>(base) + off); });
 }
 bool read_f32(const void* base, size_t off, float* out) {
-    __try { *out = *reinterpret_cast<const float*>(static_cast<const char*>(base) + off); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_READ(site, "npc_scan::read_f32");
+    return fault::guarded(site, [&] { *out = *reinterpret_cast<const float*>(static_cast<const char*>(base) + off); });
 }
 bool call_vtbl(size_t slot, void* self, void** out) {
     void* vtbl = nullptr;
@@ -81,7 +85,8 @@ bool call_vtbl1(size_t slot, void* self, const void* arg, void** out) {
 bool read_name_safe(const void* entity, char* outBuf, size_t outBufLen) {
     void* strPtr = nullptr;
     if (!read_ptr(entity, kOffName, &strPtr) || !strPtr) return false;
-    __try {
+    KCDMP_FAULT_READ(site, "npc_scan::read_name_safe");
+    return fault::guarded_or<bool>(site, false, [&]() -> bool {
         const char* s = static_cast<const char*>(strPtr);
         size_t i = 0;
         for (; i < outBufLen - 1 && i < static_cast<size_t>(kMaxNameLen); ++i) {
@@ -93,7 +98,7 @@ bool read_name_safe(const void* entity, char* outBuf, size_t outBufLen) {
         if (s[i] != '\0' && i >= static_cast<size_t>(kMaxNameLen)) return false;   // did not terminate in bound
         outBuf[i] = '\0';
         return i > 0;
-    } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    });
 }
 
 bool read_pos_yaw(const void* entity, float* x, float* y, float* z, float* yaw) {

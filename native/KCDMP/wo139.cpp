@@ -3,6 +3,7 @@
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 // WO-139 -- see wo139.h.
 #include "wo139.h"
+#include "fault_guard.h"
 
 #include <windows.h>
 #include <atomic>
@@ -45,8 +46,8 @@ char g_where[96] = "?";
 FrameFn g_frame = nullptr;
 
 bool rd_bytes(const uint8_t* p, uint8_t* out, size_t n) {
-    __try { std::memcpy(out, p, n); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_READ(site, "wo139::rd_bytes");
+    return fault::guarded(site, [&] { std::memcpy(out, p, n); });
 }
 
 // Every distinct function that loads `target` with a RIP-relative lea (48/4C 8D /r, mod 00 rm 101).
@@ -54,7 +55,8 @@ int functions_loading(HMODULE mod, const void* target, const uint8_t** out, int 
     anchor::Range text{};
     if (!anchor::section(mod, ".text", &text) || text.size() < 8) return 0;
     int n = 0;
-    __try {
+    KCDMP_FAULT_READ(site, "wo139::functions_loading");
+    if (!fault::guarded(site, [&] {
         for (const uint8_t* p = text.begin; p + 7 <= text.end && n < max; ++p) {
             if ((p[0] != 0x48 && p[0] != 0x4C) || p[1] != 0x8D || (p[2] & 0xC7) != 0x05) continue;
             int32_t disp = 0; std::memcpy(&disp, p + 3, 4);
@@ -65,7 +67,7 @@ int functions_loading(HMODULE mod, const void* target, const uint8_t** out, int 
             for (int i = 0; i < n; ++i) if (out[i] == fr.begin) dup = true;
             if (!dup) out[n++] = fr.begin;
         }
-    } __except (EXCEPTION_EXECUTE_HANDLER) { return 0; }
+    })) return 0;
     return n;
 }
 
@@ -74,7 +76,8 @@ int functions_jumping_to(HMODULE mod, const void* target, const uint8_t** out, i
     anchor::Range text{};
     if (!anchor::section(mod, ".text", &text) || text.size() < 8) return 0;
     int n = 0;
-    __try {
+    KCDMP_FAULT_READ(site, "wo139::functions_jumping_to");
+    if (!fault::guarded(site, [&] {
         for (const uint8_t* p = text.begin; p + 5 <= text.end && n < max; ++p) {
             if (p[0] != 0xE9) continue;
             int32_t rel = 0; std::memcpy(&rel, p + 1, 4);
@@ -85,7 +88,7 @@ int functions_jumping_to(HMODULE mod, const void* target, const uint8_t** out, i
             for (int i = 0; i < n; ++i) if (out[i] == fr.begin) dup = true;
             if (!dup) out[n++] = fr.begin;
         }
-    } __except (EXCEPTION_EXECUTE_HANDLER) { return 0; }
+    })) return 0;
     return n;
 }
 

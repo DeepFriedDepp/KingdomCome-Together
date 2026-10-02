@@ -114,6 +114,13 @@ void set_frame_callback(FrameFn fn);   // 0xA0 / 0xA1 go out through it
 
 void on_pipe_closed();   // any thread: sender off, gate off, hold off
 
+// WO-151 3.8: the host's world held for a whole join -- the engine's own PauseGame from the
+// ScriptBind source (2: idle on this build, never declined by the levers), at most maxS seconds
+// (the DLL's own deadline, checked every frame: the frame hook runs while paused), released
+// when the agent goes away. Main thread. True = the engine call ran.
+bool join_hold(bool on, double maxS);
+bool join_held();
+
 // WO-141: every tracked name with a live entity (main thread).
 void for_each_tracked(void (*fn)(const char* name, uint32_t eid, void* ctx), void* ctx);
 

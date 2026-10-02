@@ -41,6 +41,7 @@
 //           (docs/WO-42-findings.md §9.2 -- a real shipped row, not invented)
 
 #include "rttr_abi.h"
+#include "fault_guard.h"
 #include "pe_exports.h"
 #include "log.h"
 
@@ -67,45 +68,45 @@ using PlayAnimFn           = void (*)(void* actor, const char* fragment, const c
 // probe_play_anim() itself holds a std::vector<ExportEntry>.
 
 bool call_get_player_actor(GetPlayerActorFn fn, const void* inst, void** out) {
-    __try { *out = fn(inst); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "combat_playanim::call_get_player_actor");
+    return fault::guarded(site, [&] { *out = fn(inst); });
 }
 
 bool call_get_script_bind_human(GetScriptBindHumanFn fn, const void* inst, void** out) {
-    __try { *out = fn(inst); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "combat_playanim::call_get_script_bind_human");
+    return fault::guarded(site, [&] { *out = fn(inst); });
 }
 
 bool call_resolve_actor_by_id(ResolveActorByIdFn fn, void* bind, uint32_t id, void** out) {
-    __try { *out = fn(bind, id); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "combat_playanim::call_resolve_actor_by_id");
+    return fault::guarded(site, [&] { *out = fn(bind, id); });
 }
 
 // §9.6: `actor->[+0x28]->vtbl[0x80]()`. Returns false only on a fault; a
 // clean read with a zero/absent guard object is a normal, expected outcome
 // and still returns true (with *guardObj possibly null, *guardValue 0).
 bool call_guard(void* actor, void** guardObj, short* guardValue) {
-    __try {
+    KCDMP_FAULT_CALL(site, "combat_playanim::call_guard");
+    return fault::guarded(site, [&] {
         *guardObj = *reinterpret_cast<void**>(reinterpret_cast<char*>(actor) + 0x28);
         if (*guardObj) {
             auto* vtbl = *reinterpret_cast<void***>(*guardObj);
             auto fn = reinterpret_cast<ShortPredicateFn>(vtbl[0x80 / 8]);
             *guardValue = fn(*guardObj);
         }
-        return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    });
 }
 
 // §9.6's real work: read C_Actor vtable slot +0xE48 and call it.
 bool call_play_anim(void* actor, const char* frag, const char* tags, void** targetOut) {
-    __try {
+    KCDMP_FAULT_CALL(site, "combat_playanim::call_play_anim");
+    return fault::guarded(site, [&] {
         auto* vtbl = *reinterpret_cast<void***>(actor);
         void* target = vtbl[0xE48 / 8];
         *targetOut = target;
         auto playAnim = reinterpret_cast<PlayAnimFn>(target);
         playAnim(actor, frag, tags);
-        return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    });
 }
 
 bool read_playanim_config(uint32_t* entityId, bool* wantPlayer,

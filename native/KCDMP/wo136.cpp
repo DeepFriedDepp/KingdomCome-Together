@@ -3,6 +3,7 @@
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 // WO-136 -- see wo136.h.
 #include "wo136.h"
+#include "fault_guard.h"
 
 #include <windows.h>
 #include <atomic>
@@ -98,7 +99,8 @@ uint32_t player_eid() {
 
 bool copy_str(const char* s, char* out, size_t n) {
     size_t i = 0;
-    __try { for (; i + 1 < n && s[i]; ++i) out[i] = s[i]; } __except (EXCEPTION_EXECUTE_HANDLER) { i = 0; }
+    KCDMP_FAULT_READ(site, "wo136::copy_str");
+    if (!fault::guarded(site, [&] { for (; i + 1 < n && s[i]; ++i) out[i] = s[i]; })) i = 0;
     out[i] = 0;
     return i > 0;
 }

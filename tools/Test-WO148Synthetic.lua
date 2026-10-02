@@ -274,6 +274,30 @@ do
     PLAYER_CARRYING = false
     advance(2.5)
     check("a: ...and its set-down sends nothing either", #carries(from) == 0)
+    -- WO-151 3.2: the same carry of a quest NPC the game lets be carried alive (CarryLivingActor): shown like a body
+    reset()
+    local qh = mkEntity("zranenylovci_hunter2", 1, 1, 0); ENTS["zranenylovci_hunter2"] = qh
+    qh.soul.HasScriptContext = function(self, c) return c == "CarryLivingActor" end
+    from = #LOG
+    BasicAIActions.OnGrabCorpse(qh, player, 0)
+    advance(0.5)
+    local lc = carries(from)
+    check("a: WO-151: a CarryLivingActor NPC carried by this player goes out as living", lc[1] ~= nil and lc[1]:find("^grab living zranenylovci_hunter2 ") ~= nil, lc[1])
+    check("a: WO-151: ...held here (the stream waits)", KCD2MP_W148Holds("zranenylovci_hunter2"))
+    PLAYER_CARRYING = false
+    advance(2.5)
+    lc = carries(from)
+    check("a: WO-151: ...and its set-down goes out", lc[2] ~= nil and lc[2]:find("^put put living zranenylovci_hunter2 ") ~= nil, lc[2])
+    KCD2MP.w151.carryLiving = false
+    reset()
+    local qh2 = mkEntity("zranenylovci_hunter3", 1, 1, 0); ENTS["zranenylovci_hunter3"] = qh2
+    qh2.soul.HasScriptContext = function(self, c) return c == "CarryLivingActor" end
+    from = #LOG
+    BasicAIActions.OnGrabCorpse(qh2, player, 0)
+    advance(0.5)
+    check("a: WO-151: mp_carry_living off -> shown nowhere (WO-148's own rule)", #carries(from) == 0)
+    KCD2MP.w151.carryLiving = true
+    PLAYER_CARRYING = false; advance(2.5)
     -- a load replaced the world mid-carry: lost, not put
     reset()
     local b3 = mkEntity("corpse_q", 1, 1, 0); b3.dead = true; ENTS["corpse_q"] = b3
@@ -363,6 +387,28 @@ do
     KCD2MP_W148Apply("2", "grab", "ko", "villager_1", 1, 0, 0)
     check("b: a living body is never picked up", av.grabs == 0 and (alive.moves or 0) == 0)
     check("b: ...and the refusal says why", emitted("w148_result", from)[1] == "2 grab villager_1 refused alive")
+    -- WO-151 3.2: a partner's quest carry of a living NPC the game lets be carried (CarryLivingActor): the
+    -- avatar carries the copy with the game's own pick-up; one that may not be carried alive is still refused
+    reset()
+    av = avatar(2, 0, 0, 0)
+    local qcopy = mkEntity("tvid_huntsman", 1, 0, 0); ENTS["tvid_huntsman"] = qcopy
+    qcopy.soul.HasScriptContext = function(self, c) return c == "CarryLivingActor" end
+    from = #LOG
+    KCD2MP_W148Apply("2", "grab", "living", "tvid_huntsman", 1, 0, 0)
+    advance(3.0)
+    check("b: WO-151: the avatar carries a CarryLivingActor copy (RequestGrabCorpse)", av.grabs == 1 and av.carrying == true, av.grabs)
+    check("b: WO-151: ...the copy is held (the host's stream and the DLL let go)", KCD2MP_W148Holds("tvid_huntsman"))
+    from = #LOG
+    KCD2MP_W148Apply("2", "put", "living", "tvid_huntsman", 2, 0, 0, "put")
+    advance(3.0)
+    check("b: WO-151: its set-down is the game's own put, the copy left where it set it", av.puts == 1 and (qcopy.moves or 0) == 0
+        and logCount("a living NPC: left where the game's own put set it", from) == 1, lastLog("land tvid_huntsman"))
+    reset()
+    av = avatar(2, 0, 0, 0)
+    local plain = mkEntity("villager_2", 1, 0, 0); ENTS["villager_2"] = plain
+    from = #LOG
+    KCD2MP_W148Apply("2", "grab", "living", "villager_2", 1, 0, 0)
+    check("b: WO-151: a living copy the game may not carry alive is still refused", av.grabs == 0 and emitted("w148_result", from)[1] == "2 grab villager_2 refused alive")
 
     -- far: fetched from near the pick-up spot, refused when far from both
     reset()

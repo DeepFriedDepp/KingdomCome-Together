@@ -2,6 +2,7 @@
 // GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 #include "savelist.h"
+#include "fault_guard.h"
 #include "anchors.h"
 #include "log.h"
 
@@ -44,38 +45,39 @@ size_t      g_nameOff = 0;    // C_SaveGameDescription+g_nameOff = CryString bas
 // --- SEH islands (no C++ objects needing unwinding in these) -------------------
 
 bool seh_read_ptr(const void* p, void** out) {
-    __try { *out = *static_cast<void* const*>(p); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_READ(site, "savelist::seh_read_ptr");
+    return fault::guarded(site, [&] { *out = *static_cast<void* const*>(p); });
 }
 bool seh_gi(void** out) {
-    __try { *out = g_gi(); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "savelist::seh_gi");
+    return fault::guarded(site, [&] { *out = g_gi(); });
 }
 bool seh_update(void* mgr) {
-    __try { g_update(mgr); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "savelist::seh_update");
+    return fault::guarded(site, [&] { g_update(mgr); });
 }
 bool seh_count(void* mgr, int pl, int* out) {
-    __try { *out = g_count(mgr, pl); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "savelist::seh_count");
+    return fault::guarded(site, [&] { *out = g_count(mgr, pl); });
 }
 bool seh_desc(void* mgr, int pl, int i, const void** out) {
-    __try { *out = g_desc(mgr, pl, i); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "savelist::seh_desc");
+    return fault::guarded(site, [&] { *out = g_desc(mgr, pl, i); });
 }
 bool seh_current(void* mgr, int* out) {
-    __try { *out = g_current(mgr); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "savelist::seh_current");
+    return fault::guarded(site, [&] { *out = g_current(mgr); });
 }
 bool seh_newest(void* mgr, int pl, int* idx, bool* out) {
-    __try { *out = g_newest(mgr, pl, idx); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "savelist::seh_newest");
+    return fault::guarded(site, [&] { *out = g_newest(mgr, pl, idx); });
 }
 // The CryString's characters, copied out (printable ASCII, <128). Its exact
 // shape (bare name, name.whs, or a path) is reduced by base_name() below.
 bool seh_raw(const void* desc, char* out, size_t n) {
     out[0] = 0;
-    __try {
+    KCDMP_FAULT_READ(site, "savelist::seh_raw");
+    const bool ok = fault::guarded_or<bool>(site, false, [&]() -> bool {
         const char* s = *reinterpret_cast<const char* const*>(static_cast<const char*>(desc) + g_nameOff);
         if (!s) return false;
         size_t i = 0;
@@ -88,8 +90,9 @@ bool seh_raw(const void* desc, char* out, size_t n) {
         if (s[i] != 0 || i == 0) { out[0] = 0; return false; }
         out[i] = 0;
         return true;
-    }
-    __except (EXCEPTION_EXECUTE_HANDLER) { out[0] = 0; return false; }
+    });
+    if (!ok) out[0] = 0;
+    return ok;
 }
 
 // "save021", "save021.whs" or ".../playline2/save021.whs" -> "save021";
@@ -126,7 +129,9 @@ bool lift_manager_offset(void* giExport, void* lockExport, size_t* off) {
     if (!wh || !anchor::section(wh, ".text", &text)) return false;
     int found = 0;
     size_t lifted = 0;
-    __try {
+    bool disagree = false;
+    KCDMP_FAULT_READ(site, "savelist::lift_manager_offset");
+    if (!fault::guarded(site, [&] {
         for (const uint8_t* p = text.begin; p + 48 < text.end; ++p) {
             if (p[0] != 0xFF || p[1] != 0x15) continue;
             const int32_t d = *reinterpret_cast<const int32_t*>(p + 2);
@@ -144,7 +149,7 @@ bool lift_manager_offset(void* giExport, void* lockExport, size_t* off) {
                     const int32_t d2 = *reinterpret_cast<const int32_t*>(r + 2);
                     void* v2 = nullptr;
                     if (seh_read_ptr(reinterpret_cast<void* const*>(r + 6 + d2), &v2) && v2 == lockExport) {
-                        if (found && o != lifted) return false;   // two binds disagree: not trusted
+                        if (found && o != lifted) { disagree = true; return; }   // two binds disagree: not trusted
                         lifted = o; ++found;
                     }
                     break;
@@ -152,7 +157,8 @@ bool lift_manager_offset(void* giExport, void* lockExport, size_t* off) {
                 break;
             }
         }
-    } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    })) return false;
+    if (disagree) return false;
     if (!found || lifted == 0 || lifted > 0x1000) return false;
     *off = lifted;
     return true;
@@ -161,7 +167,8 @@ bool lift_manager_offset(void* giExport, void* lockExport, size_t* off) {
 // GetFilePath's first read off `this` (rdi): 48 8B 87 id = mov rax,[rdi+imm32],
 // followed by the CryString header read 44 8B 48 F4 = mov r9d,[rax-0xC].
 bool lift_name_offset(const void* filePath, size_t* off) {
-    __try {
+    KCDMP_FAULT_READ(site, "savelist::lift_name_offset");
+    return fault::guarded_or<bool>(site, false, [&]() -> bool {
         const uint8_t* p = static_cast<const uint8_t*>(filePath);
         for (int i = 0; i < 64; ++i) {
             if (p[i] == 0x48 && p[i + 1] == 0x8B && p[i + 2] == 0x87) {
@@ -174,8 +181,8 @@ bool lift_name_offset(const void* filePath, size_t* off) {
                 return false;
             }
         }
-    } __except (EXCEPTION_EXECUTE_HANDLER) {}
-    return false;
+        return false;
+    });
 }
 
 void* manager() {

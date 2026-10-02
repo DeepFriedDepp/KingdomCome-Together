@@ -2,9 +2,11 @@
 // GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 #include "rttr_abi.h"
+#include "fault_guard.h"
 #include "pe_exports.h"
 #include "log.h"
 
+#include <atomic>
 #include <cmath>
 #include <cstdio>
 #include <string>
@@ -15,114 +17,83 @@ namespace {
 
 // Every call into the game goes through one of these. If the ABI model is
 // wrong the failure mode is an access violation, and an access violation in
-// the game's own process is a hard exit with no diagnostic. SEH turns that
-// into a log line, which is the difference between "learned something" and
-// "the game vanished".
+// the game's own process is a hard exit with no diagnostic. The guard turns
+// that into a log line, which is the difference between "learned something"
+// and "the game vanished".
 //
-// These helpers hold no C++ objects with destructors: __try/__except cannot
-// coexist with unwinding in the same frame (C2712).
+// WO-151: the guard is fault::guarded() with a named site (fault_guard.h): the
+// first fault at a site is logged at once with where it happened, and a call
+// into the game that keeps faulting is switched off after 8. Before WO-151
+// these returned false in silence -- and one of them (the stamina read below)
+// faulted inside the game's stat getter thousands of times, leaking the game's
+// stat stack, with no line in any log (WO-148 s7). The plumbing calls carry one
+// site each; the property reads and the method invokes take the caller's site,
+// so the log names the read that faulted (rttr::sample_health/GetState(stamina)).
 
 bool call_get_by_name(GetByName fn, Type* out, const std::string_view* name) {
-    __try {
-        fn(out, name);
-        return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return false;
-    }
+    KCDMP_FAULT_CALL(site, "rttr::type::get_by_name");
+    return fault::guarded(site, [&] { fn(out, name); });
 }
 
 bool call_is_valid(TypeIsValid fn, const Type* self, bool* out) {
-    __try {
-        *out = fn(self);
-        return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return false;
-    }
+    KCDMP_FAULT_CALL(site, "rttr::type::is_valid");
+    return fault::guarded(site, [&] { *out = fn(self); });
 }
 
 bool call_get_method(GetMethod fn, const Type* self, Method* out, const std::string_view* name) {
-    __try {
-        fn(self, out, name);
-        return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return false;
-    }
+    KCDMP_FAULT_CALL(site, "rttr::type::get_method");
+    return fault::guarded(site, [&] { fn(self, out, name); });
 }
 
 bool call_method_is_valid(MethodIsValid fn, const Method* self, bool* out) {
-    __try {
-        *out = fn(self);
-        return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return false;
-    }
+    KCDMP_FAULT_CALL(site, "rttr::method::is_valid");
+    return fault::guarded(site, [&] { *out = fn(self); });
 }
 
 bool call_method_string(MethodGetName fn, const Method* self, std::string_view* out) {
-    __try {
-        fn(self, out);
-        return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return false;
-    }
+    KCDMP_FAULT_CALL(site, "rttr::method::get_name/get_signature");
+    return fault::guarded(site, [&] { fn(self, out); });
 }
 
-bool call_get_property_value(GetPropertyValue fn, const Type* self, Variant* ret,
+// The caller names the read (the property and who wants it).
+bool call_get_property_value(fault::Site& site, GetPropertyValue fn, const Type* self, Variant* ret,
                              const std::string_view* name, const void* inst) {
-    __try {
-        fn(self, ret, name, inst);
-        return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return false;
-    }
+    return fault::guarded(site, [&] { fn(self, ret, name, inst); });
 }
 
 bool call_variant_valid(VariantIsValid fn, const Variant* v, bool* out) {
-    __try { *out = fn(v); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "rttr::variant::is_valid");
+    return fault::guarded(site, [&] { *out = fn(v); });
 }
 
 bool call_variant_dtor(VariantDtor fn, Variant* v) {
-    __try {
-        fn(v);
-        return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return false;
-    }
+    KCDMP_FAULT_CALL(site, "rttr::variant::~variant");
+    return fault::guarded(site, [&] { fn(v); });
 }
 
 bool call_game_interface(GetGameInterface fn, void** out) {
-    __try {
-        *out = fn();
-        return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return false;
-    }
+    KCDMP_FAULT_CALL(site, "rttr::C_GameInterface::GetWritableInstance");
+    return fault::guarded(site, [&] { *out = fn(); });
 }
 
 bool call_get_methods(GetMethods fn, const Type* self, void* ret) {
-    __try {
-        fn(self, ret);
-        return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return false;
-    }
+    KCDMP_FAULT_CALL(site, "rttr::type::get_methods");
+    return fault::guarded(site, [&] { fn(self, ret); });
 }
 
 bool call_get_properties(GetProperties fn, const Type* self, void* ret) {
-    __try {
-        fn(self, ret);
-        return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return false;
-    }
+    KCDMP_FAULT_CALL(site, "rttr::type::get_properties");
+    return fault::guarded(site, [&] { fn(self, ret); });
 }
 
 bool call_property_is_valid(PropertyIsValid fn, const Property* self, bool* out) {
-    __try { *out = fn(self); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "rttr::property::is_valid");
+    return fault::guarded(site, [&] { *out = fn(self); });
 }
 
 bool call_property_name(PropertyGetName fn, const Property* self, std::string_view* out) {
-    __try { fn(self, out); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "rttr::property::get_name");
+    return fault::guarded(site, [&] { fn(self, out); });
 }
 
 // A heap/static pointer in this process. Rejects null, small integers and
@@ -177,6 +148,10 @@ bool resolve(Api& api) {
     api.invoke2 = reinterpret_cast<Invoke2>(
         find_export_suffix(exports, "?invoke@method@rttr@@QEBA",
                            "Vinstance@2@Vargument@2@1@Z"));
+    // WO-151: the four-argument overload (TakeDamage's SuppressHitReaction). Optional.
+    api.invoke4 = reinterpret_cast<Invoke4>(
+        find_export_suffix(exports, "?invoke@method@rttr@@QEBA",
+                           "Vinstance@2@Vargument@2@111@Z"));
 
     api.create_assoc_view = reinterpret_cast<CreateAssocView>(
         find_export(exports, "?create_associative_view@variant@rttr@@"));
@@ -329,7 +304,7 @@ namespace {
 // Read an object-valued property. Returns the contained pointer, or null.
 // A pointer small enough to be trivially copyable lives inline at the start of
 // the variant's 16-byte payload.
-void* read_object_property(const Api& api, const char* type_name, const void* obj,
+void* read_object_property(fault::Site& site, const Api& api, const char* type_name, const void* obj,
                            const char* prop, InstanceLayout layout) {
     const std::string_view tn{type_name};
     Type t{};
@@ -345,8 +320,8 @@ void* read_object_property(const Api& api, const char* type_name, const void* ob
 
     const std::string_view pn{prop};
     Variant v{};
-    if (!call_get_property_value(api.get_property_value, &t, &v, &pn, inst.bytes)) {
-        logf("WALK: FAULT reading %s::%s", type_name, prop);
+    if (!call_get_property_value(site, api.get_property_value, &t, &v, &pn, inst.bytes)) {
+        if (fault::enabled(site)) logf("WALK: FAULT reading %s::%s", type_name, prop);   // the FAULT line has the details
         return nullptr;
     }
 
@@ -356,7 +331,7 @@ void* read_object_property(const Api& api, const char* type_name, const void* ob
     return result;
 }
 
-int read_int_property(const Api& api, const char* type_name, const void* obj,
+int read_int_property(fault::Site& site, const Api& api, const char* type_name, const void* obj,
                       const char* prop, InstanceLayout layout, bool* ok) {
     *ok = false;
     const std::string_view tn{type_name};
@@ -370,8 +345,8 @@ int read_int_property(const Api& api, const char* type_name, const void* obj,
 
     const std::string_view pn{prop};
     Variant v{};
-    if (!call_get_property_value(api.get_property_value, &t, &v, &pn, inst.bytes)) {
-        logf("WALK: FAULT reading %s::%s", type_name, prop);
+    if (!call_get_property_value(site, api.get_property_value, &t, &v, &pn, inst.bytes)) {
+        if (fault::enabled(site)) logf("WALK: FAULT reading %s::%s", type_name, prop);   // the FAULT line has the details
         return 0;
     }
 
@@ -427,14 +402,14 @@ void walk_to_soul() {
         const auto layout = static_cast<InstanceLayout>(i);
         WALK_LOG("WALK: trying instance layout %s", layout_name(layout));
 
-        void* rpg = read_object_property(api, "wh::shared::GameInterface", root, "RPGModule", layout);
+        void* rpg = read_object_property(KCDMP_SITE_CALL("rttr::walk_to_soul/RPGModule"), api, "wh::shared::GameInterface", root, "RPGModule", layout);
         if (!plausible_pointer(rpg)) {
             WALK_LOG("  RPGModule -> %p  rejected", rpg);
             continue;
         }
         WALK_LOG("  RPGModule  = %p", rpg);
 
-        void* souls = read_object_property(api, "wh::rpgmodule::RPGModule", rpg, "SoulList", layout);
+        void* souls = read_object_property(KCDMP_SITE_CALL("rttr::walk_to_soul/SoulList"), api, "wh::rpgmodule::RPGModule", rpg, "SoulList", layout);
         if (!plausible_pointer(souls)) {
             WALK_LOG("  SoulList  -> %p  rejected", souls);
             continue;
@@ -442,7 +417,7 @@ void walk_to_soul() {
         WALK_LOG("  SoulList   = %p", souls);
 
         bool ok = false;
-        const int count = read_int_property(api, "wh::rpgmodule::SoulList", souls, "SoulCount", layout, &ok);
+        const int count = read_int_property(KCDMP_SITE_CALL("rttr::walk_to_soul/SoulCount"), api, "wh::rpgmodule::SoulList", souls, "SoulCount", layout, &ok);
         if (!ok) { WALK_LOG("  SoulCount unreadable"); continue; }
         WALK_LOG("  SoulCount  = %d", count);
 
@@ -451,11 +426,11 @@ void walk_to_soul() {
             continue;
         }
 
-        void* player = read_object_property(api, "wh::rpgmodule::SoulList", souls, "PlayerSoul", layout);
+        void* player = read_object_property(KCDMP_SITE_CALL("rttr::walk_to_soul/PlayerSoul"), api, "wh::rpgmodule::SoulList", souls, "PlayerSoul", layout);
         WALK_LOG("  PlayerSoul = %p", player);
 
         void* combat = plausible_pointer(player)
-            ? read_object_property(api, "wh::rpgmodule::Soul", player, "CombatSoul", layout)
+            ? read_object_property(KCDMP_SITE_CALL("rttr::walk_to_soul/CombatSoul"), api, "wh::rpgmodule::Soul", player, "CombatSoul", layout)
             : nullptr;
         WALK_LOG("  CombatSoul = %p", combat);
 
@@ -477,21 +452,25 @@ void walk_to_soul() {
 namespace {
 
 bool call_get_enumeration(GetEnumeration fn, const Type* self, Enumeration* out) {
-    __try { fn(self, out); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "rttr::type::get_enumeration");
+    return fault::guarded(site, [&] { fn(self, out); });
 }
 
 bool call_name_to_value(NameToValue fn, const Enumeration* self, Variant* out,
                         const std::string_view* name) {
-    __try { fn(self, out, name); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "rttr::enumeration::name_to_value");
+    return fault::guarded(site, [&] { fn(self, out, name); });
 }
 
 bool call_argument_from_variant(ArgumentFromVariant fn, void* self, const Variant* v) {
-    __try { fn(self, v); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "rttr::argument::argument(variant)");
+    return fault::guarded(site, [&] { fn(self, v); });
 }
 
-bool call_invoke1(Invoke1 fn, const Method* self, Variant* ret,
+// The caller names the invoke (the method, and for GetState the state).
+bool call_invoke1(fault::Site& site, Invoke1 fn, const Method* self, Variant* ret,
                   const void* inst, const void* arg) {
-    __try { fn(self, ret, inst, arg); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    return fault::guarded(site, [&] { fn(self, ret, inst, arg); });
 }
 
 } // namespace
@@ -579,7 +558,7 @@ void probe_invoke() {
     inst.build(g_layout, t_soul, g_player);
 
     Variant result{};
-    if (!call_invoke1(api.invoke1, &m, &result, inst.bytes, argbuf)) {
+    if (!call_invoke1(KCDMP_SITE_CALL("rttr::probe_invoke/GetState(health,ctor-arg)"), api.invoke1, &m, &result, inst.bytes, argbuf)) {
         logf("INVOKE: FAULT during method::invoke -- argument layout is wrong");
         return;
     }
@@ -611,14 +590,10 @@ void probe_invoke() {
     std::memcpy(&raw_state, v_enum.data, sizeof(raw_state));
     call_variant_dtor(api.variant_dtor, &v_enum);
 
-    alignas(8) unsigned char hand[32]{};
-    auto* hw = reinterpret_cast<void**>(hand);
-    hw[0] = &raw_state;
-    hw[1] = &raw_state;
-    hw[2] = t_state.data;
+    const Arg<uint64_t> hand(raw_state, t_state);   // WO-151: the argument owns its value
 
     Variant hand_result{};
-    if (!call_invoke1(api.invoke1, &m, &hand_result, inst.bytes, hand)) {
+    if (!call_invoke1(KCDMP_SITE_CALL("rttr::probe_invoke/GetState(health,hand-built)"), api.invoke1, &m, &hand_result, inst.bytes, hand.get())) {
         logf("INVOKE: hand-built argument FAULTED -- one of fields [0]/[8] wants a variant*, "
              "not a pointer to the value");
         return;
@@ -635,16 +610,19 @@ void probe_invoke() {
 
 namespace {
 
-bool call_invoke3(Invoke3 fn, const Method* self, Variant* ret, const void* inst,
+bool call_invoke3(fault::Site& site, Invoke3 fn, const Method* self, Variant* ret, const void* inst,
                   const void* a0, const void* a1, const void* a2) {
-    __try { fn(self, ret, inst, a0, a1, a2); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    return fault::guarded(site, [&] { fn(self, ret, inst, a0, a1, a2); });
 }
 
-bool call_invoke2(Invoke2 fn, const Method* self, Variant* ret, const void* inst,
+bool call_invoke2(fault::Site& site, Invoke2 fn, const Method* self, Variant* ret, const void* inst,
                   const void* a0, const void* a1) {
-    __try { fn(self, ret, inst, a0, a1); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    return fault::guarded(site, [&] { fn(self, ret, inst, a0, a1); });
+}
+
+bool call_invoke4(fault::Site& site, Invoke4 fn, const Method* self, Variant* ret, const void* inst,
+                  const void* a0, const void* a1, const void* a2, const void* a3) {
+    return fault::guarded(site, [&] { fn(self, ret, inst, a0, a1, a2, a3); });
 }
 
 // Resolve the first of several candidate spellings for a type name.
@@ -717,15 +695,11 @@ void probe_take_damage() {
     call_method_is_valid(api.method_is_valid, &m, &mv);
     if (!mv) { logf("DAMAGE: TakeDamage did not resolve"); return; }
 
-    // Values must outlive the arguments that point at them.
-    float stamina_dmg = 0.0f;
-    float health_dmg  = 5.0f;
-    void* attacker    = g_player;   // the player attacking themselves
-
-    alignas(8) unsigned char a0[32], a1[32], a2[32];
-    build_argument(a0, &stamina_dmg, t_float);
-    build_argument(a1, &health_dmg,  t_float);
-    build_argument(a2, &attacker,    t_soulptr);   // pointer TO the pointer
+    // WO-151: each argument holds its own value (Arg<T>).
+    void* attacker = g_player;   // the player attacking themselves
+    const Arg<float> a0(0.0f, t_float);
+    const Arg<float> a1(5.0f, t_float);
+    const Arg<void*> a2(attacker, t_soulptr);   // the argument points TO the pointer
 
     InstanceBuf inst{};
     inst.build(g_layout, t_cs, g_combat);
@@ -734,7 +708,7 @@ void probe_take_damage() {
          attacker, g_combat);
 
     Variant ret{};
-    if (!call_invoke3(api.invoke3, &m, &ret, inst.bytes, a0, a1, a2)) {
+    if (!call_invoke3(KCDMP_SITE_CALL("rttr::probe_take_damage/TakeDamage"), api.invoke3, &m, &ret, inst.bytes, a0.get(), a1.get(), a2.get())) {
         logf("DAMAGE: FAULT during invoke -- pointer argument not passed correctly");
         return;
     }
@@ -745,31 +719,41 @@ void probe_take_damage() {
 namespace {
 
 bool call_create_view(CreateAssocView fn, const Variant* v, void* out) {
-    __try { fn(v, out); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "rttr::variant::create_associative_view");
+    return fault::guarded(site, [&] { fn(v, out); });
 }
 bool call_view_begin(ViewBegin fn, void* view, void* out) {
-    __try { fn(view, out); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "rttr::assoc_view::begin");
+    return fault::guarded(site, [&] { fn(view, out); });
 }
 bool call_iter_deref(IterDeref fn, void* it, void* out) {
-    __try { fn(it, out); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "rttr::assoc_view::iterator::operator*");
+    return fault::guarded(site, [&] { fn(it, out); });
 }
 bool call_view_size(ViewGetSize fn, const void* view, uint64_t* out) {
-    __try { *out = fn(view); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "rttr::assoc_view::get_size");
+    return fault::guarded(site, [&] { *out = fn(view); });
 }
 bool call_view_valid(ViewIsValid fn, const void* view, bool* out) {
-    __try { *out = fn(view); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "rttr::assoc_view::is_valid");
+    return fault::guarded(site, [&] { *out = fn(view); });
 }
+// The view's and the iterators' destructors.
 void call_void1(void (*fn)(void*), void* a) {
-    __try { fn(a); } __except (EXCEPTION_EXECUTE_HANDLER) { }
+    KCDMP_FAULT_CALL(site, "rttr::assoc_view::~view/~iterator");
+    fault::guarded(site, [&] { fn(a); });
 }
 bool call_view_end(ViewEnd fn, void* view, void* out) {
-    __try { fn(view, out); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "rttr::assoc_view::end");
+    return fault::guarded(site, [&] { fn(view, out); });
 }
 bool call_iter_inc(IterPreInc fn, void* it) {
-    __try { fn(it); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "rttr::assoc_view::iterator::operator++");
+    return fault::guarded(site, [&] { fn(it); });
 }
 bool call_iter_ne(IterNotEqual fn, const void* a, const void* b, bool* out) {
-    __try { *out = fn(a, b); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "rttr::assoc_view::iterator::operator!=");
+    return fault::guarded(site, [&] { *out = fn(a, b); });
 }
 
 // Optional explicit target, so choosing an NPC does not need a rebuild.
@@ -812,13 +796,13 @@ bool read_target_guid(unsigned char out[16]) {
 }
 
 // Read a Vec3-valued property. 12 bytes, so it lives inline in the variant.
-bool read_vec3(const Api& api, Type t, const void* obj, const char* prop,
+bool read_vec3(fault::Site& site, const Api& api, Type t, const void* obj, const char* prop,
                InstanceLayout layout, float out[3]) {
     InstanceBuf inst{};
     inst.build(layout, t, obj);
     const std::string_view pn{prop};
     Variant v{};
-    if (!call_get_property_value(api.get_property_value, &t, &v, &pn, inst.bytes)) return false;
+    if (!call_get_property_value(site, api.get_property_value, &t, &v, &pn, inst.bytes)) return false;
     std::memcpy(out, v.data, sizeof(float) * 3);
     call_variant_dtor(api.variant_dtor, &v);
     return true;
@@ -848,7 +832,7 @@ void* find_soul_by_guid(const unsigned char guid[16]) {
     inst.build(g_layout, t_sl, g_souls);
     const std::string_view prop{"SoulsByGuid"};
     Variant map_v{};
-    if (!call_get_property_value(api.get_property_value, &t_sl, &map_v, &prop, inst.bytes)) {
+    if (!call_get_property_value(KCDMP_SITE_CALL("rttr::find_soul_by_guid/SoulsByGuid"), api.get_property_value, &t_sl, &map_v, &prop, inst.bytes)) {
         return nullptr;
     }
 
@@ -894,7 +878,7 @@ bool apply_damage(const unsigned char guid[16], float stamina, float health,
     void* soul = find_soul_by_guid(guid);
     if (!soul) return false;
 
-    void* combat = read_object_property(api, "wh::rpgmodule::Soul", soul, "CombatSoul", g_layout);
+    void* combat = read_object_property(KCDMP_SITE_CALL("rttr::apply_damage/CombatSoul"), api, "wh::rpgmodule::Soul", soul, "CombatSoul", g_layout);
     if (!plausible_pointer(combat)) return false;
 
     static const char* float_names[] = { "float" };
@@ -923,22 +907,23 @@ bool apply_damage(const unsigned char guid[16], float stamina, float health,
     // match the signature, and the call silently did nothing while reporting
     // success. The remaining parameters have defaults.
     //
-    // suppress_hit_reaction is therefore accepted but not yet honoured: setting
-    // it would mean also supplying an Attacker, which we do not have for a
-    // remote player. Recorded rather than quietly dropped.
-    (void)suppress_hit_reaction;
+    // WO-151: suppress_hit_reaction is honoured now -- the four-argument call
+    // with a null Attacker (apply_damage_soul_ex). Every sender of a copy's
+    // damage has always asked for it; dropped, each host blow played a local
+    // reaction on the copy, and a wolf copy was knocked down (ragdolled, so
+    // the native writer let it go) by every one (docs/WO-151-findings.md 1.3).
+    // Without the four-argument export the reaction plays, as it always did.
+    if (suppress_hit_reaction && apply_damage_soul_ex(soul, stamina, health, nullptr, 1)) return true;
 
-    // Values must outlive the arguments that point at them.
-    float st = stamina, hp = health;
-    alignas(8) unsigned char a0[32], a1[32];
-    build_argument(a0, &st, t_float);
-    build_argument(a1, &hp, t_float);
+    // WO-151: each argument holds its own value (Arg<T>).
+    const Arg<float> a0(stamina, t_float);
+    const Arg<float> a1(health, t_float);
 
     InstanceBuf cinst{};
     cinst.build(g_layout, t_cs, combat);
 
     Variant ret{};
-    if (!call_invoke2(api.invoke2, &m, &ret, cinst.bytes, a0, a1)) return false;
+    if (!call_invoke2(KCDMP_SITE_CALL("rttr::apply_damage/TakeDamage"), api.invoke2, &m, &ret, cinst.bytes, a0.get(), a1.get())) return false;
 
     // A fault-free invoke is NOT a successful one: rttr hands back an invalid
     // variant when the arguments do not match the signature. Checking this is
@@ -972,7 +957,7 @@ bool apply_death(const unsigned char guid[16]) {
     inst.build(g_layout, t_soul, soul);
     const std::string_view dead{"IsDead"};
     Variant v{};
-    if (call_get_property_value(api.get_property_value, &t_soul, &v, &dead, inst.bytes)) {
+    if (call_get_property_value(KCDMP_SITE_CALL("rttr::apply_death/IsDead"), api.get_property_value, &t_soul, &v, &dead, inst.bytes)) {
         bool is_dead = false;
         std::memcpy(&is_dead, v.data, sizeof(is_dead));
         call_variant_dtor(api.variant_dtor, &v);
@@ -1074,9 +1059,9 @@ bool read_faction_config(unsigned char ghost[16], char faction[64],
 }
 
 void call_set_parent(FactionSetParent fn, void* self, const void* sp) {
-    __try { fn(self, sp); } __except (EXCEPTION_EXECUTE_HANDLER) {
-        logf("FACTION: FAULT inside SetParent");
-    }
+    KCDMP_FAULT_CALL(site, "rttr::C_NPCFactionNode::SetParent");
+    if (!fault::guarded(site, [&] { fn(self, sp); }))
+        logf("FACTION: SetParent faulted or is switched off (the FAULT line says which)");
 }
 
 // SetParent is virtual (UEAA in the mangling). Calling the exported
@@ -1097,33 +1082,33 @@ void call_set_parent(FactionSetParent fn, void* self, const void* sp) {
 [[maybe_unused]]
 int find_vtable_index(void* const* vtable, const void* fn, int max_slots = 256) {
     if (!vtable) return -1;
-    __try {
+    KCDMP_FAULT_READ(site, "rttr::find_vtable_index");
+    return fault::guarded_or(site, -1, [&]() -> int {
         for (int i = 0; i < max_slots; ++i) {
             if (vtable[i] == fn) return i;
             if (vtable[i] == nullptr) break;
         }
-    } __except (EXCEPTION_EXECUTE_HANDLER) { }
-    return -1;
+        return -1;
+    });
 }
 
 [[maybe_unused]]
 bool call_virtual_set_parent(void* obj, int index, const void* sp) {
-    __try {
+    KCDMP_FAULT_CALL(site, "rttr::C_FactionBase::SetParent(virtual)");
+    return fault::guarded(site, [&] {
         auto* vt = *reinterpret_cast<void***>(obj);
         auto fn = reinterpret_cast<FactionSetParent>(vt[index]);
         fn(obj, sp);
-        return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return false;
-    }
+    });
 }
 
 [[maybe_unused]]
 const void* object_vslot(void* obj, int index) {
-    __try {
+    KCDMP_FAULT_READ(site, "rttr::object_vslot");
+    return fault::guarded_or<const void*>(site, nullptr, [&]() -> const void* {
         auto* vt = *reinterpret_cast<void***>(obj);
         return vt[index];
-    } __except (EXCEPTION_EXECUTE_HANDLER) { return nullptr; }
+    });
 }
 
 // WO-144 1.2 -- the host crash on an in-session reload, at the root. The theory
@@ -1228,7 +1213,7 @@ void probe_faction() {
     inst.build(g_layout, t_sl, g_souls);
     const std::string_view prop{"SoulsByGuid"};
     Variant map_v{};
-    if (!call_get_property_value(api.get_property_value, &t_sl, &map_v, &prop, inst.bytes)) return;
+    if (!call_get_property_value(KCDMP_SITE_CALL("rttr::probe_faction/SoulsByGuid"), api.get_property_value, &t_sl, &map_v, &prop, inst.bytes)) return;
 
     alignas(16) unsigned char view[kViewBufBytes]{};
     if (!call_create_view(api.create_assoc_view, &map_v, view)) {
@@ -1267,7 +1252,7 @@ void probe_faction() {
         return;
     }
 
-    void* ghost_node = read_object_property(api, "wh::rpgmodule::Soul", ghost_soul,
+    void* ghost_node = read_object_property(KCDMP_SITE_CALL("rttr::probe_faction/FactionNode(ghost)"), api, "wh::rpgmodule::Soul", ghost_soul,
                                             "FactionNode", g_layout);
     logf("FACTION: ghost node=%p", ghost_node);
     if (!plausible_pointer(ghost_node)) return;
@@ -1276,7 +1261,7 @@ void probe_faction() {
     // reflected Parent. No string construction, so nothing to get wrong.
     if (donor_mode) {
         if (!plausible_pointer(donor_soul)) { logf("FACTION: donor soul not found"); return; }
-        void* donor_node = read_object_property(api, "wh::rpgmodule::Soul", donor_soul,
+        void* donor_node = read_object_property(KCDMP_SITE_CALL("rttr::probe_faction/FactionNode(donor)"), api, "wh::rpgmodule::Soul", donor_soul,
                                                 "FactionNode", g_layout);
         if (!plausible_pointer(donor_node)) { logf("FACTION: donor has no faction node"); return; }
 
@@ -1290,7 +1275,7 @@ void probe_faction() {
         dinst.build(g_layout, t_npcf, donor_node);
         const std::string_view par{"Parent"};
         Variant parent_v{};
-        if (!call_get_property_value(api.get_property_value, &t_npcf, &parent_v, &par, dinst.bytes)) {
+        if (!call_get_property_value(KCDMP_SITE_CALL("rttr::probe_faction/Parent"), api.get_property_value, &t_npcf, &parent_v, &par, dinst.bytes)) {
             logf("FACTION: FAULT reading donor Parent"); return;
         }
         void* fp = nullptr;
@@ -1339,7 +1324,7 @@ void probe_faction() {
         // get a proven-safe owned copy. No new offsets, no new assumptions.
         // ------------------------------------------------------------------
         Variant parent_v2{};
-        if (!call_get_property_value(api.get_property_value, &t_npcf, &parent_v2, &par, dinst.bytes)) {
+        if (!call_get_property_value(KCDMP_SITE_CALL("rttr::probe_faction/Parent"), api.get_property_value, &t_npcf, &parent_v2, &par, dinst.bytes)) {
             logf("FACTION: FAULT on the second donor Parent read -- aborting, nothing touched");
             call_variant_dtor(api.variant_dtor, &parent_v);
             return;
@@ -1364,7 +1349,7 @@ void probe_faction() {
         InstanceBuf ginst{};
         ginst.build(g_layout, t_npcf, ghost_node);
         Variant before_v{};
-        if (call_get_property_value(api.get_property_value, &t_npcf, &before_v, &par, ginst.bytes)) {
+        if (call_get_property_value(KCDMP_SITE_CALL("rttr::probe_faction/Parent"), api.get_property_value, &t_npcf, &before_v, &par, ginst.bytes)) {
             void* before_fp = nullptr;
             std::memcpy(&before_fp, before_v.data, sizeof(before_fp));
             logf("FACTION: ghost Parent before = %p (expected null/orphan)", before_fp);
@@ -1386,7 +1371,7 @@ void probe_faction() {
         // verification is the human polling FactionNode/Parent/Name over HTTP
         // for an extended window afterward, per the WO's own instruction.
         Variant after_v{};
-        if (call_get_property_value(api.get_property_value, &t_npcf, &after_v, &par, ginst.bytes)) {
+        if (call_get_property_value(KCDMP_SITE_CALL("rttr::probe_faction/Parent"), api.get_property_value, &t_npcf, &after_v, &par, ginst.bytes)) {
             void* after_fp = nullptr;
             std::memcpy(&after_fp, after_v.data, sizeof(after_fp));
             logf("FACTION: ghost Parent immediately after = %p (expected %p) -- "
@@ -1401,7 +1386,7 @@ void probe_faction() {
     // FactionManager::GetFaction(string) -> shared_ptr<C_Faction>.
     // The argument is a std::string: the game is MSVC-built, so our std::string
     // is layout-identical and can be pointed at directly.
-    void* fmgr = read_object_property(api, "wh::rpgmodule::RPGModule", g_rpg,
+    void* fmgr = read_object_property(KCDMP_SITE_CALL("rttr::probe_faction/FactionManager"), api, "wh::rpgmodule::RPGModule", g_rpg,
                                       "FactionManager", g_layout);
     if (!plausible_pointer(fmgr)) { logf("FACTION: FactionManager=%p", fmgr); return; }
 
@@ -1427,14 +1412,12 @@ void probe_faction() {
     }
     logf("FACTION: string type resolved as \"%s\"", chosen);
 
-    std::string name_arg{faction_name};
-    alignas(8) unsigned char sarg[32];
-    build_argument(sarg, &name_arg, t_str);
+    const StringArg sarg(faction_name, t_str);   // WO-151: the argument owns its string
 
     InstanceBuf finst{};
     finst.build(g_layout, t_fm, fmgr);
     Variant fac_v{};
-    if (!call_invoke1(api.invoke1, &m_gf, &fac_v, finst.bytes, sarg)) {
+    if (!call_invoke1(KCDMP_SITE_CALL("rttr::probe_faction/GetFaction"), api.invoke1, &m_gf, &fac_v, finst.bytes, sarg.get())) {
         logf("FACTION: FAULT in GetFaction -- the string argument shape is wrong");
         return;
     }
@@ -1458,7 +1441,7 @@ void probe_faction() {
         // re-tested enough to trust independently of the donor path. Prefer
         // the donor path until this one has its own live evidence.
         Variant fac_v2{};
-        if (!call_invoke1(api.invoke1, &m_gf, &fac_v2, finst.bytes, sarg)) {
+        if (!call_invoke1(KCDMP_SITE_CALL("rttr::probe_faction/GetFaction(second)"), api.invoke1, &m_gf, &fac_v2, finst.bytes, sarg.get())) {
             logf("FACTION: FAULT on the second GetFaction invoke -- aborting, nothing touched");
             call_variant_dtor(api.variant_dtor, &fac_v);
             return;
@@ -1517,7 +1500,7 @@ bool set_ghost_faction_hostile(const unsigned char ghost_guid[16], bool hostile)
     void* ghost_soul = find_soul_by_guid(ghost_guid);
     if (!ghost_soul) { logf("AGGRO: ghost soul not found"); return false; }
 
-    void* ghost_node = read_object_property(api, "wh::rpgmodule::Soul", ghost_soul,
+    void* ghost_node = read_object_property(KCDMP_SITE_CALL("rttr::set_ghost_faction_hostile/FactionNode(ghost)"), api, "wh::rpgmodule::Soul", ghost_soul,
                                             "FactionNode", g_layout);
     if (!plausible_pointer(ghost_node)) { logf("AGGRO: ghost has no FactionNode"); return false; }
 
@@ -1556,7 +1539,7 @@ bool set_ghost_faction_hostile(const unsigned char ghost_guid[16], bool hostile)
         if (!node_set_parent(ghost_node, zero_sp, "AGGRO")) return false;   // WO-144: the node's own SetParent (a null arg owns nothing)
 
         Variant after_v{};
-        if (call_get_property_value(api.get_property_value, &t_npcf, &after_v, &par, ginst.bytes)) {
+        if (call_get_property_value(KCDMP_SITE_CALL("rttr::set_ghost_faction_hostile/Parent"), api.get_property_value, &t_npcf, &after_v, &par, ginst.bytes)) {
             void* after_fp = nullptr;
             std::memcpy(&after_fp, after_v.data, sizeof(after_fp));
             logf("AGGRO: ghost Parent after detach = %p (expected null)", after_fp);
@@ -1572,14 +1555,14 @@ bool set_ghost_faction_hostile(const unsigned char ghost_guid[16], bool hostile)
     }
     void* donor_soul = find_soul_by_guid(donor_guid);
     if (!donor_soul) { logf("AGGRO: donor soul not loaded here"); return false; }
-    void* donor_node = read_object_property(api, "wh::rpgmodule::Soul", donor_soul,
+    void* donor_node = read_object_property(KCDMP_SITE_CALL("rttr::set_ghost_faction_hostile/FactionNode(donor)"), api, "wh::rpgmodule::Soul", donor_soul,
                                             "FactionNode", g_layout);
     if (!plausible_pointer(donor_node)) { logf("AGGRO: donor has no FactionNode"); return false; }
 
     InstanceBuf dinst{};
     dinst.build(g_layout, t_npcf, donor_node);
     Variant parent_v2{};
-    if (!call_get_property_value(api.get_property_value, &t_npcf, &parent_v2, &par, dinst.bytes)) {
+    if (!call_get_property_value(KCDMP_SITE_CALL("rttr::set_ghost_faction_hostile/Parent"), api.get_property_value, &t_npcf, &parent_v2, &par, dinst.bytes)) {
         logf("AGGRO: FAULT reading donor Parent");
         return false;
     }
@@ -1600,7 +1583,7 @@ bool set_ghost_faction_hostile(const unsigned char ghost_guid[16], bool hostile)
     // call variant_dtor on it (the exact WO-15 ownership fix, reapplied).
 
     Variant after_v{};
-    if (call_get_property_value(api.get_property_value, &t_npcf, &after_v, &par, ginst.bytes)) {
+    if (call_get_property_value(KCDMP_SITE_CALL("rttr::set_ghost_faction_hostile/Parent"), api.get_property_value, &t_npcf, &after_v, &par, ginst.bytes)) {
         void* after_fp = nullptr;
         std::memcpy(&after_fp, after_v.data, sizeof(after_fp));
         logf("AGGRO: ghost Parent after attach = %p (expected %p)", after_fp, fp);
@@ -1627,8 +1610,8 @@ bool set_ghost_faction_player(const unsigned char ghost_guid[16]) {
     if (!ghost_soul) { logf("WO131-FACTION: avatar soul not found"); return false; }
     void* donor_soul = read_player_soul();
     if (!plausible_pointer(donor_soul)) { logf("WO131-FACTION: player soul unreadable"); return false; }
-    void* ghost_node = read_object_property(api, "wh::rpgmodule::Soul", ghost_soul, "FactionNode", g_layout);
-    void* donor_node = read_object_property(api, "wh::rpgmodule::Soul", donor_soul, "FactionNode", g_layout);
+    void* ghost_node = read_object_property(KCDMP_SITE_CALL("rttr::set_ghost_faction_player/FactionNode"), api, "wh::rpgmodule::Soul", ghost_soul, "FactionNode", g_layout);
+    void* donor_node = read_object_property(KCDMP_SITE_CALL("rttr::set_ghost_faction_player/FactionNode"), api, "wh::rpgmodule::Soul", donor_soul, "FactionNode", g_layout);
     if (!plausible_pointer(ghost_node) || !plausible_pointer(donor_node)) {
         logf("WO131-FACTION: faction node missing (avatar %p, player %p)", ghost_node, donor_node);
         return false;
@@ -1646,7 +1629,7 @@ bool set_ghost_faction_player(const unsigned char ghost_guid[16]) {
     ginst.build(g_layout, t_npcf, ghost_node);
     dinst.build(g_layout, t_npcf, donor_node);
     Variant parent_v{};
-    if (!call_get_property_value(api.get_property_value, &t_npcf, &parent_v, &par, dinst.bytes)) {
+    if (!call_get_property_value(KCDMP_SITE_CALL("rttr::set_ghost_faction_player/Parent"), api.get_property_value, &t_npcf, &parent_v, &par, dinst.bytes)) {
         logf("WO131-FACTION: FAULT reading the player's faction Parent");
         return false;
     }
@@ -1665,7 +1648,7 @@ bool set_ghost_faction_player(const unsigned char ghost_guid[16]) {
     }
     Variant after_v{};
     void* after_fp = nullptr;
-    if (call_get_property_value(api.get_property_value, &t_npcf, &after_v, &par, ginst.bytes)) {
+    if (call_get_property_value(KCDMP_SITE_CALL("rttr::set_ghost_faction_player/Parent"), api.get_property_value, &t_npcf, &after_v, &par, ginst.bytes)) {
         std::memcpy(&after_fp, after_v.data, sizeof(after_fp));
         call_variant_dtor(api.variant_dtor, &after_v);
     }
@@ -1689,7 +1672,61 @@ struct Tracked {
     bool          seen;
     bool          nearPlayer = false;   // WO-147: within kStaminaRadius at the last rescan
     float         stamina = -1.0f;      // WO-147: the last reading (-1 = none yet)
+    void*         vptr = nullptr;       // WO-151: the soul's vtable pointer at the rescan (soul_alive)
+    bool          gone = false;         // WO-151: failed soul_alive -- never read again until the next rescan
 };
+
+// WO-151: the tracked set lives up to 3 s between rescans, and an entity removed in that window frees
+// its soul (a despawned animal, a removed stand-in): GetState on it read freed memory (live, L2:
+// "FAULT rttr::sample_health/GetState(health): 0xC0000005 reading 0x7fff00000280" right after a test
+// NPC was removed, 8 of them in 450 ms, and the site was switched off for the run -- no more LocalHit
+// reports). A fault there can also leave the game's stat stack pushed (the WO-148 collapse). Before
+// every read a soul must still be itself: its vtable pointer as at the rescan, and its own guid where
+// the rescan found it inside the object (the field is identified by its content, the map key; the
+// offset is learned once and re-proved on every soul that is tracked). Both are plain guarded reads.
+int    g_soulGuidOff = -1;      // -1 unknown, -2 no consistent offset found (then the vptr check alone)
+int    g_soulGuidMisses = 0;
+uint32_t c_soulGone = 0, c_soulGuidLearned = 0;
+
+bool read_soul_bytes(const void* soul, size_t off, void* out, size_t n) {
+    KCDMP_FAULT_READ(site, "rttr::sample_health/soul_alive");
+    return fault::guarded(site, [&] { std::memcpy(out, static_cast<const char*>(soul) + off, n); });
+}
+
+// The offset of the soul's own 16-byte guid inside the object, by content: scanned once per new soul
+// while the offset is unknown; agreed on by two souls before it is used.
+void learn_guid_offset(const void* soul, const unsigned char guid[16]) {
+    if (g_soulGuidOff == -2) return;
+    if (g_soulGuidOff >= 0) {
+        unsigned char b[16]{};
+        if (read_soul_bytes(soul, static_cast<size_t>(g_soulGuidOff), b, 16) && std::memcmp(b, guid, 16) == 0) return;
+        if (++g_soulGuidMisses >= 3) { logf("SAMPLE: the soul guid offset +0x%X stopped matching (%d misses) -- the vtable check alone from now on", g_soulGuidOff, g_soulGuidMisses); g_soulGuidOff = -2; }
+        return;
+    }
+    static int candidate = -1, agreed = 0, scanned = 0;
+    unsigned char blob[0x400]{};
+    if (!read_soul_bytes(soul, 0, blob, sizeof blob)) return;
+    int found = -1;
+    for (int off = 8; off + 16 <= static_cast<int>(sizeof blob); off += 4)
+        if (std::memcmp(blob + off, guid, 16) == 0) { found = off; break; }
+    if (found < 0) { if (++scanned >= 8 && candidate < 0) { g_soulGuidOff = -2; logf("SAMPLE: no soul guid inside the first 0x400 bytes of 8 souls -- the vtable check alone"); } return; }
+    if (candidate < 0 || candidate != found) { candidate = found; agreed = 1; return; }
+    if (++agreed >= 2) {
+        g_soulGuidOff = candidate;
+        ++c_soulGuidLearned;
+        logf("SAMPLE: a soul's own guid sits at +0x%X (agreed by %d souls) -- every tracked soul is re-proved there before a read", candidate, agreed);
+    }
+}
+
+bool soul_alive(const Tracked& t) {
+    void* vp = nullptr;
+    if (!t.vptr || !read_soul_bytes(t.soul, 0, &vp, sizeof vp) || vp != t.vptr) return false;
+    if (g_soulGuidOff >= 0) {
+        unsigned char b[16]{};
+        if (!read_soul_bytes(t.soul, static_cast<size_t>(g_soulGuidOff), b, 16) || std::memcmp(b, t.guid, 16) != 0) return false;
+    }
+    return true;
+}
 
 constexpr int   kMaxTracked     = 64;
 constexpr float kTrackRadius    = 60.0f;
@@ -1774,14 +1811,14 @@ void sample_health(void (*on_hit)(const unsigned char[16], void*, float, float, 
         {
             void* root = nullptr;
             if (call_game_interface(api.game_interface, &root) && plausible_pointer(root)) {
-                void* rpg = read_object_property(api, "wh::shared::GameInterface",
+                void* rpg = read_object_property(KCDMP_SITE_CALL("rttr::sample_health/RPGModule"), api, "wh::shared::GameInterface",
                                                  root, "RPGModule", g_layout);
                 if (plausible_pointer(rpg)) {
                     if (rpg != g_rpg) {
                         logf("SAMPLE: RPGModule moved %p -> %p -- refreshed", g_rpg, rpg);
                         g_rpg = rpg;
                     }
-                    void* souls = read_object_property(api, "wh::rpgmodule::RPGModule",
+                    void* souls = read_object_property(KCDMP_SITE_CALL("rttr::sample_health/SoulList"), api, "wh::rpgmodule::RPGModule",
                                                        rpg, "SoulList", g_layout);
                     if (plausible_pointer(souls) && souls != g_souls) {
                         logf("SAMPLE: SoulList moved %p -> %p -- refreshed", g_souls, souls);
@@ -1790,7 +1827,7 @@ void sample_health(void (*on_hit)(const unsigned char[16], void*, float, float, 
                 }
             }
 
-            void* live = read_object_property(api, "wh::rpgmodule::SoulList",
+            void* live = read_object_property(KCDMP_SITE_CALL("rttr::sample_health/PlayerSoul"), api, "wh::rpgmodule::SoulList",
                                               g_souls, "PlayerSoul", g_layout);
 
             // Positive instrumentation, added after the 2026-09-17 live run.
@@ -1815,7 +1852,7 @@ void sample_health(void (*on_hit)(const unsigned char[16], void*, float, float, 
                 g_player = live;
                 player_changed = true;
 
-                void* cs = read_object_property(api, "wh::rpgmodule::Soul",
+                void* cs = read_object_property(KCDMP_SITE_CALL("rttr::sample_health/CombatSoul"), api, "wh::rpgmodule::Soul",
                                                 live, "CombatSoul", g_layout);
                 if (plausible_pointer(cs)) {
                     logf("SAMPLE: CombatSoul %p -> %p -- refreshed", g_combat, cs);
@@ -1825,7 +1862,7 @@ void sample_health(void (*on_hit)(const unsigned char[16], void*, float, float, 
         }
 
         float ppos[3]{};
-        if (!read_vec3(api, t_soul, g_player, "Position", g_layout, ppos)) return;
+        if (!read_vec3(KCDMP_SITE_CALL("rttr::sample_health/Position"), api, t_soul, g_player, "Position", g_layout, ppos)) return;
 
         // Snapshot the outgoing set so credit (and health continuity) survive
         // the rebuild, keyed by guid instead of by slot. A save load is the one
@@ -1856,7 +1893,7 @@ void sample_health(void (*on_hit)(const unsigned char[16], void*, float, float, 
         slinst.build(g_layout, t_sl, g_souls);
         const std::string_view prop{"SoulsByGuid"};
         Variant map_v{};
-        if (!call_get_property_value(api.get_property_value, &t_sl, &map_v, &prop, slinst.bytes)) return;
+        if (!call_get_property_value(KCDMP_SITE_CALL("rttr::sample_health/SoulsByGuid"), api.get_property_value, &t_sl, &map_v, &prop, slinst.bytes)) return;
 
         alignas(16) unsigned char view[kViewBufBytes]{};
         if (!call_create_view(api.create_assoc_view, &map_v, view)) {
@@ -1879,13 +1916,16 @@ void sample_health(void (*on_hit)(const unsigned char[16], void*, float, float, 
                     std::memcpy(&soul, va, sizeof(soul));
                     if (plausible_pointer(soul) && soul != g_player) {
                         float p[3]{};
-                        if (read_vec3(api, t_soul, soul, "Position", g_layout, p) &&
+                        if (read_vec3(KCDMP_SITE_CALL("rttr::sample_health/Position"), api, t_soul, soul, "Position", g_layout, p) &&
                             !(p[0] == 0.0f && p[1] == 0.0f && p[2] == 0.0f)) {
                             const float dx = p[0]-ppos[0], dy = p[1]-ppos[1], dz = p[2]-ppos[2];
                             if (dx*dx + dy*dy + dz*dz < kTrackRadius * kTrackRadius) {
                                 Tracked& t = g_tracked[g_tracked_count++];
                                 std::memcpy(t.guid, ka, 16);
                                 t.soul = soul; t.seen = false;
+                                t.gone = false; t.vptr = nullptr;
+                                read_soul_bytes(soul, 0, &t.vptr, sizeof t.vptr);   // WO-151: soul_alive's reference
+                                learn_guid_offset(soul, t.guid);
                                 t.nearPlayer = dx*dx + dy*dy + dz*dz < kStaminaRadius * kStaminaRadius;   // WO-147
 
                                 const Carry* c = find_carry(t.guid);
@@ -1939,37 +1979,43 @@ void sample_health(void (*on_hit)(const unsigned char[16], void*, float, float, 
     Method m{};
     if (!call_get_method(api.get_method, &t_soul, &m, &gs)) return;
 
-    alignas(8) unsigned char arg[32];
-    build_argument(arg, &state_val, t_state);
+    const Arg<uint64_t> arg(state_val, t_state);
 
     // WO-147: the stamina state too (a blocked or stamina-only blow: the field's joiner broke his
     // sword and every later blow did 0 health and 40 stamina -- nothing of it ever reached the host).
-    bool have_st = false;
-    // arg_st points at st_val, so st_val must live as long as arg_st. Declared inside the block
-    // below (0.42.5-0.42.7), its stack slot was reused for the stamina reading: from the second
-    // soul near the player on, GetState got the last stamina value as its state, read out of
-    // range and faulted after the game had pushed it onto its stat-evaluation stack. The fault
-    // guard swallowed it, the pop never ran, and every later stat read in the game walked the
-    // ever-longer stack under a lock -- the frame rate fell in every fight and never came back.
+    // 0.42.5-0.42.7 built this argument over a variable declared in the block below; its stack
+    // slot was reused for the stamina reading: from the second soul near the player on, GetState
+    // got the last stamina value as its state, read out of range and faulted after the game had
+    // pushed it onto its stat-evaluation stack. The fault guard swallowed it, the pop never ran,
+    // and every later stat read in the game walked the ever-longer stack under a lock -- the frame
+    // rate fell in every fight and never came back (WO-148 s7). WO-151: the argument now holds
+    // the value itself (Arg<T>), and the guard logs and counts every fault.
     uint64_t st_val = 0;
-    alignas(8) unsigned char arg_st[32];
+    bool have_st = false;
     {
         const std::string_view sn{"stamina"};
         Variant v_st{};
         if (call_name_to_value(api.name_to_value, &en, &v_st, &sn)) {
             std::memcpy(&st_val, v_st.data, sizeof(st_val));
             call_variant_dtor(api.variant_dtor, &v_st);
-            build_argument(arg_st, &st_val, t_state);
             have_st = true;
         }
     }
+    const Arg<uint64_t> arg_st(st_val, t_state);
 
+    bool anyGone = false;
     for (int i = 0; i < g_tracked_count; ++i) {
         Tracked& t = g_tracked[i];
+        if (t.gone) continue;
+        if (!soul_alive(t)) {   // WO-151: freed since the rescan (its entity was removed): never read it again
+            t.gone = true; anyGone = true;
+            if (++c_soulGone <= 20) logf("SAMPLE: a tracked soul is no longer itself (freed since the rescan -- its entity removed?) -- dropped, the set is rebuilt now");
+            continue;
+        }
         InstanceBuf inst{};
         inst.build(g_layout, t_soul, t.soul);
         Variant res{};
-        if (!call_invoke1(api.invoke1, &m, &res, inst.bytes, arg)) continue;
+        if (!call_invoke1(KCDMP_SITE_CALL("rttr::sample_health/GetState(health)"), api.invoke1, &m, &res, inst.bytes, arg.get())) continue;
         bool valid = false;
         call_variant_valid(api.variant_is_valid, &res, &valid);
         float hp = 0.0f;
@@ -1981,7 +2027,7 @@ void sample_health(void (*on_hit)(const unsigned char[16], void*, float, float, 
         float st_drop = 0.0f;
         if (have_st && t.nearPlayer) {
             Variant rs{};
-            if (call_invoke1(api.invoke1, &m, &rs, inst.bytes, arg_st)) {
+            if (call_invoke1(KCDMP_SITE_CALL("rttr::sample_health/GetState(stamina)"), api.invoke1, &m, &rs, inst.bytes, arg_st.get())) {
                 bool vs = false;
                 call_variant_valid(api.variant_is_valid, &rs, &vs);
                 float st = 0.0f;
@@ -2015,6 +2061,7 @@ void sample_health(void (*on_hit)(const unsigned char[16], void*, float, float, 
         if (died) t.dead = true;
         if (on_hit) on_hit(t.guid, t.soul, reportable, st_drop, died);
     }
+    if (anyGone) g_last_rescan = 0;   // WO-151: rebuild the set at the next sample (60 ms)
 }
 
 namespace {
@@ -2078,7 +2125,8 @@ void probe_method_wrapper() {
     auto* words = reinterpret_cast<void* const*>(m.data);
     for (int i = 0; i < 16; ++i) {
         void* w = nullptr;
-        __try { w = words[i]; } __except (EXCEPTION_EXECUTE_HANDLER) { break; }
+        KCDMP_FAULT_READ(s_word, "rttr::probe_method_wrapper/word");
+        if (!fault::guarded(s_word, [&] { w = words[i]; })) break;
         describe_address(w, desc, sizeof(desc));
         logf("HOOK:   [%2d] %p  %s", i * 8, w, desc);
     }
@@ -2086,7 +2134,8 @@ void probe_method_wrapper() {
     // The vtable itself is worth dumping: its slots are the wrapper's own
     // invoke overloads, which is a second route to the target.
     void* const* vt = nullptr;
-    __try { vt = *reinterpret_cast<void* const* const*>(m.data); } __except (EXCEPTION_EXECUTE_HANDLER) { vt = nullptr; }
+    KCDMP_FAULT_READ(s_vt, "rttr::probe_method_wrapper/vtable");
+    if (!fault::guarded(s_vt, [&] { vt = *reinterpret_cast<void* const* const*>(m.data); })) vt = nullptr;
     if (plausible_pointer(vt)) {
         logf("HOOK: wrapper vtable at %p", static_cast<const void*>(vt));
         // Do not filter on plausible_pointer here: it insists on 4-byte
@@ -2094,7 +2143,8 @@ void probe_method_wrapper() {
         // truncated this dump to two entries on the first run.
         for (int i = 0; i < 24; ++i) {
             void* f = nullptr;
-            __try { f = vt[i]; } __except (EXCEPTION_EXECUTE_HANDLER) { break; }
+            KCDMP_FAULT_READ(s_slot, "rttr::probe_method_wrapper/slot");
+            if (!fault::guarded(s_slot, [&] { f = vt[i]; })) break;
             if (f == nullptr) break;
             const bool exec = describe_address(f, desc, sizeof(desc));
             logf("HOOK:   vt[%2d] %p  %s", i, f, desc);
@@ -2191,7 +2241,7 @@ void probe_attribution() {
 
     const std::string_view prop{"SoulsByGuid"};
     Variant map_v{};
-    if (!call_get_property_value(api.get_property_value, &t_sl, &map_v, &prop, inst.bytes)) {
+    if (!call_get_property_value(KCDMP_SITE_CALL("rttr::probe_attribution/SoulsByGuid"), api.get_property_value, &t_sl, &map_v, &prop, inst.bytes)) {
         logf("ATTR: FAULT reading SoulsByGuid"); return;
     }
 
@@ -2226,7 +2276,7 @@ void probe_attribution() {
     }
 
     float player_pos[3]{};
-    if (!read_vec3(api, t_soul, g_player, "Position", g_layout, player_pos)) {
+    if (!read_vec3(KCDMP_SITE_CALL("rttr::probe_attribution/Position"), api, t_soul, g_player, "Position", g_layout, player_pos)) {
         logf("ATTR: could not read player position");
         call_void1(reinterpret_cast<void(*)(void*)>(api.view_dtor), view);
         call_variant_dtor(api.variant_dtor, &map_v);
@@ -2248,7 +2298,7 @@ void probe_attribution() {
         pinst.build(g_layout, t_soul, g_player);
         const std::string_view gp{"Guid"};
         Variant gv{};
-        if (call_get_property_value(api.get_property_value, &t_soul, &gv, &gp, pinst.bytes)) {
+        if (call_get_property_value(KCDMP_SITE_CALL("rttr::probe_attribution/Guid"), api.get_property_value, &t_soul, &gv, &gp, pinst.bytes)) {
             std::memcpy(player_guid, gv.data, sizeof(player_guid));
             call_variant_dtor(api.variant_dtor, &gv);
             have_player_guid = true;
@@ -2310,7 +2360,7 @@ void probe_attribution() {
                 std::memcmp(key_addr, player_guid, sizeof(player_guid)) == 0;
             if (plausible_pointer(soul) && soul != g_player && !is_player) {
                 float p[3]{};
-                if (read_vec3(api, t_soul, soul, "Position", g_layout, p)) {
+                if (read_vec3(KCDMP_SITE_CALL("rttr::probe_attribution/Position"), api, t_soul, soul, "Position", g_layout, p)) {
                     const bool at_origin = (p[0] == 0.0f && p[1] == 0.0f && p[2] == 0.0f);
                     if (!at_origin) {
                         ++spawned;
@@ -2375,7 +2425,7 @@ void probe_attribution() {
 
     // That soul's CombatSoul, then damage attributed to the player.
     // t_soul was already resolved above for the position scan.
-    void* target_combat = read_object_property(api, "wh::rpgmodule::Soul", target,
+    void* target_combat = read_object_property(KCDMP_SITE_CALL("rttr::probe_attribution/CombatSoul"), api, "wh::rpgmodule::Soul", target,
                                                "CombatSoul", g_layout);
     if (!plausible_pointer(target_combat)) {
         logf("ATTR: target has no CombatSoul (%p)", target_combat); return;
@@ -2400,19 +2450,17 @@ void probe_attribution() {
     call_method_is_valid(api.method_is_valid, &m, &mv);
     if (!mv) { logf("ATTR: TakeDamage did not resolve"); return; }
 
-    float stam = 0.0f, dmg = 3.0f;
     void* attacker = g_player;
-    alignas(8) unsigned char a0[32], a1[32], a2[32];
-    build_argument(a0, &stam, t_float);
-    build_argument(a1, &dmg,  t_float);
-    build_argument(a2, &attacker, t_soulptr);
+    const Arg<float> a0(0.0f, t_float);
+    const Arg<float> a1(3.0f, t_float);
+    const Arg<void*> a2(attacker, t_soulptr);
 
     InstanceBuf cinst{};
     cinst.build(g_layout, t_cs, target_combat);
 
     logf("ATTR: TakeDamage(0, 3, attacker=player) on soul %p", target);
     Variant ret{};
-    if (!call_invoke3(api.invoke3, &m, &ret, cinst.bytes, a0, a1, a2)) {
+    if (!call_invoke3(KCDMP_SITE_CALL("rttr::probe_attribution/TakeDamage"), api.invoke3, &m, &ret, cinst.bytes, a0.get(), a1.get(), a2.get())) {
         logf("ATTR: FAULT during invoke"); return;
     }
     call_variant_dtor(api.variant_dtor, &ret);
@@ -2432,13 +2480,11 @@ void probe_attribution() {
     call_method_is_valid(api.method_is_valid, &hm, &hmv);
     if (!hmv) { logf("ATTR: HasCombatHistoryWithSoul did not resolve"); return; }
 
-    float max_time = 30.0f;
-    alignas(8) unsigned char h0[32], h1[32];
-    build_argument(h0, &attacker, t_soulptr);
-    build_argument(h1, &max_time, t_float);
+    const Arg<void*> h0(attacker, t_soulptr);
+    const Arg<float> h1(30.0f, t_float);
 
     Variant hres{};
-    if (!call_invoke2(api.invoke2, &hm, &hres, cinst.bytes, h0, h1)) {
+    if (!call_invoke2(KCDMP_SITE_CALL("rttr::probe_attribution/HasCombatHistoryWithSoul"), api.invoke2, &hm, &hres, cinst.bytes, h0.get(), h1.get())) {
         logf("ATTR: FAULT during HasCombatHistoryWithSoul"); return;
     }
     bool has_history = false;
@@ -2508,14 +2554,14 @@ bool soul_state_value(const Api& api, const char* name, uint64_t* out, Type* sta
 
 // A reflected bool property of `obj` as `typeName`. False when the property
 // does not exist on this build (invalid variant) -- never "false" by default.
-bool bool_property(const Api& api, const char* typeName, const void* obj, const char* prop, bool* out) {
+bool bool_property(fault::Site& site, const Api& api, const char* typeName, const void* obj, const char* prop, bool* out) {
     Type t{};
     if (!type_named(api, typeName, &t)) return false;
     InstanceBuf inst{};
     inst.build(g_layout, t, obj);
     const std::string_view pn{prop};
     Variant v{};
-    if (!call_get_property_value(api.get_property_value, &t, &v, &pn, inst.bytes)) return false;
+    if (!call_get_property_value(site, api.get_property_value, &t, &v, &pn, inst.bytes)) return false;
     bool valid = false;
     call_variant_valid(api.variant_is_valid, &v, &valid);
     bool b = false;
@@ -2545,11 +2591,11 @@ void* read_player_soul() {
     }
     void* root = nullptr;
     if (!call_game_interface(api->game_interface, &root) || !plausible_pointer(root)) return nullptr;
-    void* rpg = read_object_property(*api, "wh::shared::GameInterface", root, "RPGModule", g_layout);
+    void* rpg = read_object_property(KCDMP_SITE_CALL("rttr::read_player_soul/RPGModule"), *api, "wh::shared::GameInterface", root, "RPGModule", g_layout);
     if (!plausible_pointer(rpg)) return nullptr;
-    void* souls = read_object_property(*api, "wh::rpgmodule::RPGModule", rpg, "SoulList", g_layout);
+    void* souls = read_object_property(KCDMP_SITE_CALL("rttr::read_player_soul/SoulList"), *api, "wh::rpgmodule::RPGModule", rpg, "SoulList", g_layout);
     if (!plausible_pointer(souls)) return nullptr;
-    void* player = read_object_property(*api, "wh::rpgmodule::SoulList", souls, "PlayerSoul", g_layout);
+    void* player = read_object_property(KCDMP_SITE_CALL("rttr::read_player_soul/PlayerSoul"), *api, "wh::rpgmodule::SoulList", souls, "PlayerSoul", g_layout);
     return plausible_pointer(player) ? player : nullptr;
 }
 
@@ -2558,7 +2604,7 @@ void* rpg_module() {
     if (!api) return nullptr;
     void* root = nullptr;
     if (!call_game_interface(api->game_interface, &root) || !plausible_pointer(root)) return nullptr;
-    void* rpg = read_object_property(*api, "wh::shared::GameInterface", root, "RPGModule", g_layout);
+    void* rpg = read_object_property(KCDMP_SITE_CALL("rttr::rpg_module/RPGModule"), *api, "wh::shared::GameInterface", root, "RPGModule", g_layout);
     return plausible_pointer(rpg) ? rpg : nullptr;
 }
 
@@ -2571,7 +2617,7 @@ bool soul_guid(void* soul, unsigned char out[16]) {
     inst.build(g_layout, t, soul);
     const std::string_view gp{"Guid"};
     Variant v{};
-    if (!call_get_property_value(api->get_property_value, &t, &v, &gp, inst.bytes)) return false;
+    if (!call_get_property_value(KCDMP_SITE_CALL("rttr::soul_guid/Guid"), api->get_property_value, &t, &v, &gp, inst.bytes)) return false;
     bool valid = false;
     call_variant_valid(api->variant_is_valid, &v, &valid);
     if (valid) std::memcpy(out, v.data, 16);
@@ -2588,12 +2634,11 @@ bool soul_state(void* soul, const char* state, float* out) {
     if (!type_named(*api, "wh::rpgmodule::Soul", &tSoul)) return false;
     Method m{};
     if (!method_named(*api, tSoul, "GetState", &m)) return false;
-    alignas(8) unsigned char arg[32];
-    build_argument(arg, &sv, tState);
+    const Arg<uint64_t> arg(sv, tState);
     InstanceBuf inst{};
     inst.build(g_layout, tSoul, soul);
     Variant res{};
-    if (!call_invoke1(api->invoke1, &m, &res, inst.bytes, arg)) return false;
+    if (!call_invoke1(KCDMP_SITE_CALL("rttr::soul_state/GetState"), api->invoke1, &m, &res, inst.bytes, arg.get())) return false;
     bool valid = false;
     call_variant_valid(api->variant_is_valid, &res, &valid);
     float v = 0.0f;
@@ -2614,14 +2659,12 @@ bool soul_set_state(void* soul, const char* state, float value) {
     if (!type_named(*api, "float", &tFloat)) return false;
     Method m{};
     if (!method_named(*api, tSoul, "SetState", &m)) return false;
-    float fv = value;
-    alignas(8) unsigned char a0[32], a1[32];
-    build_argument(a0, &sv, tState);
-    build_argument(a1, &fv, tFloat);
+    const Arg<uint64_t> a0(sv, tState);
+    const Arg<float> a1(value, tFloat);
     InstanceBuf inst{};
     inst.build(g_layout, tSoul, soul);
     Variant res{};
-    if (!call_invoke2(api->invoke2, &m, &res, inst.bytes, a0, a1)) return false;
+    if (!call_invoke2(KCDMP_SITE_CALL("rttr::soul_set_state/SetState"), api->invoke2, &m, &res, inst.bytes, a0.get(), a1.get())) return false;
     bool valid = false;
     call_variant_valid(api->variant_is_valid, &res, &valid);
     call_variant_dtor(api->variant_dtor, &res);
@@ -2631,21 +2674,21 @@ bool soul_set_state(void* soul, const char* state, float value) {
 bool soul_bool(void* soul, const char* prop, bool* out) {
     const Api* api = cached_api();
     if (!api || !plausible_pointer(soul) || !out) return false;
-    return bool_property(*api, "wh::rpgmodule::Soul", soul, prop, out);
+    return bool_property(KCDMP_SITE_CALL("rttr::soul_bool/Soul.<bool>"), *api, "wh::rpgmodule::Soul", soul, prop, out);
 }
 
 bool combat_bool(void* soul, const char* prop, bool* out) {
     const Api* api = cached_api();
     if (!api || !plausible_pointer(soul) || !out) return false;
-    void* combat = read_object_property(*api, "wh::rpgmodule::Soul", soul, "CombatSoul", g_layout);
+    void* combat = read_object_property(KCDMP_SITE_CALL("rttr::combat_bool/CombatSoul"), *api, "wh::rpgmodule::Soul", soul, "CombatSoul", g_layout);
     if (!plausible_pointer(combat)) return false;
-    return bool_property(*api, "wh::rpgmodule::CombatSoul", combat, prop, out);
+    return bool_property(KCDMP_SITE_CALL("rttr::combat_bool/CombatSoul.<bool>"), *api, "wh::rpgmodule::CombatSoul", combat, prop, out);
 }
 
 bool combat_history(void* victim, void* attacker, float seconds, bool* out) {
     const Api* api = cached_api();
     if (!api || !plausible_pointer(victim) || !plausible_pointer(attacker) || !out) return false;
-    void* combat = read_object_property(*api, "wh::rpgmodule::Soul", victim, "CombatSoul", g_layout);
+    void* combat = read_object_property(KCDMP_SITE_CALL("rttr::combat_history/CombatSoul"), *api, "wh::rpgmodule::Soul", victim, "CombatSoul", g_layout);
     if (!plausible_pointer(combat)) return false;
     Type tCs{}, tFloat{}, tSoulPtr{};
     if (!type_named(*api, "wh::rpgmodule::CombatSoul", &tCs)) return false;
@@ -2653,15 +2696,12 @@ bool combat_history(void* victim, void* attacker, float seconds, bool* out) {
     if (!type_named(*api, "wh::rpgmodule::I_Soul*", &tSoulPtr)) return false;
     Method m{};
     if (!method_named(*api, tCs, "HasCombatHistoryWithSoul", &m)) return false;
-    void* who = attacker;
-    float maxTime = seconds;
-    alignas(8) unsigned char a0[32], a1[32];
-    build_argument(a0, &who, tSoulPtr);
-    build_argument(a1, &maxTime, tFloat);
+    const Arg<void*> a0(attacker, tSoulPtr);
+    const Arg<float> a1(seconds, tFloat);
     InstanceBuf inst{};
     inst.build(g_layout, tCs, combat);
     Variant res{};
-    if (!call_invoke2(api->invoke2, &m, &res, inst.bytes, a0, a1)) return false;
+    if (!call_invoke2(KCDMP_SITE_CALL("rttr::combat_history/HasCombatHistoryWithSoul"), api->invoke2, &m, &res, inst.bytes, a0.get(), a1.get())) return false;
     bool valid = false;
     call_variant_valid(api->variant_is_valid, &res, &valid);
     bool b = false;
@@ -2677,7 +2717,7 @@ bool soul_position(void* soul, float out[3]) {
     if (!api || !plausible_pointer(soul) || !out) return false;
     Type tSoul{};
     if (!type_named(*api, "wh::rpgmodule::Soul", &tSoul)) return false;
-    return read_vec3(*api, tSoul, soul, "Position", g_layout, out) &&
+    return read_vec3(KCDMP_SITE_CALL("rttr::soul_position/Position"), *api, tSoul, soul, "Position", g_layout, out) &&
            std::isfinite(out[0]) && std::isfinite(out[1]) && std::isfinite(out[2]);
 }
 
@@ -2686,9 +2726,9 @@ int for_each_soul(bool (*visit)(void* soul, void* ctx), void* ctx) {
     if (!api || !g_walked || !visit) return 0;
     void* root = nullptr;
     if (!call_game_interface(api->game_interface, &root) || !plausible_pointer(root)) return 0;
-    void* rpg = read_object_property(*api, "wh::shared::GameInterface", root, "RPGModule", g_layout);
+    void* rpg = read_object_property(KCDMP_SITE_CALL("rttr::for_each_soul/RPGModule"), *api, "wh::shared::GameInterface", root, "RPGModule", g_layout);
     void* souls = plausible_pointer(rpg)
-        ? read_object_property(*api, "wh::rpgmodule::RPGModule", rpg, "SoulList", g_layout) : nullptr;
+        ? read_object_property(KCDMP_SITE_CALL("rttr::for_each_soul/SoulList"), *api, "wh::rpgmodule::RPGModule", rpg, "SoulList", g_layout) : nullptr;
     if (!plausible_pointer(souls)) return 0;
 
     Type t_sl{};
@@ -2697,7 +2737,7 @@ int for_each_soul(bool (*visit)(void* soul, void* ctx), void* ctx) {
     inst.build(g_layout, t_sl, souls);
     const std::string_view prop{"SoulsByGuid"};
     Variant map_v{};
-    if (!call_get_property_value(api->get_property_value, &t_sl, &map_v, &prop, inst.bytes)) return 0;
+    if (!call_get_property_value(KCDMP_SITE_CALL("rttr::for_each_soul/SoulsByGuid"), api->get_property_value, &t_sl, &map_v, &prop, inst.bytes)) return 0;
     alignas(16) unsigned char view[kViewBufBytes]{};
     if (!call_create_view(api->create_assoc_view, &map_v, view)) {
         call_variant_dtor(api->variant_dtor, &map_v);
@@ -2736,14 +2776,14 @@ int for_each_soul(bool (*visit)(void* soul, void* ctx), void* ctx) {
 void* combat_soul_of(void* soul) {
     const Api* api = cached_api();
     if (!api || !plausible_pointer(soul)) return nullptr;
-    void* combat = read_object_property(*api, "wh::rpgmodule::Soul", soul, "CombatSoul", g_layout);
+    void* combat = read_object_property(KCDMP_SITE_CALL("rttr::combat_soul_of/CombatSoul"), *api, "wh::rpgmodule::Soul", soul, "CombatSoul", g_layout);
     return plausible_pointer(combat) ? combat : nullptr;
 }
 
 bool apply_damage_soul(void* soul, float stamina, float health, void* attacker) {
     const Api* api = cached_api();
     if (!api || !plausible_pointer(soul)) return false;
-    void* combat = read_object_property(*api, "wh::rpgmodule::Soul", soul, "CombatSoul", g_layout);
+    void* combat = read_object_property(KCDMP_SITE_CALL("rttr::apply_damage_soul/CombatSoul"), *api, "wh::rpgmodule::Soul", soul, "CombatSoul", g_layout);
     if (!plausible_pointer(combat)) return false;
     Type tCs{}, tFloat{}, tSoulPtr{};
     if (!type_named(*api, "wh::rpgmodule::CombatSoul", &tCs)) return false;
@@ -2752,26 +2792,63 @@ bool apply_damage_soul(void* soul, float stamina, float health, void* attacker) 
     if (!method_named(*api, tCs, "TakeDamage", &m)) return false;
     // TakeDamage(float Stamina, float Health, I_Soul* Attacker, ...): the
     // attacker is argument THREE (see apply_damage). With none, two args.
-    float st = stamina, hp = health;
-    void* who = attacker;
-    alignas(8) unsigned char a0[32], a1[32], a2[32];
-    build_argument(a0, &st, tFloat);
-    build_argument(a1, &hp, tFloat);
+    const Arg<float> a0(stamina, tFloat);
+    const Arg<float> a1(health, tFloat);
     InstanceBuf inst{};
     inst.build(g_layout, tCs, combat);
     Variant res{};
     bool invoked;
-    if (who) {
+    if (attacker) {
         if (!type_named(*api, "wh::rpgmodule::I_Soul*", &tSoulPtr)) return false;
-        build_argument(a2, &who, tSoulPtr);
-        invoked = call_invoke3(api->invoke3, &m, &res, inst.bytes, a0, a1, a2);
+        const Arg<void*> a2(attacker, tSoulPtr);
+        invoked = call_invoke3(KCDMP_SITE_CALL("rttr::apply_damage_soul/TakeDamage(attacker)"), api->invoke3, &m, &res, inst.bytes,
+                               a0.get(), a1.get(), a2.get());
     } else {
-        invoked = call_invoke2(api->invoke2, &m, &res, inst.bytes, a0, a1);
+        invoked = call_invoke2(KCDMP_SITE_CALL("rttr::apply_damage_soul/TakeDamage"), api->invoke2, &m, &res, inst.bytes,
+                               a0.get(), a1.get());
     }
     if (!invoked) return false;
     bool valid = false;
     call_variant_valid(api->variant_is_valid, &res, &valid);
     call_variant_dtor(api->variant_dtor, &res);
+    return valid;
+}
+
+// ---- WO-151 ------------------------------------------------------------------
+
+bool can_suppress_hit_reaction() {
+    const Api* api = cached_api();
+    return api && api->invoke4;
+}
+
+bool apply_damage_soul_ex(void* soul, float stamina, float health, void* attacker, int suppress) {
+    if (suppress < 0) return apply_damage_soul(soul, stamina, health, attacker);
+    const Api* api = cached_api();
+    if (!api || !api->invoke4 || !plausible_pointer(soul)) return false;
+    void* combat = read_object_property(KCDMP_SITE_CALL("rttr::apply_damage_soul_ex/CombatSoul"), *api, "wh::rpgmodule::Soul", soul, "CombatSoul", g_layout);
+    if (!plausible_pointer(combat)) return false;
+    Type tCs{}, tFloat{}, tSoulPtr{}, tBool{};
+    if (!type_named(*api, "wh::rpgmodule::CombatSoul", &tCs) || !type_named(*api, "float", &tFloat)
+        || !type_named(*api, "wh::rpgmodule::I_Soul*", &tSoulPtr) || !type_named(*api, "bool", &tBool)) return false;
+    Method m{};
+    if (!method_named(*api, tCs, "TakeDamage", &m)) return false;
+    // TakeDamage(float Stamina, float Health, I_Soul* Attacker, bool SuppressHitReaction, BodyPartData InjureBodypart):
+    // four of five; the body part keeps its default.
+    const Arg<float> a0(stamina, tFloat);
+    const Arg<float> a1(health, tFloat);
+    const Arg<void*> a2(attacker, tSoulPtr);
+    const Arg<bool> a3(suppress != 0, tBool);
+    InstanceBuf inst{};
+    inst.build(g_layout, tCs, combat);
+    Variant res{};
+    if (!call_invoke4(KCDMP_SITE_CALL("rttr::apply_damage_soul_ex/TakeDamage(4)"), api->invoke4, &m, &res, inst.bytes,
+                      a0.get(), a1.get(), a2.get(), a3.get())) return false;
+    bool valid = false;
+    call_variant_valid(api->variant_is_valid, &res, &valid);
+    call_variant_dtor(api->variant_dtor, &res);
+    static std::atomic<bool> s_logged{false};
+    if (!valid && !s_logged.exchange(true))
+        logf("WO151-TAKEDAMAGE the four-argument TakeDamage returned an invalid variant (argument mismatch) -- the reaction is not suppressed; the old call is used");
     return valid;
 }
 

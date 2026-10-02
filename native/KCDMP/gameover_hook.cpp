@@ -2,6 +2,7 @@
 // GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 #include "gameover_hook.h"
+#include "fault_guard.h"
 #include "anchors.h"
 #include "log.h"
 
@@ -31,9 +32,9 @@ void hooked_start(void* self, int id) {
     if (p) {
         // The policy runs game-thread reads; a fault there must not become a
         // Game Over that silently never happens -- pass through instead.
-        __try { swallow = p(id); }
-        __except (EXCEPTION_EXECUTE_HANDLER) {
-            logf("MP-GAMEOVER id=%d policy FAULTED -- passing through to the original", id);
+        KCDMP_FAULT_CALL(site, "gameover::hooked_start/policy");
+        if (!fault::guarded(site, [&] { swallow = p(id); })) {
+            logf("MP-GAMEOVER id=%d policy FAULTED (or switched off) -- passing through to the original", id);
             swallow = false;
         }
     }

@@ -510,6 +510,50 @@ public class RelayRoundTripTests : IClassFixture<RelayFixture>
     }
 
     [Fact]
+    public async Task Npc_hit_reaction_is_forwarded_only_from_the_host()
+    {
+        // WO-151: an NPC's hit reaction speaks for the host's world, like its combat state.
+        var (a, b) = await TwoPeersAsync();
+        await using var _a = a; await using var _b = b;
+        var row = Guid.Parse("4170e487-3ea4-3572-a3fd-6baf115378a7");   // a live-captured CombatHitGen row (L4)
+        var ev = new RowEvent(1000u, 0, row, "w151_g2");
+
+        await b.SendRawAsync(new ActionOutbox().Build(ActionKind.NpcHit, ActionPhase.Commit, ev.ToBytes()));
+        Assert.True(await a.NoneOfAsync(Protocol.ActionDown, Quiet));
+
+        await a.SendRawAsync(new ActionOutbox().Build(ActionKind.NpcHit, ActionPhase.Commit, ev.ToBytes()));
+        var down = await b.ReadUntilAsync(Protocol.ActionDown, Wait);
+        var got = new ActionInbox().Accept(down, out _);
+        Assert.NotNull(got);
+        Assert.Equal(ActionKind.NpcHit, got!.Value.Kind);
+        Assert.True(RowEvent.TryFromBytes(got.Value.Payload, out var back));
+        Assert.Equal((row, "w151_g2"), (back.Row, back.Name));
+    }
+
+    [Fact]
+    public async Task Door_state_is_forwarded_only_from_the_host_and_a_door_ask_from_anyone()
+    {
+        // WO-151 3.9: a door's state is the host's world's; a joiner asks (DoorAsk) and the host answers.
+        var (a, b) = await TwoPeersAsync();
+        await using var _a = a; await using var _b = b;
+        var ev = new DoorEvent(1000u, 1, 0, 10.5f, -20.25f, 30f, "AnimDoor_w151");
+
+        await b.SendRawAsync(new ActionOutbox().Build(ActionKind.DoorState, ActionPhase.Commit, ev.ToBytes()));
+        Assert.True(await a.NoneOfAsync(Protocol.ActionDown, Quiet));
+
+        await b.SendRawAsync(new ActionOutbox().Build(ActionKind.DoorAsk, ActionPhase.Commit, ev.ToBytes()));
+        var asked = new ActionInbox().Accept(await a.ReadUntilAsync(Protocol.ActionDown, Wait), out _);
+        Assert.Equal(ActionKind.DoorAsk, asked!.Value.Kind);
+
+        await a.SendRawAsync(new ActionOutbox().Build(ActionKind.DoorState, ActionPhase.Commit, ev.ToBytes()));
+        var got = new ActionInbox().Accept(await b.ReadUntilAsync(Protocol.ActionDown, Wait), out _);
+        Assert.NotNull(got);
+        Assert.Equal(ActionKind.DoorState, got!.Value.Kind);
+        Assert.True(DoorEvent.TryFromBytes(got.Value.Payload, out var back));
+        Assert.Equal(ev, back);
+    }
+
+    [Fact]
     public async Task V8_attack_event_carries_its_row_guid_through_the_relay()
     {
         var (a, b) = await TwoPeersAsync();

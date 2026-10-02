@@ -297,6 +297,7 @@ public partial class GameBridge
     {
         if (!NpcCombatEvent.TryFromBytes(a.Payload, out var ev)) { Console.WriteLine($"MP-W132 npc-combat in malformed len={a.Payload.Length}"); return; }
         Interlocked.Increment(ref _w132CombatIn);
+        if (ev.InCombat) Wo151NoteFight(ev.Name, "the host's NPC is in combat");   // WO-151 1.1
         bool guarded = _w131Guarded.TryGetValue(ev.Name, out uint geid);
         bool bound = _nativeBound.ContainsKey(ev.Name);
         uint eid = guarded ? geid : _npcEntityIds.TryGetValue(ev.Name, out uint pe) ? pe : 0;

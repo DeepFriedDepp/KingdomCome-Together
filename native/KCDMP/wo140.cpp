@@ -3,6 +3,7 @@
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 // WO-140 -- see wo140.h.
 #include "wo140.h"
+#include "fault_guard.h"
 
 #include <windows.h>
 #include <intrin.h>
@@ -65,8 +66,8 @@ FrameFn g_frame = nullptr;
 std::atomic<uint32_t> c_held{0}, c_passed{0}, c_replayed{0}, c_edges{0}, c_started{0}, c_startRefused{0}, c_stopped{0}, c_pulled{0};
 
 bool rd(const void* p, void* out, size_t n) {
-    __try { std::memcpy(out, p, n); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_READ(site, "wo140::rd");
+    return fault::guarded(site, [&] { std::memcpy(out, p, n); });
 }
 
 // The gate: rcx = the C_SkipTime, edx = the skip id. True = the picker does not open.
@@ -96,7 +97,8 @@ void* instance() {
     if (g_inst || g_instTried || !g_I) return g_inst;
     g_instTried = true;
     void* inst = nullptr;
-    __try { inst = g_I(); } __except (EXCEPTION_EXECUTE_HANDLER) { inst = nullptr; }
+    KCDMP_FAULT_CALL(s_inst, "wo140::instance/C_SkipTime::I");
+    if (!fault::guarded(s_inst, [&] { inst = g_I(); })) inst = nullptr;
     void* const* vt = nullptr;
     void* slot = nullptr;
     if (!inst || !rd(inst, &vt, 8) || !vt || !rd(vt + kSlotShow, &slot, 8) || slot != reinterpret_cast<void*>(g_show)) {
@@ -121,33 +123,34 @@ void* vslot(void* inst, size_t slot) {
 }
 
 bool call_show(const Held& h, bool* shown) {
-    __try { *shown = g_show(h.self, h.id, h.f1, h.f2, h.spot, h.f6); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "wo140::call_show");
+    return fault::guarded(site, [&] { *shown = g_show(h.self, h.id, h.f1, h.f2, h.spot, h.f6); });
 }
 bool call_start(StartFn fn, void* inst, int id, float hours, bool* started) {
     static const uint8_t kNoSpot[16] = {};
-    __try { *started = fn(inst, id, wo140rules::float_bits(hours), kNoSpot); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "wo140::call_start");
+    return fault::guarded(site, [&] { *started = fn(inst, id, wo140rules::float_bits(hours), kNoSpot); });
 }
 bool call_stop(StopFn fn, void* inst) {
-    __try { fn(inst, 0, false); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "wo140::call_stop");
+    return fault::guarded(site, [&] { fn(inst, 0, false); });
 }
 void* calendar() {
     if (!g_gi) return nullptr;
     const void* gi = nullptr;
-    __try { gi = g_gi(); } __except (EXCEPTION_EXECUTE_HANDLER) { gi = nullptr; }
+    KCDMP_FAULT_CALL(s_gi, "wo140::calendar/GetGameIface");
+    if (!fault::guarded(s_gi, [&] { gi = g_gi(); })) gi = nullptr;
     void* cal = nullptr;
     if (!gi || !rd(static_cast<const uint8_t*>(gi) + kOffCalendar, &cal, 8)) return nullptr;
     return cal;
 }
 bool call_set_time(void* cal, int64_t ms) {
-    __try { g_setTime(cal, ms); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "wo140::call_set_time");
+    return fault::guarded(site, [&] { g_setTime(cal, ms); });
 }
 bool write_ms(void* cal, int64_t ms) {
-    __try { *reinterpret_cast<int64_t*>(static_cast<uint8_t*>(cal) + kOffCalMs) = ms; return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_READ(site, "wo140::write_ms");
+    return fault::guarded(site, [&] { *reinterpret_cast<int64_t*>(static_cast<uint8_t*>(cal) + kOffCalMs) = ms; });
 }
 
 void send_state(wo140rules::Edge e, int id, float hours, uint32_t st) {

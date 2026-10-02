@@ -326,6 +326,9 @@ constexpr uint8_t kActivity2Out       = 0xA9;
 // WO-147: the joiner can fight, the leash pulls (native wo147.h): 0x29 [op][...] -> 0xAA [ok][seq][op][reason][payload].
 constexpr uint8_t kWo147              = 0x29;
 constexpr uint8_t kWo147Reply         = 0xAA;
+// WO-151: the safeguards' switches (native wo151.h): 0x2A [op][...] -> 0xAB [ok][seq][op][reason][payload].
+constexpr uint8_t kWo151              = 0x2A;
+constexpr uint8_t kWo151Reply         = 0xAB;
 constexpr uint8_t kSaveListReply      = 0x8D;   // [ok][seq][listed][idx:2][count:2][current][contPl][contIdx:2][nameLen][contName]
 constexpr uint8_t kLocalAction        = 0x96;   // unsolicited: [kind][phase][ic][zone][type][flags][guid:16][eid:4][nameLen][name]
 constexpr uint8_t kPvpHitOut          = 0x97;   // unsolicited: [victimEid:4][st:4f][hp:4f][flags][material]

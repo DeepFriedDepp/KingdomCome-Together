@@ -838,6 +838,14 @@ public partial class GameBridge(ClientConfig config)
     /// <summary>WO-98 Phase 5: a Rendered/Ingame cutscene edge on this machine.</summary>
     private void OnLocalCutsceneEdge(bool active, string type, string name)
     {
+        // WO-151 3.4: the end edge is the engine's release (ReleaseScene / Interrupt, Wo151OnSceneStage), not the
+        // content's end: the end positioning runs after it (41-60 s of a black joiner in the field read as free)
+        if (!active && _w151SceneGuard) return;
+        ApplyLocalCutsceneEdge(active, type, name);
+    }
+
+    private void ApplyLocalCutsceneEdge(bool active, string type, string name)
+    {
         // WO-99 Phase 4: Fader/Text/SkipTime are logged (acted=0) and nothing
         // else -- no peer beat, no prompt hold. Only Rendered/Ingame act.
         bool acts = type is "Rendered" or "Ingame";
@@ -1771,6 +1779,7 @@ public partial class GameBridge(ClientConfig config)
         Wo143OnConnect(cts.Token);           // WO-143: hands, gaits, one-shots, looks, the players' minigames on the avatars
         Wo147OnConnect(cts.Token);           // WO-147: the joiner fights hostile copies, destructive quest steps checked, the leash's stats
         Wo148OnConnect(cts.Token);           // WO-148: carrying on the other screen (the carrier owns the body; the host's world decides)
+        Wo151OnConnect(cts.Token);           // WO-151: the safeguards' switches (the fault guard's switch-off, the frame-cost meter)
         _ = _combat.NpcConfigAsync(_nativeWriteOn, _nativeSenderClock, cts.Token);
         _ = RespawnHeartbeatAsync(stream, announceGraves: true, cts.Token);
         // WO-99 Phase 0: learn who the local player is before the first hit.
@@ -1848,6 +1857,7 @@ public partial class GameBridge(ClientConfig config)
             tailForPause.FastTravelStateChanged += Wo114OnLocalFastTravel;   // WO-114
             tailForPause.FastTravelRefused += Wo114OnFastTravelRefused;       // WO-114
             tailForPause.CutsceneEdge += OnLocalCutsceneEdge;        // WO-98 Phase 5
+            tailForPause.SceneStage += Wo151OnSceneStage;            // WO-151 3.4: the scene guard
             tailForPause.ModInitDetected += OnModInitDetected;       // WO-98 Phase 7
             tailForPause.GameplayStarted += Wo122OnGameplayStarted;  // WO-122
             tailForPause.AutoSaveRefused += Wo122OnAutoSaveRefused;  // WO-122
@@ -3921,7 +3931,7 @@ public partial class GameBridge(ClientConfig config)
         var now = DateTime.UtcNow;
         if (!_peerLastSeenUtc.Any(kv => (now - kv.Value) < TimeSpan.FromMinutes(2))) return;
 
-        if (now >= _weatherNextRepickUtc)
+        if (now >= _weatherNextRepickUtc && !_w151WeatherNative)   // WO-151: the host's own weather once it is read
         {
             _weatherNextRepickUtc = now.AddSeconds(Protocol.WeatherRepickSeconds);
             bool keep = _sessionWeatherProfile is not null && _weatherRng.Next(2) == 0;
@@ -3952,6 +3962,8 @@ public partial class GameBridge(ClientConfig config)
     private async Task ApplyWeatherAsync(string profile, ushort blendSec)
     {
         if (profile == _lastAppliedWeatherProfile) return;
+        // WO-151: at the main menu the call never reaches a world (ExecLuaAsync's menu gate): not applied yet
+        if (_where == GameWhere.Menu) return;
         _lastAppliedWeatherProfile = profile;
         Console.WriteLine($"[weather] applying profile '{profile}' blend={blendSec}");
         try
@@ -5192,7 +5204,10 @@ public partial class GameBridge(ClientConfig config)
                         string wProfile = Encoding.UTF8.GetString(payload, 2, wNameLen);
                         ushort wBlend = BinaryPrimitives.ReadUInt16LittleEndian(payload.AsSpan(2 + wNameLen));
                         if (WeatherNamePattern.IsMatch(wProfile))
+                        {
+                            await Wo151OnHostWeatherAsync(wProfile);   // WO-151 3.7: the gate first -- only the host's profile blends here
                             await ApplyWeatherAsync(wProfile, wBlend);
+                        }
                     }
                 }
                 else if (type == Protocol.StoryBeatDown
@@ -5793,6 +5808,21 @@ public partial class GameBridge(ClientConfig config)
                 return;
             case "w148_cfg":         // WO-148: mp_carry_sync
                 Wo148OnCfg(arg);
+                return;
+            case "w151_cfg":         // WO-151: mp_fault_switchoff, mp_main_cost
+                Wo151OnCfg(arg);
+                return;
+            case "w151":             // WO-151: mp_fault_status, mp_fault_test
+                _ = Wo151OnEventAsync(arg);
+                return;
+            case "w151_crime":       // WO-151 Phase 5: joint responsibility (the host's own crime, its resolution)
+                _ = Wo151OnCrimeAsync(arg);
+                return;
+            case "w151_door":        // WO-151 3.9: a door of the host's world changed / this joiner used one
+                _ = Wo151OnDoorLocalAsync(arg);
+                return;
+            case "w151_emote":       // WO-151 3.5: this player whistled
+                _ = Wo151OnEmoteLocalAsync(arg);
                 return;
             case "w148_carry":       // WO-148: this player picked something up / set it down
                 _ = Wo148OnLocalAsync(arg);

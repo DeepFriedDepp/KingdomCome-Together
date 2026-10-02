@@ -29,7 +29,16 @@ void post(std::function<void()> work);
 
 // Run work on every tick, for the lifetime of the process. Used by the
 // outbound sampler, which needs a per-frame heartbeat rather than a one-shot.
+// The name labels the task in the MAIN-COST line (mp_main_cost: every 10 s what this
+// DLL's frame hook costs the frame, per task -- the game's profiler books all of it to
+// the hook's caller, CCryAction::PreSystemUpdate) and its fault site (WO-151: a task
+// that keeps faulting is switched off on its own, "main::task/<name>").
 void post_repeating(std::function<void()> work);
+void post_repeating(const char* name, std::function<void()> work);
+
+// WO-151: mp_main_cost -- the per-task frame-cost meter (off by default).
+void set_cost_meter(bool on);
+bool cost_meter();
 
 // Queue work and block until it has run. Returns false when timeout_ms elapses
 // before the game thread starts it. Work already running is allowed to finish

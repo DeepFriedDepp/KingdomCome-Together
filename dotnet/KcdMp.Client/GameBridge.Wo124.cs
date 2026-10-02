@@ -315,6 +315,7 @@ public partial class GameBridge
     {
         _where = GameWhere.World;
         Wo136OnGameplayStarted();   // WO-136: the settle, then the held frames
+        Wo151OnGameplayStarted();   // WO-151 3.7: the weather applied memory goes; a joiner re-applies the host's
         Wo125HostOnGameplayStarted();
         if (_ownLoadExpected) { _ownLoadExpected = false; _leaveInProgress = false; Console.WriteLine("MP-JOIN joiner: back in this player's own world (Gameplay started)"); }
         if (_jj is { } j && j.GameplayStarted is { } t) { j.GameplayUtc = DateTime.UtcNow; t.TrySetResult(true); }

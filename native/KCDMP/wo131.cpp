@@ -3,6 +3,7 @@
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 // WO-131 -- see wo131.h.
 #include "wo131.h"
+#include "fault_guard.h"
 
 #include <windows.h>
 #include <atomic>
@@ -31,8 +32,8 @@ constexpr const char* kInfiniteUncText  = "74cf0c29-d03e-4233-9352-b91ca5ea69ea"
 constexpr const char* kRemoveUncText    = "bd22f98a-e61f-4d83-b39c-79d1d85b6b91";   // remove_unconsciousness
 
 template <class T> bool rd(const void* base, size_t off, T* out) {
-    __try { *out = *reinterpret_cast<const T*>(static_cast<const char*>(base) + off); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_READ(site, "wo131::rd");
+    return fault::guarded(site, [&] { *out = *reinterpret_cast<const T*>(static_cast<const char*>(base) + off); });
 }
 void* vslot(void* obj, size_t off) {
     void* vt = nullptr; void* fn = nullptr;
@@ -40,12 +41,12 @@ void* vslot(void* obj, size_t off) {
     return fn;
 }
 bool call_p0(void* fn, void* self, void** out) {
-    __try { *out = reinterpret_cast<void* (__fastcall*)(void*)>(fn)(self); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "wo131::call_p0");
+    return fault::guarded(site, [&] { *out = reinterpret_cast<void* (__fastcall*)(void*)>(fn)(self); });
 }
 bool call_p1u(void* fn, void* self, uint32_t a, void** out) {
-    __try { *out = reinterpret_cast<void* (__fastcall*)(void*, uint32_t)>(fn)(self, a); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "wo131::call_p1u");
+    return fault::guarded(site, [&] { *out = reinterpret_cast<void* (__fastcall*)(void*, uint32_t)>(fn)(self, a); });
 }
 void* actor_by_eid(uint32_t eid) {
     void* gi = engine::game_iface();

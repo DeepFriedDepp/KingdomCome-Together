@@ -2,6 +2,7 @@
 // GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 #include "engine.h"
+#include "fault_guard.h"
 #include "anchors.h"
 #include "log.h"
 
@@ -50,8 +51,8 @@ void* const*  g_vftConsole = nullptr;
 void* const*  g_vftEntity = nullptr;
 
 bool rd(const void* base, size_t off, void** out) {
-    __try { *out = *reinterpret_cast<void* const*>(static_cast<const char*>(base) + off); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_READ(site, "engine::rd");
+    return fault::guarded(site, [&] { *out = *reinterpret_cast<void* const*>(static_cast<const char*>(base) + off); });
 }
 void* vslot(void* obj, size_t off) {
     void* vt = nullptr; void* fn = nullptr;
@@ -63,33 +64,35 @@ bool is_a(void* obj, void* const* vft) {
     return obj && vft && rd(obj, 0, &vp) && vp == static_cast<const void*>(vft);
 }
 
+// WO-151: the caller names the call (every engine service has its own site, so a call that
+// keeps faulting is switched off alone: entity_name faulting must not stop entity_by_id).
 template <typename R, typename... A>
-bool vcall(void* obj, size_t off, R* out, A... a) {
+bool vcall(fault::Site& site, void* obj, size_t off, R* out, A... a) {
     void* fn = vslot(obj, off);
     if (!fn) return false;
-    __try { *out = reinterpret_cast<R (*)(void*, A...)>(fn)(obj, a...); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    return fault::guarded(site, [&] { *out = reinterpret_cast<R (*)(void*, A...)>(fn)(obj, a...); });
 }
 template <typename... A>
-bool vcall_void(void* obj, size_t off, A... a) {
+bool vcall_void(fault::Site& site, void* obj, size_t off, A... a) {
     void* fn = vslot(obj, off);
     if (!fn) return false;
-    __try { reinterpret_cast<void (*)(void*, A...)>(fn)(obj, a...); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    return fault::guarded(site, [&] { reinterpret_cast<void (*)(void*, A...)>(fn)(obj, a...); });
 }
 
 bool call_gi(void* fn, void** out) {
-    __try { *out = reinterpret_cast<void* (*)()>(fn)(); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "engine::call_gi");
+    return fault::guarded(site, [&] { *out = reinterpret_cast<void* (*)()>(fn)(); });
 }
 
 bool copy_str(const char* s, char* out, size_t n) {
-    __try {
+    KCDMP_FAULT_READ(site, "engine::copy_str");
+    if (fault::guarded(site, [&] {
         size_t i = 0;
         for (; i + 1 < n && s[i]; ++i) out[i] = s[i];
         out[i] = 0;
-        return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) { if (n) out[0] = 0; return false; }
+    })) return true;
+    if (n) out[0] = 0;
+    return false;
 }
 
 } // namespace
@@ -178,52 +181,52 @@ void* console() {
 
 void* entity_by_id(uint32_t id) {
     void* es = entity_system(); void* e = nullptr;
-    if (!es || !id || !vcall(es, kEsGetEntity, &e, id)) return nullptr;
+    if (!es || !id || !vcall(KCDMP_SITE_CALL("engine::entity_by_id/GetEntity"), es, kEsGetEntity, &e, id)) return nullptr;
     return is_a(e, g_vftEntity) ? e : nullptr;
 }
 
 void* entity_by_guid(uint64_t guid) {
     void* es = entity_system(); void* e = nullptr;
-    if (!es || !guid || !vcall(es, kEsByGuid, &e, static_cast<const uint64_t*>(&guid))) return nullptr;
+    if (!es || !guid || !vcall(KCDMP_SITE_CALL("engine::entity_by_guid/ByGuid"), es, kEsByGuid, &e, static_cast<const uint64_t*>(&guid))) return nullptr;
     return is_a(e, g_vftEntity) ? e : nullptr;
 }
 
 uint32_t entity_id(void* e) {
     uint32_t id = 0;
-    return (is_a(e, g_vftEntity) && vcall(e, kEntGetId, &id)) ? id : 0;
+    return (is_a(e, g_vftEntity) && vcall(KCDMP_SITE_CALL("engine::entity_id/GetId"), e, kEntGetId, &id)) ? id : 0;
 }
 
 uint64_t entity_guid(void* e) {
     uint64_t g = 0;
-    return (is_a(e, g_vftEntity) && vcall(e, kEntGetGuid, &g)) ? g : 0;
+    return (is_a(e, g_vftEntity) && vcall(KCDMP_SITE_CALL("engine::entity_guid/GetGuid"), e, kEntGetGuid, &g)) ? g : 0;
 }
 
 const char* entity_name(void* e) {
     const char* n = nullptr;
-    return (is_a(e, g_vftEntity) && vcall(e, kEntGetName, &n)) ? n : nullptr;
+    return (is_a(e, g_vftEntity) && vcall(KCDMP_SITE_CALL("engine::entity_name/GetName"), e, kEntGetName, &n)) ? n : nullptr;
 }
 
 bool entity_world_pos(void* e, float out[3]) {
     if (!is_a(e, g_vftEntity)) return false;
     float buf[4]{};
     void* ret = nullptr;
-    if (!vcall(e, kEntGetWorldPos, &ret, static_cast<float*>(buf))) return false;
+    if (!vcall(KCDMP_SITE_CALL("engine::entity_world_pos/GetWorldPos"), e, kEntGetWorldPos, &ret, static_cast<float*>(buf))) return false;
     out[0] = buf[0]; out[1] = buf[1]; out[2] = buf[2];
     return std::isfinite(out[0]) && std::isfinite(out[1]) && std::isfinite(out[2]);
 }
 
 bool entity_set_pos(void* e, const float pos[3]) {
     if (!is_a(e, g_vftEntity)) return false;
-    return vcall_void(e, kEntSetPos, pos, 0, false, false);
+    return vcall_void(KCDMP_SITE_CALL("engine::entity_set_pos/SetPos"), e, kEntSetPos, pos, 0, false, false);
 }
 
 bool entity_add_flags(void* e, uint32_t flags) {
-    return is_a(e, g_vftEntity) && vcall_void(e, kEntAddFlags, flags);
+    return is_a(e, g_vftEntity) && vcall_void(KCDMP_SITE_CALL("engine::entity_add_flags/AddFlags"), e, kEntAddFlags, flags);
 }
 
 int entity_load_geometry(void* e, int slot, const char* file, int flags) {
     int r = -1;
-    if (!is_a(e, g_vftEntity) || !vcall(e, kEntLoadGeometry, &r, slot, file, static_cast<const char*>(nullptr), flags))
+    if (!is_a(e, g_vftEntity) || !vcall(KCDMP_SITE_CALL("engine::entity_load_geometry/LoadGeometry"), e, kEntLoadGeometry, &r, slot, file, static_cast<const char*>(nullptr), flags))
         return -1;
     return r;
 }
@@ -232,8 +235,8 @@ void* spawn(const char* className, const char* name, const float pos[3], uint32_
     void* es = entity_system();
     if (!es) return nullptr;
     void* reg = nullptr; void* cls = nullptr;
-    if (!vcall(es, kEsClassRegistry, &reg) || !reg) return nullptr;
-    if (!vcall(reg, kRegFindClass, &cls, className) || !cls) {
+    if (!vcall(KCDMP_SITE_CALL("engine::spawn/ClassRegistry"), es, kEsClassRegistry, &reg) || !reg) return nullptr;
+    if (!vcall(KCDMP_SITE_CALL("engine::spawn/FindClass"), reg, kRegFindClass, &cls, className) || !cls) {
         logf("ENGINE: spawn: no entity class '%s'", className);
         return nullptr;
     }
@@ -253,44 +256,44 @@ void* spawn(const char* className, const char* name, const float pos[3], uint32_
     std::memcpy(p + 0x64, q, 16);
     std::memcpy(p + 0x74, s, 12);
     void* e = nullptr;
-    if (!vcall(es, kEsSpawn, &e, static_cast<void*>(p), true) || !e) return nullptr;
+    if (!vcall(KCDMP_SITE_CALL("engine::spawn/Spawn"), es, kEsSpawn, &e, static_cast<void*>(p), true) || !e) return nullptr;
     return is_a(e, g_vftEntity) ? e : nullptr;
 }
 
 bool remove(uint32_t entityId) {
     void* es = entity_system();
-    return es && entityId && vcall_void(es, kEsRemove, entityId, false, 0);
+    return es && entityId && vcall_void(KCDMP_SITE_CALL("engine::remove/Remove"), es, kEsRemove, entityId, false, 0);
 }
 
 int for_each_entity(bool (*visit)(void* e, void* ctx), void* ctx) {
     void* es = entity_system();
     if (!es || !visit) return 0;
     void* it = nullptr;
-    if (!vcall(es, kEsIterator, &it) || !it) return 0;
+    if (!vcall(KCDMP_SITE_CALL("engine::for_each_entity/Iterator"), es, kEsIterator, &it) || !it) return 0;
     void* dummy = nullptr;
-    vcall(it, kItAddRef, &dummy);
-    vcall(it, kItMoveFirst, &dummy);
+    vcall(KCDMP_SITE_CALL("engine::for_each_entity/AddRef"), it, kItAddRef, &dummy);
+    vcall(KCDMP_SITE_CALL("engine::for_each_entity/MoveFirst"), it, kItMoveFirst, &dummy);
     int n = 0;
     for (int guard = 0; guard < 200000; ++guard) {
         void* e = nullptr;
-        if (!vcall(it, kItNext, &e) || !e) break;
+        if (!vcall(KCDMP_SITE_CALL("engine::for_each_entity/Next"), it, kItNext, &e) || !e) break;
         if (!is_a(e, g_vftEntity)) continue;
         ++n;
         if (visit(e, ctx)) break;
     }
-    vcall(it, kItRelease, &dummy);
+    vcall(KCDMP_SITE_CALL("engine::for_each_entity/Release"), it, kItRelease, &dummy);
     return n;
 }
 
 bool cvar_set_int(const char* name, int value, int* previous) {
     void* con = console();
     void* cv = nullptr;
-    if (!con || !vcall(con, kConGetCVar, &cv, name) || !cv) return false;
+    if (!con || !vcall(KCDMP_SITE_CALL("engine::cvar_set_int/GetCVar"), con, kConGetCVar, &cv, name) || !cv) return false;
     int type = 0;
-    if (!vcall(cv, kCVarGetType, &type) || type != 1) return false;
+    if (!vcall(KCDMP_SITE_CALL("engine::cvar_set_int/GetType"), cv, kCVarGetType, &type) || type != 1) return false;
     int old = 0;
-    if (previous) { if (vcall(cv, kCVarGetIVal, &old)) *previous = old; }
-    return vcall_void(cv, kCVarSetInt, value);
+    if (previous) { if (vcall(KCDMP_SITE_CALL("engine::cvar_set_int/GetIVal"), cv, kCVarGetIVal, &old)) *previous = old; }
+    return vcall_void(KCDMP_SITE_CALL("engine::cvar_set_int/SetInt"), cv, kCVarSetInt, value);
 }
 
 } // namespace kcdmp::engine

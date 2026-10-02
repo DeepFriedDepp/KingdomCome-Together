@@ -63,6 +63,12 @@ inline constexpr uint8_t kNpcStateRequest[24] = {
     0x48, 0x81, 0xEC, 0x68, 0x02, 0x00, 0x00,
 };
 
+// weather.cpp (WO-151): EnvironmentModule C_TimeOfDayBlender::BlendToProfile (found by its __FUNCTION__ string).
+// mov [rsp+10h],rbx; mov [rsp+18h],rbp; push rsi; push rdi; push r15
+inline constexpr uint8_t kBlendToProfile[14] = {
+    0x48, 0x89, 0x5C, 0x24, 0x10, 0x48, 0x89, 0x6C, 0x24, 0x18, 0x56, 0x57, 0x41, 0x57,
+};
+
 struct Entry { const char* name; const uint8_t* bytes; size_t len; };
 inline constexpr Entry kAll[] = {
     {"motion UpdateMannequinTags", kMotionTags, sizeof kMotionTags},
@@ -72,6 +78,7 @@ inline constexpr Entry kAll[] = {
     {"wo139 trespass listener", kTrespassListener, sizeof kTrespassListener},
     {"wo140 SkipTime ShowDialog", kSkipTimeShow, sizeof kSkipTimeShow},
     {"wo143 NPC-state request", kNpcStateRequest, sizeof kNpcStateRequest},
+    {"weather BlendToProfile", kBlendToProfile, sizeof kBlendToProfile},
 };
 
 } // namespace kcdmp::hookpro

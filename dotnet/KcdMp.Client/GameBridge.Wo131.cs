@@ -138,6 +138,20 @@ public partial class GameBridge
         if (h != health || died)
             Console.WriteLine(FormattableString.Invariant(
                 $"MP-WO131 hit on {npcName}: measured {health:F1}{(died ? " (local FATAL -- not sent: the host decides death)" : "")}, forwarded {h:F1}{(h != health ? " (the copy sat at the imm floor)" : "")}"));
+        // WO-151 1.1: the copy's health is the host's, never computed here. The forwarded blow goes back
+        // off the copy at once (the host's result arrives in its stream and the follow writes it); before
+        // this the local value stood until the host's next change (the field: copy 64.6 / host 29.8,
+        // copy 1.0 / host 29.2).
+        if (_w151HealthHost && _w131Guarded.TryGetValue(npcName, out uint feid) && _w131StreamHp.TryGetValue(npcName, out float fhp))
+        {
+            var (fok, fb, fa, _) = await _combat.Wo131FollowHpAsync(soul, feid, fhp);
+            if (fok)
+            {
+                _w131HpWritten[npcName] = (fhp, W131NowMs());
+                if (Interlocked.Increment(ref _w151HealthBack) <= 20 || Math.Abs(fb - fa) > 10)
+                    Console.WriteLine(FormattableString.Invariant($"MP-W151 hit on {npcName} forwarded; the copy's health back to the host's {fb:F1} -> {fa:F1}"));
+            }
+        }
         return (true, h, false);
     }
 

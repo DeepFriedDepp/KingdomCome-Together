@@ -2,6 +2,7 @@
 // GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 #include "buffs.h"
+#include "fault_guard.h"
 #include "anchors.h"
 #include "log.h"
 #include "rttr_abi.h"
@@ -54,8 +55,8 @@ using FindDefFn = void* (*)(void* mgr, const void* guid);
 using PtrFn     = void* (*)(void* self);
 
 bool rd(const void* base, size_t off, void** out) {
-    __try { *out = *reinterpret_cast<void* const*>(static_cast<const char*>(base) + off); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_READ(site, "buffs::rd");
+    return fault::guarded(site, [&] { *out = *reinterpret_cast<void* const*>(static_cast<const char*>(base) + off); });
 }
 void* vslot(void* obj, size_t off) {
     void* vt = nullptr; void* fn = nullptr;
@@ -63,24 +64,24 @@ void* vslot(void* obj, size_t off) {
     return fn;
 }
 bool call_ptr(void* fn, void* self, void** out) {
-    __try { *out = reinterpret_cast<PtrFn>(fn)(self); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "buffs::call_ptr");
+    return fault::guarded(site, [&] { *out = reinterpret_cast<PtrFn>(fn)(self); });
 }
 bool call_add(void* fn, void* mgr, void* soul, const void* guid, const void* perk, void** out) {
-    __try { *out = reinterpret_cast<AddFn>(fn)(mgr, soul, guid, nullptr, perk); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "buffs::call_add");
+    return fault::guarded(site, [&] { *out = reinterpret_cast<AddFn>(fn)(mgr, soul, guid, nullptr, perk); });
 }
 bool call_remove(void* fn, void* mgr, void* soul, const void* guid, uint32_t* out) {
-    __try { *out = reinterpret_cast<RemoveFn>(fn)(mgr, soul, guid); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "buffs::call_remove");
+    return fault::guarded(site, [&] { *out = reinterpret_cast<RemoveFn>(fn)(mgr, soul, guid); });
 }
 bool call_find(void* fn, void* mgr, const void* guid, void** out) {
-    __try { *out = reinterpret_cast<FindDefFn>(fn)(mgr, guid); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "buffs::call_find");
+    return fault::guarded(site, [&] { *out = reinterpret_cast<FindDefFn>(fn)(mgr, guid); });
 }
 bool guid_eq(const void* a, const unsigned char b[16]) {
-    __try { return a && std::memcmp(a, b, 16) == 0; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_READ(site, "buffs::guid_eq");
+    return fault::guarded_or<bool>(site, false, [&]() -> bool { return a && std::memcmp(a, b, 16) == 0; });
 }
 
 void* manager_checked() {

@@ -2,6 +2,7 @@
 // GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 #include "npc_drive.h"
+#include "fault_guard.h"
 #include "npc_scan.h"   // WO-144 2.3: body_kind (a horse or an animal is entity-written)
 #include "anchors.h"
 #include "engine.h"
@@ -134,12 +135,12 @@ std::atomic<uint32_t> g_statSamples{0};
 
 // ---- SEH-isolated engine calls (no destructible locals, MSVC C2712) ----------
 bool rd_ptr(const void* base, size_t off, void** out) {
-    __try { *out = *reinterpret_cast<void* const*>(static_cast<const char*>(base) + off); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_READ(site, "npc_drive::rd_ptr");
+    return fault::guarded(site, [&] { *out = *reinterpret_cast<void* const*>(static_cast<const char*>(base) + off); });
 }
 bool rd_f(const void* base, size_t off, float* out) {
-    __try { *out = *reinterpret_cast<const float*>(static_cast<const char*>(base) + off); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_READ(site, "npc_drive::rd_f");
+    return fault::guarded(site, [&] { *out = *reinterpret_cast<const float*>(static_cast<const char*>(base) + off); });
 }
 void* vslot(void* obj, size_t off) {
     void* vt = nullptr; void* fn = nullptr;
@@ -151,28 +152,34 @@ bool is_a(void* obj, void* const* vft) {
     return obj && vft && rd_ptr(obj, 0, &vp) && vp == static_cast<const void*>(vft);
 }
 bool call_ptr0(void* fn, void* self, void** out) {
-    __try { *out = reinterpret_cast<void* (*)(void*)>(fn)(self); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "npc_drive::call_ptr0");
+    return fault::guarded(site, [&] { *out = reinterpret_cast<void* (*)(void*)>(fn)(self); });
 }
 bool call_int2(void* fn, void* self, void* arg, int arg2, int* out) {
-    __try { *out = reinterpret_cast<int (*)(void*, void*, int)>(fn)(self, arg, arg2); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "npc_drive::call_int2");
+    return fault::guarded(site, [&] { *out = reinterpret_cast<int (*)(void*, void*, int)>(fn)(self, arg, arg2); });
 }
 bool call_int1(void* fn, void* self, void* arg, int* out) {
-    __try { *out = reinterpret_cast<int (*)(void*, void*)>(fn)(self, arg); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "npc_drive::call_int1");
+    return fault::guarded(site, [&] { *out = reinterpret_cast<int (*)(void*, void*)>(fn)(self, arg); });
 }
 bool call_prs(void* fn, void* self, const float* pos, const float* q, const float* scale) {
-    __try { reinterpret_cast<void (*)(void*, const float*, const float*, const float*, uint32_t)>(fn)(self, pos, q, scale, 0u); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "npc_drive::call_prs");
+    return fault::guarded(site, [&] {
+ reinterpret_cast<void (*)(void*, const float*, const float*, const float*, uint32_t)>(fn)(self, pos, q, scale, 0u);
+    });
 }
 bool copy_name(const char* s, char* out, size_t n) {
-    __try {
+    KCDMP_FAULT_READ(site, "npc_drive::copy_name");
+    bool any = false;
+    if (fault::guarded(site, [&] {
         size_t i = 0;
         for (; i + 1 < n && s[i]; ++i) out[i] = s[i];
         out[i] = 0;
-        return i > 0;
-    } __except (EXCEPTION_EXECUTE_HANDLER) { if (n) out[0] = 0; return false; }
+        any = i > 0;
+    })) return any;
+    if (n) out[0] = 0;
+    return false;
 }
 
 // ---- engine helpers built on the above ----------------------------------------
@@ -678,7 +685,7 @@ void install() {
     g_qpcPeriod = 1.0 / static_cast<double>(f.QuadPart);
     // Posted whatever the anchors say: the trace (mp_npc_trace) must run on
     // the legacy Lua path too -- that is the A/B the WO-118 gate asks for.
-    main_thread::post_repeating(&tick);
+    main_thread::post_repeating("npc_drive::tick", &tick);
 
     auto fail = [](const char* why) {
         logf("WO118-NATIVE native_write=DISARMED reason=\"%s\" -- Lua keeps writing every puppet (the 50 ms path)", why);

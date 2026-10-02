@@ -3,6 +3,7 @@
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 // WO-135 -- see wo135.h.
 #include "wo135.h"
+#include "fault_guard.h"
 
 #include <windows.h>
 #include <atomic>
@@ -28,8 +29,8 @@ std::atomic<uint32_t> c_refused{0}, c_seen{0};
 const char* g_why = "not installed";
 
 template <class T> bool rd(const void* base, size_t off, T* out) {
-    __try { *out = *reinterpret_cast<const T*>(static_cast<const char*>(base) + off); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_READ(site, "wo135::rd");
+    return fault::guarded(site, [&] { *out = *reinterpret_cast<const T*>(static_cast<const char*>(base) + off); });
 }
 
 bool blocked(uint64_t id) {

@@ -80,6 +80,10 @@ static class JoinPeer
         int corrupt = IntArg(a, "--corrupt-chunk", -1), dropAfter = IntArg(a, "--disconnect-after-chunks", -1);
         int cancelAfter = IntArg(a, "--cancel-after-chunks", -1), stallAfter = IntArg(a, "--stall-after-chunks", -1);
         double duration = DblArg(a, "--duration", 400);
+        // WO-151 3.9: --door-ask "<name> <dir> <unlock> <x> <y> <z>" [--door-ask-after S] -- a DoorAsk S seconds after Ready
+        string doorAsk = Arg(a, "--door-ask", ""); double doorAskAfter = DblArg(a, "--door-ask-after", 3);
+        double doorAskAt = double.MaxValue;
+        var doorOut = new KcdMp.Client.ActionOutbox();
 
         string staging = Path.Combine(Path.GetTempPath(), "kcdmp-synthjoin-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(staging);
@@ -117,6 +121,17 @@ static class JoinPeer
                     Say(FormattableString.Invariant($"JoinerReady sent ({now - tDone:F1} s after the file verified) -- the host should resume now"));
                     readyAt = double.MaxValue;
                     lingerUntil = now + linger;
+                    if (doorAsk.Length > 0) { doorAskAt = now + doorAskAfter; lingerUntil = Math.Max(lingerUntil, doorAskAt + linger); }
+                }
+                if (now >= doorAskAt)
+                {
+                    doorAskAt = double.MaxValue;
+                    var df = doorAsk.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                    var inv = CultureInfo.InvariantCulture;
+                    var dev = new DoorEvent((uint)Clock.ElapsedMilliseconds, sbyte.Parse(df[1], inv), df[2] == "1" ? DoorEvent.FlagLocked : (byte)0,
+                        float.Parse(df[3], inv), float.Parse(df[4], inv), float.Parse(df[5], inv), df[0]);
+                    await st.WriteAsync(doorOut.Build(ActionKind.DoorAsk, ActionPhase.Commit, dev.ToBytes()), hard.Token);
+                    Say($"DoorAsk sent: {dev}");
                 }
                 var tick = Task.Delay(100, hard.Token);
                 if (await Task.WhenAny(readTask, tick) != readTask) continue;

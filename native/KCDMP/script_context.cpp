@@ -2,6 +2,7 @@
 // GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 #include "script_context.h"
+#include "fault_guard.h"
 #include "log.h"
 #include "rttr_abi.h"
 
@@ -158,116 +159,110 @@ constexpr const char* kBogusContext = "kcdmp_wo68_not_a_context";
 using GetGameIfaceFn = const void* (*)();
 
 bool call_get_game_iface(GetGameIfaceFn fn, const void** out) {
-    __try { *out = fn(); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "script_context::call_get_game_iface");
+    return fault::guarded(site, [&] { *out = fn(); });
 }
 
 bool read_ptr(const void* base, size_t offset, void** out) {
-    __try {
-        *out = *reinterpret_cast<void* const*>(reinterpret_cast<const char*>(base) + offset);
-        return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_READ(site, "script_context::read_ptr");
+    return fault::guarded(site, [&] { *out = *reinterpret_cast<void* const*>(reinterpret_cast<const char*>(base) + offset); });
 }
 
 bool read_u64(const void* base, size_t offset, uint64_t* out) {
-    __try {
-        *out = *reinterpret_cast<const uint64_t*>(reinterpret_cast<const char*>(base) + offset);
-        return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_READ(site, "script_context::read_u64");
+    return fault::guarded(site, [&] { *out = *reinterpret_cast<const uint64_t*>(reinterpret_cast<const char*>(base) + offset); });
 }
 
 bool read_i32(const void* base, size_t offset, int32_t* out) {
-    __try {
-        *out = *reinterpret_cast<const int32_t*>(reinterpret_cast<const char*>(base) + offset);
-        return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_READ(site, "script_context::read_i32");
+    return fault::guarded(site, [&] { *out = *reinterpret_cast<const int32_t*>(reinterpret_cast<const char*>(base) + offset); });
 }
 
 bool read_vptr(const void* obj, void** out) {
-    __try { *out = *reinterpret_cast<void* const*>(obj); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_READ(site, "script_context::read_vptr");
+    return fault::guarded(site, [&] { *out = *reinterpret_cast<void* const*>(obj); });
 }
 
 bool read_vtbl_slot(const void* obj, size_t byteOffset, void** out) {
-    __try {
+    KCDMP_FAULT_READ(site, "script_context::read_vtbl_slot");
+    return fault::guarded(site, [&] {
         auto* vtbl = *reinterpret_cast<void** const*>(obj);
         *out = vtbl[byteOffset / 8];
-        return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    });
 }
 
 bool call_vtbl_ptr(void* obj, size_t byteOffset, void** out) {
-    __try {
+    KCDMP_FAULT_CALL(site, "script_context::call_vtbl_ptr");
+    return fault::guarded(site, [&] {
         auto* vtbl = *reinterpret_cast<void***>(obj);
         auto fn = reinterpret_cast<void* (*)(void*)>(vtbl[byteOffset / 8]);
         *out = fn(obj);
-        return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    });
 }
 
 bool call_vtbl_ptr_arg(void* obj, size_t byteOffset, const void* arg, void** out) {
-    __try {
+    KCDMP_FAULT_CALL(site, "script_context::call_vtbl_ptr_arg");
+    return fault::guarded(site, [&] {
         auto* vtbl = *reinterpret_cast<void***>(obj);
         auto fn = reinterpret_cast<void* (*)(void*, const void*)>(vtbl[byteOffset / 8]);
         *out = fn(obj, arg);
-        return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    });
 }
 
 // bool C_ScriptContextManager::HasEntityContext(WUID, const node*) -- slot [7].
 bool call_has_entity_context(void* mgr, uint64_t wuid, const void* node, bool* out) {
-    __try {
+    KCDMP_FAULT_CALL(site, "script_context::call_has_entity_context");
+    return fault::guarded(site, [&] {
         auto* vtbl = *reinterpret_cast<void***>(mgr);
         auto fn = reinterpret_cast<bool (*)(void*, uint64_t, const void*)>(
             vtbl[kVtblHasEntityContext / 8]);
         *out = fn(mgr, wuid, node);
-        return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    });
 }
 
 // void C_ScriptContextManager::SetEntityContext(bool, WUID, const node*) -- slot [2].
 // Argument order and register assignment come from the shipped test's own call
 // (WHGame 0x71C90): RCX=this, DL=value, R8=wuid, R9=node.
 bool call_set_entity_context(void* mgr, bool value, uint64_t wuid, const void* node) {
-    __try {
+    KCDMP_FAULT_CALL(site, "script_context::call_set_entity_context");
+    return fault::guarded(site, [&] {
         auto* vtbl = *reinterpret_cast<void***>(mgr);
         auto fn = reinterpret_cast<void (*)(void*, bool, uint64_t, const void*)>(
             vtbl[kVtblSetEntityContext / 8]);
         fn(mgr, value, wuid, node);
-        return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    });
 }
 
 bool call_has_relation_context(void* mgr, uint64_t from, uint64_t to, const void* node, bool* out) {
-    __try {
+    KCDMP_FAULT_CALL(site, "script_context::call_has_relation_context");
+    return fault::guarded(site, [&] {
         auto* vtbl = *reinterpret_cast<void***>(mgr);
         auto fn = reinterpret_cast<bool (*)(void*, uint64_t, uint64_t, const void*)>(vtbl[kVtblHasRelationContext / 8]);
         *out = fn(mgr, from, to, node);
-        return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    });
 }
 
 bool call_set_relation_context(void* mgr, bool value, uint64_t from, uint64_t to, const void* node) {
-    __try {
+    KCDMP_FAULT_CALL(site, "script_context::call_set_relation_context");
+    return fault::guarded(site, [&] {
         auto* vtbl = *reinterpret_cast<void***>(mgr);
         auto fn = reinterpret_cast<void (*)(void*, bool, uint64_t, uint64_t, const void*)>(vtbl[kVtblSetRelationContext / 8]);
         fn(mgr, value, from, to, node);
-        return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    });
 }
 
 bool prologue_matches(const void* fn, const uint8_t* expect, size_t n) {
-    __try { return std::memcmp(fn, expect, n) == 0; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_READ(site, "script_context::prologue_matches");
+    return fault::guarded_or<bool>(site, false, [&]() -> bool { return std::memcmp(fn, expect, n) == 0; });
 }
 
 bool copy_cstr_guarded(const char* s, char* out, size_t n) {
-    __try {
+    KCDMP_FAULT_READ(site, "script_context::copy_cstr_guarded");
+    return fault::guarded(site, [&] {
         size_t i = 0;
         for (; i + 1 < n && s[i]; ++i) out[i] = s[i];
         out[i] = 0;
-        return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    });
 }
 
 // module+0xRVA description, matching combat_construct.cpp / rttr_abi.cpp.

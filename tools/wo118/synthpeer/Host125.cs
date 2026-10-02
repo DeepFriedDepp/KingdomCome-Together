@@ -155,6 +155,7 @@ static class Host125
         string name = Arg(a, "--name", "synth-host");
         string ctl = Arg(a, "--ctl", "");
         double duration = double.Parse(Arg(a, "--duration", "3600"), CultureInfo.InvariantCulture);
+        bool hostRiding = false;   // WO-151: ride <horse>|off -- the riding flag on every host position packet
         var hp = Arg(a, "--host-pos", "0,0,0").Split(',').Select(v => float.Parse(v, CultureInfo.InvariantCulture)).ToArray();
         byte leashSeq = 0;
         // WO-134: the scripted host world
@@ -166,7 +167,8 @@ static class Host125
         BodyState2? hostSt2 = null;
         var npcVel = new System.Collections.Concurrent.ConcurrentDictionary<string, (float Vx, float Vy, float Vz)>(StringComparer.Ordinal);   // WO-136: npcmove
         var npcCombatOn = new System.Collections.Concurrent.ConcurrentDictionary<string, NpcCombatEvent>(StringComparer.Ordinal);            // WO-136: npccombat
-        var actOut = new ActionOutbox();                                                                                                      // WO-136: NpcAttack / NpcCombat                                                                                    // WO-135: hstate crouch=1 -- the host avatar's state block                                                                                      // WO-135: announced to every joiner every 10 s
+        var actOut = new ActionOutbox();
+        var doorInbox = new ActionInbox();   // WO-151 3.9: a joiner's DoorAsk, logged                                                                                                      // WO-136: NpcAttack / NpcCombat                                                                                    // WO-135: hstate crouch=1 -- the host avatar's state block                                                                                      // WO-135: announced to every joiner every 10 s
         var ledger = new Wo134Rules.Ledger();
         uint qseq = 0;                                                                                                                         // WO-137: this host's change numbers
         bool qauto = true;                                                                                                                     // WO-137: quest auto on|off
@@ -242,7 +244,7 @@ static class Host125
             {
                 while (!hard.IsCancellationRequested)
                 {
-                    await W(PositionCodec.BuildPosition(hp[0], hp[1], hp[2], 0, false, false, hostSt2, hostClaim: true));   // WO-127: the synthetic host claims the session like a real one (WO-135: + its state block)
+                    await W(PositionCodec.BuildPosition(hp[0], hp[1], hp[2], 0, hostRiding, false, hostSt2, hostClaim: true));   // WO-127: the synthetic host claims the session like a real one (WO-135: + its state block)
                     if (n++ % 5 == 0) await Announce();
                     if (carryBody is not null && carryHeld && n % 2 == 0)   // WO-148: still carrying (every 2 s)
                         for (byte g = 1; g < 8; g++)
@@ -317,7 +319,7 @@ static class Host125
                                     {
                                         hp = [hp[0] + wvx * 0.1f, hp[1] + wvy * 0.1f, hp[2] + wvz * 0.1f];
                                         float yawW = (float)Math.Atan2(-wvx, wvy);
-                                        await W(PositionCodec.BuildPosition(hp[0], hp[1], hp[2], yawW, false, false, hostSt2, hostClaim: true));
+                                        await W(PositionCodec.BuildPosition(hp[0], hp[1], hp[2], yawW, hostRiding, false, hostSt2, hostClaim: true));
                                         try { await Task.Delay(100, hard.Token); } catch { break; }
                                     }
                                     Say(FormattableString.Invariant($"WALK done at ({hp[0]:F1}, {hp[1]:F1}, {hp[2]:F1})"));
@@ -351,7 +353,7 @@ static class Host125
                             }
                             case "pos":   // WO-114
                                 hp = [float.Parse(p[1], CultureInfo.InvariantCulture), float.Parse(p[2], CultureInfo.InvariantCulture), float.Parse(p[3], CultureInfo.InvariantCulture)];
-                                await W(PositionCodec.BuildPosition(hp[0], hp[1], hp[2], 0, false, false, null, hostClaim: true));
+                                await W(PositionCodec.BuildPosition(hp[0], hp[1], hp[2], 0, hostRiding, false, null, hostClaim: true));
                                 Say(FormattableString.Invariant($"POS the host is now at ({hp[0]:F1}, {hp[1]:F1}, {hp[2]:F1})"));
                                 break;
                             case "leash":   // WO-114
@@ -503,7 +505,7 @@ static class Host125
                                     bits = q[1] == "1" ? bits | b : bits & ~b;
                                 }
                                 hostSt2 = new BodyState2(0, 0, bits, WireZone.Undefined, WireGuardStance.None, WireZone.Undefined, 0, 0, 0);
-                                await W(PositionCodec.BuildPosition(hp[0], hp[1], hp[2], 0, false, false, hostSt2, hostClaim: true));
+                                await W(PositionCodec.BuildPosition(hp[0], hp[1], hp[2], 0, hostRiding, false, hostSt2, hostClaim: true));
                                 Say($"HSTATE bits={bits}");
                                 break;
                             }
@@ -531,6 +533,52 @@ static class Host125
                                 await W(actOut.Build(ActionKind.NpcAttack, ActionPhase.Commit, new RowEvent((uint)Clock.ElapsedMilliseconds, 0, Guid.Parse(p[2]), p[1]).ToBytes()));
                                 Say($"NPCROW {p[1]} row={p[2]}");
                                 break;
+                            case "npcreact":   // WO-151: npcreact <name> <rowGuid> -- the host NPC's hit reaction (NpcHit)
+                                await W(actOut.Build(ActionKind.NpcHit, ActionPhase.Commit, new RowEvent((uint)Clock.ElapsedMilliseconds, 0, Guid.Parse(p[2]), p[1]).ToBytes()));
+                                Say($"NPCREACT {p[1]} row={p[2]}");
+                                break;
+                            case "weather":   // WO-151 3.7: weather <profile> [blendSec] -- the host's weather (WeatherUp 0x2E)
+                            {
+                                var wn = Encoding.UTF8.GetBytes(p[1]);
+                                ushort wb = p.Length > 2 ? ushort.Parse(p[2], CultureInfo.InvariantCulture) : (ushort)30;
+                                var wp = new byte[3 + 1 + wn.Length + 2]; wp[0] = Protocol.WeatherUp;
+                                BinaryPrimitives.WriteUInt16LittleEndian(wp.AsSpan(1), (ushort)(1 + wn.Length + 2));
+                                wp[3] = (byte)wn.Length; wn.CopyTo(wp, 4);
+                                BinaryPrimitives.WriteUInt16LittleEndian(wp.AsSpan(4 + wn.Length), wb);
+                                await W(wp);
+                                Say($"WEATHER {p[1]} blend={wb}s");
+                                break;
+                            }
+                            case "emote":   // WO-151 3.5: emote whistle -- the host whistles (Emote [ms][1])
+                            {
+                                var eb = new byte[EmoteId.PayloadLen];
+                                BinaryPrimitives.WriteUInt32LittleEndian(eb, (uint)Clock.ElapsedMilliseconds);
+                                eb[4] = EmoteId.Whistle;
+                                await W(actOut.Build(ActionKind.Emote, ActionPhase.Commit, eb));
+                                Say("EMOTE whistle");
+                                break;
+                            }
+                            case "door":   // WO-151 3.9: door <name> <dir -1|1> <locked 0|1> <x> <y> <z> -- a door of the host's world (DoorState)
+                            {
+                                var dev = new DoorEvent((uint)Clock.ElapsedMilliseconds, sbyte.Parse(p[2], CultureInfo.InvariantCulture), p[3] == "1" ? DoorEvent.FlagLocked : (byte)0,
+                                    float.Parse(p[4], CultureInfo.InvariantCulture), float.Parse(p[5], CultureInfo.InvariantCulture), float.Parse(p[6], CultureInfo.InvariantCulture), p[1]);
+                                await W(actOut.Build(ActionKind.DoorState, ActionPhase.Commit, dev.ToBytes()));
+                                Say($"DOOR {dev}");
+                                break;
+                            }
+                            case "ride":   // WO-151: ride <horse>|off -- the host rides (HorseInfo + the riding flag)
+                            {
+                                string hn = p.Length > 1 && p[1] != "off" ? p[1] : "-";
+                                hostRiding = hn != "-";
+                                var hnb = Encoding.UTF8.GetBytes(hn);
+                                var hip = new byte[3 + 1 + hnb.Length]; hip[0] = Protocol.HorseInfoUp;
+                                BinaryPrimitives.WriteUInt16LittleEndian(hip.AsSpan(1), (ushort)(1 + hnb.Length));
+                                hip[3] = (byte)hnb.Length; hnb.CopyTo(hip, 4);
+                                await W(hip);
+                                await W(PositionCodec.BuildPosition(hp[0], hp[1], hp[2], 0, hostRiding, false, hostSt2, hostClaim: true));
+                                Say($"RIDE {(hostRiding ? hn : "off")} (HorseInfo + the riding flag)");
+                                break;
+                            }
                             case "npccombat":   // WO-136: npccombat <name> on|off [host|avatar:N|none] [gz]
                             {
                                 bool on = p[2] == "on";
@@ -877,6 +925,11 @@ static class Host125
                     int dof = 2 + p[1];
                     Say(FormattableString.Invariant(
                         $"GOT NpcDamage from={p[0]} npc={dn} hp={BinaryPrimitives.ReadSingleLittleEndian(p.AsSpan(dof + 4)):F2} st={BinaryPrimitives.ReadSingleLittleEndian(p.AsSpan(dof)):F2} flags=0x{p[dof + 8]:X2}"));
+                    continue;
+                }
+                if (type == Protocol.ActionDown && doorInbox.Accept(p, out _) is { } act && act.Kind == ActionKind.DoorAsk)   // WO-151 3.9: logged (a real host applies it)
+                {
+                    Say(DoorEvent.TryFromBytes(act.Payload, out var dq) ? $"GOT DoorAsk from ghost {act.SourceGhostId}: {dq}" : $"GOT DoorAsk malformed len={act.Payload.Length}");
                     continue;
                 }
                 if (!Protocol.IsJoinDown(type, p.Length) || Split(p) is not var (src, jid, body)) continue;

@@ -196,7 +196,10 @@ do
     for i = 1, 5 do alive(); tick("c2_npc", 26.7 + i * 0.07, 25, 1) end
     check("c2: the late ack still hands it to the DLL", KCD2MP.npcPuppets.c2_npc.nativeOwned == true and #e.writes == w, #e.writes - w)
 
+    -- WO-151 1.1: with mp_copy_fight on, a not-living refusal (a ragdolled copy) is left lying 2.5 s
+    -- before Lua places it (Test-WO151Synthetic.lua); this is the switch-off path, the WO-118 rule.
     reset(); NOW = 280
+    if KCD2MP.w151 then KCD2MP.w151.copyFight = false end
     local r = mkEntity("c3_npc", 28, 28, 1)
     alive()
     for i = 1, 4 do alive(); tick("c3_npc", 28 + i * 0.07, 28, 1) end
@@ -210,6 +213,19 @@ do
     check("c3: the retry is offered", nb == 2, nb)
     check("c3: and Lua kept writing through it (no hold on a body Lua already writes)", #r.writes >= 205, #r.writes)
     check("c3: no Lua errors", #ERRS == 0, ERRS[1])
+    if KCD2MP.w151 then KCD2MP.w151.copyFight = true end
+
+    -- the same with mp_copy_fight on and a refusal that says nothing about the body
+    reset(); NOW = 310
+    local r2 = mkEntity("c3b_npc", 31, 31, 1)
+    alive()
+    for i = 1, 4 do alive(); tick("c3b_npc", 31 + i * 0.07, 31, 1) end
+    KCD2MP_NpcNativeAck("c3b_npc", 0, "table-full")
+    alive(); tick("c3b_npc", 31.4, 31, 1)
+    check("c3b: copy_fight on, a table-full refusal -> Lua writes at once", #r2.writes == 1, #r2.writes)
+    for i = 1, 205 do alive(); tick("c3b_npc", 31.4 + (i % 20) * 0.07, 31, 1) end
+    check("c3b: and kept writing through the retry", #r2.writes >= 205, #r2.writes)
+    check("c3b: no Lua errors", #ERRS == 0, ERRS[1])
 end
 
 -- ---------------------------------------------------------------- (o)

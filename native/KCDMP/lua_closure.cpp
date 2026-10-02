@@ -2,6 +2,7 @@
 // GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 #include "lua_closure.h"
+#include "fault_guard.h"
 #include "log.h"
 
 #include <windows.h>
@@ -18,12 +19,8 @@ namespace {
 // resolve(), which itself contains no __try.
 
 bool read_u64_raw(uint64_t addr, uint64_t* out) {
-    __try {
-        *out = *reinterpret_cast<const uint64_t*>(static_cast<uintptr_t>(addr));
-        return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return false;
-    }
+    KCDMP_FAULT_READ(site, "lua_closure::read_u64_raw");
+    return fault::guarded(site, [&] { *out = *reinterpret_cast<const uint64_t*>(static_cast<uintptr_t>(addr)); });
 }
 
 // Bounded, SEH-guarded C-string read into a fixed buffer. Stops at bufLen-1
@@ -31,7 +28,8 @@ bool read_u64_raw(uint64_t addr, uint64_t* out) {
 // should read as "not resolved", not produce a plausible-looking garbage
 // string. Returns false (and leaves out untouched) on any failure.
 bool read_cstring_raw(uint64_t addr, char* out, size_t bufLen) {
-    __try {
+    KCDMP_FAULT_READ(site, "lua_closure::read_cstring_raw");
+    return fault::guarded_or<bool>(site, false, [&]() -> bool {
         const char* p = reinterpret_cast<const char*>(static_cast<uintptr_t>(addr));
         for (size_t i = 0; i + 1 < bufLen; ++i) {
             char c = p[i];
@@ -44,19 +42,15 @@ bool read_cstring_raw(uint64_t addr, char* out, size_t bufLen) {
             out[i] = c;
         }
         return false; // never terminated within bound
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return false;
-    }
+    });
 }
 
 bool read_bytes_raw(uint64_t addr, unsigned char* out, size_t n) {
-    __try {
+    KCDMP_FAULT_READ(site, "lua_closure::read_bytes_raw");
+    return fault::guarded(site, [&] {
         const auto* bytes = reinterpret_cast<const unsigned char*>(static_cast<uintptr_t>(addr));
         for (size_t i = 0; i < n; ++i) out[i] = bytes[i];
-        return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return false;
-    }
+    });
 }
 
 struct RawResult {

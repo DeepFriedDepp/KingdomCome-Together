@@ -2,6 +2,7 @@
 // GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 #include "punishment.h"
+#include "fault_guard.h"
 #include "anchors.h"
 #include "pe_exports.h"
 #include "rttr_abi.h"
@@ -66,29 +67,29 @@ bool g_resolved = false;
 
 // --- SEH-isolated primitives (no destructible locals in a __try frame) -------
 bool rd(const void* base, size_t off, void** out) {
-    __try { *out = *reinterpret_cast<void* const*>(static_cast<const char*>(base) + off); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_READ(site, "punishment::rd");
+    return fault::guarded(site, [&] { *out = *reinterpret_cast<void* const*>(static_cast<const char*>(base) + off); });
 }
 bool call_gi(GetGameIfaceFn fn, const void** out) {
-    __try { *out = fn(); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "punishment::call_gi");
+    return fault::guarded(site, [&] { *out = fn(); });
 }
 bool call_lookup(FindNodeFn fn, void* self, const void* str, void** out) {
     void* sp = nullptr;
-    __try { fn(self, &sp, str); *out = sp; return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "punishment::call_lookup");
+    return fault::guarded(site, [&] { fn(self, &sp, str); *out = sp; });
 }
 bool call_dir(GetDirFn fn, const void* port, int* out) {
-    __try { *out = fn(port); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "punishment::call_dir");
+    return fault::guarded(site, [&] { *out = fn(port); });
 }
 bool call_trigger(TriggerFn fn, void* port) {
-    __try { fn(port); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "punishment::call_trigger");
+    return fault::guarded(site, [&] { fn(port); });
 }
 bool call_read(ReadFn fn, void* port, rttr::Variant* v) {
-    __try { fn(port, v); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "punishment::call_read");
+    return fault::guarded(site, [&] { fn(port, v); });
 }
 
 // A CryStringT<char> the engine reads but can never free: header

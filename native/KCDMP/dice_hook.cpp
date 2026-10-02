@@ -46,6 +46,7 @@
 // injection thread, before any dice interaction has been triggered.
 
 #include "dice_hook.h"
+#include "fault_guard.h"
 #include "log.h"
 
 #include <windows.h>
@@ -147,9 +148,8 @@ void sample_instance_if_changed() {
     if (!inst) return;
 
     unsigned char buf[kWindowBytes];
-    __try {
-        std::memcpy(buf, inst, kWindowBytes);
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    KCDMP_FAULT_READ(site, "dice::sample_instance_if_changed");
+    if (!fault::guarded(site, [&] { std::memcpy(buf, inst, kWindowBytes); })) {
         logf("DICE: SEH fault reading instance memory at %p -- sampler disabled", inst);
         g_disabled = true;
         return;

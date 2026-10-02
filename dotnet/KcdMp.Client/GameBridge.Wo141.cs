@@ -180,7 +180,7 @@ public partial class GameBridge
                 if (kind == Protocol.ActivityKindNpc)
                 {
                     _w141HostRows[r.Name] = r.A;
-                    if (_w141Blocked.ContainsKey(r.Name)) continue;
+                    if (_w141Blocked.ContainsKey(r.Name) || W151InFight(r.Name)) continue;   // WO-151 1.1: not before the block tick either
                     await Wo141ApplyAsync(r.Name, r.A, "host");
                 }
                 else if (r.Peer != _myGhostId)
@@ -239,7 +239,8 @@ public partial class GameBridge
         if (!W141Joiner) return;
         foreach (var (name, a) in _w141HostRows)
         {
-            string? why = Wo141Rules.BlockReason(_w132Engaged.ContainsKey(name), Wo136HostNpcDown(name), _w141Talking.ContainsKey(name));
+            // WO-151 1.1: a fight is also WO-147's engagement, the host NPC's own combat, and the 10 s after either
+            string? why = Wo141Rules.BlockReason(_w132Engaged.ContainsKey(name) || W151InFight(name), Wo136HostNpcDown(name), _w141Talking.ContainsKey(name));
             bool was = _w141Blocked.ContainsKey(name);
             if (why is not null && !was)
             {

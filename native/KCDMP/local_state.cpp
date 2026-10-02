@@ -2,6 +2,7 @@
 // GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 #include "local_state.h"
+#include "fault_guard.h"
 #include "main_thread.h"
 #include "pe_exports.h"
 #include "log.h"
@@ -33,16 +34,16 @@ using PtrFn = void* (*)(const void*);
 
 // --- SEH-isolated primitives (no destructible locals; MSVC C2712) -----------
 bool call_ptr_fn(PtrFn fn, const void* arg, void** out) {
-    __try { *out = fn(arg); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "local_state::call_ptr_fn");
+    return fault::guarded(site, [&] { *out = fn(arg); });
 }
 bool read_ptr(const void* base, size_t off, void** out) {
-    __try { *out = *reinterpret_cast<void* const*>(static_cast<const char*>(base) + off); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_READ(site, "local_state::read_ptr");
+    return fault::guarded(site, [&] { *out = *reinterpret_cast<void* const*>(static_cast<const char*>(base) + off); });
 }
 bool read_f32(const void* base, size_t off, float* out) {
-    __try { *out = *reinterpret_cast<const float*>(static_cast<const char*>(base) + off); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_READ(site, "local_state::read_f32");
+    return fault::guarded(site, [&] { *out = *reinterpret_cast<const float*>(static_cast<const char*>(base) + off); });
 }
 
 void* resolve_player_actor(uint8_t* refuse) {
@@ -68,10 +69,18 @@ size_t g_hopOffset = 0;
 bool   g_announced = false;
 uint8_t g_lastRefuse = 0xFF;
 
+// A user-mode heap pointer: canonical, above the null page, 8-aligned. WO-151: one of the
+// candidate slots holds a non-pointer (0xffffffff00007777 live) and the vptr read through it
+// faulted at every scan -- silent before the guard logged it. Such a slot is skipped unread.
+bool plausible(const void* p) {
+    const auto v = reinterpret_cast<uintptr_t>(p);
+    return v > 0x10000 && v < 0x00007FFFFFFFFFFFull && (v & 7) == 0;
+}
+
 void* resolve_entity(void* actor, const void* cEntityVftable, uint8_t* refuse) {
     auto try_slot = [&](size_t off) -> void* {
         void* ent = nullptr; void* vptr = nullptr;
-        if (!read_ptr(actor, off, &ent) || !ent) return nullptr;
+        if (!read_ptr(actor, off, &ent) || !plausible(ent)) return nullptr;
         if (!read_ptr(ent, 0, &vptr)) return nullptr;
         return vptr == cEntityVftable ? ent : nullptr;
     };

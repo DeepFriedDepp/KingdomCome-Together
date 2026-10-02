@@ -3,6 +3,7 @@
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 // WO-138: no pausing, and the host's NPC stream in the DLL. See wo138.h.
 #include "wo138.h"
+#include "fault_guard.h"
 #include "wo138_rules.h"
 
 #ifndef NOMINMAX
@@ -97,7 +98,8 @@ void* scan_cryaction() {
     anchor::Range rdata{}, data{}, text{};
     if (!ca || !g_pauseFn || !anchor::section(ca, ".rdata", &rdata) || !anchor::section(ca, ".data", &data) ||
         !anchor::section(ca, ".text", &text)) return nullptr;
-    __try {
+    KCDMP_FAULT_READ(site, "wo138::scan_cryaction");
+    return fault::guarded_or<void*>(site, nullptr, [&]() -> void* {
         const uint64_t want = reinterpret_cast<uint64_t>(g_pauseFn);
         for (const uint8_t* q = rdata.begin; q + 8 <= rdata.end; q += 8) {
             if (*reinterpret_cast<const uint64_t*>(q) != want) continue;
@@ -115,15 +117,15 @@ void* scan_cryaction() {
                 }
             }
         }
-    } __except (EXCEPTION_EXECUTE_HANDLER) {}
-    return nullptr;
+        return nullptr;
+    });
 }
 
 using PauseFn = void (*)(void* self, bool pause, uint16_t source, bool force, uint32_t fadeMs);
 bool call_pause(void* self, bool pause, uint16_t source, bool force) {
     if (!g_pauseFn || !self) return false;
-    __try { reinterpret_cast<PauseFn>(const_cast<uint8_t*>(g_pauseFn))(self, pause, source, force, 0); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "wo138::call_pause");
+    return fault::guarded(site, [&] { reinterpret_cast<PauseFn>(const_cast<uint8_t*>(g_pauseFn))(self, pause, source, force, 0); });
 }
 
 bool __fastcall pause_gate(void* self, void* a2, void* a3, void* a4) {
@@ -148,16 +150,17 @@ bool __fastcall pause_gate(void* self, void* a2, void* a3, void* a4) {
 uint16_t held_mask() {
     void* ca = g_cryAction.load(std::memory_order_relaxed);
     if (!ca) return 0xFFFF;
-    uint16_t m = 0;
-    __try {
+    KCDMP_FAULT_READ(site, "wo138::held_mask");
+    return fault::guarded_or<uint16_t>(site, 0xFFFF, [&]() -> uint16_t {
+        uint16_t m = 0;
         const int32_t* c = reinterpret_cast<const int32_t*>(static_cast<const char*>(ca) + kCountersOff);
         for (uint16_t s = 0; s < R::kSrcCount; ++s) {
             const int32_t v = c[s];
             if (v < 0 || v > 1000) return 0xFFFF;   // not the counters we think they are
             if (v) m = static_cast<uint16_t>(m | (1u << s));
         }
-    } __except (EXCEPTION_EXECUTE_HANDLER) { return 0xFFFF; }
-    return m;
+        return m;
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -275,25 +278,25 @@ std::string lower_of(const std::string& s) {
 bool name_is(void* e, const std::string& lower) {
     const char* n = e ? engine::entity_name(e) : nullptr;
     if (!n) return false;
-    __try {
+    KCDMP_FAULT_READ(site, "wo138::name_is");
+    return fault::guarded_or<bool>(site, false, [&]() -> bool {
         size_t i = 0;
         for (; i < lower.size(); ++i) {
             const char c = n[i];
             if (!c || static_cast<char>(std::tolower(static_cast<unsigned char>(c))) != lower[i]) return false;
         }
         return n[i] == 0;
-    } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    });
 }
 
 struct WalkCtx { std::unordered_map<std::string, uint32_t>* want; int found; };
-// Separate from walk_visit: __try cannot share a frame with the std::string
-// the lookup below builds (C2712).
 bool lower_name(void* e, char* buf, size_t cap) {
     const char* n = engine::entity_name(e);
     if (!n) return false;
     size_t i = 0;
-    __try { for (; i + 1 < cap && n[i]; ++i) buf[i] = static_cast<char>(std::tolower(static_cast<unsigned char>(n[i]))); }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_READ(site, "wo138::lower_name");
+    if (!fault::guarded(site, [&] { for (; i + 1 < cap && n[i]; ++i) buf[i] = static_cast<char>(std::tolower(static_cast<unsigned char>(n[i]))); }))
+        return false;
     buf[i] = 0;
     return i > 0;
 }
@@ -552,8 +555,40 @@ void install() {
 
 bool gate_armed() { return g_gateArmed.load(); }
 
+// ---- WO-151 3.8: the join hold -------------------------------------------------------------------
+namespace {
+constexpr uint16_t kJoinHoldSource = 2;   // ScriptBind (Lua's Game.PauseGame is not registered on 1.5.5)
+std::atomic<bool> g_joinHeld{false};
+double g_joinSince = 0, g_joinDeadline = 0;
+}
+
+bool join_hold(bool on, double maxS) {
+    void* ca = g_cryAction.load();
+    if (!ca && (ca = scan_cryaction()) != nullptr) g_cryAction = ca;
+    if (!g_gateArmed || !ca) { logf("WO151-JOINHOLD %s refused: %s", on ? "on" : "off", !g_gateArmed ? "the PauseGame gate is not armed" : "no CCryAction instance yet"); return false; }
+    const double now = now_s();
+    if (on) {
+        if (g_joinHeld.load()) { g_joinDeadline = now + (maxS > 0 ? maxS : 240.0); return true; }   // extended, not stacked
+        if (!call_pause(ca, true, kJoinHoldSource, false)) { logf("WO151-JOINHOLD on FAILED (PauseGame faulted)"); return false; }
+        g_joinHeld = true; g_joinSince = now; g_joinDeadline = now + (maxS > 0 ? maxS : 240.0);
+        logf("WO151-JOINHOLD on: the host's world is held for the join (PauseGame source %u, at most %.0f s; held=0x%X)", kJoinHoldSource,
+             g_joinDeadline - now, held_mask());
+        return true;
+    }
+    if (!g_joinHeld.exchange(false)) return true;
+    const bool ok = call_pause(ca, false, kJoinHoldSource, false);
+    logf("WO151-JOINHOLD off after %.1f s%s (held=0x%X)", now - g_joinSince, ok ? "" : " -- PauseGame FAULTED", held_mask());
+    return ok;
+}
+
+bool join_held() { return g_joinHeld.load(); }
+
 void tick() {
     const double now = now_s();
+    if (g_joinHeld.load() && now > g_joinDeadline) {   // WO-151: the DLL's own deadline -- never a stuck world
+        logf("WO151-JOINHOLD the deadline passed -- released by the DLL");
+        join_hold(false, 0);
+    }
     meter(now, main_thread::last_dt());
     sender_tick(now);
     if (g_on && now - g_lastStatusLog >= 10.0) {
@@ -565,6 +600,7 @@ void tick() {
 }
 
 void on_pipe_closed() {
+    if (g_joinHeld.load()) main_thread::post([] { logf("WO151-JOINHOLD the agent went away -- released"); join_hold(false, 0); });
     if (g_on.exchange(false)) logf("WO138-SEND off (the agent went away)");
     if (g_leversOn.exchange(false)) logf("WO138-LEVERS off (the agent went away): menus pause again");
     npcdrive::set_hold_all(false);

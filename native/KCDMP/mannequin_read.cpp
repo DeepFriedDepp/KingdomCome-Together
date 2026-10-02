@@ -82,6 +82,7 @@
 // the known-answer check is whether it tracks what is on screen.
 
 #include "mannequin_read.h"
+#include "fault_guard.h"
 #include "pe_exports.h"
 #include "log.h"
 
@@ -161,58 +162,60 @@ using ResolveByIdFn = void* (*)(void* scriptBindHuman, uint32_t entityId);
 // --- SEH-isolated primitives (no destructible locals; MSVC C2712) -----------
 
 bool call_ptr_fn(PtrFn fn, const void* arg, void** out) {
-    __try { *out = fn(arg); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "mannequin_read::call_ptr_fn");
+    return fault::guarded(site, [&] { *out = fn(arg); });
 }
 
 bool call_resolve_by_id(ResolveByIdFn fn, void* bind, uint32_t id, void** out) {
-    __try { *out = fn(bind, id); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "mannequin_read::call_resolve_by_id");
+    return fault::guarded(site, [&] { *out = fn(bind, id); });
 }
 
 bool call_vtbl_ptr(void* obj, size_t vtblByteOffset, void** out) {
-    __try {
+    KCDMP_FAULT_CALL(site, "mannequin_read::call_vtbl_ptr");
+    return fault::guarded(site, [&] {
         auto* vtbl = *reinterpret_cast<void***>(obj);
         auto fn = reinterpret_cast<void* (*)(void*)>(vtbl[vtblByteOffset / 8]);
         *out = fn(obj);
-        return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    });
 }
 
 bool read_ptr(const void* base, size_t off, void** out) {
-    __try { *out = *reinterpret_cast<void* const*>(static_cast<const char*>(base) + off); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_READ(site, "mannequin_read::read_ptr");
+    return fault::guarded(site, [&] { *out = *reinterpret_cast<void* const*>(static_cast<const char*>(base) + off); });
 }
 
 bool read_i32(const void* base, ptrdiff_t off, int32_t* out) {
-    __try { *out = *reinterpret_cast<const int32_t*>(static_cast<const char*>(base) + off); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_READ(site, "mannequin_read::read_i32");
+    return fault::guarded(site, [&] { *out = *reinterpret_cast<const int32_t*>(static_cast<const char*>(base) + off); });
 }
 
 bool read_f32(const void* base, size_t off, float* out) {
-    __try { *out = *reinterpret_cast<const float*>(static_cast<const char*>(base) + off); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_READ(site, "mannequin_read::read_f32");
+    return fault::guarded(site, [&] { *out = *reinterpret_cast<const float*>(static_cast<const char*>(base) + off); });
 }
 
 bool read_u8(const void* base, size_t off, uint8_t* out) {
-    __try { *out = *reinterpret_cast<const uint8_t*>(static_cast<const char*>(base) + off); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_READ(site, "mannequin_read::read_u8");
+    return fault::guarded(site, [&] { *out = *reinterpret_cast<const uint8_t*>(static_cast<const char*>(base) + off); });
 }
 
 bool copy_bytes(const void* src, void* dst, size_t n) {
-    __try { std::memcpy(dst, src, n); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_READ(site, "mannequin_read::copy_bytes");
+    return fault::guarded(site, [&] { std::memcpy(dst, src, n); });
 }
 
 // Copy a C string out of engine memory with a hard bound, so a bad pointer
 // cannot walk off the end of a page in the log formatter.
 bool copy_cstr(const char* src, char* dst, size_t n) {
-    __try {
+    KCDMP_FAULT_READ(site, "mannequin_read::copy_cstr");
+    if (fault::guarded(site, [&] {
         size_t i = 0;
         for (; i + 1 < n && src[i]; ++i) dst[i] = src[i];
         dst[i] = 0;
-        return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) { dst[0] = 0; return false; }
+    })) return true;
+    dst[0] = 0;
+    return false;
 }
 
 // ---- config ---------------------------------------------------------------

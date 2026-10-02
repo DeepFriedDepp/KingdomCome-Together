@@ -3,6 +3,7 @@
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 // WO-121 Phases 5 and 6 -- see hits.h.
 #include "hits.h"
+#include "fault_guard.h"
 
 #include <windows.h>
 #include <atomic>
@@ -37,8 +38,8 @@ constexpr size_t kSoulCombat  = 0x108;   // C_CombatSoul from the actor's soul (
 constexpr double kEngagementS = 30.0;    // one skirmish add per (victim, avatar) per this
 
 template <class T> bool rd(const void* base, size_t off, T* out) {
-    __try { *out = *reinterpret_cast<const T*>(static_cast<const char*>(base) + off); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_READ(site, "hits::rd");
+    return fault::guarded(site, [&] { *out = *reinterpret_cast<const T*>(static_cast<const char*>(base) + off); });
 }
 void* vslot(void* obj, size_t off) {
     void* vt = nullptr; void* fn = nullptr;
@@ -46,36 +47,36 @@ void* vslot(void* obj, size_t off) {
     return fn;
 }
 bool call_p0(void* fn, void* self, void** out) {
-    __try { *out = reinterpret_cast<void* (__fastcall*)(void*)>(fn)(self); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "hits::call_p0");
+    return fault::guarded(site, [&] { *out = reinterpret_cast<void* (__fastcall*)(void*)>(fn)(self); });
 }
 bool call_p1u(void* fn, void* self, uint32_t a, void** out) {
-    __try { *out = reinterpret_cast<void* (__fastcall*)(void*, uint32_t)>(fn)(self, a); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "hits::call_p1u");
+    return fault::guarded(site, [&] { *out = reinterpret_cast<void* (__fastcall*)(void*, uint32_t)>(fn)(self, a); });
 }
 bool call_history(void* fn, void* victimCs, void* data) {
-    __try { reinterpret_cast<void (__fastcall*)(void*, void*)>(fn)(victimCs, data); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "hits::call_history");
+    return fault::guarded(site, [&] { reinterpret_cast<void (__fastcall*)(void*, void*)>(fn)(victimCs, data); });
 }
 bool call_getter(void* fn, void** out) {
-    __try { *out = reinterpret_cast<void* (__fastcall*)(void*)>(fn)(nullptr); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "hits::call_getter");
+    return fault::guarded(site, [&] { *out = reinterpret_cast<void* (__fastcall*)(void*)>(fn)(nullptr); });
 }
 bool call_add_soul(void* fn, void* mgr, void* soul, void* ref, uint8_t ovr, uint64_t* out) {
-    __try { *out = reinterpret_cast<uint64_t (__fastcall*)(void*, void*, void*, uint8_t)>(fn)(mgr, soul, ref, ovr); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "hits::call_add_soul");
+    return fault::guarded(site, [&] { *out = reinterpret_cast<uint64_t (__fastcall*)(void*, void*, void*, uint8_t)>(fn)(mgr, soul, ref, ovr); });
 }
 // WO-132: I_SkirmishManager vtable +0x18 RemoveSoulFromSkirmish(mgr, soul) (RPGModule
 // 0x645970, its __FUNCTION__ string names it) -> C_Skirmish::RemoveSoul: one soul
 // leaves its skirmish, the fight itself goes on.
 bool call_remove_soul(void* fn, void* mgr, void* soul, uint64_t* out) {
-    __try { *out = reinterpret_cast<uint64_t (__fastcall*)(void*, void*)>(fn)(mgr, soul); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "hits::call_remove_soul");
+    return fault::guarded(site, [&] { *out = reinterpret_cast<uint64_t (__fastcall*)(void*, void*)>(fn)(mgr, soul); });
 }
 bool is_a(void* obj, void* const* vft) { void* vp = nullptr; return obj && vft && rd(obj, 0, &vp) && vp == static_cast<const void*>(vft); }
 bool bytes_eq(const void* p, const uint8_t* pat, size_t n) {
-    __try { return std::memcmp(p, pat, n) == 0; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_READ(site, "hits::bytes_eq");
+    return fault::guarded_or<bool>(site, false, [&]() -> bool { return std::memcmp(p, pat, n) == 0; });
 }
 
 // ---- anchors ---------------------------------------------------------------------
@@ -257,7 +258,8 @@ bool find_name_visit(void* e, void* ctx) {
     char buf[64]{};
     if (!n) return false;
     size_t i = 0;
-    __try { for (; i + 1 < sizeof(buf) && n[i]; ++i) buf[i] = n[i]; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_READ(site, "hits::find_name_visit");
+    if (!fault::guarded(site, [&] { for (; i + 1 < sizeof(buf) && n[i]; ++i) buf[i] = n[i]; })) return false;
     buf[i] = 0;
     if (_stricmp(buf, f->name) == 0) { f->eid = engine::entity_id(e); return true; }
     return false;
@@ -281,7 +283,8 @@ void copy_name(uint32_t eid, char* out, size_t n) {
     const char* s = e ? engine::entity_name(e) : nullptr;
     if (!s) return;
     size_t i = 0;
-    __try { for (; i + 1 < n && s[i]; ++i) out[i] = s[i]; } __except (EXCEPTION_EXECUTE_HANDLER) { i = 0; }
+    KCDMP_FAULT_READ(site, "hits::copy_name");
+    if (!fault::guarded(site, [&] { for (; i + 1 < n && s[i]; ++i) out[i] = s[i]; })) i = 0;
     out[i] = 0;
 }
 

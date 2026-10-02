@@ -2,6 +2,7 @@
 // GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 #include "leash.h"
+#include "fault_guard.h"
 #include "log.h"
 #include "main_thread.h"
 #include "npc_drive.h"
@@ -29,16 +30,16 @@ bool       g_have = false;
 bool       g_announced = false;
 
 bool rd_ptr(const void* base, size_t off, void** out) {
-    __try { *out = *reinterpret_cast<void* const*>(static_cast<const char*>(base) + off); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_READ(site, "leash::rd_ptr");
+    return fault::guarded(site, [&] { *out = *reinterpret_cast<void* const*>(static_cast<const char*>(base) + off); });
 }
 bool rd_u32(const void* base, size_t off, uint32_t* out) {
-    __try { *out = *reinterpret_cast<const uint32_t*>(static_cast<const char*>(base) + off); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_READ(site, "leash::rd_u32");
+    return fault::guarded(site, [&] { *out = *reinterpret_cast<const uint32_t*>(static_cast<const char*>(base) + off); });
 }
 bool call_visarea(void* fn, void* self, const float* pos, void** out) {
-    __try { *out = reinterpret_cast<void* (*)(void*, const float*)>(fn)(self, pos); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "leash::call_visarea");
+    return fault::guarded(site, [&] { *out = reinterpret_cast<void* (*)(void*, const float*)>(fn)(self, pos); });
 }
 
 bool in_module(const void* p, const char* moduleName) {

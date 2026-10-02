@@ -2,6 +2,7 @@
 // GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 #include "wo143.h"
+#include "fault_guard.h"
 #include "wo143_rules.h"
 #include "npcstate.h"
 #include "anchors.h"
@@ -41,37 +42,38 @@ namespace {
 // SEH-isolated helpers (no destructible locals in any __try frame).
 // ---------------------------------------------------------------------------
 bool rd(const void* base, size_t off, void** out) {
-    __try { *out = *reinterpret_cast<void* const*>(static_cast<const char*>(base) + off); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_READ(site, "wo143::rd");
+    return fault::guarded(site, [&] { *out = *reinterpret_cast<void* const*>(static_cast<const char*>(base) + off); });
 }
 bool rd64(const void* base, size_t off, uint64_t* out) {
-    __try { *out = *reinterpret_cast<const uint64_t*>(static_cast<const char*>(base) + off); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_READ(site, "wo143::rd64");
+    return fault::guarded(site, [&] { *out = *reinterpret_cast<const uint64_t*>(static_cast<const char*>(base) + off); });
 }
 bool rd32(const void* base, size_t off, uint32_t* out) {
-    __try { *out = *reinterpret_cast<const uint32_t*>(static_cast<const char*>(base) + off); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_READ(site, "wo143::rd32");
+    return fault::guarded(site, [&] { *out = *reinterpret_cast<const uint32_t*>(static_cast<const char*>(base) + off); });
 }
 bool rd8(const void* base, size_t off, uint8_t* out) {
-    __try { *out = *(static_cast<const uint8_t*>(base) + off); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_READ(site, "wo143::rd8");
+    return fault::guarded(site, [&] { *out = *(static_cast<const uint8_t*>(base) + off); });
 }
 bool wr64(void* base, size_t off, uint64_t v) {
-    __try { *reinterpret_cast<uint64_t*>(static_cast<char*>(base) + off) = v; return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_READ(site, "wo143::wr64");
+    return fault::guarded(site, [&] { *reinterpret_cast<uint64_t*>(static_cast<char*>(base) + off) = v; });
 }
 bool wr8(void* base, size_t off, uint8_t v) {
-    __try { *(static_cast<uint8_t*>(base) + off) = v; return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_READ(site, "wo143::wr8");
+    return fault::guarded(site, [&] { *(static_cast<uint8_t*>(base) + off) = v; });
 }
 bool rdstr(const char* p, char* out, size_t n) {
-    __try {
+    KCDMP_FAULT_READ(site, "wo143::rdstr");
+    if (fault::guarded(site, [&] {
         size_t i = 0;
         for (; i + 1 < n && p && p[i]; ++i) out[i] = (p[i] >= 32 && p[i] < 127) ? p[i] : '?';
         out[i] = 0;
-        return true;
-    }
-    __except (EXCEPTION_EXECUTE_HANDLER) { out[0] = 0; return false; }
+    })) return true;
+    out[0] = 0;
+    return false;
 }
 void* vslot(void* obj, size_t off) {
     void* vt = nullptr; void* fn = nullptr;
@@ -86,24 +88,24 @@ template <typename R, typename... A>
 bool vcall(void* obj, size_t off, R* out, A... a) {
     void* fn = vslot(obj, off);
     if (!fn) return false;
-    __try { *out = reinterpret_cast<R (*)(void*, A...)>(fn)(obj, a...); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "wo143::vcall");
+    return fault::guarded(site, [&] { *out = reinterpret_cast<R (*)(void*, A...)>(fn)(obj, a...); });
 }
 template <typename R, typename... A>
 bool fcall(void* fn, R* out, A... a) {
     if (!fn) return false;
-    __try { *out = reinterpret_cast<R (*)(A...)>(fn)(a...); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "wo143::fcall");
+    return fault::guarded(site, [&] { *out = reinterpret_cast<R (*)(A...)>(fn)(a...); });
 }
 template <typename... A>
 bool fcall_void(void* fn, A... a) {
     if (!fn) return false;
-    __try { reinterpret_cast<void (*)(A...)>(fn)(a...); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "wo143::fcall_void");
+    return fault::guarded(site, [&] { reinterpret_cast<void (*)(A...)>(fn)(a...); });
 }
 bool ilock_add(void* p, long d) {
-    __try { InterlockedAdd(static_cast<volatile long*>(p), d); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_READ(site, "wo143::ilock_add");
+    return fault::guarded(site, [&] { InterlockedAdd(static_cast<volatile long*>(p), d); });
 }
 bool prologue_ok(const void* fn, const uint8_t* want, size_t n) {
     for (size_t i = 0; i < n; ++i) { uint8_t b = 0; if (!rd8(fn, i, &b) || b != want[i]) return false; }

@@ -23,12 +23,14 @@
 #include "wo131.h"
 #include "wo132.h"
 #include "wo137.h"
+#include "weather.h"
 #include "wo138.h"
 #include "wo139.h"
 #include "wo140.h"
 #include "wo141.h"
 #include "wo143.h"
 #include "wo147.h"
+#include "wo151.h"
 #include "buffs.h"
 #include "log.h"
 
@@ -1312,6 +1314,25 @@ void serve(HANDLE h) {
                 LeaveCriticalSection(&g_write_lock);
                 break;
             }
+            case kWo151: {   // WO-151: the safeguards' switches, the guard's live check
+                std::vector<uint8_t> copy(body, body + len);
+                struct R { uint8_t reason = kcdmp::wo151::kRFailed; uint8_t op = 0; uint8_t buf[200]{}; size_t n = 0; };
+                R r{};
+                bool faulted = false;
+                const bool ran = run_sync_bounded<R>(
+                    [copy](R& out) {
+                        out.op = copy.empty() ? 0 : copy[0];
+                        out.reason = kcdmp::wo151::handle(copy.data(), copy.size(), out.buf, sizeof(out.buf), &out.n);
+                    }, "Wo151", r, &faulted);
+                if (!ran) { r.reason = faulted ? kReasonTaskFaulted : kcdmp::wo151::kRFailed; r.n = 0; r.op = len ? body[0] : 0; }
+                BYTE rb[4 + 200]{};
+                rb[0] = (ran && r.reason == kcdmp::wo151::kROk) ? 1 : 0; rb[1] = seq; rb[2] = r.op; rb[3] = r.reason;
+                if (r.n) std::memcpy(rb + 4, r.buf, r.n);
+                EnterCriticalSection(&g_write_lock);
+                send_frame(h, kWo151Reply, rb, static_cast<uint16_t>(4 + r.n));
+                LeaveCriticalSection(&g_write_lock);
+                break;
+            }
             case kLeashSample: {
                 kcdmp::leash::Result page{};
                 uint8_t n = len >= 5 ? body[4] : 0;
@@ -1361,6 +1382,7 @@ void serve(HANDLE h) {
     main_thread::post([] { kcdmp::wo132::on_pipe_closed(); });   // WO-132: engaged copies let go (main-thread state)
     kcdmp::wo137::on_disconnect();   // WO-137: no agent -- no quest frames, no HUD proxy
     kcdmp::wo138::on_pipe_closed();  // WO-138: no agent -- the native sender, the pause gate and the hold go off
+    kcdmp::weather::on_pipe_closed();  // WO-151: no agent -- the weather gate opens
     kcdmp::wo139::on_pipe_closed();
     kcdmp::wo140::on_pipe_closed();  // WO-140: no agent -- the sleep gate off  // WO-139: no agent -- the trespass detector off
     kcdmp::main_thread::post([] { kcdmp::wo141::on_pipe_closed(); });   // WO-141: no agent -- no capture, no apply, every hold released
@@ -1427,7 +1449,7 @@ bool start() {
     // Outbound detection runs on the game thread every frame; the sampler
     // rate-limits itself. Posting a self-requeueing task keeps it going without
     // a second timer.
-    main_thread::post_repeating([] {
+    main_thread::post_repeating("rttr::sample_health", [] {
         rttr::sample_health(&send_local_hit);
     });
 

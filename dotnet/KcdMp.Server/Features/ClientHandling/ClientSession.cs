@@ -598,6 +598,18 @@ public class ClientSession
                             _clientHandler.CountDrop(Protocol.ActionUp, "npc-combat-not-host");
                             continue;
                         }
+                        // WO-151: likewise an NPC's hit reaction (the host's NPC is the one that reacts).
+                        if (body[0] == (byte)ActionKind.NpcHit && !_clientHandler.IsDamageAuthority(this))
+                        {
+                            _clientHandler.CountDrop(Protocol.ActionUp, "npc-hit-not-host");
+                            continue;
+                        }
+                        // WO-151 3.9: a door's state is the host's world's (a joiner asks with DoorAsk instead).
+                        if (body[0] == (byte)ActionKind.DoorState && !_clientHandler.IsDamageAuthority(this))
+                        {
+                            _clientHandler.CountDrop(Protocol.ActionUp, "door-state-not-host");
+                            continue;
+                        }
                         _broadcastService.BroadcastAction(this, body);
                     }
                     continue;

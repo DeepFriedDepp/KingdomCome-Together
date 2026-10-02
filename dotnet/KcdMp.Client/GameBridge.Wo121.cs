@@ -278,15 +278,22 @@ public partial class GameBridge
             // An NPC's committed attack: the owner streams it so the NPC copies
             // swing that exact row. Only the owner (the host under host
             // authority) speaks for its NPCs; a name must be authored.
-            if ((ActionKind)f.Kind != ActionKind.Attack || !_npcRows || !_isDamageAuthority) return;
+            // WO-151: and its hit reaction (NpcHit), so a copy shows the host's reaction, not its own.
+            bool npcHit = (ActionKind)f.Kind == ActionKind.NpcHit;
+            if (((ActionKind)f.Kind != ActionKind.Attack && !npcHit) || !_npcRows || !_isDamageAuthority) return;
+            if (npcHit && !_w151Reactions) return;
             if (!NpcNamePattern.IsMatch(f.Name) || Protocol.IsNeverSyncedNpcName(f.Name)) return;
-            pkt = _actionOut.Build(ActionKind.NpcAttack, ActionPhase.Commit, new RowEvent(ms, 0, f.Row, f.Name).ToBytes());
+            pkt = _actionOut.Build(npcHit ? ActionKind.NpcHit : ActionKind.NpcAttack, ActionPhase.Commit, new RowEvent(ms, 0, f.Row, f.Name).ToBytes());
             what = $"npc={f.Name} row={f.Row}";
-            _w121NpcRowsOut++;
+            // WO-151: the table the row came from (a hit or a paired bite proves the DLL's descriptor read)
+            if (_rowCatalog.IsCompletedSuccessfully && _rowCatalog.Result is { } cat)
+                what += cat.TryGet(f.Row, out var known) ? $" table={known.Table} spec=\"{known.Spec}\"" : " table=UNKNOWN";
+            if (npcHit) Interlocked.Increment(ref _w151HitRowsOut); else _w121NpcRowsOut++;
         }
         await WritePacketAsync(s, pkt, _wo121Ct);
         _w121EvOut++;
-        Console.WriteLine(FormattableString.Invariant($"MP-ACTION section=outbound kind={(ActionKind)(f.Eid == 0 ? f.Kind : (byte)ActionKind.NpcAttack)} gen={_actionOut.Gen} {what}"));
+        var outKind = f.Eid == 0 ? (ActionKind)f.Kind : (ActionKind)f.Kind == ActionKind.NpcHit ? ActionKind.NpcHit : ActionKind.NpcAttack;
+        Console.WriteLine(FormattableString.Invariant($"MP-ACTION section=outbound kind={outKind} gen={_actionOut.Gen} {what}"));
     }
 
     /// <summary>The local player hit a peer's avatar (0x97). The avatar kept nothing; the damage goes to its owner.</summary>
@@ -323,6 +330,13 @@ public partial class GameBridge
             case ActionKind.NpcCombat:
                 await Wo132OnNpcCombatInAsync(a, ct);   // WO-132: the host's NPC in a fight
                 return true;
+            case ActionKind.Emote:
+                await Wo151OnEmoteInAsync(a);   // WO-151 3.5: the partner's whistle at his avatar
+                return true;
+            case ActionKind.DoorState:
+            case ActionKind.DoorAsk:
+                await Wo151OnDoorInAsync(a);   // WO-151 3.9: never stale-dropped (a door's state is not a moment)
+                return true;
             case ActionKind.SessionSetting:
                 if (a.Payload.Length >= 2 && a.Payload[0] == SessionSettingKey.FriendlyFire)
                 {
@@ -342,6 +356,7 @@ public partial class GameBridge
             case ActionKind.BlockImpulse:
             case ActionKind.Dodge:
             case ActionKind.NpcAttack:
+            case ActionKind.NpcHit:
                 break;
             default:
                 return false;
@@ -388,6 +403,9 @@ public partial class GameBridge
                 Console.WriteLine($"MP-ACTION section=inbound ghost={a.SourceGhostId} kind=Jump seq={a.Seq} dispatch=native-jump result={r.ReasonTag}");
                 return true;
             }
+            case ActionKind.NpcHit:
+                await Wo151OnNpcHitInAsync(a, catalog, ct);   // WO-151 Phase 1.1: the host NPC's own reaction on its copy
+                return true;
             case ActionKind.NpcAttack:
             {
                 if (!RowEvent.TryFromBytes(a.Payload, out var ne) || ne.Name.Length == 0) return true;

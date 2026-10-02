@@ -128,13 +128,14 @@ public partial class GameBridge
             try { await Task.Delay(1000, ct); } catch { return; }
             try
             {
-                bool holding = Wo136Holding;
+                bool holding = W151MirrorHolding;   // WO-151 3.1: + the host's reload, a running join
                 await Wo137PushConfigAsync(holding);
                 bool host = W137Host, joiner = W137Joiner;
                 bool joinerActive = joiner && Wo137Active(holding);
                 if (joinerActive && !_w137JoinerWasActive)
                 {
                     // this copy is the host's world again (a join, a reload, the sync back on): compare it now
+                    Wo151CatchUpStart(_w137JoinerEverActive ? "runs again" : "starts");   // WO-151 3.1: nothing goes out until compared
                     await Wo137SendAsync(Protocol.QuestAskUp, Protocol.JoinTargetHost, Protocol.QuestAskResync, 0, _w137JoinerEverActive ? "resumed" : "joined");
                     Console.WriteLine($"MP-W137 joiner: the mirror runs{(_w137JoinerEverActive ? " again" : "")} -- asked the host for a checkpoint now");
                     _w137JoinerEverActive = true;
@@ -219,10 +220,11 @@ public partial class GameBridge
     {
         // A record the DLL made before the config push reached it (the kill switch, a load, a
         // Godwin stretch, the host's mode going off) is dropped here: "at once" means at once.
-        if (!Wo137Active(Wo136Holding)) { Wo137Veto("inactive"); return; }
+        if (!Wo137Active(W151MirrorHolding)) { Wo137Veto("inactive"); return; }
         if (W137Host)
         {
             if (Wo137Rules.HostSendVeto(c) is { } veto) { Interlocked.Increment(ref _w137Vetoed); Wo137Veto("host-" + veto); return; }
+            if (c.Old != c.New) Wo151NoteHostValue(c.Path, c.Old);   // WO-151 3.1: the value this State leaves behind here
             _w137HostSeen[c.Path] = (c.New, c.Port, Environment.TickCount64);
             if (_w137HostSeen.Count > 4000) Wo137TrimSeen();
             _w137HostSeenDirty = true;
@@ -245,15 +247,28 @@ public partial class GameBridge
                     Console.WriteLine(FormattableString.Invariant($"MP-W137 joiner: local change {c.Path} {(c.Port.Length > 0 ? c.Port : "-")} {c.Old}->{c.New} not sent to the host ({veto})"));
                 return;
             }
-            uint tok = Interlocked.Increment(ref _w137Tok);
-            _w137Asked[tok] = (c, Environment.TickCount64);
-            Wo147LearnPortValue(c.Path, c.Port, c.New, c.Type);   // WO-147: what this port produced here
-            bool conv = Wo147InOwnConversation();                  // WO-147: a conversation's outcome is this player's
-            var sent = conv ? c with { Flags = (byte)(c.Flags | Wo147Rules.FlagConversation) } : c;
-            await Wo137SendAsync(Protocol.QuestAskUp, Protocol.JoinTargetHost, Protocol.QuestAskRequest, tok, Wo137Rules.RequestText(sent));
-            Interlocked.Increment(ref _w137AsksOut);
-            Console.WriteLine(FormattableString.Invariant($"MP-W137 joiner -> host request #{tok}: {c.Path} {c.Port} {c.Old}->{c.New} ({c.Type}{(conv ? ", from this player's conversation" : "")}) -- this game's own step, the host applies it to the world"));
+            if (_w151CatchUp && !_w151CaughtUp)
+            {
+                // WO-151 3.1: not caught up -- this step waits; it goes out after the catch-up if it still stands
+                if (_w151HeldAsks.Count < 100) _w151HeldAsks.Enqueue(c);
+                Console.WriteLine(FormattableString.Invariant($"MP-W151 catch-up: local step {c.Path} {c.Port} {c.Old}->{c.New} waits (the host's checkpoint is not compared yet)"));
+                return;
+            }
+            await Wo137SendRequestAsync(c);
         }
+    }
+
+    /// <summary>A joiner's own step, as a request to the host (WO-151: also a held step after the catch-up).</summary>
+    private async Task Wo137SendRequestAsync(QuestChange c)
+    {
+        uint tok = Interlocked.Increment(ref _w137Tok);
+        _w137Asked[tok] = (c, Environment.TickCount64);
+        Wo147LearnPortValue(c.Path, c.Port, c.New, c.Type);   // WO-147: what this port produced here
+        bool conv = Wo147InOwnConversation();                  // WO-147: a conversation's outcome is this player's
+        var sent = conv ? c with { Flags = (byte)(c.Flags | Wo147Rules.FlagConversation) } : c;
+        await Wo137SendAsync(Protocol.QuestAskUp, Protocol.JoinTargetHost, Protocol.QuestAskRequest, tok, Wo137Rules.RequestText(sent));
+        Interlocked.Increment(ref _w137AsksOut);
+        Console.WriteLine(FormattableString.Invariant($"MP-W137 joiner -> host request #{tok}: {c.Path} {c.Port} {c.Old}->{c.New} ({c.Type}{(conv ? ", from this player's conversation" : "")}) -- this game's own step, the host applies it to the world"));
     }
 
     private void Wo137TrimSeen()
@@ -382,11 +397,16 @@ public partial class GameBridge
             try
             {
                 int budget = 64;   // at most this many applies per 50 ms (a quest cascade is ~10-20)
-                while (budget-- > 0 && W137Joiner && Wo137Active(Wo136Holding) && _w137Queue.TryPeek(out var c))
+                // WO-151 3.3: never into this player's own scene while it positions its NPCs (the field applied the
+                // host's #949 there; its profile step came out of the scene's order and a later scene never started)
+                bool sceneWait = _w137Queue.Count > 0 && Wo151OwnScenePositioning();
+                if (sceneWait) Interlocked.Increment(ref _w151SceneDeferred);
+                while (!sceneWait && budget-- > 0 && W137Joiner && Wo137Active(W151MirrorHolding) && _w137Queue.TryPeek(out var c))
                 {
                     if (!await Wo137ApplyOneAsync(c)) break;   // not now (the DLL did not answer, the node is asleep): the next tick tries again
                     _w137Queue.Remove(c);   // exactly this one: a correction put in front meanwhile stays
                 }
+                if (W137Joiner && Wo137Active(W151MirrorHolding)) await Wo151ProcessStashedPartsAsync();   // WO-151 3.1
             }
             catch (Exception ex) { Console.WriteLine($"MP-W137 drain failed: {ex.GetType().Name}: {ex.Message}"); }
         }
@@ -456,7 +476,7 @@ public partial class GameBridge
         _w137Asked.TryRemove(tok, out var asked);
         string what = asked.Req.Path is { Length: > 0 } ? $"{asked.Req.Path} {asked.Req.Port} {asked.Req.Old}->{asked.Req.New}" : path;
         Console.WriteLine(FormattableString.Invariant($"MP-W137 joiner: request #{tok} {what}: the host says {verdict} (host value {hostVal})"));
-        if (verdict is "refused" or "failed")
+        if (verdict is "refused" or "failed" || (verdict == "already" && _w151CatchUp && asked.Req.Path is { Length: > 0 } && hostVal != asked.Req.New))
         {
             // WO-147: only a port known to produce the host's value (was: the host's last port, which the
             // field showed landing elsewhere).
@@ -471,8 +491,18 @@ public partial class GameBridge
 
     private async Task Wo137OnCheckpointAsync(int part, int nparts, List<Wo137Rules.CheckpointEntry> entries)
     {
-        if (!W137Joiner || !Wo137Active(Wo136Holding)) return;
-        if (_w137Queue.Count > 0 || !_w137Asked.IsEmpty) return;   // not caught up yet: compared next time
+        if (!W137Joiner || !Wo137Active(W151MirrorHolding)) return;
+        if (_w137Queue.Count > 0 || !_w137Asked.IsEmpty)
+        {
+            // not caught up yet: WO-151 3.1 keeps the part for when the queue is empty (was: dropped)
+            if (_w151CatchUp) { _w151CpStash[part] = (nparts, entries, Environment.TickCount64); Interlocked.Increment(ref _w151StashedParts); }
+            return;
+        }
+        await Wo137CompareCheckpointAsync(part, nparts, entries);
+    }
+
+    private async Task Wo137CompareCheckpointAsync(int part, int nparts, List<Wo137Rules.CheckpointEntry> entries)
+    {
         var local = await _combat.Wo137ReadStatesAsync(entries.Select(e => e.Path).ToList());
         if (local is null || local.Count != entries.Count) return;
         Interlocked.Increment(ref _w137Checkpoints);
@@ -497,6 +527,7 @@ public partial class GameBridge
         }
         if (mism > 0 || part == nparts)
             Console.WriteLine($"MP-W137 joiner: checkpoint part {part}/{nparts}: {entries.Count} State(s) compared, {mism} mismatch(es), {fixedN} corrected");
+        Wo151CatchUpPartDone(part, nparts);   // WO-151 3.1
     }
 
     // ---------------------------------------------------------------- host: requests, checkpoints, talk
@@ -523,6 +554,15 @@ public partial class GameBridge
         var h = reads[0];
         string hostPort = _w137HostSeen.TryGetValue(req.Path, out var seen) ? seen.Port : "";
         var v = Wo137Rules.Judge(h.Ok, h.Val, req.Old, req.New);
+        if (_w151CatchUp && Wo151Rules.Judge(h.Ok, h.Val, req.Old, req.New, req.Type == "bool", Wo151PassedOf(req.Path, h.Val)) == Wo151Rules.CatchUpVerdict.AlreadyPassed)
+        {
+            // WO-151 3.1: a value this State has already passed in the host's world -- never applied again
+            Interlocked.Increment(ref _w137VerdictAlready);
+            Interlocked.Increment(ref _w151PassedVerdicts);
+            await Wo137ReplyAsync(src, tok, "already", h.Val, hostPort, req.Path);
+            Console.WriteLine(FormattableString.Invariant($"{head}: already -- the host's world has passed {req.New} (now {h.Val}): never run again here"));
+            return;
+        }
         switch (v)
         {
             case Wo137Rules.Verdict.Already:

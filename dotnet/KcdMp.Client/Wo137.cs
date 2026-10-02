@@ -80,7 +80,27 @@ public static class Wo137Rules
 
     /// <summary>A per-machine State: its type, or a module whose job is this machine's own streaming.</summary>
     public static bool PerMachine(QuestChange c) =>
-        PerMachineTypes.Contains(c.Type) || c.Path.Contains(".streamprofileshandling.", StringComparison.Ordinal);
+        PerMachineTypes.Contains(c.Type) || c.Path.Contains(".streamprofileshandling.", StringComparison.Ordinal)
+        || PlayerMinigame(c.Path, c.Type);
+
+    /// <summary>
+    /// WO-151 4.1: a minigame's own tutorial states are the player's at that minigame, never the world's.
+    /// The field: the joiner's blacksmithing tutorial was mirrored through the host, whose copy was not at
+    /// the anvil -- "tutorialState Exec 2->5: refused (host value 4)", put back 5->4, and the tutorial looped:
+    /// he was stuck at the anvil. A path segment ending in "_minigame", or a *TutorialProgress State.
+    /// </summary>
+    public static bool PlayerMinigame(string path, string type)
+    {
+        if (type.EndsWith("TutorialProgress", StringComparison.Ordinal)) return true;
+        int i = path.IndexOf("_minigame", StringComparison.Ordinal);
+        while (i >= 0)
+        {
+            int end = i + "_minigame".Length;
+            if (end == path.Length || path[end] == '.') return true;
+            i = path.IndexOf("_minigame", end, StringComparison.Ordinal);
+        }
+        return false;
+    }
 
     /// <summary>Host: why this change does NOT go to the joiners (null = it goes).</summary>
     public static string? HostSendVeto(QuestChange c)

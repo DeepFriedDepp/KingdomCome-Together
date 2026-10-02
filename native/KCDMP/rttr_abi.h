@@ -31,7 +31,9 @@
 #include <windows.h>
 #include <cstdint>
 #include <cstring>
+#include <string>
 #include <string_view>
+#include <type_traits>
 
 namespace kcdmp::rttr {
 
@@ -195,6 +197,9 @@ using Invoke3 = void* (*)(const Method* self, Variant* ret, const void* instance
                           const void* a0, const void* a1, const void* a2);
 using Invoke2 = void* (*)(const Method* self, Variant* ret, const void* instance,
                           const void* a0, const void* a1);
+// WO-151: four arguments -- CombatSoul::TakeDamage's SuppressHitReaction is the fourth.
+using Invoke4 = void* (*)(const Method* self, Variant* ret, const void* instance,
+                          const void* a0, const void* a1, const void* a2, const void* a3);
 
 // rttr::array_range<rttr::method>, rttr::array_range<rttr::property> --
 // NOT modelled as a full type; only the first 16 bytes are used.
@@ -274,6 +279,7 @@ struct Api {
     Invoke1            invoke1              = nullptr;
     Invoke3            invoke3              = nullptr;
     Invoke2            invoke2              = nullptr;
+    Invoke4            invoke4              = nullptr;   // WO-151: optional, not in complete()
     CreateAssocView    create_assoc_view    = nullptr;
     ViewIsValid        view_is_valid        = nullptr;
     ViewGetSize        view_get_size        = nullptr;
@@ -301,16 +307,71 @@ struct Api {
     }
 };
 
-// Build an argument for a raw value. Recipe proven against GetState: both
-// leading fields point at the value, the third is the type handle. `value`
-// must outlive the call -- the argument refers to it, it does not copy.
-inline void build_argument(void* buf32, const void* value, Type type) {
-    std::memset(buf32, 0, 32);
-    auto* w = reinterpret_cast<const void**>(buf32);
-    w[0] = value;
-    w[1] = value;
-    w[2] = type.data;
-}
+// An rttr::argument for a raw value, holding the value itself (WO-151 Phase 0.2).
+// Recipe proven against GetState: both leading fields point at the value, the third
+// is the type handle. The argument refers to the value, it does not copy it -- so the
+// value lives in the same object, right beside the argument's bytes, and the object can
+// be neither copied nor moved: the argument can never outlive (or be separated from)
+// what it points at. 0.42.5-0.42.7 built the stamina argument over a variable declared
+// in an inner block; its stack slot was reused for the reading, GetState got junk, and
+// the game's stat stack leaked until the frame rate collapsed (WO-148 s7). This type
+// makes that mistake a compile error: there is no pointer to hand it.
+template <class T>
+class Arg {
+    static_assert(std::is_trivially_copyable<T>::value && sizeof(T) <= 32,
+                  "Arg<T>: a raw value the argument can point at (float, enum word, pointer, ...)");
+public:
+    Arg(const T& value, Type type) noexcept : value_(value) {
+        std::memset(bytes_, 0, sizeof bytes_);
+        auto* w = reinterpret_cast<const void**>(bytes_);
+        w[0] = &value_;
+        w[1] = &value_;
+        w[2] = type.data;
+    }
+    Arg(const Arg&) = delete;
+    Arg& operator=(const Arg&) = delete;
+    Arg(Arg&&) = delete;
+    Arg& operator=(Arg&&) = delete;
+
+    // What method::invoke takes.
+    const void* get() const noexcept { return bytes_; }
+    const T& value() const noexcept { return value_; }
+    // The argument's value pointers (fields 0 and 8) name this object's own value.
+    bool points_into_self() const noexcept {
+        auto* w = reinterpret_cast<const void* const*>(bytes_);
+        return w[0] == &value_ && w[1] == &value_;
+    }
+
+private:
+    alignas(8) T value_;
+    alignas(8) unsigned char bytes_[32];
+};
+
+// The std::string argument for GetFaction(string): the same ownership rule (the
+// game is MSVC-built, so a std::string is layout-identical and can be pointed at).
+class StringArg {
+public:
+    StringArg(const char* text, Type type) : value_(text ? text : "") {
+        std::memset(bytes_, 0, sizeof bytes_);
+        auto* w = reinterpret_cast<const void**>(bytes_);
+        w[0] = &value_;
+        w[1] = &value_;
+        w[2] = type.data;
+    }
+    StringArg(const StringArg&) = delete;
+    StringArg& operator=(const StringArg&) = delete;
+    StringArg(StringArg&&) = delete;
+    StringArg& operator=(StringArg&&) = delete;
+    const void* get() const noexcept { return bytes_; }
+    bool points_into_self() const noexcept {
+        auto* w = reinterpret_cast<const void* const*>(bytes_);
+        return w[0] == &value_ && w[1] == &value_;
+    }
+
+private:
+    std::string value_;
+    alignas(8) unsigned char bytes_[32];
+};
 
 bool resolve(Api& api);
 bool validate();
@@ -491,5 +552,16 @@ void* combat_soul_of(void* soul);
 /// null) as the cause -- the victim's brain and shouts then name the attacker
 /// (WO-119 s2.1). True only when the invoke returned a valid variant.
 bool apply_damage_soul(void* soul, float stamina, float health, void* attacker);
+
+// ---- WO-151 -----------------------------------------------------------------
+
+/// The same with TakeDamage's fourth argument, SuppressHitReaction, given:
+/// suppress < 0 is apply_damage_soul (two or three arguments), 0 or 1 the
+/// four-argument call (the attacker may be null). False when the four-argument
+/// invoke is unavailable (no export) or returned an invalid variant.
+bool apply_damage_soul_ex(void* soul, float stamina, float health, void* attacker, int suppress);
+
+/// True when the four-argument invoke resolved (apply_damage_soul_ex can suppress).
+bool can_suppress_hit_reaction();
 
 } // namespace kcdmp::rttr

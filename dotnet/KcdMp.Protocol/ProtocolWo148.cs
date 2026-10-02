@@ -62,7 +62,8 @@ public static partial class Protocol
 /// <summary>WO-148: one carry message's text, both ways.</summary>
 public readonly record struct CarryText(byte Carrier, string How, string What, string Name, float X, float Y, float Z, string Why)
 {
-    public static readonly string[] Whats = { "dead", "ko", "object" };
+    // WO-151 3.2: "living" -- a living NPC carried through the game's own quest carry (CarryLivingActor)
+    public static readonly string[] Whats = { "dead", "ko", "object", "living" };
     public static readonly string[] Hows = { "put", "drop", "throw", "lost" };
     public static readonly string[] Whys = { "carried", "no-body", "alive", "far", "off", "no-avatar", "not-shared", "name" };
 

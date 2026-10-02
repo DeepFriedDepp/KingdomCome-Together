@@ -29,6 +29,7 @@ int wo140_rules_tests(int* passed);        // wo140_rules_tests.cpp
 int wo141_rules_tests(int* passed);        // wo141_rules_tests.cpp
 int wo143_rules_tests(int* passed);        // wo143_rules_tests.cpp
 int wo148_x64_tests(int* passed);          // wo148_x64_tests.cpp
+int wo151_tests(int* passed);              // wo151_tests.cpp
 
 static int g_fail = 0, g_pass = 0;
 #define CHECK(cond, ...) do { if (cond) ++g_pass; else { ++g_fail; std::printf("FAIL  %s:%d  ", __FILE__, __LINE__); std::printf(__VA_ARGS__); std::printf("\n"); } } while (0)
@@ -183,6 +184,14 @@ int main() {
         const int xf = wo148_x64_tests(&xp);
         g_pass += xp;
         g_fail += xf;
+    }
+
+    // WO-151: the fault guard, the argument that owns its value, the frame-rate line
+    {
+        int fp = 0;
+        const int ff = wo151_tests(&fp);
+        g_pass += fp;
+        g_fail += ff;
     }
 
     std::printf("%d passed, %d failed\n", g_pass, g_fail);

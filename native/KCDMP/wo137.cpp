@@ -3,6 +3,7 @@
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 // WO-137 -- see wo137.h.
 #include "wo137.h"
+#include "fault_guard.h"
 #include "wo137_rules.h"
 
 #include <windows.h>
@@ -33,21 +34,23 @@ namespace {
 // unwindable object (MSVC's rule, and this DLL's habit).
 // ---------------------------------------------------------------------------
 template <class T> bool rd(const void* base, size_t off, T* out) {
-    __try { *out = *reinterpret_cast<const T*>(static_cast<const char*>(base) + off); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_READ(site, "wo137::set_send_callback");
+    return fault::guarded(site, [&] { *out = *reinterpret_cast<const T*>(static_cast<const char*>(base) + off); });
 }
 bool copy_cstr(const char* s, char* out, size_t n) {
     if (!s || n == 0) return false;
-    __try {
+    KCDMP_FAULT_READ(site, "wo137::copy_cstr");
+    if (fault::guarded(site, [&] {
         size_t i = 0;
         for (; i + 1 < n && s[i]; ++i) out[i] = s[i];
         out[i] = 0;
-        return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) { out[0] = 0; return false; }
+    })) return true;
+    out[0] = 0;
+    return false;
 }
 bool copy_bytes(const void* s, void* out, size_t n) {
-    __try { std::memcpy(out, s, n); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_READ(site, "wo137::copy_bytes");
+    return fault::guarded(site, [&] { std::memcpy(out, s, n); });
 }
 // The class name behind an object's vptr (its RTTI locator; logs only).
 bool rtti_name(const void* obj, char* out, size_t n) {
@@ -159,94 +162,105 @@ using ExecFn      = void (*)(void* self, const void* ctx);
 using ChangedFn   = void (*)(void* self, const void* oldV, const void* newV, bool notify);
 
 bool call_gi(const void** out) {
-    __try { *out = reinterpret_cast<GiFn>(A.getGameIface)(); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "wo137::call_gi");
+    return fault::guarded(site, [&] { *out = reinterpret_cast<GiFn>(A.getGameIface)(); });
 }
 bool call_find(void* mgr, const void* s, void** out) {
-    __try { *out = nullptr; reinterpret_cast<FindNodeFn>(A.findNode)(mgr, out, s); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { *out = nullptr; return false; }
+    KCDMP_FAULT_CALL(site, "wo137::call_find");
+    if (fault::guarded(site, [&] { *out = nullptr; reinterpret_cast<FindNodeFn>(A.findNode)(mgr, out, s); })) return true;
+    *out = nullptr;
+    return false;
 }
 bool call_get_port(void* node, const void* s, void** out) {
-    __try { *out = nullptr; reinterpret_cast<GetPortFn>(A.getPort)(node, out, s); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { *out = nullptr; return false; }
+    KCDMP_FAULT_CALL(site, "wo137::call_get_port");
+    if (fault::guarded(site, [&] { *out = nullptr; reinterpret_cast<GetPortFn>(A.getPort)(node, out, s); })) return true;
+    *out = nullptr;
+    return false;
 }
 bool call_name(const void* node, const char** out) {
-    __try {
+    KCDMP_FAULT_CALL(site, "wo137::call_name");
+    if (fault::guarded(site, [&] {
         const void* ref = reinterpret_cast<NameFn>(A.nodeName)(node);
         *out = ref ? *static_cast<const char* const*>(ref) : nullptr;
-        return *out != nullptr;
-    } __except (EXCEPTION_EXECUTE_HANDLER) { *out = nullptr; return false; }
+    })) return *out != nullptr;
+    *out = nullptr;
+    return false;
 }
 bool call_parent(const void* node, void** out) {
-    __try { *out = nullptr; reinterpret_cast<ParentFn>(A.nodeParent)(node, out); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { *out = nullptr; return false; }
+    KCDMP_FAULT_CALL(site, "wo137::call_parent");
+    if (fault::guarded(site, [&] { *out = nullptr; reinterpret_cast<ParentFn>(A.nodeParent)(node, out); })) return true;
+    *out = nullptr;
+    return false;
 }
 void call_release(const void* res) {
     if (!res) return;
-    __try { reinterpret_cast<ReleaseFn>(A.release)(res); }
-    __except (EXCEPTION_EXECUTE_HANDLER) {}
+    KCDMP_FAULT_CALL(site, "wo137::call_release");
+    fault::guarded(site, [&] { reinterpret_cast<ReleaseFn>(A.release)(res); });
 }
 bool call_int(void* fn, const void* self, int* out) {
-    __try { *out = reinterpret_cast<IntFn>(fn)(self); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "wo137::call_int");
+    return fault::guarded(site, [&] { *out = reinterpret_cast<IntFn>(fn)(self); });
 }
 bool call_u32(void* fn, const void* self, uint32_t* out) {
-    __try { *out = reinterpret_cast<U32Fn>(fn)(self); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "wo137::call_u32");
+    return fault::guarded(site, [&] { *out = reinterpret_cast<U32Fn>(fn)(self); });
 }
 bool call_i64(void* fn, const void* self, int64_t* out) {
-    __try { *out = reinterpret_cast<I64Fn>(fn)(self); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "wo137::call_i64");
+    return fault::guarded(site, [&] { *out = reinterpret_cast<I64Fn>(fn)(self); });
 }
 bool call_ptr(void* fn, const void* self, const void** out) {
-    __try { *out = reinterpret_cast<PtrFn>(fn)(self); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "wo137::call_ptr");
+    return fault::guarded(site, [&] { *out = reinterpret_cast<PtrFn>(fn)(self); });
 }
 bool call_void(void* fn, void* self) {
-    __try { reinterpret_cast<VoidFn>(fn)(self); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "wo137::call_void");
+    return fault::guarded(site, [&] { reinterpret_cast<VoidFn>(fn)(self); });
 }
 bool call_resolver(void* cmod, void** out) {
-    __try { *out = reinterpret_cast<ResolverFn>(A.resolver)(cmod); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "wo137::call_resolver");
+    return fault::guarded(site, [&] { *out = reinterpret_cast<ResolverFn>(A.resolver)(cmod); });
 }
 bool call_resolve(void* resolver, uint32_t id, void** out) {
-    __try {
+    KCDMP_FAULT_CALL(site, "wo137::call_resolve");
+    if (fault::guarded(site, [&] {
         *out = nullptr;
         void* vt = *static_cast<void**>(resolver);
         reinterpret_cast<ResolveFn>(static_cast<void**>(vt)[2])(resolver, out, id);
-        return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) { *out = nullptr; return false; }
+    })) return true;
+    *out = nullptr;
+    return false;
 }
 bool call_hud_set(void* qm, void* sink) {
-    __try { reinterpret_cast<HudSetFn>(A.setHud)(qm, sink); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "wo137::call_hud_set");
+    return fault::guarded(site, [&] { reinterpret_cast<HudSetFn>(A.setHud)(qm, sink); });
 }
 bool call_hud_get(void* qm, void** out) {
-    __try { *out = reinterpret_cast<HudGetFn>(A.getHud)(qm); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "wo137::call_hud_get");
+    return fault::guarded(site, [&] { *out = reinterpret_cast<HudGetFn>(A.getHud)(qm); });
 }
 
 // --- rttr::variant decode: no allocation (to_int, get_type, type::get_name) --
 struct Val { bool valid = false; bool ok = false; int32_t i = 0; char type[48]{}; };
 
 bool variant_valid(const void* v, bool* out) {
-    __try { *out = reinterpret_cast<VValidFn>(A.vIsValid)(v); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "wo137::variant_valid");
+    return fault::guarded(site, [&] { *out = reinterpret_cast<VValidFn>(A.vIsValid)(v); });
 }
 bool variant_int(const void* v, int* out, bool* ok) {
-    __try { *ok = false; *out = reinterpret_cast<VToIntFn>(A.vToInt)(v, ok); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "wo137::variant_int");
+    return fault::guarded(site, [&] { *ok = false; *out = reinterpret_cast<VToIntFn>(A.vToInt)(v, ok); });
 }
 bool variant_type_name(const void* v, const char** data, size_t* size) {
-    __try {
+    KCDMP_FAULT_CALL(site, "wo137::variant_type_name");
+    return fault::guarded_or<bool>(site, false, [&]() -> bool {
         void* type[2] = { nullptr, nullptr };
         reinterpret_cast<VGetTypeFn>(A.vGetType)(v, type);
         struct { const char* d; size_t n; } sv{ nullptr, 0 };
         reinterpret_cast<TGetNameFn>(A.tGetName)(type, &sv);
         *data = sv.d; *size = sv.n;
         return sv.d != nullptr;
-    } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    });
 }
 void decode(const void* v, Val* out) {
     *out = Val{};
@@ -459,8 +473,8 @@ std::atomic<uint32_t> c_punishSkipped{0};
 
 using wo137rules::is_time_method;   // wo137_rules.h (pinned by native/tests/wo137_rules_tests.cpp)
 bool call_variant_ctor(void* v) {
-    __try { reinterpret_cast<void (*)(void*)>(A.variantCtor)(v); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "wo137::call_variant_ctor");
+    return fault::guarded(site, [&] { reinterpret_cast<void (*)(void*)>(A.variantCtor)(v); });
 }
 void log_time_skip(void* self, const char* method) {
     static void* seen[64]{};
@@ -654,8 +668,10 @@ uint64_t hud_fwd(HudProxy* self, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t
 
 using ModByNameFn = void* (*)(const void* mm, const char* name);
 bool call_mod_by_name(const void* mm, const char* name, void** out) {
-    __try { *out = reinterpret_cast<ModByNameFn>(A.getModuleByName)(mm, name); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { *out = nullptr; return false; }
+    KCDMP_FAULT_CALL(site, "wo137::call_mod_by_name");
+    if (fault::guarded(site, [&] { *out = reinterpret_cast<ModByNameFn>(A.getModuleByName)(mm, name); })) return true;
+    *out = nullptr;
+    return false;
 }
 
 // The QuestModule instance, by its RTTI class (a slot may hold an interface

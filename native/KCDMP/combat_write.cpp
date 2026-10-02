@@ -92,6 +92,7 @@
 //     error (WO-100 S10.5).
 
 #include "combat_write.h"
+#include "fault_guard.h"
 #include "pe_exports.h"
 #include "log.h"
 
@@ -142,48 +143,51 @@ using RequestActionFn = void* (*)(void* combatActor, void** outAction,
 // --- SEH-isolated primitives (no destructible locals; MSVC C2712) ----------
 
 bool call_ptr_fn(PtrFn fn, const void* arg, void** out) {
-    __try { *out = fn(arg); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "combat_write::call_ptr_fn");
+    return fault::guarded(site, [&] { *out = fn(arg); });
 }
 bool call_resolve_by_id(ResolveByIdFn fn, void* bind, uint32_t id, void** out) {
-    __try { *out = fn(bind, id); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "combat_write::call_resolve_by_id");
+    return fault::guarded(site, [&] { *out = fn(bind, id); });
 }
 bool read_ptr(const void* base, size_t off, void** out) {
-    __try { *out = *reinterpret_cast<void* const*>(static_cast<const char*>(base) + off); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_READ(site, "combat_write::read_ptr");
+    return fault::guarded(site, [&] { *out = *reinterpret_cast<void* const*>(static_cast<const char*>(base) + off); });
 }
 bool read_u8(const void* base, size_t off, uint8_t* out) {
-    __try { *out = *reinterpret_cast<const uint8_t*>(static_cast<const char*>(base) + off); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_READ(site, "combat_write::read_u8");
+    return fault::guarded(site, [&] { *out = *reinterpret_cast<const uint8_t*>(static_cast<const char*>(base) + off); });
 }
 bool copy_cstr(const char* src, char* dst, size_t n) {
-    __try {
+    KCDMP_FAULT_READ(site, "combat_write::copy_cstr");
+    if (fault::guarded(site, [&] {
         size_t i = 0;
         for (; i + 1 < n && src[i]; ++i) dst[i] = src[i];
-        dst[i] = 0; return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) { dst[0] = 0; return false; }
+        dst[i] = 0;
+    })) return true;
+    dst[0] = 0;
+    return false;
 }
 bool bytes_match(const void* at, const uint8_t* want, size_t n) {
-    __try { return std::memcmp(at, want, n) == 0; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_READ(site, "combat_write::bytes_match");
+    return fault::guarded_or<bool>(site, false, [&]() -> bool { return std::memcmp(at, want, n) == 0; });
 }
 bool call_set_flag(SetFlagFn fn, void* obj, int32_t index, uint8_t value) {
-    __try { fn(obj, index, value); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "combat_write::call_set_flag");
+    return fault::guarded(site, [&] { fn(obj, index, value); });
 }
 bool call_request_action(RequestActionFn fn, void* actor, void** out,
                          uint8_t type, int32_t zone, uint8_t hand, int32_t p6) {
-    __try { fn(actor, out, type, zone, hand, p6); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "combat_write::call_request_action");
+    return fault::guarded(site, [&] { fn(actor, out, type, zone, hand, p6); });
 }
 // The caller contract from FireAction's tail: release our reference.
 bool release_action(void* action) {
-    __try {
+    KCDMP_FAULT_CALL(site, "combat_write::release_action");
+    return fault::guarded(site, [&] {
         auto* vtbl = *reinterpret_cast<void***>(action);
         reinterpret_cast<void (*)(void*)>(vtbl[2])(action);
-        return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    });
 }
 
 // ---- resolution -----------------------------------------------------------

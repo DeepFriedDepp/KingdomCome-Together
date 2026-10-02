@@ -2,6 +2,7 @@
 // GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 #include "hangover.h"
+#include "fault_guard.h"
 #include "anchors.h"
 #include "engine.h"
 #include "log.h"
@@ -99,8 +100,8 @@ using FnLinks = void (*)(void*, void*, LinkVec*);
 using FnNav = bool (*)(void*, const float*, float, float, float*, void*);
 
 bool rd(const void* base, size_t off, void** out) {
-    __try { *out = *reinterpret_cast<void* const*>(static_cast<const char*>(base) + off); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_READ(site, "hangover::rd");
+    return fault::guarded(site, [&] { *out = *reinterpret_cast<void* const*>(static_cast<const char*>(base) + off); });
 }
 void* slot(void* obj, size_t off) {
     void* vt = nullptr; void* fn = nullptr;
@@ -109,62 +110,64 @@ void* slot(void* obj, size_t off) {
 }
 bool v0(void* obj, size_t off, void** out) {
     void* fn = slot(obj, off); if (!fn) return false;
-    __try { *out = reinterpret_cast<Fn0>(fn)(obj); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "hangover::v0");
+    return fault::guarded(site, [&] { *out = reinterpret_cast<Fn0>(fn)(obj); });
 }
 bool vI(void* obj, size_t off, int a, void** out) {
     void* fn = slot(obj, off); if (!fn) return false;
-    __try { *out = reinterpret_cast<FnI>(fn)(obj, a); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "hangover::vI");
+    return fault::guarded(site, [&] { *out = reinterpret_cast<FnI>(fn)(obj, a); });
 }
 bool vP(void* obj, size_t off, const void* a, void** out) {
     void* fn = slot(obj, off); if (!fn) return false;
-    __try { *out = reinterpret_cast<FnP>(fn)(obj, a); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "hangover::vP");
+    return fault::guarded(site, [&] { *out = reinterpret_cast<FnP>(fn)(obj, a); });
 }
 bool vU(void* obj, size_t off, uint32_t a, void** out) {
     void* fn = slot(obj, off); if (!fn) return false;
-    __try { *out = reinterpret_cast<FnU>(fn)(obj, a); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "hangover::vU");
+    return fault::guarded(site, [&] { *out = reinterpret_cast<FnU>(fn)(obj, a); });
 }
 bool vF(void* obj, size_t off, float* out) {
     void* fn = slot(obj, off); if (!fn) return false;
-    __try { *out = reinterpret_cast<FnF>(fn)(obj); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "hangover::vF");
+    return fault::guarded(site, [&] { *out = reinterpret_cast<FnF>(fn)(obj); });
 }
 bool links(void* mgr, void* node, LinkVec* out) {
     void* fn = slot(mgr, kMgrGetLinks); if (!fn) return false;
-    __try { reinterpret_cast<FnLinks>(fn)(mgr, node, out); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "hangover::links");
+    return fault::guarded(site, [&] { reinterpret_cast<FnLinks>(fn)(mgr, node, out); });
 }
 bool nav_check(void* q, const float* pos, float a, float b, float* out, bool* ok) {
     void* fn = slot(q, 0); if (!fn) return false;
-    __try { *ok = reinterpret_cast<FnNav>(fn)(q, pos, a, b, out, nullptr); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "hangover::nav_check");
+    return fault::guarded(site, [&] { *ok = reinterpret_cast<FnNav>(fn)(q, pos, a, b, out, nullptr); });
 }
 bool copy_str(const char* s, char* out, size_t n) {
-    __try {
+    KCDMP_FAULT_READ(site, "hangover::copy_str");
+    if (fault::guarded(site, [&] {
         size_t i = 0;
         for (; i + 1 < n && s[i]; ++i) out[i] = s[i];
         out[i] = 0;
-        return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) { out[0] = 0; return false; }
+    })) return true;
+    out[0] = 0;
+    return false;
 }
 bool str_eq(const char* a, const char* b) {
-    __try { return a && b && std::strcmp(a, b) == 0; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_READ(site, "hangover::str_eq");
+    return fault::guarded_or<bool>(site, false, [&]() -> bool { return a && b && std::strcmp(a, b) == 0; });
 }
 bool read_u32(const void* p, uint32_t* out) {
-    __try { *out = *static_cast<const uint32_t*>(p); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_READ(site, "hangover::read_u32");
+    return fault::guarded(site, [&] { *out = *static_cast<const uint32_t*>(p); });
 }
 bool read_vec(const float* p, float out[3]) {
-    __try { out[0] = p[0]; out[1] = p[1]; out[2] = p[2]; return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_READ(site, "hangover::read_vec");
+    return fault::guarded(site, [&] { out[0] = p[0]; out[1] = p[1]; out[2] = p[2]; });
 }
 bool call_gi(void* fn, void** out) {
-    __try { *out = reinterpret_cast<void* (*)()>(fn)(); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "hangover::call_gi");
+    return fault::guarded(site, [&] { *out = reinterpret_cast<void* (*)()>(fn)(); });
 }
 
 // The tag object: +8 holds the name's char*.

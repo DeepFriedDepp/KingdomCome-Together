@@ -2,6 +2,7 @@
 // GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 #include "inline_hook.h"
+#include "fault_guard.h"
 #include "x64_len.h"
 
 #include <windows.h>
@@ -107,12 +108,10 @@ bool install_gate4(void* target, const uint8_t* expect, size_t len, GateCallback
 }
 
 // Copies up to `n` bytes of live code into `out`; returns how many were readable.
-// Its own function: __try cannot share a frame with objects that need unwinding.
 static size_t read_code(const uint8_t* src, uint8_t* out, size_t n) {
     size_t i = 0;
-    __try {
-        for (; i < n; ++i) out[i] = src[i];
-    } __except (EXCEPTION_EXECUTE_HANDLER) {}
+    KCDMP_FAULT_READ(site, "inline_hook::read_code");
+    fault::guarded(site, [&] { for (; i < n; ++i) out[i] = src[i]; });
     return i;
 }
 
@@ -125,9 +124,10 @@ bool install_impl(void* target, const uint8_t* expect, size_t len, Callback cb, 
     if (!why) why = &dummy;
     if (!target || !expect || !cb || len < 14 || len > 32) { *why = "bad arguments"; return false; }
     auto* tgt = static_cast<uint8_t*>(target);
-    __try {
-        if (std::memcmp(tgt, expect, len) != 0) { *why = "prologue bytes differ from the expected ones"; return false; }
-    } __except (EXCEPTION_EXECUTE_HANDLER) { *why = "prologue unreadable"; return false; }
+    bool same = false;
+    KCDMP_FAULT_READ(s_prologue, "inline_hook::install/prologue");
+    if (!fault::guarded(s_prologue, [&] { same = std::memcmp(tgt, expect, len) == 0; })) { *why = "prologue unreadable"; return false; }
+    if (!same) { *why = "prologue bytes differ from the expected ones"; return false; }
 
     // WO-148: decode the prologue of the exact image being patched. The copied
     // bytes become the trampoline, so the length must end on an instruction

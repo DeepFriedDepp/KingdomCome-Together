@@ -104,6 +104,8 @@ public sealed class CombatPipe : IAsyncDisposable
     private const byte Wo143Reply        = 0xA8;
     private const byte Wo147             = 0x29;   // WO-147 [op][...] -> 0xAA [ok][seq][op][reason][payload] (native wo147.h)
     private const byte Wo147Reply        = 0xAA;
+    private const byte Wo151             = 0x2A;   // WO-151 [op][...] -> 0xAB [ok][seq][op][reason][payload] (native wo151.h)
+    private const byte Wo151Reply        = 0xAB;
     private const byte ExtraOut          = 0xA9;   // WO-143, unsolicited: hands, gaits, looks, one-shots, need-item, one-shot done
 
     private const int GuidLen = 16;
@@ -996,6 +998,108 @@ public sealed class CombatPipe : IAsyncDisposable
     {
         var r = await Wo147Async(2, [], ct);
         return r is { Ok: true } x ? System.Text.Encoding.ASCII.GetString(x.Payload) : null;
+    }
+
+    public async Task<(bool Ok, byte Reason, byte[] Payload)?> Wo151Async(byte op, byte[] args, CancellationToken ct = default)
+    {
+        var p = new byte[1 + args.Length];
+        p[0] = op; args.CopyTo(p, 1);
+        var (body, _) = await SendAndAwaitAsync(Wo151, p, Wo151Reply, ct);
+        if (body is null || body.Length < 4) return null;
+        return (body[0] == 1, body[3], body.AsSpan(4).ToArray());
+    }
+
+    /// <summary>
+    /// WO-151 op 1: mp_fault_switchoff (a game-code site that faulted 8 times this run is switched off)
+    /// and mp_main_cost (the per-task frame-cost meter). The DLL's values after the call, or null.
+    /// </summary>
+    public async Task<(bool SwitchOff, bool MainCost)?> Wo151ConfigAsync(bool switchOff, bool mainCost, CancellationToken ct = default)
+    {
+        var r = await Wo151Async(1, [(byte)(switchOff ? 1 : 0), (byte)(mainCost ? 1 : 0)], ct);
+        return r is { Ok: true, Payload.Length: >= 2 } x ? (x.Payload[0] != 0, x.Payload[1] != 0) : null;
+    }
+
+    /// <summary>WO-151 op 2: "faults=N sites=N off=N fault_switchoff=on main_cost=off", or null.</summary>
+    public async Task<string?> Wo151StatusAsync(CancellationToken ct = default)
+    {
+        var r = await Wo151Async(2, [], ct);
+        return r is { Ok: true } x ? System.Text.Encoding.ASCII.GetString(x.Payload) : null;
+    }
+
+    /// <summary>
+    /// WO-151 op 3: a deliberate fault at a test site (0 = a read, 1 = a call), for the guard's live check.
+    /// (ran, the site's fault count, switched off), or null.
+    /// </summary>
+    public async Task<(bool Ran, uint Faults, bool Off)?> Wo151TestFaultAsync(byte kind, CancellationToken ct = default)
+    {
+        var r = await Wo151Async(3, [kind], ct);
+        if (r is not { Ok: true, Payload.Length: >= 6 } x) return null;
+        return (x.Payload[0] != 0, BinaryPrimitives.ReadUInt32LittleEndian(x.Payload.AsSpan(1)), x.Payload[5] != 0);
+    }
+
+    /// <summary>
+    /// WO-151 op 4: TakeDamage on the soul of <paramref name="victimEid"/> (0 = the local player) with the soul of
+    /// <paramref name="attackerEid"/> as the cause (0 = none); mode 0 two arguments, 1 three, 2 four with
+    /// SuppressHitReaction false, 3 four with it true. (ok, reason, health before, after), or null.
+    /// </summary>
+    public async Task<(bool Ok, byte Reason, float Before, float After)?> Wo151TestTakeDamageAsync(uint victimEid, uint attackerEid, float hp, float st, byte mode, CancellationToken ct = default)
+    {
+        var a = new byte[17];
+        BinaryPrimitives.WriteUInt32LittleEndian(a, victimEid);
+        BinaryPrimitives.WriteUInt32LittleEndian(a.AsSpan(4), attackerEid);
+        BinaryPrimitives.WriteSingleLittleEndian(a.AsSpan(8), hp);
+        BinaryPrimitives.WriteSingleLittleEndian(a.AsSpan(12), st);
+        a[16] = mode;
+        var r = await Wo151Async(4, a, ct);
+        if (r is not { } x) return null;
+        float b = x.Payload.Length >= 8 ? BinaryPrimitives.ReadSingleLittleEndian(x.Payload) : -1f;
+        float af = x.Payload.Length >= 8 ? BinaryPrimitives.ReadSingleLittleEndian(x.Payload.AsSpan(4)) : -1f;
+        return (x.Ok, x.Reason, b, af);
+    }
+
+    /// <summary>WO-151 op 8 (3.8): the host's world held for a whole join (the engine's PauseGame, the DLL's own deadline). True = held.</summary>
+    public async Task<bool?> Wo151JoinHoldAsync(bool on, ushort maxS, CancellationToken ct = default)
+    {
+        var a = new byte[3];
+        a[0] = (byte)(on ? 1 : 0);
+        BinaryPrimitives.WriteUInt16LittleEndian(a.AsSpan(1), maxS);
+        var r = await Wo151Async(8, a, ct);
+        return r is { Ok: true, Payload.Length: >= 1 } x ? x.Payload[0] != 0 : null;
+    }
+
+    /// <summary>WO-151 op 6 (3.7): the last time-of-day profile a blend ran with, and the change counter (0 = none yet). Null = no hook.</summary>
+    public async Task<(uint Count, string Name)?> Wo151WeatherReadAsync(CancellationToken ct = default)
+    {
+        var r = await Wo151Async(6, [], ct);
+        if (r is not { Ok: true, Payload.Length: >= 5 } x) return null;
+        int n = x.Payload[4];
+        if (x.Payload.Length < 5 + n) return null;
+        return (BinaryPrimitives.ReadUInt32LittleEndian(x.Payload), System.Text.Encoding.ASCII.GetString(x.Payload, 5, n));
+    }
+
+    /// <summary>WO-151 op 7 (3.7): a joiner's weather gate -- only <paramref name="profile"/> may blend (null = off). True = applied.</summary>
+    public async Task<bool> Wo151WeatherGateAsync(string? profile, CancellationToken ct = default)
+    {
+        var name = System.Text.Encoding.ASCII.GetBytes(profile ?? "");
+        if (name.Length > 47) return false;
+        var a = new byte[1 + name.Length];
+        a[0] = (byte)name.Length; name.CopyTo(a, 1);
+        var r = await Wo151Async(7, a, ct);
+        return r is { Ok: true };
+    }
+
+    /// <summary>
+    /// WO-151 op 5 (Phase 1.1): a joiner's copy in a fight runs none of its own hit reactions (the game's
+    /// combat_actorSupressHitreactionAnimation and the two hit-reaction switches on its soul); off clears what this set.
+    /// (written, already, failed), or null.
+    /// </summary>
+    public async Task<(byte Written, byte Already, byte Failed)?> Wo151CopyFightAsync(uint eid, bool on, CancellationToken ct = default)
+    {
+        var a = new byte[5];
+        BinaryPrimitives.WriteUInt32LittleEndian(a, eid);
+        a[4] = (byte)(on ? 1 : 0);
+        var r = await Wo151Async(5, a, ct);
+        return r is { Ok: true, Payload.Length: >= 3 } x ? (x.Payload[0], x.Payload[1], x.Payload[2]) : null;
     }
 
     /// <summary>op 1: capture and apply masks (Wo143Rules.Bit*). The armed bits (Wo143Rules.Armed*), or null.</summary>

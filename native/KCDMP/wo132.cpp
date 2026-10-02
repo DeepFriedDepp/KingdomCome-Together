@@ -3,6 +3,7 @@
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 // WO-132 -- see wo132.h.
 #include "wo132.h"
+#include "fault_guard.h"
 
 #include <windows.h>
 #include <atomic>
@@ -64,7 +65,8 @@ void emit(uint32_t eid, const motion::NpcCombat& c) {
     const char* n = nullptr;
     if (void* e = engine::entity_by_id(eid)) n = engine::entity_name(e);
     size_t len = 0;
-    if (n) { __try { while (len < 63 && n[len]) { b[15 + len] = static_cast<uint8_t>(n[len]); ++len; } } __except (EXCEPTION_EXECUTE_HANDLER) { len = 0; } }
+    KCDMP_FAULT_READ(s_name, "wo132::emit/name");
+    if (n && !fault::guarded(s_name, [&] { while (len < 63 && n[len]) { b[15 + len] = static_cast<uint8_t>(n[len]); ++len; } })) len = 0;
     b[14] = static_cast<uint8_t>(len);
     fn(b, static_cast<uint16_t>(15 + len));
     c_watchOut.fetch_add(1);

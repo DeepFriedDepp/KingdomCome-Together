@@ -53,6 +53,7 @@
 // EntityModule.dll / CombatModule.dll this session (docs/WO-44-findings.md).
 
 #include "combat_swing.h"
+#include "fault_guard.h"
 #include "engine.h"
 #include "pe_exports.h"
 #include "log.h"
@@ -155,142 +156,139 @@ using QueueActionFn    = void  (*)(void* manager, void** smartPtr, float time);
 // --- SEH-isolated primitives (no destructible locals; MSVC C2712). ----------
 
 bool call_ptr_fn(PtrFn fn, const void* arg, void** out) {
-    __try { *out = fn(arg); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "combat_construct::call_ptr_fn");
+    return fault::guarded(site, [&] { *out = fn(arg); });
 }
 
 bool call_resolve_by_id(ResolveByIdFn fn, void* bind, uint32_t id, void** out) {
-    __try { *out = fn(bind, id); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "combat_construct::call_resolve_by_id");
+    return fault::guarded(site, [&] { *out = fn(bind, id); });
 }
 
 bool call_get_or_create(GetOrCreateFn fn, void* actor, void** out) {
-    __try { *out = fn(actor); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "combat_construct::call_get_or_create");
+    return fault::guarded(site, [&] { *out = fn(actor); });
 }
 
 // vtbl call with zero / one pointer argument, SEH-isolated.
 bool call_vtbl_ptr(void* obj, size_t vtblByteOffset, void** out) {
-    __try {
+    KCDMP_FAULT_CALL(site, "combat_construct::call_vtbl_ptr");
+    return fault::guarded(site, [&] {
         auto* vtbl = *reinterpret_cast<void***>(obj);
         auto fn = reinterpret_cast<void* (*)(void*)>(vtbl[vtblByteOffset / 8]);
         *out = fn(obj);
-        return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    });
 }
 
 bool call_vtbl_ptr_arg(void* obj, size_t vtblByteOffset, void* arg, void** out) {
-    __try {
+    KCDMP_FAULT_CALL(site, "combat_construct::call_vtbl_ptr_arg");
+    return fault::guarded(site, [&] {
         auto* vtbl = *reinterpret_cast<void***>(obj);
         auto fn = reinterpret_cast<void* (*)(void*, void*)>(vtbl[vtblByteOffset / 8]);
         *out = fn(obj, arg);
-        return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    });
 }
 
 bool call_vtbl_u32(void* obj, size_t vtblByteOffset, uint32_t arg, void** out) {
-    __try {
+    KCDMP_FAULT_CALL(site, "combat_construct::call_vtbl_u32");
+    return fault::guarded(site, [&] {
         auto* vtbl = *reinterpret_cast<void***>(obj);
         auto fn = reinterpret_cast<void* (*)(void*, uint32_t)>(vtbl[vtblByteOffset / 8]);
         *out = fn(obj, arg);
-        return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    });
 }
 
 bool call_get_game_iface(GetGameIfaceFn fn, const void** out) {
-    __try { *out = fn(); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "combat_construct::call_get_game_iface");
+    return fault::guarded(site, [&] { *out = fn(); });
 }
 
 bool call_parse_fragment_spec(ParseFragSpecFn fn, void* animDB, const char* spec,
                               ParseFragmentOut* out) {
-    __try { fn(animDB, spec, out); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "combat_construct::call_parse_fragment_spec");
+    return fault::guarded(site, [&] { fn(animDB, spec, out); });
 }
 
 bool call_combat_alloc(CombatAllocFn fn, size_t size, void** out) {
     size_t actual = 0;
-    __try { *out = fn(size, &actual, 0); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "combat_construct::call_combat_alloc");
+    return fault::guarded(site, [&] { *out = fn(size, &actual, 0); });
 }
 
 bool call_anim_ctor(AnimCtorFn fn, void* mem, void* combatActor, uint32_t priority,
                     uint32_t fragmentID, const void* tags20, void** out) {
-    __try { *out = fn(mem, mem, combatActor, priority, fragmentID, tags20, 0); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "combat_construct::call_anim_ctor");
+    return fault::guarded(site, [&] { *out = fn(mem, mem, combatActor, priority, fragmentID, tags20, 0); });
 }
 
 // The float rides in XMM2 -- WO-42 §2.3's classic trap. A correct C prototype
 // (third parameter `float`) is exactly what puts it there under the MSVC x64
 // convention; nothing manual needed beyond not declaring it as an int.
 bool call_queue_action(QueueActionFn fn, void* manager, void** sp, float time) {
-    __try { fn(manager, sp, time); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_CALL(site, "combat_construct::call_queue_action");
+    return fault::guarded(site, [&] { fn(manager, sp, time); });
 }
 
 // IAction::Release -- vtbl[0x10] (WO-44 §4). Drops one reference through the
 // object's own virtual, so the object's own destroy path (vtbl[0xB8]) runs if
 // this was the last one.
 bool call_release(void* obj) {
-    __try {
+    KCDMP_FAULT_CALL(site, "combat_construct::call_release");
+    return fault::guarded(site, [&] {
         auto* vtbl = *reinterpret_cast<void***>(obj);
         reinterpret_cast<void (*)(void*)>(vtbl[0x10 / 8])(obj);
-        return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    });
 }
 
 bool read_u32(const void* base, size_t offset, uint32_t* out) {
-    __try {
-        *out = *reinterpret_cast<const uint32_t*>(reinterpret_cast<const char*>(base) + offset);
-        return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_READ(site, "combat_construct::read_u32");
+    return fault::guarded(site, [&] { *out = *reinterpret_cast<const uint32_t*>(reinterpret_cast<const char*>(base) + offset); });
 }
 
 bool prologue_matches(const void* fn, const uint8_t* expect, size_t n) {
-    __try { return std::memcmp(fn, expect, n) == 0; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_READ(site, "combat_construct::prologue_matches");
+    return fault::guarded_or<bool>(site, false, [&]() -> bool { return std::memcmp(fn, expect, n) == 0; });
 }
 
 bool read_ptr(const void* base, size_t offset, void** out) {
-    __try {
-        *out = *reinterpret_cast<void* const*>(reinterpret_cast<const char*>(base) + offset);
-        return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_READ(site, "combat_construct::read_ptr");
+    return fault::guarded(site, [&] { *out = *reinterpret_cast<void* const*>(reinterpret_cast<const char*>(base) + offset); });
 }
 
 bool read_vptr(const void* obj, void** out) {
-    __try { *out = *reinterpret_cast<void* const*>(obj); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    KCDMP_FAULT_READ(site, "combat_construct::read_vptr");
+    return fault::guarded(site, [&] { *out = *reinterpret_cast<void* const*>(obj); });
 }
 
 bool call_char_vtbl(void* obj, size_t vtblByteOffset, char* out) {
-    __try {
+    KCDMP_FAULT_CALL(site, "combat_construct::call_char_vtbl");
+    return fault::guarded(site, [&] {
         auto* vtbl = *reinterpret_cast<void***>(obj);
         auto fn = reinterpret_cast<CharPredicateFn>(vtbl[vtblByteOffset / 8]);
         *out = fn(obj);
-        return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    });
 }
 
 // Copies at most n-1 bytes of a possibly-not-our-memory C string into out,
 // stopping at NUL, under SEH -- so a bad pointer logs "<unreadable>" instead
 // of faulting.
 bool copy_cstr_guarded(const char* s, char* out, size_t n) {
-    __try {
+    KCDMP_FAULT_READ(site, "combat_construct::copy_cstr_guarded");
+    return fault::guarded(site, [&] {
         size_t i = 0;
         for (; i + 1 < n && s[i]; ++i) out[i] = s[i];
         out[i] = 0;
-        return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    });
 }
 
 bool call_get_name(void* obj, char* out, size_t n) {
     const char* name = nullptr;
-    __try {
+    KCDMP_FAULT_CALL(site, "combat_construct::call_get_name");
+    if (!fault::guarded(site, [&] {
         auto* vtbl = *reinterpret_cast<void***>(obj);
         auto fn = reinterpret_cast<GetNameFn>(vtbl[kVtblGetName / 8]);
         name = fn(obj);
-    } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    })) return false;
     if (!name) { _snprintf_s(out, n, _TRUNCATE, "<null>"); return true; }
     if (!copy_cstr_guarded(name, out, n)) { _snprintf_s(out, n, _TRUNCATE, "<unreadable>"); }
     return true;

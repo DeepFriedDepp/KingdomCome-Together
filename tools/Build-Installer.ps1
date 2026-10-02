@@ -53,6 +53,15 @@ function Get-Iscc {
 $iscc = Get-Iscc
 Write-Host "Inno Setup compiler: $iscc"
 
+# WO-151 Phase 0.3: no installer before the frame-rate soak has passed for exactly this
+# code (tools/perf/README.md). 0.42.7 was built with a frame-rate collapse listed as a
+# known issue; the soak record carries the git trees of the code it ran, and this stops
+# a build whose DLL, Lua, agent, relay or protocol differ from them.
+$soak = Join-Path $root "tools\perf\soak.py"
+if (-not (Test-Path $soak)) { throw "tools\perf\soak.py missing -- the frame-rate soak gate cannot run" }
+& python $soak check
+if ($LASTEXITCODE -ne 0) { throw "the frame-rate soak has not passed for this code (tools\perf\soak.py check). Not shipping." }
+
 $payload = Join-Path $root "release\KCDMP"
 
 # Rebuild kdcmp.pak from its sources before packaging it. The pak is a build
@@ -101,7 +110,8 @@ if (-not $SkipPublish) {
     # case, WO-110 quoting -- R2 shipped for two releases with the case check
     # alone) and the Lua 5.1 200-local cliff (WO-110 Phase 0.2; MoonSharp does
     # not enforce it, so no suite above can see it).
-    foreach ($static in @("Test-WO106ConsolePlaceholder.ps1", "Test-WO110LuaLocals.ps1")) {
+    # WO-151: the third, on the native DLL: no raw __try, no build_argument(.
+    foreach ($static in @("Test-WO106ConsolePlaceholder.ps1", "Test-WO110LuaLocals.ps1", "Test-NativeGuards.ps1")) {
         Write-Host "Static check $static ..."
         & powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot $static)
         if ($LASTEXITCODE -ne 0) { throw "$static FAILED. Not shipping." }

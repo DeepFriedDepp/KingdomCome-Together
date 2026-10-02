@@ -2,6 +2,7 @@
 // GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 #include "anchors.h"
+#include "fault_guard.h"
 
 #include <cstdio>
 #include <cstring>
@@ -149,7 +150,8 @@ bool scan_call(const Range& r, const uint8_t* target) {
 // --- SEH isolation for the scans (no C++ objects with destructors here) ----
 
 bool guarded_section(HMODULE mod, const char* name, Range* out) {
-    __try {
+    KCDMP_FAULT_READ(site, "anchors::guarded_section");
+    return fault::guarded_or<bool>(site, false, [&]() -> bool {
         const IMAGE_NT_HEADERS64* nt = nt_headers(mod);
         if (!nt) return false;
         const IMAGE_SECTION_HEADER* s = IMAGE_FIRST_SECTION(nt);
@@ -164,13 +166,14 @@ bool guarded_section(HMODULE mod, const char* name, Range* out) {
             return true;
         }
         return false;
-    } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    });
 }
 
 const char* guarded_find_cstring(const Range& r, const char* s, size_t n, int* count) {
     const char* first = nullptr;
     int c = 0;
-    __try {
+    KCDMP_FAULT_READ(site, "anchors::guarded_find_cstring");
+    if (!fault::guarded(site, [&] {
         for (const uint8_t* p = r.begin; p + n + 1 <= r.end; ++p) {
             if (*p != static_cast<uint8_t>(s[0])) continue;
             if (p > r.begin && p[-1] != 0) continue;
@@ -178,7 +181,7 @@ const char* guarded_find_cstring(const Range& r, const char* s, size_t n, int* c
             if (!first) first = reinterpret_cast<const char*>(p);
             ++c;
         }
-    } __except (EXCEPTION_EXECUTE_HANDLER) { return nullptr; }
+    })) return nullptr;
     if (count) *count += c;
     return first;
 }
@@ -189,7 +192,8 @@ const char* guarded_find_cstring(const Range& r, const char* s, size_t n, int* c
 // The qword just before a vftable is the COL's absolute address.
 void* const* guarded_find_vftable(HMODULE mod, const Range& data, const Range& rdata,
                                   const char* decorated, uint32_t colOffset) {
-    __try {
+    KCDMP_FAULT_READ(site, "anchors::guarded_find_vftable");
+    return fault::guarded_or<void* const*>(site, nullptr, [&]() -> void* const* {
         const size_t n = std::strlen(decorated);
         auto* base = reinterpret_cast<const uint8_t*>(mod);
         void* const* found = nullptr;
@@ -215,11 +219,12 @@ void* const* guarded_find_vftable(HMODULE mod, const Range& data, const Range& r
             }
         }
         return (hits == 1) ? found : nullptr;
-    } __except (EXCEPTION_EXECUTE_HANDLER) { return nullptr; }
+    });
 }
 
 bool guarded_function_range(HMODULE mod, const void* addr, Range* out) {
-    __try {
+    KCDMP_FAULT_READ(site, "anchors::guarded_function_range");
+    return fault::guarded_or<bool>(site, false, [&]() -> bool {
         Pdata p{};
         if (!pdata(mod, &p)) return false;
         auto* base = reinterpret_cast<const uint8_t*>(mod);
@@ -231,7 +236,7 @@ bool guarded_function_range(HMODULE mod, const void* addr, Range* out) {
         out->begin = base + r->BeginAddress;
         out->end   = base + r->EndAddress;
         return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    });
 }
 
 enum class Scan { Ref, Bytes, Seq, Call, Find };
@@ -245,7 +250,8 @@ struct ScanArgs {
 };
 
 bool guarded_scan_function(HMODULE mod, const void* fn, const ScanArgs& s) {
-    __try {
+    KCDMP_FAULT_READ(site, "anchors::guarded_scan_function");
+    return fault::guarded_or<bool>(site, false, [&]() -> bool {
         Pdata p{};
         if (!pdata(mod, &p)) return false;
         auto* base = reinterpret_cast<const uint8_t*>(mod);
@@ -268,14 +274,15 @@ bool guarded_scan_function(HMODULE mod, const void* fn, const ScanArgs& s) {
             }
             return false;
         });
-    } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    });
 }
 
 // Every LEA reg,[rip+disp32] (REX.W 8D, ModRM mod=00 rm=101) in .text whose
 // target is `str`; distinct root functions counted. Returns the root when
 // exactly one function references the string.
 const uint8_t* guarded_function_by_string(HMODULE mod, const Range& text, const uint8_t* str, int* count) {
-    __try {
+    KCDMP_FAULT_READ(site, "anchors::guarded_function_by_string");
+    return fault::guarded_or<const uint8_t*>(site, nullptr, [&]() -> const uint8_t* {
         Pdata p{};
         if (!pdata(mod, &p)) return nullptr;
         auto* base = reinterpret_cast<const uint8_t*>(mod);
@@ -296,13 +303,14 @@ const uint8_t* guarded_function_by_string(HMODULE mod, const Range& text, const 
         }
         if (count) *count = nroots;
         return (nroots == 1) ? roots[0] : nullptr;
-    } __except (EXCEPTION_EXECUTE_HANDLER) { return nullptr; }
+    });
 }
 
 // WO-121: every distinct E8/E9 rel32 target in the function (all fragments)
 // that lands on a primary function start of the same module.
 int guarded_call_targets(HMODULE mod, const void* fn, const uint8_t** out, int max) {
-    __try {
+    KCDMP_FAULT_READ(site, "anchors::guarded_call_targets");
+    return fault::guarded_or<int>(site, 0, [&]() -> int {
         Pdata p{};
         if (!pdata(mod, &p)) return 0;
         auto* base = reinterpret_cast<const uint8_t*>(mod);
@@ -329,7 +337,7 @@ int guarded_call_targets(HMODULE mod, const void* fn, const uint8_t** out, int m
             return false;
         });
         return n;
-    } __except (EXCEPTION_EXECUTE_HANDLER) { return 0; }
+    });
 }
 
 } // namespace

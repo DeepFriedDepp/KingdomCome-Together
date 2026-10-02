@@ -38,6 +38,17 @@ $src   = $PSScriptRoot
 $build = Join-Path $src "build"
 if ($Clean -and (Test-Path $build)) { Remove-Item $build -Recurse -Force }
 
+# WO-151: no raw __try (every guard is fault::guarded with a named site) and no
+# pointer-taking build_argument( -- a build that adds either fails here.
+$guards = Join-Path $src "..\tools\Test-NativeGuards.ps1"
+if (Test-Path $guards) {
+    & powershell -NoProfile -ExecutionPolicy Bypass -File $guards -NativeDir (Join-Path $src "KCDMP") | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        & powershell -NoProfile -ExecutionPolicy Bypass -File $guards -NativeDir (Join-Path $src "KCDMP") | Out-Host
+        throw "tools\Test-NativeGuards.ps1 FAILED: a raw __try or build_argument( in native\KCDMP (WO-151 Phase 0)"
+    }
+}
+
 # A KCDMP.dll currently injected into a running game holds its own file open, so
 # the linker fails with LNK1104. Windows does allow *renaming* a loaded module,
 # which frees the name without disturbing the game. Same trap as rebuilding the

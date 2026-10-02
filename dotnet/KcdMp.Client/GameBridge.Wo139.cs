@@ -344,6 +344,7 @@ public partial class GameBridge
                 foreach (var (g, p) in _w139Pursuits.ToArray()) if (p.Peer == src) await Wo139EndPursuitAsync(g, "the record is cleared");
                 await Wo139SendAsync(Protocol.CrimeHostUp, src, Protocol.CrimeHostCleared, tok, Wo139Rules.ClearedText(result, settlement));
                 Console.WriteLine($"MP-W139 host: ghost {src}'s stop by {(guard.Length > 0 ? guard : "-")}: {result}{(fine > 0 ? $" ({fine / 10.0:F1} groschen)" : "")} -- {n} crime(s) cleared in {(settlement.Length > 0 ? settlement : "every settlement")}");
+                await Wo151OnJoinerClearedAsync(src, result);   // WO-151 joint: the host's Henry is cleared with him
                 break;
             case Wo139Rules.OutcomeEffect.Resist:
                 if (settlement.Length > 0) rec.MarkResisted(settlement, Environment.TickCount64);

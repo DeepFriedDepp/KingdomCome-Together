@@ -1646,7 +1646,7 @@ public enum ActionKind : byte
     /// <summary>A jump. WO-121: sent at the commit (the state expansion's
     /// RequestJump accepted it on the sender), payload <c>[senderMs:4]</c>.</summary>
     Jump = 2,
-    /// <summary>Reserved: an emote.</summary>
+    /// <summary>An emote, payload <c>[senderMs:4][emote:1]</c> (<see cref="EmoteId"/>). WO-151 3.5: the whistle.</summary>
     Emote = 3,
     /// <summary>
     /// WO-102 Phase 5: a non-owner's attack REQUEST at an owned NPC -- the
@@ -1684,6 +1684,79 @@ public enum ActionKind : byte
     NpcAttack = 13,
     /// <summary>WO-132: the owner's NPC combat state (in a fight, guard, block, who it fights), payload <see cref="NpcCombatEvent"/>. The relay forwards it only from the damage authority (the host).</summary>
     NpcCombat = 14,
+    /// <summary>WO-151: the owner's NPC entered a hit reaction (its committed combat_action_hit row), payload <see cref="RowEvent"/> with the NPC's name: the joiner's copy plays the host's reaction instead of its own. The relay forwards it only from the damage authority (the host).</summary>
+    NpcHit = 15,
+    /// <summary>WO-151 3.9: a door of the host's world moved or (un)locked, payload <see cref="DoorEvent"/>. The relay forwards it only from the damage authority (the host).</summary>
+    DoorState = 16,
+    /// <summary>WO-151 3.9: a joiner used a door (open/close, his key or his lockpick), payload <see cref="DoorEvent"/>: the host applies it in its world and answers with DoorState.</summary>
+    DoorAsk = 17,
+}
+
+/// <summary>WO-151 3.5: what an Emote action plays (APPEND-ONLY).</summary>
+public static class EmoteId
+{
+    /// <summary>The whistle (the `call` action): the game's v_horse_whistle at the sender's avatar.</summary>
+    public const byte Whistle = 1;
+    public const int PayloadLen = 5;
+    public static string Name(byte id) => id switch { Whistle => "whistle", _ => $"unknown-{id}" };
+}
+
+/// <summary>
+/// WO-151 3.9: a door on the action channel --
+/// <c>[senderMs:4][dir:1 sbyte][flags:1][x:4f][y:4f][z:4f][nameLen:1][name]</c>.
+/// dir: 1 open, -1 closed (0: no move). flags bit 0: locked (DoorState) / unlock (DoorAsk).
+/// The name is the door's authored level name (<c>[A-Za-z0-9_.-]</c>); the pivot tells two
+/// doors of one name apart (the receiver takes the AnimDoor within 1 m of it).
+/// </summary>
+public readonly record struct DoorEvent(uint SenderMs, sbyte Dir, byte Flags, float X, float Y, float Z, string Name)
+{
+    public const int FixedLen = 4 + 1 + 1 + 12 + 1;
+    public const int MaxNameLen = Protocol.ActionPayloadMaxLen - FixedLen;   // 45
+    public const byte FlagLocked = 0x01;
+
+    public static bool IsDoorName(string? n)
+    {
+        if (string.IsNullOrEmpty(n) || n.Length > MaxNameLen) return false;
+        foreach (char c in n)
+            if (!(c is >= 'A' and <= 'Z' or >= 'a' and <= 'z' or >= '0' and <= '9' or '_' or '.' or '-')) return false;
+        return true;
+    }
+
+    public byte[] ToBytes()
+    {
+        if (!IsDoorName(Name)) throw new ArgumentException($"not a door name: '{Name}'", nameof(Name));
+        var name = System.Text.Encoding.ASCII.GetBytes(Name);
+        var b = new byte[FixedLen + name.Length];
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(b, SenderMs);
+        b[4] = (byte)Dir; b[5] = Flags;
+        System.Buffers.Binary.BinaryPrimitives.WriteSingleLittleEndian(b.AsSpan(6), X);
+        System.Buffers.Binary.BinaryPrimitives.WriteSingleLittleEndian(b.AsSpan(10), Y);
+        System.Buffers.Binary.BinaryPrimitives.WriteSingleLittleEndian(b.AsSpan(14), Z);
+        b[18] = (byte)name.Length;
+        name.CopyTo(b, FixedLen);
+        return b;
+    }
+
+    /// <summary>False on a truncated frame, a direction other than -1/0/1, a non-finite pivot or a bad name.</summary>
+    public static bool TryFromBytes(ReadOnlySpan<byte> b, out DoorEvent e)
+    {
+        e = default;
+        if (b.Length < FixedLen) return false;
+        sbyte dir = (sbyte)b[4];
+        if (dir is < -1 or > 1) return false;
+        float x = System.Buffers.Binary.BinaryPrimitives.ReadSingleLittleEndian(b[6..]);
+        float y = System.Buffers.Binary.BinaryPrimitives.ReadSingleLittleEndian(b[10..]);
+        float z = System.Buffers.Binary.BinaryPrimitives.ReadSingleLittleEndian(b[14..]);
+        if (!float.IsFinite(x) || !float.IsFinite(y) || !float.IsFinite(z)) return false;
+        int n = b[18];
+        if (n == 0 || n > MaxNameLen || b.Length < FixedLen + n) return false;
+        string name = System.Text.Encoding.ASCII.GetString(b.Slice(FixedLen, n));
+        if (!IsDoorName(name)) return false;
+        e = new DoorEvent(System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(b), dir, b[5], x, y, z, name);
+        return true;
+    }
+
+    public override string ToString() => FormattableString.Invariant($"door={Name} dir={Dir} flags={Flags} at=({X:F2},{Y:F2},{Z:F2})");
 }
 
 /// <summary>

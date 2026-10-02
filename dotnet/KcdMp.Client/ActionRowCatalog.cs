@@ -41,6 +41,9 @@ public sealed class ActionRowCatalog
         "Libs/Tables/combat/combat_action_block.xml",
         "Libs/Tables/combat/combat_action_perfect_block.xml",
         "Libs/Tables/combat/combat_action_dodge.xml",
+        // WO-151: an NPC's hit reaction (NpcHit) and an animal's paired bite (a sync attack, sent as NpcAttack)
+        "Libs/Tables/combat/combat_action_hit.xml",
+        "Libs/Tables/combat/combat_action_sync_attack.xml",
     };
 
     public static ActionRowCatalog LoadFrom(string tablesPakPath)
@@ -76,7 +79,7 @@ public sealed class ActionRowCatalog
             string? pak = WeaponSwingCatalog.FindTablesPak();
             if (pak is null) { log("[rowcatalog] Tables.pak not found -- v8 attack events fall back to the weapon swing rows"); return null; }
             var c = LoadFrom(pak);
-            log($"[rowcatalog] loaded {c.Count} combat rows (attack/block/perfect_block/dodge) from {pak}");
+            log($"[rowcatalog] loaded {c.Count} combat rows (attack/block/perfect_block/dodge/hit/sync_attack) from {pak}");
             return c;
         }
         catch (Exception ex)

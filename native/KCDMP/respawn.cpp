@@ -2,6 +2,7 @@
 // GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 #include "respawn.h"
+#include "fault_guard.h"
 #include "wo136.h"
 #include "respawn_actions.h"
 #include "engine.h"
@@ -850,13 +851,14 @@ void run_test_command(const char* line) {
     if (std::sscanf(line, "gameover %d", &id) == 1) {
         void* gi = engine::game_iface(); void* pm = nullptr; void* go = nullptr;
         void* vt = nullptr; void* start = nullptr;
-        bool ok = false;
-        __try {
+        bool called = false;
+        KCDMP_FAULT_CALL(s_gameover, "respawn::run_test_command/gameover");
+        const bool ok = fault::guarded(s_gameover, [&] {
             pm = gi ? *reinterpret_cast<void**>(static_cast<char*>(gi) + 0x130) : nullptr;
             if (pm) go = reinterpret_cast<void* (*)(void*)>((*reinterpret_cast<void***>(pm))[0xA8 / 8])(pm);
             if (go) { vt = *reinterpret_cast<void**>(go); start = reinterpret_cast<void**>(vt)[1]; }
-            if (start) { reinterpret_cast<void (*)(void*, int)>(start)(go, id); ok = true; }
-        } __except (EXCEPTION_EXECUTE_HANDLER) { ok = false; }
+            if (start) { reinterpret_cast<void (*)(void*, int)>(start)(go, id); called = true; }
+        }) && called;
         logf("MP-RESPAWN-TEST gameover %d -> I_GameOver %p slot1 %p (%s) %s", id, go, start,
              gameover::installed() ? "guarded" : "UNGUARDED", ok ? "called" : "NOT called (fault or unresolved)");
     } else if (std::strncmp(line, "spots", 5) == 0) {

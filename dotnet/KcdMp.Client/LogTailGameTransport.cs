@@ -285,6 +285,48 @@ public sealed class LogTailGameTransport : IGameTransport
     public event Action<bool, string, string>? CutsceneEdge;
 
     /// <summary>
+    /// WO-151 3.4: every scene-player stage of every type -- (stage, type, name), from
+    /// <c>CutscenePlayer::&lt;stage&gt; called for &lt;Type&gt; cutscene '&lt;name&gt;'</c>
+    /// (OnCutsceneInitialized, PlayCutscene, OnCutsceneEnd, OnRequestFastForwardedBehavior,
+    /// OnPositioningFinished, FinishCutscene, FinalizeCutscene, ReleaseScene, Interrupt), plus
+    /// ("PositioningLate", "", seconds) for the engine's "NPC positioning took longer than expected"
+    /// and ("FFCancelled", "", "") for its "Cancelling FF for all NPCs". The scene guard's clock: the
+    /// content end starts the end positioning, ReleaseScene is the engine's real release.
+    /// </summary>
+    public event Action<string, string, string>? SceneStage;
+
+    public static readonly string[] SceneStages =
+    [
+        "OnCutsceneInitialized", "PlayCutscene", "OnCutsceneEnd", "OnRequestFastForwardedBehavior",
+        "OnPositioningFinished", "FinishCutscene", "FinalizeCutscene", "ReleaseScene", "Interrupt",
+    ];
+
+    /// <summary>WO-151 3.4: one <c>CutscenePlayer::</c> stage line, or false (a stage, type and name the guard knows only).</summary>
+    public static bool TryParseSceneStage(ReadOnlySpan<char> line, out string stage, out string type, out string name)
+    {
+        stage = type = name = "";
+        int a = line.IndexOf("CutscenePlayer::".AsSpan(), StringComparison.Ordinal);
+        if (a < 0) return false;
+        var rest = line[(a + "CutscenePlayer::".Length)..];
+        int b = rest.IndexOf(" called for ".AsSpan(), StringComparison.Ordinal);
+        if (b <= 0) return false;
+        string st = rest[..b].ToString();
+        if (Array.IndexOf(SceneStages, st) < 0) return false;
+        rest = rest[(b + " called for ".Length)..];
+        int c = rest.IndexOf(" cutscene '".AsSpan(), StringComparison.Ordinal);
+        if (c <= 0) return false;
+        string ty = rest[..c].ToString();
+        foreach (char ch in ty) if (!char.IsAsciiLetter(ch)) return false;
+        rest = rest[(c + " cutscene '".Length)..];
+        int d = rest.IndexOf('\'');
+        if (d <= 0) return false;
+        string nm = rest[..d].ToString();
+        foreach (char ch in nm) if (!(char.IsAsciiLetterOrDigit(ch) || ch == '_')) return false;
+        stage = st; type = ty; name = nm;
+        return true;
+    }
+
+    /// <summary>
     /// WO-98 Phase 7: the mod's Lua state was (re)initialised -- the tail saw
     /// "[KCD2-MP] MOD INIT". The one moment a restarted game's fresh Lua
     /// actually needs the agent's standing quest state pushed again.
@@ -332,7 +374,8 @@ public sealed class LogTailGameTransport : IGameTransport
 
     public static readonly string[] Wo144Contains =
     [
-        "' was added into waiting players",
+        // WO-151 3.4: the engine spells it "addded" (three d's): " into waiting players" matches both
+        " into waiting players",
         "Dialog interrupted.",
         "Dialog ends but no response was played",
     ];
@@ -588,6 +631,31 @@ public sealed class LogTailGameTransport : IGameTransport
         // WO-98 Phase 5: report every Rendered/Ingame edge with type and name.
         // Fader/Text/SkipTime stay excluded here too -- they are not what a
         // player experiences as "a cutscene" (WO-80 notes above).
+        if (SceneStage is not null)
+        {
+            if (line.IndexOf("CutscenePlayer::", StringComparison.Ordinal) >= 0)
+            {
+                if (TryParseSceneStage(line, out var sst, out var sty, out var snm))
+                {
+                    try { SceneStage.Invoke(sst, sty, snm); }
+                    catch (Exception ex) { Console.WriteLine($"[scene] stage handler threw: {ex.Message}"); }
+                }
+            }
+            else if (line.IndexOf("[ScenePositioningManager]:NPC positioning took longer than expected", StringComparison.Ordinal) >= 0)
+            {
+                const string fin = "Finished in ";
+                int f = line.IndexOf(fin, StringComparison.Ordinal);
+                string secs = f >= 0 ? line[(f + fin.Length)..].ToString().Split(' ')[0] : "?";
+                try { SceneStage.Invoke("PositioningLate", "", secs); }
+                catch (Exception ex) { Console.WriteLine($"[scene] stage handler threw: {ex.Message}"); }
+            }
+            else if (line.IndexOf("Cancelling FF for all NPCs", StringComparison.Ordinal) >= 0)
+            {
+                try { SceneStage.Invoke("FFCancelled", "", ""); }
+                catch (Exception ex) { Console.WriteLine($"[scene] stage handler threw: {ex.Message}"); }
+            }
+        }
+
         if (CutsceneEdge is not null && line.IndexOf("CutscenePlayer::") >= 0)
         {
             bool csPlay = line.IndexOf("::PlayCutscene called for ") >= 0;
