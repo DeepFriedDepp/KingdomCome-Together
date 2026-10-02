@@ -580,12 +580,9 @@ the synthetic suites, and the native build from scratch.
   folder no Setup ran on.
 * **The privacy sweep** covered all 1,026 payload files, ASCII and UTF-16. It found none of the
   field bundles' player or Steam names, Windows user names, Steam IDs, addresses or profile
-  paths of ours. The only hits are in stock files:
-  * "MooseCree" is a language name in a Microsoft culture table;
-  * `ToBinary...` and `AttemptingToBind...` are .NET method names;
-  * the NAudio author's own build path sits inside the six NuGet DLLs;
-  * `10.0.0.2` is the master server's documented example;
-  * the other 10.x "addresses" are assembly version numbers.
+  paths of ours. Every match is inside stock files that are not ours: words in runtime
+  tables and method names, the NAudio author's own build path inside the six NuGet DLLs, the
+  master server's documented example address, and assembly version numbers.
 
 ## L. Live runs (solo, throwaway saves, one machine)
 
