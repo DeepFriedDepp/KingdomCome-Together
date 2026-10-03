@@ -59,6 +59,9 @@ public partial class GameBridge
                  _w137Mismatch, _w137Corrected, _w137VerdictApplied, _w137VerdictAlready, _w137VerdictRefused, _w137Checkpoints,
                  _w137TalksOut, _w137TalksIn, _w137Mirrors;
     private readonly ConcurrentDictionary<string, long> _w137VetoCounts = new(StringComparer.Ordinal);
+    // WO-154 1: States each world re-derives by itself (Wo154Contest); kept until the session ends
+    private readonly Wo154Contest _w154Contest = new();
+    private long _w154ContestFound, _w154ContestTold, _w154ContestSkippedCp;
 
     /// <summary>The host of a shared world (its own mp_shared_world).</summary>
     private bool W137Host => _combatRoleApplied && _isDamageAuthority && _sharedWorld;
@@ -90,6 +93,7 @@ public partial class GameBridge
         int dropped = _w137Queue.Reset();
         _w137Asked.Clear();
         _w137HostSeen.Clear();
+        _w154Contest.Reset();   // WO-154 1
         foreach (var (npc, h) in _w137TalkHolds.ToArray())
             if (_w137TalkHolds.TryRemove(npc, out _)) _ = ExecLuaAsync($"if KCD2MP_W137HostHold then KCD2MP_W137HostHold(false, \"{npc}\", {h.Peer}, \"disconnect\") end");
         try { await _combat.Wo137ConfigAsync(false, 0, 0); } catch { }
@@ -209,7 +213,7 @@ public partial class GameBridge
     {
         var vetoes = string.Join(",", _w137VetoCounts.OrderBy(k => k.Key, StringComparer.Ordinal).Select(k => $"{k.Key}:{k.Value}"));
         return FormattableString.Invariant(
-            $"MP-WO137-STATS role={(W137Host ? "host" : W137Joiner ? "joiner" : W137JoinerSession ? "joiner-not-joined" : "none")} sync={On(_w137SyncOn)} host_mode={On(_w137HostModeOn)} player={_w137HostPlayer} in={_w137In} out={_w137Out} queue={_w137Queue.Count} applied={_w137Applied} unchanged={_w137Unchanged} apply_fail={_w137ApplyFail} mirrors={_w137Mirrors} asks_out={_w137AsksOut} asks_in={_w137AsksIn} verdicts=applied:{_w137VerdictApplied},already:{_w137VerdictAlready},refused:{_w137VerdictRefused} checkpoints={_w137Checkpoints} mismatch={_w137Mismatch} corrected={_w137Corrected} talks=out:{_w137TalksOut},in:{_w137TalksIn} holds={_w137TalkHolds.Count} vetoes={vetoes}");
+            $"MP-WO137-STATS role={(W137Host ? "host" : W137Joiner ? "joiner" : W137JoinerSession ? "joiner-not-joined" : "none")} sync={On(_w137SyncOn)} host_mode={On(_w137HostModeOn)} player={_w137HostPlayer} in={_w137In} out={_w137Out} queue={_w137Queue.Count} applied={_w137Applied} unchanged={_w137Unchanged} apply_fail={_w137ApplyFail} mirrors={_w137Mirrors} asks_out={_w137AsksOut} asks_in={_w137AsksIn} verdicts=applied:{_w137VerdictApplied},already:{_w137VerdictAlready},refused:{_w137VerdictRefused} checkpoints={_w137Checkpoints} mismatch={_w137Mismatch} corrected={_w137Corrected} talks=out:{_w137TalksOut},in:{_w137TalksIn} holds={_w137TalkHolds.Count} contested={_w154Contest.Count} contest_found={_w154ContestFound} contest_told={_w154ContestTold} cp_contested={_w154ContestSkippedCp} vetoes={vetoes}");
     }
 
     private void Wo137Veto(string why) => _w137VetoCounts.AddOrUpdate(why, 1, (_, n) => n + 1);
@@ -224,6 +228,14 @@ public partial class GameBridge
         if (W137Host)
         {
             if (Wo137Rules.HostSendVeto(c) is { } veto) { Interlocked.Increment(ref _w137Vetoed); Wo137Veto("host-" + veto); return; }
+            // WO-154 1: this world put back a value a joiner's request had put here -- the State is each world's own
+            if (!c.Mirror && !c.Cascade && _w154Contest.NoteLocal(c.Path, c.Old, c.New, Environment.TickCount64, out string cwhy))
+            {
+                Interlocked.Increment(ref _w154ContestFound);
+                Console.WriteLine(FormattableString.Invariant($"MP-W154 host: {c.Path} is CONTESTED -- {cwhy}; each world keeps its own value from now on (a per-player trigger), the joiners are told"));
+                foreach (byte g in Wo134Peers()) await Wo137SendAsync(Protocol.QuestHostUp, g, Protocol.QuestHostResult, 0, Wo137Rules.ResultText(Wo154Rules.VerdictContested, c.New, "", c.Path));
+            }
+            if (_w154Contest.IsContested(c.Path)) { Wo137Veto("host-contested"); return; }
             if (c.Old != c.New) Wo151NoteHostValue(c.Path, c.Old);   // WO-151 3.1: the value this State leaves behind here
             _w137HostSeen[c.Path] = (c.New, c.Port, Environment.TickCount64);
             if (_w137HostSeen.Count > 4000) Wo137TrimSeen();
@@ -233,18 +245,25 @@ public partial class GameBridge
             foreach (byte g in peers) await Wo137SendAsync(Protocol.QuestHostUp, g, Protocol.QuestHostChange, 0, text);
             Wo148NoteQuestChange($"#{c.Seq} {c.Path} {c.Old}->{c.New}");   // WO-148 3.3: a quest reacting to a partner's carry is logged
             Console.WriteLine(FormattableString.Invariant(
-                $"MP-W137 host change #{c.Seq} {c.Path} {(c.Port.Length > 0 ? c.Port : "-")} {c.Old}->{c.New} ({c.Type}{(c.Cascade ? ", cascade" : ", root")}{(c.Mirror ? ", from a request" : "")}) -> {peers.Count} joiner(s)"));
+                $"MP-W137 host change #{c.Seq} {c.Path} {(c.Port.Length > 0 ? c.Port : "-")} {c.Old}->{c.New} ({c.Type}{(c.Cascade ? ", cascade" : ", root")}{(c.Worker ? ", worker" : "")}{(c.Mirror ? ", from a request" : "")}) -> {peers.Count} joiner(s)"));
             return;
         }
         if (W137JoinerSession)
         {
             if (c.Mirror) { Interlocked.Increment(ref _w137Mirrors); return; }   // the host's own change, applied here: not asked back
             if (!W137Joiner) { Wo137Veto("joiner-not-joined"); return; }
+            // WO-154 1: this copy put back a value the host's change had put here -- the State is each world's own
+            if (!c.Cascade && _w154Contest.NoteLocal(c.Path, c.Old, c.New, Environment.TickCount64, out string jwhy))
+            {
+                Interlocked.Increment(ref _w154ContestFound);
+                Console.WriteLine(FormattableString.Invariant($"MP-W154 joiner: {c.Path} is CONTESTED -- {jwhy}; this copy keeps its own value from now on (a per-player trigger): not applied, asked or corrected"));
+            }
+            if (_w154Contest.IsContested(c.Path)) { Wo137Veto("joiner-contested"); return; }
             if (Wo137Rules.JoinerAskVeto(c) is { } veto)
             {
                 Interlocked.Increment(ref _w137Vetoed); Wo137Veto("joiner-" + veto);
                 if (veto is not ("cascade" or "silent" or "per-machine"))
-                    Console.WriteLine(FormattableString.Invariant($"MP-W137 joiner: local change {c.Path} {(c.Port.Length > 0 ? c.Port : "-")} {c.Old}->{c.New} not sent to the host ({veto})"));
+                    Console.WriteLine(FormattableString.Invariant($"MP-W137 joiner: local change {c.Path} {(c.Port.Length > 0 ? c.Port : "-")} {c.Old}->{c.New}{(c.Worker ? " (worker)" : "")} not sent to the host ({veto})"));
                 return;
             }
             if (_w151CatchUp && !_w151CaughtUp)
@@ -416,6 +435,7 @@ public partial class GameBridge
     private async Task<bool> Wo137ApplyOneAsync(QuestChange c)
     {
         if (Wo137Rules.PerMachine(c)) { Wo137Veto("apply-per-machine"); return true; }
+        if (_w154Contest.IsContested(c.Path)) { Wo137Veto("apply-contested"); return true; }   // WO-154 1: each world's own
         // WO-147: a correction fires only while this copy still differs from the host's value (the field's
         // "carryingBags SetCart 4->2 (the host had 4)": an earlier correction's cascade had already put it on 4).
         if (c.Seq == 0 && c.Port.Length > 0 && await Wo147CorrectionStillNeededAsync(c) == false) return true;
@@ -450,6 +470,7 @@ public partial class GameBridge
         {
             case 0:
                 Interlocked.Increment(ref _w137Applied);
+                _w154Contest.NoteImposed(c.Path, a.Old, a.New, Environment.TickCount64);   // WO-154 1
                 Wo147LearnPortValue(c.Path, c.Port, a.New, a.Type);   // WO-147
                 Console.WriteLine(FormattableString.Invariant(
                     $"MP-W137 joiner applied host change #{c.Seq} {c.Path} {c.Port} {a.Old}->{a.New}{(a.New != c.New ? $" (the host had {c.New})" : "")}"));
@@ -474,6 +495,13 @@ public partial class GameBridge
     private async Task Wo137OnResultAsync(uint tok, string verdict, int hostVal, string hostPort, string path)
     {
         _w137Asked.TryRemove(tok, out var asked);
+        if (verdict == Wo154Rules.VerdictContested)
+        {
+            // WO-154 1: the host's world re-derives this State by itself -- this copy keeps its own value
+            if (_w154Contest.Mark(path, "the host's world puts it back by itself")) Interlocked.Increment(ref _w154ContestTold);
+            Console.WriteLine(FormattableString.Invariant($"MP-W154 joiner: {path} is CONTESTED (the host says so{(tok != 0 ? $", request #{tok}" : "")}) -- this copy keeps its own value: not applied, asked or corrected from now on"));
+            return;
+        }
         string what = asked.Req.Path is { Length: > 0 } ? $"{asked.Req.Path} {asked.Req.Port} {asked.Req.Old}->{asked.Req.New}" : path;
         Console.WriteLine(FormattableString.Invariant($"MP-W137 joiner: request #{tok} {what}: the host says {verdict} (host value {hostVal})"));
         if (verdict is "refused" or "failed" || (verdict == "already" && _w151CatchUp && asked.Req.Path is { Length: > 0 } && hostVal != asked.Req.New))
@@ -511,6 +539,7 @@ public partial class GameBridge
         {
             var e = entries[i]; var l = local[i];
             if (!l.Found || !l.Ok || l.Val == e.Val) continue;
+            if (_w154Contest.IsContested(e.Path)) { Interlocked.Increment(ref _w154ContestSkippedCp); continue; }   // WO-154 1: each world's own
             mism++;
             Interlocked.Increment(ref _w137Mismatch);
             // WO-147: only a port known to produce the host's value (the field: "carryingBags SetCart 4->2
@@ -544,6 +573,13 @@ public partial class GameBridge
             return;
         }
         if (Wo137Rules.IsDlc(req.Path) || Wo137Rules.PerMachine(req)) { await Wo137ReplyAsync(src, tok, "notquest", 0, "", req.Path); Console.WriteLine($"{head}: refused (not a shared quest State)"); return; }
+        if (_w154Contest.IsContested(req.Path))
+        {
+            // WO-154 1: this world puts it back by itself -- each world keeps its own
+            await Wo137ReplyAsync(src, tok, Wo154Rules.VerdictContested, 0, "", req.Path);
+            Console.WriteLine($"{head}: contested -- this world re-derives it (a per-player trigger); each world keeps its own value");
+            return;
+        }
         var reads = await _combat.Wo137ReadStatesAsync([req.Path]);
         if (reads is not { Count: 1 } || !reads[0].Found)
         {
@@ -591,6 +627,7 @@ public partial class GameBridge
         if (a is { Result: 0 })
         {
             Interlocked.Increment(ref _w137VerdictApplied);
+            _w154Contest.NoteImposed(req.Path, a.Value.Old, a.Value.New, Environment.TickCount64);   // WO-154 1
             await Wo137ReplyAsync(src, tok, "applied", a.Value.New, req.Port, req.Path);
             Console.WriteLine(FormattableString.Invariant($"{head}: APPLIED to the host's world ({a.Value.Old}->{a.Value.New}); its consequences reach every joiner as changes"));
         }

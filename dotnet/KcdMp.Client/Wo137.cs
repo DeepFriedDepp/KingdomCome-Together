@@ -14,15 +14,18 @@ namespace KcdMp.Client;
 ///   [seq:4][flags:1][old:4][new:4][portLen:1][port][typeLen:1][type][pathLen:2][path][questLen:2]
 /// </code>
 /// flags: 1 notify, 2 mirror (caused while an Apply ran here), 4 old ok, 8 new ok,
-/// 16 cascade (made by another State's consumers). questLen: the quest root's
-/// prefix of Path (only States under a C_Quest are recorded).
+/// 16 cascade (made by another State's consumers), 64 worker (WO-154: made on an AI
+/// worker thread, not the frame thread). questLen: the quest root's prefix of Path
+/// (only States under a C_Quest are recorded). 32 is a request's own flag (Wo147Rules.FlagConversation).
 /// </summary>
 public readonly record struct QuestChange(uint Seq, byte Flags, int Old, int New, string Port, string Type, string Path, int QuestLen)
 {
-    public const byte FNotify = 1, FMirror = 2, FOldOk = 4, FNewOk = 8, FCascade = 16;
+    public const byte FNotify = 1, FMirror = 2, FOldOk = 4, FNewOk = 8, FCascade = 16, FWorker = 64;
     public bool Notify => (Flags & FNotify) != 0;
     public bool Mirror => (Flags & FMirror) != 0;
     public bool Cascade => (Flags & FCascade) != 0;
+    /// <summary>WO-154: made on a worker thread (an AI behaviour's change).</summary>
+    public bool Worker => (Flags & FWorker) != 0;
     public bool NewOk => (Flags & FNewOk) != 0;
     public bool OldOk => (Flags & FOldOk) != 0;
     /// <summary>"Barbora.trosecko.hledaniPsa" for "Barbora.trosecko.hledaniPsa.h.findVorech".</summary>
@@ -211,7 +214,7 @@ public static class Wo137Rules
         return true;
     }
 
-    public static readonly string[] Verdicts = ["applied", "already", "refused", "failed", "off", "held", "notquest"];
+    public static readonly string[] Verdicts = ["applied", "already", "refused", "failed", "off", "held", "notquest", Wo154Rules.VerdictContested];
 
     public static string ResultText(string verdict, int hostVal, string hostPort, string path) => $"{verdict} {I(hostVal)} {P(hostPort)} {path}";
 
