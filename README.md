@@ -7,7 +7,7 @@
 <strong>Not affiliated with or endorsed by Warhorse Studios or PLAION.</strong></p>
 
 <p align="center">
-  <a href="docs/releases/RELEASE-NOTES-0.44.0.md"><img alt="main" src="https://img.shields.io/badge/main-0.44.0-b8860b?style=flat-square"></a>
+  <a href="docs/releases/RELEASE-NOTES-0.45.0.md"><img alt="main" src="https://img.shields.io/badge/main-0.45.0-b8860b?style=flat-square"></a>
   <a href="https://github.com/DeepFriedDepp/KingdomCome-Together/releases/latest"><img alt="latest release" src="https://img.shields.io/github/v/release/DeepFriedDepp/KingdomCome-Together?label=latest%20release&color=8a3324&style=flat-square"></a>
   <a href="LICENSE"><img alt="License: GPLv3" src="https://img.shields.io/badge/license-GPLv3-2c3e50?style=flat-square"></a>
   <a href="docs/LAUNCHING.md"><img alt="Platform" src="https://img.shields.io/badge/platform-Windows-555555?style=flat-square"></a>
@@ -72,11 +72,14 @@ and weather. Each feature below says how far it is proven:
 | Clothes and weapons | The other player's figure wears what they wear and holds what they hold | ✅ |
 | Crouching, sneaking, torches | The figure crouches and sneaks with its player and holds a light only when its player does | 🧪 |
 | Riding | The rider sits on a horse on both screens | ✅ |
+| Smooth riding | The partner's horse is moved every frame with the game's own walk, trot and gallop (frozen frames 50 % → 0 % measured) | 🧪 new in 0.45.0 |
+| The join, seen by the host | The game's own panel shows the partner's progress through the whole join, while the world is held | 🧪 new in 0.45.0 |
+| A join that can't work | Plain words why (saves from the regular game, only copies of this world, no character) and **Join with a new character**; a load that freezes the game is told plainly (restart the game) | 🧪 new in 0.45.0 |
 | Nobody's menu stops the other | The host's world keeps running while either player is in a menu, the map or the inventory | ✅ |
 | Joining holds the host's world | While the partner joins, the host's world really stands still (until 0.42.8 it kept running) | 🧪 new in 0.43.0 |
 | Whistling | Your whistle (call your horse) is heard at your figure on the other screen | 🧪 new in 0.43.0 |
 | Riding the host's horses | The rider's horse is the rider's: nothing of the mod moves, pauses or animates it while it is ridden | 🧪 new in 0.43.0 |
-| Voice chat | Speech by distance | ⚠️ starts every session; nobody has confirmed hearing the other yet |
+| Voice chat | Speech by distance; **off** unless you turn it on (the launcher's Settings or the mod menu) | ⚠️ changed in 0.45.0; nobody has confirmed hearing the other yet |
 
 ### Fighting
 
@@ -90,6 +93,10 @@ and weather. Each feature below says how far it is proven:
 | Knockouts and takedowns | A knocked-out NPC is down on both screens; takedowns go through the host | 🧪 |
 | One fight, the host's | An enemy both of you fight shows the host's own reactions on the partner's screen; no falling over by itself, no tools mid-fight | 🧪 new in 0.43.0 |
 | Dying | A grave with your things, and you wake up nearby; nobody's world reloads | ✅ |
+| The host's blows count | An enemy fighting the partner reacts to the host's blows and turns on the host the way it would in the game | 🧪 new in 0.45.0 |
+| A partner who falls | Every fight against the partner's figure ends when they fall or respawn; guards leave them alone for two minutes after | 🧪 new in 0.45.0 |
+| Knocked down | A knocked-down player's figure falls on the other screen, lies there and gets up with them | 🧪 new in 0.45.0 |
+| Friendly fire | A hit on the partner never turns their figure against you (no "threatened" bark, no attack) | 🧪 new in 0.45.0 |
 
 ### The world
 
@@ -106,7 +113,7 @@ and weather. Each feature below says how far it is proven:
 | Dropping items for each other | What one drops, the other can pick up; the first pickup wins | ✅ |
 | Carrying | A body (dead or knocked out) or a sack one player carries is carried by that player's figure on the other screen and lies where it was put down; one carrier at a time, decided by the host's world | 🧪 new in 0.42.7 |
 | Carrying a living quest person | A person a quest lets you carry alive (the wounded hunter) is carried the same way | ⚠️ new in 0.43.0 (built and tested in scripts; not seen in the game yet) |
-| Fast travel | Only the host fast travels; the partner is told why | ✅ |
+| Fast travel | **Off** during a co-op session unless the host turns it on in the mod menu; then only the host fast travels and the partner is brought along | 🧪 changed in 0.45.0 |
 | The leash | A partner more than 650 m from the host is brought back after a countdown | 🧪 fixed in 0.42.5 (in the field it never brought anyone back) |
 
 ### Quests and conversations
@@ -114,6 +121,7 @@ and weather. Each feature below says how far it is proven:
 | Feature | What you get | Evidence |
 |---|---|---|
 | Shared quests | The partner's quest steps reach the host's world, the host's reach the partner's | ✅ |
+| Quest steps the game's AI makes | Duels, brawls, distance triggers and other steps made by the game's AI now go both ways too (until 0.44.0 most were lost) | 🧪 new in 0.45.0 |
 | Talking to the host's people | They wait for the partner while the partner talks to them | ✅ |
 | The host's quests are safe | A partner's step that would fail a quest or count someone as dead happens only if the host's world agrees | 🧪 new in 0.42.5 |
 | Catching up | After a join or the host's reload the partner acts only once their quests match the host's; a step the host has already done is never done again | 🧪 new in 0.43.0 |
@@ -127,7 +135,9 @@ and weather. Each feature below says how far it is proven:
 | Feature | What you get | Evidence |
 |---|---|---|
 | Dice against each other | A full game of Farkle in the game, with wagers | 🧪 against a scripted opponent |
-| Launcher | Host or join, version check, Report a bug (collects the logs) | ✅ |
+| Launcher | Host or join, version check, Report a bug (collects the logs); explains Windows blocking the mod in plain words | ✅ |
+| The mod menu | **Insert** in the game: every setting in plain words; the host's settings locked on the partner's screen | 🧪 new in 0.45.0 |
+| Setup that does itself | The launcher's checklist links the game into the Modding Tools for you (no Workspace Setup) | 🧪 new in 0.45.0 |
 | Installer | One Setup for everything; checks its own files | ✅ |
 | Server browser | Find a host's session in the launcher | 🧪 |
 
@@ -141,8 +151,8 @@ and weather. Each feature below says how far it is proven:
 - **Cutscenes** play for each player separately. 0.43.0 helps a scene that waits
   on the host's people, but a scene that waits for a quest step can still stay
   black until the next load.
-- **Friendly fire:** the host's blow hurts the partner, but the partner's figure
-  shows no reaction yet.
+- **Friendly fire:** a blow on the partner hurts and a knockdown shows, but the
+  figure's small flinch on an ordinary hit is not shown yet.
 - **Wolves' bites** hurt, but the bite itself is not shown on the partner's
   screen yet.
 - **Conversations and barks** are not heard by the other player.
@@ -158,14 +168,21 @@ earlier detailed status table is kept in
 
 ## How to play with a friend
 
-1. Both of you install the mod (below) and the launcher.
-2. One of you clicks **HOST GAME** in the launcher — it starts a relay and
-   shows you the address to share.
-3. The other clicks **ADD SERVER**, enters that address, and clicks **JOIN**.
-4. Both of you click through to load into the game world; the launcher
-   handles injecting the plugin and starting your agent once you confirm
-   you're actually in-game.
-5. Once both loaded, ALT+TAB into the launcher and choose the "Connect" option
+1. Both of you install the mod (below); the launcher's checklist sets up the
+   rest the first time.
+2. The **host** clicks **HOST GAME** in the launcher (it starts a relay and shows
+   the address to share), clicks **PLAY**, loads one of their own saves in the
+   game, and clicks **CONNECT** once the launcher says the game is ready.
+3. The **partner** clicks **ADD SERVER**, enters that address, clicks **PLAY**,
+   waits at the game's **main menu**, and clicks **CONNECT**. The host's world comes
+   to them: their own character lands beside the host. A partner with no save of
+   their own in the Modding Tools uses **Join with a new character**.
+4. In the game, **Insert** opens the mod menu: every setting in plain words
+   (`docs/MOD-MENU.md`). The console commands still work for those who like them.
+
+Which save: the host plays one of their own Modding Tools saves (a save past the
+tutorial is the better start; the tutorial is the roughest part to play together).
+The partner needs no save of that world.
 
 Same Wi-Fi/LAN: that's it. Different houses: see
 **[docs/NETWORKING.md](docs/NETWORKING.md)** for the two ways to connect
