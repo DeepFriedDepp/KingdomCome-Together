@@ -5929,6 +5929,7 @@ public partial class GameBridge(ClientConfig config)
                 Wo140OnEvent(name, arg);
                 return;
             case "w154_falls":       // WO-154 2: mp_avatar_falls on|off
+            case "w154_coalesce":    // WO-154 1: mp_quest_coalesce on|off
             case "w154_status":
                 Wo154OnEvent(name, arg);
                 return;

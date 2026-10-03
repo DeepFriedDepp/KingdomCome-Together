@@ -91,6 +91,46 @@ public class Wo154Tests
         Assert.True(d.Feed(true, 6000));                    // knocked down again
     }
 
+    // the field's Moravian fight on the joiner, 106 ms apart (22:44:32.453 / .559)
+    private const string Fight = "Barbora.trosecko.zbranePanaSemina.h.na_semine.bitka_s_moravaky.stateBitkaSMoravakem";
+    private const string Duel = "Barbora.trosecko.zbranePanaSemina.h.na_semine.bitka_s_moravaky.duelbehavioradvanced.OngoingDuel";
+    private static QuestChange W(string path, int o, int n, string port) =>
+        new(0, QuestChange.FNotify | QuestChange.FOldOk | QuestChange.FNewOk | QuestChange.FWorker, o, n, port, "", path, 33);
+
+    [Fact]
+    public void An_AI_behaviours_steps_on_one_State_are_judged_as_their_net_result()
+    {
+        var co = new Wo154Rules.WorkerCoalescer();
+        Assert.False(co.Add(1, 28, W(Fight, 0, 1, "SetInProgress"), 1000));
+        Assert.False(co.Add(1, 29, W(Duel, 0, 1, "SetTrue"), 1000));
+        Assert.True(co.Add(1, 33, W(Fight, 1, 2, "SetWon"), 1106));
+        Assert.True(co.Add(1, 36, W(Duel, 1, 0, "SetFalse"), 1106));
+        Assert.Empty(co.TakeReady(2000));                       // quiet for less than 1.5 s: still waiting
+        var ready = co.TakeReady(2700);
+        Assert.Equal(2, ready.Count);
+        Assert.Equal(Fight, ready[0].Path);                     // in the order they first came
+        var fight = Wo154Rules.WorkerCoalescer.Merged(ready[0]);
+        Assert.Equal((0, 2, "SetWon"), (fight.Old, fight.New, fight.Port));   // one Won, not InProgress then Won
+        Assert.Equal(new uint[] { 28, 33 }, ready[0].Toks);   // both steps get the one answer
+        Assert.False((fight.Flags & QuestChange.FWorker) != 0);  // judged as one step, never merged again
+        var duel = Wo154Rules.WorkerCoalescer.Merged(ready[1]);
+        Assert.Equal(duel.Old, duel.New);                       // 0->1->0: nothing to apply (the host answers "already")
+        Assert.Equal(0, co.Count);
+    }
+
+    [Fact]
+    public void A_State_that_keeps_moving_is_judged_after_five_seconds_and_partners_are_kept_apart()
+    {
+        var co = new Wo154Rules.WorkerCoalescer();
+        co.Add(1, 1, W(Fight, 0, 1, "SetInProgress"), 0);
+        co.Add(2, 2, W(Fight, 0, 1, "SetInProgress"), 0);      // another joiner's own step: his own entry
+        for (long t = 1000; t <= 5000; t += 1000) co.Add(1, (uint)(10 + t), W(Fight, 1, 1, "SetInProgress"), t);
+        var r = co.TakeReady(5000);
+        Assert.Contains(r, x => x.Src == 1);                    // the 5 s ceiling, though it never went quiet
+        Assert.Contains(r, x => x.Src == 2);                    // quiet since 0
+        Assert.Equal(2, r.Count);
+    }
+
     [Fact]
     public void A_bool_State_is_always_corrected_with_its_own_Set_ports()
     {

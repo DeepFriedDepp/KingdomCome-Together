@@ -19937,6 +19937,15 @@ do
         end
     end
 
+    -- mp_quest_coalesce on|off (host): a joiner's AI-behaviour steps on one State are judged as their net result
+    function KCD2MP_W154SetCoalesce(arg)
+        local v = KCD2MP_Wo122ParseBool(arg)
+        if v == "bad" then mp_log("mp_quest_coalesce: expected on|off"); return false end
+        if v ~= nil then KCD2MP_EmitEvent("w154_coalesce", v and "on" or "off") end
+        KCD2MP_EmitEvent("w154_status", "")
+        return true
+    end
+
     -- mp_avatar_falls on|off (bare = report)
     function KCD2MP_W154SetFalls(arg)
         local v = KCD2MP_Wo122ParseBool(arg)
@@ -21077,6 +21086,7 @@ local ok, err = pcall(function()
     System.AddCCommand("mp_oneshots", 'KCD2MP_SetOneShots(%line)', "WO-143: NPCs' one-shots (serving, drinking, a dog's howl) show on the other screen (default on): mp_oneshots on|off")
     System.AddCCommand("mp_player_minigames", 'KCD2MP_SetPlayerMinigames(%line)', "WO-143: the partner's grindstone, smithing, alchemy, reading and dice show on his avatar (default on): mp_player_minigames on|off")
     System.AddCCommand("mp_idles", 'KCD2MP_SetIdles(%line)', "WO-143: standing NPCs look at who they look at on the host's screen (default on): mp_idles on|off")
+    System.AddCCommand("mp_quest_coalesce", 'KCD2MP_W154SetCoalesce(%line)', "WO-154: (host) a joiner's quest steps made by an AI behaviour (a duel, a brawl) on one State are judged as their net result, not replayed step by step (default on): mp_quest_coalesce on|off")
     System.AddCCommand("mp_avatar_falls", 'KCD2MP_W154SetFalls(%line)', "WO-154: a partner who is knocked down in his own world falls and lies on this screen too, and stands up when he does (default on): mp_avatar_falls on|off")
     System.AddCCommand("mp_avatar_herbs", 'KCD2MP_SetAvatarHerbs(%line)', "WO-153: the partner's avatar plays its herb-picking loop (default OFF: the avatar stands; the loop ended both 0.43.0 joiner crashes): mp_avatar_herbs on|off")
     System.AddCCommand("mp_avatar_dress", 'KCD2MP_SetAvatarDress(%line)', "WO-144: a partner's avatar wears pieces from its own inventory, equipped through the actor (default on; off = 0.42.0's REST EquipItem): mp_avatar_dress on|off")

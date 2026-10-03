@@ -94,6 +94,55 @@ public static class Wo154Rules
     public const string VerdictContested = "contested";
 
     /// <summary>
+    /// Phase 1: a joiner's steps on one State made by an AI behaviour (worker flag), merged into their net result
+    /// before the host judges them. Live L1: the field's Moravian fight replayed step by step put the host's own duel
+    /// into InProgress, whose own logic (the host's Henry was not in the arena) resolved it Lost at once; the joiner's
+    /// Won that came 106 ms later was refused. Merged, 0->1->2 is one Won, 0->1->0 is nothing. A State waits until
+    /// <see cref="QuietMs"/> after its last step (at most <see cref="MaxWaitMs"/> after its first).
+    /// </summary>
+    public sealed class WorkerCoalescer
+    {
+        public const long QuietMs = 1500, MaxWaitMs = 5000;
+        public sealed record Item(byte Src, string Path, int FirstOld, int LastNew, string LastPort, byte Flags, int QuestLen,
+                                  List<uint> Toks, long FirstAtMs, long LastAtMs);
+        private readonly List<Item> _items = new();
+        public int Count { get { lock (_items) return _items.Count; } }
+
+        /// <summary>One step in. True when it joined a State already waiting (a merge).</summary>
+        public bool Add(byte src, uint tok, QuestChange req, long nowMs)
+        {
+            lock (_items)
+            {
+                int i = _items.FindIndex(x => x.Src == src && x.Path == req.Path);
+                if (i < 0)
+                {
+                    _items.Add(new Item(src, req.Path, req.Old, req.New, req.Port, req.Flags, req.QuestLen, new List<uint> { tok }, nowMs, nowMs));
+                    return false;
+                }
+                var x = _items[i];
+                x.Toks.Add(tok);
+                _items[i] = x with { LastNew = req.New, LastPort = req.Port, LastAtMs = nowMs };
+                return true;
+            }
+        }
+
+        /// <summary>The States whose wait is over (all of them with <paramref name="all"/>), in the order they first arrived.</summary>
+        public List<Item> TakeReady(long nowMs, bool all = false)
+        {
+            lock (_items)
+            {
+                var ready = _items.Where(x => all || nowMs - x.LastAtMs >= QuietMs || nowMs - x.FirstAtMs >= MaxWaitMs).ToList();
+                foreach (var x in ready) _items.Remove(x);
+                return ready;
+            }
+        }
+
+        /// <summary>The merged request (its worker flag cleared: judged as one step, never merged again).</summary>
+        public static QuestChange Merged(Item x) =>
+            new(0, (byte)(x.Flags & ~QuestChange.FWorker), x.FirstOld, x.LastNew, x.LastPort, "", x.Path, x.QuestLen);
+    }
+
+    /// <summary>
     /// Phase 2: a partner's Downed bit, edge by edge. The SENDER's DLL debounces the bit (it reads every frame;
     /// a body that flickers through a ragdoll does not set it), and the state block travels only on a change
     /// (plus a 1 s heartbeat while non-zero), so a receiver-side wait for a second clear sample would never end

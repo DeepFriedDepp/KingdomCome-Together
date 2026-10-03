@@ -94,6 +94,7 @@ public partial class GameBridge
         _w137Asked.Clear();
         _w137HostSeen.Clear();
         _w154Contest.Reset();   // WO-154 1
+        _w154Coalescer.TakeReady(0, all: true);
         foreach (var (npc, h) in _w137TalkHolds.ToArray())
             if (_w137TalkHolds.TryRemove(npc, out _)) _ = ExecLuaAsync($"if KCD2MP_W137HostHold then KCD2MP_W137HostHold(false, \"{npc}\", {h.Peer}, \"disconnect\") end");
         try { await _combat.Wo137ConfigAsync(false, 0, 0); } catch { }
@@ -147,6 +148,7 @@ public partial class GameBridge
                 _w137JoinerWasActive = joinerActive;
                 _ = ExecLuaAsync($"if KCD2MP_W137Session then KCD2MP_W137Session({B(host)}, {B(joiner)}, {B(Wo137Active(holding))}) end");
                 if (wasHolding && !holding && host) Wo137ReleaseHeldRequests();
+                if (host) Wo154FlushCoalesced(false);   // WO-154 1
                 wasHolding = holding;
                 long now = Environment.TickCount64;
                 if (host && LivePartners().Count > 0)
@@ -580,6 +582,7 @@ public partial class GameBridge
             Console.WriteLine($"{head}: contested -- this world re-derives it (a per-player trigger); each world keeps its own value");
             return;
         }
+        if (Wo154CoalesceWorkerRequest(src, tok, req, head)) return;   // WO-154 1: an AI behaviour's steps are judged as their net result
         var reads = await _combat.Wo137ReadStatesAsync([req.Path]);
         if (reads is not { Count: 1 } || !reads[0].Found)
         {
@@ -651,8 +654,13 @@ public partial class GameBridge
         if (n > 0) Console.WriteLine($"MP-W137 host: the world has loaded -- {n} joiner request(s) that waited are judged now, in order");
     }
 
-    private Task Wo137ReplyAsync(byte peer, uint tok, string verdict, int hostVal, string hostPort, string path) =>
-        Wo137SendAsync(Protocol.QuestHostUp, peer, Protocol.QuestHostResult, tok, Wo137Rules.ResultText(verdict, hostVal, hostPort, path));
+    private async Task Wo137ReplyAsync(byte peer, uint tok, string verdict, int hostVal, string hostPort, string path)
+    {
+        await Wo137SendAsync(Protocol.QuestHostUp, peer, Protocol.QuestHostResult, tok, Wo137Rules.ResultText(verdict, hostVal, hostPort, path));
+        // WO-154 1: a merged request answers every step it merged
+        if (_w154AlsoToks.Value is { } more)
+            foreach (uint t in more) await Wo137SendAsync(Protocol.QuestHostUp, peer, Protocol.QuestHostResult, t, Wo137Rules.ResultText(verdict, hostVal, hostPort, path));
+    }
 
     private Task Wo137SendCheckpointAsync() => Wo137SendCheckpointAsync(null, "periodic");
 
