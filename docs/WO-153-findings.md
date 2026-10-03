@@ -253,8 +253,14 @@ Read by an investigator against the logs; none sits at a dropped batch, a fault 
 ## B. The installer
 
 Built by `tools\Build-Installer.ps1 -SoakWaiver "<the maintainer's instruction>"` inside a fresh
-clone of the repository, so nothing from the working folder is in it. The numbers and the payload
-checks are in `docs/WO-153-progress.md` (the work log, item 9).
+clone of the repository (at `a5da586`), so nothing from the working folder is in it:
+`release\KingdomComeTogether-Setup-0.44.0.exe`, 97.3 MB, SHA-256
+`13f8fb0b9580128a524444770979356bb1986992f40c7938ef16ec0620b2bb28`, in the git-ignored release
+folder with `SOAK-WAIVED-0.44.0.txt`. No GitHub release. **The soak did not run** (§D 1).
+The payload smoke, the install markers and the privacy sweep passed on the final payload; the sweep
+found one real leak on the way (the maintainer's Windows user name in the NativeAOT `KcdMpSetup.exe`,
+from the native linker's PDB path) and it is fixed (`/PDBALTPATH`) and rebuilt. Details:
+`docs/WO-153-progress.md`, work log item 9.
 
 ## G. Gates
 

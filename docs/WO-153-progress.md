@@ -45,7 +45,21 @@ soak (§D 1).
    `Wo136DoorKey` and the door coalescing in the load hold.
 8. **Gates, docs.** See below.
 9. **The installer** (0.44.0): built on the maintainer's instruction with the soak waived
-   (`-SoakWaiver`); the result is appended below once built.
+   (`-SoakWaiver`), inside a fresh clone at `a5da586`. `release\KingdomComeTogether-Setup-0.44.0.exe`,
+   102,031,590 bytes (97.3 MB), SHA-256 `13f8fb0b9580128a524444770979356bb1986992f40c7938ef16ec0620b2bb28`,
+   beside `release\SOAK-WAIVED-0.44.0.txt` (git-ignored; there is no GitHub release). Inside the build:
+   relay tests 62, agent tests 852, Setup tests 64, `RELAY-SMOKE ok protocol=v10 release=0.44.0`.
+   Two false starts, both recorded: (a) the first clone sat under the scratchpad's very long path and
+   16 of the 64 Setup tests failed there (they pass 64 of 64 in the repo and in a short-path clone: a
+   path-length effect, not a defect); (b) the payload privacy sweep found the maintainer's Windows user
+   name in `KcdMpSetup.exe` (the native linker's PDB path, which Roslyn's PathMap does not cover);
+   fixed in `KcdMp.SetupHost.csproj` and the installer rebuilt, the first one discarded.
+   Checks on the final payload: the payload smoke (1,066 assembly entries, `failed: 0`), `Verify-Install`
+   against the payload (every WO-153 marker present; only the dice keys and Setup's own verify file,
+   which Setup writes, are missing), and the privacy sweep over all 1,038 payload and mod files (ASCII
+   and UTF-16): none of the field players' names, the maintainer's user name or e-mail, Steam IDs or
+   addresses; the matches left are the project's own repository name, words inside stock runtime tables,
+   and the NAudio author's build path in its six NuGet DLLs (as in 0.43.0).
 
 ## Gates (HEAD `07ca5aa` + the docs commit)
 
