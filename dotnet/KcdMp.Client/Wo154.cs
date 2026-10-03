@@ -94,13 +94,14 @@ public static class Wo154Rules
     public const string VerdictContested = "contested";
 
     /// <summary>
-    /// Phase 2: a partner's Downed bit, debounced. Down once the bit has held for <see cref="DownAfterMs"/> (a body
-    /// that flickers through a ragdoll for a frame does not fall); up once it has been clear for
-    /// <see cref="UpAfterMs"/> (a ragdoll settling does not stand the avatar up and drop it again).
+    /// Phase 2: a partner's Downed bit, edge by edge. The SENDER's DLL debounces the bit (it reads every frame;
+    /// a body that flickers through a ragdoll does not set it), and the state block travels only on a change
+    /// (plus a 1 s heartbeat while non-zero), so a receiver-side wait for a second clear sample would never end
+    /// (live L1: the avatar never stood up). Down on the first set sample, up on the first clear one.
     /// </summary>
     public sealed class DownEdge
     {
-        public const long DownAfterMs = 200, UpAfterMs = 500;
+        public const long DownAfterMs = 0, UpAfterMs = 0;
         public bool Down { get; private set; }
         private long _bitSince = -1, _clearSince = -1;
 

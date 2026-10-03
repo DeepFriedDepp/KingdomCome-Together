@@ -6,6 +6,7 @@
 #include "fault_guard.h"
 
 #include <windows.h>
+#include <algorithm>
 #include <atomic>
 #include <cmath>
 #include <cstdio>
@@ -17,6 +18,7 @@
 #include "wo143_rules.h"
 #include "mannequin_read.h"
 #include "npc_drive.h"
+#include "rttr_abi.h"
 #include <unordered_map>
 #include <vector>
 
@@ -802,8 +804,14 @@ void set_quiet(Body& b, uint8_t want);
 
 void release_body(Body& b, const char* why) {
     release_gait(b);
-    if (b.ctxApplied) set_avatar_contexts(b, false);
-    if (b.quietApplied) set_quiet(b, 0);
+    // WO-154 2: an avatar's reaction contexts and its speech gate are its identity, not the writer's: they
+    // stay through every unbind (riding, a stale stream, a fallen body, a dropped writer). 0.44.0 cleared them
+    // here, and every avatar bark of the field evening with the DLL present fell in those windows (95 s on the
+    // host, 75 s on the joiner). They go when the session ends (on_pipe_closed) or a switch turns a group off.
+    if (!b.avatar) {
+        if (b.ctxApplied) set_avatar_contexts(b, false);
+        if (b.quietApplied) set_quiet(b, 0);
+    }
     if (b.crouchApplied && b.exp && vslot(b.exp, kExpSetCrouch) == A.fnSetCrouch) { call_bb(A.fnSetCrouch, b.exp, false, false); b.crouchApplied = false; }
     if (b.ca && is_a(b.ca, A.vftCa)) {
         if (b.blockApplied) call_setblock(A.fnSetBlock, b.ca, false, 0);
@@ -952,9 +960,10 @@ std::atomic<uint32_t> c_buffAdds{0};
 void ensure_avatar_guard(Body& b, double now) {
     if (now - b.lastBuffCheck < 5.0) return;
     b.lastBuffCheck = now;
-    const bool wantCtx = g_combat && g_cfgCombat;
+    // WO-154 2: on every avatar, always (0.44.0: only while the combat path was armed and mp_avatar_combat on).
+    const bool wantCtx = true;
     if (wantCtx != b.ctxApplied) set_avatar_contexts(b, wantCtx);
-    const uint8_t wantQuiet = wantCtx ? g_cfgQuiet.load() : 0;   // WO-135
+    const uint8_t wantQuiet = g_cfgQuiet.load();   // WO-135: mp_avatar_quiet's groups
     if (wantQuiet != b.quietApplied) set_quiet(b, wantQuiet);
     if (!g_avatarGuardOk) return;
     void* soul = nullptr;
@@ -962,6 +971,51 @@ void ensure_avatar_guard(Body& b, double now) {
     if (!fn || !call_p0(fn, b.actor, &soul) || !soul) return;
     if (buffs::has(soul, g_avatarGuard) > 0) return;
     if (buffs::add(soul, g_avatarGuard)) { c_buffAdds.fetch_add(1); logf("WO121-MOTION body=%s avatar guard applied (imm+upr)", b.key.c_str()); }
+}
+
+// WO-154 2: the avatar's identity at spawn, by its soul's guid (the agent's per-spawn isolate call, pipe 0x07):
+// the WO-121 contexts and mp_avatar_quiet's groups (speech gate included) go on before the writer ever binds it,
+// and stay until the session ends. Main thread.
+struct KeptIdentity { unsigned char guid[16]; uint8_t quiet; };
+std::vector<KeptIdentity> g_kept;
+
+void set_identity_on_soul(void* soul, uint8_t quiet, bool on, const char* who) {
+    int ok = 0, bad = 0;
+    for (const char* n : kAvatarContexts) (kcdmp::sctx::set_soul_context(soul, n, on) >= 0 ? ok : bad)++;
+    for (const auto& g : kQuiet) {
+        if (!on || (quiet & g.bit)) {
+            for (size_t i = 0; i < g.n; ++i) (kcdmp::sctx::set_soul_context(soul, g.ctx[i], on) >= 0 ? ok : bad)++;
+            if (g.bit == kQuietSpeech) { kcdmp::wo135::set_speaker_blocked(soul, on); (kcdmp::wo135::armed() ? ok : bad)++; }
+        }
+    }
+    c_ctxSet.fetch_add(ok); c_ctxFail.fetch_add(bad);
+    logf("WO154-IDENTITY avatar soul %p %s: %d ok, %d failed (quiet=0x%X, %s)", soul, on ? "SET at spawn" : "cleared", ok, bad, quiet, who);
+}
+
+void avatar_identity(const unsigned char guid[16], bool on) {
+    void* soul = rttr::find_soul_by_guid(guid);
+    auto it = std::find_if(g_kept.begin(), g_kept.end(), [&](const KeptIdentity& k) { return std::memcmp(k.guid, guid, 16) == 0; });
+    if (!soul) {
+        logf("WO154-IDENTITY avatar soul not found by its guid (%s) -- the bind applies it later", on ? "spawn" : "removal");
+        if (!on && it != g_kept.end()) g_kept.erase(it);
+        return;
+    }
+    if (on) {
+        const uint8_t quiet = g_cfgQuiet.load();
+        set_identity_on_soul(soul, quiet, true, "the isolate call");
+        if (it == g_kept.end()) { KeptIdentity k{}; std::memcpy(k.guid, guid, 16); k.quiet = quiet; g_kept.push_back(k); }
+        else it->quiet = quiet;
+    } else {
+        set_identity_on_soul(soul, 0x0F, false, "the isolate call");
+        if (it != g_kept.end()) g_kept.erase(it);
+    }
+}
+
+void release_identities(const char* why) {
+    for (const auto& k : g_kept)
+        if (void* soul = rttr::find_soul_by_guid(k.guid)) set_identity_on_soul(soul, 0x0F, false, why);
+    if (!g_kept.empty()) logf("WO154-IDENTITY %zu avatar identit%s released (%s)", g_kept.size(), g_kept.size() == 1 ? "y" : "ies", why);
+    g_kept.clear();
 }
 
 // WO-129: the body's own class count from the engine's logical-speed manager
@@ -1312,6 +1366,9 @@ void body_frame(const char* key, void* ent, uint32_t eid, float renderSpeedMps, 
     else if (b.automationOff || b.combatHeld) release_body(b, "toggle off");
 }
 
+void identity(const unsigned char guid[16], bool on) { avatar_identity(guid, on); }
+void on_pipe_closed() { release_identities("the agent went away"); }
+
 void body_released(const char* key, uint32_t eid) {
     auto it = g_bodies.find(eid);
     if (it == g_bodies.end()) return;
@@ -1324,18 +1381,26 @@ void body_released(const char* key, uint32_t eid) {
 // WO-154 2: the local player's body is down when its physics is no living entity: the ragdoll of a
 // knockdown (TakeDamage's own, WO-151 L2: on his back until he stands) or of a knockout. The partner's
 // screen shows the avatar fall, lie and stand up on this bit's edges. Logged on each edge.
+// Debounced here, where every read sees it: down after 150 ms of no living physics, up after 300 ms of
+// living physics again (the state block travels only on a change, so the receiver cannot debounce).
 void note_local_downed(State2* out) {
-    static int s_was = -1;
+    static bool s_down = false;
+    static double s_since = -1;   // when the raw reading last started to differ from s_down
     void* pe = engine::entity_by_id(0x7777);
     kcdmp::npcdrive::PhysicsStatus ps{};
-    if (!pe || !kcdmp::npcdrive::physics_status(pe, &ps) || !ps.present) return;
-    const bool down = !ps.living;
-    if (down) out->bits |= kBitDowned;
-    if (s_was != static_cast<int>(down)) {
-        if (s_was >= 0)
-            logf("WO154-DOWN the local player is %s (physics %s)", down ? "DOWN" : "up again", ps.living ? "living" : "not a living entity");
-        s_was = down ? 1 : 0;
+    if (pe && kcdmp::npcdrive::physics_status(pe, &ps) && ps.present) {
+        const bool raw = !ps.living;
+        const double now = kcdmp::npcdrive::now_s();
+        if (raw == s_down) s_since = -1;
+        else {
+            if (s_since < 0) s_since = now;
+            if (now - s_since >= (raw ? 0.15 : 0.30)) {
+                s_down = raw; s_since = -1;
+                logf("WO154-DOWN the local player is %s (physics %s)", raw ? "DOWN" : "up again", ps.living ? "living" : "not a living entity");
+            }
+        }
     }
+    if (s_down) out->bits |= kBitDowned;
 }
 
 bool read_local_state2(State2* out, float facingYaw) {

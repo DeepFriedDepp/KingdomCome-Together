@@ -6371,12 +6371,15 @@ public partial class GameBridge(ClientConfig config)
             {
                 Console.WriteLine($"[isolate] ghost {ghostId}: no soul guid yet -- contexts not "
                                 + (on ? "applied" : "removed") + " (next spawn retries)");
+                if (on) await ExecLuaAsync($"if KCD2MP_W154AvatarIdentity then KCD2MP_W154AvatarIdentity(\"{ghostId}\", false) end");   // WO-154 2: fail closed
                 return;
             }
 
             bool ok = await _combat.GhostIsolateAsync(guid.Value, on, ct);
             Console.WriteLine($"[isolate] ghost {ghostId} contexts {(on ? "applied" : "removed")}: {ok}"
                             + (ok ? "" : " -- see the SCTX lines in kcdmp-native.log"));
+            // WO-154 2: an avatar without its native protections has its brain paused until it has them (fail closed)
+            if (on) await ExecLuaAsync($"if KCD2MP_W154AvatarIdentity then KCD2MP_W154AvatarIdentity(\"{ghostId}\", {B(ok)}) end");
         }
         catch (Exception ex)
         {

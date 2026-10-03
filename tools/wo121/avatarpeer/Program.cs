@@ -11,7 +11,7 @@
 //   at <t> move <speedMps> <headingRad> <secs> [zEnd]  walk/run on a heading (zEnd: z moves linearly to it; the state
 //                                              block's speed = speed; facing = heading)
 //   at <t> strafe <speedMps> <moveDirRad> <secs>  move at moveDir relative to the facing
-//   at <t> state k=v ...                       bits/zones: crouch=0|1 combat=0|1 block=0|1
+//   at <t> state k=v ...                       bits/zones: crouch=0|1 combat=0|1 block=0|1 downed=0|1 (WO-154)
 //                                              locked=0|1 gz=<zone> gs=<left|right|none> az=<zone>
 //                                              (zones by table name: head upper_left upper_right
 //                                              lower_left lower_right lower undefined)
@@ -29,7 +29,7 @@
 //                                              placed (on), refuse as busy, or report not-placed (fail)
 //   at <t> death                               (WO-131) a PlayerDeath (0x23): "I died"
 //   at <t> respawned <x> <y> <z>               (WO-131) a PlayerRespawned (0x3E), then stand there
-//   at <t> vitals <hp> <st> [downed]           (WO-131; WO-132 downed = the unconscious bit 0x01) a PlayerState (0x1F): the owner's own health (hp > 0 clears
+//   at <t> vitals <hp> <st> [downed|knockeddown]  (WO-131; WO-132 downed = the unconscious bit 0x01; WO-154 knockeddown = 0x01|0x04) a PlayerState (0x1F): the owner's own health (hp > 0 clears
 //                                              the host's death tag, as a real joiner's vitals do); also sent
 //                                              every 2 s at 100/100 once `vitals` or `respawned` ran
 //   at <t> appearance mirror|<guid,...>        (WO-131) an Appearance (0x1A): the host's own item classes
@@ -299,7 +299,7 @@ static class P
                         foreach (var kv in f[1..])
                         {
                             var p = kv.Split('='); if (p.Length != 2) continue;
-                            BodyState2Bits Bit(string k) => k switch { "crouch" => BodyState2Bits.Crouched, "combat" => BodyState2Bits.CombatMode, "block" => BodyState2Bits.BlockHeld, "locked" => BodyState2Bits.Locked, "torch" => BodyState2Bits.TorchLit, _ => 0 };
+                            BodyState2Bits Bit(string k) => k switch { "crouch" => BodyState2Bits.Crouched, "combat" => BodyState2Bits.CombatMode, "block" => BodyState2Bits.BlockHeld, "locked" => BodyState2Bits.Locked, "torch" => BodyState2Bits.TorchLit, "downed" => BodyState2Bits.Downed, _ => 0 };
                             switch (p[0])
                             {
                                 case "gz": s2 = s2 with { GuardZone = Zone(p[1]) }; break;
@@ -376,7 +376,8 @@ static class P
                         break;
                     case "vitals":   // WO-131
                         vitalsHp = F(f[1]); vitalsSt = F(f[2]); lastVitals = -9;
-                        vitalsFlags = f.Length > 3 && f[3] == "downed" ? Protocol.PlayerStateFlagUnconscious : (byte)0;
+                        vitalsFlags = f.Length > 3 && f[3] == "downed" ? Protocol.PlayerStateFlagUnconscious
+                                    : f.Length > 3 && f[3] == "knockeddown" ? (byte)(Protocol.PlayerStateFlagUnconscious | Protocol.PlayerStateFlagKnockedDown) : (byte)0;   // WO-154
                         Console.WriteLine($"PEER t={t:F1} vitals {vitalsHp}/{vitalsSt}{(vitalsFlags != 0 ? " DOWNED" : "")}");
                         break;
                     case "death":   // WO-131

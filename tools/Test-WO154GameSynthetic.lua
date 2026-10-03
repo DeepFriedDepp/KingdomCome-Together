@@ -5,6 +5,7 @@
 --
 --   (A) Phase 2: a partner who is knocked down falls on this screen, lies there with his writer held, and
 --       stands up when he does; a hidden (dead) avatar never falls; mp_avatar_falls off stands every figure up
+--   (A5) Phase 2, fail closed: an avatar without its native protections has its brain paused until it has them
 --
 -- Driven by Test-WO154GameSynthetic.ps1 through the WO-77 MoonSharp driver. Live evidence: docs/WO-154-findings.md.
 --
@@ -82,8 +83,8 @@ local function mkAvatar(id, x, y, z)
         IsDead = function() return false end,
         IsUnconscious = function() return false end,
         GetHealth = function() return 100 end,
-        Fall = function(self, pos) e.falls = e.falls + 1; e.fallAt = pos end,
-        StandUp = function(self) e.stands = e.stands + 1 end,
+        RagDollize = function(self) e.falls = e.falls + 1; e.fallAt = { x = e.px, y = e.py, z = e.pz } end,
+        Revive = function(self, full) e.stands = e.stands + 1; e.reviveFull = full end,
     }
     ENTS[name] = e
     KCD2MP.ghosts = KCD2MP.ghosts or {}
@@ -102,14 +103,14 @@ do
     KCD2MP_W154AvatarDowned("1", true)
     check("A: down -> the writer lets go first", g.istate.nativeOwned == false and countEvt("npc_native", "kcd2mp_1 off", mark) == 1,
         tostring(g.istate.nativeOwned))
-    check("A: down -> the engine's own fall, where it stands", e.falls == 1 and e.fallAt and e.fallAt.x == 10 and e.fallAt.y == 20, tostring(e.falls))
+    check("A: down -> the engine's own ragdoll, where it stands", e.falls == 1 and e.fallAt and e.fallAt.x == 10 and e.fallAt.y == 20, tostring(e.falls))
     check("A: down -> WO154-FALL logged ok", lastLog("WO154-FALL avatar=kcd2mp_1 ok=true", mark) ~= nil, lastLog("WO154-FALL", mark))
     check("A: while down it is frozen like a body (nothing moves or animates it)", mp_ghost_is_corpse("1", g) == true)
     check("A: while down WO-135's not-living stand-up refuses", KCD2MP_W135AvatarStandUp("kcd2mp_1") == false and e.stands == 0, tostring(e.stands))
     NOW = NOW + 6.0
     mark = #LOG
     KCD2MP_W154AvatarDowned("1", false)
-    check("A: up -> the engine's own stand-up", e.stands == 1, tostring(e.stands))
+    check("A: up -> the engine's own Revive(false) stands it", e.stands == 1 and e.reviveFull == false, tostring(e.stands))
     check("A: up -> WO154-RISE logged with how long he lay", (lastLog("WO154-RISE avatar=kcd2mp_1 ok=true", mark) or ""):find("down 6.0 s", 1, true) ~= nil,
         lastLog("WO154-RISE", mark))
     check("A: up -> no longer frozen", mp_ghost_is_corpse("1", g) == false)
@@ -157,6 +158,22 @@ do
     KCD2MP_W154AvatarDowned("7", false)
     check("A4: up clears the mark", not KCD2MP_W154IsDown("7"))
     noErrs("A4")
+end
+
+-- (A5) fail closed: no native protections -> the brain is paused; with them -> resumed ------------------------------------
+do
+    ERRS = {}; CMDS = {}
+    local mark = #LOG
+    KCD2MP_W154AvatarIdentity("4", false)
+    check("A5: no protections -> wh_ai_PauseNPC on the avatar", CMDS[1] == "wh_ai_PauseNPC kcd2mp_4", CMDS[1])
+    KCD2MP_W154AvatarIdentity("4", false)
+    check("A5: ... once", #CMDS == 1, tostring(#CMDS))
+    check("A5: ... logged", lastLog("WO154-FAILCLOSED avatar=kcd2mp_4 paused ok=true", mark) ~= nil)
+    KCD2MP_W154AvatarIdentity("4", true)
+    check("A5: protections on -> wh_ai_ResumeNPC", CMDS[2] == "wh_ai_ResumeNPC kcd2mp_4", CMDS[2])
+    KCD2MP_W154AvatarIdentity("5", true)
+    check("A5: an avatar that always had them is never touched", #CMDS == 2, tostring(#CMDS))
+    noErrs("A5")
 end
 
 OUT = table.concat(RESULTS, "\n")

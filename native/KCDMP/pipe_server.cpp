@@ -710,7 +710,10 @@ void serve(HANDLE h) {
                 bool ok = false;
                 bool faultedFlag = false;
                 const bool ran = run_sync_bounded<bool>(
-                    [guid, on](bool& result) { result = sctx::apply_isolation(guid.data(), on); },
+                    [guid, on](bool& result) {
+                        result = sctx::apply_isolation(guid.data(), on);
+                        kcdmp::motion::identity(guid.data(), on);   // WO-154 2: its reaction contexts from spawn
+                    },
                     "GhostIsolate", ok, &faultedFlag);
                 if (!ran) logf("PIPE: GhostIsolate timed out waiting for a frame");
                 logf("PIPE: GhostIsolate on=%s -> %s", on ? "true" : "false",
@@ -1380,6 +1383,7 @@ void serve(HANDLE h) {
     // WO-118: no agent, no stream -- every native binding is dropped.
     npcdrive::on_pipe_closed();
     main_thread::post([] { kcdmp::wo132::on_pipe_closed(); });   // WO-132: engaged copies let go (main-thread state)
+    main_thread::post([] { kcdmp::motion::on_pipe_closed(); });  // WO-154 2: the avatars' identities go with the session
     kcdmp::wo137::on_disconnect();   // WO-137: no agent -- no quest frames, no HUD proxy
     kcdmp::wo138::on_pipe_closed();  // WO-138: no agent -- the native sender, the pause gate and the hold go off
     kcdmp::weather::on_pipe_closed();  // WO-151: no agent -- the weather gate opens

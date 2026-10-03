@@ -89,8 +89,13 @@ uint8_t on_avatar_event(const uint8_t* body, size_t len);
 // renderVx/Vy: this frame's rendered planar velocity (world, m/s).
 void body_frame(const char* key, void* ent, uint32_t eid, float renderSpeedMps, float renderVx, float renderVy,
                 const State2* st, double stAgeS, double now);
-// The writer stopped driving this body (unbind, drop, disarm): give it back.
+// The writer stopped driving this body (unbind, drop, disarm): give it back. An avatar keeps its identity
+// (WO-154 2: its reaction contexts and speech gate stay through every unbind).
 void body_released(const char* key, uint32_t eid);
+// WO-154 2: the avatar's identity at spawn, by its soul's guid (the agent's isolate call); main thread.
+void identity(const unsigned char guid[16], bool on);
+// WO-154 2: the session is over: every avatar identity this DLL set is cleared; main thread.
+void on_pipe_closed();
 // The local player's state block (main thread; the 0x86 read). facingYaw is
 // the yaw local_state read from the entity matrix in the same call.
 bool read_local_state2(State2* out, float facingYaw);

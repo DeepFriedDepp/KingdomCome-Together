@@ -19853,14 +19853,21 @@ end
 -- ===== WO-154: the partner's figure falls when he is knocked down (docs/WO-154-findings.md) =====
 --
 -- Phase 2 (both roles). The partner's DLL sets the Downed bit of his body-state block while his own body
--- is down (its physics is no living entity: a knockdown's ragdoll, a knockout); the agent debounces its
--- edges (GameBridge.Wo154.cs) and calls KCD2MP_W154AvatarDowned. On the way down the avatar's writer lets
--- go first (mp_ghost_is_corpse reads it down: nothing moves or animates it), then the engine's own
--- Actor.Fall drops it where it stands; it lies there while he does. On the way up the engine's own
--- StandUp; if its body is still on the ground when the writer binds it again, WO-135's not-living
--- stand-up runs as before. A death or an execution still hides the avatar at the death spot (WO-132);
--- a knockdown is never hidden. mp_avatar_falls on|off (default on).
+-- is down (its physics is no living entity: a knockdown's ragdoll, a knockout; the DLL debounces it) and the
+-- agent calls KCD2MP_W154AvatarDowned on its edges (GameBridge.Wo154.cs). On the way down the avatar's
+-- writer lets go first (mp_ghost_is_corpse reads it down: nothing moves or animates it), then the engine's
+-- own Actor.RagDollize lays it where it stands; it lies there while he does (live L1: still down at 2, 10
+-- and 25 s; Actor.Fall is a stagger it got up from by itself after ~7 s). On the way up the engine's own
+-- Revive(false) stands it (live L1; StandUp does not lift a RagDollize'd body); its reaction contexts were
+-- never off (WO-154 2: they stay through every unbind). A death or an execution still hides the avatar at
+-- the death spot (WO-132); a knockdown is never hidden. mp_avatar_falls on|off (default on).
 --   WO154-FALL avatar=<name> ok=<pcall> / WO154-RISE avatar=<name> ok=<pcall>
+--
+-- Fail closed (Phase 2): an avatar whose native protections (its reaction contexts, the speech gate) are
+-- not on -- the DLL is not injected, or the isolate call failed -- has its brain paused with the engine's
+-- own wh_ai_PauseNPC until they are (the field's one crime chain ran in a launch without the DLL: the
+-- avatar heard, saw the drawn weapon, ran the assault reaction and attacked the host). Its stream still
+-- moves it.  WO154-FAILCLOSED avatar=<name> paused|resumed
 do
     KCD2MP.w154 = KCD2MP.w154 or {}
     local W = KCD2MP.w154
@@ -19885,10 +19892,12 @@ do
             if hidden then mp_log("WO154-FALL avatar=" .. name .. " is hidden (a death) -- no fall"); return end
             pcall(KCD2MP_GhostNativeSync, id, ghost, false)   -- the writer lets go first
             local ok, err = false, nil
-            if type(e.actor.Fall) == "function" then
+            if type(e.actor.RagDollize) == "function" then
+                ok, err = pcall(function() e.actor:RagDollize() end)
+            elseif type(e.actor.Fall) == "function" then
                 ok, err = pcall(function() e.actor:Fall(e:GetWorldPos()) end)
             else
-                err = "Actor.Fall is not registered on this build"
+                err = "Actor.RagDollize / Actor.Fall are not registered on this build"
             end
             if ok then W.stats.fell = W.stats.fell + 1 else W.stats.fallFail = W.stats.fallFail + 1 end
             mp_log(string.format("WO154-FALL avatar=%s ok=%s%s -- he is down in his world: his figure falls and lies here",
@@ -19898,14 +19907,33 @@ do
             W.down[id] = nil
             if not (e and e.actor) then return end
             local ok, err = false, nil
-            if type(e.actor.StandUp) == "function" then
+            if type(e.actor.Revive) == "function" then
+                ok, err = pcall(function() e.actor:Revive(false) end)
+            elseif type(e.actor.StandUp) == "function" then
                 ok, err = pcall(function() e.actor:StandUp() end)
             else
-                err = "Actor.StandUp is not registered on this build"
+                err = "Actor.Revive / Actor.StandUp are not registered on this build"
             end
             if ok then W.stats.rose = W.stats.rose + 1 else W.stats.riseFail = W.stats.riseFail + 1 end
             mp_log(string.format("WO154-RISE avatar=%s ok=%s%s -- he stood up in his world (down %.1f s)",
                 name, tostring(ok), ok and "" or (" err=" .. tostring(err)), since and (os.clock() - since) or -1))
+        end
+    end
+
+    -- The agent's answer to an avatar's isolate call (its spawn): ok = the native protections are on.
+    W.failClosed = W.failClosed or {}   -- ghost id -> true while its brain is paused for want of them
+    function KCD2MP_W154AvatarIdentity(id, ok)
+        id = tostring(id)
+        local name = "kcd2mp_" .. id
+        if not ok and not W.failClosed[id] then
+            local pok, err = pcall(System.ExecuteCommand, "wh_ai_PauseNPC " .. name)
+            W.failClosed[id] = true
+            mp_log(string.format("WO154-FAILCLOSED avatar=%s paused ok=%s%s -- its native protections are not on (no DLL, or the isolate call failed): its brain stays off, its stream still moves it",
+                name, tostring(pok), pok and "" or (" err=" .. tostring(err))))
+        elseif ok and W.failClosed[id] then
+            local pok = pcall(System.ExecuteCommand, "wh_ai_ResumeNPC " .. name)
+            W.failClosed[id] = nil
+            mp_log(string.format("WO154-FAILCLOSED avatar=%s resumed ok=%s -- its native protections are on", name, tostring(pok)))
         end
     end
 
