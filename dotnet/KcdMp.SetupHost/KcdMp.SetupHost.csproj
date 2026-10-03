@@ -40,4 +40,13 @@
     <ProjectReference Include="..\KcdMp.Setup\KcdMp.Setup.csproj" />
   </ItemGroup>
 
+  <!--
+    WO-153: the native linker writes the full path of its PDB into the exe's debug directory (RSDS), and Roslyn's
+    PathMap (Directory.Build.props, WO-98) does not touch that: the 0.44.0 payload sweep found the build machine's
+    Windows user name in KcdMpSetup.exe. /PDBALTPATH:%_PDB% embeds the PDB's file name only.
+  -->
+  <ItemGroup>
+    <LinkerArg Include="/PDBALTPATH:%_PDB%" />
+  </ItemGroup>
+
 </Project>
