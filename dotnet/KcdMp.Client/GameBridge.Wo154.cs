@@ -227,6 +227,21 @@ public partial class GameBridge
             string w = await Wo154WhereNowAsync();
             Console.WriteLine(FormattableString.Invariant($"MP-W154 check: where -> {w} in {sw.ElapsedMilliseconds} ms (the join's probe: \"busy\" = no answer in 4 s)"));
         }
+        else if (p.Length == 2 && p[0] == "whereloop" && int.TryParse(p[1], out int loopS) && loopS is > 0 and <= 300)
+        {
+            // the join's probe every 2 s by the agent itself (a console command cannot run while a load holds the game)
+            _ = Task.Run(async () =>
+            {
+                var end = DateTime.UtcNow.AddSeconds(loopS);
+                while (DateTime.UtcNow < end)
+                {
+                    var sw = System.Diagnostics.Stopwatch.StartNew();
+                    string w = await Wo154WhereNowAsync();
+                    Console.WriteLine(FormattableString.Invariant($"MP-W154 check: whereloop -> {w} in {sw.ElapsedMilliseconds} ms"));
+                    await Task.Delay(2000);
+                }
+            });
+        }
         else if (p.Length == 1 && p[0] == "status")
         {
             Console.WriteLine($"MP-W154 check: {Wo154FightStatsText()} {Wo154JoinStatsText()}");

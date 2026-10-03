@@ -596,7 +596,8 @@ public partial class GameBridge
     {
         double pausedS = j.PausedUtc is { } p ? (DateTime.UtcNow - p).TotalSeconds : 0;
         // Resume first: nothing below may keep the host frozen. WO-151: the engine's own hold first of all
-        // (through the pipe -- the mod's Lua does not run while the engine is paused).
+        // (through the pipe -- while the engine holds the world the mod's timer chains do not run; console-called Lua
+        // does, which is how WO-154's join panel updates during the hold).
         await Wo151JoinHoldAsync(j, false);
         Wo154HostJoinPanelHide($"join {reason}");   // WO-154 4.1
         if (j.PausedUtc is not null)
