@@ -518,9 +518,10 @@ static class P
                         Console.WriteLine($"PEER t={t:F1} sleep {Protocol.SleepVoteName(sk)} tok=0x{stok:X8}: {stext}");
                         break;
                     }
-                    case "crime":   // WO-139: crime report ... | outcome <tok> ... | resync <why>
+                    case "crime":   // WO-139: crime report ... | outcome <tok> ... | resync <why> | endfights <why> (WO-154: his mp_unstuck)
                     {
-                        byte k = f[1] switch { "report" => Protocol.CrimeAskReport, "outcome" => Protocol.CrimeAskOutcome, "resync" => Protocol.CrimeAskResync, _ => (byte)0 };
+                        byte k = f[1] switch { "report" => Protocol.CrimeAskReport, "outcome" => Protocol.CrimeAskOutcome, "resync" => Protocol.CrimeAskResync,
+                                               "endfights" => Protocol.CrimeAskEndFights, _ => (byte)0 };
                         if (k == 0) { Console.WriteLine($"PEER t={t:F1} crime: unknown verb {f[1]}"); break; }
                         uint ctok;
                         string text;

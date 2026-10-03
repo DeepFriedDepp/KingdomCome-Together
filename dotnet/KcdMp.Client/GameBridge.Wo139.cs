@@ -312,8 +312,10 @@ public partial class GameBridge
     /// </summary>
     private async Task Wo139OnPeerDownAsync(byte peer, string why)
     {
-        if (!W139Host || !_w139Records.TryGetValue(peer, out var rec)) return;
-        rec.Calm(null);
+        if (!W139Host) return;
+        if (_w139Records.TryGetValue(peer, out var rec)) rec.Calm(null);
+        // WO-154 3.3: every pursuit of his avatar ends, whatever the record says (a pursuit left standing keeps its
+        // guard's skirmish against the avatar, and the guard goes for the partner again after his respawn)
         foreach (var (g, p) in _w139Pursuits.ToArray())
             if (p.Peer == peer) await Wo139EndPursuitAsync(g, $"the joiner {why}");
     }

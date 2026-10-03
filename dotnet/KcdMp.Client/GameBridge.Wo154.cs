@@ -131,7 +131,8 @@ public partial class GameBridge
         {
             _w154RespiteTold[peer] = tag;
             Console.WriteLine(b is null ? $"MP-W154 host: ghost {peer}'s respite is over -- the guards act on his record again"
-                                        : $"MP-W154 host: ghost {peer} is {b} -- no guard stops or attacks him");
+                                        : tag == "down" ? $"MP-W154 host: ghost {peer} is down -- no guard stops or attacks him"
+                                        : $"MP-W154 host: ghost {peer} has a respite ({b}) -- no guard stops or attacks him");
         }
         if (b is not null) Interlocked.Increment(ref _w154RespiteSkips);
         return b;
@@ -211,7 +212,13 @@ public partial class GameBridge
         else if (p.Length == 4 && p[0] == "pursue" && TestNpc(p[1]) && p[3] is "on" or "off")
         {
             if (!_ghostEntityIds.TryGetValue(p[2], out uint avatar)) { Console.WriteLine($"MP-W154 check: no avatar {p[2]}"); return; }
+            byte ghost = byte.Parse(p[2], CultureInfo.InvariantCulture);
             var r = await _combat.Wo139PursueAsync(p[3] == "on", avatar, p[1]);
+            // tracked like a real pursuit (in a settlement of his record, or WO-139's tick ends it at once), so a
+            // partner's down or mp_unstuck ends it the same way
+            string st = _w139Records.TryGetValue(ghost, out var rec) ? rec.Settlements.FirstOrDefault() ?? "" : "";
+            if (p[3] == "on" && r is 1 or 0) _w139Pursuits[p[1]] = (ghost, avatar, st, Environment.TickCount64);
+            else if (p[3] == "off") _w139Pursuits.TryRemove(p[1], out _);
             Console.WriteLine($"MP-W154 check: WO-139's pursuit of avatar {p[2]} by {p[1]} {p[3]} -> {r?.ToString(CultureInfo.InvariantCulture) ?? "no answer"} (1 set, 0 already, 2 no body, 3 refused, 4 it fights the host)");
         }
         else if (p.Length == 1 && p[0] == "status")
