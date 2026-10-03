@@ -293,7 +293,12 @@ public partial class GameBridge
     /// <summary>The engine refused a fast travel on this machine (the switch at 0): on a blocked joiner, say why.</summary>
     private void Wo114OnFastTravelRefused()
     {
-        if (!_leashFtBlocked) { Console.WriteLine("MP-LEASH the engine refused a fast travel here (not our block)"); return; }
+        if (!_leashFtBlocked)
+        {
+            if (Wo154MenuOnFastTravelRefused()) return;   // WO-154: the session's fast travel is off (mp_fast_travel)
+            Console.WriteLine("MP-LEASH the engine refused a fast travel here (not our block)");
+            return;
+        }
         _leashFtRefusedUtc = DateTime.UtcNow;
         Console.WriteLine("MP-LEASH joiner: fast travel refused by the engine (wh_pl_FastTravelEnabled 0) -- only the host fast-travels in co-op; telling the player");
         _ = ExecLuaAsync("if KCD2MP_Wo114FastTravelTried then KCD2MP_Wo114FastTravelTried(\"engine-refused\") end");

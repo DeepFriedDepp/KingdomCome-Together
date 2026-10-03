@@ -147,11 +147,19 @@ public readonly record struct BodyState2(
         $"speed={SpeedMps:F2} dir={MoveDirRad:F2} combat={(CombatMode ? 1 : 0)} block={(BlockHeld ? 1 : 0)} crouch={(Crouched ? 1 : 0)} guard={GuardZone}/{GuardStance} atk={AtkZone} locked={((Bits & BodyState2Bits.Locked) != 0 ? 1 : 0)}");
 }
 
-/// <summary>WO-121: SessionSetting keys (the host's session-wide levers). APPEND-ONLY.</summary>
+/// <summary>
+/// WO-121: SessionSetting keys (the host's session-wide levers). APPEND-ONLY. WO-154 added 2 and 3 (the mod
+/// menu shows a joiner the host's value, locked); an older receiver ignores a key it does not know, so no
+/// protocol bump (a mixed-version session is refused anyway).
+/// </summary>
 public static class SessionSettingKey
 {
     public const byte FriendlyFire = 1;
-    public static string Name(byte k) => k switch { FriendlyFire => "friendly_fire", _ => $"unknown-{k}" };
+    /// <summary>WO-154: the host's mp_crime_mode, 1 = joint (shared), 0 = individual.</summary>
+    public const byte CrimeMode = 2;
+    /// <summary>WO-154: the host's mp_fast_travel, 1 = allowed in the session, 0 = off on every machine.</summary>
+    public const byte FastTravel = 3;
+    public static string Name(byte k) => k switch { FriendlyFire => "friendly_fire", CrimeMode => "crime_mode", FastTravel => "fast_travel", _ => $"unknown-{k}" };
 }
 
 /// <summary>

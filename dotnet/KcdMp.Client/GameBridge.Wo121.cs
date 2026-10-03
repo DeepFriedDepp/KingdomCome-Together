@@ -350,6 +350,7 @@ public partial class GameBridge
                         _ = PushWo121ConfigAsync(ct);
                     }
                 }
+                else if (a.Payload.Length >= 2) Wo154MenuOnSessionSetting(a.Payload[0], a.Payload[1], a.SourceGhostId);   // WO-154: crime mode, fast travel
                 return true;
             case ActionKind.Attack:
             case ActionKind.Jump:

@@ -33,6 +33,7 @@ public static class BatchPolicy
         "KCD2MP_W131Tick", "KCD2MP_W134Tick", "KCD2MP_W140Session", "KCD2MP_W139Session", "KCD2MP_W148Session", "KCD2MP_W137Session",
         "KCD2MP_W138Hold", "KCD2MP_Wo133Gate", "KCD2MP_ShowPing", "KCD2MP_Wo114Busy", "KCD2MP_W143Sync", "KCD2MP_Wo121Alive",
         "KCD2MP_FriendlyFireSession", "KCD2MP_W141AvatarStance",
+        "KCD2MP_W154MenuSession",   // WO-154 7b: the menu's once-a-second session push
     };
 
     private static readonly Regex Head = new(@"^(?:if (KCD2MP_\w+) then )?(KCD2MP_\w+)\((.*)\)(?: end)?$", RegexOptions.CultureInvariant | RegexOptions.Singleline);

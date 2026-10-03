@@ -1780,6 +1780,7 @@ public partial class GameBridge(ClientConfig config)
         Wo143OnConnect(cts.Token);           // WO-143: hands, gaits, one-shots, looks, the players' minigames on the avatars
         Wo147OnConnect(cts.Token);           // WO-147: the joiner fights hostile copies, destructive quest steps checked, the leash's stats
         Wo148OnConnect(cts.Token);           // WO-148: carrying on the other screen (the carrier owns the body; the host's world decides)
+        Wo154MenuOnConnect(cts.Token);       // WO-154 7b: the mod menu (the saved choices, the host's levers, fast travel)
         Wo151OnConnect(cts.Token);           // WO-151: the safeguards' switches (the fault guard's switch-off, the frame-cost meter)
         _ = _combat.NpcConfigAsync(_nativeWriteOn, _nativeSenderClock, cts.Token);
         _ = RespawnHeartbeatAsync(stream, announceGraves: true, cts.Token);
@@ -2298,6 +2299,7 @@ public partial class GameBridge(ClientConfig config)
             await Wo139OnDisconnectAsync();   // WO-139: holds released, the detector and the punishment gate off
             await Wo140OnDisconnectAsync();   // WO-140: the sleep gate off, no vote kept
             await Wo141OnDisconnectAsync();   // WO-141: no capture, no apply, the writer takes every body back
+            await Wo154MenuOnDisconnectAsync();   // WO-154 7b: no session -- fast travel given back
             await Wo143OnDisconnectAsync();   // WO-143: nothing captured or applied, the temporary tools taken back
             await Wo148OnDisconnectAsync();   // WO-148: every partner's carry set down here
             _myOpenDrops.Clear();
@@ -5909,6 +5911,10 @@ public partial class GameBridge(ClientConfig config)
             case "w139_punish":
             case "w139_status":
                 Wo139OnEvent(name, arg);
+                return;
+            case "w154_menu_set":    // WO-154 7b: a mod-menu choice to remember (mod-settings.json; MenuKey: settings.json)
+            case "w154_menu_cfg":    // WO-154 7b: mp_fast_travel (the host's lever)
+                Wo154MenuOnEvent(name, arg);
                 return;
             case "mp_mark":          // WO-140: the checklist's markers (mark_<word>)
                 Console.WriteLine($"MP-MARK {(arg ?? "").Trim()} -- the tester's marker (typed on this machine)");
