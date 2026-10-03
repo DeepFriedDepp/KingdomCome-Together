@@ -216,6 +216,8 @@ $AsmMarkers = @(
     @{ File = 'KcdMpServer.dll'; Marker = 'door-state-not-host';    Owner = "WO-151 3.9 a door's state is the host's (relay gate)" },
     @{ File = 'KcdMpServer.dll'; Marker = 'npc-hit-not-host';       Owner = "WO-151 1.1 an NPC's hit reaction is the host's (relay gate)" },
     @{ File = 'KcdMp.Protocol.dll'; Marker = 'DoorEvent';           Owner = 'WO-151 3.9 the door payload (protocol)' },
+    # WO-153: the 0.43.0 tutorial session's fixes
+    @{ File = 'KcdMpClient.dll'; Marker = 'MP-BATCH-HOLD down';     Owner = 'WO-153 3 a batch the game does not answer is kept and sent again (agent half)' },
     @{ File = 'KCDMP_launcher.dll'; Marker = 'Kingdom Come: Together'; Owner = 'WO-134 rebrand (launcher window title)' }
 )
 
@@ -303,6 +305,10 @@ $PakMarkers = @(
     @{ Marker = 'function KCD2MP_W148Holds';       Owner = "WO-148 a carried body is the carrier's: the stream leaves it alone (mod half)" },
     @{ Marker = 'WO148-BUILD';                     Owner = 'WO-148 the carrying build line (mod half)' },
     @{ Marker = 'WO151-BUILD';                     Owner = 'WO-151 the build line: every WO-151 switch (mod half)' },
+    @{ Marker = 'function KCD2MP_Once';            Owner = "WO-153 3 the agent's once-guard for a batch the game ran late (mod half)" },
+    @{ Marker = 'function KCD2MP_NpcDeathHeld';    Owner = 'WO-153 4 an applied death is held against a stale alive sample (mod half)' },
+    @{ Marker = 'function KCD2MP_W131PauseOnly';   Owner = 'WO-153 2 domestic dogs are suspended under the copy guard (mod half)' },
+    @{ Marker = 'KCD2MP_SetAvatarHerbs';           Owner = "WO-153 1 mp_avatar_herbs: the partner's herb-picking loop, off by default (mod half)" },
     @{ Marker = 'function KCD2MP_W151CaughtUp';    Owner = 'WO-151 3.1 the catch-up gate on conversations (mod half)' },
     @{ Marker = 'function KCD2MP_W151CarryLiving'; Owner = "WO-151 3.2 a living NPC through the game's quest carry (mod half)" },
     @{ Marker = 'function KCD2MP_W151SceneResume'; Owner = "WO-151 3.4 the scene guard's resume (mod half)" },
