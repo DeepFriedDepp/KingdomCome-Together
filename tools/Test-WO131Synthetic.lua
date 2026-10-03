@@ -377,6 +377,29 @@ do -- (l) the host's far band
     check("l: no Lua errors", #ERRS == 0, ERRS[1])
 end
 
+do -- (m) WO-153 2: a domestic dog the host never streams is suspended (not hidden) on the joiner, and given back
+    reset(); clearLog(); NOW = 3000
+    local dog = mkEntity("korenarka_dog", 5, 0, 0); dog.class = "Dog"; ENTS["korenarka_dog"] = dog; SPHERE = { dog }
+    local hen = mkEntity("some_hen", 6, 0, 0); hen.class = "Hen"; ENTS["some_hen"] = hen; SPHERE = { dog, hen }
+    KCD2MP.w131.pausedAnimals = {}
+    KCD2MP_W131Tick(true, true)
+    check("m: the dog is paused", cmdCount("wh_ai_PauseNPC korenarka_dog") == 1, cmdCount("wh_ai_PauseNPC korenarka_dog"))
+    check("m: ...and NOT hidden (nothing of the host's replaces it)", dog.hidden == false)
+    check("m: a class the list does not name is left alone", cmdCount("wh_ai_PauseNPC some_hen") == 0)
+    check("m: said once", logCount("WO131-GUARD pause npc=korenarka_dog class=Dog") == 1)
+    KCD2MP_W131Tick(true, true)
+    check("m: not paused again on the next sweep (only on the 10 s re-pause)", cmdCount("wh_ai_PauseNPC korenarka_dog") == 1)
+    NOW = 3011; KCD2MP_W131Tick(true, true)
+    check("m: re-paused after the repause interval", cmdCount("wh_ai_PauseNPC korenarka_dog") == 2)
+    KCD2MP.w131.pausedAnimals["korenarka_dog"] = nil; dog.dead = true; NOW = 3030; KCD2MP_W131Tick(true, true)
+    check("m: a dead dog has no brain to stop", cmdCount("wh_ai_PauseNPC korenarka_dog") == 2)
+    dog.dead = false; NOW = 3031; KCD2MP_W131Tick(true, true)
+    local before = cmdCount("wh_ai_ResumeNPC korenarka_dog")
+    KCD2MP_W131UnparkAll("mp_npc_guard off")
+    check("m: given back when the guard goes off", cmdCount("wh_ai_ResumeNPC korenarka_dog") == before + 1 and next(KCD2MP.w131.pausedAnimals) == nil)
+    check("m: no Lua errors", #ERRS == 0, ERRS[1])
+end
+
 local pass, fail = 0, 0
 for _, r in ipairs(RESULTS) do if r:sub(1, 4) == "PASS" then pass = pass + 1 else fail = fail + 1 end end
 OUT = table.concat(RESULTS, "\n") .. string.format("\n%d passed, %d failed", pass, fail)

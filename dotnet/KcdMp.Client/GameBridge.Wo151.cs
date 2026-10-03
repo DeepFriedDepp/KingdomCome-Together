@@ -109,8 +109,8 @@ public partial class GameBridge
     {
         var want = new Dictionary<string, uint>(StringComparer.OrdinalIgnoreCase);
         if (_w151Reactions && _w151CopyFight && Wo131JoinerActive)
-            foreach (var kv in _w131Guarded)
-                if (kv.Value != 0) want[kv.Key] = kv.Value;
+            foreach (var kv in Wo151Rules.CopiesNeedingContexts(_w131Guarded, W151InFight))   // WO-153 2: only copies in a fight
+                want[kv.Key] = kv.Value;
         foreach (var kv in _w151CtxOn.ToArray())
         {
             if (want.TryGetValue(kv.Key, out uint e2) && e2 == kv.Value) continue;

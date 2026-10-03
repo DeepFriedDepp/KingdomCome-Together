@@ -116,6 +116,15 @@ public class Wo153Tests
         Assert.Equal(new[] { Toast("f2"), Toast("f3"), Toast("f4"), Toast("f5") }, q.TakeBatch(10_000, 0).Select(e => e.Lua));
     }
 
+    [Fact]
+    public void WO153_only_a_copy_in_a_fight_holds_the_no_own_hit_reaction_contexts()
+    {
+        var guarded = new Dictionary<string, uint> { ["ttkc_man_1"] = 0x10, ["tbuk_man_1"] = 0x11, ["karavany_horse_1"] = 0x12, ["no_body_yet"] = 0 };
+        var inFight = new HashSet<string> { "tbuk_man_1", "no_body_yet" };
+        var want = Wo151Rules.CopiesNeedingContexts(guarded, inFight.Contains).Select(kv => kv.Key).ToArray();
+        Assert.Equal(new[] { "tbuk_man_1" }, want);     // a villager, a horse and a body with no entity yet hold nothing
+    }
+
     // ---------------------------------------------------------------- doors held through a load (phase 5)
 
     private static byte[] DoorFrame(byte src, sbyte dir, float x, string name = "door_village_left1")

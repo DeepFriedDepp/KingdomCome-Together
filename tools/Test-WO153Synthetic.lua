@@ -205,4 +205,27 @@ do
     noErrs("A4")
 end
 
+-- (B) the writer hand-over: Lua waits for the DLL to let go before it writes the body (MP-AUTHORITY-VIOLATION path=legacy) ----
+do
+    resetNpc()
+    local n = "ttkc_man_3"
+    local e = mkEntity(n, 0, 0, 0); ENTS[n] = e
+    KCD2MP.npcNativeWrite = true
+    KCD2MP._npcNative.armed = true; KCD2MP._npcNative.on = true; KCD2MP._npcNative.aliveAt = NOW
+    local function feed() KCD2MP_ApplyNpcState(n, 5, 0, 0, 0, 100, 0, 0, nil, nil) end
+    KCD2MP_ApplyNpcState(n, 5, 0, 0, 0, 100, 0, 0, 1, 1000)
+    tick()
+    local p = KCD2MP.npcPuppets[n]
+    p.nativeSent = true; p.nativeOwned = true          -- the DLL writes it every frame
+    NOW = NOW + 4.0                                    -- the agent's heartbeat goes stale (join-time lag)
+    local w0 = #e.writes
+    local mark = #LOG
+    run(1.0, feed)
+    check("B: Lua tells the DLL to let go ...", p.nativeOwned == false and countEvt("npc_native", n .. " off", mark) == 1, tostring(p.nativeOwned))
+    check("B: ... and does NOT write the body for the next second (the DLL may still be writing it)", #e.writes == w0, tostring(#e.writes - w0))
+    run(1.0, feed)
+    check("B: after the hold (1.5 s) Lua writes it itself", #e.writes > w0, tostring(#e.writes - w0))
+    noErrs("B")
+end
+
 OUT = table.concat(RESULTS, "\n")

@@ -2887,6 +2887,11 @@ TUNE.NPC_NATIVE_STALE_S  = 3.0   -- heartbeat age at which Lua writes every pupp
 TUNE.NPC_NATIVE_RESEND_S = 3.0   -- an unanswered bind is re-sent after this long
 TUNE.NPC_NATIVE_RETRY_S  = 10.0  -- a refused or dropped puppet is offered again after this long
 TUNE.NPC_NATIVE_BIND_WAIT_S = 1.0 -- a fresh puppet waits this long for its first bind before Lua writes it
+-- WO-153 2: after Lua tells the DLL to let a puppet go (a stale heartbeat), Lua waits this long before it writes the body
+-- itself. The unbind reaches the DLL through the agent (the field's join bursts: up to 2.6 s of transport lag) while the
+-- DLL keeps writing every frame; both writers on one body were the field's 28 MP-AUTHORITY-VIOLATION lines (every one
+-- followed a native-to-legacy hand-over by 0.3-6.7 s), not an NPC's own brain.
+TUNE.NPC_NATIVE_UNBIND_HOLD_S = 1.5
 
 function KCD2MP_NpcNativeHealthy()
     local n = KCD2MP._npcNative
@@ -2926,6 +2931,7 @@ function KCD2MP_NpcNativeAck(name, ok, reason)
     if not p then return end
     if ok and p.nativeSent then
         p.nativeOwned = true
+        p.nativeUnbindAt = nil
         p.nativeRefused = nil
         mp_log(string.format("MP-NPCWRITE npc=%s native=bound -- KCDMP.dll writes it every frame", tostring(name)))
     elseif not ok then
@@ -2977,6 +2983,7 @@ function KCD2MP_NpcNativeSync(name, p, e, want, why)
             p.ax or p.cx or 0, p.ay or p.cy or 0, p.cz or 0, math.floor(KCD2MP_NpcSmoothDelayS() * 1000 + 0.5)))
     elseif p.nativeSent or p.nativeOwned then
         p.nativeSent, p.nativeOwned = nil, false
+        p.nativeUnbindAt = now   -- WO-153 2: Lua's writer waits NPC_NATIVE_UNBIND_HOLD_S for the DLL to let go
         p.lastWroteX, p.lastWroteY, p.lastWroteZ = nil, nil, nil
         KCD2MP._npcNative.unbinds = KCD2MP._npcNative.unbinds + 1
         KCD2MP_EmitEvent("npc_native", name .. " off " .. tostring(why or "lua"))
@@ -5775,6 +5782,7 @@ KCD2MP.w131 = {
     joiner = false, shared = false, aliveAt = nil,
     active = false,
     parked = {},              -- name -> { at = os.clock(), why = }
+    pausedAnimals = {},       -- WO-153 2: name -> os.clock(): a domestic dog the host does not stream, suspended (never hidden)
     reassert = false,         -- a load dropped every suspension and every Hide
     repauseS = 10.0,          -- every parked body in range is re-paused this often (idempotent)
     logN = 0,
@@ -5803,6 +5811,20 @@ local function w131_body(name)
     local e = nil
     pcall(function() e = System.GetEntityByName(name) end)
     return e
+end
+
+-- WO-153 2: the classes the host never streams whose brain still fought on the joiner's screen: the field's domestic dog
+-- (`korenarka_dog`, class Dog) attacked the joiner's Henry three times and took him to 1 hp while the guard stood on. The
+-- host's NPC classes are streamed; these are suspended where they stand and NOT hidden (nothing of the host's replaces
+-- them, so hiding would remove a dog from the joiner's world). A paused dog stands still; it never bites, chases or goes.
+KCD2MP_W131_PAUSE_ONLY_CLASSES = { Dog = true }
+function KCD2MP_W131PauseOnly(e)
+    if not e or not KCD2MP_W131_PAUSE_ONLY_CLASSES[tostring(e.class)] then return false end
+    if mp_is_mod_entity(e) then return false end
+    local name = nil
+    pcall(function() name = e:GetName() end)
+    if not name or not string.find(name, "^[%w_]+$") or mp_is_excluded_npc_name(name) then return false end
+    return true, name
 end
 
 -- A host-owned NPC body of this world that the guard may park.
@@ -5882,6 +5904,11 @@ function KCD2MP_W131UnparkAll(why)
         n = n + 1
     end
     w.parked = {}
+    for name in pairs(w.pausedAnimals or {}) do   -- WO-153 2
+        pcall(System.ExecuteCommand, "wh_ai_ResumeNPC " .. tostring(name))
+        n = n + 1
+    end
+    w.pausedAnimals = {}
     if n > 0 or w.active then
         mp_log(string.format("WO131-GUARD state=off why=%s parked=%d -- given back (unhidden, resumed)", tostring(why), n))
     end
@@ -5904,6 +5931,20 @@ local function w131_sweep()
     local repause = (os.clock() - (w.repauseAt or -1e9)) >= w.repauseS
     if repause then w.repauseAt = os.clock() end
     for _, e in ipairs(ents) do
+        local okA, aname = KCD2MP_W131PauseOnly(e)   -- WO-153 2: animals the host does not stream are suspended, not hidden
+        if okA and not KCD2MP.npcPuppets[aname] and (not w.pausedAnimals[aname] or repause or w.reassert) then
+            local dead = false
+            pcall(function() dead = e.actor and e.actor:IsDead() == true end)
+            if not dead then
+                local first = w.pausedAnimals[aname] == nil
+                local okx, errx = pcall(System.ExecuteCommand, "wh_ai_PauseNPC " .. tostring(aname))
+                w.pausedAnimals[aname] = os.clock()
+                if first then
+                    w.stats.park = w.stats.park + 1
+                    w131_log(string.format("WO131-GUARD pause npc=%s class=%s why=not-streamed (suspended, not hidden) exec=%s", aname, tostring(e.class), okx and "ok" or ("err:" .. tostring(errx))))
+                end
+            end
+        end
         local ok, name = KCD2MP_W131Guardable(e)
         if ok and KCD2MP_W139StopHeld and KCD2MP_W139StopHeld(name) then ok = false end   -- WO-139: a guard stopping this player
         if ok and KCD2MP_W148Holds and KCD2MP_W148Holds(name) then ok = false end   -- WO-148: a carried body is never parked
@@ -9962,7 +10003,8 @@ function KCD2MP_NpcPuppetTick(arg, gen)
             -- (WO131-STANDUP); writing the stream's standing height into a lying body sank it into the
             -- ground (the field's tbuk_man_1).
             local lying = (p.ragdollUntil or 0) > now
-            if p.nativeOwned or bindPending or lying then
+            local unbindHold = p.nativeUnbindAt ~= nil and (now - p.nativeUnbindAt) < TUNE.NPC_NATIVE_UNBIND_HOLD_S   -- WO-153 2
+            if p.nativeOwned or bindPending or lying or unbindHold then
                 p.lastWroteX, p.lastWroteY, p.lastWroteZ = nil, nil, nil
             else
                 e:SetWorldPos({x = p.cx, y = p.cy, z = p.cz})

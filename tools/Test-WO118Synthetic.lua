@@ -308,7 +308,12 @@ do
     local wS = #e.writes
     NOW = NOW + 3.5   -- no alive() for 3.5 s
     tick("c_npc", 21.3, 20, 1)
-    check("e: stale heartbeat -> Lua writes again at once", #e.writes == wS + 1, #e.writes - wS)
+    -- WO-153 2: Lua no longer writes at once: the DLL may still be writing until the unbind reaches it (both writers on one
+    -- body were the field's MP-AUTHORITY-VIOLATION lines). It waits NPC_NATIVE_UNBIND_HOLD_S (1.5 s), then writes.
+    check("e: stale heartbeat -> Lua waits for the DLL to let go (WO-153)", #e.writes == wS, #e.writes - wS)
+    NOW = NOW + 1.6
+    tick("c_npc", 21.35, 20, 1)
+    check("e: ... and writes again once the hold is over", #e.writes == wS + 1, #e.writes - wS)
     check("e: stale heartbeat -> unbind event", (evts("npc_native")[#evts("npc_native")] or ""):find("c_npc off tick", 1, true) ~= nil, evts("npc_native")[#evts("npc_native")])
     check("e: ownership cleared", KCD2MP.npcPuppets.c_npc.nativeOwned == false)
     local nb = #evts("npc_native")

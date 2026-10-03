@@ -18,6 +18,15 @@ public static class Wo151Rules
     /// </summary>
     public const long FightHoldMs = 10_000;
 
+    /// <summary>
+    /// WO-153 2: which guarded copies hold the "no own hit reaction" contexts. Only a copy in a fight (the host's NPC in
+    /// combat, or held in combat mode here, and for <see cref="FightHoldMs"/> after). 0.43.0 set them on every guarded
+    /// copy: 216 in the tutorial run, 4 of which ever fought (the rest villagers and horses).
+    /// </summary>
+    public static IEnumerable<KeyValuePair<string, uint>> CopiesNeedingContexts(
+        IEnumerable<KeyValuePair<string, uint>> guarded, Func<string, bool> inFight) =>
+        guarded.Where(kv => kv.Value != 0 && inFight(kv.Key));
+
     /// <summary>A name the mod's wire carries ([A-Za-z0-9_], 1..64): the fight list goes into a Lua string.</summary>
     public static bool IsWireName(string? s)
     {

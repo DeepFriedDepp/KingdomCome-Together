@@ -151,6 +151,18 @@ public class Wo132RulesTests
         new(1, new BodyState2(0, 0, combat ? BodyState2Bits.CombatMode : BodyState2Bits.None, 0, 0, 0, 0, 0, 0), combat ? NpcCombatTarget.Avatar : NpcCombatTarget.None, 1, "npc");
 
     [Fact]
+    public void WO153_a_copy_is_not_engaged_with_this_player_for_the_hosts_own_fight()
+    {
+        var hostFight = new NpcCombatEvent(1, new BodyState2(0, 0, BodyState2Bits.CombatMode, 0, 0, 0, 0, 0, 0), NpcCombatTarget.Host, 0, "npc");
+        Assert.Equal(E.Ignore, Wo132Rules.JudgeEngage(hostFight, true, true, true, false));                   // the host's NPC fights the host
+        Assert.Equal(E.Release, Wo132Rules.JudgeEngage(hostFight, true, true, true, true));                   // ... and an engaged copy is let go
+        Assert.Equal(E.Engage, Wo132Rules.JudgeEngage(Ev(true), true, true, true, false));                    // a fight with an avatar or anyone else: as before
+        // a fight that IS this player's (the NPC's target is his avatar on the host's screen) still engages
+        var mine = new NpcCombatEvent(1, new BodyState2(0, 0, BodyState2Bits.None, 0, 0, 0, 0, 0, 0), NpcCombatTarget.Avatar, 1, "npc");
+        Assert.Equal(E.Engage, Wo132Rules.JudgeEngage(mine, true, true, true, false, myGhost: 1));
+    }
+
+    [Fact]
     public void Only_the_hosts_bound_guarded_copy_in_a_fight_is_engaged()
     {
         Assert.Equal(E.Engage, Wo132Rules.JudgeEngage(Ev(true), joinerActive: true, guarded: true, nativeBound: true, engagedNow: false));

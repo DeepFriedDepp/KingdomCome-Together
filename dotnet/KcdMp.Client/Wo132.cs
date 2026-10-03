@@ -136,7 +136,10 @@ public static class Wo132Rules
     public static EngageVerdict JudgeEngage(NpcCombatEvent e, bool joinerActive, bool guarded, bool nativeBound, bool engagedNow, byte myGhost = 0xFF)
     {
         bool mine = myGhost != 0xFF && e.Target == NpcCombatTarget.Avatar && e.TargetGhost == myGhost;
-        bool want = joinerActive && (e.InCombat || mine) && guarded && nativeBound;
+        // WO-153 2: a copy is engaged with THIS player only for a fight that is his: not one the host's NPC has with the
+        // host's own Henry (target = Host). The field: 11 of 22 engages "target Host" put the joiner into a skirmish
+        // with an NPC that was fighting someone else, and he stayed "in combat" for the length of the host's fights.
+        bool want = joinerActive && (mine || (e.InCombat && e.Target != NpcCombatTarget.Host)) && guarded && nativeBound;
         if (want) return EngageVerdict.Engage;
         return engagedNow ? EngageVerdict.Release : EngageVerdict.Ignore;
     }
