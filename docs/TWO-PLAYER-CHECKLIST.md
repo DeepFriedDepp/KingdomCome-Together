@@ -582,6 +582,34 @@ seen working solo against a scripted partner; these checks need two people.
 Lines worth a look: `MP-W151` (agent log), `WO151-` (kcd.log), `FRAME` and `FAULT`
 (kcdmp-native.log; a `FAULT` line is worth a report).
 
+## WO-153 — the tutorial session's fixes
+
+Throwaway saves only; nothing here needs a real playline. Markers as before (`mark_<word>`).
+
+104. **Herbs together.** Both of you pick herbs in one patch, close together, for a few minutes.
+     Marker: `mark_herbs`.
+     * Neither game crashes. The other's figure stands where it is while its player picks (it no
+       longer plays the pick). Switch: `mp_avatar_herbs on` brings the old loop back (it crashed the
+       joiner twice: only for a test).
+105. **A dog.** The joiner walks past a village dog (Bozhena's dog, or any farm dog) with a weapon
+     drawn. Marker: `mark_dog`.
+     * The dog stands where it is; it never bites or chases. Agent/kcd log: `WO131-GUARD pause npc=… class=Dog`.
+106. **The host fights alone.** The host fights a bandit or a villager while the joiner stands within
+     ten metres. Marker: `mark_hostfight`.
+     * The joiner is not drawn into the fight and has no "in combat" state when it ends. No
+       `MP-W151 copy … its own hit reactions off` line for anyone who is not fighting.
+107. **A death.** The host kills an NPC the joiner can see (best: a road ambush). Marker: `mark_death`.
+     * The joiner's copy lies dead where the host's does, once; loot opens once; no standing copy.
+       kcd.log: `MP-OWNERDEATH … applied=dead` (or `UNRESOLVED` if it did not land).
+108. **A stall.** The joiner joins the host's world (the load takes ~40 s), and once during play the
+     host opens the map and the joiner alt-tabs for 5 s. Marker: `mark_stall`.
+     * agent.log: `MP-BATCH-HOLD down` then `MP-BATCH-HOLD up after N s`, and **no** `MP-BATCH-DROP`.
+       After the hold the world is the host's (NPCs where the host's are, doors as the host's).
+109. **Doors after the join.** Right after a join load, watch a few doors the host opened earlier.
+     Marker: `mark_door2`. * Each door is in the host's state; none flaps open and shut.
+110. **Quiet logs.** At the end, in kcdmp-native.log: no `FAULT motion::` lines; on screen: no
+     "an NPC is being moved by this machine's own AI" notice at any time. Marker: `mark_quiet`.
+
 ## Logs to send afterwards
 
 Both machines: Report a bug in the launcher. Since 0.42.2 it also collects the
