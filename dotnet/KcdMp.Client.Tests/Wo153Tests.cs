@@ -116,6 +116,34 @@ public class Wo153Tests
         Assert.Equal(new[] { Toast("f2"), Toast("f3"), Toast("f4"), Toast("f5") }, q.TakeBatch(10_000, 0).Select(e => e.Lua));
     }
 
+    // ---------------------------------------------------------------- doors held through a load (phase 5)
+
+    private static byte[] DoorFrame(byte src, sbyte dir, float x, string name = "door_village_left1")
+    {
+        var body = new KcdMp.Wire.DoorEvent(0, dir, 0, x, 2f, 3f, name).ToBytes();
+        var p = new byte[10 + body.Length];
+        p[0] = src; p[1] = (byte)KcdMp.Wire.ActionKind.DoorState; p[4] = (byte)KcdMp.Wire.ActionPhase.Commit; p[9] = (byte)body.Length;
+        body.CopyTo(p, 10);
+        return p;
+    }
+
+    [Fact]
+    public void WO153_held_door_states_are_keyed_per_door_so_only_the_newest_one_replays()
+    {
+        const int Down = KcdMp.Wire.Protocol.ActionDown;
+        var open = GameBridge.Wo136DoorKey(Down, DoorFrame(0, 1, 10f));
+        var shut = GameBridge.Wo136DoorKey(Down, DoorFrame(0, -1, 10f));
+        Assert.NotNull(open);
+        Assert.Equal(open, shut);                                                   // one door, two states: the later replaces the earlier
+        Assert.NotEqual(open, GameBridge.Wo136DoorKey(Down, DoorFrame(0, 1, 40f)));       // another door of the same name, 30 m away
+        Assert.NotEqual(open, GameBridge.Wo136DoorKey(Down, DoorFrame(0, 1, 10f, "other_door")));
+        // anything that is not a door state is not coalesced
+        var attack = DoorFrame(0, 1, 10f); attack[1] = (byte)KcdMp.Wire.ActionKind.Attack;
+        Assert.Null(GameBridge.Wo136DoorKey(Down, attack));
+        Assert.Null(GameBridge.Wo136DoorKey(KcdMp.Wire.Protocol.Ghost, DoorFrame(0, 1, 10f)));
+        Assert.Null(GameBridge.Wo136DoorKey(Down, new byte[] { 0, 16 }));
+    }
+
     // ---------------------------------------------------------------- the transport against a game that stops answering
 
     private sealed class FakeGame : HttpMessageHandler

@@ -49,6 +49,8 @@ public partial class GameBridge
     private readonly ConcurrentDictionary<string, string?> _w143LookNow = new(StringComparer.Ordinal);   // copy -> who it looks at here (null none)
     // joiner: the temporary tools the mod gave each copy (class texts)
     private readonly ConcurrentDictionary<string, HashSet<string>> _w143Temps = new(StringComparer.Ordinal);
+    // WO-153 5: (copy, class) -> when its temporary tool is taken back (Wo143Rules.TempHoldMs after no row asked for it)
+    private readonly ConcurrentDictionary<(string Name, string Cls), long> _w143ReleaseAt = new();
     // both: each avatar's minigame on this machine (the player's row: the minigame and its object)
     private sealed class W143Mini
     {
@@ -109,6 +111,8 @@ public partial class GameBridge
                     knownPeers = now;
                 }
                 if (active && W141Joiner) await Wo143QuietTickAsync();
+                foreach (var (n, c) in Wo143Rules.DueReleases(_w143ReleaseAt, Environment.TickCount64))
+                    if (_w143ReleaseAt.TryRemove((n, c), out _)) await Wo143ReleaseTempAsync(n, c);   // WO-153 5
                 long t = Environment.TickCount64;
                 if (t - _w143SyncAtMs >= 5_000)
                 {
@@ -173,6 +177,8 @@ public partial class GameBridge
                     string cls = ExtraRow.ClassText(r.Left);
                     if (!_w143Hands || cls == "-") return;
                     var set = _w143Temps.GetOrAdd(r.Name, _ => new HashSet<string>());
+                    // WO-153 5: the copy still has this class's tool from before (its take had not come due): no second give
+                    if (_w143ReleaseAt.TryRemove((r.Name, cls), out _)) { lock (set) set.Add(cls); return; }
                     lock (set) { if (!set.Add(cls)) return; }
                     Interlocked.Increment(ref _w143Temps0);
                     await ExecLuaAsync($"if KCD2MP_W143Provide then KCD2MP_W143Provide(\"{EscapeLua(r.Name)}\", \"{cls}\") end");
@@ -250,8 +256,12 @@ public partial class GameBridge
             foreach (var cls in go)
             {
                 lock (set) set.Remove(cls);
-                _ = Task.Run(async () => { await Task.Delay(2_500); await Wo143ReleaseTempAsync(r.Name, cls); });
+                _w143ReleaseAt[(r.Name, cls)] = Environment.TickCount64 + Wo143Rules.TempHoldMs;   // WO-153 5: given once, taken once
             }
+            // a class the hands want again before its take came due: kept (the take is cancelled)
+            string l = ExtraRow.ClassText(r.Left), rt = ExtraRow.ClassText(r.Right);
+            foreach (var key in _w143ReleaseAt.Keys.Where(k => k.Name == r.Name && (k.Cls == l || k.Cls == rt)).ToList())
+                if (_w143ReleaseAt.TryRemove(key, out _)) lock (set) set.Add(key.Cls);
         }
     }
 
@@ -264,7 +274,7 @@ public partial class GameBridge
         int n = _w143Temps.Values.Sum(s => s.Count);
         if (n == 0) return;
         try { await ExecLuaAsync("if KCD2MP_W143ReleaseAll then KCD2MP_W143ReleaseAll() end"); } catch { }
-        _w143Temps.Clear();
+        _w143Temps.Clear(); _w143ReleaseAt.Clear();
         Console.WriteLine($"MP-W143 {n} temporary tool(s) taken back ({why})");
     }
 

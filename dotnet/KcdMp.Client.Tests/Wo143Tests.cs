@@ -213,6 +213,16 @@ public class Wo143Tests
     }
 
     [Fact]
+    public void WO153_a_temporary_tool_is_taken_back_only_after_ninety_unwanted_seconds()
+    {
+        var pending = new Dictionary<(string Name, string Cls), long> { [("ttkc_man_28", "hoe")] = 1_000 + Wo143Rules.TempHoldMs, [("ttkc_woman_2", "saw")] = 5_000 };
+        Assert.Equal(90_000, Wo143Rules.TempHoldMs);
+        Assert.Equal(new[] { ("ttkc_woman_2", "saw") }, Wo143Rules.DueReleases(pending, 5_000));
+        Assert.Empty(Wo143Rules.DueReleases(pending, 4_999));
+        Assert.Equal(2, Wo143Rules.DueReleases(pending, 1_000 + Wo143Rules.TempHoldMs).Count);
+    }
+
+    [Fact]
     public void WO153_the_herb_loop_is_off_unless_asked_for_and_a_pickup_is_never_aligned()
     {
         // the field: both 0.43.0 joiner crashes ended on the avatar's PickingHerbs loop being stopped

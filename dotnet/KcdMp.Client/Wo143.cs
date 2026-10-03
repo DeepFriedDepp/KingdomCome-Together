@@ -318,6 +318,17 @@ public static class Wo143Rules
     /// <summary>A copy the host's NPC is fighting, talking with or has down plays no one-shot and forces no look (its own brain or the stream has it).</summary>
     public static bool Quiet(string? blockedWhy) => blockedWhy is not null;
 
+    /// <summary>
+    /// WO-153 5: a temporary tool that no row asks for any more is kept this long before it is taken back, and a row that
+    /// asks for it again in that time cancels the take. The host's hand rows flap (one villager changed hands 235 times in
+    /// 1,055 s), and the 0.43.0 release fired 2.5 s after each empty row, so tools were given and taken again and again.
+    /// </summary>
+    public const long TempHoldMs = 90_000;
+
+    /// <summary>The pending takes that are due at <paramref name="nowMs"/>.</summary>
+    public static List<(string Name, string Cls)> DueReleases(IEnumerable<KeyValuePair<(string Name, string Cls), long>> pending, long nowMs) =>
+        pending.Where(kv => kv.Value <= nowMs).Select(kv => kv.Key).ToList();
+
     /// <summary>Temporary tools: a copy's temp item of a class goes once its hands no longer want that class.</summary>
     public static IEnumerable<string> TempsToRelease(IReadOnlyCollection<string> temps, byte[] left, byte[] right)
     {

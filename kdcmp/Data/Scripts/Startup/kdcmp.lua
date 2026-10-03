@@ -17889,7 +17889,9 @@ function KCD2MP_W143Release(name, cls, tries)
         KCD2MP_EmitEvent("w143", string.format("inhand %s %s %d", name, cls, tonumber(tries) or 0))
         return
     end
-    if e and e.inventory then pcall(function() e.inventory:DeleteItem(it) end) end
+    -- WO-153 5: DeleteItem(id, count) -- the count was missing, so the engine logged a script error at every take
+    -- ("expect parameter 2 of type Number (Provided type Null)", 223 of 223 in the field's tutorial run)
+    if e and e.inventory then pcall(function() e.inventory:DeleteItem(it, 1) end) end
     t[cls] = nil
     w.stats.released = w.stats.released + 1
     mp_log(string.format("WO143-TEMP take %s %s (%s deleted)", name, cls, tostring(it)))
@@ -17906,7 +17908,7 @@ function KCD2MP_W143ReleaseAll()
         for cls, it in pairs(t) do
             if e and e.human and KCD2MP_W143InHand(e, cls) then kept = kept + 1
             else
-                if e and e.inventory then pcall(function() e.inventory:DeleteItem(it) end) end
+                if e and e.inventory then pcall(function() e.inventory:DeleteItem(it, 1) end) end
                 t[cls] = nil
                 n = n + 1
             end

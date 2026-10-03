@@ -252,6 +252,7 @@ pcall = function(f, ...)
 end
 local function noErrs(label) check(label .. ": no swallowed Lua errors", #ERRS == 0, ERRS[1]) end
 
+DELETE_COUNTS = {}
 -- a copy of the host's NPC: its own inventory (FindItem / CreateItem / DeleteItem as the game binds them)
 -- and its hands (GetItemInHand: 0 right, 1 left)
 local HOE = "4d444b36-afde-42c9-8107-88ec448d4158"
@@ -260,7 +261,7 @@ local function mkCopy(name, id)
     local inv = { list = {} }
     inv.FindItem = function(self, cls) for _, w in ipairs(self.list) do if ITEMS[w] and ITEMS[w].class == cls then return w end end return nil end
     inv.CreateItem = function(self, cls, hp, amt) NEXTWUID = NEXTWUID + 1; local w = "wuid" .. NEXTWUID; ITEMS[w] = { class = cls, id = w }; self.list[#self.list + 1] = w; return true end
-    inv.DeleteItem = function(self, w) for i, x in ipairs(self.list) do if x == w then table.remove(self.list, i); ITEMS[w] = nil; return true end end return false end
+    inv.DeleteItem = function(self, w, n) DELETE_COUNTS[#DELETE_COUNTS + 1] = n; for i, x in ipairs(self.list) do if x == w then table.remove(self.list, i); ITEMS[w] = nil; return true end end return false end
     local e = { class = "NPC", id = id, inventory = inv, hands = {}, looking = nil, lookSets = 0, lookClears = 0 }
     e.GetName = function() return name end
     e.GetWorldPos = function() return { x = 100, y = 104, z = 10 } end
@@ -345,6 +346,7 @@ do
     mark = #LOG
     KCD2MP_W143Release("ttkc_man_28", HOE, 3)
     check("T: out of the hand: the temporary tool is deleted", farmer.inventory:FindItem(HOE) == nil and #farmer.inventory.list == 0)
+    check("T: WO-153: DeleteItem is given its count (the engine logged a script error for each take without one)", #DELETE_COUNTS >= 1 and DELETE_COUNTS[#DELETE_COUNTS] == 1, tostring(DELETE_COUNTS[#DELETE_COUNTS]))
     check("T: ...the agent hears released", emitted("w143", mark)[1] == "released ttkc_man_28 " .. HOE)
     check("T: ...logged", logCount("WO143-TEMP take ttkc_man_28 " .. HOE, mark) == 1)
     mark = #LOG

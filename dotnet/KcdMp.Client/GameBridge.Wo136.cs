@@ -38,6 +38,7 @@ public partial class GameBridge
     private readonly object _w136Gate = new();
     private readonly Dictionary<string, InFrame> _w136NpcHeld = new(StringComparer.Ordinal);
     private readonly Dictionary<byte, InFrame> _w136GhostHeld = new();
+    private readonly Dictionary<string, InFrame> _w136DoorHeld = new(StringComparer.Ordinal);   // WO-153 5: the newest door state per door
     private readonly List<InFrame> _w136OrderedHeld = [];
     private long _w136Held, _w136Replayed, _w136Holds, _w136OrderedDropped;
     private DateTime _w136LuaToldUtc = DateTime.MinValue;
@@ -60,6 +61,7 @@ public partial class GameBridge
             _w136Held++;
             if (frame.Type == Protocol.NpcStateDown && Wo136NpcKey(frame.Payload) is string name) _w136NpcHeld[name] = frame;
             else if (frame.Type == Protocol.Ghost && frame.Payload.Length > 0) _w136GhostHeld[frame.Payload[0]] = frame;
+            else if (Wo136DoorKey(frame.Type, frame.Payload) is string door) _w136DoorHeld[door] = frame;
             else
             {
                 if (_w136OrderedHeld.Count >= W136MaxOrdered) { _w136OrderedHeld.RemoveAt(0); _w136OrderedDropped++; }
@@ -67,6 +69,21 @@ public partial class GameBridge
             }
         }
         return true;
+    }
+
+    /// <summary>
+    /// WO-153 5: the key of a held host DoorState frame (the door's name and pivot), null for anything else. A door's state is
+    /// absolute (open or shut, locked or not), so only the newest one per door is kept. The field's "door open and shut twice
+    /// at one moment" was the host's whole door history since the last load replayed in one millisecond when the hold ended.
+    /// </summary>
+    public static string? Wo136DoorKey(int type, byte[] p)
+    {
+        if (type != Protocol.ActionDown) return null;
+        // [sourceGhostId:1][kind:1][seq:2][phase:1][gen:4][len:1][body]
+        if (p.Length < 10 || p[1] != (byte)ActionKind.DoorState) return null;
+        int len = p[9];
+        if (p.Length < 10 + len || !DoorEvent.TryFromBytes(p.AsSpan(10, len), out var e)) return null;
+        return FormattableString.Invariant($"{p[0]}|{e.Name}|{MathF.Round(e.X, 1)}|{MathF.Round(e.Y, 1)}|{MathF.Round(e.Z, 1)}");
     }
 
     /// <summary>The name of an NpcStateDown (the same framing rule as the handlers); null when malformed.</summary>
@@ -89,8 +106,8 @@ public partial class GameBridge
             _w136WasHolding = false;
             heldFor = DateTime.UtcNow - _w136HoldSinceUtc;
             // NPC states first (the bodies exist before anything hits them), then the peers, then in order.
-            replay = [.. _w136NpcHeld.Values, .. _w136GhostHeld.Values, .. _w136OrderedHeld];
-            _w136NpcHeld.Clear(); _w136GhostHeld.Clear(); _w136OrderedHeld.Clear();
+            replay = [.. _w136NpcHeld.Values, .. _w136GhostHeld.Values, .. _w136DoorHeld.Values, .. _w136OrderedHeld];
+            _w136NpcHeld.Clear(); _w136GhostHeld.Clear(); _w136DoorHeld.Clear(); _w136OrderedHeld.Clear();
         }
         var w = _frameWriter;
         int n = 0;
