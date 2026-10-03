@@ -73,11 +73,18 @@ vanilla comparison), and (answered) that the game opening and closing during the
     Soak 1's single stack row of 2 was a mid-frame read: the reader now takes the settled value; soak 2's two dips
     were the game window losing focus while the maintainer typed (his message at 14:16:19.6 lands in the dip). The
     record is soak 2's, PASS. Final gates: all green.
-20. **The build**: pushed; the shipping installer from a fresh clone of `origin/main`; the privacy sweep; the tag (the
-    record: the next commit).
+20. **The build**: pushed (`ca3e122..0f5b36d`); the shipping installer built from a fresh clone of `origin/main` at
+    `0f5b36d` with no waiver: 102,167,032 bytes, sha256 `b5fdc1a4…a7a0af` (findings §9.5), every gate inside the build
+    green. The payload's privacy sweep: nothing of ours. The tag `v0.45.0` on `0f5b36d`. The self-review found a gate
+    hole (one synthetic suite handed its runner only a summary, so its failures could not fail the build), proven with
+    a forced failure and closed in `tools/`, and a splice in the findings from an earlier fill, repaired. The maintainer
+    installed the Setup on this machine: its own check PASS.
 
 ## Housekeeping
 
-* The throwaway files in playline4 removed at the end; `tools`-side scratch (bundles, runs, frames, stacks) stays in the
+* The three save files this session added to playline4 moved out at the end (the five it held before are unchanged);
+  the 368 real save files match the list taken at the start. Scratch (bundles, runs, frames, stacks, logs) stays in the
   session's scratchpad, never committed; field logs never committed.
-* The installed mod's pak and manifest restored to the backup taken at the start.
+* The installed mod's pak was **not** put back to the backup taken at the start: the maintainer installed the 0.45.0
+  Setup over it during the finish, and putting the old pak back would have broken that install.
+* The two side streams' worktrees (merged) and the three throwaway build clones under `release\` removed.

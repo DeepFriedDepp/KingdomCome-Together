@@ -57,8 +57,8 @@ join now stops the menu's video first and tells the player plainly if the game s
    tutorial module's States, and mirroring those States is exactly what looped the joiner at the anvil in WO-151. The
    WO's line "must not exclude any real quest objective" holds for every main-quest objective (0 of 626) and every
    tutorial objective outside that minigame module; these four follow each player's own anvil, by design.
-7. **`mp_join_stopvideo` on**, though not proven to prevent the freeze: the freeze came once in 14 natural joins this WO (1 of 8 without the step, 0 of 6 with it) joins this
-   WO, too rarely to measure a difference in the time; stopping the menu's video removes the component the stacks show
+7. **`mp_join_stopvideo` on**, though not proven to prevent the freeze: the freeze came once in 14 natural joins this WO (1 of 8 without the step, 0 of 6 with it),
+   too rarely to measure a difference; stopping the menu's video removes the component the stacks show
    racing, and it is proven harmless (every join with it loaded, and a manual load after it). Off restores 0.44.0's
    flow.
 8. **`mp_join_frozen` on**: proven against a simulated freeze (the game suspended during a join's load: the freeze's
@@ -75,10 +75,7 @@ join now stops the menu's video first and tells the player plainly if the game s
     was reproduced with a test NPC attached to a test horse the way a cart attaches its sitters (no cart sitter was
     loaded in the test world).
 15. **The maintainer's Tier 3 result** (a WO-150 build on a machine with no Kingdom Come) never reached this session;
-    `docs/* **The player's settings across an upgrade** (`tools/wo154/Test-SettingsUpgrade.ps1 -Launcher`, against the 0.45.0 candidate built from this tree): 0.43.0 and 0.44.0 (the first WO-150 build) installed into throwaway folders against a fixture Steam tree; a player's `settings.json` (a custom game path, changed relay and network choices, a voice choice from the old default, a Steam code, unknown keys — one nested —, its own key order, CRLF, four-space indents), `custom_servers.json`, `favorites.json` and `kcdmp-client.json` (a player name) written by hand; the 0.45.0 Setup installed over each: **every file byte-identical**, Setup's own verdict PASS; then the upgraded launcher started from the folder and ran 25 s (alive throughout; it loaded the hand-written servers and the custom master address, ran its read-only checklist, kept the saved game path — "settings.json keeps the saved path" — and exited cleanly): **every file still byte-identical. 24 / 24.** [L-inst]
-* **WO-150's four cases**: `tools/wo150/Test-SetupCases.ps1` (a Setup compiled from the real script, isolated from any real install) and `tools/Test-InstallerDetect.ps1` run inside `tools/Build-Installer.ps1` and passed for the candidate and the shipping build (§9.5).
-* **A finding about where to build**: a build or a clone under `%LocalAppData%` fails 16 of the 64 setup tests on this machine (the sandbox redirects that folder for this session's processes, and hard links made there do not read back); the candidate and the shipping build run in a fresh clone inside the repository's git-ignored `release\` folder instead.
-* `docs/INSTALLER-TESTING.md`: the Tier 2 and 3 boxes rewritten to the current wizard (the page informs, the launcher's checklist finishes); the settings test added; Tier 3 records the maintainer's run on a machine with no Kingdom Come as awaited (Decision 15).ER-TESTING.md` records it as awaited instead of inventing it.
+    `docs/INSTALLER-TESTING.md` records it as awaited instead of inventing it.
 16. **The soaks ran on the mod version only**, on the maintainer's instruction during the WO ("Only run the soak on the
     mod version. No need to do a vanilla comparison."); `soak.py verdict --mod-only` records the waiver.
 
@@ -347,10 +344,7 @@ host's (the brief had it behind).
   page, from the menu stream); every player-facing page points to the menu and its key, the console commands stay
   documented for advanced players. `docs/WO-154-menu-findings.md`, `docs/WO-154-voice-decision.md` and
   `docs/WO-154-code-signing.md` are folded in here (§6.7, §7, §7b) and kept as the streams' own records.
-* `docs/* **The player's settings across an upgrade** (`tools/wo154/Test-SettingsUpgrade.ps1 -Launcher`, against the 0.45.0 candidate built from this tree): 0.43.0 and 0.44.0 (the first WO-150 build) installed into throwaway folders against a fixture Steam tree; a player's `settings.json` (a custom game path, changed relay and network choices, a voice choice from the old default, a Steam code, unknown keys — one nested —, its own key order, CRLF, four-space indents), `custom_servers.json`, `favorites.json` and `kcdmp-client.json` (a player name) written by hand; the 0.45.0 Setup installed over each: **every file byte-identical**, Setup's own verdict PASS; then the upgraded launcher started from the folder and ran 25 s (alive throughout; it loaded the hand-written servers and the custom master address, ran its read-only checklist, kept the saved game path — "settings.json keeps the saved path" — and exited cleanly): **every file still byte-identical. 24 / 24.** [L-inst]
-* **WO-150's four cases**: `tools/wo150/Test-SetupCases.ps1` (a Setup compiled from the real script, isolated from any real install) and `tools/Test-InstallerDetect.ps1` run inside `tools/Build-Installer.ps1` and passed for the candidate and the shipping build (§9.5).
-* **A finding about where to build**: a build or a clone under `%LocalAppData%` fails 16 of the 64 setup tests on this machine (the sandbox redirects that folder for this session's processes, and hard links made there do not read back); the candidate and the shipping build run in a fresh clone inside the repository's git-ignored `release\` folder instead.
-* `docs/INSTALLER-TESTING.md`: the Tier 2 and 3 boxes rewritten to the current wizard (the page informs, the launcher's checklist finishes); the settings test added; Tier 3 records the maintainer's run on a machine with no Kingdom Come as awaited (Decision 15).ER-TESTING.md`: the stale pre-WO-150 Tier 2/3 boxes rewritten to the current wizard; the settings
+* `docs/INSTALLER-TESTING.md`: the stale pre-WO-150 Tier 2/3 boxes rewritten to the current wizard; the settings
   upgrade test; Tier 3 records the maintainer's run as awaited (Decision 15).
 
 ## 9. Phase 9 — the proof and the build
@@ -422,9 +416,35 @@ What needs two players: `docs/TWO-PLAYER-CHECKLIST.md` §WO-154 (items 111–126
 
 ### 9.5 The installer, the privacy sweep, the tag
 
-The shipping installer is built from a fresh clone of `origin/main` at the commit that adds this page, after it is
-pushed; its record (the size and sha256, the gates inside the build, the privacy sweep of the payload, the tag) is the
-next commit.
+* **The build.** A fresh clone of `origin/main` at `0f5b36d` (the commit that added this page, pushed first), inside
+  the repository's git-ignored `release\` folder (§9.4), built by `tools/Build-Installer.ps1` with no waiver:
+  **`KingdomComeTogether-Setup-0.45.0.exe`, 102,167,032 bytes, sha256
+  `b5fdc1a4447e8743422992409e33c52989688400cb35ebc77ff2b942d7a7a0af`**. It stays on this machine for the maintainer
+  (installers never go on GitHub). The pak it ships holds the committed `kdcmp.lua` and tables byte for byte (Windows
+  line endings aside).
+* **The gates inside the build** (its log): the soak record accepted for this code (`soak PASS for this code (0.45.0`,
+  the comparison without the mod waived by the maintainer, §9.2); native 388, relay 62, agent 1,088, setup 64 — 0
+  failed; all 45 synthetic suites passed; the three static checks; Steam detection with WO-150's four installer cases
+  26/26 and the compiled Setup's cases 41/41; the payload's coherence check and its smoke run (a relay started from a
+  copy of the payload: `RELAY-SMOKE ok ... protocol=v10 release=0.45.0`).
+* **A gate hole, found in the self-review and closed.** One of the 45 suites (WO-100.5's body-state test) handed its
+  runner only a summary line, so the runner counted no checks and a failing check there would have passed the build:
+  proven with a forced failure (the suite printed "33 passed, 1 failed", the runner exited 0). The scenario now hands
+  over every check line like the other suites: a forced failure exits 1, the real suite counts 33 passed. The fix is in
+  `tools/` only and came after the build; the shipping build's own log shows that suite at 33 passed, 0 failed, so it
+  hid nothing.
+* **The privacy sweep** of what the installer packs (the 1,031 files of `release\KCDMP`, the pak and the manifest), for
+  the field's and this machine's names, Windows profile paths, Steam IDs and private IPv4 addresses, in ASCII and
+  UTF-16: **nothing of ours**. Every match is third-party or runtime text: assembly versions (`10.0.0.0`,
+  `10.1.0.0`), a documentation example in a comment of the master server's config (`10.0.0.2`), a language name in
+  WPF's culture table, a .NET runtime method name, and NAudio's own build paths inside NAudio's DLLs. The WO-154 diff
+  was swept the same way before the push (test data only).
+* **The maintainer's own install.** The maintainer installed this Setup on this machine during the finish: Setup's own
+  check `PASS 1032 component(s) verified by sha256 against the install manifest`, `version 0.45.0`, `mod placed by
+  Setup`; the pak in the game's `Mods` folder is byte-identical to the build's.
+* **The tag.** `v0.45.0` on `0f5b36d`, the commit the installer was built from (a lightweight tag, like `v0.43.0`).
+  This record, the repair of a splice in this page (an earlier fill replaced a placeholder inside a file name, three
+  times) and the gate fix come after it and change no shipped file (the installer ships no docs and no tests).
 
 ## Self-review — every item of the WO
 
@@ -465,7 +485,7 @@ stated; "not done" = with the reason. Every new behaviour has a switch (named).
 | 9.3 | a full solo live pass, both roles; the two-player list | done | §9.3, checklist §WO-154 |
 | 9.4 | the install pass (WO-150's four cases; the upgrade over 0.43.0 byte for byte); Tier 3; stale boxes | done: 24/24 (0.43.0 and 0.44.0, the launcher alive); the four cases in the installer's own gates; Tier 3 awaited (Decision 15); boxes rewritten | §9.4 |
 | 9.5 | the self-review | this table | — |
-| 9.6 | the installer from a fresh clone of `origin/main`; the privacy sweep; the tag; the push | see §9.5 | §9.5 |
+| 9.6 | the installer from a fresh clone of `origin/main`; the privacy sweep; the tag; the push | done: built at `0f5b36d` with no waiver, every gate inside the build green; the payload clean; `v0.45.0` on `0f5b36d`; pushed; a gate hole found and closed | §9.5 |
 | 9.7 | `docs/WO-154-findings.md` (answer first), `docs/WO-154-progress.md` | done | — |
 
 ## What a follow-up needs
@@ -478,7 +498,4 @@ stated; "not done" = with the reason. Every new behaviour has a switch (named).
 * **A small flinch on an ordinary friendly-fire hit** is not shown (the knockdown is).
 * **An NPC fighting an avatar** reads not-in-combat to the game: the fair-crime exemption does not cover it.
 * **Code signing** needs the maintainer's certificate (`docs/WO-154-code-signing.md`).
-* **The maintainer's Tier 3 run** (no Kingdom Come installed) to be written into `docs/* **The player's settings across an upgrade** (`tools/wo154/Test-SettingsUpgrade.ps1 -Launcher`, against the 0.45.0 candidate built from this tree): 0.43.0 and 0.44.0 (the first WO-150 build) installed into throwaway folders against a fixture Steam tree; a player's `settings.json` (a custom game path, changed relay and network choices, a voice choice from the old default, a Steam code, unknown keys — one nested —, its own key order, CRLF, four-space indents), `custom_servers.json`, `favorites.json` and `kcdmp-client.json` (a player name) written by hand; the 0.45.0 Setup installed over each: **every file byte-identical**, Setup's own verdict PASS; then the upgraded launcher started from the folder and ran 25 s (alive throughout; it loaded the hand-written servers and the custom master address, ran its read-only checklist, kept the saved game path — "settings.json keeps the saved path" — and exited cleanly): **every file still byte-identical. 24 / 24.** [L-inst]
-* **WO-150's four cases**: `tools/wo150/Test-SetupCases.ps1` (a Setup compiled from the real script, isolated from any real install) and `tools/Test-InstallerDetect.ps1` run inside `tools/Build-Installer.ps1` and passed for the candidate and the shipping build (§9.5).
-* **A finding about where to build**: a build or a clone under `%LocalAppData%` fails 16 of the 64 setup tests on this machine (the sandbox redirects that folder for this session's processes, and hard links made there do not read back); the candidate and the shipping build run in a fresh clone inside the repository's git-ignored `release\` folder instead.
-* `docs/INSTALLER-TESTING.md`: the Tier 2 and 3 boxes rewritten to the current wizard (the page informs, the launcher's checklist finishes); the settings test added; Tier 3 records the maintainer's run on a machine with no Kingdom Come as awaited (Decision 15).ER-TESTING.md`.
+* **The maintainer's Tier 3 run** (no Kingdom Come installed) to be written into `docs/INSTALLER-TESTING.md`.

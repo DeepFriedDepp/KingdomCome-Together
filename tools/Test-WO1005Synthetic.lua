@@ -279,10 +279,6 @@ for _, t in ipairs(SPAWNS) do if t.NoAI == true then sawNoAi = true end end
 check("(i) on: NoAI=true is passed", sawNoAi)
 
 -- ---------------------------------------------------------------------------
-local pass, fail = 0, 0
-for _, r in ipairs(RESULTS) do
-    print(r)
-    if r:sub(1, 4) == "PASS" then pass = pass + 1 else fail = fail + 1 end
-end
-print(string.format("RESULT: %d passed, %d failed", pass, fail))
-OUT = string.format("%d passed, %d failed", pass, fail)
+-- Every check line goes to the runner (Test-NpcSmoothSynthetic.ps1), which counts PASS/FAIL lines and exits 1 on
+-- a FAIL. Until WO-154 this handed over only a summary: the runner counted 0/0 and a failing check passed the gate.
+OUT = table.concat(RESULTS, "\n")
