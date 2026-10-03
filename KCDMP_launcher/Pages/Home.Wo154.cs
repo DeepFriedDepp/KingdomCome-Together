@@ -47,11 +47,20 @@ namespace KCDMP_launcher.Pages
             else if (!r.Ok)
             {
                 Log.Warning("settings: {Why}: settings.json not written -- {Reason}", why, r.Result.Why);
-                UiService.ShowError("Your settings file (settings.json) couldn't be read, so the launcher did not change it. " +
-                                    "Your change is used until the launcher closes. To keep it, fix or delete settings.json in the install folder, then change it again.");
+                UiService.ShowError(NotWrittenText("settings.json", r.Result.Why));
             }
             return r.Ok;
         }
+
+        /// <summary>A player's file the launcher left as it is, in plain words: unreadable (never written over) or not writable.</summary>
+        private static string NotWrittenText(string file, string why) =>
+            why.StartsWith("not one JSON", StringComparison.Ordinal) || why.StartsWith("unreadable JSON", StringComparison.Ordinal)
+            || why.StartsWith("the file is not one JSON", StringComparison.Ordinal) || why.StartsWith("unexpected token", StringComparison.Ordinal)
+            || why.StartsWith("the root object", StringComparison.Ordinal) || why.StartsWith("text after", StringComparison.Ordinal) || why == "truncated"
+                ? $"Your {file} couldn't be read, so the launcher did not change it. Your change is used until the launcher closes. " +
+                  $"To keep it, fix or delete {file} in the install folder, then make the change again."
+                : $"Windows didn't let the launcher save {file} (it may be read-only, or open in another program). Your change is used " +
+                  "until the launcher closes. Check the file, then make the change again.";
 
         /// <summary>The settings window opens: values another program wrote (the mod menu, through the agent) show as saved.</summary>
         private void OpenSettings()
@@ -110,8 +119,7 @@ namespace KCDMP_launcher.Pages
             else if (!r.Ok)
             {
                 Log.Warning("{File}: {What}: not written -- {Reason}", file, what, r.Why);
-                UiService.ShowError($"Your {file} couldn't be read, so the launcher did not change it. " +
-                                    "The change is used until the launcher closes. To keep it, fix or delete that file in the install folder, then make the change again.");
+                UiService.ShowError(NotWrittenText(file, r.Why));
             }
         }
 

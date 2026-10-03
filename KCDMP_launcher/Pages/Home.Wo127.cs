@@ -253,7 +253,10 @@ namespace KCDMP_launcher.Pages
                 ? $"--steam \"{code}\" --steam-app {settings.SteamAppId}{SteamGameArg}"
                 : $"--host {server.Ip} --port {server.Port}";
             // WO-154: the voice flag is always explicit -- the player's choice, off unless chosen
-            // (KcdMp.Wire.VoiceSetting) -- so no default in kcdmp-client.json can decide it.
+            // (KcdMp.Wire.VoiceSetting) -- so no default in kcdmp-client.json can decide it. The file is
+            // read again first: the mod menu's switch (through the previous agent) may have changed it.
+            var taken = settingsStore.Refresh(settings);
+            if (taken.Count > 0) Log.Information("settings: changed outside the launcher since it read them: {Keys}", string.Join(", ", taken));
             var agentArgs = target +
                 " " + VoiceSetting.AgentFlag(settings.VoiceChatOn) +
                 (isHosting ? " --hosting" : "");
