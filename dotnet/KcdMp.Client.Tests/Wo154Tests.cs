@@ -361,3 +361,49 @@ public class Wo154RestTests
         Assert.False(Wo137Rules.PlayerMinigame(path, type, false));
     }
 }
+
+/// <summary>WO-154 Phase 4.2 (live L7, the field's hung join): a load busy with no CPU is the game's own freeze.</summary>
+public class Wo154FrozenTests
+{
+    [Fact]
+    public void A_load_that_uses_the_cpu_is_never_frozen()
+    {
+        var w = new Wo154Rules.FrozenWatch();
+        double cpu = 30;
+        for (double t = 0; t <= 600; t += 2)
+        {
+            cpu += 0.9;   // a slow load on a slow machine: ~45 % of one core
+            Assert.False(w.Feed(true, t, cpu), $"t={t}");
+        }
+    }
+
+    [Fact]
+    public void A_busy_game_with_flat_cpu_is_frozen_after_90_s()
+    {
+        // live L7: busy, CPU flat at 63.4 s for minutes
+        var w = new Wo154Rules.FrozenWatch();
+        double firstFrozen = -1;
+        for (double t = 0; t <= 300; t += 2)
+            if (w.Feed(true, t, 63.4 + t * 0.001) && firstFrozen < 0) firstFrozen = t;
+        Assert.InRange(firstFrozen, Wo154Rules.FrozenWatch.BusyMinS, Wo154Rules.FrozenWatch.BusyMinS + 4);
+        Assert.True(w.CpuInWindowS < Wo154Rules.FrozenWatch.CpuMaxS);
+    }
+
+    [Fact]
+    public void An_answer_or_no_cpu_reading_starts_over()
+    {
+        var w = new Wo154Rules.FrozenWatch();
+        for (double t = 0; t < 80; t += 2) Assert.False(w.Feed(true, t, 10));
+        Assert.False(w.Feed(false, 80, 10));          // the game answered (a menu, a world, loading)
+        for (double t = 82; t < 82 + 88; t += 2) Assert.False(w.Feed(true, t, 10), $"t={t}");
+        var n = new Wo154Rules.FrozenWatch();
+        for (double t = 0; t < 400; t += 2) Assert.False(n.Feed(true, t, null));   // no reading: never a freeze
+    }
+
+    [Fact]
+    public void The_frozen_line_is_plain()
+    {
+        Assert.DoesNotContain("mp_", Wo154Rules.FrozenLoadText);
+        Assert.Contains("start it again", Wo154Rules.FrozenLoadText);
+    }
+}

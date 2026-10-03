@@ -82,6 +82,7 @@ public partial class GameBridge
         public DateTime LoadCmdUtc, LoadStartUtc, LoadGameUtc, GameplayUtc;
         public volatile string Phase = "preparing";
         public bool InWorld;                        // WO-125: an in-world rejoin (a host reload) or a join from the own world
+        public bool Frozen;                         // WO-154 4.2: the load froze (busy, no CPU): the player is told to restart the game
         public string Mode = "bring";               // WO-125: bring | fresh | restore
         public string? WorldTag;
         public WhsSave.HenryParts? SplicedParts;
@@ -537,6 +538,17 @@ public partial class GameBridge
             Console.WriteLine($"MP-JOIN joiner: join 0x{j.JoinId:x8} rescan: {j.Name} is listed (idx {listed.Idx} of {listed.Count} in playline{j.Playline}; current playline {listed.Current}, Continue would load playline{listed.ContinuePlayline}/{listed.ContinueName})");
 
             // ---- the load, from the menu
+            // WO-154 4.2 (live L7, the field's hung join): a load started while the main menu's video plays can freeze for
+            // good -- the render thread waits inside the video player for a frame its stopped decode threads never finish,
+            // the main thread waits for the render thread at the loading screen. The video is stopped first (the game's own
+            // wh_ui_StopMovie: the menu stays, its background goes black) and the load starts once the renderer is past it.
+            if (_w154JoinStopVideo && !j.InWorld)
+            {
+                await ExecLuaAsync("System.ExecuteCommand(\"wh_ui_StopMovie\")");
+                Interlocked.Increment(ref _w154JoinVideoStops);
+                Console.WriteLine($"MP-JOIN joiner: join 0x{j.JoinId:x8}: the main menu's video stopped (wh_ui_StopMovie) -- the load starts in {W154StopVideoSettleMs / 1000.0:F1} s");
+                await Task.Delay(W154StopVideoSettleMs);
+            }
             j.Phase = "loading";
             Wo137OnJoinLoading(j.JoinId);   // WO-137: host quest changes from before this world are in it already
             SetJoinUi("loading", "Loading your host's world...");
@@ -554,15 +566,17 @@ public partial class GameBridge
             if (await Task.WhenAny(j.LoadStarted.Task, Task.Delay(20000)) != j.LoadStarted.Task
                 && !(_w154JoinPatient && await Wo154WaitLoadAsync(j, "accept")))
             {
-                Console.WriteLine($"MP-JOIN joiner: join 0x{j.JoinId:x8}: the engine did not accept wh_sys_LoadGame {j.Playline} {j.Name} {(_w154JoinPatient ? "(the game answers, not loading)" : "within 20 s")} -- abort");
-                await AbortJoinerJoinAsync(j, Protocol.JoinAbortLoadFailed, "load-failed", "Your host's world could not be loaded.");
+                Console.WriteLine($"MP-JOIN joiner: join 0x{j.JoinId:x8}: the engine did not accept wh_sys_LoadGame {j.Playline} {j.Name} {(j.Frozen ? "(the game froze)" : _w154JoinPatient ? "(the game answers, not loading)" : "within 20 s")} -- abort");
+                if (j.Frozen) await AbortJoinerJoinAsync(j, Protocol.JoinAbortLoadFailed, "load-frozen", Wo154Rules.FrozenLoadText);
+                else await AbortJoinerJoinAsync(j, Protocol.JoinAbortLoadFailed, "load-failed", "Your host's world could not be loaded.");
                 return;
             }
             var endT = await Task.WhenAny(j.GameplayStarted.Task, j.LoadFailed.Task, Task.Delay(_w154JoinPatient ? 90000 : 300000));
             if (endT != j.GameplayStarted.Task && !(endT != j.LoadFailed.Task && _w154JoinPatient && await Wo154WaitLoadAsync(j, "gameplay")))
             {
-                Console.WriteLine($"MP-JOIN joiner: join 0x{j.JoinId:x8}: the load {(endT == j.LoadFailed.Task ? "FAILED (the engine went back to the menu)" : "never reached \"Gameplay started\" in 300 s")} -- abort");
-                await AbortJoinerJoinAsync(j, Protocol.JoinAbortLoadFailed, "load-failed", "Your host's world could not be loaded.");
+                Console.WriteLine($"MP-JOIN joiner: join 0x{j.JoinId:x8}: the load {(endT == j.LoadFailed.Task ? "FAILED (the engine went back to the menu)" : j.Frozen ? "FROZE (busy with no CPU: the game's own freeze at the loading screen)" : "never reached \"Gameplay started\" in 300 s")} -- abort");
+                if (j.Frozen) await AbortJoinerJoinAsync(j, Protocol.JoinAbortLoadFailed, "load-frozen", Wo154Rules.FrozenLoadText);
+                else await AbortJoinerJoinAsync(j, Protocol.JoinAbortLoadFailed, "load-failed", "Your host's world could not be loaded.");
                 return;
             }
             Console.WriteLine(FormattableString.Invariant(
@@ -830,7 +844,7 @@ public partial class GameBridge
         _joinReceivedId = 0;
         if (ReferenceEquals(_jj, j)) _jj = null;
         _autoNextUtc = DateTime.UtcNow.AddSeconds(30);
-        SetJoinUi(why == "no-own-save" ? "no-save" : "failed", message);
+        SetJoinUi(why == "no-own-save" ? "no-save" : "failed", message, why == "load-frozen" ? "frozen" : "");
         Console.WriteLine($"MP-JOIN joiner: join 0x{j.JoinId:x8} ABORTED ({why}) -- JoinAbort {Protocol.JoinAbortName(reason)} {(sendAbort ? "sent (the host resumes)" : "not sent")}; {(j.InWorld && _joinedWorld ? "leaving the host's world" : "staying where it is")}");
         // WO-125: a failed in-world rejoin leaves the host's world (what the joiner did since the reload is not kept).
         if (j.InWorld && _joinedWorld) await LeaveSharedWorldAsync(why, message);
@@ -925,6 +939,23 @@ public partial class GameBridge
                 _ = Task.Run(async () =>
                 {
                     if (j.GameplayStarted is { } gs) await Task.WhenAny(gs.Task, Task.Delay(240000));
+                    if (_w154JoinPatient && !(j.GameplayStarted?.Task.IsCompleted ?? false))
+                    {
+                        // WO-154 4.2 (live L7): still loading -- or frozen. The file stays until no load can read it (it was
+                        // deleted here while the game was busy), and the world is left only once the game is in one.
+                        if (j.PlacedPath is string pp && Wo154RemovePlacedLater(j, pp)) j.PlacedPath = null;
+                        var t0 = DateTime.UtcNow;
+                        string w = "busy";
+                        while ((DateTime.UtcNow - t0).TotalSeconds < Wo154Rules.JoinLoadWatch.MaxWaitS && !j.Frozen
+                               && (w = await Wo154WhereNowAsync()) is not ("world" or "menu"))
+                            await Task.Delay(3000);
+                        Console.WriteLine($"MP-JOIN joiner: join 0x{joinId:x8} host-abort: the load {(w == "world" ? "came through after all -- leaving that world" : w == "menu" ? "ended at the main menu -- nothing to leave" : j.Frozen ? "froze -- the player is told to restart the game" : "never ended -- nothing left to do")}");
+                        if (w != "world")
+                        {
+                            if (w == "menu") SetJoinUi("failed", $"Your host stopped the join ({reason}).");
+                            return;
+                        }
+                    }
                     SetJoinedWorld(true);
                     await RemovePlacedWorldAsync(j, "host-abort");
                     await LeaveSharedWorldAsync(reason, $"Your host stopped the join ({reason}).");

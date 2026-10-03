@@ -17,6 +17,7 @@ public partial class GameBridge
     private long _w154SkipEndedMs, _w154SkipToldMs, _w154SkipTold;
     private volatile bool _w154SkipEndedShared;
     private string _w154SkipEndedKind = "skip";
+    private string? _w154SkipBeganKind;   // the DLL's began edge carries the skip's id; its ended edge reads -1 (live L6)
 
     /// <summary>This game's own skip ended (the DLL's edge or the log's marker): a set-back right after it is his.</summary>
     private void Wo154NoteLocalSkipEnded(string kind)

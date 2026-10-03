@@ -35,6 +35,7 @@ public partial class GameBridge
     {
         Interlocked.Increment(ref _w154JoinWaits);
         var watch = new Wo154Rules.JoinLoadWatch();
+        var frozen = new Wo154Rules.FrozenWatch();
         var t0 = DateTime.UtcNow;
         string told = "";
         bool Done() => (stage == "accept" && j.LoadStarted!.Task.IsCompleted) || j.GameplayStarted!.Task.IsCompleted;
@@ -47,6 +48,16 @@ public partial class GameBridge
             if (Done()) return true;
             double waited = (DateTime.UtcNow - t0).TotalSeconds;
             var v = watch.Feed(w, waited, loadAccepted: j.LoadStarted!.Task.IsCompleted);
+            if (_w154JoinFrozen && frozen.Feed(w == "busy", waited, GameCpuSeconds()))
+            {
+                // the game's own freeze at the loading screen (live L7: the render thread inside the video player's decode
+                // wait, the main thread waiting for it; the field's hung join the same): it never ends -- the player restarts
+                j.Frozen = true;
+                Interlocked.Increment(ref _w154JoinFrozenSeen);
+                Console.WriteLine(FormattableString.Invariant($"MP-JOIN joiner: join 0x{j.JoinId:x8}: the game is FROZEN -- busy for {frozen.BusyForS:F0} s and it used {frozen.CpuInWindowS:F2} s of CPU in the last {Wo154Rules.FrozenWatch.WindowS:F0} s (a load uses the CPU all the time) -- the player is told to restart the game; its world file stays until no load can read it"));
+                SetJoinUi("failed", Wo154Rules.FrozenLoadText, "frozen", false);
+                return false;
+            }
             if (w != told)
             {
                 told = w;
@@ -72,6 +83,30 @@ public partial class GameBridge
             }
             await Task.Delay(2000);
         }
+    }
+
+    // Phase 4.2: mp_join_frozen on|off (default on) -- a load busy with no CPU is the game's own freeze: the player is told
+    private volatile bool _w154JoinFrozen = true;
+    private long _w154JoinFrozenSeen;
+    // Phase 4.2: mp_join_stopvideo on|off (default on) -- the main menu's video is stopped before a join's load from the menu
+    private volatile bool _w154JoinStopVideo = true;
+    private long _w154JoinVideoStops;
+    private const int W154StopVideoSettleMs = 1500;
+
+    /// <summary>The game process's total CPU seconds (the Modding Tools build's KingdomCome.exe), or null when not readable.</summary>
+    private static double? GameCpuSeconds()
+    {
+        try
+        {
+            var ps = System.Diagnostics.Process.GetProcessesByName("KingdomCome");
+            try
+            {
+                if (ps.Length != 1) return null;   // none, or two games: no reading (never declares a freeze)
+                return ps[0].TotalProcessorTime.TotalSeconds;
+            }
+            finally { foreach (var p in ps) p.Dispose(); }
+        }
+        catch { return null; }
     }
 
     /// <summary>
@@ -156,5 +191,5 @@ public partial class GameBridge
     }
 
     private string Wo154JoinStatsText() => FormattableString.Invariant(
-        $"join_patient={(_w154JoinPatient ? "on" : "off")} join_waits={_w154JoinWaits} join_wait_aborts={_w154JoinWaitAborts} join_wait_worlds={_w154JoinWaitWorlds} placed_deferred={_w154JoinDeferredRemovals} join_panel={(_w154JoinPanel ? "on" : "off")} panel_pushes={_w154PanelPushes}");
+        $"join_patient={(_w154JoinPatient ? "on" : "off")} join_frozen={(_w154JoinFrozen ? "on" : "off")} frozen_seen={Interlocked.Read(ref _w154JoinFrozenSeen)} join_stopvideo={(_w154JoinStopVideo ? "on" : "off")} video_stops={Interlocked.Read(ref _w154JoinVideoStops)} join_waits={_w154JoinWaits} join_wait_aborts={_w154JoinWaitAborts} join_wait_worlds={_w154JoinWaitWorlds} placed_deferred={_w154JoinDeferredRemovals} join_panel={(_w154JoinPanel ? "on" : "off")} panel_pushes={_w154PanelPushes}");
 }

@@ -222,6 +222,14 @@ public partial class GameBridge
             else if (p[3] == "off") _w139Pursuits.TryRemove(p[1], out _);
             Console.WriteLine($"MP-W154 check: WO-139's pursuit of avatar {p[2]} by {p[1]} {p[3]} -> {r?.ToString(CultureInfo.InvariantCulture) ?? "no answer"} (1 set, 0 already, 2 no body, 3 refused, 4 it fights the host)");
         }
+        else if (p.Length == 3 && p[0] == "skip" && p[1] is "wait" or "sleep"
+                 && float.TryParse(p[2], NumberStyles.Float, CultureInfo.InvariantCulture, out float hrs) && hrs is >= 0.25f and <= 24f)
+        {
+            // 6.3: this game's own skip, as the game's Wait or Sleep runs it (no vote: the DLL's gate lets the start's own
+            // dialog through) -- a joiner's own skip that its copy runs anyway, for the set-back and its line
+            byte? r = await _combat.Wo140StartAsync(p[1] == "wait" ? (byte)1 : (byte)2, hrs);
+            Console.WriteLine(FormattableString.Invariant($"MP-W154 check: this game's own {p[1]} for {hrs:0.##} h -> {(r == 1 ? "the game's own skip runs" : r == 2 ? "refused: a skip is running" : r == 3 ? "refused: a bad length" : r == 0 ? "the game said no" : "no answer")}"));
+        }
         else if (p.Length == 1 && p[0] == "where")
         {
             var sw = System.Diagnostics.Stopwatch.StartNew();
@@ -289,6 +297,8 @@ public partial class GameBridge
                         case "fair_crime": _w154FairCrime = on; break;
                         case "scene_resume": _w154SceneResume = on; break;
                         case "join_patient": _w154JoinPatient = on; break;
+                        case "join_frozen": _w154JoinFrozen = on; break;
+                        case "join_stopvideo": _w154JoinStopVideo = on; break;
                         case "ride_native": _w154RideNative = on; if (!on) _w154RideFeed.Clear(); break;
                         case "bind_far":
                             if (_w154BindFar != on) { _w154BindFar = on; _ = _combat.NpcConfigAsync(_nativeWriteOn, _nativeSenderClock, default, on); }

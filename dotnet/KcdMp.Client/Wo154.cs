@@ -250,6 +250,39 @@ public static class Wo154Rules
         }
     }
 
+    /// <summary>
+    /// Phase 4.2 (live L7, and the field's hung join): a load from the main menu can freeze for good -- the main thread waits
+    /// for the render thread at the loading screen, the render thread waits inside the game's video player (Bink) for its
+    /// decode threads, and those wait too: no CPU, no log line, the menu's last frame on screen. A slow load works (the L6
+    /// load used the CPU for 46 s); a frozen one does not. Frozen = the game has been busy (no console answer) for at least
+    /// <see cref="BusyMinS"/> and used less than <see cref="CpuMaxS"/> of CPU in the last <see cref="WindowS"/>.
+    /// No CPU reading (the process not found or not readable) never declares a freeze.
+    /// </summary>
+    public sealed class FrozenWatch
+    {
+        public const double BusyMinS = 90, WindowS = 60, CpuMaxS = 1.5;
+        private readonly Queue<(double T, double Cpu)> _samples = new();
+        private double _busySince = -1;
+        public double BusyForS { get; private set; }
+        public double CpuInWindowS { get; private set; } = double.NaN;
+
+        /// <summary>One look: busy = no console answer; cpuS = the game process's total CPU seconds, or null.</summary>
+        public bool Feed(bool busy, double nowS, double? cpuS)
+        {
+            if (!busy || cpuS is not double cpu) { _samples.Clear(); _busySince = -1; BusyForS = 0; CpuInWindowS = double.NaN; return false; }
+            if (_busySince < 0) _busySince = nowS;
+            BusyForS = nowS - _busySince;
+            _samples.Enqueue((nowS, cpu));
+            while (_samples.Count > 1 && nowS - _samples.Peek().T > WindowS) _samples.Dequeue();
+            var first = _samples.Peek();
+            if (nowS - first.T < WindowS - 5) return false;   // not a full window yet
+            CpuInWindowS = cpu - first.Cpu;
+            return BusyForS >= BusyMinS && CpuInWindowS < CpuMaxS;
+        }
+    }
+
+    public const string FrozenLoadText = "Your game froze while loading your host's world (the game's own video player stopped at the loading screen; your own saves are untouched). Close the game - if it won't close, end it in Task Manager - then start it again and join again.";
+
     /// <summary>Phase 4.2: a placed world file may go now -- no load was asked, or the engine is past it, or it answers from a menu or a world.</summary>
     public static bool PlacedFileMayGo(bool loadCommanded, bool gameplayStarted, bool loadFailed, string where) =>
         !loadCommanded || gameplayStarted || loadFailed || where is "menu" or "world";

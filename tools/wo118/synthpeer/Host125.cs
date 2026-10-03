@@ -93,8 +93,12 @@
 //       carry refuse <joinerId> <body> <why>   (WO-148) the host's world says no to that joiner's carry
 //       carry auto on|off         (WO-148) answer a joiner's Grab like a host (default on): refused when this host
 //                                 carries that body itself, else nothing (the host shows it)
-//       walk <vx> <vy> <secs> [vz] (WO-148) the host walks: its position moves at that velocity, streamed at 10 Hz
+//       walk <vx> <vy> <secs> [vz] [ms] (WO-148) the host walks: its position moves at that velocity, streamed every ms
+//                                 (default 100; WO-154: by the time that really passed, one walk at a time, no heartbeat repeat)
 //                                 (every CarryDown 0x71 received is logged: CARRY ...)
+//       setting ff|crime|ft 0|1    (WO-154) the host's session lever (SessionSetting), as a real host sends it
+//       vitals <hp> <st> [knockeddown|downed]   (WO-154) the host's own PlayerState (0x1F), at once and every 2 s
+//                                 (hstate downed=1|0: the Downed bit of the host's state block)
 //     [reseed] = a synthetic seed (hex) written into the save's body 0x01FB, re-signed: a second
 //     "playthrough" made from a copy. Files are COPIES of real host saves; never logged by path.
 //
@@ -165,6 +169,8 @@ static class Host125
         var npcHp = new System.Collections.Concurrent.ConcurrentDictionary<string, float>(StringComparer.Ordinal);   // WO-147: ... and its hp (a dead row carries 0)
         string? hostBuild = null;
         BodyState2? hostSt2 = null;
+        float hyaw = 0;                                                  // WO-154: the host's heading (walk sets it; every position packet carries it)
+        float vitHp = -1, vitSt = 100; byte vitFlags = 0;                // WO-154: vitals <hp> <st> [knockeddown|downed] -- a PlayerState heartbeat (2 s)
         var npcVel = new System.Collections.Concurrent.ConcurrentDictionary<string, (float Vx, float Vy, float Vz)>(StringComparer.Ordinal);   // WO-136: npcmove
         var npcCombatOn = new System.Collections.Concurrent.ConcurrentDictionary<string, NpcCombatEvent>(StringComparer.Ordinal);            // WO-136: npccombat
         var actOut = new ActionOutbox();
@@ -208,7 +214,7 @@ static class Host125
         bool npcQuiet = false, linkQuiet = false;   // WO-138
         string sleepAuto = "none"; uint sleepN = 0; byte myGhost = ack[0];   // WO-140
         uint carryTok = 0; string? carryBody = null, carryWhat = null; bool carryHeld = true, carryAuto = true;   // WO-148
-        double walkUntil = 0; float wvx = 0, wvy = 0, wvz = 0;                                                   // WO-148: walk
+        double walkUntil = 0; float wvx = 0, wvy = 0, wvz = 0; int walkGen = 0;                                                   // WO-148: walk
         async Task W(byte[] pkt) { if (linkQuiet) return; await wlock.WaitAsync(); try { await st.WriteAsync(pkt, hard.Token); } finally { wlock.Release(); } }
         async Task Announce()
         {
@@ -223,6 +229,14 @@ static class Host125
             var p = new byte[3 + body.Length];
             p[0] = Protocol.WorldSavedUp; BinaryPrimitives.WriteUInt16LittleEndian(p.AsSpan(1), (ushort)body.Length); body.CopyTo(p, 3);
             return p;
+        }
+        static byte[] VitalsPacket(float hpv, float stv, byte flags)
+        {
+            var vp = new byte[3 + Protocol.PlayerStateUpPayloadLen]; vp[0] = Protocol.PlayerStateUp;
+            BinaryPrimitives.WriteUInt16LittleEndian(vp.AsSpan(1), (ushort)Protocol.PlayerStateUpPayloadLen);
+            BinaryPrimitives.WriteSingleLittleEndian(vp.AsSpan(3), hpv); BinaryPrimitives.WriteSingleLittleEndian(vp.AsSpan(7), stv);
+            vp[11] = flags;
+            return vp;
         }
         List<string> Branch()
         {
@@ -244,7 +258,9 @@ static class Host125
             {
                 while (!hard.IsCancellationRequested)
                 {
-                    await W(PositionCodec.BuildPosition(hp[0], hp[1], hp[2], 0, hostRiding, false, hostSt2, hostClaim: true));   // WO-127: the synthetic host claims the session like a real one (WO-135: + its state block)
+                    if (Clock.Elapsed.TotalSeconds >= walkUntil)   // WO-154: while walking, the walk's own 10 Hz stream is the position (a repeat here is a stall)
+                        await W(PositionCodec.BuildPosition(hp[0], hp[1], hp[2], hyaw, hostRiding, false, hostSt2, hostClaim: true));   // WO-127: the synthetic host claims the session like a real one (WO-135: + its state block)
+                    if (vitHp >= 0 && n % 2 == 0) await W(VitalsPacket(vitHp, vitSt, vitFlags));   // WO-154
                     if (n++ % 5 == 0) await Announce();
                     if (carryBody is not null && carryHeld && n % 2 == 0)   // WO-148: still carrying (every 2 s)
                         for (byte g = 1; g < 8; g++)
@@ -307,22 +323,27 @@ static class Host125
                                 await Announce();
                                 Say($"MODE {(shared ? "shared-world" : "separate")} announced");
                                 break;
-                            case "walk":   // WO-148: walk <vx> <vy> <secs> [vz] -- streamed at 10 Hz on its own task
+                            case "walk":   // WO-148: walk <vx> <vy> <secs> [vz] [ms] -- streamed every ms (default 100; WO-154: a real host ~30) on its own task
                             {
                                 wvx = float.Parse(p[1], CultureInfo.InvariantCulture); wvy = float.Parse(p[2], CultureInfo.InvariantCulture);
                                 wvz = p.Length > 4 ? float.Parse(p[4], CultureInfo.InvariantCulture) : 0;
+                                int walkMs = p.Length > 5 ? int.Parse(p[5], CultureInfo.InvariantCulture) : 100;
                                 walkUntil = Clock.Elapsed.TotalSeconds + double.Parse(p[3], CultureInfo.InvariantCulture);
+                                int myWalk = ++walkGen;   // WO-154: a new walk replaces a running one (two loops moved the host twice as fast)
                                 Say(FormattableString.Invariant($"WALK v=({wvx:F2}, {wvy:F2}, {wvz:F2}) for {p[3]} s from ({hp[0]:F1}, {hp[1]:F1}, {hp[2]:F1})"));
                                 _ = Task.Run(async () =>
                                 {
-                                    while (Clock.Elapsed.TotalSeconds < walkUntil && !hard.IsCancellationRequested)
+                                    double tw = Clock.Elapsed.TotalSeconds;   // WO-154: steps by the time that really passed (Task.Delay runs late)
+                                    while (Clock.Elapsed.TotalSeconds < walkUntil && !hard.IsCancellationRequested && myWalk == walkGen)
                                     {
-                                        hp = [hp[0] + wvx * 0.1f, hp[1] + wvy * 0.1f, hp[2] + wvz * 0.1f];
+                                        double tn = Clock.Elapsed.TotalSeconds; float dtw = (float)(tn - tw); tw = tn;
+                                        hp = [hp[0] + wvx * dtw, hp[1] + wvy * dtw, hp[2] + wvz * dtw];
                                         float yawW = (float)Math.Atan2(-wvx, wvy);
+                                        hyaw = yawW;   // WO-154: the 1 s heartbeat keeps the heading (it sent 0: a yaw snap every second)
                                         await W(PositionCodec.BuildPosition(hp[0], hp[1], hp[2], yawW, hostRiding, false, hostSt2, hostClaim: true));
-                                        try { await Task.Delay(100, hard.Token); } catch { break; }
+                                        try { await Task.Delay(walkMs, hard.Token); } catch { break; }
                                     }
-                                    Say(FormattableString.Invariant($"WALK done at ({hp[0]:F1}, {hp[1]:F1}, {hp[2]:F1})"));
+                                    if (myWalk == walkGen) Say(FormattableString.Invariant($"WALK done at ({hp[0]:F1}, {hp[1]:F1}, {hp[2]:F1})"));
                                 });
                                 break;
                             }
@@ -501,7 +522,7 @@ static class Host125
                                 foreach (var kv in p.Skip(1))
                                 {
                                     var q = kv.Split('='); if (q.Length != 2) continue;
-                                    var b = q[0] switch { "crouch" => BodyState2Bits.Crouched, "torch" => BodyState2Bits.TorchLit, "combat" => BodyState2Bits.CombatMode, _ => BodyState2Bits.None };
+                                    var b = q[0] switch { "crouch" => BodyState2Bits.Crouched, "torch" => BodyState2Bits.TorchLit, "combat" => BodyState2Bits.CombatMode, "downed" => BodyState2Bits.Downed, _ => BodyState2Bits.None };
                                     bits = q[1] == "1" ? bits | b : bits & ~b;
                                 }
                                 hostSt2 = new BodyState2(0, 0, bits, WireZone.Undefined, WireGuardStance.None, WireZone.Undefined, 0, 0, 0);
@@ -564,6 +585,24 @@ static class Host125
                                     float.Parse(p[4], CultureInfo.InvariantCulture), float.Parse(p[5], CultureInfo.InvariantCulture), float.Parse(p[6], CultureInfo.InvariantCulture), p[1]);
                                 await W(actOut.Build(ActionKind.DoorState, ActionPhase.Commit, dev.ToBytes()));
                                 Say($"DOOR {dev}");
+                                break;
+                            }
+                            case "vitals":   // WO-154: vitals <hp> <st> [knockeddown|downed] -- the host's own PlayerState (0x1F), now and every 2 s
+                            {
+                                vitHp = float.Parse(p[1], CultureInfo.InvariantCulture); vitSt = float.Parse(p[2], CultureInfo.InvariantCulture);
+                                vitFlags = p.Length > 3 && p[3] == "knockeddown" ? (byte)(Protocol.PlayerStateFlagUnconscious | Protocol.PlayerStateFlagKnockedDown)
+                                         : p.Length > 3 && p[3] == "downed" ? Protocol.PlayerStateFlagUnconscious : (byte)0;
+                                await W(VitalsPacket(vitHp, vitSt, vitFlags));
+                                Say(FormattableString.Invariant($"VITALS hp={vitHp} st={vitSt} flags=0x{vitFlags:X2}"));
+                                break;
+                            }
+                            case "setting":   // WO-154: setting ff|crime|ft 0|1 -- the host's session lever (SessionSetting), as a real host sends it
+                            {
+                                byte key = p[1] switch { "ff" => SessionSettingKey.FriendlyFire, "crime" => SessionSettingKey.CrimeMode, "ft" => SessionSettingKey.FastTravel, _ => (byte)0 };
+                                if (key == 0 || p.Length < 3) { Say("SETTING usage: setting ff|crime|ft 0|1"); break; }
+                                byte val = p[2] == "1" ? (byte)1 : (byte)0;
+                                await W(actOut.Build(ActionKind.SessionSetting, ActionPhase.Commit, [key, val]));
+                                Say($"SETTING {SessionSettingKey.Name(key)}={val} sent");
                                 break;
                             }
                             case "ride":   // WO-151: ride <horse>|off -- the host rides (HorseInfo + the riding flag)

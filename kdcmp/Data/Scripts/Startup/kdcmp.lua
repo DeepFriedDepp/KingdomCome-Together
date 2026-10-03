@@ -20092,6 +20092,14 @@ do
     -- Phase 4.2 (joiner): mp_join_patient on|off (default on) -- a join's load is given up only on a responsive menu
     if W.joinPatient == nil then W.joinPatient = true end
     function KCD2MP_W154SetJoinPatient(arg) return fightSwitch("join_patient", "joinPatient", arg, "a join's load is given up only on a responsive menu, never while the game is busy") end
+    -- (joiner) mp_join_frozen on|off (default on) -- a join's load busy with no CPU is the game's own freeze at the loading
+    -- screen (its video player): the player is told to restart the game instead of waiting
+    if W.joinFrozen == nil then W.joinFrozen = true end
+    function KCD2MP_W154SetJoinFrozen(arg) return fightSwitch("join_frozen", "joinFrozen", arg, "a join's load that froze (busy, no CPU) is told plainly: restart the game") end
+    -- (joiner) mp_join_stopvideo on|off (default on) -- the main menu's video is stopped (wh_ui_StopMovie) before a join's
+    -- load from the menu: a load started while it plays can freeze for good in the game's video player
+    if W.joinStopVideo == nil then W.joinStopVideo = true end
+    function KCD2MP_W154SetJoinStopVideo(arg) return fightSwitch("join_stopvideo", "joinStopVideo", arg, "the main menu's video is stopped before a join's load from the menu") end
 
     -- Phase 4.1 (host): the join bar through the engine's hold -- the game's own tutorial panel, pushed by the agent
     -- (the mod's timers, which draw the old bar, do not run while the engine holds the world; a console call does).
@@ -22096,6 +22104,8 @@ local ok, err = pcall(function()
     System.AddCCommand("mp_scene_resume", 'KCD2MP_W154SetSceneResume(%line)', "WO-154: (joiner) a scene stuck at its end resumes the host's copies, as in 0.44.0 (default off: no copy is resumed; the engine's own rescue, a save request, runs at once): mp_scene_resume on|off")
     System.AddCCommand("mp_bind_far", 'KCD2MP_W154SetBindFar(%line)', "WO-154: (joiner) KCDMP.dll writes a host copy that has no physics yet (far away) and one seated on a cart (held in its seat until it gets off), instead of refusing them as not-living / parented (default on): mp_bind_far on|off")
     System.AddCCommand("mp_skip_tell", 'KCD2MP_W154SetSkipTell(%line)', "WO-154: (joiner) your own wait or sleep, set back to the host's clock (only the host's clock moves time in a shared world), is told on screen (default on): mp_skip_tell on|off")
+    System.AddCCommand("mp_join_frozen", 'KCD2MP_W154SetJoinFrozen(%line)', "WO-154: (joiner) a join's load that froze (the game busy with no CPU: its own video player stopped at the loading screen) is told plainly -- restart the game and join again -- instead of waited out (default on): mp_join_frozen on|off")
+    System.AddCCommand("mp_join_stopvideo", 'KCD2MP_W154SetJoinStopVideo(%line)', "WO-154: (joiner) the main menu's video is stopped (the game's wh_ui_StopMovie: the menu stays, its background goes black) before a join's load from the menu -- a load started while it plays can freeze for good (default on): mp_join_stopvideo on|off")
     System.AddCCommand("mp_minigame_outcome", 'KCD2MP_W154SetMinigameOutcome(%line)', "WO-154: a quest State named after a minigame (the knight's dice in the attack on Nebakov: won or lost) is shared like any quest State; a minigame module's own States (the blacksmith's tutorial) stay each player's (default on; off = WO-151's rule): mp_minigame_outcome on|off")
     System.AddCCommand("mp_ride_native", 'KCD2MP_W154SetRideNative(%line)', "WO-154: a partner's ridden horse is written every frame by KCDMP.dll from the rider's stream, its brain held, its gait the engine's own (default on; off = 0.44.0's Lua-moved horse): mp_ride_native on|off")
     System.AddCCommand("mp_gait_hysteresis", 'KCD2MP_W154SetGaitHyst(%line)', "WO-154: a partner's figure (and a host copy) changes its gait only past a band around each boundary, so a pace on a boundary keeps its gait (default on): mp_gait_hysteresis on|off")

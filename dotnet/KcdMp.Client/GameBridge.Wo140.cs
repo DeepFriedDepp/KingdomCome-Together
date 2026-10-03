@@ -529,6 +529,7 @@ public partial class GameBridge
                 Console.WriteLine($"MP-W140 this game's {Wo140Rules.KindOfSkipId(f.Id)} picker is open");
                 return;
             case Wo140Frame.EdgeBegan:
+                _w154SkipBeganKind = Wo140Rules.KindOfSkipId(f.Id);   // WO-154 6.3: the ended edge reads id -1 (live L6)
                 await Wo140OnLocalBeganAsync(f);
                 return;
             case Wo140Frame.EdgeBackedOut:
@@ -544,7 +545,8 @@ public partial class GameBridge
             }
             case Wo140Frame.EdgeEnded:
                 _w140LocalSkipping = false;
-                Wo154NoteLocalSkipEnded(Wo140Rules.KindOfSkipId(f.Id));   // WO-154 6.3: a set-back right after it is told
+                Wo154NoteLocalSkipEnded(_w154SkipBeganKind ?? Wo140Rules.KindOfSkipId(f.Id));   // WO-154 6.3: a set-back right after it is told
+                _w154SkipBeganKind = null;
                 await Wo140OnLocalEndedAsync();
                 return;
         }

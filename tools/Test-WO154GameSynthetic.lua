@@ -464,6 +464,11 @@ do
     m = #LOG
     check("E1: a bad value is refused, nothing sent", KCD2MP_W154SetSkipTell("maybe") == false and countEvt("w154_cfg", "skip_tell", m) == 0)
     check("E1: no value: the current state is sent (the agent learns it)", KCD2MP_W154SetMinigameOutcome("") == true and countEvt("w154_cfg", "minigame_outcome=on", m) == 1)
+    m = #LOG
+    check("E1: mp_join_frozen and mp_join_stopvideo are console commands (4.2)", CCMDS["mp_join_frozen"] ~= nil and CCMDS["mp_join_stopvideo"] ~= nil)
+    KCD2MP_W154SetJoinFrozen("off"); KCD2MP_W154SetJoinStopVideo("off")
+    check("E1: ...and tell the agent", countEvt("w154_cfg", "join_frozen=off", m) == 1 and countEvt("w154_cfg", "join_stopvideo=off", m) == 1)
+    KCD2MP_W154SetJoinFrozen("on"); KCD2MP_W154SetJoinStopVideo("on")
     noErrs("E1")
 end
 
