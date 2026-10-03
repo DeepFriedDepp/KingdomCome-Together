@@ -132,7 +132,7 @@ public partial class GameBridge
             _w154RespiteTold[peer] = tag;
             Console.WriteLine(b is null ? $"MP-W154 host: ghost {peer}'s respite is over -- the guards act on his record again"
                                         : tag == "down" ? $"MP-W154 host: ghost {peer} is down -- no guard stops or attacks him"
-                                        : $"MP-W154 host: ghost {peer} has a respite ({b}) -- no guard stops or attacks him");
+                                        : $"MP-W154 host: ghost {peer} is up again ({b[8..]} of respite left) -- no guard stops or attacks him");
         }
         if (b is not null) Interlocked.Increment(ref _w154RespiteSkips);
         return b;
@@ -221,12 +221,18 @@ public partial class GameBridge
             else if (p[3] == "off") _w139Pursuits.TryRemove(p[1], out _);
             Console.WriteLine($"MP-W154 check: WO-139's pursuit of avatar {p[2]} by {p[1]} {p[3]} -> {r?.ToString(CultureInfo.InvariantCulture) ?? "no answer"} (1 set, 0 already, 2 no body, 3 refused, 4 it fights the host)");
         }
+        else if (p.Length == 1 && p[0] == "where")
+        {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            string w = await Wo154WhereNowAsync();
+            Console.WriteLine(FormattableString.Invariant($"MP-W154 check: where -> {w} in {sw.ElapsedMilliseconds} ms (the join's probe: \"busy\" = no answer in 4 s)"));
+        }
         else if (p.Length == 1 && p[0] == "status")
         {
-            Console.WriteLine($"MP-W154 check: {Wo154FightStatsText()}");
+            Console.WriteLine($"MP-W154 check: {Wo154FightStatsText()} {Wo154JoinStatsText()}");
             Console.WriteLine($"MP-W154 check: dll {await _combat.Wo132StatusAsync() ?? "no answer"}");
         }
-        else Console.WriteLine("MP-W154 check: hostfight <w154_npc> [secs] | hostfight off | pursue <w154_npc> <ghost> on|off | status");
+        else Console.WriteLine("MP-W154 check: hostfight <w154_npc> [secs] | hostfight off | pursue <w154_npc> <ghost> on|off | where | status");
     }
 
     private string Wo154FightStatsText() => FormattableString.Invariant(
@@ -266,9 +272,11 @@ public partial class GameBridge
                         case "guard_respite": _w154GuardRespite = on; break;
                         case "fair_crime": _w154FairCrime = on; break;
                         case "scene_resume": _w154SceneResume = on; break;
+                        case "join_patient": _w154JoinPatient = on; break;
+                        case "join_panel": _w154JoinPanel = on; if (!on) Wo154HostJoinPanelHide("mp_join_panel off"); break;
                     }
                 }
-                Console.WriteLine($"MP-W154 cfg {Wo154FightStatsText()}");
+                Console.WriteLine($"MP-W154 cfg {Wo154FightStatsText()} {Wo154JoinStatsText()}");
                 return;
             case "w154_check":       // mp_w154_check (live checks, test NPCs only)
                 _ = Wo154CheckAsync(arg ?? "");
@@ -277,7 +285,7 @@ public partial class GameBridge
                 _ = Wo154EndFightsLocalAsync(f.Length > 0 && Wo139Text.IsWord(f[0]) ? f[0] : "unstuck");
                 return;
             case "w154_status":
-                Console.WriteLine(FormattableString.Invariant($"MP-W154-STATUS falls={(_w154AvatarFalls ? "on" : "off")} fell={_w154Falls} rose={_w154Rises} peers_down={_w154PeerDown.Count(kv => kv.Value.Down)} coalesce={(_w154Coalesce ? "on" : "off")} merged={_w154Merged} waiting={_w154Coalescer.Count} contested={_w154Contest.Count} {Wo154FightStatsText()}"));
+                Console.WriteLine(FormattableString.Invariant($"MP-W154-STATUS falls={(_w154AvatarFalls ? "on" : "off")} fell={_w154Falls} rose={_w154Rises} peers_down={_w154PeerDown.Count(kv => kv.Value.Down)} coalesce={(_w154Coalesce ? "on" : "off")} merged={_w154Merged} waiting={_w154Coalescer.Count} contested={_w154Contest.Count} {Wo154FightStatsText()} {Wo154JoinStatsText()}"));
                 return;
         }
     }

@@ -166,7 +166,7 @@ public partial class GameBridge
             try
             {
                 if (!_combatRoleApplied) continue;
-                if (_isDamageAuthority) { await Wo124HostModeTickAsync(); continue; }
+                if (_isDamageAuthority) { Wo154HostJoinPanel(_hostJoin); await Wo124HostModeTickAsync(); continue; }   // WO-154 4.1: the hold's panel
                 // Joiner: learn where the game is (the mod answers wo124_where).
                 if (_where == GameWhere.Unknown && (DateTime.UtcNow - _whereAskedUtc).TotalSeconds >= 5)
                 {
@@ -550,14 +550,16 @@ public partial class GameBridge
             // "Loading saved game" + "[CryAction] LoadGame"), so the file must stay
             // until "Gameplay started" (observed: deleting it earlier failed the
             // load and the engine went back to the menu).
-            if (await Task.WhenAny(j.LoadStarted.Task, Task.Delay(20000)) != j.LoadStarted.Task)
+            // WO-154 4.2: past 20 s the game is asked where it is; never given up while it is busy (mp_join_patient)
+            if (await Task.WhenAny(j.LoadStarted.Task, Task.Delay(20000)) != j.LoadStarted.Task
+                && !(_w154JoinPatient && await Wo154WaitLoadAsync(j, "accept")))
             {
-                Console.WriteLine($"MP-JOIN joiner: join 0x{j.JoinId:x8}: the engine did not accept wh_sys_LoadGame {j.Playline} {j.Name} within 20 s -- abort");
+                Console.WriteLine($"MP-JOIN joiner: join 0x{j.JoinId:x8}: the engine did not accept wh_sys_LoadGame {j.Playline} {j.Name} {(_w154JoinPatient ? "(the game answers, not loading)" : "within 20 s")} -- abort");
                 await AbortJoinerJoinAsync(j, Protocol.JoinAbortLoadFailed, "load-failed", "Your host's world could not be loaded.");
                 return;
             }
-            var endT = await Task.WhenAny(j.GameplayStarted.Task, j.LoadFailed.Task, Task.Delay(300000));
-            if (endT != j.GameplayStarted.Task)
+            var endT = await Task.WhenAny(j.GameplayStarted.Task, j.LoadFailed.Task, Task.Delay(_w154JoinPatient ? 90000 : 300000));
+            if (endT != j.GameplayStarted.Task && !(endT != j.LoadFailed.Task && _w154JoinPatient && await Wo154WaitLoadAsync(j, "gameplay")))
             {
                 Console.WriteLine($"MP-JOIN joiner: join 0x{j.JoinId:x8}: the load {(endT == j.LoadFailed.Task ? "FAILED (the engine went back to the menu)" : "never reached \"Gameplay started\" in 300 s")} -- abort");
                 await AbortJoinerJoinAsync(j, Protocol.JoinAbortLoadFailed, "load-failed", "Your host's world could not be loaded.");
@@ -815,10 +817,14 @@ public partial class GameBridge
             try { await WriteJoinAsync(WorldReceiver.BuildAbort(j.Host, j.JoinId, reason)); } catch { }
         if (j.PlacedPath is string p)
         {
-            try { File.Delete(p); } catch { }
-            j.PlacedPath = null;
-            var after = await _combat.SaveListAsync(1, j.Playline, j.Name);
-            Console.WriteLine($"MP-JOIN joiner: join 0x{j.JoinId:x8}: removed {SaveDisplay(p)}; rescan listed={(after is null ? "?" : On(after.Listed))}");
+            if (Wo154RemovePlacedLater(j, p)) j.PlacedPath = null;   // WO-154 4.2: a load may be reading it -- it goes later
+            else
+            {
+                try { File.Delete(p); } catch { }
+                j.PlacedPath = null;
+                var after = await _combat.SaveListAsync(1, j.Playline, j.Name);
+                Console.WriteLine($"MP-JOIN joiner: join 0x{j.JoinId:x8}: removed {SaveDisplay(p)}; rescan listed={(after is null ? "?" : On(after.Listed))}");
+            }
         }
         WorldReceiver.SweepStaging(WorldReceiver.DefaultStagingDir());
         _joinReceivedId = 0;

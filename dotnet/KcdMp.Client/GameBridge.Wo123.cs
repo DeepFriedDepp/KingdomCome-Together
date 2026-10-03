@@ -70,6 +70,7 @@ public partial class GameBridge
         public readonly Channel<(byte Type, byte[] Body)> Inbox = Channel.CreateUnbounded<(byte, byte[])>();
         public WorldSender? Sender;
         public volatile bool EngineHeld;   // WO-151 3.8: the engine's own hold is on for this join
+        public volatile int SentPct;       // WO-154 4.1: the transfer's acknowledged share, for the hold's panel
         public TaskCompletionSource<(string Kind, string Arg)>? LuaReply;
         public void Cancel(string reason) { CancelReason ??= reason; try { Cts.Cancel(); } catch (ObjectDisposedException) { } }
     }
@@ -85,6 +86,8 @@ public partial class GameBridge
     private uint _joinOutId;                 // the join this machine asked for
     private volatile string _joinUiState = "idle";
     private volatile string _joinUiMessage = "";
+    private volatile string _joinUiReason = "";   // WO-154 4.4: why there is no save to bring (Wo154Rules.NoSaveReason)
+    private volatile bool _joinUiCanFresh;        // WO-154 4.4: a new character can join (POST /join-choice?c=fresh)
     private long _joinUiBytes, _joinUiTotal;
     private double _joinUiEtaS;
     private int _joinRxLastDecile = -1;
@@ -481,7 +484,9 @@ public partial class GameBridge
                 {
                     lastProgress = DateTime.UtcNow;
                     double pct = 100.0 * sender.AckedBytes / sender.TotalBytes;
+                    j.SentPct = (int)pct;
                     _ = ExecLuaAsync(FormattableString.Invariant($"if KCD2MP_JoinProgress then KCD2MP_JoinProgress(\"{j.JoinId:x8}\", {pct:F0}, \"sending\") end"));
+                    Wo154HostJoinPanel(j);   // WO-154 4.1
                 }
                 using var wait = CancellationTokenSource.CreateLinkedTokenSource(dct);
                 wait.CancelAfter(TimeSpan.FromSeconds(sender.AllAcked ? JoinDoneTimeoutS : JoinAckTimeoutS));
@@ -593,6 +598,7 @@ public partial class GameBridge
         // Resume first: nothing below may keep the host frozen. WO-151: the engine's own hold first of all
         // (through the pipe -- the mod's Lua does not run while the engine is paused).
         await Wo151JoinHoldAsync(j, false);
+        Wo154HostJoinPanelHide($"join {reason}");   // WO-154 4.1
         if (j.PausedUtc is not null)
         {
             try { await ExecLuaAsync($"if KCD2MP_JoinResume then KCD2MP_JoinResume(\"{j.JoinId:x8}\", \"{EscapeLua(reason)}\") end"); }
@@ -770,8 +776,10 @@ public partial class GameBridge
         _ = Wo124OnWorldReceivedAsync(joinId, host, rx.FinalPath, rx.Offer.WorldSavedSeq);   // WO-124: splice, place, load -- off the frame loop (a load takes ~50 s)
     }
 
-    private void SetJoinUi(string state, string message)
+    private void SetJoinUi(string state, string message, string reason = "", bool canFresh = false)
     {
+        _joinUiReason = reason;
+        _joinUiCanFresh = canFresh;
         _joinUiState = state;
         _joinUiMessage = message;
     }
@@ -785,7 +793,8 @@ public partial class GameBridge
         sb.Append("{\"State\":\"").Append(_joinUiState).Append("\",\"Percent\":").Append(pct.ToString("F1", CultureInfo.InvariantCulture))
           .Append(",\"Bytes\":").Append(b).Append(",\"Total\":").Append(t)
           .Append(",\"EtaS\":").Append(_joinUiEtaS.ToString("F1", CultureInfo.InvariantCulture))
-          .Append(",\"Message\":\"").Append(_joinUiMessage.Replace("\\", "\\\\").Replace("\"", "\\\"")).Append("\"}");
+          .Append(",\"Message\":\"").Append(_joinUiMessage.Replace("\\", "\\\\").Replace("\"", "\\\"")).Append('"')
+          .Append(",\"Reason\":\"").Append(_joinUiReason).Append("\",\"CanFresh\":").Append(_joinUiCanFresh ? "true" : "false").Append('}');
         return sb.ToString();
     }
 }

@@ -208,6 +208,63 @@ public class Wo154Tests
         Assert.False(Wo154Rules.TryParseEndFights("", out _));
     }
 
+    [Theory]
+    [InlineData(0, 0, 0, 0, "1.5.5-release_1_5", "no-saves")]
+    [InlineData(7, 0, 0, 0, "1.5.5-release_1_5", "only-host-copies")]          // the field's tester: 7 copies of the host's world
+    [InlineData(5, 5, 0, 5, "1.5.5-release_1_5", "regular-game-saves")]       // "Your saves are from 1.5.5 -- host 1.5.5"
+    [InlineData(5, 5, 0, 2, "1.5.5-release_1_5", "wrong-build")]
+    [InlineData(3, 1, 1, 0, "1.5.5-release_1_5", "no-henry")]                 // the prologue save only
+    [InlineData(3, 3, 0, 0, null, "no-henry")]                                // the host's build not announced: no build verdict
+    public void A_joiner_without_a_save_to_bring_is_told_why_in_plain_words(int all, int own, int same, int regular, string? host, string reason)
+    {
+        Assert.Equal(reason, Wo154Rules.NoSaveReason(all, own, same, regular, host));
+    }
+
+    [Fact]
+    public void The_regular_games_saves_are_told_from_the_Modding_Tools_by_their_build_number()
+    {
+        Assert.True(Wo154Rules.IsRegularGameBuild("1.5.5-15315-release_1_5"));
+        Assert.True(Wo154Rules.IsRegularGameBuild("1.5.2-14493"));
+        Assert.False(Wo154Rules.IsRegularGameBuild("1.5.5-release_1_5"));
+        Assert.False(Wo154Rules.IsRegularGameBuild(null));
+        Assert.StartsWith("Your saves are from the regular game, not the Modding Tools.", Wo154Rules.NoSaveMessage("regular-game-saves", false, null, null));
+        Assert.EndsWith("You can join with a new character.", Wo154Rules.NoSaveMessage("only-host-copies", true, null, null));
+        Assert.Contains("play past the prologue", Wo154Rules.NoSaveMessage("no-saves", false, null, null));
+        Assert.DoesNotContain("play past the prologue, then join again", Wo154Rules.NoSaveMessage("wrong-build", false, "1.5.2-14493", "1.5.5-release_1_5"));
+    }
+
+    [Fact]
+    public void A_busy_game_is_never_given_up_and_a_responsive_menu_three_times_is()
+    {
+        var w = new Wo154Rules.JoinLoadWatch();
+        // the field: the main thread held 50+ s by the load -- the console answers nothing
+        for (int s = 20; s < 80; s += 6) Assert.Equal(Wo154Rules.JoinLoadWatch.Verdict.Wait, w.Feed("busy", s, loadAccepted: false));
+        Assert.Equal(Wo154Rules.JoinLoadWatch.Verdict.Wait, w.Feed("loading", 86, loadAccepted: true));
+        Assert.Equal(Wo154Rules.JoinLoadWatch.Verdict.InWorld, w.Feed("world", 92, loadAccepted: true));   // its log line late
+        var m = new Wo154Rules.JoinLoadWatch();
+        Assert.Equal(Wo154Rules.JoinLoadWatch.Verdict.Wait, m.Feed("menu", 22, false));
+        Assert.Equal(Wo154Rules.JoinLoadWatch.Verdict.Wait, m.Feed("busy", 28, false));             // a busy answer resets the count
+        Assert.Equal(Wo154Rules.JoinLoadWatch.Verdict.Wait, m.Feed("menu", 34, false));
+        Assert.Equal(Wo154Rules.JoinLoadWatch.Verdict.Wait, m.Feed("menu", 40, false));
+        Assert.Equal(Wo154Rules.JoinLoadWatch.Verdict.Abort, m.Feed("menu", 46, false));
+        var own = new Wo154Rules.JoinLoadWatch();                                                    // a join from the own world
+        own.Feed("world", 22, false); own.Feed("world", 28, false);
+        Assert.Equal(Wo154Rules.JoinLoadWatch.Verdict.Abort, own.Feed("world", 34, false));          // still the own world: the load never took
+        Assert.Equal(Wo154Rules.JoinLoadWatch.Verdict.GaveUpBusy, new Wo154Rules.JoinLoadWatch().Feed("busy", Wo154Rules.JoinLoadWatch.MaxWaitS, false));
+    }
+
+    [Fact]
+    public void A_placed_world_file_goes_only_when_no_load_can_be_reading_it()
+    {
+        Assert.True(Wo154Rules.PlacedFileMayGo(loadCommanded: false, gameplayStarted: false, loadFailed: false, where: "busy"));   // before the load
+        Assert.False(Wo154Rules.PlacedFileMayGo(true, false, false, "busy"));      // the field's delete at 02:17:50
+        Assert.False(Wo154Rules.PlacedFileMayGo(true, false, false, "loading"));
+        Assert.True(Wo154Rules.PlacedFileMayGo(true, false, false, "menu"));
+        Assert.True(Wo154Rules.PlacedFileMayGo(true, false, false, "world"));
+        Assert.True(Wo154Rules.PlacedFileMayGo(true, true, false, "busy"));        // past Gameplay started: the engine read it
+        Assert.True(Wo154Rules.PlacedFileMayGo(true, false, true, "busy"));        // the engine reported the failed load
+    }
+
     [Fact]
     public void The_contested_verdict_parses_and_the_worker_flag_reads()
     {

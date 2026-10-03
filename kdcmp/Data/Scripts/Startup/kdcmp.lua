@@ -5234,6 +5234,7 @@ function KCD2MP_JoinDrawUI()
         KCD2MP_JoinResume(w.joinId, "mod-safety-timeout")
         return
     end
+    if KCD2MP.w154 and KCD2MP.w154.joinPanelOn then return end   -- WO-154 4.1: the hold's panel shows it (one bar, not two)
     local label, bar = KCD2MP_JoinBarText(w.partner, w.phase, w.pct, os.clock() - (w.phaseAt or w.pausedAt or os.clock()))
     -- the log key: once per stage, not once a second
     mp_draw_row("join_title", 760, 480, label, 2.4, (label:gsub("%d+ s", "N s"):gsub("%d+%%", "N%%")))
@@ -20075,6 +20076,48 @@ do
     function KCD2MP_W154SetGuardRespite(arg) return fightSwitch("guard_respite", "guardRespite", arg, "no guard acts on a partner who is down or just up again") end
     function KCD2MP_W154SetFairCrime(arg) return fightSwitch("fair_crime", "fairCrime", arg, "a murder only on a death; an assault judged 5 s later") end
     function KCD2MP_W154SetSceneResume(arg) return fightSwitch("scene_resume", "sceneResume", arg, "on = 0.44.0's copy resume for a stuck scene") end
+    -- Phase 4.2 (joiner): mp_join_patient on|off (default on) -- a join's load is given up only on a responsive menu
+    if W.joinPatient == nil then W.joinPatient = true end
+    function KCD2MP_W154SetJoinPatient(arg) return fightSwitch("join_patient", "joinPatient", arg, "a join's load is given up only on a responsive menu, never while the game is busy") end
+
+    -- Phase 4.1 (host): the join bar through the engine's hold -- the game's own tutorial panel, pushed by the agent
+    -- (the mod's timers, which draw the old bar, do not run while the engine holds the world; a console call does).
+    -- The panel queues and fades on every push, so each push flushes the queue first and the agent pushes rarely.
+    --   MP-SCREEN panel=join text="<title> | <ladder>"
+    W.panelId = "kcd2mp_join"
+    local function panelEsc(s) return (tostring(s or ""):gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;")) end
+    function KCD2MP_W154JoinPanel(partner, phase, pct, stageS)
+        local title, ladder = KCD2MP_JoinBarText(partner ~= "" and partner or nil, tostring(phase), tonumber(pct) or 0, tonumber(stageS) or 0)
+        local html = string.format('<font size="24">%s</font><br/><font size="18">%s</font><br/><font size="15">The world is paused until your partner is in (mp_join_cancel to stop).</font>',
+            panelEsc(title), panelEsc(ladder))
+        pcall(function() UIAction.CallFunction("hud", -1, "HideAllTutorials") end)
+        local ok = pcall(function() UIAction.CallFunction("hud", -1, "ShowTutorial", W.panelId, html, 600000, false, 9, 0, false, "") end)
+        W.joinPanelOn = ok
+        mp_log(string.format('MP-SCREEN panel=join text="%s | %s" ok=%s', title, ladder, tostring(ok)))
+        return ok
+    end
+    function KCD2MP_W154JoinPanelHide(why)
+        pcall(function() UIAction.CallFunction("hud", -1, "HideTutorial", W.panelId) end)
+        pcall(function() UIAction.CallFunction("hud", -1, "HideAllTutorials") end)
+        if W.joinPanelOn then mp_log('MP-SCREEN panel=join text="" (' .. tostring(why) .. ')') end
+        W.joinPanelOn = false
+        return true
+    end
+    -- mp_join_panel on|off (host; default on)
+    if W.joinPanel == nil then W.joinPanel = true end
+    function KCD2MP_W154SetJoinPanel(arg) return fightSwitch("join_panel", "joinPanel", arg, "the host's join bar is the game's tutorial panel through the engine's hold") end
+
+    -- Phase 4.2: where the game is, as the answer to the agent's token (wo124_reply <tok> menu|world|loading). A load
+    -- that holds the main thread runs no console command: no answer at all is the agent's "busy".
+    function KCD2MP_W154Where(tok)
+        local where = "menu"
+        if KCD2MP_Wo124Where then
+            local ok, w = pcall(KCD2MP_Wo124Where)
+            if ok and type(w) == "string" then where = w end
+        end
+        KCD2MP_EmitEvent("wo124_reply", tostring(tok) .. " " .. where)
+        return where
+    end
 
     -- mp_w154_check (live checks; test NPCs named w154_ only): the agent does them (GameBridge.Wo154.cs)
     function KCD2MP_W154Check(arg)
@@ -21955,7 +21998,9 @@ local ok, err = pcall(function()
     System.AddCCommand("mp_guard_respite", 'KCD2MP_W154SetGuardRespite(%line)', "WO-154: no guard stops or attacks a partner who is down, or for 2 minutes after he is up (30 s after his mp_unstuck); a stop turned into an attack is 'fled' only when he moved away (default on): mp_guard_respite on|off")
     System.AddCCommand("mp_fair_crime", 'KCD2MP_W154SetFairCrime(%line)', "WO-154: (host) a partner's murder only on the victim's death, and an assault judged 5 s later -- no crime if the victim fights by then, a quest brawl (default on): mp_fair_crime on|off")
     System.AddCCommand("mp_scene_resume", 'KCD2MP_W154SetSceneResume(%line)', "WO-154: (joiner) a scene stuck at its end resumes the host's copies, as in 0.44.0 (default off: no copy is resumed; the engine's own rescue, a save request, runs at once): mp_scene_resume on|off")
-    System.AddCCommand("mp_w154_check", 'KCD2MP_W154Check(%line)', "WO-154 live checks (test NPCs named w154_ only): mp_w154_check hostfight <npc> [secs] | hostfight off | pursue <npc> <ghost> on|off | status")
+    System.AddCCommand("mp_join_panel", 'KCD2MP_W154SetJoinPanel(%line)', "WO-154: (host) the join's progress is the game's own tutorial panel, so it shows through the engine's hold (default on; off = 0.44.0's drawn bar, which the hold stops): mp_join_panel on|off")
+    System.AddCCommand("mp_join_patient", 'KCD2MP_W154SetJoinPatient(%line)', "WO-154: (joiner) a join's load is given up only when the game answers from its menu, never while it is busy loading, and the world file is kept until no load can read it (default on): mp_join_patient on|off")
+    System.AddCCommand("mp_w154_check", 'KCD2MP_W154Check(%line)', "WO-154 live checks (test NPCs named w154_ only): mp_w154_check hostfight <npc> [secs] | hostfight off | pursue <npc> <ghost> on|off | where | status")
     System.AddCCommand("mp_avatar_falls", 'KCD2MP_W154SetFalls(%line)', "WO-154: a partner who is knocked down in his own world falls and lies on this screen too, and stands up when he does (default on): mp_avatar_falls on|off")
     System.AddCCommand("mp_avatar_herbs", 'KCD2MP_SetAvatarHerbs(%line)', "WO-153: the partner's avatar plays its herb-picking loop (default OFF: the avatar stands; the loop ended both 0.43.0 joiner crashes): mp_avatar_herbs on|off")
     System.AddCCommand("mp_avatar_dress", 'KCD2MP_SetAvatarDress(%line)', "WO-144: a partner's avatar wears pieces from its own inventory, equipped through the actor (default on; off = 0.42.0's REST EquipItem): mp_avatar_dress on|off")

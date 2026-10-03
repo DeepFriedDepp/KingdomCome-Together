@@ -342,4 +342,63 @@ do
     noErrs("B5")
 end
 
+-- (C1) Phase 4.1, host: the join bar through the engine's hold is the game's tutorial panel -----------------------------
+do
+    ERRS = {}
+    local calls = {}
+    local saved = UIAction.CallFunction
+    UIAction.CallFunction = function(panel, inst, fn, a1, a2, a3, ...) calls[#calls + 1] = { panel = panel, fn = fn, id = a1, html = a2, ms = a3 } end
+    local mark = #LOG
+    check("C1: the panel is pushed", KCD2MP_W154JoinPanel("joiner-one", "sending", 50, 4) == true)
+    check("C1: the queue is flushed first (HideAllTutorials, then ShowTutorial)", #calls == 2 and calls[1].fn == "HideAllTutorials" and calls[2].fn == "ShowTutorial",
+        tostring(#calls))
+    local html = calls[2] and calls[2].html or ""
+    check("C1: its own id, the stage's own words, a long safety lifetime", calls[2].id == "kcd2mp_join" and html:find("Sending the world to joiner-one... 50%", 1, true) ~= nil
+        and calls[2].ms == 600000, html)
+    check("C1: logged as the join's screen row", lastLog('MP-SCREEN panel=join text="Sending the world to joiner-one... 50%', mark) ~= nil)
+    calls = {}
+    KCD2MP_W154JoinPanel("<b>x</b>", "loading", 100, 30)
+    check("C1: markup in a name is escaped", (calls[2] and calls[2].html or ""):find("&lt;b&gt;x", 1, true) ~= nil)
+    -- the drawn bar stands down while the panel shows (one bar, not two)
+    KCD2MP.w123.paused = true; KCD2MP.w123.pausedAt = NOW; KCD2MP.w123.timeoutS = 600
+    local draws = 0
+    local savedDraw = System.DrawText
+    System.DrawText = function(...) draws = draws + 1 end
+    KCD2MP_JoinDrawUI()
+    check("C1: while the panel shows, no drawn bar", draws == 0, tostring(draws))
+    calls = {}
+    KCD2MP_W154JoinPanelHide("join in")
+    check("C1: the join's end hides it", #calls >= 2 and calls[1].fn == "HideTutorial" and calls[1].id == "kcd2mp_join" and not KCD2MP.w154.joinPanelOn)
+    KCD2MP_JoinDrawUI()
+    check("C1: ...and without the panel the drawn bar is back", draws == 3, tostring(draws))
+    System.DrawText = savedDraw
+    KCD2MP.w123.paused = false
+    UIAction.CallFunction = saved
+    local m2 = #LOG
+    KCD2MP_W154SetJoinPanel("off")
+    check("C1: mp_join_panel tells the agent", countEvt("w154_cfg", "join_panel=off", m2) == 1)
+    KCD2MP_W154SetJoinPanel("on")
+    check("C1: mp_join_panel is a console command", CCMDS["mp_join_panel"] ~= nil and CCMDS["mp_join_panel"].body:find("(%line)", 1, true) ~= nil)
+    noErrs("C1")
+end
+
+-- (C2) Phase 4.2, joiner: the where probe answers the agent's token ---------------------------------------------------
+do
+    ERRS = {}
+    player = nil
+    local mark = #LOG
+    KCD2MP_W154Where("ab12cd34")
+    check("C2: no player -> menu, under the agent's token", countEvt("wo124_reply", "ab12cd34 menu", mark) == 1)
+    mkPlayer(0, 0)
+    mark = #LOG
+    KCD2MP_W154Where("ef56")
+    check("C2: a player -> world", countEvt("wo124_reply", "ef56 world", mark) == 1)
+    local m2 = #LOG
+    KCD2MP_W154SetJoinPatient("off")
+    check("C2: mp_join_patient tells the agent", countEvt("w154_cfg", "join_patient=off", m2) == 1)
+    KCD2MP_W154SetJoinPatient("on")
+    check("C2: mp_join_patient is a console command", CCMDS["mp_join_patient"] ~= nil)
+    noErrs("C2")
+end
+
 OUT = table.concat(RESULTS, "\n")

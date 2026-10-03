@@ -400,10 +400,10 @@ public partial class GameBridge
             if (!_chooseAsked)
             {
                 _chooseAsked = true;
-                var (state, msg) = Wo135FirstJoinUi();
-                Console.WriteLine($"MP-HENRY joiner: first join to world {_peerTag} -- {(state == "wrong-build" ? "NO save of the host's game version: nothing asked of the host" : $"asking the player ({state}): Bring my character / Start fresh")} (launcher; console: mp_join_henry auto|fresh|playlineN/file)");
-                SetJoinUi(state, msg);
-                if (state == "wrong-build") Wo135TellInGame(msg);
+                var (state, msg, reason, canFresh) = Wo135FirstJoinUi();
+                Console.WriteLine($"MP-HENRY joiner: first join to world {_peerTag} -- {(state == "no-save" ? $"NO save of this player's to bring ({reason}){(canFresh ? "; a new character can join" : ": nothing asked of the host")}" : $"asking the player ({state}): Bring my character / Start fresh")} (launcher; console: mp_join_henry auto|fresh|playlineN/file)");
+                SetJoinUi(state, msg, reason, canFresh);
+                if (state == "no-save") Wo135TellInGame(msg);
             }
             return false;
         }
@@ -415,9 +415,9 @@ public partial class GameBridge
             Console.WriteLine($"MP-HENRY joiner: no join asked -- '{choice}': {swhy} (asking again)");
             _firstChoice = null;
             _chooseAsked = true;
-            var (state, msg) = Wo135FirstJoinUi();
-            SetJoinUi(state, state == "wrong-build" ? msg : $"{swhy} {msg}");
-            if (state == "wrong-build") Wo135TellInGame(msg); else Wo135TellInGame(swhy);
+            var (state, msg, reason, canFresh) = Wo135FirstJoinUi();
+            SetJoinUi(state, state == "no-save" ? msg : $"{swhy} {msg}", reason, canFresh);
+            if (state == "no-save") Wo135TellInGame(msg); else Wo135TellInGame(swhy);
             return false;
         }
         return true;
@@ -427,13 +427,28 @@ public partial class GameBridge
     private string? Wo135TargetBuild() => _peerHostBuild;
 
     /// <summary>WO-135: which of Bring / Start fresh exist from the host's build, as the launcher shows it.</summary>
-    private (string State, string Message) Wo135FirstJoinUi()
+    private (string State, string Message, string Reason, bool CanFresh) Wo135FirstJoinUi()
     {
         string? host = Wo135TargetBuild();
-        if (host is null) return Wo135Rules.ChooseUi(Wo135Rules.Offer.Both, null, "");
+        if (host is null) { var (s0, m0) = Wo135Rules.ChooseUi(Wo135Rules.Offer.Both, null, ""); return (s0, m0, "", false); }
         bool bring = Wo125SourceFor("bring", out _) is not null;
         bool fresh = Wo125SourceFor("fresh", out _) is not null;
-        return Wo135Rules.ChooseUi(Wo135Rules.OfferFor(bring, fresh), Wo135NewestHenryBuild(), host);
+        if (bring) { var (s1, m1) = Wo135Rules.ChooseUi(Wo135Rules.OfferFor(bring, fresh), Wo135NewestHenryBuild(), host); return (s1, m1, "", fresh); }
+        // WO-154 4.4: nothing of this player's to bring -- the plain reason, and a new character when one can join
+        string reason = Wo154NoSaveReason(host);
+        return ("no-save", Wo154Rules.NoSaveMessage(reason, fresh, Wo135NewestHenryBuild(), host), reason, fresh);
+    }
+
+    /// <summary>WO-154 4.4: the census behind <see cref="Wo154Rules.NoSaveReason"/> (headers only; nothing inflated).</summary>
+    private string Wo154NoSaveReason(string? host)
+    {
+        if (ResolveSavesDirForJoin() is not string saves) return "no-saves";
+        int all = ListOwnSaves(saves).Count;
+        var own = OwnSaves(saves, HostSeedForOwn());
+        var builds = own.Select(s => WhsSave.ReadBuildFromFile(s.Save.FullPath)).ToList();
+        int same = host is null ? own.Count : builds.Count(b => Wo135Rules.SameBuild(b, host));
+        int regular = builds.Count(Wo154Rules.IsRegularGameBuild);
+        return Wo154Rules.NoSaveReason(all, own.Count, same, regular, host);
     }
 
     /// <summary>The build of this player's newest own save (any build) -- the "X" of the plain message.</summary>

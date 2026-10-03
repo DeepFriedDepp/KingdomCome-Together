@@ -189,6 +189,71 @@ public static class Wo154Rules
             IsDown(nowMs) ? "down" : nowMs < _until ? FormattableString.Invariant($"respite {(_until - nowMs + 999) / 1000} s") : null;
     }
 
+    /// <summary>
+    /// Phase 4.4: why a first join has no save of this player's to bring, as a code the launcher puts in plain words
+    /// (AgentStatusBanner.PlainReason). The field: "Your saves are from 1.5.5 -- host 1.5.5" (the regular game's saves,
+    /// build 15315, beside the Modding Tools' in the shared saves folder), and a tester whose only Modding Tools saves
+    /// were copies of the host's world. Counts are of the saves folder's engine saves.
+    /// </summary>
+    public static string NoSaveReason(int allSaves, int ownSaves, int ownSameBuild, int ownRegularGame, string? hostBuild)
+    {
+        if (allSaves == 0) return "no-saves";
+        if (ownSaves == 0) return "only-host-copies";
+        if (hostBuild is not null && ownSameBuild == 0) return ownRegularGame == ownSaves ? "regular-game-saves" : "wrong-build";
+        return "no-henry";   // own saves of the host's build, none with Henry in it (the prologue: its player is Godwin)
+    }
+
+    /// <summary>The regular game's BuildInfo carries a build number ("1.5.5-15315-release_1_5"); the Modding Tools' does not.</summary>
+    public static bool IsRegularGameBuild(string? build) =>
+        build is not null && System.Text.RegularExpressions.Regex.IsMatch(build, @"^\d+(?:\.\d+)+-\d+(?:-|$)");
+
+    /// <summary>The joiner's own words for <see cref="NoSaveReason"/> (the in-game toast; the launcher has its own).</summary>
+    public static string NoSaveMessage(string reason, bool canFresh, string? theirs, string? host)
+    {
+        string why = reason switch
+        {
+            "no-saves" => "You have no Modding Tools saves yet.",
+            "only-host-copies" => "Your only Modding Tools saves are copies of this same world.",
+            "regular-game-saves" => "Your saves are from the regular game, not the Modding Tools.",
+            "wrong-build" => Wo135Rules.WrongBuildMessage(theirs, host ?? ""),
+            _ => "Your Modding Tools saves have no character of yours in them yet (only the prologue).",
+        };
+        if (canFresh) return why + " You can join with a new character.";
+        return reason == "wrong-build" ? why : why + " Start a new game in the Modding Tools once and play past the prologue, then join again.";
+    }
+
+    /// <summary>
+    /// Phase 4.2: a joiner's load is given up only on a responsive main menu, never while the game is busy. The field:
+    /// a load that held the main thread 50+ s (the console runs nothing then, and kcd.log's "Loading saved game" came
+    /// late); the 20 s give-up deleted the world file under it. Feed every where-probe answer ("menu", "world",
+    /// "loading", "busy" = no answer in time, "unknown"); the verdict is Wait until the game answers, not loading,
+    /// <see cref="IdleAnswersToAbort"/> times in a row (Abort: the load never took), or answers from a world once the
+    /// engine had accepted the load (InWorld: it got there, its log line late). Before the engine accepted the load a
+    /// world answer is the player's own world still (a join from it): it counts as idle. <see cref="MaxWaitS"/> bounds
+    /// the wait of a game that never answers again.
+    /// </summary>
+    public sealed class JoinLoadWatch
+    {
+        public const int IdleAnswersToAbort = 3;
+        public const double MaxWaitS = 900;
+        public enum Verdict { Wait, Abort, InWorld, GaveUpBusy }
+        private int _idle;
+        public string Last { get; private set; } = "";
+
+        public Verdict Feed(string where, double waitedS, bool loadAccepted)
+        {
+            Last = where;
+            if (where == "world" && loadAccepted) return Verdict.InWorld;
+            _idle = where is "menu" or "world" ? _idle + 1 : 0;
+            if (_idle >= IdleAnswersToAbort) return Verdict.Abort;
+            return waitedS >= MaxWaitS ? Verdict.GaveUpBusy : Verdict.Wait;
+        }
+    }
+
+    /// <summary>Phase 4.2: a placed world file may go now -- no load was asked, or the engine is past it, or it answers from a menu or a world.</summary>
+    public static bool PlacedFileMayGo(bool loadCommanded, bool gameplayStarted, bool loadFailed, string where) =>
+        !loadCommanded || gameplayStarted || loadFailed || where is "menu" or "world";
+
     /// <summary>Phase 3.4: a joiner's mp_unstuck asks the host to end every fight against his avatar (crime-ask kind 4).</summary>
     public static string EndFightsText(string why) => Wo139Text.IsWord(why) ? why : "unstuck";
 
