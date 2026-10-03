@@ -35,8 +35,10 @@
 // and one unsolicited frame per recorded change:
 //   0x9E QuestChange [seq:4][flags:1][old:4][new:4][portLen:1][port][typeLen:1][type][pathLen:2][path][questLen:2]
 //        flags: 1 notify, 2 mirror (caused while an Apply ran), 4 old ok, 8 new ok,
-//               16 cascade (made by another State's consumers, not by the world); questLen = the quest
-//               root's prefix of path (only States under a C_Quest are recorded)
+//               16 cascade (made by another State's consumers, not by the world), 64 worker (WO-154: made
+//               on a thread other than the frame thread -- an AI behaviour's); questLen = the quest
+//               root's prefix of path (only States under a C_Quest are recorded). 32 is the agent's
+//               own request flag (Wo147Rules.FlagConversation) and never comes from here.
 //
 // The TIME GATE (joiner, shared world): a quest's time set is a C_Function
 // node calling wh::rpgmodule::AdvanceWorldTime / wh::conceptmodule::PassLongTime
@@ -93,7 +95,7 @@ enum class Applied : uint8_t {
 };
 
 // Flags on 0x9E.
-constexpr uint8_t kFNotify = 1, kFMirror = 2, kFOldOk = 4, kFNewOk = 8, kFCascade = 16;
+constexpr uint8_t kFNotify = 1, kFMirror = 2, kFOldOk = 4, kFNewOk = 8, kFCascade = 16, kFWorker = 64;
 constexpr uint8_t kCfgTimeGate = 1;
 
 // Off the main thread: resolve anchors, patch the two vftable slots (the

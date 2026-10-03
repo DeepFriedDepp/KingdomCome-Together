@@ -382,7 +382,6 @@ std::atomic<bool> g_detect{false};     // records made (agent Config or research
 std::atomic<bool> g_logAll{false};     // research: one log line per change
 std::atomic<bool> g_send_on{false};    // frames to the agent
 std::atomic<bool> g_hold{false};       // records kept back (the agent's load hold)
-std::atomic<int>  g_applyDepth{0};
 std::atomic<uint32_t> g_seq{0};
 std::atomic<uint32_t> c_recorded{0}, c_sent{0}, c_dropped{0}, c_foreign{0}, c_noPath{0};
 std::atomic<uint32_t> c_apply[10]{};
@@ -391,21 +390,31 @@ uint8_t g_role = 0;
 
 ChangedFn g_origChanged = nullptr;
 ExecFn    g_origExecute = nullptr;
-// The State execution in progress on the main thread (the graph is single-
-// threaded; any other thread gets no port attribution).
-void* g_execNode = nullptr;
-const void* g_execPort = nullptr;
+// WO-154: the State execution in progress, PER THREAD. Until 0.44.0 this was
+// kept for the frame thread only, on the belief that the graph is single-
+// threaded. It is not: the field's 400+ port-less records (both evenings,
+// every log) were never once flagged a cascade, and both the port and the
+// cascade flag were computed on the frame thread only -- they are the changes
+// AI behaviours make from their worker threads (a distance trigger, a duel's
+// state, a farmhand's evening). Every thread now carries its own execution,
+// its own notification depth and its own apply depth, so a worker's change
+// gets its port and its consequences are a cascade like anywhere else.
+thread_local void* t_execNode = nullptr;
+thread_local const void* t_execPort = nullptr;
+thread_local int t_changeDepth = 0;   // >0 while a State's own notification runs on this thread (its consumers' changes are a cascade)
+thread_local int t_applyDepth = 0;    // >0 while an Apply runs on this thread (its changes are a mirror)
+std::atomic<uint32_t> c_worker{0}, c_workerPort{0};
 
 struct Rec {
     uint32_t seq;
     uint8_t flags;
     int32_t oldI, newI;
     uint16_t questLen;   // the quest root's prefix of `path` ("Barbora.trosecko.hledaniPsa")
+    uint32_t tid;        // WO-154: the thread the change was made on (logs)
     char port[64];
     char type[48];
     char path[kMaxPath + 1];
 };
-int g_changeDepth = 0;   // main thread: >0 while a State's own notification runs (its consumers' changes are a cascade)
 std::atomic<uint32_t> c_notQuest{0}, c_cascade{0};
 std::mutex g_qm;
 std::vector<Rec> g_queue;           // under g_qm
@@ -427,11 +436,15 @@ void record(void* self, const void* oldV, const void* newV, bool notify, bool ca
     decode(oldV, &o);
     decode(newV, &nv);
     r.oldI = o.i; r.newI = nv.i;
-    r.flags = static_cast<uint8_t>((notify ? kFNotify : 0) | (g_applyDepth.load() > 0 ? kFMirror : 0) |
-                                   (o.ok ? kFOldOk : 0) | (nv.ok ? kFNewOk : 0) | (cascade ? kFCascade : 0));
+    r.tid = GetCurrentThreadId();
+    const bool worker = g_mainTid != 0 && r.tid != g_mainTid;
+    r.flags = static_cast<uint8_t>((notify ? kFNotify : 0) | (t_applyDepth > 0 ? kFMirror : 0) |
+                                   (o.ok ? kFOldOk : 0) | (nv.ok ? kFNewOk : 0) | (cascade ? kFCascade : 0) |
+                                   (worker ? kFWorker : 0));
     strncpy_s(r.type, nv.type[0] ? nv.type : o.type, _TRUNCATE);
-    if (GetCurrentThreadId() == g_mainTid && g_execNode == self && g_execPort)
-        port_name(g_execPort, r.port, sizeof r.port);
+    if (t_execNode == self && t_execPort)
+        port_name(t_execPort, r.port, sizeof r.port);
+    if (worker) { c_worker.fetch_add(1); if (r.port[0]) c_workerPort.fetch_add(1); }
     r.seq = g_seq.fetch_add(1) + 1;
     c_recorded.fetch_add(1);
     std::lock_guard<std::mutex> lk(g_qm);
@@ -442,23 +455,22 @@ void record(void* self, const void* oldV, const void* newV, bool notify, bool ca
 void hooked_changed(void* self, const void* oldV, const void* newV, bool notify) {
     // Recorded BEFORE the original runs: the notifications below may change
     // further States (a cascade), which then land after this one -- the
-    // engine's own order.
-    const bool mainT = GetCurrentThreadId() == g_mainTid;
-    if (g_detect.load(std::memory_order_relaxed)) record(self, oldV, newV, notify, mainT && g_changeDepth > 0);
-    if (mainT) ++g_changeDepth;
+    // engine's own order. WO-154: on any thread (t_changeDepth is per thread).
+    if (g_detect.load(std::memory_order_relaxed)) record(self, oldV, newV, notify, t_changeDepth > 0);
+    ++t_changeDepth;
     g_origChanged(self, oldV, newV, notify);
-    if (mainT) --g_changeDepth;
+    --t_changeDepth;
 }
 
 void hooked_execute(void* self, const void* ctx) {
-    if (GetCurrentThreadId() != g_mainTid || !ctx) { g_origExecute(self, ctx); return; }
-    void* prevNode = g_execNode;
-    const void* prevPort = g_execPort;
+    if (!ctx) { g_origExecute(self, ctx); return; }
+    void* prevNode = t_execNode;
+    const void* prevPort = t_execPort;
     const void* port = nullptr;
     rd(ctx, 8, &port);   // S_NodeExecuteContext: +8 the triggering port (C_Node::Execute reads it there)
-    g_execNode = self; g_execPort = port;
+    t_execNode = self; t_execPort = port;   // WO-154: per thread (a worker's execution keeps its own port)
     g_origExecute(self, ctx);
-    g_execNode = prevNode; g_execPort = prevPort;
+    t_execNode = prevNode; t_execPort = prevPort;
 }
 
 // ---------------------------------------------------------------------------
@@ -476,18 +488,25 @@ bool call_variant_ctor(void* v) {
     KCDMP_FAULT_CALL(site, "wo137::call_variant_ctor");
     return fault::guarded(site, [&] { reinterpret_cast<void (*)(void*)>(A.variantCtor)(v); });
 }
+std::mutex g_seenM;   // WO-154: the gates run on any thread now
 void log_time_skip(void* self, const char* method) {
     static void* seen[64]{};
     static int nSeen = 0;
-    for (int i = 0; i < nSeen; ++i) if (seen[i] == self) return;   // once per node per process
-    if (nSeen < 64) seen[nSeen++] = self;
+    {
+        std::lock_guard<std::mutex> lk(g_seenM);
+        for (int i = 0; i < nSeen; ++i) if (seen[i] == self) return;   // once per node per process
+        if (nSeen < 64) seen[nSeen++] = self;
+    }
     char path[kMaxPath + 64] = "?";
     node_path(self, path, sizeof path);
     logf("WO137-TIMESET joiner: quest time set %s (%s) NOT run -- only the host's clock moves the world "
          "(its OnExec still fires; the host's time reaches this game through the time sync)", canonical(path), method);
 }
+// WO-154: both gates hold on every thread. They were frame-thread only (as the
+// port attribution was), so a quest time set an AI behaviour ran from a worker
+// would have passed the joiner's gate.
 void* hooked_fn_invoke(void* self, void* ret, void* out) {
-    if (g_timeGate.load(std::memory_order_relaxed) && GetCurrentThreadId() == g_mainTid) {
+    if (g_timeGate.load(std::memory_order_relaxed)) {
         const char* s = nullptr; char m[128];
         if (rd(self, kOffFnMethodName, &s) && s && copy_cstr(s, m, sizeof m) && is_time_method(m) && call_variant_ctor(ret)) {
             c_timeSkipped.fetch_add(1);
@@ -496,7 +515,7 @@ void* hooked_fn_invoke(void* self, void* ret, void* out) {
         }
     }
     // WO-139: the punishment's own time sets, on either machine (only its nodes).
-    if (g_punishGate.load(std::memory_order_relaxed) && GetCurrentThreadId() == g_mainTid) {
+    if (g_punishGate.load(std::memory_order_relaxed)) {
         const char* s = nullptr; char m[128];
         if (rd(self, kOffFnMethodName, &s) && s && copy_cstr(s, m, sizeof m) && is_time_method(m)) {
             char path[kMaxPath + 64] = "";
@@ -552,9 +571,9 @@ Applied apply(const char* path, const char* portNm, Val* before, Val* after) {
         if ((pv != A.inTrigVft && pv != A.autoTrigVft) || trig != A.inTrigTrigger) { res = Applied::PortRefused; break; }
         int dir = -1;
         if (A.portDirection && (!call_int(A.portDirection, port, &dir) || dir != 1)) { res = Applied::PortRefused; break; }
-        g_applyDepth.fetch_add(1);
+        ++t_applyDepth;   // WO-154: per thread (a worker's own change during this pulse is no mirror)
         const bool ran = call_void(trig, port);
-        g_applyDepth.fetch_sub(1);
+        --t_applyDepth;
         if (!ran) { res = Applied::Fault; break; }
         decode(static_cast<char*>(node) + kOffStateValue, after);
         const bool same = before->valid == after->valid && before->ok == after->ok && before->i == after->i &&
@@ -898,9 +917,10 @@ void research_watch() {
 // ---------------------------------------------------------------------------
 void emit(const Rec& r) {
     if (g_logAll.load() || g_send_on.load()) {
-        logf("WO137-CHANGE seq=%u %s %s -> %d%s (from %d) type=%s%s%s%s", r.seq, r.path, r.port[0] ? r.port : "-",
+        logf("WO137-CHANGE seq=%u %s %s -> %d%s (from %d) type=%s%s%s%s%s tid=%u", r.seq, r.path, r.port[0] ? r.port : "-",
              r.newI, (r.flags & kFNewOk) ? "" : "?", r.oldI, r.type, (r.flags & kFMirror) ? " MIRROR" : "",
-             (r.flags & kFCascade) ? " cascade" : " root", (r.flags & kFNotify) ? "" : " silent");
+             (r.flags & kFCascade) ? " cascade" : " root", (r.flags & kFNotify) ? "" : " silent",
+             (r.flags & kFWorker) ? " worker" : "", r.tid);
     }
     if (!g_send_on.load() || !g_send) return;
     uint8_t b[1 + 4 + 4 + 4 + 1 + 64 + 1 + 48 + 2 + kMaxPath + 8];
@@ -933,12 +953,12 @@ void status_text(char* out, size_t n) {
     _snprintf_s(out, n, _TRUNCATE,
         "wo137 detector=%d apply=%d read=%d hud=%d detect=%d send=%d hold=%d role=%u recorded=%u sent=%u dropped=%u "
         "foreign=%u nopath=%u applies changed=%u unchanged=%u nonode=%u notstate=%u noport=%u refused=%u asleep=%u fault=%u "
-        "hud0=%u hud1=%u queue=%zu timegate=%d/%d skipped=%u notquest=%u cascade=%u",
+        "hud0=%u hud1=%u queue=%zu timegate=%d/%d skipped=%u notquest=%u cascade=%u worker=%u worker_port=%u",
         A.detector, A.apply, A.read, A.hud, g_detect.load(), g_send_on.load(), g_hold.load(), g_role, c_recorded.load(),
         c_sent.load(), c_dropped.load(), c_foreign.load(), c_noPath.load(), c_apply[0].load(), c_apply[1].load(),
         c_apply[2].load(), c_apply[3].load(), c_apply[4].load(), c_apply[5].load(), c_apply[6].load(), c_apply[7].load(),
         c_hud[0].load(), c_hud[1].load(), g_queue.size(), A.timeGate, g_timeGate.load(), c_timeSkipped.load(),
-        c_notQuest.load(), c_cascade.load());
+        c_notQuest.load(), c_cascade.load(), c_worker.load(), c_workerPort.load());
 }
 
 void put_u16(uint8_t* p, uint16_t v) { std::memcpy(p, &v, 2); }
