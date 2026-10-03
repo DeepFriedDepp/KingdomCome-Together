@@ -92,6 +92,28 @@ public class Wo154Tests
     }
 
     [Fact]
+    public void A_bool_State_is_always_corrected_with_its_own_Set_ports()
+    {
+        Assert.Equal("SetTrue", Wo147Rules.CorrectionPort(null, "bool", 1, null));
+        Assert.Equal("SetFalse", Wo147Rules.CorrectionPort(null, "bool", 0, null));
+        Assert.Null(Wo147Rules.CorrectionPort(null, "bool", 7, null));   // not a bool's value: nothing guessed
+    }
+
+    [Fact]
+    public void Developer_test_projects_do_not_veto_a_type_the_quests_agree_on()
+    {
+        Assert.True(QuestValueIndex.IsTestingFile("Quests/Testing/someone/asset_problem/bug.xml"));
+        Assert.True(QuestValueIndex.IsTestingFile(@"Quests\Testing\x.xml"));
+        Assert.False(QuestValueIndex.IsTestingFile("Quests/Final/Barbora.xml"));
+        // the field's Moravian fight: with only the game's own definitions, Challenge has a port for every value
+        var idx = new QuestValueIndex();
+        idx.AddXml("<Type TypeName=\"Challenge\"><StateTypeEnumeration Name=\"None\"/><StateTypeEnumeration Name=\"InProgress\"/>"
+                 + "<StateTypeEnumeration Name=\"Won\"/><StateTypeEnumeration Name=\"Lost\"/></Type>");
+        Assert.Equal("SetInProgress", Wo147Rules.CorrectionPort(idx, "Challenge", 1, null));
+        Assert.Equal("SetWon", Wo147Rules.CorrectionPort(idx, "Challenge", 2, null));
+    }
+
+    [Fact]
     public void The_contested_verdict_parses_and_the_worker_flag_reads()
     {
         string text = Wo137Rules.ResultText(Wo154Rules.VerdictContested, 1, "", Trigger);

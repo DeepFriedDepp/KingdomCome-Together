@@ -362,6 +362,9 @@ public static class Wo147Rules
     /// </summary>
     public static string? CorrectionPort(QuestValueIndex? idx, string? type, int hostVal, IReadOnlyDictionary<string, int>? learnedPortValues)
     {
+        // WO-154 1: a bool State always has its two Set ports (the State's own ExecuteNode compares the trigger's name
+        // with the static strings "SetTrue" / "SetFalse", ConceptModule 1.5.5, read in the binary): no learned port needed.
+        if (type == "bool" && hostVal is 0 or 1) return hostVal == 1 ? "SetTrue" : "SetFalse";
         var defs = idx?.Definitions(type) ?? Array.Empty<QuestValueIndex.Value[]>();
         string? byType = null;
         foreach (var def in defs)

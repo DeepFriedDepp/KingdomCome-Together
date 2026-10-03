@@ -82,6 +82,7 @@ public sealed class QuestValueIndex
         foreach (var e in zip.Entries)
         {
             if (!e.FullName.StartsWith("Quests/", StringComparison.OrdinalIgnoreCase) || !e.FullName.EndsWith(".xml", StringComparison.OrdinalIgnoreCase)) continue;
+            if (IsTestingFile(e.FullName)) continue;   // WO-154 1: developer test projects are no part of the game's quest database
             byte[] bytes;
             using (var s = e.Open()) using (var ms = new MemoryStream()) { s.CopyTo(ms); bytes = ms.ToArray(); }
             if (bytes.AsSpan().IndexOf(marker) < 0) continue;
@@ -89,6 +90,15 @@ public sealed class QuestValueIndex
         }
         return idx;
     }
+
+    /// <summary>
+    /// WO-154 1: Scripts.pak ships its developers' test projects beside the quests (Quests/Testing/&lt;name&gt;/...). Their
+    /// type definitions are not the game's: one test file defines Challenge as None/Won/Lost where the game's own
+    /// quests (and every other definition) say None/InProgress/Won/Lost, so the all-agree rule found no
+    /// correction port for the field's Moravian fight (stateBitkaSMoravakem).
+    /// </summary>
+    public static bool IsTestingFile(string entry) =>
+        entry.Replace('\\', '/').Contains("/Testing/", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>The installed game's Data\Scripts.pak (beside Tables.pak), or null.</summary>
     public static string? FindScriptsPak()
