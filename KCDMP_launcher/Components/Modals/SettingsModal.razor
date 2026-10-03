@@ -76,7 +76,8 @@
 
                 <div class="kcd-input-group">
                     <label class="kcd-label" style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
-                        <input type="checkbox" @bind="Settings.VoiceChatEnabled" />
+                        @* WO-154: the effective value (off unless the player chose on); a click is the player's choice *@
+                        <input type="checkbox" @bind="Settings.VoiceChatOn" />
                         Voice Chat Enabled
                     </label>
                 </div>

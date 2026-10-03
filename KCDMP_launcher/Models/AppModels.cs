@@ -3,6 +3,7 @@
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 // Portions from the original project, marczukmichal/kcd2-multiplayer; its author keeps their copyright (AUTHORS).
 using System.Collections.Generic;
+using KcdMp.Wire;
 
 // WO-154: no launcher-only usings here -- the agent test project compiles this file by link
 // (the settings store's tests need AppSettings itself).
@@ -194,7 +195,23 @@ namespace KCDMP_launcher.Models
 
         // Mirrors KcdMp.Client's --voice/--no-voice. Exposed as a normal
         // setting rather than something only reachable via the command line.
-        public bool VoiceChatEnabled { get; set; } = true;
+        // WO-154: off unless the player chose it (KcdMp.Wire.VoiceSetting). The
+        // default was true until 0.44.0 and every save wrote it, so a stored true
+        // is read only together with VoiceChatChosen; an upgrade never changes it.
+        public bool VoiceChatEnabled { get; set; } = false;
+
+        // WO-154: written (with VoiceChatEnabled) only when the player picks a voice
+        // setting -- in Settings, or in the mod menu (the agent writes both keys).
+        public bool VoiceChatChosen { get; set; } = false;
+
+        // WO-154: what the launcher uses and shows: on only when the player chose on.
+        // Setting it is the player's choice, so it records the choice too.
+        [System.Text.Json.Serialization.JsonIgnore]
+        public bool VoiceChatOn
+        {
+            get => VoiceSetting.Effective(VoiceChatEnabled, VoiceChatChosen);
+            set { VoiceChatEnabled = value; VoiceChatChosen = true; }
+        }
 
         // WO-127: "Also allow Steam" in the Host window (the relay also listens on Steam P2P).
         public bool HostAllowSteam { get; set; } = true;

@@ -10,6 +10,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using KCDMP_launcher.Components.Shared;
 using KCDMP_launcher.Models;
+using KcdMp.Wire;
 using Serilog;
 
 namespace KCDMP_launcher.Pages
@@ -246,8 +247,10 @@ namespace KCDMP_launcher.Pages
             string target = server.SteamCode is { } code
                 ? $"--steam \"{code}\" --steam-app {settings.SteamAppId}{SteamGameArg}"
                 : $"--host {server.Ip} --port {server.Port}";
+            // WO-154: the voice flag is always explicit -- the player's choice, off unless chosen
+            // (KcdMp.Wire.VoiceSetting) -- so no default in kcdmp-client.json can decide it.
             var agentArgs = target +
-                (settings.VoiceChatEnabled ? "" : " --no-voice") +
+                " " + VoiceSetting.AgentFlag(settings.VoiceChatOn) +
                 (isHosting ? " --hosting" : "");
 
             var agentStartInfo = new ProcessStartInfo

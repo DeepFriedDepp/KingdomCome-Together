@@ -876,6 +876,7 @@ public partial class GameBridge(ClientConfig config)
         _w133PushDue = true;                       // WO-133: the shared-world quest gate, too
         _dmgGuard.InvalidatePlayerGuid();          // WO-99 Phase 0
         _dmgGuardIdentityAtUtc = DateTime.MinValue;
+        _ = Wo154PushVoiceStateAsync("mod init");  // WO-154: the mod menu's voice switch shows the state again
         Console.WriteLine("[quest] mod Lua (re)initialised -- standing divergences will be re-pushed on the next re-arm");
     }
     private static readonly TimeSpan CatchupWindow = TimeSpan.FromSeconds(120);   // mirrors KCD2MP.quest.windowS
@@ -1555,16 +1556,8 @@ public partial class GameBridge(ClientConfig config)
 
         // Start voice chat — frames captured on background thread, queued, sent in main loop.
         // Left null when disabled, which also suppresses every _voice?. call below.
-        if (config.VoiceChatEnabled)
-        {
-            _voice = new VoiceChat(frame => _voiceQueue.Enqueue(frame));
-            try { _voice.Start(); }
-            catch (Exception ex) { Console.WriteLine($"[voice] Failed to start: {ex.Message}"); }
-        }
-        else
-        {
-            Console.WriteLine("[voice] Disabled by config — microphone will not be opened.");
-        }
+        // WO-154: off unless the player chose it; the mod menu starts and stops it at runtime.
+        Wo154VoiceSessionStart();
 
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(appCt);
 
@@ -2159,10 +2152,11 @@ public partial class GameBridge(ClientConfig config)
                     await SendDeathIfNewAsync(stream, st, cts.Token);
 
                     // Update voice local position and recalculate all player volumes.
-                    if (_voice != null)
+                    // WO-154: one read -- the mod menu can close it from another thread.
+                    if (_voice is { } voiceNow)
                     {
-                        _voice.LocalPos = (x, y, z);
-                        _voice.UpdateAllVolumes();
+                        voiceNow.LocalPos = (x, y, z);
+                        voiceNow.UpdateAllVolumes();
                     }
 
                     // WO-102.5 Phase 2: its own cadence, independent of the
@@ -2221,8 +2215,9 @@ public partial class GameBridge(ClientConfig config)
                 }
 
                 // Drain captured voice frames and send to server.
+                // WO-154: only while voice is on -- a frame left over from before an off is dropped.
                 while (_voiceQueue.TryDequeue(out var voiceFrame))
-                    await SendVoiceAsync(stream, voiceFrame);
+                    if (_voice is not null) await SendVoiceAsync(stream, voiceFrame);
 
                 // Send everything the receive loop buffered this tick as one call.
                 await _transport.FlushAsync(cts.Token);
@@ -2244,9 +2239,7 @@ public partial class GameBridge(ClientConfig config)
             try { await pingTask;        } catch { }
             try { await appearanceTask;  } catch { }
             try { await outfitWatchTask; } catch { }
-            _voice?.Stop();
-            _voice?.Dispose();
-            _voice = null;
+            Wo154VoiceSessionEnd();   // the microphone closes (WO-154: under the switch's lock)
 
             if (_transport is LogTailGameTransport tailForPause2)
             {
@@ -5939,6 +5932,9 @@ public partial class GameBridge(ClientConfig config)
             case "w154_status":
                 Wo154OnEvent(name, arg);
                 return;
+            case "w154_voice":       // WO-154 6.7: the mod menu's voice switch (on|off), connected or not
+                Wo154OnVoiceEvent(arg);
+                return;
         }
 
         var interactions = Interactions;
@@ -6854,7 +6850,7 @@ public partial class GameBridge(ClientConfig config)
     public static bool IsMenuSafeLua(string lua) => MenuSafeLua.IsMatch(lua);
 
     private static readonly System.Text.RegularExpressions.Regex MenuSafeLua = new(
-        @"^(if )?KCD2MP_(Wo12[1-5]|Join|HostOnlyLock|EmitEvent|SetHitSensor|WorldSavedIn|SaveRefused|SaveLeak)|^if KCD2MP_Wo12[45]|^System\.LogAlways",
+        @"^(if )?KCD2MP_(Wo12[1-5]|Join|HostOnlyLock|EmitEvent|SetHitSensor|WorldSavedIn|SaveRefused|SaveLeak|W154VoiceState)|^if KCD2MP_Wo12[45]|^System\.LogAlways",
         System.Text.RegularExpressions.RegexOptions.CultureInvariant);
 
     // WO-110 R9: the client side of the framing-drop counters (the relay has

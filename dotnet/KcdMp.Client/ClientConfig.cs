@@ -49,8 +49,13 @@ public sealed class ClientConfig
     /// <summary>
     /// Whether to open the microphone for proximity voice chat. Off means the
     /// mic is never captured and no voice frames are sent.
+    ///
+    /// WO-154: off by default. The launcher always passes --voice or --no-voice
+    /// (the player's choice, KcdMp.Wire.VoiceSetting); the mod menu flips it at
+    /// runtime (GameBridge.Wo154Voice.cs). This default only decides for an agent
+    /// started by hand without either flag and without a config file saying so.
     /// </summary>
-    public bool VoiceChatEnabled { get; set; } = true;
+    public bool VoiceChatEnabled { get; set; } = false;
 
     /// <summary>
     /// WO-40 Phase 3: whether this agent participates in session weather
