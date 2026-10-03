@@ -29,7 +29,7 @@ namespace KcdMp.Client;
 /// hack WO-1 removes -- see <see cref="LogTailGameTransport"/> -- but it stays
 /// here so this remains an honest baseline and a working fallback.
 /// </summary>
-public sealed partial class HttpGameTransport(string gameApiBase, int timeoutMs = 800) : IGameTransport
+public sealed partial class HttpGameTransport(string gameApiBase, int timeoutMs = 800, HttpMessageHandler? handler = null) : IGameTransport
 {
     /// <summary>How often the background loop refreshes yaw and mount state.</summary>
     private const int RotStateIntervalMs = 80;
@@ -44,12 +44,15 @@ public sealed partial class HttpGameTransport(string gameApiBase, int timeoutMs 
     // previous 4,000-raw bound let a full batch be truncated by the engine
     // with a Lua error nobody on this side could see.
     private const int MaxBatchChars = LuaCommandBudget.MaxEncodedCommandChars;
-    private int _pendingEncoded;   // encoded size of the statements in _pending, wrappers included
 
-    private readonly HttpClient _http = new() { Timeout = TimeSpan.FromMilliseconds(timeoutMs) };
+    private readonly HttpClient _http = handler is null
+        ? new() { Timeout = TimeSpan.FromMilliseconds(timeoutMs) }
+        : new(handler, disposeHandler: false) { Timeout = TimeSpan.FromMilliseconds(timeoutMs) };
 
-    private readonly List<string> _pending = [];
+    // WO-153 3: the ordered queue behind the batches (see BatchQueue) and the one send in flight at a time.
+    private readonly BatchQueue _queue = new();
     private readonly SemaphoreSlim _batchLock = new(1, 1);
+    private readonly SemaphoreSlim _sendLock = new(1, 1);
 
     private CancellationTokenSource? _rotCts;
     private Task? _rotTask;
@@ -70,13 +73,30 @@ public sealed partial class HttpGameTransport(string gameApiBase, int timeoutMs 
     /// </summary>
     public int RoundTripsPerStateRead => 1;
 
-    /// <summary>Starts the background yaw/mount-state refresh.</summary>
+    /// <summary>
+    /// Remembers the agent's token. The background yaw/mount-state refresh starts with the first
+    /// <see cref="ReadPlayerStateAsync"/>: in log-tail mode (the default) that is never called, and the loop's two
+    /// REST round trips about every 100 ms (a `System.SetCVar` ExecuteString plus a GET, 12-16 requests a second for the
+    /// agent's whole life, WO-153 3) fed nothing.
+    /// </summary>
     public Task StartAsync(CancellationToken ct = default)
     {
-        if (_rotTask is not null) return Task.CompletedTask;
-        _rotCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        _rotTask = Task.Run(() => RotStateLoopAsync(_rotCts.Token), CancellationToken.None);
+        _rotToken = ct;
         return Task.CompletedTask;
+    }
+
+    private CancellationToken _rotToken;
+    private readonly object _rotStart = new();
+
+    private void EnsureRotLoop()
+    {
+        if (_rotTask is not null) return;
+        lock (_rotStart)
+        {
+            if (_rotTask is not null) return;
+            _rotCts = CancellationTokenSource.CreateLinkedTokenSource(_rotToken);
+            _rotTask = Task.Run(() => RotStateLoopAsync(_rotCts.Token), CancellationToken.None);
+        }
     }
 
     private async Task RotStateLoopAsync(CancellationToken ct)
@@ -151,6 +171,7 @@ public sealed partial class HttpGameTransport(string gameApiBase, int timeoutMs 
     /// <summary>Position this tick, plus the most recent cached yaw/mount state.</summary>
     public async Task<PlayerState?> ReadPlayerStateAsync(CancellationToken ct = default)
     {
+        EnsureRotLoop();
         var pos = await ReadPositionOnlyAsync(ct);
         if (pos is null) return null;
         var (x, y, z) = pos.Value;
@@ -225,6 +246,46 @@ public sealed partial class HttpGameTransport(string gameApiBase, int timeoutMs 
         catch { return null; }
     }
 
+    /// <summary>
+    /// WO-153 3: true (the default) = a batch the game does not answer within the timeout is kept and sent again, in
+    /// order, once the game answers (see <see cref="BatchQueue"/>). False = the 0.43.0 behaviour: it is dropped.
+    /// </summary>
+    public bool RetryBatches { get; set; } = true;
+
+    /// <summary>The clock for the queue's time to live and the recovery's pace (tests replace it).</summary>
+    public Func<long> NowMs { get; set; } = () => Environment.TickCount64;
+    /// <summary>How often a held transport tries the game again.</summary>
+    public int RecoveryIntervalMs { get; set; } = 1000;
+    /// <summary>Consecutive unanswered batches before the transport stops sending and waits (the hold).</summary>
+    public int FailuresBeforeHold { get; set; } = 2;
+
+    private static readonly string OnceEpoch = Random.Shared.Next(0x1000, 0xFFFF).ToString("x");   // one agent run; ids never collide with an earlier run's
+    private long _onceSeq;
+    private int _consecutiveFailures;
+    private volatile bool _held;
+    private long _heldSinceMs;
+    private Task? _recovery;
+    private CancellationTokenSource? _recoveryCts;
+
+    /// <summary>True while the game does not answer and sends wait in the queue (WO-153 3).</summary>
+    public bool Held => _held;
+    /// <summary>Statements waiting in the queue (tests, status).</summary>
+    public int Queued { get { lock (_queueLock) return _queue.Count; } }
+    private readonly object _queueLock = new();
+
+    /// <summary>WO-153 3: batches that got no answer and were kept.</summary>
+    public long BatchesRetried { get; private set; }
+    /// <summary>WO-153 3: how many times the transport stopped sending and waited for the game.</summary>
+    public long Holds { get; private set; }
+    public long Superseded { get { lock (_queueLock) return _queue.Superseded; } }
+    public long Expired { get { lock (_queueLock) return _queue.Expired; } }
+    public long Overflowed { get { lock (_queueLock) return _queue.Overflowed; } }
+    public long StaleDropped { get { lock (_queueLock) return _queue.StaleDropped; } }
+
+    private static string Wrap(string lua) => "pcall(function() " + lua + " end)\n";
+    private static string WrapOnce(string lua, string id) =>
+        "pcall(function() local f=function() " + lua + " end if KCD2MP_Once then KCD2MP_Once(\"" + id + "\",f) else f() end end)\n";
+
     public async Task ExecuteAsync(string lua, CancellationToken ct = default)
     {
         if (!BatchingEnabled)
@@ -233,7 +294,19 @@ public sealed partial class HttpGameTransport(string gameApiBase, int timeoutMs 
             return;
         }
 
-        int enc = LuaCommandBudget.EncodedLength(lua) + LuaCommandBudget.WrapperEncodedChars;
+        // Each statement gets its own pcall so one failure cannot swallow the rest of the batch (measured: unwrapped, a
+        // fault at statement 6 of 12 lost everything after it). WO-153 3: a statement that must run once -- an Edge,
+        // anything that is not a re-sent state -- also carries its once-guard, so a batch the game ran late AND we sent
+        // again cannot run it twice.
+        var (kind, key) = RetryBatches ? BatchPolicy.Classify(lua) : (BatchKind.Level, (string?)null);
+        string? onceId = kind == BatchKind.Edge ? OnceEpoch + "-" + Interlocked.Increment(ref _onceSeq) : null;
+        string text = onceId is null ? Wrap(lua) : WrapOnce(lua, onceId);
+        int enc = LuaCommandBudget.EncodedLength(text);
+        if (enc > MaxBatchChars && onceId is not null)
+        {
+            // too big with its guard but whole without it: sent plain (a retry of this one could run twice)
+            onceId = null; text = Wrap(lua); enc = LuaCommandBudget.EncodedLength(text);
+        }
         if (enc > MaxBatchChars)
         {
             // Cannot ever be sent whole: the engine would truncate it and fail
@@ -248,29 +321,20 @@ public sealed partial class HttpGameTransport(string gameApiBase, int timeoutMs 
             return;
         }
 
-        // The decision and the add happen under ONE lock acquisition. Callers
-        // fire-and-forget from several loops at once (the native-scan push
-        // queues its chunks in a burst); with the check in a separate lock
-        // section every caller saw an empty queue, all of them added, and the
-        // chunks still landed in one oversize batch (observed live 2026-09-22).
-        string[]? sendFirst = null;
-        bool full = false;
+        // The decision and the add happen under ONE lock acquisition. Callers fire-and-forget from several loops at once
+        // (the native-scan push queues its chunks in a burst).
+        bool full;
         await _batchLock.WaitAsync(ct);
         try
         {
-            if (_pending.Count > 0 && _pendingEncoded + enc > MaxBatchChars)
+            lock (_queueLock)
             {
-                sendFirst = [.. _pending];   // what is queued goes out now; this statement starts the next batch
-                _pending.Clear();
-                _pendingEncoded = 0;
+                _queue.Add(new BatchQueue.Entry { Lua = lua, Text = text, Kind = kind, Key = key, OnceId = onceId, Encoded = enc, EnqueuedMs = NowMs() });
+                full = _queue.QueuedEncoded >= MaxBatchChars - 200;   // full enough: do not wait for the loop
             }
-            _pending.Add(lua);
-            _pendingEncoded += enc;
-            if (_pendingEncoded >= MaxBatchChars - 200) full = true;   // full enough: do not wait for the loop
         }
         finally { _batchLock.Release(); }
 
-        if (sendFirst is not null) await SendBatchAsync(sendFirst, ct);
         if (full) await FlushAsync(ct);
     }
 
@@ -280,57 +344,140 @@ public sealed partial class HttpGameTransport(string gameApiBase, int timeoutMs 
 
     public async Task FlushAsync(CancellationToken ct = default)
     {
-        string[] batch;
-        await _batchLock.WaitAsync(ct);
+        if (_held) return;   // the recovery task owns sending until the game answers again
+        await _sendLock.WaitAsync(ct);
         try
         {
-            if (_pending.Count == 0) return;
-            batch = [.. _pending];
-            _pending.Clear();
-            _pendingEncoded = 0;
-        }
-        finally { _batchLock.Release(); }
-        await SendBatchAsync(batch, ct);
-    }
-
-    private async Task SendBatchAsync(string[] batch, CancellationToken ct)
-    {
-
-        // Each statement gets its own pcall so one failure cannot swallow the
-        // rest of the batch -- measured: unwrapped, a fault at statement 6 of 12
-        // lost everything after it.
-        var sb = new StringBuilder();
-        foreach (var stmt in batch)
-        {
-            sb.Append("pcall(function() ").Append(stmt).Append(" end)\n");
-        }
-
-        // WO-110 Phase 6 (WO-109 s2.3): a failed flush drops EVERY statement
-        // in the batch -- one Lua syntax error fails the whole ExecuteString
-        // before any per-statement pcall runs, and an 800 ms timeout drops it
-        // too. This used to be silent. Logged with the count and the head of
-        // the batch, throttled to one line per 5 s so a stuck game does not
-        // flood; the total is in the counter for the summary.
-        try { await SendNowAsync(sb.ToString(), ct); }
-        catch (Exception ex)
-        {
-            BatchesDropped++;
-            StatementsDropped += batch.Length;
-            var now = DateTime.UtcNow;
-            if ((now - _lastDropLogUtc) >= TimeSpan.FromSeconds(5))
+            // at most 8 batches a call: a burst drains over a few ticks, never one unbounded stall
+            for (int i = 0; i < 8 && !_held; i++)
             {
-                _lastDropLogUtc = now;
-                string head = batch[0].Length > 120 ? batch[0][..120] + "..." : batch[0];
-                Console.WriteLine($"MP-BATCH-DROP statements={batch.Length} total_batches={BatchesDropped} total_statements={StatementsDropped} why={ex.GetType().Name}: {ex.Message} first=\"{head}\"");
+                List<BatchQueue.Entry> batch;
+                lock (_queueLock) batch = _queue.TakeBatch(MaxBatchChars, NowMs());
+                if (batch.Count == 0) break;
+                if (!await SendEntriesAsync(batch, ct)) break;
             }
         }
+        finally { _sendLock.Release(); }
     }
 
-    /// <summary>WO-110 Phase 6: batches whose ExecuteString failed (timeout, HTTP error, a syntax error in any statement).</summary>
+    /// <summary>One command with these statements. True when the game answered; false when it did not (the statements are kept, or dropped under RetryBatches=false).</summary>
+    private async Task<bool> SendEntriesAsync(List<BatchQueue.Entry> batch, CancellationToken ct)
+    {
+        var sb = new StringBuilder();
+        foreach (var e in batch) sb.Append(e.Text);
+        try
+        {
+            await SendNowAsync(sb.ToString(), ct);
+            _consecutiveFailures = 0;
+            return true;
+        }
+        catch (Exception ex)
+        {
+            bool transient = RetryBatches && !ct.IsCancellationRequested && IsNoAnswer(ex);
+            if (!transient)
+            {
+                // WO-110 Phase 6: this is the 0.43.0 path, still the one for a hard error or RetryBatches=false: a failed
+                // flush drops EVERY statement in the batch (one Lua syntax error fails the whole ExecuteString before any
+                // per-statement pcall runs). Logged with the count and the head, throttled to one line per 5 s.
+                BatchesDropped++;
+                StatementsDropped += batch.Count;
+                LogDrop(batch, ex);
+                return false;
+            }
+            lock (_queueLock) _queue.Requeue(batch);
+            BatchesRetried++;
+            int n = ++_consecutiveFailures;
+            LogRetry(batch, ex);
+            if (n >= FailuresBeforeHold) EnterHold(n);
+            return false;
+        }
+    }
+
+    /// <summary>The game did not answer: a timeout, or no connection (it is loading, hung or gone).</summary>
+    private static bool IsNoAnswer(Exception ex) =>
+        ex is TaskCanceledException or TimeoutException or OperationCanceledException or HttpRequestException;
+
+    private void EnterHold(int failures)
+    {
+        if (_held) return;
+        _held = true;
+        _heldSinceMs = NowMs();
+        Holds++;
+        int queued; lock (_queueLock) queued = _queue.Count;
+        Console.WriteLine($"MP-BATCH-HOLD down: the game did not answer {failures} batches in a row -- {queued} statement(s) wait in the queue (bounded, a stale state is replaced by a newer one); trying again every {RecoveryIntervalMs} ms");
+        _recoveryCts = new CancellationTokenSource();
+        var tok = _recoveryCts.Token;
+        _recovery = Task.Run(() => RecoverAsync(tok), CancellationToken.None);
+    }
+
+    private async Task RecoverAsync(CancellationToken ct)
+    {
+        while (_held && !ct.IsCancellationRequested)
+        {
+            try { await Task.Delay(RecoveryIntervalMs, ct); } catch { return; }
+            try
+            {
+                await _sendLock.WaitAsync(ct);
+                try
+                {
+                    List<BatchQueue.Entry> batch;
+                    lock (_queueLock) batch = _queue.TakeBatch(MaxBatchChars, NowMs());
+                    bool answered;
+                    if (batch.Count == 0)
+                    {
+                        // nothing waits: a harmless statement tells whether the game answers again
+                        try { await SendNowAsync(Wrap("local _ = 1").TrimEnd('\n'), ct); answered = true; }
+                        catch (Exception ex) when (IsNoAnswer(ex)) { answered = false; }
+                    }
+                    else
+                    {
+                        // a failure here is expected while the game is away: the statements go back, nothing is counted twice
+                        var sb = new StringBuilder();
+                        foreach (var e in batch) sb.Append(e.Text);
+                        try { await SendNowAsync(sb.ToString(), ct); answered = true; }
+                        catch (Exception ex) when (IsNoAnswer(ex)) { answered = false; lock (_queueLock) _queue.Requeue(batch); }
+                    }
+                    if (answered)
+                    {
+                        long downMs = NowMs() - _heldSinceMs;
+                        _consecutiveFailures = 0;
+                        _held = false;
+                        int queued; lock (_queueLock) queued = _queue.Count;
+                        Console.WriteLine($"MP-BATCH-HOLD up after {downMs / 1000.0:F1} s: {queued} statement(s) still queued, {Superseded} replaced by a newer state, {Expired} expired, {Overflowed} over the bound, {StaleDropped} stale (retried batches {BatchesRetried})");
+                        return;
+                    }
+                }
+                finally { _sendLock.Release(); }
+            }
+            catch (OperationCanceledException) { return; }
+            catch (Exception ex) { Console.WriteLine($"MP-BATCH-HOLD recovery attempt failed: {ex.GetType().Name}: {ex.Message}"); }
+        }
+    }
+
+    private void LogRetry(List<BatchQueue.Entry> batch, Exception ex)
+    {
+        var now = DateTime.UtcNow;
+        if ((now - _lastRetryLogUtc) < TimeSpan.FromSeconds(5)) return;
+        _lastRetryLogUtc = now;
+        string head = batch[0].Lua.Length > 120 ? batch[0].Lua[..120] + "..." : batch[0].Lua;
+        Console.WriteLine($"MP-BATCH-RETRY statements={batch.Count} total_batches={BatchesRetried} why={ex.GetType().Name}: {ex.Message} -- kept, sent again in order when the game answers; first=\"{head}\"");
+    }
+
+    private void LogDrop(List<BatchQueue.Entry> batch, Exception ex)
+    {
+        var now = DateTime.UtcNow;
+        if ((now - _lastDropLogUtc) < TimeSpan.FromSeconds(5)) return;
+        _lastDropLogUtc = now;
+        string head = batch[0].Lua.Length > 120 ? batch[0].Lua[..120] + "..." : batch[0].Lua;
+        Console.WriteLine($"MP-BATCH-DROP statements={batch.Count} total_batches={BatchesDropped} total_statements={StatementsDropped} why={ex.GetType().Name}: {ex.Message} first=\"{head}\"");
+    }
+
+    /// <summary>WO-110 Phase 6: batches whose ExecuteString failed for good (a hard error, or RetryBatches off).</summary>
     public long BatchesDropped { get; private set; }
     /// <summary>WO-110 Phase 6: statements lost inside those batches.</summary>
     public long StatementsDropped { get; private set; }
     private DateTime _lastDropLogUtc = DateTime.MinValue;
+    private DateTime _lastRetryLogUtc = DateTime.MinValue;
 
     /// <summary>Sends immediately, bypassing the batch buffer.</summary>
     private async Task SendNowAsync(string lua, CancellationToken ct = default)
@@ -584,6 +731,12 @@ public sealed partial class HttpGameTransport(string gameApiBase, int timeoutMs 
     {
         try { await FlushAsync(); } catch { }
 
+        _recoveryCts?.Cancel();
+        if (_recovery is not null)
+        {
+            try { await _recovery; } catch { }
+        }
+        _recoveryCts?.Dispose();
         _rotCts?.Cancel();
         if (_rotTask is not null)
         {
@@ -591,6 +744,7 @@ public sealed partial class HttpGameTransport(string gameApiBase, int timeoutMs 
         }
         _rotCts?.Dispose();
         _batchLock.Dispose();
+        _sendLock.Dispose();
         _http.Dispose();
     }
 

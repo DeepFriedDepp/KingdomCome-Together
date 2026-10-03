@@ -75,7 +75,9 @@ int wo141_rules_tests(int* passed) {
 
     // the reconcile's pace: at once, again every 1.5 s, 15 s after 4 refusals
     ACHECK(next_delay(0) == kRecheckS && next_delay(3) == kRecheckS, "the first misses: 1.5 s");
-    ACHECK(next_delay(4) == kBackoffS && next_delay(40) == kBackoffS, "a body the game keeps refusing: 15 s");
+    ACHECK(next_delay(4) == kBackoffS && next_delay(7) == kBackoffS, "a body the game keeps refusing: 15 s");
+    ACHECK(next_delay(8) == kLongBackoffS && next_delay(40) == kLongBackoffS && kLongBackoffS >= 4 * kBackoffS,
+           "WO-153: ...and from the eighth miss once a minute, never faster again (the 104 CartMounts)");
 
     // the host's capture: a change now, an activity again every 10 s, "none" once
     ACHECK(send_due(true, true, 0) && send_due(true, false, 0), "a change is sent at once");

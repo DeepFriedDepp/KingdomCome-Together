@@ -380,7 +380,12 @@ do -- (p) yield refused under host authority
     KCD2MP.wo102.authorityHost = true
     local e = mkEntity("p_npc", 10, 0, 0); ENTS["p_npc"] = e
     NOW = 700
+    local toasts, oldToast = 0, KCD2MP_ShowNativeToast
+    KCD2MP_ShowNativeToast = function() toasts = toasts + 1 end
+    KCD2MP._authViolationToastAt = nil
     dragPuppet("p_npc", e, 0.6, KCD2MP.npcYield.ticks + 3)
+    KCD2MP_ShowNativeToast = oldToast
+    check("p: WO-153: the violation goes to the log only -- never a toast on the player's screen", toasts == 0, toasts)
     check("p: no MP-NPCYIELD under host authority", logCount("MP-NPCYIELD") == 0)
     check("p: puppet never yielded", KCD2MP.npcPuppets["p_npc"] ~= nil and not KCD2MP.npcPuppets["p_npc"].yielded)
     check("p: violation logged as kind=contention", logCount("MP-AUTHORITY-VIOLATION npc=p_npc kind=contention") >= 1, lastLog("MP-AUTHORITY-VIOLATION"))

@@ -3435,8 +3435,44 @@ function KCD2MP_NpcRemoteDeath(name, via)
         KCD2MP.npcDeathSync and "" or " -- mp_npc_deathsync off, agent will not apply"))
     if not KCD2MP.npcDeathSync then return false end
     KCD2MP._npcDeathRemote[name] = { via = tostring(via), at = os.clock() }
+    KCD2MP.w153.applied[name] = os.clock()
     if p then p.dead = true end
     return true
+end
+
+-- WO-153 4: a death the agent applied here from a peer is held against stale alive samples for deathHoldS seconds (a
+-- sample sent before the host's death can still be in flight, or waiting in the agent's coalescer, when the death
+-- lands) -- but only while this world's copy really reads dead, so a host that is truly alive again is never fought.
+KCD2MP.w153 = KCD2MP.w153 or { deathHoldS = 10.0, unresolvedAfter = 8, deathHeld = 0, unresolved = 0, applied = {} }
+
+-- WO-153 3: the agent's once-guard. A batch the game did not answer in time is kept and sent again, but the game may
+-- have run the first attempt late (it ran about a third of them). A statement that is not a re-sent state is wrapped as
+-- KCD2MP_Once("<agent epoch>-<n>", function() ... end): the second run of the same id is skipped. Ids are strings (this
+-- Lua's numbers are float32); the table is bounded, oldest out first.
+KCD2MP._once = KCD2MP._once or { set = {}, order = {}, head = 1, n = 0, ran = 0, dups = 0 }
+KCD2MP_ONCE_KEEP = 1024
+function KCD2MP_Once(id, fn)
+    local o = KCD2MP._once
+    id = tostring(id)
+    if o.set[id] then o.dups = o.dups + 1; return false end
+    o.set[id] = true
+    o.n = o.n + 1
+    o.order[o.n] = id
+    o.ran = o.ran + 1
+    if o.n - o.head >= KCD2MP_ONCE_KEEP then
+        o.set[o.order[o.head]] = nil
+        o.order[o.head] = nil
+        o.head = o.head + 1
+    end
+    fn()
+    return true
+end
+function KCD2MP_NpcDeathHeld(name, e)
+    local at = KCD2MP.w153.applied[name]
+    if not at or (os.clock() - at) >= KCD2MP.w153.deathHoldS then return false end
+    local dead = false
+    if e and e.actor then pcall(function() dead = e.actor:IsDead() == true end) end
+    return dead
 end
 
 -- Agent -> mod: the DLL's FATAL LocalHit already announced this body's death
@@ -3562,7 +3598,13 @@ end
 function KCD2MP_OwnerDeathCheck(name, streamDead, locallyDead, x, y, z, owner, via)
     local w = KCD2MP.w122
     if not (w.ownerDeath and KCD2MP.npcDeathSync) then return false end
-    if not streamDead then w.ownerReq[name] = nil; return false end
+    if not streamDead then
+        -- WO-153 4: one stale alive sample, or a body that already died here, never clears the request: the landing
+        -- (corpse to the stream's place, `applied=dead`) still has to run for it
+        if w.ownerReq[name] and locallyDead then return false end
+        w.ownerReq[name] = nil
+        return false
+    end
     if locallyDead then return false end
     local now = os.clock()
     local r = w.ownerReq[name]
@@ -3575,6 +3617,13 @@ function KCD2MP_OwnerDeathCheck(name, streamDead, locallyDead, x, y, z, owner, v
     r.n, r.at = r.n + 1, now
     w.ownerReqN = w.ownerReqN + 1
     KCD2MP._npcDeathRemote[name] = { via = "owner-death", at = now }   -- the local IsDead flip is not announced back
+    -- WO-153 4: a host death always reaches the copy -- the request goes on every ownerSlowS for as long as the stream
+    -- says dead and the copy lives, and says so (once at the 8th request, then once a minute) instead of going quiet
+    if r.n == KCD2MP.w153.unresolvedAfter or (r.n > KCD2MP.w153.unresolvedAfter and (r.n - KCD2MP.w153.unresolvedAfter) % 3 == 0) then
+        KCD2MP.w153.unresolved = KCD2MP.w153.unresolved + 1
+        mp_log(string.format("MP-OWNERDEATH npc=%s UNRESOLVED requests=%d since_s=%.0f -- the copy still lives here; asking again every %.0f s",
+            name, r.n, now - r.since, w.ownerSlowS))
+    end
     mp_log(string.format("MP-OWNERDEATH npc=%s request=%d local=alive stream=dead owner=%s stream_at=%.1f,%.1f,%.1f via=%s",
         name, r.n, tostring(owner or "?"), x or 0, y or 0, z or 0, tostring(via)))
     KCD2MP_EmitEvent("npc_owner_dead", string.format("%s %.2f %.2f %.2f %s", name, x or 0, y or 0, z or 0, tostring(owner or "?")))
@@ -4489,10 +4538,9 @@ local function mp_wo102_violation(name, p, kind, distM, fx, fy)
     -- WO-104 Phase 1: a violation IS the contention signal. Promote (no-op
     -- unless mp_npc_replica_on) -- every event, not only the rate-limited log.
     if KCD2MP_NpcReplicaConsider then KCD2MP_NpcReplicaConsider(name, p, kind) end
-    if (now - (KCD2MP._authViolationToastAt or -1e9)) >= 300.0 then
-        KCD2MP._authViolationToastAt = now
-        pcall(function() KCD2MP_ShowNativeToast("Kingdom Come: Together -- an NPC is being moved by this machine's own AI under host authority -- see kcd.log (MP-AUTHORITY-VIOLATION)") end)
-    end
+    -- WO-153 2: the log line above is the whole notice. 0.43.0 also put a toast on the player's screen (at most one per
+    -- 300 s); the field's 28 lines were the mod's own writers meeting (a native-to-legacy hand-over), not an NPC's AI,
+    -- and the player can do nothing about either, so it never shows on screen.
 end
 
 -- Toggle side effects (called by KCD2MP_Wo102Set).
@@ -9105,6 +9153,13 @@ function KCD2MP_ApplyNpcState(name, x, y, z, rot, hp, flags, src, seq, senderMs)
     local wasKo = p.ko
     local wasDead = p.dead
     p.dead  = (math.floor(f) % 2) == 1          -- bit 0
+    -- WO-153 4: a sample that was already in flight when the host's death was applied here reads ALIVE a moment
+    -- later (field: stream hp=1.8, 12 ms after ApplyDeath). It must not undo the death: for KCD2MP.w153.deathHoldS
+    -- after a death was applied from a peer, and only while this world's copy really is dead, the dead bit stays set.
+    if not p.dead and KCD2MP_NpcDeathHeld and KCD2MP_NpcDeathHeld(name, e) then
+        p.dead = true
+        KCD2MP.w153.deathHeld = KCD2MP.w153.deathHeld + 1
+    end
     p.deadHint = nil                            -- WO-137: p.dead is the reading from here on
     p.ko    = (math.floor(f / 2) % 2) == 1      -- bit 1 (WO-38 Phase 6: knocked out in the authority's world)
     p.drawn = (math.floor(f / 4) % 2) == 1      -- bit 2 (WO-40 Phase 6: weapon out in the authority's world)
@@ -9459,7 +9514,7 @@ function KCD2MP_NpcPuppetTick(arg, gen)
             mp_npc_death_observe(name, locallyDead, localHp, "puppet")
             -- WO-122 Phase 1: the owner's death wins, even over a copy a load
             -- made alive again; once it lands, the corpse goes where the stream has it.
-            if p.dead and locallyDead and KCD2MP.w122.ownerReq[name] then
+            if locallyDead and KCD2MP.w122.ownerReq[name] then   -- WO-153 4: not `p.dead and` -- a stale alive sample must not skip the landing
                 if KCD2MP_OwnerDeathLanded(name, lifeE, p.tx, p.ty, p.tz) then p.dragX, p.dragY = p.tx, p.ty end
             else
                 KCD2MP_OwnerDeathCheck(name, p.dead == true, locallyDead, p.tx, p.ty, p.tz, p.owner, "puppet")

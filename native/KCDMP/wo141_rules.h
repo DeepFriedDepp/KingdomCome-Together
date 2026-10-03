@@ -164,7 +164,15 @@ inline bool hands_ride(bool handsSet, bool dropped, uint8_t stance);
 constexpr double kRecheckS = 1.5;
 constexpr double kBackoffS = 15.0;
 constexpr int    kMissesBeforeBackoff = 4;
-inline double next_delay(int misses) { return misses < kMissesBeforeBackoff ? kRecheckS : kBackoffS; }
+// WO-153 2: a copy never runs an action again and again on its own. The field's caravan horses were asked for their
+// cart stance 26 times each in 340 s (104 `CartMount ... Slot is occupied` lines): the game's answer never changes
+// (the slot's occupant is the horse itself), so after four quick and four 15 s tries the retry settles at one a minute
+// (a new host row still starts the count again: set_desired).
+constexpr int    kMissesBeforeLongBackoff = 8;
+constexpr double kLongBackoffS = 60.0;
+inline double next_delay(int misses) {
+    return misses < kMissesBeforeBackoff ? kRecheckS : misses < kMissesBeforeLongBackoff ? kBackoffS : kLongBackoffS;
+}
 
 // The host's capture: a change is sent at once; an activity that is not "none"
 // is sent again every kRefreshS (a joiner that came late, a lost frame).
