@@ -6,7 +6,6 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
-using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using KCDMP_launcher.Components.Shared;
@@ -81,7 +80,7 @@ namespace KCDMP_launcher.Pages
         {
             if (settings.HostAllowSteam == on) return;
             settings.HostAllowSteam = on;
-            try { File.WriteAllText(SettingsFileName, JsonSerializer.Serialize(settings)); } catch { }
+            WriteSettings("Also allow Steam", nameof(AppSettings.HostAllowSteam));   // WO-154: this key only
             Log.Information("Host: Also allow Steam = {On}; restarting the relay", on);
             StopHostedRelay();
             hostSteamState = "off"; hostSteamCode = null; hostSteamMessage = on ? "Starting Steam..." : "";
@@ -189,8 +188,9 @@ namespace KCDMP_launcher.Pages
         {
             string code = steamCodeInput.Trim();
             if (code.Length == 0) return;
+            // This run only: LastSteamCode is never written (AppModels.cs). WO-154: the whole-object
+            // save that used to follow wrote nothing of it and rewrote every other setting.
             settings.LastSteamCode = code;
-            try { File.WriteAllText(SettingsFileName, JsonSerializer.Serialize(settings)); } catch { }
             showJoinSteam = false;
             Log.Information("Join through Steam (app {App})", settings.SteamAppId);
             await LaunchGame(new ServerInfo { Name = "(Steam)", Ip = "", Port = 0, Ping = 0, SteamCode = code });

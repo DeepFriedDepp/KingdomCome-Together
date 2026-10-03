@@ -15,7 +15,8 @@
 ;     Tools are installed AND set up; otherwise installs everything else and
 ;     leaves the rest to the launcher's checklist (WO-150: no dead end),
 ;   * pre-seeds the launcher's settings.json with the game path it found, so
-;     first launch needs zero configuration,
+;     first launch needs zero configuration (WO-154: only when there is no
+;     settings.json yet -- the player's file is never written by Setup),
 ;   * installs the WebView2 runtime when missing, which the Photino-based
 ;     launcher cannot render without.
 
@@ -799,27 +800,22 @@ end;
 
 { Pre-seed settings.json so the first launch needs no trip to Settings.
   Only GamePath is written: every other field in AppSettings has a usable C#
-  default, and a partial file deserialises to exactly those defaults. An
-  existing file with a real GamePath is left completely alone, which is what
-  makes an upgrade non-destructive. }
+  default, and a partial file deserialises to exactly those defaults.
+
+  WO-154: only when there is no settings.json at all. The file is the
+  player's: an existing one is never written, whatever it holds -- until
+  0.44.0 a file whose GamePath was "" was replaced by the seed, and every
+  other setting in it was lost on upgrade. An empty GamePath is filled by the
+  launcher instead, as that one key (Home.Wo150.cs AdoptDetectedGamePath). }
 procedure SeedSettings();
 var
-  Path, Json, Escaped, Squashed: String;
-  Existing: AnsiString;
+  Path, Json, Escaped: String;
   Lines: TArrayOfString;
 begin
   Path := ExpandConstant('{app}\settings.json');
   // WO-150: nothing found yet -- the launcher fills GamePath once its checklist finds the Modding Tools.
   if DetectedGameExe = '' then Exit;
-
-  if FileExists(Path) then
-  begin
-    if not LoadStringFromFile(Path, Existing) then Exit;
-    Squashed := String(Existing);
-    StringChangeEx(Squashed, ' ', '', True);
-    StringChangeEx(Squashed, #9, '', True);
-    if Pos('"GamePath":""', Squashed) = 0 then Exit;
-  end;
+  if FileExists(Path) then Exit;
 
   Escaped := DetectedGameExe;
   StringChangeEx(Escaped, '\', '\\', True);

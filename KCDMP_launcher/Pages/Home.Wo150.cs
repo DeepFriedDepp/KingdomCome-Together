@@ -6,10 +6,10 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
-using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using KCDMP_launcher.Components.Shared;
+using KCDMP_launcher.Models;
 using KcdMp.Setup;
 using Serilog;
 
@@ -376,18 +376,28 @@ namespace KCDMP_launcher.Pages
         /// A settings.json without a usable Modding Tools path (a new player, an
         /// unzipped build, a game that moved) takes the one the shared detection
         /// found, instead of opening Settings with an error as before WO-150.
+        ///
+        /// WO-154: written only where the file has no game path (no file, no key,
+        /// or an empty one -- the never-set state) and then as that one key. A path
+        /// the player set that does not work right now (a moved game, a drive not
+        /// plugged in) is replaced for this run only: the file keeps the player's
+        /// path, and only the player changing it in Settings writes another.
         /// </summary>
         private void AdoptDetectedGamePath(SetupSnapshot snap)
         {
             if (snap.ModdingToolsExe is not string exe) return;
             if (IsModdingToolsBuild(settings.GamePath ?? "") && File.Exists(settings.GamePath)) return;
             settings.GamePath = exe;
-            try
+            if (settingsStore.IsUnsetOnDisk(nameof(AppSettings.GamePath)))
             {
-                File.WriteAllText(SettingsFileName, JsonSerializer.Serialize(settings));
-                Log.Information("setup: game path set to the Modding Tools found in Steam");
+                if (WriteSettings("setup", nameof(AppSettings.GamePath)))
+                    Log.Information("setup: game path set to the Modding Tools found in Steam");
             }
-            catch (Exception ex) { Log.Warning(ex, "setup: settings.json could not be written"); }
+            else
+            {
+                settingsStore.Accept(settings, nameof(AppSettings.GamePath));
+                Log.Information("setup: the saved game path is not the Modding Tools; using the one found in Steam for this run (settings.json keeps the saved path)");
+            }
         }
 
         /// <summary>The kdcmp folder is ours when HKCU\Software\KCDMP\ModsPath (Setup's marker, or ours after placing) names it.</summary>

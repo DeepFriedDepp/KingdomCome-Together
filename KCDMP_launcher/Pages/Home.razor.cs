@@ -252,6 +252,7 @@ namespace KCDMP_launcher.Pages
                 }
             }
             catch { }
+            NoteCustomServerKeys();   // WO-154: each entry's address as the file has it, for an edit
         }
 
         private void AddCustomServer(ServerInfo newServer)
@@ -259,7 +260,7 @@ namespace KCDMP_launcher.Pages
             if (!customServers.Any(s => s.Ip == newServer.Ip && s.Port == newServer.Port))
             {
                 customServers.Add(newServer);
-                SaveCustomServers();
+                SaveCustomServer(newServer, ServerChange.Add);   // WO-154: this entry only
             }
             showAddServer = false;
             StateHasChanged();
@@ -280,7 +281,7 @@ namespace KCDMP_launcher.Pages
 
         private void HandleServerUpdate(ServerInfo updatedServer)
         {
-            SaveCustomServers();
+            SaveCustomServer(updatedServer, ServerChange.Edit);   // WO-154: this entry only
             StateHasChanged();
         }
 
@@ -293,20 +294,10 @@ namespace KCDMP_launcher.Pages
             {
                 customServers.Remove(customToRemove);
 
-                SaveCustomServers();
+                SaveCustomServer(customToRemove, ServerChange.Remove);   // WO-154: this entry only
                 serverListComponent?.ClearSelection();
                 StateHasChanged();
             }
-        }
-
-        private void SaveCustomServers()
-        {
-            try
-            {
-                var json = JsonSerializer.Serialize(customServers);
-                File.WriteAllText(CustomServersFileName, json);
-            }
-            catch { }
         }
 
         protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -347,14 +338,17 @@ namespace KCDMP_launcher.Pages
         [JSInvokable]
         public void ToggleSettingsJS()
         {
-            showSettings = !showSettings;
+            // WO-154: opening re-reads settings.json (a value the mod menu wrote shows as saved);
+            // closing without SAVE puts the unsaved edits back.
+            if (showSettings) CancelSettings();
+            else OpenSettings();
             StateHasChanged();
         }
 
         [JSInvokable]
         public void ExitApp()
         {
-            if (showSettings) { showSettings = false; StateHasChanged(); return; }
+            if (showSettings) { CancelSettings(); StateHasChanged(); return; }
             if (isFilterOpen) { isFilterOpen = false; StateHasChanged(); return; }
             showExitConfirm = true;
             StateHasChanged();
@@ -427,9 +421,10 @@ namespace KCDMP_launcher.Pages
 
         private void ToggleFavorite(ServerInfo server)
         {
-            if (favoriteIps.Contains(server.Ip)) favoriteIps.Remove(server.Ip);
-            else favoriteIps.Add(server.Ip);
-            SaveFavorites();
+            bool add = !favoriteIps.Contains(server.Ip);
+            if (add) favoriteIps.Add(server.Ip);
+            else favoriteIps.Remove(server.Ip);
+            SaveFavorite(server.Ip, add);   // WO-154: this address only
         }
 
         /// <summary>
@@ -1238,15 +1233,25 @@ namespace KCDMP_launcher.Pages
 
         // Persistence
         private void LoadFavorites() { try { if (File.Exists(FavoritesFileName)) favoriteIps = JsonSerializer.Deserialize<HashSet<string>>(File.ReadAllText(FavoritesFileName)) ?? new(); } catch { } }
-        private void SaveFavorites() { try { File.WriteAllText(FavoritesFileName, JsonSerializer.Serialize(favoriteIps)); } catch { } }
 
+        /// <summary>
+        /// WO-154: settings.json is read key by key (LauncherSettingsStore): a value that does not
+        /// read keeps its default instead of resetting every setting, and the values as read are
+        /// the baseline every later save is compared with. The migrations below correct the
+        /// in-memory value only -- the file keeps what the player has until the player changes it.
+        /// </summary>
         private void LoadSettings()
         {
-            try { if (File.Exists(SettingsFileName)) settings = JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(SettingsFileName)) ?? new(); }
-            catch { }
+            var problems = new List<string>();
+            settings = settingsStore.Load(problems);
+            foreach (var p in problems) Log.Warning("settings: {Problem}", p);
+        }
 
-            MigrateStaleMasterServerUrl();
-            MigrateStaleMasterServerPath();
+        /// <summary>The launcher's own corrections of known stale values (memory only, see LoadSettings).</summary>
+        private static void MigrateStaleSettings(AppSettings s)
+        {
+            MigrateStaleMasterServerUrl(s);
+            MigrateStaleMasterServerPath(s);
         }
 
         /// <summary>
@@ -1276,30 +1281,27 @@ namespace KCDMP_launcher.Pages
             "KcdMpMasterServer.exe", // flat-merged, pre-subfolder-isolation
         ];
 
-        private void MigrateStaleMasterServerUrl()
+        private static void MigrateStaleMasterServerUrl(AppSettings s)
         {
-            if (Array.IndexOf(KnownStaleMasterServerUrls, settings.MasterServerUrl) >= 0)
+            if (Array.IndexOf(KnownStaleMasterServerUrls, s.MasterServerUrl) >= 0)
             {
-                settings.MasterServerUrl = new AppSettings().MasterServerUrl;
+                s.MasterServerUrl = new AppSettings().MasterServerUrl;
             }
         }
 
-        private void MigrateStaleMasterServerPath()
+        private static void MigrateStaleMasterServerPath(AppSettings s)
         {
-            if (Array.IndexOf(KnownStaleMasterServerPaths, settings.MasterServerPath) >= 0)
+            if (Array.IndexOf(KnownStaleMasterServerPaths, s.MasterServerPath) >= 0)
             {
-                settings.MasterServerPath = new AppSettings().MasterServerPath;
+                s.MasterServerPath = new AppSettings().MasterServerPath;
             }
         }
 
+        /// <summary>The settings window's SAVE: only what the player changed is written (WO-154, Home.Wo154.cs).</summary>
         private void SaveSettings()
         {
-            try
-            {
-                File.WriteAllText(SettingsFileName, JsonSerializer.Serialize(settings));
-                showSettings = false;
-            }
-            catch (Exception ex) { errorMessage = ex.Message; }
+            WriteSettings("the settings window");
+            showSettings = false;
         }
 
 

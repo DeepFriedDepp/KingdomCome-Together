@@ -2,9 +2,10 @@
 // GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 // Portions from the original project, marczukmichal/kcd2-multiplayer; its author keeps their copyright (AUTHORS).
-using System.Threading.Tasks;
-using KCDMP_launcher.Services;
+using System.Collections.Generic;
 
+// WO-154: no launcher-only usings here -- the agent test project compiles this file by link
+// (the settings store's tests need AppSettings itself).
 namespace KCDMP_launcher.Models
 {
     public class ServerInfo

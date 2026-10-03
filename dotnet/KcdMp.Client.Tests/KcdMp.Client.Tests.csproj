@@ -29,6 +29,10 @@
        launcher has no test project of its own; the file has no UI types). -->
   <ItemGroup>
     <Compile Include="..\..\KCDMP_launcher\Models\AgentStatusBanner.cs" Link="Launcher\AgentStatusBanner.cs" />
+    <!-- WO-154: the player's files (settings.json, custom_servers.json, favorites.json). -->
+    <Compile Include="..\..\KCDMP_launcher\Models\AppModels.cs" Link="Launcher\AppModels.cs" />
+    <Compile Include="..\..\KCDMP_launcher\Models\LauncherSettingsStore.cs" Link="Launcher\LauncherSettingsStore.cs" />
+    <Compile Include="..\..\KCDMP_launcher\Models\PlayerListFiles.cs" Link="Launcher\PlayerListFiles.cs" />
   </ItemGroup>
 
 </Project>

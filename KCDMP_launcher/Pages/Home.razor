@@ -154,10 +154,10 @@
             OnConfirm="@ConfirmExit"
             OnClose="@(() => showExitConfirm = false)" />
 
-<SettingsModal  IsVisible="@showSettings" 
-                Settings="@settings" 
-                OnSave="@SaveSettings" 
-                OnClose="@(() => showSettings = false)" />
+<SettingsModal  IsVisible="@showSettings"
+                Settings="@settings"
+                OnSave="@SaveSettings"
+                OnClose="@CancelSettings" />
 
 <AddServerModal IsVisible="@showAddServer"
                 ServerToEdit="@serverToEdit"
