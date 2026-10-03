@@ -7,7 +7,7 @@
 <strong>Not affiliated with or endorsed by Warhorse Studios or PLAION.</strong></p>
 
 <p align="center">
-  <a href="docs/releases/RELEASE-NOTES-0.43.0.md"><img alt="main" src="https://img.shields.io/badge/main-0.43.0-b8860b?style=flat-square"></a>
+  <a href="docs/releases/RELEASE-NOTES-0.44.0.md"><img alt="main" src="https://img.shields.io/badge/main-0.44.0-b8860b?style=flat-square"></a>
   <a href="https://github.com/DeepFriedDepp/KingdomCome-Together/releases/latest"><img alt="latest release" src="https://img.shields.io/github/v/release/DeepFriedDepp/KingdomCome-Together?label=latest%20release&color=8a3324&style=flat-square"></a>
   <a href="LICENSE"><img alt="License: GPLv3" src="https://img.shields.io/badge/license-GPLv3-2c3e50?style=flat-square"></a>
   <a href="docs/LAUNCHING.md"><img alt="Platform" src="https://img.shields.io/badge/platform-Windows-555555?style=flat-square"></a>
@@ -119,7 +119,7 @@ and weather. Each feature below says how far it is proven:
 | Catching up | After a join or the host's reload the partner acts only once their quests match the host's; a step the host has already done is never done again | 🧪 new in 0.43.0 |
 | Black screens after a scene | A scene that waits on the host's people is helped along and never leaves the partner on a black screen for long | ⚠️ new in 0.43.0 |
 | Smithing and other work | The partner at a forge or grindstone shows on the other screen where they stand; nobody's station looks taken | 🧪 new in 0.43.0 |
-| Picking herbs | The partner's figure **stands** while they pick herbs (its pick loop crashed the game twice in the 0.43.0 tutorial session; `mp_avatar_herbs on` brings it back for a test) | ⚠️ changed after 0.43.0 (commits only, no installer yet) |
+| Picking herbs | The partner's figure **stands** while they pick herbs (its pick loop crashed the game twice in the 0.43.0 tutorial session; `mp_avatar_herbs on` brings it back for a test) | ⚠️ changed in 0.44.0 (installer not built yet) |
 | Dice with villagers | The dice game after a conversation starts on the partner's screen | 🧪 |
 
 ### Dice between players, and the tools

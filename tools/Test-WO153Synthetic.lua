@@ -228,4 +228,19 @@ do
     noErrs("B")
 end
 
+-- (C) the tester pages' marker words are registered (typing an unregistered one printed "unknown command") ------------------
+do
+    local words = { "carry_alive", "crime", "death", "dog", "door", "door2", "ff", "fight_same", "forge", "herbs", "hostfight", "quiet",
+                    "reload", "ride", "scene", "stall", "stuck", "weather", "whistle", "odd" }
+    local missing = {}
+    for _, w in ipairs(words) do if not CCMDS["mark_" .. w] then missing[#missing + 1] = w end end
+    check("C: every marker word the 0.43.0 and 0.44.0 pages ask for is a console command", #missing == 0, table.concat(missing, ","))
+    Calendar = { GetWorldTime = function() return 12345 end }
+    ERRS = {}
+    local mark = #LOG
+    KCD2MP_Mark("herbs")
+    check("C: a marker writes its MP-MARK line", countLog("MP-MARK herbs", mark) >= 1, lastLog("MP-MARK", mark))
+    noErrs("C")
+end
+
 OUT = table.concat(RESULTS, "\n")
