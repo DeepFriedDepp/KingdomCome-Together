@@ -389,6 +389,29 @@ public class Wo154FrozenTests
         Assert.True(w.CpuInWindowS < Wo154Rules.FrozenWatch.CpuMaxS);
     }
 
+    [Theory]
+    [InlineData(6.05)]   // live L9: a 4 s probe timeout + a 2 s pause (the window never filled before the fix)
+    [InlineData(6.0)]
+    [InlineData(2.0)]
+    [InlineData(13.7)]
+    public void The_freeze_is_found_whatever_the_looks_spacing(double every)
+    {
+        var w = new Wo154Rules.FrozenWatch();
+        double firstFrozen = -1;
+        for (double t = 4; t <= 400; t += every)
+            if (w.Feed(true, t, 63.4) && firstFrozen < 0) firstFrozen = t;
+        Assert.True(firstFrozen > 0, $"never found at a look every {every} s");
+        Assert.InRange(firstFrozen - 4, Wo154Rules.FrozenWatch.BusyMinS, Wo154Rules.FrozenWatch.BusyMinS + 2 * every);
+    }
+
+    [Fact]
+    public void A_slow_load_at_the_live_spacing_is_not_frozen()
+    {
+        var w = new Wo154Rules.FrozenWatch();
+        double cpu = 30;
+        for (double t = 4; t <= 600; t += 6.05) { cpu += 6.05 * 0.2; Assert.False(w.Feed(true, t, cpu), $"t={t}"); }   // 20 % of a core
+    }
+
     [Fact]
     public void An_answer_or_no_cpu_reading_starts_over()
     {

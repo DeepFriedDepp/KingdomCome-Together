@@ -261,9 +261,10 @@ public static class Wo154Rules
     public sealed class FrozenWatch
     {
         public const double BusyMinS = 90, WindowS = 60, CpuMaxS = 1.5;
-        private readonly Queue<(double T, double Cpu)> _samples = new();
+        private readonly List<(double T, double Cpu)> _samples = new();
         private double _busySince = -1;
         public double BusyForS { get; private set; }
+        /// <summary>The game's CPU seconds over the window, scaled to <see cref="WindowS"/>.</summary>
         public double CpuInWindowS { get; private set; } = double.NaN;
 
         /// <summary>One look: busy = no console answer; cpuS = the game process's total CPU seconds, or null.</summary>
@@ -272,11 +273,14 @@ public static class Wo154Rules
             if (!busy || cpuS is not double cpu) { _samples.Clear(); _busySince = -1; BusyForS = 0; CpuInWindowS = double.NaN; return false; }
             if (_busySince < 0) _busySince = nowS;
             BusyForS = nowS - _busySince;
-            _samples.Enqueue((nowS, cpu));
-            while (_samples.Count > 1 && nowS - _samples.Peek().T > WindowS) _samples.Dequeue();
-            var first = _samples.Peek();
-            if (nowS - first.T < WindowS - 5) return false;   // not a full window yet
-            CpuInWindowS = cpu - first.Cpu;
+            _samples.Add((nowS, cpu));
+            // the window starts at the newest look that is at least WindowS old: a full window whatever the looks'
+            // spacing (live L9: a look every ~6.05 s kept 9 gaps, 54.5 s, and a "55 s at least" never came)
+            while (_samples.Count > 2 && nowS - _samples[1].T >= WindowS) _samples.RemoveAt(0);
+            var first = _samples[0];
+            double span = nowS - first.T;
+            if (span < WindowS) return false;   // not a full window yet
+            CpuInWindowS = (cpu - first.Cpu) * WindowS / span;
             return BusyForS >= BusyMinS && CpuInWindowS < CpuMaxS;
         }
     }
