@@ -39,6 +39,8 @@
     <Compile Include="..\..\KCDMP_launcher\Models\RelayReuse.cs" Link="Launcher\RelayReuse.cs" />
     <!-- WO-154 (Phase 4.3): CONNECT waits until it can work. -->
     <Compile Include="..\..\KCDMP_launcher\Models\ConnectGate.cs" Link="Launcher\ConnectGate.cs" />
+    <!-- WO-154: the mod menu's choices in a bug report, filtered. -->
+    <Compile Include="..\..\KCDMP_launcher\Models\ModSettingsReport.cs" Link="Launcher\ModSettingsReport.cs" />
   </ItemGroup>
 
 </Project>

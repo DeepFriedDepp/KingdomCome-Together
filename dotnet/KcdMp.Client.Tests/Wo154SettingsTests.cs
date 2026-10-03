@@ -171,6 +171,33 @@ public class Wo154SettingsTests : IDisposable
     }
 
     [Fact]
+    public void The_mod_menus_MenuKey_and_an_unknown_key_survive_a_save_byte_for_byte()
+    {
+        // The mod menu (through the agent) keeps MenuKey in this file; the launcher does not own it.
+        string f = Compact044()[..^1] + ",\"MenuKey\":\"np_add\",\"Overlay\":{\"Corner\":\"top-left\",\"Scale\":1.25}}";
+        Put("settings.json", f);
+        var store = new LauncherSettingsStore(P("settings.json"));
+        var s = store.Load();
+        Assert.DoesNotContain(LauncherSettingsStore.Keys, k => k.Name == "MenuKey");
+        Assert.Equal(SettingsJson.Outcome.Unchanged, store.Save(s).Result.Outcome);
+        Assert.Equal(f, Get("settings.json"));                         // byte-identical
+        Assert.Empty(store.Refresh(s));                                // opening the settings window takes nothing either
+
+        // the player changes another setting: both keep their bytes and their place
+        s.HostPort = 7795;
+        Assert.Equal(new[] { "HostPort" }, store.Save(s).Set);
+        string fills = string.Concat(MissingFrom(f).Select(k => $",\"{k}\":{Default(k)}"));
+        Assert.Equal(f.Replace("\"HostPort\":7778", "\"HostPort\":7795")[..^1] + fills + "}", Get("settings.json"));
+
+        // the menu changes MenuKey while the launcher is open: the launcher's next save keeps it
+        SettingsJson.Update(P("settings.json"), new[] { SettingsJson.Edit.Set("MenuKey", "np_subtract") }, createIfMissing: false);
+        s.Language = "cs";
+        Assert.Equal(new[] { "Language" }, store.Save(s).Set);
+        string after = Get("settings.json");
+        Assert.Contains(",\"MenuKey\":\"np_subtract\",\"Overlay\":{\"Corner\":\"top-left\",\"Scale\":1.25}", after);
+    }
+
+    [Fact]
     public void Opening_the_settings_takes_what_another_program_wrote_unless_the_player_changed_that_key()
     {
         Put("settings.json", Compact044());
@@ -316,6 +343,20 @@ public class Wo154SettingsTests : IDisposable
         Assert.Equal(LauncherSettingsStore.Keys.Count, o.Count);
         Assert.Equal(7794, o["HostPort"]!.GetValue<int>());
         Assert.False(o.ContainsKey("LastSteamCode"));   // this run only, never written
+    }
+
+    [Fact]
+    public void A_bug_report_takes_the_mod_menus_own_choices_only()
+    {
+        Assert.Equal(Wo154MenuRules.Settings.Select(s => s.Key), ModSettingsReport.KnownKeys);   // one list with the agent's
+        // the menu's own values pass; a key or a value typed by hand (a name, a path, an id, an address) does not
+        string f = "{\"NameBadges\":false,\"CrimeMode\":\"joint\",\"FastTravel\":true,\"MyFriend\":\"A friend's name\"," +
+                   "\"Leash\":\"C:\\\\Some\\\\Folder\",\"Whistle\":12345678901234567,\"PingLine\":\"192.0.2.10\"}";
+        Assert.Equal("{\"NameBadges\":false,\"CrimeMode\":\"joint\",\"FastTravel\":true,\"_left_out\":4}",
+                     ModSettingsReport.Filter(Encoding.UTF8.GetBytes(f)));
+        Assert.Equal("{}", ModSettingsReport.Filter(Encoding.UTF8.GetBytes("{}")));
+        Assert.Null(ModSettingsReport.Filter(Encoding.UTF8.GetBytes("{broken")));
+        Assert.Null(ModSettingsReport.Filter(null));
     }
 
     // ------------------------------------------------------------------ favorites.json, custom_servers.json

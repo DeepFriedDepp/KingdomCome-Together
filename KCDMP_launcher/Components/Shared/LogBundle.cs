@@ -113,6 +113,29 @@ namespace KCDMP_launcher.Components.Shared
                 // The primary native log sits beside the DLL, which ships in
                 // the same directory as the agent.
                 AddIfPresent(Path.Combine(agentDirectory, "kcdmp-native.log"), "kcdmp-native.log");
+                // WO-154: the mod menu's remembered choices, filtered (Models/ModSettingsReport.cs): its own
+                // keys with on/off or joint/individual only -- nothing typed by hand reaches the zip.
+                try
+                {
+                    string ms = Path.Combine(agentDirectory, "mod-settings.json");
+                    if (File.Exists(ms))
+                    {
+                        byte[] raw;
+                        using (var src = new FileStream(ms, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+                        using (var mem = new MemoryStream())
+                        {
+                            src.CopyTo(mem);
+                            raw = mem.ToArray();
+                        }
+                        if (KCDMP_launcher.Models.ModSettingsReport.Filter(raw) is string filtered)
+                        {
+                            var entry = zip.CreateEntry("mod-settings.json", CompressionLevel.Optimal);
+                            using var w = new StreamWriter(entry.Open());
+                            w.Write(filtered);
+                        }
+                    }
+                }
+                catch { }
                 // WO-127: the leash recorder's CSVs (mp_leash_trace), newest first.
                 try
                 {
