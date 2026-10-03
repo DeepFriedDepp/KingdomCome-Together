@@ -25,6 +25,7 @@
 #include "respawn_actions.h"
 #include "rttr_abi.h"
 #include "wo136.h"
+#include "wo139.h"
 
 namespace kcdmp::hits {
 namespace {
@@ -620,6 +621,7 @@ void tick() {
             if (void* c = buffs::as_c_soul(soul)) g_hitSouls[c] = now;
             c_marks.fetch_add(1);
         }
+        if (kcdmp::wo136::host_target()) kcdmp::wo139::host_struck(m.victimEid);   // WO-154 3.1: a pursuit's lock goes first
         kcdmp::wo136::note_threat(m.victimEid, 0, 2, "host-hit");   // WO-136: the host's real hit, its threat
     }
     if (g_hitSouls.size() > 256)

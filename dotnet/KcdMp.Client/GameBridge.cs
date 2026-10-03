@@ -1776,6 +1776,7 @@ public partial class GameBridge(ClientConfig config)
         Wo154MenuOnConnect(cts.Token);       // WO-154 7b: the mod menu (the saved choices, the host's levers, fast travel)
         Wo151OnConnect(cts.Token);           // WO-151: the safeguards' switches (the fault guard's switch-off, the frame-cost meter)
         _ = _combat.NpcConfigAsync(_nativeWriteOn, _nativeSenderClock, cts.Token);
+        _ = Wo154PushNativeAsync("connect");   // WO-154 3.1: mp_host_target's native half
         _ = RespawnHeartbeatAsync(stream, announceGraves: true, cts.Token);
         // WO-99 Phase 0: learn who the local player is before the first hit.
         _dmgGuard.ResetEchoMemory();
@@ -5929,6 +5930,9 @@ public partial class GameBridge(ClientConfig config)
                 return;
             case "w154_falls":       // WO-154 2: mp_avatar_falls on|off
             case "w154_coalesce":    // WO-154 1: mp_quest_coalesce on|off
+            case "w154_cfg":         // WO-154 3: mp_host_target / mp_guard_respite / mp_fair_crime / mp_scene_resume
+            case "w154_endfights":   // WO-154 3.4: mp_unstuck's end-combat step
+            case "w154_check":       // WO-154 3.5: mp_w154_check (live checks)
             case "w154_status":
                 Wo154OnEvent(name, arg);
                 return;

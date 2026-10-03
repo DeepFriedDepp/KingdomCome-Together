@@ -218,6 +218,7 @@ public partial class GameBridge
         if (!W132Gate(ghost).Down(DateTime.UtcNow)) return;
         Console.WriteLine($"MP-W132 peer {ghost} {why}: nothing is forwarded to it until 5 s after it wakes");
         if (!_isDamageAuthority) return;
+        Wo154OnPeerDown(ghost);                   // WO-154 3.3: no guard acts on him while he is down
         await Wo139OnPeerDownAsync(ghost, why);   // WO-139: the guards fighting its avatar stop
         await Wo132AvatarLeaveFightAsync(ghost, why);
         // Its state on the host: bleeding and health reset, hidden at the death spot (WO-154: a knockdown lies there instead).
@@ -230,6 +231,7 @@ public partial class GameBridge
         bool ended = W132Gate(ghost).Up(DateTime.UtcNow);
         Console.WriteLine($"MP-W132 peer {ghost} {why}: {(ended ? "awake" : "(again)")} -- forwards resume in 5 s");
         if (!_isDamageAuthority) return;
+        if (ended) Wo154OnPeerUp(ghost);          // WO-154 3.3: and his respite from the guards starts
         await Wo132AvatarLeaveFightAsync(ghost, why);
         // Shown again once its new position has streamed in (the interpolator
         // snaps any jump over 5 m, and the stream follows the announcement).

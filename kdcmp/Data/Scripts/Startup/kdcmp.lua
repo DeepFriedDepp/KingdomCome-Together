@@ -18563,7 +18563,7 @@ function KCD2MP_W139Stop(id, guard, crimesCsv)
     pcall(function() e:Hide(0) end)
     local money = 0
     pcall(function() money = player.inventory:GetMoney() or 0 end)
-    w.stop = { id = tostring(id), guard = guard, since = os.clock(), money0 = money, planted = {}, result = nil, sawDialog = false }
+    w.stop = { id = tostring(id), guard = guard, since = os.clock(), money0 = money, planted = {}, result = nil, sawDialog = false, p0 = pp }
     w.stats.stops = w.stats.stops + 1
     mp_log(string.format("WO139-STOP start guard=%s id=%s dist=%.1f crimes=%s -- this copy runs its own brain: the game's own arrest, against this Henry",
         guard, tostring(id), d, tostring(crimesCsv)))
@@ -18628,7 +18628,8 @@ function KCD2MP_W139StopTick()
     pcall(function() e = System.GetEntityByName(s.guard) end)
     local dead = false
     pcall(function() dead = player.actor:IsDead() == true end)
-    if dead then KCD2MP_W139StopEnd("the-player-died", "fought"); return end
+    -- WO-154 3.3 (mp_guard_respite): a death during a stop is no resist ("died"; 0.44.0: "fought")
+    if dead then KCD2MP_W139StopEnd("the-player-died", (KCD2MP.w154 and KCD2MP.w154.guardRespite == false) and "fought" or "died"); return end
     if not e then KCD2MP_W139StopEnd("guard-gone", s.result or "nostop"); return end
     -- a fight: the guard's own resisting-arrest attack, or a refused / ignored chat.
     -- An arresting guard may draw his weapon without fighting; the player's own
@@ -18636,7 +18637,9 @@ function KCD2MP_W139StopTick()
     local danger = false
     pcall(function() danger = player.soul:IsInCombatDanger() == true end)
     if danger and not inDialog and (now - s.since) > 3.0 then
-        KCD2MP_W139StopEnd("the-guard-attacks", s.result == "fought" and "fought" or "fled"); return
+        local res = s.result == "fought" and "fought" or "fled"
+        if KCD2MP_W154StopResult then res = KCD2MP_W154StopResult(s, res) end   -- WO-154 3.3: "fled" only when he moved away
+        KCD2MP_W139StopEnd("the-guard-attacks", res); return
     end
     if s.result and not inDialog and (now - (s.resultAt or now)) > 2.0 then KCD2MP_W139StopEnd("resolved", s.result); return end
     if s.sawDialog and s.outSince and (now - s.outSince) > 6.0 and not s.result then KCD2MP_W139StopEnd("dialogue-ended-without-a-result", "talked"); return end
@@ -18674,7 +18677,7 @@ function KCD2MP_W139StopEnd(why, result)
     local fighting = false
     pcall(function() fighting = e.soul:IsInCombatMode() == true end)
     local ended = ""
-    if e and (fighting or result == "fled" or result == "fought") then
+    if e and (fighting or result == "fled" or result == "fought" or result == "attacked" or result == "died") then
         local t = W139.stim("stopFight")
         if t then
             t.soulCount = 1
@@ -18922,11 +18925,19 @@ end
 -- takedown of) one of this world's NPCs. Not a crime: a public enemy (a bandit),
 -- or someone already fighting that avatar (self-defence).
 function KCD2MP_W139HostViolent(src, npc, kind)
-    local w = KCD2MP.w139
     if not KCD2MP_W139HostActive() then return end
     local e = nil
     pcall(function() e = System.GetEntityByName(npc) end)
     if not e or KCD2MP_W139IsAvatar(e) then return end
+    -- WO-154 3.1 (mp_fair_crime): a murder only on the victim's own death; an assault judged a moment later
+    if KCD2MP_W154FairViolent and KCD2MP_W154FairViolent(src, npc, kind, e) then return end
+    if kind == "hit" then return end
+    KCD2MP_W139HostViolentNow(src, npc, kind, e)
+end
+
+function KCD2MP_W139HostViolentNow(src, npc, kind, e)
+    local w = KCD2MP.w139
+    if not KCD2MP_W139HostActive() then return end
     local enemy, fighting = false, false
     pcall(function() enemy = e.soul:IsPublicEnemy() == true end)
     pcall(function() fighting = e.soul:IsInCombatMode() == true end)
@@ -19976,6 +19987,100 @@ do
             (function() local n = 0 for _ in pairs(W.down) do n = n + 1 end return n end)()))
         return true
     end
+
+    -- ---- Phase 3: fighting together (the agent keeps its half: GameBridge.Wo154.cs) ----
+    -- mp_host_target   on|off (default on)  the host's blow frees an NPC from the mod's locks on an avatar (the DLL)
+    -- mp_guard_respite on|off (default on)  no guard acts on a partner who is down or just up again; a stop the
+    --                                       guard turned into an attack is "fled" only when the player moved away
+    -- mp_fair_crime    on|off (default on)  a murder only on the victim's death; an assault judged 5 s later
+    -- mp_scene_resume  on|off (default off) 0.44.0's copy resume for a stuck scene (off: the rescue save at once)
+    if W.hostTarget == nil then W.hostTarget = true end
+    if W.guardRespite == nil then W.guardRespite = true end
+    if W.fairCrime == nil then W.fairCrime = true end
+    if W.sceneResume == nil then W.sceneResume = false end
+    W.fledM = W.fledM or 8.0             -- "fled": this far from where the stop began
+    W.assaultDeferS = W.assaultDeferS or 5.0
+    W.murdered = W.murdered or {}        -- npc name -> os.clock(): a murder is judged once per victim
+    W.stats.attacked = W.stats.attacked or 0
+    W.stats.fairExempt = W.stats.fairExempt or 0
+
+    -- Joiner: a stop the guard turned into an attack. "fled" only when this player really moved away (W.fledM from
+    -- where he stood when the stop began); one who stood (a loot screen, a menu, no reply yet) was attacked, which
+    -- is no resist (the field: both "fled" results came from a player standing still).
+    --   WO154-STOP fled|attacked moved=<m>
+    function KCD2MP_W154StopResult(s, res)
+        if W.guardRespite == false or res ~= "fled" then return res end
+        local pp = player and W139.pos(player)
+        local moved = (pp and s and s.p0) and math.sqrt((pp.x - s.p0.x) ^ 2 + (pp.y - s.p0.y) ^ 2) or 0
+        if moved >= W.fledM then
+            mp_log(string.format("WO154-STOP fled moved=%.1f -- this player moved away during the stop", moved))
+            return "fled"
+        end
+        W.stats.attacked = W.stats.attacked + 1
+        mp_log(string.format("WO154-STOP attacked moved=%.1f -- the guard attacked while this player stood: no resist", moved))
+        return "attacked"
+    end
+
+    local function isDead(e)
+        local d = false
+        pcall(function() d = e.actor:IsDead() == true end)
+        return d
+    end
+
+    local function murder(src, npc, e)
+        if W.murdered[npc] then return end
+        W.murdered[npc] = os.clock()
+        KCD2MP_W139HostViolentNow(src, npc, "murder", e)
+    end
+
+    -- Host: every attributed avatar hit asks (the agent: "assault" when a new assault is due, "hit" otherwise; a
+    -- takedown's own "knockout"/"murder" is judged as before). A murder is the victim's own death, once per victim
+    -- (the field: 11 of 11 blocked 0-hp duel hits on a living NPC were judged murders). An assault is judged
+    -- W.assaultDeferS later and is no crime if the victim fights by then: the quest brawl the host's world starts a
+    -- few seconds after the joiner's (the field: the punch on jurko 2.9 s before the host's own brawl). True = done.
+    --   WO154-JUDGE src=<n> assault on <npc> -- not a crime: it fights <s> s later
+    function KCD2MP_W154FairViolent(src, npc, kind, e)
+        if W.fairCrime == false or (kind ~= "assault" and kind ~= "hit") then return false end
+        npc = tostring(npc)
+        if isDead(e) then murder(src, npc, e); return true end
+        local wait = kind == "assault" and W.assaultDeferS or 1.2
+        Script.SetTimer(math.floor(wait * 1000), function()
+            local x = nil
+            pcall(function() x = System.GetEntityByName(npc) end)
+            if not x then return end
+            if isDead(x) then murder(src, npc, x); return end
+            if kind ~= "assault" then return end
+            local fighting = false
+            pcall(function() fighting = x.soul:IsInCombatMode() == true end)
+            if fighting then
+                W.stats.fairExempt = W.stats.fairExempt + 1
+                mp_log(string.format("WO154-JUDGE src=%s assault on %s -- not a crime: it fights %.0f s later (a fight of its own: a quest brawl, self-defence)",
+                    tostring(src), npc, wait))
+                return
+            end
+            KCD2MP_W139HostViolentNow(src, npc, "assault", x)
+        end)
+        return true
+    end
+
+    local function fightSwitch(key, field, arg, what)
+        local v = KCD2MP_Wo122ParseBool(arg)
+        if v == "bad" then mp_log("mp_" .. key .. ": expected on|off"); return false end
+        if v ~= nil then W[field] = v end
+        KCD2MP_EmitEvent("w154_cfg", key .. "=" .. (W[field] and "on" or "off"))
+        mp_log(string.format("WO154-TOGGLE mp_%s %s -- %s", key, W[field] and "on" or "off", what))
+        return true
+    end
+    function KCD2MP_W154SetHostTarget(arg) return fightSwitch("host_target", "hostTarget", arg, "a host blow frees an NPC from the mod's locks on an avatar") end
+    function KCD2MP_W154SetGuardRespite(arg) return fightSwitch("guard_respite", "guardRespite", arg, "no guard acts on a partner who is down or just up again") end
+    function KCD2MP_W154SetFairCrime(arg) return fightSwitch("fair_crime", "fairCrime", arg, "a murder only on a death; an assault judged 5 s later") end
+    function KCD2MP_W154SetSceneResume(arg) return fightSwitch("scene_resume", "sceneResume", arg, "on = 0.44.0's copy resume for a stuck scene") end
+
+    -- mp_w154_check (live checks; test NPCs named w154_ only): the agent does them (GameBridge.Wo154.cs)
+    function KCD2MP_W154Check(arg)
+        KCD2MP_EmitEvent("w154_check", tostring(arg or "status"))
+        return true
+    end
 end
 
 -- ===== WO-151: the safeguards and the live session's fixes (docs/WO-151-findings.md) ======
@@ -20623,6 +20728,17 @@ do
         local w140 = KCD2MP.w140
         if w140 and (w140.held or w140.waiting) and KCD2MP_W140Drop then pcall(KCD2MP_W140Drop, "", false); did[#did + 1] = "kept-sleep" end
         if pcall(function() player.actor:StandUp() end) then did[#did + 1] = "stand-up" end
+        -- WO-154 3.4: a stuck fight ends too -- the game's own StopFight on this Henry, the copies engaged against
+        -- him let go, and a joiner's host ends every fight against his avatar ("mp_unstuck fight": even when the
+        -- game does not say he is fighting)
+        local fight = tostring(arg or ""):find("fight", 1, true) ~= nil
+        if not fight then
+            pcall(function()
+                local s = player and player.soul
+                fight = s ~= nil and ((s.IsInCombatDanger ~= nil and s:IsInCombatDanger() == true) or (s.IsInCombatMode ~= nil and s:IsInCombatMode() == true))
+            end)
+        end
+        if fight then KCD2MP_EmitEvent("w154_endfights", "unstuck"); did[#did + 1] = "end-fights" end
         if hard then
             KCD2MP_EmitEvent("w151", "takedamage 0 0 0 0 0")   -- the game's own reaction, no damage
             did[#did + 1] = "hit-reaction"
@@ -21733,7 +21849,7 @@ local ok, err = pcall(function()
     System.AddCCommand("mp_whistle",             'KCD2MP_W151SetWhistle(%line)',          "WO-151: this player's whistle (call) is heard at his avatar on the partner's machine (default on): mp_whistle on|off; bare = report")
     System.AddCCommand("mp_scene_guard",         'KCD2MP_W151SetSceneGuard(%line)',       "WO-151: the scene guard -- a scene's end positioning that waits on paused copies resumes them, then a save request, given up at 90 s; a dialogue the game forces on a paused copy resumes it (default on): mp_scene_guard on|off; bare = report")
     System.AddCCommand("mp_door_sync",           'KCD2MP_W151SetDoorSync(%line)',         "WO-151: the host's world owns every door -- its doors' states go to the joiner, the joiner's door use asks the host (default on): mp_door_sync on|off; bare = report")
-    System.AddCCommand("mp_unstuck",             'KCD2MP_W151Unstuck(%line)',             "WO-151: a way out of any stuck player state through the game's own exits (the picker's Back, the mod's holds let go, the actor's StandUp; hard = also the game's own hit reaction, no damage): mp_unstuck [hard]")
+    System.AddCCommand("mp_unstuck",             'KCD2MP_W151Unstuck(%line)',             "WO-151: a way out of any stuck player state through the game's own exits (the picker's Back, the mod's holds let go, the actor's StandUp; a fight you are in ends -- WO-154: the game's StopFight, and a joiner's host ends every fight against his figure; hard = also the game's own hit reaction, no damage): mp_unstuck [hard] [fight]")
     System.AddCCommand("mp_join_engine_hold",    'KCD2MP_W151SetJoinHold(%line)',         "WO-151 (host): the world is truly held for a whole join -- the engine's own pause from the join save to its end (at most the join's timeout + 60 s) (default on): mp_join_hold on|off; bare = report")
     System.AddCCommand("mp_crime_mode",          'KCD2MP_W151SetCrimeMode(%line)',        "WO-151: joint = a crime by either player counts for both (raised in the host's world too, a fine or punishment by either clears both); individual = each answers for his own (WO-139) (default joint): mp_crime_mode joint|individual; bare = report")
     System.AddCCommand("mp_ride_owner",          'KCD2MP_W151SetRideOwner(%line)',        "WO-151: one owner for a ridden horse, the rider's mount path -- the horse you sit on (and one a partner's figure rides) is never a puppet, bound, parked, hidden or frozen by the mod, and the host's stream for it waits (default on): mp_ride_owner on|off; bare = report")
@@ -21835,6 +21951,11 @@ local ok, err = pcall(function()
     System.AddCCommand("mp_player_minigames", 'KCD2MP_SetPlayerMinigames(%line)', "WO-143: the partner's grindstone, smithing, alchemy, reading and dice show on his avatar (default on): mp_player_minigames on|off")
     System.AddCCommand("mp_idles", 'KCD2MP_SetIdles(%line)', "WO-143: standing NPCs look at who they look at on the host's screen (default on): mp_idles on|off")
     System.AddCCommand("mp_quest_coalesce", 'KCD2MP_W154SetCoalesce(%line)', "WO-154: (host) a joiner's quest steps made by an AI behaviour (a duel, a brawl) on one State are judged as their net result, not replayed step by step (default on): mp_quest_coalesce on|off")
+    System.AddCCommand("mp_host_target", 'KCD2MP_W154SetHostTarget(%line)', "WO-154: (host) the host's blow frees an enemy from the mod's hold on a partner's figure, and a guard fighting the host is never sent at the partner (default on): mp_host_target on|off")
+    System.AddCCommand("mp_guard_respite", 'KCD2MP_W154SetGuardRespite(%line)', "WO-154: no guard stops or attacks a partner who is down, or for 2 minutes after he is up (30 s after his mp_unstuck); a stop turned into an attack is 'fled' only when he moved away (default on): mp_guard_respite on|off")
+    System.AddCCommand("mp_fair_crime", 'KCD2MP_W154SetFairCrime(%line)', "WO-154: (host) a partner's murder only on the victim's death, and an assault judged 5 s later -- no crime if the victim fights by then, a quest brawl (default on): mp_fair_crime on|off")
+    System.AddCCommand("mp_scene_resume", 'KCD2MP_W154SetSceneResume(%line)', "WO-154: (joiner) a scene stuck at its end resumes the host's copies, as in 0.44.0 (default off: no copy is resumed; the engine's own rescue, a save request, runs at once): mp_scene_resume on|off")
+    System.AddCCommand("mp_w154_check", 'KCD2MP_W154Check(%line)', "WO-154 live checks (test NPCs named w154_ only): mp_w154_check hostfight <npc> [secs] | hostfight off | pursue <npc> <ghost> on|off | status")
     System.AddCCommand("mp_avatar_falls", 'KCD2MP_W154SetFalls(%line)', "WO-154: a partner who is knocked down in his own world falls and lies on this screen too, and stands up when he does (default on): mp_avatar_falls on|off")
     System.AddCCommand("mp_avatar_herbs", 'KCD2MP_SetAvatarHerbs(%line)', "WO-153: the partner's avatar plays its herb-picking loop (default OFF: the avatar stands; the loop ended both 0.43.0 joiner crashes): mp_avatar_herbs on|off")
     System.AddCCommand("mp_avatar_dress", 'KCD2MP_SetAvatarDress(%line)', "WO-144: a partner's avatar wears pieces from its own inventory, equipped through the actor (default on; off = 0.42.0's REST EquipItem): mp_avatar_dress on|off")

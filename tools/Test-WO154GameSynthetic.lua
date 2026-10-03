@@ -176,4 +176,170 @@ do
     noErrs("A5")
 end
 
+-- Phase 3 stubs: this machine's player and a plain NPC.
+local function mkPlayer(x, y)
+    local p = { class = "Player", id = 7777, px = x or 0, py = y or 0, pz = 0, danger = false, combat = false, dead = false, money = 100, stood = 0 }
+    p.GetName = function() return "Dude" end
+    p.GetWorldPos = function(self) return { x = self.px, y = self.py, z = self.pz } end
+    p.soul = { IsInCombatDanger = function() return p.danger end, IsInCombatMode = function() return p.combat end }
+    p.actor = { IsDead = function() return p.dead end, StandUp = function() p.stood = p.stood + 1 end }
+    p.human = { IsInDialog = function() return false end }
+    p.inventory = { GetMoney = function() return p.money end }
+    player = p
+    return p
+end
+local function mkNpc(name, x, y)
+    NEXTID = NEXTID + 1
+    local n = { class = "NPC", id = NEXTID, px = x or 0, py = y or 0, pz = 0, dead = false, fighting = false }
+    n.GetName = function() return name end
+    n.GetWorldPos = function(self) return { x = self.px, y = self.py, z = self.pz } end
+    n.actor = { IsDead = function() return n.dead end, IsUnconscious = function() return false end }
+    n.soul = { IsInCombatMode = function() return n.fighting end, IsPublicEnemy = function() return false end,
+               HasScriptContext = function() return false end, GetFactionID = function() return "trosecko_settlements_semin" end }
+    n.this = { id = n.id }
+    ENTS[name] = n
+    return n
+end
+local function runTimers()
+    local t = TIMERS; TIMERS = {}
+    for _, x in ipairs(t) do x.f() end
+end
+
+-- (B1) Phase 3.3, joiner: a stop the guard turned into an attack is "fled" only when he moved away --------------------
+do
+    ERRS = {}
+    local p = mkPlayer(2, 0)
+    local s = { p0 = { x = 0, y = 0, z = 0 } }
+    local mark = #LOG
+    check("B1: stood (2 m) -> attacked, no resist", KCD2MP_W154StopResult(s, "fled") == "attacked", KCD2MP_W154StopResult(s, "fled"))
+    check("B1: ... logged", lastLog("WO154-STOP attacked moved=2.0", mark) ~= nil)
+    p.px = 12
+    check("B1: moved 12 m away -> fled", KCD2MP_W154StopResult(s, "fled") == "fled")
+    check("B1: a fight result stays a fight", KCD2MP_W154StopResult(s, "fought") == "fought")
+    p.px = 0
+    KCD2MP.w154.guardRespite = false
+    check("B1: mp_guard_respite off -> 0.44.0's fled", KCD2MP_W154StopResult(s, "fled") == "fled")
+    KCD2MP.w154.guardRespite = true
+    noErrs("B1")
+end
+
+-- (B2) the stop tick: the guard attacks a player who stands -> "attacked"; a death during the stop -> "died" ------------
+do
+    ERRS = {}; CMDS = {}
+    XGenAIModule = { MakeTableFromType = function(kind) return { kind = kind } end, SendMessageToEntityData = function() end }
+    local w = KCD2MP.w139
+    w.joiner, w.host, w.on, w.aliveAt = true, false, true, NOW
+    local p = mkPlayer(0, 0)
+    local g = mkNpc("tsem_man_9", 3, 0)
+    p.danger = true
+    w.stop = { id = "8", guard = "tsem_man_9", since = NOW - 5, money0 = 100, planted = {}, result = nil, sawDialog = false, p0 = { x = 0, y = 0, z = 0 } }
+    local mark = #LOG
+    KCD2MP_W139StopTick()
+    check("B2: the guard attacks a standing player -> outcome 'attacked' (no resist)", countEvt("w139_outcome", "8 attacked tsem_man_9", mark) == 1,
+        lastLog("w139_outcome", mark))
+    w.stop = { id = "9", guard = "tsem_man_9", since = NOW - 5, money0 = 100, planted = {}, result = nil, sawDialog = false, p0 = { x = 0, y = 0, z = 0 } }
+    p.dead = true
+    mark = #LOG
+    KCD2MP_W139StopTick()
+    check("B2: he died during the stop -> outcome 'died'", countEvt("w139_outcome", "9 died tsem_man_9", mark) == 1, lastLog("w139_outcome", mark))
+    w.stop = { id = "10", guard = "tsem_man_9", since = NOW - 5, money0 = 100, planted = {}, result = nil, sawDialog = false, p0 = { x = 0, y = 0, z = 0 } }
+    KCD2MP.w154.guardRespite = false
+    mark = #LOG
+    KCD2MP_W139StopTick()
+    check("B2: mp_guard_respite off -> 0.44.0's 'fought' on a death", countEvt("w139_outcome", "10 fought tsem_man_9", mark) == 1, lastLog("w139_outcome", mark))
+    KCD2MP.w154.guardRespite = true
+    w.joiner, w.stop = false, nil
+    noErrs("B2")
+end
+
+-- (B3) Phase 3.1, host: a murder only on a death, an assault judged 5 s later (no crime if it fights by then) ----------
+do
+    ERRS = {}; TIMERS = {}
+    local w = KCD2MP.w139
+    w.host, w.on, w.aliveAt = true, true, NOW
+    mkPlayer(0, 0)
+    local v1 = mkNpc("taborVictim_1", 5, 5)
+    local mark = #LOG
+    KCD2MP_W139HostViolent(1, "taborVictim_1", "assault")
+    check("B3: an assault is not judged at once", countLog("WO139-JUDGE src=1 id=0 assault", mark) == 0 and #TIMERS == 1 and TIMERS[1].ms == 5000,
+        tostring(#TIMERS))
+    runTimers()
+    check("B3: ... but 5 s later, when the victim does not fight", countLog("WO139-JUDGE src=1 id=0 assault", mark) == 1, lastLog("WO139-JUDGE", mark))
+    local v2 = mkNpc("zbranePanaSemina_moravak_jurko", 5, 5)
+    mark = #LOG
+    KCD2MP_W139HostViolent(1, "zbranePanaSemina_moravak_jurko", "assault")
+    v2.fighting = true   -- the host's own brawl starts 2.9 s later
+    runTimers()
+    check("B3: a victim that fights by then (a quest brawl) -> not a crime", countLog("WO139-JUDGE src=1 id=0 assault", mark) == 0
+        and lastLog("WO154-JUDGE src=1 assault on zbranePanaSemina_moravak_jurko -- not a crime", mark) ~= nil, lastLog("JUDGE", mark))
+    local v3 = mkNpc("taboryUCesty_duel_kunes", 5, 5)
+    v3.fighting = true
+    mark = #LOG
+    for _ = 1, 11 do KCD2MP_W139HostViolent(1, "taboryUCesty_duel_kunes", "hit") end   -- the duel's 0-hp hits
+    runTimers()
+    check("B3: 0-hp hits on a living victim are never murder", countLog("murder", mark) == 0, lastLog("JUDGE", mark))
+    v3.dead = true
+    mark = #LOG
+    KCD2MP_W139HostViolent(1, "taboryUCesty_duel_kunes", "hit")
+    KCD2MP_W139HostViolent(1, "taboryUCesty_duel_kunes", "hit")
+    check("B3: the victim's death is the murder -- judged once", countLog("WO139-JUDGE src=1 id=0 murder", mark) == 1, tostring(countLog("murder", mark)))
+    local v4 = mkNpc("taborVictim_4", 5, 5)
+    mark = #LOG
+    KCD2MP_W139HostViolent(1, "taborVictim_4", "hit")
+    v4.dead = true   -- the fatal blow lands a frame later
+    runTimers()
+    check("B3: a death a moment after the hit is still the murder", countLog("WO139-JUDGE src=1 id=0 murder", mark) == 1)
+    mkNpc("taborVictim_5", 5, 5)
+    mark = #LOG
+    KCD2MP_W139HostViolent(1, "taborVictim_5", "knockout")
+    check("B3: a takedown's knockout is judged at once, as before", countLog("WO139-JUDGE src=1 id=0 knockout", mark) == 1)
+    KCD2MP.w154.fairCrime = false
+    mkNpc("taborVictim_6", 5, 5)
+    mark = #LOG; TIMERS = {}
+    KCD2MP_W139HostViolent(1, "taborVictim_6", "assault")
+    check("B3: mp_fair_crime off -> 0.44.0: judged at once", countLog("WO139-JUDGE src=1 id=0 assault", mark) == 1 and #TIMERS == 0)
+    KCD2MP.w154.fairCrime = true
+    w.host = false
+    noErrs("B3")
+end
+
+-- (B4) Phase 3.4: mp_unstuck ends a fight he is in (and only then, unless asked) ---------------------------------------
+do
+    ERRS = {}
+    local p = mkPlayer(0, 0)
+    local mark = #LOG
+    KCD2MP_W151Unstuck("")
+    check("B4: not fighting -> no end-fights step", countEvt("w154_endfights", "", mark) == 0)
+    p.danger = true
+    mark = #LOG
+    KCD2MP_W151Unstuck("")
+    check("B4: in a fight -> the agent ends it (w154_endfights)", countEvt("w154_endfights", "unstuck", mark) == 1)
+    check("B4: ... and the log says so", (lastLog("WO151-UNSTUCK soft", mark) or ""):find("end-fights", 1, true) ~= nil, lastLog("WO151-UNSTUCK", mark))
+    p.danger = false
+    mark = #LOG
+    KCD2MP_W151Unstuck("fight")
+    check("B4: 'mp_unstuck fight' ends fights even when the game says none", countEvt("w154_endfights", "unstuck", mark) == 1)
+    noErrs("B4")
+end
+
+-- (B5) Phase 3's switches: each tells the agent, refuses a bad value, and is a console command -------------------------
+do
+    ERRS = {}
+    local cases = { { "mp_host_target", KCD2MP_W154SetHostTarget, "host_target" }, { "mp_guard_respite", KCD2MP_W154SetGuardRespite, "guard_respite" },
+                    { "mp_fair_crime", KCD2MP_W154SetFairCrime, "fair_crime" }, { "mp_scene_resume", KCD2MP_W154SetSceneResume, "scene_resume" } }
+    for _, c in ipairs(cases) do
+        local mark = #LOG
+        c[2]("off")
+        check("B5: " .. c[1] .. " off tells the agent", countEvt("w154_cfg", c[3] .. "=off", mark) == 1)
+        mark = #LOG
+        c[2]("on")
+        check("B5: " .. c[1] .. " on tells the agent", countEvt("w154_cfg", c[3] .. "=on", mark) == 1)
+        check("B5: " .. c[1] .. " refuses a bad value", c[2]("maybe") == false)
+        check("B5: " .. c[1] .. " is registered with an unquoted %line", CCMDS[c[1]] ~= nil and CCMDS[c[1]].body:find("(%line)", 1, true) ~= nil)
+    end
+    KCD2MP_W154SetSceneResume("off")   -- its default
+    check("B5: the defaults are on, on, on, off", KCD2MP.w154.hostTarget and KCD2MP.w154.guardRespite and KCD2MP.w154.fairCrime and not KCD2MP.w154.sceneResume)
+    noErrs("B5")
+end
+
 OUT = table.concat(RESULTS, "\n")

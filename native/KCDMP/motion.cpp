@@ -1557,6 +1557,23 @@ bool test_fight(uint32_t eid) {
     return call_auto(A.fnAuto, g_autoCmdOn, ca, true);
 }
 
+bool player_automation(bool on) {
+    if (!g_combat) return false;
+    void* actor = player_actor();
+    void* ca = actor ? combat_actor_of(actor, true) : nullptr;
+    if (!ca) return false;
+    void* model = nullptr;
+    const bool haveModel = rd(ca, kCaModel, &model) && model;
+    if (on) {
+        uint64_t r = 0;
+        if (!call_trystart(A.fnTryStart, ca, &r)) return false;
+        if (haveModel) call_setflag(A.fnSetFlag, static_cast<char*>(model) + kModelFlags, kGuardRequestScope, 1);
+        return call_auto(A.fnAuto, g_autoCmdOn, ca, true);
+    }
+    if (haveModel) call_setflag(A.fnSetFlag, static_cast<char*>(model) + kModelFlags, kGuardRequestScope, 0);
+    return call_auto(A.fnAuto, g_autoCmd, ca, false);
+}
+
 bool player_block(bool on) {
     void* pca = g_playerCa.load();
     if (!g_combat || !pca || !A.fnSetBlock) return false;

@@ -61,6 +61,21 @@ void tick();
 // Live checks only: a threat the host "makes" on an NPC (no input exists).
 bool test_host_threat(uint32_t npcEid, int weight);
 
+// WO-154 3.1: the host is a real target (mp_host_target, default on). A host
+// blow on an NPC releases the forced target this module holds on it toward an
+// avatar (wo139::host_struck releases a pursuit's), and the host's blows count
+// as a threat on an NPC that fights an avatar even before an avatar touched
+// it. The engine's own rules (its hit reaction, its skirmish's pick) and the
+// threat rule above decide whom it fights. Off = 0.44.0.
+void set_host_target(bool on);
+bool host_target();
+
+// WO-154 3.3: an avatar left its fight (its partner went down or woke, or
+// ended his fights): every forced pair toward it is cleared, its threats are
+// forgotten and its queued switches dropped. Returns the pairs cleared.
+//   WO136-FORGET avatar eid=0x<id>: <n> forced pair(s) cleared, ... -- <why>
+int forget_avatar(uint32_t avatarEid, const char* why);
+
 void set_enabled(bool on);
 bool enabled();
 int status_text(char* out, int n);

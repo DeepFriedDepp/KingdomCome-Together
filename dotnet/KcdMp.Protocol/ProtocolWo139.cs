@@ -36,8 +36,11 @@ namespace KcdMp.Wire;
 //                where: world | stash | door | lock | horse | body | area
 //   2 Outcome    "<result> <guard|-> <fine> <x> <y> <z>"               tok = the host's stop id
 //                result: paid | punished | fought | fled | bribed | persuaded | talked | executed | refused | nostop
+//                        | attacked (WO-154: the guard attacked a player who stood: no resist)
+//                        | died (WO-154: the player died during the stop: no resist)
 //                fine = what left this Henry (decagroschen); x y z = where the guard's copy ended (0 0 0 = none)
 //   3 Resync     "<why>"                     the joiner's world has just loaded: the host answers with its Record
+//   4 EndFights  "<why>"                     WO-154: the joiner's mp_unstuck -- every fight against his avatar ends
 // Host kinds (APPEND-ONLY):
 //   1 Judged     "<crime> <witnesses> <guards> <known 0|1> <settlement|->"   tok = the joiner's crime id
 //                the host raised it in its world (witnesses 0 = nobody saw it: no crime there)
@@ -64,14 +67,14 @@ public static partial class Protocol
     public const int CrimeTextMax = 1400;
 
     // ---- ask kinds (APPEND-ONLY) ----
-    public const byte CrimeAskReport = 1, CrimeAskOutcome = 2, CrimeAskResync = 3;
+    public const byte CrimeAskReport = 1, CrimeAskOutcome = 2, CrimeAskResync = 3, CrimeAskEndFights = 4;
     // ---- host kinds (APPEND-ONLY) ----
     public const byte CrimeHostJudged = 1, CrimeHostStop = 2, CrimeHostPursue = 3, CrimeHostRecord = 4,
                       CrimeHostHorses = 5, CrimeHostCleared = 6, CrimeHostMode = 7;
 
     public static string CrimeAskName(byte k) => k switch
     {
-        CrimeAskReport => "report", CrimeAskOutcome => "outcome", CrimeAskResync => "resync", _ => $"unknown-{k}",
+        CrimeAskReport => "report", CrimeAskOutcome => "outcome", CrimeAskResync => "resync", CrimeAskEndFights => "end-fights", _ => $"unknown-{k}",
     };
 
     public static string CrimeHostName(byte k) => k switch
@@ -89,7 +92,8 @@ public static partial class Wo139Text
     /// <summary>Every crime the host's record holds.</summary>
     public static readonly string[] AllCrimes = { "theft", "lockpick", "trespass", "horsetheft", "robbody", "assault", "murder", "knockout" };
     public static readonly string[] Wheres = { "world", "stash", "door", "lock", "horse", "body", "area" };
-    public static readonly string[] Results = { "paid", "punished", "fought", "fled", "bribed", "persuaded", "talked", "executed", "refused", "nostop" };
+    public static readonly string[] Results = { "paid", "punished", "fought", "fled", "bribed", "persuaded", "talked", "executed", "refused", "nostop",
+                                                "attacked", "died" };   // WO-154: APPEND-ONLY
 
     [GeneratedRegex(@"^[A-Za-z][A-Za-z0-9_]{0,62}$", RegexOptions.CultureInvariant)]
     private static partial Regex NameRx();

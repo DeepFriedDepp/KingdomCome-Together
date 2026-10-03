@@ -15,11 +15,13 @@
 #include "engine.h"
 #include "hits.h"
 #include "main_thread.h"
+#include "motion.h"
 #include "script_context.h"
 #include "hook_prologues.h"
 #include "inline_hook.h"
 #include "log.h"
 #include "npc_drive.h"
+#include "wo136.h"
 #include "wo137.h"
 #include "wo139_rules.h"
 
@@ -107,10 +109,10 @@ bool player_pos(float p[3]) {
 // Pursuits this module set: guard eid -> the avatar and both souls (main thread only).
 struct Pursuit { uint32_t avatar; void* guardSoul; void* avatarSoul; bool forced; };
 std::unordered_map<uint32_t, Pursuit> g_pursuits;
-std::atomic<uint32_t> c_pursueOn{0}, c_pursueOff{0}, c_pursueFail{0}, c_context{0};
+std::atomic<uint32_t> c_pursueOn{0}, c_pursueOff{0}, c_pursueFail{0}, c_context{0}, c_hostStruck{0}, c_pursueBusy{0};
 constexpr const char* kForcedTarget = "combat_forcedTarget";
 
-// 1 set, 0 already so, 2 no such guard / avatar, 3 refused.
+// 1 set, 0 already so, 2 no such guard / avatar, 3 refused, 4 it fights the host (WO-154: left to that fight).
 uint8_t pursue(bool on, uint32_t avatarEid, const char* guard) {
     const uint32_t geid = hits::eid_of_name(guard);
     void* gs = geid && engine::entity_by_id(geid) ? hits::soul_of_eid(geid) : nullptr;
@@ -132,6 +134,16 @@ uint8_t pursue(bool on, uint32_t avatarEid, const char* guard) {
     void* as = avatarEid && engine::entity_by_id(avatarEid) ? hits::soul_of_eid(avatarEid) : nullptr;
     if (!gs || !as) { c_pursueFail.fetch_add(1); logf("WO139-PURSUE on guard=%s avatar=0x%X -- %s", guard, avatarEid, !gs ? "no such guard here" : "no such avatar"); return 2; }
     if (it != g_pursuits.end() && it->second.avatar == avatarEid) return 0;
+    // WO-154 3.1: a guard already fighting the host stays in that fight -- the game splits its
+    // enemies between allies; the mod never pulls one off the host to gang up on the avatar.
+    if (wo136::host_target()) {
+        motion::NpcCombat c{};
+        if (motion::read_npc_combat(geid, &c) && c.hasCa && c.opponentIsPlayer) {
+            c_pursueBusy.fetch_add(1);
+            logf("WO139-PURSUE on guard=%s eid=0x%X -> avatar 0x%X left to its fight -- it fights the host now (the game's own split)", guard, geid, avatarEid);
+            return 4;
+        }
+    }
     uint64_t rv = 0;
     const bool added = hits::skirmish_ready() && hits::skirmish_add(gs, as, 1, &rv);
     const int fr = sctx::set_soul_relation(gs, as, kForcedTarget, true);
@@ -142,6 +154,26 @@ uint8_t pursue(bool on, uint32_t avatarEid, const char* guard) {
          guard, geid, avatarEid, added ? "added" : "NOT added", fr == 1 ? "set (read back)" : fr == 0 ? "already set by the game (left to it)" : "NOT set");
     return 1;
 }
+
+} // namespace
+
+// WO-154 3.1: the host struck a guard this module holds on an avatar: the forced target goes (the pursuit
+// itself stays, so its end still takes the guard out of the skirmish); the guard's own rules pick now.
+void host_struck(uint32_t guardEid) {
+    auto it = g_pursuits.find(guardEid);
+    if (it == g_pursuits.end() || !it->second.forced) return;
+    Pursuit& p = it->second;
+    void* gs = engine::entity_by_id(guardEid) ? hits::soul_of_eid(guardEid) : nullptr;
+    void* as = engine::entity_by_id(p.avatar) ? hits::soul_of_eid(p.avatar) : nullptr;
+    int r = -2;
+    if (gs && as && gs == p.guardSoul && as == p.avatarSoul) r = sctx::set_soul_relation(gs, as, kForcedTarget, false);
+    p.forced = false;
+    c_hostStruck.fetch_add(1);
+    logf("WO139-PURSUE host-struck guard eid=0x%X avatar=0x%X forced_target=%s -- the host is a real target: the guard's own rules pick whom it fights",
+         guardEid, p.avatar, r > 0 ? "cleared (read back)" : r == 0 ? "already clear" : r == -2 ? "left (a body is gone)" : "clear FAILED");
+}
+
+namespace {
 
 void clear_all_pursuits(const char* why) {
     for (auto it = g_pursuits.begin(); it != g_pursuits.end(); it = g_pursuits.begin()) {
@@ -287,11 +319,11 @@ uint8_t handle(const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t
             return ok ? kROk : kRNotArmed;
         }
         case kOpStatus: {
-            char line[300];
+            char line[420];
             const int n = std::snprintf(line, sizeof line,
-                "WO139-NATIVE trespass armed=%d on=%d at=%s level=%u told=%u edges=%u sent=%u pursuits=%zu on=%u off=%u fail=%u contexts=%u punish_gate_armed=%d punish_skipped=%u%s%s",
+                "WO139-NATIVE trespass armed=%d on=%d at=%s level=%u told=%u edges=%u sent=%u pursuits=%zu on=%u off=%u fail=%u busy=%u host_struck=%u contexts=%u punish_gate_armed=%d punish_skipped=%u%s%s",
                 g_armed.load() ? 1 : 0, g_on.load() ? 1 : 0, g_where, g_level.load(), g_told.load(), c_edges.load(), c_sent.load(),
-                g_pursuits.size(), c_pursueOn.load(), c_pursueOff.load(), c_pursueFail.load(), c_context.load(),
+                g_pursuits.size(), c_pursueOn.load(), c_pursueOff.load(), c_pursueFail.load(), c_pursueBusy.load(), c_hostStruck.load(), c_context.load(),
                 wo137::punish_gate_armed() ? 1 : 0, wo137::punish_skipped(),
                 g_armed.load() ? "" : " why=", g_armed.load() ? "" : g_why);
             if (n <= 0) return kRFailed;

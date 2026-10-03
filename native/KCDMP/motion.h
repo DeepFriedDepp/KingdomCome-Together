@@ -126,6 +126,11 @@ bool player_set_crouch(bool on);
 // WO-132 (live checks only): a test NPC fights -- combat mode, the guard-request
 // flag and its combat automation ON (what the shipped combat autotests use).
 bool test_fight(uint32_t eid);
+// WO-154 3.5 (live checks only): the local player's own combat automation on or
+// off (the same combat_EnableAutomation path): the engine fights for the host
+// against his skirmish opponent, so his blows go through the game's own hit --
+// the proof of "the host is a real target" without any input.
+bool player_automation(bool on);
 size_t npc_engaged_count();
 
 // WO-132 (host, main thread): one NPC's combat state, read from its combat model.

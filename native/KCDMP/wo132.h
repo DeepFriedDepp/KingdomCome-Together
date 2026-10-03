@@ -13,7 +13,8 @@
 //                   soul: it leaves its skirmish, the fight goes on without it
 //                   (the enemies drop it as a target). Replaces WO-131's
 //                   StopFight on an avatar, which ended the whole fight -- the
-//                   host's too.
+//                   host's too. WO-154: an avatar leaving its fight also loses
+//                   every forced target and threat WO-136 holds toward it.
 //   op 2 Engage     [on:1][eid:4][state:12]  -> [first:1][skirmish:1][distM:4f]
 //                   Joiner: a bound, suspended copy of a host NPC that is in a
 //                   fight near this player. First time: the copy joins a
@@ -54,6 +55,11 @@ constexpr uint8_t kOpHandOver    = 9;    // [removePlayer:1] -> [handed:1]   the
 constexpr uint8_t kOpAvatarSwing = 10;   // [avatarEid:4] -> [npcEid:4]      a joiner's committed attack: its avatar fights that NPC, the swing threatens it
 constexpr uint8_t kOpFights      = 11;   // [on:1] -> []                     mp_w136_fights on|off (the threat rule and the hand-over)
 constexpr uint8_t kOpHostThreat  = 12;   // [npcEid:4][weight:1] -> []       live checks only: a threat the host "makes" (no input exists)
+// WO-154 3.1 (host; wo136.h): mp_host_target on|off -- a host blow frees an NPC from the mod's locks on an avatar
+constexpr uint8_t kOpHostTarget  = 13;   // [on:1] -> []
+// WO-154 3.5 (live checks only): the host's Henry fights npcEid by the engine's own combat automation for secs
+// (no input; his blows are the game's own hits). off: automation off at once. [on:1][npcEid:4][secs:1] -> []
+constexpr uint8_t kOpPlayerFight = 14;
 constexpr uint8_t kOpTestFight  = 8;   // [npcEid:4][targetEid:4][override:1] live checks only: a test NPC fights (skirmish + combat + automation)   // [on:1] live checks only: the player's block via SetBlockMode (no input)
 
 constexpr uint8_t kROk         = 0;

@@ -2,6 +2,7 @@
 // GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 using KcdMp.Client;
+using KcdMp.Wire;
 using Xunit;
 
 namespace KcdMp.Client.Tests;
@@ -151,6 +152,60 @@ public class Wo154Tests
                  + "<StateTypeEnumeration Name=\"Won\"/><StateTypeEnumeration Name=\"Lost\"/></Type>");
         Assert.Equal("SetInProgress", Wo147Rules.CorrectionPort(idx, "Challenge", 1, null));
         Assert.Equal("SetWon", Wo147Rules.CorrectionPort(idx, "Challenge", 2, null));
+    }
+
+    [Fact]
+    public void The_guards_leave_a_partner_alone_while_he_is_down_and_for_two_minutes_after()
+    {
+        var r = new Wo154Rules.GuardRespite();
+        Assert.Null(r.Blocked(0));                                   // never down: the guards act on his record
+        r.Down(1000);
+        Assert.Equal("down", r.Blocked(1056));                       // the field: a stop at his body 56 ms after the down
+        r.Up(30_000);                                                // the respawn
+        Assert.Equal("respite 120 s", r.Blocked(30_000));
+        Assert.NotNull(r.Blocked(30_000 + 48_000));                  // the field: the "fled" stop 48 s after the respawn
+        Assert.Null(r.Blocked(30_000 + Wo154Rules.GuardRespite.RespiteMs));
+    }
+
+    [Fact]
+    public void A_lost_up_never_blocks_the_guards_for_the_rest_of_the_session_and_an_unstuck_gives_30_s()
+    {
+        var r = new Wo154Rules.GuardRespite();
+        r.Down(0);
+        Assert.Equal("down", r.Blocked(Wo154Rules.GuardRespite.MaxDownMs - 1));
+        Assert.Null(r.Blocked(Wo154Rules.GuardRespite.MaxDownMs));   // WO-132's LifeGate rule
+        var u = new Wo154Rules.GuardRespite();
+        u.Unstuck(5000);
+        Assert.NotNull(u.Blocked(5000 + 29_000));
+        Assert.Null(u.Blocked(5000 + Wo154Rules.GuardRespite.UnstuckRespiteMs));
+        u.Up(10_000);                                                // a respawn after it: the longer respite wins
+        u.Unstuck(11_000);
+        Assert.NotNull(u.Blocked(10_000 + 100_000));
+    }
+
+    [Fact]
+    public void A_stop_turned_into_an_attack_on_a_standing_player_or_a_death_is_no_resist()
+    {
+        Assert.True(Wo139Text.IsResult("attacked"));
+        Assert.True(Wo139Text.IsResult("died"));
+        Assert.Equal(Wo139Rules.OutcomeEffect.Keep, Wo139Rules.EffectOf("attacked"));
+        Assert.Equal(Wo139Rules.OutcomeEffect.Keep, Wo139Rules.EffectOf("died"));
+        Assert.Equal(Wo139Rules.OutcomeEffect.Resist, Wo139Rules.EffectOf("fled"));   // a real flight still is
+        Assert.True(Wo139Rules.TryParseOutcome("attacked tsem_man_9 0", out var res, out var guard, out int fine));
+        Assert.Equal(("attacked", "tsem_man_9", 0), (res, guard, fine));
+    }
+
+    [Fact]
+    public void Mp_unstuck_asks_the_host_to_end_the_fights_on_the_crime_channel()
+    {
+        Assert.Equal(4, Protocol.CrimeAskEndFights);
+        Assert.Equal("end-fights", Protocol.CrimeAskName(Protocol.CrimeAskEndFights));
+        Assert.Equal("unstuck", Wo154Rules.EndFightsText("unstuck"));
+        Assert.Equal("unstuck", Wo154Rules.EndFightsText("no spaces allowed"));   // never a free text on the wire
+        Assert.True(Wo154Rules.TryParseEndFights("unstuck", out var why));
+        Assert.Equal("unstuck", why);
+        Assert.False(Wo154Rules.TryParseEndFights("rm -rf", out _));
+        Assert.False(Wo154Rules.TryParseEndFights("", out _));
     }
 
     [Fact]

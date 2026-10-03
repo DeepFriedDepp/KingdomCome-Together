@@ -2,6 +2,7 @@
 // GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 using System.Globalization;
+using KcdMp.Wire;
 
 namespace KcdMp.Client;
 
@@ -163,5 +164,37 @@ public static class Wo154Rules
             if (Down && !bit && nowMs - _clearSince >= UpAfterMs) { Down = false; return false; }
             return null;
         }
+    }
+
+    /// <summary>
+    /// Phase 3: the host's guards leave a partner alone while he is down, for <see cref="RespiteMs"/> after he is up
+    /// again (a death's respawn, a knockout's or a knockdown's wake), and for <see cref="UnstuckRespiteMs"/> after he
+    /// ended his fights (mp_unstuck): no stop, no pursuit, and a stop's "fought"/"fled" is no resist then. The field:
+    /// an arrest at his body 56 ms after he went down, and a stop judged "fled" 48 s after his respawn that sent three
+    /// guards at him again (his third death). A down that never sees an up stops counting after <see cref="MaxDownMs"/>
+    /// (WO-132's LifeGate rule: a lost up never blocks a partner for the rest of the session).
+    /// </summary>
+    public sealed class GuardRespite
+    {
+        public const long RespiteMs = 120_000, UnstuckRespiteMs = 30_000, MaxDownMs = 180_000;
+        private long _downAt = -1, _until = -1;
+
+        public bool IsDown(long nowMs) => _downAt >= 0 && nowMs - _downAt < MaxDownMs;
+        public void Down(long nowMs) => _downAt = nowMs;
+        public void Up(long nowMs) { _downAt = -1; _until = Math.Max(_until, nowMs + RespiteMs); }
+        public void Unstuck(long nowMs) => _until = Math.Max(_until, nowMs + UnstuckRespiteMs);
+
+        /// <summary>null: the guards may act on him. Otherwise why not, in a word or two.</summary>
+        public string? Blocked(long nowMs) =>
+            IsDown(nowMs) ? "down" : nowMs < _until ? FormattableString.Invariant($"respite {(_until - nowMs + 999) / 1000} s") : null;
+    }
+
+    /// <summary>Phase 3.4: a joiner's mp_unstuck asks the host to end every fight against his avatar (crime-ask kind 4).</summary>
+    public static string EndFightsText(string why) => Wo139Text.IsWord(why) ? why : "unstuck";
+
+    public static bool TryParseEndFights(string? text, out string why)
+    {
+        why = (text ?? "").Trim();
+        return Wo139Text.IsWord(why);
     }
 }

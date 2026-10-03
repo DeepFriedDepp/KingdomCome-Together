@@ -82,4 +82,9 @@ void set_frame_callback(FrameFn fn);   // 0xA3 goes out through it
 
 void on_pipe_closed();   // any thread: the detector off, every pursuit this module set cleared (on the main thread)
 
+// WO-154 3.1 (main thread, hits.cpp's host-hit marks): the host struck guardEid -- a pursuit's forced target on
+// it goes; the guard's own rules pick whom it fights (the pursuit stays until it ends).
+//   WO139-PURSUE host-struck guard eid=0x<id> avatar=0x<id> forced_target=<...>
+void host_struck(uint32_t guardEid);
+
 } // namespace kcdmp::wo139

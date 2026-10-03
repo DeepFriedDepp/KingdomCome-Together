@@ -10,6 +10,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <algorithm>
 #include <unordered_map>
 #include <vector>
 
@@ -87,8 +88,9 @@ void force(uint32_t npc, uint32_t to, void* ns, void* ts, const char* why) {
 }
 
 std::atomic<bool> g_on{true};
+std::atomic<bool> g_hostTarget{true};   // WO-154 3.1: mp_host_target
 std::atomic<uint32_t> c_threat{0}, c_switch{0}, c_switchFail{0}, c_swing{0}, c_swingNone{0}, c_handover{0}, c_handoverNone{0}, c_combatant{0},
-    c_handoverLate{0}, c_handoverLost{0};
+    c_handoverLate{0}, c_handoverLost{0}, c_hostStruck{0}, c_hostCounted{0}, c_forget{0};
 
 double now_s() { LARGE_INTEGER q, f; QueryPerformanceCounter(&q); QueryPerformanceFrequency(&f); return double(q.QuadPart) / double(f.QuadPart); }
 
@@ -96,6 +98,10 @@ uint32_t player_eid() {
     void* e = engine::entity_by_id(0x7777);
     return e ? engine::entity_id(e) : 0;
 }
+
+// A switch's target as an entity: kPlayer (0) is the local player, whose entity
+// id is not 0 (WO-154: the read back looked entity 0 up and never found it).
+uint32_t entity_of(uint32_t to) { return to == kPlayer ? player_eid() : to; }
 
 bool copy_str(const char* s, char* out, size_t n) {
     size_t i = 0;
@@ -116,6 +122,13 @@ const char* src_name(uint32_t src, char* buf, size_t n) {
     if (src == kPlayer) return "host";
     if (src == kNone) return "none";
     std::snprintf(buf, n, "avatar:0x%X", src);
+    return buf;
+}
+
+// A switch's target in a log line (entity_of: kPlayer is the local player).
+const char* to_text(uint32_t to, char* buf, size_t n) {
+    if (to == kPlayer) return "the host";
+    std::snprintf(buf, n, "0x%X", to);
     return buf;
 }
 
@@ -245,11 +258,22 @@ bool enabled() { return g_on.load(); }
 
 void note_threat(uint32_t npcEid, uint32_t srcEid, int weight, const char* why) {
     if (!g_on.load() || !npcEid) return;
+    const bool host = srcEid == kPlayer;
+    const bool hostTarget = host && g_hostTarget.load();
+    // WO-154 3.1: the host's blow frees the NPC from the mod's own lock on an avatar
+    // (the field: guards forced onto the avatar never turned to the host's 11 blows).
+    if (hostTarget && g_forced.count(npcEid)) { c_hostStruck.fetch_add(1); unforce(npcEid, "the host struck it -- the host is a real target"); }
     // Only a fight a partner is part of: the host's own hits count only once
-    // an avatar has touched this NPC (a solo fight is left to the engine).
+    // an avatar has touched this NPC (a solo fight is left to the engine) --
+    // or (WO-154) while the NPC fights an avatar.
     auto it = g_threat.find(npcEid);
     if (it == g_threat.end()) {
-        if (srcEid == kPlayer) return;
+        if (host) {
+            motion::NpcCombat c{};
+            const uint32_t cur = hostTarget && motion::read_npc_combat(npcEid, &c) && c.hasCa ? current_opponent(c) : kNone;
+            if (cur == kNone || cur == kPlayer || !is_avatar(cur)) return;
+            c_hostCounted.fetch_add(1);
+        }
         if (g_threat.size() > 64) g_threat.clear();
         it = g_threat.emplace(npcEid, NpcThreat{}).first;
     }
@@ -371,10 +395,11 @@ void tick() {
     if (g_pending.empty()) return;
     for (auto it = g_pending.begin(); it != g_pending.end();) {
         if (now < it->next) { ++it; continue; }
-        char nb[64];
+        char nb[64], tb[24];
         name_of(it->npc, nb, sizeof nb);
         void* ns = engine::entity_by_id(it->npc) ? hits::soul_of_eid(it->npc) : nullptr;
-        void* ts = engine::entity_by_id(it->to) ? hits::soul_of_eid(it->to) : nullptr;
+        const uint32_t toEnt = entity_of(it->to);
+        void* ts = toEnt && engine::entity_by_id(toEnt) ? hits::soul_of_eid(toEnt) : nullptr;
         motion::NpcCombat c{};
         const bool readable = ns && ts && motion::read_npc_combat(it->npc, &c);
         const char* what = it->kind == Kind::Handover ? "WO136-HANDOVER" : it->kind == Kind::Switch ? "WO136-TARGET" : "WO136-SWING";
@@ -383,15 +408,16 @@ void tick() {
             if (it->kind == Kind::Handover) { c_handover.fetch_add(1); c_handoverLate.fetch_add(1); }
             else if (it->kind == Kind::Switch) c_switch.fetch_add(1);
             else c_combatant.fetch_add(1);
-            logf("%s %s=%s -> 0x%X taken (read back after %d ms, %d redo(s)) -- %s", what, it->kind == Kind::Combatant ? "avatar" : "npc", nb, it->to, ms, it->redos, it->why);
+            logf("%s %s=%s -> %s taken (read back after %d ms, %d redo(s)) -- %s", what, it->kind == Kind::Combatant ? "avatar" : "npc", nb,
+                 to_text(it->to, tb, sizeof tb), ms, it->redos, it->why);
             it = g_pending.erase(it);
             continue;
         }
         if (!readable || now > it->until) {
             if (it->kind == Kind::Handover) c_handoverLost.fetch_add(1);
             else if (it->kind == Kind::Switch) c_switchFail.fetch_add(1);
-            logf("%s %s=%s -> 0x%X NOT taken after %d ms, %d redo(s) (%s) -- %s", what, it->kind == Kind::Combatant ? "avatar" : "npc", nb, it->to, ms, it->redos,
-                 readable ? "the engine kept its own target" : "a body is gone", it->why);
+            logf("%s %s=%s -> %s NOT taken after %d ms, %d redo(s) (%s) -- %s", what, it->kind == Kind::Combatant ? "avatar" : "npc", nb,
+                 to_text(it->to, tb, sizeof tb), ms, it->redos, readable ? "the engine kept its own target" : "a body is gone", it->why);
             it = g_pending.erase(it);
             continue;
         }
@@ -405,12 +431,42 @@ void tick() {
     }
 }
 
+void set_host_target(bool on) { g_hostTarget.store(on); }
+bool host_target() { return g_hostTarget.load(); }
+
+int forget_avatar(uint32_t avatarEid, const char* why) {
+    if (!avatarEid) return 0;
+    int forced = 0, threats = 0, pending = 0;
+    for (auto it = g_forced.begin(); it != g_forced.end();) {
+        if (it->second.to != avatarEid) { ++it; continue; }
+        unforce(it->first, why);   // erases it
+        ++forced;
+        it = g_forced.begin();
+    }
+    for (auto& kv : g_threat) {
+        auto& evs = kv.second.evs;
+        const size_t n0 = evs.size();
+        evs.erase(std::remove_if(evs.begin(), evs.end(), [&](const wo136rules::Ev& e) { return e.src == avatarEid; }), evs.end());
+        threats += static_cast<int>(n0 - evs.size());
+    }
+    for (auto it = g_pending.begin(); it != g_pending.end();) {
+        if (it->to == avatarEid || it->npc == avatarEid) { it = g_pending.erase(it); ++pending; }
+        else ++it;
+    }
+    c_forget.fetch_add(1);
+    if (forced || threats || pending)
+        logf("WO136-FORGET avatar eid=0x%X: %d forced pair(s) cleared, %d threat(s) and %d queued switch(es) dropped -- %s",
+             avatarEid, forced, threats, pending, why);
+    return forced;
+}
+
 int status_text(char* out, int n) {
     return std::snprintf(out, n,
-        "wo136 fights=%s threat=%u switch=%u switch_fail=%u swing=%u swing_none=%u combatant=%u handover=%u handover_late=%u handover_lost=%u handover_none=%u tracked=%zu pending=%zu forced=%zu forced_set=%u forced_clear=%u forced_fail=%u",
+        "wo136 fights=%s threat=%u switch=%u switch_fail=%u swing=%u swing_none=%u combatant=%u handover=%u handover_late=%u handover_lost=%u handover_none=%u tracked=%zu pending=%zu forced=%zu forced_set=%u forced_clear=%u forced_fail=%u host_target=%s host_struck=%u host_counted=%u forget=%u",
         g_on.load() ? "on" : "off", c_threat.load(), c_switch.load(), c_switchFail.load(), c_swing.load(), c_swingNone.load(),
         c_combatant.load(), c_handover.load(), c_handoverLate.load(), c_handoverLost.load(), c_handoverNone.load(), g_threat.size(), g_pending.size(),
-        g_forced.size(), c_forcedSet.load(), c_forcedClear.load(), c_forcedFail.load());
+        g_forced.size(), c_forcedSet.load(), c_forcedClear.load(), c_forcedFail.load(),
+        g_hostTarget.load() ? "on" : "off", c_hostStruck.load(), c_hostCounted.load(), c_forget.load());
 }
 
 } // namespace kcdmp::wo136

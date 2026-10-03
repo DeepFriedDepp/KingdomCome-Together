@@ -449,6 +449,21 @@ public partial class GameBridge
                 continue;
             }
             if (s.Positioned || !_w151SceneGuard || !W137Joiner) continue;
+            if (!_w154SceneResume)
+            {
+                // WO-154 3.2: no copy is resumed for a scene -- a resumed copy runs the scene's own end moves (the
+                // field: the engine's end-of-scene fast-forward ran behaviour 'teleport' on the Moravians' copies,
+                // 10-16 m jumps). The engine's own way out instead, at once: a save request cancels every NPC's
+                // fast-forward and the positioning ends (mp_scene_resume on = 0.44.0).
+                if (!s.Rescued && since >= SceneResumeAfterS)
+                {
+                    s.Rescued = true;
+                    Interlocked.Increment(ref _w151SceneRescues);
+                    Console.WriteLine(FormattableString.Invariant($"MP-W151 scene {s.Type} '{s.Name}' not positioned {since:F0} s after its content -- no copy is resumed (mp_scene_resume off); the rescue now: a save request (the engine cancels every NPC's fast-forward)"));
+                    _ = Wo151SceneRescueSaveAsync(s.Name);
+                }
+                continue;
+            }
             if (!s.Resumed && since >= SceneResumeAfterS)
             {
                 s.Resumed = true;

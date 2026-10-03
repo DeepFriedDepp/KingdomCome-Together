@@ -504,16 +504,34 @@ do
     noErrs("S1")
 end
 
-do -- the guard's own attack (a refused / ignored chat): the stop ends as a flight
+do -- the guard's own attack (a refused / ignored chat) on a player who stands: no resist (WO-154 3.3)
     local g = stopSetup()
-    KCD2MP_W139Stop(78, "tzel_man_7", "theft:1")
-    check("S: no record here, no stolen piece on him: the host's list is planted as the fine only", #MSGS == 1 and MSGS[1].kind == "switch:stimulus:disturbance" and MSGS[1].t.priceOverride == 500)
+    KCD2MP_W139Stop(76, "tzel_man_7", "theft:1")
     PLAYER_DANGER = true
     NOW = NOW + 4
     local mark = #LOG
     KCD2MP_W139StopTick()
     local out = emitted("w139_outcome", mark)
-    check("S: the guard fights him: fled (resisting arrest)", #out == 1 and out[1]:find("^78 fled tzel_man_7 0") ~= nil, out[1])
+    check("S: the guard attacks a player who stood (a loot screen, no reply yet): attacked, no resist", #out == 1 and out[1]:find("^76 attacked tzel_man_7 0") ~= nil, out[1])
+    local sf = MSGS[#MSGS]
+    check("S: ...its fight ends first all the same (stopFight)", sf.kind == "stopFight" and sf.t.messageId == "w139stop76")
+    for _, t in ipairs(TIMERS) do if t.ms == 4500 then t.f() end end
+    TIMERS = {}
+    NOW = NOW + 3.5
+    noErrs("S2a")
+end
+
+do -- the guard's own attack (a refused / ignored chat) and the player runs: the stop ends as a flight
+    local g = stopSetup()
+    KCD2MP_W139Stop(78, "tzel_man_7", "theft:1")
+    check("S: no record here, no stolen piece on him: the host's list is planted as the fine only", #MSGS == 1 and MSGS[1].kind == "switch:stimulus:disturbance" and MSGS[1].t.priceOverride == 500)
+    PLAYER_DANGER = true
+    PLAYER_POS = { x = 88, y = 100, z = 10 }   -- 12 m from where the stop began
+    NOW = NOW + 4
+    local mark = #LOG
+    KCD2MP_W139StopTick()
+    local out = emitted("w139_outcome", mark)
+    check("S: the guard fights him and he ran: fled (resisting arrest)", #out == 1 and out[1]:find("^78 fled tzel_man_7 0") ~= nil, out[1])
     local sf = MSGS[#MSGS]
     check("S: ...its fight ends first: the game's own stopFight to the guard, the suspension after it",
         sf.kind == "stopFight" and sf.to == g.this.id and sf.t.soulCount == 1 and sf.t.messageId == "w139stop78"
@@ -562,7 +580,7 @@ do -- refusals and ends
     PLAYER_DEAD = true
     mark = #LOG
     KCD2MP_W139StopTick()
-    check("S: the player died in it: ended (fought)", e1("w139_outcome", mark):find("^83 fought") ~= nil)
+    check("S: the player died in it: ended (died -- no resist, WO-154)", e1("w139_outcome", mark):find("^83 died") ~= nil, e1("w139_outcome", mark))
     PLAYER_DEAD = false
     KCD2MP_W139Stop(85, "tzel_man_7", "trespass:1")
     NOW = NOW + KCD2MP.w139.stopMaxS + 1
@@ -658,11 +676,14 @@ do
     check("H: a spot away from the avatar is judged at the spot", logCount("by=the spot", mark) == 1)
     -- violent crimes the host sees itself
     local victim = mkNpc("tzel_man_9", 101, 101, 10, ZEL)
-    mark = #LOG
+    mark = #LOG; TIMERS = {}
     KCD2MP_W139HostViolent(1, "tzel_man_9", "assault")
+    check("H: an assault waits 5 s (WO-154: a quest brawl the host's world starts later is no crime)", #emitted("w139_judged", mark) == 0 and #TIMERS == 1)
+    for _, t in ipairs(TIMERS) do t.f() end; TIMERS = {}
     check("H: the avatar's hit on a townsperson: judged as the joiner's assault", #emitted("w139_judged", mark) == 1 and e1("w139_judged", mark):find("^1 0 assault") ~= nil)
     mark = #LOG
     KCD2MP_W139HostViolent(1, "bandit_1", "assault")
+    for _, t in ipairs(TIMERS) do t.f() end; TIMERS = {}
     check("H: a bandit (a public enemy): no crime", #emitted("w139_judged", mark) == 0 and logCount("not a crime (a public enemy)", mark) == 1)
     victim.combat = true
     mark = #LOG

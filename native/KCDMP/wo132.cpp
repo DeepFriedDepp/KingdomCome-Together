@@ -43,6 +43,9 @@ std::atomic<CombatFn> g_combatFn{nullptr};
 // Live checks: test NPCs held in a fight (main thread).
 struct TestFight { uint32_t eid; double until; double last = 0; };
 std::vector<TestFight> g_testFights;
+// WO-154 3.5 (live checks only): the host's own automated fight against one NPC, until this time
+struct PlayerFight { uint32_t npc = 0; double until = 0, last = 0; };
+PlayerFight g_playerFight;
 
 // Joiner: the engaged copies (main thread).
 std::vector<uint32_t> g_engaged;
@@ -106,6 +109,8 @@ uint8_t handle(const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t
         const bool ok = hits::skirmish_remove(soul, &rv);
         logf("WO132-LEAVEFIGHT eid=0x%X (%s) -> %s rv=0x%llX -- this body leaves its skirmish, the fight goes on",
              eid, isPlayer ? "the local player" : "a body", ok ? "removed" : "FAILED", static_cast<unsigned long long>(rv));
+        // WO-154 3.3: nothing of the mod's keeps an NPC on it (a forced pair, a remembered threat, a queued switch)
+        if (!isPlayer) kcdmp::wo136::forget_avatar(eid, "the avatar left its fight");
         if (!ok) { c_leaveFail.fetch_add(1); return kRFailed; }
         c_leave.fetch_add(1);
         out[0] = static_cast<uint8_t>(rv & 0xFF);
@@ -241,6 +246,36 @@ uint8_t handle(const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t
         logf("WO136-FIGHTS %s -- the threat rule and the hand-over at the host's down", a[0] ? "on" : "off");
         return kROk;
     }
+    case kOpHostTarget: {
+        if (n != 1) return kRBadRequest;
+        kcdmp::wo136::set_host_target(a[0] != 0);
+        logf("WO136-HOSTTARGET %s -- %s", a[0] ? "on" : "off",
+             a[0] ? "a host blow frees an NPC from the mod's locks on an avatar; a guard fighting the host is never pulled onto one"
+                  : "0.44.0: the mod's locks hold until the fight ends");
+        return kROk;
+    }
+    case kOpPlayerFight: {
+        if (n != 6) return kRBadRequest;
+        const bool on = a[0] != 0;
+        const uint32_t npc = get_u32(a + 1);
+        if (!on) {
+            const bool ok = motion::player_automation(false);
+            logf("WO154-HOSTFIGHT off -- the host's combat automation %s", ok ? "OFF" : "off FAILED");
+            g_playerFight = PlayerFight{};
+            return ok ? kROk : kRFailed;
+        }
+        void* ps = hits::soul_of_eid(player_eid());
+        void* ns = hits::soul_of_eid(npc);
+        if (!ps || !ns) return kRNoActor;
+        uint64_t rv = 0;
+        const bool sk = hits::skirmish_add(ps, ns, 1, &rv);
+        const bool au = motion::player_automation(true);
+        const double secs = a[5] ? a[5] : 15;
+        g_playerFight = PlayerFight{npc, now_s() + secs, now_s()};
+        logf("WO154-HOSTFIGHT on npc=0x%X for %.0f s: skirmish %s, combat automation %s -- the engine fights for the host (live check; no input)",
+             npc, secs, sk ? "added" : "NOT added", au ? "ON" : "FAILED");
+        return au ? kROk : kRFailed;
+    }
     case kOpHostThreat: {
         if (n != 5) return kRBadRequest;
         return kcdmp::wo136::test_host_threat(get_u32(a), a[4]) ? kROk : kRFailed;
@@ -266,6 +301,17 @@ uint8_t handle(const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t
 void tick() {
     const double now = now_s();
     kcdmp::wo136::tick();   // WO-136: queued hand-overs
+    if (g_playerFight.npc) {   // WO-154 3.5 (live checks only): held, then given back
+        if (now > g_playerFight.until || !engine::entity_by_id(g_playerFight.npc)) {
+            const bool ok = motion::player_automation(false);
+            logf("WO154-HOSTFIGHT npc=0x%X over -- the host's combat automation %s", g_playerFight.npc, ok ? "OFF" : "off FAILED");
+            g_playerFight = PlayerFight{};
+        } else if (now - g_playerFight.last >= 0.25) {
+            g_playerFight.last = now;
+            motion::NpcCombat c{};
+            if (motion::read_npc_combat(player_eid(), &c) && !c.combat) motion::player_automation(true);
+        }
+    }
     for (auto it = g_testFights.begin(); it != g_testFights.end();) {
         if (now > it->until || !engine::entity_by_id(it->eid)) { it = g_testFights.erase(it); continue; }
         if (now - it->last >= 0.25) {

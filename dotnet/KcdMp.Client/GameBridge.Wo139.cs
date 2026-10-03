@@ -258,15 +258,19 @@ public partial class GameBridge
                 if (p.Length == 5 && Wo139Text.IsName(p[0]) && Wo139Text.IsSettlementOrDash(p[1]) && int.TryParse(p[2], out int d))
                     guards.Add((p[0], p[1] == "-" ? "" : p[1], d, p[3] == "1", p[4] == "1"));
             }
+        // WO-154 3.3: a partner who is down, or just up again, is left alone (mp_guard_respite)
+        string? respite = Wo154GuardsBlocked(src);
         // hostile (a fresh violent crime, or a resist under 5 min old): every guard of that
         // settlement near the avatar attacks it -- the game's own attack interrupt
         // (crime:attackInitiatedByConcept), the target held by combat_forcedTarget
         foreach (var g in guards)
         {
             if (_w139Pursuits.TryGetValue(g.Name, out var cur)) { _w139Pursuits[g.Name] = cur with { NearMs = now }; continue; }
+            if (respite is not null) continue;
             if (g.Settlement.Length == 0 || !rec.AnyHostileKnownIn(g.Settlement, now) || g.Dist > 40) continue;
             if (_w139Pursuits.Count(p => p.Value.Peer == src) >= 3) break;
             var r = await _combat.Wo139PursueAsync(true, avatar, g.Name);
+            if (r == 4) { Wo154NoteGuardOnHost(g.Name, src); continue; }   // WO-154 3.1: it fights the host -- left to it
             if (r is 1 or 0)
             {
                 _w139Pursuits[g.Name] = (src, avatar, g.Settlement, now);
@@ -283,7 +287,7 @@ public partial class GameBridge
                 await Wo139EndPursuitAsync(guard, rec.KnownIn(p.Settlement).Count == 0 ? "the record is cleared" : "the avatar got away");
         // arrestable (everything not hostile now, violent crimes included once no longer fresh): one stop at
         // a time, by a guard of that settlement who sees the avatar up close
-        if (_w139Stops.ContainsKey(src)) return;
+        if (_w139Stops.ContainsKey(src) || respite is not null) return;
         foreach (var g in guards.Where(g => g.Sees && g.Dist <= 12).OrderBy(g => g.Dist))
         {
             if (g.Settlement.Length == 0 || rec.AnyHostileKnownIn(g.Settlement, now) || _w139Pursuits.ContainsKey(g.Name)) continue;
@@ -346,6 +350,12 @@ public partial class GameBridge
                 Console.WriteLine($"MP-W139 host: ghost {src}'s stop by {(guard.Length > 0 ? guard : "-")}: {result}{(fine > 0 ? $" ({fine / 10.0:F1} groschen)" : "")} -- {n} crime(s) cleared in {(settlement.Length > 0 ? settlement : "every settlement")}");
                 await Wo151OnJoinerClearedAsync(src, result);   // WO-151 joint: the host's Henry is cleared with him
                 break;
+            case Wo139Rules.OutcomeEffect.Resist when Wo154GuardsBlocked(src) is string blocked:
+                // WO-154 3.3: he went down (or is just up again): a death is no sentence, and no resist either
+                Interlocked.Increment(ref _w154ResistIgnored);
+                if (guard.Length > 0) _w139GuardCooldown[guard] = Environment.TickCount64 + 30_000;
+                Console.WriteLine($"MP-W139 host: ghost {src} {result} at the stop by {(guard.Length > 0 ? guard : "-")}, but he is {blocked} -- no resist (mp_guard_respite); the record stands");
+                break;
             case Wo139Rules.OutcomeEffect.Resist:
                 if (settlement.Length > 0) rec.MarkResisted(settlement, Environment.TickCount64);
                 Console.WriteLine($"MP-W139 host: ghost {src} {result} at the stop by {guard} -- resisting arrest: the guards of {(settlement.Length > 0 ? settlement : "?")} fight him now");
@@ -366,10 +376,14 @@ public partial class GameBridge
         long now = Environment.TickCount64;
         string key = $"{source}|{npcName}";
         string? kind = null;
-        if (health <= 0.01f) { kind = "murder"; _w139AssaultSeen.TryRemove(key, out _); }
+        // WO-154 3.1 (mp_fair_crime): `health` is the hit's damage, not the victim's: a blocked 0-hp hit is no murder
+        // (the field: 11 of 11 duel hits on a living kunes judged murders). The mod's Lua judges a murder by the
+        // victim's own death, and every hit asks it ("hit" = no new assault, only the death check).
+        if (!_w154FairCrime && health <= 0.01f) { kind = "murder"; _w139AssaultSeen.TryRemove(key, out _); }
         else if (!_w139AssaultSeen.TryGetValue(key, out long at) || now - at > 60_000) { kind = "assault"; _w139AssaultSeen[key] = now; }
+        if (_w154FairCrime) kind ??= "hit";
         if (kind is null) return;
-        Interlocked.Increment(ref _w139Violent);
+        if (kind != "hit") Interlocked.Increment(ref _w139Violent);
         _ = ExecLuaAsync($"if KCD2MP_W139HostViolent then KCD2MP_W139HostViolent({source}, \"{npcName}\", \"{kind}\") end");
     }
 
@@ -423,6 +437,9 @@ public partial class GameBridge
                     await Wo139HostOutcomeAsync(src, m.Tok, res, guard, fine, x, y, z);
                     return;
                 }
+                case Protocol.CrimeAskEndFights when Wo154Rules.TryParseEndFights(m.Text, out string endWhy):
+                    await Wo154EndFightsForPeerAsync(src, endWhy);   // WO-154 3.4: his mp_unstuck
+                    return;
                 case Protocol.CrimeAskResync when Wo139Rules.TryParseResync(m.Text, out string why):
                 {
                     var rec = Wo139Record(src);
