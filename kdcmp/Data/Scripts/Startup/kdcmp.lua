@@ -246,6 +246,8 @@ KCD2MP._screenSeen = {}     -- row keys drawn this frame
 -- stableText: what gets compared and logged when the drawn text carries a
 -- per-second countdown (the invite timer, the catch-up window).
 local function mp_draw_row(key, x, y, text, size, stableText)
+    -- WO-154: the clean screen hides every row (a row hidden this way logs text="" at the frame's end, as gone)
+    if KCD2MP.w154menu and KCD2MP.w154menu.clean then return end
     text = tostring(text)
     local logText = stableText and tostring(stableText) or text
     KCD2MP._screenSeen[key] = true
@@ -1065,6 +1067,7 @@ end
 -- the UIAction path ever fails.
 function KCD2MP_ShowNativeToast(text)
     mp_log_text("native", text)   -- WO-98 Phase 6
+    if KCD2MP.w154menu and KCD2MP.w154menu.clean then return end   -- WO-154: the clean screen shows no toast (still logged)
     local ok = pcall(function()
         UIAction.CallFunction("hud", -1, "ShowInfoText", tostring(text), 10, 5000, true)
     end)
@@ -1159,6 +1162,7 @@ function KCD2MP_DrawInteractionUI()
     if KCD2MP_JoinDrawUI then pcall(KCD2MP_JoinDrawUI) end   -- WO-123: "<partner> is joining..."
     if KCD2MP_Wo114DrawUI then pcall(KCD2MP_Wo114DrawUI) end -- WO-114: "Bringing you back to your host in N..."
     if KCD2MP_W140DrawUI then pcall(KCD2MP_W140DrawUI) end   -- WO-140: "Waiting for other players...", the sleep prompt, the own-world line
+    if KCD2MP_W154MenuBackstop then pcall(KCD2MP_W154MenuBackstop) end   -- WO-154: a queued line; fast travel back if the agent went silent
     mp_screen_frame_end()   -- WO-98 Phase 6: rows that vanished this frame log text=""
 end
 
@@ -5596,7 +5600,8 @@ function KCD2MP_Wo114FastTravelBlock(on, why)
         return false
     end
     if on then
-        if not w.ftBlocked then w.ftPrev = cur; w.ftBlocked = true end
+        -- WO-154: the session's fast-travel switch may hold it at 0 already: the value it remembers is the real one
+        if not w.ftBlocked then w.ftPrev = (KCD2MP_W154FastTravelHeldPrev and KCD2MP_W154FastTravelHeldPrev()) or cur; w.ftBlocked = true end
         if cur ~= 0 then
             pcall(function() System.SetCVar("wh_pl_FastTravelEnabled", 0) end)
             local back = nil
@@ -5608,6 +5613,11 @@ function KCD2MP_Wo114FastTravelBlock(on, why)
     end
     if w.ftBlocked then
         w.ftBlocked = false
+        -- WO-154: the session's fast-travel switch still holds it at 0; it gives the value back when it lets go
+        if KCD2MP_W154FastTravelHeldPrev and KCD2MP_W154FastTravelHeldPrev() ~= nil then
+            mp_log(string.format("WO114-FASTTRAVEL released (%s): the session's fast travel is still off (WO-154 holds the switch)", tostring(why)))
+            return true
+        end
         local give = (w.ftPrev ~= nil and w.ftPrev ~= 0) and w.ftPrev or 1
         pcall(function() System.SetCVar("wh_pl_FastTravelEnabled", give) end)
         local back = nil
@@ -11583,15 +11593,18 @@ function KCD2MP_LabelTick()
     Script.SetTimer(8, KCD2MP_LabelTick)
     KCD2MP._labelAliveAt = os.clock()
     KCD2MP_ApplyHorseTransforms()
+    -- WO-154: the name badges and the ping line are the player's to hide (mp_name_badges, mp_ping_line, mp_clean_screen)
+    local mm = KCD2MP.w154menu
+    local badges = not (mm and (mm.clean or mm.nameBadges == false))
     for id, lbl in pairs(KCD2MP.labelCache) do
-        if lbl.size > 0 then
+        if badges and lbl.size > 0 then
             pcall(function()
                 System.DrawLabel({x=lbl.x, y=lbl.y, z=lbl.z}, lbl.size, lbl.name, 1, 1, 0, 1)
             end)
         end
     end
     -- Draw ping in top-left corner using 2D screen-space DrawText(x, y, text, size).
-    if KCD2MP.pingText then
+    if KCD2MP.pingText and not (mm and (mm.clean or mm.pingLine == false)) then
         pcall(function()
             System.DrawText(10, 10, KCD2MP.pingText, 2)
         end)
@@ -20794,6 +20807,725 @@ do
     end
 end
 
+-- ===== WO-154: the mod menu (docs/WO-154-findings.md) =====
+-- Phase 7b. Dozens of mp_* switches typed in the console were the only way in; now one in-game menu
+-- (the player's page: docs/MOD-MENU.md). Insert opens and closes it -- the player's MenuKey, bound by the
+-- keys pak (KeybindPak.cs); while it is open PgUp / PgDn choose and End changes the chosen item. The four
+-- are new kcd2mp_menu_* actions in the "interaction" actionmap on keys the game binds nowhere, so nothing
+-- the game's own keys do changes and no input is ever blocked: the player keeps moving with it open.
+-- Plain names in four groups, each with its value, the chosen item's one line at the bottom; drawn with
+-- System.DrawText(x, y, text, size) only (this build's working call; no colour, the ">" marks the chosen
+-- row), on the right of the screen, never its centre, by its own frame chain while it is open (the label
+-- loop needs the agent; the menu does not).
+--   * A change calls the SAME function its console command calls (ITEMS[i].fn is the function that
+--     command's template names; Test-WO154Synthetic checks every one) and the agent remembers it in the
+--     player's mod-settings.json (w154_menu_set <Key> <value>), never in a game save; at every session
+--     start and after every world load the agent pushes the saved values back (KCD2MP_W154MenuRestore,
+--     which calls the same setter again).
+--   * Whose: the display switches, the sleep vote, the whistle, the partner's herb picking, voice and the
+--     menu key are each player's own. Friendly fire, crimes, fast travel and the leash change the shared
+--     world: the HOST's. A joiner sees the host's value, locked, "[set by the host]" (the agent pushes it
+--     once a second: KCD2MP_W154MenuSession).
+--   * Never opens -- and closes if open -- in a cutscene, a dialogue, a load (WO-136's hold), the game's own
+--     screens (their own actions reach this hook first: Esc's open_menu, the inventory / map / journal /
+--     skip-time keys; the agent's log-tail edge; frames that stood still over a second), dead, knocked out.
+-- The four new switches (console commands too; each logs WO154-TOGGLE):
+--   mp_name_badges on|off   (default on)   the partner's name (and health) above his figure
+--   mp_ping_line on|off     (default on)   the ping and clock line, top left
+--   mp_clean_screen on|off  (default off)  hides EVERYTHING the mod draws: every mp_draw_row row, the ping
+--       line, the name badges, the mod's toasts (all still logged). The menu still opens and its first row
+--       says so. Kept: the dice board of a match being played (it is the game being played).
+--   mp_fast_travel on|off   (HOST; default OFF for 0.45.0) while a co-op session is up (a partner connected)
+--       the engine's wh_pl_FastTravelEnabled is 0 on both machines unless the host allows it; a joiner
+--       follows the host's value; re-applied every second (a game restart resets the cvar); the value from
+--       before given back when the session ends. Said once at the session's start. WO-114's joiner block
+--       shares the cvar: whichever of the two lets go last gives the value back.
+--   mp_menu open|close|up|down|change|status|select <n|item>   exactly what the keys do (live proof)
+--   MP-MENU open|close|refused open|select|<item>=<value> (by menu)|restore|status   WO154-FASTTRAVEL ...
+do
+    KCD2MP.w154menu = KCD2MP.w154menu or {}
+    local M = KCD2MP.w154menu
+    if M.nameBadges == nil then M.nameBadges = true end    -- mp_name_badges
+    if M.pingLine == nil then M.pingLine = true end        -- mp_ping_line
+    if M.clean == nil then M.clean = false end             -- mp_clean_screen
+    if M.fastTravel == nil then M.fastTravel = false end   -- mp_fast_travel: this machine's; the HOST's counts
+    M.role = M.role or "none"                              -- the agent, once a second: host | joiner | none
+    M.partner = M.partner == true
+    M.link = M.link or "starting"
+    M.sessionTimeoutS = 10.0                               -- the agent repeats itself every second
+    M.menuKey = M.menuKey or "insert"                      -- bound in this game run (the agent reads the keys pak)
+    M.menu = M.menu or { open = false, sel = 1, gen = 0 }
+    M.stats = M.stats or { opens = 0, refused = 0, changes = 0, restores = 0, ftOff = 0, ftBack = 0 }
+    M.GAP_S = 1.0                                          -- frames that stood still this long: the game took the screen
+    M.FRAME_MS = 4                                         -- every frame up to 250 fps (the label loop's 8 ms skips frames above 125)
+    M.LAYOUT = M.LAYOUT or { xFrac = 0.62, yFrac = 0.10, title = 1.7, row = 1.5, small = 1.35, line = 22, wrap = 60 }
+    M.MENU_KEYS = { "insert", "np_add", "np_subtract" }    -- KeybindPak.MenuKeys, in its order
+    M.KEY_NAMES = { insert = "Insert", np_add = "Numpad +", np_subtract = "Numpad -" }
+    M.TEXT_FT_HOST = "Fast travel is off in this co-op session (you can turn it on in the mod menu)"
+    M.TEXT_FT_JOINER = "Fast travel is off in this co-op session (your host can turn it on in the mod menu)"
+    -- The game's own screens: their actions reach Player.OnAction before the screen takes the keys (WO-12
+    -- observed open_apse_inventory_keyboard and open_menu there); the action names are the game's
+    -- keybindSuperactions.xml's (Esc / Backspace, I, P, J, M, N, T).
+    M.GAME_MENU_ACTIONS = { open_menu = true, open_pause_menu = true, open_apse_inventory_keyboard = true,
+        open_apse_player = true, open_apse_questlog = true, open_apse_map_keyboard = true, open_apse_codex = true,
+        open_codex_new_entry = true, open_skiptime = true }
+    M.KEY_VERBS = { kcd2mp_menu_toggle = "toggle", kcd2mp_menu_up = "up", kcd2mp_menu_down = "down", kcd2mp_menu_change = "change" }
+    -- The live check's marker words (docs/WO-154-menu-findings.md), registered with the others as mark_<word>.
+    for _, w in ipairs({ "menu", "menu_locked", "badges", "clean", "fasttravel", "menukey" }) do
+        local have = false
+        for _, x in ipairs(KCD2MP_MARKS or {}) do if x == w then have = true end end
+        if KCD2MP_MARKS and not have then KCD2MP_MARKS[#KCD2MP_MARKS + 1] = w end
+    end
+
+    local function onoff(b) return b and "on" or "off" end
+
+    -- ---- the session (the agent) -------------------------------------------------------------
+    function M.fresh() return M.sessionAt ~= nil and (os.clock() - M.sessionAt) <= M.sessionTimeoutS end
+    function M.roleNow() return M.fresh() and M.role or "none" end
+    function M.sessionUp() return M.fresh() and M.role ~= "none" and M.partner == true end
+
+    function M.say(text)
+        mp_log("WO154-MSG " .. tostring(text))
+        pcall(KCD2MP_ShowNativeToast, tostring(text))
+    end
+
+    function M.setNote(text) M.note = { text = tostring(text), at = os.clock() } end
+
+    -- ---- the new switches ---------------------------------------------------------------------
+    function M.setBool(field, cmd, name, arg, onText, offText)
+        local v = KCD2MP_Wo122ParseBool(arg)
+        if v == "bad" then mp_log(cmd .. ": expected on|off, got '" .. tostring(arg) .. "'"); return false end
+        if v ~= nil then M[field] = v end
+        mp_log(string.format("WO154-TOGGLE %s %s=%s -- %s%s", cmd, name, onoff(M[field]), M[field] and onText or offText,
+            (M.clean and field ~= "clean") and " (the clean screen hides it anyway)" or ""))
+        return true
+    end
+
+    -- mp_name_badges on|off (default on)
+    function KCD2MP_W154SetNameBadges(arg)
+        return M.setBool("nameBadges", "mp_name_badges", "name_badges", arg,
+            "your partner's name (and health) above his figure", "no name above your partner")
+    end
+
+    -- mp_ping_line on|off (default on)
+    function KCD2MP_W154SetPingLine(arg)
+        return M.setBool("pingLine", "mp_ping_line", "ping_line", arg,
+            "the ping and clock line in the top left corner", "no ping line")
+    end
+
+    -- mp_clean_screen on|off (default off)
+    function KCD2MP_W154SetCleanScreen(arg)
+        return M.setBool("clean", "mp_clean_screen", "clean_screen", arg,
+            "every row, the ping line, the name badges and the mod's messages hidden; the mod menu still opens",
+            "the mod draws again")
+    end
+
+    -- The session's fast travel: the host's own value on the host (and alone), the host's value on a joiner
+    -- (not heard yet = off, the 0.45.0 default).
+    function KCD2MP_W154FastTravelSession()
+        if M.roleNow() == "joiner" then return M.hostFt == true end
+        return M.fastTravel == true
+    end
+
+    -- mp_fast_travel on|off (HOST; default off)
+    function KCD2MP_W154SetFastTravel(arg)
+        local v = KCD2MP_Wo122ParseBool(arg)
+        if v == "bad" then mp_log("mp_fast_travel: expected on|off, got '" .. tostring(arg) .. "'"); return false end
+        local was = M.fastTravel
+        if v ~= nil then M.fastTravel = v end
+        local joiner = M.roleNow() == "joiner"
+        mp_log(string.format("WO154-TOGGLE mp_fast_travel fast_travel=%s role=%s session_value=%s -- %s", onoff(M.fastTravel),
+            M.roleNow(), onoff(KCD2MP_W154FastTravelSession()),
+            joiner and "this machine's own value: the HOST's decides for the session"
+                   or (M.fastTravel and "fast travel allowed in a co-op session" or "fast travel off while a co-op session is up")))
+        KCD2MP_EmitEvent("w154_menu_cfg", "fast_travel=" .. onoff(M.fastTravel))
+        if v ~= nil and v ~= was and not joiner and M.sessionUp() then
+            M.ftTold = true
+            M.say("Fast travel is now " .. (M.fastTravel and "ON" or "OFF") .. " in this co-op session.")
+        end
+        pcall(KCD2MP_W154FastTravelApply, "mp_fast_travel")
+        return true
+    end
+
+    -- ---- fast travel: the engine's own switch, shared with WO-114 -----------------------------
+    local function ftRead()
+        local cur = nil
+        pcall(function() cur = tonumber(System.GetCVar("wh_pl_FastTravelEnabled")) end)
+        return cur
+    end
+
+    -- WO-114 asks: is the switch held here, and what was there before (nil = not held)?
+    function KCD2MP_W154FastTravelHeldPrev()
+        if M.ftHeld then return M.ftPrev end
+        return nil
+    end
+
+    -- Hold the switch at 0 (on) or let it go (off). The value from before is remembered at the first hold
+    -- (WO-114's when it already holds), and given back only when WO-114 does not hold it too.
+    function KCD2MP_W154FastTravelHold(on, why)
+        local w114 = KCD2MP.w114
+        if on then
+            local cur = ftRead()
+            if cur == nil then
+                if not M.ftUnreadableSaid then M.ftUnreadableSaid = true; mp_log("WO154-FASTTRAVEL cvar wh_pl_FastTravelEnabled unreadable -- fast travel NOT switched off") end
+                return false
+            end
+            if not M.ftHeld then
+                M.ftPrev = (w114 and w114.ftBlocked and w114.ftPrev) or cur
+                M.ftHeld = true
+                M.stats.ftOff = M.stats.ftOff + 1
+            end
+            if cur ~= 0 then
+                pcall(function() System.SetCVar("wh_pl_FastTravelEnabled", 0) end)
+                mp_log(string.format("WO154-FASTTRAVEL off (%s): wh_pl_FastTravelEnabled %s -> %s (was %s before the session)",
+                    tostring(why), tostring(cur), tostring(ftRead()), tostring(M.ftPrev)))
+            end
+            return true
+        end
+        if not M.ftHeld then return true end
+        M.ftHeld = false
+        M.stats.ftBack = M.stats.ftBack + 1
+        if w114 and w114.ftBlocked then
+            if w114.ftPrev == nil or w114.ftPrev == 0 then w114.ftPrev = M.ftPrev end
+            mp_log("WO154-FASTTRAVEL released (" .. tostring(why) .. "): WO-114's joiner block keeps it off (only the host fast-travels in his world)")
+            return true
+        end
+        local give = (M.ftPrev ~= nil and M.ftPrev ~= 0) and M.ftPrev or 1
+        pcall(function() System.SetCVar("wh_pl_FastTravelEnabled", give) end)
+        mp_log(string.format("WO154-FASTTRAVEL given back (%s): wh_pl_FastTravelEnabled -> %s", tostring(why), tostring(ftRead())))
+        return true
+    end
+
+    -- The session decides: up and its fast travel off -> held (said once per session; a joiner is told once
+    -- the host's value has come -- held meanwhile, fail-closed); else let go.
+    function KCD2MP_W154FastTravelApply(why)
+        local up = M.sessionUp()
+        if up and not KCD2MP_W154FastTravelSession() then
+            local joiner = M.roleNow() == "joiner"
+            if KCD2MP_W154FastTravelHold(true, why) and not M.ftTold and not (joiner and M.hostFt == nil) then
+                M.ftTold = true
+                M.say(joiner and M.TEXT_FT_JOINER or M.TEXT_FT_HOST)
+            end
+        else
+            KCD2MP_W154FastTravelHold(false, up and "the session allows fast travel" or (tostring(why) .. ", no co-op session"))
+        end
+        if not up then M.ftTold = false end
+    end
+
+    -- The engine refused a fast travel while the session's is off (the agent saw its line): say why, once per 5 s.
+    -- The map holds the timers: the game's own toast now, the plain row again when the map closes.
+    function KCD2MP_W154FastTravelTried(how)
+        if not M.ftHeld then return false end
+        if (os.clock() - (M.ftToldAt or -1e9)) < 5 then return true end
+        M.ftToldAt = os.clock()
+        local text = M.roleNow() == "joiner" and M.TEXT_FT_JOINER or M.TEXT_FT_HOST
+        mp_log("WO154-FASTTRAVEL refused (" .. tostring(how or "map") .. ") -- telling the player")
+        pcall(KCD2MP_ShowNativeToast, text)
+        M.pendingMsg = text
+        return true
+    end
+
+    -- ---- the agent's pushes -------------------------------------------------------------------
+    -- Once a second: the role, a partner here, the host's levers as a joiner knows them (nil = not yet), the
+    -- link, the version, the game's own screens, this player down (WO-113).
+    function KCD2MP_W154MenuSession(role, partner, hostFt, hostCrime, hostLeash, link, version, gameScreen, downed)
+        local wasUp, wasHostFt = M.sessionUp(), M.hostFt
+        role = (role == "host" or role == "joiner") and role or "none"
+        local fresh = not M.fresh()
+        if fresh or role ~= M.role or (partner == true) ~= M.partner then
+            mp_log(string.format("WO154-SESSION role=%s partner=%s link=%s host_fast_travel=%s host_crime=%s host_leash=%s",
+                role, tostring(partner == true), tostring(link), tostring(hostFt), tostring(hostCrime), tostring(hostLeash)))
+        end
+        M.sessionAt = os.clock()
+        M.role, M.partner = role, partner == true
+        if hostFt == nil then M.hostFt = nil else M.hostFt = hostFt == true end
+        M.hostCrime = (hostCrime == "joint" or hostCrime == "individual") and hostCrime or nil
+        if hostLeash == nil then M.hostLeash = nil else M.hostLeash = hostLeash == true end
+        M.link = tostring(link or "starting")
+        if version ~= nil and tostring(version):match("^[%w%.%-]+$") then M.version = tostring(version) end
+        M.downed = downed == true
+        KCD2MP_W154MenuGameScreen(gameScreen == true, "session")
+        -- the host changed fast travel during the session: the joiner is told too
+        if role == "joiner" and wasUp and M.sessionUp() and wasHostFt ~= nil and M.hostFt ~= nil and wasHostFt ~= M.hostFt then
+            M.ftTold = true
+            M.say("Fast travel is now " .. (M.hostFt and "ON" or "OFF") .. " in this co-op session (set by the host).")
+        end
+        KCD2MP_W154FastTravelApply("session")
+        if fresh then KCD2MP_EmitEvent("w154_menu_cfg", "fast_travel=" .. onoff(M.fastTravel)) end   -- a (re)started agent learns ours
+    end
+
+    -- The game's own screen (its menu, inventory, map, skip-time, a cutscene) came up: the mod menu closes.
+    function KCD2MP_W154MenuGameScreen(on, src)
+        local was = M.gameScreen == true
+        M.gameScreen, M.gameScreenAt = on == true, os.clock()
+        if M.gameScreen and not was and M.menu.open then M.close("the game's own screen (" .. tostring(src or "agent") .. ")") end
+    end
+
+    -- The menu keys: bound in this game run, stored for the next start, and the answer to a change.
+    function KCD2MP_W154MenuKeys(active, stored, result)
+        if M.KEY_NAMES[active] then M.menuKey = active end
+        if M.KEY_NAMES[stored] then M.menuKeyStored = stored end
+        if result == "stored" or result == "not-saved" then
+            M.menuKeySave = result
+            mp_log(string.format("MP-MENU menu_key=%s %s (bound now: %s)", tostring(M.menuKeyStored), result == "stored" and "stored -- from the next game start" or "NOT saved (no launcher settings file)", M.menuKey))
+            if result == "not-saved" then M.setNote("The new menu key could not be saved (the launcher's settings file is missing).") end
+        end
+    end
+
+    -- Voice chat: the agent's answer to w154_voice on|off (and its own report).
+    function KCD2MP_W154VoiceState(on)
+        M.voice = on == true
+        M.voiceAsked = nil
+        mp_log("MP-MENU voice=" .. onoff(M.voice) .. " (the agent's answer)")
+    end
+
+    -- ---- the items ----------------------------------------------------------------------------
+    -- kind: onoff | crime (joint/individual) | voice | menukey | action | info. host = the host's lever.
+    -- fn = the function the console command's template names (the menu calls exactly that).
+    M.ITEMS = {
+        { id = "name_badges", group = "Display", label = "Partner's name badge", kind = "onoff", save = "NameBadges",
+          cmd = "mp_name_badges", fn = "KCD2MP_W154SetNameBadges", get = function() return M.nameBadges end,
+          help = "Shows your partner's name (and health) above their figure." },
+        { id = "ping_line", group = "Display", label = "Ping and clock line", kind = "onoff", save = "PingLine",
+          cmd = "mp_ping_line", fn = "KCD2MP_W154SetPingLine", get = function() return M.pingLine end,
+          help = "Shows the ping and clock line in the top left corner." },
+        { id = "clean_screen", group = "Display", label = "Clean screen", kind = "onoff", save = "CleanScreen",
+          cmd = "mp_clean_screen", fn = "KCD2MP_W154SetCleanScreen", get = function() return M.clean end,
+          help = "Hides everything the mod draws -- its lines, names and messages. For screenshots and recording." },
+        { id = "friendly_fire", group = "Gameplay", label = "Friendly fire", kind = "onoff", host = true, save = "FriendlyFire",
+          cmd = "mp_friendly_fire", fn = "KCD2MP_Wo121SetFriendlyFire",
+          get = function() return KCD2MP.w121 ~= nil and KCD2MP.w121.friendlyFire end,
+          session = function() return KCD2MP.w121 ~= nil and KCD2MP.w121.ffSession end,
+          help = "Players can hurt each other." },
+        { id = "crime_mode", group = "Gameplay", label = "Crime", kind = "crime", host = true, save = "CrimeMode",
+          cmd = "mp_crime_mode", fn = "KCD2MP_W151SetCrimeMode",
+          get = function() return KCD2MP.w151 ~= nil and KCD2MP.w151.crimeJoint end,
+          session = function() if M.hostCrime == nil then return nil end return M.hostCrime == "joint" end,
+          help = "Shared: a crime by either of you counts for both. Individual: each answers for his own." },
+        { id = "fast_travel", group = "Gameplay", label = "Fast travel", kind = "onoff", host = true, save = "FastTravel",
+          cmd = "mp_fast_travel", fn = "KCD2MP_W154SetFastTravel",
+          get = function() return M.fastTravel end, session = function() return M.hostFt end,
+          help = "Allows fast travel in a co-op session. In the host's world only the host travels; the joiner is brought along." },
+        { id = "leash", group = "Gameplay", label = "Keep players together", kind = "onoff", host = true, save = "Leash",
+          cmd = "mp_leash", fn = "KCD2MP_SetLeash",
+          get = function() return KCD2MP.w114 ~= nil and KCD2MP.w114.leash end, session = function() return M.hostLeash end,
+          help = "Warns the joiner, then brings them back beside the host, when they wander too far apart." },
+        { id = "sleep_vote", group = "Gameplay", label = "Sleep and wait together", kind = "onoff", save = "SleepVote",
+          cmd = "mp_sleep_vote", fn = "KCD2MP_SetSleepVote",
+          get = function() return KCD2MP.w140 ~= nil and KCD2MP.w140.vote end,
+          help = "Your sleep or wait asks your partner first. Off: you sleep and wait alone." },
+        { id = "whistle", group = "Gameplay", label = "Hear each other's whistle", kind = "onoff", save = "Whistle",
+          cmd = "mp_whistle", fn = "KCD2MP_W151SetWhistle",
+          get = function() return KCD2MP.w151 ~= nil and KCD2MP.w151.whistle end,
+          help = "Your whistle is heard at your figure on your partner's screen, and theirs on yours." },
+        { id = "partner_herbs", group = "Gameplay", label = "Partner's herb picking", kind = "onoff", save = "PartnerHerbs",
+          cmd = "mp_avatar_herbs", fn = "KCD2MP_SetAvatarHerbs",
+          get = function() return KCD2MP.w143 ~= nil and KCD2MP.w143.herbs end,
+          help = "Shows your partner picking herbs. Off: their figure stands while they pick." },
+        { id = "voice", group = "Voice and keys", label = "Voice chat", kind = "voice", get = function() return M.voice end,
+          help = "Talk to your partner through your microphone." },
+        { id = "menu_key", group = "Voice and keys", label = "Menu key", kind = "menukey",
+          get = function() return M.menuKeyStored or M.menuKey end,
+          help = "The key that opens this menu. A new key works from the next game start." },
+        { id = "unstuck", group = "Help", label = "I'm stuck", kind = "action", cmd = "mp_unstuck", fn = "KCD2MP_W151Unstuck",
+          help = "Frees you from a stuck state: a bed, a picker that did not close, a knockdown." },
+        { id = "report", group = "Help", label = "Something's wrong here", kind = "action", cmd = "mark_odd", fn = "KCD2MP_Mark", arg = "odd",
+          help = "Marks this moment in the logs. Then send your logs with Report a bug (in the launcher) before you restart." },
+        { id = "version", group = "Help", label = "Version", kind = "info",
+          get = function() return M.version or "unknown (the helper is not running)" end },
+        { id = "connection", group = "Help", label = "Connection", kind = "info", get = function() return M.connectionText() end },
+    }
+
+    function M.connectionText()
+        if not M.fresh() then return "Not connected" end
+        if M.link == "connected" then
+            if M.role == "host" then return M.partner and "Hosting -- your partner is here" or "Hosting -- waiting for your partner" end
+            if M.role == "joiner" then return M.partner and "Joined your host" or "Connected -- your host is away" end
+            return "Connected"
+        end
+        if M.link == "connecting" then return "Connecting..." end
+        if M.link == "failed" then return "Not connected (the connection failed)" end
+        return "Starting..."
+    end
+
+    -- The value shown, and whether it is the host's (a joiner: locked).
+    function M.valueOf(it)
+        if it.host and M.roleNow() == "joiner" then return it.session and it.session(), true end
+        return it.get and it.get(), false
+    end
+
+    -- The value as the console says it (and the logs, and w154_menu_set).
+    function M.word(it, v)
+        if it.kind == "onoff" or it.kind == "voice" then if v == nil then return "?" end return onoff(v) end
+        if it.kind == "crime" then if v == nil then return "?" end return v and "joint" or "individual" end
+        if it.kind == "action" then return "action" end
+        return tostring(v)
+    end
+
+    -- The value as the player reads it.
+    function M.shown(it, v)
+        if it.kind == "onoff" then if v == nil then return "Waiting for the host" end return v and "On" or "Off" end
+        if it.kind == "crime" then if v == nil then return "Waiting for the host" end return v and "Shared" or "Individual" end
+        if it.kind == "voice" then
+            if M.voiceAsked ~= nil then return (M.voiceAsked and "On" or "Off") .. " (asking...)" end
+            if v == nil then return "Not known yet" end
+            return v and "On" or "Off"
+        end
+        if it.kind == "menukey" then
+            local name = M.KEY_NAMES[v] or tostring(v)
+            if v == M.menuKey then return name end
+            if M.menuKeySave == "not-saved" then return name .. " (could not be saved)" end
+            if M.menuKeySave == "stored" then return name .. " (from the next game start)" end
+            return name .. " (saving...)"
+        end
+        if it.kind == "info" then return tostring(v) end
+        return nil
+    end
+
+    function M.rowText(it, selected)
+        local v, locked = M.valueOf(it)
+        local s = (selected and "> " or "  ") .. it.label
+        local shown = M.shown(it, v)
+        if shown then s = s .. ": " .. shown end
+        if locked then s = s .. "  [set by the host]" end
+        return s
+    end
+
+    function M.wrap(s, n)
+        local out, line = {}, ""
+        for word in string.gmatch(tostring(s or ""), "%S+") do
+            if line == "" then line = word
+            elseif #line + 1 + #word <= n then line = line .. " " .. word
+            else out[#out + 1] = line; line = word end
+        end
+        if line ~= "" then out[#out + 1] = line end
+        return out
+    end
+
+    function M.selectable(i)
+        local it = M.ITEMS[i]
+        return it ~= nil and it.kind ~= "info"
+    end
+
+    function M.firstSelectable()
+        for i = 1, #M.ITEMS do if M.selectable(i) then return i end end
+        return 1
+    end
+
+    -- PgUp / PgDn: the next item that can be chosen, wrapping round at either end.
+    function M.step(dir)
+        local n, i = #M.ITEMS, M.menu.sel
+        for _ = 1, n do
+            i = i + dir
+            if i < 1 then i = n elseif i > n then i = 1 end
+            if M.selectable(i) then break end
+        end
+        M.menu.sel = i
+        mp_log(string.format("MP-MENU select %d %s", i, M.ITEMS[i].id))
+    end
+
+    function M.select(what)
+        local i = tonumber(what)
+        if i then i = math.floor(i) else for k, it in ipairs(M.ITEMS) do if it.id == what then i = k end end end
+        if not i or not M.selectable(i) then mp_log("MP-MENU select refused: '" .. tostring(what) .. "' is not an item that can be chosen"); return false end
+        M.menu.sel = i
+        mp_log(string.format("MP-MENU select %d %s", i, M.ITEMS[i].id))
+        return true
+    end
+
+    -- The console command's own function, by its global name (WO-141's _G lookup, live-verified).
+    function M.call(fn, arg)
+        local f = _G and _G[fn]
+        if type(f) ~= "function" then mp_log("MP-MENU " .. tostring(fn) .. " is not defined -- nothing done"); return false end
+        local ok, r = pcall(f, arg)
+        if not ok then mp_log("MP-MENU " .. tostring(fn) .. " failed: " .. tostring(r)); return false end
+        return r ~= false
+    end
+
+    -- End: change the chosen item (a joiner's host levers are locked).
+    function M.change(src)
+        local it = M.ITEMS[M.menu.sel]
+        if not it or it.kind == "info" then return false end
+        local v, locked = M.valueOf(it)
+        if locked then
+            mp_log(string.format("MP-MENU %s locked: set by the host (%s)", it.id, M.word(it, v)))
+            M.setNote("Set by the host: only the host can change this.")
+            return false
+        end
+        M.stats.changes = M.stats.changes + 1
+        if it.kind == "onoff" or it.kind == "crime" then
+            local want = not (v == true)
+            local arg = (it.kind == "crime") and (want and "joint" or "individual") or onoff(want)
+            local ok = M.call(it.fn, arg)
+            local now = it.get()
+            mp_log(string.format("MP-MENU %s=%s (by menu)%s", it.id, M.word(it, now), ok and "" or (" -- " .. it.fn .. " refused " .. arg)))
+            if ok then KCD2MP_EmitEvent("w154_menu_set", it.save .. " " .. M.word(it, now)) end
+            return ok
+        elseif it.kind == "voice" then
+            local want = not (M.voice == true)
+            M.voiceAsked = want
+            mp_log("MP-MENU voice=" .. onoff(want) .. " (by menu) -- asked the agent")
+            KCD2MP_EmitEvent("w154_voice", onoff(want))
+            return true
+        elseif it.kind == "menukey" then
+            local cur, idx = M.menuKeyStored or M.menuKey, 1
+            for i, k in ipairs(M.MENU_KEYS) do if k == cur then idx = i end end
+            local nextKey = M.MENU_KEYS[(idx % #M.MENU_KEYS) + 1]
+            M.menuKeyStored, M.menuKeySave = nextKey, "asked"
+            mp_log("MP-MENU menu_key=" .. nextKey .. " (by menu) -- from the next game start; asked the agent to store it")
+            KCD2MP_EmitEvent("w154_menu_set", "MenuKey " .. nextKey)
+            return true
+        elseif it.kind == "action" then
+            local ok = M.call(it.fn, it.arg)
+            mp_log(string.format("MP-MENU %s (by menu)%s", it.id, ok and "" or " -- failed"))
+            if it.id == "report" then
+                local text = "Marked. Send your logs with Report a bug (in the launcher) before you restart the game."
+                M.setNote(text)
+                pcall(KCD2MP_ShowNativeToast, text)
+            elseif it.id == "unstuck" then
+                M.setNote("Tried to free you. Still stuck? Try it once more, then reload a save.")
+            end
+            return ok
+        end
+        return false
+    end
+
+    -- Why the menu may not be up now (nil = it may).
+    function M.blockedWhy()
+        if not player then return "no world" end
+        if KCD2MP.cutsceneActive then return "a cutscene" end
+        if KCD2MP_W131InConversation and KCD2MP_W131InConversation() then return "a dialogue" end
+        local h = KCD2MP.w136
+        if h and h.hold and os.clock() <= (h.holdUntil or 0) then return "a load" end
+        if M.gameScreen and (os.clock() - (M.gameScreenAt or -1e9)) <= M.sessionTimeoutS then return "a game menu" end
+        if M.downed and M.fresh() then return "down" end
+        local dead, ko = false, false
+        if KCD2MP_ReadSelfVitals then
+            local _, _, d, u = KCD2MP_ReadSelfVitals()
+            dead, ko = d == true, u == true
+        end
+        if dead then return "dead" end
+        if ko then return "knocked out" end
+        return nil
+    end
+
+    function M.open(src)
+        local mn = M.menu
+        local why = M.blockedWhy()
+        if why then
+            M.stats.refused = M.stats.refused + 1
+            mp_log("MP-MENU refused open (" .. why .. ") by=" .. tostring(src))
+            return false
+        end
+        mn.open = true
+        mn.gen = mn.gen + 1
+        mn.frameAt, mn.checkAt, mn.drawErr = os.clock(), os.clock(), false
+        if not M.selectable(mn.sel) then mn.sel = M.firstSelectable() end
+        M.stats.opens = M.stats.opens + 1
+        local gen = mn.gen
+        Script.SetTimer(M.FRAME_MS, function() KCD2MP_W154MenuFrame(gen) end)
+        mp_log(string.format("MP-MENU open by=%s role=%s session=%s clean=%s key=%s selected=%d:%s",
+            tostring(src), M.roleNow(), M.sessionUp() and "up" or "none", onoff(M.clean), M.menuKey, mn.sel, M.ITEMS[mn.sel].id))
+        return true
+    end
+
+    function M.close(why)
+        local mn = M.menu
+        if not mn.open then return false end
+        mn.open = false
+        mn.gen = mn.gen + 1   -- the running frame chain ends at its next frame
+        mp_log("MP-MENU close (" .. tostring(why) .. ")")
+        return true
+    end
+
+    -- Open AND drawing: a load kills the frame chain and leaves the flag.
+    function M.isOpen()
+        local mn = M.menu
+        if not mn.open then return false end
+        if (os.clock() - (mn.frameAt or -1e9)) > M.GAP_S then
+            M.close("its frames had stopped: a load or the game's own screen")
+            return false
+        end
+        return true
+    end
+
+    function M.draw()
+        local L, now = M.LAYOUT, os.clock()
+        if not M.vp or (now - (M.vpAt or -1e9)) > 2.0 then
+            local w, h = 1920, 1080
+            pcall(function()
+                local v = System.GetViewport()   -- a TABLE {x, y, width, height} (WO-6, proven in game)
+                if v and tonumber(v.width) and v.width > 0 and tonumber(v.height) and v.height > 0 then w, h = v.width, v.height end
+            end)
+            M.vp, M.vpAt = { w = w, h = h }, now
+        end
+        local x = math.floor(M.vp.w * L.xFrac)
+        local y = math.floor(M.vp.h * L.yFrac)
+        local key = M.KEY_NAMES[M.menuKey] or "Insert"
+        System.DrawText(x, y, "Kingdom Come: Together -- mod menu (" .. key .. " to close)", L.title)
+        y = y + L.line + 6
+        if M.clean then
+            System.DrawText(x, y, "Clean screen is ON: the mod shows nothing else.", L.row)
+            y = y + L.line
+        end
+        local group = nil
+        for i, it in ipairs(M.ITEMS) do
+            if it.group ~= group then
+                group = it.group
+                y = y + 4
+                System.DrawText(x, y, "-- " .. group .. " --", L.small)
+                y = y + L.line
+            end
+            System.DrawText(x, y, M.rowText(it, i == M.menu.sel), L.row)
+            y = y + L.line
+        end
+        y = y + 6
+        local sel = M.ITEMS[M.menu.sel]
+        for _, ln in ipairs(M.wrap(sel and sel.help or "", L.wrap)) do
+            System.DrawText(x, y, ln, L.small)
+            y = y + L.line - 2
+        end
+        if M.note and (now - M.note.at) < 8 then
+            for _, ln in ipairs(M.wrap(M.note.text, L.wrap)) do
+                System.DrawText(x, y, ln, L.small)
+                y = y + L.line - 2
+            end
+        end
+        y = y + 4
+        System.DrawText(x, y, "PgUp/PgDn choose  End change  " .. key .. " close", L.small)
+    end
+
+    -- The menu's own frame chain (only while it is open).
+    function KCD2MP_W154MenuFrame(gen)
+        local mn = M.menu
+        if not mn.open or gen ~= mn.gen then return end
+        local now = os.clock()
+        if mn.frameAt and (now - mn.frameAt) > M.GAP_S then
+            M.close(string.format("its frames stood still %.1f s: the game's own screen, a load or a cutscene", now - mn.frameAt))
+            return
+        end
+        Script.SetTimer(M.FRAME_MS, function() KCD2MP_W154MenuFrame(gen) end)   -- first: a draw error must not end it
+        mn.frameAt = now
+        if (now - (mn.checkAt or -1e9)) >= 0.25 then
+            mn.checkAt = now
+            local why = M.blockedWhy()
+            if why then M.close(why); return end
+        end
+        local ok, err = pcall(M.draw)
+        if not ok and not mn.drawErr then mn.drawErr = true; mp_log("MP-MENU draw failed: " .. tostring(err)) end
+    end
+
+    function M.status()
+        local mn = M.menu
+        local parts = {}
+        for i, it in ipairs(M.ITEMS) do
+            local v, locked = M.valueOf(it)
+            local val = (it.kind == "info") and ('"' .. tostring(M.shown(it, v)) .. '"') or M.word(it, v)
+            local whose = (it.kind == "info" and "info") or (it.kind == "action" and "help")
+                          or (it.host and (locked and "host,locked" or "host")) or "own"
+            parts[#parts + 1] = string.format("%d:%s=%s(%s)", i, it.id, val, whose)
+        end
+        local stale = mn.open and (os.clock() - (mn.frameAt or -1e9)) > M.GAP_S
+        mp_log(string.format("MP-MENU status open=%s sel=%d:%s role=%s session=%s clean=%s key=%s stored_key=%s fast_travel_session=%s cvar_held=%s opens=%d refused=%d changes=%d restores=%d items: %s",
+            mn.open and (stale and "stale" or "yes") or "no", mn.sel, tostring(M.ITEMS[mn.sel] and M.ITEMS[mn.sel].id), M.roleNow(),
+            M.sessionUp() and "up" or "none", onoff(M.clean), M.menuKey, tostring(M.menuKeyStored or M.menuKey),
+            onoff(KCD2MP_W154FastTravelSession()), tostring(M.ftHeld == true), M.stats.opens, M.stats.refused, M.stats.changes,
+            M.stats.restores, table.concat(parts, " ")))
+        return true
+    end
+
+    -- mp_menu open|close|up|down|change|status|select <n|item> -- exactly what the keys do; bare = status.
+    -- The keys come here too (src "key").
+    function KCD2MP_W154Menu(arg, src)
+        src = src or "console"
+        local s = tostring(arg or ""):lower():gsub("^%s+", ""):gsub("%s+$", "")
+        if s == "" or s == "%line" or s == "nil" then s = "status" end
+        local verb, rest = s:match("^(%S+)%s*(.-)$")
+        if verb == "open" then
+            if M.isOpen() then mp_log("MP-MENU already open"); return true end
+            return M.open(src)
+        elseif verb == "close" then
+            if not M.isOpen() then mp_log("MP-MENU already closed"); return true end
+            return M.close("by " .. src)
+        elseif verb == "toggle" then
+            if M.isOpen() then return M.close(src == "key" and "its key" or ("by " .. src)) end
+            return M.open(src)
+        elseif verb == "up" or verb == "down" or verb == "change" or verb == "select" then
+            if not M.isOpen() then mp_log("MP-MENU " .. verb .. " ignored: the menu is closed"); return false end
+            if verb == "change" then return M.change(src) end
+            if verb == "select" then return M.select(rest) end
+            M.step(verb == "up" and -1 or 1)
+            return true
+        elseif verb == "status" then
+            return M.status()
+        end
+        mp_log("mp_menu: expected open|close|up|down|change|status|select <n|item>, got '" .. s .. "'")
+        return false
+    end
+
+    -- handleAction: true = one of the menu's own actions (consumed: nothing else uses them). A game screen's own
+    -- action closes the menu and is never consumed (the game's handler already ran).
+    function KCD2MP_W154MenuOnAction(action, activation)
+        if M.GAME_MENU_ACTIONS[action] then
+            if M.menu.open then M.close("the game's own menu (" .. tostring(action) .. ")") end
+            return false
+        end
+        local verb = M.KEY_VERBS[action]
+        if not verb then return false end
+        if activation ~= "press" and activation ~= 1 then return true end
+        local now = os.clock()
+        if M.lastKey == action and (now - (M.lastKeyAt or -1e9)) < 0.05 then return true end   -- one press once (both hooks may deliver it)
+        M.lastKey, M.lastKeyAt = action, now
+        KCD2MP_W154Menu(verb, "key")
+        return true
+    end
+
+    -- The agent's push of a remembered choice (session start, every world load): the same setter as its console
+    -- command; a joiner keeps the host's levers.
+    function KCD2MP_W154MenuRestore(key, value)
+        local it = nil
+        for _, x in ipairs(M.ITEMS) do if x.save ~= nil and x.save == key then it = x end end
+        if not it then mp_log("MP-MENU restore refused: no item remembers '" .. tostring(key) .. "'"); return false end
+        if it.host and M.roleNow() == "joiner" then
+            mp_log("MP-MENU restore " .. it.id .. " skipped: a joiner plays with the host's value")
+            return false
+        end
+        local s, arg = tostring(value or ""), nil
+        if it.kind == "crime" then
+            if s == "joint" or s == "individual" then arg = s end
+        else
+            local b = KCD2MP_Wo122ParseBool(s)
+            if b == true then arg = "on" elseif b == false then arg = "off" end
+        end
+        if not arg then mp_log("MP-MENU restore refused: " .. it.id .. "='" .. s .. "'"); return false end
+        local ok = M.call(it.fn, arg)
+        M.stats.restores = M.stats.restores + 1
+        mp_log(string.format("MP-MENU restore %s=%s (saved)%s", it.id, M.word(it, it.get()), ok and "" or (" -- " .. it.fn .. " refused it")))
+        if it.id == "clean_screen" and M.clean and not M.cleanTold then
+            -- the one line the clean screen lets through: why nothing of the mod shows
+            M.cleanTold = true
+            local text = "Clean screen is on: the mod's lines and names are hidden. Open the mod menu (" .. (M.KEY_NAMES[M.menuKey] or "Insert") .. ") to turn it off."
+            mp_log("WO154-MSG " .. text)
+            pcall(function() UIAction.CallFunction("hud", -1, "ShowInfoText", text, 10, 8000, true) end)
+        end
+        return ok
+    end
+
+    -- The label loop's 1 Hz duty: a line queued while the map held the timers; fast travel given back when the
+    -- agent went silent (no session without it).
+    function KCD2MP_W154MenuBackstop()
+        local now = os.clock()
+        if (now - (M.backAt or -1e9)) < 1.0 then return end
+        M.backAt = now
+        if M.pendingMsg then
+            local t = M.pendingMsg
+            M.pendingMsg = nil
+            pcall(KCD2MP_ShowInteractionMsg, t)
+        end
+        if M.ftHeld and not M.fresh() then KCD2MP_W154FastTravelApply("the agent went silent") end
+    end
+end
+
 -- ===== Register Console Commands =====
 
 local ok, err = pcall(function()
@@ -21035,6 +21767,22 @@ local ok, err = pcall(function()
     System.AddCCommand("mp_npc_read_native_off", 'KCD2MP_SetNpcReadNative("off")',             "WO-103 Phase 2: always read position/yaw live off the entity, as before this WO")
     System.AddCCommand("mp_npc_read_compare",    "KCD2MP_NpcReadCompare()",                    "WO-103 Phase 2 known-answer check: diff the native push's position/yaw against a fresh live read for every currently-tracked name; a real mismatch fails mp_npc_read_native closed")
     System.AddCCommand("mp_npc_track_max",       'KCD2MP_SetNpcTrackMax(%line)',               "WO-110 R3: how many NPCs (nearest first) the native scan pushes for the owner to track: mp_npc_track_max <n> (10..400, default 200; 0.26.4 was 40 in engine walk order); bare = report")
+
+    -- WO-154 7b: the mod menu (Insert) and its four new switches. The menu calls these same functions.
+    System.AddCCommand("mp_menu",         'KCD2MP_W154Menu(%line)',           "WO-154: the mod menu (Insert opens it, PgUp/PgDn choose, End changes) -- exactly what its keys do: mp_menu open|close|up|down|change|status|select <n|item>; bare = status")
+    System.AddCCommand("mp_name_badges",  'KCD2MP_W154SetNameBadges(%line)',  "WO-154: your partner's name (and health) above his figure (default on): mp_name_badges on|off; bare = report")
+    System.AddCCommand("mp_ping_line",    'KCD2MP_W154SetPingLine(%line)',    "WO-154: the ping and clock line in the top left corner (default on): mp_ping_line on|off; bare = report")
+    System.AddCCommand("mp_clean_screen", 'KCD2MP_W154SetCleanScreen(%line)', "WO-154: hide everything the mod draws -- its lines, the ping line, the name badges, its messages -- for screenshots and recording (default off; the mod menu still opens): mp_clean_screen on|off; bare = report")
+    System.AddCCommand("mp_fast_travel",  'KCD2MP_W154SetFastTravel(%line)',  "WO-154 (HOST -- the host's value is the session's): fast travel in a co-op session (default OFF: the engine's wh_pl_FastTravelEnabled is 0 on both machines while a partner is here, given back after): mp_fast_travel on|off; bare = report")
+    do
+        local m = KCD2MP.w154menu
+        mp_log(string.format("WO154-BUILD menu=on menu_key=%s name_badges=%s ping_line=%s clean_screen=%s fast_travel=%s items=%d"
+            .. " -- the mod menu (Insert; mp_menu): a change calls the console command's own setter, the agent remembers it in mod-settings.json;"
+            .. " fast travel off in a co-op session unless the host turns it on",
+            m.menuKey, m.nameBadges and "on" or "off", m.pingLine and "on" or "off", m.clean and "on" or "off",
+            m.fastTravel and "on" or "off", #m.ITEMS))
+        KCD2MP_EmitEvent("w154_menu_cfg", "fast_travel=" .. (m.fastTravel and "on" or "off"))
+    end
 
     -- Dropped-item sync (WO-48)
     System.AddCCommand("mp_item_sync",   'KCD2MP_EnableItemSync(%line)', "WO-48: share deliberately dropped items with peers: mp_item_sync on|off")
@@ -21359,6 +22107,11 @@ local function handleAction(action, activation, value)
     end
     if KCD2MP_W148OnAction then pcall(KCD2MP_W148OnAction, action, activation) end   -- WO-148: put_item / deposit_item / put_corpse
     if KCD2MP_W151OnAction then pcall(KCD2MP_W151OnAction, action, activation) end   -- WO-151 3.5: the whistle
+    -- WO-154: the mod menu's keys (its own actions only; a game menu's action closes it and goes on)
+    if KCD2MP_W154MenuOnAction then
+        local okm, used = pcall(KCD2MP_W154MenuOnAction, action, activation)
+        if okm and used then return end
+    end
 
     -- Only consume these while a prompt is actually up, so they never interfere
     -- with normal dialogue or menus.
