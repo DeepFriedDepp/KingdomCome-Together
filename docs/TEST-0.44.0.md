@@ -12,8 +12,10 @@ stay standing after the host killed it. One page for the host and the partner:
 install, then the checks below. Tick what you saw, write the time next to anything
 odd, and send the logs at the end.
 
-**Status:** the installer is not built yet (the frame-rate soak has to pass first),
-and none of this has run in the game; the checks below are its first real test.
+**Status:** none of this has run in the game; the checks below are its first real
+test. The frame-rate soak was skipped for this build (the maintainer's call), so also
+watch the frame rate: if it falls over a session, send the `FRAME` lines of
+`kcdmp-native.log` (one per minute) with the logs.
 
 ## Install
 

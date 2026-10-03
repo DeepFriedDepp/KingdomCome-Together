@@ -198,10 +198,18 @@ Read by an investigator against the logs; none sits at a dropped batch, a fault 
 
 ## D. Decisions made unattended
 
-1. **No version, no installer, no soak.** `VERSION` was blank: commits only. The frame-rate soak gates
-   the installer, so it did not run; nothing here was measured for frame rate. The DLL changes are
-   per-frame reads that got cheaper (a pointer check before a guarded read; one fewer read of a stale
-   pointer), and no new per-frame work was added.
+1. **The version, and the soak waived.** `VERSION` was blank, so the first pass was commits only. The
+   maintainer then chose `0.44.0` and, after being told that `Build-Installer.ps1` refuses without a
+   passing soak for this code, instructed "build the new installer, ignore the soak". The installer
+   was built that way: **the frame-rate soak did not run for this code**, and no comparison against
+   the game without the mod exists. Standing rule 5 (an unexplained frame-rate drop blocks the
+   installer) is about a drop that was seen; none was seen and none was measured. The only evidence
+   is by reading: the DLL changes are per-frame reads that got cheaper (a pointer check before a
+   guarded read; one fewer read of a stale pointer) and add no new per-frame work. The waiver is on
+   the record in `tools\Build-Installer.ps1 -SoakWaiver` and `release\SOAK-WAIVED-0.44.0.txt`
+   (beside the installer, not in git). **The first live session should read the `FRAME` line of
+   `kcdmp-native.log` (fps, `ours_us_mean`) against the 0.43.0 numbers (70.9-71.4 FPS, 0.69-0.76
+   ms) and run the soak then.**
 2. **No live runs.** The game was not started. Every fix is verified by unit and synthetic tests
    against the real `kdcmp.lua` and the real C# classes; the live behaviour is on the two-player
    checklist. *Why:* the machine's game launch needs the maintainer's session (focus, saves), and
@@ -242,6 +250,19 @@ Read by an investigator against the logs; none sits at a dropped batch, a fault 
     was moved to [0,0,0]!` in one marker window, 73,000 in the run: Part B), the tutorial respawn spot,
     lip sync (the Modding Tools build lacks the data).
 
+## B. The installer
+
+Built by `tools\Build-Installer.ps1 -SoakWaiver "<the maintainer's instruction>"` inside a fresh
+clone of the repository, so nothing from the working folder is in it. The numbers and the payload
+checks are in `docs/WO-153-progress.md` (the work log, item 9).
+
 ## G. Gates
 
-Filled in at the end of the work log (`docs/WO-153-progress.md`).
+| gate | result |
+|---|---|
+| every synthetic suite (`Test-*Synthetic.ps1`, 43) | 0 failed |
+| the three static checks | exit 0 |
+| agent tests | 852 passed |
+| relay tests | 62 passed |
+| native tests | 377 passed |
+| the frame-rate soak | **waived by the maintainer; not run** (§D 1) |

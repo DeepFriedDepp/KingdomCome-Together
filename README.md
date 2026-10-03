@@ -119,7 +119,7 @@ and weather. Each feature below says how far it is proven:
 | Catching up | After a join or the host's reload the partner acts only once their quests match the host's; a step the host has already done is never done again | 🧪 new in 0.43.0 |
 | Black screens after a scene | A scene that waits on the host's people is helped along and never leaves the partner on a black screen for long | ⚠️ new in 0.43.0 |
 | Smithing and other work | The partner at a forge or grindstone shows on the other screen where they stand; nobody's station looks taken | 🧪 new in 0.43.0 |
-| Picking herbs | The partner's figure **stands** while they pick herbs (its pick loop crashed the game twice in the 0.43.0 tutorial session; `mp_avatar_herbs on` brings it back for a test) | ⚠️ changed in 0.44.0 (installer not built yet) |
+| Picking herbs | The partner's figure **stands** while they pick herbs (its pick loop crashed the game twice in the 0.43.0 tutorial session; `mp_avatar_herbs on` brings it back for a test) | ⚠️ changed in 0.44.0 |
 | Dice with villagers | The dice game after a conversation starts on the partner's screen | 🧪 |
 
 ### Dice between players, and the tools

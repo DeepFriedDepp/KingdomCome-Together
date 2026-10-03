@@ -8,9 +8,8 @@ Unofficial and free. Not affiliated with or endorsed by Warhorse Studios or
 PLAION. Kingdom Come: Deliverance II, its assets and its content belong to
 Warhorse Studios and PLAION; this project's copyright covers only its own code.
 
-Everything on `main` up to WO-153 (2026-10-02). **Status: the installer has not
-been built yet** — the frame-rate soak has to pass first. When it exists,
-`KingdomComeTogether-Setup-0.44.0.exe` comes from the maintainer and is not on
+Everything on `main` up to WO-153 (2026-10-02). The installer,
+`KingdomComeTogether-Setup-0.44.0.exe`, comes from the maintainer and is not on
 GitHub. The tester page is `docs/TEST-0.44.0.md`; the evidence is
 `docs/WO-153-findings.md`.
 
@@ -19,7 +18,10 @@ other version at the handshake, 0.43.0 included.
 
 **Verified:** by unit and synthetic tests only (every synthetic suite, the agent,
 relay and native tests, the static checks) against the real mod and agent code.
-**Not run in the game yet**, and the frame-rate soak has not run for this code.
+**Not run in the game yet**, and the frame-rate soak was **skipped on the maintainer's
+instruction**: there is no frame-rate comparison against the game without the mod for this
+build. Anything that looks like a frame-rate drop is worth a report with the `FRAME` lines
+of `kcdmp-native.log`.
 What needs two people is listed in `docs/TWO-PLAYER-CHECKLIST.md` (WO-153).
 
 ---

@@ -44,6 +44,8 @@ soak (§D 1).
 7. **Phase 5.** `fault::plausible_address` and `motion.cpp`; `DeleteItem` counts and the 90 s tool hold;
    `Wo136DoorKey` and the door coalescing in the load hold.
 8. **Gates, docs.** See below.
+9. **The installer** (0.44.0): built on the maintainer's instruction with the soak waived
+   (`-SoakWaiver`); the result is appended below once built.
 
 ## Gates (HEAD `07ca5aa` + the docs commit)
 
@@ -54,8 +56,8 @@ soak (§D 1).
 | agent tests | 852 passed (825 before) |
 | relay tests | 62 passed |
 | native tests | 377 passed (369 before; the native build is clean) |
-| the payload smoke | not run (no installer built) |
-| the frame-rate soak | not run (no installer built; §D 1) |
+| the payload smoke | see work log item 9 |
+| the frame-rate soak | **waived by the maintainer; not run** (findings §D 1) |
 
 ## Not done
 

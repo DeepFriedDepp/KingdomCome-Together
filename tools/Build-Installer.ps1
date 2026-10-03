@@ -18,12 +18,19 @@
     Compile the installer against whatever release\KCDMP already contains.
     Only useful when iterating on the .iss -- a full publish is minutes.
 
+.PARAMETER SoakWaiver
+    WO-153: the maintainer's explicit decision to build without the frame-rate soak
+    having passed for this code. The reason is mandatory text (who decided, why); it
+    is printed, and written to release\SOAK-WAIVED-<version>.txt beside the installer
+    with the git commit. Without this switch the soak gate below stands as before.
+
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File tools\Build-Installer.ps1
 #>
 param(
     [switch]$SkipPublish,
-    [string]$Version
+    [string]$Version,
+    [string]$SoakWaiver
 )
 
 $ErrorActionPreference = "Stop"
@@ -59,8 +66,20 @@ Write-Host "Inno Setup compiler: $iscc"
 # a build whose DLL, Lua, agent, relay or protocol differ from them.
 $soak = Join-Path $root "tools\perf\soak.py"
 if (-not (Test-Path $soak)) { throw "tools\perf\soak.py missing -- the frame-rate soak gate cannot run" }
-& python $soak check
-if ($LASTEXITCODE -ne 0) { throw "the frame-rate soak has not passed for this code (tools\perf\soak.py check). Not shipping." }
+if ($SoakWaiver) {
+    # WO-153: waived by the maintainer, on the record -- never silently.
+    $commit = (& git -C $root rev-parse HEAD 2>$null)
+    Write-Host ("WARNING: building WITHOUT the frame-rate soak -- waived: " + $SoakWaiver) -ForegroundColor Yellow
+    $relDir = Join-Path $root "release"
+    $null = New-Item -ItemType Directory -Force -Path $relDir
+    @("The frame-rate soak (tools\perf\soak.py) was NOT run or not passing for this build; the maintainer waived it.",
+      "version : $Version", "commit  : $commit", "when    : $(Get-Date -Format s)", "waiver  : $SoakWaiver",
+      "No frame-rate comparison against the game without the mod exists for this code.") |
+        Set-Content -Encoding utf8 (Join-Path $relDir "SOAK-WAIVED-$Version.txt")
+} else {
+    & python $soak check
+    if ($LASTEXITCODE -ne 0) { throw "the frame-rate soak has not passed for this code (tools\perf\soak.py check). Not shipping." }
+}
 
 $payload = Join-Path $root "release\KCDMP"
 
