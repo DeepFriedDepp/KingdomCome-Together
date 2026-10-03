@@ -35,6 +35,8 @@
     <Compile Include="..\..\KCDMP_launcher\Models\PlayerListFiles.cs" Link="Launcher\PlayerListFiles.cs" />
     <!-- WO-154 (Phase 7): Windows blocking a file the mod needs, in plain words. -->
     <Compile Include="..\..\KCDMP_launcher\Models\LaunchBlock.cs" Link="Launcher\LaunchBlock.cs" />
+    <!-- WO-154 (Phase 7): the relay's ports taken by an earlier launcher's relay. -->
+    <Compile Include="..\..\KCDMP_launcher\Models\RelayReuse.cs" Link="Launcher\RelayReuse.cs" />
   </ItemGroup>
 
 </Project>

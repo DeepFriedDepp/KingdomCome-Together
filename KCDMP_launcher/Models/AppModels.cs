@@ -216,6 +216,13 @@ namespace KCDMP_launcher.Models
         // WO-127: "Also allow Steam" in the Host window (the relay also listens on Steam P2P).
         public bool HostAllowSteam { get; set; } = true;
 
+        // WO-154: Host finds the relay's ports taken by this install's own relay (a
+        // launcher closed with the window's X leaves it running): the same release with
+        // the same settings is used again, any other is stopped and replaced; another
+        // program's port is never touched (Models/RelayReuse.cs). false = no check, the
+        // relay is started as before 0.45.0.
+        public bool RelayReuse { get; set; } = true;
+
         // WO-127 (Settings, advanced): the Steam app id both players use. 2429020 is the
         // game's own (Modding Tools); 480 and 1771300 are selectable. The maintainer decides
         // the final default after the WO-128 test.

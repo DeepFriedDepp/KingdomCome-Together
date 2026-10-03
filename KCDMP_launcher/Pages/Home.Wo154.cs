@@ -7,6 +7,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
+using KCDMP_launcher.Components.Shared;
 using KCDMP_launcher.Models;
 using KcdMp.Wire;
 using Serilog;
@@ -210,6 +211,103 @@ namespace KCDMP_launcher.Pages
         {
             ReadInstallManifest();
             return installedMod!;
+        }
+
+        // ------------------------------------------------------------ the relay's ports (Phase 7)
+
+        /// <summary>Who holds the relay's two ports (TCP Host Port, HTTP Server Info Port), and what our own relay there says.</summary>
+        private async Task<RelayDecision> DecideRelayAsync(string relayPath)
+        {
+            var holders = await Task.Run(() => RelayReuse.Holders(relayPath, settings.HostPort, settings.ServerInfoPort));
+            RelayAnswer? answer = holders.Count > 0 && holders.All(h => h.Ours) ? await AskRelayAsync() : null;
+            return RelayReuse.Decide(holders, settings.HostPort, answer, Globals.Version, settings.HostAllowSteam, settings.SteamAppId);
+        }
+
+        private async Task<RelayAnswer?> AskRelayAsync()
+        {
+            var st = await NetService.GetRelayLocalStatusAsync(settings.ServerInfoPort);
+            return st is null ? null : new RelayAnswer(st.Release, st.Steam.State, st.Steam.AppId);
+        }
+
+        /// <summary>Carries a decision out. True: start this install's relay now.</summary>
+        private async Task<bool> ApplyRelayDecisionAsync(RelayDecision d)
+        {
+            switch (d.Plan)
+            {
+                case RelayPlan.Reuse:
+                    try
+                    {
+                        hostedRelayProcess = Process.GetProcessById(d.Pid);
+                        Log.Information(d.LogLine);
+                        return false;
+                    }
+                    catch (ArgumentException)
+                    {
+                        Log.Information("MP-RELAY the relay to reuse (pid {Pid}) has just exited; starting this install's", d.Pid);
+                        return true;
+                    }
+                case RelayPlan.Replace:
+                    Log.Information(d.LogLine);
+                    foreach (int pid in d.Pids) StopOldRelay(pid);
+                    await WaitPortsFreeAsync(TimeSpan.FromSeconds(5));
+                    return true;
+                case RelayPlan.Refuse:
+                    Log.Warning(d.LogLine);
+                    hostErrorMessage = d.PlayerMessage;
+                    return false;
+                default:
+                    return true;
+            }
+        }
+
+        /// <summary>One process of this install's own relay (Decide named it ours by its executable): stopped, waited for.</summary>
+        private static void StopOldRelay(int pid)
+        {
+            try
+            {
+                using var p = Process.GetProcessById(pid);
+                p.Kill();
+                if (!p.WaitForExit(5000)) Log.Warning("MP-RELAY the old relay (pid {Pid}) did not exit within 5 s", pid);
+            }
+            catch (ArgumentException) { }   // gone already
+            catch (Exception ex) { Log.Warning("MP-RELAY the old relay (pid {Pid}) could not be stopped: {Kind}", pid, ex.GetType().Name); }
+        }
+
+        private async Task WaitPortsFreeAsync(TimeSpan max)
+        {
+            var until = DateTime.UtcNow + max;
+            while (DateTime.UtcNow < until)
+            {
+                if (PortOwners.ListeningPids(settings.HostPort).Count == 0 && PortOwners.ListeningPids(settings.ServerInfoPort).Count == 0) return;
+                await Task.Delay(200);
+            }
+        }
+
+        /// <summary>A just-started relay is up when it answers; it may also exit (a port it could not bind). At most 8 s.</summary>
+        private async Task WaitForRelayAsync(Process relay)
+        {
+            var until = DateTime.UtcNow + TimeSpan.FromSeconds(8);
+            await Task.Delay(300);
+            while (DateTime.UtcNow < until)
+            {
+                if (relay.HasExited) return;
+                if (await AskRelayAsync() is not null) return;
+                await Task.Delay(250);
+            }
+            Log.Warning("MP-RELAY the relay did not answer within 8 s; it keeps running");
+        }
+
+        /// <summary>The relay died at start: which port, and whether another program holds it, in plain words.</summary>
+        private string RelayExitedMessage(string relayPath)
+        {
+            var holders = RelayReuse.Holders(relayPath, settings.HostPort, settings.ServerInfoPort);
+            var d = RelayReuse.Decide(holders, settings.HostPort, null, Globals.Version, settings.HostAllowSteam, settings.SteamAppId);
+            if (d.Plan == RelayPlan.Refuse)
+            {
+                Log.Warning(d.LogLine);
+                return d.PlayerMessage;
+            }
+            return $"Hosting stopped right after it started. Another copy may already be running on port {settings.HostPort}: close it (or restart the computer) and try again.";
         }
 
         /// <summary>Smart App Control's state, for the log beside a block (HKLM\...\CI\Policy VerifiedAndReputablePolicyState).</summary>

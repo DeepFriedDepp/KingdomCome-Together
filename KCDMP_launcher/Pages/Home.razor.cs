@@ -874,43 +874,56 @@ namespace KCDMP_launcher.Pages
                 // WO-154: gone or empty (a quarantine looks like this) -- one plain message, no path.
                 if (BlockedBeforeLaunch("", relayPath, Path.ChangeExtension(relayPath, ".dll")))
                     return;
-                try
-                {
-                    var relayStartInfo = new ProcessStartInfo
-                    {
-                        FileName = relayPath,
-                        Arguments = RelayArguments(),   // WO-127: + Steam when "Also allow Steam" is on
-                        UseShellExecute = false,
-                        CreateNoWindow = true,
-                        WorkingDirectory = Path.GetDirectoryName(relayPath)
-                    };
-                    hostedRelayProcess = StartChecked(relayStartInfo);
-                    // Give it a moment to bind before anyone tries to connect.
-                    await Task.Delay(500);
-                    if (hostedRelayProcess == null || hostedRelayProcess.HasExited)
-                    {
-                        Log.Warning("The relay exited right after starting (code {Code})", hostedRelayProcess?.ExitCode);
-                        hostErrorMessage = $"Hosting stopped right after it started. Another copy may already be running on port {settings.HostPort}: close it (or restart the computer) and try again.";
-                        hostedRelayProcess = null;
-                    }
-                }
-                catch (LaunchBlockedException lb)
-                {
-                    ShowBlocked(lb.Block);   // WO-154: Windows refused the relay
-                    hostedRelayProcess = null;
-                    return;
-                }
-                catch (Exception ex)
-                {
-                    Log.Error(ex, "Could not start the relay");
-                    hostErrorMessage = "Hosting couldn't start on this computer. Check the relay path in Settings, then try again.";
-                    hostedRelayProcess = null;
-                }
+                // WO-154: the ports may be held by this install's own relay (a launcher closed with the
+                // window's X leaves it running): used again, or replaced. Another program's: told, untouched.
+                bool startOurs = !settings.RelayReuse || await ApplyRelayDecisionAsync(await DecideRelayAsync(relayPath));
+                if (startOurs && !await StartRelayAsync(relayPath)) return;   // Windows refused it: told
             }
 
             showHostInfo = true;
             StartHostStatusPoll();   // WO-127: Steam state, the code, refused joiner versions
             StateHasChanged();
+        }
+
+        /// <summary>Starts this install's relay. False only when Windows refused it (the player has been told).</summary>
+        private async Task<bool> StartRelayAsync(string relayPath)
+        {
+            try
+            {
+                var relayStartInfo = new ProcessStartInfo
+                {
+                    FileName = relayPath,
+                    Arguments = RelayArguments(),   // WO-127: + Steam when "Also allow Steam" is on
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    WorkingDirectory = Path.GetDirectoryName(relayPath)
+                };
+                hostedRelayProcess = StartChecked(relayStartInfo);
+                // Give it a moment to bind before anyone tries to connect.
+                // WO-154: until it answers, or 8 s -- a relay that failed to bind used to die after the
+                // fixed 500 ms and looked hosted; the host's agent then went without its host claim.
+                if (hostedRelayProcess is not null) await WaitForRelayAsync(hostedRelayProcess);
+                if (hostedRelayProcess == null || hostedRelayProcess.HasExited)
+                {
+                    Log.Warning("The relay exited right after starting (code {Code})", hostedRelayProcess?.ExitCode);
+                    hostErrorMessage = RelayExitedMessage(relayPath);
+                    hostedRelayProcess = null;
+                }
+                return true;
+            }
+            catch (LaunchBlockedException lb)
+            {
+                ShowBlocked(lb.Block);   // WO-154: Windows refused the relay
+                hostedRelayProcess = null;
+                return false;
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "Could not start the relay");
+                hostErrorMessage = "Hosting couldn't start on this computer. Check the relay path in Settings, then try again.";
+                hostedRelayProcess = null;
+                return true;
+            }
         }
 
         private Task LaunchAsHost()
