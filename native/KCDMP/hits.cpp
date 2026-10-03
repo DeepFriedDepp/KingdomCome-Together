@@ -129,7 +129,10 @@ std::atomic<NpcHitFn> g_npcHitFn{nullptr};
 std::atomic<DiscardFn> g_discardFn{nullptr};
 // WO-132: attacker entity ids whose hits on the local player are discarded
 // (the joiner's engaged copies of host NPCs). Main thread writes.
-constexpr int kMaxDiscard = 64;
+// WO-153 2: 256, not 64. The field's status lines read `discard_eids=64` (the cap) in four of five joiner runs against 88-229
+// guarded copies, so a guarded copy past the 64th could still hurt the joiner. One entry per guarded copy's entity id;
+// the scan per hit is 256 relaxed loads.
+constexpr int kMaxDiscard = 256;
 std::atomic<uint32_t> g_discard[kMaxDiscard]{};
 bool is_discard_attacker(uint32_t eid) {
     if (!eid) return false;

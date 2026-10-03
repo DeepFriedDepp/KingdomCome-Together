@@ -1400,6 +1400,7 @@ public sealed class CombatPipe : IAsyncDisposable
     /// <summary>Route frames: replies to the waiting command, hits to the callback.</summary>
     private async Task ReadLoopAsync()
     {
+        var myPipe = _pipe;   // WO-153 3: the pipe THIS reader serves (a reconnect has a new one)
         try
         {
             while (_pipe?.IsConnected == true)
@@ -1596,6 +1597,11 @@ public sealed class CombatPipe : IAsyncDisposable
             Console.WriteLine($"[combat] reader stopped: {ex.GetType().Name}: {ex.Message}");
         }
         Console.WriteLine("[combat] pipe reader exited");
+        // WO-153 3: the reader is the first to know the DLL is gone (the game ended). Before, only a later WRITE found it,
+        // the waiting caller sat out its full 5 s deadline ("no answer to 0x28 after 5000 ms") and the loss was declared
+        // 4.3-4.6 s late, in every one of the 12 field runs. The connection is dropped now, once, so every caller fails at
+        // once -- but only if this reader's pipe is still the current one.
+        if (myPipe is not null && ReferenceEquals(_pipe, myPipe)) Drop();
     }
 
     private async Task<bool> SendAsync(byte type, byte[] payload, CancellationToken ct)

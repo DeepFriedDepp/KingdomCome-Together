@@ -125,6 +125,14 @@ public class Wo153Tests
         Assert.Equal(new[] { "tbuk_man_1" }, want);     // a villager, a horse and a body with no entity yet hold nothing
     }
 
+    [Fact]
+    public void WO153_the_cancelled_dialog_request_names_whose_it_was()
+    {
+        Assert.Equal("Dude", Wo144Rules.CancelSoul("Canceling dialog request id 48 from soul 'Dude'. Request timed out."));
+        Assert.Equal("tkop_ptacek", Wo144Rules.CancelSoul("Canceling dialog request id 2185 from soul 'tkop_ptacek'. Request timed out."));
+        Assert.Null(Wo144Rules.CancelSoul("Canceling dialog request id 7"));
+    }
+
     // ---------------------------------------------------------------- doors held through a load (phase 5)
 
     private static byte[] DoorFrame(byte src, sbyte dir, float x, string name = "door_village_left1")

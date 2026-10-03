@@ -40,6 +40,13 @@ public sealed class ClientConfig
     public string GameApiBase { get; set; } = "http://localhost:1403";
 
     /// <summary>
+    /// WO-153 3: a Lua batch the game does not answer within the timeout (it is loading, hung or busy) is kept and sent again
+    /// in order once it answers (a newer state replaces an older one, a one-off statement runs once, stale relays are
+    /// dropped, the queue is bounded). False = the 0.43.0 behaviour: the batch is dropped. Ships on.
+    /// </summary>
+    public bool BatchRetryEnabled { get; set; } = true;
+
+    /// <summary>
     /// Whether to open the microphone for proximity voice chat. Off means the
     /// mic is never captured and no voice frames are sent.
     /// </summary>

@@ -316,6 +316,19 @@ do -- (i) stand-ins
     check("i: no Lua errors", #ERRS == 0, ERRS[1])
 end
 
+do -- (i2) WO-153 4: one body per NPC -- no stand-in over a body that already answers to the name
+    reset(); clearLog(); NOW = 800
+    KCD2MP_W131Tick(true, true)
+    KCD2MP_W136SoulFor("prepadeniNaCeste_bandit_5", "", "")
+    local real = mkEntity("prepadeniNaCeste_bandit_5", 40, 5, 0); ENTS["prepadeniNaCeste_bandit_5"] = real
+    local n0 = #SPAWNS
+    local got = KCD2MP_W131StandIn("prepadeniNaCeste_bandit_5", 41, 6, 0, 0, 1)   -- dead on the host
+    check("i2: a body already answers to the name: the stand-in is refused, the body is returned", got == real and #SPAWNS == n0, tostring(#SPAWNS - n0))
+    check("i2: ... it is not registered as a stand-in (so nothing removes it by name later)", KCD2MP.w131.standins["prepadeniNaCeste_bandit_5"] == nil)
+    check("i2: ... and said", logCount("WO131-STANDIN refused npc=prepadeniNaCeste_bandit_5") == 1)
+    check("i2: no Lua errors", #ERRS == 0, ERRS[1])
+end
+
 do -- (j) stuck poses
     reset(); clearLog(); NOW = 700
     local b = mkEntity("ttkc_man_10", 10, 0, 0); ENTS["ttkc_man_10"] = b

@@ -6124,6 +6124,18 @@ function KCD2MP_W131StandIn(name, x, y, z, rot, flags)
     if deadOnHost and not (KCD2MP_W137DeadStandInOk and KCD2MP_W137DeadStandInOk(name)) then return nil end
     if not string.find(tostring(name), "^[%w_]+$") or mp_is_excluded_npc_name(name) then return nil end
     if w.standins[name] then return w131_body(name) end
+    -- WO-153 4: one body per NPC. A body already answers to this name (the NPC streamed in late, a load re-created it, a
+    -- stand-in this table lost): that is the copy -- a second one would be the field's "same NPC alive and dead at once".
+    do
+        local existing = w131_body(name)
+        if existing then
+            KCD2MP.w153.standInRefused = (KCD2MP.w153.standInRefused or 0) + 1
+            if KCD2MP.w153.standInRefused <= 5 then
+                mp_log(string.format("WO131-STANDIN refused npc=%s -- a body already answers to that name (one body per NPC)", tostring(name)))
+            end
+            return existing
+        end
+    end
     -- WO-136 Phase 2: the host's own soul and class (animals too); nil = wait for it / a horse.
     local soul, cls, kind = KCD2MP_W136StandInSpec(name, notHuman)
     if not soul then return nil end

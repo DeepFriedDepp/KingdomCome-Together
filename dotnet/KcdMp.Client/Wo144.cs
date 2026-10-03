@@ -72,6 +72,11 @@ public sealed class PeerSet
 
 public static class Wo144Rules
 {
+    private static readonly System.Text.RegularExpressions.Regex CancelSoulRx = new(@"from soul '([^']+)'", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+    /// <summary>WO-153 3: whose request the engine cancelled, from "Canceling dialog request id 48 from soul 'Dude'. Request timed out." (null when absent).</summary>
+    public static string? CancelSoul(string line) { var m = CancelSoulRx.Match(line); return m.Success ? m.Groups[1].Value : null; }
+
     // ---------------------------------------------------------------- 2.1 the live avatar's soul
 
     /// <summary>

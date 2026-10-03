@@ -467,6 +467,7 @@ public partial class GameBridge(ClientConfig config)
     // (see AppearanceLoopAsync) -- a busy game times out for minutes and a
     // per-poll line would flood the agent log.
     private bool _appearanceReadDown;
+    private int _appearanceReadFails;   // WO-153 3: consecutive failed equipped-set reads
 
     // Set by the "appearance_sync" game event (mp_sync_appearance console
     // command) to force the next poll to send unconditionally, bypassing the
@@ -1112,7 +1113,7 @@ public partial class GameBridge(ClientConfig config)
 
     public async Task RunAsync(CancellationToken ct = default)
     {
-        var http = new HttpGameTransport(config.GameApiBase);
+        var http = new HttpGameTransport(config.GameApiBase) { RetryBatches = config.BatchRetryEnabled };   // WO-153 3
         await http.StartAsync(ct);
         _transport = http;
 
@@ -2470,14 +2471,18 @@ public partial class GameBridge(ClientConfig config)
                     // partial reads went out as real changes and peers
                     // stripped half the outfit. Skip the poll; the next good
                     // read diffs against _lastSentAppearance and self-heals.
-                    if (!_appearanceReadDown)
+                    // WO-153 3: every field failure sat on a game stall (a level load, a 25 s GPU hang, a 1.5 s hitch) and
+                    // healed by itself; the poll still runs every 3 s, it is only the outfit that is not acted on. Said once
+                    // the game has not answered three polls in a row, and in words that are true.
+                    if (++_appearanceReadFails >= 3 && !_appearanceReadDown)
                     {
                         _appearanceReadDown = true;
-                        Console.WriteLine("[appearance] local equipped-set read failed -- skipping polls until it answers again");
+                        Console.WriteLine("[appearance] the game has not answered the equipped-set read three times in a row -- the outfit is left as it was; the read goes on every 3 s and is acted on again when it answers");
                     }
                 }
                 else if (current.Length > 0)
                 {
+                    _appearanceReadFails = 0;
                     if (_appearanceReadDown)
                     {
                         _appearanceReadDown = false;
@@ -3704,6 +3709,13 @@ public partial class GameBridge(ClientConfig config)
     /// mod has just READ this world's copy alive while the owner streams it
     /// dead (typically right after a load brought it back), so a death applied
     /// here seconds ago says nothing about now. The mod throttles that route.
+    private long _w153StaleAliveDropped;
+    private static readonly TimeSpan W153DeathHold = TimeSpan.FromSeconds(10);
+
+    /// <summary>WO-153 4: a death was applied to this NPC's copy from a peer within <see cref="W153DeathHold"/>.</summary>
+    private bool Wo153DeathHeld(string npcName) =>
+        _npcDeathAppliedUtc.TryGetValue(npcName, out var at) && DateTime.UtcNow - at < W153DeathHold;
+
     private async Task ApplyRemoteNpcDeathAsync(string npcName, Guid? knownLocalGuid, byte sourceGhostId, string via, CancellationToken ct, bool bypassDedupe = false)
     {
         var now = DateTime.UtcNow;
@@ -5137,6 +5149,16 @@ public partial class GameBridge(ClientConfig config)
                                 _ = _combat.NpcHoldAsync(npcName, 900, ct);
                             }
 
+                            // WO-153 4: a sample the host sent BEFORE its NPC died can reach this agent after the death was
+                            // applied here (the field: stream hp=1.8, 12 ms after ApplyDeath), and it would have put the copy
+                            // "alive" again in the mod's bookkeeping and skipped the owner-death landing. For 10 s after a death
+                            // was applied from a peer, an ALIVE sample of that NPC is not passed on.
+                            if (!nDead && Wo153DeathHeld(npcName))
+                            {
+                                Interlocked.Increment(ref _w153StaleAliveDropped);
+                            }
+                            else
+                            {
                             Wo131OnNpcSample(npcName, nhp, nDead);   // WO-131 1c: the copy's health follows the host's
 
                             string npcLua = string.Format(CultureInfo.InvariantCulture,
@@ -5144,6 +5166,7 @@ public partial class GameBridge(ClientConfig config)
                                 npcName, nx, ny, nz, nrot, nhp, nflags, nsrc, nseq, nSenderMs);   // WO-102 Phase 2: source id = the stream's owner (MP-AUTHORITY); WO-110 R6: seq + sender ms
                             if (_npcLua.Offer(npcName, NpcNativeBound(npcName), nflags, nhp, frame.Arrival, npcLua))   // WO-118 follow-up
                                 await ExecLuaAsync(npcLua);
+                            }
 
                             if (nDead && nSeen && !nWasDead)
                                 await ApplyRemoteNpcDeathAsync(npcName, null, nsrc, "0x27 dead transition", ct);
