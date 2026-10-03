@@ -4546,6 +4546,7 @@ public partial class GameBridge(ClientConfig config)
             // the frame the position does.
             _nativeFeed.Enqueue(new NativeNpcSample(gs.GhostId, "kcd2mp_" + gs.GhostId, gs.X, gs.Y, gs.Z, gs.RotZ,
                 gs.IsRiding ? (byte)0x10 : (byte)0, gSeq, gs.SenderMs, arrival, gs.State2));
+            Wo154FeedRiddenHorse(gs, gSeq, arrival);   // WO-154 5: the ridden horse rides the rider's stream
             // WO-121: the newest sender stamp per peer -- the clock an event's
             // own stamp is judged against (Protocol.EventStaleMs).
             if (gs.SenderMs != 0) _ghostLastSenderMs[gs.GhostId] = gs.SenderMs;
@@ -5933,6 +5934,7 @@ public partial class GameBridge(ClientConfig config)
             case "w154_cfg":         // WO-154 3: mp_host_target / mp_guard_respite / mp_fair_crime / mp_scene_resume
             case "w154_endfights":   // WO-154 3.4: mp_unstuck's end-combat step
             case "w154_check":       // WO-154 3.5: mp_w154_check (live checks)
+            case "w154_ride":        // WO-154 5: a ridden horse bound to the native writer (or let go)
             case "w154_status":
                 Wo154OnEvent(name, arg);
                 return;

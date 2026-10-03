@@ -107,7 +107,7 @@ public partial class GameBridge
     {
         try
         {
-            var m = await _combat.MotionConfigAsync(_avatarGait, _npcGait, _avatarMoves, _avatarCombat, _npcRows, _avatarQuiet, ct);
+            var m = await _combat.MotionConfigAsync(_avatarGait, _npcGait, _avatarMoves, _avatarCombat, _npcRows, _avatarQuiet, _w154GaitHyst, ct);
             var h = await _combat.HitsConfigAsync(_ffSession, _npcAttribution, true, ct);
             Console.WriteLine(FormattableString.Invariant(
                 $"MP-WO121 cfg avatar_gait={On(_avatarGait)} npc_gait={On(_npcGait)} avatar_moves={On(_avatarMoves)} avatar_combat={On(_avatarCombat)} npc_rows={On(_npcRows)} avatar_quiet=0x{_avatarQuiet:X} attribution={On(_npcAttribution)} friendly_fire={On(_ffSession)} ff_from={(_ffFromHost ? "host" : _isDamageAuthority ? "self-host" : "default")} dll_motion={m.ReasonTag} dll_hits={h.ReasonTag}"));

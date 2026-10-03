@@ -401,4 +401,47 @@ do
     noErrs("C2")
 end
 
+-- (D1) Phase 5: a ridden horse on the DLL's writer -------------------------------------------------------------------
+do
+    ERRS = {}; CMDS = {}
+    local e, g = mkAvatar(5, 100, 200, 81.5)
+    local horse = { class = "Horse", id = 777, px = 100, py = 200, pz = 80.0, writes = 0 }
+    horse.GetName = function() return "ttkc_horse_3" end
+    horse.GetWorldPos = function(self) return { x = self.px, y = self.py, z = self.pz } end
+    horse.SetWorldPos = function(self, p) self.writes = self.writes + 1 end
+    horse.SetWorldAngles = function() end
+    horse.soul = { GetId = function() return "userdata: 0500000000000ABC" end }
+    ENTS["ttkc_horse_3"] = horse
+    KCD2MP.horseGhosts = KCD2MP.horseGhosts or {}
+    KCD2MP.horseGhosts["5"] = { entity = horse, renderX = 101, renderY = 201, renderZ = 80, renderR = 0 }
+    local mark = #LOG
+    check("D1: the mounted avatar's horse goes native", KCD2MP_W154RideNative("5", true) == true)
+    check("D1: the agent is told the horse and the saddle height (1.5 m)", countEvt("w154_ride", "5 ttkc_horse_3 1.500", mark) == 1, lastLog("w154_ride", mark))
+    check("D1: the horse is bound like a puppet (100 ms behind, like the avatar)", countEvt("npc_native", "ttkc_horse_3 on ", mark) == 1
+        and (lastLog("npc_native ttkc_horse_3 on", mark) or ""):find(" 100$") ~= nil, lastLog("npc_native", mark))
+    check("D1: its brain is held (one driver)", CMDS[#CMDS] == "wh_ai_PauseNPC ttkc_horse_3", CMDS[#CMDS])
+    KCD2MP_ApplyHorseTransforms()
+    check("D1: until the DLL says bound, this file still moves it", horse.writes == 1, tostring(horse.writes))
+    KCD2MP_NpcNativeAck("ttkc_horse_3", 1, "ok")
+    check("D1: the DLL's ack marks it bound", KCD2MP.horseGhosts["5"].native.bound == true and lastLog("WO154-RIDE horse=ttkc_horse_3 native=bound", mark) ~= nil)
+    KCD2MP_ApplyHorseTransforms()
+    check("D1: bound -> this file no longer writes it", horse.writes == 1, tostring(horse.writes))
+    check("D1: a second mount call changes nothing", KCD2MP_W154RideNative("5", true) == false)
+    mark = #LOG
+    KCD2MP_GhostDismount("5", g, "riding-stop")
+    check("D1: the dismount lets it go first: the agent, the writer, the brain", countEvt("w154_ride", "5 off", mark) == 1
+        and countEvt("npc_native", "ttkc_horse_3 off", mark) == 1 and CMDS[#CMDS] == "wh_ai_ResumeNPC ttkc_horse_3", CMDS[#CMDS])
+    check("D1: ...and this file writes it again", KCD2MP.horseGhosts["5"].native == nil)
+    KCD2MP_W154SetRideNative("off")
+    check("D1: mp_ride_native off -> no native ride", KCD2MP_W154RideNative("5", true) == false)
+    KCD2MP_W154SetRideNative("on")
+    check("D1: mp_ride_native / mp_gait_hysteresis are console commands", CCMDS["mp_ride_native"] ~= nil and CCMDS["mp_gait_hysteresis"] ~= nil)
+    local m2 = #LOG
+    KCD2MP_W154SetGaitHyst("off")
+    check("D1: mp_gait_hysteresis tells the agent", countEvt("w154_cfg", "gait_hyst=off", m2) == 1)
+    KCD2MP_W154SetGaitHyst("on")
+    KCD2MP.horseGhosts["5"] = nil
+    noErrs("D1")
+end
+
 OUT = table.concat(RESULTS, "\n")

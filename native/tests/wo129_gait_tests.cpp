@@ -59,6 +59,31 @@ int main() {
     CHECK(clamp_class(3.0f, 0) == 3.0f && clamp_class(3.0f, -1) == 3.0f, "unknown range caps at 3");
     CHECK(clamp_class(1.0f, 1) == 1.0f, "a 1-class body keeps walk");
 
+    // ---- WO-154 5: the class with hysteresis -------------------------------
+    {
+        // the field's trot: 2.5-3.0 m/s around the walk/run boundary -- one class, no flapping
+        float cls = 1.0f;
+        int flips = 0;
+        const float trot[] = {2.30f, 2.50f, 2.35f, 2.60f, 2.45f, 2.90f, 2.30f, 3.00f, 2.28f, 2.70f};
+        float plain = speed_class(trot[0]);
+        int plainFlips = 0;
+        for (float s : trot) {
+            const float n = speed_class_hyst(s, cls); if (n != cls) ++flips; cls = n;
+            const float q = speed_class(s); if (q != plain) ++plainFlips; plain = q;
+        }
+        CHECK(flips == 1 && plainFlips == 7, "a pace wavering 2.28-3.00 m/s: 1 class change with the band, %d without (%d)", plainFlips, flips);
+        CHECK(speed_class_hyst(2.50f, 1.0f) == 1.0f, "walk stays walk at 2.50 (up needs 2.55)");
+        CHECK(speed_class_hyst(2.56f, 1.0f) == 2.0f, "walk -> run at 2.56");
+        CHECK(speed_class_hyst(2.30f, 2.0f) == 2.0f, "run stays run at 2.30 (down needs below 2.25)");
+        CHECK(speed_class_hyst(2.20f, 2.0f) == 1.0f, "run -> walk at 2.20");
+        CHECK(speed_class_hyst(4.10f, 2.0f) == 2.0f && speed_class_hyst(4.25f, 2.0f) == 3.0f, "run -> sprint only at 4.20+");
+        CHECK(speed_class_hyst(3.85f, 3.0f) == 3.0f && speed_class_hyst(3.75f, 3.0f) == 2.0f, "sprint -> run only below 3.80");
+        CHECK(speed_class_hyst(0.11f, 0.0f) == 0.0f && speed_class_hyst(0.14f, 0.0f) == 1.0f, "standing -> walk at 0.13+");
+        CHECK(speed_class_hyst(0.08f, 1.0f) == 1.0f && speed_class_hyst(0.05f, 1.0f) == 0.0f, "walk -> standing below 0.07");
+        CHECK(speed_class_hyst(6.0f, 1.0f) == 3.0f && speed_class_hyst(0.0f, 3.0f) == 0.0f, "a jump over classes is one change");
+        CHECK(speed_class_hyst(3.0f, -1.0f) == speed_class(3.0f), "no class yet: the plain class");
+    }
+
     // ---- the table ---------------------------------------------------------
     {
         static Table<16, 8> t;

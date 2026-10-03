@@ -2923,6 +2923,7 @@ end
 -- drop (ok=0).
 function KCD2MP_NpcNativeAck(name, ok, reason)
     local n = KCD2MP._npcNative
+    if KCD2MP_W154RideAck and KCD2MP_W154RideAck(name, ok, reason) then return end   -- WO-154 5: a ridden horse
     ok = (tonumber(ok) or 0) == 1
     if ok then n.acks = n.acks + 1 else n.nacks = n.nacks + 1 end
     local p = KCD2MP.npcPuppets[name]
@@ -11008,6 +11009,7 @@ function KCD2MP_MountNPCOnHorse(id)
 
         g2.istate.nativeMounted = true
         mp_log("NATIVE MOUNT SUCCESS id=" .. captId)
+        if KCD2MP_W154RideNative then pcall(KCD2MP_W154RideNative, captId, true) end   -- WO-154 5: the horse on the DLL's writer
 
         -- === OPTION C: suppress "No valid scheduler behavior while occupying stance" ===
         -- Try 1: send OnHorseMounted signal so scheduler updates its state
@@ -11039,6 +11041,7 @@ end
 function KCD2MP_GhostDismount(id, ghost, why)
     local st = ghost and ghost.istate
     if not st then return false end
+    if KCD2MP_W154RideNative then pcall(KCD2MP_W154RideNative, id, false) end   -- WO-154 5: the writer lets the horse go first
     local live = KCD2MP_GhostIsMounted(ghost)
     local flag = st.nativeMounted == true
     local force = "none"
@@ -11087,6 +11090,7 @@ function KCD2MP_GhostDismountRetry(id, ghost)
 end
 
 function KCD2MP_RemoveHorse(id)
+    if KCD2MP_W154RideNative then pcall(KCD2MP_W154RideNative, id, false) end   -- WO-154 5
     local horseData = KCD2MP.horseGhosts[id]
     if not horseData then return end
     if horseData.isWorldHorse then
@@ -11314,7 +11318,7 @@ end
 -- while the rider slid along on top of it.
 function KCD2MP_ApplyHorseTransforms()
     for id, horseData in pairs(KCD2MP.horseGhosts) do
-        if horseData.entity and horseData.renderX then
+        if horseData.entity and horseData.renderX and not (horseData.native and horseData.native.bound) then   -- WO-154 5: the DLL writes it
             pcall(function()
                 horseData.entity:SetWorldPos({x=horseData.renderX, y=horseData.renderY, z=horseData.renderZ})
                 horseData.entity:SetWorldAngles({x=0, y=0, z=horseData.renderR})
@@ -12841,9 +12845,11 @@ function KCD2MP_InterpTick(arg, gen)
                     -- or a dismount would wait a keep-alive period before the
                     -- ghost stopped riding an imaginary horse.
                     istate.animLoopName = nil
+                    local w154Native = (function() local h = KCD2MP.horseGhosts[id]; return h and h.native and h.native.bound end)()
                     if istate.nativeMounted then
                         -- Only override for gallop; leave idle to engine sync system.
-                        if isGallop and KCD2MP._ridingGallopAnim then
+                        -- WO-154 5: with the horse on the DLL's writer the engine syncs the rider to the horse's own gait.
+                        if isGallop and KCD2MP._ridingGallopAnim and not w154Native then
                             mp_anim_loop(istate, "rideLoop", ghost.entity,
                                          KCD2MP._ridingGallopAnim, 0.3, 1.0, KCD2MP._tickPumped)
                         elseif wasGallop then
@@ -12927,8 +12933,15 @@ function KCD2MP_InterpTick(arg, gen)
                             horseAnim = KCD2MP._horseEntityIdleAnim
                         end
                         -- WO-84: same change-plus-keep-alive rule as the rider.
-                        mp_anim_loop(horseData, "gaitLoop", horseData.entity,
-                                     horseAnim, 0.2, 1.0, KCD2MP._tickPumped)
+                        -- WO-154 5: a natively written horse walks by the engine's own locomotion (the DLL's gait):
+                        -- no forced clip (it fought the rider's idle: "segments do not have the same duration").
+                        if not (horseData.native and horseData.native.bound) then
+                            mp_anim_loop(horseData, "gaitLoop", horseData.entity,
+                                         horseAnim, 0.2, 1.0, KCD2MP._tickPumped)
+                        elseif horseData.gaitLoopName then
+                            pcall(function() horseData.entity:StopAnimation(0, 0) end)
+                            horseData.gaitLoopName = nil
+                        end
                     end
                     -- NPC ghost Z = sz = packet player Z = saddle height (correct).
                     -- Already set above in the nativeMounted block. No extra offset needed.
@@ -20107,6 +20120,77 @@ do
     if W.joinPanel == nil then W.joinPanel = true end
     function KCD2MP_W154SetJoinPanel(arg) return fightSwitch("join_panel", "joinPanel", arg, "the host's join bar is the game's tutorial panel through the engine's hold") end
 
+    -- Phase 5: riding, smooth on both screens. Once a partner's avatar is mounted (NATIVE MOUNT SUCCESS) its horse
+    -- becomes a puppet like any other: its brain held (one driver), the agent feeds it the RIDER'S stream under the
+    -- horse's own name with the saddle height taken off (measured here, the mounted avatar over its horse), and
+    -- KCDMP.dll writes it every frame with the engine's own locomotion (its gait). The field: the horse was moved by
+    -- this file every ~31 ms (every second frame), its brain ran too, and a forced gallop clip fought the rider's
+    -- idle. At the dismount (or the horse's removal) all three are undone. mp_ride_native on|off (default on).
+    --   WO154-RIDE native on|off id=<n> horse=<name> saddle_m=<dz>
+    if W.rideNative == nil then W.rideNative = true end
+    if W.gaitHyst == nil then W.gaitHyst = true end
+    W.rideStats = W.rideStats or { on = 0, off = 0, bound = 0, refused = 0 }
+    function KCD2MP_W154RideNative(id, on)
+        id = tostring(id)
+        local hd = KCD2MP.horseGhosts and KCD2MP.horseGhosts[id]
+        if not on then
+            local n = hd and hd.native
+            if not n then return false end
+            hd.native = nil
+            W.rideStats.off = W.rideStats.off + 1
+            KCD2MP_EmitEvent("w154_ride", id .. " off")
+            KCD2MP_EmitEvent("npc_native", n.name .. " off ride-over")
+            if n.paused then pcall(System.ExecuteCommand, "wh_ai_ResumeNPC " .. n.name) end   -- as the avatar's take left it
+            mp_log(string.format("WO154-RIDE native off id=%s horse=%s after_s=%.1f -- the horse is let go", id, n.name, os.clock() - n.at))
+            return true
+        end
+        local g = KCD2MP.ghosts and KCD2MP.ghosts[id]
+        if W.rideNative == false or not (hd and hd.entity and g and g.entity) or hd.native then return false end
+        local name = nil
+        pcall(function() name = hd.entity:GetName() end)
+        if not (name and string.find(name, "^[%w_]+$")) then return false end
+        local ap, hp = nil, nil
+        pcall(function() ap = g.entity:GetWorldPos(); hp = hd.entity:GetWorldPos() end)
+        local dz = (ap and hp) and (ap.z - hp.z) or 1.5
+        if not (dz > 0.6 and dz < 2.6) then dz = 1.5 end
+        local hexid = string.match(tostring(hd.entity.id), "(%x+)%s*$")
+        if not hexid then return false end
+        local wuid = "?"
+        pcall(function() if hd.entity.soul and hd.entity.soul.GetId then wuid = string.match(tostring(hd.entity.soul:GetId()), "(%x+)%s*$") or "?" end end)
+        local paused = pcall(System.ExecuteCommand, "wh_ai_PauseNPC " .. name)
+        hd.native = { name = name, dz = dz, at = os.clock(), bound = false, paused = paused }
+        W.rideStats.on = W.rideStats.on + 1
+        KCD2MP_EmitEvent("w154_ride", string.format("%s %s %.3f", id, name, dz))
+        KCD2MP_EmitEvent("npc_native", string.format("%s on %s %s %.3f %.3f %.3f %d", name, hexid, wuid,
+            hp and hp.x or 0, hp and hp.y or 0, hp and hp.z or 0, TUNE.GHOST_NATIVE_DELAY_MS or 100))
+        mp_log(string.format("WO154-RIDE native on id=%s horse=%s saddle_m=%.2f -- its brain held; KCDMP.dll writes it every frame from the rider's stream", id, name, dz))
+        return true
+    end
+
+    -- The DLL's answer for a ridden horse (true = it was one: not a puppet's ack).
+    function KCD2MP_W154RideAck(name, ok, reason)
+        for id, hd in pairs(KCD2MP.horseGhosts or {}) do
+            local n = hd.native
+            if n and n.name == name then
+                local was = n.bound
+                n.bound = (tonumber(ok) or 0) == 1
+                if n.bound and not was then W.rideStats.bound = W.rideStats.bound + 1 end
+                if not n.bound then W.rideStats.refused = W.rideStats.refused + 1 end
+                mp_log(string.format("WO154-RIDE horse=%s native=%s%s", tostring(name), n.bound and "bound -- written every frame" or "NOT bound",
+                    n.bound and "" or (" reason=" .. tostring(reason) .. " -- this file moves it, as before")))
+                return true
+            end
+        end
+        return false
+    end
+
+    function KCD2MP_W154SetRideNative(arg)
+        local r = fightSwitch("ride_native", "rideNative", arg, "a partner's ridden horse is written every frame by KCDMP.dll from the rider's stream")
+        if W.rideNative == false then for id in pairs(KCD2MP.horseGhosts or {}) do pcall(KCD2MP_W154RideNative, id, false) end end
+        return r
+    end
+    function KCD2MP_W154SetGaitHyst(arg) return fightSwitch("gait_hyst", "gaitHyst", arg, "a figure's gait changes only past a band (a pace on a boundary keeps its gait)") end
+
     -- Phase 4.2: where the game is, as the answer to the agent's token (wo124_reply <tok> menu|world|loading). A load
     -- that holds the main thread runs no console command: no answer at all is the agent's "busy".
     function KCD2MP_W154Where(tok)
@@ -21998,6 +22082,8 @@ local ok, err = pcall(function()
     System.AddCCommand("mp_guard_respite", 'KCD2MP_W154SetGuardRespite(%line)', "WO-154: no guard stops or attacks a partner who is down, or for 2 minutes after he is up (30 s after his mp_unstuck); a stop turned into an attack is 'fled' only when he moved away (default on): mp_guard_respite on|off")
     System.AddCCommand("mp_fair_crime", 'KCD2MP_W154SetFairCrime(%line)', "WO-154: (host) a partner's murder only on the victim's death, and an assault judged 5 s later -- no crime if the victim fights by then, a quest brawl (default on): mp_fair_crime on|off")
     System.AddCCommand("mp_scene_resume", 'KCD2MP_W154SetSceneResume(%line)', "WO-154: (joiner) a scene stuck at its end resumes the host's copies, as in 0.44.0 (default off: no copy is resumed; the engine's own rescue, a save request, runs at once): mp_scene_resume on|off")
+    System.AddCCommand("mp_ride_native", 'KCD2MP_W154SetRideNative(%line)', "WO-154: a partner's ridden horse is written every frame by KCDMP.dll from the rider's stream, its brain held, its gait the engine's own (default on; off = 0.44.0's Lua-moved horse): mp_ride_native on|off")
+    System.AddCCommand("mp_gait_hysteresis", 'KCD2MP_W154SetGaitHyst(%line)', "WO-154: a partner's figure (and a host copy) changes its gait only past a band around each boundary, so a pace on a boundary keeps its gait (default on): mp_gait_hysteresis on|off")
     System.AddCCommand("mp_join_panel", 'KCD2MP_W154SetJoinPanel(%line)', "WO-154: (host) the join's progress is the game's own tutorial panel, so it shows through the engine's hold (default on; off = 0.44.0's drawn bar, which the hold stops): mp_join_panel on|off")
     System.AddCCommand("mp_join_patient", 'KCD2MP_W154SetJoinPatient(%line)', "WO-154: (joiner) a join's load is given up only when the game answers from its menu, never while it is busy loading, and the world file is kept until no load can read it (default on): mp_join_patient on|off")
     System.AddCCommand("mp_w154_check", 'KCD2MP_W154Check(%line)', "WO-154 live checks (test NPCs named w154_ only): mp_w154_check hostfight <npc> [secs] | hostfight off | pursue <npc> <ghost> on|off | where | status")

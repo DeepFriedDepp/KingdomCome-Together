@@ -205,6 +205,7 @@ std::string g_whyGait = "not installed", g_whyMoves = "not installed", g_whyComb
 
 // ---- config (agent) --------------------------------------------------------------
 std::atomic<bool> g_cfgAvatarGait{true}, g_cfgNpcGait{true}, g_cfgMoves{true}, g_cfgCombat{true}, g_cfgNpcRows{true};
+std::atomic<bool> g_cfgGaitHyst{true};   // WO-154 5: mp_gait_hysteresis
 std::atomic<bool> g_cfgChanged{false};
 // WO-135: which groups of the avatar's puppet contexts are set (MotionConfig byte 5;
 // kQuiet* below). Default: all of them.
@@ -1266,13 +1267,14 @@ void install() {
 }
 
 uint8_t on_config(const uint8_t* body, size_t len) {
-    if (len != 5 && len != 6) return 8;
+    if (len < 5 || len > 7) return 8;
     g_cfgAvatarGait = body[0] != 0; g_cfgNpcGait = body[1] != 0; g_cfgMoves = body[2] != 0;
     g_cfgCombat = body[3] != 0; g_cfgNpcRows = body[4] != 0;
-    if (len == 6) g_cfgQuiet = static_cast<uint8_t>(body[5] & 0x0F);   // WO-135
+    if (len >= 6) g_cfgQuiet = static_cast<uint8_t>(body[5] & 0x0F);   // WO-135
+    if (len >= 7) g_cfgGaitHyst = body[6] != 0;                         // WO-154 5
     g_cfgChanged = true;
-    logf("WO121-MOTION config avatar_gait=%d npc_gait=%d avatar_moves=%d avatar_combat=%d npc_rows=%d quiet=0x%X",
-         body[0] != 0, body[1] != 0, body[2] != 0, body[3] != 0, body[4] != 0, g_cfgQuiet.load());
+    logf("WO121-MOTION config avatar_gait=%d npc_gait=%d avatar_moves=%d avatar_combat=%d npc_rows=%d quiet=0x%X gait_hysteresis=%d",
+         body[0] != 0, body[1] != 0, body[2] != 0, body[3] != 0, body[4] != 0, g_cfgQuiet.load(), g_cfgGaitHyst.load() ? 1 : 0);
     return 0;
 }
 
@@ -1322,7 +1324,8 @@ void body_frame(const char* key, void* ent, uint32_t eid, float renderSpeedMps, 
         if (!snap) { b.velX += (renderVx - b.velX) * 0.25f; b.velY += (renderVy - b.velY) * 0.25f; }
         // WO-129: pseudo-speed is a logical speed CLASS; clamp it to this body's own range.
         const int range = body_range(b, now);
-        float cls = gait::clamp_class(gait::speed_class(s), range);
+        // WO-154 5: with hysteresis (a pace on a boundary keeps its class)
+        float cls = gait::clamp_class(g_cfgGaitHyst.load() ? gait::speed_class_hyst(s, b.cls) : gait::speed_class(s), range);
         // WO-143: a copy the host shows hoeing creeps along its row (H1: 0.08-0.10 m/s, under the walking
         // floor; read as standing, it stood with its hoe). While it creeps it walks, and the tags see the
         // pace the game hoes at (J1: 0.4 m/s showed the hoeing walk; the stream still places the body).

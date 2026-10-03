@@ -25,6 +25,20 @@ inline float speed_class(float mps) {
     return 3.0f;
 }
 
+// WO-154 5: a class with hysteresis. The field's trot (2.5-3.0 m/s) sat on a boundary and the clip flapped (42
+// walk/gallop flips in 58 s). A class changes only once the speed is past the boundary by its half band, in the
+// direction of the change: idle/walk 0.10 +- 0.03, walk/run 2.40 +- 0.15, run/sprint 4.00 +- 0.20 m/s. prev < 0 =
+// no class yet (the plain class).
+inline float speed_class_hyst(float mps, float prev) {
+    const float raw = speed_class(mps);
+    if (!(prev >= 0.0f) || prev > 3.0f || raw == prev) return raw;
+    static constexpr float kBound[3] = {0.10f, 2.40f, 4.00f};   // the lower bound of classes 1, 2, 3
+    static constexpr float kHalf[3] = {0.03f, 0.15f, 0.20f};
+    const int c = static_cast<int>(prev);
+    if (raw > prev) return mps >= kBound[c] + kHalf[c] ? raw : prev;          // up: into class c + 1 (bound index c)
+    return (mps < kBound[c - 1] - kHalf[c - 1]) ? raw : prev;                    // down: out of class c (bound index c - 1)
+}
+
 // The body's own class count caps the class (engine: count(soul, kind));
 // unknown (<= 0) caps at the 3 classes every avatar showed.
 inline float clamp_class(float cls, int range) {

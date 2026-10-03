@@ -79,6 +79,7 @@ public partial class GameBridge
     private void Wo154ForgetPeer(byte ghost)
     {
         _w154PeerDown.TryRemove(ghost, out _);
+        _w154RideFeed.TryRemove(ghost, out _);
         _w154Respite.TryRemove(ghost, out _);
         _w154RespiteTold.TryRemove(ghost, out _);
     }
@@ -288,10 +289,17 @@ public partial class GameBridge
                         case "fair_crime": _w154FairCrime = on; break;
                         case "scene_resume": _w154SceneResume = on; break;
                         case "join_patient": _w154JoinPatient = on; break;
+                        case "ride_native": _w154RideNative = on; if (!on) _w154RideFeed.Clear(); break;
+                        case "gait_hyst":
+                            if (_w154GaitHyst != on) { _w154GaitHyst = on; _ = PushWo121ConfigAsync(_wo121Ct); }
+                            break;
                         case "join_panel": _w154JoinPanel = on; if (!on) Wo154HostJoinPanelHide("mp_join_panel off"); break;
                     }
                 }
-                Console.WriteLine($"MP-W154 cfg {Wo154FightStatsText()} {Wo154JoinStatsText()}");
+                Console.WriteLine($"MP-W154 cfg {Wo154FightStatsText()} {Wo154JoinStatsText()} {Wo154RideStatsText()}");
+                return;
+            case "w154_ride":        // phase 5: <ghost> <horse> <dz> | <ghost> off
+                Wo154OnRide(arg);
                 return;
             case "w154_check":       // mp_w154_check (live checks, test NPCs only)
                 _ = Wo154CheckAsync(arg ?? "");
@@ -300,7 +308,7 @@ public partial class GameBridge
                 _ = Wo154EndFightsLocalAsync(f.Length > 0 && Wo139Text.IsWord(f[0]) ? f[0] : "unstuck");
                 return;
             case "w154_status":
-                Console.WriteLine(FormattableString.Invariant($"MP-W154-STATUS falls={(_w154AvatarFalls ? "on" : "off")} fell={_w154Falls} rose={_w154Rises} peers_down={_w154PeerDown.Count(kv => kv.Value.Down)} coalesce={(_w154Coalesce ? "on" : "off")} merged={_w154Merged} waiting={_w154Coalescer.Count} contested={_w154Contest.Count} {Wo154FightStatsText()} {Wo154JoinStatsText()}"));
+                Console.WriteLine(FormattableString.Invariant($"MP-W154-STATUS falls={(_w154AvatarFalls ? "on" : "off")} fell={_w154Falls} rose={_w154Rises} peers_down={_w154PeerDown.Count(kv => kv.Value.Down)} coalesce={(_w154Coalesce ? "on" : "off")} merged={_w154Merged} waiting={_w154Coalescer.Count} contested={_w154Contest.Count} {Wo154FightStatsText()} {Wo154JoinStatsText()} {Wo154RideStatsText()}"));
                 return;
         }
     }
