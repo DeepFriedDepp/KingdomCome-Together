@@ -93,8 +93,12 @@ constexpr Prop kPropAttackType{0x2C0, "AttackType"};
 constexpr Prop kPropReqInputClass{0x300, "RequestedInputClass"};
 
 // ---- SEH-isolated primitives (no destructible locals) --------------------------
+// WO-153 5: an address no user-mode pointer can hold (the null page, or above the canonical range) is refused before the
+// read. The field's 3,556 faults a minute were `reading 0xffffffffffffffff`: a pointer slot that held data, read every frame.
+inline bool plausible_addr(uintptr_t a) { return fault::plausible_address(a); }
 template <class T> bool rd(const void* base, size_t off, T* out) {
     KCDMP_FAULT_READ(site, "motion::rd");
+    if (!plausible_addr(reinterpret_cast<uintptr_t>(base) + off)) return false;
     return fault::guarded(site, [&] { *out = *reinterpret_cast<const T*>(static_cast<const char*>(base) + off); });
 }
 void* vslot(void* obj, size_t off) {
@@ -166,6 +170,7 @@ bool call_setblock(void* fn, void* ca, bool on, unsigned scope) {
 }
 bool copy_cstr(const void* p, char* out, size_t n) {
     KCDMP_FAULT_READ(site, "motion::copy_cstr");
+    if (!plausible_addr(reinterpret_cast<uintptr_t>(p))) { out[0] = 0; return false; }   // WO-153 5
     if (fault::guarded(site, [&] {
         const char* s = static_cast<const char*>(p);
         size_t i = 0;
@@ -224,6 +229,7 @@ struct Body {
     // combat
     bool automationOff = false, combatHeld = false, blockApplied = false;
     int appliedGz = -2, appliedGs = -2, appliedAz = -2;
+    double caBadUntil = 0;        // WO-153 5: no combat read on this body until then (its combat actor read back wrong)
     double lastCombatAssert = 0, lastBuffCheck = 0, lastGaitLog = 0;
     uint32_t combatStarts = 0;
     bool ctxApplied = false;      // the WO-121 avatar contexts (kAvatarContexts) are set on its soul
@@ -731,10 +737,23 @@ void set_guard_flag(Body& b, uint8_t v) {
 
 void apply_combat(Body& b, const State2* st, double now) {
     const bool want = st && (st->bits & kBitCombat);
-    if (!b.ca) b.ca = combat_actor_of(b.actor, true);
+    if (now < b.caBadUntil) return;
+    // WO-153 5: the combat actor is read through its owner every frame. It was cached once, and a body whose combat
+    // actor the engine freed or rebuilt (a time skip, streaming) kept reading through the old pointer: ca+0x2F0 -> model
+    // -> name, one fault per frame for minutes (field: motion::rd / motion::copy_cstr, 78-110 a second).
+    void* cur = combat_actor_of(b.actor, false);
+    if (b.ca && cur != b.ca) {
+        b.ca = nullptr;
+        b.automationOff = b.combatHeld = b.blockApplied = false;
+        b.appliedGz = b.appliedGs = b.appliedAz = -2;
+    }
+    if (!b.ca) b.ca = cur ? cur : combat_actor_of(b.actor, true);
     if (!b.ca) return;
     void* model = nullptr;
-    if (!rd(b.ca, kCaModel, &model) || !model || !prop_named(model, kPropCombatMode)) return;
+    if (!rd(b.ca, kCaModel, &model) || !model || !prop_named(model, kPropCombatMode)) {
+        b.ca = nullptr; b.caBadUntil = now + 1.0;   // read back wrong: try again in a second, from the owner
+        return;
+    }
     if (want) {
         if (!b.automationOff) {
             if (!call_auto(A.fnAuto, g_autoCmd, b.ca, false)) { c_faults.fetch_add(1); g_combat = false; g_whyCombat = "automation call faulted"; return; }

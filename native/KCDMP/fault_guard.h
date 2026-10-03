@@ -78,6 +78,10 @@ void on_fault(Site& s) noexcept;
 
 inline bool enabled(const Site& s) noexcept { return !s.off.load(std::memory_order_relaxed); }
 
+// WO-153 5: an address no user-mode pointer can hold -- the null page, or above the canonical range. A read through one is
+// refused before it happens (no fault, no log line). The field's `reading 0xffffffffffffffff` was a pointer slot that held data.
+inline bool plausible_address(uintptr_t a) noexcept { return a >= 0x10000 && a < 0x0000800000000000ull; }
+
 // Run f() under the guard. False when the site is switched off (f never runs) or when
 // f faulted.
 template <class F>

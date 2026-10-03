@@ -44,6 +44,20 @@ int wo151_tests(int* passed) {
     fault::reset_for_tests();
     fault::set_sink(&capture);
 
+    // ---- WO-153 5: an impossible address is refused before the read (the field's `reading 0xffffffffffffffff`) ----
+    {
+        FCHECK(!fault::plausible_address(0), "null");
+        FCHECK(!fault::plausible_address(0x10), "the null page");
+        FCHECK(!fault::plausible_address(0xFFFF), "just under the first mappable page");
+        FCHECK(fault::plausible_address(0x10000), "the first mappable page");
+        FCHECK(fault::plausible_address(0x00007FFC04380000ull), "a module base");
+        FCHECK(!fault::plausible_address(0x0000800000000000ull), "the first non-canonical address");
+        FCHECK(!fault::plausible_address(0xFFFFFFFFFFFFFFFFull), "-1: the field's address");
+        FCHECK(!fault::plausible_address(0xFFFFFFFF00007777ull), "a half-sign-extended value (WO-151 0.1's local_state read)");
+        const int before = 0;
+        (void)before;
+    }
+
     // ---- a read site: counted and logged at the 1st, 10th and 100th, never switched off ----
     {
         static fault::Site s{"test/read", fault::Kind::Read};
