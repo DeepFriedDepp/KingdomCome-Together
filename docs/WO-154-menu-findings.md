@@ -186,7 +186,7 @@ screen is on.
 |---|---|
 | `tools/Test-WO154Synthetic.ps1` | 223 passed, 0 failed |
 | every `tools/Test-*Synthetic.ps1` (45 suites) | all 0 failed |
-| `dotnet test dotnet/KcdMp.Client.Tests -c Release` | 935 passed, 0 failed (60 of them new) |
+| `dotnet test dotnet/KcdMp.Client.Tests -c Release` | 939 passed, 0 failed (60 of them new), on top of main 17aab69 |
 | `dotnet test dotnet/KcdMp.Relay.Tests -c Release` (the protocol gained two constants) | 62 passed, 0 failed |
 | `tools/Test-WO106ConsolePlaceholder.ps1` | 7 passed |
 | `tools/Test-WO110LuaLocals.ps1` | 134 main-chunk locals (unchanged), 6 passed |
