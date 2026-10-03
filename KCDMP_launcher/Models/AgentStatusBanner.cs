@@ -26,6 +26,10 @@ namespace KCDMP_launcher.Models
         public long Total { get; set; }
         public double EtaS { get; set; }
         public string Message { get; set; } = "";
+        // WO-154 (Phase 4.4): why this joiner has no usable save -- regular-game-saves | only-host-copies |
+        // no-saves | wrong-build -- and whether the agent can join with a new character instead.
+        public string Reason { get; set; } = "";
+        public bool CanFresh { get; set; }
     }
 
     /// <summary>
@@ -57,6 +61,25 @@ namespace KCDMP_launcher.Models
         public bool ShowFresh => JoinState is "choose" or "choose-fresh";
         /// <summary>WO-140: a joiner connected from its own save (the agent's "own-world" state): the launcher shows a modal once.</summary>
         public bool OwnWorld => JoinState == "own-world";
+        /// <summary>WO-154: the joiner has no usable save and the agent can join with a new character (POST /join-choice?c=fresh).</summary>
+        public bool ShowFreshJoin { get; private set; }
+        /// <summary>WO-154: the agent's reason code for the plain message (empty: none given).</summary>
+        public string JoinReason { get; private set; } = "";
+
+        /// <summary>
+        /// WO-154 (Phase 4.4): the launcher's plain words for a joiner without a usable save, by the
+        /// agent's reason; null for a reason it does not know (the agent's own message is shown then).
+        /// </summary>
+        public static string? PlainReason(string reason) => reason switch
+        {
+            "regular-game-saves" => "Your saves are from the regular game, not the Modding Tools.",
+            "only-host-copies" => "Your only Modding Tools saves are copies of this same world.",
+            "no-saves" => "You have no Modding Tools saves yet.",
+            "wrong-build" => "Your saves are from a different game version than your host's.",
+            _ => null,
+        };
+
+        public const string FreshJoinOffer = "You can join with a new character.";
 
         private string _lastConnState = "";
         private double _lastReadAt = double.NaN;
@@ -68,6 +91,7 @@ namespace KCDMP_launcher.Models
             ConnLine = viaSteam ? "Connecting to your host through Steam..." : "Connecting to your host...";
             ConnBad = false;
             JoinMessage = ""; JoinState = "idle";
+            ShowFreshJoin = false; JoinReason = "";
             _lastConnState = "starting";
             _lastReadAt = nowS;
             _lastLog = "";
@@ -85,6 +109,7 @@ namespace KCDMP_launcher.Models
                 ConnLine = _lastConnState == "connected" || _lastConnState == "" ? "" : "The multiplayer part stopped. Click CONNECT to start it again.";
                 ConnBad = ConnLine.Length > 0;
                 JoinMessage = ""; JoinState = "idle";
+                ShowFreshJoin = false; JoinReason = "";
                 return Report("agent=exited");
             }
             if (cs is not null)
@@ -107,13 +132,20 @@ namespace KCDMP_launcher.Models
             {
                 JoinState = string.IsNullOrEmpty(js.State) ? "idle" : js.State;
                 JoinMessage = JoinState == "idle" ? "" : js.Message;
+                // WO-154: no usable save, a new character possible: the plain words for the reason, and the button.
+                JoinReason = js.Reason ?? "";
+                ShowFreshJoin = js.CanFresh && !ShowChoiceButtons;
+                if (ShowFreshJoin)
+                    JoinMessage = PlainReason(JoinReason) is string plain ? plain + " " + FreshJoinOffer
+                                : string.IsNullOrEmpty(JoinMessage) ? FreshJoinOffer : JoinMessage;
             }
             return Report($"connection={(cs?.State ?? "unread")} join={(js is null ? "unread" : JoinState)}");
         }
 
         private string? Report(string what)
         {
-            string line = $"Agent status: {what} line=\"{ConnLine}\" join=\"{JoinMessage}\" buttons={(ShowChoiceButtons ? "shown" : "hidden")}";
+            string line = $"Agent status: {what} line=\"{ConnLine}\" join=\"{JoinMessage}\" buttons={(ShowChoiceButtons ? "shown" : "hidden")}"
+                        + (JoinReason.Length > 0 || ShowFreshJoin ? $" reason={(JoinReason.Length > 0 ? JoinReason : "-")} fresh={(ShowFreshJoin ? "shown" : "hidden")}" : "");
             if (line == _lastLog) return null;
             _lastLog = line;
             return line;

@@ -299,6 +299,7 @@ namespace KCDMP_launcher.Pages
             connStatusBad = agentBanner.ConnBad;
             joinStatusMessage = agentBanner.JoinMessage;
             joinStatusState = agentBanner.JoinState;
+            joinCanFresh = agentBanner.ShowFreshJoin;   // WO-154: "Join with a new character"
         }
 
         private async Task PollAgentStatusAsync(Process? agent, CancellationToken ct)

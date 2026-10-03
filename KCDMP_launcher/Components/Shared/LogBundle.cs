@@ -243,7 +243,7 @@ namespace KCDMP_launcher.Components.Shared
         /// up from it a few levels, then scan every KCD-ish folder in every
         /// Steam library and take the most recently written match.
         /// </summary>
-        private static string? FindKcdLog(string gameRoot)
+        internal static string? FindKcdLog(string gameRoot)   // WO-154: also the CONNECT gate's (Home.Wo154.cs)
         {
             try
             {

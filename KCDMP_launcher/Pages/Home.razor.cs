@@ -59,6 +59,7 @@ namespace KCDMP_launcher.Pages
         // WO-123: the joiner's world transfer ("Receiving the world... 62%"), polled from the agent.
         private string joinStatusMessage = "";
         private string joinStatusState = "idle";   // WO-125: "choose" shows the first-join buttons
+        private bool joinCanFresh;                 // WO-154: no usable save -- "Join with a new character"
         // WO-140: a joiner waits at the main menu and joins the host's world from there.
         internal const string JoinerReadyText = "Stay at the main menu. Don't load a save. Click CONNECT -- you'll join your host's world automatically.";
         private bool ownWorldModalShown;           // WO-140: the "you loaded your own save" modal, once per stretch
@@ -504,6 +505,7 @@ namespace KCDMP_launcher.Pages
                     ShowBlocked(keysBlock);
                     return;
                 }
+                var gameStartLocal = DateTime.Now;   // WO-154: the gate reads only this game's kcd.log
                 var gameProcess = StartChecked(gameStartInfo);
                 if (gameProcess == null)
                 {
@@ -513,6 +515,8 @@ namespace KCDMP_launcher.Pages
 
                 launchStage = LaunchStage.WaitingForConnect;
                 launchStatusMessage = "Waiting for the game to start...";
+                // WO-154: CONNECT waits until it can work (the host's world, the joiner's host), with the reason shown.
+                StartConnectGate(hostedRelayProcess != null && !hostedRelayProcess.HasExited, server, gameStartLocal);
                 StateHasChanged();
 
                 if (!await WaitForInjectableAsync(gameProcess, settings.InjectDelaySeconds))
@@ -579,6 +583,14 @@ namespace KCDMP_launcher.Pages
                 ResetLaunchState();
                 return;
             }
+
+            // WO-154: the button is disabled while the gate is closed; a click that still arrives is not acted on.
+            if (!ConnectEnabled)
+            {
+                Log.Information("MP-LAUNCH CONNECT not taken: {Reason}", connectGateReason);
+                return;
+            }
+            StopConnectGate();
 
             string injectorPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "KCDMP_LauncherInjector.exe");
             string agentPath = ResolveAgainstLauncher(settings.AgentPath);
@@ -652,6 +664,8 @@ namespace KCDMP_launcher.Pages
                 ShowBlocked(lb.Block);
                 launchStage = LaunchStage.WaitingForConnect;
                 launchStatusMessage = waitingText;
+                connectGateOpen = true;   // the gate was passed already
+                connectGateReason = "";
                 StateHasChanged();
             }
             catch (Exception ex)
@@ -813,6 +827,9 @@ namespace KCDMP_launcher.Pages
             launchStatusMessage = "";
             versionPollCts?.Cancel();
             versionPollCts = null;
+            StopConnectGate();   // WO-154
+            connectGateOpen = true;
+            connectGateReason = "";
             StateHasChanged();
         }
 

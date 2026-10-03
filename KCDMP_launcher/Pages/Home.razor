@@ -90,11 +90,16 @@
                     })
                 </div>
                 <p style="margin: 15px 0;">@launchStatusMessage</p>
+                @if (launchStage == LaunchStage.WaitingForConnect && !ConnectEnabled && !string.IsNullOrEmpty(connectGateReason))
+                {
+                    @* WO-154: why CONNECT waits, in plain words (Models/ConnectGate.cs) *@
+                    <div class="kcd-hint" style="margin-bottom: 12px;">@connectGateReason</div>
+                }
 
                 <div class="modal-actions">
                     @if (launchStage == LaunchStage.WaitingForConnect)
                     {
-                        <button class="kcd-btn primary" @onclick="ConnectToGame">CONNECT</button>
+                        <button class="kcd-btn primary" disabled="@(!ConnectEnabled)" @onclick="ConnectToGame">CONNECT</button>
                         <button class="kcd-btn" @onclick="CancelPendingConnect">CANCEL</button>
                     }
                     else if (launchStage == LaunchStage.Connected || launchStage == LaunchStage.Failed)
@@ -197,6 +202,13 @@
                 {
                     <button class="btn btn-secondary" @onclick='() => SendJoinChoiceAsync("fresh")'>Start fresh</button>
                 }
+            </div>
+        }
+        else if (joinCanFresh)
+        {
+            @* WO-154: no usable save (the message says why) -- the agent can join with a new character (mp_join_henry fresh) *@
+            <div style="margin-top: 8px; display: flex; gap: 12px; justify-content: center;">
+                <button class="btn btn-primary" @onclick='() => SendJoinChoiceAsync("fresh")'>Join with a new character</button>
             </div>
         }
     </div>

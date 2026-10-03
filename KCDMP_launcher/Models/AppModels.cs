@@ -216,6 +216,12 @@ namespace KCDMP_launcher.Models
         // WO-127: "Also allow Steam" in the Host window (the relay also listens on Steam P2P).
         public bool HostAllowSteam { get; set; } = true;
 
+        // WO-154: CONNECT waits until it can work, with the reason under it -- the
+        // host's until the game's log says the world is loaded and settled, the
+        // joiner's until the host's relay says the host is in (Models/ConnectGate.cs).
+        // false = the button is always enabled, as before 0.45.0.
+        public bool ConnectGate { get; set; } = true;
+
         // WO-154: Host finds the relay's ports taken by this install's own relay (a
         // launcher closed with the window's X leaves it running): the same release with
         // the same settings is used again, any other is stopped and replaced; another

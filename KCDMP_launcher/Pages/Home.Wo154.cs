@@ -6,6 +6,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using KCDMP_launcher.Components.Shared;
 using KCDMP_launcher.Models;
@@ -16,11 +17,17 @@ namespace KCDMP_launcher.Pages
 {
     /// <summary>
     /// WO-154: the launcher's last work order before the public beta.
-    ///
-    /// The player's files. settings.json, custom_servers.json and favorites.json belong to the
-    /// player (the maintainer's rule, permanent): every write is the player's own change, key by
-    /// key or entry by entry, atomically; nothing is reset, reordered or dropped, unknown keys
-    /// stay (LauncherSettingsStore, PlayerListFiles). The log names keys, never values.
+    /// <list type="bullet">
+    /// <item>The player's files. settings.json, custom_servers.json and favorites.json belong to
+    ///   the player (the maintainer's rule, permanent): every write is the player's own change, key
+    ///   by key or entry by entry, atomically; nothing is reset, reordered or dropped, unknown keys
+    ///   stay (LauncherSettingsStore, PlayerListFiles). The log names keys, never values.</item>
+    /// <item>Windows blocking the mod (Phase 7): every start goes through StartChecked; a refused
+    ///   or quarantined file is one plain message by its name (LaunchBlock).</item>
+    /// <item>CONNECT waits until it can work (Phase 4.3), with the reason under it (ConnectGate).</item>
+    /// <item>The relay's ports held by an earlier launcher's relay (Phase 7): reused or replaced,
+    ///   another program's never touched (RelayReuse).</item>
+    /// </list>
     /// </summary>
     public partial class Home
     {
@@ -211,6 +218,93 @@ namespace KCDMP_launcher.Pages
         {
             ReadInstallManifest();
             return installedMod!;
+        }
+
+        // ------------------------------------------------------------ CONNECT waits until it can work (Phase 4.3)
+        //
+        // The rule is ConnectGateRule (Models/ConnectGate.cs): the host's button opens when the game's own
+        // kcd.log says the world is loaded and has been for ConnectGateRule.SettleS; the joiner's when the
+        // host's relay says the host's agent is in. The reason is shown in plain words under the button.
+        // Passive: the launcher reads a log and asks the relay -- no key, click or focus change, ever.
+
+        private bool connectGateOpen = true;
+        private string connectGateReason = "";
+        private CancellationTokenSource? connectGateCts;
+
+        /// <summary>The CONNECT button's state: always on with the ConnectGate setting off.</summary>
+        private bool ConnectEnabled => !settings.ConnectGate || connectGateOpen;
+
+        /// <summary>From LaunchGame, once the game is up: the gate for this launch.</summary>
+        private void StartConnectGate(bool hosting, ServerInfo server, DateTime gameStartLocal)
+        {
+            StopConnectGate();
+            connectGateOpen = true;
+            connectGateReason = "";
+            if (!settings.ConnectGate) return;
+            connectGateOpen = false;
+            connectGateReason = hosting ? ConnectGateRule.LoadSaveFirst : ConnectGateRule.HostNotReady;
+            Log.Information("MP-LAUNCH connect gate closed ({Who}) -- {Reason}", hosting ? "host: the game's log" : "joiner: the host's relay", connectGateReason);
+            var cts = connectGateCts = new CancellationTokenSource();
+            _ = hosting ? HostGateLoopAsync(gameStartLocal, cts.Token) : JoinerGateLoopAsync(server, cts.Token);
+        }
+
+        private void StopConnectGate()
+        {
+            connectGateCts?.Cancel();
+            connectGateCts = null;
+        }
+
+        private async Task HostGateLoopAsync(DateTime gameStartLocal, CancellationToken ct)
+        {
+            var clock = Stopwatch.StartNew();
+            KcdLogFollower? follower = null;
+            double nextFind = 0;
+            while (!ct.IsCancellationRequested)
+            {
+                double now = clock.Elapsed.TotalSeconds;
+                if (follower is null && now >= nextFind)
+                {
+                    string root = LogBundleGameRoot;
+                    if (await Task.Run(() => LogBundle.FindKcdLog(root)) is string path) follower = new KcdLogFollower(path, gameStartLocal);
+                    else nextFind = now + 5;
+                }
+                if (follower is not null) await Task.Run(() => follower.Poll(now));
+                bool reading = follower?.Reading == true;
+                var v = ConnectGateRule.ForHost(follower?.State.Stage ?? GameStage.Starting, follower?.State.WorldSinceS ?? double.NaN,
+                                            reading, (DateTime.Now - gameStartLocal).TotalSeconds, now);
+                await SetGateAsync(v, reading ? $"game {follower!.State.Stage.ToString().ToLowerInvariant()}" : "the game's log is not readable yet", ct);
+                try { await Task.Delay(1000, ct); } catch (OperationCanceledException) { break; }
+            }
+        }
+
+        private async Task JoinerGateLoopAsync(ServerInfo server, CancellationToken ct)
+        {
+            string agent = ResolveAgainstLauncher(settings.AgentPath);
+            string args = server.SteamCode is null
+                ? $"--test-connection --host {server.Ip} --port {server.Port}"
+                : $"--test-connection --steam \"{server.SteamCode}\" --steam-app {settings.SteamAppId}{SteamGameArg}";
+            while (!ct.IsCancellationRequested)
+            {
+                TestConnectionData? r = null;
+                try { r = await AgentHelper.RunAsync<TestConnectionData>(agent, args, "TEST-CONNECTION", TimeSpan.FromSeconds(45)); }
+                catch (Exception ex) { Log.Debug("MP-LAUNCH connect gate: the host check did not run ({Kind})", ex.GetType().Name); }
+                if (ct.IsCancellationRequested) break;
+                var answer = r is null ? HostAnswer.Unknown : ConnectGateRule.FromTest(r.Reachable, r.Kind, r.HostConnected);
+                var v = ConnectGateRule.ForJoiner(answer);
+                await SetGateAsync(v, $"host {answer.ToString().ToLowerInvariant()}", ct);
+                if (v.Open) break;   // the host is in (or the relay cannot say): CONNECT stays open
+                try { await Task.Delay(server.SteamCode is null ? 8000 : 12000, ct); } catch (OperationCanceledException) { break; }
+            }
+        }
+
+        private async Task SetGateAsync(GateView v, string detail, CancellationToken ct)
+        {
+            if (ct.IsCancellationRequested) return;   // CONNECT was pressed (or the launch ended): this loop no longer decides
+            if (v.Open == connectGateOpen && v.Reason == connectGateReason) return;
+            connectGateOpen = v.Open;
+            connectGateReason = v.Reason;
+            Log.Information("MP-LAUNCH connect gate {State} ({Detail}){Reason}", v.Open ? "open" : "closed", detail, v.Open ? "" : " -- " + v.Reason);
+            await InvokeAsync(StateHasChanged);
         }
 
         // ------------------------------------------------------------ the relay's ports (Phase 7)
