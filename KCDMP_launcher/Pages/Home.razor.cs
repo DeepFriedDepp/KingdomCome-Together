@@ -479,25 +479,12 @@ namespace KCDMP_launcher.Pages
             }
 
             string dllFullPath = ResolveAgainstLauncher(settings.DllPath);
-            if (!File.Exists(dllFullPath))
-            {
-                UiService.ShowError($"Multiplayer DLL not found at: {dllFullPath}");
-                return;
-            }
-
             string injectorPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "KCDMP_LauncherInjector.exe");
-            if (!File.Exists(injectorPath))
-            {
-                UiService.ShowError($"Injector executable not found at: {injectorPath}");
-                return;
-            }
-
             string agentPath = ResolveAgainstLauncher(settings.AgentPath);
-            if (!File.Exists(agentPath))
-            {
-                UiService.ShowError($"Agent (KcdMpClient.exe) not found at: {agentPath}");
+            // WO-154: a file the launch needs that is gone or empty -- what an antivirus quarantine
+            // leaves -- is told in plain words, by its name only (the old messages showed full paths).
+            if (BlockedBeforeLaunch(GameRootOf(settings.GamePath), dllFullPath, injectorPath, agentPath, Path.ChangeExtension(agentPath, ".dll")))
                 return;
-            }
 
             try
             {
@@ -510,8 +497,14 @@ namespace KCDMP_launcher.Pages
 
                 // WO-144: the previous launch's logs are kept before the game starts over them
                 LogBundle.KeepHistory(GameRootOf(settings.GamePath), Path.GetDirectoryName(agentPath) ?? "");
-                await RefreshKeysPakAsync(agentPath, GameRootOf(settings.GamePath));
-                var gameProcess = Process.Start(gameStartInfo);
+                // WO-154: the agent's first start of a launch (the keys pak). Windows refusing it stops
+                // the launch here, before a game is started for nothing.
+                if (await RefreshKeysPakAsync(agentPath, GameRootOf(settings.GamePath), IsInstalledFile(agentPath)) is { } keysBlock)
+                {
+                    ShowBlocked(keysBlock);
+                    return;
+                }
+                var gameProcess = StartChecked(gameStartInfo);
                 if (gameProcess == null)
                 {
                     UiService.ShowError("The game process could not be started.");
@@ -541,6 +534,11 @@ namespace KCDMP_launcher.Pages
                     ? "Load into your save, then click CONNECT once you can see and move your character."
                     : JoinerReadyText;
                 StateHasChanged();
+            }
+            catch (LaunchBlockedException lb)
+            {
+                ShowBlocked(lb.Block);   // WO-154: Windows refused the game's start
+                ResetLaunchState();
             }
             catch (Exception ex)
             {
@@ -584,6 +582,7 @@ namespace KCDMP_launcher.Pages
 
             string injectorPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "KCDMP_LauncherInjector.exe");
             string agentPath = ResolveAgainstLauncher(settings.AgentPath);
+            string waitingText = launchStatusMessage;   // WO-154: back to it when Windows refuses a start
 
             try
             {
@@ -599,7 +598,7 @@ namespace KCDMP_launcher.Pages
                     CreateNoWindow = true
                 };
 
-                using (var injector = Process.Start(injectorStartInfo))
+                using (var injector = StartChecked(injectorStartInfo))
                 {
                     if (injector != null)
                     {
@@ -643,6 +642,16 @@ namespace KCDMP_launcher.Pages
 
                 launchStage = LaunchStage.Connected;
                 launchStatusMessage = "The game is ready. The line at the bottom of this window shows the connection; you can close this.";
+                StateHasChanged();
+            }
+            catch (LaunchBlockedException lb)
+            {
+                // WO-154: Windows refused the injector or the agent. Nothing reached the game (or the
+                // plugin is in and waits), so once the player has allowed the file, CONNECT works
+                // again in this same game -- no restart needed.
+                ShowBlocked(lb.Block);
+                launchStage = LaunchStage.WaitingForConnect;
+                launchStatusMessage = waitingText;
                 StateHasChanged();
             }
             catch (Exception ex)
@@ -862,38 +871,40 @@ namespace KCDMP_launcher.Pages
             if (hostedRelayProcess == null || hostedRelayProcess.HasExited)
             {
                 string relayPath = ResolveAgainstLauncher(settings.RelayPath);
-                if (!File.Exists(relayPath))
+                // WO-154: gone or empty (a quarantine looks like this) -- one plain message, no path.
+                if (BlockedBeforeLaunch("", relayPath, Path.ChangeExtension(relayPath, ".dll")))
+                    return;
+                try
                 {
-                    hostErrorMessage = $"Relay executable not found at: {relayPath}. Check Settings.";
-                }
-                else
-                {
-                    try
+                    var relayStartInfo = new ProcessStartInfo
                     {
-                        var relayStartInfo = new ProcessStartInfo
-                        {
-                            FileName = relayPath,
-                            Arguments = RelayArguments(),   // WO-127: + Steam when "Also allow Steam" is on
-                            UseShellExecute = false,
-                            CreateNoWindow = true,
-                            WorkingDirectory = Path.GetDirectoryName(relayPath)
-                        };
-                        hostedRelayProcess = Process.Start(relayStartInfo);
-                        // Give it a moment to bind before anyone tries to connect.
-                        await Task.Delay(500);
-                        if (hostedRelayProcess == null || hostedRelayProcess.HasExited)
-                        {
-                            Log.Warning("The relay exited right after starting (code {Code})", hostedRelayProcess?.ExitCode);
-                            hostErrorMessage = $"Hosting stopped right after it started. Another copy may already be running on port {settings.HostPort}: close it (or restart the computer) and try again.";
-                            hostedRelayProcess = null;
-                        }
-                    }
-                    catch (Exception ex)
+                        FileName = relayPath,
+                        Arguments = RelayArguments(),   // WO-127: + Steam when "Also allow Steam" is on
+                        UseShellExecute = false,
+                        CreateNoWindow = true,
+                        WorkingDirectory = Path.GetDirectoryName(relayPath)
+                    };
+                    hostedRelayProcess = StartChecked(relayStartInfo);
+                    // Give it a moment to bind before anyone tries to connect.
+                    await Task.Delay(500);
+                    if (hostedRelayProcess == null || hostedRelayProcess.HasExited)
                     {
-                        Log.Error(ex, "Could not start the relay");
-                        hostErrorMessage = "Hosting couldn't start on this computer. Check the relay path in Settings, then try again.";
+                        Log.Warning("The relay exited right after starting (code {Code})", hostedRelayProcess?.ExitCode);
+                        hostErrorMessage = $"Hosting stopped right after it started. Another copy may already be running on port {settings.HostPort}: close it (or restart the computer) and try again.";
                         hostedRelayProcess = null;
                     }
+                }
+                catch (LaunchBlockedException lb)
+                {
+                    ShowBlocked(lb.Block);   // WO-154: Windows refused the relay
+                    hostedRelayProcess = null;
+                    return;
+                }
+                catch (Exception ex)
+                {
+                    Log.Error(ex, "Could not start the relay");
+                    hostErrorMessage = "Hosting couldn't start on this computer. Check the relay path in Settings, then try again.";
+                    hostedRelayProcess = null;
                 }
             }
 
@@ -1040,6 +1051,9 @@ namespace KCDMP_launcher.Pages
             catch (Exception ex)
             {
                 Log.Warning(ex, "Could not start the local master server");
+                // WO-154: classified for the log only -- the master server is optional (the browser list stays empty).
+                if (LaunchBlocks.FromStartFailure(ex, Path.GetFileName(masterServerPath), IsInstalledFile(masterServerPath)) is { } b)
+                    Log.Warning("{Line} (the optional master server; nothing shown)", b.LogLine);
                 hostedMasterServerProcess = null;
             }
         }

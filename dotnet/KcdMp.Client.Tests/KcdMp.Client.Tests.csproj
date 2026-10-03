@@ -33,6 +33,8 @@
     <Compile Include="..\..\KCDMP_launcher\Models\AppModels.cs" Link="Launcher\AppModels.cs" />
     <Compile Include="..\..\KCDMP_launcher\Models\LauncherSettingsStore.cs" Link="Launcher\LauncherSettingsStore.cs" />
     <Compile Include="..\..\KCDMP_launcher\Models\PlayerListFiles.cs" Link="Launcher\PlayerListFiles.cs" />
+    <!-- WO-154 (Phase 7): Windows blocking a file the mod needs, in plain words. -->
+    <Compile Include="..\..\KCDMP_launcher\Models\LaunchBlock.cs" Link="Launcher\LaunchBlock.cs" />
   </ItemGroup>
 
 </Project>

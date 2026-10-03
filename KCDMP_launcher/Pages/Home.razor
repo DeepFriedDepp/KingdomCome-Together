@@ -148,6 +148,8 @@
               Address="@fallbackAddress"
               AddressChanged="@(a => fallbackAddress = a)"
               OnUseAddress="@ConnectByAddressAfterSteamAsync"
+              ShowReportBug="@messageReportBug"
+              OnReportBug="@(() => { showMessage = false; showReportBug = true; })"
               OnClose="@(() => showMessage = false)" />
 
 <ExitModal  IsVisible="@showExitConfirm"

@@ -342,7 +342,8 @@ namespace KCDMP_launcher.Pages
             {
                 RecordModsPath(ModInstall.TargetDir(mt), snap.ModdingToolsExe);
                 string agentPath = ResolveAgainstLauncher(settings.AgentPath);
-                if (File.Exists(agentPath)) await RefreshKeysPakAsync(agentPath, mt);
+                if (File.Exists(agentPath) && await RefreshKeysPakAsync(agentPath, mt, IsInstalledFile(agentPath)) is { } keysBlock)
+                    Log.Warning("setup: keys pak not built -- {Line}", keysBlock.LogLine);   // WO-154: told at the next launch
             }
             SetActivity(setupActivity with
             {

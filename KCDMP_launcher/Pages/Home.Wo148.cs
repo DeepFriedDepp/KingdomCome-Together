@@ -26,7 +26,11 @@ namespace KCDMP_launcher.Pages
             public string? Source { get; set; }
         }
 
-        private static async Task RefreshKeysPakAsync(string agentPath, string gameRoot)
+        /// <summary>
+        /// WO-154: returns how Windows refused the agent itself (its first start in a launch), for the
+        /// caller to tell the player; null otherwise -- a failure here costs the keys only.
+        /// </summary>
+        private static async Task<LaunchBlock?> RefreshKeysPakAsync(string agentPath, string gameRoot, bool agentInstalled = false)
         {
             try
             {
@@ -34,7 +38,7 @@ namespace KCDMP_launcher.Pages
                 if (!Directory.Exists(modDir))
                 {
                     Log.Warning("keys pak: no Mods\\kdcmp folder in the game root; not built");
-                    return;
+                    return null;
                 }
                 var r = await AgentHelper.RunAsync<KeysPakResult>(
                     agentPath, $"--keys-pak --game-root \"{gameRoot}\" --mod-dir \"{modDir}\"", "KEYS-PAK", TimeSpan.FromSeconds(20));
@@ -42,10 +46,15 @@ namespace KCDMP_launcher.Pages
                 else if (r.Ok) Log.Information("keys pak: {Action} from {Source} ({Detail})", r.Action, r.Source, r.Detail);
                 else Log.Warning("keys pak: not built -- {Detail}; the dice keys may be missing", r.Detail);
             }
+            catch (Exception ex) when (LaunchBlocks.FromStartFailure(ex, Path.GetFileName(agentPath), agentInstalled) is { } b)
+            {
+                return b;
+            }
             catch (Exception ex)
             {
                 Log.Warning(ex, "keys pak: failed; the dice keys may be missing");
             }
+            return null;
         }
     }
 }

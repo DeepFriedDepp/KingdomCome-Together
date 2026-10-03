@@ -228,7 +228,10 @@ public static class SetupChecklist
         if (a.PlacingMod)
             return new(StepId.Mod, title, StepStatus.Working, "Placing the mod into the Modding Tools...");
         if (!m.StagedAvailable)
-            return new(StepId.Mod, title, StepStatus.NeedsYou, "The mod's files are missing from the install. Run Setup again.");
+            // WO-154: Setup put them there, so something took them -- most often an antivirus.
+            return new(StepId.Mod, title, StepStatus.NeedsYou,
+                "The mod's files are missing from the install, most likely removed by Windows Security or an antivirus. " +
+                "Restore them from quarantine (Windows Security > Virus & threat protection > Protection history) and allow them, or run Setup again.");
         if (s.GameProcessRunning)
             return new(StepId.Mod, title, StepStatus.NeedsYou, "Close the game first, then click Try again.", StepAction.PlaceMod, "Try again");
         if (a.PlaceFailure is not null)

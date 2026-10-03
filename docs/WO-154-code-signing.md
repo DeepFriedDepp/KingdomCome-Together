@@ -1,0 +1,5 @@
+# WO-154: code signing (not in this work order)
+
+- Needs a code-signing certificate the maintainer buys: OV (organization validation) or EV (extended validation, on a hardware token or a cloud HSM), issued to the project's publisher name.
+- `tools/Build-Installer.ps1` would sign every executable we ship before the install manifest is written (the manifest hashes the signed bytes): `KCDMP_LauncherInjector.exe`, `KCDMP.dll`, `KCDMP_launcher.exe`, `KcdMpClient.exe`/`.dll`, `KcdMpServer.exe`/`.dll`, `KcdMpMasterServer.exe`, `KcdMpSetup.exe`, and finally the Setup `.exe` itself -- with `signtool sign /fd sha256 /tr <RFC 3161 timestamp URL> /td sha256`, so the signatures stay valid after the certificate expires.
+- A signature does not by itself get the mod past Smart App Control (or SmartScreen): Windows also weighs the publisher's reputation, which builds up over time and installs. Until then the launcher's plain message (`KCDMP_launcher/Models/LaunchBlock.cs`) is what a blocked player sees.

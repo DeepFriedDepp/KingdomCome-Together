@@ -50,6 +50,7 @@ namespace KCDMP_launcher.Pages
         private string messageText = "";
         private string messageNext = "";
         private bool messageAddressFallback;
+        private bool messageReportBug;
         private string fallbackAddress = "";
 
         // The agent's connection, in plain words
@@ -158,8 +159,9 @@ namespace KCDMP_launcher.Pages
         {
             if (AgentPathOrError() is not { } agent) return;
             steamBusy = true; steamBusyText = "Asking Steam which friends are hosting..."; steamFriendsNote = ""; StateHasChanged();
-            var r = await AgentHelper.RunAsync<SteamFriendsData>(agent, $"--steam-friends --steam-app {settings.SteamAppId}{SteamGameArg}", "STEAM-FRIENDS", TimeSpan.FromSeconds(25));
+            var (r, blocked) = await RunHelperAsync<SteamFriendsData>(agent, $"--steam-friends --steam-app {settings.SteamAppId}{SteamGameArg}", "STEAM-FRIENDS", TimeSpan.FromSeconds(25));
             steamBusy = false;
+            if (blocked) { StateHasChanged(); return; }   // WO-154: told in plain words
             if (r is null) steamFriendsNote = "Steam didn't answer. Type the host's code instead.";
             else if (r.State != "ok") steamFriendsNote = $"{r.Message} {r.Next}".Trim();
             else
@@ -178,9 +180,10 @@ namespace KCDMP_launcher.Pages
             if (AgentPathOrError() is not { } agent) return;
             string code = steamCodeInput.Trim();
             steamBusy = true; steamBusyText = "Testing (up to 20 seconds)..."; steamResultMessage = ""; StateHasChanged();
-            var r = await AgentHelper.RunAsync<TestConnectionData>(agent,
+            var (r, blocked) = await RunHelperAsync<TestConnectionData>(agent,
                 $"--test-connection --steam \"{code}\" --steam-app {settings.SteamAppId}{SteamGameArg}", "TEST-CONNECTION", TimeSpan.FromSeconds(45));
             steamBusy = false;
+            if (blocked) { StateHasChanged(); return; }   // WO-154: told in plain words
             (steamResultMessage, steamResultOk) = DescribeTest(r);
             StateHasChanged();
         }
@@ -205,10 +208,11 @@ namespace KCDMP_launcher.Pages
         {
             if (AgentPathOrError() is not { } agent) return;
             ShowMessage("TESTING...", server.SteamCode is null ? "Reaching the host..." : "Reaching the host through Steam (up to 20 seconds)...", "");
-            var r = await AgentHelper.RunAsync<TestConnectionData>(agent, server.SteamCode is null
+            var (r, blocked) = await RunHelperAsync<TestConnectionData>(agent, server.SteamCode is null
                     ? $"--test-connection --host {server.Ip} --port {server.Port}"
                     : $"--test-connection --steam \"{server.SteamCode}\" --steam-app {settings.SteamAppId}{SteamGameArg}",
                 "TEST-CONNECTION", TimeSpan.FromSeconds(45));
+            if (blocked) return;   // WO-154: the blocked-file message replaced "TESTING..."
             var (msg, ok) = DescribeTest(r);
             ShowMessage(ok ? "CONNECTION OK" : launching ? "CAN'T REACH THE HOST" : "CONNECTION TEST", msg, "");
         }
@@ -228,9 +232,10 @@ namespace KCDMP_launcher.Pages
             return ((msg + " " + r.Next).Trim(), ok);
         }
 
-        private void ShowMessage(string title, string text, string next, bool addressFallback = false)
+        private void ShowMessage(string title, string text, string next, bool addressFallback = false, bool reportBug = false)
         {
             messageTitle = title; messageText = text; messageNext = next; messageAddressFallback = addressFallback;
+            messageReportBug = reportBug;   // WO-154: the blocked-file message offers Report a bug
             showMessage = true;
             _ = InvokeAsync(StateHasChanged);
         }
@@ -262,7 +267,7 @@ namespace KCDMP_launcher.Pages
             };
 
             StopExistingAgent();
-            agentProcess = Process.Start(agentStartInfo);
+            agentProcess = StartChecked(agentStartInfo);   // WO-154: Windows refusing it is told plainly by the caller
             Log.Information("Agent started via {Via}", server.SteamCode is null ? "address" : "Steam");
             pendingServer = server;
             steamFallbackShown = false;
@@ -352,8 +357,12 @@ namespace KCDMP_launcher.Pages
             showMessage = false;
             var server = new ServerInfo { Name = "(Address)", Ip = host, Port = port };
             bool gameUp = agentProcess != null && launchStage == LaunchStage.Connected;
-            if (gameUp) StartAgent(server);
-            else await LaunchGame(server);
+            try
+            {
+                if (gameUp) StartAgent(server);
+                else await LaunchGame(server);
+            }
+            catch (LaunchBlockedException lb) { ShowBlocked(lb.Block); }   // WO-154
             StateHasChanged();
         }
     }

@@ -35,6 +35,11 @@
                     {
                         <button class="kcd-btn primary" disabled="@string.IsNullOrWhiteSpace(Address)" @onclick="OnUseAddress">CONNECT BY ADDRESS</button>
                     }
+                    @if (ShowReportBug)
+                    {
+                        @* WO-154: Windows blocked a file -- the log bundle is one click away *@
+                        <button class="kcd-btn" @onclick="OnReportBug">REPORT A BUG</button>
+                    }
                     <button class="kcd-btn" @onclick="CloseModalAsync">CLOSE</button>
                 </div>
             </div>
@@ -52,4 +57,6 @@
     [Parameter] public string Address { get; set; } = "";
     [Parameter] public EventCallback<string> AddressChanged { get; set; }
     [Parameter] public EventCallback OnUseAddress { get; set; }
+    [Parameter] public bool ShowReportBug { get; set; }   // WO-154
+    [Parameter] public EventCallback OnReportBug { get; set; }
 }

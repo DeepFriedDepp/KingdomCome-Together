@@ -3,7 +3,10 @@
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.IO;
 using System.Linq;
+using System.Threading.Tasks;
 using KCDMP_launcher.Models;
 using KcdMp.Wire;
 using Serilog;
@@ -102,6 +105,129 @@ namespace KCDMP_launcher.Pages
                 UiService.ShowError($"Your {file} couldn't be read, so the launcher did not change it. " +
                                     "The change is used until the launcher closes. To keep it, fix or delete that file in the install folder, then make the change again.");
             }
+        }
+
+        // ------------------------------------------------------------ Windows blocking the mod (Phase 7)
+        //
+        // Every program the launcher starts for the mod goes through StartChecked: Windows refusing it
+        // (Smart App Control / an App Control policy, a group policy, an antivirus verdict, a file an
+        // antivirus took) becomes one plain message naming the file, never its path, with Report a bug
+        // beside it, and one MP-LAUNCH line in the log. Before a launch, the files it needs are looked
+        // at first (LaunchBlocks.FromFileCheck): a quarantine is told before Windows' own error.
+
+        /// <summary>A start Windows refused; carries the classification to the caller's catch.</summary>
+        private sealed class LaunchBlockedException(LaunchBlock block, Exception inner) : Exception(block.LogLine, inner)
+        {
+            public LaunchBlock Block { get; } = block;
+        }
+
+        private Process? StartChecked(ProcessStartInfo psi)
+        {
+            try { return Process.Start(psi); }
+            catch (Exception ex) when (LaunchBlocks.FromStartFailure(ex, Path.GetFileName(psi.FileName), IsInstalledFile(psi.FileName)) is { } b)
+            {
+                throw new LaunchBlockedException(b, ex);
+            }
+        }
+
+        private void ShowBlocked(LaunchBlock b)
+        {
+            Log.Warning(b.LogLine);
+            Log.Information("MP-LAUNCH smart_app_control={State}", SmartAppControlState());
+            ShowMessage(b.Title, b.Message, b.NextStep, reportBug: true);
+        }
+
+        /// <summary>
+        /// The launch's own files, before anything starts: <paramref name="appFiles"/> (full paths) and the
+        /// mod's files in &lt;game root&gt;\Mods\kdcmp as the install manifest lists them. True: told, stop.
+        /// </summary>
+        private bool BlockedBeforeLaunch(string gameRoot, params string[] appFiles)
+        {
+            var check = appFiles.Select(f => (Path: f, Installed: IsInstalledFile(f))).ToList();
+            if (!string.IsNullOrWhiteSpace(gameRoot))
+            {
+                string modDir = Path.Combine(gameRoot, "Mods", "kdcmp");
+                foreach (var rel in InstalledModFiles())
+                    check.Add((Path.Combine(modDir, rel), true));
+            }
+            foreach (var (path, installed) in check)
+            {
+                var fi = new FileInfo(path);
+                if (LaunchBlocks.FromFileCheck(fi.Name, fi.Exists, fi.Exists ? fi.Length : 0, installed) is { } b)
+                {
+                    ShowBlocked(b);
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        /// <summary>Runs the agent as a one-shot helper; a start Windows refused is told and gives (null, true).</summary>
+        private async Task<(T? Result, bool Blocked)> RunHelperAsync<T>(string agentPath, string arguments, string tag, TimeSpan timeout) where T : class
+        {
+            try { return (await AgentHelper.RunAsync<T>(agentPath, arguments, tag, timeout), false); }
+            catch (Exception ex) when (LaunchBlocks.FromStartFailure(ex, Path.GetFileName(agentPath), IsInstalledFile(agentPath)) is { } b)
+            {
+                ShowBlocked(b);
+                return (null, true);
+            }
+        }
+
+        // install-manifest.txt (Setup's own list, beside the launcher): a file it lists was installed, so a
+        // missing one was taken (quarantine). A development build has no manifest: "missing" then.
+        private HashSet<string>? installedApp;
+        private List<string>? installedMod;
+
+        private void ReadInstallManifest()
+        {
+            if (installedApp is not null) return;
+            installedApp = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            installedMod = new List<string>();
+            try
+            {
+                string manifest = Path.Combine(AppContext.BaseDirectory, KcdMp.Setup.ModInstall.ManifestName);
+                if (!File.Exists(manifest)) return;
+                foreach (var e in KcdMp.Setup.ModInstall.ReadManifest(manifest))
+                {
+                    if (e.Kind == "APP") installedApp.Add(e.Rel);
+                    else if (e.Kind == "MOD") installedMod.Add(e.Rel);
+                }
+            }
+            catch (Exception ex) { Log.Warning("MP-LAUNCH install-manifest.txt could not be read ({Kind})", ex.GetType().Name); }
+        }
+
+        private bool IsInstalledFile(string fullPath)
+        {
+            ReadInstallManifest();
+            string baseDir = Path.GetFullPath(AppContext.BaseDirectory);
+            string full;
+            try { full = Path.GetFullPath(fullPath); } catch { return false; }
+            if (!full.StartsWith(baseDir, StringComparison.OrdinalIgnoreCase)) return false;
+            return installedApp!.Contains(full[baseDir.Length..].TrimStart('\\', '/'));
+        }
+
+        private IReadOnlyList<string> InstalledModFiles()
+        {
+            ReadInstallManifest();
+            return installedMod!;
+        }
+
+        /// <summary>Smart App Control's state, for the log beside a block (HKLM\...\CI\Policy VerifiedAndReputablePolicyState).</summary>
+        private static string SmartAppControlState()
+        {
+            try
+            {
+                using var key = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Control\CI\Policy");
+                return key?.GetValue("VerifiedAndReputablePolicyState") switch
+                {
+                    0 => "off",
+                    1 => "on",
+                    2 => "evaluation",
+                    null => "not-present",
+                    var v => "value-" + v,
+                };
+            }
+            catch { return "unknown"; }
         }
     }
 }
