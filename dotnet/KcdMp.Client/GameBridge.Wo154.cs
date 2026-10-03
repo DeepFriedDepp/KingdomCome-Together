@@ -290,6 +290,9 @@ public partial class GameBridge
                         case "scene_resume": _w154SceneResume = on; break;
                         case "join_patient": _w154JoinPatient = on; break;
                         case "ride_native": _w154RideNative = on; if (!on) _w154RideFeed.Clear(); break;
+                        case "bind_far":
+                            if (_w154BindFar != on) { _w154BindFar = on; _ = _combat.NpcConfigAsync(_nativeWriteOn, _nativeSenderClock, default, on); }
+                            break;
                         case "gait_hyst":
                             if (_w154GaitHyst != on) { _w154GaitHyst = on; _ = PushWo121ConfigAsync(_wo121Ct); }
                             break;

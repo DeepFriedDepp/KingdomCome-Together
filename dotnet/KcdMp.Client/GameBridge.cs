@@ -1775,7 +1775,7 @@ public partial class GameBridge(ClientConfig config)
         Wo148OnConnect(cts.Token);           // WO-148: carrying on the other screen (the carrier owns the body; the host's world decides)
         Wo154MenuOnConnect(cts.Token);       // WO-154 7b: the mod menu (the saved choices, the host's levers, fast travel)
         Wo151OnConnect(cts.Token);           // WO-151: the safeguards' switches (the fault guard's switch-off, the frame-cost meter)
-        _ = _combat.NpcConfigAsync(_nativeWriteOn, _nativeSenderClock, cts.Token);
+        _ = _combat.NpcConfigAsync(_nativeWriteOn, _nativeSenderClock, cts.Token, _w154BindFar);
         _ = Wo154PushNativeAsync("connect");   // WO-154 3.1: mp_host_target's native half
         _ = RespawnHeartbeatAsync(stream, announceGraves: true, cts.Token);
         // WO-99 Phase 0: learn who the local player is before the first hit.
@@ -6719,7 +6719,7 @@ public partial class GameBridge(ClientConfig config)
                 bool on = _nativeWriteOn, sc = _nativeSenderClock;
                 _ = Task.Run(async () =>
                 {
-                    var r = await _combat.NpcConfigAsync(on, sc);
+                    var r = await _combat.NpcConfigAsync(on, sc, default, _w154BindFar);
                     if (!r.Ok) Console.WriteLine($"[npcwrite] DLL did not take the config ({r.ReasonTag})");
                 });
                 return;

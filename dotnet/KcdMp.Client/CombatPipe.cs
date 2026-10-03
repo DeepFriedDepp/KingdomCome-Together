@@ -447,8 +447,8 @@ public sealed class CombatPipe : IAsyncDisposable
         => SendForResultAsync(NpcHold, NativeNpcCodec.BuildHold(name, ms), ct);
 
     /// <summary>WO-118: mirror mp_npc_native_write and mp_npc_senderclock into the DLL.</summary>
-    public Task<PipeResult> NpcConfigAsync(bool nativeOn, bool senderClock, CancellationToken ct = default)
-        => SendForResultAsync(NpcConfig, [nativeOn ? (byte)1 : (byte)0, senderClock ? (byte)1 : (byte)0], ct);
+    public Task<PipeResult> NpcConfigAsync(bool nativeOn, bool senderClock, CancellationToken ct = default, bool bindFar = true)
+        => SendForResultAsync(NpcConfig, [nativeOn ? (byte)1 : (byte)0, senderClock ? (byte)1 : (byte)0, bindFar ? (byte)1 : (byte)0], ct);   // WO-154 6.2: [2] mp_bind_far
 
     /// <summary>WO-118: the writer's counters (the 1 Hz heartbeat). Null when absent or refused.</summary>
     public async Task<NativeNpcStatus?> NpcStatusAsync(CancellationToken ct = default)

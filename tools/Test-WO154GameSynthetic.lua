@@ -440,6 +440,10 @@ do
     KCD2MP_W154SetGaitHyst("off")
     check("D1: mp_gait_hysteresis tells the agent", countEvt("w154_cfg", "gait_hyst=off", m2) == 1)
     KCD2MP_W154SetGaitHyst("on")
+    m2 = #LOG
+    KCD2MP_W154SetBindFar("off")
+    check("D1: mp_bind_far tells the agent (6.2)", countEvt("w154_cfg", "bind_far=off", m2) == 1 and CCMDS["mp_bind_far"] ~= nil)
+    KCD2MP_W154SetBindFar("on")
     KCD2MP.horseGhosts["5"] = nil
     noErrs("D1")
 end

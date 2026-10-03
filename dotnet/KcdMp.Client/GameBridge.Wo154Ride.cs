@@ -19,6 +19,9 @@ namespace KcdMp.Client;
 public partial class GameBridge
 {
     private volatile bool _w154RideNative = true, _w154GaitHyst = true;
+    // Phase 6.2: mp_bind_far -- the native writer binds a body with no physics yet (far: the field's 287 "not-living"
+    // refusals, median 635 m away) and a body seated on a cart (held in its seat) instead of leaving them to Lua.
+    private volatile bool _w154BindFar = true;
     private readonly ConcurrentDictionary<byte, (string Horse, float Dz)> _w154RideFeed = new();
     private long _w154RideFeeds, _w154RideSamples;
 

@@ -20190,6 +20190,10 @@ do
         return r
     end
     function KCD2MP_W154SetGaitHyst(arg) return fightSwitch("gait_hyst", "gaitHyst", arg, "a figure's gait changes only past a band (a pace on a boundary keeps its gait)") end
+    -- Phase 6.2: mp_bind_far on|off (default on) -- KCDMP.dll binds a host copy with no physics yet (far away) and one
+    -- seated on a cart (held in its seat) instead of refusing them to this file's writer
+    if W.bindFar == nil then W.bindFar = true end
+    function KCD2MP_W154SetBindFar(arg) return fightSwitch("bind_far", "bindFar", arg, "far copies with no physics yet and seated ones are on KCDMP.dll's writer") end
 
     -- Phase 4.2: where the game is, as the answer to the agent's token (wo124_reply <tok> menu|world|loading). A load
     -- that holds the main thread runs no console command: no answer at all is the agent's "busy".
@@ -22082,6 +22086,7 @@ local ok, err = pcall(function()
     System.AddCCommand("mp_guard_respite", 'KCD2MP_W154SetGuardRespite(%line)', "WO-154: no guard stops or attacks a partner who is down, or for 2 minutes after he is up (30 s after his mp_unstuck); a stop turned into an attack is 'fled' only when he moved away (default on): mp_guard_respite on|off")
     System.AddCCommand("mp_fair_crime", 'KCD2MP_W154SetFairCrime(%line)', "WO-154: (host) a partner's murder only on the victim's death, and an assault judged 5 s later -- no crime if the victim fights by then, a quest brawl (default on): mp_fair_crime on|off")
     System.AddCCommand("mp_scene_resume", 'KCD2MP_W154SetSceneResume(%line)', "WO-154: (joiner) a scene stuck at its end resumes the host's copies, as in 0.44.0 (default off: no copy is resumed; the engine's own rescue, a save request, runs at once): mp_scene_resume on|off")
+    System.AddCCommand("mp_bind_far", 'KCD2MP_W154SetBindFar(%line)', "WO-154: (joiner) KCDMP.dll writes a host copy that has no physics yet (far away) and one seated on a cart (held in its seat until it gets off), instead of refusing them as not-living / parented (default on): mp_bind_far on|off")
     System.AddCCommand("mp_ride_native", 'KCD2MP_W154SetRideNative(%line)', "WO-154: a partner's ridden horse is written every frame by KCDMP.dll from the rider's stream, its brain held, its gait the engine's own (default on; off = 0.44.0's Lua-moved horse): mp_ride_native on|off")
     System.AddCCommand("mp_gait_hysteresis", 'KCD2MP_W154SetGaitHyst(%line)', "WO-154: a partner's figure (and a host copy) changes its gait only past a band around each boundary, so a pace on a boundary keeps its gait (default on): mp_gait_hysteresis on|off")
     System.AddCCommand("mp_join_panel", 'KCD2MP_W154SetJoinPanel(%line)', "WO-154: (host) the join's progress is the game's own tutorial panel, so it shows through the engine's hold (default on; off = 0.44.0's drawn bar, which the hold stops): mp_join_panel on|off")

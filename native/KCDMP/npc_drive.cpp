@@ -116,6 +116,8 @@ constexpr float  kPullFloorCm   = 0.1f;   // a frame counts as "moved" above 1 m
 std::atomic<bool> g_armed{false};
 std::atomic<bool> g_nativeOn{true};       // mp_npc_native_write (default on, WO-118)
 std::atomic<bool> g_senderClock{true};    // mp_npc_senderclock mirror
+std::atomic<bool> g_bindFar{true};        // WO-154 6.2: mp_bind_far -- a body with no physics yet, or seated on a cart, is bound
+std::atomic<uint32_t> c_bindNoPhys{0}, c_bindParented{0};
 std::atomic<bool> g_dropAll{false};
 std::atomic<bool> g_holdAll{false};      // WO-138: the host is paused, hold every copy
 std::atomic<bool> g_holdEnded{false};    // WO-138: the hold just ended (restart the silence clocks)
@@ -787,12 +789,13 @@ uint8_t on_hold(const uint8_t* body, size_t len) {
 }
 
 uint8_t on_config(const uint8_t* body, size_t len) {
-    if (len != 2) return kBadRequest;
+    if (len != 2 && len != 3) return kBadRequest;
     const bool on = body[0] != 0, sc = body[1] != 0;
     const bool wasOn = g_nativeOn.exchange(on), wasSc = g_senderClock.exchange(sc);
-    if (on != wasOn || sc != wasSc)
-        logf("MP-NPCWRITE config native_write=%s senderclock=%s (was %s/%s)", on ? "on" : "off", sc ? "on" : "off",
-             wasOn ? "on" : "off", wasSc ? "on" : "off");
+    const bool bindFarCfg = len == 3 ? body[2] != 0 : true, wasBindFar = g_bindFar.exchange(bindFarCfg);   // WO-154 6.2
+    if (on != wasOn || sc != wasSc || bindFarCfg != wasBindFar)
+        logf("MP-NPCWRITE config native_write=%s senderclock=%s bind_far=%s (was %s/%s/%s)", on ? "on" : "off", sc ? "on" : "off",
+             bindFarCfg ? "on" : "off", wasOn ? "on" : "off", wasSc ? "on" : "off", wasBindFar ? "on" : "off");
     return kOk;
 }
 
@@ -865,18 +868,29 @@ uint8_t bind_main(const BindRequest& req) {
     }
     void* parent = nullptr;
     if (!get_parent(e, &parent)) return refuse(kFault, "GetParent faulted");
-    if (parent) return refuse(kParented, "");
+    // WO-154 6.2 (mp_bind_far): a body seated on something (the field's 34: the caravan men in the cart stance) is
+    // bound and held in its seat -- the per-frame loop never writes a parented body -- and written once it is free.
+    // Off: 0.44.0's refusal (Lua wrote those bodies, parent or not).
+    const bool bindFar = g_bindFar.load(std::memory_order_relaxed);
+    if (parent && !bindFar) return refuse(kParented, "");
     void* phys = get_physics(e);
     // WO-144 2.3: a horse (or an encounter animal) is written through its entity like any body -- the field's
     // "bind <horse> refused: not-living" left the host's own horse and every rider's to the Lua writer
     // (the rider stood upright on the ground with no horse). A human whose physics is not living is a
     // ragdoll and is still refused (WO-131 2b: Lua stands it up first).
     bool beast = false;
-    if (!phys || !is_a(phys, g_vftLiving)) {
+    // WO-154 6.2 (mp_bind_far): no physics yet is a body outside this machine's physics range (the field: 287 of 290
+    // "not-living" refusals, median 635 m away; the host streams 300 m around each player, the leash allows 650 m
+    // between them), not a ragdoll -- it is written through its entity until its physics appears; a human whose
+    // physics is there but not living (a ragdoll: 3 of 290) is still refused, and dropped per frame as before.
+    const bool noPhys = !phys && bindFar;
+    if (!noPhys && (!phys || !is_a(phys, g_vftLiving))) {
         const int kind = npcscan::body_kind(e);
         if (!phys || (kind != 1 && kind != 2)) return refuse(kNotLiving, phys ? "physics is not a living entity" : "no physics");
         beast = true;
     }
+    if (noPhys) c_bindNoPhys.fetch_add(1, std::memory_order_relaxed);
+    if (parent) c_bindParented.fetch_add(1, std::memory_order_relaxed);
     if (g_bound.find(key) == g_bound.end() && g_bound.size() >= kMaxBound) return refuse(kTableFull, "");
 
     const double now = now_s();
@@ -899,8 +913,10 @@ uint8_t bind_main(const BindRequest& req) {
     }
     p.blendPending = true;   // the first write starts from the body, not from the stream (blend_start)
     g_statBound.store(static_cast<uint16_t>(g_bound.size()));
-    logf("MP-NPCBIND npc=%s result=ok%s%s eid=0x%X wuid=%016llX lua_wuid=%016llX anchor=(%.2f,%.2f,%.2f) delay_ms=%u jitter_allow_ms=%.0f bound=%zu",
-         req.name, rebind ? " rebind=1" : "", beast ? " body=horse-or-animal (entity-written)" : "", req.eid, static_cast<unsigned long long>(nativeWuid),
+    logf("MP-NPCBIND npc=%s result=ok%s%s%s%s eid=0x%X wuid=%016llX lua_wuid=%016llX anchor=(%.2f,%.2f,%.2f) delay_ms=%u jitter_allow_ms=%.0f bound=%zu",
+         req.name, rebind ? " rebind=1" : "", beast ? " body=horse-or-animal (entity-written)" : "",
+         noPhys ? " physics=none-yet (entity-written until it has physics)" : "", parent ? " seated=held (written once free)" : "",
+         req.eid, static_cast<unsigned long long>(nativeWuid),
          static_cast<unsigned long long>(req.wuid), req.anchor[0], req.anchor[1], req.anchor[2], req.delayMs,
          p.lateApplied * 1000.0, g_bound.size());
     return kOk;
