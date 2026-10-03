@@ -17729,6 +17729,10 @@ KCD2MP.w143.gaits = (KCD2MP.w143.gaits == nil) and true or KCD2MP.w143.gaits    
 KCD2MP.w143.oneshots = (KCD2MP.w143.oneshots == nil) and true or KCD2MP.w143.oneshots   -- mp_oneshots
 KCD2MP.w143.minigames = (KCD2MP.w143.minigames == nil) and true or KCD2MP.w143.minigames -- mp_player_minigames
 KCD2MP.w143.idles = (KCD2MP.w143.idles == nil) and true or KCD2MP.w143.idles            -- mp_idles
+-- WO-153 1: the one switch that ships OFF. The avatar's herb-picking loop (`PickingHerbs`) ended both of the joiner's
+-- 0.43.0 crashes; with it off the avatar stands while its player gathers herbs. (`x == nil and false or x` would
+-- give nil in Lua, hence the explicit test.)
+if KCD2MP.w143.herbs == nil then KCD2MP.w143.herbs = false end                            -- mp_avatar_herbs
 KCD2MP.w143.temps = KCD2MP.w143.temps or {}    -- copy name -> class id -> the temporary item's id
 KCD2MP.w143.looks = KCD2MP.w143.looks or {}    -- copy name -> who it is made to look at
 KCD2MP.w143.stats = KCD2MP.w143.stats or { provided = 0, released = 0, inhand = 0, looks = 0, cleared = 0 }
@@ -17744,6 +17748,8 @@ KCD2MP_W143_SWITCHES = {
       off = "the avatar stands at the spot" },
     { key = "idles", cmd = "mp_idles", on = "standing NPCs look at who they look at on the host's screen",
       off = "copies look straight ahead" },
+    { key = "herbs", cmd = "mp_avatar_herbs", on = "the partner's avatar plays the herb-picking loop (the 0.43.0 joiner crashes ended on it)",
+      off = "the avatar stands while its player gathers herbs" },
 }
 
 function KCD2MP_W143Set(key, arg)
@@ -17764,12 +17770,13 @@ function KCD2MP_SetActivityGaits(arg) return KCD2MP_W143Set("gaits", arg) end
 function KCD2MP_SetOneShots(arg) return KCD2MP_W143Set("oneshots", arg) end
 function KCD2MP_SetPlayerMinigames(arg) return KCD2MP_W143Set("minigames", arg) end
 function KCD2MP_SetIdles(arg) return KCD2MP_W143Set("idles", arg) end
+function KCD2MP_SetAvatarHerbs(arg) return KCD2MP_W143Set("herbs", arg) end
 
 -- The agent asks every few seconds: the switches as this game has them, so a
 -- switch typed before the agent connected still counts.
-function KCD2MP_W143Sync(hands, gaits, oneshots, minigames, idles)
+function KCD2MP_W143Sync(hands, gaits, oneshots, minigames, idles, herbs)
     local w = KCD2MP.w143
-    local agent = { hands = hands, gaits = gaits, oneshots = oneshots, minigames = minigames, idles = idles }
+    local agent = { hands = hands, gaits = gaits, oneshots = oneshots, minigames = minigames, idles = idles, herbs = (herbs == true) }
     for _, s in ipairs(KCD2MP_W143_SWITCHES) do
         if agent[s.key] ~= w[s.key] then KCD2MP_EmitEvent("w143", s.key .. " " .. (w[s.key] and "on" or "off")) end
     end
@@ -20847,6 +20854,7 @@ local ok, err = pcall(function()
     System.AddCCommand("mp_oneshots", 'KCD2MP_SetOneShots(%line)', "WO-143: NPCs' one-shots (serving, drinking, a dog's howl) show on the other screen (default on): mp_oneshots on|off")
     System.AddCCommand("mp_player_minigames", 'KCD2MP_SetPlayerMinigames(%line)', "WO-143: the partner's grindstone, smithing, alchemy, reading and dice show on his avatar (default on): mp_player_minigames on|off")
     System.AddCCommand("mp_idles", 'KCD2MP_SetIdles(%line)', "WO-143: standing NPCs look at who they look at on the host's screen (default on): mp_idles on|off")
+    System.AddCCommand("mp_avatar_herbs", 'KCD2MP_SetAvatarHerbs(%line)', "WO-153: the partner's avatar plays its herb-picking loop (default OFF: the avatar stands; the loop ended both 0.43.0 joiner crashes): mp_avatar_herbs on|off")
     System.AddCCommand("mp_avatar_dress", 'KCD2MP_SetAvatarDress(%line)', "WO-144: a partner's avatar wears pieces from its own inventory, equipped through the actor (default on; off = 0.42.0's REST EquipItem): mp_avatar_dress on|off")
     System.AddCCommand("mp_show_animals", 'KCD2MP_SetShowAnimals(%line)', "WO-144: a horse or animal the host streams is shown here even where this world keeps it hidden (default on): mp_show_animals on|off")
     System.AddCCommand("mp_avatar_lights", 'KCD2MP_SetAvatarLights(%line)', "WO-144: a partner's avatar holds a light only while its player does -- its own NPC lamps and torches are taken out (default on): mp_avatar_lights on|off")

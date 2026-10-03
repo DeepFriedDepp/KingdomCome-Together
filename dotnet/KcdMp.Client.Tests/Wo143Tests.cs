@@ -213,6 +213,28 @@ public class Wo143Tests
     }
 
     [Fact]
+    public void WO153_the_herb_loop_is_off_unless_asked_for_and_a_pickup_is_never_aligned()
+    {
+        // the field: both 0.43.0 joiner crashes ended on the avatar's PickingHerbs loop being stopped
+        Assert.Null(Wo143Rules.AvatarShow(Minigame(4), herbsOn: false));                    // default: the avatar stands
+        Assert.Equal("PickingHerbs", Wo143Rules.AvatarShow(Minigame(4), herbsOn: true)!.Loop);   // mp_avatar_herbs on = 0.43.0's loop
+        // every other minigame is untouched by the herb switch
+        foreach (byte t in new byte[] { 1, 2, 3, 5, 6, 12 }) Assert.NotNull(Wo143Rules.AvatarShow(Minigame(t), herbsOn: false));
+        Assert.Equal("Digging", Wo143Rules.AvatarShow(Minigame(6), herbsOn: false)!.Loop);
+        Assert.Null(Wo143Rules.AvatarShow(ActivityState.None, herbsOn: true));
+        Assert.False(GameBridge.W143HerbsDefault);                                           // the one W143 piece that ships off
+        // a pick-up or a dig never aligns to a world object, whatever the row names: it plays where the avatar stands
+        Assert.False(Wo143Rules.MayAlignAt(Wo143Rules.HerbMinigame));
+        Assert.False(Wo143Rules.MayAlignAt(6));
+        var herbs = Wo143Rules.ShowFor(4, false)!;
+        Assert.Equal(("PickingHerbs", "", false, Wo143Rules.PhaseLoop), Wo143Rules.FirstStep(herbs, 0xC0FFEE));
+        var dig = Wo143Rules.ShowFor(6, false)!;
+        Assert.Equal(("Digging", "", false, Wo143Rules.PhaseLoop), Wo143Rules.FirstStep(dig, 0xC0FFEE));
+        // the stations keep their alignment (under mp_minigame_align): grindstone, alchemy, lockpicking, smithing
+        foreach (byte t in new byte[] { 1, 3, 5, 12 }) Assert.True(Wo143Rules.MayAlignAt(t));
+    }
+
+    [Fact]
     public void After_each_step_the_game_decides_and_a_refusal_falls_back_quietly()
     {
         const int E = Wo143Rules.PhaseEntry, L = Wo143Rules.PhaseLoop, O = Wo143Rules.PhaseOut;

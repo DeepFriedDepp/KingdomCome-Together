@@ -30,7 +30,13 @@ public partial class GameBridge
     /// <summary>The maintainer's rule: new fail-closed mechanisms ship ON (mp_hand_items, mp_activity_gaits, mp_oneshots, mp_player_minigames, mp_idles).</summary>
     public const bool W143Default = true;
 
+    /// <summary>WO-153 1: mp_avatar_herbs ships OFF -- the avatar's herb-picking loop ended both of the joiner's 0.43.0 crashes.</summary>
+    public const bool W143HerbsDefault = false;
+
     private volatile bool _w143Hands = W143Default, _w143Gaits = W143Default, _w143Shots = W143Default, _w143Minigames = W143Default, _w143Idles = W143Default;
+    // WO-153 1: mp_avatar_herbs -- the avatar's herb-picking loop, OFF by default (the joiner's 0.43.0 crashes ended on it)
+    private volatile bool _w143Herbs = W143HerbsDefault;
+    private long _w143HerbsWithheldAtMs;
     private volatile bool _w143Connected;
     private int _w143CfgKey = -1;
     private long _w143CfgAtMs, _w143SyncAtMs;
@@ -107,7 +113,7 @@ public partial class GameBridge
                 if (t - _w143SyncAtMs >= 5_000)
                 {
                     _w143SyncAtMs = t;
-                    _ = ExecLuaAsync($"if KCD2MP_W143Sync then KCD2MP_W143Sync({B(_w143Hands)}, {B(_w143Gaits)}, {B(_w143Shots)}, {B(_w143Minigames)}, {B(_w143Idles)}) end");
+                    _ = ExecLuaAsync($"if KCD2MP_W143Sync then KCD2MP_W143Sync({B(_w143Hands)}, {B(_w143Gaits)}, {B(_w143Shots)}, {B(_w143Minigames)}, {B(_w143Idles)}, {B(_w143Herbs)}) end");
                     _ = ExecLuaAsync(Wo144SyncLua());   // WO-144: mp_avatar_dress / mp_avatar_lights as this game has them
                 }
                 if (t - lastStats >= 60_000) { lastStats = t; Console.WriteLine(Wo143StatsLine()); }
@@ -300,7 +306,12 @@ public partial class GameBridge
     private async Task Wo143OnPlayerRowAsync(byte peer, ActivityState a)
     {
         if (!_w143Minigames || !W141Active || peer == _myGhostId) return;
-        var show = Wo143Rules.ShowFor(a);
+        var show = Wo143Rules.AvatarShow(a, _w143Herbs);
+        if (show is null && a.Minigame == Wo143Rules.HerbMinigame && Environment.TickCount64 - _w143HerbsWithheldAtMs > 60_000)
+        {
+            _w143HerbsWithheldAtMs = Environment.TickCount64;
+            Console.WriteLine($"MP-W143 player {peer}: herb gathering -- the avatar stands (mp_avatar_herbs is off: the 0.43.0 joiner crashes ended on its PickingHerbs loop)");
+        }
         var cur = _w143Mini.GetValueOrDefault(peer);
         if (cur is not null && show is not null && cur.Type == show.Type && cur.Obj == a.MinigameObj) return;
         if (cur is null && show is null) return;
@@ -411,10 +422,10 @@ public partial class GameBridge
         bool on = f[1] == "on";
         string? setting = f[0] switch
         {
-            "hands" => "mp_hand_items", "gaits" => "mp_activity_gaits", "oneshots" => "mp_oneshots", "minigames" => "mp_player_minigames", "idles" => "mp_idles", _ => null,
+            "hands" => "mp_hand_items", "gaits" => "mp_activity_gaits", "oneshots" => "mp_oneshots", "minigames" => "mp_player_minigames", "idles" => "mp_idles", "herbs" => "mp_avatar_herbs", _ => null,
         };
         if (setting is null) return;
-        bool was = f[0] switch { "hands" => _w143Hands, "gaits" => _w143Gaits, "oneshots" => _w143Shots, "minigames" => _w143Minigames, _ => _w143Idles };
+        bool was = f[0] switch { "hands" => _w143Hands, "gaits" => _w143Gaits, "oneshots" => _w143Shots, "minigames" => _w143Minigames, "herbs" => _w143Herbs, _ => _w143Idles };
         switch (f[0])
         {
             case "hands": _w143Hands = on; break;
@@ -422,17 +433,20 @@ public partial class GameBridge
             case "oneshots": _w143Shots = on; break;
             case "minigames": _w143Minigames = on; break;
             case "idles": _w143Idles = on; break;
+            case "herbs": _w143Herbs = on; break;
         }
         _w143CfgKey = -1;
         if (was != on) Console.WriteLine($"MP-W143 {setting} {(on ? "on" : "off")}");
         if (!on && f[0] == "hands") _ = Task.Run(async () => { await Task.Delay(3_000); await Wo143ReleaseAllTempsAsync("mp_hand_items off"); });
         if (!on && f[0] == "idles") _ = Task.Run(async () => { foreach (var c in _w143LookNow.Keys.ToList()) await Wo143ApplyLookAsync(c, null); });
+        if (!on && f[0] == "herbs")
+            _ = Task.Run(async () => { foreach (var (peer, m) in _w143Mini.Where(kv => kv.Value.Type == Wo143Rules.HerbMinigame).ToList()) await Wo143EndMinigameAsync(peer, m, "mp_avatar_herbs off"); });
         if (!on && f[0] == "minigames")
             _ = Task.Run(async () => { foreach (var (peer, m) in _w143Mini.ToList()) await Wo143EndMinigameAsync(peer, m, "mp_player_minigames off"); });
     }
 
     private string Wo143StatsLine() => FormattableString.Invariant(
-        $"MP-W143 stats: hands={(_w143Hands ? "on" : "off")} gaits={(_w143Gaits ? "on" : "off")} oneshots={(_w143Shots ? "on" : "off")} minigames={(_w143Minigames ? "on" : "off")} idles={(_w143Idles ? "on" : "off")} armed=0x{_w143Armed:X2} host={W141Host} joiner={W141Joiner} out hands={Interlocked.Read(ref _w143HandRowsOut)} gaits={Interlocked.Read(ref _w143GaitRowsOut)} looks={Interlocked.Read(ref _w143LookRowsOut)} shots={Interlocked.Read(ref _w143ShotsOut)} | in rows={Interlocked.Read(ref _w143RowsIn)} shots={Interlocked.Read(ref _w143ShotsIn)} played={Interlocked.Read(ref _w143ShotsPlayed)} skipped={Interlocked.Read(ref _w143ShotsSkipped)} done={Interlocked.Read(ref _w143ShotsDone)} failed={Interlocked.Read(ref _w143ShotsFailed)} looks={Interlocked.Read(ref _w143Looks)} temps={Interlocked.Read(ref _w143Temps0)} released={Interlocked.Read(ref _w143TempsReleased)} avatar_loops={Interlocked.Read(ref _w143Loops)} copies_with_tools={_w143HostHands.Count(kv => !kv.Value.HandsEmpty)}");
+        $"MP-W143 stats: hands={(_w143Hands ? "on" : "off")} gaits={(_w143Gaits ? "on" : "off")} oneshots={(_w143Shots ? "on" : "off")} minigames={(_w143Minigames ? "on" : "off")} idles={(_w143Idles ? "on" : "off")} herbs={(_w143Herbs ? "on" : "off")} armed=0x{_w143Armed:X2} host={W141Host} joiner={W141Joiner} out hands={Interlocked.Read(ref _w143HandRowsOut)} gaits={Interlocked.Read(ref _w143GaitRowsOut)} looks={Interlocked.Read(ref _w143LookRowsOut)} shots={Interlocked.Read(ref _w143ShotsOut)} | in rows={Interlocked.Read(ref _w143RowsIn)} shots={Interlocked.Read(ref _w143ShotsIn)} played={Interlocked.Read(ref _w143ShotsPlayed)} skipped={Interlocked.Read(ref _w143ShotsSkipped)} done={Interlocked.Read(ref _w143ShotsDone)} failed={Interlocked.Read(ref _w143ShotsFailed)} looks={Interlocked.Read(ref _w143Looks)} temps={Interlocked.Read(ref _w143Temps0)} released={Interlocked.Read(ref _w143TempsReleased)} avatar_loops={Interlocked.Read(ref _w143Loops)} copies_with_tools={_w143HostHands.Count(kv => !kv.Value.HandsEmpty)}");
 }
 
 /// <summary>WO-143: the five switches as the bridge keeps them.</summary>

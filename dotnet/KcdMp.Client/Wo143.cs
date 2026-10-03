@@ -240,9 +240,33 @@ public static class Wo143Rules
     public static MinigameShow? ShowFor(ActivityState a) =>
         a.Minigame == ActivityState.NoMinigame ? null : ShowFor(a.Minigame, a.Stance == ActivityState.Sitting);
 
+    /// <summary>
+    /// WO-153 1: herb gathering, the one minigame whose loop ended both of the joiner's 0.43.0 crashes: the avatar's
+    /// `PickingHerbs` loop stopped while the local player's own herb minigame was a second old. Nothing of ours ties that
+    /// loop to a plant (no object, no alignment, no tags -- the field's `MP-W143 ... plays PickingHerbs where he stands`),
+    /// so the engine's own fragment is what breaks. Until an engine-side look says why, the avatar stands while its player
+    /// gathers herbs (`mp_avatar_herbs`, off by default); every other minigame is unchanged.
+    /// </summary>
+    public const byte HerbMinigame = 4;
+
+    /// <summary>What the avatar plays for this player row, with the herb switch applied (null: the avatar stands).</summary>
+    public static MinigameShow? AvatarShow(ActivityState a, bool herbsOn)
+    {
+        var show = ShowFor(a);
+        return show is { Type: HerbMinigame } && !herbsOn ? null : show;
+    }
+
+    /// <summary>
+    /// WO-153 1: only a station's minigame (grindstone, alchemy, lockpicking, smithing) may ever be aligned at the object
+    /// the player stands at, and only under `mp_minigame_align`. A pick-up (herbs) or a dig is never aligned to, attached
+    /// to or referenced against a world object: it plays where the avatar stands.
+    /// </summary>
+    public static bool MayAlignAt(byte type) => type is 1 or 3 or 5 or 12;
+
     /// <summary>The first request of a minigame on the avatar: (fragment, tags, align at the object, the aligned-entry guard, the phase it starts).</summary>
     public static (string Fragment, string Tags, bool Aligned, int Phase) FirstStep(MinigameShow m, ulong obj)
     {
+        if (!MayAlignAt(m.Type)) obj = 0;
         if (m.Entry is { } e && (!m.EntryAligned || obj != 0)) return (e, m.EntryTags, m.EntryAligned && obj != 0, PhaseEntry);
         if (m.LoopAligned && obj != 0) return (m.Loop, m.LoopTags, true, PhaseLoop);
         return (m.Loop, m.LoopTags, false, PhaseLoop);

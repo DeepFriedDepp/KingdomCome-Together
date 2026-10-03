@@ -276,14 +276,17 @@ end
 do
     ERRS = {}
     local w = KCD2MP.w143
-    check("A: all five default on", w.hands == true and w.gaits == true and w.oneshots == true and w.minigames == true and w.idles == true)
+    check("A: the first five default on", w.hands == true and w.gaits == true and w.oneshots == true and w.minigames == true and w.idles == true)
+    check("A: WO-153: mp_avatar_herbs defaults OFF (the herb loop ended the 0.43.0 joiner crashes)", w.herbs == false, tostring(w.herbs))
+    check("A: ...and its command is registered", CCMDS["mp_avatar_herbs"] ~= nil and CCMDS["mp_avatar_herbs"].body == "KCD2MP_SetAvatarHerbs(%line)",
+          CCMDS["mp_avatar_herbs"] and CCMDS["mp_avatar_herbs"].body)
     check("A: the commands are registered", CCMDS["mp_hand_items"] ~= nil and CCMDS["mp_activity_gaits"] ~= nil and CCMDS["mp_oneshots"] ~= nil and
           CCMDS["mp_player_minigames"] ~= nil and CCMDS["mp_idles"] ~= nil and CCMDS["mp_activity2_status"] ~= nil)
     check("A: ...with the argument unquoted (the placeholder arrives quoted)", CCMDS["mp_hand_items"] ~= nil and CCMDS["mp_hand_items"].body == "KCD2MP_SetHandItems(%line)",
           CCMDS["mp_hand_items"] and CCMDS["mp_hand_items"].body)
     local cases = { { KCD2MP_SetHandItems, "hands", "mp_hand_items" }, { KCD2MP_SetActivityGaits, "gaits", "mp_activity_gaits" },
                     { KCD2MP_SetOneShots, "oneshots", "mp_oneshots" }, { KCD2MP_SetPlayerMinigames, "minigames", "mp_player_minigames" },
-                    { KCD2MP_SetIdles, "idles", "mp_idles" } }
+                    { KCD2MP_SetIdles, "idles", "mp_idles" }, { KCD2MP_SetAvatarHerbs, "herbs", "mp_avatar_herbs" } }
     for _, c in ipairs(cases) do
         local fn, key, cmd = c[1], c[2], c[3]
         local mark = #LOG
@@ -295,12 +298,16 @@ do
         mark = #LOG
         check("A: " .. cmd .. " bare: says the state, changes nothing", fn(nil) == true and w[key] == true and logCount("WO143-SWITCH " .. cmd .. " on", mark) == 1)
     end
+    KCD2MP_SetAvatarHerbs("off")   -- the loop above left every switch on; herbs ships off
     local mark = #LOG
-    KCD2MP_W143Sync(true, false, true, true, true)
+    KCD2MP_W143Sync(true, false, true, true, true, false)
     check("A: the agent's sync: the one it has off hears on", #emitted("w143", mark) == 1 and emitted("w143", mark)[1] == "gaits on", emitted("w143", mark)[1])
     mark = #LOG
-    KCD2MP_W143Sync(true, true, true, true, true)
+    KCD2MP_W143Sync(true, true, true, true, true, false)
     check("A: ...in step: nothing", #emitted("w143", mark) == 0)
+    mark = #LOG
+    KCD2MP_W143Sync(true, true, true, true, true, true)
+    check("A: the agent has herbs ON and this game OFF: the agent hears off", #emitted("w143", mark) == 1 and emitted("w143", mark)[1] == "herbs off", emitted("w143", mark)[1])
     noErrs("A")
 end
 
