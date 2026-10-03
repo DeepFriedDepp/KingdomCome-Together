@@ -168,8 +168,22 @@ namespace KCDMP_launcher.Pages
             }
             foreach (var (path, installed) in check)
             {
-                var fi = new FileInfo(path);
-                if (LaunchBlocks.FromFileCheck(fi.Name, fi.Exists, fi.Exists ? fi.Length : 0, installed) is { } b)
+                // An empty or malformed path (one blanked in Settings) is a missing file, not an exception.
+                string name = "a file whose path is empty in Settings";
+                bool exists = false;
+                long length = 0;
+                try
+                {
+                    if (!string.IsNullOrWhiteSpace(path))
+                    {
+                        var fi = new FileInfo(path);
+                        name = fi.Name;
+                        exists = fi.Exists;
+                        length = exists ? fi.Length : 0;
+                    }
+                }
+                catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException or IOException or UnauthorizedAccessException) { }
+                if (LaunchBlocks.FromFileCheck(name, exists, length, installed) is { } b)
                 {
                     ShowBlocked(b);
                     return true;
@@ -350,7 +364,7 @@ namespace KCDMP_launcher.Pages
                     }
                 case RelayPlan.Replace:
                     Log.Information(d.LogLine);
-                    foreach (int pid in d.Pids) StopOldRelay(pid);
+                    await Task.Run(() => { foreach (int pid in d.Pids) StopOldRelay(pid); });   // off the window's thread
                     await WaitPortsFreeAsync(TimeSpan.FromSeconds(5));
                     return true;
                 case RelayPlan.Refuse:
