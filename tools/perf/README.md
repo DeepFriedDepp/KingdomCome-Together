@@ -37,6 +37,15 @@ python tools/perf/soak.py verdict --mod tools/perf/runs/mod1.json --vanilla tool
   was removed, while the DLL's own cost (`FRAME ... ours_us_mean`) stayed at 0.7 ms; the
   focused rerun held 71 FPS to the end.
 * A dropped console connection is retried (the first 0.43.0 attempt died at 72 s on one).
+* **WO-154 (0.45.0): the maintainer's call, mod only.** `verdict --mod <run.json> --mod-only`
+  makes no comparison with the game without the mod and says so in the record; PASS needs the
+  mod's last 2 minutes within 10 % of its first 2, the stack 0 in every row, no `FAULT` line,
+  enough rows and the code committed.
+* **WO-154: a joined partner** (`run --partner-ctl <peer.ctl>`): the same scene with a scripted
+  partner (`tools/wo121/avatarpeer`; the relay, the host's agent and the peer started beside the
+  run) who stands 4 m from the player, paces 4 m back and forth all the run and, from the fight
+  on, lands an attributed hit on each pair's attacker every 15 s. `--record` keeps its verdict
+  apart (`tools/perf/soak-record-partner.json`).
 
 ## The stat-stack reader
 

@@ -218,6 +218,18 @@ $AsmMarkers = @(
     @{ File = 'KcdMp.Protocol.dll'; Marker = 'DoorEvent';           Owner = 'WO-151 3.9 the door payload (protocol)' },
     # WO-153: the 0.43.0 tutorial session's fixes
     @{ File = 'KcdMpClient.dll'; Marker = 'MP-BATCH-HOLD down';     Owner = 'WO-153 3 a batch the game does not answer is kept and sent again (agent half)' },
+    # WO-154: the public beta (0.45.0)
+    @{ File = 'KcdMpClient.dll'; Marker = 'MP-W154 skip: ';         Owner = "WO-154 6.3 a joiner's own wait or sleep set back is told (agent half)" },
+    @{ File = 'KcdMpClient.dll'; Marker = 'the game is FROZEN';     Owner = "WO-154 4.2 a join's frozen load is told plainly (agent half)" },
+    @{ File = 'KcdMpClient.dll'; Marker = 'wh_ui_StopMovie';        Owner = "WO-154 4.2 the menu's video stopped before a join's load (agent half)" },
+    @{ File = 'KcdMpClient.dll'; Marker = 'MP-W154 ride: ';         Owner = 'WO-154 5 a ridden horse fed from the rider (agent half)' },
+    @{ File = 'KcdMpClient.dll'; Marker = 'MP-MENU host sent';      Owner = "WO-154 7b the host's menu levers on the wire (agent half)" },
+    @{ File = 'KcdMp.Protocol.dll'; Marker = 'VoiceChatChosen';     Owner = 'WO-154 6.7 voice off unless chosen (protocol)' },
+    @{ File = 'KCDMP.dll';       Marker = 'WO154-IDENTITY';         Owner = "WO-154 2 the avatar's identity from spawn (native)" },
+    @{ File = 'KCDMP.dll';       Marker = 'physics=none-yet';       Owner = 'WO-154 6.2 far copies on the native writer (native)' },
+    @{ File = 'KCDMP.dll';       Marker = 'WO136-FORGET';           Owner = "WO-154 3.3 a partner's down clears his fights (native)" },
+    @{ File = 'KCDMP_launcher.dll'; Marker = 'Smart App Control';   Owner = 'WO-154 7 Windows blocking the mod, told in plain words (launcher)' },
+    @{ File = 'KCDMP_launcher.dll'; Marker = 'Join with a new character'; Owner = 'WO-154 4.4 the plain join messages and the button (launcher)' },
     @{ File = 'KCDMP_launcher.dll'; Marker = 'Kingdom Come: Together'; Owner = 'WO-134 rebrand (launcher window title)' }
 )
 
@@ -305,6 +317,14 @@ $PakMarkers = @(
     @{ Marker = 'function KCD2MP_W148Holds';       Owner = "WO-148 a carried body is the carrier's: the stream leaves it alone (mod half)" },
     @{ Marker = 'WO148-BUILD';                     Owner = 'WO-148 the carrying build line (mod half)' },
     @{ Marker = 'WO151-BUILD';                     Owner = 'WO-151 the build line: every WO-151 switch (mod half)' },
+    @{ Marker = 'function KCD2MP_W154Menu';        Owner = 'WO-154 7b the mod menu (mod half)' },
+    @{ Marker = 'function KCD2MP_W154JoinPanel';   Owner = "WO-154 4.1 the host's join panel through the hold (mod half)" },
+    @{ Marker = 'function KCD2MP_W154RideNative';  Owner = 'WO-154 5 a ridden horse on the native writer (mod half)' },
+    @{ Marker = 'WO154-FALL';                      Owner = "WO-154 2 a knocked-down partner's figure falls (mod half)" },
+    @{ Marker = 'function KCD2MP_W154SetSkipTell'; Owner = 'WO-154 6.3 mp_skip_tell (mod half)' },
+    @{ Marker = 'function KCD2MP_W154SetMinigameOutcome'; Owner = 'WO-154 6.5 mp_minigame_outcome (mod half)' },
+    @{ Marker = 'function KCD2MP_W154FairViolent'; Owner = 'WO-154 3 crime judged on what happened (mod half)' },
+    @{ Marker = 'mp_join_stopvideo';               Owner = 'WO-154 4.2 mp_join_stopvideo (mod half)' },
     @{ Marker = 'function KCD2MP_Once';            Owner = "WO-153 3 the agent's once-guard for a batch the game ran late (mod half)" },
     @{ Marker = 'function KCD2MP_NpcDeathHeld';    Owner = 'WO-153 4 an applied death is held against a stale alive sample (mod half)' },
     @{ Marker = 'function KCD2MP_W131PauseOnly';   Owner = 'WO-153 2 domestic dogs are suspended under the copy guard (mod half)' },

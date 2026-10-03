@@ -17720,7 +17720,10 @@ KCD2MP_MARKS = { "setup", "join", "fight", "fightboth", "ko", "hostdown", "horse
     "carry", "carry_host", "carry_both", "sack", "bury", "dice_keys",
     -- WO-153: the 0.43.0 tester page's markers (never registered: typing one printed "unknown command") and 0.44.0's
     "carry_alive", "crime", "door", "ff", "fight_same", "forge", "reload", "ride", "scene", "stuck", "weather", "whistle",
-    "herbs", "dog", "hostfight", "death", "stall", "door2", "quiet" }
+    "herbs", "dog", "hostfight", "death", "stall", "door2", "quiet",
+    -- WO-154: the 0.45.0 tester page's markers
+    "quest", "knock", "turn", "partnerdown", "endfight", "joinbar", "joinslow", "newchar", "fasttravel", "menu", "skip",
+    "voice", "caravan" }
 function KCD2MP_Mark(word)
     word = tostring(word or "odd"):gsub("[^%w_]", "")
     if word == "" then word = "odd" end
