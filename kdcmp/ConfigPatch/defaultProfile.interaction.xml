@@ -27,4 +27,12 @@
 		<action name="kcd2mp_dice_bank" onPress="1" onRelease="1" keyboard="_keybinds_ref_" />
 		<action name="kcd2mp_dice_yield" onPress="1" onRelease="1" keyboard="_keybinds_ref_" />
 		<action name="kcd2mp_dice_cancel" onPress="1" keyboard="_keybinds_ref_" />
+		<!-- KCD2MP (WO-154): the mod menu. kcd2mp_menu_toggle opens and closes it (Insert, or the
+		     player's MenuKey); while it is open kcd2mp_menu_up / kcd2mp_menu_down (PgUp / PgDn)
+		     choose and kcd2mp_menu_change (End) changes the chosen item. Press only, like the dice
+		     marks: nothing here is held. -->
+		<action name="kcd2mp_menu_toggle" onPress="1" keyboard="_keybinds_ref_" />
+		<action name="kcd2mp_menu_up" onPress="1" keyboard="_keybinds_ref_" />
+		<action name="kcd2mp_menu_down" onPress="1" keyboard="_keybinds_ref_" />
+		<action name="kcd2mp_menu_change" onPress="1" keyboard="_keybinds_ref_" />
 </kdcmp_patch>

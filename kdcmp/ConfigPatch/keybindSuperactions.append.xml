@@ -93,4 +93,34 @@
 		<action name="kcd2mp_dice_cancel" map="interaction" />
 		<control input="u" controller="keyboard" />
 	</superaction>
+
+	<!-- KCD2MP (WO-154): the mod menu. None of these keys is named anywhere in the game's own
+	     Libs/Config/defaultProfile.xml or keybindSuperactions.xml (the 1.5.5 files, retail and
+	     Modding Tools identical, every input= and keyboard= value checked), and none is a key
+	     CryEngine keeps for itself (the console key, ScrollLock, Pause): Insert, PgUp, PgDn and End
+	     are read only by the console while it is open. NOT YET PRESSED LIVE one at a time (the WO-6
+	     rule above): that is the first item of the menu's live check.
+	     kcd2mp_menu_toggle's key is the player's choice: settings.json MenuKey (insert, np_add or
+	     np_subtract), written in here by the keys-pak verb when it builds the pak (KeybindPak.cs);
+	     "insert" below is the default. The other three are fixed. Hidden from the rebind menu like
+	     the dice keys; mp_menu open|close|up|down|change is the console fallback. -->
+	<superaction name="kcd2mp_menu_toggle" ui_group="" keyboard="hidden">
+		<action name="kcd2mp_menu_toggle" map="interaction" />
+		<control input="insert" controller="keyboard" />
+	</superaction>
+
+	<superaction name="kcd2mp_menu_up" ui_group="" keyboard="hidden">
+		<action name="kcd2mp_menu_up" map="interaction" />
+		<control input="pgup" controller="keyboard" />
+	</superaction>
+
+	<superaction name="kcd2mp_menu_down" ui_group="" keyboard="hidden">
+		<action name="kcd2mp_menu_down" map="interaction" />
+		<control input="pgdn" controller="keyboard" />
+	</superaction>
+
+	<superaction name="kcd2mp_menu_change" ui_group="" keyboard="hidden">
+		<action name="kcd2mp_menu_change" map="interaction" />
+		<control input="end" controller="keyboard" />
+	</superaction>
 </kdcmp_patch>

@@ -24,7 +24,12 @@ namespace KcdMp.Client;
 /// kdcmp.pak, Mods\kdcmp\Data\kdcmp_keys.pak (the game opens every *.pak in a mod's folder). Setup
 /// runs it after the copy, the launcher before every game start (a game update changes the source;
 /// the pak is rewritten only when its content would change). A failure costs the keys only: the
-/// console commands (mp_dice_*, mp_invite, mp_accept, mp_decline, mp_quest_*) still work.
+/// console commands (mp_dice_*, mp_invite, mp_accept, mp_decline, mp_quest_*, mp_menu) still work.
+///
+/// WO-154: the mod menu's four actions ride the same two files -- Insert opens and closes it (the
+/// player's settings.json <c>MenuKey</c>: one of <see cref="MenuKeys"/>, read when the pak is built;
+/// anything else is Insert, and the outcome says so), PgUp / PgDn choose, End changes. The dice keys
+/// are exactly as before.
 /// </summary>
 public static class KeybindPak
 {
@@ -32,12 +37,39 @@ public static class KeybindPak
     public const string ProfileEntry = "Libs/Config/defaultProfile.xml";
     public const string SuperactionsEntry = "Libs/Config/keybindSuperactions.xml";
 
-    /// <summary>The ten actions our lines add (both files name each once).</summary>
+    /// <summary>The actions our lines add (both files name each once): WO-148's ten dice actions, WO-154's four menu actions.</summary>
     public static readonly string[] Actions =
     {
         "kcd2mp_dice_mark_1", "kcd2mp_dice_mark_2", "kcd2mp_dice_mark_3", "kcd2mp_dice_mark_4",
         "kcd2mp_dice_mark_5", "kcd2mp_dice_mark_6", "kcd2mp_dice_cast", "kcd2mp_dice_bank",
         "kcd2mp_dice_yield", "kcd2mp_dice_cancel",
+        "kcd2mp_menu_toggle", "kcd2mp_menu_up", "kcd2mp_menu_down", "kcd2mp_menu_change",
+    };
+
+    /// <summary>WO-148's dice keys. Nothing after WO-148 changes them (WO-154's tests pin it).</summary>
+    public static readonly (string Action, string Key)[] DiceKeys =
+    {
+        ("kcd2mp_dice_mark_1", "f2"), ("kcd2mp_dice_mark_2", "f4"), ("kcd2mp_dice_mark_3", "f5"), ("kcd2mp_dice_mark_4", "f6"),
+        ("kcd2mp_dice_mark_5", "f7"), ("kcd2mp_dice_mark_6", "f8"), ("kcd2mp_dice_cast", "f9"), ("kcd2mp_dice_bank", "f11"),
+        ("kcd2mp_dice_yield", "f12"), ("kcd2mp_dice_cancel", "u"),
+    };
+
+    /// <summary>WO-154: the action that opens and closes the mod menu (its key is the player's choice).</summary>
+    public const string MenuToggleAction = "kcd2mp_menu_toggle";
+    public const string MenuKeyDefault = "insert";
+    public const string MenuKeySetting = "MenuKey";
+
+    /// <summary>
+    /// WO-154: the keys a player may give the menu (settings.json <c>MenuKey</c>). Each is named nowhere in the
+    /// game's own two files (1.5.5, retail and Modding Tools identical), none is used by the mod's other keys,
+    /// and none is one CryEngine keeps for itself (ScrollLock, Pause, the console key). Short on purpose.
+    /// </summary>
+    public static readonly string[] MenuKeys = { "insert", "np_add", "np_subtract" };
+
+    /// <summary>WO-154: the menu's fixed navigation keys (only while it is open).</summary>
+    public static readonly (string Action, string Key)[] MenuNavKeys =
+    {
+        ("kcd2mp_menu_up", "pgup"), ("kcd2mp_menu_down", "pgdn"), ("kcd2mp_menu_change", "end"),
     };
 
     public sealed record Outcome(bool Ok, string Action, string Detail, string? SourcePak = null)
@@ -111,7 +143,74 @@ public static class KeybindPak
         return merged;
     }
 
-    private static bool ContainsAny(string text) => text.Contains("kcd2mp_dice_", StringComparison.Ordinal);
+    private static bool ContainsAny(string text) => text.Contains("kcd2mp_", StringComparison.Ordinal);
+
+    // ---- WO-154: the menu key (pure, unit-tested) ---------------------------------------------------
+
+    /// <summary>
+    /// The settings.json <c>MenuKey</c> as the key to bind: one of <see cref="MenuKeys"/> (any case, trimmed), else
+    /// Insert. <paramref name="note"/> is "" for a known key or none; for anything else it says what was there and
+    /// that Insert is used (a value that is not a plain key name is not repeated: it may be anything).
+    /// </summary>
+    public static string ResolveMenuKey(string? setting, out string note)
+    {
+        note = "";
+        string s = (setting ?? "").Trim().ToLowerInvariant();
+        if (s.Length == 0) return MenuKeyDefault;
+        if (Array.IndexOf(MenuKeys, s) >= 0) return s;
+        string shown = Regex.IsMatch(s, "^[a-z0-9_]{1,16}$") ? "'" + s + "'" : "(not a key name)";
+        note = $"MenuKey {shown} is not one of {string.Join("|", MenuKeys)} -- {MenuKeyDefault} used";
+        return MenuKeyDefault;
+    }
+
+    private static readonly Regex ToggleBlock = new(
+        @"(<superaction\s+name=""" + MenuToggleAction + @"""[^>]*>)(.*?)(</superaction>)",
+        RegexOptions.CultureInvariant | RegexOptions.Singleline);
+    private static readonly Regex ControlInput = new(@"(<control\s+input="")([^""]*)("")", RegexOptions.CultureInvariant);
+
+    /// <summary>Our superactions with the menu toggle's one control set to <paramref name="key"/> (one of
+    /// <see cref="MenuKeys"/>); every other line, the dice keys included, byte for byte as it was.</summary>
+    public static string WithMenuKey(string superactionsBody, string key)
+    {
+        if (Array.IndexOf(MenuKeys, key) < 0) throw new ArgumentException("not a menu key: " + key, nameof(key));
+        var blocks = ToggleBlock.Matches(superactionsBody);
+        if (blocks.Count != 1) throw new InvalidDataException($"{blocks.Count} {MenuToggleAction} superactions in our lines (expected 1)");
+        var b = blocks[0];
+        string inner = b.Groups[2].Value;
+        if (ControlInput.Matches(inner).Count != 1) throw new InvalidDataException($"{MenuToggleAction} must have exactly one control");
+        string replaced = ControlInput.Replace(inner, m => m.Groups[1].Value + key + m.Groups[3].Value);
+        return superactionsBody[..b.Groups[2].Index] + replaced + superactionsBody[(b.Groups[2].Index + b.Groups[2].Length)..];
+    }
+
+    /// <summary>The key a keybindSuperactions.xml binds to one action (its superaction's first control), or null.</summary>
+    public static string? BoundKey(string superactionsXml, string action)
+    {
+        var block = new Regex(@"<superaction\s+name=""" + Regex.Escape(action) + @"""[^>]*>(.*?)</superaction>",
+                              RegexOptions.CultureInvariant | RegexOptions.Singleline).Match(superactionsXml);
+        if (!block.Success) return null;
+        var c = ControlInput.Match(block.Groups[1].Value);
+        return c.Success ? c.Groups[2].Value : null;
+    }
+
+    /// <summary>settings.json's MenuKey as written (null: no file, not one JSON object, no such key, not a string).
+    /// Reading never changes the file.</summary>
+    public static string? ReadMenuKeySetting(string settingsPath)
+    {
+        try { return SettingsJson.Read(settingsPath)?[MenuKeySetting] is System.Text.Json.Nodes.JsonValue v && v.TryGetValue(out string? s) ? s : null; }
+        catch (InvalidOperationException) { return null; }
+    }
+
+    /// <summary>The menu key a built kdcmp_keys.pak binds (what this game run uses), or null when it cannot be read.</summary>
+    public static string? BoundMenuKeyInPak(string pakPath)
+    {
+        try
+        {
+            using ZipArchive z = ZipFile.OpenRead(pakPath);
+            ZipArchiveEntry? s = Find(z, SuperactionsEntry);
+            return s is null ? null : BoundKey(ReadText(s), MenuToggleAction);
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException) { return null; }
+    }
 
     private static bool Wellformed(string xml, out string why)
     {
@@ -226,8 +325,9 @@ public static class KeybindPak
         catch (Exception) { return false; }
     }
 
-    /// <summary>The whole job: the game's files + our lines -> modDir\Data\kdcmp_keys.pak.</summary>
-    public static Outcome Build(string gameRoot, string modDir)
+    /// <summary>The whole job: the game's files + our lines -> modDir\Data\kdcmp_keys.pak. WO-154:
+    /// <paramref name="menuKeySetting"/> is settings.json's MenuKey as written (null = none: Insert).</summary>
+    public static Outcome Build(string gameRoot, string modDir, string? menuKeySetting = null)
     {
         try
         {
@@ -236,8 +336,10 @@ public static class KeybindPak
                 return new Outcome(false, "none", why);
             string? p = MergeProfile(profile, PatchBody(EmbeddedPatch("defaultProfile.interaction.xml")), out why);
             if (p is null) return new Outcome(false, "none", why, source);
-            string? s = MergeSuperactions(supa, PatchBody(EmbeddedPatch("keybindSuperactions.append.xml")), out why);
+            string menuKey = ResolveMenuKey(menuKeySetting, out string keyNote);
+            string? s = MergeSuperactions(supa, WithMenuKey(PatchBody(EmbeddedPatch("keybindSuperactions.append.xml")), menuKey), out why);
             if (s is null) return new Outcome(false, "none", why, source);
+            if (BoundKey(s, MenuToggleAction) != menuKey) return new Outcome(false, "none", "the menu key did not land in " + SuperactionsEntry, source);
             string data = Path.Combine(modDir, "Data");
             Directory.CreateDirectory(data);
             // The game's files are plain ASCII; written back without a byte-order mark.
@@ -247,7 +349,7 @@ public static class KeybindPak
                 (ProfileEntry, enc.GetBytes(p)),
                 (SuperactionsEntry, enc.GetBytes(s)),
             });
-            return new Outcome(true, action, $"{Actions.Length} actions in both files", source);
+            return new Outcome(true, action, $"{Actions.Length} actions in both files; menu key {menuKey}{(keyNote.Length > 0 ? " (" + keyNote + ")" : "")}", source);
         }
         catch (Exception ex)
         {
@@ -268,7 +370,9 @@ public static class KeybindPak
         return text;
     }
 
-    /// <summary>--keys-pak --game-root DIR [--mod-dir DIR]: prints "KEYS-PAK {json}"; exit 0 when the pak is in place.</summary>
+    /// <summary>--keys-pak --game-root DIR [--mod-dir DIR] [--settings FILE]: prints "KEYS-PAK {json}"; exit 0 when
+    /// the pak is in place. WO-154: the menu key comes from the launcher's settings.json (MenuKey), by default the
+    /// one beside this exe -- where the launcher keeps it.</summary>
     public static int RunCli(string[] args, TextWriter output)
     {
         string? Arg(string name)
@@ -279,11 +383,12 @@ public static class KeybindPak
         string? root = Arg("--game-root");
         if (string.IsNullOrWhiteSpace(root))
         {
-            output.WriteLine("KEYS-PAK " + new Outcome(false, "none", "usage: --keys-pak --game-root <dir> [--mod-dir <dir>]").ToJson());
+            output.WriteLine("KEYS-PAK " + new Outcome(false, "none", "usage: --keys-pak --game-root <dir> [--mod-dir <dir>] [--settings <settings.json>]").ToJson());
             return 2;
         }
         string mod = Arg("--mod-dir") ?? Path.Combine(root, "Mods", "kdcmp");
-        Outcome o = Build(root, mod);
+        string settings = Arg("--settings") ?? Path.Combine(AppContext.BaseDirectory, "settings.json");
+        Outcome o = Build(root, mod, ReadMenuKeySetting(settings));
         output.WriteLine("KEYS-PAK " + o.ToJson());
         return o.Ok ? 0 : 1;
     }

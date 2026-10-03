@@ -338,12 +338,15 @@ public class Wo148Tests
     }
 
     [Fact]
-    public void The_patch_files_hold_only_our_ten_actions()
+    public void The_patch_files_hold_only_our_actions()
     {
+        // WO-148's ten dice actions and WO-154's four menu actions (Wo154MenuTests pins the dice keys unchanged)
         string p = ProfileBody(), s = SuperBody();
         foreach (string a in KeybindPak.Actions) { Assert.Contains($"name=\"{a}\"", p); Assert.Contains($"name=\"{a}\"", s); }
-        Assert.Equal(10, p.Split("<action ").Length - 1);
-        Assert.Equal(10, s.Split("<superaction ").Length - 1);
+        Assert.Equal(14, KeybindPak.Actions.Length);
+        Assert.Equal(KeybindPak.Actions.Length, p.Split("<action ").Length - 1);
+        Assert.Equal(KeybindPak.Actions.Length, s.Split("<superaction ").Length - 1);
+        Assert.Equal(10, KeybindPak.Actions.Count(a => a.StartsWith("kcd2mp_dice_", StringComparison.Ordinal)));
         Assert.DoesNotContain("<actionmap", p);
         Assert.DoesNotContain("<keybinds", s);
     }
