@@ -1295,6 +1295,13 @@ public static partial class Protocol
     public const byte PlayerStateFlagBleeding = 0x02;
 
     /// <summary>
+    /// WO-154: with <see cref="PlayerStateFlagUnconscious"/>, the down is a KNOCKDOWN (the game's own knockout,
+    /// or the death guard's knockdown kind): the player wakes where he lies. The partner's screen shows the
+    /// avatar lying there (it is not hidden at a death spot, which stays for a death or an execution).
+    /// </summary>
+    public const byte PlayerStateFlagKnockedDown = 0x04;
+
+    /// <summary>
     /// How much a player's health or stamina must move before it is worth a
     /// PlayerStateUp. Small enough that a real hit always crosses it, large
     /// enough that ordinary regeneration does not turn this into a second

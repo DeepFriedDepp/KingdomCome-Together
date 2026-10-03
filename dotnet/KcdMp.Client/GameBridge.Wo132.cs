@@ -207,19 +207,21 @@ public partial class GameBridge
         bool down = (flags & Protocol.PlayerStateFlagUnconscious) != 0;
         bool was = _w132PeerFlags.TryGetValue(ghost, out byte f0) && (f0 & Protocol.PlayerStateFlagUnconscious) != 0;
         _w132PeerFlags[ghost] = flags;
-        if (down && !was) _ = Wo132OnPeerDownAsync(ghost, "downed");
+        // WO-154 2: a knockdown is shown lying where he fell (the avatar falls on the Downed bit); only a death hides it
+        bool knockedDown = (flags & Protocol.PlayerStateFlagKnockedDown) != 0;
+        if (down && !was) _ = Wo132OnPeerDownAsync(ghost, knockedDown ? "knocked down" : "downed", hide: !knockedDown || !_w154AvatarFalls);
         else if (!down && was) _ = Wo132OnPeerUpAsync(ghost, "back up");
     }
 
-    private async Task Wo132OnPeerDownAsync(byte ghost, string why)
+    private async Task Wo132OnPeerDownAsync(byte ghost, string why, bool hide = true)
     {
         if (!W132Gate(ghost).Down(DateTime.UtcNow)) return;
         Console.WriteLine($"MP-W132 peer {ghost} {why}: nothing is forwarded to it until 5 s after it wakes");
         if (!_isDamageAuthority) return;
         await Wo139OnPeerDownAsync(ghost, why);   // WO-139: the guards fighting its avatar stop
         await Wo132AvatarLeaveFightAsync(ghost, why);
-        // Its state on the host: bleeding and health reset, hidden at the death spot.
-        await ExecLuaAsync($"if KCD2MP_W132AvatarDown then KCD2MP_W132AvatarDown(\"{ghost}\", true) end");
+        // Its state on the host: bleeding and health reset, hidden at the death spot (WO-154: a knockdown lies there instead).
+        if (hide) await ExecLuaAsync($"if KCD2MP_W132AvatarDown then KCD2MP_W132AvatarDown(\"{ghost}\", true) end");
         await Wo131RestoreAvatarAsync(ghost);
     }
 

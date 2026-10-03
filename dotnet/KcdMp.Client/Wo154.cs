@@ -92,4 +92,26 @@ public static class Wo154Rules
 {
     /// <summary>The host's verdict for a joiner's request on a contested State (the joiner stops asking and correcting it).</summary>
     public const string VerdictContested = "contested";
+
+    /// <summary>
+    /// Phase 2: a partner's Downed bit, debounced. Down once the bit has held for <see cref="DownAfterMs"/> (a body
+    /// that flickers through a ragdoll for a frame does not fall); up once it has been clear for
+    /// <see cref="UpAfterMs"/> (a ragdoll settling does not stand the avatar up and drop it again).
+    /// </summary>
+    public sealed class DownEdge
+    {
+        public const long DownAfterMs = 200, UpAfterMs = 500;
+        public bool Down { get; private set; }
+        private long _bitSince = -1, _clearSince = -1;
+
+        /// <summary>One sample. True = it just went down, false = it just came up, null = no change.</summary>
+        public bool? Feed(bool bit, long nowMs)
+        {
+            if (bit) { _clearSince = -1; if (_bitSince < 0) _bitSince = nowMs; }
+            else { _bitSince = -1; if (_clearSince < 0) _clearSince = nowMs; }
+            if (!Down && bit && nowMs - _bitSince >= DownAfterMs) { Down = true; return true; }
+            if (Down && !bit && nowMs - _clearSince >= UpAfterMs) { Down = false; return false; }
+            return null;
+        }
+    }
 }

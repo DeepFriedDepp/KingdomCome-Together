@@ -76,6 +76,27 @@ public class Wo154Tests
     }
 
     [Fact]
+    public void A_downed_bit_falls_only_after_it_held_and_rises_only_after_it_cleared()
+    {
+        var d = new Wo154Rules.DownEdge();
+        Assert.Null(d.Feed(true, 1000));                    // a frame of ragdoll: not yet
+        Assert.Null(d.Feed(false, 1050));                   // gone again: nothing ever fell
+        Assert.False(d.Down);
+        Assert.Null(d.Feed(true, 2000));
+        Assert.Null(d.Feed(true, 2150));
+        Assert.True(d.Feed(true, 2200));                    // held 200 ms: he is down
+        Assert.True(d.Down);
+        Assert.Null(d.Feed(true, 3000));                    // no second fall
+        Assert.Null(d.Feed(false, 4000));                   // the ragdoll settles for a moment...
+        Assert.Null(d.Feed(true, 4100));                    // ...still down: no stand-up and fall again
+        Assert.Null(d.Feed(false, 5000));
+        Assert.Null(d.Feed(false, 5400));
+        Assert.False(d.Feed(false, 5500));                  // clear 500 ms: he is up
+        Assert.False(d.Down);
+        Assert.Null(d.Feed(false, 6000));
+    }
+
+    [Fact]
     public void The_contested_verdict_parses_and_the_worker_flag_reads()
     {
         string text = Wo137Rules.ResultText(Wo154Rules.VerdictContested, 1, "", Trigger);

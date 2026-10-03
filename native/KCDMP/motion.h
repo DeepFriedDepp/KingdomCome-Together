@@ -68,6 +68,9 @@ struct State2 {
 static_assert(sizeof(State2) == 12, "State2 is the 12-byte wire block");
 
 constexpr uint8_t kBitCombat = 0x01, kBitBlock = 0x02, kBitCrouch = 0x04, kBitRanged = 0x08, kBitLocked = 0x10;
+// WO-154 2: the sender's own body is down -- its physics is no living entity (a knockdown's ragdoll,
+// a knockout). 0x20 is the agent's (TorchLit).
+constexpr uint8_t kBitDowned = 0x40;
 
 // Resolve anchors, install the capture hooks. Main thread, once, after
 // npcdrive::install(). Logs one WO121-MOTION line.

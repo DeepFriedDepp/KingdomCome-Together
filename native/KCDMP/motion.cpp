@@ -16,6 +16,7 @@
 #include "wo143.h"
 #include "wo143_rules.h"
 #include "mannequin_read.h"
+#include "npc_drive.h"
 #include <unordered_map>
 #include <vector>
 
@@ -1320,6 +1321,23 @@ void body_released(const char* key, uint32_t eid) {
     g_bodies.erase(it);
 }
 
+// WO-154 2: the local player's body is down when its physics is no living entity: the ragdoll of a
+// knockdown (TakeDamage's own, WO-151 L2: on his back until he stands) or of a knockout. The partner's
+// screen shows the avatar fall, lie and stand up on this bit's edges. Logged on each edge.
+void note_local_downed(State2* out) {
+    static int s_was = -1;
+    void* pe = engine::entity_by_id(0x7777);
+    kcdmp::npcdrive::PhysicsStatus ps{};
+    if (!pe || !kcdmp::npcdrive::physics_status(pe, &ps) || !ps.present) return;
+    const bool down = !ps.living;
+    if (down) out->bits |= kBitDowned;
+    if (s_was != static_cast<int>(down)) {
+        if (s_was >= 0)
+            logf("WO154-DOWN the local player is %s (physics %s)", down ? "DOWN" : "up again", ps.living ? "living" : "not a living entity");
+        s_was = down ? 1 : 0;
+    }
+}
+
 bool read_local_state2(State2* out, float facingYaw) {
     *out = State2{};
     void* actor = player_actor();
@@ -1344,6 +1362,7 @@ bool read_local_state2(State2* out, float facingYaw) {
     }
     void* ca = combat_actor_of(actor, false);
     g_playerCa = ca;
+    note_local_downed(out);   // WO-154 2
     if (A.vftExp) {
         void* exp = expansion_of(actor);
         g_playerExp = exp;

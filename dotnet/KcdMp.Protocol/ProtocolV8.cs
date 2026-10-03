@@ -86,6 +86,9 @@ public enum BodyState2Bits : byte
     Locked = 0x10,
     /// <summary>WO-136: the sender holds a lit torch (its hand holds the game's torch item); the avatar holds one too.</summary>
     TorchLit = 0x20,
+    /// <summary>WO-154: the sender's own body is down (its physics is no living entity: a knockdown's ragdoll, a
+    /// knockout). The avatar falls, lies and stands up on this bit's edges.</summary>
+    Downed = 0x40,
 }
 
 /// <summary>WO-121: the 12 replicated-state bytes (Position/Ghost flag 0x10).</summary>

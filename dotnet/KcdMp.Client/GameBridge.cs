@@ -4169,6 +4169,9 @@ public partial class GameBridge(ClientConfig config)
 
         byte flags = 0;
         if (st.IsUnconscious == true || _localDowned) flags |= Protocol.PlayerStateFlagUnconscious;   // WO-113: downed = a body
+        // WO-154 2: a knockout or the death guard's knockdown kind -- he wakes where he lies (shown lying, not hidden)
+        if ((st.IsUnconscious == true && !_localDowned) || (_localDowned && _localDownedKind == Protocol.RespawnReasonKnockdown))
+            flags |= Protocol.PlayerStateFlagKnockedDown;
         // Bleeding has no confirmed read on this build -- it is a buff, and the
         // mod's emitter does not sample the buff list. The bit stays clear
         // rather than being faked from low health, which would be a guess a
@@ -4636,7 +4639,7 @@ public partial class GameBridge(ClientConfig config)
                     // clears its body state on a call without one) gets the
                     // newest block's derivation, held while the sender's 1 s
                     // heartbeat keeps it fresh.
-                    if (gs.State2 is BodyState2 st2n) { _peerState2At[ghostId] = DateTime.UtcNow; _peerLastState2[ghostId] = st2n; Wo136OnPeerState2(ghostId, st2n); }
+                    if (gs.State2 is BodyState2 st2n) { _peerState2At[ghostId] = DateTime.UtcNow; _peerLastState2[ghostId] = st2n; Wo136OnPeerState2(ghostId, st2n); Wo154OnPeerState2(ghostId, st2n); }
                     else if (_peerLastState2.TryGetValue(ghostId, out var st2h) && _peerState2At.TryGetValue(ghostId, out var st2t)
                              && (DateTime.UtcNow - st2t).TotalSeconds < 3.0)
                         body = st2h.ToLegacy(gs.IsRiding);
@@ -4767,6 +4770,7 @@ public partial class GameBridge(ClientConfig config)
                     Console.WriteLine($"[disconnect] ghost {ghostId} removed");
                     Wo144OnPeerDisconnected(ghostId);   // WO-144: out of every partner loop at once
                     Wo148OnPeerGone(ghostId);           // WO-148: its avatar sets down what it carried
+                    Wo154ForgetPeer(ghostId);           // WO-154 2: a rejoin starts from up
                     _peerLastSeenUtc.TryRemove(ghostId, out _);
                     _peerCutscene.TryRemove(ghostId, out _);   // WO-98 Phase 5
                     RefreshDiscordPeerCount();
@@ -5923,6 +5927,10 @@ public partial class GameBridge(ClientConfig config)
             case "w140_cfg":
             case "w140_status":
                 Wo140OnEvent(name, arg);
+                return;
+            case "w154_falls":       // WO-154 2: mp_avatar_falls on|off
+            case "w154_status":
+                Wo154OnEvent(name, arg);
                 return;
         }
 

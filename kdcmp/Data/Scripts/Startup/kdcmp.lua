@@ -6606,6 +6606,8 @@ do
     --   WO135-STANDUP avatar=<name> ok=<pcall>
     function KCD2MP_W135AvatarStandUp(name)
         if not tostring(name):match("^kcd2mp_%d+$") then return false end
+        -- WO-154 2: a partner who is down in his own world lies here too: never stood up before he stands
+        if KCD2MP_W154IsDown and KCD2MP_W154IsDown(tostring(name):match("^kcd2mp_(%d+)$")) then return false end
         local w = KCD2MP.w135
         w.standAt = w.standAt or {}
         local now = os.clock()
@@ -11510,6 +11512,7 @@ end
 -- reconcile cycle.
 function mp_ghost_is_corpse(id, ghost)
     if KCD2MP.ghostDead[id] then return true end
+    if KCD2MP_W154IsDown and KCD2MP_W154IsDown(id) then return true end   -- WO-154 2: he lies where he fell
     -- WO-38 Phase 6: the owner reporting themselves unconscious (0x1F/0x20
     -- flags bit 0) is also a body -- they are lying in their own world, so a
     -- position stream that keeps arriving is stale-by-definition and driving
@@ -19847,6 +19850,84 @@ do
     end
 end
 
+-- ===== WO-154: the partner's figure falls when he is knocked down (docs/WO-154-findings.md) =====
+--
+-- Phase 2 (both roles). The partner's DLL sets the Downed bit of his body-state block while his own body
+-- is down (its physics is no living entity: a knockdown's ragdoll, a knockout); the agent debounces its
+-- edges (GameBridge.Wo154.cs) and calls KCD2MP_W154AvatarDowned. On the way down the avatar's writer lets
+-- go first (mp_ghost_is_corpse reads it down: nothing moves or animates it), then the engine's own
+-- Actor.Fall drops it where it stands; it lies there while he does. On the way up the engine's own
+-- StandUp; if its body is still on the ground when the writer binds it again, WO-135's not-living
+-- stand-up runs as before. A death or an execution still hides the avatar at the death spot (WO-132);
+-- a knockdown is never hidden. mp_avatar_falls on|off (default on).
+--   WO154-FALL avatar=<name> ok=<pcall> / WO154-RISE avatar=<name> ok=<pcall>
+do
+    KCD2MP.w154 = KCD2MP.w154 or {}
+    local W = KCD2MP.w154
+    if W.falls == nil then W.falls = true end
+    W.down = W.down or {}   -- ghost id (string) -> os.clock() of its fall
+    W.stats = W.stats or { fell = 0, rose = 0, fallFail = 0, riseFail = 0 }
+
+    function KCD2MP_W154IsDown(id)
+        return W.down[tostring(id)] ~= nil
+    end
+
+    function KCD2MP_W154AvatarDowned(id, down)
+        id = tostring(id)
+        local name = "kcd2mp_" .. id
+        local ghost = KCD2MP.ghosts and KCD2MP.ghosts[id]
+        local e = ghost and ghost.entity
+        if down then
+            W.down[id] = os.clock()
+            if not (e and e.actor) then mp_log("WO154-FALL avatar=" .. name .. " no body here -- marked down"); return end
+            local hidden = false
+            pcall(function() hidden = e:IsHidden() and true or false end)
+            if hidden then mp_log("WO154-FALL avatar=" .. name .. " is hidden (a death) -- no fall"); return end
+            pcall(KCD2MP_GhostNativeSync, id, ghost, false)   -- the writer lets go first
+            local ok, err = false, nil
+            if type(e.actor.Fall) == "function" then
+                ok, err = pcall(function() e.actor:Fall(e:GetWorldPos()) end)
+            else
+                err = "Actor.Fall is not registered on this build"
+            end
+            if ok then W.stats.fell = W.stats.fell + 1 else W.stats.fallFail = W.stats.fallFail + 1 end
+            mp_log(string.format("WO154-FALL avatar=%s ok=%s%s -- he is down in his world: his figure falls and lies here",
+                name, tostring(ok), ok and "" or (" err=" .. tostring(err))))
+        else
+            local since = W.down[id]
+            W.down[id] = nil
+            if not (e and e.actor) then return end
+            local ok, err = false, nil
+            if type(e.actor.StandUp) == "function" then
+                ok, err = pcall(function() e.actor:StandUp() end)
+            else
+                err = "Actor.StandUp is not registered on this build"
+            end
+            if ok then W.stats.rose = W.stats.rose + 1 else W.stats.riseFail = W.stats.riseFail + 1 end
+            mp_log(string.format("WO154-RISE avatar=%s ok=%s%s -- he stood up in his world (down %.1f s)",
+                name, tostring(ok), ok and "" or (" err=" .. tostring(err)), since and (os.clock() - since) or -1))
+        end
+    end
+
+    -- mp_avatar_falls on|off (bare = report)
+    function KCD2MP_W154SetFalls(arg)
+        local v = KCD2MP_Wo122ParseBool(arg)
+        if v == "bad" then mp_log("mp_avatar_falls: expected on|off"); return false end
+        if v ~= nil then
+            W.falls = v
+            if not v then
+                -- standing again at once: nothing keeps a fallen figure down with the switch off
+                for gid in pairs(W.down) do pcall(KCD2MP_W154AvatarDowned, gid, false) end
+            end
+            KCD2MP_EmitEvent("w154_falls", v and "on" or "off")
+        end
+        mp_log(string.format("WO154-FALLS falls=%s fell=%d rose=%d fall_fail=%d rise_fail=%d down_now=%d",
+            W.falls and "on" or "off", W.stats.fell, W.stats.rose, W.stats.fallFail, W.stats.riseFail,
+            (function() local n = 0 for _ in pairs(W.down) do n = n + 1 end return n end)()))
+        return true
+    end
+end
+
 -- ===== WO-151: the safeguards and the live session's fixes (docs/WO-151-findings.md) ======
 -- Phase 0 switches (the agent reads them through w151_cfg and pushes them to KCDMP.dll):
 --   mp_fault_switchoff on|off (default on) a call into the game's code that faulted 8 times
@@ -20968,6 +21049,7 @@ local ok, err = pcall(function()
     System.AddCCommand("mp_oneshots", 'KCD2MP_SetOneShots(%line)', "WO-143: NPCs' one-shots (serving, drinking, a dog's howl) show on the other screen (default on): mp_oneshots on|off")
     System.AddCCommand("mp_player_minigames", 'KCD2MP_SetPlayerMinigames(%line)', "WO-143: the partner's grindstone, smithing, alchemy, reading and dice show on his avatar (default on): mp_player_minigames on|off")
     System.AddCCommand("mp_idles", 'KCD2MP_SetIdles(%line)', "WO-143: standing NPCs look at who they look at on the host's screen (default on): mp_idles on|off")
+    System.AddCCommand("mp_avatar_falls", 'KCD2MP_W154SetFalls(%line)', "WO-154: a partner who is knocked down in his own world falls and lies on this screen too, and stands up when he does (default on): mp_avatar_falls on|off")
     System.AddCCommand("mp_avatar_herbs", 'KCD2MP_SetAvatarHerbs(%line)', "WO-153: the partner's avatar plays its herb-picking loop (default OFF: the avatar stands; the loop ended both 0.43.0 joiner crashes): mp_avatar_herbs on|off")
     System.AddCCommand("mp_avatar_dress", 'KCD2MP_SetAvatarDress(%line)', "WO-144: a partner's avatar wears pieces from its own inventory, equipped through the actor (default on; off = 0.42.0's REST EquipItem): mp_avatar_dress on|off")
     System.AddCCommand("mp_show_animals", 'KCD2MP_SetShowAnimals(%line)', "WO-144: a horse or animal the host streams is shown here even where this world keeps it hidden (default on): mp_show_animals on|off")
