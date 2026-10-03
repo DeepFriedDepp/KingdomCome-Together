@@ -544,6 +544,7 @@ public partial class GameBridge
             }
             case Wo140Frame.EdgeEnded:
                 _w140LocalSkipping = false;
+                Wo154NoteLocalSkipEnded(Wo140Rules.KindOfSkipId(f.Id));   // WO-154 6.3: a set-back right after it is told
                 await Wo140OnLocalEndedAsync();
                 return;
         }
@@ -689,6 +690,7 @@ public partial class GameBridge
                 _lastPollUtc = DateTime.UtcNow;
                 _suppressJumpUntilUtc = DateTime.UtcNow.AddSeconds(30);
                 Console.WriteLine(FormattableString.Invariant($"MP-W140 this clock was {ok.Before - target} s ahead of the host's -- pulled back {ok.Before} -> {ok.After} (one clock: the host's)"));
+                Wo154AfterPull(ok.Before - target);   // WO-154 6.3: this player's own wait or sleep set back: told on screen
             }
             else Console.WriteLine(FormattableString.Invariant($"MP-W140 this clock is ahead of the host's ({worldTime} > {target}) but the pull {(r is null ? "got no answer (not armed?)" : r.Value.Result == 2 ? "was refused: the calendar went back past this reading (a load)" : r.Value.Result == 3 ? "waits: this game's own skip is running (tried again after it)" : "was not needed")}"));
         });

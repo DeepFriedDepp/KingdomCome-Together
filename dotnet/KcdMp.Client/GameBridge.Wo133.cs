@@ -23,7 +23,7 @@ public partial class GameBridge
     private bool _w133Pushed;              // the current state has reached the mod at least once
     private volatile bool _w133PushDue;    // the mod's Lua was reborn
     private DateTime _w133LastPushUtc = DateTime.MinValue;
-    private long _w133SkipsDropped, _w133DivergencesSkipped, _w133FingerprintsSkipped, _w133MarkersWithheld;
+    private long _w133SkipsDropped, _w133AnnouncesIgnored, _w133DivergencesSkipped, _w133FingerprintsSkipped, _w133MarkersWithheld;
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, long> _w133SkipByWhere = new(StringComparer.Ordinal);
     private static readonly TimeSpan W133Heartbeat = TimeSpan.FromSeconds(5);
 
@@ -61,7 +61,7 @@ public partial class GameBridge
     }
 
     private string W133Stats() => FormattableString.Invariant(
-        $"skips_dropped={Interlocked.Read(ref _w133SkipsDropped)} divergences_skipped={Interlocked.Read(ref _w133DivergencesSkipped)} fingerprints_skipped={Interlocked.Read(ref _w133FingerprintsSkipped)} markers_withheld={Interlocked.Read(ref _w133MarkersWithheld)}");
+        $"skips_dropped={Interlocked.Read(ref _w133SkipsDropped)} announces_not_applied={Interlocked.Read(ref _w133AnnouncesIgnored)} divergences_skipped={Interlocked.Read(ref _w133DivergencesSkipped)} fingerprints_skipped={Interlocked.Read(ref _w133FingerprintsSkipped)} markers_withheld={Interlocked.Read(ref _w133MarkersWithheld)}");
 
     /// <summary>The host's drop of a joiner's time skip (any phase). True = dropped, logged.</summary>
     private bool Wo133DropTimeSkip(byte source, byte phase, byte kind, uint worldTime)
@@ -69,8 +69,16 @@ public partial class GameBridge
         bool host = Wo133HostOfSharedWorld;
         int hostId = _hostModeKnown && _hostModeFrom != 0xFF ? _hostModeFrom : -1;
         if (!Wo133Rules.DropInboundTimeSkip(host, Wo133JoinerQuiet, hostId, source, _myGhostId)) return false;
-        long n = Interlocked.Increment(ref _w133SkipsDropped);
         string who = (_ghostNames.TryGetValue(source, out var dn) ? dn : $"player {source}") + (host ? "" : $" (not the host, ghost {hostId})");
+        if (Wo154Rules.IsClockAnnounce(phase, kind))
+        {
+            // WO-154 6.3: a clock announce is no skip (the field's "53 dropped skips" were these); logged rarely
+            long a = Interlocked.Increment(ref _w133AnnouncesIgnored);
+            if (a == 1 || a % 30 == 0)
+                Console.WriteLine($"[timeskip] {who}'s clock announce (t={worldTime}) not applied -- not a time skip: in a shared world only the host's clock moves the world (#{a} announces)");
+            return true;
+        }
+        long n = Interlocked.Increment(ref _w133SkipsDropped);
         string ph = phase switch { Protocol.TimeSkipPhaseStart => "start", Protocol.TimeSkipPhaseSync => "sync", Protocol.TimeSkipPhaseDoneQuiet => "done-quiet", _ => "done" };
         Console.WriteLine($"[timeskip] DROPPED {who}'s time skip ({ph} kind={kind} t={worldTime}) -- WO-133: in a shared world only the host's clock moves the world (#{n}; our clock {(_lastPolledWorldTime is uint c ? c.ToString(System.Globalization.CultureInfo.InvariantCulture) : "?")})");
         return true;

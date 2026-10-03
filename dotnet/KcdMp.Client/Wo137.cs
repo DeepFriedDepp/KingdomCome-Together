@@ -87,19 +87,36 @@ public static class Wo137Rules
         || PlayerMinigame(c.Path, c.Type);
 
     /// <summary>
+    /// WO-154 6.5: a State whose OWN name ends in "_minigame" is the quest's record of a minigame, not the
+    /// minigame: the game's data has exactly one, the knight's dice in utokNaNebakov (...kostky_s_rytirem.
+    /// dice_minigame, a DiceState None/InProgress/Won/Lost whose Won/Lost branch the quest), and WO-151's rule
+    /// kept it per machine by its name. On (default): it is shared like any quest State; only a "_minigame"
+    /// MODULE (a segment followed by '.') is the player's own. mp_minigame_outcome on|off (off = WO-151's rule).
+    /// </summary>
+    public static volatile bool MinigameOutcomeShared = true;
+
+    /// <summary>
     /// WO-151 4.1: a minigame's own tutorial states are the player's at that minigame, never the world's.
     /// The field: the joiner's blacksmithing tutorial was mirrored through the host, whose copy was not at
     /// the anvil -- "tutorialState Exec 2->5: refused (host value 4)", put back 5->4, and the tutorial looped:
     /// he was stuck at the anvil. A path segment ending in "_minigame", or a *TutorialProgress State.
+    /// WO-154 6.5: what it keeps per machine in the game's own quest data (Scripts.pak, 8,919 States): the 16
+    /// States of the blacksmith's tutorial module (kovar...blacksmithing_minigame.*) and the four tutorials'
+    /// progress drivers (Blacksmithing, Masterstrike, Combat, Alchemy TutorialProgress). No main-quest journal
+    /// objective (0 of 626); four journal objectives of the blacksmith's tutorial (heat the forge, to the anvil,
+    /// finish the falchion, quench the blade) are views over its module's States: each player's own anvil.
     /// </summary>
-    public static bool PlayerMinigame(string path, string type)
+    public static bool PlayerMinigame(string path, string type) => PlayerMinigame(path, type, MinigameOutcomeShared);
+
+    public static bool PlayerMinigame(string path, string type, bool outcomeShared)
     {
         if (type.EndsWith("TutorialProgress", StringComparison.Ordinal)) return true;
         int i = path.IndexOf("_minigame", StringComparison.Ordinal);
         while (i >= 0)
         {
             int end = i + "_minigame".Length;
-            if (end == path.Length || path[end] == '.') return true;
+            if (end < path.Length && path[end] == '.') return true;
+            if (end == path.Length && !outcomeShared) return true;
             i = path.IndexOf("_minigame", end, StringComparison.Ordinal);
         }
         return false;

@@ -262,4 +262,29 @@ public static class Wo154Rules
         why = (text ?? "").Trim();
         return Wo139Text.IsWord(why);
     }
+
+    // ------------------------------------------------------------------ Phase 6.3: a joiner's own wait or sleep
+
+    /// <summary>
+    /// Phase 6.3: shown on a joiner's screen when his own wait or sleep (not a shared one) was set back to the host's
+    /// clock. The field's "53 dropped skips" were the joiner's once-a-minute clock announces, not skips; the one way a
+    /// joiner's own skip is refused without a word is this set-back (a held picker that the host refuses already says
+    /// <see cref="Wo140Rules.NotReadyText"/>).
+    /// </summary>
+    public const string SkipUndoneText = "Time was set back to your host's clock: in a shared world only the host's clock moves time. Ask your host to wait or sleep, and it passes for you both.";
+    public const long SkipTellWindowMs = 60_000, SkipTellQuietMs = 60_000;
+
+    /// <summary>
+    /// A set-back is told when it follows this player's own skip (ended at most <see cref="SkipTellWindowMs"/> ago, not
+    /// a shared one) and nothing was told in the last <see cref="SkipTellQuietMs"/>. A set-back after a cutscene's own
+    /// time jump or the host's reload is not this player's doing: nothing is said (the field: a 2 h set-back at the end
+    /// of the lake cutscene).
+    /// </summary>
+    public static bool TellSkipUndone(bool on, bool sharedSkipNow, long nowMs, long localEndedMs, bool localWasShared, long lastToldMs) =>
+        on && !sharedSkipNow && localEndedMs > 0 && !localWasShared && nowMs - localEndedMs <= SkipTellWindowMs
+        && (lastToldMs <= 0 || nowMs - lastToldMs >= SkipTellQuietMs);
+
+    /// <summary>A joiner's clock announce (the connect/new-peer sync, re-sent once a minute; the relay passes it on as a quiet done): not a time skip.</summary>
+    public static bool IsClockAnnounce(byte phase, byte kind) =>
+        kind == Protocol.TimeSkipKindUnknown && (phase == Protocol.TimeSkipPhaseSync || phase == Protocol.TimeSkipPhaseDoneQuiet);
 }

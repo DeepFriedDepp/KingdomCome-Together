@@ -236,13 +236,20 @@ public class Wo151MinigameTests
     [Theory]
     [InlineData("Barbora.trosecko.kovar.hibernace.blacksmithing_minigame.tutorialState", "BlacksmithingTutorialProgress", true)]
     [InlineData("Barbora.trosecko.kovar.hibernace.blacksmithing_minigame.pohyb_mysi_polotovarem_ve_vyhni.pohybuj_mecem_ve_vyhni_state", "Progress", true)]
-    [InlineData("Barbora.trosecko.kovar.hibernace.blacksmithing_minigame", "Progress", true)]
     [InlineData("Barbora.trosecko.kovar.StavPrnihoTutorialu", "SomeTutorialProgress", true)]
     [InlineData("Barbora.trosecko.kovar.hibernace.kovar_ceka", "Progress", false)]
     [InlineData("Barbora.trosecko.minigames_board.state", "Progress", false)]
     [InlineData("Barbora.trosecko.zranenyLovci.lovec_krici", "bool", false)]
     public void A_minigames_tutorial_is_the_players_own(string path, string type, bool local)
     {
-        Assert.Equal(local, Wo137Rules.PlayerMinigame(path, type));
+        Assert.Equal(local, Wo137Rules.PlayerMinigame(path, type, true));
+        Assert.Equal(local, Wo137Rules.PlayerMinigame(path, type, false));   // WO-154 6.5's switch leaves these alone
+    }
+
+    /// <summary>WO-151's own reading of a path that ENDS in "_minigame" (WO-154's mp_minigame_outcome off).</summary>
+    [Fact]
+    public void A_path_ending_in_minigame_is_local_under_the_old_rule()
+    {
+        Assert.True(Wo137Rules.PlayerMinigame("Barbora.trosecko.kovar.hibernace.blacksmithing_minigame", "Progress", false));
     }
 }

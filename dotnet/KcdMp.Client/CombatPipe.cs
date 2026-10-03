@@ -24,7 +24,13 @@ namespace KcdMp.Client;
 /// </summary>
 public sealed class CombatPipe : IAsyncDisposable
 {
-    private const string PipeName = "kcdmp";
+    private const string DefaultPipeName = "kcdmp";
+    private readonly string _pipeName;
+
+    public CombatPipe() : this(DefaultPipeName) { }
+
+    /// <summary>WO-154 6.6: another pipe name, for tests only (a test server must never take the game's "kcdmp").</summary>
+    public CombatPipe(string pipeName) => _pipeName = pipeName;
 
     private const byte ApplyDamage       = 0x01;
     private const byte ApplyDeath        = 0x02;
@@ -253,7 +259,7 @@ public sealed class CombatPipe : IAsyncDisposable
             if (IsConnected) return true;
 
             _pipe?.Dispose();
-            _pipe = new NamedPipeClientStream(".", PipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
+            _pipe = new NamedPipeClientStream(".", _pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
             try
             {
                 await _pipe.ConnectAsync(500, ct);
@@ -783,6 +789,12 @@ public sealed class CombatPipe : IAsyncDisposable
                 TimedOut++;
                 return false;
             }
+        }
+        catch (ChannelClosedException)
+        {
+            // WO-154 6.6: the reader lost the pipe (the game quit) while this waited, and its Drop completed the
+            // channel; it is already dropped (a Drop here could close a connection made since)
+            return false;
         }
         catch (Exception ex) when (ex is IOException or ObjectDisposedException)
         {
@@ -1855,6 +1867,13 @@ public sealed class CombatPipe : IAsyncDisposable
                 _expectedSeq = (byte)(seq + 1);
                 return (reply.Body, PipeReason.Ok);
             }
+        }
+        catch (ChannelClosedException)
+        {
+            // WO-154 6.6: the field's "tick failed: ChannelClosedException" at every game exit -- the reader lost the
+            // pipe while this command waited for its answer and completed the channel (WO-153's Drop on the reader's
+            // exit). The connection is already dropped: not connected, said once by the reader, nothing thrown.
+            return (null, PipeReason.NotConnected);
         }
         catch (Exception ex) when (ex is IOException or ObjectDisposedException)
         {

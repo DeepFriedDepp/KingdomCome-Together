@@ -297,9 +297,15 @@ public partial class GameBridge
                             if (_w154GaitHyst != on) { _w154GaitHyst = on; _ = PushWo121ConfigAsync(_wo121Ct); }
                             break;
                         case "join_panel": _w154JoinPanel = on; if (!on) Wo154HostJoinPanelHide("mp_join_panel off"); break;
+                        case "skip_tell": _w154SkipTell = on; break;
+                        case "minigame_outcome":
+                            if (Wo137Rules.MinigameOutcomeShared != on)
+                                Console.WriteLine($"MP-W154 mp_minigame_outcome {(on ? "on" : "off")} -- a quest State named after a minigame (its outcome) is {(on ? "shared like any quest State" : "per machine (WO-151's rule)")}");
+                            Wo137Rules.MinigameOutcomeShared = on;
+                            break;
                     }
                 }
-                Console.WriteLine($"MP-W154 cfg {Wo154FightStatsText()} {Wo154JoinStatsText()} {Wo154RideStatsText()}");
+                Console.WriteLine($"MP-W154 cfg {Wo154FightStatsText()} {Wo154JoinStatsText()} {Wo154RideStatsText()} {Wo154RestStatsText()}");
                 return;
             case "w154_ride":        // phase 5: <ghost> <horse> <dz> | <ghost> off
                 Wo154OnRide(arg);

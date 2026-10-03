@@ -20194,6 +20194,14 @@ do
     -- seated on a cart (held in its seat) instead of refusing them to this file's writer
     if W.bindFar == nil then W.bindFar = true end
     function KCD2MP_W154SetBindFar(arg) return fightSwitch("bind_far", "bindFar", arg, "far copies with no physics yet and seated ones are on KCDMP.dll's writer") end
+    -- Phase 6.3 (joiner): mp_skip_tell on|off (default on) -- this player's own wait or sleep set back to the host's
+    -- clock is told on screen (the agent decides: GameBridge.Wo154Rest.cs)
+    if W.skipTell == nil then W.skipTell = true end
+    function KCD2MP_W154SetSkipTell(arg) return fightSwitch("skip_tell", "skipTell", arg, "a joiner's own wait or sleep set back to the host's clock is told on screen") end
+    -- Phase 6.5: mp_minigame_outcome on|off (default on) -- a quest State named after a minigame (the knight's dice:
+    -- won or lost) is the quest's and is shared; off = WO-151's rule (everything named *_minigame stays per machine)
+    if W.minigameOutcome == nil then W.minigameOutcome = true end
+    function KCD2MP_W154SetMinigameOutcome(arg) return fightSwitch("minigame_outcome", "minigameOutcome", arg, "a quest State named after a minigame (its outcome) is shared; a minigame module's own States stay per machine") end
 
     -- Phase 4.2: where the game is, as the answer to the agent's token (wo124_reply <tok> menu|world|loading). A load
     -- that holds the main thread runs no console command: no answer at all is the agent's "busy".
@@ -22087,6 +22095,8 @@ local ok, err = pcall(function()
     System.AddCCommand("mp_fair_crime", 'KCD2MP_W154SetFairCrime(%line)', "WO-154: (host) a partner's murder only on the victim's death, and an assault judged 5 s later -- no crime if the victim fights by then, a quest brawl (default on): mp_fair_crime on|off")
     System.AddCCommand("mp_scene_resume", 'KCD2MP_W154SetSceneResume(%line)', "WO-154: (joiner) a scene stuck at its end resumes the host's copies, as in 0.44.0 (default off: no copy is resumed; the engine's own rescue, a save request, runs at once): mp_scene_resume on|off")
     System.AddCCommand("mp_bind_far", 'KCD2MP_W154SetBindFar(%line)', "WO-154: (joiner) KCDMP.dll writes a host copy that has no physics yet (far away) and one seated on a cart (held in its seat until it gets off), instead of refusing them as not-living / parented (default on): mp_bind_far on|off")
+    System.AddCCommand("mp_skip_tell", 'KCD2MP_W154SetSkipTell(%line)', "WO-154: (joiner) your own wait or sleep, set back to the host's clock (only the host's clock moves time in a shared world), is told on screen (default on): mp_skip_tell on|off")
+    System.AddCCommand("mp_minigame_outcome", 'KCD2MP_W154SetMinigameOutcome(%line)', "WO-154: a quest State named after a minigame (the knight's dice in the attack on Nebakov: won or lost) is shared like any quest State; a minigame module's own States (the blacksmith's tutorial) stay each player's (default on; off = WO-151's rule): mp_minigame_outcome on|off")
     System.AddCCommand("mp_ride_native", 'KCD2MP_W154SetRideNative(%line)', "WO-154: a partner's ridden horse is written every frame by KCDMP.dll from the rider's stream, its brain held, its gait the engine's own (default on; off = 0.44.0's Lua-moved horse): mp_ride_native on|off")
     System.AddCCommand("mp_gait_hysteresis", 'KCD2MP_W154SetGaitHyst(%line)', "WO-154: a partner's figure (and a host copy) changes its gait only past a band around each boundary, so a pace on a boundary keeps its gait (default on): mp_gait_hysteresis on|off")
     System.AddCCommand("mp_join_panel", 'KCD2MP_W154SetJoinPanel(%line)', "WO-154: (host) the join's progress is the game's own tutorial panel, so it shows through the engine's hold (default on; off = 0.44.0's drawn bar, which the hold stops): mp_join_panel on|off")

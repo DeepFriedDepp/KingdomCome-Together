@@ -448,4 +448,23 @@ do
     noErrs("D1")
 end
 
+-- ======================================================================================== E. Phase 6.3 / 6.5 switches
+do
+    local m = #LOG
+    check("E1: mp_skip_tell and mp_minigame_outcome are console commands", CCMDS["mp_skip_tell"] ~= nil and CCMDS["mp_minigame_outcome"] ~= nil)
+    KCD2MP_W154SetSkipTell("off")
+    check("E1: mp_skip_tell off tells the agent (6.3)", countEvt("w154_cfg", "skip_tell=off", m) == 1)
+    KCD2MP_W154SetSkipTell("on")
+    check("E1: ...and on again", countEvt("w154_cfg", "skip_tell=on", m) == 1)
+    m = #LOG
+    KCD2MP_W154SetMinigameOutcome("off")
+    check("E1: mp_minigame_outcome off tells the agent (6.5)", countEvt("w154_cfg", "minigame_outcome=off", m) == 1)
+    KCD2MP_W154SetMinigameOutcome("on")
+    check("E1: ...and on again", countEvt("w154_cfg", "minigame_outcome=on", m) == 1)
+    m = #LOG
+    check("E1: a bad value is refused, nothing sent", KCD2MP_W154SetSkipTell("maybe") == false and countEvt("w154_cfg", "skip_tell", m) == 0)
+    check("E1: no value: the current state is sent (the agent learns it)", KCD2MP_W154SetMinigameOutcome("") == true and countEvt("w154_cfg", "minigame_outcome=on", m) == 1)
+    noErrs("E1")
+end
+
 OUT = table.concat(RESULTS, "\n")

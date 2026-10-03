@@ -1831,6 +1831,7 @@ public partial class GameBridge(ClientConfig config)
             }
             else
             {
+                Wo154NoteLocalSkipEnded(_localSkipKind == Protocol.TimeSkipKindSleep ? "sleep" : _localSkipKind == Protocol.TimeSkipKindWait ? "wait" : "skip");   // WO-154 6.3
                 // The resulting clock is read from the mod; the reply arrives
                 // as a time_now game event and becomes our TimeSkipUp(done).
                 _awaitSkipDoneTime = true;

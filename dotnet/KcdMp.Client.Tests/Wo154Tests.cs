@@ -280,3 +280,84 @@ public class Wo154Tests
         Assert.NotEqual(QuestChange.FWorker, Wo147Rules.FlagConversation);
     }
 }
+
+/// <summary>WO-154 Phase 6.3 and 6.5: a joiner's own skip set back; what the minigame rule keeps per machine.</summary>
+public class Wo154RestTests
+{
+    [Fact]
+    public void A_set_back_right_after_this_players_own_skip_is_told_once_a_minute()
+    {
+        // ended 5 s ago, not shared, nothing told yet
+        Assert.True(Wo154Rules.TellSkipUndone(true, false, 100_000, 95_000, false, 0));
+        // the switch off
+        Assert.False(Wo154Rules.TellSkipUndone(false, false, 100_000, 95_000, false, 0));
+        // a shared skip (now, or the one that ended)
+        Assert.False(Wo154Rules.TellSkipUndone(true, true, 100_000, 95_000, false, 0));
+        Assert.False(Wo154Rules.TellSkipUndone(true, false, 100_000, 95_000, true, 0));
+        // no own skip, or one that ended long ago: a cutscene's time jump or the host's reload is not his doing
+        Assert.False(Wo154Rules.TellSkipUndone(true, false, 100_000, 0, false, 0));
+        Assert.False(Wo154Rules.TellSkipUndone(true, false, 100_000, 100_000 - Wo154Rules.SkipTellWindowMs - 1, false, 0));
+        // told 30 s ago: quiet; told a minute ago: again
+        Assert.False(Wo154Rules.TellSkipUndone(true, false, 100_000, 95_000, false, 70_000));
+        Assert.True(Wo154Rules.TellSkipUndone(true, false, 100_000, 95_000, false, 100_000 - Wo154Rules.SkipTellQuietMs));
+    }
+
+    [Fact]
+    public void The_set_back_line_is_plain()
+    {
+        Assert.DoesNotContain("mp_", Wo154Rules.SkipUndoneText);
+        Assert.Contains("host", Wo154Rules.SkipUndoneText);
+        Assert.True(Wo154Rules.SkipUndoneText.Length <= 160);
+    }
+
+    [Theory]
+    [InlineData(Protocol.TimeSkipPhaseDoneQuiet, Protocol.TimeSkipKindUnknown, true)]    // the field's 52 of 54 "drops"
+    [InlineData(Protocol.TimeSkipPhaseSync, Protocol.TimeSkipKindUnknown, true)]
+    [InlineData(Protocol.TimeSkipPhaseStart, Protocol.TimeSkipKindWait, false)]         // a real wait
+    [InlineData(Protocol.TimeSkipPhaseDone, Protocol.TimeSkipKindWait, false)]
+    [InlineData(Protocol.TimeSkipPhaseDone, Protocol.TimeSkipKindSleep, false)]
+    [InlineData(Protocol.TimeSkipPhaseDone, Protocol.TimeSkipKindFastTravel, false)]
+    public void A_clock_announce_is_not_a_time_skip(byte phase, byte kind, bool announce)
+    {
+        Assert.Equal(announce, Wo154Rules.IsClockAnnounce(phase, kind));
+    }
+
+    // the game's one State named after a minigame: the knight's dice in utokNaNebakov (a DiceState the quest branches on)
+    private const string KnightDice = "Barbora.trosecko.utokNaNebakov.hibernovana_gameplay.na_troskach.porada_s_bergovem.nespokojeny_stav.kostky_s_rytirem.dice_minigame";
+
+    [Fact]
+    public void The_knights_dice_is_the_quests_and_is_shared()
+    {
+        Assert.False(Wo137Rules.PlayerMinigame(KnightDice, "DiceState", true));
+        Assert.True(Wo137Rules.PlayerMinigame(KnightDice, "DiceState", false));      // mp_minigame_outcome off: WO-151's rule
+        var won = new QuestChange(1, QuestChange.FNotify, 1, 2, "SetWon", "DiceState", KnightDice, "Barbora.trosecko.utokNaNebakov".Length);
+        if (Wo137Rules.MinigameOutcomeShared) Assert.Null(Wo137Rules.HostSendVeto(won));
+    }
+
+    [Theory]
+    // the blacksmith's tutorial module (the field's anvil) and the four tutorial drivers stay each player's own, either way
+    [InlineData("Barbora.trosecko.kovar.hibernace.blacksmithing_minigame.tutorialState", "BlacksmithingTutorialProgress")]
+    [InlineData("Barbora.trosecko.kovar.hibernace.blacksmithing_minigame.pohyb_mysi__nahrarit_mece.nazhav_obrubek_state", "Progress")]
+    [InlineData("Barbora.trosecko.kovar.hibernace.blacksmithing_minigame.dokonceni_mece.state1", "Progress")]
+    [InlineData("Barbora.trosecko.kovar.hibernace.blacksmithing_minigame.dokonceni_mece.state3", "Progress")]
+    [InlineData("Barbora.trosecko.kovar.hibernace.blacksmithing_minigame.ke_kovadline_a_posouvani_mece_po_kovadline.state3", "Progress")]
+    [InlineData("Barbora.trosecko.masterstrike_tutorial.masterstrike_tutorial__kocour.state33", "MasterstrikeTutorialProgress")]
+    [InlineData("Barbora.trosecko.prepadeni.hibernovana_cast.tabor.serm_s_ptackem.tutorialProgress", "CombatTutorialProgress")]
+    [InlineData("Barbora.trosecko.zachrana.hibernace.leceni_ptacka__druhy_den.alchemy_tutorial.alchemy_tutorial.state31", "AlchemyTutorialProgress")]
+    public void The_minigames_own_states_stay_per_machine(string path, string type)
+    {
+        Assert.True(Wo137Rules.PlayerMinigame(path, type, true));
+        Assert.True(Wo137Rules.PlayerMinigame(path, type, false));
+    }
+
+    [Theory]
+    // the main-quest tutorials' journal objectives are views over their own step States: shared
+    [InlineData("Barbora.trosecko.prepadeni.hibernovana_cast.tabor.serm_s_ptackem.n0_vytas_zbran.vytas_mec", "Progress")]
+    [InlineData("Barbora.trosecko.zachrana.hibernace.leceni_ptacka__druhy_den.alchemy_tutorial.alchemy_tutorial.naliti_zakladu.state5", "Progress")]
+    [InlineData("Barbora.trosecko.zachrana.hibernace.leceni_ptacka__druhy_den.alchemy_tutorial.makeHealingPotion", "Progress")]
+    public void The_tutorials_journal_objectives_are_shared(string path, string type)
+    {
+        Assert.False(Wo137Rules.PlayerMinigame(path, type, true));
+        Assert.False(Wo137Rules.PlayerMinigame(path, type, false));
+    }
+}

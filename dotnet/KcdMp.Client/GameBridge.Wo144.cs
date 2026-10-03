@@ -163,11 +163,14 @@ public partial class GameBridge
                 // free (this player alone, a gossip request, a greeting during a six-person conversation, a paused copy);
                 // the 20 s timeout never ran. 8 were this player's own press with nobody to talk to; the host's log has
                 // the same without any copy, so the cause is the game's, not ours.
+                // WO-154 6.4: but not always at once -- the field's request 836 (a seated copy whose brain could not get
+                // back into its activity, "Agent is stuck") waited the engine's full 20 s. This line cannot tell which:
+                // the mod's "WO137-TALK end ... held_s=" says how long this player's own request waited.
                 string soul = Wo144Rules.CancelSoul(line) ?? "?";
                 bool mine = soul == "Dude";
                 long n = mine ? Interlocked.Increment(ref _w153CancelMine) : Interlocked.Increment(ref _w153CancelOther);
                 if (mine || n <= 5 || n % 50 == 0)
-                    Console.WriteLine($"MP-W137 the engine refused dialog request {id} of '{soul}' at once (a participant was not free; its text says \"timed out\" but nothing waited){(mine ? " -- this player's own: if it was a talk, it ends here and nothing was held on the host" : $" [n={n}, not this player's]")}");
+                    Console.WriteLine($"MP-W137 the engine cancelled dialog request {id} of '{soul}' (a participant was not free; its text says \"timed out\"){(mine ? " -- this player's own: if it was a talk, it ends here and nothing was held on the host (the mod's WO137-TALK end line has how long it waited)" : $" [n={n}, not this player's]")}");
                 _ = ExecLuaAsync($"if KCD2MP_W137TalkDropped then KCD2MP_W137TalkDropped({id}) end");
             }
             return;
