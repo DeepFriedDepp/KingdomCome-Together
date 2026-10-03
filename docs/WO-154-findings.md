@@ -439,9 +439,10 @@ What needs two players: `docs/TWO-PLAYER-CHECKLIST.md` §WO-154 (items 111–126
   `10.1.0.0`), a documentation example in a comment of the master server's config (`10.0.0.2`), a language name in
   WPF's culture table, a .NET runtime method name, and NAudio's own build paths inside NAudio's DLLs. The WO-154 diff
   was swept the same way before the push (test data only).
-* **The maintainer's own install.** The maintainer installed this Setup on this machine during the finish: Setup's own
-  check `PASS 1032 component(s) verified by sha256 against the install manifest`, `version 0.45.0`, `mod placed by
-  Setup`; the pak in the game's `Mods` folder is byte-identical to the build's.
+* **The maintainer's own install.** The maintainer installed this Setup on this machine during the finish. Setup's own
+  log (the record to trust; this session's reads of the install folder are not): `detect: ... workspace=linked ...
+  place_mod=1`, `Installation process succeeded.`, `verify: PASS (1032 components, 0 stale removed)`, `keys pak: agent
+  exit 0`; the pak in the game's `Mods` folder is byte-identical to the build's.
 * **The tag.** `v0.45.0` on `0f5b36d`, the commit the installer was built from (a lightweight tag, like `v0.43.0`).
   This record, the repair of a splice in this page (an earlier fill replaced a placeholder inside a file name, three
   times) and the gate fix come after it and change no shipped file (the installer ships no docs and no tests).
