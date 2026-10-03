@@ -14,7 +14,7 @@ The TLS slot and the block offset are the Modding Tools 1.5.5 RPGModule's. The r
 build by its PE header (TimeDateStamp and SizeOfImage) and refuses any other: on another build the
 same numbers would read something else. As a module: depth(pid, tid) -> (depth, ids) or raises.
 """
-import ctypes, ctypes.wintypes as W, sys, collections, struct
+import time, ctypes, ctypes.wintypes as W, sys, collections, struct
 
 # The Modding Tools 1.5.5 RPGModule (KCD2Mod, ReleaseSteamLTO_DLL): its identity and the two offsets.
 KNOWN_BUILDS = {
@@ -135,6 +135,23 @@ class Reader:
         raw = self.rpm(begin, min(n, 20000) * 4)
         ids = [int.from_bytes(raw[i:i + 4], 'little') for i in range(0, len(raw), 4)]
         return n, ids
+
+    def settled_depth(self, reads=5, gap_s=0.003):
+        """WO-154: the stack between frames -- the smallest of a few reads a few ms apart. One read lands at an
+        arbitrary moment and can catch the main thread inside a stat call (the 0.45.0 soak's first run: one 2 among
+        60 zeros, the next row 0); a leak stays up in every read (0.42.5: thousands). Returns (settled, ids, first)."""
+        first = None
+        best = None
+        for i in range(reads):
+            n, ids = self.depth()
+            if first is None:
+                first = n
+            if best is None or n < best[0]:
+                best = (n, ids)
+            if n == 0:
+                break
+            time.sleep(gap_s)
+        return best[0], best[1], first
 
 
 if __name__ == '__main__':

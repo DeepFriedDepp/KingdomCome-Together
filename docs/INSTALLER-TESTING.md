@@ -5,9 +5,8 @@
 > older `KCDMP-Setup` install in place, one entry in Windows' apps list). Older examples
 > below keep the old file names.
 
-> **WO-150: there is no Modding-Tools gate any more.** The Tier 2 and 3 boxes below about
-> "the gate", "Next is refused" and "Get it on Steam" describe the pre-WO-150 wizard. Now
-> the page only informs: Setup always installs the launcher, places the mod only when the
+> **WO-150: there is no Modding-Tools gate any more** (WO-154 rewrote the Tier 2 and 3 boxes
+> below to the current wizard). The page only informs: Setup always installs the launcher, places the mod only when the
 > Modding Tools are installed **and** their workspace linked, and otherwise holds it back
 > for the launcher's checklist (`docs/WO-150-findings.md`). The automated proof of the four
 > cases is `tools\Test-InstallerDetect.ps1` (detection, 26 checks) and
@@ -109,8 +108,8 @@ download, and the replace-a-foreign-`kdcmp` prompt are all unexercised by it.
 Run `release\KingdomComeTogether-Setup-<version>.exe` by double-clicking it.
 
 - [ ] Welcome page appears; GPLv3 licence page shows the real licence text.
-- [ ] The Modding Tools page shows **Modding Tools found** and the correct
-      `KingdomCome.exe` path, plus the `...\Mods\kdcmp` target.
+- [ ] The Modding Tools page shows **Modding Tools found and set up.**, the correct
+      `KingdomCome.exe` path, and the `...\Mods\kdcmp` target the mod goes into.
 - [ ] **Browse...** → pick the *retail* `KingdomCome.exe` (app 1771300,
       `KingdomComeDeliverance2`) → rejected with the "that is the retail
       game" message, and the previously detected path is kept.
@@ -121,7 +120,7 @@ Run `release\KingdomComeTogether-Setup-<version>.exe` by double-clicking it.
 - [ ] **Launch now** starts the launcher, and it opens with the game already
       configured — Settings shows the right path and no first-run warning.
 
-**The gate, deliberately provoked** (this is the point of the exercise).
+**The hand-off, deliberately provoked** (WO-150: the page informs, it never stops you).
 
 > **Do not fake "not installed" by renaming the real
 > `appmanifest_2429020.acf`.** It looks reversible and is not. Steam reads
@@ -130,36 +129,41 @@ Run `release\KingdomComeTogether-Setup-<version>.exe` by double-clicking it.
 > found"** — the only way back is a full redownload. This was done once, on
 > 2026-07-30, and cost 8.8 GB. Setup takes a `/STEAMROOT` override precisely
 > so nobody has to do it again.
->
-> The trigger is Steam *noticing*. Clicking **Get it on Steam** while the
-> manifest is missing is what does it. Do not rely on "I'll close Steam
-> first" — the deep-link starts it.
 
 Point Setup at a fixture tree instead. `tools\Test-InstallerDetect.ps1`
-builds one at `%TEMP%\kcdmp-detect-fixtures`; run it once first, then:
+builds them at `%TEMP%\kcdmp-detect-fixtures`; run it once first, then:
 
 ```bash
-"release\KCDMP-Setup-0.8.0.exe" /STEAMROOT="%TEMP%\kcdmp-detect-fixtures\missing\Steam"
+"release\KingdomComeTogether-Setup-<version>.exe" /STEAMROOT="%TEMP%\kcdmp-detect-fixtures\missing\Steam"
 ```
 
-- [ ] The Modding Tools page says they are not installed and explains what
-      they are.
-- [ ] **Next is refused** — clicking it produces the explanation message and
-      does not advance.
-- [ ] **Get it on Steam** opens Steam on the Modding Tools entry
-      (`steam://install/2429020`). Safe here: real Steam still has its
-      manifest, so it just shows you the app. Close Steam's window.
-- [ ] **Re-check** → "still nothing".
-- [ ] Now make the fixture succeed without restarting the wizard: copy
-      `%TEMP%\kcdmp-detect-fixtures\rootlib\Steam\steamapps` over
-      `%TEMP%\kcdmp-detect-fixtures\missing\Steam\steamapps`, then click
-      **Re-check** → the page flips to found and Next advances.
-- [ ] Cancel out at that point rather than installing — the fixture's
-      "game" is a folder of empty files, so letting it deploy the mod there
-      proves nothing and seeds a junk directory.
+- [ ] The page says **The KCD2 Modding Tools are not installed yet.** ("the launcher
+      will install them through Steam"), and that you can continue.
+- [ ] **Next advances** (nothing is refused). The finish page says one more thing is
+      needed: open the launcher, whose checklist installs the Modding Tools through
+      Steam, links the game's files and places the mod.
+- [ ] **Re-check** after copying `%TEMP%\kcdmp-detect-fixtures\rootlib\Steam\steamapps`
+      over the `missing` fixture's `steamapps` → the page flips to found.
+- [ ] Cancel out rather than installing into a fixture (its "game" is a folder of
+      empty files).
+- [ ] A fixture with the Modding Tools but no linked workspace → **Modding Tools found,
+      but not set up yet.** The install completes without placing the mod; the
+      launcher's checklist places it after linking.
+- [ ] `/STEAMROOT="C:\definitely\not\here"` → **Steam was not found on this PC.** ("the
+      launcher will walk you through it"); Next still advances.
 
-- [ ] Separately, `/STEAMROOT="C:\definitely\not\here"` → the *Steam not
-      found* page, not the *Modding Tools missing* page.
+The four cases are automated (Tier 1): `tools\Test-InstallerDetect.ps1` (detection) and
+`tools\wo150\Test-SetupCases.ps1` (a Setup compiled from the real script, isolated from any
+real install), both gates in `tools\Build-Installer.ps1`. This list is for the eyes: the
+words on the page, the finish page, the Re-check.
+
+**The player's settings on an upgrade (WO-154)** — automated:
+`tools\wo154\Test-SettingsUpgrade.ps1` installs 0.43.0 and 0.44.0 (the first WO-150 build)
+into throwaway folders, writes a player's `settings.json` (a custom game path, changed relay
+and network choices, a voice choice, unknown keys, CRLF and four-space indents),
+`custom_servers.json`, `favorites.json` and `kcdmp-client.json` by hand, installs the new
+Setup over each and compares every file byte for byte; `-Launcher` also starts the upgraded
+launcher once and compares again.
 
 **The half-apply dialog (WO-74) — still unticked, and the reason tier 2 exists:**
 
@@ -197,12 +201,17 @@ builds one at `%TEMP%\kcdmp-detect-fixtures`; run it once first, then:
       CloseApplications uses the Restart Manager over `[Files]` entries and
       does not cover the `[UninstallDelete]` sweep of `{app}`.
 
-## Tier 3 — clean machine — NOT EXECUTED
+## Tier 3 — clean machine
 
-None of this has been run. This project has one machine, and it is a
-development machine with Steam, the Modding Tools, the .NET SDK and the
-WebView2 runtime all already present — which is precisely the machine that
-cannot test any of the following. Do not treat anything here as verified.
+This project has one development machine, with Steam, the Modding Tools, the .NET SDK
+and the WebView2 runtime already present — precisely the machine that cannot test any
+of the following. Only what someone has run on another machine is ticked here.
+
+**Reported by the maintainer: a WO-150 build on a machine with no Kingdom Come installed
+at all.** WO-154 asked for his result to be recorded here as he reports it. It had not
+reached this file when 0.45.0 was built: **awaiting the maintainer's report** (what the
+page said, whether the launcher's checklist installed the Modding Tools through Steam,
+linked the workspace and placed the mod, and anything that needed him).
 
 **A fresh Windows install with no WebView2 runtime** (Windows Server images
 and some LTSC/enterprise Windows 10 builds ship without it; confirm absence
@@ -217,14 +226,16 @@ via `HKLM\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-
 
 **A machine with no Steam at all:**
 
-- [ ] The Modding Tools page says Steam was not found, rather than crashing
-      or claiming the Modding Tools are missing.
+- [ ] The page says **Steam was not found on this PC.** rather than crashing or
+      claiming the Modding Tools are missing; Next advances; the launcher's checklist
+      says what is needed.
 - [ ] Browse... still works if the game was copied there by hand.
 
-**A machine with Steam but no Kingdom Come at all:**
+**A machine with Steam but no Kingdom Come at all** (the maintainer's run above):
 
-- [ ] The gate holds; `steam://install/2429020` opens the store page for a
-      user who does not own the Modding Tools yet.
+- [ ] The page says the Modding Tools are not installed yet; Setup completes; the
+      launcher's checklist opens Steam's install window for the game / the free
+      Modding Tools, follows the download, links the workspace and places the mod.
 
 **Steam in a non-default location:**
 

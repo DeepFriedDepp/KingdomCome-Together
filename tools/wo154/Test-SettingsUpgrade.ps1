@@ -16,7 +16,10 @@
     -Launcher also starts the upgraded launcher once from the install folder (its working directory, where it reads
     settings.json), lets it run -LauncherSeconds, closes it, and compares again: a launcher that only reads must leave
     every byte alone; anything it wrote is printed key by key (the rule: fill a missing key only, never change, reset,
-    reorder or drop one).
+    reorder or drop one). The launcher runs its read-only setup checklist against the machine's real Steam (it changes
+    nothing when everything is in place) and writes its own daily log to %AppData%\KCDMP_Launcher\app<date>.log, its
+    normal place: move that file aside after a run on a player's machine. A launcher that is no longer running at the
+    end of the wait fails the run (the comparison would prove nothing).
 
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File tools\wo154\Test-SettingsUpgrade.ps1 -SetupExe release\KingdomComeTogether-Setup-0.45.0.exe
@@ -140,6 +143,7 @@ foreach ($prev in $PreviousSetupExe) {
         else {
             $lp = Start-Process -FilePath $exe -WorkingDirectory $appDir -PassThru -WindowStyle Minimized
             Start-Sleep -Seconds $LauncherSeconds
+            Assert-That "${tag}: the launcher is still running after ${LauncherSeconds} s" (-not $lp.HasExited) "it exited early (code $($lp.ExitCode)) -- the comparison below would prove nothing"
             Get-Process -Id $lp.Id -ErrorAction SilentlyContinue | ForEach-Object { $_.CloseMainWindow() | Out-Null }
             Start-Sleep -Seconds 3
             Get-Process -Id $lp.Id -ErrorAction SilentlyContinue | Stop-Process -Force

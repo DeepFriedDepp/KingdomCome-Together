@@ -610,6 +610,58 @@ Throwaway saves only; nothing here needs a real playline. Markers as before (`ma
 110. **Quiet logs.** At the end, in kcdmp-native.log: no `FAULT motion::` lines; on screen: no
      "an NPC is being moved by this machine's own AI" notice at any time. Marker: `mark_quiet`.
 
+## WO-154 — the public beta: questing, fighting and joining together
+
+Throwaway saves only. Markers as before (`mark_<word>`). Each item says what WO-154 proved alone on one machine and
+what only two players can show. The mod menu (**Insert**) has every switch named here.
+
+111. **Questing together.** The host does a quest step the joiner can see (a conversation that moves a quest on,
+     an item picked up); then the joiner wins a duel or a brawl step, or picks up a quest item. Marker: `mark_quest`.
+     * Both journals follow each other. agent.log: `MP-W137` lines with `applied`, and no `came through no port` or
+       `not sent to the host (no-port)`. Proven solo: the field's 43 host steps replayed into a real joiner game,
+       0 failed to apply.
+112. **Friendly fire and the partner's figure.** The host hits the joiner (fist, then a weapon), then the other way
+     round. Marker: `mark_ff`.
+     * The other player's figure never barks "threatened", never draws or attacks. kcd.log: no `Skirmish is getting
+       armed because of 'kcd2mp_`.
+113. **Knocked down.** Each of you knocks the other down once (friendly fire). Marker: `mark_knock`.
+     * The figure falls on the other screen, lies there while its player is down, and gets up when they do.
+       kcd.log: `WO154-FALL` and `WO154-RISE`. Proven solo both ways (a scripted partner).
+114. **The host turns an enemy.** An enemy fights the joiner; the host hits it from behind. Marker: `mark_turn`.
+     * It reacts to the host's blows and turns to the host the way it would in the game. kcdmp-native.log:
+       `WO136-FORCED ... cleared (read back) -- the host struck it` or `WO139-PURSUE host-struck`.
+115. **The partner falls.** The joiner is knocked out or killed in a fight with two enemies. Marker: `mark_partnerdown`.
+     * Every enemy stops fighting the joiner's figure at once; after the respawn no guard or enemy goes for them for
+       two minutes. Lines: `WO136-FORGET`, agent.log `MP-W154 ... down` / `respite`.
+116. **A fight that won't end.** The joiner types `mp_unstuck` (or the menu's "I'm stuck") during a fight that does not
+     end. Marker: `mark_endfight`. * The host's world ends every fight against the joiner's figure.
+117. **The join bar.** The host watches the panel while the joiner joins (start, middle, end). Marker: `mark_joinbar`.
+     * The panel shows through the whole hold and goes away when the joiner is in.
+118. **A slow or frozen load.** If the joiner's load takes long, the launcher says the game is busy and waits; if the
+     joiner's game ever freezes at the loading screen, the launcher says to restart the game and join again, and the
+     host gets the world back. Marker: `mark_joinslow` (only if it happens). agent.log: `MP-JOIN ... FROZEN`;
+     `MP-JOIN ... the main menu's video stopped (wh_ui_StopMovie)` before every join's load.
+119. **Join with a new character.** A joiner with no usable save of their own: the launcher's message says why and
+     offers **Join with a new character**. Marker: `mark_newchar`.
+120. **Riding together.** Ride side by side at a trot and a gallop for a minute, then the other way round.
+     Marker: `mark_ride`. * The other's horse moves smoothly, no stutter or sliding, the rider moves with it.
+121. **Fast travel.** With the menu's fast travel off (the default), the map refuses fast travel with the plain line;
+     the host turns it on: the host fast travels and the joiner is brought along. Marker: `mark_fasttravel`.
+122. **The mod menu.** Both open it (Insert). On the joiner's screen the host's settings show "[set by the host]" and
+     cannot be changed; name badges off and on; clean screen on and off. Marker: `mark_menu`.
+123. **The joiner's own wait.** With the menu's "Sleep and wait together" off on the joiner, the joiner waits an hour.
+     Marker: `mark_skip`. * The time goes back to the host's, and the game says so in one line.
+124. **Voice.** On a new install voice chat is off (no microphone opened). Turn it on in the menu on both: you hear
+     each other. Marker: `mark_voice`.
+125. **A caravan.** Walk past a caravan (people sitting on a cart) on the joiner's screen. Marker: `mark_caravan`.
+     * They stay seated and move with the cart. kcdmp-native.log: `MP-NPCBIND ... seated=held`.
+126. **Talking.** The joiner talks to a few villagers, men and women. Marker: `mark_talk`.
+     * A refusal for low reputation is the game's own; "This person can't talk to you right now" only when that
+       person is busy (talking to the host, for example).
+
+Lines worth a look: `MP-W154` and `MP-JOIN` (agent log), `WO154-` (kcd.log), `FRAME` and `FAULT`
+(kcdmp-native.log; a `FAULT` line is worth a report).
+
 ## Logs to send afterwards
 
 Both machines: Report a bug in the launcher. Since 0.42.2 it also collects the

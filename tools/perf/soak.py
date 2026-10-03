@@ -236,7 +236,9 @@ def run(args):
         fps = (f - last_f) / (t - last_t) if t > last_t else 0.0
         last_f, last_t = f, t
         try:
-            depth, ids = reader.depth()
+            depth, ids, first_read = reader.settled_depth()   # WO-154: between frames (the smallest of a few reads)
+            if first_read != depth:
+                notes.append('%.0fs one stack read caught a frame mid-stat-call (%d, settled %d)' % (time.time() - t0, first_read, depth))
         except Exception as e:   # noqa: BLE001
             depth, ids = -1, []
             notes.append('stack read failed: %s' % e)

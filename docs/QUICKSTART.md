@@ -34,11 +34,28 @@ When every step shows ✅ the list says **Ready!** Click **PLAY**.
 
 ## 4. Host or Join
 
-- **Host:** click **HOST GAME**, then share the address the launcher shows.
+- **Host:** click **HOST GAME**, then share the address the launcher shows. Click
+  **PLAY**, load one of your own saves in the game, and click **CONNECT** when the
+  launcher says the game is ready.
 - **Join:** click **ADD SERVER**, enter your host's address, then **JOIN** (or use
-  **JOIN THROUGH STEAM** with your host's code).
+  **JOIN THROUGH STEAM** with your host's code). Click **PLAY**, stay at the game's
+  **main menu**, and click **CONNECT**: your host's world comes to you, and your own
+  character lands beside the host.
+
+**Which save?** A save is for the **host**: one of your own Modding Tools saves (a save
+past the tutorial is the better start; the tutorial is the roughest part to play
+together). The **partner** needs no save of that world: they bring their character from
+their own Modding Tools save of another world, or click **Join with a new character**
+when the launcher offers it (no save of their own yet).
 
 Same house: that's all. Different houses: see [NETWORKING.md](NETWORKING.md).
+
+## In the game
+
+Press **Insert** for the mod menu: every setting in plain words, "I'm stuck" if
+something holds you, and "Something's wrong here" to mark a moment for a bug report. See
+[MOD-MENU.md](MOD-MENU.md). Fast travel is off while you play together unless the host
+turns it on there, and voice chat is off unless you turn it on.
 
 ## If something breaks later
 

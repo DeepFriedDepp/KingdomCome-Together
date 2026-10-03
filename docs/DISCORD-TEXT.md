@@ -24,3 +24,18 @@ Kingdom Come: Together 0.42.7 — carrying shows for both of you.
 • The dice keys are now built from your own game's files when you install or start it (the mod no longer carries copies of them).
 Both players and the relay need 0.42.7. Tester page: docs/TEST-0.42.7.md in the official repository.
 ```
+
+## Version 0.45.0 — the public beta (WO-154)
+
+```
+Kingdom Come: Together 0.45.0 — the public beta.
+• Setup does itself: install, open the launcher, follow its checklist. No Workspace Setup, no console.
+• Press Insert in the game for the new mod menu: every setting in plain words, "I'm stuck", and the host's settings shown on the partner's screen.
+• Questing together: quest steps now go both ways, duels and brawls included.
+• Fighting together: your blows turn an enemy that's fighting your partner; a partner who falls or respawns is left alone; a knocked-down player falls on both screens.
+• Joins show their progress to the host, wait out slow loads, and say plainly when something can't work ("Join with a new character" where it helps).
+• Smoother riding on both screens.
+• Fast travel and the mod's voice chat are off unless you turn them on.
+Known: cutscenes aren't shared yet (next big update), the tutorial is the roughest part, no lip sync (the Modding Tools build lacks the data).
+Both players and the relay need 0.45.0. Quick start and tester page in the official repository: docs/QUICKSTART.md, docs/TEST-0.45.0.md
+```
