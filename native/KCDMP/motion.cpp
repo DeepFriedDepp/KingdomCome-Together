@@ -238,8 +238,12 @@ struct Body {
     uint32_t combatStarts = 0;
     bool ctxApplied = false;      // the WO-121 avatar contexts (kAvatarContexts) are set on its soul
     uint8_t quietApplied = 0;     // WO-135: the kQuiet* groups set on its soul
+    double attachAt = -1;         // WO-155: when this body was first driven (a fresh spawn, a re-bind after a fall)
+    bool nudged = false;          // WO-155: its locomotion graph has been started (a walk-class pulse, or it walked)
 };
 std::unordered_map<uint32_t, Body> g_bodies;
+constexpr double kNudgeAfterS = 0.1, kNudgeS = 0.6;
+constexpr float kNudgeMps = 0.3f;   // WO-155: the T-pose pulse (body_frame)
 
 // WO-132: NPC copies engaged on a joiner -- the host NPC's combat state (a
 // synthesized State2: combat, guard zone/stance, attack zone, block) held on
@@ -1294,6 +1298,7 @@ void body_frame(const char* key, void* ent, uint32_t eid, float renderSpeedMps, 
         unpublish_gait(b);   // WO-129: never leave a slot naming a body we no longer drive
         b = Body{};
         b.eid = eid; b.ent = ent; b.key = key; b.avatar = is_avatar_key(key);
+        b.attachAt = now;
         b.actor = actor_by_eid(eid);
         if (b.actor && b.avatar) b.ca = combat_actor_of(b.actor, true);
         if (b.actor) b.exp = expansion_of(b.actor);
@@ -1332,6 +1337,22 @@ void body_frame(const char* key, void* ent, uint32_t eid, float renderSpeedMps, 
         float tvx = b.velX, tvy = b.velY;
         if (!b.avatar && wo143::activity_locomotion(eid) && wo143rules::hoe_tags(b.velX, b.velY, &tvx, &tvy) && cls < 1.0f)
             cls = gait::clamp_class(1.0f, range);
+        // WO-155: an avatar bound to this writer stands in a T-pose for 5-8 s (live: a fresh spawn, and the body of a figure
+        // that fell, taken back): its locomotion graph does not start until something moves it, and a standing stream
+        // never does. A walk-class pulse of 0.6 s at 0.3 m/s, 0.1 s after the bind, starts it (live: the same pulse from a
+        // partner's 0.6 s step cleared the pose at once and the idle that followed was normal). Only an avatar that is
+        // still, once per bind; a partner already walking never needs it.
+        if (b.avatar && !b.nudged) {
+            const double age = now - b.attachAt;
+            if (cls >= 1.0f) b.nudged = true;
+            else if (age >= kNudgeAfterS && age < kNudgeAfterS + kNudgeS) {
+                if (b.cls < 1.0f) logf("WO155-NUDGE body=%s: a %.2f s walk-class pulse starts its locomotion graph (a freshly bound avatar stands in a T-pose until then)", b.key.c_str(), kNudgeS);
+                cls = gait::clamp_class(1.0f, range);
+                // along the body's own facing: the direction tag reads a velocity, and none reads as no gait at all
+                const float yaw = kcdmp::npcdrive::entity_yaw(b.ent);
+                tvx = -std::sin(yaw) * kNudgeMps; tvy = std::cos(yaw) * kNudgeMps;
+            } else if (age >= kNudgeAfterS + kNudgeS) b.nudged = true;
+        }
         b.cls = cls;
         apply_gait(b, cls);
         publish_gait(b, cls, tvx, tvy);
@@ -1386,8 +1407,12 @@ void body_released(const char* key, uint32_t eid) {
 // screen shows the avatar fall, lie and stand up on this bit's edges. Logged on each edge.
 // Debounced here, where every read sees it: down after 150 ms of no living physics, up after 300 ms of
 // living physics again (the state block travels only on a change, so the receiver cannot debounce).
+static bool s_down = false;                  // WO-155: read by hits.cpp (the friendly-fire knockdown window)
+static double s_lastDownEdge = -1e9;
+bool local_down_now() { return s_down; }
+double local_last_down_edge_s() { return s_lastDownEdge; }
+
 void note_local_downed(State2* out) {
-    static bool s_down = false;
     static double s_since = -1;   // when the raw reading last started to differ from s_down
     void* pe = engine::entity_by_id(0x7777);
     kcdmp::npcdrive::PhysicsStatus ps{};
@@ -1399,6 +1424,7 @@ void note_local_downed(State2* out) {
             if (s_since < 0) s_since = now;
             if (now - s_since >= (raw ? 0.15 : 0.30)) {
                 s_down = raw; s_since = -1;
+                if (raw) s_lastDownEdge = now;
                 logf("WO154-DOWN the local player is %s (physics %s)", raw ? "DOWN" : "up again", ps.living ? "living" : "not a living entity");
             }
         }

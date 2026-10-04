@@ -662,6 +662,33 @@ what only two players can show. The mod menu (**Insert**) has every switch named
 Lines worth a look: `MP-W154` and `MP-JOIN` (agent log), `WO154-` (kcd.log), `FRAME` and `FAULT`
 (kcdmp-native.log; a `FAULT` line is worth a report).
 
+## WO-155 — hits never knock a player down; a figure falls only on a death (0.45.1)
+
+Throwaway saves only. Markers as before. What WO-155 proved alone on one machine (a scripted partner, a synthetic host,
+every number in `docs/WO-155-findings.md`) and what only two players can show.
+
+127. **Guards fighting the joiner.** Let the host's guards or enemies fight the joiner: ten blows or more (a bandit, a
+     guard after a crime, a wolf). Marker: `mark_hitnofall`.
+     * The joiner's health drops by each blow and he is **never knocked down**; the host's screen shows his figure
+       standing the whole time, flinching at most. kcdmp-native.log (joiner): no `WO154-DOWN … DOWN`; agent.log (joiner):
+       `[playerhit] took N damage … (no knockdown: WO-155)`.
+128. **Swinging and blocking between blows.** The joiner swings and blocks between the guards' blows. Marker:
+     `mark_hitnofall`. * Nothing in the way: no fall, no lost input, no stuck animation. (Not shown solo: no key input.)
+129. **A death on each side.** The host dies in a fight, then the joiner does. Marker: `mark_deathfall`.
+     * On the other screen the dead player's figure falls where he stood and **lies on the ground, not in it** until he
+       respawns; then it vanishes and a fresh figure stands where he woke (in a normal pose, no T-pose). The grave
+       appears as before. kcd.log: `WO155-COLLAPSE`, `WO155-REPLACE`.
+130. **Friendly fire both ways.** The host hits the joiner (fist, then a weapon), then the other way round; hit the same
+     player again 1–2 s later and again 8 s later. Marker: `mark_ffwindow`.
+     * The victim falls on his own screen and **not twice within 5 s**; the second hit still takes its health. On the
+       attacker's screen the victim's figure falls, lies and gets up with the game's own animations and stands in a normal
+       pose with its animation playing. kcdmp-native.log (victim): `WO155-FF knockdown=allowed|no(he is down)|no(inside
+       the 5 s window)`; kcd.log (attacker): `WO155-FALL`, `WO155-STATE`, `WO155-RISE`.
+131. **A figure's pose.** Watch the other player's figure after it spawns (a join, a respawn) and after it got up.
+     Marker: `mark_tpose` if it ever stands with its arms out for more than a second. kcdmp-native.log: `WO155-NUDGE`.
+
+Lines worth a look: `MP-W155` (agent log), `WO155-` (kcd.log), `WO155-FF` and `WO155-NUDGE` (kcdmp-native.log).
+
 ## Logs to send afterwards
 
 Both machines: Report a bug in the launcher. Since 0.42.2 it also collects the

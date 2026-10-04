@@ -7,7 +7,7 @@
 <strong>Not affiliated with or endorsed by Warhorse Studios or PLAION.</strong></p>
 
 <p align="center">
-  <a href="docs/releases/RELEASE-NOTES-0.45.0.md"><img alt="main" src="https://img.shields.io/badge/main-0.45.0-b8860b?style=flat-square"></a>
+  <a href="docs/releases/RELEASE-NOTES-0.45.1.md"><img alt="main" src="https://img.shields.io/badge/main-0.45.1-b8860b?style=flat-square"></a>
   <a href="https://github.com/DeepFriedDepp/KingdomCome-Together/releases/latest"><img alt="latest release" src="https://img.shields.io/github/v/release/DeepFriedDepp/KingdomCome-Together?label=latest%20release&color=8a3324&style=flat-square"></a>
   <a href="LICENSE"><img alt="License: GPLv3" src="https://img.shields.io/badge/license-GPLv3-2c3e50?style=flat-square"></a>
   <a href="docs/LAUNCHING.md"><img alt="Platform" src="https://img.shields.io/badge/platform-Windows-555555?style=flat-square"></a>
@@ -95,7 +95,9 @@ and weather. Each feature below says how far it is proven:
 | Dying | A grave with your things, and you wake up nearby; nobody's world reloads | ✅ |
 | The host's blows count | An enemy fighting the partner reacts to the host's blows and turns on the host the way it would in the game | 🧪 new in 0.45.0 |
 | A partner who falls | Every fight against the partner's figure ends when they fall or respawn; guards leave them alone for two minutes after | 🧪 new in 0.45.0 |
-| Knocked down | A knocked-down player's figure falls on the other screen, lies there and gets up with them | 🧪 new in 0.45.0 |
+| Hits never knock you down | An enemy's or an animal's blow only takes health and stamina; nobody is knocked down by it (a death still kills) | 🧪 new in 0.45.1 |
+| A death shows | When a player dies, their figure falls on the other screen and lies there until they respawn | 🧪 new in 0.45.1 |
+| Knocked down by a friend | A friendly-fire hit knocks the victim down on their own screen (never twice within 5 s); on yours their figure falls and gets up with the game's own animations | 🧪 new in 0.45.1 |
 | Friendly fire | A hit on the partner never turns their figure against you (no "threatened" bark, no attack) | 🧪 new in 0.45.0 |
 
 ### The world

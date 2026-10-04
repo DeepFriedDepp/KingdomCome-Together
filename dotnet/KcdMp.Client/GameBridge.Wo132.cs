@@ -209,7 +209,11 @@ public partial class GameBridge
         _w132PeerFlags[ghost] = flags;
         // WO-154 2: a knockdown is shown lying where he fell (the avatar falls on the Downed bit); only a death hides it
         bool knockedDown = (flags & Protocol.PlayerStateFlagKnockedDown) != 0;
-        if (down && !was) _ = Wo132OnPeerDownAsync(ghost, knockedDown ? "knocked down" : "downed", hide: !knockedDown || !_w154AvatarFalls);
+        bool wasKnocked = (f0 & Protocol.PlayerStateFlagKnockedDown) != 0;
+        // WO-155: a death lays the figure down where it stands (the lying body is the proof of the death); nothing
+        // else makes it fall. The figure is hidden only with mp_avatar_falls off (0.44.0's way).
+        Wo155OnPeerBody(ghost, Wo155Rules.BodyOf(down, knockedDown), Wo155Rules.BodyOf(was, wasKnocked));
+        if (down && !was) _ = Wo132OnPeerDownAsync(ghost, knockedDown ? "knocked down" : "downed", hide: !_w154AvatarFalls);
         else if (!down && was) _ = Wo132OnPeerUpAsync(ghost, "back up");
     }
 

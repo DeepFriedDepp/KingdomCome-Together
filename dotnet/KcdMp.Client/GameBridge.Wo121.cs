@@ -312,6 +312,7 @@ public partial class GameBridge
         }
         await WritePacketAsync(s, new PlayerHitV8(vid, stamina, health, flags, material).BuildUp(), _wo121Ct);
         _w121FfOut++;
+        Wo155NoteFfSent(vid);   // WO-155: the knockdown this hit causes on his screen is the one his figure falls for here
         Console.WriteLine(line + " result=sent");
     }
 
@@ -502,7 +503,7 @@ public partial class GameBridge
             Console.WriteLine(line + $" result=dropped reason={(!_ffSession ? "friendly-fire-off" : "not-me")}");
             return;
         }
-        var r = await _combat.ApplyPvpHitAsync(hit.Stamina, hit.Health, hit.Flags, attacker, ct);
+        var r = await _combat.ApplyPvpHitAsync(hit.Stamina, hit.Health, Wo155PvpFlags(hit.Flags), attacker, ct);
         _w121FfIn++;
         Console.WriteLine(line + $" result={(r.Ok ? "applied" : "failed")} reason={r.ReasonTag}");
     }

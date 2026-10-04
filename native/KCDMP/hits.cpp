@@ -26,6 +26,7 @@
 #include "rttr_abi.h"
 #include "wo136.h"
 #include "wo139.h"
+#include "wo155_rules.h"
 
 namespace kcdmp::hits {
 namespace {
@@ -463,16 +464,29 @@ bool apply_pvp_hit(const uint8_t* body, size_t len) {
     float st = 0, hp = 0;
     std::memcpy(&st, body, 4); std::memcpy(&hp, body + 4, 4);
     const uint8_t flags = body[8], attacker = body[9];
+    constexpr uint8_t kPvpNoKnockdown = 0x80;   // WO-155: the agent's mp_ff_knockdown off (a pipe bit, not a wire flag)
     if (!std::isfinite(st) || !std::isfinite(hp) || st < 0 || hp < 0) return false;
     void* player = rttr::read_player_soul();
     if (!player) return false;
     // The unarmed hint goes in FIRST: the damage below may be the one that
     // floors Henry, and the classifier runs off the next sample.
     respawn::note_pvp_hit((flags & 0x01) != 0, attacker);
-    const bool ok = rttr::apply_damage_soul(player, st, hp, nullptr);   // no attacker: naming one starts fights
+    // WO-155: friendly fire keeps knocking the victim down (the game's scripted hit), but never twice in a row:
+    // while he is on the ground, and for 5 s after the hit that knocked him down, the damage goes in through the
+    // four-argument call with SuppressHitReaction (health and stamina exact, no second fall). The agent's
+    // kPvpNoKnockdown (mp_ff_knockdown off) suppresses every one.
+    static kcdmp::wo155rules::FfWindow s_ffWin;
+    const bool noKnock = (flags & kPvpNoKnockdown) != 0;
+    const bool downNow = kcdmp::motion::local_down_now();
+    const bool suppress = noKnock || s_ffWin.suppress(npcdrive::now_s(), downNow, kcdmp::motion::local_last_down_edge_s());
+    bool ok = suppress && rttr::apply_damage_soul_ex(player, st, hp, nullptr, 1);
+    bool viaOld = false;
+    if (!ok) { ok = rttr::apply_damage_soul(player, st, hp, nullptr); viaOld = suppress; }   // no attacker: naming one starts fights
     c_pvpIn.fetch_add(1);
-    logf("WO121-HITS friendly-fire hit on the player: hp -%.2f st -%.2f unarmed=%d from ghost %u -> %s", hp, st, (flags & 1) ? 1 : 0,
-         attacker, ok ? "applied" : "FAILED");
+    logf("WO121-HITS friendly-fire hit on the player: hp -%.2f st -%.2f unarmed=%d from ghost %u -> %s",
+         hp, st, (flags & 1) ? 1 : 0, attacker, ok ? "applied" : "FAILED");
+    logf("WO155-FF knockdown=%s%s", noKnock ? "off(mp_ff_knockdown)" : downNow ? "no(he is down)" : suppress ? "no(inside the 5 s window)" : "allowed",
+         viaOld ? " -- the four-argument call is not available: the old call ran" : "");
     return ok;
 }
 

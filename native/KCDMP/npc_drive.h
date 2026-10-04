@@ -133,6 +133,7 @@ void tick();
 // ---- shared helpers for npc_trace.cpp (main thread) --------------------------
 double now_s();                                    // QPC seconds
 bool   entity_pos(void* e, float out[3]);          // world translation, SEH-guarded
+float  entity_yaw(void* e);                        // WO-155: the body's yaw (atan2 of the world matrix's x axis); forward = (-sin, cos)
 void*  entity_by_name(const char* name);           // one full walk; null when absent
 bool   living_flying(void* e, int* flying);        // pe_status_living.bFlying, when readable
 

@@ -4375,10 +4375,14 @@ public partial class GameBridge(ClientConfig config)
         // Protocol.UnknownStat; passing that straight into TakeDamage would
         // *restore* stamina, so it is floored rather than forwarded.
         float st = staminaLoss > 0 ? staminaLoss : 0f;
+        // WO-155: an NPC's or an animal's blow never knocks a player down (the game's scripted two-argument hit does,
+        // whenever he is not in a combat stance: 10 knockdowns in 13 minutes in the field); the four-argument call with
+        // SuppressHitReaction takes exactly the health and stamina. A death still kills him as before.
+        bool noFall = Wo155SuppressNpcHit();
         bool applied = await _combat.ApplyDamageAsync(PlayerHenrySharedSoulGuid, st, healthLoss,
-                                                     suppressHitReaction: false, ct);
+                                                     suppressHitReaction: noFall, ct);
         if (applied)
-            Console.WriteLine($"[playerhit] took {healthLoss:F1} damage from an NPC in the authority's world");
+            Console.WriteLine($"[playerhit] took {healthLoss:F1} damage from an NPC in the authority's world{(noFall ? " (no knockdown: WO-155)" : "")}");
         else
             Console.WriteLine($"[playerhit] {healthLoss:F1} damage NOT applied -- KCDMP.dll is not injected, so " +
                               "NPC hits from other players' worlds cannot reach this player");
@@ -5003,7 +5007,8 @@ public partial class GameBridge(ClientConfig config)
                     byte sourceId = payload[0];
                     string who = _ghostNames.TryGetValue(sourceId, out var dn) ? dn : $"player {sourceId}";
                     Console.WriteLine($"[death] {who} died and is reloading their own save");
-                    _ = Wo132OnPeerDownAsync(sourceId, "died");   // WO-132 (was WO-131 1g's StopFight)
+                    _ = Wo132OnPeerDownAsync(sourceId, "died", hide: !_w154AvatarFalls);   // WO-132 (was WO-131 1g's StopFight); WO-155: his figure lies instead of vanishing
+                    Wo155CollapseFigure(sourceId, "his death packet");
                     try
                     {
                         await ExecLuaAsync($"KCD2MP_SetGhostDead(\"{sourceId}\", true)");
@@ -5929,6 +5934,9 @@ public partial class GameBridge(ClientConfig config)
             case "w140_cfg":
             case "w140_status":
                 Wo140OnEvent(name, arg);
+                return;
+            case "w155_cfg":         // WO-155: mp_hit_knockdown / mp_ff_knockdown
+                Wo155OnEvent(name, arg);
                 return;
             case "w154_falls":       // WO-154 2: mp_avatar_falls on|off
             case "w154_coalesce":    // WO-154 1: mp_quest_coalesce on|off

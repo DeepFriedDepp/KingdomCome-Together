@@ -25,6 +25,19 @@ Kingdom Come: Together 0.42.7 — carrying shows for both of you.
 Both players and the relay need 0.42.7. Tester page: docs/TEST-0.42.7.md in the official repository.
 ```
 
+## Version 0.45.1 — hits never knock you down (WO-155)
+
+```
+Kingdom Come: Together 0.45.1 — a small fix for a big annoyance.
+
+An enemy's or an animal's blow no longer knocks a player down: it takes health and stamina, and that is all (a death
+still kills). A player's figure now falls on the other screen only when he dies — it lies where he fell until he
+respawns — or when your own friendly-fire hit knocked him down (the game's own fall and get-up; never twice within 5
+seconds). The T-pose a figure showed for a few seconds after it spawned is gone too.
+
+Both players and the relay need 0.45.1. Tester page in the official repository: docs/TEST-0.45.1.md
+```
+
 ## Version 0.45.0 — the public beta (WO-154)
 
 ```

@@ -99,6 +99,10 @@ void on_pipe_closed();
 // The local player's state block (main thread; the 0x86 read). facingYaw is
 // the yaw local_state read from the entity matrix in the same call.
 bool read_local_state2(State2* out, float facingYaw);
+// WO-155: the debounced down state of the local player's body (the WO-154 DOWN edges) and when it last went down
+// (QPC seconds, npcdrive::now_s(); -1e9 = never); read on the main thread.
+bool local_down_now();
+double local_last_down_edge_s();
 // Per-frame: drain the capture queue to the callback, heartbeat checks.
 void tick();
 

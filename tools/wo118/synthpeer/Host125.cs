@@ -98,6 +98,9 @@
 //                                 (every CarryDown 0x71 received is logged: CARRY ...)
 //       setting ff|crime|ft 0|1    (WO-154) the host's session lever (SessionSetting), as a real host sends it
 //       vitals <hp> <st> [knockeddown|downed]   (WO-154) the host's own PlayerState (0x1F), at once and every 2 s
+//       phit <hp> <st> [joinerId=1]   (WO-155) the host's NPC blow on the joiner (PlayerHitUp 0x21)
+//       ffhit <hp> <st> [unarmed] [joinerId=1]   (WO-155) the host's friendly-fire hit on the joiner (PlayerHitV8Up 0x44)
+//       death                     (WO-155) the host dies (PlayerDeathUp 0x23); pair it with vitals <hp> <st> downed
 //                                 (hstate downed=1|0: the Downed bit of the host's state block)
 //     [reseed] = a synthetic seed (hex) written into the save's body 0x01FB, re-signed: a second
 //     "playthrough" made from a copy. Files are COPIES of real host saves; never logged by path.
@@ -594,6 +597,34 @@ static class Host125
                                          : p.Length > 3 && p[3] == "downed" ? Protocol.PlayerStateFlagUnconscious : (byte)0;
                                 await W(VitalsPacket(vitHp, vitSt, vitFlags));
                                 Say(FormattableString.Invariant($"VITALS hp={vitHp} st={vitSt} flags=0x{vitFlags:X2}"));
+                                break;
+                            }
+                            case "phit":   // WO-155: phit <hp> <st> [joinerId=1] -- the host's NPC blow on the joiner (PlayerHitUp 0x21 -> the joiner's 0x22)
+                            {
+                                byte tgt = p.Length > 3 ? byte.Parse(p[3], CultureInfo.InvariantCulture) : (byte)1;
+                                var hp9 = new byte[3 + Protocol.PlayerHitUpPayloadLen]; hp9[0] = Protocol.PlayerHitUp;
+                                BinaryPrimitives.WriteUInt16LittleEndian(hp9.AsSpan(1), (ushort)Protocol.PlayerHitUpPayloadLen);
+                                hp9[3] = tgt;
+                                BinaryPrimitives.WriteSingleLittleEndian(hp9.AsSpan(4), float.Parse(p[1], CultureInfo.InvariantCulture));
+                                BinaryPrimitives.WriteSingleLittleEndian(hp9.AsSpan(8), float.Parse(p[2], CultureInfo.InvariantCulture));
+                                hp9[12] = 0;
+                                await W(hp9);
+                                Say($"PHIT hp={p[1]} st={p[2]} -> ghost {tgt} (an NPC blow of the host's world)");
+                                break;
+                            }
+                            case "ffhit":   // WO-155: ffhit <hp> <st> [unarmed] [joinerId=1] -- the host's friendly-fire hit on the joiner (PlayerHitV8Up 0x44 -> 0x45)
+                            {
+                                bool unarmed = p.Length > 3 && p[3] == "unarmed";
+                                byte tg2 = p.Length > 4 ? byte.Parse(p[4], CultureInfo.InvariantCulture) : (byte)1;
+                                await W(new PlayerHitV8(tg2, float.Parse(p[2], CultureInfo.InvariantCulture), float.Parse(p[1], CultureInfo.InvariantCulture),
+                                                        (byte)(unarmed ? PlayerHitV8.FlagUnarmed : 0), 0).BuildUp());
+                                Say($"FFHIT hp={p[1]} st={p[2]} unarmed={(unarmed ? 1 : 0)} -> ghost {tg2} (friendly fire)");
+                                break;
+                            }
+                            case "death":   // WO-155: the host dies (PlayerDeathUp 0x23: every other client's 0x24); pair with vitals <hp> <st> downed
+                            {
+                                await W([Protocol.PlayerDeathUp, 0, 0]);
+                                Say("DEATH sent (PlayerDeathUp)");
                                 break;
                             }
                             case "setting":   // WO-154: setting ff|crime|ft 0|1 -- the host's session lever (SessionSetting), as a real host sends it

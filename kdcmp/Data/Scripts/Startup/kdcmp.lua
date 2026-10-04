@@ -13347,6 +13347,12 @@ function KCD2MP_RemoveGhost(id)
     -- WO-39: same id-reuse reasoning -- a stale drawn flag would make whoever
     -- next gets this id spawn weapon-ready for no reason.
     KCD2MP.ghostWeaponDrawn[id] = nil
+    -- WO-155: the same for a figure that was falling or lying dead: the next occupant starts from standing
+    if KCD2MP.w154 then
+        KCD2MP.w154.down[id] = nil
+        if KCD2MP.w154.fall then KCD2MP.w154.fall[id] = nil end
+        if KCD2MP.w154.dead then KCD2MP.w154.dead[id] = nil end
+    end
     System.LogAlways("[KCD2-MP] Removed ghost: " .. id)
     -- Reset riding anim probes: if they were cached while NPC was ForceMount'd they may be
     -- wrong (false). Re-probe on next riding ghost (free NPC ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ correct results).
@@ -17721,6 +17727,8 @@ KCD2MP_MARKS = { "setup", "join", "fight", "fightboth", "ko", "hostdown", "horse
     -- WO-153: the 0.43.0 tester page's markers (never registered: typing one printed "unknown command") and 0.44.0's
     "carry_alive", "crime", "door", "ff", "fight_same", "forge", "reload", "ride", "scene", "stuck", "weather", "whistle",
     "herbs", "dog", "hostfight", "death", "stall", "door2", "quiet",
+    -- WO-155: the 0.45.1 tester page's markers
+    "hitnofall", "deathfall", "ffwindow",
     -- WO-154: the 0.45.0 tester page's markers
     "quest", "knock", "turn", "partnerdown", "endfight", "joinbar", "joinslow", "newchar", "fasttravel", "menu", "skip",
     "voice", "caravan" }
@@ -19891,18 +19899,25 @@ do
     end
 end
 
--- ===== WO-154: the partner's figure falls when he is knocked down (docs/WO-154-findings.md) =====
+-- ===== WO-154 / WO-155: the partner's figure (docs/WO-154-findings.md, docs/WO-155-findings.md) =====
 --
--- Phase 2 (both roles). The partner's DLL sets the Downed bit of his body-state block while his own body
--- is down (its physics is no living entity: a knockdown's ragdoll, a knockout; the DLL debounces it) and the
--- agent calls KCD2MP_W154AvatarDowned on its edges (GameBridge.Wo154.cs). On the way down the avatar's
--- writer lets go first (mp_ghost_is_corpse reads it down: nothing moves or animates it), then the engine's
--- own Actor.RagDollize lays it where it stands; it lies there while he does (live L1: still down at 2, 10
--- and 25 s; Actor.Fall is a stagger it got up from by itself after ~7 s). On the way up the engine's own
--- Revive(false) stands it (live L1; StandUp does not lift a RagDollize'd body); its reaction contexts were
--- never off (WO-154 2: they stay through every unbind). A death or an execution still hides the avatar at
--- the death spot (WO-132); a knockdown is never hidden. mp_avatar_falls on|off (default on).
---   WO154-FALL avatar=<name> ok=<pcall> / WO154-RISE avatar=<name> ok=<pcall>
+-- WO-155: a hit never knocks a player down, and his figure falls on the other screen only when he dies.
+--   * DEATH (his vitals say a body that is not a knockout): KCD2MP_W155AvatarCollapse(id, true) -- the avatar's writer
+--     lets go, the engine's own Actor.RagDollize lays it where it stands, and it LIES THERE until his respawn: a
+--     watch holds it on the ground (never below it: a figure that sinks under the terrain is put back on it).
+--     At his respawn (collapse(id, false)) the figure is hidden at once and replaced 1.5 s later by a FRESH body
+--     (KCD2MP_W155AvatarReplace: RemoveGhost, the next position spawns it) at the place he woke. No Revive ever runs
+--     on a living figure: a ragdoll that stands up again is the sinking and the T-pose of the field (0.45.0).
+--   * FRIENDLY FIRE (the watcher's own hit knocked him down on his own screen): KCD2MP_W155AvatarFall(id) -- the
+--     engine's own Actor.Fall (the game's knockdown, lying, and get-up animations), the writer let go for the
+--     duration. Live: the writer must not take the body back while the get-up blend (BlendRagdoll) still runs, so it is
+--     handed back once the engine says the figure is up and idle (the blend seen and over: physicalization 'alive',
+--     animation state MotionIdle*, plus 1.2 s). A freshly bound avatar stands in a T-pose for 5-8 s whatever the wait
+--     (a fresh spawn too): the DLL's walk-class pulse after every bind (WO155-NUDGE, motion.cpp) starts its locomotion
+--     graph. A watch that never sees the figure up replaces it with a fresh one.
+--   * Everything else (a knockout, the death guard's knockdown, an NPC's blow): the figure does not fall.
+-- mp_avatar_falls on|off (default on); off: nothing falls, a death hides the figure as 0.44.0 did.
+--   WO155-FALL avatar=<name> ok=<pcall> / WO155-RISE avatar=<name> ... / WO155-COLLAPSE / WO155-HOLD / WO155-REPLACE
 --
 -- Fail closed (Phase 2): an avatar whose native protections (its reaction contexts, the speech gate) are
 -- not on -- the DLL is not injected, or the isolate call failed -- has its brain paused with the engine's
@@ -19913,24 +19928,164 @@ do
     KCD2MP.w154 = KCD2MP.w154 or {}
     local W = KCD2MP.w154
     if W.falls == nil then W.falls = true end
-    W.down = W.down or {}   -- ghost id (string) -> os.clock() of its fall
+    W.down = W.down or {}   -- ghost id (string) -> os.clock() of its fall or collapse (the figure is not the writer's)
+    W.fall = W.fall or {}   -- id -> the settle watch of a friendly-fire fall
+    W.dead = W.dead or {}   -- id -> the dead figure's record { at, refZ, released }
     W.stats = W.stats or { fell = 0, rose = 0, fallFail = 0, riseFail = 0 }
+    W.stats.collapsed = W.stats.collapsed or 0
+    W.stats.replaced = W.stats.replaced or 0
+    W.stats.held = W.stats.held or 0
+    W.fallSettleS = W.fallSettleS or 1.2     -- idle this long after the get-up blend before the writer takes the body back
+    W.fallGiveUpS = W.fallGiveUpS or 20.0    -- a fall that never settles: the figure is replaced
+    W.fallNoFallS = W.fallNoFallS or 4.0     -- Actor.Fall that never showed a fall in this long: nothing to wait for
+    W.holdSinkM = W.holdSinkM or 0.35        -- a lying figure this far under the terrain it lies on is put back
 
-    function KCD2MP_W154IsDown(id)
-        return W.down[tostring(id)] ~= nil
+    local function w155_body(id)
+        local ghost = KCD2MP.ghosts and KCD2MP.ghosts[tostring(id)]
+        return ghost, ghost and ghost.entity
     end
 
-    function KCD2MP_W154AvatarDowned(id, down)
-        id = tostring(id)
-        local name = "kcd2mp_" .. id
+    -- The engine's own reading of the figure: physicalization profile ('sleep' = down, 'alive' = up, 'ragdoll' = a
+    -- RagDollize) and the animation state ('BlendRagdoll' = the get-up blend, 'MotionIdle*' = up and idle).
+    local function w155_read(e)
+        local prof, anim = nil, nil
+        pcall(function() prof = e.actor:GetPhysicalizationProfile() end)
+        pcall(function() anim = e.actor:GetCurrentAnimationState() end)
+        return prof, anim
+    end
+
+    local function w155_name(id) return "kcd2mp_" .. tostring(id) end
+
+    function KCD2MP_W154IsDown(id)
+        local k = tostring(id)
+        local f = W.fall[k]
+        -- backstop: a watch whose timer chain died (a load kills every chain) never leaves a figure frozen
+        if f and (os.clock() - f.at) > (W.fallGiveUpS + 5.0) then
+            W.fall[k] = nil; W.down[k] = nil
+            mp_log("WO155-RISE avatar=" .. w155_name(k) .. " the watch is stale (its timer chain died) -- the writer takes the figure back")
+            return false
+        end
+        return W.down[k] ~= nil
+    end
+
+    -- ---- friendly fire: the game's own fall and get-up ----
+    local function w155_release(id, why, replace)
+        local f = W.fall[id]
+        W.fall[id] = nil
+        W.down[id] = nil
         local ghost = KCD2MP.ghosts and KCD2MP.ghosts[id]
-        local e = ghost and ghost.entity
-        if down then
+        if replace and ghost then
+            W.stats.replaced = W.stats.replaced + 1
+            pcall(KCD2MP_RemoveGhost, id)
+        end
+        W.stats.rose = W.stats.rose + 1
+        mp_log(string.format("WO155-RISE avatar=%s %s (down %.1f s)%s", w155_name(id), why, f and (os.clock() - f.at) or -1,
+            replace and " -- a fresh figure replaces it" or " -- the writer takes it back (its first step starts the animation graph: WO155-NUDGE)"))
+    end
+
+    function KCD2MP_W155FallTick(id)
+        id = tostring(id)
+        local f = W.fall[id]
+        if not f then return end
+        local ghost, e = w155_body(id)
+        if not (e and e.actor) then W.fall[id] = nil; W.down[id] = nil; return end
+        if W.dead[id] then W.fall[id] = nil; return end   -- a death took over
+        local now = os.clock()
+        local prof, anim = w155_read(e)
+        local key = tostring(prof) .. "/" .. tostring(anim)
+        if key ~= f.key then
+            f.key = key
+            mp_log(string.format("WO155-STATE avatar=%s +%.1f s profile=%s anim=%s", w155_name(id), now - f.at, tostring(prof), tostring(anim)))
+        end
+        if prof == "sleep" or prof == "ragdoll" then f.seen = true end
+        if anim == "BlendRagdoll" then f.seen = true; f.blend = true end
+        -- up and idle counts only AFTER the get-up blend was seen: between the body waking ('alive') and the blend's start
+        -- the animation state still reads idle, and the writer binding there freezes the pose in a T-pose (live PF1/PF2)
+        local idle = f.blend and prof == "alive" and type(anim) == "string" and anim:find("^MotionIdle") ~= nil
+        if idle then
+            f.idleAt = f.idleAt or now
+            if now - f.idleAt >= W.fallSettleS then w155_release(id, "got up by the game's own animation", false); return end
+        else
+            f.idleAt = nil
+        end
+        if not f.seen and now - f.at >= W.fallNoFallS then
+            w155_release(id, "the engine showed no fall -- nothing to wait for", false); return
+        end
+        if now - f.at >= W.fallGiveUpS then
+            w155_release(id, string.format("never settled (profile=%s anim=%s)", tostring(prof), tostring(anim)), true); return
+        end
+        Script.SetTimer(400, function() KCD2MP_W155FallTick(id) end)
+    end
+
+    function KCD2MP_W155AvatarFall(id)
+        id = tostring(id)
+        local name = w155_name(id)
+        if not W.falls then return end
+        if W.dead[id] or W.fall[id] then return end      -- a body already lies / is already falling
+        local ghost, e = w155_body(id)
+        if not (e and e.actor) then mp_log("WO155-FALL avatar=" .. name .. " no body here -- nothing to fall"); return end
+        local hidden = false
+        pcall(function() hidden = e:IsHidden() and true or false end)
+        if hidden then mp_log("WO155-FALL avatar=" .. name .. " is hidden -- no fall"); return end
+        if type(e.actor.Fall) ~= "function" then
+            W.stats.fallFail = W.stats.fallFail + 1
+            mp_log("WO155-FALL avatar=" .. name .. " Actor.Fall is not registered on this build -- the figure does not fall"); return
+        end
+        W.down[id] = os.clock()
+        pcall(KCD2MP_GhostNativeSync, id, ghost, false)   -- the writer lets go first
+        local ok, err = pcall(function() e.actor:Fall(e:GetWorldPos()) end)
+        if not ok then
+            W.down[id] = nil
+            W.stats.fallFail = W.stats.fallFail + 1
+            mp_log(string.format("WO155-FALL avatar=%s ok=false err=%s", name, tostring(err))); return
+        end
+        W.fall[id] = { at = os.clock() }
+        W.stats.fell = W.stats.fell + 1
+        mp_log(string.format("WO155-FALL avatar=%s ok=true -- his friendly-fire knockdown: the engine's own fall and get-up play here", name))
+        Script.SetTimer(400, function() KCD2MP_W155FallTick(id) end)
+    end
+
+    -- ---- death: the figure collapses and lies until his respawn ----
+    function KCD2MP_W155HoldTick(id)
+        id = tostring(id)
+        local d = W.dead[id]
+        if not d or d.released then return end
+        local ghost, e = w155_body(id)
+        if not e then return end
+        local now = os.clock()
+        local p = nil
+        pcall(function() p = e:GetWorldPos() end)
+        if p then
+            -- The ground is the terrain under the body: a ragdoll's own pivot wanders by half a metre while it settles (live: a
+            -- hold against its own settled height lifted it off the ground), a resting body lies about 0.2 m under the terrain's
+            -- surface, and a sunk one is clearly below it. Put back only a body that is.
+            local gz = nil
+            pcall(function() gz = System.GetTerrainElevation({ x = p.x, y = p.y, z = 0 }) end)
+            if type(gz) == "number" and p.z < gz - W.holdSinkM then
+                local ok = pcall(function() e:SetWorldPos({ x = p.x, y = p.y, z = gz - 0.2 }) end)
+                W.stats.held = W.stats.held + 1
+                mp_log(string.format("WO155-HOLD avatar=%s sank %.2f m under the terrain it lay on -- put back (ok=%s)", w155_name(id), gz - p.z, tostring(ok)))
+            end
+        end
+        Script.SetTimer(1000, function() KCD2MP_W155HoldTick(id) end)
+    end
+
+    function KCD2MP_W155AvatarCollapse(id, on)
+        id = tostring(id)
+        local name = w155_name(id)
+        local ghost, e = w155_body(id)
+        if on then
+            if not W.falls then return end
+            if W.dead[id] and not W.dead[id].released then return end
+            W.fall[id] = nil
             W.down[id] = os.clock()
-            if not (e and e.actor) then mp_log("WO154-FALL avatar=" .. name .. " no body here -- marked down"); return end
+            W.dead[id] = { at = os.clock() }
+            W.stats.collapsed = W.stats.collapsed + 1
+            if not (e and e.actor) then mp_log("WO155-COLLAPSE avatar=" .. name .. " no body here -- marked dead"); return end
             local hidden = false
             pcall(function() hidden = e:IsHidden() and true or false end)
-            if hidden then mp_log("WO154-FALL avatar=" .. name .. " is hidden (a death) -- no fall"); return end
+            if hidden then mp_log("WO155-COLLAPSE avatar=" .. name .. " is hidden -- marked dead, no figure to lay down"); return end
+            if KCD2MP_GhostIsMounted and KCD2MP_GhostIsMounted(ghost) then pcall(KCD2MP_GhostDismount, id, ghost, "death") end
             pcall(KCD2MP_GhostNativeSync, id, ghost, false)   -- the writer lets go first
             local ok, err = false, nil
             if type(e.actor.RagDollize) == "function" then
@@ -19940,25 +20095,33 @@ do
             else
                 err = "Actor.RagDollize / Actor.Fall are not registered on this build"
             end
-            if ok then W.stats.fell = W.stats.fell + 1 else W.stats.fallFail = W.stats.fallFail + 1 end
-            mp_log(string.format("WO154-FALL avatar=%s ok=%s%s -- he is down in his world: his figure falls and lies here",
+            mp_log(string.format("WO155-COLLAPSE avatar=%s ok=%s%s -- he died in his world: his figure lies here until he respawns",
                 name, tostring(ok), ok and "" or (" err=" .. tostring(err))))
+            Script.SetTimer(1000, function() KCD2MP_W155HoldTick(id) end)
         else
-            local since = W.down[id]
-            W.down[id] = nil
-            if not (e and e.actor) then return end
-            local ok, err = false, nil
-            if type(e.actor.Revive) == "function" then
-                ok, err = pcall(function() e.actor:Revive(false) end)
-            elseif type(e.actor.StandUp) == "function" then
-                ok, err = pcall(function() e.actor:StandUp() end)
-            else
-                err = "Actor.Revive / Actor.StandUp are not registered on this build"
-            end
-            if ok then W.stats.rose = W.stats.rose + 1 else W.stats.riseFail = W.stats.riseFail + 1 end
-            mp_log(string.format("WO154-RISE avatar=%s ok=%s%s -- he stood up in his world (down %.1f s)",
-                name, tostring(ok), ok and "" or (" err=" .. tostring(err)), since and (os.clock() - since) or -1))
+            local d = W.dead[id]
+            if not d then return end
+            d.released = true
+            if e then pcall(function() e:Hide(1) end) end
+            mp_log("WO155-COLLAPSE avatar=" .. name .. " respawned in his world -- the lying figure is removed; a fresh one stands where he woke")
         end
+    end
+
+    -- 1.5 s after his respawn (his new position has streamed in): the lying body is replaced by a fresh figure.
+    function KCD2MP_W155AvatarReplace(id)
+        id = tostring(id)
+        local d = W.dead[id]
+        if not (d and d.released) then return end
+        W.dead[id] = nil
+        W.down[id] = nil
+        W.stats.replaced = W.stats.replaced + 1
+        pcall(KCD2MP_RemoveGhost, id)
+        mp_log("WO155-REPLACE avatar=" .. w155_name(id) .. " removed -- the next position update spawns a fresh figure (identity, outfit and name come with it)")
+    end
+
+    -- The pre-WO-155 entry (the agent of 0.45.0, the tests): a knocked-down partner -> the game's own fall.
+    function KCD2MP_W154AvatarDowned(id, down)
+        if down then KCD2MP_W155AvatarFall(id) end
     end
 
     -- The agent's answer to an avatar's isolate call (its spawn): ok = the native protections are on.
@@ -19987,6 +20150,27 @@ do
         return true
     end
 
+    -- WO-155. mp_hit_knockdown on|off (default OFF): a blow of an NPC or an animal on a player knocks him down (0.45.0's
+    -- two-argument TakeDamage); off = the four-argument call with SuppressHitReaction (health and stamina exact, no fall).
+    -- mp_ff_knockdown on|off (default ON): a friendly-fire hit knocks the victim down on his own screen (his figure falls
+    -- on the attacker's), but never twice within 5 s; off = friendly fire never knocks down.
+    W.hitKnockdown = W.hitKnockdown or false
+    if W.ffKnockdown == nil then W.ffKnockdown = true end
+    function KCD2MP_W155SetCfg(which, arg)
+        local v = KCD2MP_Wo122ParseBool(arg)
+        local cmd = which == "hit_knockdown" and "mp_hit_knockdown" or "mp_ff_knockdown"
+        if v == "bad" then mp_log(cmd .. ": expected on|off"); return false end
+        local key = which == "hit_knockdown" and "hitKnockdown" or "ffKnockdown"
+        if v ~= nil then
+            W[key] = v
+            KCD2MP_EmitEvent("w155_cfg", which .. "=" .. (v and "on" or "off"))
+        end
+        mp_log(string.format("WO155-TOGGLE %s=%s", which, W[key] and "on" or "off"))
+        return true
+    end
+    function KCD2MP_W155SetHitKnockdown(arg) return KCD2MP_W155SetCfg("hit_knockdown", arg) end
+    function KCD2MP_W155SetFfKnockdown(arg) return KCD2MP_W155SetCfg("ff_knockdown", arg) end
+
     -- mp_avatar_falls on|off (bare = report)
     function KCD2MP_W154SetFalls(arg)
         local v = KCD2MP_Wo122ParseBool(arg)
@@ -19994,13 +20178,14 @@ do
         if v ~= nil then
             W.falls = v
             if not v then
-                -- standing again at once: nothing keeps a fallen figure down with the switch off
-                for gid in pairs(W.down) do pcall(KCD2MP_W154AvatarDowned, gid, false) end
+                -- nothing keeps a figure down with the switch off: the falling ones stand, the dead ones are replaced
+                for gid in pairs(W.fall) do pcall(w155_release, gid, "mp_avatar_falls off", true) end
+                for gid, d in pairs(W.dead) do d.released = true; pcall(KCD2MP_W155AvatarReplace, gid) end
             end
             KCD2MP_EmitEvent("w154_falls", v and "on" or "off")
         end
-        mp_log(string.format("WO154-FALLS falls=%s fell=%d rose=%d fall_fail=%d rise_fail=%d down_now=%d",
-            W.falls and "on" or "off", W.stats.fell, W.stats.rose, W.stats.fallFail, W.stats.riseFail,
+        mp_log(string.format("WO154-FALLS falls=%s fell=%d rose=%d fall_fail=%d rise_fail=%d collapsed=%d replaced=%d held=%d down_now=%d",
+            W.falls and "on" or "off", W.stats.fell, W.stats.rose, W.stats.fallFail, W.stats.riseFail, W.stats.collapsed, W.stats.replaced, W.stats.held,
             (function() local n = 0 for _ in pairs(W.down) do n = n + 1 end return n end)()))
         return true
     end
@@ -22115,7 +22300,9 @@ local ok, err = pcall(function()
     System.AddCCommand("mp_join_panel", 'KCD2MP_W154SetJoinPanel(%line)', "WO-154: (host) the join's progress is the game's own tutorial panel, so it shows through the engine's hold (default on; off = 0.44.0's drawn bar, which the hold stops): mp_join_panel on|off")
     System.AddCCommand("mp_join_patient", 'KCD2MP_W154SetJoinPatient(%line)', "WO-154: (joiner) a join's load is given up only when the game answers from its menu, never while it is busy loading, and the world file is kept until no load can read it (default on): mp_join_patient on|off")
     System.AddCCommand("mp_w154_check", 'KCD2MP_W154Check(%line)', "WO-154 live checks (test NPCs named w154_ only): mp_w154_check hostfight <npc> [secs] | hostfight off | pursue <npc> <ghost> on|off | where | status")
-    System.AddCCommand("mp_avatar_falls", 'KCD2MP_W154SetFalls(%line)', "WO-154: a partner who is knocked down in his own world falls and lies on this screen too, and stands up when he does (default on): mp_avatar_falls on|off")
+    System.AddCCommand("mp_avatar_falls", 'KCD2MP_W154SetFalls(%line)', "WO-155: a partner's figure falls on this screen only when he dies (lies until he respawns) or for a knockdown of your own friendly-fire hit (the game's own fall and get-up); off: nothing falls (default on): mp_avatar_falls on|off")
+    System.AddCCommand("mp_hit_knockdown", 'KCD2MP_W155SetHitKnockdown(%line)', "WO-155: a blow of an NPC or an animal knocks a player down (0.45.0); off = it only takes health and stamina (default off): mp_hit_knockdown on|off")
+    System.AddCCommand("mp_ff_knockdown", 'KCD2MP_W155SetFfKnockdown(%line)', "WO-155: a friendly-fire hit knocks the victim down, never twice within 5 s; off = friendly fire never knocks down (default on): mp_ff_knockdown on|off")
     System.AddCCommand("mp_avatar_herbs", 'KCD2MP_SetAvatarHerbs(%line)', "WO-153: the partner's avatar plays its herb-picking loop (default OFF: the avatar stands; the loop ended both 0.43.0 joiner crashes): mp_avatar_herbs on|off")
     System.AddCCommand("mp_avatar_dress", 'KCD2MP_SetAvatarDress(%line)', "WO-144: a partner's avatar wears pieces from its own inventory, equipped through the actor (default on; off = 0.42.0's REST EquipItem): mp_avatar_dress on|off")
     System.AddCCommand("mp_show_animals", 'KCD2MP_SetShowAnimals(%line)', "WO-144: a horse or animal the host streams is shown here even where this world keeps it hidden (default on): mp_show_animals on|off")

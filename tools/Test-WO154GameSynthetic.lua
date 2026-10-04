@@ -3,8 +3,7 @@
 -- content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 -- WO-154 synthetic test (the game-side phases), against the real kdcmp.lua under MoonSharp.
 --
---   (A) Phase 2: a partner who is knocked down falls on this screen, lies there with his writer held, and
---       stands up when he does; a hidden (dead) avatar never falls; mp_avatar_falls off stands every figure up
+--   (A) Phase 2, as WO-155 left it: the pre-WO-155 entry is the game's own fall (the full suite: Test-WO155Synthetic)
 --   (A5) Phase 2, fail closed: an avatar without its native protections has its brain paused until it has them
 --
 -- Driven by Test-WO154GameSynthetic.ps1 through the WO-77 MoonSharp driver. Live evidence: docs/WO-154-findings.md.
@@ -72,7 +71,7 @@ local NEXTID = 9000
 local function mkAvatar(id, x, y, z)
     NEXTID = NEXTID + 1
     local name = "kcd2mp_" .. tostring(id)
-    local e = { class = "NPC", id = NEXTID, px = x or 0, py = y or 0, pz = z or 0, rz = 0, hidden = false, falls = 0, stands = 0 }
+    local e = { class = "NPC", id = NEXTID, px = x or 0, py = y or 0, pz = z or 0, rz = 0, hidden = false, falls = 0, fell = 0, stands = 0 }
     e.GetName = function(self) return name end
     e.GetWorldPos = function(self) return { x = self.px, y = self.py, z = self.pz } end
     e.GetWorldAngles = function(self) return { x = 0, y = 0, z = self.rz } end
@@ -84,7 +83,10 @@ local function mkAvatar(id, x, y, z)
         IsUnconscious = function() return false end,
         GetHealth = function() return 100 end,
         RagDollize = function(self) e.falls = e.falls + 1; e.fallAt = { x = e.px, y = e.py, z = e.pz } end,
+        Fall = function(self, pos) e.fell = e.fell + 1; e.fellAt = { x = pos.x, y = pos.y, z = pos.z } end,
         Revive = function(self, full) e.stands = e.stands + 1; e.reviveFull = full end,
+        GetPhysicalizationProfile = function() return e.prof or "alive" end,
+        GetCurrentAnimationState = function() return e.anim or "MotionIdle" end,
     }
     ENTS[name] = e
     KCD2MP.ghosts = KCD2MP.ghosts or {}
@@ -92,7 +94,7 @@ local function mkAvatar(id, x, y, z)
     return e, KCD2MP.ghosts[tostring(id)]
 end
 
--- (A) Phase 2: a partner knocked down falls here, lies, and stands up with him -----------------------------------------------
+-- (A) Phase 2 (superseded by WO-155): the pre-WO-155 entry KCD2MP_W154AvatarDowned(id, true) is now the game's own fall ---------
 do
     ERRS = {}
     KCD2MP.w154.down = {}
@@ -103,21 +105,17 @@ do
     KCD2MP_W154AvatarDowned("1", true)
     check("A: down -> the writer lets go first", g.istate.nativeOwned == false and countEvt("npc_native", "kcd2mp_1 off", mark) == 1,
         tostring(g.istate.nativeOwned))
-    check("A: down -> the engine's own ragdoll, where it stands", e.falls == 1 and e.fallAt and e.fallAt.x == 10 and e.fallAt.y == 20, tostring(e.falls))
-    check("A: down -> WO154-FALL logged ok", lastLog("WO154-FALL avatar=kcd2mp_1 ok=true", mark) ~= nil, lastLog("WO154-FALL", mark))
+    check("A: down -> the engine's own Actor.Fall, where it stands (no ragdoll)", e.fell == 1 and e.fellAt and e.fellAt.x == 10 and e.fellAt.y == 20 and e.falls == 0,
+        tostring(e.fell) .. "/" .. tostring(e.falls))
+    check("A: down -> WO155-FALL logged ok", lastLog("WO155-FALL avatar=kcd2mp_1 ok=true", mark) ~= nil, lastLog("WO155-FALL", mark))
     check("A: while down it is frozen like a body (nothing moves or animates it)", mp_ghost_is_corpse("1", g) == true)
     check("A: while down WO-135's not-living stand-up refuses", KCD2MP_W135AvatarStandUp("kcd2mp_1") == false and e.stands == 0, tostring(e.stands))
-    NOW = NOW + 6.0
-    mark = #LOG
     KCD2MP_W154AvatarDowned("1", false)
-    check("A: up -> the engine's own Revive(false) stands it", e.stands == 1 and e.reviveFull == false, tostring(e.stands))
-    check("A: up -> WO154-RISE logged with how long he lay", (lastLog("WO154-RISE avatar=kcd2mp_1 ok=true", mark) or ""):find("down 6.0 s", 1, true) ~= nil,
-        lastLog("WO154-RISE", mark))
-    check("A: up -> no longer frozen", mp_ghost_is_corpse("1", g) == false)
+    check("A: up from the pre-WO-155 entry never runs Revive on the figure", e.stands == 0, tostring(e.stands))
     noErrs("A")
 end
 
--- (A2) a hidden avatar (a death or an execution: WO-132 hides it at the death spot) never falls -------------------------------
+-- (A2) a hidden avatar (the avatar mp_avatar_falls off hides at a death) never falls ----------------------------------------
 do
     ERRS = {}
     KCD2MP.w154.down = {}
@@ -125,12 +123,12 @@ do
     e.hidden = true
     local mark = #LOG
     KCD2MP_W154AvatarDowned("2", true)
-    check("A2: a hidden figure does not fall", e.falls == 0, tostring(e.falls))
-    check("A2: ... and says why", lastLog("WO154-FALL avatar=kcd2mp_2 is hidden", mark) ~= nil)
+    check("A2: a hidden figure does not fall", e.fell == 0 and e.falls == 0, tostring(e.fell))
+    check("A2: ... and says why", lastLog("WO155-FALL avatar=kcd2mp_2 is hidden", mark) ~= nil)
     noErrs("A2")
 end
 
--- (A3) mp_avatar_falls off: every fallen figure stands, the agent is told; on again is reported --------------------------------
+-- (A3) mp_avatar_falls off: every fallen figure stands (the writer takes it back), the agent is told; on again is reported ---
 do
     ERRS = {}
     KCD2MP.w154.down = {}
@@ -138,7 +136,7 @@ do
     KCD2MP_W154AvatarDowned("3", true)
     local mark = #LOG
     KCD2MP_W154SetFalls("off")
-    check("A3: off stands the fallen figure up at once", e.stands == 1 and not KCD2MP_W154IsDown("3"), tostring(e.stands))
+    check("A3: off lets the fallen figure go at once (a fresh one, never a Revive)", not KCD2MP_W154IsDown("3") and e.stands == 0, tostring(e.stands))
     check("A3: off tells the agent", countEvt("w154_falls", "off", mark) == 1)
     mark = #LOG
     KCD2MP_W154SetFalls("on")
@@ -148,15 +146,13 @@ do
     noErrs("A3")
 end
 
--- (A4) an avatar with no body yet is only marked (its spawn later finds it down) ------------------------------------------
+-- (A4) an avatar with no body yet: nothing to fall, nothing marked --------------------------------------------------------
 do
     ERRS = {}
     KCD2MP.w154.down = {}
     local mark = #LOG
     KCD2MP_W154AvatarDowned("7", true)
-    check("A4: no body -> marked down, nothing called", KCD2MP_W154IsDown("7") and lastLog("WO154-FALL avatar=kcd2mp_7 no body", mark) ~= nil)
-    KCD2MP_W154AvatarDowned("7", false)
-    check("A4: up clears the mark", not KCD2MP_W154IsDown("7"))
+    check("A4: no body -> nothing called, nothing marked", not KCD2MP_W154IsDown("7") and lastLog("WO155-FALL avatar=kcd2mp_7 no body", mark) ~= nil)
     noErrs("A4")
 end
 

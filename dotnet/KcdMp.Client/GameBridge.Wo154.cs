@@ -65,20 +65,14 @@ public partial class GameBridge
         bool? change;
         lock (edge) change = edge.Feed((st.Bits & BodyState2Bits.Downed) != 0, Environment.TickCount64);
         if (change is not bool down) return;
-        if (!_w154AvatarFalls)
-        {
-            Console.WriteLine($"MP-W154 peer {ghost} {(down ? "is down" : "is up again")} -- mp_avatar_falls off: its avatar stays as it is");
-            return;
-        }
-        if (down) Interlocked.Increment(ref _w154Falls); else Interlocked.Increment(ref _w154Rises);
-        Console.WriteLine($"MP-W154 peer {ghost} {(down ? "is DOWN -> its avatar falls where it stands and lies there" : "is up again -> its avatar stands up")}");
-        _ = ExecLuaAsync($"if KCD2MP_W154AvatarDowned then KCD2MP_W154AvatarDowned(\"{ghost}\", {B(down)}) end");
+        Wo155OnPeerDownEdge(ghost, down);   // WO-155: only a friendly-fire knockdown of mine makes the figure fall (the game's own animation); a death is the vitals' business
     }
 
     /// <summary>A partner left: his edge state goes (a rejoin starts from up).</summary>
     private void Wo154ForgetPeer(byte ghost)
     {
         _w154PeerDown.TryRemove(ghost, out _);
+        Wo155ForgetPeer(ghost);
         _w154RideFeed.TryRemove(ghost, out _);
         _w154Respite.TryRemove(ghost, out _);
         _w154RespiteTold.TryRemove(ghost, out _);
@@ -256,7 +250,15 @@ public partial class GameBridge
             Console.WriteLine($"MP-W154 check: {Wo154FightStatsText()} {Wo154JoinStatsText()}");
             Console.WriteLine($"MP-W154 check: dll {await _combat.Wo132StatusAsync() ?? "no answer"}");
         }
-        else Console.WriteLine("MP-W154 check: hostfight <w154_npc> [secs] | hostfight off | pursue <w154_npc> <ghost> on|off | where | status");
+        else if (p.Length >= 4 && p[0] == "ffhit" && _ghostEntityIds.TryGetValue(p[1], out uint ffEid))
+        {
+            // WO-155 live check: this player's friendly-fire hit on that avatar, as the DLL's 0x97 frame reports one
+            // (sent to the relay, noted as the cause of the knockdown that follows on his screen)
+            float hpv = float.Parse(p[2], CultureInfo.InvariantCulture), stv = float.Parse(p[3], CultureInfo.InvariantCulture);
+            await OnPvpHitAsync(ffEid, stv, hpv, p.Length > 4 && p[4] == "unarmed" ? PlayerHitV8.FlagUnarmed : (byte)0, 0);
+            Console.WriteLine($"MP-W154 check: friendly-fire hit on ghost {p[1]}: hp={hpv} st={stv} (the same path as a real hit)");
+        }
+        else Console.WriteLine("MP-W154 check: hostfight <w154_npc> [secs] | hostfight off | pursue <w154_npc> <ghost> on|off | ffhit <ghost> <hp> <st> [unarmed] | where | status");
     }
 
     private string Wo154FightStatsText() => FormattableString.Invariant(
@@ -327,7 +329,7 @@ public partial class GameBridge
                 _ = Wo154EndFightsLocalAsync(f.Length > 0 && Wo139Text.IsWord(f[0]) ? f[0] : "unstuck");
                 return;
             case "w154_status":
-                Console.WriteLine(FormattableString.Invariant($"MP-W154-STATUS falls={(_w154AvatarFalls ? "on" : "off")} fell={_w154Falls} rose={_w154Rises} peers_down={_w154PeerDown.Count(kv => kv.Value.Down)} coalesce={(_w154Coalesce ? "on" : "off")} merged={_w154Merged} waiting={_w154Coalescer.Count} contested={_w154Contest.Count} {Wo154FightStatsText()} {Wo154JoinStatsText()} {Wo154RideStatsText()}"));
+                Console.WriteLine(FormattableString.Invariant($"MP-W154-STATUS {Wo155StatsText()} falls={(_w154AvatarFalls ? "on" : "off")} fell={_w154Falls} rose={_w154Rises} peers_down={_w154PeerDown.Count(kv => kv.Value.Down)} coalesce={(_w154Coalesce ? "on" : "off")} merged={_w154Merged} waiting={_w154Coalescer.Count} contested={_w154Contest.Count} {Wo154FightStatsText()} {Wo154JoinStatsText()} {Wo154RideStatsText()}"));
                 return;
         }
     }

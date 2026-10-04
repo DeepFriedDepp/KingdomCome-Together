@@ -658,6 +658,7 @@ double now_s() {
 }
 
 bool entity_pos(void* e, float out[3]) { return e && read_pos(e, out); }
+float entity_yaw(void* e) { return e ? yaw_of(e) : 0.0f; }
 
 namespace {
 struct FindCtx { const char* name; void* found; };

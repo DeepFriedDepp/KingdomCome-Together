@@ -228,6 +228,10 @@ $AsmMarkers = @(
     @{ File = 'KCDMP.dll';       Marker = 'WO154-IDENTITY';         Owner = "WO-154 2 the avatar's identity from spawn (native)" },
     @{ File = 'KCDMP.dll';       Marker = 'physics=none-yet';       Owner = 'WO-154 6.2 far copies on the native writer (native)' },
     @{ File = 'KCDMP.dll';       Marker = 'WO136-FORGET';           Owner = "WO-154 3.3 a partner's down clears his fights (native)" },
+    # WO-155: hits never knock a player down (0.45.1)
+    @{ File = 'KcdMpClient.dll'; Marker = 'MP-W155 peer ';          Owner = "WO-155 2 a partner's death lays his figure down (agent half)" },
+    @{ File = 'KCDMP.dll';       Marker = 'WO155-FF';               Owner = 'WO-155 1 friendly fire never knocks the victim down twice in 5 s (native)' },
+    @{ File = 'KCDMP.dll';       Marker = 'WO155-NUDGE';            Owner = "WO-155 4 a freshly bound avatar's animation is started (native)" },
     @{ File = 'KCDMP_launcher.dll'; Marker = 'Smart App Control';   Owner = 'WO-154 7 Windows blocking the mod, told in plain words (launcher)' },
     @{ File = 'KCDMP_launcher.dll'; Marker = 'Join with a new character'; Owner = 'WO-154 4.4 the plain join messages and the button (launcher)' },
     @{ File = 'KCDMP_launcher.dll'; Marker = 'Kingdom Come: Together'; Owner = 'WO-134 rebrand (launcher window title)' }
@@ -321,6 +325,8 @@ $PakMarkers = @(
     @{ Marker = 'function KCD2MP_W154JoinPanel';   Owner = "WO-154 4.1 the host's join panel through the hold (mod half)" },
     @{ Marker = 'function KCD2MP_W154RideNative';  Owner = 'WO-154 5 a ridden horse on the native writer (mod half)' },
     @{ Marker = 'WO154-FALL';                      Owner = "WO-154 2 a knocked-down partner's figure falls (mod half)" },
+    @{ Marker = 'function KCD2MP_W155AvatarCollapse'; Owner = "WO-155 2 a dead partner's figure lies until his respawn (mod half)" },
+    @{ Marker = 'function KCD2MP_W155AvatarFall';  Owner = "WO-155 1 a friendly-fire knockdown's own animation (mod half)" },
     @{ Marker = 'function KCD2MP_W154SetSkipTell'; Owner = 'WO-154 6.3 mp_skip_tell (mod half)' },
     @{ Marker = 'function KCD2MP_W154SetMinigameOutcome'; Owner = 'WO-154 6.5 mp_minigame_outcome (mod half)' },
     @{ Marker = 'function KCD2MP_W154FairViolent'; Owner = 'WO-154 3 crime judged on what happened (mod half)' },
