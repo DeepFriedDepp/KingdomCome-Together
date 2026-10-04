@@ -157,7 +157,7 @@ window)|off(mp_ff_knockdown)`. [native] 18 checks [J3]
 | 2c | no `Revive` on a living figure, ever; the figure never stands up from a ragdoll | none in the code path; a fresh figure at the respawn | [syn] counts `revives == 0` |
 | 2d | a knockout: only if it is the game's own state, else no fall | no fall (decision 2) | [code] [syn] |
 | 3 | proof: host + scripted partner (10 blows; death), joiner of a synthetic host (10 blows; death), friendly fire both ways | done, except swings/blocks between blows | the sections above |
-| D | docs, release notes, checklist §WO-155, tester page, installer | see the build record | — |
+| D | docs, release notes, checklist §WO-155, tester page, installer | done; the installer built with every gate green, the soak included | the build section |
 
 ## What a follow-up needs
 
@@ -207,4 +207,28 @@ The game window was never brought to the front by this session; it rendered at i
   in every row, no `FAULT` line, enough rows, the code committed); `soak.py check` says `soak PASS for this code (0.45.1 …)`.
   The run files are `tools/perf/runs/mod0451*.{json,csv,md}` (git-ignored, kept on the machine).
 
-@@BUILD@@
+## The build
+
+* **The installer.** `tools/Build-Installer.ps1`, run in a fresh clone of the final commit (`c64336f`) inside the repository's
+  git-ignored `release\` folder (§9.4 of WO-154's findings: a build under `%LocalAppData%` fails on this machine), no waiver:
+  **`KingdomComeTogether-Setup-0.45.1.exe`, 102,177,389 bytes, sha256
+  `03cdf331865cd07e6b50906a45b3bc5675db7ae904763e4b37b0f8c6f04bd9cd`**. It stays on this machine for the maintainer (installers
+  never go on GitHub): `release\KingdomComeTogether-Setup-0.45.1.exe`. The clone is of the local `main`; nothing was pushed
+  (the WO does not ask for it).
+* **The gates inside the build** (its log): the soak record accepted for this code (`soak PASS for this code (0.45.1, … the game
+  without the mod not compared …)`); native 406, relay 62, agent 1,097, setup 64 — 0 failed; all 46 synthetic suites and
+  the three static checks passed; Steam detection with WO-150's four installer cases 26/26 and the compiled Setup's cases
+  41/41; the payload's coherence check and its smoke run (`RELAY-SMOKE ok … protocol=v10 release=0.45.1`).
+* **What the install pass did not repeat**: the launcher, Setup, the installer script, the relay and the protocol are
+  byte-identical to 0.45.0 (`git diff 00b8f78 HEAD` names none of them); WO-154's upgrade test (every player file kept byte
+  for byte) and its four cases therefore stand, and the four cases ran again inside the build. The maintainer's install of
+  0.45.0 on this machine was **not** touched: its `Mods\kdcmp` pak and manifest are the 0.45.0 files (sha1 checked against the
+  copy taken at the start); every test pak lived in that folder only while a test game ran.
+* **The privacy sweep** of what the installer packs (the 1,031 files of the payload) for the field's and this machine's names,
+  Windows profile paths, Steam IDs and private IPv4 addresses, in ASCII and UTF-16: the same third-party matches as
+  0.45.0's (assembly versions `10.0.0.0`/`10.1.0.0`, the master server's config example `10.0.0.2`, a language name in
+  WPF's table, .NET method names, NAudio's own build paths) and **nothing of ours**; the diff of this WO swept the same way:
+  nothing.
+* **The tag**: none (not asked). The version is the maintainer's number, `0.45.1`, as the WO gave it.
+
+
