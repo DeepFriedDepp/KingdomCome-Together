@@ -121,10 +121,10 @@ window)|off(mp_ff_knockdown)`. [native] 18 checks [J3]
 
 **Host + scripted partner** (`tools/wo121/avatarpeer`, the host's agent and relay):
 * A hostile commoner fought the partner's avatar; **10 blows** reached the partner (`got NPC hit (0x22)` ×10, hp 20.55 →
-  5.18), every one with its damage; the figure's engine state stayed `alive` in 32 samples (only `MotionIdle*` and one
+  5.18), every one with its damage; the figure's engine state stayed `alive` in 33 samples (`MotionIdle*` 32 times and one
   `HitDeath` reading: the local flinch of a hit, a bent pose for a moment), never `sleep`, `ragdoll` or `BlendRagdoll`;
-  no T-pose; the avatar kept its animation (frames 9). The fight needed 5 tries (the AI's fights are not reliable;
-  the 6 and 10 blows of the last two are in the logs). [L6]
+  no T-pose; the avatar kept its animation (frames 9). The AI's fights are not reliable: the runs of this session gave
+  10, 0, 1, 0, 0, 6 and 10 blows in 40–90 s; the run shown is the one that reached 10. [L6]
 * The partner "died" (death packet + downed vitals): the figure collapsed on the host's screen and lay on the ground, not
   in it; a forced sink of 1.0 m made it vanish, the hold put it back (`WO155-HOLD sank 0.87 m … put back`) and it was
   visible again; the respawn hid it, `WO155-REPLACE` removed it 1.5 s later and a fresh figure stood 40 m away; the
@@ -170,8 +170,41 @@ window)|off(mp_ff_knockdown)`. [native] 18 checks [J3]
 * **The pulse's step** at every spawn is one small step; if it shows as a slide in the field, the pulse's speed or
   length (`kNudgeMps`, `kNudgeS` in `motion.cpp`) is the lever.
 
-@@GATES@@
+## The gates
 
-@@SOAKS@@
+On the tree of the shipping code (`8aac11e`; the commits after it are docs and the soak records): **native 406** (388 + 18 for
+the friendly-fire window), **agent 1,097** (1,088 + 9), **relay 62**, **setup 64**, the launcher's build, the three static
+checks (console placeholders 7, Lua locals 6, native guards 7) and **all 46 synthetic suites** (the new
+`Test-WO155Synthetic` 74 checks; `Test-WO154GameSynthetic` 108, adapted: its fall/rise checks now describe the pre-WO-155
+entry as the game's own fall) — **0 failed**. The same gates run again inside `tools/Build-Installer.ps1` for the shipping
+build.
+
+## The soaks (the mod only, as WO-154 ran them; window not focused by this session)
+
+The WO's instruction ("the mod only, as WO-154 ran it"): `soak.py verdict --mod-only` records that the comparison with
+the game without the mod is not made. Both runs on the throwaway save the 0.45.0 soak used (`playline4/autosave111`), 10
+minutes each, the game as host with the relay and its agent, the WO-151 scene (three bystanders 3 m around the player,
+an AI fight beside them from minute 3, a new pair whenever one goes down or stalls), **the committed code** (`8aac11e`).
+The game window was never brought to the front by this session; it rendered at its full rate anyway (the DLL's own
+`FRAME` rows read 72 FPS in the sessions before).
+
+| | soak 1: the mod | soak 2: the mod + a joined partner through the fights |
+|---|---|---|
+| the first 2 minutes | 69.1 FPS | 68.6 FPS |
+| the last 2 minutes | 68.2 FPS (−1.3 %) | 67.0 FPS (−2.3 %) |
+| lowest row | 67.7 | 66.3 |
+| the stat stack | 0 in all 55 rows | 0 in all 58 rows |
+| `FAULT` lines | 0 | 0 |
+| fight pairs | 5 | 3 (the partner landed an attributed hit on each attacker every 15 s) |
+
+* **Lower than WO-154's 71–74 FPS and 0.65–0.67 ms of the DLL a frame — and not 0.45.1's doing.** The same scene with
+  the 0.45.0 binaries (the maintainer's install, today, same save, same run): **68.8 → 68.1 FPS** first/last 2 minutes
+  and the DLL's own cost 0.68–0.76 ms a frame, against 0.45.1's 69.1 → 68.2 FPS and 0.70–0.76 ms. The machine is
+  3–4 FPS slower today than on the WO-154 day (`tools/perf/runs/ab0450-same-day.*`, kept on the machine: that folder is git-ignored); the 0.45.1 change adds nothing
+  measurable. (The A/B run is not a gate; it is here because a 5 % lower number than the last soak is exactly what a
+  regression would look like.)
+* **The record** (`tools/perf/soak-record.json`): soak 2, PASS (the last 2 minutes within 10 % of the first 2, the stack 0
+  in every row, no `FAULT` line, enough rows, the code committed); `soak.py check` says `soak PASS for this code (0.45.1 …)`.
+  The run files are `tools/perf/runs/mod0451*.{json,csv,md}` (git-ignored, kept on the machine).
 
 @@BUILD@@
