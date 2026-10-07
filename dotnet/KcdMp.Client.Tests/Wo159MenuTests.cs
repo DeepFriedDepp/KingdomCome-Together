@@ -119,13 +119,15 @@ public class Wo159MenuTests
     public void The_host_is_connected_by_the_launcher_only_after_a_Start_Game_load_has_settled()
     {
         // the world Start Game loaded, "Gameplay started" at 100 s on the driver's clock
-        Assert.False(MenuTakeoverRule.HostAutoConnect(true, true, GameStage.World, 100, 105, true));    // still settling
-        Assert.True(MenuTakeoverRule.HostAutoConnect(true, true, GameStage.World, 100, 100 + ConnectGateRule.SettleS, true));
-        Assert.False(MenuTakeoverRule.HostAutoConnect(true, true, GameStage.Loading, 100, 200, true));  // a new load started
-        Assert.False(MenuTakeoverRule.HostAutoConnect(true, true, GameStage.Menu, double.NaN, 200, true));
-        Assert.False(MenuTakeoverRule.HostAutoConnect(true, false, GameStage.World, 100, 200, true));   // loaded some other way: the button
-        Assert.False(MenuTakeoverRule.HostAutoConnect(true, true, GameStage.World, 100, 200, false));   // connected already / launch reset
-        Assert.False(MenuTakeoverRule.HostAutoConnect(false, true, GameStage.World, 100, 200, true));   // a joiner connects on Join Game
+        Assert.False(MenuTakeoverRule.HostAutoConnect(true, true, GameStage.World, 100, 105, true, true));    // still settling
+        Assert.True(MenuTakeoverRule.HostAutoConnect(true, true, GameStage.World, 100, 100 + ConnectGateRule.SettleS, true, true));
+        Assert.False(MenuTakeoverRule.HostAutoConnect(true, true, GameStage.Loading, 100, 200, true, true));  // a new load started
+        Assert.False(MenuTakeoverRule.HostAutoConnect(true, true, GameStage.Menu, double.NaN, 200, true, true));
+        Assert.False(MenuTakeoverRule.HostAutoConnect(true, false, GameStage.World, 100, 200, true, true));   // loaded some other way: the button
+        Assert.False(MenuTakeoverRule.HostAutoConnect(true, true, GameStage.World, 100, 200, false, true));   // connected already / launch reset
+        Assert.False(MenuTakeoverRule.HostAutoConnect(false, true, GameStage.World, 100, 200, true, true));   // a joiner connects on Join Game
+        // live, 0.45.6: the settle passed on this clock a second before the CONNECT gate opened -- wait for the gate
+        Assert.False(MenuTakeoverRule.HostAutoConnect(true, true, GameStage.World, 100, 200, true, false));
     }
 
     [Fact]

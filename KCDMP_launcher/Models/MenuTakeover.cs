@@ -148,11 +148,13 @@ namespace KCDMP_launcher.Models
         /// <summary>
         /// The host's CONNECT, pressed by the launcher: only after a load the menu's Start Game asked for, once the game's
         /// own log says the world is loaded and has stayed loaded for <see cref="ConnectGateRule.SettleS"/> (the same rule
-        /// the CONNECT button waits for, WO-154), and only while the launch still waits for it. A save loaded any other way
-        /// keeps the button the player presses.
+        /// the CONNECT button waits for, WO-154), and only while the launch still waits for it -- AND only once that gate
+        /// itself is open (<paramref name="gateOpen"/>): the two read the same log on their own clocks, and a connect pressed
+        /// a moment before the gate opened was refused ("CONNECT not taken") and never tried again (0.45.6, live). A save
+        /// loaded any other way keeps the button the player presses.
         /// </summary>
-        public static bool HostAutoConnect(bool hosting, bool menuLoad, GameStage stage, double worldSinceS, double nowS, bool waitingForConnect) =>
-            hosting && menuLoad && waitingForConnect && stage == GameStage.World
+        public static bool HostAutoConnect(bool hosting, bool menuLoad, GameStage stage, double worldSinceS, double nowS, bool waitingForConnect, bool gateOpen) =>
+            hosting && menuLoad && waitingForConnect && gateOpen && stage == GameStage.World
             && !double.IsNaN(worldSinceS) && nowS - worldSinceS >= ConnectGateRule.SettleS;
 
         /// <summary>A line on the game's own screen (the HUD's info text), for what the player would otherwise only see in the launcher.</summary>

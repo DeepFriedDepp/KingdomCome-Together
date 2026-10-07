@@ -225,7 +225,7 @@ namespace KCDMP_launcher.Pages
 
                     // the host: CONNECT pressed by the launcher once the world Start Game loaded has settled (no Alt+Tab)
                     if (w159Takeover && !hostConnectTried && MenuTakeoverRule.HostAutoConnect(hosting, menuLoad, stage,
-                            follower?.State.WorldSinceS ?? double.NaN, now, launchStage == LaunchStage.WaitingForConnect))
+                            follower?.State.WorldSinceS ?? double.NaN, now, launchStage == LaunchStage.WaitingForConnect, ConnectEnabled))
                     {
                         hostConnectTried = true;
                         Log.Information("MP-W159 the world Start Game loaded has settled: CONNECT for the host");
@@ -274,7 +274,7 @@ namespace KCDMP_launcher.Pages
             catch (Exception ex) { Log.Warning("MP-W159 menu driver stopped: {Kind}: {Msg}", ex.GetType().Name, ex.Message); }
             try { await game.WaitForExitAsync(); } catch { }
             Log.Information("MP-W159 the game exited");
-            Wo159RemoveLogo();
+            await Wo159RemoveLogoAsync();
             string agent = ResolveAgainstLauncher(settings.AgentPath);
             if (await AgentHelper.RunAsync<W159UnstageData>(agent, "--w159 unstage", "W159", TimeSpan.FromSeconds(20)) is { } u && u.Lines.Count > 0)
                 Log.Information("MP-W159 start saves after the game: {Lines}", string.Join("; ", u.Lines));
@@ -305,11 +305,19 @@ namespace KCDMP_launcher.Pages
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { Log.Warning("MP-W159 our logo could not be placed: {Kind}", ex.GetType().Name); }
         }
 
-        private void Wo159RemoveLogo()
+        private async Task Wo159RemoveLogoAsync()
         {
             if (Wo159BrandTarget() is not string dst || !File.Exists(dst)) return;
-            try { File.Delete(dst); Log.Information("MP-W159 our logo taken out again (the game's own for a normal start)"); }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { Log.Warning("MP-W159 our logo could not be taken out: {Kind}", ex.GetType().Name); }
+            // the game can hold the pak for a moment after its process ended (0.45.6: IOException at the exit)
+            for (int attempt = 1; ; attempt++)
+            {
+                try { File.Delete(dst); Log.Information("MP-W159 our logo taken out again (the game's own for a normal start)"); return; }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    if (attempt >= 15) { Log.Warning("MP-W159 our logo could not be taken out: {Kind} (the next launch's exit or Setup removes it)", ex.GetType().Name); return; }
+                    await Task.Delay(1000);
+                }
+            }
         }
 
         /// <summary>The menu's load: the menu's video stopped first (WO-154's freeze), then the WO-124 load.</summary>
