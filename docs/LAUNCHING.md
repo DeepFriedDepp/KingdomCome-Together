@@ -18,6 +18,9 @@ launcher entirely and drive the pieces directly:
    `KcdMpServer.exe` (defaults to port 7778)
 2. **Each player** — launch KCD2 via **Modding Tools**, load a save. Confirm
    `[KCD2-MP] === MOD INIT ===` appears in `kcd.log`.
+   *(Stale since WO-159 for the launcher flow: a game the launcher starts shows Start Game / Join Game on its
+   main menu instead — see `docs/QUICKSTART.md` step 4 and `docs/WO-159-findings.md`. A game started by hand, as
+   here, keeps the game's own menu.)*
 3. **Each player** — inject the plugin into the running game. Since WO-157 the launcher does this itself
    (`dotnet\KcdMp.Setup\GameInjector.cs`) and no injector exe ships; for development, the
    `native\KCDMP_LauncherInjector` tool (built, never shipped):

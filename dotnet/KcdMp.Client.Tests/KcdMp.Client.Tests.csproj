@@ -41,6 +41,8 @@
     <Compile Include="..\..\KCDMP_launcher\Models\ConnectGate.cs" Link="Launcher\ConnectGate.cs" />
     <!-- WO-154: the mod menu's choices in a bug report, filtered. -->
     <Compile Include="..\..\KCDMP_launcher\Models\ModSettingsReport.cs" Link="Launcher\ModSettingsReport.cs" />
+    <!-- WO-159: the main menu's Start Game / Join Game (the model, the menu's choices, the joiner's words). -->
+    <Compile Include="..\..\KCDMP_launcher\Models\MenuTakeover.cs" Link="Launcher\MenuTakeover.cs" />
   </ItemGroup>
 
 </Project>

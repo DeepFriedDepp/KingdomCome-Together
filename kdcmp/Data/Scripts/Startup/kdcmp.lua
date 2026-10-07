@@ -22337,6 +22337,220 @@ do
     end
 end
 
+-- ===== WO-159: Start Game / Join Game on the main menu (docs/WO-159-findings.md) =====
+-- Only the launcher arms this: it calls KCD2MP_W159Model / KCD2MP_W159Tick through the game's console
+-- while its own game sits at the main menu. Nothing here runs by itself -- a game started any other way
+-- never has these called, so its menu is the game's own, untouched (no UI file of the game is replaced).
+--
+-- The menu is the game's own "Menu" element: ClearAll + PreparePage + AddBasicButton + ShowPage build a
+-- page, SetDisable greys an entry, AddConfirmation asks, and OnButton / OnConfirm come back here through
+-- UIAction.RegisterElementListener (all observed live, WO-159 Phase 0). Two engine facts shape it:
+--   * the game's own menu ignores an id it does not know (our MP_* entries are ours alone), but it rebuilds
+--     its own root page on Back AFTER our listener ran -- so a rebuild after a native page waits for the
+--     launcher's next tick (no Lua timer fires at the main menu: observed again);
+--   * the shipped entries keep their own ids, so Settings / Help / DLCs / Credits / Quit still work.
+-- The launcher acts on the "w159" events (load a save, a new adventure, join, cancel); Lua only draws.
+KCD2MP.w159 = { armed = false, listening = false, page = "root", depth = 0, dirty = true, model = nil, sig = "",
+    builds = 0, joinState = "idle", lastWhy = "" }
+
+KCD2MP_W159_HINT = "Use Start Game / Join Game while Kingdom Come: Together is running."
+KCD2MP_W159_ABOUT = "Kingdom Come: Together -- unofficial, not affiliated with or endorsed by Warhorse Studios or PLAION."
+-- the game's own pages under the root; Back from one of them returns one level (depth 0 = the root again)
+KCD2MP_W159_SUBPAGES = { Settings = true, GameSettings = true, GraphicSettings = true, AdvancedGraphics = true,
+    SoundSettings = true, Controls = true, Keybinds = true, HelpOverlays = true, DLC = true }
+
+function KCD2MP_W159Call(...)
+    local ok = pcall(UIAction.CallFunction, "Menu", -1, ...)
+    return ok
+end
+
+-- The main menu only: no player entity and no load running (the WO-124 rule).
+function KCD2MP_W159AtMenu()
+    if player ~= nil then return false end
+    local okL, loading = pcall(function() return Game.IsLoadingEngineSaveGame and Game.IsLoadingEngineSaveGame() end)
+    if okL and loading == true then return false end
+    return true
+end
+
+-- The launcher's model: { sig, role = "host"|"join", saves = { {pl, name, label}, ... }, hidden, newadv = {pl, name}|nil,
+-- newwhy, join = { state = "idle"|"waiting"|"joining", bring = bool, msg } }. A new sig redraws the page.
+function KCD2MP_W159Model(t)
+    local w = KCD2MP.w159
+    if type(t) ~= "table" then return false end
+    local sig = tostring(t.sig or "")
+    w.model = t
+    if sig ~= w.sig then
+        w.sig = sig
+        if type(t.join) == "table" and t.join.state then w.joinState = tostring(t.join.state) end
+        w.dirty = true
+        mp_log(string.format("WO159-MENU model role=%s saves=%d newadv=%s join=%s", tostring(t.role),
+            type(t.saves) == "table" and #t.saves or 0, t.newadv and "yes" or "no", w.joinState))
+    end
+    return true
+end
+
+-- The pages: lists of { id, text, tip, off, cont } (cont 1 = the bottom container, Quit / Back).
+function KCD2MP_W159Page(w)
+    local m = w.model or {}
+    local role = m.role == "join" and "join" or "host"
+    local b = {}
+    local function add(id, text, tip, off, cont) b[#b + 1] = { id = id, text = text, tip = tip or "", off = off == true, cont = cont or 0 } end
+    if w.page == "host" then
+        local n = 0
+        for _, s in ipairs(type(m.saves) == "table" and m.saves or {}) do
+            n = n + 1
+            if n > 5 then break end
+            add("MP_Load_" .. n, tostring(s.label), "Load this world and host it.")
+        end
+        if m.newadv then add("MP_NewAdv", "New adventure", "A new world in a new save slot: you start as Henry, after the prologue.")
+        else add("MP_NewAdv", "New adventure", tostring(m.newwhy or "No new adventure is available."), true) end
+        if m.hidden and m.hidden ~= "" then add("MP_Hidden", "Some saves are not shown", tostring(m.hidden), true) end
+        add("MP_Back", "@ui_back", "", false, 1)
+        return b, "Start Game", (n > 0 and "MP_Load_1" or "MP_NewAdv")
+    elseif w.page == "join" then
+        local j = type(m.join) == "table" and m.join or {}
+        local st = w.joinState
+        if st == "waiting" then
+            add("MP_JoinWait", "Waiting for the host...", "You join as soon as your host is in their world.", true)
+            add("MP_JoinCancel", "Cancel", "Stay at the menu; nothing is joined.")
+            add("MP_Back", "@ui_back", "", false, 1)
+            return b, "Join Game", "MP_JoinCancel"
+        elseif st == "joining" then
+            add("MP_JoinWait", "Joining your host...", "Your host's world is on its way.", true)
+            return b, "Join Game", "MP_JoinWait"
+        end
+        add("MP_JoinFresh", "Join with a new character", "A new Henry, straight after the prologue, in your host's world.")
+        if j.bring then add("MP_JoinBring", "Bring my character", "Your own Henry from your newest save of this game.")
+        else add("MP_JoinBring", "Bring my character", tostring(j.msg or "You have no save of your own to bring."), true) end
+        add("MP_Back", "@ui_back", "", false, 1)
+        return b, "Join Game", (j.bring and "MP_JoinBring" or "MP_JoinFresh")
+    end
+    add("MP_StartGame", "Start Game", role == "host" and KCD2MP_W159_ABOUT or "You are joining: use Join Game.", role ~= "host")
+    add("MP_JoinGame", "Join Game", role == "join" and KCD2MP_W159_ABOUT or "You are hosting: your partner uses Join Game.", role ~= "join")
+    add("Continue", "@ui_Continue", KCD2MP_W159_HINT, true)
+    add("NewGame", "@ui_NewGame", KCD2MP_W159_HINT, true)
+    add("LoadGame", "@ui_LoadGame", KCD2MP_W159_HINT, true)
+    add("Settings", "@ui_Settings")
+    add("HelpOverlays", "@ui_FAQ")
+    add("DLC", "@ui_DLCs")
+    add("Credits", "@ui_Credits")
+    add("Exit", "@ui_Exit", "", false, 1)
+    return b, "", (role == "join" and "MP_JoinGame" or "MP_StartGame")
+end
+
+function KCD2MP_W159Build()
+    local w = KCD2MP.w159
+    local list, head, sel = KCD2MP_W159Page(w)
+    KCD2MP_W159Call("ClearAll")
+    KCD2MP_W159Call("PreparePage", 1500, w.page == "root" and 325 or 360, 8, head, w.page == "root" and 196 or 248)
+    for _, e in ipairs(list) do KCD2MP_W159Call("AddBasicButton", e.id, e.cont, e.text, e.tip, e.off) end
+    KCD2MP_W159Call("ShowPage")
+    if sel then KCD2MP_W159Call("SelectButton", sel, 0) end
+    w.dirty = false
+    w.builds = w.builds + 1
+    mp_log(string.format("WO159-MENU page=%s entries=%d (build %d)", w.page, #list, w.builds))
+end
+
+function KCD2MP_W159Emit(what)
+    mp_log("WO159-MENU chose " .. tostring(what))
+    KCD2MP_EmitEvent("w159", what)
+end
+
+-- The game's own menu events. Our MP_* entries are acted on here; the game's own only move the page depth.
+function KCD2MP.w159.OnMenu(self, el, inst, ev, args)
+    local w = KCD2MP.w159
+    if not w.armed then return end
+    local a = type(args) == "table" and args or {}
+    local id = tostring(a[0] or a[1] or "")
+    if ev == "OnConfirm" then
+        local res = tonumber(a[1]) or -1
+        if tostring(a[0]) == "MP_NewAdv" then
+            if res == 0 then KCD2MP_W159Emit("newadv") end
+            return
+        end
+        return
+    end
+    if ev == "OnCreditsHide" or ev == "OnHelpOverlayClose" then
+        if w.depth == 0 then w.dirty = true end
+        return
+    end
+    if ev ~= "OnButton" then return end
+    if id == "Back" then
+        -- the game's own Back: from one of its pages (one level up), or Esc on ours (our root again)
+        if w.depth > 0 then w.depth = w.depth - 1 end
+        if w.depth == 0 then w.page = "root"; w.dirty = true end
+        return
+    end
+    if KCD2MP_W159_SUBPAGES[id] then w.depth = w.depth + 1; return end
+    if id:sub(1, 3) ~= "MP_" then return end
+    local m = w.model or {}
+    if id == "MP_StartGame" then w.page = "host"; KCD2MP_W159Build()
+    elseif id == "MP_JoinGame" then w.page = "join"; KCD2MP_W159Build()
+    elseif id == "MP_Back" then
+        if w.page == "join" and w.joinState == "waiting" then w.joinState = "idle"; KCD2MP_W159Emit("cancel") end
+        w.page = "root"; KCD2MP_W159Build()
+    elseif id:match("^MP_Load_%d+$") then
+        local s = type(m.saves) == "table" and m.saves[tonumber(id:sub(9))] or nil
+        if s then KCD2MP_W159Emit(string.format("load %d %s", tonumber(s.pl) or -1, tostring(s.name))) end
+    elseif id == "MP_NewAdv" then
+        if m.newadv then
+            KCD2MP_W159Call("AddConfirmation", "MP_NewAdv",
+                "Start a new adventure in a new save slot? You start as Henry, after the prologue.", "Start", "@ui_back", 0, 1)
+        end
+    elseif id == "MP_JoinFresh" or id == "MP_JoinBring" then
+        w.joinState = "waiting"
+        KCD2MP_W159Emit(id == "MP_JoinFresh" and "join fresh" or "join bring")
+        KCD2MP_W159Build()
+    elseif id == "MP_JoinCancel" then
+        w.joinState = "idle"
+        KCD2MP_W159Emit("cancel")
+        KCD2MP_W159Build()
+    end
+end
+
+-- The launcher's tick (about four times a second while its game is at the main menu): arms once, then
+-- redraws our page when it is due -- never over one of the game's own pages, never outside the menu.
+function KCD2MP_W159Tick()
+    local w = KCD2MP.w159
+    if not KCD2MP_W159AtMenu() then
+        if w.armed then mp_log("WO159-MENU not at the main menu: the menu is left alone") end
+        w.armed = false
+        w.dirty = true
+        return "away"
+    end
+    if not w.listening then
+        for _, ev in ipairs({ "OnButton", "OnConfirm", "OnCreditsHide", "OnHelpOverlayClose" }) do
+            pcall(UIAction.RegisterElementListener, KCD2MP.w159, "Menu", -1, ev, "OnMenu")
+        end
+        w.listening = true
+    end
+    if not w.armed then
+        w.armed = true
+        w.page = "root"
+        w.depth = 0
+        w.dirty = true
+        mp_log("WO159-MENU armed by the launcher: Start Game / Join Game")
+    end
+    if w.dirty and w.depth == 0 then KCD2MP_W159Build() end
+    return w.page
+end
+
+-- Before a load the launcher starts: the menu is the game's again (nothing is redrawn during the load).
+function KCD2MP_W159Disarm(why)
+    local w = KCD2MP.w159
+    if w.armed then mp_log("WO159-MENU disarmed (" .. tostring(why) .. ")") end
+    w.armed = false
+    w.dirty = true
+    return true
+end
+
+-- The prologue recap (Phase 0: the game's wh_ui_PlayMovie takes a video at the main menu but draws nothing
+-- there, and it stops the menu's own video): not available. Kept as the one place a recap would start.
+function KCD2MP_W159Recap()
+    mp_log("WO159-MENU the prologue recap is not available at the main menu (skip only)")
+    return false
+end
+
 -- ===== Register Console Commands =====
 
 local ok, err = pcall(function()

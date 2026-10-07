@@ -222,6 +222,15 @@ namespace KCDMP_launcher.Models
         // false = the button is always enabled, as before 0.45.0.
         public bool ConnectGate { get; set; } = true;
 
+        // WO-159: a game this launcher starts shows Start Game / Join Game on its main menu (Continue, New Game
+        // and Load Game greyed, the Modding Tools debug entries gone). A game started any other way keeps the
+        // game's own menu. false = the game's own menu here too (the CONNECT flow as before).
+        public bool MenuTakeover { get; set; } = true;
+
+        // WO-159: the bundled start save (a folder holding one save, or the file) a host's New adventure starts
+        // from. Relative = next to the launcher, where Setup puts it.
+        public string StartSavePath { get; set; } = "start-save";
+
         // WO-154: Host finds the relay's ports taken by this install's own relay (a
         // launcher closed with the window's X leaves it running): the same release with
         // the same settings is used again, any other is stopped and replaced; another

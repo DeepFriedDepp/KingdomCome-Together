@@ -137,6 +137,8 @@ namespace KCDMP_launcher.Models
         private readonly Decoder _utf8 = Encoding.UTF8.GetDecoder();
 
         public GameLogStage State { get; private set; } = new();
+        /// <summary>WO-159: every line read (after the stage has seen it), for the menu's choices.</summary>
+        public Action<string>? OnLine { get; set; }
         /// <summary>This game's log has been found and is being read.</summary>
         public bool Reading => _ours;
 
@@ -184,7 +186,7 @@ namespace KCDMP_launcher.Models
                         if (chars[i] == '\n')
                         {
                             string line = _partial.ToString().TrimEnd('\r');
-                            if (line != _tailFed) State.Feed(line, nowS);
+                            if (line != _tailFed) { State.Feed(line, nowS); OnLine?.Invoke(line); }
                             _tailFed = null;
                             _partial.Clear();
                         }
@@ -198,6 +200,7 @@ namespace KCDMP_launcher.Models
                 if (tail.Length > 0 && tail != _tailFed)
                 {
                     State.Feed(tail, nowS);
+                    OnLine?.Invoke(tail);
                     _tailFed = tail;
                 }
             }

@@ -128,6 +128,23 @@ Copy-Item $nativeDll $OutDir -Force
 # An earlier publish into this folder left the injector: it must not ride along.
 Remove-Item (Join-Path $OutDir "KCDMP_LauncherInjector.exe") -Force -ErrorAction SilentlyContinue
 
+# --- WO-159: the bundled start save (a host's New adventure on the main menu). The maintainer supplies
+#     assets\start-save\ (one save); it ships in start-save\ beside the launcher (AppSettings.StartSavePath), behind
+#     the same Setup and its install manifest. It must pass tools\Validate-StartSave.ps1 (a Modding Tools Henry after
+#     the prologue, no partner or mod data, no account or machine name). None supplied: none ships, and the menu
+#     says "No start save is installed". ---
+$startSaves = @(Get-ChildItem (Join-Path $root "assets\start-save") -Filter *.whs -ErrorAction SilentlyContinue)
+if ($startSaves.Count -gt 1) { throw "assets\start-save holds $($startSaves.Count) saves (one is expected)" }
+if ($startSaves.Count -eq 1) {
+    & powershell -ExecutionPolicy Bypass -File (Join-Path $root "tools\Validate-StartSave.ps1") -Path $startSaves[0].FullName -Agent (Join-Path $clientPublish "KcdMpClient.exe")
+    if ($LASTEXITCODE -ne 0) { throw "the start save in assets\start-save does not pass tools\Validate-StartSave.ps1" }
+    New-Item -ItemType Directory -Force (Join-Path $OutDir "start-save") | Out-Null
+    Copy-Item $startSaves[0].FullName (Join-Path $OutDir "start-save") -Force
+    Write-Output "Start save: $($startSaves[0].Name) (New adventure)"
+} else {
+    Write-Output "No start save in assets\start-save: this build ships none (the menu's New adventure says so)"
+}
+
 Write-Output "`nRelease assembled at: $OutDir"
 Write-Output "Contents:"
 Get-ChildItem $OutDir -File | Select-Object Name, @{N='KB';E={[math]::Round($_.Length/1KB,1)}} | Format-Table

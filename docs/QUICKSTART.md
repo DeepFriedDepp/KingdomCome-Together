@@ -45,19 +45,36 @@ When every step shows ✅ the list says **Ready!** Click **PLAY**.
 
 ## 4. Host or Join
 
-- **Host:** click **HOST GAME**, then share the address the launcher shows. Click
-  **PLAY**, load one of your own saves in the game, and click **CONNECT** when the
-  launcher says the game is ready.
-- **Join:** click **ADD SERVER**, enter your host's address, then **JOIN** (or use
-  **JOIN THROUGH STEAM** with your host's code). Click **PLAY**, stay at the game's
-  **main menu**, and click **CONNECT**: your host's world comes to you, and your own
-  character lands beside the host.
+When the launcher starts the game, the game's main menu shows **Start Game** and **Join
+Game** at the top. Continue, New Game and Load Game are greyed out while Kingdom Come:
+Together runs them (start the game from Steam to play alone as usual).
 
-**Which save?** A save is for the **host**: one of your own Modding Tools saves (a save
-past the tutorial is the better start; the tutorial is the roughest part to play
-together). The **partner** needs no save of that world: they bring their character from
-their own Modding Tools save of another world, or click **Join with a new character**
-when the launcher offers it (no save of their own yet).
+- **Host:** click **HOST GAME**, then share the address the launcher shows. Click
+  **PLAY**. In the game, press **Start Game**:
+  - one of **your worlds** (your own Modding Tools saves, one line per save slot, newest
+    first) — it loads where you left it; or
+  - **New adventure** — a new world that starts as Henry **right after the prologue** (you
+    skip it). It goes into an empty save slot and saves normally from then on; each new
+    adventure is its own world.
+
+  Click **CONNECT** in the launcher when it says the game is ready (you can see and move
+  your character).
+- **Join:** click **ADD SERVER**, enter your host's address, then **JOIN** (or use
+  **JOIN THROUGH STEAM** with your host's code). Click **PLAY**. In the game, press
+  **Join Game**, then **Join with a new character** (or **Bring my character** if you have a
+  Modding Tools save of your own). If your host isn't in their world yet, the menu says
+  **Waiting for the host…** and you join as soon as they are (**Cancel** stops waiting).
+  Your host's world comes to you, and your character lands beside the host.
+
+**Which save?** You don't need one. The **host** picks one of their worlds or a New
+adventure; the **partner** never needs a save of the host's world. Saves the menu does not
+show (from the regular game, copies of a host's world you joined, still in the prologue)
+are named under the list.
+
+**The game asks you to accept two pages first?** Kingdom Come: Deliverance II shows its
+licence and telemetry pages the first time it starts. If you haven't accepted them yet, the
+launcher says so: start the game once from Steam (the Modding Tools entry), accept them,
+close it, and press Host or Join again.
 
 Same house: that's all. Different houses: see [NETWORKING.md](NETWORKING.md).
 

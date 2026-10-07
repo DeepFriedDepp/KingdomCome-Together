@@ -15,6 +15,16 @@ Only builds from this repository are Kingdom Come: Together. Other GitHub reposi
 Kingdom Come: Together is unofficial and free, made by its contributors and maintained by DeepFriedDepp. It is not affiliated with or endorsed by Warhorse Studios or PLAION. Kingdom Come: Deliverance II and everything in it belongs to Warhorse Studios and PLAION. Credits and lineage: https://github.com/DeepFriedDepp/KingdomCome-Together/blob/main/AUTHORS
 ```
 
+## How to start a game together (WO-159; for the how-to / FAQ channel)
+
+```
+How to play together:
+1. Both: open the Kingdom Come: Together launcher.
+2. Host: HOST GAME, share the address (or the Steam code), PLAY. On the game's main menu press Start Game: pick one of your worlds, or New adventure (a fresh world that starts as Henry right after the prologue — no prologue to replay). Click CONNECT in the launcher once you can move.
+3. Partner: JOIN with the host's address (or JOIN THROUGH STEAM), PLAY. On the main menu press Join Game, then Join with a new character (or Bring my character). Pressed too early? It says "Waiting for the host…" and joins by itself when they're ready.
+You don't need anyone's save file any more. First time ever starting the game? Start it once from Steam and accept its two first-run pages, then use the launcher.
+```
+
 ## Version 0.42.7 (WO-148)
 
 ```

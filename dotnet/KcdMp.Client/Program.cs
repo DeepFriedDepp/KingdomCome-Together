@@ -18,6 +18,11 @@ if (args.Contains("--save-tool"))
 if (args.Contains("--keys-pak"))
     return KeybindPak.RunCli(args, Console.Out);
 
+// --w159 (WO-159): the launcher's main-menu helpers (the host's worlds, the start save staged and taken back,
+// the start-save check). Before the config load, like --save-tool: a helper run never writes the agent's files.
+if (args.Contains("--w159"))
+    return Wo159.RunCli(args, Console.Out);
+
 // Settings live in kcdmp-client.json next to the executable; it is created with
 // defaults on first run. Everything can still be overridden on the command line:
 //   named:      --host <ip> --port <n> --name <s> --game-api <url> [--no-voice]

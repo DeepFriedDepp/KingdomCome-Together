@@ -490,6 +490,10 @@ namespace KCDMP_launcher.Pages
             if (!await PreLaunchFilesOkAsync(GameRootOf(settings.GamePath), dllFullPath, agentPath, Path.ChangeExtension(agentPath, ".dll")))
                 return;
 
+            // WO-159: the first-run pages (read only), the host's start save staged, the player's worlds listed
+            if (!await Wo159BeforeLaunchAsync(hostedRelayProcess != null && !hostedRelayProcess.HasExited))
+                return;
+
             try
             {
                 var gameStartInfo = new ProcessStartInfo
@@ -520,6 +524,7 @@ namespace KCDMP_launcher.Pages
                 launchStatusMessage = "Waiting for the game to start...";
                 // WO-154: CONNECT waits until it can work (the host's world, the joiner's host), with the reason shown.
                 StartConnectGate(hostedRelayProcess != null && !hostedRelayProcess.HasExited, server, gameStartLocal);
+                Wo159StartDriver(gameProcess, hostedRelayProcess != null && !hostedRelayProcess.HasExited, gameStartLocal);   // WO-159
                 StateHasChanged();
 
                 if (!await WaitForInjectableAsync(gameProcess, settings.InjectDelaySeconds))
@@ -539,8 +544,9 @@ namespace KCDMP_launcher.Pages
                 // in a separate world -- the field trap); only the host loads a save first.
                 bool hostingNow = hostedRelayProcess != null && !hostedRelayProcess.HasExited;
                 launchStatusMessage = hostingNow
-                    ? "Load into your save, then click CONNECT once you can see and move your character."
-                    : JoinerReadyText;
+                    ? (w159Takeover ? "Press Start Game on the game's main menu. Click CONNECT once you can see and move your character."
+                                    : "Load into your save, then click CONNECT once you can see and move your character.")
+                    : (w159Takeover ? "Press Join Game on the game's main menu. You join as soon as your host is ready." : JoinerReadyText);
                 StateHasChanged();
             }
             catch (LaunchBlockedException lb)
@@ -818,6 +824,7 @@ namespace KCDMP_launcher.Pages
             versionPollCts?.Cancel();
             versionPollCts = null;
             StopConnectGate();   // WO-154
+            Wo159OnLaunchReset();   // WO-159: the game's own menu again
             connectGateOpen = true;
             connectGateReason = "";
             StateHasChanged();
