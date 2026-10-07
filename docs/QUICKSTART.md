@@ -57,14 +57,16 @@ Together runs them (start the game from Steam to play alone as usual).
     skip it). It goes into an empty save slot and saves normally from then on; each new
     adventure is its own world.
 
-  Click **CONNECT** in the launcher when it says the game is ready (you can see and move
-  your character).
+  You don't need to switch back to the launcher: once your world has loaded and settled
+  (about 10 seconds), the launcher connects by itself. If it can't, the game says so on
+  screen and the launcher window says why.
 - **Join:** click **ADD SERVER**, enter your host's address, then **JOIN** (or use
   **JOIN THROUGH STEAM** with your host's code). Click **PLAY**. In the game, press
   **Join Game**, then **Join with a new character** (or **Bring my character** if you have a
   Modding Tools save of your own). If your host isn't in their world yet, the menu says
   **Waiting for the host…** and you join as soon as they are (**Cancel** stops waiting).
-  Your host's world comes to you, and your character lands beside the host.
+  Your host's world comes to you, and your character lands beside the host. No CONNECT
+  click on either side.
 
 **Which save?** You don't need one. The **host** picks one of their worlds or a New
 adventure; the **partner** never needs a save of the host's world. Saves the menu does not

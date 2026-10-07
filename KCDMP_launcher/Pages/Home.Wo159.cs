@@ -133,7 +133,7 @@ namespace KCDMP_launcher.Pages
             double nextFind = 0;
             long lastSeq = -1;
             string pushed = "";
-            bool loadIssued = false, armedLogged = false, choicePosted = false;
+            bool loadIssued = false, armedLogged = false, choicePosted = false, menuLoad = false, hostConnectTried = false;
             GameStage lastStage = GameStage.Starting;
             DateTime connectedAt = DateTime.MinValue;
             Log.Information("MP-W159 menu driver on ({Role})", hosting ? "host" : "joiner");
@@ -174,9 +174,11 @@ namespace KCDMP_launcher.Pages
                         {
                             case "load" when hosting && !loadIssued:
                                 loadIssued = await Wo159LoadAsync(console, c.Playline, c.Name, false);
+                                menuLoad |= loadIssued;
                                 break;
                             case "newadv" when hosting && !loadIssued && w159Saves?.Staged is { } st:
                                 loadIssued = await Wo159LoadAsync(console, st.Pl, st.Name, true);
+                                menuLoad |= loadIssued;
                                 break;
                             case "join" when !hosting:
                                 w159JoinChoice = c.Join;
@@ -189,12 +191,23 @@ namespace KCDMP_launcher.Pages
                         }
                     }
 
+                    // the host: CONNECT pressed by the launcher once the world Start Game loaded has settled (no Alt+Tab)
+                    if (w159Takeover && !hostConnectTried && MenuTakeoverRule.HostAutoConnect(hosting, menuLoad, stage,
+                            follower?.State.WorldSinceS ?? double.NaN, now, launchStage == LaunchStage.WaitingForConnect))
+                    {
+                        hostConnectTried = true;
+                        Log.Information("MP-W159 the world Start Game loaded has settled: CONNECT for the host");
+                        await InvokeAsync(ConnectToGame);
+                        if (launchStage != LaunchStage.Connected) await console.LuaAsync(MenuTakeoverRule.HudLine(MenuTakeoverRule.ConnectFailedText));
+                    }
+
                     // the joiner: CONNECT as soon as the host is ready (the WO-154 gate), then the first-join answer
                     if (!hosting && w159Takeover && w159JoinState == "waiting" && launchStage == LaunchStage.WaitingForConnect && ConnectEnabled)
                     {
                         w159JoinState = "joining";
                         Log.Information("MP-W159 the host is ready: CONNECT for the menu's Join ({Choice})", w159JoinChoice);
                         await InvokeAsync(ConnectToGame);
+                        if (launchStage != LaunchStage.Connected) await console.LuaAsync(MenuTakeoverRule.HudLine(MenuTakeoverRule.ConnectFailedText));
                         connectedAt = DateTime.UtcNow;
                     }
                     if (!hosting && w159JoinState == "joining" && !choicePosted && launchStage == LaunchStage.Connected && w159JoinChoice.Length > 0)

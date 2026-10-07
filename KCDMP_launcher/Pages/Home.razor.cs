@@ -544,7 +544,7 @@ namespace KCDMP_launcher.Pages
                 // in a separate world -- the field trap); only the host loads a save first.
                 bool hostingNow = hostedRelayProcess != null && !hostedRelayProcess.HasExited;
                 launchStatusMessage = hostingNow
-                    ? (w159Takeover ? "Press Start Game on the game's main menu. Click CONNECT once you can see and move your character."
+                    ? (w159Takeover ? "Press Start Game on the game's main menu. The launcher connects by itself once your world has loaded."
                                     : "Load into your save, then click CONNECT once you can see and move your character.")
                     : (w159Takeover ? "Press Join Game on the game's main menu. You join as soon as your host is ready." : JoinerReadyText);
                 StateHasChanged();

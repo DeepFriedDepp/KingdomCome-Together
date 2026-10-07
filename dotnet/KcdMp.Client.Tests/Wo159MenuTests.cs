@@ -86,6 +86,27 @@ public class Wo159MenuTests
     }
 
     [Fact]
+    public void The_host_is_connected_by_the_launcher_only_after_a_Start_Game_load_has_settled()
+    {
+        // the world Start Game loaded, "Gameplay started" at 100 s on the driver's clock
+        Assert.False(MenuTakeoverRule.HostAutoConnect(true, true, GameStage.World, 100, 105, true));    // still settling
+        Assert.True(MenuTakeoverRule.HostAutoConnect(true, true, GameStage.World, 100, 100 + ConnectGateRule.SettleS, true));
+        Assert.False(MenuTakeoverRule.HostAutoConnect(true, true, GameStage.Loading, 100, 200, true));  // a new load started
+        Assert.False(MenuTakeoverRule.HostAutoConnect(true, true, GameStage.Menu, double.NaN, 200, true));
+        Assert.False(MenuTakeoverRule.HostAutoConnect(true, false, GameStage.World, 100, 200, true));   // loaded some other way: the button
+        Assert.False(MenuTakeoverRule.HostAutoConnect(true, true, GameStage.World, 100, 200, false));   // connected already / launch reset
+        Assert.False(MenuTakeoverRule.HostAutoConnect(false, true, GameStage.World, 100, 200, true));   // a joiner connects on Join Game
+    }
+
+    [Fact]
+    public void A_failed_connect_is_said_on_the_games_own_screen()
+    {
+        string l = MenuTakeoverRule.HudLine(MenuTakeoverRule.ConnectFailedText);
+        Assert.StartsWith("pcall(function() UIAction.CallFunction('hud', -1, 'ShowInfoText', \"Kingdom Come: Together could not connect.", l);
+        Assert.True(Uri.EscapeDataString("#" + l).Length <= MenuTakeoverRule.MaxEncoded);
+    }
+
+    [Fact]
     public void A_missing_settings_key_means_the_menu_is_on()
     {
         var s = System.Text.Json.JsonSerializer.Deserialize<AppSettings>("{\"GamePath\":\"x\"}")!;

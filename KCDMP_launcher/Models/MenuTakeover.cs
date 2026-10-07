@@ -103,6 +103,23 @@ namespace KCDMP_launcher.Models
 
         public const string TickCall = "if KCD2MP_W159Tick then KCD2MP_W159Tick() end";
 
+        /// <summary>
+        /// The host's CONNECT, pressed by the launcher: only after a load the menu's Start Game asked for, once the game's
+        /// own log says the world is loaded and has stayed loaded for <see cref="ConnectGateRule.SettleS"/> (the same rule
+        /// the CONNECT button waits for, WO-154), and only while the launch still waits for it. A save loaded any other way
+        /// keeps the button the player presses.
+        /// </summary>
+        public static bool HostAutoConnect(bool hosting, bool menuLoad, GameStage stage, double worldSinceS, double nowS, bool waitingForConnect) =>
+            hosting && menuLoad && waitingForConnect && stage == GameStage.World
+            && !double.IsNaN(worldSinceS) && nowS - worldSinceS >= ConnectGateRule.SettleS;
+
+        /// <summary>A line on the game's own screen (the HUD's info text), for what the player would otherwise only see in the launcher.</summary>
+        public static string HudLine(string text) =>
+            "pcall(function() UIAction.CallFunction('hud', -1, 'ShowInfoText', " + Lua(text) + ", 10, 15000, true) end)";
+
+        public const string ConnectFailedText =
+            "Kingdom Come: Together could not connect. Switch to the launcher window: it says why and what to do.";
+
         /// <summary>A load from the menu (the WO-124 call, after the menu's video is stopped: WO-154's freeze).</summary>
         public static string LoadCall(int playline, string name) =>
             "if KCD2MP_W159Disarm then KCD2MP_W159Disarm(\"load\") end; if KCD2MP_Wo124LoadGame then KCD2MP_Wo124LoadGame(" +

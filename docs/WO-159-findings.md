@@ -132,7 +132,13 @@ recap would start is the stub `KCD2MP_W159Recap()` (returns false, logged).
    host's world is known.
 5. **Join Game connects by itself** when the host is ready (the WO-154 gate opens), then sends the choice to the agent's
    existing `/join-choice`. No timeout while waiting; Cancel or our Back stops waiting.
-6. **The host's CONNECT stays manual** (the WO-154 gate), as the WO says.
+6. **Nobody clicks CONNECT** (changed at the maintainer's word after the first commit: the WO's "Connect becomes
+   available" left the host an Alt+Tab). The host's is pressed by the launcher once the world Start Game loaded has
+   settled: the WO-154 gate's own rule ("Gameplay started", then 10 s with no new load), only after a load the menu
+   asked for, at most once per launch. A save loaded any other way keeps the button. A connect that fails also puts a
+   line on the game's own screen (the HUD's info text), since nobody is looking at the launcher then. The joiner's
+   connects on Join Game once the host is ready, as before. **[unit]**; **[not tested]** live (the CONNECT step loads
+   the DLL and starts the agent: the launcher's window was not driven).
 7. **The first-run check stops the launch** when the pages are missing or older than the known accepted version (2): a
    page under a menu this launcher redraws could be wiped by `ClearAll`. No profile determinable: logged, not checked.
    Nothing is ever written.
