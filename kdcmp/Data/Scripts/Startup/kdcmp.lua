@@ -20844,7 +20844,10 @@ KCD2MP.w151.caughtUp = (KCD2MP.w151.caughtUp == nil) and true or KCD2MP.w151.cau
 KCD2MP.w151.whistleStats = KCD2MP.w151.whistleStats or { sent = 0, played = 0, noAvatar = 0, failed = 0 }
 KCD2MP.w151.sceneHeld = KCD2MP.w151.sceneHeld or {}
 KCD2MP.w151.sceneStats = KCD2MP.w151.sceneStats or { resumes = 0, copies = 0, releases = 0, expired = 0 }
-KCD2MP.w151.doorStats = KCD2MP.w151.doorStats or { sent = 0, asks = 0, applied = 0, askApplied = 0, unnamed = 0, notFound = 0, deferred = 0 }
+KCD2MP.w151.doorStats = KCD2MP.w151.doorStats or { sent = 0, asks = 0, applied = 0, askApplied = 0, unnamed = 0, notFound = 0, deferred = 0,
+    ownUnlocks = 0, privacySkipped = 0 }
+-- a joiner's unlock counts as his lockpick only this long after he started picking that lock (the minigame)
+KCD2MP_W151_PICK_WINDOW_S = 300
 KCD2MP.w151.crimeStats = KCD2MP.w151.crimeStats or { raised = 0, own = 0, forgets = 0, forgetNpcs = 0, resolved = 0 }
 KCD2MP.w151.rideStats = KCD2MP.w151.rideStats or { mountStarts = 0, avatarTakes = 0, avatarReturns = 0, parksRefused = 0, freezesRefused = 0, samplesDropped = 0 }
 do
@@ -21369,11 +21372,49 @@ do
                 local r = orig(self, ...)
                 local role = doorRole()
                 if l0 and role == "host" then pcall(KCD2MP_W151DoorChanged, self, "unlocked")
-                -- a joiner's unlock outside his own use and outside an apply: the lockpick minigame's success
-                elseif l0 and role == "joiner" and not W.doorApplying and not W.doorInUse then pcall(KCD2MP_W151DoorAskLocal, self, true, "unlocked here") end
+                -- a joiner's unlock outside his own use and outside an apply: the lockpick minigame's success -- only
+                -- right after he started picking this lock. Any other unlock here is this copy's own (its owners'
+                -- privacy, live 0.45.8: two doors of one house "unlocked here" every half minute, each applied in the
+                -- host's world as an unlock-and-close)
+                elseif l0 and role == "joiner" and not W.doorApplying and not W.doorInUse then
+                    if self.w151PickAt and (os.clock() - self.w151PickAt) < KCD2MP_W151_PICK_WINDOW_S then
+                        self.w151PickAt = nil
+                        pcall(KCD2MP_W151DoorAskLocal, self, true, "lockpicked here")
+                    else
+                        W.doorStats.ownUnlocks = (W.doorStats.ownUnlocks or 0) + 1
+                    end
+                end
                 return r
             end
             AnimDoor.Unlock = W.doorUnlockWrap
+        end
+        -- Joiner: the lockpick minigame starts here (the action reads AnimDoor.Lockpick when its prompt is built)
+        if type(AnimDoor.Lockpick) == "function" and AnimDoor.Lockpick ~= W.doorPickWrap then
+            local orig = AnimDoor.Lockpick
+            W.doorPickWrap = function(self, user, ...)
+                if player and user and user.id == player.id then self.w151PickAt = os.clock() end
+                return orig(self, user, ...)
+            end
+            AnimDoor.Lockpick = W.doorPickWrap
+        end
+        -- Joiner: the engine locks a building's doors when its area turns private and unlocks them when it opens
+        -- (SetLockedDueToPrivate, called by no script). On a joiner the owners are paused copies whose states never
+        -- settle, so his copy of the town flips between private and open: a lock there also SHUT a door the host
+        -- had opened (Lock closes an open door; live 0.45.8: open for the host, shut for the joiner, and walking
+        -- in raised his game's trespass). The host's world owns every door's lock: here it only notes the flag.
+        if type(AnimDoor.SetLockedDueToPrivate) == "function" and AnimDoor.SetLockedDueToPrivate ~= W.doorPrivateWrap then
+            local orig = AnimDoor.SetLockedDueToPrivate
+            W.doorPrivateWrap = function(self, isPrivate, ...)
+                if doorRole() ~= "joiner" then return orig(self, isPrivate, ...) end
+                self.lockedDueToPrivate = isPrivate
+                W.doorStats.privacySkipped = (W.doorStats.privacySkipped or 0) + 1
+                if W.doorStats.privacySkipped <= 5 then
+                    local n = doorKey(self)
+                    mp_log(string.format("WO151-DOOR %s: this copy's own privacy %s skipped -- the host's world locks its doors",
+                        tostring(n), isPrivate and "lock" or "unlock"))
+                end
+            end
+            AnimDoor.SetLockedDueToPrivate = W.doorPrivateWrap
         end
         if type(AnimDoor.OnUsed) == "function" and AnimDoor.OnUsed ~= W.doorUsedWrap then
             local orig = AnimDoor.OnUsed
@@ -21402,8 +21443,9 @@ do
         if v == "bad" then mp_log("mp_door_sync: expected on|off, got '" .. tostring(arg) .. "'"); return false end
         if v ~= nil then W.doorSync = v end
         local st = W.doorStats
-        mp_log(string.format("WO151-TOGGLE mp_door_sync door_sync=%s role=%s sent=%d asks=%d applied=%d ask_applied=%d unnamed=%d not_found=%d deferred=%d",
-            W.doorSync and "on" or "off", tostring(doorRole()), st.sent, st.asks, st.applied, st.askApplied, st.unnamed, st.notFound, st.deferred))
+        mp_log(string.format("WO151-TOGGLE mp_door_sync door_sync=%s role=%s sent=%d asks=%d applied=%d ask_applied=%d unnamed=%d not_found=%d deferred=%d own_unlocks=%d privacy_skipped=%d",
+            W.doorSync and "on" or "off", tostring(doorRole()), st.sent, st.asks, st.applied, st.askApplied, st.unnamed, st.notFound, st.deferred,
+            st.ownUnlocks or 0, st.privacySkipped or 0))
         return true
     end
 

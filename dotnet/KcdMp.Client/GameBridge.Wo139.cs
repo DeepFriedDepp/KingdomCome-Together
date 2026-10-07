@@ -63,7 +63,7 @@ public partial class GameBridge
     private volatile int _w139TrespassLevel;
     private long _w139TrespassSentMs;
     private long _w139Reports, _w139ReportsIn, _w139Judged, _w139Witnessed, _w139Unseen, _w139StopsOut, _w139StopsIn, _w139Outcomes,
-                 _w139Pursue, _w139Cleared, _w139Violent, _w139TakedownMarked, _w139HorseLegal, _w139Trespass;
+                 _w139Pursue, _w139Cleared, _w139Violent, _w139TakedownMarked, _w139HorseLegal, _w139Trespass, _w139TrespassAtStats;
 
     /// <summary>The host of a shared world with a partner connected.</summary>
     private bool W139Host => _combatRoleApplied && _isDamageAuthority && _sharedWorld && Wo134Peers().Count > 0;
@@ -124,7 +124,18 @@ public partial class GameBridge
                 }
                 if (joiner && on && _w139TrespassLevel >= 3 && now - _w139TrespassSentMs >= 8_000)
                     await Wo139ReportTrespassAsync(_lastX, _lastY, _lastZ, "still inside");
-                if (now - lastStats >= 60_000) { lastStats = now; Console.WriteLine(Wo139StatsLine()); }
+                if (now - lastStats >= 60_000)
+                {
+                    lastStats = now;
+                    Console.WriteLine(Wo139StatsLine());
+                    // a joiner's trespass this minute: the DLL's own count of warnings it hid (quieted=) goes in the log too
+                    // (live 0.45.8: "it showed he was trespassing", and nothing in the bundle said whether the HUD gate held)
+                    if (joiner && _w139Trespass != _w139TrespassAtStats)
+                    {
+                        _w139TrespassAtStats = _w139Trespass;
+                        Console.WriteLine($"MP-W139 native: {await _combat.Wo139StatusAsync() ?? "no answer"}");
+                    }
+                }
             }
             catch (Exception ex) { Console.WriteLine($"MP-W139 tick failed: {ex.GetType().Name}: {ex.Message}"); }
         }

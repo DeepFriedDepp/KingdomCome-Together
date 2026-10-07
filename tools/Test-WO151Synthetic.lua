@@ -438,6 +438,9 @@ do
     function AnimDoor:Close() if self.nDirection == 1 then self:DoPlayAnimation(-1, nil, nil, nil, nil, player.id) end end
     function AnimDoor:Lock(dontClose) if not dontClose and self:IsOpen() then self:Close() end; self.bLocked = true end
     function AnimDoor:Unlock() self.bLocked = false end
+    function AnimDoor:Lockpick(user, slot) self.picking = true end   -- the game starts its minigame here
+    -- the engine's privacy lock (the game's own body): a private area locks its doors, an open one unlocks them
+    function AnimDoor:SetLockedDueToPrivate(isPrivate) if isPrivate then self:Lock() else self:Unlock() end; self.lockedDueToPrivate = isPrivate end
     function AnimDoor:OnUsed(user, slot)
         local direction = -self.nDirection
         if self.bLocked == true then
@@ -519,6 +522,14 @@ do
     e = doorEvts()
     check("h: host: an ask that unlocked it there unlocks and opens it here", d6.nDirection == 1 and not d6.bLocked
         and #e == 1 and e[1] == "state " .. K(lvl("h_door6")) .. " 1 0 40.00 0.00 0.00", e[1])
+    local hp = mkDoor("h_private", 60, 0, 0)
+    hp:DoPlayAnimation(1, nil, nil, nil, false, "npc:4")
+    hp.inUse = 0
+    local before = #doorEvts()
+    hp:SetLockedDueToPrivate(true)   -- the host's world: its own area turned private
+    e = doorEvts()
+    check("h: host: its own privacy lock is the game's (shut and locked) and goes out", hp.nDirection == -1 and hp.bLocked == true
+        and #e == before + 2 and e[#e] == "state " .. K(lvl("h_private")) .. " -1 1 60.00 0.00 0.00", e[#e])
     KCD2MP_W151DoorAsked(1, "h_nowhere", 1, 0, 1, 1, 1)
     check("h: host: an ask for a door that is not here is logged", logCount("WO151-DOOR ask from 1 for h_nowhere: no such door here") == 1)
 
@@ -560,9 +571,39 @@ do
     check("h: joiner: his key opens a locked door -> one ask, unlock claimed", #e == 1 and e[1] == "ask " .. K(lvl("j_door3")) .. " 1 1 6.00 6.00 0.00", table.concat(e, " | "))
     local j4 = mkDoor("j_door4", 7, 7, 0); j4.bLocked = true
     clearLog()
+    j4:Unlock()   -- an unlock he never picked (this copy's own): not his
+    check("h: joiner: an unlock with no lockpick of his asks nothing (live 0.45.8: this copy's own unlocks reached the host)", #doorEvts() == 0)
+    j4.bLocked = true
+    j4:Lockpick(player)   -- he starts picking it
+    NOW = NOW + 20; KCD2MP_W137Session(false, true, true)   -- the agent's tick goes on
     j4:Unlock()   -- the lockpick minigame's success (the engine unlocks it)
     e = doorEvts()
     check("h: joiner: a lockpicked door asks the host (unlock, no move)", #e == 1 and e[1] == "ask " .. K(lvl("j_door4")) .. " -1 1 7.00 7.00 0.00", e[1])
+    j4.bLocked = true; j4:Unlock()
+    check("h: joiner: ...once per pick", #doorEvts() == 1)
+    local j4b = mkDoor("j_door4b", 7.5, 7.5, 0); j4b.bLocked = true
+    j4b:Lockpick(player)
+    NOW = NOW + KCD2MP_W151_PICK_WINDOW_S + 1; KCD2MP_W137Session(false, true, true)
+    j4b:Unlock()
+    check("h: joiner: an unlock long after his pick began is not his", #doorEvts() == 1)
+    j4b.bLocked = true
+    j4b:Lockpick({ id = 99 })   -- somebody else's pick (never this player)
+    j4b:Unlock()
+    check("h: joiner: another user's pick is not his", #doorEvts() == 1)
+    -- the engine's privacy lock on this copy: the host's world owns the lock (live 0.45.8: his copy shut a door
+    -- the host had opened, and walking in raised his game's trespass)
+    local jp = mkDoor("j_private", 12, 12, 0)
+    KCD2MP_W151DoorApply(K(lvl("j_private")), 1, 0, 12, 12, 0)   -- the host opened it
+    jp.inUse = 0
+    clearLog()
+    jp:SetLockedDueToPrivate(true)
+    check("h: joiner: his copy's privacy lock neither shuts nor locks the host's open door", jp.nDirection == 1 and jp.bLocked ~= true
+        and jp.lockedDueToPrivate == true and #doorEvts() == 0, #doorEvts())
+    check("h: joiner: ...and says so (once per door, first five)", logCount(": this copy's own privacy lock skipped -- the host's world locks its doors") == 1)
+    local jq = mkDoor("j_private2", 13, 13, 0); jq.bLocked = true
+    jq:SetLockedDueToPrivate(false)
+    check("h: joiner: his copy's privacy unlock leaves the host's lock and asks nothing", jq.bLocked == true and jq.lockedDueToPrivate == false and #doorEvts() == 0)
+    check("h: joiner: both counted", W.doorStats.privacySkipped >= 2 and W.doorStats.ownUnlocks >= 3, W.doorStats.privacySkipped)
     local j5 = mkDoor("j_door5", 8, 8, 0); j5.bLocked = true
     clearLog()
     j5:OnUsed(player)   -- locked, no key: nothing changes

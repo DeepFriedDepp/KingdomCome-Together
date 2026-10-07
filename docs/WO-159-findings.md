@@ -394,6 +394,30 @@ At the maintainer's word: the three start saves are made from his own saves inst
 * Synthetic 91/91, all 49 suites; client 1,167. **Not verified live yet** (the sound setup above all: heard, and
   released at the end).
 
+## 0.45.8 field: a door shut for the joiner, and his trespass (outside WO-159, fixed here)
+
+* **Field (two testers, 0.45.8, Troskowitz):** a door stood open for the host and shut for the joiner; the host opened and
+  closed it; the joiner walked in and his game showed a trespass **[L]**. Both bundles (one session, the machines' clocks
+  one hour apart).
+* **The joiner's game raised it:** `WO139-TRESPASS level 2 -> 3 (personal)` at (2280.0, 2053.1), left 1 s later, reported
+  to the host (`reports_out=1`). **The host judged nothing** (`reports_in=1 judged=0`, no record, no stop): its own
+  world's labels said no crime, as WO-157 meant. Whether the joiner's HUD gate hid his own warning is not in the logs
+  (the DLL counts `quieted=` only on request) -- the joiner's agent now prints that count with the minute's stats
+  whenever a trespass came.
+* **Why his door differed:** the engine locks a building's doors when its area turns private and unlocks them when it
+  opens (`AnimDoor:SetLockedDueToPrivate`, called by no script), and `Lock()` also **shuts an open door**. On the joiner
+  the owners are paused copies whose NPC states never settle (the repeated `ChangeAreaLabel ... antitrespass` errors),
+  so his copy of the town flips between private and open: the host's open door was shut again on his side only.
+* **And his copy's unlocks reached the host's world:** every flip back to open unlocked that building's doors on the
+  joiner, and the Unlock wrap took any unlock outside his own use for his lockpick: two doors of one house were
+  "unlocked here" in the same instant five times (`dir=-1 unlock=true`), each applied in the host's world as an
+  unlock-and-close (`ask from 1 ... applied in the host's world`).
+* **The fix (joiner only; the host's world owns every lock):** his copy's `SetLockedDueToPrivate` only notes the flag
+  (no lock, no shut; first five logged, `privacy_skipped` counted); an unlock asks the host only within
+  `KCD2MP_W151_PICK_WINDOW_S` (300 s) of his own `Lockpick` on that door, once (`own_unlocks` counted otherwise). The
+  host's own privacy lock is untouched (the game's, sent as before). Synthetic WO-151 157/157 (8 new), all 49 suites;
+  client 1,167. **Not verified live yet.**
+
 ## Pocketed (outside this WO)
 
 1. **A prologue recap** would have to play somewhere the engine draws video (in the world, e.g. right after the load);
