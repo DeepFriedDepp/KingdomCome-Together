@@ -362,6 +362,16 @@ At the maintainer's word: the three start saves are made from his own saves inst
   held at the menu sends none.
 * Synthetic 99/99 (14 new), all 49 suites; client 1,167. **Not verified live yet.**
 
+## The 0.45.8 build
+
+* Both recap fixes (the cutscene player: sound and the world paused; skipping one skips them all). From a fresh clone of
+  `0f716fa` (`release\c0458`) with the same three start saves,
+  `tools\Build-Installer.ps1 -SoakWaiver "The maintainer decided on 2026-10-07: no soak test for 0.45.8."`:
+  `release\KingdomComeTogether-Setup-0.45.8.exe`, 106,326,145 bytes, sha256
+  `7c0280574a07cde63e31526c2ea144c07159783faed35715495612579117091e`. Local only; not tagged; unsigned.
+* Inside the build: the start saves and the logo pak, relay 62, agent 1,167, setup 77, all synthetic suites, the static
+  and native checks, the installer cases; no FAIL line. Payload 1,034 files; privacy sweep clean.
+
 ## Pocketed (outside this WO)
 
 1. **A prologue recap** would have to play somewhere the engine draws video (in the world, e.g. right after the load);
