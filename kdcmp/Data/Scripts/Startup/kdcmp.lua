@@ -4936,6 +4936,7 @@ function KCD2MP_JoinBusyReason()
     pcall(function() if player.actor and player.actor:IsDead() then busy = "dead" end end)
     if busy then return busy end
     if KCD2MP.cutsceneActive then return "cutscene" end
+    if KCD2MP_W159RecapActive and KCD2MP_W159RecapActive() then return "prologue" end   -- WO-159: the host watches the prologue
     pcall(function() if player.human and player.human:IsInDialog() then busy = "dialogue" end end)
     if busy then return busy end
     pcall(function()
@@ -5061,6 +5062,9 @@ function KCD2MP_JoinTry(joinId, partner, timeoutS)
         return false
     end
     local busy = KCD2MP_JoinBusyReason()
+    if busy == "prologue" and KCD2MP_W159RecapLeftS then   -- WO-159: the minutes left go to the joiner
+        busy = string.format("prologue %d", math.max(1, math.ceil(KCD2MP_W159RecapLeftS() / 60)))
+    end
     if busy then
         w.deferredAt = w.deferredAt or os.clock()
         w.partner = tostring(partner or "your partner")
@@ -22389,6 +22393,14 @@ function KCD2MP_W159Model(t)
     return true
 end
 
+-- The three playstyles of the game's own choice in the prologue (M01's stat presets, docs/WO-159-findings.md), each
+-- a bundled start save made where Hans and Henry part ways. The tooltip is what each one raised.
+KCD2MP_W159_STYLES = {
+    { id = "soldier", text = "Soldier", tip = "Strength and agility; swords, heavy and large weapons, unarmed, craftsmanship, riding." },
+    { id = "adviser", text = "Adviser", tip = "Speech; alchemy, scholarship, drinking, craftsmanship, riding." },
+    { id = "scout", text = "Scout", tip = "Vitality; marksmanship, survival, hounds, stealth, thievery, craftsmanship, riding, sword." },
+}
+
 -- The pages: lists of { id, text, tip, off, cont } (cont 1 = the bottom container, Quit / Back).
 function KCD2MP_W159Page(w)
     local m = w.model or {}
@@ -22402,11 +22414,28 @@ function KCD2MP_W159Page(w)
             if n > 5 then break end
             add("MP_Load_" .. n, tostring(s.label), "Load this world and host it.")
         end
-        if m.newadv then add("MP_NewAdv", "New adventure", "A new world in a new save slot: you start as Henry, after the prologue.")
+        if m.newadv then add("MP_NewAdv", "New adventure", "A new world: you start as Henry where Hans and Henry part ways (the prologue is behind you).")
         else add("MP_NewAdv", "New adventure", tostring(m.newwhy or "No new adventure is available."), true) end
         if m.hidden and m.hidden ~= "" then add("MP_Hidden", "Some saves are not shown", tostring(m.hidden), true) end
         add("MP_Back", "@ui_back", "", false, 1)
         return b, "Start Game", (n > 0 and "MP_Load_1" or "MP_NewAdv")
+    elseif w.page == "style" then
+        local styles = type(m.styles) == "table" and m.styles or {}
+        local first = nil
+        for _, st in ipairs(KCD2MP_W159_STYLES) do
+            local have = styles[st.id] == true
+            if have and not first then first = "MP_Style_" .. st.id end
+            add("MP_Style_" .. st.id, st.text, have and st.tip or "This playstyle's start save is not installed.", not have)
+        end
+        add("MP_Back", "@ui_back", "", false, 1)
+        return b, "Choose your playstyle", first or "MP_Style_soldier"
+    elseif w.page == "prologue" then
+        add("MP_Prologue_skip", "Skip the prologue",
+            "Recommended when a partner is joining: they can join right away. You start where Hans and Henry part ways.")
+        add("MP_Prologue_watch", string.format("Watch the prologue's cutscenes (%d min)", tonumber(m.recapMin) or 16),
+            "Only its rendered cutscenes, no conversations or choices. Your partner joins when they end. Hold E to skip.")
+        add("MP_Back", "@ui_back", "", false, 1)
+        return b, "The prologue", "MP_Prologue_skip"
     elseif w.page == "join" then
         local j = type(m.join) == "table" and m.join or {}
         local st = w.joinState
@@ -22416,10 +22445,11 @@ function KCD2MP_W159Page(w)
             add("MP_Back", "@ui_back", "", false, 1)
             return b, "Join Game", "MP_JoinCancel"
         elseif st == "joining" then
-            add("MP_JoinWait", "Joining your host...", "Your host's world is on its way.", true)
+            local line = tostring(j.status or "")
+            add("MP_JoinWait", "Joining your host...", line ~= "" and line or "Your host's world is on its way.", true)
             return b, "Join Game", "MP_JoinWait"
         end
-        add("MP_JoinFresh", "Join with a new character", "A new Henry, straight after the prologue, in your host's world.")
+        add("MP_JoinFresh", "Join with a new character", "A new Henry where Hans and Henry part ways, in your host's world. You choose the playstyle next.")
         if j.bring then add("MP_JoinBring", "Bring my character", "Your own Henry from your newest save of this game.")
         else add("MP_JoinBring", "Bring my character", tostring(j.msg or "You have no save of your own to bring."), true) end
         add("MP_Back", "@ui_back", "", false, 1)
@@ -22456,20 +22486,15 @@ function KCD2MP_W159Emit(what)
     KCD2MP_EmitEvent("w159", what)
 end
 
+-- Where our Back goes from each of our pages.
+KCD2MP_W159_PARENT = { host = "root", join = "root", prologue = "style" }
+
 -- The game's own menu events. Our MP_* entries are acted on here; the game's own only move the page depth.
 function KCD2MP.w159.OnMenu(self, el, inst, ev, args)
     local w = KCD2MP.w159
     if not w.armed then return end
     local a = type(args) == "table" and args or {}
     local id = tostring(a[0] or a[1] or "")
-    if ev == "OnConfirm" then
-        local res = tonumber(a[1]) or -1
-        if tostring(a[0]) == "MP_NewAdv" then
-            if res == 0 then KCD2MP_W159Emit("newadv") end
-            return
-        end
-        return
-    end
     if ev == "OnCreditsHide" or ev == "OnHelpOverlayClose" then
         if w.depth == 0 then w.dirty = true end
         return
@@ -22488,18 +22513,32 @@ function KCD2MP.w159.OnMenu(self, el, inst, ev, args)
     elseif id == "MP_JoinGame" then w.page = "join"; KCD2MP_W159Build()
     elseif id == "MP_Back" then
         if w.page == "join" and w.joinState == "waiting" then w.joinState = "idle"; KCD2MP_W159Emit("cancel") end
-        w.page = "root"; KCD2MP_W159Build()
+        w.page = w.page == "style" and (w.styleFor == "join" and "join" or "host") or (KCD2MP_W159_PARENT[w.page] or "root")
+        KCD2MP_W159Build()
     elseif id:match("^MP_Load_%d+$") then
         local s = type(m.saves) == "table" and m.saves[tonumber(id:sub(9))] or nil
         if s then KCD2MP_W159Emit(string.format("load %d %s", tonumber(s.pl) or -1, tostring(s.name))) end
     elseif id == "MP_NewAdv" then
-        if m.newadv then
-            KCD2MP_W159Call("AddConfirmation", "MP_NewAdv",
-                "Start a new adventure in a new save slot? You start as Henry, after the prologue.", "Start", "@ui_back", 0, 1)
+        if m.newadv then w.styleFor = "host"; w.page = "style"; KCD2MP_W159Build() end
+    elseif id == "MP_JoinFresh" then
+        w.styleFor = "join"; w.page = "style"; KCD2MP_W159Build()
+    elseif id:match("^MP_Style_%a+$") then
+        local st = id:sub(10)
+        if not (type(m.styles) == "table" and m.styles[st] == true) then return end
+        if w.styleFor == "join" then
+            w.joinState = "waiting"
+            w.page = "join"
+            KCD2MP_W159Emit("join fresh " .. st)
+        else
+            w.style = st
+            w.page = "prologue"
         end
-    elseif id == "MP_JoinFresh" or id == "MP_JoinBring" then
+        KCD2MP_W159Build()
+    elseif id == "MP_Prologue_skip" or id == "MP_Prologue_watch" then
+        KCD2MP_W159Emit(string.format("newadv %s %s", tostring(w.style or "soldier"), id == "MP_Prologue_watch" and "watch" or "skip"))
+    elseif id == "MP_JoinBring" then
         w.joinState = "waiting"
-        KCD2MP_W159Emit(id == "MP_JoinFresh" and "join fresh" or "join bring")
+        KCD2MP_W159Emit("join bring")
         KCD2MP_W159Build()
     elseif id == "MP_JoinCancel" then
         w.joinState = "idle"
@@ -22544,11 +22583,97 @@ function KCD2MP_W159Disarm(why)
     return true
 end
 
--- The prologue recap (Phase 0: the game's wh_ui_PlayMovie takes a video at the main menu but draws nothing
--- there, and it stops the menu's own video): not available. Kept as the one place a recap would start.
-function KCD2MP_W159Recap()
-    mp_log("WO159-MENU the prologue recap is not available at the main menu (skip only)")
-    return false
+-- ----- the prologue's rendered cutscenes, after a New adventure loaded ("Watch") -----
+-- At the main menu the game's wh_ui_PlayMovie draws nothing; in the world it plays full screen and wh_ui_StopMovie
+-- returns to the world (WO-159 probes). The launcher starts the list once the world is loaded; this plays it video
+-- after video by each one's length (their Bink headers), and a held E (the game's "use") for a second skips the rest.
+-- While it runs a join waits (KCD2MP_JoinBusyReason: "prologue"). Only rendered video: no scene with a conversation
+-- or a choice is ever played.
+KCD2MP_W159_SKIP_HOLD_S = 1.0
+KCD2MP_W159_PREROLL_S = 4
+
+-- spec: "m01/name|seconds;..." -- each is Videos/m01/name/name.bk2 (the game's own layout)
+function KCD2MP_W159RecapStart(spec)
+    local w = KCD2MP.w159
+    local list, total = {}, 0
+    for part in tostring(spec or ""):gmatch("[^;]+") do
+        local dir, name, secs = part:match("^(m%d+)/([%w_]+)|([%d%.]+)$")
+        if dir then
+            list[#list + 1] = { path = string.format("Videos/%s/%s/%s.bk2", dir, name, name), secs = tonumber(secs) }
+            total = total + tonumber(secs)
+        end
+    end
+    if #list == 0 or not player then mp_log("WO159-RECAP refused: no videos or no player"); return false end
+    -- the game draws a video over all of its UI (live: neither DrawText nor the HUD shows during one), so the hint
+    -- comes first, on the HUD, for KCD2MP_W159_PREROLL_S; then the first video
+    local now = os.clock()
+    w.recap = { list = list, i = 0, at = 0, holdAt = nil, total = total, startedAt = now + KCD2MP_W159_PREROLL_S, last = now }
+    mp_log(string.format("WO159-RECAP %d video(s), %.0f s -- hold E to skip", #list, total))
+    pcall(UIAction.CallFunction, "hud", -1, "ShowInfoText", "The prologue's cutscenes start in a moment. Hold E to skip them.", 10,
+        math.floor(KCD2MP_W159_PREROLL_S * 1000), true)
+    Script.SetTimer(16, KCD2MP_W159RecapTick)
+    return true
+end
+
+function KCD2MP_W159RecapNext()
+    local r = KCD2MP.w159.recap
+    if not r then return end
+    r.i = r.i + 1
+    local v = r.list[r.i]
+    if not v then KCD2MP_W159RecapEnd("finished"); return end
+    r.at = os.clock()
+    pcall(System.ExecuteCommand, "wh_ui_PlayMovie " .. v.path)
+    mp_log(string.format("WO159-RECAP video %d/%d %s (%.0f s)", r.i, #r.list, v.path:match("[^/]+$") or v.path, v.secs))
+end
+
+function KCD2MP_W159RecapEnd(how)
+    local w = KCD2MP.w159
+    if not w.recap then return end
+    pcall(System.ExecuteCommand, "wh_ui_StopMovie")
+    mp_log(string.format("WO159-RECAP ended (%s) after %.0f s", tostring(how), os.clock() - w.recap.startedAt))
+    w.recap = nil
+    KCD2MP_EmitEvent("w159", "recap " .. tostring(how))
+end
+
+-- The left time, for the joiner's "your host is watching the prologue (about N min left)".
+function KCD2MP_W159RecapLeftS()
+    local r = KCD2MP.w159.recap
+    if not r then return 0 end
+    return math.max(0, r.total - math.max(0, os.clock() - r.startedAt))
+end
+
+function KCD2MP_W159RecapTick()
+    local w = KCD2MP.w159
+    local r = w.recap
+    if not r then return end
+    local now = os.clock()
+    r.last = now
+    if r.holdAt and now - r.holdAt >= KCD2MP_W159_SKIP_HOLD_S then KCD2MP_W159RecapEnd("skipped"); return end
+    if r.i == 0 then
+        if now >= r.startedAt then KCD2MP_W159RecapNext() end
+    else
+        local v = r.list[r.i]
+        if v and now - r.at >= v.secs + 0.3 then KCD2MP_W159RecapNext() end
+    end
+    if not w.recap then return end
+    Script.SetTimer(16, KCD2MP_W159RecapTick)
+end
+
+-- From handleAction: the game's "use" (E by default) held while the recap plays.
+function KCD2MP_W159OnAction(action, activation)
+    local r = KCD2MP.w159.recap
+    if not r or action ~= "use" then return false end
+    if activation == "press" then r.holdAt = os.clock()
+    elseif activation == "release" then r.holdAt = nil end
+    return true
+end
+
+-- The recap is running (a load kills its timer chain: then it is over, WO-78 liveness).
+function KCD2MP_W159RecapActive()
+    local r = KCD2MP.w159.recap
+    if not r then return false end
+    if os.clock() - r.last > 2 then KCD2MP.w159.recap = nil; return false end
+    return true
 end
 
 -- ===== Register Console Commands =====
@@ -23155,6 +23280,10 @@ local function handleAction(action, activation, value)
     end
     if KCD2MP_W148OnAction then pcall(KCD2MP_W148OnAction, action, activation) end   -- WO-148: put_item / deposit_item / put_corpse
     if KCD2MP_W151OnAction then pcall(KCD2MP_W151OnAction, action, activation) end   -- WO-151 3.5: the whistle
+    if KCD2MP_W159OnAction then
+        local okr, used = pcall(KCD2MP_W159OnAction, action, activation)   -- WO-159: hold E skips the prologue's cutscenes
+        if okr and used then return end
+    end
     -- WO-154: the mod menu's keys (its own actions only; a game menu's action closes it and goes on)
     if KCD2MP_W154MenuOnAction then
         local okm, used = pcall(KCD2MP_W154MenuOnAction, action, activation)

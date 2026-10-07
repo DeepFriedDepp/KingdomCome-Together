@@ -237,6 +237,33 @@ back (403 save files and the profile checked after):
 * **A join is not held back during such a video**: `KCD2MP_JoinBusyReason()` returned nil mid-video **[L]** — the recap
   needs its own busy reason ("your host is watching the prologue").
 
+## What 0.45.5 adds on top (the maintainer's design, built after the probes)
+
+| Piece | What it does | Where |
+|---|---|---|
+| Playstyle page | New adventure → Choose your playstyle (Soldier / Adviser / Scout, each entry's tooltip = what its preset raises; a playstyle without its start save greyed) | `kdcmp.lua` WO-159 (`KCD2MP_W159_STYLES`, page `style`) |
+| Prologue page | Skip the prologue (top, selected; "recommended when a partner is joining") / Watch the prologue's cutscenes (16 min; no conversations or choices; hold E) — replaces the question box | page `prologue`; event `newadv <style> <skip\|watch>` |
+| One staged slot, swapped | the first installed playstyle is staged before the game starts; the chosen one is written over it before the load (`--w159 swap`: new seed, scrubbed header, ledger follows) | `Wo159.Swap`, launcher `Home.Wo159` |
+| The recap | after the world loads: a HUD line "Hold E to skip them" for 4 s (a video covers all UI), then the nine rendered videos by their Bink lengths; the game's "use" held 1 s skips the rest; a dead timer chain ends it | `KCD2MP_W159RecapStart/Tick/OnAction`, `MenuTakeoverRule.RecapCall` |
+| The join hold | a join during the recap is deferred with reason `prologue` (appended to the reason table: old ids unchanged) and the minutes left in the status argument; the joiner reads "Your host is watching the prologue (about N min left)…" | `KCD2MP_JoinBusyReason`, `Wo159Rules.BusyReason/DeferredText` |
+| New character from a bundled save | Join with a new character → the same playstyle page → `/join-choice?c=fresh:<style>`; the agent takes that start save's Henry first (same build only), else the old sources; a saves folder is made for a player whose game ran but never saved; the join's slot folder is created if missing | `GameBridge.Wo159`, `Wo125SourceFor`, `ResolveSavesDirForJoin` |
+| Three start saves | `assets/start-save/<soldier\|adviser\|scout>/`; validator: where Hans and Henry part (M03 Done, nothing of M05 done — the game starts M05 at once: the maintainer's own save reads M03 Done, M05 Active) and the playstyle (the preset's own skills carry the most experience) | `Wo159.CutPoint/PlaystyleOf`, `Validate-StartSave.ps1 -Style`, `Publish-Release.ps1` |
+| Our logo | `KCDLogo.dds` (the menu's logo, 1024×512 DXT5) rebuilt from `docs/branding/KCT_txt.png` into the game logo's own box; `kdcmp_brand.pak` placed in the mod's Data folder by the launcher for its own game, removed at that game's exit (Setup prunes a leftover) | `tools/Build-MenuLogo.py`, `kdcmp_brand/`, `Home.Wo159` |
+| Nobody clicks CONNECT | see decision 6 | |
+
+**Live (r5, one game, throwaway `playline4`, two test playstyles: the placeholder as "soldier", the throwaway
+`playline3/autosave003` as "scout") [L][harness]:** our logo on the menu in place of the game's; the playstyle page
+(Adviser greyed: not installed); the prologue page; Watch → the swap put "scout" in the slot (new key `af58b8bdd2`) →
+loaded (55 s) → the recap started 2 s after the world → **all nine videos in order, finished after 984 s** → a join
+during it: `prologue`, 972 s left. Found and fixed: the "Hold E to skip" line was drawn under the video (neither
+`System.DrawText` nor the HUD's info text shows while a video plays) — it now shows on the HUD for 4 s before the first
+video. Saves (403 files), the profile and the installed mod files checked back after.
+
+**Not tested live:** a real E held during the recap (the maintainer declined the in-session press; the synthetic suite
+covers the hold, a short press, and other keys); the joiner's new character from a bundled save, and a brand-new
+player's first join into a slot folder made during the game (needs two players: the native rescan of a new playline
+folder is unproven); the three real start saves (not supplied); the launcher window itself (headless harness).
+
 ## Pocketed (outside this WO)
 
 1. **A prologue recap** would have to play somewhere the engine draws video (in the world, e.g. right after the load);

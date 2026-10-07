@@ -128,22 +128,40 @@ Copy-Item $nativeDll $OutDir -Force
 # An earlier publish into this folder left the injector: it must not ride along.
 Remove-Item (Join-Path $OutDir "KCDMP_LauncherInjector.exe") -Force -ErrorAction SilentlyContinue
 
-# --- WO-159: the bundled start save (a host's New adventure on the main menu). The maintainer supplies
-#     assets\start-save\ (one save); it ships in start-save\ beside the launcher (AppSettings.StartSavePath), behind
-#     the same Setup and its install manifest. It must pass tools\Validate-StartSave.ps1 (a Modding Tools Henry after
-#     the prologue, no partner or mod data, no account or machine name). None supplied: none ships, and the menu
-#     says "No start save is installed". ---
-$startSaves = @(Get-ChildItem (Join-Path $root "assets\start-save") -Filter *.whs -ErrorAction SilentlyContinue)
-if ($startSaves.Count -gt 1) { throw "assets\start-save holds $($startSaves.Count) saves (one is expected)" }
-if ($startSaves.Count -eq 1) {
-    & powershell -ExecutionPolicy Bypass -File (Join-Path $root "tools\Validate-StartSave.ps1") -Path $startSaves[0].FullName -Agent (Join-Path $clientPublish "KcdMpClient.exe")
-    if ($LASTEXITCODE -ne 0) { throw "the start save in assets\start-save does not pass tools\Validate-StartSave.ps1" }
-    New-Item -ItemType Directory -Force (Join-Path $OutDir "start-save") | Out-Null
-    Copy-Item $startSaves[0].FullName (Join-Path $OutDir "start-save") -Force
-    Write-Output "Start save: $($startSaves[0].Name) (New adventure)"
-} else {
-    Write-Output "No start save in assets\start-save: this build ships none (the menu's New adventure says so)"
+# --- WO-159: our logo on the main menu of a game the launcher starts. kdcmp_brand.pak (stored entries, like
+#     kdcmp.pak) carries kdcmp_brand\Libs\UI\Textures\KCDLogo.dds (tools\Build-MenuLogo.py); the launcher puts it into
+#     the mod's Data folder for its own game only and takes it out when that game exits. ---
+Add-Type -AssemblyName System.IO.Compression
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+$brandDds = Join-Path $root "kdcmp_brand\Libs\UI\Textures\KCDLogo.dds"
+if (-not (Test-Path $brandDds)) { throw "kdcmp_brand\Libs\UI\Textures\KCDLogo.dds missing (tools\Build-MenuLogo.py makes it)" }
+$brandPak = Join-Path $OutDir "kdcmp_brand.pak"
+if (Test-Path $brandPak) { Remove-Item $brandPak -Force }
+$bz = [System.IO.Compression.ZipFile]::Open($brandPak, [System.IO.Compression.ZipArchiveMode]::Create)
+try {
+    $be = $bz.CreateEntry("Libs/UI/Textures/KCDLogo.dds", [System.IO.Compression.CompressionLevel]::NoCompression)
+    $bs = $be.Open(); $bb = [System.IO.File]::ReadAllBytes($brandDds); $bs.Write($bb, 0, $bb.Length); $bs.Close()
+} finally { $bz.Dispose() }
+Write-Output "Menu logo pak: kdcmp_brand.pak ($((Get-Item $brandPak).Length) bytes)"
+
+# --- WO-159: the bundled start saves (a host's New adventure, a joiner's new character), one per playstyle: the
+#     maintainer supplies assets\start-save\<soldier|adviser|scout>\ (one save each, made where Hans and Henry part
+#     ways); they ship in start-save\<style>\ beside the launcher and the agent, behind the same Setup and its install
+#     manifest. Each must pass tools\Validate-StartSave.ps1 -Style. None supplied: none ships, and the menu says
+#     "No start save is installed". ---
+$shipped = @()
+foreach ($style in @("soldier", "adviser", "scout")) {
+    $saves = @(Get-ChildItem (Join-Path $root "assets\start-save\$style") -Filter *.whs -ErrorAction SilentlyContinue)
+    if ($saves.Count -gt 1) { throw "assets\start-save\$style holds $($saves.Count) saves (one is expected)" }
+    if ($saves.Count -eq 0) { continue }
+    & powershell -ExecutionPolicy Bypass -File (Join-Path $root "tools\Validate-StartSave.ps1") -Path $saves[0].FullName -Style $style -Agent (Join-Path $clientPublish "KcdMpClient.exe")
+    if ($LASTEXITCODE -ne 0) { throw "the $style start save in assets\start-save does not pass tools\Validate-StartSave.ps1" }
+    New-Item -ItemType Directory -Force (Join-Path $OutDir "start-save\$style") | Out-Null
+    Copy-Item $saves[0].FullName (Join-Path $OutDir "start-save\$style") -Force
+    $shipped += $style
 }
+if ($shipped.Count -gt 0) { Write-Output "Start saves: $($shipped -join ', ') (New adventure)" }
+else { Write-Output "No start saves in assets\start-save\<playstyle>: this build ships none (the menu's New adventure says so)" }
 
 Write-Output "`nRelease assembled at: $OutDir"
 Write-Output "Contents:"

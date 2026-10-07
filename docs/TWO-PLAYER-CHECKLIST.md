@@ -735,6 +735,26 @@ soak-tested; the maintainer tags it after this session.
 
 Lines worth a look: `MP-W157`, `MP-INJECT` (agent / launcher logs), `WO157-` (kcd.log), `WO157-QUIET` (kcdmp-native.log).
 
+## WO-159 — Start Game / Join Game on the main menu (0.45.5)
+
+145. **The menu.** Both start from the launcher: our logo, Start Game / Join Game on top, Continue / New Game / Load Game
+     greyed, no "New Game Debug" entries. Settings → Back returns to Start / Join. Marker: `mark_menu`.
+146. **Join Game before the host is ready.** The joiner presses Join Game → Join with a new character → a playstyle while
+     the host is still at the menu. * "Waiting for the host…" with Cancel; nobody clicks CONNECT; once the host is in its
+     world the joiner joins by itself. Marker: `mark_joinwait`.
+147. **The host's Start Game.** New adventure → a playstyle → Skip the prologue (needs the start saves). * The host is
+     connected without touching the launcher (~10 s after the world loads); Henry stands where Hans and Henry part ways.
+     Marker: `mark_newadv`.
+148. **The new-character default.** On a joiner with no Modding Tools save of their own: Join with a new character is
+     selected and Bring my character greyed with the plain reason; the joiner arrives as the bundled playstyle's Henry.
+     Marker: `mark_fresh`.
+149. **Watch the prologue** (host, once): the HUD says "Hold E to skip them", then the cutscenes play; the joiner reads
+     "Your host is watching the prologue (about N min left)"; the host **holds E** for a second — the rest is skipped and
+     the joiner joins. Marker: `mark_recap`.
+
+Lines worth a look: `MP-W159` (launcher log), `WO159-MENU`, `WO159-RECAP` (kcd.log), `MP-HENRY joiner: a new character`
+(agent log).
+
 ## Logs to send afterwards
 
 Both machines: Report a bug in the launcher. Since 0.42.2 it also collects the

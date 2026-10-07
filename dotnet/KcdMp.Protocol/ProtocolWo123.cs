@@ -176,6 +176,8 @@ public static partial class Protocol
         "not-henry", "world-changed", "reloading", "no-henry-source",
         // WO-157
         "host-key",
+        // WO-159: the host watches the prologue's cutscenes (arg = minutes left)
+        "prologue",
     };
 
     public static byte JoinReasonId(string name)

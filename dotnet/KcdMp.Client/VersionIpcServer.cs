@@ -160,7 +160,7 @@ public sealed class VersionIpcServer(Func<KeyValuePair<byte, string>[]> getPeers
             if ((req.HttpMethod == "POST" || req.HttpMethod == "GET") && req.Url?.AbsolutePath == "/join-choice" && onJoinChoice is not null)
             {
                 string c = req.QueryString["c"] ?? "";
-                bool ok = c is "bring" or "fresh";
+                bool ok = Wo159Rules.TryParseJoinChoice(c, out _, out _);   // bring | fresh | fresh:<playstyle> (WO-159)
                 if (ok) onJoinChoice(c);
                 var bytes = Encoding.UTF8.GetBytes(ok ? "{\"Ok\":true}" : "{\"Ok\":false}");
                 res.StatusCode = ok ? 200 : 400;

@@ -58,6 +58,7 @@ public class WhsSaveTests
         public byte NpcMood = 7;
         public bool Incompressible;   // WO-132: the world filler is random bytes (deflate grows them past 32 KB)
         public bool NoItemList;       // WO-132: Henry's inventory record holds no 0x0007 item list (a stripped early-game Henry)
+        public List<(uint Id, uint Xp)>? Skills;   // WO-159: Henry's skill experience (null: fencing 77, as before)
     }
 
     private static byte[] ItemRec(Item it)
@@ -70,7 +71,9 @@ public class WhsSaveTests
     private static byte[] HenryRecord(Spec s)
     {
         var stats = s.NoStory ? Cat(U32(0), U32(s.Strength), U32(0xFFFFFFFF)) : Cat(U32(0), U32(s.Strength), U32(8), U32(s.Story), U32(0xFFFFFFFF), U32(0));
-        var skills = Cat(U32(2), U32(77), U32(0xFFFFFFFF), U32(0));
+        var skills = s.Skills is { } sk   // WO-159: a Henry's own skill experience (skill id, xp)
+            ? Cat(sk.SelectMany(k => Cat(U32(k.Id), U32(k.Xp))).Concat(Cat(U32(0xFFFFFFFF), U32(0))).ToArray())
+            : Cat(U32(2), U32(77), U32(0xFFFFFFFF), U32(0));
         var states = new byte[24];
         BinaryPrimitives.WriteSingleLittleEndian(states, 55.5f + s.Side);
         var perks = Cat(s.Perks.Select(pk => Tlv(0x03D8, Tlv(0x137E, Tlv(0x1379, Cat(G(pk), new byte[4]))))).ToArray());

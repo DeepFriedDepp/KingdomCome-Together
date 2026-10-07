@@ -27,7 +27,10 @@ namespace KCDMP_launcher.Models
     public static class MenuTakeoverRule
     {
         /// <summary>The menu's choice, from kdcmp.lua's "[KCD2-MP-EVT] v1 &lt;seq&gt; w159 &lt;what&gt;" line.</summary>
-        public sealed record MenuChoice(long Seq, string Kind, int Playline = -1, string Name = "", string Join = "");
+        public sealed record MenuChoice(long Seq, string Kind, int Playline = -1, string Name = "", string Join = "", string Style = "", bool Watch = false);
+
+        /// <summary>The prologue's three playstyles, as the menu and the start-save folders name them.</summary>
+        public static readonly string[] Styles = { "soldier", "adviser", "scout" };
 
         public static MenuChoice? Parse(string line)
         {
@@ -38,9 +41,12 @@ namespace KCDMP_launcher.Models
             if (p.Length < 3 || p[1] != "w159" || !long.TryParse(p[0], NumberStyles.None, CultureInfo.InvariantCulture, out long seq)) return null;
             switch (p[2])
             {
-                case "newadv": return new(seq, "newadv");
+                case "newadv" when p.Length >= 5 && Styles.Contains(p[3]) && p[4] is "skip" or "watch":
+                    return new(seq, "newadv", Style: p[3], Watch: p[4] == "watch");
                 case "cancel": return new(seq, "cancel");
-                case "join" when p.Length >= 4 && p[3] is "fresh" or "bring": return new(seq, "join", Join: p[3]);
+                case "join" when p.Length >= 5 && p[3] == "fresh" && Styles.Contains(p[4]): return new(seq, "join", Join: "fresh", Style: p[4]);
+                case "join" when p.Length == 4 && p[3] == "bring": return new(seq, "join", Join: "bring");
+                case "recap" when p.Length >= 4 && p[3] is "finished" or "skipped": return new(seq, "recap", Name: p[3]);
                 case "load" when p.Length >= 5 && int.TryParse(p[3], NumberStyles.None, CultureInfo.InvariantCulture, out int pl)
                                   && pl is >= 0 and <= 4 && IsSaveName(p[4]):
                     return new(seq, "load", pl, p[4]);
@@ -83,7 +89,7 @@ namespace KCDMP_launcher.Models
         /// 2,100 encoded characters per call).
         /// </summary>
         public static string ModelCall(bool hosting, IReadOnlyList<WorldEntry> worlds, string hidden, WorldEntry? newAdv, string newWhy,
-                                       string joinState, bool bring, string bringMsg)
+                                       string joinState, bool bring, string bringMsg, IReadOnlyCollection<string>? styles = null, string joinStatus = "")
         {
             var b = new StringBuilder();
             b.Append("role=").Append(Lua(hosting ? "host" : "join"));
@@ -95,13 +101,49 @@ namespace KCDMP_launcher.Models
             b.Append(",hidden=").Append(Lua(hidden));
             if (newAdv is not null) b.Append(",newadv={pl=").Append(newAdv.Playline.ToString(CultureInfo.InvariantCulture)).Append(",name=").Append(Lua(newAdv.Name)).Append('}');
             b.Append(",newwhy=").Append(Lua(newWhy));
-            b.Append(",join={state=").Append(Lua(joinState)).Append(",bring=").Append(bring ? "true" : "false").Append(",msg=").Append(Lua(bringMsg)).Append('}');
+            b.Append(",join={state=").Append(Lua(joinState)).Append(",bring=").Append(bring ? "true" : "false").Append(",msg=").Append(Lua(bringMsg))
+             .Append(",status=").Append(Lua(joinStatus.Length > 120 ? joinStatus[..120] : joinStatus)).Append('}');
+            b.Append(",styles={");
+            foreach (var st in Styles) if (styles?.Contains(st) == true) b.Append(st).Append("=true,");
+            b.Append('}');
+            b.Append(",recapMin=").Append(RecapMinutes.ToString(CultureInfo.InvariantCulture));
             string body = b.ToString();
             string sig = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(body)))[..12].ToLowerInvariant();
             return "if KCD2MP_W159Model then KCD2MP_W159Model({sig=" + Lua(sig) + "," + body + "}) end";
         }
 
         public const string TickCall = "if KCD2MP_W159Tick then KCD2MP_W159Tick() end";
+
+        /// <summary>
+        /// The prologue's rendered cutscenes up to where Hans and Henry part ways, in story order, with each one's length
+        /// from its Bink header (WO-159 findings). No in-engine scene: those hold the conversations and choices.
+        /// </summary>
+        public static readonly (string Path, double Seconds)[] PrologueVideos =
+        {
+            ("Videos/m50/cin_m5010k_obranabohuta__siege_intro_start/cin_m5010k_obranabohuta__siege_intro_start.bk2", 199.5),
+            ("Videos/m50/cin_m5010k_obranabohuta__siege_intro_end/cin_m5010k_obranabohuta__siege_intro_end.bk2", 122.8),
+            ("Videos/m01/cin_m0110t_prepadeni__intro_cutscene/cin_m0110t_prepadeni__intro_cutscene.bk2", 169.7),
+            ("Videos/m02/cin_m0210t_zachrana__fall_dream_clip01/cin_m0210t_zachrana__fall_dream_clip01.bk2", 149.9),
+            ("Videos/m02/cin_m0250t_zachrana__first_dreaming_clip_01/cin_m0250t_zachrana__first_dreaming_clip_01.bk2", 104.9),
+            ("Videos/m02/cin_m0260t_zachrana__second_dreaming_clip01/cin_m0260t_zachrana__second_dreaming_clip01.bk2", 16.3),
+            ("Videos/m02/cin_m0260t_zachrana__second_dreaming_clip02/cin_m0260t_zachrana__second_dreaming_clip02.bk2", 25.2),
+            ("Videos/m02/cin_m0260t_zachrana__second_dreaming_clip03/cin_m0260t_zachrana__second_dreaming_clip03.bk2", 19.8),
+            ("Videos/m03/cin_m0310t_socky__trosky_journey/cin_m0310t_socky__trosky_journey.bk2", 172.7),
+        };
+
+        public static int RecapMinutes => (int)Math.Round(PrologueVideos.Sum(v => v.Seconds) / 60.0);
+
+        /// <summary>The recap's start, once the New adventure's world is loaded (kdcmp.lua KCD2MP_W159RecapStart).</summary>
+        public static string RecapCall() =>
+            "if KCD2MP_W159RecapStart then KCD2MP_W159RecapStart(" +
+            Lua(string.Join(";", PrologueVideos.Select(v => ShortName(v.Path) + "|" + v.Seconds.ToString("0.0", CultureInfo.InvariantCulture)))) + ") end";
+
+        /// <summary>"Videos/m01/x/x.bk2" -> "m01/x" (the Lua expands it back; one console call holds all nine).</summary>
+        public static string ShortName(string path)
+        {
+            var p = path.Split('/');
+            return p.Length == 4 && p[0] == "Videos" && p[3] == p[2] + ".bk2" ? p[1] + "/" + p[2] : path;
+        }
 
         /// <summary>
         /// The host's CONNECT, pressed by the launcher: only after a load the menu's Start Game asked for, once the game's

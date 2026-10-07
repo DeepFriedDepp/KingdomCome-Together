@@ -18,11 +18,11 @@ Kingdom Come: Together is unofficial and free, made by its contributors and main
 ## How to start a game together (WO-159; for the how-to / FAQ channel)
 
 ```
-How to play together:
+How to play together (0.45.5):
 1. Both: open the Kingdom Come: Together launcher.
-2. Host: HOST GAME, share the address (or the Steam code), PLAY. On the game's main menu press Start Game: pick one of your worlds, or New adventure (a fresh world that starts as Henry right after the prologue — no prologue to replay). The launcher connects by itself once the world has loaded (no Alt+Tab).
-3. Partner: JOIN with the host's address (or JOIN THROUGH STEAM), PLAY. On the main menu press Join Game, then Join with a new character (or Bring my character). Pressed too early? It says "Waiting for the host…" and joins by itself when they're ready.
-You don't need anyone's save file any more. First time ever starting the game? Start it once from Steam and accept its two first-run pages, then use the launcher.
+2. Host: HOST GAME, share the address (or the Steam code), PLAY. On the game's main menu press Start Game: pick one of your worlds, or New adventure — choose your playstyle (Soldier / Adviser / Scout), then Skip the prologue (recommended with a partner) or watch its cutscenes (16 min, hold E to skip). You start where Hans and Henry part ways.
+3. Partner: JOIN with the host's address (or JOIN THROUGH STEAM), PLAY. On the main menu press Join Game, then Join with a new character (pick a playstyle; no save of your own needed) or Bring my character. Pressed too early? It says "Waiting for the host…" and joins by itself when they're ready.
+Nobody clicks CONNECT any more, and you don't need anyone's save file. First time ever starting the game? Start it once from Steam and accept its two first-run pages, then use the launcher.
 ```
 
 ## Version 0.42.7 (WO-148)

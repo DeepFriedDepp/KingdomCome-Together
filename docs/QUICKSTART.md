@@ -45,25 +45,31 @@ When every step shows ✅ the list says **Ready!** Click **PLAY**.
 
 ## 4. Host or Join
 
-When the launcher starts the game, the game's main menu shows **Start Game** and **Join
-Game** at the top. Continue, New Game and Load Game are greyed out while Kingdom Come:
+When the launcher starts the game, the game's main menu shows the Kingdom Come: Together
+logo and **Start Game** and **Join Game** at the top. Continue, New Game and Load Game are greyed out while Kingdom Come:
 Together runs them (start the game from Steam to play alone as usual).
 
 - **Host:** click **HOST GAME**, then share the address the launcher shows. Click
   **PLAY**. In the game, press **Start Game**:
   - one of **your worlds** (your own Modding Tools saves, one line per save slot, newest
     first) — it loads where you left it; or
-  - **New adventure** — a new world that starts as Henry **right after the prologue** (you
-    skip it). It goes into an empty save slot and saves normally from then on; each new
-    adventure is its own world.
+  - **New adventure** — a new world that starts as Henry **where Hans and Henry part
+    ways** (the whole prologue is behind you: the ride, the ambush, the herbalist, the bar
+    fight, the pillory). Choose your **playstyle** (Soldier, Adviser or Scout — each says
+    what it raises), then **Skip the prologue** (recommended when a partner is joining: they
+    can join right away) or **Watch the prologue's cutscenes** (16 minutes of its rendered
+    cutscenes, no conversations or choices; **hold E** to skip the rest; your partner joins
+    when they end). It goes into an empty save slot and saves normally from then on; each
+    new adventure is its own world.
 
   You don't need to switch back to the launcher: once your world has loaded and settled
   (about 10 seconds), the launcher connects by itself. If it can't, the game says so on
   screen and the launcher window says why.
 - **Join:** click **ADD SERVER**, enter your host's address, then **JOIN** (or use
   **JOIN THROUGH STEAM** with your host's code). Click **PLAY**. In the game, press
-  **Join Game**, then **Join with a new character** (or **Bring my character** if you have a
-  Modding Tools save of your own). If your host isn't in their world yet, the menu says
+  **Join Game**, then **Join with a new character** and its playstyle (your Henry starts
+  where Hans and Henry part ways; you need no save of your own), or **Bring my character**
+  if you have a Modding Tools save of your own. If your host isn't in their world yet, the menu says
   **Waiting for the host…** and you join as soon as they are (**Cancel** stops waiting).
   Your host's world comes to you, and your character lands beside the host. No CONNECT
   click on either side.

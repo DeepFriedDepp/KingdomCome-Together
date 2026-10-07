@@ -210,10 +210,45 @@ public class Wo159Tests : IDisposable
 
     // ------------------------------------------------------------------ the start-save recipe
 
+    // the quest tree where Hans and Henry part: M03 Done, M05 started with nothing of it done (single-quoted: it rides in
+    // the builder's World text, which also lands in the header's double-quoted attribute)
+    private const string AtSplit = "<Roots><_Barbora><Nodes><_trosecko><Nodes>"
+        + "<_socky><Nodes><_questProgress value='Done'/></Nodes></_socky>"
+        + "<_svatba><Nodes><_questProgress value='Active'/><_objectiveVisual1><Logs><Active/></Logs></_objectiveVisual1></Nodes></_svatba>"
+        + "</Nodes></_trosecko></Nodes></_Barbora></Roots>";
+    private static readonly List<(uint, uint)> ScoutSkills = [(0, 900), (4, 700), (14, 800), (19, 1200), (24, 150), (6, 60)];
+
+    [Fact]
+    public void The_cut_point_is_where_Hans_and_Henry_part_ways()
+    {
+        Assert.True(Wo159.CutPoint(WhsSave.Inflate(WhsSaveTests.File(new Spec { World = AtSplit })).Raw).Ok);
+        var early = Wo159.CutPoint(WhsSave.Inflate(WhsSaveTests.File(new Spec { World = AtSplit.Replace("value='Done'", "value='Active'") })).Raw);
+        Assert.False(early.Ok);   // still in the bar-fight quest
+        Assert.Contains("M03 (the bar fight, the pillory) Active", early.Detail);
+        var late = Wo159.CutPoint(WhsSave.Inflate(WhsSaveTests.File(new Spec { World = AtSplit.Replace("<Logs><Active/></Logs>", "<Logs><Active/><Done/></Logs>") })).Raw);
+        Assert.False(late.Ok);    // an objective of Wedding Crashers done already
+        Assert.Contains("1 objective(s) done", late.Detail);
+        Assert.False(Wo159.CutPoint(WhsSave.Inflate(WhsSaveTests.File(new Spec())).Raw).Ok);   // no quest tree at all
+    }
+
+    [Fact]
+    public void The_playstyle_is_read_from_Henrys_own_skills()
+    {
+        Assert.Equal("scout", Wo159.PlaystyleOf(WhsSave.Inflate(WhsSaveTests.File(new Spec { Skills = ScoutSkills })).Raw).Style);
+        Assert.Equal("soldier", Wo159.PlaystyleOf(WhsSave.Inflate(WhsSaveTests.File(new Spec { Skills = [(17, 1500), (23, 900), (24, 600), (19, 10)] })).Raw).Style);
+        Assert.Equal("adviser", Wo159.PlaystyleOf(WhsSave.Inflate(WhsSaveTests.File(new Spec { Skills = [(6, 800), (26, 900), (13, 400), (24, 150)] })).Raw).Style);
+        Assert.Null(Wo159.PlaystyleOf(WhsSave.Inflate(WhsSaveTests.File(new Spec { Skills = [(2, 77)] })).Raw).Style);   // none of the three
+    }
+
     [Fact]
     public void Validate_passes_a_clean_post_prologue_Henry_and_names_every_failure()
     {
-        Assert.All(Wo159.Validate(WhsSaveTests.File(new Spec { Pristine = true })), c => Assert.True(c.Pass, c.Name + ": " + c.Detail));
+        var clean = WhsSaveTests.File(new Spec { Pristine = true, World = AtSplit });
+        Assert.All(Wo159.Validate(clean), c => Assert.True(c.Pass, c.Name + ": " + c.Detail));
+        var scout = WhsSaveTests.File(new Spec { World = AtSplit, Skills = ScoutSkills });
+        Assert.All(Wo159.Validate(scout, "scout"), c => Assert.True(c.Pass, c.Name + ": " + c.Detail));
+        Assert.Contains(Wo159.Validate(scout, "soldier"), c => c.Name == "the soldier playstyle" && !c.Pass && c.Detail.Contains("look like scout"));
+        Assert.Contains(Wo159.Validate(WhsSaveTests.File(new Spec())), c => c.Name == "where Hans and Henry part ways" && !c.Pass);
         var prologue = Wo159.Validate(WhsSaveTests.File(new Spec { Bohuta = true }));
         Assert.Contains(prologue, c => c.Name == "after the prologue, as Henry" && !c.Pass && c.Detail.Contains("player_bohuta"));
         var regular = Wo159.Validate(WhsSaveTests.File(new Spec { Build = Regular }));
@@ -224,9 +259,66 @@ public class Wo159Tests : IDisposable
         Assert.Contains(header, c => c.Name == "no account or machine name in the header" && !c.Pass);
         Assert.Contains(header, c => c.Name == "no mods listed in the header" && !c.Pass);
         // the scrubbed copy passes the header checks
-        var c0 = WhsSave.Inflate(WithGameHeader(WhsSaveTests.File(new Spec())));
+        var c0 = WhsSave.Inflate(WithGameHeader(WhsSaveTests.File(new Spec { World = AtSplit })));
         var scrubbed = WhsSave.Deflate(Encoding.UTF8.GetBytes(Wo159.ScrubDescription(c0.Desc)), c0.Raw, c0.FooterTail);
         Assert.All(Wo159.Validate(scrubbed), c => Assert.True(c.Pass, c.Name));
         Assert.Single(Wo159.Validate([1, 2, 3]));   // unreadable: one failed check, nothing else tried
+    }
+
+    // ------------------------------------------------------------------ the playstyle swap, the joiner's choice
+
+    private void PutStyle(string style, uint seed, List<(uint, uint)> skills)
+    {
+        Directory.CreateDirectory(Path.Combine(Source, style));
+        File.WriteAllBytes(Path.Combine(Source, style, "permanent002.whs"), WithGameHeader(WhsSaveTests.File(new Spec { Seed = seed, World = AtSplit, Skills = skills })));
+    }
+
+    [Fact]
+    public void One_staged_slot_takes_whichever_playstyle_is_chosen()
+    {
+        PutStyle("soldier", 0x1001, [(17, 1500)]);
+        PutStyle("scout", 0x3003, ScoutSkills);
+        Assert.Equal(["soldier", "scout"], Wo159.InstalledStyles(Source));
+        var st = Wo159.Stage(Saves, Source, Ledger);   // the root: the first playstyle installed
+        Assert.True(st.Ok, st.Why);
+        string staged = Path.Combine(Saves, $"playline{st.Playline}", "permanent002.whs");
+        Assert.Equal("soldier", Wo159.PlaystyleOf(WhsSave.Inflate(File.ReadAllBytes(staged)).Raw).Style);
+        var sw = Wo159.Swap(staged, Wo159.StyleFile(Source, "scout")!, Ledger);
+        Assert.True(sw.Ok, sw.Why);
+        var raw = WhsSave.Inflate(File.ReadAllBytes(staged)).Raw;
+        Assert.Equal("scout", Wo159.PlaystyleOf(raw).Style);
+        Assert.NotEqual(st.SeedTag, sw.SeedTag);                       // a new world again
+        Assert.NotEqual(WhsSave.SeedTag(0x3003), sw.SeedTag);
+        Assert.Equal(sw.SeedTag, Wo159.ReadLedger(Ledger).Single().SeedTag);   // the ledger follows the new bytes
+        Assert.True(WhsSave.VerifyFile(staged).Ok);
+        Assert.Equal((1, 0), (Wo159.Unstage(Ledger).Removed, 0));            // still never played: taken back
+        Assert.False(Wo159.Swap(staged, Wo159.StyleFile(Source, "scout")!, Ledger).Ok);   // not staged any more
+        Assert.Null(Wo159.StyleFile(Source, "adviser"));
+        Assert.Null(Wo159.StyleFile(Source, "../soldier"));
+    }
+
+    [Theory]
+    [InlineData("bring", true, "bring", null)]
+    [InlineData("fresh", true, "fresh", null)]
+    [InlineData("fresh:scout", true, "fresh", "scout")]
+    [InlineData(" Fresh:Adviser ", true, "fresh", "adviser")]
+    [InlineData("fresh:wizard", false, "", null)]
+    [InlineData("bring:scout", false, "", null)]
+    [InlineData("", false, "", null)]
+    public void The_joiners_choice_carries_its_playstyle(string c, bool ok, string choice, string? style)
+    {
+        Assert.Equal(ok, Wo159Rules.TryParseJoinChoice(c, out string ch, out string? st));
+        Assert.Equal((choice, style), (ch, st));
+    }
+
+    [Fact]
+    public void A_joiner_waiting_for_the_prologue_is_told_how_long()
+    {
+        Assert.Equal(("prologue", (ushort)7), Wo159Rules.BusyReason("prologue 7"));
+        Assert.Equal(("combat", (ushort)0), Wo159Rules.BusyReason("combat"));
+        Assert.Equal("Your host is watching the prologue (about 7 min left). You'll join as soon as it ends or they skip it.", Wo159Rules.DeferredText("prologue", 7));
+        Assert.Equal("Your host is busy, you'll join in a moment.", Wo159Rules.DeferredText("combat", 0));
+        Assert.Equal("prologue", KcdMp.Wire.Protocol.JoinReasonName(KcdMp.Wire.Protocol.JoinReasonId("prologue")));
+        Assert.Equal(KcdMp.Wire.Protocol.JoinBusyReasons.Length - 1, KcdMp.Wire.Protocol.JoinReasonId("prologue"));   // appended: old ids unchanged
     }
 }

@@ -199,7 +199,7 @@ public partial class GameBridge
         {
             case "join_try":        // "<joinId> paused <n> ..." | "<joinId> busy <reason>"
                 if (_hostJoin is { } j && j.JoinId == id && p.Length >= 2)
-                    j.LuaReply?.TrySetResult((p[1], p.Length > 2 ? p[2] : ""));
+                    j.LuaReply?.TrySetResult((p[1], p.Length > 2 ? string.Join(' ', p.Skip(2)) : ""));   // WO-159: "prologue <min>"
                 return;
             case "join_resumed":    // "<joinId> <reason>": the mod resumed on its own (mp_join_cancel, its safety timer)
                 if (_hostJoin is { } j2 && j2.JoinId == id) j2.Cancel(p.Length > 1 ? p[1] : "mod");
@@ -412,7 +412,8 @@ public partial class GameBridge
                 if (busy != lastBusy || (DateTime.UtcNow - lastStatus).TotalSeconds >= 10)
                 {
                     Console.WriteLine($"MP-JOIN host: join 0x{j.JoinId:x8} deferred: {busy} -- telling {j.Partner} 'your host is busy'");
-                    await TrySendStatusAsync(j, Protocol.JoinStateDeferred, busy);
+                    var (busyName, busyArg) = Wo159Rules.BusyReason(busy);   // WO-159: "prologue <min>" -> the reason + minutes left
+                    await TrySendStatusAsync(j, Protocol.JoinStateDeferred, busyName, busyArg);
                     lastBusy = busy; lastStatus = DateTime.UtcNow;
                 }
                 if ((DateTime.UtcNow - j.RequestUtc).TotalSeconds > JoinDeferMaxS)
@@ -675,7 +676,7 @@ public partial class GameBridge
         Console.WriteLine($"MP-JOIN joiner: host status join=0x{joinId:x8} state={st} reason={rs} arg={arg}");
         switch (state)
         {
-            case Protocol.JoinStateDeferred: SetJoinUi("deferred", "Your host is busy, you'll join in a moment."); break;
+            case Protocol.JoinStateDeferred: SetJoinUi("deferred", Wo159Rules.DeferredText(rs, arg)); break;   // WO-159: the prologue says how long
             case Protocol.JoinStatePaused:
             case Protocol.JoinStateSaving: SetJoinUi("saving", "Your host is saving the world..."); break;
             case Protocol.JoinStateWaitingReady: SetJoinUi("received", "World received. Loading..."); break;

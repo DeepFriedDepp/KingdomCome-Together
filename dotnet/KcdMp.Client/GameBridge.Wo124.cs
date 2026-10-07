@@ -113,7 +113,7 @@ public partial class GameBridge
 
     /// <summary>KCDMP_JOIN_SAVES_DIR (tests) or the engine's saves folder.</summary>
     private static string? ResolveSavesDirForJoin() =>
-        Environment.GetEnvironmentVariable("KCDMP_JOIN_SAVES_DIR") is { Length: > 0 } d ? d : ResolveSavesDir();
+        Environment.GetEnvironmentVariable("KCDMP_JOIN_SAVES_DIR") is { Length: > 0 } d ? d : ResolveSavesDir() ?? Wo159Rules.CreateSavesDirIfGameRan();   // WO-159: a new player's first join
 
     private static readonly Regex TransientName = new(@"^mpworld[0-9a-f]{1,8}\.(whs|part)$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
@@ -515,6 +515,7 @@ public partial class GameBridge
             _lastWorldPlayline = j.Playline;
             j.Name = $"mpworld{j.JoinId:x8}";
             string dir = Path.Combine(saves, $"playline{j.Playline}");
+            Directory.CreateDirectory(dir);   // WO-159: a new player's slot may not exist yet
             string part = Path.Combine(dir, j.Name + ".part");
             string final = Path.Combine(dir, j.Name + ".whs");
             Wo125Sweep("before a join");

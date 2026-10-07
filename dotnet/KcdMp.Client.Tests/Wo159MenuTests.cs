@@ -10,16 +10,18 @@ namespace KcdMp.Client.Tests;
 public class Wo159MenuTests
 {
     [Theory]
-    [InlineData("[KCD2-MP-EVT] v1 12 w159 newadv", "newadv", -1, "", "")]
-    [InlineData("<12:01:02> [KCD2-MP-EVT] v1 13 w159 load 2 autosave118", "load", 2, "autosave118", "")]
-    [InlineData("[KCD2-MP-EVT] v1 14 w159 join fresh", "join", -1, "", "fresh")]
-    [InlineData("[KCD2-MP-EVT] v1 15 w159 join bring", "join", -1, "", "bring")]
-    [InlineData("[KCD2-MP-EVT] v1 16 w159 cancel", "cancel", -1, "", "")]
-    public void The_menus_choices_are_read_from_its_log_line(string line, string kind, int pl, string name, string join)
+    [InlineData("[KCD2-MP-EVT] v1 12 w159 newadv scout watch", "newadv", -1, "", "", "scout", true)]
+    [InlineData("[KCD2-MP-EVT] v1 12 w159 newadv soldier skip", "newadv", -1, "", "", "soldier", false)]
+    [InlineData("<12:01:02> [KCD2-MP-EVT] v1 13 w159 load 2 autosave118", "load", 2, "autosave118", "", "", false)]
+    [InlineData("[KCD2-MP-EVT] v1 14 w159 join fresh adviser", "join", -1, "", "fresh", "adviser", false)]
+    [InlineData("[KCD2-MP-EVT] v1 15 w159 join bring", "join", -1, "", "bring", "", false)]
+    [InlineData("[KCD2-MP-EVT] v1 16 w159 cancel", "cancel", -1, "", "", "", false)]
+    [InlineData("[KCD2-MP-EVT] v1 17 w159 recap skipped", "recap", -1, "skipped", "", "", false)]
+    public void The_menus_choices_are_read_from_its_log_line(string line, string kind, int pl, string name, string join, string style, bool watch)
     {
         var c = MenuTakeoverRule.Parse(line);
         Assert.NotNull(c);
-        Assert.Equal((kind, pl, name, join), (c!.Kind, c.Playline, c.Name, c.Join));
+        Assert.Equal((kind, pl, name, join, style, watch), (c!.Kind, c.Playline, c.Name, c.Join, c.Style, c.Watch));
     }
 
     [Theory]
@@ -29,6 +31,10 @@ public class Wo159MenuTests
     [InlineData("[KCD2-MP-EVT] v1 12 w159 load 2 ..\\..\\x")]           // not a save name
     [InlineData("[KCD2-MP-EVT] v1 12 w159 load 2 a;quit")]
     [InlineData("[KCD2-MP-EVT] v1 12 w159 join somebody")]
+    [InlineData("[KCD2-MP-EVT] v1 12 w159 newadv")]                    // no playstyle
+    [InlineData("[KCD2-MP-EVT] v1 12 w159 newadv wizard skip")]        // not one of the three
+    [InlineData("[KCD2-MP-EVT] v1 12 w159 newadv scout maybe")]
+    [InlineData("[KCD2-MP-EVT] v1 12 w159 join fresh")]                // a new character always names its playstyle
     [InlineData("[KCD2-MP-EVT] v1 12 w159 lo")]                         // a line cut short
     [InlineData("[KCD2-MP] WO159-MENU chose newadv")]                   // the human-readable line is not the event
     public void Anything_else_is_not_a_choice(string line) => Assert.Null(MenuTakeoverRule.Parse(line));
@@ -63,6 +69,30 @@ public class Wo159MenuTests
     }
 
     private static string Sig(string call) => call.Split("sig=\"")[1][..12];
+
+    [Fact]
+    public void The_model_says_which_playstyles_are_installed_and_the_joins_own_line()
+    {
+        string m = MenuTakeoverRule.ModelCall(true, [], "", new W(3, "permanent002", ""), "", "idle", false, "", ["soldier", "scout"]);
+        Assert.Contains("styles={soldier=true,scout=true,}", m);
+        Assert.Contains("recapMin=16", m);
+        string j = MenuTakeoverRule.ModelCall(false, [], "", null, "", "joining", false, "", null, "Your host is watching the prologue (about 9 min left).");
+        Assert.Contains("status=\"Your host is watching the prologue (about 9 min left).\"", j);
+        Assert.Contains("styles={}", j);
+    }
+
+    [Fact]
+    public void The_recap_is_the_prologues_nine_rendered_cutscenes_in_one_console_call()
+    {
+        Assert.Equal(9, MenuTakeoverRule.PrologueVideos.Length);
+        Assert.Equal(16, MenuTakeoverRule.RecapMinutes);   // 980.8 s
+        Assert.All(MenuTakeoverRule.PrologueVideos, v => Assert.Matches(@"^Videos/m(50|01|02|03)/", v.Path));
+        string call = MenuTakeoverRule.RecapCall();
+        Assert.True(Uri.EscapeDataString("#" + call).Length <= MenuTakeoverRule.MaxEncoded, $"{Uri.EscapeDataString("#" + call).Length} encoded characters");
+        Assert.Contains("\"m50/cin_m5010k_obranabohuta__siege_intro_start|199.5;", call);
+        Assert.EndsWith("m03/cin_m0310t_socky__trosky_journey|172.7\") end", call);
+        Assert.Equal("m01/x", MenuTakeoverRule.ShortName("Videos/m01/x/x.bk2"));
+    }
 
     [Fact]
     public void The_joiners_choice_names_the_real_difference()

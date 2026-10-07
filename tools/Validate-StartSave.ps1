@@ -19,13 +19,18 @@
       no partner / mod data          no "kcd2mp" name anywhere in the world (a partner's figure, a mod entity)
       no account or machine name     DebugInfoHistory UserName and BuildComputer are empty
       no mods listed in the header   UsedMods is empty
+      where Hans and Henry part ways M03 (the bar fight, the pillory) Done; nothing of M05 (Wedding Crashers) done
+      the <style> playstyle          (with -Style) Henry's own playstyle skills match: soldier / adviser / scout
 
     -WriteScrubbed <out.whs> writes a copy with the account and machine names cleared and the mods list emptied (header only;
     the world is not touched), when the save passes the first four checks. Supply that copy. The input is never
     changed.
 
 .PARAMETER Path
-    A .whs file, or a folder holding exactly one (e.g. assets\start-save).
+    A .whs file, or a folder holding exactly one (e.g. assets\start-save\soldier).
+
+.PARAMETER Style
+    soldier | adviser | scout: the playstyle this start save must have taken in the prologue.
 
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File tools\Validate-StartSave.ps1 -Path assets\start-save
@@ -35,6 +40,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][string] $Path,
+    [ValidateSet('', 'soldier', 'adviser', 'scout')][string] $Style = '',
     [string] $WriteScrubbed = '',
     [string] $Agent = ''
 )
@@ -56,6 +62,7 @@ if (Test-Path $Path -PathType Container) {
 if (-not (Test-Path $file -PathType Leaf)) { Write-Host "FAIL  no such file: $file" -ForegroundColor Red; exit 1 }
 
 $a = @('--w159', 'validate', '--file', (Resolve-Path $file).Path)
+if ($Style) { $a += @('--style', $Style) }
 if ($WriteScrubbed) {
     $outDir = Split-Path -Parent $WriteScrubbed
     if ($outDir -and -not (Test-Path $outDir)) { New-Item -ItemType Directory -Force $outDir | Out-Null }

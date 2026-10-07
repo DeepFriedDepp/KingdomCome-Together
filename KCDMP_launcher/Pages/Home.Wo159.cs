@@ -39,6 +39,8 @@ namespace KCDMP_launcher.Pages
         private W159SavesData? w159Saves;
         private string w159NewWhy = "";
         private readonly ConcurrentQueue<MenuTakeoverRule.MenuChoice> w159Choices = new();
+        private string? w159StartRoot;                        // the start saves: one folder per playstyle
+        private List<string> w159Styles = new();              // the playstyles whose start save is installed
 
         private const int W159TickMs = 250;
         private const int W159StopVideoSettleMs = 1500;   // the agent's own settle after wh_ui_StopMovie (GameBridge.Wo154Join)
@@ -79,13 +81,16 @@ namespace KCDMP_launcher.Pages
             if (!settings.MenuTakeover) return true;
 
             string agent = ResolveAgainstLauncher(settings.AgentPath);
+            w159StartRoot = Environment.GetEnvironmentVariable("KCDMP_START_SAVE") is { Length: > 0 } envRoot ? envRoot : ResolveAgainstLauncher(settings.StartSavePath);
+            w159Styles = MenuTakeoverRule.Styles.Where(st => Directory.Exists(Path.Combine(w159StartRoot, st))
+                && Directory.GetFiles(Path.Combine(w159StartRoot, st), "*.whs").Length == 1).ToList();
+            Log.Information("MP-W159 start saves installed: {Styles}", w159Styles.Count == 0 ? "none" : string.Join(", ", w159Styles));
             // a start save an earlier run staged and never played (the launcher closed with its game still open)
             if (await AgentHelper.RunAsync<W159UnstageData>(agent, "--w159 unstage", "W159", TimeSpan.FromSeconds(20)) is { } u && u.Lines.Count > 0)
                 Log.Information("MP-W159 earlier start saves: {Lines}", string.Join("; ", u.Lines));
             if (hosting)
             {
-                string src = Environment.GetEnvironmentVariable("KCDMP_START_SAVE") is { Length: > 0 } env ? env : ResolveAgainstLauncher(settings.StartSavePath);
-                var st = await AgentHelper.RunAsync<W159StageData>(agent, $"--w159 stage --source \"{src}\"", "W159", TimeSpan.FromSeconds(30));
+                var st = await AgentHelper.RunAsync<W159StageData>(agent, $"--w159 stage --source \"{w159StartRoot}\"", "W159", TimeSpan.FromSeconds(30));
                 if (st is { Ok: true }) Log.Information("MP-W159 start save staged: playline{Pl}/{Name} (new world {Tag})", st.Pl, st.Name, st.SeedTag);
                 else
                 {
@@ -93,6 +98,7 @@ namespace KCDMP_launcher.Pages
                     Log.Information("MP-W159 no new adventure this launch: {Why}", st?.Why ?? "the helper did not answer");
                 }
             }
+            Wo159PlaceLogo();
             w159Saves = await AgentHelper.RunAsync<W159SavesData>(agent, "--w159 saves", "W159", TimeSpan.FromSeconds(60));
             Log.Information("MP-W159 worlds: {N} usable, staged={Staged}, hidden=\"{Hidden}\"", w159Saves?.Usable.Count ?? -1,
                 w159Saves?.Staged is { } s ? $"playline{s.Pl}/{s.Name}" : "none", w159Saves?.Hidden ?? "");
@@ -122,7 +128,8 @@ namespace KCDMP_launcher.Pages
             var adv = s?.Staged is { } st && st.Pl is >= 0 and <= 4 ? new MenuTakeoverRule.WorldEntry(st.Pl, st.Name, "") : null;
             string why = adv is not null ? "" : w159NewWhy.Length > 0 ? w159NewWhy : "No new adventure is available.";
             var (bring, msg) = MenuTakeoverRule.JoinChoice(s?.Usable.Count ?? 0, s?.HiddenRegular ?? 0, s?.HiddenCopies ?? 0);
-            return MenuTakeoverRule.ModelCall(hosting, worlds, s?.Hidden ?? "", adv, why, w159JoinState, bring, msg);
+            return MenuTakeoverRule.ModelCall(hosting, worlds, s?.Hidden ?? "", adv, why, w159JoinState, bring, msg, w159Styles,
+                w159JoinState == "joining" ? joinStatusMessage ?? "" : "");
         }
 
         private async Task Wo159DriverAsync(Process game, bool hosting, DateTime gameStartLocal)
@@ -134,6 +141,7 @@ namespace KCDMP_launcher.Pages
             long lastSeq = -1;
             string pushed = "";
             bool loadIssued = false, armedLogged = false, choicePosted = false, menuLoad = false, hostConnectTried = false;
+            bool recapPending = false, recapSent = false;
             GameStage lastStage = GameStage.Starting;
             DateTime connectedAt = DateTime.MinValue;
             Log.Information("MP-W159 menu driver on ({Role})", hosting ? "host" : "joiner");
@@ -177,11 +185,27 @@ namespace KCDMP_launcher.Pages
                                 menuLoad |= loadIssued;
                                 break;
                             case "newadv" when hosting && !loadIssued && w159Saves?.Staged is { } st:
+                            {
+                                // the chosen playstyle's start save into the staged slot, then the load
+                                var sw = await AgentHelper.RunAsync<W159StageData>(ResolveAgainstLauncher(settings.AgentPath),
+                                    $"--w159 swap --path \"{st.Path}\" --source \"{w159StartRoot}\" --style {c.Style}", "W159", TimeSpan.FromSeconds(30));
+                                if (sw is not { Ok: true })
+                                {
+                                    Log.Warning("MP-W159 the {Style} start save could not be put in place: {Why}", c.Style, sw?.Why ?? "the helper did not answer");
+                                    await console.LuaAsync(MenuTakeoverRule.HudLine("The new adventure could not be prepared. Switch to the launcher window for details."));
+                                    break;
+                                }
+                                Log.Information("MP-W159 new adventure: {Style}, a new world {Tag}; prologue {How}", c.Style, sw.SeedTag, c.Watch ? "watched" : "skipped");
                                 loadIssued = await Wo159LoadAsync(console, st.Pl, st.Name, true);
                                 menuLoad |= loadIssued;
+                                recapPending = loadIssued && c.Watch;
+                                break;
+                            }
+                            case "recap":
+                                Log.Information("MP-W159 the prologue's cutscenes {How}", c.Name);
                                 break;
                             case "join" when !hosting:
-                                w159JoinChoice = c.Join;
+                                w159JoinChoice = c.Join == "fresh" ? "fresh:" + c.Style : "bring";
                                 w159JoinState = "waiting";
                                 break;
                             case "cancel" when !hosting && w159JoinState == "waiting":
@@ -189,6 +213,14 @@ namespace KCDMP_launcher.Pages
                                 w159JoinState = "idle";
                                 break;
                         }
+                    }
+
+                    // "Watch the prologue": its rendered cutscenes start once the New adventure's world is there
+                    if (recapPending && !recapSent && stage == GameStage.World && follower is not null
+                        && now - follower.State.WorldSinceS >= 2)
+                    {
+                        recapSent = await console.LuaAsync(MenuTakeoverRule.RecapCall());
+                        Log.Information("MP-W159 the prologue's cutscenes {State} ({Min} min, hold E to skip)", recapSent ? "started" : "NOT started", MenuTakeoverRule.RecapMinutes);
                     }
 
                     // the host: CONNECT pressed by the launcher once the world Start Game loaded has settled (no Alt+Tab)
@@ -242,9 +274,42 @@ namespace KCDMP_launcher.Pages
             catch (Exception ex) { Log.Warning("MP-W159 menu driver stopped: {Kind}: {Msg}", ex.GetType().Name, ex.Message); }
             try { await game.WaitForExitAsync(); } catch { }
             Log.Information("MP-W159 the game exited");
+            Wo159RemoveLogo();
             string agent = ResolveAgainstLauncher(settings.AgentPath);
             if (await AgentHelper.RunAsync<W159UnstageData>(agent, "--w159 unstage", "W159", TimeSpan.FromSeconds(20)) is { } u && u.Lines.Count > 0)
                 Log.Information("MP-W159 start saves after the game: {Lines}", string.Join("; ", u.Lines));
+        }
+
+        // ------------------------------------------------------------ our logo on the main menu (launcher-started only)
+        //
+        // The game draws its menu logo from Libs/UI/Textures/KCDLogo.dds. kdcmp_brand.pak (beside the launcher; built by
+        // tools\Build-MenuLogo.py + tools\Publish-Release.ps1) carries ours under that name. It is put into the mod's
+        // Data folder only for a game this launcher starts and taken out when that game exits, so a game started any other
+        // way shows the game's own logo. A pak left behind by a launcher that was killed is removed by the next launch's
+        // exit, or by Setup (it prunes what is not the mod's).
+        private const string BrandPak = "kdcmp_brand.pak";
+
+        private string? Wo159BrandTarget() =>
+            string.IsNullOrEmpty(settings.GamePath) ? null : Path.Combine(ModDirFor(settings.GamePath), "Data", BrandPak);
+
+        private void Wo159PlaceLogo()
+        {
+            string src = ResolveAgainstLauncher(BrandPak);
+            if (!File.Exists(src) || Wo159BrandTarget() is not string dst) { Log.Information("MP-W159 no menu logo pak beside the launcher: the game's own logo"); return; }
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(dst)!);
+                File.Copy(src, dst, overwrite: true);
+                Log.Information("MP-W159 our logo placed for this game ({Pak})", BrandPak);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { Log.Warning("MP-W159 our logo could not be placed: {Kind}", ex.GetType().Name); }
+        }
+
+        private void Wo159RemoveLogo()
+        {
+            if (Wo159BrandTarget() is not string dst || !File.Exists(dst)) return;
+            try { File.Delete(dst); Log.Information("MP-W159 our logo taken out again (the game's own for a normal start)"); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { Log.Warning("MP-W159 our logo could not be taken out: {Kind}", ex.GetType().Name); }
         }
 
         /// <summary>The menu's load: the menu's video stopped first (WO-154's freeze), then the WO-124 load.</summary>

@@ -342,7 +342,10 @@ public partial class GameBridge
     private void Wo125OnLauncherChoice(string c)
     {
         c = (c ?? "").Trim().ToLowerInvariant();
-        if (c is not ("bring" or "fresh")) { Console.WriteLine($"MP-HENRY joiner: the launcher sent an unknown choice '{c}' -- ignored"); return; }
+        if (!Wo159Rules.TryParseJoinChoice(c, out string parsed, out string? style)) { Console.WriteLine($"MP-HENRY joiner: the launcher sent an unknown choice '{c}' -- ignored"); return; }
+        c = parsed;
+        _w159FreshStyle = style;   // WO-159: "fresh:<playstyle>" = that bundled start save's Henry
+        if (style is not null) Console.WriteLine($"MP-HENRY joiner: a new character with the {style} playstyle (the bundled start save)");
         _firstChoice = c;
         _firstChoiceTag = _peerTag;
         _chooseAsked = false;
@@ -564,6 +567,7 @@ public partial class GameBridge
     private HenryChoice? Wo125SourceFor(string choice, out string why)
     {
         why = "";
+        if (choice == "fresh" && Wo159BundledFresh(out string bwhy) is { } bundled) return bundled;   // WO-159
         if (ResolveSavesDirForJoin() is not string saves) { why = "no saves folder"; return null; }
         uint? hostSeed = HostSeedForOwn();
         string? build = Wo135TargetBuild();   // WO-135: only saves of the host world's build

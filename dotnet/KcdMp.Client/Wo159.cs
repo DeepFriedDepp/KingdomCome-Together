@@ -160,6 +160,10 @@ public static class Wo159
         if (!Directory.Exists(source)) { why = "no start save is installed"; return null; }
         var f = Directory.EnumerateFiles(source, "*.whs").ToList();
         if (f.Count == 1) return f[0];
+        // the start-save root with one folder per playstyle: the first one installed (the menu swaps in the chosen one)
+        if (f.Count == 0)
+            foreach (var st in Wo159Rules.Styles)
+                if (StyleFile(source, st) is string sf) return sf;
         why = f.Count == 0 ? "no start save is installed" : $"the start-save folder holds {f.Count} saves (one is expected)";
         return null;
     }
@@ -205,6 +209,50 @@ public static class Wo159
         l.Add(new Staged { Path = final, Sha256 = Convert.ToHexString(SHA256.HashData(outBytes)).ToLowerInvariant(), SeedTag = tag, CreatedDir = created, StagedUtc = DateTime.UtcNow });
         WriteLedger(ledger, l);
         return new(true, pl, System.IO.Path.GetFileNameWithoutExtension(name), tag, "");
+    }
+
+    /// <summary>The one save of a playstyle's folder (start-save/&lt;style&gt;/), or null.</summary>
+    public static string? StyleFile(string root, string style)
+    {
+        if (!Wo159Rules.Styles.Contains(style)) return null;
+        string dir = System.IO.Path.Combine(root, style);
+        if (!Directory.Exists(dir)) return null;
+        var f = Directory.EnumerateFiles(dir, "*.whs").ToList();
+        return f.Count == 1 ? f[0] : null;
+    }
+
+    /// <summary>The playstyles whose start save is installed under <paramref name="root"/>.</summary>
+    public static List<string> InstalledStyles(string? root) =>
+        root is null ? [] : Wo159Rules.Styles.Where(s => StyleFile(root, s) is not null).ToList();
+
+    /// <summary>
+    /// The chosen playstyle's start save written over the staged one, just before the load: the game lists a save at its
+    /// start and reads the file only when it loads it (WO-159 probe: a replaced file is what loads). A new seed again, the
+    /// header scrubbed; .part + replace, read back; the ledger entry follows the new bytes.
+    /// </summary>
+    public static StageResult Swap(string stagedPath, string sourceFile, string ledger, Func<uint>? newSeed = null)
+    {
+        var l = ReadLedger(ledger);
+        var e = l.FirstOrDefault(x => string.Equals(x.Path, stagedPath, StringComparison.OrdinalIgnoreCase));
+        if (e is null || !File.Exists(stagedPath)) return new(false, -1, "", "", "that file is not a staged start save");
+        byte[] bytes;
+        try { bytes = WhsSave.ReadShared(sourceFile); } catch (IOException ex) { return new(false, -1, "", "", "the start save cannot be read: " + ex.Message); }
+        if (!WhsSave.Verify(bytes).Ok) return new(false, -1, "", "", "the start save does not verify");
+        uint old = WhsSave.ReadSeed(WhsSave.Inflate(bytes).Raw) ?? 0, seed;
+        do seed = newSeed?.Invoke() ?? BitConverter.ToUInt32(RandomNumberGenerator.GetBytes(4));
+        while (seed == 0 || seed == old);
+        var outBytes = Rekey(bytes, seed);
+        string part = stagedPath + ".part";
+        File.WriteAllBytes(part, outBytes);
+        File.Move(part, stagedPath, overwrite: true);
+        var back = WhsSave.ReadShared(stagedPath);
+        if (!back.AsSpan().SequenceEqual(outBytes) || WhsSave.ReadSeedFromFile(stagedPath) != seed)
+            return new(false, -1, "", "", "the swapped save did not read back as written");
+        e.Sha256 = Convert.ToHexString(SHA256.HashData(outBytes)).ToLowerInvariant();
+        e.SeedTag = WhsSave.SeedTag(seed);
+        WriteLedger(ledger, l);
+        var pp = WorldSaved.ParsePath(stagedPath);
+        return new(true, pp?.Playline ?? -1, System.IO.Path.GetFileNameWithoutExtension(stagedPath), e.SeedTag, "");
     }
 
     public sealed record UnstageResult(int Removed, int Kept, List<string> Lines);
@@ -254,7 +302,49 @@ public static class Wo159
 
     public sealed record Check(string Name, bool Pass, string Detail);
 
-    public static List<Check> Validate(byte[] file)
+    /// <summary>
+    /// Where the story stands: M03 ("socky", the bar fight and the pillory) Done -- Hans and Henry have parted -- and
+    /// nothing of M05 ("svatba", which the game starts at once) Done yet. From the save's ConceptState tree.
+    /// </summary>
+    public static (bool Ok, string Detail) CutPoint(byte[] raw)
+    {
+        System.Xml.XmlDocument? doc;
+        try { doc = SaveGameReader.ParseConceptState(raw); } catch (System.Xml.XmlException) { doc = null; }
+        if (doc is null) return (false, "the save holds no quest tree");
+        var tro = doc.SelectSingleNode("/Roots/_Barbora/Nodes/_trosecko/Nodes");
+        string State(string q) => tro?.SelectSingleNode($"_{q}//_questProgress")?.Attributes?["value"]?.Value ?? "none";
+        string m03 = State("socky"), m05 = State("svatba");
+        int m05Done = 0;
+        if (tro?.SelectSingleNode("_svatba") is { } sv)
+            foreach (System.Xml.XmlNode n in sv.SelectNodes(".//Logs") ?? (System.Xml.XmlNodeList)new System.Xml.XmlDocument().ChildNodes)
+                if (n.LastChild?.Name is "Done" or "Completed") m05Done++;
+        string d = $"M03 (the bar fight, the pillory) {m03}, M05 (Wedding Crashers) {m05} with {m05Done} objective(s) done";
+        bool ok = m03 == "Done" && m05 is not ("Done" or "Failed") && m05Done == 0;
+        return (ok, ok ? d : d + ": the start save must be made right after Hans and Henry part ways");
+    }
+
+    /// <summary>
+    /// Which of the prologue's three playstyles this Henry took: the one whose own skills (each preset's skills no other
+    /// preset raises) carry the most experience. Null when none of them has any.
+    /// </summary>
+    public static (string? Style, string Detail) PlaystyleOf(byte[] raw)
+    {
+        var rec = WhsSave.FindSoul(raw, WhsSave.HenrySoul);
+        if (rec is not WhsSave.Node r) return (null, "no Henry record");
+        var soul = WhsSave.DecodePlayerSoul(raw, r);
+        var xp = new Dictionary<string, long>(StringComparer.Ordinal);
+        foreach (var kv in (soul.Scalars.GetValueOrDefault("skill_xp") ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries))
+        {
+            int eq = kv.IndexOf('=');
+            if (eq > 0 && long.TryParse(kv[(eq + 1)..], out long v)) xp[kv[..eq]] = v;
+        }
+        var sums = Wo159Rules.StyleSkills.ToDictionary(s => s.Key, s => s.Value.Sum(k => xp.GetValueOrDefault(k)));
+        var best = sums.OrderByDescending(s => s.Value).First();
+        string d = string.Join(", ", sums.Select(s => $"{s.Key} {s.Value}"));
+        return (best.Value > 0 ? best.Key : null, d);
+    }
+
+    public static List<Check> Validate(byte[] file, string? style = null)
     {
         var o = new List<Check>();
         var v = WhsSave.Verify(file);
@@ -273,6 +363,14 @@ public static class Wo159
         o.Add(new("no account or machine name in the header", !user, user ? "the header names the account or machine that saved it: supply the copy -WriteScrubbed makes" : ""));
         bool mods = c.Desc.Contains("S_ModInfo", StringComparison.Ordinal);
         o.Add(new("no mods listed in the header", !mods, mods ? "the header lists mods used: supply the copy -WriteScrubbed makes (it empties the list)" : ""));
+        var cut = CutPoint(c.Raw);
+        o.Add(new("where Hans and Henry part ways", cut.Ok, cut.Detail));
+        if (style is not null)
+        {
+            var ps = PlaystyleOf(c.Raw);
+            o.Add(new($"the {style} playstyle", ps.Style == style,
+                ps.Style is null ? $"no playstyle skill has experience ({ps.Detail})" : $"its skills look like {ps.Style} ({ps.Detail})"));
+        }
         return o;
     }
 
@@ -339,6 +437,15 @@ public static class Wo159
                 Out(new { ok = r.Ok, pl = r.Playline, name = r.Name, seedTag = r.SeedTag, why = r.Why });
                 return r.Ok ? 0 : 1;
             }
+            case "swap":
+            {
+                // the chosen playstyle's start save over the staged one, just before the menu's load
+                string root = Opt("--source") ?? "", style = Opt("--style") ?? "";
+                if (StyleFile(root, style) is not string sf) { Out(new { ok = false, why = $"the {style} start save is not installed" }); return 1; }
+                var r = Swap(Opt("--path") ?? "", sf, ledger);
+                Out(new { ok = r.Ok, pl = r.Playline, name = r.Name, seedTag = r.SeedTag, why = r.Why });
+                return r.Ok ? 0 : 1;
+            }
             case "unstage":
             {
                 var r = Unstage(ledger);
@@ -357,7 +464,7 @@ public static class Wo159
                 byte[] b;
                 try { b = WhsSave.ReadShared(f); }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { Out(new { ok = false, pass = false, checks = new[] { new { name = "reads", pass = false, detail = ex.Message } } }); return 1; }
-                var checks = Validate(b);
+                var checks = Validate(b, Opt("--style"));
                 bool pass = checks.All(x => x.Pass);
                 string? scrubbed = null;
                 if (Opt("--write-scrubbed") is string outPath && checks.Take(4).All(x => x.Pass))
@@ -371,7 +478,64 @@ public static class Wo159
                 return pass ? 0 : 1;
             }
         }
-        Out(new { ok = false, why = "usage: --w159 saves|stage|unstage|used|validate" });
+        Out(new { ok = false, why = "usage: --w159 saves|stage|swap|unstage|used|validate" });
         return 2;
+    }
+}
+
+/// <summary>WO-159: the small rules shared by the agent, its IPC and the launcher's words.</summary>
+public static class Wo159Rules
+{
+    /// <summary>The prologue's three playstyles (M01's stat presets: fighter, diplomat, scout), as the menu names them.</summary>
+    public static readonly string[] Styles = ["soldier", "adviser", "scout"];
+
+    /// <summary>The skills only that preset raises (WO-159 findings: the three stat presets in M01).</summary>
+    public static readonly Dictionary<string, string[]> StyleSkills = new(StringComparer.Ordinal)
+    {
+        ["soldier"] = ["heavy_weapons", "weapon_large", "weapon_unarmed"],
+        ["adviser"] = ["alchemy", "scholarship", "drinking"],
+        ["scout"] = ["marksmanship", "survival", "stealth", "thievery"],
+    };
+
+    /// <summary>bring | fresh | fresh:&lt;playstyle&gt; (the launcher's /join-choice).</summary>
+    public static bool TryParseJoinChoice(string c, out string choice, out string? style)
+    {
+        c = (c ?? "").Trim().ToLowerInvariant();
+        choice = ""; style = null;
+        if (c is "bring" or "fresh") { choice = c; return true; }
+        if (c.StartsWith("fresh:", StringComparison.Ordinal) && Styles.Contains(c[6..])) { choice = "fresh"; style = c[6..]; return true; }
+        return false;
+    }
+
+    /// <summary>The mod's busy reason: "prologue 7" = the reason "prologue" and 7 minutes left (the status packet's arg).</summary>
+    public static (string Name, ushort Arg) BusyReason(string busy)
+    {
+        var p = (busy ?? "").Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
+        if (p.Length == 2 && ushort.TryParse(p[1], out ushort a)) return (p[0], a);
+        return (busy ?? "", 0);
+    }
+
+    /// <summary>What a deferred joiner reads.</summary>
+    public static string DeferredText(string reason, ushort arg) => reason == "prologue"
+        ? $"Your host is watching the prologue (about {Math.Max(1, (int)arg)} min left). You'll join as soon as it ends or they skip it."
+        : "Your host is busy, you'll join in a moment.";
+
+    /// <summary>KCDMP_START_SAVE (tests) or start-save beside this agent (Setup puts it beside the launcher and the agent).</summary>
+    public static string? StartSaveRoot()
+    {
+        string root = Environment.GetEnvironmentVariable("KCDMP_START_SAVE") is { Length: > 0 } e ? e : Path.Combine(AppContext.BaseDirectory, "start-save");
+        return Directory.Exists(root) ? root : null;
+    }
+
+    /// <summary>
+    /// A new player whose game has run (its user folder exists) but who never saved has no saves folder yet: it is made,
+    /// empty, so a first join has somewhere to put the host's world. Null when the game never ran here.
+    /// </summary>
+    public static string? CreateSavesDirIfGameRan()
+    {
+        if (GameBridge.Kcd2UserFolder() is not string user || !Directory.Exists(user)) return null;
+        string saves = Path.Combine(user, "saves");
+        try { Directory.CreateDirectory(saves); return saves; }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return null; }
     }
 }

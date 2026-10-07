@@ -6,10 +6,13 @@
 --   (N) a game nobody armed: loading the mod touches no menu function and registers no listener
 --   (R) the launcher's first tick: listeners, the root page in our order, the shipped entries greyed, no debug entries
 --   (W) menu-only: a player entity or a running load leaves the menu alone
---   (H) Start Game: the host page (worlds, New adventure, the hidden-saves note), a load, the new-adventure question
+--   (H) Start Game: the host page (worlds, New adventure, the hidden-saves note), a load, the playstyle page, the
+--       prologue page (Skip on top, Watch with its length)
 --   (G) the game's own pages: no redraw while one is open; Back to the root redraws on the next tick
---   (J) Join Game: the new-character default, waiting + Cancel, joining
---   (D) disarm before a load; a stale model is not redrawn; the recap stub
+--   (J) Join Game: the new-character default and its playstyle, waiting + Cancel, joining with the join's own line
+--   (D) disarm before a load; nothing sends input to the menu
+--   (P) the prologue's rendered cutscenes in the world: one after another, hold E for a second skips, a join waits
+--       ("prologue", minutes left), a dead timer chain ends it
 -- Driven by Test-WO159Synthetic.ps1 through the WO-77 MoonSharp driver.
 
 NOW = 0
@@ -144,7 +147,8 @@ do
     ERRS = {}
     KCD2MP_W159Model({ sig = "h2", role = "host", saves = { { pl = 2, name = "autosave118", label = "Playline 2 (Oct 07 14:02)" },
         { pl = 0, name = "quicksave030", label = "Playline 0 (Sep 30 21:10)" } },
-        hidden = "3 saves are copies of a host's world or from the regular game.", newadv = { pl = 3, name = "permanent002" } })
+        hidden = "3 saves are copies of a host's world or from the regular game.", newadv = { pl = 3, name = "permanent002" },
+        styles = { soldier = true, scout = true }, recapMin = 16 })
     KCD2MP_W159Tick()
     press("MP_StartGame")
     local p, head = lastPage()
@@ -157,15 +161,33 @@ do
     press("MP_Load_2")
     local e = events("w159")
     check("H7: a world: the launcher is told which", e[#e] == "load 0 quicksave030", e[#e])
-    local ask = count("AddConfirmation")
     press("MP_NewAdv")
-    check("H8: New adventure asks first (the game's own question)", count("AddConfirmation") == ask + 1)
+    p, head = lastPage()
+    check("H8: New adventure: the playstyle page", KCD2MP.w159.page == "style" and head == "Choose your playstyle"
+        and p[1].id == "MP_Style_soldier" and p[2].id == "MP_Style_adviser" and p[3].id == "MP_Style_scout")
+    check("H8b: each playstyle says what it raises", find(p, "MP_Style_scout").tip:find("stealth", 1, true) ~= nil)
+    check("H8c: a playstyle whose start save is not installed is greyed", find(p, "MP_Style_adviser").off and not find(p, "MP_Style_soldier").off)
     local nev = #events("w159")
-    confirm("MP_NewAdv", 1)
-    check("H9: Back on the question: nothing", #events("w159") == nev)
-    confirm("MP_NewAdv", 0)
+    press("MP_Style_adviser")
+    check("H8d: ...and pressing it does nothing", #events("w159") == nev and KCD2MP.w159.page == "style")
+    press("MP_Style_scout")
+    p, head = lastPage()
+    check("H9: then the prologue page: Skip on top and selected, Watch with its length", KCD2MP.w159.page == "prologue" and p[1].id == "MP_Prologue_skip"
+        and lastSel() == "MP_Prologue_skip" and p[2].text == "Watch the prologue's cutscenes (16 min)")
+    check("H9b: Skip recommends itself for a partner; Watch says a partner waits and how to skip", p[1].tip:find("partner", 1, true)
+        and p[2].tip:find("Hold E", 1, true) and p[2].tip:find("no conversations or choices", 1, true))
+    press("MP_Back")
+    check("H9c: Back from the prologue page: the playstyles again", KCD2MP.w159.page == "style")
+    press("MP_Style_scout")
+    press("MP_Prologue_watch")
     e = events("w159")
-    check("H10: Start: the launcher is told", e[#e] == "newadv")
+    check("H10: the launcher is told the playstyle and Watch", e[#e] == "newadv scout watch", e[#e])
+    press("MP_Prologue_skip")
+    e = events("w159")
+    check("H10b: ...or Skip", e[#e] == "newadv scout skip", e[#e])
+    check("H10c: no question box any more (the pages are the question)", count("AddConfirmation") == 0)
+    press("MP_Back"); press("MP_Back")
+    check("H10d: Back, Back: the playstyles, then Start Game", KCD2MP.w159.page == "host")
     -- no start save: New adventure greyed with the reason; no world: New adventure selected
     KCD2MP_W159Model({ sig = "h3", role = "host", saves = {}, newwhy = "All five save slots are in use." })
     KCD2MP_W159Tick()
@@ -214,7 +236,7 @@ end
 do
     ERRS = {}
     KCD2MP_W159Model({ sig = "j1", role = "join", join = { state = "idle", bring = false,
-        msg = "Your saves are from the regular game, not the Modding Tools." } })
+        msg = "Your saves are from the regular game, not the Modding Tools." }, styles = { soldier = true, adviser = true, scout = true } })
     KCD2MP_W159Tick()
     local p = lastPage()
     check("J1: the joiner's root: Join Game enabled and selected, Start Game greyed", not find(p, "MP_JoinGame").off and find(p, "MP_StartGame").off and lastSel() == "MP_JoinGame")
@@ -223,18 +245,24 @@ do
     check("J2: no own save: Join with a new character first and selected", p[1].id == "MP_JoinFresh" and lastSel() == "MP_JoinFresh")
     check("J3: Bring greyed with the plain reason", find(p, "MP_JoinBring").off and find(p, "MP_JoinBring").tip:find("regular game", 1, true))
     press("MP_JoinFresh")
+    check("J4a: a new character: the same playstyle page", KCD2MP.w159.page == "style" and lastPage()[1].id == "MP_Style_soldier")
+    local nev = #events("w159")
+    press("MP_Back")
+    check("J4b: Back from the playstyles: the join page, nothing chosen", KCD2MP.w159.page == "join" and #events("w159") == nev)
+    press("MP_JoinFresh")
+    press("MP_Style_adviser")
     local e = events("w159")
-    check("J4: the choice goes to the launcher", e[#e] == "join fresh")
+    check("J4: the choice and its playstyle go to the launcher", e[#e] == "join fresh adviser", e[#e])
     p = lastPage()
     check("J5: Waiting for the host... with a Cancel", find(p, "MP_JoinWait") and find(p, "MP_JoinWait").off and find(p, "MP_JoinCancel") and lastSel() == "MP_JoinCancel")
     -- the launcher's next push still says idle (it has not read the click yet): the page stays waiting
-    KCD2MP_W159Model({ sig = "j1", role = "join", join = { state = "idle", bring = false } })
+    KCD2MP_W159Model({ sig = "j1", role = "join", join = { state = "idle", bring = false }, styles = { soldier = true, adviser = true, scout = true } })
     KCD2MP_W159Tick()
     check("J6: a stale model does not undo the click", KCD2MP.w159.joinState == "waiting")
     press("MP_JoinCancel")
     e = events("w159")
     check("J7: Cancel: told, the choice page again", e[#e] == "cancel" and lastPage()[1].id == "MP_JoinFresh")
-    press("MP_JoinFresh")
+    press("MP_JoinFresh"); press("MP_Style_scout")
     press("MP_Back")
     e = events("w159")
     check("J8: Back while waiting cancels too", e[#e] == "cancel" and KCD2MP.w159.page == "root")
@@ -242,10 +270,12 @@ do
     KCD2MP_W159Tick()
     press("MP_JoinGame")
     check("J9: an own save to bring: Bring is the default", lastSel() == "MP_JoinBring" and not find(lastPage(), "MP_JoinBring").off)
-    KCD2MP_W159Model({ sig = "j3", role = "join", join = { state = "joining", bring = true } })
+    KCD2MP_W159Model({ sig = "j3", role = "join", join = { state = "joining", bring = true,
+        status = "Your host is watching the prologue (about 9 min left)." } })
     KCD2MP_W159Tick()
     p = lastPage()
     check("J10: joining: one greyed line, no Cancel", #p == 1 and p[1].id == "MP_JoinWait" and p[1].text:find("Joining", 1, true))
+    check("J10b: ...with the join's own status as its line", p[1].tip:find("watching the prologue", 1, true) ~= nil, p[1].tip)
     check("J11: no swallowed Lua errors", #ERRS == 0, ERRS[1])
 end
 
@@ -255,10 +285,61 @@ do
     local n, nev = #UI, #events("w159")
     press("MP_StartGame"); press("MP_JoinFresh")
     check("D1: disarmed (a load runs): our entries do nothing", #UI == n and #events("w159") == nev)
-    check("D2: the recap is not available (skip only)", KCD2MP_W159Recap() == false)
     local ms = 0
     for _, c in ipairs(UI) do if c.fn == "SetInput" then ms = ms + 1 end end
     check("D3: nothing ever sends input to the menu", ms == 0)
+end
+
+-- (P) the prologue's cutscenes in the world ---------------------------------------------------------------------------------
+do
+    ERRS = {}
+    player = { id = 1 }
+    KCD2MP.w122.sharedWorld = true
+    CMDS = {}; TIMERS = {}
+    NOW = 1000
+    local spec = "m01/cin_m0110t_prepadeni__intro_cutscene|169.7;m02/cin_m0210t_zachrana__fall_dream_clip01|149.9;m03/cin_m0310t_socky__trosky_journey|172.7"
+    TOASTS = {}
+    local uiBefore = #UI
+    check("P1: started", KCD2MP_W159RecapStart(spec) == true)
+    local hint = UI[#UI]
+    check("P1b: first the hint on the HUD (a video covers the UI)", #UI == uiBefore + 1 and hint.el == "hud" and hint.fn == "ShowInfoText"
+        and tostring(hint.args[1]):find("Hold E", 1, true) ~= nil and #CMDS == 0)
+    local function tick() local t = TIMERS[#TIMERS]; TIMERS[#TIMERS] = nil; if t then t.f() end end
+    NOW = 1002; tick()
+    check("P1c: no video during the hint", #CMDS == 0)
+    NOW = 1004.05; tick()
+    check("P2: the first video, the game's own path", CMDS[#CMDS] == "wh_ui_PlayMovie Videos/m01/cin_m0110t_prepadeni__intro_cutscene/cin_m0110t_prepadeni__intro_cutscene.bk2", CMDS[#CMDS])
+    check("P3: a join waits: 'prologue'", KCD2MP_JoinBusyReason() == "prologue", KCD2MP_JoinBusyReason())
+    check("P4: about 9 min left", math.ceil(KCD2MP_W159RecapLeftS() / 60) == 9, KCD2MP_W159RecapLeftS())
+    NOW = 1004 + 100; tick()
+    check("P5: still the first one at 100 s", #CMDS == 1)
+    NOW = 1004 + 170.1; tick()
+    check("P6: the second one after the first's length", CMDS[#CMDS]:find("fall_dream", 1, true) ~= nil, CMDS[#CMDS])
+    -- E pressed briefly: nothing; held for a second: skipped
+    KCD2MP_W159OnAction("use", "press"); NOW = NOW + 0.5; tick(); KCD2MP_W159OnAction("use", "release"); NOW = NOW + 1; tick()
+    check("P7: a short press does not skip", KCD2MP.w159.recap ~= nil)
+    check("P8: other keys are not taken", KCD2MP_W159OnAction("attack", "press") == false)
+    KCD2MP_W159OnAction("use", "press"); NOW = NOW + 1.05; tick()
+    check("P9: E held for a second: the rest is skipped, the video stopped", KCD2MP.w159.recap == nil and CMDS[#CMDS] == "wh_ui_StopMovie")
+    local e = events("w159")
+    check("P10: the launcher is told", e[#e] == "recap skipped", e[#e])
+    check("P11: a join no longer waits for it", KCD2MP_JoinBusyReason() ~= "prologue")
+    check("P12: E is the game's own again", KCD2MP_W159OnAction("use", "press") == false)
+    -- played to the end
+    NOW = 5000
+    KCD2MP_W159RecapStart("m02/cin_m0260t_zachrana__second_dreaming_clip01|16.3")
+    NOW = 5004.05; tick(); NOW = 5004.05 + 16.7; tick()
+    e = events("w159")
+    check("P13: played to the end: finished", KCD2MP.w159.recap == nil and e[#e] == "recap finished", e[#e])
+    -- a load kills the timer chain: the recap is over (no join waits forever)
+    NOW = 6000
+    KCD2MP_W159RecapStart("m02/cin_m0260t_zachrana__second_dreaming_clip01|16.3")
+    TIMERS = {}
+    NOW = 6000 + 3
+    check("P14: a dead timer chain: over", KCD2MP_JoinBusyReason() ~= "prologue" and KCD2MP.w159.recap == nil)
+    check("P15: a bad spec is refused", KCD2MP_W159RecapStart("../x.bk2|5") == false)
+    check("P16: no swallowed Lua errors", #ERRS == 0, ERRS[1])
+    player = nil
 end
 
 local pass, fail = 0, 0
