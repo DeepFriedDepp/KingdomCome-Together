@@ -264,6 +264,20 @@ covers the hold, a short press, and other keys); the joiner's new character from
 player's first join into a slot folder made during the game (needs two players: the native rescan of a new playline
 folder is unproven); the three real start saves (not supplied); the launcher window itself (headless harness).
 
+## The 0.45.5 build
+
+* Built from a fresh clone of `ddbb775` (`release\c0455`, git-ignored) with `tools\Build-Installer.ps1 -SoakWaiver "The
+  maintainer decided on 2026-10-07: no soak test for 0.45.5."`: `release\KingdomComeTogether-Setup-0.45.5.exe`,
+  102,302,801 bytes, sha256 `2d5bd4c4a4ab1024b465fe248437f7945a6edabf390d32186de89147e323280f`. **Local only**; not tagged;
+  **unsigned** (no signing settings here). The waiver is in `release\SOAK-WAIVED-0.45.5.txt`; the build log is
+  `release\BUILD-0.45.5.log` (console: `BUILD-0.45.5.console.txt`).
+* Every other gate ran inside the build, no FAIL line: relay 62, agent 1,167, setup 77, all 49 synthetic suites (none
+  blind), the static checks (7, 6, 7, 17), the native tests, the payload smoke (`RELAY-SMOKE ok protocol=v10
+  release=0.45.5`), Steam detection, the four installer cases.
+* **Payload**: 1,031 files (0.45.2's 1,030 + `kdcmp_brand.pak`, 512 KB); **no start saves** (none supplied: New adventure
+  and the bundled new character say "No start save is installed"). Privacy sweep of every payload file: no account,
+  machine or contact name.
+
 ## Pocketed (outside this WO)
 
 1. **A prologue recap** would have to play somewhere the engine draws video (in the world, e.g. right after the load);
