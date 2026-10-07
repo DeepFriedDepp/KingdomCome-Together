@@ -413,6 +413,26 @@ do -- (m) WO-153 2: a domestic dog the host never streams is suspended (not hidd
     check("m: no Lua errors", #ERRS == 0, ERRS[1])
 end
 
+do -- (n) WO-158 S2: Mutt, the player's own dog, is never paused; any other dog still is
+    reset(); clearLog(); NOW = 4000
+    local other = mkEntity("korenarka_dog", 5, 0, 0); other.class = "Dog"; ENTS["korenarka_dog"] = other
+    local mutt = mkEntity("tvez_vorech", 6, 0, 0); mutt.class = "Dog"; ENTS["tvez_vorech"] = mutt
+    local mutt2 = mkEntity("player_dogCompanion_vorech", 7, 0, 0); mutt2.class = "Dog"; ENTS["player_dogCompanion_vorech"] = mutt2
+    local mutt3 = mkEntity("player_dogCompanion_other", 8, 0, 0); mutt3.class = "Dog"; ENTS["player_dogCompanion_other"] = mutt3
+    SPHERE = { other, mutt, mutt2, mutt3 }
+    KCD2MP.w131.pausedAnimals = {}
+    KCD2MP_W131Tick(true, true)
+    check("n: another dog is still paused", cmdCount("wh_ai_PauseNPC korenarka_dog") == 1, cmdCount("wh_ai_PauseNPC korenarka_dog"))
+    check("n: Mutt (the soul's name) is never paused", cmdCount("wh_ai_PauseNPC tvez_vorech") == 0 and KCD2MP.w131.pausedAnimals["tvez_vorech"] == nil)
+    check("n: Mutt (the companion entity's name) is never paused", cmdCount("wh_ai_PauseNPC player_dogCompanion_vorech") == 0)
+    check("n: any player_dogCompanion* dog is the player's own", cmdCount("wh_ai_PauseNPC player_dogCompanion_other") == 0)
+    NOW = 4011; KCD2MP_W131Tick(true, true)
+    check("n: nor on the re-pause", cmdCount("wh_ai_PauseNPC tvez_vorech") == 0 and cmdCount("wh_ai_PauseNPC korenarka_dog") == 2)
+    check("n: the predicate: Mutt yes, a stranger's dog no", KCD2MP_W131IsPlayersDog("tvez_vorech") == true
+        and KCD2MP_W131IsPlayersDog("korenarka_dog") == false and KCD2MP_W131IsPlayersDog(nil) == false)
+    check("n: no Lua errors", #ERRS == 0, ERRS[1])
+end
+
 local pass, fail = 0, 0
 for _, r in ipairs(RESULTS) do if r:sub(1, 4) == "PASS" then pass = pass + 1 else fail = fail + 1 end end
 OUT = table.concat(RESULTS, "\n") .. string.format("\n%d passed, %d failed", pass, fail)

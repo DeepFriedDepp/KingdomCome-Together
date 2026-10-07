@@ -5831,12 +5831,22 @@ end
 -- host's NPC classes are streamed; these are suspended where they stand and NOT hidden (nothing of the host's replaces
 -- them, so hiding would remove a dog from the joiner's world). A paused dog stands still; it never bites, chases or goes.
 KCD2MP_W131_PAUSE_ONLY_CLASSES = { Dog = true }
+-- WO-158 S2: Mutt, the player's own dog, is never paused (on either machine this function runs): a dog frozen where it
+-- stands is a dog that does not follow its player. Identified from the game's own files, not guessed: the soul
+-- `tvez_vorech` (soul class `animalCompanions`, role VORECH), the level's Dog entity of that name, and the entity name
+-- the game's own scripts use for the player's companion (`player_dogCompanion_vorech`).
+KCD2MP_W131_PAUSE_EXEMPT_NAMES = { tvez_vorech = true, player_dogCompanion_vorech = true }
+function KCD2MP_W131IsPlayersDog(name)
+    if not name then return false end
+    return KCD2MP_W131_PAUSE_EXEMPT_NAMES[name] == true or string.find(name, "^player_dogCompanion") ~= nil
+end
 function KCD2MP_W131PauseOnly(e)
     if not e or not KCD2MP_W131_PAUSE_ONLY_CLASSES[tostring(e.class)] then return false end
     if mp_is_mod_entity(e) then return false end
     local name = nil
     pcall(function() name = e:GetName() end)
     if not name or not string.find(name, "^[%w_]+$") or mp_is_excluded_npc_name(name) then return false end
+    if KCD2MP_W131IsPlayersDog(name) then return false end
     return true, name
 end
 
@@ -11622,6 +11632,47 @@ local function sampleGhostHealth(id, ghost)
     KCD2MP_EmitEvent("ghost_hit", string.format("%s %.2f", tostring(id), delta))
 end
 
+-- WO-158 S1: the name badge hangs on the avatar's neck bone, not on a fixed height over the stream's point. Standing,
+-- walking, riding, sitting and lying figures then carry their badge with them. The chain is fail-closed, in order:
+-- the neck, then the head, each accepted only as a plain finite point that is not the origin and lies within 3 m
+-- (across) and -1..+3 m (up) of the entity's own world point -- a bone stuck at the model's origin, or a read that comes
+-- back in model space instead of world space, fails that test; then the old stream-height formula, unchanged.
+-- The player's own switches (mp_name_badges, mp_clean_screen) still decide whether any badge is drawn at all.
+KCD2MP.w158 = KCD2MP.w158 or { badgeBones = { "Neck", "Head" }, badgeLiftM = 0.45, badgeLevel = {}, badgeToldAt = {},
+                               badgeStats = { neck = 0, head = 0, stream = 0 } }
+function KCD2MP_W158Finite(v) return type(v) == "number" and v == v and v > -1e7 and v < 1e7 end
+function KCD2MP_W158BadgeAnchor(ent, fx, fy, fz)
+    local w = KCD2MP.w158
+    if ent then
+        local okp, ep = pcall(function() return ent:GetWorldPos() end)
+        if okp and type(ep) == "table" and KCD2MP_W158Finite(ep.x) and KCD2MP_W158Finite(ep.y) and KCD2MP_W158Finite(ep.z) then
+            for _, bone in ipairs(w.badgeBones) do
+                local okb, bp = pcall(function() return ent:GetBonePos(bone) end)
+                if okb and type(bp) == "table" and KCD2MP_W158Finite(bp.x) and KCD2MP_W158Finite(bp.y) and KCD2MP_W158Finite(bp.z)
+                   and not (bp.x == 0 and bp.y == 0 and bp.z == 0) then
+                    local dx, dy, dz = bp.x - ep.x, bp.y - ep.y, bp.z - ep.z
+                    if dx * dx + dy * dy <= 9.0 and dz >= -1.0 and dz <= 3.0 then
+                        return bp.x, bp.y, bp.z + w.badgeLiftM, string.lower(bone)
+                    end
+                end
+            end
+        end
+    end
+    return fx, fy, fz, "stream"
+end
+-- One line when the level a figure's badge hangs on changes (and at most one per 10 s per figure): the chain level
+-- used is then visible in the log, so a regression back to the stream formula is too.
+function KCD2MP_W158BadgeNote(id, level)
+    local w = KCD2MP.w158
+    w.badgeStats[level] = (w.badgeStats[level] or 0) + 1
+    if w.badgeLevel[id] == level then return end
+    local now = os.clock()
+    if w.badgeToldAt[id] and (now - w.badgeToldAt[id]) < 10.0 then return end
+    w.badgeLevel[id] = level
+    w.badgeToldAt[id] = now
+    mp_log(string.format("WO158-BADGE id=%s hangs on %s", tostring(id), level == "stream" and "the stream height (no bone read)" or ("the " .. level .. " bone")))
+end
+
 function KCD2MP_LabelTick()
     if not KCD2MP.labelRunning then return end
     Script.SetTimer(8, KCD2MP_LabelTick)
@@ -11633,7 +11684,10 @@ function KCD2MP_LabelTick()
     for id, lbl in pairs(KCD2MP.labelCache) do
         if badges and lbl.size > 0 then
             pcall(function()
-                System.DrawLabel({x=lbl.x, y=lbl.y, z=lbl.z}, lbl.size, lbl.name, 1, 1, 0, 1)
+                local lx, ly, lz, lvl = lbl.x, lbl.y, lbl.z, "stream"
+                if lbl.ent then lx, ly, lz, lvl = KCD2MP_W158BadgeAnchor(lbl.ent, lbl.x, lbl.y, lbl.z) end
+                if lbl.ent then KCD2MP_W158BadgeNote(id, lvl) end
+                System.DrawLabel({x=lx, y=ly, z=lz}, lbl.size, lbl.name, 1, 1, 0, 1)
             end)
         end
     end
@@ -13044,7 +13098,7 @@ function KCD2MP_InterpTick(arg, gen)
                         labelSize = math.max(0.3, math.min(2.0, 10.0 / math.max(dist, 1.0)))
                     end
                 end
-                KCD2MP.labelCache[id] = {x=x, y=y, z=labelZ, size=labelSize, name=displayName}
+                KCD2MP.labelCache[id] = {x=x, y=y, z=labelZ, size=labelSize, name=displayName, ent=ghost.entity}   -- WO-158 S1: ent = the neck bone read
             end
         end
         end)  -- end pcall for ghost update
