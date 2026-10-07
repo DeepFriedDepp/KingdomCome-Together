@@ -47,4 +47,20 @@ calls are under "Decisions made unattended" in the findings.
 
 ## The build
 
-Filled in when the maintainer gives the version string (see the findings' decision 1).
+* **0.45.2, a release candidate**, built from a fresh clone of de72cd0 (`release\c0452`, a short path in the git-ignored
+  release folder) with `tools\Build-Installer.ps1 -ReleaseCandidate`: `release\KingdomComeTogether-Setup-0.45.2.exe`,
+  102,157,651 bytes, sha256 `c3b3a4be738a646ace4f867805b28866b4113686240b9569cd4cd51bcf33ced2`. **Local only**: nothing was
+  uploaded; **not tagged** (the maintainer tags after his two-player session).
+* **Not soak-tested** (the work order's rule: the soak runs only before a public release): `release\RELEASE-CANDIDATE-0.45.2.txt`,
+  the build log `release\BUILD-0.45.2.log` (and the console capture `BUILD-0.45.2.console.txt`) and the installer's own
+  `install-verify.txt` say so. Every other gate ran inside the build: relay 62, agent 1,119, setup 72, the 47 synthetic
+  suites (none blind: no `0 passed, 0 failed`), the static checks (7, 6, 7, 17), native 406, the payload smoke
+  (`RELAY-SMOKE ok ... protocol=v10 release=0.45.2 rtt_ms=18`), Steam detection and the four installer cases.
+* **Unsigned**: no signing settings on this machine (`Code signing: OFF` in the build log). `docs/CODE-SIGNING.md` is the
+  maintainer's setup.
+* **The payload**: 1,030 files (0.45.1: 1,031 -- `KCDMP_LauncherInjector.exe` is gone; `KcdMp.Setup.dll` ships, holding the
+  in-launcher loader). The privacy sweep of every file (the field's and this machine's names, profile paths, Steam IDs,
+  private IPv4, ASCII and UTF-16): the same third-party matches as 0.45.0 and 0.45.1 (assembly versions `10.0.0.0`/`10.1.0.0`,
+  the master server's config example, a word in WPF's tables, .NET and NAudio build paths) and nothing of ours.
+* **To install it on this machine**: close the launcher, agent, relay and game; run the Setup; then
+  `tools\Verify-Install.ps1` (it prints the release-candidate note and the WO-157 markers).

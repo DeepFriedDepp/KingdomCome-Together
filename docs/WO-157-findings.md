@@ -108,8 +108,10 @@ foreground at each launch and was left there (never pushed or activated again).
 
 ## The gates
 
-See `docs/WO-157-progress.md` (the build section) for the counts of this commit: agent 1,119, setup 72+, every synthetic
-suite (WO-157: 41), the static checks (WO-157: 17), native 406, relay, payload smoke, installer cases.
+Inside the 0.45.2 build (a fresh clone of de72cd0, `-ReleaseCandidate`: only the soak skipped, logged): relay 62, agent
+1,119, setup 72, all 47 synthetic suites (WO-157: 41; none blind), the static checks (WO-157: 17), native 406, the payload
+smoke (release 0.45.2), Steam detection, the four installer cases. Installer `release\KingdomComeTogether-Setup-0.45.2.exe`,
+102,157,651 bytes, sha256 `c3b3a4be…f33ced2`, unsigned, not tagged, local only. Details: `docs/WO-157-progress.md`.
 
 ## §9 What a follow-up needs (proposed WOs)
 
