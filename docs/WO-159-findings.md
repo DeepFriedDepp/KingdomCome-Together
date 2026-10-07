@@ -210,6 +210,33 @@ start save should be made after that choice, at a calm spot (recipe updated).
 * **The launcher's window itself** (the driver ran headless in the harness; the launcher builds and its rules are unit
   tested).
 
+## Follow-up design probes (after the first commit, at the maintainer's direction)
+
+The maintainer corrected the cut point and asked for three start saves, a playstyle choice, a pre-rendered-only recap
+and a new-character join from the bundled saves. Probes, one game session, throwaway `playline4` moved aside and put
+back (403 save files and the profile checked after):
+
+* **The prologue ends where Hans and Henry split**: main quest **M03 `socky` ("Laboratores")** holds the Trosky
+  journey video, the gate and tavern dialogues, the tavern (`v_hospode`: the bar fight) and the pillory (`pranyr`), then
+  ends; **M05 "Wedding Crashers"** is Henry alone **[obs: Scripts.pak quest files]**. The start saves go after M03,
+  before M05, at a calm spot.
+* **The playstyle choice** is a `CharacterCreation` step in M01 with three stat presets **[obs]**: fighter (strength,
+  agility; sword, heavy weapons, unarmed, large weapons, craftsmanship, riding), diplomat (speech; alchemy,
+  scholarship, drinking, craftsmanship, riding), scout (vitality; marksmanship, survival, houndmaster, stealth,
+  thievery, craftsmanship, riding, sword). The game's own panel text is `ui_tut_m01_t06_archetype`.
+* **No left-hand panel at the main menu**: the HUD's `ShowTutorial` is accepted there and draws nothing; the menu's
+  `ShowHelpOverlay` draws only pages compiled into `MenuHelpOverlays.gfx` ("Dummy page for …" otherwise) **[L]**. The
+  playstyle is therefore a menu page like Start / Join (the maintainer's call), each entry's summary as its tooltip.
+* **One prepared slot is enough**: a file written over the staged save after the game listed it is what the load reads
+  (staged key `1a94658764`, overwritten with another save re-keyed `0d1166aae7`; the game loaded and QuickSaved
+  `0d1166aae7`) **[L]**. So the chosen playstyle's save is written into the one staged slot just before the load.
+* **The pre-rendered prologue videos play full screen in the world** (`wh_ui_PlayMovie <path>`; `wh_ui_StopMovie`
+  returns to the world with the HUD) **[L]** — at the menu they draw nothing. The recap therefore plays right after a
+  New adventure loads. The prologue's nine videos (siege intro start / end, the ambush intro, the fall dream, three
+  dreaming clips in two parts, the Trosky journey) total **980.8 s = 16.3 min** (their Bink headers) **[obs]**.
+* **A join is not held back during such a video**: `KCD2MP_JoinBusyReason()` returned nil mid-video **[L]** — the recap
+  needs its own busy reason ("your host is watching the prologue").
+
 ## Pocketed (outside this WO)
 
 1. **A prologue recap** would have to play somewhere the engine draws video (in the world, e.g. right after the load);
