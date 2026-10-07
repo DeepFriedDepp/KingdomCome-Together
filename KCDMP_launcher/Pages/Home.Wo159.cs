@@ -107,7 +107,7 @@ namespace KCDMP_launcher.Pages
 
         private static string PlainNewWhy(string why) =>
             why.StartsWith("All five", StringComparison.Ordinal) ? why
-            : why.StartsWith("no start save", StringComparison.Ordinal) ? "No start save is installed (run Setup again)."
+            : why.StartsWith("no start save", StringComparison.Ordinal) ? "This installation has no start saves (they come with the installer)."
             : "The start save could not be prepared: " + why;
 
         /// <summary>From LaunchGame, once the game process is up.</summary>

@@ -278,6 +278,31 @@ folder is unproven); the three real start saves (not supplied); the launcher win
   and the bundled new character say "No start save is installed"). Privacy sweep of every payload file: no account,
   machine or contact name.
 
+## The start saves (0.45.6)
+
+At the maintainer's word: the three start saves are made from his own saves instead of three recorded playthroughs.
+
+* **Where his saves stand** (402 read, read-only): 200 sit between the split and any Wedding Crashers objective; every one
+  holds a leftover of a co-op session. The two clean candidates were the game's own milestone saves at the split:
+  `permanent016` (Adviser, Jul 27) and `permanent014` (Scout, Sep 15). The Scout one carried the old partner in many places
+  (its entity, guard lists, a statistics list) — not used.
+* **The presets only add experience** (M01's three modules: `AddXPFromToSkillLevel` / `AddXPFromToStatLevel` from level
+  5 to 7 (primary) or 6 (secondary); nothing else) **[obs]**. Through the Modding Tools API (`PlayerSoul/AddXPFromTo…`) on
+  a throwaway continuation: every skill +25,600 for 5→6 and +55,040 for 5→7; strength +33,280, agility +29,440, speech
+  +33,920, vitality +30,080 for 5→6; a repeated call adds the same again (fixed amounts); weapon skills also give fencing
+  experience (the engine's own side effect, kept as the engine wrote it) **[L]**.
+* **Built**: A = the Adviser save loaded and quick-saved; B = A + the Soldier preset; E = A + the Scout preset (both applied
+  by the game's own function in the game); then offline: the old partner's soul record removed from the soul list
+  (`kcd2mp_0`), the Adviser preset taken back from B and E (speech −33,920; riding, alchemy, scholarship −55,040;
+  drinking, craftsmanship −25,600). Loaded in the game: the expected levels (Soldier strength 6 / large weapons 7; Adviser
+  alchemy, scholarship, riding 7; Scout survival 7 / vitality 6) **[L]**. Their load still raised the original save's 53
+  "NPC … does not have a faction" lines: a hidden body of the old partner ("Player0", 1.4 km off) — removed in the game
+  (`System.RemoveEntity`) and quick-saved, which left no soul, reference or name of it. The final Soldier reloaded with
+  **0** faction errors, no stray body, its levels, in free roam in Troskowitz **[L]**.
+* All three pass `Validate-StartSave -Style` (the split, the playstyle, no mod data, a clean header). They are
+  **git-ignored** (the maintainer's play data; the repository is public) and copied into the release clone.
+* The maintainer's saves were only read; the work ran on copies in empty slots, moved out of the saves folder after.
+
 ## Pocketed (outside this WO)
 
 1. **A prologue recap** would have to play somewhere the engine draws video (in the world, e.g. right after the load);

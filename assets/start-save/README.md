@@ -14,8 +14,13 @@ adventure is its own world, and loads it; a joiner's agent takes its Henry from 
 `start-save\<playstyle>\` beside the launcher; `tools\Publish-Release.ps1` takes them from here and refuses one that
 does not pass the check below.
 
-**Empty until the maintainer supplies them.** A playstyle without its save is greyed on the menu; with none, New
-adventure says "No start save is installed".
+**They are not in git** (`.gitignore`: they are the maintainer's play data, and the repository is public). The
+maintainer keeps them here and copies them into the release clone before `tools\Build-Installer.ps1`. A build without
+them ships none: a playstyle without its save is greyed on the menu; with none, New adventure says so.
+
+The 0.45.6 set (2026-10-07) comes from one playthrough's own save at the split (the Adviser), cleaned of an old
+session's partner record, with the Soldier and Scout presets applied by the game's own function and the Adviser preset
+taken back offline (docs/WO-159-findings.md, "The start saves").
 
 ## The recipe
 

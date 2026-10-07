@@ -45,3 +45,6 @@ tools/signing.local.json
 
 # WO-156: a private reference study -- never committed or pushed
 research/
+
+# WO-159: the bundled start saves are the maintainer's play data: copied into the release build, never committed
+assets/start-save/*/*.whs
