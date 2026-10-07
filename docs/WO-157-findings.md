@@ -47,8 +47,8 @@ problem sees. What could not be proven or fixed as a patch is recorded with its 
 
 ## Decisions made unattended
 
-1. **VERSION is blank in the work order.** It is the maintainer's string (`docs/VERSIONING.md`): no VERSION
-   commit and no installer until the maintainer gives it. Everything else (code, gates, docs, the build path) is ready.
+1. **VERSION was blank in the work order.** It is the maintainer's string (`docs/VERSIONING.md`): the code, gates and docs
+   were done and pushed without it, and the maintainer was asked once at the end, before the build: **0.45.2**.
 2. **The host's trespass test** is the engine's own labels at the reported spot **and** at the joiner's figure: private or
    personal, not opened by antitrespass / publicServiceTrespassOverride. Unknown (no answer) = no crime. The host's own
    detections (id 0) are judged as before. `mp_trespass_host off` = 0.45.1.

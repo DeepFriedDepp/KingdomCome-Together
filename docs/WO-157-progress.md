@@ -15,8 +15,8 @@ calls are under "Decisions made unattended" in the findings.
 | 3 the fresh-install pair | no far ForceMount; the connection line (live); snaps per window; NPC desync recorded | findings 3.1–3.4 |
 | 3b the 10-06 session | blows land; one-shots stop for a fight; look IK off (live); talk reset; sleeps never cut (live), rest topped up (live); fast-travel text; "saved" line; what to install | findings 3b |
 | the build path | `Build-Installer.ps1 -ReleaseCandidate` (only the soak skipped, logged in `release\BUILD-<v>.log`, `RELEASE-CANDIDATE-<v>.txt` and `install-verify.txt`); optional Azure Artifact Signing | findings 2.6, `tools\CodeSigning.ps1` |
-| docs | findings, this page, release notes (`docs/releases/RELEASE-NOTES-NEXT.md` until the version is given), QUICKSTART, the checklist §WO-157, `docs/CODE-SIGNING.md`, `Verify-Install.ps1` markers | — |
-| VERSION, the installer | **waiting for the maintainer's version string** (blank in the WO) | findings, decision 1 |
+| docs | findings, this page, release notes (`docs/releases/RELEASE-NOTES-0.45.2.md`), QUICKSTART, the checklist §WO-157, `docs/CODE-SIGNING.md`, `Verify-Install.ps1` markers | — |
+| VERSION, the installer | **0.45.2** (the maintainer's string, asked at the end: blank in the WO); a release candidate built from a fresh clone | "The build" below |
 
 ## Work log
 

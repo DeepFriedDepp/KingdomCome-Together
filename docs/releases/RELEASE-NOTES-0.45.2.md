@@ -1,4 +1,4 @@
-# Kingdom Come: Together @@VERSION@@ — the first public-beta patch
+# Kingdom Come: Together 0.45.2 — the first public-beta patch
 
 **Official repository: https://github.com/DeepFriedDepp/KingdomCome-Together**
 — only builds made from it are this project's releases; other repositories may
@@ -9,7 +9,7 @@ PLAION. Kingdom Come: Deliverance II, its assets and its content belong to
 Warhorse Studios and PLAION; this project's copyright covers only its own code.
 
 The fixes for what the first public testers reported on 0.45.1 (WO-157, 2026-10-06). The installer,
-`KingdomComeTogether-Setup-@@VERSION@@.exe`, comes from the maintainer. The evidence is
+`KingdomComeTogether-Setup-0.45.2.exe`, comes from the maintainer. The evidence is
 `docs/WO-157-findings.md`; what a two-player session checks is `docs/TWO-PLAYER-CHECKLIST.md` §WO-157.
 
 **Both machines and the relay must run the same build.** It refuses every other version at the handshake.
@@ -61,7 +61,7 @@ mod), and without it Windows says "MSVCP120.dll was not found" when the game sta
   are saved with the host's saves.
 - The log's `MP-GHOSTCORR` counts snaps per 10-second window, per figure and per session.
 - Setup and the launcher are ready for **code signing** (`docs/CODE-SIGNING.md`); this build is
-  @@SIGNED@@.
+  **not signed yet** (the signing account is being set up), and it is a **release candidate**: not soak-tested, for the maintainer's two-player session before the public release.
 
 ## If you see…
 
