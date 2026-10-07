@@ -49,6 +49,13 @@ inline constexpr uint8_t kTrespassListener[16] = {
     0x48, 0x89, 0x5C, 0x24, 0x08, 0x57, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0xF9, 0x0F, 0xB6, 0xDA,
 };
 
+// wo139.cpp (after 0.45.8): C_UIHudStates::SetTrespassState(this, int level) itself -- the HUD's own refresh calls it
+// directly, past the listener (a joiner's hidden warning showed in the field).
+// mov [rsp+8],rbx; mov [rsp+10h],edx; push rdi; sub rsp,20h; mov rdi,rcx
+inline constexpr uint8_t kTrespassImpl[17] = {
+    0x48, 0x89, 0x5C, 0x24, 0x08, 0x89, 0x54, 0x24, 0x10, 0x57, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0xF9,
+};
+
 // wo140.cpp: C_SkipTime::ShowDialog.
 // mov rax,rsp; mov [rax+8],rbx; mov [rax+10h],rsi; mov [rax+18h],rdi; push rbp
 inline constexpr uint8_t kSkipTimeShow[16] = {
@@ -76,6 +83,7 @@ inline constexpr Entry kAll[] = {
     {"wo135 dialogue gate", kDialogueGate, sizeof kDialogueGate},
     {"wo138 PauseGame", kPauseGame, sizeof kPauseGame},
     {"wo139 trespass listener", kTrespassListener, sizeof kTrespassListener},
+    {"wo139 SetTrespassState", kTrespassImpl, sizeof kTrespassImpl},
     {"wo140 SkipTime ShowDialog", kSkipTimeShow, sizeof kSkipTimeShow},
     {"wo143 NPC-state request", kNpcStateRequest, sizeof kNpcStateRequest},
     {"weather BlendToProfile", kBlendToProfile, sizeof kBlendToProfile},

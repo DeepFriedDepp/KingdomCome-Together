@@ -418,6 +418,21 @@ At the maintainer's word: the three start saves are made from his own saves inst
   host's own privacy lock is untouched (the game's, sent as before). Synthetic WO-151 157/157 (8 new), all 49 suites;
   client 1,167. **Not verified live yet.**
 
+### The joiner's trespass warning: a second way onto the HUD
+
+* The maintainer: both players walked into the shop; only the joiner's **on-screen warning** was wrong **[L]**.
+* GUIModule (the Modding Tools build) has **two** callers of `C_UIHudStates::SetTrespassState` (RVA 0x27EBB0): the event
+  listener the WO-157 gate hooks (0x27E4C0, tail jump at 0x27E4F8) and the **HUD's own refresh** (0x27E3D0, call at
+  0x27E415), which reads the player's level itself (actor vtable +0xDD8) and calls the implementation directly, past the
+  gate. Both map levels 1 and 2 to 0 (only 3+, personal/private, is drawn) **[disasm]**. WO-157's live check jumped
+  straight into a house (`255 -> 3`, one listener call) and never met the refresh; walking in through a door did.
+* **The fix:** the implementation is gated too (`impl_gate`: a raise on a joiner in a session is not drawn; a drop to 0
+  always passes). Prologue `kTrespassImpl` (17 bytes: five whole instructions, the next is the first RIP-relative `lea`;
+  the same bytes the DLL already matched to find the function) in `hook_prologues.h`; native tests 407/407 (the
+  boundary check of every shipped hook, now nine). The status line adds `refresh_gate=` and `refresh_quieted=`; the
+  joiner's agent prints it after a minute with a trespass. **Not verified live yet** (the DLL ships with the installer;
+  at the game's start the native log says `WO139-BUILD trespass HUD gate ARMED ... (the HUD's own refresh)`).
+
 ## Pocketed (outside this WO)
 
 1. **A prologue recap** would have to play somewhere the engine draws video (in the world, e.g. right after the load);

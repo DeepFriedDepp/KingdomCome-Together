@@ -29,9 +29,8 @@ namespace kcdmp::wo139 {
 namespace {
 
 // C_UIHudStates::SetTrespassState(this, int level): mov [rsp+8],rbx; mov [rsp+10h],edx; push rdi; sub rsp,20h; mov rdi,rcx
-constexpr uint8_t kImplPrologue[17] = {
-    0x48, 0x89, 0x5C, 0x24, 0x08, 0x89, 0x54, 0x24, 0x10, 0x57, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0xF9,
-};
+// (17 bytes, instruction-aligned, no RIP-relative operand: the next instruction is the first lea [rip+]).
+constexpr auto& kImplPrologue = hookpro::kTrespassImpl;   // hook_prologues.h
 // The listener (this, uint8 level): mov [rsp+8],rbx; push rdi; sub rsp,20h; mov rdi,rcx; movzx ebx,dl
 // (16 bytes, instruction-aligned, no RIP-relative operand: the next instruction is the first lea [rip+]).
 constexpr auto& kListenerPrologue = hookpro::kTrespassListener;   // hook_prologues.h (WO-148)
@@ -44,6 +43,10 @@ std::atomic<bool> g_on{false};
 // "public" always passes, so the HUD can never be left showing one.
 std::atomic<bool> g_quiet{true};
 std::atomic<uint32_t> c_quieted{0};
+// After 0.45.8: SetTrespassState has a second caller, the HUD's own refresh (it reads the player's level itself and calls it
+// directly, past the listener): live 0.45.8 a joiner walking into a house saw the warning. The implementation is gated too.
+std::atomic<bool> g_implGated{false};
+std::atomic<uint32_t> c_quietedRefresh{0};
 std::atomic<uint32_t> g_level{0xFF};       // the last level the engine told the HUD (0xFF = none yet)
 std::atomic<uint32_t> g_told{0};           // listener calls
 uint32_t g_sentLevel = 0xFF;               // main thread: the last level sent
@@ -107,6 +110,17 @@ bool __fastcall listener_gate(void* /*self*/, void* a2) {
     g_told.fetch_add(1, std::memory_order_relaxed);
     if (lv != 0 && g_on.load(std::memory_order_relaxed) && g_quiet.load(std::memory_order_relaxed)) {
         c_quieted.fetch_add(1, std::memory_order_relaxed);
+        return true;
+    }
+    return false;
+}
+
+// rcx = the C_UIHudStates, edx = the level the HUD is set to (the game maps 1/2 to 0: only 3+ draws). Every path to the
+// HUD ends here; the listener's own calls arrive only when the listener passed them. A raise on a joiner is not drawn.
+bool __fastcall impl_gate(void* /*self*/, void* a2) {
+    const uint32_t lv = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(a2) & 0xFF);
+    if (lv != 0 && g_on.load(std::memory_order_relaxed) && g_quiet.load(std::memory_order_relaxed)) {
+        c_quietedRefresh.fetch_add(1, std::memory_order_relaxed);
         return true;
     }
     return false;
@@ -240,6 +254,14 @@ void install() {
     char implAt[96]; anchor::describe(impl, implAt, sizeof implAt);
     g_armed = true; g_why = "";
     logf("WO139-BUILD trespass detector ARMED at %s (C_UIHudStates::SetTrespassState %s): pass-through, off until the agent's Config", g_where, implAt);
+    // the HUD's own refresh calls the implementation directly: the joiner's hidden warning is gated there too
+    const char* whyImpl = nullptr;
+    if (inlinehook::install_gate(const_cast<uint8_t*>(impl), kImplPrologue, sizeof kImplPrologue, &impl_gate, &whyImpl)) {
+        g_implGated = true;
+        logf("WO139-BUILD trespass HUD gate ARMED at %s too (the HUD's own refresh)", implAt);
+    } else {
+        logf("WO139-BUILD trespass HUD gate on SetTrespassState NOT armed -- %s (the listener's gate still holds)", whyImpl ? whyImpl : "install failed");
+    }
 }
 
 bool armed() { return g_armed.load(); }
@@ -337,8 +359,8 @@ uint8_t handle(const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t
         case kOpStatus: {
             char line[420];
             const int n = std::snprintf(line, sizeof line,
-                "WO139-NATIVE trespass armed=%d on=%d quiet=%d quieted=%u at=%s level=%u told=%u edges=%u sent=%u pursuits=%zu on=%u off=%u fail=%u busy=%u host_struck=%u contexts=%u punish_gate_armed=%d punish_skipped=%u%s%s",
-                g_armed.load() ? 1 : 0, g_on.load() ? 1 : 0, g_quiet.load() ? 1 : 0, c_quieted.load(), g_where, g_level.load(), g_told.load(), c_edges.load(), c_sent.load(),
+                "WO139-NATIVE trespass armed=%d on=%d quiet=%d quieted=%u refresh_gate=%d refresh_quieted=%u at=%s level=%u told=%u edges=%u sent=%u pursuits=%zu on=%u off=%u fail=%u busy=%u host_struck=%u contexts=%u punish_gate_armed=%d punish_skipped=%u%s%s",
+                g_armed.load() ? 1 : 0, g_on.load() ? 1 : 0, g_quiet.load() ? 1 : 0, c_quieted.load(), g_implGated.load() ? 1 : 0, c_quietedRefresh.load(), g_where, g_level.load(), g_told.load(), c_edges.load(), c_sent.load(),
                 g_pursuits.size(), c_pursueOn.load(), c_pursueOff.load(), c_pursueFail.load(), c_pursueBusy.load(), c_hostStruck.load(), c_context.load(),
                 wo137::punish_gate_armed() ? 1 : 0, wo137::punish_skipped(),
                 g_armed.load() ? "" : " why=", g_armed.load() ? "" : g_why);

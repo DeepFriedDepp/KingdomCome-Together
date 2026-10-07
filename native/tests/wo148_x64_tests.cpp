@@ -107,7 +107,7 @@ int wo148_x64_tests(int* passed) {
         x64::describe(r, h.len, text, sizeof text);
         XCHECK(r.verdict == x64::Boundary::Ok, "%s: %s", h.name, text);
     }
-    XCHECK(sizeof hookpro::kAll / sizeof hookpro::kAll[0] == 8, "eight inline hooks in the shipped DLL (WO-151: + BlendToProfile)");
+    XCHECK(sizeof hookpro::kAll / sizeof hookpro::kAll[0] == 9, "nine inline hooks in the shipped DLL (WO-151: + BlendToProfile; after 0.45.8: + SetTrespassState)");
 
     // ---- the refusals ------------------------------------------------------------
     // mov [rsp+8],rbx; mov [rsp+18h],rsi; mov [rsp+20h],rdi = ends 5/10/15
