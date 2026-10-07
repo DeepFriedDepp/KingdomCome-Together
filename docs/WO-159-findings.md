@@ -314,6 +314,21 @@ At the maintainer's word: the three start saves are made from his own saves inst
   detection, the four installer cases; no FAIL line. Payload 1,034 files; privacy sweep clean (no account, machine or
   contact name in any file; the saves' headers scrubbed, no `kcd2mp` in their worlds).
 
+## The 0.45.7 build
+
+* The fix from 0.45.6's first live session: the launcher tried to connect the host as soon as the world had settled on
+  its own clock, a second before its CONNECT gate opened; the try was refused, never repeated, and the game's HUD said the
+  connect had failed. `HostAutoConnect` now also needs the gate open (`5401f85`); the logo pak removal at exit retries
+  for 15 s (an `IOException` while the game still held the file).
+* From a fresh clone of `867c1c7` (`release\c0457`) with the same three start saves copied in (byte-identical to
+  0.45.6's), `tools\Build-Installer.ps1 -SoakWaiver "The maintainer decided on 2026-10-07: no soak test for 0.45.7."`:
+  `release\KingdomComeTogether-Setup-0.45.7.exe`, 106,327,998 bytes, sha256
+  `1f2a61e1553d7b4785579d3a34d4e82f2b139ccae368d02c457c052d98c35372`. Local only; not tagged; unsigned.
+* Inside the build: the three start saves and the logo pak, relay 62, agent 1,167, setup 77, the synthetic suites, the
+  static and native checks, the installer cases; no FAIL line. Payload 1,034 files; privacy sweep clean (the only
+  user-folder paths are inside the unchanged third-party audio library's own binaries).
+* Not verified live yet: the fixed auto-connect itself (needs the maintainer's next Start Game).
+
 ## Pocketed (outside this WO)
 
 1. **A prologue recap** would have to play somewhere the engine draws video (in the world, e.g. right after the load);
