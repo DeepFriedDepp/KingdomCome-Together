@@ -148,6 +148,7 @@ public partial class GameBridge
                 SaveBranchMap();
             }
             if (seed is uint) Wo134OnHostWorld(tag, md5, loaded);   // WO-134: the host's chest ledger pairs with this save
+            if (seed is uint && _sharedWorld && config.IsHosting) _henry.MarkHosted(tag);   // WO-157: this install's own playthrough (the launcher's host flow only)
             Console.WriteLine($"MP-HENRY host: world {tag} ({why}: {SaveDisplay(path)}, md5 {md5[..8]} = the save's footer MD5) player={who.Player} henry={On(who.IsHenry)} branch_depth={BranchNewestFirst().Count}");
             if (changed)
             {
@@ -259,7 +260,7 @@ public partial class GameBridge
     {
         bool known = (flags & Protocol.SessionSeedKnown) != 0;
         bool henry = (flags & Protocol.SessionHenryWorld) != 0;
-        string? tag = known ? WhsSave.SeedTag(seed) : null;
+        string? tag = known ? Wo157TagFor(seed) : null;   // WO-157: the host's world on this machine (its install key)
         bool changed = known != _peerSeedKnown || (known && seed != _peerSeed) || henry != _peerHenryWorld;
         if (known && (!_peerSeedKnown || seed != _peerSeed)) _peerSeedKnownSinceUtc = DateTime.UtcNow;   // WO-135: the build wait starts here
         _peerSeedKnown = known;
@@ -444,7 +445,7 @@ public partial class GameBridge
     {
         if (ResolveSavesDirForJoin() is not string saves) return "no-saves";
         int all = ListOwnSaves(saves).Count;
-        var own = OwnSaves(saves, HostSeedForOwn());
+        var own = OwnSaves(saves, HostSeedForOwn(), null, Wo157HostedSeed);
         var builds = own.Select(s => WhsSave.ReadBuildFromFile(s.Save.FullPath)).ToList();
         int same = host is null ? own.Count : builds.Count(b => Wo135Rules.SameBuild(b, host));
         int regular = builds.Count(Wo154Rules.IsRegularGameBuild);
@@ -455,7 +456,7 @@ public partial class GameBridge
     private string? Wo135NewestHenryBuild()
     {
         if (ResolveSavesDirForJoin() is not string saves) return null;
-        foreach (var s in OwnSaves(saves, HostSeedForOwn()))
+        foreach (var s in OwnSaves(saves, HostSeedForOwn(), null, Wo157HostedSeed))
             if (WhsSave.ReadBuildFromFile(s.Save.FullPath) is string b) return b;
         return null;
     }
@@ -477,15 +478,20 @@ public partial class GameBridge
     /// save whose seed is <paramref name="hostSeed"/>: that is a copy of the
     /// host's world (e.g. copied in by hand under 0.28.x), never the player's
     /// own. Each skip is logged (a warning: the file is left where it is).
+    /// WO-157: unless <paramref name="hostedHere"/> says this install hosted that world itself -- two hosts of
+    /// the same start save share its seed, and the one who hosted it first then had "only copies of the host's
+    /// world" and could not join the other. The copies a join makes never stay in the playlines (the transient
+    /// world file is deleted, saves made while joined are moved out), so what is left there is his own play.
     /// </summary>
-    public static List<OwnSave> OwnSaves(string saves, uint? hostSeed, Action<string>? log = null)
+    public static List<OwnSave> OwnSaves(string saves, uint? hostSeed, Action<string>? log = null, Func<uint, bool>? hostedHere = null)
     {
         var o = new List<OwnSave>();
         var skipped = new List<string>();
+        bool ownWorld = hostSeed is uint h0 && hostedHere?.Invoke(h0) == true;
         foreach (var s in ListOwnSaves(saves))
         {
             uint? seed = WhsSave.ReadSeedFromFile(s.FullPath);
-            if (hostSeed is uint hs && seed == hs)
+            if (hostSeed is uint hs && seed == hs && !ownWorld)
             {
                 // Logged once per file per agent run: a tester with a whole host playline would otherwise see it on every lookup.
                 if (Warned.TryAdd(s.FullPath, 0)) skipped.Add(s.Display);
@@ -493,6 +499,8 @@ public partial class GameBridge
             }
             o.Add(new OwnSave(s, seed));
         }
+        if (ownWorld && Warned.TryAdd("hosted:" + saves + "|" + hostSeed, 0))
+            log?.Invoke("MP-HENRY joiner: the host's world has the playthrough seed of a world this install hosted itself (the same start save): this player's saves of it are his own");
         if (skipped.Count > 0)
             log?.Invoke($"MP-HENRY WARNING {skipped.Count} save(s) are copies of the host's world (same playthrough seed): never used as this player's own save, left where they are: {string.Join(", ", skipped.Take(6))}{(skipped.Count > 6 ? ", ..." : "")}");
         return o;
@@ -510,7 +518,7 @@ public partial class GameBridge
         why = "";
         if (TestNoOwnSave) { why = "KCDMP_TEST_NO_OWN_SAVE=1 (test: no own save)"; Console.WriteLine("MP-HENRY TEST KCDMP_TEST_NO_OWN_SAVE=1 -- acting as if this player had no save of their own"); return null; }
         if (ResolveSavesDirForJoin() is not string saves) { why = "no saves folder"; return null; }
-        var own = OwnSaves(saves, HostSeedForOwn(), l => Console.WriteLine(l));
+        var own = OwnSaves(saves, HostSeedForOwn(), l => Console.WriteLine(l), Wo157HostedSeed);
         // WO-147: only a save this game can load -- of the build of the world it runs. The live run's leave picked a
         // newer build's save (the retail game shares the saves folder): "needs newer game", and the joiner stayed.
         if (Wo135TargetBuild() is string build) own = SameBuildSaves(own, build, l => Console.WriteLine(l));
@@ -533,7 +541,7 @@ public partial class GameBridge
     {
         if (TestNoOwnSave || ResolveSavesDirForJoin() is not string saves)
             return (Wo125NewestOwn(out string w0), w0);
-        foreach (var s in OwnSaves(saves, HostSeedForOwn(), l => Console.WriteLine(l)))
+        foreach (var s in OwnSaves(saves, HostSeedForOwn(), l => Console.WriteLine(l), Wo157HostedSeed))
         {
             var v = WhsSave.VerifyFile(s.Save.FullPath);
             if (!v.Ok) { Console.WriteLine($"MP-HENRY skipping {s.Save.Display}: {v.Reason}"); continue; }
@@ -565,7 +573,7 @@ public partial class GameBridge
             if (!m.Success) { why = $"mp_join_henry '{choice}' is not playlineN/file"; return null; }
             string f = m.Groups[2].Value + ".whs", full = Path.Combine(saves, $"playline{m.Groups[1].Value}", f);
             if (!File.Exists(full)) { why = $"That save doesn't exist (playline{m.Groups[1].Value}/{f})."; return null; }
-            if (hostSeed is uint hs && WhsSave.ReadSeedFromFile(full) == hs)
+            if (hostSeed is uint hs && WhsSave.ReadSeedFromFile(full) == hs && !Wo157HostedSeed(hs))
             {
                 why = $"That save is a copy of your host's world, not your own character (playline{m.Groups[1].Value}/{f}).";
                 Console.WriteLine($"MP-HENRY joiner: mp_join_henry playline{m.Groups[1].Value}/{f} REFUSED: it has the host world's playthrough seed");
@@ -580,7 +588,7 @@ public partial class GameBridge
             }
             return TryHenrySave(src, WhsSave.HenryParts.OriginSave, "bring", out why, requirePristine: false);
         }
-        var own = OwnSaves(saves, hostSeed, l => Console.WriteLine(l));
+        var own = OwnSaves(saves, hostSeed, l => Console.WriteLine(l), Wo157HostedSeed);
         // WO-135: a save from another game build is skipped (logged once per file), before it is even read.
         var same = build is null ? own : SameBuildSaves(own, build, l => Console.WriteLine(l));
         if (choice == "bring")
@@ -596,7 +604,9 @@ public partial class GameBridge
         if (choice == "fresh")
         {
             // A new game's first Henry save: quest saves first (a new game writes permanent002 right after the prologue).
-            foreach (var s in same.OrderBy(x => x.Save.File.StartsWith("permanent", StringComparison.OrdinalIgnoreCase) ? 0 : 1).ThenBy(x => x.Save.SaveTime).Take(80))
+            // WO-157: then a pristine Henry save with the host's seed (a copy of the same start save): a Henry that
+            // has done nothing yet is nobody's character, so "Join with a new character" works from it too.
+            foreach (var s in Wo157Rules.FreshCandidates(same, OwnSaves(saves, null), build, hostSeed))
                 if (TryHenrySave(s.Save, WhsSave.HenryParts.OriginFreshSave, "fresh", out _, requirePristine: true, quiet: true) is { } c) return c;
             why = build is null
                 ? "Start fresh needs a new game's first save on this computer: start a new game once and play past the prologue (its first save after it is used, never your host's character)."
@@ -661,7 +671,7 @@ public partial class GameBridge
         var who = WhsSave.PlayerOf(c.Raw);
         _lastWorldDesc = c.DescBytes;
         if (seed is not uint s) { why = "the world has no playthrough seed"; abortReason = Protocol.JoinAbortSpliceFailed; return null; }
-        tag = WhsSave.SeedTag(s);
+        tag = Wo157TagFor(s);   // WO-157
         if (_peerSeedKnown && s != _peerSeed)
         {
             why = $"the world received ({tag}) is not the one the host announced ({_peerTag}) -- it changed; the next announcement decides";
@@ -711,6 +721,7 @@ public partial class GameBridge
             var joinSnap = _henry.Store(tag, parts, Convert.ToHexString(offerMd5), mode == "restore" ? HenryStore.SourceJoin : mode, $"the join save (seq {seq})");
             Wo134OnSnapshotStored(joinSnap);   // WO-134: the chest ledger pairs with it
             _henry.MarkJoined(tag);
+            Wo157ClaimJoinedWorld(tag);   // WO-157: this folder is this host's world from now on
             if (_firstChoiceTag == tag || _firstChoiceTag is null) { _firstChoice = null; _firstChoiceTag = null; }
         }
         catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException)
@@ -780,7 +791,7 @@ public partial class GameBridge
             {
                 var c = WhsSave.Inflate(bytes);
                 uint? seed = WhsSave.ReadSeed(c.Raw);
-                if (seed is not uint s || WhsSave.SeedTag(s) != _joinedTag) storeWhy = "the snapshot is not of the host's world (seed)";
+                if (seed is not uint s || Wo157TagFor(s) != _joinedTag) storeWhy = "the snapshot is not of the host's world (seed)";
                 else if (!WhsSave.PlayerOf(c.Raw).IsHenry) storeWhy = "the snapshot's player is not Henry";
                 else parts = WhsSave.PartsFromStream(c.Raw, WhsSave.DescriptionSummary(c.Desc).GetValueOrDefault("BuildInfo") ?? "", WhsSave.HenryParts.OriginSnapshot);
             }
@@ -792,12 +803,13 @@ public partial class GameBridge
                 Wo134OnSnapshotStored(snap);   // WO-134: the chest ledger pairs with it
                 Console.WriteLine(FormattableString.Invariant(
                     $"MP-HENRY joiner: PAIRED host save seq={w.Seq} md5={md5[..8]} with snapshot {snap.Short}: host-save-in -> request {lagS:F2} s, -> file verified {(tFile - tReq).TotalSeconds:F2} s ({SaveDisplay(path)}, {bytes.Length} B)"));
+                Wo157TellCharacterSaved();   // WO-157 3b.8: "does my inventory save?" -- said on screen
             }
             else Console.WriteLine($"MP-HENRY joiner: host save seq={w.Seq} md5={md5[..8]}: snapshot NOT stored -- {storeWhy}");
             // The QuickSave is a copy of the host's world in this player's playline: out at once.
             bool gone = _henry.MoveOut(path, "a snapshot's QuickSave (the host's world)");
             var after = await _combat.SaveListAsync(1, pl, Path.GetFileNameWithoutExtension(path));
-            string expect = OwnSaves(saves, HostSeedForOwn()).FirstOrDefault(s => s.Save.Playline == pl)?.Save.Base ?? "-";
+            string expect = OwnSaves(saves, HostSeedForOwn(), null, Wo157HostedSeed).FirstOrDefault(s => s.Save.Playline == pl)?.Save.Base ?? "-";
             Console.WriteLine($"MP-HENRY joiner: snapshot file {SaveDisplay(path)} moved out={On(gone)}; rescan listed={(after is null ? "?" : On(after.Listed))}; Continue would load playline{after?.ContinuePlayline}/{after?.ContinueName ?? "?"} (own newest there: {expect})");
             if (gone) _henry.LedgerSet(led.Id, e => e.State = "done");
         }
@@ -886,14 +898,15 @@ public partial class GameBridge
                 {
                     var t = File.GetLastWriteTimeUtc(p);
                     if (t < e.SinceUtc || t > e.SinceUtc.AddMinutes(2) || WorldSaved.ParsePath(p) is null) continue;
-                    if (WhsSave.ReadSeedFromFile(p) is uint s && WhsSave.SeedTag(s) == e.WorldTag)
+                    if (WhsSave.ReadSeedFromFile(p) is uint s && WhsSave.SeedTag(s) == _henry.BaseTagOf(e.WorldTag))
                     { if (_henry.MoveOut(p, $"a snapshot's QuickSave left by a crash ({why})")) n++; else done = false; }
                 }
             }
             if (done) _henry.LedgerSet(e.Id, x => x.State = "done");
         }
         // A copy of a host world placed by hand: warn (once per file per agent run), never touch.
-        var known = _henry.Worlds().Select(w => w.Tag).ToHashSet();
+        var known = _henry.Worlds().Select(w => _henry.BaseTagOf(w.Tag)).ToHashSet();
+        known.ExceptWith(_henry.Hosted());   // WO-157: this install's own playthrough of a world it also joined is no copy
         var copies = new List<string>();
         if (known.Count > 0)
             foreach (var s in ListOwnSaves(saves))

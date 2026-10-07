@@ -156,6 +156,7 @@ public sealed class FakeHost : ISetupHost
     public bool? SignedIn { get; set; }
     public long? Free { get; set; } = 100L * 1024 * 1024 * 1024;
     public bool DotNet6 { get; set; } = true;
+    public bool VcRuntime { get; set; } = true;   // WO-157
 
     public string? SteamRootFromRegistry() => null;
     public bool IsProcessRunning(string name) =>
@@ -164,4 +165,5 @@ public sealed class FakeHost : ISetupHost
     public bool? SteamSignedIn() => SignedIn;
     public long? FreeBytes(string path) => Free;
     public bool HasDotNet6Runtime() => DotNet6;
+    public bool HasVcRuntime2013() => VcRuntime;
 }

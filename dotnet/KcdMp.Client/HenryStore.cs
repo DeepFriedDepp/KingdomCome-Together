@@ -241,6 +241,86 @@ public sealed class HenryStore
 
     public void MarkJoined(string tag) => UpdateWorld(tag, w => w.LastJoinedUtc = _now());
 
+    // ------------------------------------------------------------------ WO-157: which host's world
+
+    /// <summary>The host whose world this folder holds (null: not known -- stored before WO-157, or no host key came).</summary>
+    public uint? WorldHostKey(string tag)
+    {
+        CheckTag(tag);
+        return File.Exists(Path.Combine(WorldDir(tag), "world.json")) ? ReadWorld(tag).HostKey : null;
+    }
+
+    /// <summary>The plain seed tag a world folder belongs to (its own name, or the seed tag a host-qualified folder records).</summary>
+    public string BaseTagOf(string tag) =>
+        TagRx.IsMatch(tag) && File.Exists(Path.Combine(WorldDir(tag), "world.json")) ? ReadWorld(tag).BaseTag ?? tag : tag;
+
+    /// <summary>A join landed: the folder belongs to this host from now on (the first host of a pre-WO-157 folder claims it).</summary>
+    public void ClaimHost(string tag, string baseTag, uint hostKey) => UpdateWorld(tag, w =>
+    {
+        w.HostKey ??= hostKey;
+        if (tag != baseTag) w.BaseTag ??= baseTag;
+    });
+
+    /// <summary>This install's key (random, never 0), made once; sent by a host so joiners can keep two hosts' worlds apart.</summary>
+    public uint InstallKey()
+    {
+        lock (_gate)
+        {
+            var p = Path.Combine(Root, "host.key");
+            try
+            {
+                if (File.Exists(p) && uint.TryParse(File.ReadAllText(p).Trim(), System.Globalization.NumberStyles.HexNumber, null, out uint k) && k != 0) return k;
+            }
+            catch (IOException) { }
+            uint key;
+            do key = BitConverter.ToUInt32(System.Security.Cryptography.RandomNumberGenerator.GetBytes(4));
+            while (key == 0);
+            Directory.CreateDirectory(Root);
+            File.WriteAllText(p, key.ToString("x8"));
+            return key;
+        }
+    }
+
+    private string HostedPath => Path.Combine(Root, "hosted.json");
+
+    /// <summary>The worlds (plain seed tags) this install hosted: its own saves of such a world are its own playthrough.</summary>
+    public HashSet<string> Hosted()
+    {
+        lock (_gate)
+        {
+            try
+            {
+                if (File.Exists(HostedPath) && JsonSerializer.Deserialize<Dictionary<string, DateTime>>(File.ReadAllText(HostedPath)) is { } d)
+                    return d.Keys.ToHashSet(StringComparer.Ordinal);
+            }
+            catch (Exception ex) when (ex is IOException or JsonException) { _log($"MP-HENRY hosted.json unreadable ({ex.Message})"); }
+            return new HashSet<string>(StringComparer.Ordinal);
+        }
+    }
+
+    public bool HostedHere(string baseTag) => Hosted().Contains(baseTag);
+
+    /// <summary>This install hosts world <paramref name="baseTag"/> (once per world; the first time is kept).</summary>
+    public void MarkHosted(string baseTag)
+    {
+        if (!TagRx.IsMatch(baseTag)) return;
+        lock (_gate)
+        {
+            Dictionary<string, DateTime> d = new(StringComparer.Ordinal);
+            try
+            {
+                if (File.Exists(HostedPath) && JsonSerializer.Deserialize<Dictionary<string, DateTime>>(File.ReadAllText(HostedPath)) is { } r) d = r;
+            }
+            catch (Exception ex) when (ex is IOException or JsonException) { }
+            if (d.ContainsKey(baseTag)) return;
+            d[baseTag] = _now();
+            Directory.CreateDirectory(Root);
+            File.WriteAllText(HostedPath + ".part", JsonSerializer.Serialize(d));
+            File.Move(HostedPath + ".part", HostedPath, overwrite: true);
+            _log($"MP-HENRY world {baseTag}: hosted by this install (its saves of it are this player's own playthrough)");
+        }
+    }
+
     // ------------------------------------------------------------------ world.json
 
     private sealed class WorldFile
@@ -248,6 +328,10 @@ public sealed class HenryStore
         public DateTime LastJoinedUtc { get; set; }
         public string? FirstSource { get; set; }
         public Dictionary<string, string> Pairs { get; set; } = new(StringComparer.Ordinal);
+        /// <summary>WO-157: the host whose world this is (null before WO-157).</summary>
+        public uint? HostKey { get; set; }
+        /// <summary>WO-157: the plain seed tag of a host-qualified folder.</summary>
+        public string? BaseTag { get; set; }
     }
 
     private WorldFile ReadWorld(string tag)

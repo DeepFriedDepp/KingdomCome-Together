@@ -84,6 +84,11 @@ XGenAIModule.MakeTableFromType = function(t) local f = TYPES[t]; return f and f(
 XGenAIModule.SendMessageToEntityData = function(to, kind, t) MSGS[#MSGS + 1] = { to = to, kind = kind, t = t } end
 WUIDS = {}           -- wuid -> entity
 XGenAIModule.GetEntityByWUID = function(w) return WUIDS[w] end
+-- WO-157: the engine's area labels at a point (the host's own trespass check). Every spot is private here unless a
+-- test says otherwise; AREA_FAIL makes the engine's call fail (unknown).
+AREA_LABELS = { private = true }
+AREA_FAIL = false
+XGenAIModule.IsPointInAreaWithLabel = function(p, l) if AREA_FAIL then error("no answer") end return AREA_LABELS[l] == true end
 enum_crime_theftMethod = { unknown = 0, loot = 1, lootCorpse = 2, lootUnconsciousBody = 3, kettleEating = 4, pick = 5, pickpocket = 6, seenEquipped = 7 }
 enum_crime_resolutionKind = { fine = 0, leaveUnconscious = 1, punishment = 2, questPunishment = 3, skillCheck = 4, fight = 5, secondArrest = 6 }
 enum_crime_stimulusKind = { trespass = 40, escalatedTrespass = 13, theft = 38 }
@@ -528,6 +533,7 @@ do -- the guard's own attack (a refused / ignored chat) and the player runs: the
     PLAYER_DANGER = true
     PLAYER_POS = { x = 88, y = 100, z = 10 }   -- 12 m from where the stop began
     NOW = NOW + 4
+    KCD2MP.w157.fledWarned = true   -- WO-157: this game's one walk-away grace is used already (its own test below)
     local mark = #LOG
     KCD2MP_W139StopTick()
     local out = emitted("w139_outcome", mark)
@@ -670,6 +676,41 @@ do
     check("H: only villagers saw a trespass: it is their settlement's (their report reaches its guards)",
         #ev == 1 and ev[1] == "1 15 trespass 1 0 trosecko_settlements_zelejov -", ev[1])
     guard.sleeping = false
+    -- WO-157 1.1: a reported trespass is judged only where THIS world calls the spot private
+    AREA_LABELS = { private = true, antitrespass = true }   -- a shop its keeper opened here (paused on the joiner's machine)
+    mark = #LOG
+    KCD2MP_W139HostJudge(1, 16, "trespass", 100, 100, 10, "-", "-", "area")
+    check("H157: a trespass reported in a shop open in the host's world is no trespass: not judged, nothing planted",
+        #emitted("w139_judged", mark) == 0 and logCount("WO157-TRESPASS src=1 id=16", mark) == 1 and logCount("here=open", mark) == 1)
+    AREA_LABELS = { personal = true, publicServiceTrespassOverride = true }
+    mark = #LOG
+    KCD2MP_W139HostJudge(1, 17, "trespass", 100, 100, 10, "-", "-", "area")
+    check("H157: ... the same for a public service's override", #emitted("w139_judged", mark) == 0)
+    AREA_LABELS = { settlement = true }
+    mark = #LOG
+    KCD2MP_W139HostJudge(1, 18, "trespass", 100, 100, 10, "-", "-", "area")
+    check("H157: a public spot (a street): not judged", #emitted("w139_judged", mark) == 0 and logCount("here=public", mark) == 1)
+    local xgen = XGenAIModule
+    XGenAIModule = {}   -- an engine without the call (a raised error would count as a swallowed one here)
+    mark = #LOG
+    KCD2MP_W139HostJudge(1, 19, "trespass", 100, 100, 10, "-", "-", "area")
+    check("H157: the engine gives no answer: unknown is no crime", #emitted("w139_judged", mark) == 0 and logCount("here=unknown", mark) == 1)
+    XGenAIModule = xgen
+    AREA_LABELS = { personal = true }
+    mark = #LOG
+    KCD2MP_W139HostJudge(1, 20, "trespass", 100, 100, 10, "-", "-", "area")
+    check("H157: a house private in the host's world (a real trespass) is judged as before", #emitted("w139_judged", mark) == 1)
+    AREA_LABELS = { private = true }
+    mark = #LOG
+    KCD2MP_W139HostJudge(1, 0, "trespass", 100, 100, 10, "-", "-", "area")
+    check("H157: the check is for a joiner's report only (id 0, the host's own detection, is judged as before)", #emitted("w139_judged", mark) == 1)
+    KCD2MP.w157.hostCheck = false
+    AREA_LABELS = { private = true, antitrespass = true }
+    mark = #LOG
+    KCD2MP_W139HostJudge(1, 21, "trespass", 100, 100, 10, "-", "-", "area")
+    check("H157: mp_trespass_host off -> 0.45.1's judging", #emitted("w139_judged", mark) == 1)
+    KCD2MP.w157.hostCheck = true
+    AREA_LABELS = { private = true }
     -- a report far from the avatar (a lagging stream): judged at the spot
     mark = #LOG
     KCD2MP_W139HostJudge(1, 14, "lockpick", 130, 100, 10, "-", "-", "door")

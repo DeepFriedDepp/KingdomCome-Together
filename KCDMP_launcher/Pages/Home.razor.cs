@@ -94,6 +94,7 @@ namespace KCDMP_launcher.Pages
         private Process? pendingGameProcess = null;
         private ServerInfo? pendingServer = null;
         private string? pendingDllPath = null;
+        private string? pendingGameExe = null;   // WO-157
         private string launchStatusMessage = "";
         // WO-27: the agent started by ConnectToGame, tracked so a later Connect
         // (e.g. after the game was closed and relaunched without restarting the
@@ -448,6 +449,7 @@ namespace KCDMP_launcher.Pages
         private async Task LaunchGame(ServerInfo server)
         {
             if (!await EnsureSetupReadyAsync()) return;   // WO-150: Host and Join unlock at Ready!
+            lastLaunchServer = server;   // WO-157: LAUNCH ANYWAY repeats this launch
 
             if (launchStage != LaunchStage.Idle && launchStage != LaunchStage.Failed)
             {
@@ -480,11 +482,12 @@ namespace KCDMP_launcher.Pages
             }
 
             string dllFullPath = ResolveAgainstLauncher(settings.DllPath);
-            string injectorPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "KCDMP_LauncherInjector.exe");
             string agentPath = ResolveAgainstLauncher(settings.AgentPath);
             // WO-154: a file the launch needs that is gone or empty -- what an antivirus quarantine
             // leaves -- is told in plain words, by its name only (the old messages showed full paths).
-            if (BlockedBeforeLaunch(GameRootOf(settings.GamePath), dllFullPath, injectorPath, agentPath, Path.ChangeExtension(agentPath, ".dll")))
+            // WO-157: no injector exe any more (the launcher loads the DLL itself); a mod file the check
+            // finds wrong offers "Launch anyway" instead of a dead end.
+            if (!await PreLaunchFilesOkAsync(GameRootOf(settings.GamePath), dllFullPath, agentPath, Path.ChangeExtension(agentPath, ".dll")))
                 return;
 
             try
@@ -531,6 +534,7 @@ namespace KCDMP_launcher.Pages
                 pendingGameProcess = gameProcess;
                 pendingServer = server;
                 pendingDllPath = dllFullPath;
+                pendingGameExe = settings.GamePath;   // WO-157: the load checks it is this game
                 // WO-140: the joiner's flow is the main menu (a joiner who loads his own save plays alone,
                 // in a separate world -- the field trap); only the host loads a save first.
                 bool hostingNow = hostedRelayProcess != null && !hostedRelayProcess.HasExited;
@@ -592,7 +596,6 @@ namespace KCDMP_launcher.Pages
             }
             StopConnectGate();
 
-            string injectorPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "KCDMP_LauncherInjector.exe");
             string agentPath = ResolveAgainstLauncher(settings.AgentPath);
             string waitingText = launchStatusMessage;   // WO-154: back to it when Windows refuses a start
 
@@ -602,27 +605,14 @@ namespace KCDMP_launcher.Pages
                 launchStatusMessage = "Injecting...";
                 StateHasChanged();
 
-                var injectorStartInfo = new ProcessStartInfo
+                // WO-157: the launcher loads the DLL itself (no KCDMP_LauncherInjector.exe for Windows to
+                // remove or refuse): the same steps and checks, failing closed with a plain message.
+                var inject = await InjectFromLauncherAsync(pendingGameProcess.Id, pendingDllPath);
+                if (!inject.Ok)
                 {
-                    FileName = injectorPath,
-                    Arguments = $"--pid {pendingGameProcess.Id} --dll \"{pendingDllPath}\"",
-                    UseShellExecute = false,
-                    CreateNoWindow = true
-                };
-
-                using (var injector = StartChecked(injectorStartInfo))
-                {
-                    if (injector != null)
-                    {
-                        await injector.WaitForExitAsync();
-                        if (injector.ExitCode != 0)
-                        {
-                            Log.Warning("Injector exited with code {Code}", injector.ExitCode);
-                            UiService.ShowError($"The multiplayer plugin couldn't be loaded into the game (code {injector.ExitCode}). Close the game and try again.");
-                            ResetLaunchState();
-                            return;
-                        }
-                    }
+                    UiService.ShowError(inject.Message);
+                    ResetLaunchState();
+                    return;
                 }
 
                 launchStage = LaunchStage.Verifying;

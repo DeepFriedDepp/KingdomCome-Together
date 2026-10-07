@@ -227,7 +227,7 @@ public class Wo154Tests
         Assert.True(Wo154Rules.IsRegularGameBuild("1.5.2-14493"));
         Assert.False(Wo154Rules.IsRegularGameBuild("1.5.5-release_1_5"));
         Assert.False(Wo154Rules.IsRegularGameBuild(null));
-        Assert.StartsWith("Your saves are from the regular game, not the Modding Tools.", Wo154Rules.NoSaveMessage("regular-game-saves", false, null, null));
+        Assert.StartsWith("Your saves are from the regular game, not the Modding Tools: the Modding Tools can't load them.", Wo154Rules.NoSaveMessage("regular-game-saves", false, null, null));   // WO-157 wording
         Assert.EndsWith("You can join with a new character.", Wo154Rules.NoSaveMessage("only-host-copies", true, null, null));
         Assert.Contains("play past the prologue", Wo154Rules.NoSaveMessage("no-saves", false, null, null));
         Assert.DoesNotContain("play past the prologue, then join again", Wo154Rules.NoSaveMessage("wrong-build", false, "1.5.2-14493", "1.5.5-release_1_5"));

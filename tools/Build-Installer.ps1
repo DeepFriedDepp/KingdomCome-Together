@@ -24,13 +24,26 @@
     is printed, and written to release\SOAK-WAIVED-<version>.txt beside the installer
     with the git commit. Without this switch the soak gate below stands as before.
 
+.PARAMETER ReleaseCandidate
+    WO-157: a release candidate for the maintainer's own two-player session, never a public
+    release. Skips ONLY the frame-rate soak check (the soak runs only before a public release);
+    every other gate stands. "not soak-tested: release candidate, not for public release" is
+    written into the build log (release\BUILD-<version>.log) and into the installer's own
+    verify file (install-verify.txt). Without this switch the soak is demanded as before.
+
+    Code signing (WO-157) is not a switch: when the Azure Artifact Signing settings are present
+    (tools\CodeSigning.ps1, docs\CODE-SIGNING.md) every shipped exe and DLL, then the Setup and
+    its uninstaller, are signed with a timestamp and checked; when absent the build is unsigned
+    and the build log says so.
+
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File tools\Build-Installer.ps1
 #>
 param(
     [switch]$SkipPublish,
     [string]$Version,
-    [string]$SoakWaiver
+    [string]$SoakWaiver,
+    [switch]$ReleaseCandidate
 )
 
 $ErrorActionPreference = "Stop"
@@ -58,7 +71,27 @@ function Get-Iscc {
 }
 
 $iscc = Get-Iscc
+
+# WO-157: the build log. Everything this build prints goes to release\BUILD-<version>.log too.
+$relDir = Join-Path $root "release"
+$null = New-Item -ItemType Directory -Force -Path $relDir
+$buildLog = Join-Path $relDir "BUILD-$Version.log"
+Start-Transcript -Path $buildLog -Force | Out-Null
+trap { try { Stop-Transcript | Out-Null } catch {}; break }
+Write-Host "Build of $Version at $(Get-Date -Format s), commit $(& git -C $root rev-parse HEAD 2>$null)"
 Write-Host "Inno Setup compiler: $iscc"
+
+# WO-157: code signing, when its settings are present (never committed: environment or the git-ignored
+# tools\signing.local.json). A half-configured signing stops the build here.
+. (Join-Path $PSScriptRoot "CodeSigning.ps1")
+$signing = Get-KcdmpSigningConfig
+if ($signing) {
+    $signTool = Find-KcdmpSignTool $signing
+    if (-not (Test-Path $signing.Dlib)) { throw "Azure.CodeSigning.Dlib.dll not found: $($signing.Dlib)" }
+    Write-Host "Code signing: ON (Azure Artifact Signing, account $($signing.Account), profile $($signing.Profile)); signtool $signTool"
+} else {
+    Write-Host "Code signing: OFF -- no signing settings found (docs\CODE-SIGNING.md). This build is UNSIGNED." -ForegroundColor Yellow
+}
 
 # WO-151 Phase 0.3: no installer before the frame-rate soak has passed for exactly this
 # code (tools/perf/README.md). 0.42.7 was built with a frame-rate collapse listed as a
@@ -66,12 +99,20 @@ Write-Host "Inno Setup compiler: $iscc"
 # a build whose DLL, Lua, agent, relay or protocol differ from them.
 $soak = Join-Path $root "tools\perf\soak.py"
 if (-not (Test-Path $soak)) { throw "tools\perf\soak.py missing -- the frame-rate soak gate cannot run" }
-if ($SoakWaiver) {
+$rcNote = "not soak-tested: release candidate, not for public release"
+if ($ReleaseCandidate -and $SoakWaiver) { throw "-ReleaseCandidate and -SoakWaiver are two different records: use one" }
+if ($ReleaseCandidate) {
+    # WO-157: the soak runs only before a public release. This build is for the maintainer's
+    # two-player session; it says so in the build log, beside the installer and in install-verify.txt.
+    $commit = (& git -C $root rev-parse HEAD 2>$null)
+    Write-Host ("WARNING: " + $rcNote) -ForegroundColor Yellow
+    @($rcNote, "version : $Version", "commit  : $commit", "when    : $(Get-Date -Format s)",
+      "Every other gate ran. Before a public release: the soak (tools\perf\soak.py) and a build without -ReleaseCandidate.") |
+        Set-Content -Encoding utf8 (Join-Path $relDir "RELEASE-CANDIDATE-$Version.txt")
+} elseif ($SoakWaiver) {
     # WO-153: waived by the maintainer, on the record -- never silently.
     $commit = (& git -C $root rev-parse HEAD 2>$null)
     Write-Host ("WARNING: building WITHOUT the frame-rate soak -- waived: " + $SoakWaiver) -ForegroundColor Yellow
-    $relDir = Join-Path $root "release"
-    $null = New-Item -ItemType Directory -Force -Path $relDir
     @("The frame-rate soak (tools\perf\soak.py) was NOT run or not passing for this build; the maintainer waived it.",
       "version : $Version", "commit  : $commit", "when    : $(Get-Date -Format s)", "waiver  : $SoakWaiver",
       "No frame-rate comparison against the game without the mod exists for this code.") |
@@ -136,7 +177,7 @@ if (-not $SkipPublish) {
     # alone) and the Lua 5.1 200-local cliff (WO-110 Phase 0.2; MoonSharp does
     # not enforce it, so no suite above can see it).
     # WO-151: the third, on the native DLL: no raw __try, no build_argument(.
-    foreach ($static in @("Test-WO106ConsolePlaceholder.ps1", "Test-WO110LuaLocals.ps1", "Test-NativeGuards.ps1")) {
+    foreach ($static in @("Test-WO106ConsolePlaceholder.ps1", "Test-WO110LuaLocals.ps1", "Test-NativeGuards.ps1", "Test-WO157Static.ps1")) {
         Write-Host "Static check $static ..."
         & powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot $static)
         if ($LASTEXITCODE -ne 0) { throw "$static FAILED. Not shipping." }
@@ -153,6 +194,14 @@ if (-not $SkipPublish) {
     Write-Host "Native unit tests (native\tests) ..."
     & $nativeTests
     if ($LASTEXITCODE -ne 0) { throw "native unit tests FAILED. Not shipping." }
+
+    # WO-157: sign the payload before anything runs it or hashes it (the smoke below runs the signed
+    # files; the install manifest further down describes the signed bytes).
+    if ($signing) {
+        $signMeta = New-KcdmpSigningMetadata $signing
+        try { Invoke-KcdmpSignPayload -Dir $payload -Config $signing -SignTool $signTool -Metadata $signMeta }
+        finally { Remove-Item $signMeta -Force -ErrorAction SilentlyContinue }
+    }
 
     # WO-110 R10: execute the MERGED payload. Publish-Release flat-copies four
     # self-contained publishes over each other (later projects overwrite
@@ -238,12 +287,28 @@ if ($LASTEXITCODE -ne 0) { throw "tools\wo150\Test-SetupCases.ps1 FAILED. Not sh
 
 $iss = Join-Path $root "installer\KCDMP.iss"
 Write-Host "Compiling $iss (version $Version) ..."
-& $iscc "/DAppVersion=$Version" $iss
+$isccArgs = @("/DAppVersion=$Version")
+if ($ReleaseCandidate) { $isccArgs += "/DReleaseCandidate=1" }
+$signMeta = $null
+if ($signing) {
+    # Inno signs the Setup and the uninstaller it embeds with the same command ($f = the file).
+    $signMeta = New-KcdmpSigningMetadata $signing
+    $isccArgs += "/DKcdmpSign=1"
+    $isccArgs += ("/Skcdmpsign=" + (Get-KcdmpSignCommand $signing $signTool $signMeta -ForInno) + ' $f')
+}
+try { & $iscc @isccArgs $iss }
+finally { if ($signMeta) { Remove-Item $signMeta -Force -ErrorAction SilentlyContinue } }
 if ($LASTEXITCODE -ne 0) { throw "ISCC failed with exit code $LASTEXITCODE" }
 
 $setup = Join-Path $root "release\KingdomComeTogether-Setup-$Version.exe"
 if (-not (Test-Path $setup)) { throw "ISCC reported success but $setup is missing" }
 
+if ($signing) { Assert-KcdmpSigned -Files @($setup) }
+
 $mb = [math]::Round((Get-Item $setup).Length / 1MB, 1)
 Write-Host ""
 Write-Host "Installer: $setup ($mb MB)"
+Write-Host ("sha256   : " + (Get-FileHash $setup -Algorithm SHA256).Hash.ToLowerInvariant())
+Write-Host ("signed   : " + $(if ($signing) { "yes (Azure Artifact Signing)" } else { "NO -- unsigned build" }))
+if ($ReleaseCandidate) { Write-Host ("WARNING: " + $rcNote) -ForegroundColor Yellow }
+Stop-Transcript | Out-Null

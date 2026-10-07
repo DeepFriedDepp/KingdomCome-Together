@@ -127,8 +127,10 @@ public readonly record struct PlainConnectionError(ConnectionTrouble Kind, strin
             $"Steam couldn't reach the host within {(int)SteamRouteTimeout.TotalSeconds} seconds.",
             "Check the code and that the host's launcher says \"Steam: ready\", or use the host's address."),
         ConnectionTrouble.BadCode => new(kind,
-            "That code isn't right. It looks like ABCD-EFG.",
-            "Ask the host to read it out again."),
+            "That code isn't right. A Steam code is 7 letters and digits, like ABCD-EFG (with one more letter, like ABCD-EFG-S, " +
+            "when the host uses another Steam app).",
+            "Your host finds it in the launcher: HOST GAME, with \"Also allow Steam\" ticked, under \"Your code\". Copy it exactly; " +
+            "a Steam friend code or a profile number is not this code."),
         ConnectionTrouble.OwnCode => new(kind,
             "That's this computer's own Steam code.",
             "Type the host's code, not yours."),

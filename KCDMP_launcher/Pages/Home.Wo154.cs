@@ -207,18 +207,21 @@ namespace KCDMP_launcher.Pages
         // missing one was taken (quarantine). A development build has no manifest: "missing" then.
         private HashSet<string>? installedApp;
         private List<string>? installedMod;
+        private Dictionary<string, KcdMp.Setup.ManifestEntry>? installedEntries;   // WO-157: sizes and hashes, by kind|rel
 
         private void ReadInstallManifest()
         {
             if (installedApp is not null) return;
             installedApp = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             installedMod = new List<string>();
+            installedEntries = new Dictionary<string, KcdMp.Setup.ManifestEntry>(StringComparer.OrdinalIgnoreCase);
             try
             {
                 string manifest = Path.Combine(AppContext.BaseDirectory, KcdMp.Setup.ModInstall.ManifestName);
                 if (!File.Exists(manifest)) return;
                 foreach (var e in KcdMp.Setup.ModInstall.ReadManifest(manifest))
                 {
+                    installedEntries[e.Kind + "|" + e.Rel] = e;
                     if (e.Kind == "APP") installedApp.Add(e.Rel);
                     else if (e.Kind == "MOD") installedMod.Add(e.Rel);
                 }

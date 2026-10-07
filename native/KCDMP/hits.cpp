@@ -599,7 +599,14 @@ void tick() {
         if (live && rttr::soul_state(w.soul, "health", &hp) && rttr::soul_state(w.soul, "stamina", &st)) {
             bool dropped = false;
             if (hp < w.hp0 - 0.01f) { w.dh += w.hp0 - hp; rttr::soul_set_state(w.soul, "health", w.hp0); dropped = true; }
-            if (st < w.st0 - 0.25f) { w.ds += w.st0 - st; rttr::soul_set_state(w.soul, "stamina", w.st0); dropped = true; }
+            // WO-157 3b.1: an NPC's blow on an avatar keeps the stamina it cost (only the health is put back -- the joiner's
+            // game takes both). Refilled after every blow, the figure never tired: its stamina soaked every blow, 14 of 16
+            // measured hp 0, and the joiner was never hurt. Measured from its lowest point, so a blow is counted once.
+            if (st < w.st0 - 0.25f) {
+                w.ds += w.st0 - st;
+                if (w.kind == kWatchNpc) w.st0 = st; else rttr::soul_set_state(w.soul, "stamina", w.st0);
+                dropped = true;
+            }
             if (dropped) { c_restored.fetch_add(1); if (w.landedAt < 0) w.landedAt = w.frames; }
         }
         if (live && now - w.t0 < kWatchS) { ++it; continue; }

@@ -64,8 +64,9 @@ public partial class GameBridge
             Console.WriteLine($"MP-PEERS ghost {id} connected ({LivePartners().Count} partner(s) now){(twins.Count > 0 ? $" -- the same player as ghost {string.Join(",", twins)}: the relay replaces the old connection" : "")}");
         if (_w144ParkedCrime.TryRemove(name, out var parked) && (DateTime.UtcNow - parked.At).TotalHours < 2)
         {
+            int dropped = parked.Rec.DropReportedTrespasses();   // WO-157 1.2: his own machine's trespass reports are not trusted
             _w139Records[id] = parked.Rec;
-            Console.WriteLine($"MP-W139 host: ghost {id} is back -- the crime record kept for that player is his again ({parked.Rec.Count} crime(s))");
+            Console.WriteLine($"MP-W139 host: ghost {id} is back -- the crime record kept for that player is his again ({parked.Rec.Count} crime(s)){(dropped > 0 ? $"; {dropped} trespass(es) his own game reported were dropped (WO-157)" : "")}");
         }
     }
 

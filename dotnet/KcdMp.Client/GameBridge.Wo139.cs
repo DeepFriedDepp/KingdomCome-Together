@@ -134,11 +134,11 @@ public partial class GameBridge
     {
         bool detector = joiner && on;
         bool punish = (host || joiner) && on;
-        int key = (detector ? 1 : 0) | (punish ? 2 : 0);
+        int key = (detector ? 1 : 0) | (punish ? 2 : 0) | (_w157TrespassHud ? 4 : 0);
         long now = Environment.TickCount64;
         if (key == _w139CfgKey && now - _w139CfgAtMs < 10_000) return;
         bool changed = key != _w139CfgKey;
-        var cfg = await _combat.Wo139ConfigAsync(detector);
+        var cfg = await _combat.Wo139ConfigAsync(detector, quiet: !_w157TrespassHud);
         var pg = await _combat.Wo139PunishGateAsync(punish);
         if (cfg is null) { if (changed) Console.WriteLine("MP-W139 config: the DLL did not answer (a world loading, or no plugin) -- tried again"); return; }
         _w139CfgKey = key; _w139CfgAtMs = now;

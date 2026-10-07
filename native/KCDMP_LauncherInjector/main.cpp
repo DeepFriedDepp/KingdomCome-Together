@@ -3,6 +3,10 @@
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 // KCDMP_LauncherInjector.exe -- loads KCDMP.dll into a running game process.
 //
+// WO-157: a DEVELOPER TOOL ONLY (probes, test harnesses). It no longer ships: the launcher
+// loads the DLL itself (dotnet/KcdMp.Setup/GameInjector.cs), because Windows Security and
+// Smart App Control kept removing or refusing this separate exe on players' machines.
+//
 // Command line is fixed by KCDMP_launcher, which already invokes it as:
 //     KCDMP_LauncherInjector.exe --pid <pid> --dll "<absolute path>"
 // See KCDMP_launcher/Pages/Home.razor.cs. Do not change the argument shape

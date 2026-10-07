@@ -323,6 +323,14 @@ public sealed class JoinerCrimeRecord
         return true;
     }
 
+    /// <summary>
+    /// WO-157 1.2: the trespasses this player's OWN machine reported (Id != 0) leave the record; every other crime stays.
+    /// 0.45.1 judged those reports without asking the host's world (a shop open there was private on the joiner's), and
+    /// the record kept for a returning player carried them into his next session (a guard stopped him 42 s after he
+    /// joined). The host's world decides a trespass from WO-157 on; what it judged before is not trusted. Returns the count.
+    /// </summary>
+    public int DropReportedTrespasses() => _open.RemoveAll(c => c.Kind == "trespass" && c.Id != 0);
+
     /// <summary>Civilian reports reach the guards (after the delay). Returns the crimes that became known now.</summary>
     public List<Crime> Tick(long nowMs, double worldS)
     {

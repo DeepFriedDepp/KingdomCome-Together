@@ -339,6 +339,15 @@ public partial class GameBridge
         _w132Engaged[ev.Name] = (DateTime.UtcNow, eid);
         if (r.First)
         {
+            // WO-157 3b.2: a copy that enters a fight leaves the one-shot it was playing (the field's tkrc_man_2 sat in
+            // 'CookingScoopToBowl' and 'EatingMashInPray' for the whole fight -- 600 s each, WO143-SHOT gave up -- with 26
+            // "queue too many actions" errors and 23 of 28 replayed host swings refused: it stood there and never swung).
+            // The stop is the game's own request with no fragment (WO-143 op 4), as when the host's NPC ends one.
+            if (_w143Shots) _ = Task.Run(async () =>
+            {
+                var stop = await _combat.Wo143OneShotAsync(ev.Name, "", "", 0, 0);
+                Console.WriteLine($"MP-W157 engage {ev.Name}: its one-shot stopped for the fight (request {stop?.ToString(CultureInfo.InvariantCulture) ?? "no answer"})");
+            });
             Interlocked.Increment(ref _w132EngageOn);
             Console.WriteLine(FormattableString.Invariant(
                 $"MP-W132 engage on {ev.Name} (eid 0x{eid:X}, {r.DistM:F1} m): skirmish vs me {(r.Skirmish ? "added" : "NOT added")}, the host's combat state held on it ({ev.State}, target {ev.Target}) -- still bound and paused; its local hits on me are discarded"));

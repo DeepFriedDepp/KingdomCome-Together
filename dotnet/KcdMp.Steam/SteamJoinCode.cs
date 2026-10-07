@@ -62,15 +62,57 @@ public static class SteamJoinCode
     /// <summary>
     /// Parses a typed code. <paramref name="appId"/> is the host's app id as
     /// the code states it (the default when it has no letter).
+    ///
+    /// WO-157: forgiving of paste mistakes the format allows ("Steam code does not decode" three times in
+    /// one zip): any case, spaces and dashes of any kind (also the long dashes and invisible spaces chat
+    /// programs insert), quotes around it, and surrounding text ("my code is ABCD-EFG!"). The check bits
+    /// still decide: a word that only looks like a code does not decode.
     /// </summary>
     public static bool TryParse(string? text, out ulong steamId64, out uint appId)
     {
         steamId64 = 0;
         appId = SteamApps.ModdingTools;
         if (string.IsNullOrWhiteSpace(text)) return false;
+        string clean = Clean(text);
+        if (TryParseExact(clean, out steamId64, out appId)) return true;
+        // Surrounding text: each code-shaped run of letters and digits, dashed ones first.
+        foreach (var m in Candidates.Matches(clean).Cast<System.Text.RegularExpressions.Match>()
+                     .OrderByDescending(m => m.Value.Contains('-')))
+            if (TryParseExact(m.Value, out steamId64, out appId)) return true;
+        steamId64 = 0;
+        appId = SteamApps.ModdingTools;
+        return false;
+    }
+
+    /// <summary>The code as the host's launcher shows it ("ABCD-EFG", "ABCD-EFG-S"), or null when it does not decode.</summary>
+    public static string? Normalize(string? text) =>
+        TryParse(text, out ulong id, out uint app) ? Encode(id, app) : null;
+
+    private static readonly System.Text.RegularExpressions.Regex Candidates = new(
+        @"(?<![0-9A-Za-z])(?<![0-9A-Za-z]-)[0-9A-Za-z]{4}[- ]?[0-9A-Za-z]{3}(?:[- ]?[SsRr])?(?![0-9A-Za-z])(?!-[0-9A-Za-z])",
+        System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+    /// <summary>Every dash-like character to '-', every space-like one (no-break, zero-width) to ' ', quotes dropped.</summary>
+    private static string Clean(string text)
+    {
+        var sb = new System.Text.StringBuilder(text.Length);
+        foreach (char ch in text)
+        {
+            if (ch is '\u2010' or '\u2011' or '\u2012' or '\u2013' or '\u2014' or '\u2015' or '\u2212' or '_') sb.Append('-');
+            else if (ch is '\u00A0' or '\u2007' or '\u202F' or '\t' or '\r' or '\n') sb.Append(' ');
+            else if (ch is '\u200B' or '\u200C' or '\u200D' or '\uFEFF' or '"' or '\'' or '`' or '\u201C' or '\u201D' or '\u2018' or '\u2019') { }
+            else sb.Append(ch);
+        }
+        return sb.ToString().Trim();
+    }
+
+    private static bool TryParseExact(string text, out ulong steamId64, out uint appId)
+    {
+        steamId64 = 0;
+        appId = SteamApps.ModdingTools;
         var sig = new List<char>(10);
         foreach (char ch in text)
-            if (ch is not ('-' or ' ' or '\t')) sig.Add(ch);
+            if (ch is not ('-' or ' ')) sig.Add(ch);
         if (sig.Count == 8)
         {
             if (SteamApps.FromSuffix(sig[7]) is not uint app) return false;

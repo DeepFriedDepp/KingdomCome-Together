@@ -509,7 +509,7 @@ do
     session("host", true)
     check("h: a partner here: wh_pl_FastTravelEnabled 0", CVARS.wh_pl_FastTravelEnabled == 0 and M.ftHeld == true)
     check("h: ...logged with the value from before", logCount("WO154-FASTTRAVEL off (session): wh_pl_FastTravelEnabled 2 -> 0 (was 2 before the session)", mark) == 1, lastLog("WO154-FASTTRAVEL"))
-    check("h: ...the host is told once, plainly", hasToast(M.TEXT_FT_HOST, ui0) and M.TEXT_FT_HOST == "Fast travel is off in this co-op session (you can turn it on in the mod menu)")
+    check("h: ...the host is told once, plainly", hasToast(M.TEXT_FT_HOST, ui0) and M.TEXT_FT_HOST == "Fast travel is turned off for co-op. You can turn it on in the mod menu (Insert).")
     session("host", true); session("host", true)
     check("h: ...once (every push re-applies quietly)", #toasts(ui0) == 1 and logCount("WO154-FASTTRAVEL off", mark) == 1, #toasts(ui0))
     CVARS.wh_pl_FastTravelEnabled = 1   -- a load or a restart put it back
@@ -532,7 +532,7 @@ do
     check("h: a joiner, the host's value not heard yet: held (fail-closed), nothing said yet", CVARS.wh_pl_FastTravelEnabled == 0 and #toasts(ui0) == 0)
     session("joiner", true, false)
     check("h: ...the host's off arrives: told once, plainly", hasToast(M.TEXT_FT_JOINER, ui0) and #toasts(ui0) == 1
-        and M.TEXT_FT_JOINER == "Fast travel is off in this co-op session (your host can turn it on in the mod menu)")
+        and M.TEXT_FT_JOINER == "Fast travel is turned off for co-op. The host can turn it on in the mod menu (Insert).")
     session("joiner", true, false)
     check("h: ...once", #toasts(ui0) == 1)
     session("joiner", true, true)

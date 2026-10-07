@@ -670,6 +670,7 @@ public partial class GameBridge
         if (!JoinStatusCodec.TryDecode(body, out byte state, out byte reason, out ushort arg)) return;
         if (state == Protocol.JoinStateSession) { Wo124OnSessionMode(src, reason, joinId, arg); return; }   // WO-124: the host's session mode (WO-125: + its world)
         if (state == Protocol.JoinStateReloading) { Wo125OnHostReloading(); return; }                   // WO-125: the host started a load
+        if (state == Protocol.JoinStateHostKey) { Wo157OnHostKey(joinId); return; }                       // WO-157: the host's install key
         string st = Protocol.JoinStateName(state), rs = Protocol.JoinReasonName(reason);
         Console.WriteLine($"MP-JOIN joiner: host status join=0x{joinId:x8} state={st} reason={rs} arg={arg}");
         switch (state)

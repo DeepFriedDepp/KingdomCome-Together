@@ -39,3 +39,6 @@ tools/__pycache__/
 
 # WO-151: the frame-rate soak's raw runs (the committed record carries the tables)
 tools/perf/runs/
+
+# WO-157: the code-signing settings (docs/CODE-SIGNING.md) -- never committed
+tools/signing.local.json

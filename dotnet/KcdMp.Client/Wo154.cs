@@ -213,8 +213,8 @@ public static class Wo154Rules
         string why = reason switch
         {
             "no-saves" => "You have no Modding Tools saves yet.",
-            "only-host-copies" => "Your only Modding Tools saves are copies of this same world.",
-            "regular-game-saves" => "Your saves are from the regular game, not the Modding Tools.",
+            "only-host-copies" => "Your Modding Tools saves are all of this same world (your host's start save, or saves from joining it), so none of them is a character of your own.",
+            "regular-game-saves" => "Your saves are from the regular game, not the Modding Tools: the Modding Tools can't load them.",
             "wrong-build" => Wo135Rules.WrongBuildMessage(theirs, host ?? ""),
             _ => "Your Modding Tools saves have no character of yours in them yet (only the prologue).",
         };

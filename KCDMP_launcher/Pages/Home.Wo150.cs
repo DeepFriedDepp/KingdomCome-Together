@@ -67,6 +67,13 @@ namespace KCDMP_launcher.Pages
                         showSetup = true;
                         StartSetupPoll();
                     }
+                    else if (SetupChecklist.OptionalNeedsYou(setupSteps))
+                    {
+                        // WO-157: ready, but an optional step (the Visual C++ 2013 runtime) asks for the player:
+                        // shown once at start; Host and Join are not held back by it.
+                        Log.Information("setup: ready; an optional step needs the player, showing the checklist once");
+                        showSetup = true;
+                    }
                     StateHasChanged();
                 });
             });
@@ -189,6 +196,8 @@ namespace KCDMP_launcher.Pages
                 case StepAction.LinkWorkspace:
                 case StepAction.AskPermission: await RunWorkspaceStepAsync(); break;
                 case StepAction.PlaceMod: await PlaceModStepAsync(); break;
+                case StepAction.InstallVcRuntime: await InstallVcRuntimeAsync(snap); break;   // WO-157
+                case StepAction.OpenVcDownload: UrlLauncher.Open(VcRuntime2013.DownloadPage); break;
             }
             await CheckSetupAgainAsync();
         }

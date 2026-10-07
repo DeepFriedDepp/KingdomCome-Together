@@ -161,7 +161,7 @@ public partial class GameBridge
     }
 
     private string Wo140StatsLine() => FormattableString.Invariant(
-        $"MP-WO140-STATS vote={On(_w140On)} required={On(W140VoteRequired)} separate={On(_w140Separate)} asks_out={_w140Asks} asks_in={_w140AsksIn} yes={_w140Yes} no={_w140No} timeouts={_w140Timeouts} begins_out={_w140Begins} begins_in={_w140BeginsIn} starts={_w140Starts} start_fallbacks={_w140StartFallbacks} stops={_w140Stops} pulls={_w140Pulls} held_native={_w140HeldNative} rest_saves={_w140RestSaves} separate_dropped={_w140SepDropped} separate_out_dropped={_w140SepOutDropped}");
+        $"MP-WO140-STATS vote={On(_w140On)} required={On(W140VoteRequired)} separate={On(_w140Separate)} asks_out={_w140Asks} asks_in={_w140AsksIn} yes={_w140Yes} no={_w140No} timeouts={_w140Timeouts} begins_out={_w140Begins} begins_in={_w140BeginsIn} starts={_w140Starts} start_fallbacks={_w140StartFallbacks} stops={_w140Stops} pulls={_w140Pulls} held_native={_w140HeldNative} rest_saves={_w140RestSaves} separate_dropped={_w140SepDropped} separate_out_dropped={_w140SepOutDropped} woke_kept={Interlocked.Read(ref _w157WokeKept)}");
 
     private async Task Wo140SendAsync(byte target, byte kind, uint tok, string text)
     {
@@ -489,9 +489,12 @@ public partial class GameBridge
             if (host) foreach (byte g in Wo134Peers()) if (g != src) await Wo140SendAsync(g, Protocol.SleepCancel, id, Wo140Text.Cancel("woke", asker));
             if (_w140LocalSkipping)
             {
-                bool? s = await _combat.Wo140StopAsync();
-                if (s == true) Interlocked.Increment(ref _w140Stops);
-                Console.WriteLine($"MP-W140 {W140Name(src)} woke -- this player wakes too ({(s == true ? "the skip ends now" : "nothing was running")})");
+                // WO-157 3b.5: one player waking never cuts another's rest short. Each game skips at its own speed: the
+                // field's host finished its 12 h in 9.1 s and its "woke" stopped the joiner's sleep 14 s in, at about
+                // 10.5 of 12 hours, and his clock was then set forward while he was awake (food and energy fell with no
+                // rest). The sleep here runs to its own end; the host's clock is met after it (held clock writes).
+                Interlocked.Increment(ref _w157WokeKept);
+                Console.WriteLine($"MP-W140 {W140Name(src)} woke -- this player's own {_w140SharedKind} runs to its end (WO-157: a partner waking never cuts this rest short); the clock meets the host's after it");
             }
             return;
         }
@@ -530,6 +533,7 @@ public partial class GameBridge
                 return;
             case Wo140Frame.EdgeBegan:
                 _w154SkipBeganKind = Wo140Rules.KindOfSkipId(f.Id);   // WO-154 6.3: the ended edge reads id -1 (live L6)
+                _ = ExecLuaAsync($"if KCD2MP_W157RestLine then KCD2MP_W157RestLine('start', {f.Id}) end");   // WO-157: rest measured
                 await Wo140OnLocalBeganAsync(f);
                 return;
             case Wo140Frame.EdgeBackedOut:
@@ -545,6 +549,7 @@ public partial class GameBridge
             }
             case Wo140Frame.EdgeEnded:
                 _w140LocalSkipping = false;
+                _ = ExecLuaAsync("if KCD2MP_W157RestLine then KCD2MP_W157RestLine('end') end");     // WO-157: rest measured
                 Wo154NoteLocalSkipEnded(_w154SkipBeganKind ?? Wo140Rules.KindOfSkipId(f.Id));   // WO-154 6.3: a set-back right after it is told
                 _w154SkipBeganKind = null;
                 await Wo140OnLocalEndedAsync();

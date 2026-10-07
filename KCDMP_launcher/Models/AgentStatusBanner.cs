@@ -72,8 +72,9 @@ namespace KCDMP_launcher.Models
         /// </summary>
         public static string? PlainReason(string reason) => reason switch
         {
-            "regular-game-saves" => "Your saves are from the regular game, not the Modding Tools.",
-            "only-host-copies" => "Your only Modding Tools saves are copies of this same world.",
+            // WO-157: the same words as the agent's (Wo154Rules.NoSaveMessage), saying which case it is.
+            "regular-game-saves" => "Your saves are from the regular game, not the Modding Tools: the Modding Tools can't load them.",
+            "only-host-copies" => "Your Modding Tools saves are all of this same world (your host's start save, or saves from joining it), so none of them is a character of your own.",
             "no-saves" => "You have no Modding Tools saves yet.",
             "wrong-build" => "Your saves are from a different game version than your host's.",
             _ => null,

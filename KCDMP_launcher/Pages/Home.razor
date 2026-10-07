@@ -154,6 +154,8 @@
               AddressChanged="@(a => fallbackAddress = a)"
               OnUseAddress="@ConnectByAddressAfterSteamAsync"
               ShowReportBug="@messageReportBug"
+              ShowLaunchAnyway="@launchAnywayAvailable"
+              OnLaunchAnyway="@LaunchAnywayAsync"
               OnReportBug="@(() => { showMessage = false; showReportBug = true; })"
               OnClose="@(() => showMessage = false)" />
 

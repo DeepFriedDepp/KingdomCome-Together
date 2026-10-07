@@ -689,6 +689,52 @@ every number in `docs/WO-155-findings.md`) and what only two players can show.
 
 Lines worth a look: `MP-W155` (agent log), `WO155-` (kcd.log), `WO155-FF` and `WO155-NUDGE` (kcdmp-native.log).
 
+## WO-157 — the first public-beta patch (the release candidate)
+
+Throwaway saves only; crime sharing **on** (the host's mod menu). What WO-157 proved alone on one machine (every number
+in `docs/WO-157-findings.md`) and what only two players can show. This build is a **release candidate**: not
+soak-tested; the maintainer tags it after this session.
+
+132. **Both launch from the launcher.** Host and joiner click PLAY and CONNECT as always. Marker: `mark_launcher`.
+     * No KCDMP_LauncherInjector.exe anywhere; the plugin attaches (launcher log `MP-INJECT injected … (sha256 matches the
+       install manifest)`; kcdmp-native.log `KCDMP.dll attached`, `tick is live`). No "A MOD FILE WAS REMOVED".
+133. **Shops are open for the joiner.** In daytime the joiner walks into an open shop (a blacksmith, a trader, an inn),
+     then into a house at night. Markers: `mark_shop` in the shop, `mark_trespass` in the house.
+     * In the shop: nothing happens on either screen; host kcd.log `WO157-TRESPASS … here=open -> not a trespass in this
+       world`. In the house at night: the host's world judges it as before (`here=private -> judged`, witnesses). The
+       joiner's own screen shows **no** trespass warning in either (kcdmp-native.log `quieted=`), and the host is never
+       punished for the shop.
+134. **A returning player's record.** After a judged trespass (133's house), the joiner leaves and joins again. Marker:
+     `mark_rejoincrime`. * Host agent.log: `… is his again (N crime(s)); M trespass(es) his own game reported were dropped
+     (WO-157)`; no guard stops him for it.
+135. **The first walk-away.** Let a guard stop the joiner (a real crime, a theft) and walk away. Marker: `mark_walkaway`.
+     * He is told it does not count as fleeing (kcd.log `WO157-STOP walked away`); the guard stops him again later; walking
+       away then is fled (as 0.45.1).
+136. **Enemies hurt the joiner.** Let bandits or guards fight the joiner; he does not block. Marker: `mark_blows`.
+     * His health and stamina fall blow by blow (agent.log `[playerhit] took N damage and M stamina`); host agent.log
+       `MP-W132 npc hit on avatar … forwarded` with stamina-only blows forwarded too. **If he blocks on his own screen,
+       does the blow still land?** (yes in this build: his own block is not yet his game's decision — note it).
+137. **The joiner's blows on bandits.** Marker: `mark_joinerblows`. * The bandits fight back on the joiner's screen (no
+       T-pose, no standing still); agent.log (joiner) `MP-W157 engage … its one-shot stopped for the fight`.
+138. **Talk and trade after smithing.** The joiner does a smithing step at the blacksmith, then talks to him and trades,
+     then talks to someone else. Markers: `mark_talkafter`, `mark_trade`.
+     * Every conversation starts; Trade opens the shop. kcd.log (joiner): `WO157-TALK free npc=…`.
+139. **Sleeping together.** The joiner asks to sleep 12 h, the host says yes (F11); then the host asks for 4 h. Markers:
+     `mark_sleeptogether`, `mark_sleepcut` if anyone wakes early.
+     * Both sleep the full length; neither is woken by the other (agent.log `runs to its end (WO-157`); both are rested
+       afterwards (kcd.log `WO157-REST start/end`, and `WO157-REST rested:` where the game gave nothing).
+140. **A bad connection, said.** If the ping is high (or play over a slow link on purpose): the mod menu's Connection line
+     says "the connection is struggling (ping N ms)", and after 30 s one line on screen. Marker: `mark_conn`.
+141. **Riding far apart.** The joiner rides more than 150 m from the host. Marker: `mark_horsefar`. * The host's game does
+     not freeze (kcd.log `WO157-MOUNT … no ForceMount that far`); the figure is mounted again when near.
+142. **The host's figure on the joiner's screen.** Over a long session: no `Animation-queue overflow` lines for
+     `kcd2mp_` in the joiner's kcd.log (kcd.log `WO157-LOOK … look_ik=off`). Marker: `mark_lookflood` if they appear.
+143. **"Your character was saved".** The host saves (or an autosave); the joiner sees the line once. Marker: `mark_saved`.
+144. **The same start save, two groups.** If possible: a player who hosted the start save joins someone else's game of it.
+     Marker: `mark_startsave`. * He is offered Bring (his own character) and "Join with a new character".
+
+Lines worth a look: `MP-W157`, `MP-INJECT` (agent / launcher logs), `WO157-` (kcd.log), `WO157-QUIET` (kcdmp-native.log).
+
 ## Logs to send afterwards
 
 Both machines: Report a bug in the launcher. Since 0.42.2 it also collects the

@@ -10,9 +10,9 @@
     Publishes KCDMP_launcher, KcdMpClient, KcdMpServer and KcdMpMasterServer
     as self-contained win-x64 (via each project's FolderProfile.pubxml -- see
     docs/WO-7-progress.md for why that's set on the profile and not the
-    .csproj), builds the native plugin/injector if not already built, and
+    .csproj), builds the native plugin if not already built, and
     copies everything the launcher's AppSettings defaults expect to find
-    beside it (KCDMP.dll, KCDMP_LauncherInjector.exe, KcdMpClient.exe,
+    beside it (KCDMP.dll, KcdMpClient.exe,
     KcdMpServer.exe + their appsettings) into one folder.
 
     KcdMpMasterServer.exe goes into its own MasterServer\ subfolder instead
@@ -109,7 +109,10 @@ $setupExe = Join-Path $root "dotnet\KcdMp.SetupHost\bin\Release\net8.0\win-x64\p
 if (-not (Test-Path $setupExe)) { throw "expected publish output not found: $setupExe" }
 Copy-Item $setupExe $OutDir -Force
 
-# --- Native plugin + injector ---
+# --- Native plugin ---
+# WO-157: no injector exe in the payload: the launcher loads KCDMP.dll itself
+# (dotnet\KcdMp.Setup\GameInjector.cs). native\KCDMP_LauncherInjector stays a
+# developer tool for probes and test harnesses; it never ships.
 # WO-110 R10 (docs/WO-109-audit.md s5.3): ALWAYS rebuilt, not only when
 # missing. A stale KCDMP.dll beside a fresh agent used to be prevented by the
 # fresh-clone discipline alone -- there is no DLL/agent version handshake to
@@ -117,13 +120,13 @@ Copy-Item $setupExe $OutDir -Force
 # native\build already held. Build-Native.ps1 parks a DLL that a running game
 # still has loaded, so this is safe with the game up.
 $nativeDll = Join-Path $root "native\build\KCDMP\KCDMP.dll"
-$nativeInjector = Join-Path $root "native\build\KCDMP_LauncherInjector\KCDMP_LauncherInjector.exe"
-Write-Output "Building the native plugin + injector (always, WO-110 R10)..."
+Write-Output "Building the native plugin (always, WO-110 R10)..."
 & powershell -ExecutionPolicy Bypass -File (Join-Path $root "native\Build-Native.ps1")
 if ($LASTEXITCODE -ne 0) { throw "native build failed" }
-if (-not (Test-Path $nativeDll) -or -not (Test-Path $nativeInjector)) { throw "native build produced no artifacts at $nativeDll / $nativeInjector" }
+if (-not (Test-Path $nativeDll)) { throw "native build produced no artifact at $nativeDll" }
 Copy-Item $nativeDll $OutDir -Force
-Copy-Item $nativeInjector $OutDir -Force
+# An earlier publish into this folder left the injector: it must not ride along.
+Remove-Item (Join-Path $OutDir "KCDMP_LauncherInjector.exe") -Force -ErrorAction SilentlyContinue
 
 Write-Output "`nRelease assembled at: $OutDir"
 Write-Output "Contents:"

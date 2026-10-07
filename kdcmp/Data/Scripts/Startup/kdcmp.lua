@@ -304,6 +304,7 @@ end
 -- Game.ShowNotification adds unwanted "@" decorators so we use DrawLabel instead.
 function KCD2MP_ShowPing(ms)
     KCD2MP.ping = ms
+    if KCD2MP_W157ConnSample then pcall(KCD2MP_W157ConnSample, ms) end   -- WO-157 3.2
     local off = KCD2MP.clockOffsetMs
     KCD2MP.pingText = string.format("Ping: %d ms", ms)
         .. (off and string.format("  clock %+.2f s", off / 1000) or "")
@@ -7272,6 +7273,7 @@ function KCD2MP_W137TalkResume(name, via)
     local wasPaused = KCD2MP._npcPaused[name] ~= nil
     t = { since = os.clock(), via = tostring(via), resumed = wasPaused }
     w.talking[name] = t
+    if KCD2MP_W157TalkFree then KCD2MP_W157TalkFree(name) end   -- WO-157 3b.4: the copy free to talk (and to trade)
     if wasPaused then mp_wo102_resume(name, "w137-talk") end
     w.stats.talks = w.stats.talks + 1
     -- WO-144 1.3: nothing is held on the key press. The host holds its NPC only once this
@@ -7429,6 +7431,7 @@ function KCD2MP_W137TalkEnd(name, why)
         t.holdSent and "" or "; the host's NPC was never held"))
     -- WO-144 1.3: an off only for a hold that went out (a conversation that never started held nothing)
     if t.holdSent then KCD2MP_EmitEvent("w137_talk", "off " .. name) end
+    if t.freed then KCD2MP_EmitEvent("w157_talkfree", "off " .. name) end   -- WO-157 3b.4: the host's activity again
     if why == "never-started" then
         w.stats.neverStarted = (w.stats.neverStarted or 0) + 1
         KCD2MP_ShowNativeToast("This person can't talk to you right now.")
@@ -10696,6 +10699,7 @@ function KCD2MP_SpawnGhost(id, x, y, z, rotZ)
         -- case where the soul was not reachable at spawn+0. No-ops if the
         -- spawn pass landed (ghost.isolated) or the toggle is off.
         KCD2MP_ApplyGhostIsolation(captId, "settle")
+        if KCD2MP_W157AvatarLook then KCD2MP_W157AvatarLook(captId, "spawn") end   -- WO-157 3b.3
     end)
 
     -- Auto-start interp loop as soon as we have a ghost to move
@@ -10984,6 +10988,31 @@ function KCD2MP_MountNPCOnHorse(id)
         KCD2MP_SpawnHorse(id, wp and wp.tx or 0, wp and wp.ty or 0, wp and wp.tz or 0, wp and wp.tr or 0)
         return
     end
+
+    -- WO-157 3.1: never a ForceMount far from this player. The fresh-install pair's host died in MountNPCOnHorse (its
+    -- last log line; ForceMount ok= never printed) while the joiner's figure was ~2 km away (MP-LEASH ... separate-world):
+    -- WO-58's distance guard covered adopting a named world horse, not the stand-in. Tried again when it is near.
+    local far = nil
+    pcall(function()
+        local a, b = ghost.entity:GetWorldPos(), player and player:GetWorldPos()
+        if a and b then
+            local d = math.sqrt((a.x - b.x) ^ 2 + (a.y - b.y) ^ 2)
+            if d > (KCD2MP.W157_MOUNT_MAX_M or 150) then far = d end
+        end
+    end)
+    if far then
+        local captId = id
+        if not ghost.w157MountFarTold then
+            ghost.w157MountFarTold = true
+            mp_log(string.format("WO157-MOUNT id=%s the figure is %.0f m away -- no ForceMount that far (the field's host froze on one); tried again when it is near", tostring(id), far))
+        end
+        Script.SetTimer(3000, function()
+            local g3 = KCD2MP.ghosts[captId]
+            if g3 and g3.istate and g3.istate.isRiding and KCD2MP.horseGhosts[captId] then KCD2MP_MountNPCOnHorse(captId) end
+        end)
+        return
+    end
+    ghost.w157MountFarTold = nil
 
     local ok1 = pcall(function() human:ForceMount(horse.id) end)
     mp_log("ForceMount ok=" .. tostring(ok1) .. " id=" .. id)
@@ -12602,6 +12631,9 @@ function KCD2MP_InterpTick(arg, gen)
                 -- snap actually happens. WO-100 S7 asked for this next to the
                 -- correction magnitude below.
                 istate.corrSnaps = (istate.corrSnaps or 0) + 1
+                -- WO-157 3.4: also per 10 s window, and for the whole session (a respawned figure starts its own count again)
+                istate.corrSnapsWin = (istate.corrSnapsWin or 0) + 1
+                KCD2MP.snapSession = (KCD2MP.snapSession or 0) + 1
                 mp_log(string.format("TELEPORT id=%s dist=%.1f", id, math.sqrt(distSq)))
                 if KCD2MP_QuestHazard then KCD2MP_QuestHazard("teleport-ghost", string.format("ghost %s snapped %.0fm", tostring(id), math.sqrt(distSq))) end
                 istate.cx = istate.tx
@@ -12682,9 +12714,13 @@ function KCD2MP_InterpTick(arg, gen)
             cw.sum = cw.sum + corr
             if corr > cw.max then cw.max = corr end
             if (nowClock - cw.since) > 10.0 and cw.n > 0 then
+                -- WO-157 3.4: snaps= is this window's (it was a running total per figure, read as if per window);
+                -- snaps_figure= this figure's since it spawned, snaps_session= every figure's since the mod loaded.
                 mp_log(string.format(
-                    "MP-GHOSTCORR ghost=%s n=%d corr_mean_m=%.3f corr_max_m=%.3f snaps=%d",
-                    tostring(id), cw.n, cw.sum / cw.n, cw.max, istate.corrSnaps or 0))
+                    "MP-GHOSTCORR ghost=%s n=%d corr_mean_m=%.3f corr_max_m=%.3f snaps=%d snaps_figure=%d snaps_session=%d window_s=%.1f",
+                    tostring(id), cw.n, cw.sum / cw.n, cw.max, istate.corrSnapsWin or 0, istate.corrSnaps or 0, KCD2MP.snapSession or 0,
+                    nowClock - cw.since))
+                istate.corrSnapsWin = 0
                 istate.corrWin = { n = 0, sum = 0, max = 0, since = nowClock }
             end
 
@@ -17729,6 +17765,9 @@ KCD2MP_MARKS = { "setup", "join", "fight", "fightboth", "ko", "hostdown", "horse
     "herbs", "dog", "hostfight", "death", "stall", "door2", "quiet",
     -- WO-155: the 0.45.1 tester page's markers
     "hitnofall", "deathfall", "ffwindow",
+    -- WO-157: the first public-beta patch's checklist markers
+    "shop", "trespass", "rejoincrime", "walkaway", "blows", "joinerblows", "talkafter", "trade", "sleeptogether", "sleepcut",
+    "conn", "horsefar", "lookflood", "saved", "launcher", "startsave",
     -- WO-154: the 0.45.0 tester page's markers
     "quest", "knock", "turn", "partnerdown", "endfight", "joinbar", "joinslow", "newchar", "fasttravel", "menu", "skip",
     "voice", "caravan" }
@@ -18925,6 +18964,12 @@ function KCD2MP_W139HostJudge(src, id, kind, x, y, z, victim, item, where)
     local ap = av and W139.pos(av)
     -- the avatar stands where the joiner is (his position stream); a report of a spot far from it is judged at the spot
     local target = av
+    -- WO-157 1.1: a reported trespass is one only where THIS world calls the spot private (a shop the joiner's paused copy
+    -- of its keeper never opened is open here)
+    if kind == "trespass" and tonumber(id) ~= 0 and KCD2MP_W157HostTrespass
+        and not KCD2MP_W157HostTrespass(src, id, { x = tp.x, y = tp.y, z = tp.z }, ap) then
+        return
+    end
     if ap and ((ap.x - tp.x) ^ 2 + (ap.y - tp.y) ^ 2) < 36 then tp = ap else target = nil end
     local ve = nil
     if victim and victim ~= "-" then pcall(function() ve = System.GetEntityByName(victim) end) end
@@ -19899,6 +19944,249 @@ do
     end
 end
 
+-- WO-157 (Phase 1): crime that wasn't. Trespass in a shared world is decided by the HOST's world only.
+-- The field: every trespass began on the joiner's machine walking into a shop (MP-W139 trespass level -> 3 "entered someone's
+-- property"): a shop is public while its keeper keeps it open (the keeper's own NPC state adds the labels antitrespass and
+-- publicServiceTrespassOverride to the shop's area), and on the joiner the keeper is a paused copy whose state never gets
+-- there, so every shop stayed private. The host judged those reports with witnesses and guards (and, in joint mode, the host
+-- paid). Now the host asks its OWN world, at the spot the joiner reported (and where his figure stands): the engine's area
+-- labels, XGenAIModule.IsPointInAreaWithLabel -- private or personal, and not opened by antitrespass /
+-- publicServiceTrespassOverride. Live: Tachov's blacksmith counter at 16:23 = private + antitrespass + publicService... (the
+-- game's own trespass cue 0); the house beside it = private only (the cue 1). Area state only: no quest NPC is touched.
+--   WO157-TRESPASS src=<n> id=<n> at=(x,y,z) here=<private|public|open|unknown> figure=<...> -> judged|not a trespass here
+KCD2MP.w157 = KCD2MP.w157 or { hostCheck = true, fledGrace = true, stats = { judged = 0, refused = 0, unknown = 0, graced = 0 }, told = {} }
+KCD2MP.W157_PRIVATE = { "private", "personal" }
+KCD2MP.W157_OPEN = { "antitrespass", "publicServiceTrespassOverride" }
+
+-- "private" | "public" | "open" (private, but its owner opened it: a shop) | "unknown" (the engine gave no answer)
+function KCD2MP_W157AreaAt(p)
+    if not p or not XGenAIModule or not XGenAIModule.IsPointInAreaWithLabel then return "unknown" end
+    local function has(l)
+        local ok, r = pcall(function() return XGenAIModule.IsPointInAreaWithLabel({ x = p.x, y = p.y, z = p.z }, l) end)
+        if not ok then return nil end
+        return r == true
+    end
+    local private = false
+    for _, l in ipairs(KCD2MP.W157_PRIVATE) do
+        local h = has(l)
+        if h == nil then return "unknown" end
+        if h then private = true end
+    end
+    if not private then return "public" end
+    for _, l in ipairs(KCD2MP.W157_OPEN) do
+        local h = has(l)
+        if h == nil then return "unknown" end
+        if h then return "open" end
+    end
+    return "private"
+end
+
+-- The host, for a trespass the joiner reported: true = a trespass in this world (judged as before); false = not (the
+-- report goes no further). Unknown is not a trespass: a crime nobody can show is no crime.
+function KCD2MP_W157HostTrespass(src, id, reported, figure)
+    local w = KCD2MP.w157
+    if w.hostCheck == false then return true end
+    local here = KCD2MP_W157AreaAt(reported)
+    local fig = figure and KCD2MP_W157AreaAt(figure) or "-"
+    local yes = here == "private" and (fig == "-" or fig == "private")
+    if yes then w.stats.judged = w.stats.judged + 1
+    elseif here == "unknown" or fig == "unknown" then w.stats.unknown = w.stats.unknown + 1
+    else w.stats.refused = w.stats.refused + 1 end
+    local key = tostring(src) .. here .. fig
+    local now = os.clock()
+    if (w.told[key] or -1e9) + 20 < now then
+        w.told[key] = now
+        mp_log(string.format("WO157-TRESPASS src=%s id=%s at=(%.1f,%.1f,%.1f) here=%s figure=%s -> %s", tostring(src), tostring(id),
+            reported.x or 0, reported.y or 0, reported.z or 0, here, fig, yes and "judged" or "not a trespass in this world"))
+    end
+    return yes
+end
+
+function KCD2MP_W157SetHostCheck(arg)
+    local v = KCD2MP_Wo122ParseBool(arg)
+    if v == "bad" then mp_log("mp_trespass_host: expected on|off"); return false end
+    if v ~= nil then KCD2MP.w157.hostCheck = v end
+    mp_log("WO157-TOGGLE mp_trespass_host " .. (KCD2MP.w157.hostCheck and "on" or "off") .. " -- a joiner's trespass is judged only where the host's own world calls the spot private")
+    return true
+end
+
+function KCD2MP_W157SetStopGrace(arg)
+    local v = KCD2MP_Wo122ParseBool(arg)
+    if v == "bad" then mp_log("mp_stop_grace: expected on|off"); return false end
+    if v ~= nil then KCD2MP.w157.fledGrace = v end
+    mp_log("WO157-TOGGLE mp_stop_grace " .. (KCD2MP.w157.fledGrace and "on" or "off") .. " -- the first walk-away from a guard's stop is told, not counted as fleeing")
+    return true
+end
+
+-- (joiner) mp_trespass_hud on|off (default off): this game's own trespass warning in a session (the DLL's HUD gate)
+function KCD2MP_W157SetTrespassHud(arg)
+    local v = KCD2MP_Wo122ParseBool(arg)
+    if v == "bad" or v == nil then mp_log("mp_trespass_hud: expected on|off"); return false end
+    KCD2MP_EmitEvent("w157_cfg", "trespass_hud=" .. (v and "on" or "off"))
+    mp_log("WO157-TOGGLE mp_trespass_hud " .. (v and "on" or "off"))
+    return true
+end
+
+-- WO-157 3b.5: what a sleep or a wait did to this player -- the field could not tell whether the host's sleep for a joiner's
+-- vote rested him (rest was never logged). Health, exhaust (HIGHER = rested: the game's energy) and hunger at the skip's start
+-- and end. Live (2026-10-06, the Modding Tools 1.5.5, standing, no bed): the game's real sleep (C_SkipTime id 2, the one a
+-- vote's accepter gets) rested in 1 of 6 fresh game processes (exhaust +12.45 an hour, health to 100) and in 5 gave NOTHING --
+-- exhaust and hunger fell at the awake rate, health stayed (the field's host, and the joiner's 12 h). Once a process rested,
+-- its later sleeps rested too; the trigger was not found (docs/WO-157-findings.md). So: a real sleep that gave no rest gets
+-- the rest the game's own sleep gives there (exhaust +12.45/h, health +7/h, at most 100), said in the log; a sleep the game
+-- rested is left alone; a wait and the forced sleep screen never rest. mp_sleep_rest off = the game's result only.
+--   WO157-REST start|end health=<n> exhaust=<n> hunger=<n> time=<world s> [id=<n>]
+--   WO157-REST rested: the game gave <n> for <h> h of real sleep -> exhaust <a> -> <b>, health <c> -> <d>
+KCD2MP.w157.sleepRest = KCD2MP.w157.sleepRest ~= false
+KCD2MP.W157_REST_EXHAUST_PER_H, KCD2MP.W157_REST_HEALTH_PER_H = 12.45, 7.0
+function KCD2MP_W157RestLine(edge, id)
+    local w = KCD2MP.w157
+    local h, e, f, t = nil, nil, nil, nil
+    pcall(function() h = player.soul:GetState("health") end)
+    pcall(function() e = player.soul:GetState("exhaust") end)
+    pcall(function() f = player.soul:GetState("hunger") end)
+    pcall(function() t = Calendar.GetWorldTime() end)
+    h, e, f, t = tonumber(h), tonumber(e), tonumber(f), tonumber(t)
+    mp_log(string.format("WO157-REST %s health=%.1f exhaust=%.1f hunger=%.1f time=%.0f%s", tostring(edge), h or -1, e or -1,
+        f or -1, t or -1, id and (" id=" .. tostring(id)) or ""))
+    if edge == "start" then
+        w.restStart = (h and e and t) and { h = h, e = e, t = t, id = tonumber(id) } or nil
+        return
+    end
+    local s = w.restStart
+    w.restStart = nil
+    if edge ~= "end" or not s or s.id ~= 2 or not (h and e and t) or w.sleepRest == false then return end
+    local hours = (t - s.t) / 3600
+    if hours < 0.5 or hours > 24 then return end
+    local want = KCD2MP.W157_REST_EXHAUST_PER_H * hours
+    local got = e - s.e
+    if got >= 0.25 * want or e >= 99 then return end   -- the game rested him (or he is rested): its own result stands
+    local e2 = math.min(100, s.e + want)
+    local h2 = math.max(h, math.min(100, s.h + KCD2MP.W157_REST_HEALTH_PER_H * hours))
+    pcall(function() player.soul:SetState("exhaust", e2) end)
+    if h2 > h then pcall(function() player.soul:SetState("health", h2) end) end
+    w.stats.rested = (w.stats.rested or 0) + 1
+    mp_log(string.format("WO157-REST rested: the game gave %.1f for %.1f h of real sleep -> exhaust %.1f -> %.1f, health %.1f -> %.1f",
+        got, hours, e, e2, h, h2))
+end
+
+function KCD2MP_W157SetSleepRest(arg)
+    local v = KCD2MP_Wo122ParseBool(arg)
+    if v == "bad" then mp_log("mp_sleep_rest: expected on|off"); return false end
+    if v ~= nil then KCD2MP.w157.sleepRest = v end
+    mp_log("WO157-TOGGLE mp_sleep_rest " .. (KCD2MP.w157.sleepRest and "on" or "off") .. " -- a real sleep the game gave no rest gets the rest its own sleep gives")
+    return true
+end
+
+-- WO-157 3b.3: a partner's figure has no look of its own. The field's joiner logged 8,076 "Animation-queue overflow" lines on
+-- the host's figure (kcd2mp_0), all its look-pose layers (relaxed_idle_lookposes_torso, crouched_idle_lookposes_torso, ...):
+-- the figure's own look IK kept asking for look poses its puppet state never played. Its look IK and its AI look target
+-- are switched off at spawn (the engine's Actor.SetLookIK / AI.EnableUpdateLookTarget); mp_avatar_look on gives them back.
+--   WO157-LOOK id=<n> why=<spawn|switch> look_ik=<off|on> look_target=<off|on> ok=<b>/<b>
+KCD2MP.w157.avatarLook = KCD2MP.w157.avatarLook or false
+function KCD2MP_W157AvatarLook(id, why)
+    local g = KCD2MP.ghosts and KCD2MP.ghosts[tostring(id)]
+    local e = g and g.entity
+    if not e then return end
+    local on = KCD2MP.w157.avatarLook == true
+    local ok1 = pcall(function() e.actor:SetLookIK(on) end)
+    local ok2 = pcall(function() AI.EnableUpdateLookTarget(e.id, on) end)
+    mp_log(string.format("WO157-LOOK id=%s why=%s look_ik=%s look_target=%s ok=%s/%s", tostring(id), tostring(why), on and "on" or "off",
+        on and "on" or "off", tostring(ok1), tostring(ok2)))
+end
+
+function KCD2MP_W157SetAvatarLook(arg)
+    local v = KCD2MP_Wo122ParseBool(arg)
+    if v == "bad" then mp_log("mp_avatar_look: expected on|off"); return false end
+    if v ~= nil then KCD2MP.w157.avatarLook = v end
+    for id, _ in pairs(KCD2MP.ghosts or {}) do KCD2MP_W157AvatarLook(id, "switch") end
+    mp_log("WO157-TOGGLE mp_avatar_look " .. (KCD2MP.w157.avatarLook and "on" or "off") .. " -- a partner's figure looks around on its own (off: no look poses)")
+    return true
+end
+
+-- WO-157 3b.4: talking (and trading) with a host copy. The field: after the blacksmith's quests the joiner could talk to nobody,
+-- and Trade closed each conversation at once. The engine cancelled his requests ("Request timed out" after its
+-- NPCPauseRequests timed out: the copy never accepted the pause) while each copy sat in the save's loaded state it could not
+-- reach -- the blacksmith's "Required state ... LeftHand Held object: semifinished_sword ...; Unstance: blacksmith_forging"
+-- (40 errors), the innkeeper re-given the host's bartender activity every few seconds by the NPC-state placement (WO-141).
+-- A shop is an action of the keeper's own NPC state (shop_sellerReadyToSell, OpenShop): it never completes on a copy stuck
+-- like that. So when this player talks to a copy: its hands, its stance and its activity are reset (the engine's own
+-- wh_ai_NPCStateResetElement, WO-116), and the host's activity is not re-applied to it until the conversation ends.
+--   WO157-TALK free npc=<n> reset=<LeftHand,RightHand,Unstance,Stance ok|err> placement=held
+KCD2MP.w157.talkFree = KCD2MP.w157.talkFree ~= false
+function KCD2MP_W157TalkFree(name)
+    local w = KCD2MP.w157
+    if w.talkFree == false then return end
+    local t = KCD2MP.w137 and KCD2MP.w137.talking[name]
+    KCD2MP_EmitEvent("w157_talkfree", "on " .. tostring(name))
+    if t then t.freed = true end
+    local res = {}
+    for _, el in ipairs({ "LeftHand", "RightHand", "Unstance", "Stance" }) do
+        local ok = pcall(System.ExecuteCommand, "wh_ai_NPCStateResetElement " .. tostring(name) .. " " .. el)
+        res[#res + 1] = el .. "=" .. (ok and "ok" or "err")
+    end
+    w.stats.freed = (w.stats.freed or 0) + 1
+    mp_log(string.format("WO157-TALK free npc=%s reset=%s placement=held -- the copy can take the conversation (and a trade)", tostring(name), table.concat(res, ",")))
+end
+
+function KCD2MP_W157SetTalkFree(arg)
+    local v = KCD2MP_Wo122ParseBool(arg)
+    if v == "bad" then mp_log("mp_talk_free: expected on|off"); return false end
+    if v ~= nil then KCD2MP.w157.talkFree = v end
+    mp_log("WO157-TOGGLE mp_talk_free " .. (KCD2MP.w157.talkFree and "on" or "off") .. " -- a host copy's hands, stance and activity are reset when this player talks to it")
+    return true
+end
+
+-- WO-157 3.2: the connection struggling, said plainly so players stop blaming everything else. The fresh-install pair: a median
+-- ping of 63 ms but a 90th percentile of 280 ms, spikes to 1,900 ms, the agent up to 2.5 s behind. A sample (the ping every
+-- ~2 s, which includes the agent's own backlog, and the agent's backlog itself) is bad at >= 250 ms ping or >= 1 s behind.
+-- Half the samples of the last 10 s bad: the mod menu's Connection line says "-- the connection is struggling". Bad for 30 s
+-- (two thirds of the samples since): one line on screen, at most once in 5 minutes.
+--   WO157-CONN struggling|ok ping=<ms> lag=<ms> bad=<n>/<n>
+KCD2MP.w157.conn = KCD2MP.w157.conn or { samples = {}, struggling = false, badSince = nil, toldAt = -1e9 }
+KCD2MP.W157_CONN_PING_MS, KCD2MP.W157_CONN_LAG_MS = 250, 1000
+function KCD2MP_W157ConnSample(ms)
+    local c = KCD2MP.w157.conn
+    local now = os.clock()
+    local ns = KCD2MP.npcSilence
+    local lag = (ns and (now - (ns.agentAt or -1e9)) < 10) and (ns.lagMs or 0) or 0
+    local bad = (tonumber(ms) or 0) >= KCD2MP.W157_CONN_PING_MS or lag >= KCD2MP.W157_CONN_LAG_MS
+    table.insert(c.samples, { t = now, bad = bad })
+    while #c.samples > 0 and now - c.samples[1].t > 30 do table.remove(c.samples, 1) end
+    local nb10, n10, nb30 = 0, 0, 0
+    for _, s in ipairs(c.samples) do
+        if s.bad then nb30 = nb30 + 1 end
+        if now - s.t <= 10 then n10 = n10 + 1; if s.bad then nb10 = nb10 + 1 end end
+    end
+    local was = c.struggling
+    c.struggling = n10 >= 2 and nb10 * 2 >= n10
+    if c.struggling and not c.badSince then c.badSince = now elseif not c.struggling then c.badSince = nil end
+    if c.struggling ~= was then
+        mp_log(string.format("WO157-CONN %s ping=%d lag=%d bad=%d/%d", c.struggling and "struggling" or "ok", tonumber(ms) or -1, lag, nb10, n10))
+    end
+    c.lastPing, c.lastLag = tonumber(ms) or 0, lag
+    if c.badSince and now - c.badSince >= 30 and nb30 * 3 >= #c.samples * 2 and now - c.toldAt >= 300 then
+        c.toldAt = now
+        mp_log(string.format("WO157-CONN told: struggling for %.0f s (ping %d ms, %d ms behind)", now - c.badSince, c.lastPing, lag))
+        pcall(KCD2MP_ShowNativeToast, string.format("Your connection to the other player is struggling (ping %d ms): movement can lag or jump. It's the connection, not the game.", c.lastPing))
+    end
+end
+
+-- The suffix of the mod menu's Connection line ("" while the connection is fine).
+function KCD2MP_W157ConnNote()
+    local c = KCD2MP.w157.conn
+    if not c.struggling then return "" end
+    return string.format(" -- the connection is struggling (ping %d ms)", c.lastPing or 0)
+end
+
+function KCD2MP_W157Status()
+    local w = KCD2MP.w157
+    local p = player and player.GetWorldPos and player:GetWorldPos()
+    mp_log(string.format("WO157-STATUS trespass_host=%s stop_grace=%s judged=%d refused=%d unknown=%d graced=%d here=%s",
+        tostring(w.hostCheck), tostring(w.fledGrace), w.stats.judged, w.stats.refused, w.stats.unknown, w.stats.graced,
+        p and KCD2MP_W157AreaAt(p) or "?"))
+end
+
 -- ===== WO-154 / WO-155: the partner's figure (docs/WO-154-findings.md, docs/WO-155-findings.md) =====
 --
 -- WO-155: a hit never knocks a player down, and his figure falls on the other screen only when he dies.
@@ -20215,6 +20503,16 @@ do
         local pp = player and W139.pos(player)
         local moved = (pp and s and s.p0) and math.sqrt((pp.x - s.p0.x) ^ 2 + (pp.y - s.p0.y) ^ 2) or 0
         if moved >= W.fledM then
+            -- WO-157 1.2: the first walk-away of a game is told, not counted -- the field's joiner was stopped 42 s after
+            -- joining for a trespass he had not committed, walked off, and "fled" began a spiral of guards
+            local g = KCD2MP.w157
+            if g and g.fledGrace ~= false and not g.fledWarned then
+                g.fledWarned = true
+                g.stats.graced = g.stats.graced + 1
+                mp_log(string.format("WO157-STOP walked away moved=%.1f -- the first walk-away from a stop is not fleeing: told, the record stands", moved))
+                pcall(KCD2MP_ShowNativeToast, "A guard stopped you about a crime and you walked away. This time it doesn't count as fleeing; next time it does (resisting arrest).")
+                return "talked"
+            end
             mp_log(string.format("WO154-STOP fled moved=%.1f -- this player moved away during the stop", moved))
             return "fled"
         end
@@ -21312,8 +21610,15 @@ do
     M.LAYOUT = M.LAYOUT or { xFrac = 0.62, yFrac = 0.10, title = 1.7, row = 1.5, small = 1.35, line = 22, wrap = 60 }
     M.MENU_KEYS = { "insert", "np_add", "np_subtract" }    -- KeybindPak.MenuKeys, in its order
     M.KEY_NAMES = { insert = "Insert", np_add = "Numpad +", np_subtract = "Numpad -" }
-    M.TEXT_FT_HOST = "Fast travel is off in this co-op session (you can turn it on in the mod menu)"
-    M.TEXT_FT_JOINER = "Fast travel is off in this co-op session (your host can turn it on in the mod menu)"
+    -- WO-157 (3b.7): a player read the old line ("Fast travel is off in this co-op session (your host can turn it
+    -- on in the mod menu)") as an error asking him to turn something on. Plainly information now, naming the key.
+    M.TEXT_FT_HOST = "Fast travel is turned off for co-op. You can turn it on in the mod menu (Insert)."
+    M.TEXT_FT_JOINER = "Fast travel is turned off for co-op. The host can turn it on in the mod menu (Insert)."
+    function M.ftText(joiner)
+        local key = M.KEY_NAMES[M.menuKey] or "Insert"
+        local text = joiner and M.TEXT_FT_JOINER or M.TEXT_FT_HOST
+        return (string.gsub(text, "%(Insert%)", "(" .. key .. ")"))
+    end
     -- The game's own screens: their actions reach Player.OnAction before the screen takes the keys (WO-12
     -- observed open_apse_inventory_keyboard and open_menu there); the action names are the game's
     -- keybindSuperactions.xml's (Esc / Backspace, I, P, J, M, N, T).
@@ -21455,7 +21760,7 @@ do
             local joiner = M.roleNow() == "joiner"
             if KCD2MP_W154FastTravelHold(true, why) and not M.ftTold and not (joiner and M.hostFt == nil) then
                 M.ftTold = true
-                M.say(joiner and M.TEXT_FT_JOINER or M.TEXT_FT_HOST)
+                M.say(M.ftText(joiner))
             end
         else
             KCD2MP_W154FastTravelHold(false, up and "the session allows fast travel" or (tostring(why) .. ", no co-op session"))
@@ -21469,7 +21774,7 @@ do
         if not M.ftHeld then return false end
         if (os.clock() - (M.ftToldAt or -1e9)) < 5 then return true end
         M.ftToldAt = os.clock()
-        local text = M.roleNow() == "joiner" and M.TEXT_FT_JOINER or M.TEXT_FT_HOST
+        local text = M.ftText(M.roleNow() == "joiner")
         mp_log("WO154-FASTTRAVEL refused (" .. tostring(how or "map") .. ") -- telling the player")
         pcall(KCD2MP_ShowNativeToast, text)
         M.pendingMsg = text
@@ -21590,9 +21895,10 @@ do
     function M.connectionText()
         if not M.fresh() then return "Not connected" end
         if M.link == "connected" then
-            if M.role == "host" then return M.partner and "Hosting -- your partner is here" or "Hosting -- waiting for your partner" end
-            if M.role == "joiner" then return M.partner and "Joined your host" or "Connected -- your host is away" end
-            return "Connected"
+            local note = KCD2MP_W157ConnNote and KCD2MP_W157ConnNote() or ""   -- WO-157 3.2: "-- the connection is struggling"
+            if M.role == "host" then return (M.partner and "Hosting -- your partner is here" or "Hosting -- waiting for your partner") .. note end
+            if M.role == "joiner" then return (M.partner and "Joined your host" or "Connected -- your host is away") .. note end
+            return "Connected" .. note
         end
         if M.link == "connecting" then return "Connecting..." end
         if M.link == "failed" then return "Not connected (the connection failed)" end
@@ -22288,6 +22594,13 @@ local ok, err = pcall(function()
     System.AddCCommand("mp_quest_coalesce", 'KCD2MP_W154SetCoalesce(%line)', "WO-154: (host) a joiner's quest steps made by an AI behaviour (a duel, a brawl) on one State are judged as their net result, not replayed step by step (default on): mp_quest_coalesce on|off")
     System.AddCCommand("mp_host_target", 'KCD2MP_W154SetHostTarget(%line)', "WO-154: (host) the host's blow frees an enemy from the mod's hold on a partner's figure, and a guard fighting the host is never sent at the partner (default on): mp_host_target on|off")
     System.AddCCommand("mp_guard_respite", 'KCD2MP_W154SetGuardRespite(%line)', "WO-154: no guard stops or attacks a partner who is down, or for 2 minutes after he is up (30 s after his mp_unstuck); a stop turned into an attack is 'fled' only when he moved away (default on): mp_guard_respite on|off")
+    System.AddCCommand("mp_trespass_host", 'KCD2MP_W157SetHostCheck(%line)', "WO-157: (host) a partner's trespass is judged only where your own world calls the spot private -- an open shop is not (default on): mp_trespass_host on|off")
+    System.AddCCommand("mp_stop_grace", 'KCD2MP_W157SetStopGrace(%line)', "WO-157: (joiner) the first time you walk away from a guard's stop it is told, not counted as fleeing (default on): mp_stop_grace on|off")
+    System.AddCCommand("mp_trespass_hud", 'KCD2MP_W157SetTrespassHud(%line)', "WO-157: (joiner) your own game's trespass warning in a co-op session; off = hidden, the host's world decides a trespass (default off): mp_trespass_hud on|off")
+    System.AddCCommand("mp_avatar_look", 'KCD2MP_W157SetAvatarLook(%line)', "WO-157: a partner's figure looks around on its own (its look IK); off = no look poses, which flooded its animation queue (default off): mp_avatar_look on|off")
+    System.AddCCommand("mp_talk_free", 'KCD2MP_W157SetTalkFree(%line)', "WO-157: (joiner) talking to a host copy resets its hands, stance and activity first, so it takes the conversation and a trade (default on): mp_talk_free on|off")
+    System.AddCCommand("mp_sleep_rest", 'KCD2MP_W157SetSleepRest(%line)', "WO-157: a real sleep (a vote's, or your own) that the game gave no rest gets the rest its own sleep gives -- in this game build its no-bed sleep often gives none (default on): mp_sleep_rest on|off")
+    System.AddCCommand("mp_w157_status", "KCD2MP_W157Status()", "WO-157: the trespass check and the stop grace (WO157-STATUS here); also the area here: private, public, open (a shop) or unknown")
     System.AddCCommand("mp_fair_crime", 'KCD2MP_W154SetFairCrime(%line)', "WO-154: (host) a partner's murder only on the victim's death, and an assault judged 5 s later -- no crime if the victim fights by then, a quest brawl (default on): mp_fair_crime on|off")
     System.AddCCommand("mp_scene_resume", 'KCD2MP_W154SetSceneResume(%line)', "WO-154: (joiner) a scene stuck at its end resumes the host's copies, as in 0.44.0 (default off: no copy is resumed; the engine's own rescue, a save request, runs at once): mp_scene_resume on|off")
     System.AddCCommand("mp_bind_far", 'KCD2MP_W154SetBindFar(%line)', "WO-154: (joiner) KCDMP.dll writes a host copy that has no physics yet (far away) and one seated on a cart (held in its seat until it gets off), instead of refusing them as not-living / parented (default on): mp_bind_far on|off")

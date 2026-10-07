@@ -334,6 +334,19 @@ public static partial class WhsSave
         return Convert.ToHexString(SHA256.HashData(b[..15]))[..10].ToLowerInvariant();
     }
 
+    /// <summary>
+    /// WO-157: a host world's tag when another host's world of the same seed is already stored here (two hosts of one
+    /// start save): the seed and that host's install key, never reversible to either.
+    /// </summary>
+    public static string HostWorldTag(uint seed, uint hostKey)
+    {
+        Span<byte> b = stackalloc byte[8 + 12];
+        BinaryPrimitives.WriteUInt32LittleEndian(b, seed);
+        BinaryPrimitives.WriteUInt32LittleEndian(b[4..], hostKey);
+        "kcdmp-world2"u8.CopyTo(b[8..]);
+        return Convert.ToHexString(SHA256.HashData(b))[..10].ToLowerInvariant();
+    }
+
     public readonly record struct PlayerInfo(bool IsHenry, string Player, bool Pristine);
 
     /// <summary>

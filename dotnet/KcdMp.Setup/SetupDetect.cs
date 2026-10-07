@@ -185,6 +185,10 @@ public sealed class SetupSnapshot
 
     public WorkspaceReport? Workspace { get; init; }
     public ModReport? Mod { get; init; }
+    /// <summary>WO-157: Microsoft's Visual C++ 2013 runtime (x64) is installed.</summary>
+    public bool VcRuntime2013 { get; init; } = true;
+    /// <summary>WO-157: its redistributable in a Steam library (Steamworks Shared), or null.</summary>
+    public string? VcRedist2013 { get; init; }
 
     public bool GameInstalled => GameRoot is not null;
     public bool ModdingToolsInstalled => ModdingToolsRoot is not null;
@@ -250,6 +254,8 @@ public static class SetupProbe
             DownloadVolumeFreeBytes = free,
             Workspace = workspace,
             Mod = mod,
+            VcRuntime2013 = host.HasVcRuntime2013(),
+            VcRedist2013 = VcRuntime2013.FindRedist(new[] { steam.Root }.Concat(steam.Libraries)),
         };
     }
 }

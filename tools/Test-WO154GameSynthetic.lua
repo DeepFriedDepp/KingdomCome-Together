@@ -210,6 +210,11 @@ do
     check("B1: stood (2 m) -> attacked, no resist", KCD2MP_W154StopResult(s, "fled") == "attacked", KCD2MP_W154StopResult(s, "fled"))
     check("B1: ... logged", lastLog("WO154-STOP attacked moved=2.0", mark) ~= nil)
     p.px = 12
+    -- WO-157 1.2: the first walk-away of a game is told, not counted (the record stands); the next one is fled
+    KCD2MP.w157.fledWarned = nil
+    local m157 = #LOG
+    check("B1/157: the first walk-away (12 m) -> talked, told once", KCD2MP_W154StopResult(s, "fled") == "talked"
+        and lastLog("WO157-STOP walked away moved=12.0", m157) ~= nil)
     check("B1: moved 12 m away -> fled", KCD2MP_W154StopResult(s, "fled") == "fled")
     check("B1: a fight result stays a fight", KCD2MP_W154StopResult(s, "fought") == "fought")
     p.px = 0

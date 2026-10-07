@@ -25,7 +25,7 @@ set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 add_link_options("/PDBALTPATH:%_PDB%")
 
 add_subdirectory(KCDMP)
-add_subdirectory(KCDMP_LauncherInjector)
+add_subdirectory(KCDMP_LauncherInjector)   # WO-157: a developer tool only (probes, harnesses); never shipped
 add_subdirectory(tests)   # WO-129: engine-free unit tests (KCDMP_NativeTests.exe)
 
 # --- WO-72 experiment (NOT product) -------------------------------------

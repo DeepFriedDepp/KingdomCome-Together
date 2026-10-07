@@ -843,9 +843,10 @@ public sealed class CombatPipe : IAsyncDisposable
     }
 
     /// <summary>op 1: the trespass detector on/off. (armed, last level) or null.</summary>
-    public async Task<(bool Armed, byte Level)?> Wo139ConfigAsync(bool on, CancellationToken ct = default)
+    public async Task<(bool Armed, byte Level)?> Wo139ConfigAsync(bool on, bool quiet = true, CancellationToken ct = default)
     {
-        var r = await Wo139Async(1, [(byte)(on ? 1 : 0)], ct);
+        // WO-157: the third byte -- the joiner's own game's trespass warning hidden (quiet) while the detector is on
+        var r = await Wo139Async(1, [(byte)(on ? 1 : 0), (byte)(quiet ? 1 : 0)], ct);
         if (r is not { } x || x.Payload.Length < 2) return null;
         return (x.Payload[0] == 1, x.Payload[1]);
     }

@@ -35,6 +35,11 @@
                     {
                         <button class="kcd-btn primary" disabled="@string.IsNullOrWhiteSpace(Address)" @onclick="OnUseAddress">CONNECT BY ADDRESS</button>
                     }
+                    @if (ShowLaunchAnyway)
+                    {
+                        @* WO-157: a mod file the check could not find is never a dead end *@
+                        <button class="kcd-btn" @onclick="OnLaunchAnyway">LAUNCH ANYWAY</button>
+                    }
                     @if (ShowReportBug)
                     {
                         @* WO-154: Windows blocked a file -- the log bundle is one click away *@
@@ -59,4 +64,6 @@
     [Parameter] public EventCallback OnUseAddress { get; set; }
     [Parameter] public bool ShowReportBug { get; set; }   // WO-154
     [Parameter] public EventCallback OnReportBug { get; set; }
+    [Parameter] public bool ShowLaunchAnyway { get; set; }   // WO-157
+    [Parameter] public EventCallback OnLaunchAnyway { get; set; }
 }

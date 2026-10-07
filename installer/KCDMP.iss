@@ -90,6 +90,11 @@ UninstallDisplayName={#AppName}
 UninstallDisplayIcon={app}\{#AppExeName}
 SetupLogging=yes
 CloseApplications=yes
+; WO-157: signed only when tools\Build-Installer.ps1 found the signing settings (it defines the tool).
+#ifdef KcdmpSign
+SignTool=kcdmpsign
+SignedUninstaller=yes
+#endif
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
@@ -1045,6 +1050,7 @@ var
   Failures, Removed, Verdict: TArrayOfString;
   I, FailCount, RemovedCount, Line: Integer;
   Detail, LoadError, ModDir: String;
+  Gone: Boolean;
 begin
   VerifyFailed := False;
   FailCount := 0;
@@ -1093,7 +1099,11 @@ begin
 
   { The verdict file is the record every tool reads: tools\Verify-Install.ps1,
     tools\Test-InstallerUpgrade.ps1, and anyone triaging a tester's machine. }
+#ifdef ReleaseCandidate
+  SetArrayLength(Verdict, FailCount + RemovedCount + 4);
+#else
   SetArrayLength(Verdict, FailCount + RemovedCount + 3);
+#endif
   Line := 0;
   if (FailCount = 0) and not ShouldPlaceMod() then
     Verdict[0] := 'PASS  ' + IntToStr(GetArrayLength(ManApp)) +
@@ -1122,6 +1132,11 @@ begin
     Verdict[Line] := 'mod placed by Setup'
   else
     Verdict[Line] := 'mod held back: the launcher places it once the Modding Tools are set up';
+#ifdef ReleaseCandidate
+  // WO-157: tools\Build-Installer.ps1 -ReleaseCandidate; read by tools\Verify-Install.ps1.
+  Verdict[Line + 1] := 'not soak-tested: release candidate, not for public release';
+  Log('verify: not soak-tested: release candidate, not for public release');
+#endif
   SaveStringsToFile(ExpandConstant('{app}\install-verify.txt'), Verdict, False);
 
   if FailCount = 0 then
@@ -1143,6 +1158,22 @@ begin
     if FailCount > 8 then
       Detail := Detail + #13#10 + '    ... and ' + IntToStr(FailCount - 8) + ' more';
 
+    { WO-157: "-1 bytes" = the file is not there right after Setup copied it. Nothing "using" a file
+      does that; an antivirus or Windows Security removing it does (the field's
+      KCDMP_LauncherInjector.exe, -1 bytes, on fresh installs). Say which it is. }
+    Gone := False;
+    for I := 0 to FailCount - 1 do
+      if Pos('(-1 bytes', Failures[I]) > 0 then Gone := True;
+    if Gone then
+      MsgBox('THIS INSTALL IS NOT COMPLETE.' + #13#10#13#10 +
+             IntToStr(FailCount) + ' component(s) did not install correctly:' + Detail + #13#10#13#10 +
+             'A file shown with -1 bytes was removed right after Setup copied it. That is almost always ' +
+             'Windows Security or another antivirus. Open Windows Security > Virus & threat protection > ' +
+             'Protection history (or your antivirus), restore the file and allow it, then run this installer ' +
+             'again. Setup never changes your security settings.' + #13#10#13#10 +
+             'The full list is in install-verify.txt in the install folder.',
+             mbCriticalError, MB_OK)
+    else
     MsgBox('THIS INSTALL IS NOT COMPLETE.' + #13#10#13#10 +
            IntToStr(FailCount) + ' component(s) did not install correctly:' + Detail + #13#10#13#10 +
            'Almost always this means something was still using those files. Close the launcher, ' +

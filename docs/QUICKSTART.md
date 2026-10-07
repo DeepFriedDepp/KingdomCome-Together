@@ -10,6 +10,17 @@ administrator rights. At the end, leave **"Launch Kingdom Come: Together now"** 
 You don't need anything else first. If Kingdom Come: Deliverance II or its free
 **Modding Tools** aren't installed yet, Setup says so and the launcher takes care of it.
 
+**What installs itself:** the launcher brings its own .NET runtime (you do **not** install
+.NET), Setup installs Microsoft's WebView2 runtime if it is missing, and Steam installs the
+game and the Modding Tools from the launcher's checklist. The checklist also offers Microsoft's
+**Visual C++ 2013 runtime** when it is missing: the Modding Tools need it (without it Windows
+says "MSVCP120.dll was not found" when the game starts); the mod itself does not.
+
+**If Windows removes or blocks a mod file**, the launcher says which file, where it looked, and
+what to do (`docs/releases/` "If you see…"). The mod never changes your Windows security
+settings and never adds exclusions: you allow a file yourself, in Windows Security or your
+antivirus.
+
 ## 2. Open the launcher
 
 If everything is already set up, the launcher opens to its normal screen, and you can go

@@ -146,7 +146,11 @@ public static partial class Protocol
                       JoinStateSession = 8,
                       // WO-125: the host started a save load (joinId 0, to every peer). A joiner in the
                       // host's world keeps nothing from here on and rejoins once the host announces again.
-                      JoinStateReloading = 9;
+                      JoinStateReloading = 9,
+                      // WO-157: the host's install key (joinId slot, to every peer, beside each state 8). Two hosts
+                      // of the same start save have the same playthrough seed; the key keeps their worlds apart on a
+                      // joiner (HenryStore). A joiner without WO-157 logs it as an unknown state and ignores it.
+                      JoinStateHostKey = 10;
 
     // WO-125: the "session" status (state 8) carries the host world's identity in the joinId
     // slot (unused for state 8 since WO-124, which always sent 0): the playthrough seed (save
@@ -157,7 +161,7 @@ public static partial class Protocol
     {
         JoinStateDeferred => "deferred", JoinStatePaused => "paused", JoinStateSaving => "saving", JoinStateSending => "sending",
         JoinStateWaitingReady => "waiting-ready", JoinStateResumed => "resumed", JoinStateRefused => "refused",
-        JoinStateSession => "session", JoinStateReloading => "reloading", _ => $"unknown-{s}",
+        JoinStateSession => "session", JoinStateReloading => "reloading", JoinStateHostKey => "host-key", _ => $"unknown-{s}",
     };
 
     /// <summary>Why a host defers (JoinStateDeferred) or refuses (JoinStateRefused). APPEND-ONLY.</summary>
@@ -170,6 +174,8 @@ public static partial class Protocol
         "joiner-abort",
         // WO-125
         "not-henry", "world-changed", "reloading", "no-henry-source",
+        // WO-157
+        "host-key",
     };
 
     public static byte JoinReasonId(string name)

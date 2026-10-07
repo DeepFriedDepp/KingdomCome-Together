@@ -131,10 +131,11 @@ $code = Invoke-Setup @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/DIR=$
 Assert-That "installer exit code 0" ($code -eq 0) "exit $code -- see $logDir\install.log"
 Assert-Verdict $appDir "fresh install"
 
-foreach ($f in @("KCDMP_launcher.exe", "KcdMpClient.exe", "KcdMpServer.exe", "KCDMP.dll",
-                 "KCDMP_LauncherInjector.exe", "unins000.exe")) {
+foreach ($f in @("KCDMP_launcher.exe", "KcdMpClient.exe", "KcdMpServer.exe", "KCDMP.dll", "unins000.exe")) {
     Assert-That "deployed $f" (Test-Path (Join-Path $appDir $f)) $appDir
 }
+# WO-157: the launcher loads the DLL itself; the injector exe is no longer shipped.
+Assert-That "no injector exe" (-not (Test-Path (Join-Path $appDir "KCDMP_LauncherInjector.exe"))) $appDir
 # The launcher resolves relative DllPath/AgentPath/RelayPath against its own
 # directory, so these have to be siblings, not tucked into a subfolder.
 Assert-That "self-contained runtime present" (Test-Path (Join-Path $appDir "hostfxr.dll")) $appDir

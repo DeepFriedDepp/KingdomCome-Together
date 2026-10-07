@@ -33,6 +33,9 @@ public interface ISetupHost
 
     /// <summary>The .NET 6 runtime Warhorse's WorkspaceSetup.exe is built against (net6.0, no roll-forward).</summary>
     bool HasDotNet6Runtime();
+
+    /// <summary>WO-157: the Visual C++ 2013 runtime (x64) the Modding Tools' trace server needs.</summary>
+    bool HasVcRuntime2013() => VcRuntime2013.PresentIn(Environment.SystemDirectory);
 }
 
 public sealed class RealSetupHost : ISetupHost

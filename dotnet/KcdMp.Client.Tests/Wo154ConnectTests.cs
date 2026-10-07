@@ -153,8 +153,8 @@ public class Wo154ConnectTests : IDisposable
     private static ConnectionStatusData Conn() => new() { State = "connected" };
 
     [Theory]
-    [InlineData("regular-game-saves", "Your saves are from the regular game, not the Modding Tools.")]
-    [InlineData("only-host-copies", "Your only Modding Tools saves are copies of this same world.")]
+    [InlineData("regular-game-saves", "Your saves are from the regular game, not the Modding Tools: the Modding Tools can't load them.")]   // WO-157 wording
+    [InlineData("only-host-copies", "Your Modding Tools saves are all of this same world (your host's start save, or saves from joining it), so none of them is a character of your own.")]
     [InlineData("no-saves", "You have no Modding Tools saves yet.")]
     [InlineData("wrong-build", "Your saves are from a different game version than your host's.")]
     public void No_usable_save_shows_the_plain_reason_and_the_new_character_button(string reason, string plain)

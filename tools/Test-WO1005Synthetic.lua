@@ -244,6 +244,18 @@ if type(KCD2MP_InterpTick) == "function" then
         check("(g) it carries a mean", line:find("corr_mean_m=", 1, true) ~= nil, line)
         check("(g) it carries a max", line:find("corr_max_m=", 1, true) ~= nil)
         check("(g) it carries the snap count", line:find("snaps=", 1, true) ~= nil)
+        -- WO-157 3.4: snaps= is this window's; the figure's and the session's totals beside it
+        check("(g) WO-157: snaps= is the window's, snaps_figure= the figure's, snaps_session= every figure's",
+            line:find(" snaps=1 snaps_figure=1 snaps_session=", 1, true) ~= nil, line)
+        for i = 1, 520 do
+            NOW = NOW + 0.020
+            g.istate.tx = g.istate.cx + 0.25
+            KCD2MP_InterpTick("ext")
+        end
+        local line2 = nil
+        for i = #LOG, 1, -1 do if LOG[i]:find("MP-GHOSTCORR", 1, true) then line2 = LOG[i]; break end end
+        check("(g) WO-157: the next window counts afresh (0), the figure's total stays", line2 ~= line and line2 ~= nil
+            and line2:find(" snaps=0 snaps_figure=1 ", 1, true) ~= nil, line2)
     end
 else
     check("(g) KCD2MP_InterpTick is reachable", false, "function not found")

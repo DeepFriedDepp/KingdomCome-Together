@@ -34,6 +34,22 @@ class Program
         {
             Log.Information("=== Start KCD2 MP Launcher ===");
 
+            // WO-157: settings.json, custom_servers.json and favorites.json are read relative to the working
+            // directory. A launcher started with another one (a tester's ran from C:\WINDOWS\system32: "settings.json
+            // not written -- access to ...system32\settings.json.tmp is denied") read and wrote nothing of its own.
+            // An installed launcher (Setup's manifest beside it) works in its own folder, where Setup put them.
+            try
+            {
+                string own = Path.GetFullPath(AppContext.BaseDirectory).TrimEnd('\\', '/');
+                string cwd = Path.GetFullPath(Environment.CurrentDirectory).TrimEnd('\\', '/');
+                if (!string.Equals(own, cwd, StringComparison.OrdinalIgnoreCase) && File.Exists(Path.Combine(own, "install-manifest.txt")))
+                {
+                    Environment.CurrentDirectory = own;
+                    Log.Information("MP-LAUNCH working folder was not the install folder; using the install folder for settings.json");
+                }
+            }
+            catch (Exception ex) { Log.Warning("MP-LAUNCH working folder could not be set ({Kind})", ex.GetType().Name); }
+
             var appBuilder = PhotinoBlazorAppBuilder.CreateDefault(args);
 
             var baseDir = AppDomain.CurrentDomain.BaseDirectory;

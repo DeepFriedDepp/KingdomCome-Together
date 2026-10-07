@@ -232,6 +232,16 @@ $AsmMarkers = @(
     @{ File = 'KcdMpClient.dll'; Marker = 'MP-W155 peer ';          Owner = "WO-155 2 a partner's death lays his figure down (agent half)" },
     @{ File = 'KCDMP.dll';       Marker = 'WO155-FF';               Owner = 'WO-155 1 friendly fire never knocks the victim down twice in 5 s (native)' },
     @{ File = 'KCDMP.dll';       Marker = 'WO155-NUDGE';            Owner = "WO-155 4 a freshly bound avatar's animation is started (native)" },
+    # WO-157: the first public-beta patch
+    @{ File = 'KcdMp.Setup.dll';  Marker = 'MP-INJECT ';            Owner = 'WO-157 2.1 the launcher loads KCDMP.dll itself, no injector exe (setup library)' },
+    @{ File = 'KcdMp.Setup.dll';  Marker = 'msvcp120.dll';          Owner = 'WO-157 2.3 the Visual C++ 2013 runtime step (setup library)' },
+    @{ File = 'KCDMP_launcher.dll'; Marker = 'LAUNCH ANYWAY';       Owner = 'WO-157 2.2 a mod-file finding is never a dead end (launcher)' },
+    @{ File = 'KCDMP_launcher.dll'; Marker = 'MP-LAUNCH file-check'; Owner = 'WO-157 2.2 what was found, and where (launcher)' },
+    @{ File = 'KcdMp.Protocol.dll'; Marker = 'host-key';            Owner = "WO-157 2.4 the host's install key on the join channel (wire)" },
+    @{ File = 'KcdMpClient.dll'; Marker = 'hosted by this install'; Owner = "WO-157 2.4 a start save this install hosted is its own (agent half)" },
+    @{ File = 'KcdMpClient.dll'; Marker = 'runs to its end (WO-157'; Owner = "WO-157 3b.5 a partner waking never cuts this sleep short (agent half)" },
+    @{ File = 'KcdMpClient.dll'; Marker = 'MP-W157 ';               Owner = 'WO-157 the patch (agent half)' },
+    @{ File = 'KCDMP.dll';       Marker = 'WO157-QUIET';            Owner = "WO-157 1.1 the joiner's own trespass warning hidden in a session (native)" },
     @{ File = 'KCDMP_launcher.dll'; Marker = 'Smart App Control';   Owner = 'WO-154 7 Windows blocking the mod, told in plain words (launcher)' },
     @{ File = 'KCDMP_launcher.dll'; Marker = 'Join with a new character'; Owner = 'WO-154 4.4 the plain join messages and the button (launcher)' },
     @{ File = 'KCDMP_launcher.dll'; Marker = 'Kingdom Come: Together'; Owner = 'WO-134 rebrand (launcher window title)' }
@@ -327,6 +337,11 @@ $PakMarkers = @(
     @{ Marker = 'WO154-FALL';                      Owner = "WO-154 2 a knocked-down partner's figure falls (mod half)" },
     @{ Marker = 'function KCD2MP_W155AvatarCollapse'; Owner = "WO-155 2 a dead partner's figure lies until his respawn (mod half)" },
     @{ Marker = 'function KCD2MP_W155AvatarFall';  Owner = "WO-155 1 a friendly-fire knockdown's own animation (mod half)" },
+    @{ Marker = 'function KCD2MP_W157HostTrespass'; Owner = "WO-157 1.1 a trespass is the host's world's to decide (mod half)" },
+    @{ Marker = 'function KCD2MP_W157RestLine';    Owner = 'WO-157 3b.5 the rest a real sleep gives (mod half)' },
+    @{ Marker = 'function KCD2MP_W157ConnSample';  Owner = 'WO-157 3.2 the connection struggling, said (mod half)' },
+    @{ Marker = 'function KCD2MP_W157TalkFree';    Owner = 'WO-157 3b.4 a copy free to talk and to trade (mod half)' },
+    @{ Marker = 'function KCD2MP_W157AvatarLook';  Owner = "WO-157 3b.3 a figure's look poses off (mod half)" },
     @{ Marker = 'function KCD2MP_W154SetSkipTell'; Owner = 'WO-154 6.3 mp_skip_tell (mod half)' },
     @{ Marker = 'function KCD2MP_W154SetMinigameOutcome'; Owner = 'WO-154 6.5 mp_minigame_outcome (mod half)' },
     @{ Marker = 'function KCD2MP_W154FairViolent'; Owner = 'WO-154 3 crime judged on what happened (mod half)' },
@@ -486,6 +501,10 @@ if (-not (Test-Path $verifyPath)) {
     $green = $verdict[0] -like 'PASS*'
     if (-not $green) { $fail++ }
     $verdict | ForEach-Object { Write-Host ("  {0}" -f $_) -ForegroundColor $(if ($green) { 'Green' } else { 'Red' }) }
+    # WO-157: a release candidate says so (built with -ReleaseCandidate: every gate but the frame-rate soak)
+    if ($verdict -match 'not soak-tested: release candidate') {
+        Write-Host "  NOTE: this install is a RELEASE CANDIDATE -- not soak-tested, not for public release" -ForegroundColor Yellow
+    }
 }
 
 # Re-check the shipped manifest independently of Setup: same three questions

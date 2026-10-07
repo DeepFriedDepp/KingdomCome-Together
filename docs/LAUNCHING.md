@@ -18,7 +18,9 @@ launcher entirely and drive the pieces directly:
    `KcdMpServer.exe` (defaults to port 7778)
 2. **Each player** — launch KCD2 via **Modding Tools**, load a save. Confirm
    `[KCD2-MP] === MOD INIT ===` appears in `kcd.log`.
-3. **Each player** — inject the plugin into the running game:
+3. **Each player** — inject the plugin into the running game. Since WO-157 the launcher does this itself
+   (`dotnet\KcdMp.Setup\GameInjector.cs`) and no injector exe ships; for development, the
+   `native\KCDMP_LauncherInjector` tool (built, never shipped):
    `KCDMP_LauncherInjector.exe --pid <pid> --dll <path>\KCDMP.dll`
 4. **Each player** — `KcdMpClient.exe --host <relay ip>`
 
@@ -41,7 +43,9 @@ DLL-injection design before that design existed, and every assumption in it has
 since been settled by the native-plugin work.
 
 `LaunchGame` starts the Modding Tools build, waits until `WHGame.dll` is loaded
-in the game process, runs `KCDMP_LauncherInjector.exe`, and then starts
+in the game process; CONNECT loads `KCDMP.dll` into it from the launcher's own process
+(WO-157: the game it started, the shipped DLL by sha256, x64 -- the separate
+`KCDMP_LauncherInjector.exe` was removed by antivirus programs on fresh installs), and then starts
 `KcdMpClient.exe --host <ip> --port <port>`.
 
 What changed and why:

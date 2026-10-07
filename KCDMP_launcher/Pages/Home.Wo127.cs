@@ -192,6 +192,10 @@ namespace KCDMP_launcher.Pages
         {
             string code = steamCodeInput.Trim();
             if (code.Length == 0) return;
+            // WO-157: the agent reads a pasted code forgivingly (text, odd dashes around it); a quote or a line
+            // break would cut its command-line argument, so those go here.
+            code = new string(code.Where(c => c is not ('"' or '\r' or '\n')).ToArray()).Trim();
+            if (code.Length == 0) return;
             // This run only: LastSteamCode is never written (AppModels.cs). WO-154: the whole-object
             // save that used to follow wrote nothing of it and rewrote every other setting.
             settings.LastSteamCode = code;
@@ -232,10 +236,11 @@ namespace KCDMP_launcher.Pages
             return ((msg + " " + r.Next).Trim(), ok);
         }
 
-        private void ShowMessage(string title, string text, string next, bool addressFallback = false, bool reportBug = false)
+        private void ShowMessage(string title, string text, string next, bool addressFallback = false, bool reportBug = false, bool launchAnyway = false)
         {
             messageTitle = title; messageText = text; messageNext = next; messageAddressFallback = addressFallback;
             messageReportBug = reportBug;   // WO-154: the blocked-file message offers Report a bug
+            launchAnywayAvailable = launchAnyway;   // WO-157: and, for the mod's own files, LAUNCH ANYWAY
             showMessage = true;
             _ = InvokeAsync(StateHasChanged);
         }

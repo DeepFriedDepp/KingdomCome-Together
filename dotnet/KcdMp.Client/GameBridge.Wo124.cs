@@ -202,6 +202,8 @@ public partial class GameBridge
             try
             {
                 var (seed, flags) = _sharedWorld ? Wo125SessionIdentity() : (0u, (ushort)0);   // WO-125: the world's identity rides along
+                // WO-157: the host's install key first, so a joiner has it when the world's identity arrives.
+                if (_sharedWorld) await WriteJoinAsync(JoinStatusCodec.Build(g, Wo157InstallKey(), Protocol.JoinStateHostKey, Protocol.JoinReasonId("host-key"), 0));
                 await WriteJoinAsync(JoinStatusCodec.Build(g, seed, Protocol.JoinStateSession, Protocol.JoinReasonId(_sharedWorld ? "shared-world" : "separate"), flags));
                 if (!_modeTold.TryGetValue(g, out bool was) || was != _sharedWorld)
                     Console.WriteLine($"MP-JOIN host: session mode {(_sharedWorld ? "shared-world" : "separate")} -> ghost {g}");
@@ -616,7 +618,7 @@ public partial class GameBridge
         string expect = "?";
         if (ResolveSavesDirForJoin() is string saves)
         {
-            var own = OwnSaves(saves, HostSeedForOwn(), l => Console.WriteLine(l)).FirstOrDefault(s => s.Save.Playline == j.Playline);   // WO-125: a host-seed copy is never "own"
+            var own = OwnSaves(saves, HostSeedForOwn(), l => Console.WriteLine(l), Wo157HostedSeed).FirstOrDefault(s => s.Save.Playline == j.Playline);   // WO-125: a host-seed copy is never "own"
             expect = own?.Save.Base ?? "-";
         }
         bool contOk = after is not null && !after.Listed && after.ContinueName == expect;

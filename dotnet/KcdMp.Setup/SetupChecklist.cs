@@ -3,7 +3,7 @@
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 namespace KcdMp.Setup;
 
-public enum StepId { Steam = 1, Game = 2, DiskSpace = 3, ModdingTools = 4, Workspace = 5, Mod = 6, Ready = 7 }
+public enum StepId { Steam = 1, Game = 2, DiskSpace = 3, ModdingTools = 4, Workspace = 5, Mod = 6, Ready = 7, VcRuntime = 8 }
 
 public enum StepStatus
 {
@@ -26,10 +26,16 @@ public enum StepAction
     LinkWorkspace,
     AskPermission,
     PlaceMod,
+    /// <summary>WO-157: run Microsoft's Visual C++ 2013 installer from the Steam library (one Windows prompt).</summary>
+    InstallVcRuntime,
+    /// <summary>WO-157: open Microsoft's download page.</summary>
+    OpenVcDownload,
 }
 
+/// <summary><paramref name="Optional"/> (WO-157): shown, but never holds Host and Join back.</summary>
 public sealed record StepView(StepId Id, string Title, StepStatus Status, string Detail,
-                              StepAction Action = StepAction.None, string? ActionLabel = null, double? Progress = null);
+                              StepAction Action = StepAction.None, string? ActionLabel = null, double? Progress = null,
+                              bool Optional = false);
 
 /// <summary>What the launcher is doing right now, which the files on disk cannot show yet.</summary>
 public sealed record SetupActivity
@@ -46,6 +52,10 @@ public sealed record SetupActivity
     public string? LinkFailure { get; init; }
     public bool PlacingMod { get; init; }
     public string? PlaceFailure { get; init; }
+    /// <summary>WO-157: Microsoft's VC++ 2013 installer is running.</summary>
+    public bool InstallingVcRuntime { get; init; }
+    /// <summary>WO-157: its last run's failure, in one plain sentence.</summary>
+    public string? VcRuntimeFailure { get; init; }
 
     public static readonly SetupActivity Idle = new();
 }
@@ -78,15 +88,19 @@ public static class SetupChecklist
         var ws = WorkspaceStep(s, a, game.Status == StepStatus.Done && mt.Status == StepStatus.Done);
         steps.Add(ws);
         steps.Add(ModStep(s, a, ws.Status == StepStatus.Done));
+        steps.Add(VcRuntimeStep(s, a));
 
-        bool allDone = steps.All(x => x.Status == StepStatus.Done);
+        bool allDone = steps.All(x => x.Optional || x.Status == StepStatus.Done);
         steps.Add(allDone
             ? new StepView(StepId.Ready, ReadyTitle, StepStatus.Done, "Everything is set up. Host or Join whenever you like.")
             : new StepView(StepId.Ready, ReadyTitle, StepStatus.Waiting, "Host and Join unlock when every step above is done."));
         return steps;
     }
 
-    public static bool IsReady(IReadOnlyList<StepView> steps) => steps.All(x => x.Status == StepStatus.Done);
+    public static bool IsReady(IReadOnlyList<StepView> steps) => steps.All(x => x.Optional || x.Status == StepStatus.Done);
+
+    /// <summary>WO-157: ready, with an optional step still asking for the player (shown once at start).</summary>
+    public static bool OptionalNeedsYou(IReadOnlyList<StepView> steps) => steps.Any(x => x.Optional && x.Status == StepStatus.NeedsYou);
 
     private static StepView Wait(StepId id, string title, string why) => new(id, title, StepStatus.Waiting, why);
 
@@ -237,6 +251,30 @@ public static class SetupChecklist
         if (a.PlaceFailure is not null)
             return new(StepId.Mod, title, StepStatus.NeedsYou, a.PlaceFailure, StepAction.PlaceMod, "Try again");
         return new(StepId.Mod, title, StepStatus.Working, "Placing the mod into the Modding Tools...", StepAction.PlaceMod);
+    }
+
+    /// <summary>
+    /// WO-157 (2.3): Microsoft's Visual C++ 2013 runtime. The Modding Tools' trace server needs it ("MSVCP120.dll
+    /// was not found"); the game and the mod do not, so the step is optional.
+    /// </summary>
+    private static StepView VcRuntimeStep(SetupSnapshot s, SetupActivity a)
+    {
+        const string title = "Visual C++ 2013 runtime (needed by the Modding Tools)";
+        if (s.VcRuntime2013)
+            return new(StepId.VcRuntime, title, StepStatus.Done, "Installed.", Optional: true);
+        if (a.InstallingVcRuntime)
+            return new(StepId.VcRuntime, title, StepStatus.Working,
+                "Microsoft's installer is running. If Windows asks for permission, choose Yes.", Optional: true);
+        const string why = "The Modding Tools' trace server needs Microsoft's Visual C++ 2013 runtime; without it Windows says " +
+                           "\"MSVCP120.dll was not found\" when the game starts. Host and Join work without it.";
+        if (s.VcRedist2013 is not null)
+            return new(StepId.VcRuntime, title, StepStatus.NeedsYou,
+                (a.VcRuntimeFailure is null ? "" : a.VcRuntimeFailure + " ") + why +
+                " Install it: Microsoft's own installer from your Steam library, and Windows asks once for permission.",
+                StepAction.InstallVcRuntime, "Install it", Optional: true);
+        return new(StepId.VcRuntime, title, StepStatus.NeedsYou,
+            why + " Download \"Visual Studio 2013 (VC++ 12.0)\", x64, from Microsoft's page and run it.",
+            StepAction.OpenVcDownload, "Open Microsoft's page", Optional: true);
     }
 
     private static string Percent(double? p) => p is double v ? $" ({v * 100:0}%)" : "";

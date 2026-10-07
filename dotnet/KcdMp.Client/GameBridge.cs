@@ -1222,6 +1222,9 @@ public partial class GameBridge(ClientConfig config)
         {
             Console.WriteLine($"[transport] emitter produced no frames; falling back to {http.Name}");
             Console.WriteLine("[transport] (is the mod installed and loaded? look for '=== MOD INIT ===' in kcd.log)");
+            // WO-157: the launcher's LAUNCH ANYWAY starts a game whose mod files it could not find: when the
+            // mod really is missing (its Lua global is absent), say so on the game's own screen.
+            try { await http.ExecuteAsync(Wo157ModMissingLua, ct); await http.FlushAsync(ct); } catch (Exception ex) { Console.WriteLine($"[transport] mod-missing notice not shown ({ex.GetType().Name})"); }
             await tail.DisposeAsync();
             return http;
         }
@@ -4328,7 +4331,12 @@ public partial class GameBridge(ClientConfig config)
             Console.WriteLine($"[playerhit] not the damage authority -- discarding a {healthLoss:F1} delta on ghost {targetGhostId}");
             return;
         }
-        if (healthLoss <= 0) return;   // guard 3, again: regeneration is not a hit
+        // guard 3, again: regeneration is not a hit. WO-157 3b.1: a blow that cost only stamina IS one -- 14 of the field's
+        // 16 blows on the joiner's figure measured hp -0.0 st -30..-38 and none of them reached him ("attacked around 20
+        // times, no damage"); now his own game takes the stamina, and the figure's stamina falls with his (the DLL no
+        // longer refills it), so the blows that follow cost health as they would him.
+        if (healthLoss <= 0 && staminaLoss <= 0) return;
+        if (healthLoss < 0) healthLoss = 0;
 
         var packet = new byte[3 + Protocol.PlayerHitUpPayloadLen];
         packet[0] = Protocol.PlayerHitUp;
@@ -4382,7 +4390,7 @@ public partial class GameBridge(ClientConfig config)
         bool applied = await _combat.ApplyDamageAsync(PlayerHenrySharedSoulGuid, st, healthLoss,
                                                      suppressHitReaction: noFall, ct);
         if (applied)
-            Console.WriteLine($"[playerhit] took {healthLoss:F1} damage from an NPC in the authority's world{(noFall ? " (no knockdown: WO-155)" : "")}");
+            Console.WriteLine($"[playerhit] took {healthLoss:F1} damage{(st > 0 ? $" and {st:F1} stamina" : "")} from an NPC in the authority's world{(noFall ? " (no knockdown: WO-155)" : "")}");
         else
             Console.WriteLine($"[playerhit] {healthLoss:F1} damage NOT applied -- KCDMP.dll is not injected, so " +
                               "NPC hits from other players' worlds cannot reach this player");
@@ -5898,6 +5906,7 @@ public partial class GameBridge(ClientConfig config)
                 return;
             case "w137_sync":        // WO-137: shared quests
             case "w137_talk":
+            case "w157_talkfree":    // WO-157 3b.4: a talked-to copy's placement waits
             case "w137_status":
                 Wo137OnEvent(name, arg);
                 return;
@@ -5937,6 +5946,9 @@ public partial class GameBridge(ClientConfig config)
                 return;
             case "w155_cfg":         // WO-155: mp_hit_knockdown / mp_ff_knockdown
                 Wo155OnEvent(name, arg);
+                return;
+            case "w157_cfg":         // WO-157: mp_trespass_hud and the patch's other agent switches
+                Wo157OnEvent(name, arg);
                 return;
             case "w154_falls":       // WO-154 2: mp_avatar_falls on|off
             case "w154_coalesce":    // WO-154 1: mp_quest_coalesce on|off
