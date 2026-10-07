@@ -344,6 +344,24 @@ At the maintainer's word: the three start saves are made from his own saves inst
   (`STORY_M50_BATTLE_5_GODWIN_BATTLE`, 10 s) -- watch that the world's music is right afterwards.
 * Synthetic 85/85 (never the bare movie player), client 1,167. **Not verified live yet.**
 
+## The recap's skip (after 0.45.7)
+
+* **Live (the maintainer, same session):** the game's own skip on a video ("Skip All") ended that video and returned to
+  the world; the recap then started the next one when the skipped one's length had run out **[L]**. The bundle shows
+  why: no `WO159-RECAP ended` line (the held E never reached `handleAction` -- a video takes the keys); no line at all for
+  the bare movie player's skip; the WO-138 gate logged `calls=0` (`wh_ui_PlayMovie` never pauses the game, so the world
+  and its sound ran on -- the other half of the sound report).
+* Through the cutscene player a rendered video pauses the game and freezes every Lua timer (WO-80/WO-149), and the agent
+  already hands its edges to Lua by name (`KCD2MP_SetCutscene`, from `CutscenePlayer::` lines). The recap now follows
+  them: the playing video's end starts the next one at once; an end more than 5 s before its length is the player's skip
+  and ends the whole recap ("skipping one skips them all", said on the HUD before the first). Without edges the old
+  clock rule plays on; a start without an end moves on after the length + 10 s. A stale chain counts as dead only once
+  no recap video is on and the playing one's length has passed (a frozen chain during a video is not a dead recap).
+  The join reason `prologue` now comes before `cutscene` (the joiner is told the minutes).
+* The video pause still applies with a joiner waiting: the levers need a partner's positions within 10 s, and a joiner
+  held at the menu sends none.
+* Synthetic 99/99 (14 new), all 49 suites; client 1,167. **Not verified live yet.**
+
 ## Pocketed (outside this WO)
 
 1. **A prologue recap** would have to play somewhere the engine draws video (in the world, e.g. right after the load);

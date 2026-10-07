@@ -343,6 +343,7 @@ function KCD2MP_SetCutscene(active, name)
     -- The quest layer reacts first so the line records the state AFTER the
     -- edge (a prompt hidden by this cutscene shows as prompt=0 pending=1).
     if KCD2MP_QuestOnCutscene then pcall(KCD2MP_QuestOnCutscene, active) end
+    if KCD2MP_W159OnCutscene then pcall(KCD2MP_W159OnCutscene, active, name) end   -- WO-159: the recap follows its videos
     local q = KCD2MP.quest
     mp_log(string.format("MP-CUTSCENE side=local state=%s name=%s peers=%s prompt=%d pending=%d",
         active and "start" or "end", tostring(name or "-"), peers == "" and "-" or peers,
@@ -4935,8 +4936,9 @@ function KCD2MP_JoinBusyReason()
     if busy then return busy end
     pcall(function() if player.actor and player.actor:IsDead() then busy = "dead" end end)
     if busy then return busy end
+    -- WO-159: the host watches the prologue (before "cutscene": its videos are cutscenes, the joiner is told the minutes)
+    if KCD2MP_W159RecapActive and KCD2MP_W159RecapActive() then return "prologue" end
     if KCD2MP.cutsceneActive then return "cutscene" end
-    if KCD2MP_W159RecapActive and KCD2MP_W159RecapActive() then return "prologue" end   -- WO-159: the host watches the prologue
     pcall(function() if player.human and player.human:IsInDialog() then busy = "dialogue" end end)
     if busy then return busy end
     pcall(function()
@@ -22433,7 +22435,7 @@ function KCD2MP_W159Page(w)
         add("MP_Prologue_skip", "Skip the prologue",
             "Recommended when a partner is joining: they can join right away. You start where Hans and Henry part ways.")
         add("MP_Prologue_watch", string.format("Watch the prologue's cutscenes (%d min)", tonumber(m.recapMin) or 16),
-            "Only its rendered cutscenes, no conversations or choices. Your partner joins when they end. Hold E to skip.")
+            "Only its rendered cutscenes, no conversations or choices. Your partner joins when they end. Skipping one skips them all.")
         add("MP_Back", "@ui_back", "", false, 1)
         return b, "The prologue", "MP_Prologue_skip"
     elseif w.page == "join" then
@@ -22584,16 +22586,21 @@ function KCD2MP_W159Disarm(why)
 end
 
 -- ----- the prologue's rendered cutscenes, after a New adventure loaded ("Watch") -----
--- At the main menu the game's wh_ui_PlayMovie draws nothing; in the world it plays full screen and wh_ui_StopMovie
--- returns to the world (WO-159 probes). Each video plays by its row in the game's cutscene table (wh_ui_PlayCutscene):
--- the game's own cutscene player sets the video's audio up (audio_setup_video) and shows its captions; the bare movie
--- player did not (live, 0.45.7: the video's sound barely audible under the world's). The launcher starts the list once
--- the world is loaded; this plays it video after video by each one's length (their Bink headers), and a held E (the
--- game's "use") for a second skips the rest.
+-- Each video plays by its row in the game's cutscene table (wh_ui_PlayCutscene), through the game's own cutscene
+-- player: it pauses the world (its sound with it), sets the video's audio up (audio_setup_video) and shows the
+-- captions. The bare movie player (wh_ui_PlayMovie) did none of it -- live, 0.45.7: the video's sound barely audible
+-- under the running world's, and its skip ended one video while the list played on.
+-- A rendered cutscene freezes every Lua timer (WO-80), and its keys go to the video, not to handleAction. So the list
+-- follows the cutscene player's own edges, which the agent hands in through the console (KCD2MP_SetCutscene, from
+-- CutscenePlayer:: lines in kcd.log): the end of the playing one starts the next; an end well before its length is
+-- the player's skip, and that skips them all. Without the edges (no agent) the old clock rule plays on: the next
+-- video after each one's length (their Bink headers).
 -- While it runs a join waits (KCD2MP_JoinBusyReason: "prologue"). Only rendered video: no scene with a conversation
 -- or a choice is ever played.
 KCD2MP_W159_SKIP_HOLD_S = 1.0
 KCD2MP_W159_PREROLL_S = 4
+KCD2MP_W159_SKIP_SLACK_S = 5      -- an end this much before the video's length is a skip
+KCD2MP_W159_START_WAIT_S = 8      -- no start edge by then: no edges this session (the clock rule plays on)
 
 -- spec: "name|seconds;..." -- each name a RenderedCutscene row of Libs/Tables/ui/cutscene.xml
 function KCD2MP_W159RecapStart(spec)
@@ -22611,8 +22618,8 @@ function KCD2MP_W159RecapStart(spec)
     -- comes first, on the HUD, for KCD2MP_W159_PREROLL_S; then the first video
     local now = os.clock()
     w.recap = { list = list, i = 0, at = 0, holdAt = nil, total = total, startedAt = now + KCD2MP_W159_PREROLL_S, last = now }
-    mp_log(string.format("WO159-RECAP %d video(s), %.0f s -- hold E to skip", #list, total))
-    pcall(UIAction.CallFunction, "hud", -1, "ShowInfoText", "The prologue's cutscenes start in a moment. Hold E to skip them.", 10,
+    mp_log(string.format("WO159-RECAP %d video(s), %.0f s -- skipping one skips them all", #list, total))
+    pcall(UIAction.CallFunction, "hud", -1, "ShowInfoText", "The prologue's cutscenes start in a moment. Skipping one skips them all.", 10,
         math.floor(KCD2MP_W159_PREROLL_S * 1000), true)
     Script.SetTimer(16, KCD2MP_W159RecapTick)
     return true
@@ -22625,6 +22632,7 @@ function KCD2MP_W159RecapNext()
     local v = r.list[r.i]
     if not v then KCD2MP_W159RecapEnd("finished"); return end
     r.at = os.clock()
+    r.seenAt = nil
     if r.i > 1 then pcall(System.ExecuteCommand, "wh_ui_StopCutscene") end   -- the last one, should it still run
     pcall(System.ExecuteCommand, "wh_ui_PlayCutscene " .. v.name)
     mp_log(string.format("WO159-RECAP video %d/%d %s (%.0f s)", r.i, #r.list, v.name, v.secs))
@@ -22637,6 +22645,25 @@ function KCD2MP_W159RecapEnd(how)
     mp_log(string.format("WO159-RECAP ended (%s) after %.0f s", tostring(how), os.clock() - w.recap.startedAt))
     w.recap = nil
     KCD2MP_EmitEvent("w159", "recap " .. tostring(how))
+end
+
+-- From KCD2MP_SetCutscene: the cutscene player's start and end of the playing video.
+function KCD2MP_W159OnCutscene(active, name)
+    local r = KCD2MP.w159.recap
+    local v = r and r.list[r.i]
+    if not v or tostring(name) ~= v.name then return false end
+    local now = os.clock()
+    r.last = now
+    r.edges = true
+    if active then r.seenAt = r.seenAt or now; return true end
+    local ran = now - (r.seenAt or r.at)
+    if ran < v.secs - KCD2MP_W159_SKIP_SLACK_S then
+        mp_log(string.format("WO159-RECAP %s ended after %.0f of %.0f s: skipped", v.name, ran, v.secs))
+        KCD2MP_W159RecapEnd("skipped")
+    else
+        KCD2MP_W159RecapNext()
+    end
+    return true
 end
 
 -- The left time, for the joiner's "your host is watching the prologue (about N min left)".
@@ -22657,13 +22684,19 @@ function KCD2MP_W159RecapTick()
         if now >= r.startedAt then KCD2MP_W159RecapNext() end
     else
         local v = r.list[r.i]
-        if v and now - r.at >= v.secs + 0.3 then KCD2MP_W159RecapNext() end
+        if not r.edges or not r.seenAt then
+            -- the clock rule: no edges this session, or this video never reported its start
+            if v and (not r.edges or now - r.at >= KCD2MP_W159_START_WAIT_S) and now - r.at >= v.secs + 0.3 then KCD2MP_W159RecapNext() end
+        elseif v and now - r.at >= v.secs + 10 then
+            KCD2MP_W159RecapNext()   -- its start came, its end never did
+        end
     end
     if not w.recap then return end
     Script.SetTimer(16, KCD2MP_W159RecapTick)
 end
 
--- From handleAction: the game's "use" (E by default) held while the recap plays.
+-- From handleAction: the game's "use" (E by default) held while the recap plays (between videos; during one the
+-- video takes the keys and the cutscene player's own skip applies).
 function KCD2MP_W159OnAction(action, activation)
     local r = KCD2MP.w159.recap
     if not r or action ~= "use" then return false end
@@ -22672,12 +22705,18 @@ function KCD2MP_W159OnAction(action, activation)
     return true
 end
 
--- The recap is running (a load kills its timer chain: then it is over, WO-78 liveness).
+-- The recap is running. A load kills its timer chain (WO-78 liveness: then it is over); a video freezes the chain
+-- too (WO-80), so a stale chain counts as dead only once no video is on and the playing one's length has passed.
 function KCD2MP_W159RecapActive()
     local r = KCD2MP.w159.recap
     if not r then return false end
-    if os.clock() - r.last > 2 then KCD2MP.w159.recap = nil; return false end
-    return true
+    local now = os.clock()
+    if now - r.last <= 2 then return true end
+    local v = r.list[r.i]
+    if KCD2MP.cutsceneActive and v and KCD2MP.cutsceneName == v.name then return true end
+    if v and now - r.at <= v.secs + 5 then return true end
+    KCD2MP.w159.recap = nil
+    return false
 end
 
 -- ===== Register Console Commands =====
@@ -23285,7 +23324,7 @@ local function handleAction(action, activation, value)
     if KCD2MP_W148OnAction then pcall(KCD2MP_W148OnAction, action, activation) end   -- WO-148: put_item / deposit_item / put_corpse
     if KCD2MP_W151OnAction then pcall(KCD2MP_W151OnAction, action, activation) end   -- WO-151 3.5: the whistle
     if KCD2MP_W159OnAction then
-        local okr, used = pcall(KCD2MP_W159OnAction, action, activation)   -- WO-159: hold E skips the prologue's cutscenes
+        local okr, used = pcall(KCD2MP_W159OnAction, action, activation)   -- WO-159: hold E between the prologue's cutscenes skips the rest
         if okr and used then return end
     end
     -- WO-154: the mod menu's keys (its own actions only; a game menu's action closes it and goes on)

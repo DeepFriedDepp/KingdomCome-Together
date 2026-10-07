@@ -220,7 +220,7 @@ namespace KCDMP_launcher.Pages
                         && now - follower.State.WorldSinceS >= 2)
                     {
                         recapSent = await console.LuaAsync(MenuTakeoverRule.RecapCall());
-                        Log.Information("MP-W159 the prologue's cutscenes {State} ({Min} min, hold E to skip)", recapSent ? "started" : "NOT started", MenuTakeoverRule.RecapMinutes);
+                        Log.Information("MP-W159 the prologue's cutscenes {State} ({Min} min, skipping one skips them all)", recapSent ? "started" : "NOT started", MenuTakeoverRule.RecapMinutes);
                     }
 
                     // the host: CONNECT pressed by the launcher once the world Start Game loaded has settled (no Alt+Tab)

@@ -58,7 +58,7 @@ Together runs them (start the game from Steam to play alone as usual).
     fight, the pillory). Choose your **playstyle** (Soldier, Adviser or Scout — each says
     what it raises), then **Skip the prologue** (recommended when a partner is joining: they
     can join right away) or **Watch the prologue's cutscenes** (16 minutes of its rendered
-    cutscenes, no conversations or choices; **hold E** to skip the rest; your partner joins
+    cutscenes, no conversations or choices; **skipping one skips them all**; your partner joins
     when they end). It goes into an empty save slot and saves normally from then on; each
     new adventure is its own world.
 

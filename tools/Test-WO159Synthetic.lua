@@ -175,7 +175,7 @@ do
     check("H9: then the prologue page: Skip on top and selected, Watch with its length", KCD2MP.w159.page == "prologue" and p[1].id == "MP_Prologue_skip"
         and lastSel() == "MP_Prologue_skip" and p[2].text == "Watch the prologue's cutscenes (16 min)")
     check("H9b: Skip recommends itself for a partner; Watch says a partner waits and how to skip", p[1].tip:find("partner", 1, true)
-        and p[2].tip:find("Hold E", 1, true) and p[2].tip:find("no conversations or choices", 1, true))
+        and p[2].tip:find("Skipping one skips them all", 1, true) and p[2].tip:find("no conversations or choices", 1, true))
     press("MP_Back")
     check("H9c: Back from the prologue page: the playstyles again", KCD2MP.w159.page == "style")
     press("MP_Style_scout")
@@ -303,7 +303,7 @@ do
     check("P1: started", KCD2MP_W159RecapStart(spec) == true)
     local hint = UI[#UI]
     check("P1b: first the hint on the HUD (a video covers the UI)", #UI == uiBefore + 1 and hint.el == "hud" and hint.fn == "ShowInfoText"
-        and tostring(hint.args[1]):find("Hold E", 1, true) ~= nil and #CMDS == 0)
+        and tostring(hint.args[1]):find("Skipping one skips them all", 1, true) ~= nil and #CMDS == 0)
     local function tick() local t = TIMERS[#TIMERS]; TIMERS[#TIMERS] = nil; if t then t.f() end end
     NOW = 1002; tick()
     check("P1c: no video during the hint", #CMDS == 0)
@@ -343,6 +343,62 @@ do
     check("P14: a dead timer chain: over", KCD2MP_JoinBusyReason() ~= "prologue" and KCD2MP.w159.recap == nil)
     check("P15: a bad spec is refused", KCD2MP_W159RecapStart("../x.bk2|5") == false and KCD2MP_W159RecapStart("intro new|5") == false)
     check("P16: no swallowed Lua errors", #ERRS == 0, ERRS[1])
+    player = nil
+end
+
+-- (Q) the cutscene player's own edges drive the list (a video freezes every Lua timer; its keys go to the video) ----------
+do
+    ERRS = {}
+    player = { id = 1 }
+    CMDS = {}; TIMERS = {}
+    KCD2MP.cutsceneActive = false; KCD2MP.cutsceneName = nil
+    local function tick() local t = TIMERS[#TIMERS]; TIMERS[#TIMERS] = nil; if t then t.f() end end
+    local spec = "intro_new_game|199.5;zachrana_fall_dream|149.9;m03_trosky_journey|172.7"
+    NOW = 10000
+    KCD2MP_W159RecapStart(spec)
+    NOW = 10004.05; tick()
+    check("Q1: the first one plays", CMDS[#CMDS] == "wh_ui_PlayCutscene intro_new_game", CMDS[#CMDS])
+    NOW = 10004.6; KCD2MP_SetCutscene(true, "intro_new_game")       -- the agent: CutscenePlayer::PlayCutscene
+    -- the video freezes the timer chain: no tick for its whole length
+    NOW = 10004.05 + 120
+    check("Q2: a frozen chain during a video is not a dead recap (a join still waits)", KCD2MP_JoinBusyReason() == "prologue", KCD2MP_JoinBusyReason())
+    NOW = 10004.05 + 199.9; KCD2MP_SetCutscene(false, "intro_new_game")   -- played out
+    check("Q3: its end starts the next one at once", CMDS[#CMDS] == "wh_ui_PlayCutscene zachrana_fall_dream", CMDS[#CMDS])
+    NOW = NOW + 0.2; tick()                                            -- the chain wakes after the video
+    check("Q4: the woken chain does not skip one", CMDS[#CMDS] == "wh_ui_PlayCutscene zachrana_fall_dream" and KCD2MP.w159.recap.i == 2)
+    KCD2MP_SetCutscene(false, "some_quest_scene")
+    check("Q5: another scene's edge is not the recap's", KCD2MP.w159.recap ~= nil and KCD2MP.w159.recap.i == 2)
+    local t0 = NOW
+    NOW = t0 + 0.5; KCD2MP_SetCutscene(true, "zachrana_fall_dream")
+    NOW = t0 + 30; KCD2MP_SetCutscene(false, "zachrana_fall_dream")    -- the player's skip: 30 of 150 s
+    local e = events("w159")
+    check("Q6: a video ended well before its length was skipped: they all are", KCD2MP.w159.recap == nil and e[#e] == "recap skipped", e[#e])
+    check("Q7: the skip stops the cutscene player, never plays the next", CMDS[#CMDS] == "wh_ui_StopCutscene" and CMDS[#CMDS - 1] == "wh_ui_PlayCutscene zachrana_fall_dream")
+    check("Q8: a join no longer waits", KCD2MP_JoinBusyReason() ~= "prologue")
+    -- an end edge that never comes: the list moves on after the length + 10 s
+    NOW = 20000; CMDS = {}; TIMERS = {}
+    KCD2MP_W159RecapStart("zachrana_prespani_data1|16.3;zachrana_prespani_data2|25.2")
+    NOW = 20004.05; tick()
+    KCD2MP_SetCutscene(true, "zachrana_prespani_data1")
+    NOW = 20004.05 + 17; tick()
+    check("Q9: with edges, the clock alone does not move on at the length", CMDS[#CMDS] == "wh_ui_PlayCutscene zachrana_prespani_data1")
+    NOW = 20004.05 + 26.5; tick()
+    check("Q10: its end never came: on after the length + 10 s", CMDS[#CMDS] == "wh_ui_PlayCutscene zachrana_prespani_data2", CMDS[#CMDS])
+    -- the last one played out: finished
+    NOW = NOW + 0.3; KCD2MP_SetCutscene(true, "zachrana_prespani_data2")
+    NOW = NOW + 25.1; KCD2MP_SetCutscene(false, "zachrana_prespani_data2")
+    e = events("w159")
+    check("Q11: the last one played out: finished", KCD2MP.w159.recap == nil and e[#e] == "recap finished", e[#e])
+    -- a load during a video: the chain is dead and no video is on -- over once the video's length has passed
+    NOW = 30000; TIMERS = {}
+    KCD2MP_W159RecapStart("zachrana_prespani_data1|16.3")
+    NOW = 30004.05; tick(); TIMERS = {}
+    KCD2MP.cutsceneActive = false; KCD2MP.cutsceneName = nil
+    NOW = 30004.05 + 10
+    check("Q12: within the video's length a stale chain still counts", KCD2MP_JoinBusyReason() == "prologue")
+    NOW = 30004.05 + 22
+    check("Q13: past it, no video on: over (no join waits forever)", KCD2MP_JoinBusyReason() ~= "prologue" and KCD2MP.w159.recap == nil)
+    check("Q14: no swallowed Lua errors", #ERRS == 0, ERRS[1])
     player = nil
 end
 

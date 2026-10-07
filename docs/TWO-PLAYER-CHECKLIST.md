@@ -748,9 +748,9 @@ Lines worth a look: `MP-W157`, `MP-INJECT` (agent / launcher logs), `WO157-` (kc
 148. **The new-character default.** On a joiner with no Modding Tools save of their own: Join with a new character is
      selected and Bring my character greyed with the plain reason; the joiner arrives as the bundled playstyle's Henry.
      Marker: `mark_fresh`.
-149. **Watch the prologue** (host, once): the HUD says "Hold E to skip them", then the cutscenes play; the joiner reads
-     "Your host is watching the prologue (about N min left)"; the host **holds E** for a second — the rest is skipped and
-     the joiner joins. Marker: `mark_recap`.
+149. **Watch the prologue** (host, once): the HUD says "Skipping one skips them all", then the cutscenes play with their
+     sound and the world silent; the joiner reads "Your host is watching the prologue (about N min left)"; the host skips
+     one with the game's own skip — the rest is skipped too and the joiner joins. Marker: `mark_recap`.
 
 Lines worth a look: `MP-W159` (launcher log), `WO159-MENU`, `WO159-RECAP` (kcd.log), `MP-HENRY joiner: a new character`
 (agent log).
