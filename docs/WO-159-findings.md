@@ -372,6 +372,28 @@ At the maintainer's word: the three start saves are made from his own saves inst
 * Inside the build: the start saves and the logo pak, relay 62, agent 1,167, setup 77, all synthetic suites, the static
   and native checks, the installer cases; no FAIL line. Payload 1,034 files; privacy sweep clean.
 
+## 0.45.8 live: Skip All froze the game (the cutscene player is out again)
+
+* **Live (the maintainer, 0.45.8, a Scout New adventure with Watch):** skipping inside the long intro worked; Skip All
+  left the game frozen (the ESC menu still opened; the game was quit from it) **[L]**.
+* The bundle: `wh_ui_PlayCutscene intro_new_game` at t=119; the agent saw `world FROZEN (held 0x10)` -- the game's
+  video pause (source 4), as intended -- and still `pause_state=frozen` a minute later; **no** `CutscenePlayer::` line
+  in kcd.log for a console-played cutscene (so no edges reached the recap), and no recap line after video 1 (its timers
+  frozen by that pause). A console-played rendered cutscene has no holder to finish it: after Skip All the video is
+  gone and its pause is never released (inferred from the log; the in-video skip points work).
+* **The fix:** back to the bare movie player (no game pause, never froze), and the recap fires the game's own video
+  sound setup around it: `audio_setup_video` (`Libs/GameAudio/default_controls.xml`: `silence:on`, cleared on stop,
+  and the FMOD snapshot `setup_video`) through `player:ExecuteAudioTrigger(Sound.GetAudioTriggerID(..),
+  player:GetDefaultAuxAudioProxyID())`, the way the game's own entity scripts fire triggers; `StopAudioTrigger` at the
+  end, on a skip and on a dead chain.
+* **The skip:** the movie player's skip writes nothing, but a video takes the keys: in the 0.45.7 bundle the player's
+  position and facing did not change inside any video and changed right after each of the three skips (about 147 s
+  into video 1, 2 s into video 2, 44 s into video 3). So a move over 0.3 m or a turn over 0.05 rad, from 1.5 s into a
+  video, ends the whole recap. The edge-driven version (above) is gone; the `prologue`-before-`cutscene` join reason
+  stays.
+* Synthetic 91/91, all 49 suites; client 1,167. **Not verified live yet** (the sound setup above all: heard, and
+  released at the end).
+
 ## Pocketed (outside this WO)
 
 1. **A prologue recap** would have to play somewhere the engine draws video (in the world, e.g. right after the load);

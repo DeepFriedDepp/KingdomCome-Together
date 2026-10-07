@@ -116,32 +116,36 @@ namespace KCDMP_launcher.Models
 
         /// <summary>
         /// The prologue's rendered cutscenes up to where Hans and Henry part ways, in story order, with each one's length
-        /// from its Bink header (WO-159 findings) and its row in the game's cutscene table (Libs/Tables/ui/cutscene.xml).
-        /// No in-engine scene: those hold the conversations and choices. They play by that row (wh_ui_PlayCutscene), the
-        /// game's own cutscene player: it sets the video's audio up (audio_setup_video: the world quiet, the video's
-        /// language track) and shows its narrator captions. The bare movie player (wh_ui_PlayMovie) does neither -- live,
-        /// 0.45.7: the video's sound barely audible under the world's.
+        /// from its Bink header (WO-159 findings). No in-engine scene: those hold the conversations and choices. They play through
+        /// the bare movie player (wh_ui_PlayMovie; the Lua fires the game's audio_setup_video around them): through the cutscene
+        /// player (wh_ui_PlayCutscene) a console-played video holds the game's video pause after its skip -- live, 0.45.8: frozen.
         /// </summary>
-        public static readonly (string Name, string Path, double Seconds)[] PrologueVideos =
+        public static readonly (string Path, double Seconds)[] PrologueVideos =
         {
-            ("intro_new_game", "Videos/m50/cin_m5010k_obranabohuta__siege_intro_start/cin_m5010k_obranabohuta__siege_intro_start.bk2", 199.5),
-            ("zoufalaObranaZaBohutu_battleOpeningCutsceneGameEnd", "Videos/m50/cin_m5010k_obranabohuta__siege_intro_end/cin_m5010k_obranabohuta__siege_intro_end.bk2", 122.8),
-            ("story_switch_to_trosecko", "Videos/m01/cin_m0110t_prepadeni__intro_cutscene/cin_m0110t_prepadeni__intro_cutscene.bk2", 169.7),
-            ("zachrana_fall_dream", "Videos/m02/cin_m0210t_zachrana__fall_dream_clip01/cin_m0210t_zachrana__fall_dream_clip01.bk2", 149.9),
-            ("zachrana_probuzeni_data1", "Videos/m02/cin_m0250t_zachrana__first_dreaming_clip_01/cin_m0250t_zachrana__first_dreaming_clip_01.bk2", 104.9),
-            ("zachrana_prespani_data1", "Videos/m02/cin_m0260t_zachrana__second_dreaming_clip01/cin_m0260t_zachrana__second_dreaming_clip01.bk2", 16.3),
-            ("zachrana_prespani_data2", "Videos/m02/cin_m0260t_zachrana__second_dreaming_clip02/cin_m0260t_zachrana__second_dreaming_clip02.bk2", 25.2),
-            ("zachrana_prespani_data3", "Videos/m02/cin_m0260t_zachrana__second_dreaming_clip03/cin_m0260t_zachrana__second_dreaming_clip03.bk2", 19.8),
-            ("m03_trosky_journey", "Videos/m03/cin_m0310t_socky__trosky_journey/cin_m0310t_socky__trosky_journey.bk2", 172.7),
+            ("Videos/m50/cin_m5010k_obranabohuta__siege_intro_start/cin_m5010k_obranabohuta__siege_intro_start.bk2", 199.5),
+            ("Videos/m50/cin_m5010k_obranabohuta__siege_intro_end/cin_m5010k_obranabohuta__siege_intro_end.bk2", 122.8),
+            ("Videos/m01/cin_m0110t_prepadeni__intro_cutscene/cin_m0110t_prepadeni__intro_cutscene.bk2", 169.7),
+            ("Videos/m02/cin_m0210t_zachrana__fall_dream_clip01/cin_m0210t_zachrana__fall_dream_clip01.bk2", 149.9),
+            ("Videos/m02/cin_m0250t_zachrana__first_dreaming_clip_01/cin_m0250t_zachrana__first_dreaming_clip_01.bk2", 104.9),
+            ("Videos/m02/cin_m0260t_zachrana__second_dreaming_clip01/cin_m0260t_zachrana__second_dreaming_clip01.bk2", 16.3),
+            ("Videos/m02/cin_m0260t_zachrana__second_dreaming_clip02/cin_m0260t_zachrana__second_dreaming_clip02.bk2", 25.2),
+            ("Videos/m02/cin_m0260t_zachrana__second_dreaming_clip03/cin_m0260t_zachrana__second_dreaming_clip03.bk2", 19.8),
+            ("Videos/m03/cin_m0310t_socky__trosky_journey/cin_m0310t_socky__trosky_journey.bk2", 172.7),
         };
 
         public static int RecapMinutes => (int)Math.Round(PrologueVideos.Sum(v => v.Seconds) / 60.0);
 
-        /// <summary>The recap's start, once the New adventure's world is loaded (kdcmp.lua KCD2MP_W159RecapStart):
-        /// "name|seconds;..." by the cutscene table's names.</summary>
+        /// <summary>The recap's start, once the New adventure's world is loaded (kdcmp.lua KCD2MP_W159RecapStart).</summary>
         public static string RecapCall() =>
             "if KCD2MP_W159RecapStart then KCD2MP_W159RecapStart(" +
-            Lua(string.Join(";", PrologueVideos.Select(v => v.Name + "|" + v.Seconds.ToString("0.0", CultureInfo.InvariantCulture)))) + ") end";
+            Lua(string.Join(";", PrologueVideos.Select(v => ShortName(v.Path) + "|" + v.Seconds.ToString("0.0", CultureInfo.InvariantCulture)))) + ") end";
+
+        /// <summary>"Videos/m01/x/x.bk2" -> "m01/x" (the Lua expands it back; one console call holds all nine).</summary>
+        public static string ShortName(string path)
+        {
+            var p = path.Split('/');
+            return p.Length == 4 && p[0] == "Videos" && p[3] == p[2] + ".bk2" ? p[1] + "/" + p[2] : path;
+        }
 
         /// <summary>
         /// The host's CONNECT, pressed by the launcher: only after a load the menu's Start Game asked for, once the game's

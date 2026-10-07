@@ -87,12 +87,11 @@ public class Wo159MenuTests
         Assert.Equal(9, MenuTakeoverRule.PrologueVideos.Length);
         Assert.Equal(16, MenuTakeoverRule.RecapMinutes);   // 980.8 s
         Assert.All(MenuTakeoverRule.PrologueVideos, v => Assert.Matches(@"^Videos/m(50|01|02|03)/", v.Path));
-        Assert.All(MenuTakeoverRule.PrologueVideos, v => Assert.Matches(@"^[A-Za-z0-9_]+$", v.Name));   // the Lua's own pattern
         string call = MenuTakeoverRule.RecapCall();
         Assert.True(Uri.EscapeDataString("#" + call).Length <= MenuTakeoverRule.MaxEncoded, $"{Uri.EscapeDataString("#" + call).Length} encoded characters");
-        // by the game's cutscene table, so its cutscene player sets the audio up (live 0.45.7: the bare movie was near silent)
-        Assert.Contains("(\"intro_new_game|199.5;zoufalaObranaZaBohutu_battleOpeningCutsceneGameEnd|122.8;", call);
-        Assert.EndsWith("m03_trosky_journey|172.7\") end", call);
+        Assert.Contains("\"m50/cin_m5010k_obranabohuta__siege_intro_start|199.5;", call);
+        Assert.EndsWith("m03/cin_m0310t_socky__trosky_journey|172.7\") end", call);
+        Assert.Equal("m01/x", MenuTakeoverRule.ShortName("Videos/m01/x/x.bk2"));
     }
 
     [Fact]

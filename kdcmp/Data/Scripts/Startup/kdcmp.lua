@@ -343,7 +343,6 @@ function KCD2MP_SetCutscene(active, name)
     -- The quest layer reacts first so the line records the state AFTER the
     -- edge (a prompt hidden by this cutscene shows as prompt=0 pending=1).
     if KCD2MP_QuestOnCutscene then pcall(KCD2MP_QuestOnCutscene, active) end
-    if KCD2MP_W159OnCutscene then pcall(KCD2MP_W159OnCutscene, active, name) end   -- WO-159: the recap follows its videos
     local q = KCD2MP.quest
     mp_log(string.format("MP-CUTSCENE side=local state=%s name=%s peers=%s prompt=%d pending=%d",
         active and "start" or "end", tostring(name or "-"), peers == "" and "-" or peers,
@@ -22586,30 +22585,68 @@ function KCD2MP_W159Disarm(why)
 end
 
 -- ----- the prologue's rendered cutscenes, after a New adventure loaded ("Watch") -----
--- Each video plays by its row in the game's cutscene table (wh_ui_PlayCutscene), through the game's own cutscene
--- player: it pauses the world (its sound with it), sets the video's audio up (audio_setup_video) and shows the
--- captions. The bare movie player (wh_ui_PlayMovie) did none of it -- live, 0.45.7: the video's sound barely audible
--- under the running world's, and its skip ended one video while the list played on.
--- A rendered cutscene freezes every Lua timer (WO-80), and its keys go to the video, not to handleAction. So the list
--- follows the cutscene player's own edges, which the agent hands in through the console (KCD2MP_SetCutscene, from
--- CutscenePlayer:: lines in kcd.log): the end of the playing one starts the next; an end well before its length is
--- the player's skip, and that skips them all. Without the edges (no agent) the old clock rule plays on: the next
--- video after each one's length (their Bink headers).
+-- They play through the game's bare movie player (wh_ui_PlayMovie): full screen in the world, and wh_ui_StopMovie returns
+-- to it (WO-159 probes). It does not set the sound up, so the recap fires the game's own video setup itself
+-- (audio_setup_video: the world silent, the video's mix -- what the cutscene player fires) and stops it at the end.
+-- The cutscene player (wh_ui_PlayCutscene) is not used: a console-played video there pauses the game, and after its skip
+-- the pause was never released (live, 0.45.8: the game frozen).
+-- The movie player's own skip ends one video and writes nothing; while a video plays it takes the keys, so the player
+-- stands still (live, 0.45.7: no movement inside a video, movement right after each skip). So the player moving or
+-- turning while a video should be on is the skip, and it skips them all. Otherwise the next video follows after each
+-- one's length (their Bink headers).
 -- While it runs a join waits (KCD2MP_JoinBusyReason: "prologue"). Only rendered video: no scene with a conversation
 -- or a choice is ever played.
 KCD2MP_W159_SKIP_HOLD_S = 1.0
 KCD2MP_W159_PREROLL_S = 4
-KCD2MP_W159_SKIP_SLACK_S = 5      -- an end this much before the video's length is a skip
-KCD2MP_W159_START_WAIT_S = 8      -- no start edge by then: no edges this session (the clock rule plays on)
+KCD2MP_W159_SETTLE_S = 1.5        -- a video's first seconds: the player may still be coming to a stop
+KCD2MP_W159_MOVE_M = 0.3          -- moved this far, or
+KCD2MP_W159_TURN_RAD = 0.05       -- turned this far, inside a video: the player is back in the world (skipped)
+KCD2MP_W159_AUDIO = "audio_setup_video"
 
--- spec: "name|seconds;..." -- each name a RenderedCutscene row of Libs/Tables/ui/cutscene.xml
+-- The game's video sound setup on the player's audio proxy (the way the game's own scripts fire a trigger).
+function KCD2MP_W159Audio(on)
+    local r = KCD2MP.w159.recap
+    if not r then return end
+    if on and not r.audio then
+        local ok = pcall(function()
+            local id = Sound.GetAudioTriggerID(KCD2MP_W159_AUDIO)
+            if not id then return end
+            local proxy = player:GetDefaultAuxAudioProxyID()
+            player:ExecuteAudioTrigger(id, proxy)
+            r.audio = { ent = player, id = id, proxy = proxy }
+        end)
+        mp_log(string.format("WO159-RECAP sound setup %s", (ok and r.audio) and "on" or "NOT on (no trigger)"))
+    elseif not on and r.audio then
+        local a = r.audio
+        r.audio = nil
+        local ok = pcall(function() a.ent:StopAudioTrigger(a.id, a.proxy) end)
+        mp_log(string.format("WO159-RECAP sound setup %s", ok and "off" or "off FAILED"))
+    end
+end
+
+local function w159Pose()
+    local pos, ang = nil, nil
+    pcall(function() pos = player:GetWorldPos(); ang = player:GetWorldAngles() end)
+    if not pos then return nil end
+    return { x = pos.x, y = pos.y, z = pos.z, rz = ang and ang.z or 0 }
+end
+
+local function w159Moved(a, b)
+    if not a or not b then return false end
+    local dx, dy, dz = a.x - b.x, a.y - b.y, a.z - b.z
+    local turn = math.abs(a.rz - b.rz)
+    if turn > math.pi then turn = 2 * math.pi - turn end
+    return dx * dx + dy * dy + dz * dz > KCD2MP_W159_MOVE_M * KCD2MP_W159_MOVE_M or turn > KCD2MP_W159_TURN_RAD
+end
+
+-- spec: "m01/name|seconds;..." -- each is Videos/m01/name/name.bk2 (the game's own layout)
 function KCD2MP_W159RecapStart(spec)
     local w = KCD2MP.w159
     local list, total = {}, 0
     for part in tostring(spec or ""):gmatch("[^;]+") do
-        local name, secs = part:match("^([%w_]+)|([%d%.]+)$")
-        if name then
-            list[#list + 1] = { name = name, secs = tonumber(secs) }
+        local dir, name, secs = part:match("^(m%d+)/([%w_]+)|([%d%.]+)$")
+        if dir then
+            list[#list + 1] = { path = string.format("Videos/%s/%s/%s.bk2", dir, name, name), secs = tonumber(secs) }
             total = total + tonumber(secs)
         end
     end
@@ -22632,38 +22669,20 @@ function KCD2MP_W159RecapNext()
     local v = r.list[r.i]
     if not v then KCD2MP_W159RecapEnd("finished"); return end
     r.at = os.clock()
-    r.seenAt = nil
-    if r.i > 1 then pcall(System.ExecuteCommand, "wh_ui_StopCutscene") end   -- the last one, should it still run
-    pcall(System.ExecuteCommand, "wh_ui_PlayCutscene " .. v.name)
-    mp_log(string.format("WO159-RECAP video %d/%d %s (%.0f s)", r.i, #r.list, v.name, v.secs))
+    r.pose = nil
+    KCD2MP_W159Audio(true)
+    pcall(System.ExecuteCommand, "wh_ui_PlayMovie " .. v.path)
+    mp_log(string.format("WO159-RECAP video %d/%d %s (%.0f s)", r.i, #r.list, v.path:match("[^/]+$") or v.path, v.secs))
 end
 
 function KCD2MP_W159RecapEnd(how)
     local w = KCD2MP.w159
     if not w.recap then return end
-    if w.recap.i > 0 then pcall(System.ExecuteCommand, "wh_ui_StopCutscene") end
+    if w.recap.i > 0 then pcall(System.ExecuteCommand, "wh_ui_StopMovie") end
+    KCD2MP_W159Audio(false)
     mp_log(string.format("WO159-RECAP ended (%s) after %.0f s", tostring(how), os.clock() - w.recap.startedAt))
     w.recap = nil
     KCD2MP_EmitEvent("w159", "recap " .. tostring(how))
-end
-
--- From KCD2MP_SetCutscene: the cutscene player's start and end of the playing video.
-function KCD2MP_W159OnCutscene(active, name)
-    local r = KCD2MP.w159.recap
-    local v = r and r.list[r.i]
-    if not v or tostring(name) ~= v.name then return false end
-    local now = os.clock()
-    r.last = now
-    r.edges = true
-    if active then r.seenAt = r.seenAt or now; return true end
-    local ran = now - (r.seenAt or r.at)
-    if ran < v.secs - KCD2MP_W159_SKIP_SLACK_S then
-        mp_log(string.format("WO159-RECAP %s ended after %.0f of %.0f s: skipped", v.name, ran, v.secs))
-        KCD2MP_W159RecapEnd("skipped")
-    else
-        KCD2MP_W159RecapNext()
-    end
-    return true
 end
 
 -- The left time, for the joiner's "your host is watching the prologue (about N min left)".
@@ -22684,19 +22703,24 @@ function KCD2MP_W159RecapTick()
         if now >= r.startedAt then KCD2MP_W159RecapNext() end
     else
         local v = r.list[r.i]
-        if not r.edges or not r.seenAt then
-            -- the clock rule: no edges this session, or this video never reported its start
-            if v and (not r.edges or now - r.at >= KCD2MP_W159_START_WAIT_S) and now - r.at >= v.secs + 0.3 then KCD2MP_W159RecapNext() end
-        elseif v and now - r.at >= v.secs + 10 then
-            KCD2MP_W159RecapNext()   -- its start came, its end never did
+        if v and now - r.at >= v.secs + 0.3 then
+            KCD2MP_W159RecapNext()
+        elseif now - r.at >= KCD2MP_W159_SETTLE_S then
+            -- inside a video the player cannot move: a move or a turn means the movie player's skip took them back
+            local p = w159Pose()
+            if not r.pose then r.pose = p
+            elseif w159Moved(p, r.pose) then
+                mp_log(string.format("WO159-RECAP the player moved %.0f s into video %d: skipped", now - r.at, r.i))
+                KCD2MP_W159RecapEnd("skipped"); return
+            end
         end
     end
     if not w.recap then return end
     Script.SetTimer(16, KCD2MP_W159RecapTick)
 end
 
--- From handleAction: the game's "use" (E by default) held while the recap plays (between videos; during one the
--- video takes the keys and the cutscene player's own skip applies).
+-- From handleAction: the game's "use" (E by default) held while the recap plays (before the first video; during one the
+-- video takes the keys and the movie player's own skip applies).
 function KCD2MP_W159OnAction(action, activation)
     local r = KCD2MP.w159.recap
     if not r or action ~= "use" then return false end
@@ -22705,18 +22729,17 @@ function KCD2MP_W159OnAction(action, activation)
     return true
 end
 
--- The recap is running. A load kills its timer chain (WO-78 liveness: then it is over); a video freezes the chain
--- too (WO-80), so a stale chain counts as dead only once no video is on and the playing one's length has passed.
+-- The recap is running (a load kills its timer chain: then it is over, WO-78 liveness; the sound setup is stopped).
 function KCD2MP_W159RecapActive()
     local r = KCD2MP.w159.recap
     if not r then return false end
-    local now = os.clock()
-    if now - r.last <= 2 then return true end
-    local v = r.list[r.i]
-    if KCD2MP.cutsceneActive and v and KCD2MP.cutsceneName == v.name then return true end
-    if v and now - r.at <= v.secs + 5 then return true end
-    KCD2MP.w159.recap = nil
-    return false
+    if os.clock() - r.last > 2 then
+        mp_log("WO159-RECAP its timer chain is dead (a load?): over")
+        KCD2MP_W159Audio(false)
+        KCD2MP.w159.recap = nil
+        return false
+    end
+    return true
 end
 
 -- ===== Register Console Commands =====
