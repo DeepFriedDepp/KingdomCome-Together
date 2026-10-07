@@ -22585,21 +22585,24 @@ end
 
 -- ----- the prologue's rendered cutscenes, after a New adventure loaded ("Watch") -----
 -- At the main menu the game's wh_ui_PlayMovie draws nothing; in the world it plays full screen and wh_ui_StopMovie
--- returns to the world (WO-159 probes). The launcher starts the list once the world is loaded; this plays it video
--- after video by each one's length (their Bink headers), and a held E (the game's "use") for a second skips the rest.
+-- returns to the world (WO-159 probes). Each video plays by its row in the game's cutscene table (wh_ui_PlayCutscene):
+-- the game's own cutscene player sets the video's audio up (audio_setup_video) and shows its captions; the bare movie
+-- player did not (live, 0.45.7: the video's sound barely audible under the world's). The launcher starts the list once
+-- the world is loaded; this plays it video after video by each one's length (their Bink headers), and a held E (the
+-- game's "use") for a second skips the rest.
 -- While it runs a join waits (KCD2MP_JoinBusyReason: "prologue"). Only rendered video: no scene with a conversation
 -- or a choice is ever played.
 KCD2MP_W159_SKIP_HOLD_S = 1.0
 KCD2MP_W159_PREROLL_S = 4
 
--- spec: "m01/name|seconds;..." -- each is Videos/m01/name/name.bk2 (the game's own layout)
+-- spec: "name|seconds;..." -- each name a RenderedCutscene row of Libs/Tables/ui/cutscene.xml
 function KCD2MP_W159RecapStart(spec)
     local w = KCD2MP.w159
     local list, total = {}, 0
     for part in tostring(spec or ""):gmatch("[^;]+") do
-        local dir, name, secs = part:match("^(m%d+)/([%w_]+)|([%d%.]+)$")
-        if dir then
-            list[#list + 1] = { path = string.format("Videos/%s/%s/%s.bk2", dir, name, name), secs = tonumber(secs) }
+        local name, secs = part:match("^([%w_]+)|([%d%.]+)$")
+        if name then
+            list[#list + 1] = { name = name, secs = tonumber(secs) }
             total = total + tonumber(secs)
         end
     end
@@ -22622,14 +22625,15 @@ function KCD2MP_W159RecapNext()
     local v = r.list[r.i]
     if not v then KCD2MP_W159RecapEnd("finished"); return end
     r.at = os.clock()
-    pcall(System.ExecuteCommand, "wh_ui_PlayMovie " .. v.path)
-    mp_log(string.format("WO159-RECAP video %d/%d %s (%.0f s)", r.i, #r.list, v.path:match("[^/]+$") or v.path, v.secs))
+    if r.i > 1 then pcall(System.ExecuteCommand, "wh_ui_StopCutscene") end   -- the last one, should it still run
+    pcall(System.ExecuteCommand, "wh_ui_PlayCutscene " .. v.name)
+    mp_log(string.format("WO159-RECAP video %d/%d %s (%.0f s)", r.i, #r.list, v.name, v.secs))
 end
 
 function KCD2MP_W159RecapEnd(how)
     local w = KCD2MP.w159
     if not w.recap then return end
-    pcall(System.ExecuteCommand, "wh_ui_StopMovie")
+    if w.recap.i > 0 then pcall(System.ExecuteCommand, "wh_ui_StopCutscene") end
     mp_log(string.format("WO159-RECAP ended (%s) after %.0f s", tostring(how), os.clock() - w.recap.startedAt))
     w.recap = nil
     KCD2MP_EmitEvent("w159", "recap " .. tostring(how))

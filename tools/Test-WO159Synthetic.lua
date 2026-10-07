@@ -297,7 +297,7 @@ do
     KCD2MP.w122.sharedWorld = true
     CMDS = {}; TIMERS = {}
     NOW = 1000
-    local spec = "m01/cin_m0110t_prepadeni__intro_cutscene|169.7;m02/cin_m0210t_zachrana__fall_dream_clip01|149.9;m03/cin_m0310t_socky__trosky_journey|172.7"
+    local spec = "story_switch_to_trosecko|169.7;zachrana_fall_dream|149.9;m03_trosky_journey|172.7"
     TOASTS = {}
     local uiBefore = #UI
     check("P1: started", KCD2MP_W159RecapStart(spec) == true)
@@ -308,36 +308,40 @@ do
     NOW = 1002; tick()
     check("P1c: no video during the hint", #CMDS == 0)
     NOW = 1004.05; tick()
-    check("P2: the first video, the game's own path", CMDS[#CMDS] == "wh_ui_PlayMovie Videos/m01/cin_m0110t_prepadeni__intro_cutscene/cin_m0110t_prepadeni__intro_cutscene.bk2", CMDS[#CMDS])
+    check("P2: the first video, by the game's cutscene player (its audio set up)", #CMDS == 1 and CMDS[1] == "wh_ui_PlayCutscene story_switch_to_trosecko", CMDS[#CMDS])
     check("P3: a join waits: 'prologue'", KCD2MP_JoinBusyReason() == "prologue", KCD2MP_JoinBusyReason())
     check("P4: about 9 min left", math.ceil(KCD2MP_W159RecapLeftS() / 60) == 9, KCD2MP_W159RecapLeftS())
     NOW = 1004 + 100; tick()
     check("P5: still the first one at 100 s", #CMDS == 1)
     NOW = 1004 + 170.1; tick()
-    check("P6: the second one after the first's length", CMDS[#CMDS]:find("fall_dream", 1, true) ~= nil, CMDS[#CMDS])
+    check("P6: the second one after the first's length (the first stopped, should it still run)", CMDS[#CMDS] == "wh_ui_PlayCutscene zachrana_fall_dream"
+        and CMDS[#CMDS - 1] == "wh_ui_StopCutscene", CMDS[#CMDS])
+    local played = 0
+    for _, c in ipairs(CMDS) do if c:find("PlayMovie", 1, true) then played = played + 1 end end
+    check("P6b: never the bare movie player (no audio setup)", played == 0)
     -- E pressed briefly: nothing; held for a second: skipped
     KCD2MP_W159OnAction("use", "press"); NOW = NOW + 0.5; tick(); KCD2MP_W159OnAction("use", "release"); NOW = NOW + 1; tick()
     check("P7: a short press does not skip", KCD2MP.w159.recap ~= nil)
     check("P8: other keys are not taken", KCD2MP_W159OnAction("attack", "press") == false)
     KCD2MP_W159OnAction("use", "press"); NOW = NOW + 1.05; tick()
-    check("P9: E held for a second: the rest is skipped, the video stopped", KCD2MP.w159.recap == nil and CMDS[#CMDS] == "wh_ui_StopMovie")
+    check("P9: E held for a second: the rest is skipped, the video stopped", KCD2MP.w159.recap == nil and CMDS[#CMDS] == "wh_ui_StopCutscene")
     local e = events("w159")
     check("P10: the launcher is told", e[#e] == "recap skipped", e[#e])
     check("P11: a join no longer waits for it", KCD2MP_JoinBusyReason() ~= "prologue")
     check("P12: E is the game's own again", KCD2MP_W159OnAction("use", "press") == false)
     -- played to the end
     NOW = 5000
-    KCD2MP_W159RecapStart("m02/cin_m0260t_zachrana__second_dreaming_clip01|16.3")
+    KCD2MP_W159RecapStart("zachrana_prespani_data1|16.3")
     NOW = 5004.05; tick(); NOW = 5004.05 + 16.7; tick()
     e = events("w159")
     check("P13: played to the end: finished", KCD2MP.w159.recap == nil and e[#e] == "recap finished", e[#e])
     -- a load kills the timer chain: the recap is over (no join waits forever)
     NOW = 6000
-    KCD2MP_W159RecapStart("m02/cin_m0260t_zachrana__second_dreaming_clip01|16.3")
+    KCD2MP_W159RecapStart("zachrana_prespani_data1|16.3")
     TIMERS = {}
     NOW = 6000 + 3
     check("P14: a dead timer chain: over", KCD2MP_JoinBusyReason() ~= "prologue" and KCD2MP.w159.recap == nil)
-    check("P15: a bad spec is refused", KCD2MP_W159RecapStart("../x.bk2|5") == false)
+    check("P15: a bad spec is refused", KCD2MP_W159RecapStart("../x.bk2|5") == false and KCD2MP_W159RecapStart("intro new|5") == false)
     check("P16: no swallowed Lua errors", #ERRS == 0, ERRS[1])
     player = nil
 end

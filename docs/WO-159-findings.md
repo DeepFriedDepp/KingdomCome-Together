@@ -329,6 +329,21 @@ At the maintainer's word: the three start saves are made from his own saves inst
   user-folder paths are inside the unchanged third-party audio library's own binaries).
 * Not verified live yet: the fixed auto-connect itself (needs the maintainer's next Start Game).
 
+## The recap's sound (after 0.45.7)
+
+* **Live (the maintainer, 0.45.7, a Soldier New adventure with Watch):** the videos' sound was barely audible and the
+  world's sound played on underneath **[L]**.
+* The cause, from the game's own data and binaries: the videos carry their sound (audio track 1 for every language,
+  `Libs/Tables/ui/video_language2audio_track.xml`), but `wh_ui_PlayMovie` is the bare movie player. The game plays them
+  through its cutscene player (`C_CutscenePlayer`, `wh_ui_PlayCutscene <name>` from `Libs/Tables/ui/cutscene.xml`), which
+  sets the audio up (`audio_setup_video`, `UseAudioSnapshot`) and shows the narrator captions (`CustomText` events).
+* The fix: the recap plays each of the nine by its table row (`intro_new_game`,
+  `zoufalaObranaZaBohutu_battleOpeningCutsceneGameEnd`, `story_switch_to_trosecko`, `zachrana_fall_dream`,
+  `zachrana_probuzeni_data1`, `zachrana_prespani_data1..3`, `m03_trosky_journey`); `wh_ui_StopCutscene` before the next
+  and on skip. The rows' events are skip points and captions only; the siege's end also toggles a music state
+  (`STORY_M50_BATTLE_5_GODWIN_BATTLE`, 10 s) -- watch that the world's music is right afterwards.
+* Synthetic 85/85 (never the bare movie player), client 1,167. **Not verified live yet.**
+
 ## Pocketed (outside this WO)
 
 1. **A prologue recap** would have to play somewhere the engine draws video (in the world, e.g. right after the load);
