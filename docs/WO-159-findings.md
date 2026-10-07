@@ -303,6 +303,17 @@ At the maintainer's word: the three start saves are made from his own saves inst
   **git-ignored** (the maintainer's play data; the repository is public) and copied into the release clone.
 * The maintainer's saves were only read; the work ran on copies in empty slots, moved out of the saves folder after.
 
+## The 0.45.6 build
+
+* From a fresh clone of `35a138b` (`release\c0456`) with the three start saves copied into `assets/start-save/<style>/`
+  (git-ignored), `tools\Build-Installer.ps1 -SoakWaiver "The maintainer decided on 2026-10-07: no soak test for 0.45.6."`:
+  `release\KingdomComeTogether-Setup-0.45.6.exe`, 106,329,689 bytes, sha256
+  `31abf815bc07eefd34609dc6b7a037fa61d7ec6af7e8cdef7edf11d7a2dbdc92`. Local only; not tagged; unsigned.
+* Inside the build: "Start saves: soldier, adviser, scout" (each passed `Validate-StartSave -Style` again), the logo pak,
+  relay 62, agent 1,167, setup 77, all 49 synthetic suites, the static and native checks, the payload smoke, Steam
+  detection, the four installer cases; no FAIL line. Payload 1,034 files; privacy sweep clean (no account, machine or
+  contact name in any file; the saves' headers scrubbed, no `kcd2mp` in their worlds).
+
 ## Pocketed (outside this WO)
 
 1. **A prologue recap** would have to play somewhere the engine draws video (in the world, e.g. right after the load);
