@@ -51,6 +51,8 @@ public class Wo139Tests
         Assert.Equal("outcome", Protocol.CrimeAskName(Protocol.CrimeAskOutcome));
         Assert.Equal("stop", Protocol.CrimeHostName(Protocol.CrimeHostStop));
         Assert.Equal("horses", Protocol.CrimeHostName(Protocol.CrimeHostHorses));
+        Assert.Equal("shops", Protocol.CrimeHostName(Protocol.CrimeHostShops));
+        Assert.Equal(8, Protocol.CrimeHostShops);   // append-only: after mode (7)
         Assert.StartsWith("unknown-", Protocol.CrimeHostName(99));
     }
 

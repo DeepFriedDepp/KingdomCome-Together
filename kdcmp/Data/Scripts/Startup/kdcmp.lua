@@ -18209,6 +18209,7 @@ KCD2MP.w139.on = false
 KCD2MP.w139.aliveTimeoutS = 10.0
 KCD2MP.w139.crimes = KCD2MP.w139.crimes or {}      -- joiner: my crimes here { kind, cls, victim, x, y, z, at }
 KCD2MP.w139.legal = KCD2MP.w139.legal or {}        -- joiner: host-legal horse name -> { orig = mountIsLegal before }
+KCD2MP.w139.shops = KCD2MP.w139.shops or {}        -- joiner: a keeper ready to sell in the host's world -> its copy's entity id
 KCD2MP.w139.skipOrig = KCD2MP.w139.skipOrig or {} -- both: skip-time data name -> { dur, target }
 KCD2MP.w139.stopped = KCD2MP.w139.stopped or {}   -- joiner: guard name -> untilAt (its host stream ignored)
 KCD2MP.w139.stopRange = 30.0                       -- a stop's guard must be this close (m) when it starts here
@@ -18261,6 +18262,7 @@ function KCD2MP_W139Session(host, joiner, on)
     if wasJoiner and not joiner then
         pcall(KCD2MP_W139StopEnd, "no-longer-joiner", "nostop")
         pcall(KCD2MP_W139LegalHorses, "")
+        pcall(KCD2MP_W139Shops, "")
     end
     if joiner and on then
         pcall(KCD2MP_W139StashTick)
@@ -18275,6 +18277,7 @@ function KCD2MP_W139Backstop()
     w.aliveAt = nil
     pcall(KCD2MP_W139StopEnd, "agent-silent", "nostop")
     pcall(KCD2MP_W139LegalHorses, "")
+    pcall(KCD2MP_W139Shops, "")
     pcall(KCD2MP_W139SkipTimeGate, false)
 end
 
@@ -19150,6 +19153,59 @@ function KCD2MP_W139HostHorses()
         end
     end
     KCD2MP_EmitEvent("w139_horses", #names > 0 and table.concat(names, ",") or "-")
+end
+
+-- Host, every 10 s with the horses: the keepers ready to sell in this world (the game's own entity context, set by a
+-- keeper's work activity while the shop is open) near either player. A joiner's copies never reach that activity (paused
+-- copies; WO-157's talk resets them on purpose), so the game offers him no Trade there (field 0.45.8: "no option to sell").
+KCD2MP.W139_SHOP_CONTEXT = "shop_sellerReadyToSell"
+function KCD2MP_W139HostShops()
+    local names, seen = {}, {}
+    local centers = {}
+    if player then centers[#centers + 1] = W139.pos(player) end
+    for _, g in pairs(KCD2MP.ghosts or {}) do if g.entity then centers[#centers + 1] = W139.pos(g.entity) end end
+    for _, c in ipairs(centers) do
+        local ents = {}
+        if c then pcall(function() ents = System.GetEntitiesInSphere(c, 300) or {} end) end
+        for _, e in ipairs(ents) do
+            if e.soul and e ~= player and not KCD2MP_W139IsAvatar(e) then
+                local n = W139.name(e)
+                if n and not seen[n] and not string.find(n, "^kcd2mp_") then
+                    seen[n] = true
+                    local ready = false
+                    pcall(function() ready = e.soul:HasScriptContext(KCD2MP.W139_SHOP_CONTEXT) == true end)
+                    if ready and #names < 60 then names[#names + 1] = n end
+                end
+            end
+        end
+    end
+    KCD2MP_EmitEvent("w139_shops", #names > 0 and table.concat(names, ",") or "-")
+end
+
+-- Joiner: the host's keepers ready to sell. Each copy here gets the same context through the DLL (the agent sets it and
+-- clears only what it set; the engine counts it per entity) -- again when the copy is a new entity (streamed in again).
+function KCD2MP_W139Shops(csv)
+    local w = KCD2MP.w139
+    local want = {}
+    for n in string.gmatch(tostring(csv or ""), "[%w_]+") do want[n] = true end
+    for n in pairs(w.shops) do
+        if not want[n] then
+            w.shops[n] = nil
+            mp_log("WO139-SHOP closed npc=" .. n .. " -- no longer ready to sell in the host's world")
+            KCD2MP_EmitEvent("w139_shop", n .. " 0")
+        end
+    end
+    for n in pairs(want) do
+        local e = nil
+        pcall(function() e = System.GetEntityByName(n) end)
+        if e and e.soul and w.shops[n] ~= e.id then
+            if not w.shops[n] then
+                mp_log("WO139-SHOP open npc=" .. n .. " -- ready to sell in the host's world: Trade is offered here too")
+            end
+            w.shops[n] = e.id
+            KCD2MP_EmitEvent("w139_shop", n .. " 1")
+        end
+    end
 end
 
 -- After a stop: the held guard stands where the joiner's copy of it ended.

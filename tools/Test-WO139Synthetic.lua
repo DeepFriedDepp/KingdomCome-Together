@@ -17,6 +17,7 @@
 --      witnesses, nobody sees = no crime; violent crimes (self-defence, bandits); the
 --      guard scan; the legal horses; the held guard placed
 --   L  legal horses on the joiner (the prompt lever, the crime-side event, restored)
+--   K  the host's keepers ready to sell on the joiner (the dialogue's Trade option)
 --   T  no time skip for punishment: the skip-time data set to one second and restored
 --   B  the backstop, the switches and the commands
 -- What this proves: the Lua half. Live evidence: docs/WO-139-findings.md.
@@ -761,6 +762,15 @@ do
     ev = emitted("w139_horses", mark)
     check("H: the horses the host's Henry may ride: his own and a legal one, not a townsperson's",
         #ev == 1 and ev[1]:find("host_horse", 1, true) and ev[1]:find("lent_horse", 1, true) and not ev[1]:find("tzel_horse_1", 1, true), ev[1])
+    -- the keepers ready to sell (field 0.45.8: the joiner had no Trade option)
+    local keeper = mkNpc("tzel_trader", 108, 104, 10, ZEL, { ctx = { shop_sellerReadyToSell = true } })
+    local closed = mkNpc("tzel_baker", 109, 104, 10, ZEL, { ctx = { activity_seller = true } })
+    local farKeeper = mkNpc("far_trader", 900, 900, 10, ZEL, { ctx = { shop_sellerReadyToSell = true } })
+    mark = #LOG
+    KCD2MP_W139HostShops()
+    ev = emitted("w139_shops", mark)
+    check("H: the keepers ready to sell in the host's world near the players: the open one, not a closed one, not one far off",
+        #ev == 1 and ev[1]:find("tzel_trader", 1, true) and not ev[1]:find("tzel_baker", 1, true) and not ev[1]:find("far_trader", 1, true), ev[1])
     -- the held guard placed where the joiner's stop ended
     check("H: the guard placed at the stop's end", KCD2MP_W139HostPlace("tzel_man_7", 104.5, 100.5, 10) == true and guard.px == 104.5)
     check("H: ...never from a stale position 50 m off", KCD2MP_W139HostPlace("tzel_man_7", 150, 100, 10) == false and guard.px == 104.5)
@@ -782,6 +792,31 @@ do
     KCD2MP_W139LegalHorses("")
     check("L: off the list: its own value back, and the crime side cleared", h.mountIsLegal == false and emitted("w139_horse", mark)[2] == "host_horse 0")
     noErrs("L")
+end
+
+-- ================================================================ K: the host's open shops on the joiner
+
+do
+    reset(); clearLog(); NOW = 3500
+    joiner()
+    local k = mkNpc("tzel_trader", 105, 105, 10, ZEL)
+    local mark = #LOG
+    KCD2MP_W139Shops("tzel_trader,not_here")
+    check("K: the host's keeper ready to sell: the agent asked to set it on this copy (a copy not here: nothing)",
+        e1("w139_shop", mark) == "tzel_trader 1" and #emitted("w139_shop", mark) == 1)
+    KCD2MP_W139Shops("tzel_trader")
+    check("K: the same list, the same copy: nothing new", #emitted("w139_shop", mark) == 1)
+    ENTS["tzel_trader"] = nil
+    local k2 = mkNpc("tzel_trader", 105, 105, 10, ZEL)   -- the copy streamed out and in: a new entity
+    KCD2MP_W139Shops("tzel_trader")
+    check("K: a copy streamed in again gets it again", #emitted("w139_shop", mark) == 2 and emitted("w139_shop", mark)[2] == "tzel_trader 1")
+    KCD2MP_W139Shops("-")
+    check("K: off the list (the host's shop closed): cleared", emitted("w139_shop", mark)[3] == "tzel_trader 0")
+    KCD2MP_W139Shops("tzel_trader")
+    KCD2MP_W139Session(false, false, false)
+    local ev = emitted("w139_shop", mark)
+    check("K: the session ends: every one cleared", ev[#ev] == "tzel_trader 0" and next(KCD2MP.w139.shops) == nil)
+    noErrs("K")
 end
 
 -- ================================================================ T: no time skip for punishment

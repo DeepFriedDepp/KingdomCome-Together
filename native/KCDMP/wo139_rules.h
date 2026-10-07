@@ -35,7 +35,9 @@ inline bool is_trespassing(uint32_t lv) { return lv == 3 || lv == 4; }
 inline bool context_allowed(const char* c) {
     if (!c) return false;
     const char* ok[] = { "crime_suppressMeleeStealthHitReaction", "crime_ignoredCorpse", "crime_ignoredUnconsciousBody",
-                         "crime_ignoredNPCHitVolume", "crime_ignoredHorseTheft_Horse" };
+                         "crime_ignoredNPCHitVolume", "crime_ignoredHorseTheft_Horse",
+                         // a joiner's copy of a keeper whose shop is open in the host's world (the dialogue's Trade option)
+                         "shop_sellerReadyToSell" };
     for (const char* k : ok) if (std::strcmp(c, k) == 0) return true;
     return false;
 }

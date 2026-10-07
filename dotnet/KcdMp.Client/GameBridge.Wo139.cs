@@ -59,6 +59,12 @@ public partial class GameBridge
     private readonly ConcurrentDictionary<string, bool> _w139StoppedHere = new(StringComparer.OrdinalIgnoreCase);   // joiner: guards in a stop
     private readonly List<string> _w139HorseParts = new();
     private string? _w139HorsesSent;   // null: never sent (an empty list is sent too)
+    // the keepers ready to sell (field 0.45.8: a joiner had no Trade option): host -- the last list sent; joiner -- the parts
+    // being received and the copies this agent set the context on (only those are ever cleared: the engine counts it)
+    private readonly List<string> _w139ShopParts = new();
+    private readonly ConcurrentDictionary<string, bool> _w139ShopSet = new(StringComparer.Ordinal);
+    private string? _w139ShopsSent;
+    private long _w139ShopsAtMs, _w139ShopsSentAtMs;
     private long _w139HorsesAtMs, _w139HorsesSentAtMs, _w139ModeAtMs;
     private volatile int _w139TrespassLevel;
     private long _w139TrespassSentMs;
@@ -121,6 +127,11 @@ public partial class GameBridge
                         _ = ExecLuaAsync("if KCD2MP_W139HostHorses then KCD2MP_W139HostHorses() end");
                     }
                     if (on) await Wo139HostTickAsync(now);
+                    if (!holding && now - _w139ShopsAtMs >= 10_000)
+                    {
+                        _w139ShopsAtMs = now;
+                        _ = ExecLuaAsync("if KCD2MP_W139HostShops then KCD2MP_W139HostShops() end");
+                    }
                 }
                 if (joiner && on && _w139TrespassLevel >= 3 && now - _w139TrespassSentMs >= 8_000)
                     await Wo139ReportTrespassAsync(_lastX, _lastY, _lastZ, "still inside");
@@ -495,6 +506,15 @@ public partial class GameBridge
                         await ExecLuaAsync($"if KCD2MP_W139LegalHorses then KCD2MP_W139LegalHorses(\"{csv}\") end");
                     }
                     return;
+                case Protocol.CrimeHostShops when Wo139Rules.TryParseHorses(m.Text, out int spart, out int snparts, out var keepers):
+                    if (spart == 1) _w139ShopParts.Clear();
+                    _w139ShopParts.AddRange(keepers);
+                    if (spart == snparts)
+                    {
+                        string csv = string.Join(",", _w139ShopParts.Distinct(StringComparer.Ordinal));
+                        await ExecLuaAsync($"if KCD2MP_W139Shops then KCD2MP_W139Shops(\"{csv}\") end");
+                    }
+                    return;
                 case Protocol.CrimeHostCleared when Wo139Rules.TryParseCleared(m.Text, out string why, out string cst):
                     Console.WriteLine($"MP-W139 joiner: the host cleared my record in {(cst.Length > 0 ? cst : "every settlement")} ({why})");
                     await ExecLuaAsync($"if KCD2MP_W139Cleared then KCD2MP_W139Cleared(\"{why}\") end");
@@ -548,6 +568,34 @@ public partial class GameBridge
                     _w139HorsesSentAtMs = Environment.TickCount64;
                     foreach (byte g in Wo134Peers())
                         foreach (var t in Wo139Rules.HorsesTexts(names)) _ = Wo139SendAsync(Protocol.CrimeHostUp, g, Protocol.CrimeHostHorses, 0, t);
+                }
+                return;
+            case "w139_shops":     // <name,name|-> (host): the keepers ready to sell, the same parts as the horses
+                if (W139Host && f.Length >= 1)
+                {
+                    var keepers = f[0] == "-" ? new List<string>() : f[0].Split(',').Where(Wo139Text.IsName).ToList();
+                    string csv = string.Join(",", keepers);
+                    if (csv == _w139ShopsSent && Environment.TickCount64 - _w139ShopsSentAtMs < 30_000) return;
+                    if (csv != _w139ShopsSent) Console.WriteLine($"MP-W139 host: keepers ready to sell near the players: {(keepers.Count == 0 ? "none" : csv)}");
+                    _w139ShopsSent = csv;
+                    _w139ShopsSentAtMs = Environment.TickCount64;
+                    foreach (byte g in Wo134Peers())
+                        foreach (var t in Wo139Rules.HorsesTexts(keepers)) _ = Wo139SendAsync(Protocol.CrimeHostUp, g, Protocol.CrimeHostShops, 0, t);
+                }
+                return;
+            case "w139_shop":      // <name> 1|0 (joiner): a copy's Trade option, as the host's keeper
+                if (f.Length >= 2 && Wo139Text.IsName(f[0]))
+                {
+                    bool on = f[1] == "1";
+                    string keeper = f[0];
+                    if (!on && !_w139ShopSet.ContainsKey(keeper)) return;   // never set here: not ours to clear
+                    _ = Task.Run(async () =>
+                    {
+                        var res = await _combat.Wo139ContextAsync(on, "shop_sellerReadyToSell", keeper);
+                        if (on && res == 1) _w139ShopSet[keeper] = true;
+                        if (!on && res is 1 or 0) _w139ShopSet.TryRemove(keeper, out _);
+                        Console.WriteLine($"MP-W139 joiner: {keeper} {(on ? "ready to sell here (the host's keeper is)" : "no longer ready to sell")} -- shop_sellerReadyToSell {res switch { 1 => "set", 0 => "already so", null => "no answer", _ => $"not set ({res.Value.ToString(CultureInfo.InvariantCulture)})" }}");
+                    });
                 }
                 return;
             case "w139_outcome":   // <stopId> <result> <guard> <paid> [x y z] (joiner)

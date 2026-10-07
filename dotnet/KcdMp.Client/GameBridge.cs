@@ -5918,6 +5918,8 @@ public partial class GameBridge(ClientConfig config)
             case "w139_outcome":
             case "w139_stop":
             case "w139_horse":
+            case "w139_shops":
+            case "w139_shop":
             case "w139_punish":
             case "w139_status":
                 Wo139OnEvent(name, arg);

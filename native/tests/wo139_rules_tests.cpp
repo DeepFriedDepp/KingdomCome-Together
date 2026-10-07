@@ -38,6 +38,8 @@ int wo139_rules_tests(int* passed) {
     RCHECK(context_allowed("crime_ignoredCorpse") && context_allowed("crime_ignoredUnconsciousBody"), "the found-body contexts");
     RCHECK(context_allowed("crime_ignoredNPCHitVolume"), "the witnessed-hit context (WO-68)");
     RCHECK(context_allowed("crime_ignoredHorseTheft_Horse"), "a legal horse (the lent-horse quests' own lever)");
+    RCHECK(context_allowed("shop_sellerReadyToSell"), "a keeper ready to sell (the dialogue's Trade option, mirrored from the host's world)");
+    RCHECK(!context_allowed("shop_sellerReadyToSellX") && !context_allowed("activity_seller"), "...exactly that one shop context");
     RCHECK(!context_allowed("combat_forcedTarget"), "a Relation context is not an entity one (op 3 owns it)");
     RCHECK(!context_allowed("crime_isAuthority") && !context_allowed("crime_disableReport"), "nothing else, not even another crime context");
     RCHECK(!context_allowed("") && !context_allowed(nullptr), "empty / null refused");

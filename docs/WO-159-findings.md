@@ -433,6 +433,26 @@ At the maintainer's word: the three start saves are made from his own saves inst
   joiner's agent prints it after a minute with a trespass. **Not verified live yet** (the DLL ships with the installer;
   at the game's start the native log says `WO139-BUILD trespass HUD gate ARMED ... (the HUD's own refresh)`).
 
+### No Trade option for the joiner
+
+* **Field (0.45.8):** both players could talk to a merchant; the joiner saw no option to sell **[L]** (no bundle of that
+  talk; the earlier joiner bundle's only conversation was an open-world greeting).
+* **The game's rule [data]:** the shop dialogue (`open_world/shop/nakupovani_z_dialogu_muz|zena.xml`, `dec1` `Type="Shop"`)
+  is offered only when `Port('seller_in_shop')`, which `utils/shop/is_seller_in_shop.xml` computes as
+  `CheckEntityContext(seller, "shop_sellerReadyToSell")`. That entity context (`Libs/Tables/ai/ScriptContext.xml`: the
+  seller has the shop chat and dialogue) is held by the keeper's **work activity** (`AI/profession/seller/so_seller.xml`,
+  the blacksmith's, the tavern's bartender/innkeeper, the spa) while the shop is open. On the joiner the keeper is a
+  paused copy: its activity never runs (and WO-157's talk reset clears it on purpose), so the context is never on.
+* **The fix:** the host names its keepers ready to sell near either player every 10 s (`soul:HasScriptContext`,
+  `KCD2MP_W139HostShops`, at most 60, within 300 m); the agent sends the list on a change and every 30 s
+  (`CrimeHostShops = 8`, append-only, the horses' parts); the joiner sets the same context on those copies through the
+  DLL's context op (allowlist + `shop_sellerReadyToSell`, no new hook) and clears it when a keeper leaves the list or the
+  session ends -- only what it set itself (the engine counts the context per entity); a copy streamed in again (a new
+  entity id) gets it again. The host's own hours decide: a shop closed in the host's world has no Trade on the joiner.
+* Synthetic WO-139 131/131 (8 new: H and K), native 409/409 (the allowlist), client 1,167, relay 62.
+  **Not verified live yet**; open there: whether the joiner's Trade then opens the shop window on a copy whose own
+  `#OpenShop` link never ran (WO-157 3b.4 saw "Trade closed at once" on a copy stuck in a state).
+
 ## Pocketed (outside this WO)
 
 1. **A prologue recap** would have to play somewhere the engine draws video (in the world, e.g. right after the load);
