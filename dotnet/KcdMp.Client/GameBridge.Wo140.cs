@@ -708,7 +708,10 @@ public partial class GameBridge
 
     private async Task Wo140SeparateTickAsync()
     {
-        bool sep = Wo140SeparateNow;
+        W160NoteJoinActivity();   // WO-160 2: a join's activity keeps the verdict quiet for 60 s after it ends
+        // WO-160 2: the verdict needs the mod's own, recent "world" answer and no join activity -- a stale "World" kept from a
+        // game that crashed, a game at its main menu, a join's load: silent.
+        bool sep = Wo140SeparateNow && await W160SeparateAllowedAsync();
         long now = Environment.TickCount64;
         if (sep != _w140Separate)
         {

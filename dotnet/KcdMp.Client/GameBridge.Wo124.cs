@@ -248,12 +248,14 @@ public partial class GameBridge
         if (w == GameWhere.Unknown) return;
         if (_where != w) Console.WriteLine($"MP-JOIN joiner: the game is at {(w == GameWhere.Menu ? "the MAIN MENU" : w == GameWhere.World ? "a loaded world" : "a load")} (asked the mod)");
         _where = w;
+        if (w == GameWhere.World) W160WorldConfirmed(); else W160WorldGone();   // WO-160 2: the mod's own word is the proof of a world
     }
 
     /// <summary>"[CryAction] LoadGame: '...'" -- the save's data is being read (from the menu: after the level load).</summary>
     private void Wo124OnLoadStarted()
     {
         _where = GameWhere.Loading;
+        W160WorldGone();
         Wo136OnLoadSeen("load");   // WO-136: nothing touches an NPC until the world has loaded
         if (_jj is { LoadStarted: not null } j) { if (j.LoadGameUtc == default) j.LoadGameUtc = DateTime.UtcNow; }
     }
@@ -262,6 +264,7 @@ public partial class GameBridge
     private void Wo124OnSaveLoadAccepted(string display)
     {
         _where = GameWhere.Loading;
+        W160WorldGone();
         Wo136OnLoadSeen("accepted");   // WO-136
         if (_combatRoleApplied && _isDamageAuthority) { Wo125HostOnLoadAccepted(display); return; }   // WO-125: the host's world changes
         if (_jj is { LoadStarted: { } t } j && display.Equals($"playline{j.Playline}/{j.Name}.whs", StringComparison.OrdinalIgnoreCase))
@@ -286,6 +289,7 @@ public partial class GameBridge
     private void Wo124OnLoadFailedToMenu()
     {
         _where = GameWhere.Menu;
+        W160WorldGone();
         _leaveInProgress = false;
         Console.WriteLine("MP-JOIN joiner: the engine reports a failed load and is back at the MAIN MENU");
         if (_jj is { LoadFailed: { } f }) f.TrySetResult(true);
@@ -296,6 +300,7 @@ public partial class GameBridge
     {
         if (_where != GameWhere.Menu) Console.WriteLine("MP-JOIN joiner: the main menu is up");
         _where = GameWhere.Menu;
+        W160WorldGone();
         _autoNextUtc = DateTime.UtcNow.AddSeconds(3);
         if (_gameQuitting)
         {
@@ -317,6 +322,7 @@ public partial class GameBridge
     private void Wo124OnGameplayStarted()
     {
         _where = GameWhere.World;
+        W160WorldConfirmed();   // WO-160 2: a world just loaded in this game process
         Wo136OnGameplayStarted();   // WO-136: the settle, then the held frames
         Wo151OnGameplayStarted();   // WO-151 3.7: the weather applied memory goes; a joiner re-applies the host's
         Wo125HostOnGameplayStarted();
@@ -355,6 +361,13 @@ public partial class GameBridge
             return;
         }
         bool fromWorld = _where == GameWhere.World && _joinFromWorldOnce;   // WO-125: after leaving for the host's new world
+        // WO-160 2: "your host is in a shared world, quit and start again" needs the mod's own word that a world is loaded (the agent's
+        // _where outlives a game that crashed without a quit line: the field's new process was still at its main menu)
+        if (_where == GameWhere.World && !fromWorld && !_needsMenuTold && !Wo160Rules.NeedsMenuToldAllowed(W160ConfirmedAgeMs()))
+        {
+            await W160AskWhereIfDueAsync();
+            return;
+        }
         if (_where == GameWhere.World && !fromWorld && !_needsMenuTold)
         {
             _needsMenuTold = true;
@@ -981,6 +994,7 @@ public partial class GameBridge
         // ghost spawn into the new game at its menu and crashed it (observed). The join tick stays quiet
         // meanwhile: _gameQuitting blocks it until the next "main menu" line.
         _where = GameWhere.Menu;
+        W160WorldGone();
         _gameQuitting = true;
         SetJoinedWorld(false);
         Wo125Sweep("game quit");

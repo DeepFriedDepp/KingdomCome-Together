@@ -5277,7 +5277,7 @@ end
 
 -- Where the game is: the agent asks once per connection (and after a load
 -- the log lines say it). "menu" = no player entity.
-function KCD2MP_Wo124Where()
+function KCD2MP_Wo124WhereNow()
     local where = "menu"
     local okL, loading = pcall(function() return Game.IsLoadingEngineSaveGame and Game.IsLoadingEngineSaveGame() end)
     if okL and loading == true then
@@ -5288,6 +5288,11 @@ function KCD2MP_Wo124Where()
         local ok, d = pcall(System.GetEntityByName, "Dude")
         if ok and d then where = "world" end
     end
+    return where
+end
+
+function KCD2MP_Wo124Where()
+    local where = KCD2MP_Wo124WhereNow()
     KCD2MP_EmitEvent("wo124_where", where)
     return where
 end
@@ -17723,6 +17728,21 @@ end
 function KCD2MP_W140Separate(on, text)
     local w = KCD2MP.w140
     if on then
+        -- WO-160 2: "You loaded your own save" is only ever true in a loaded world. The agent's own gate (the mod's recent
+        -- "world" answer, no join activity) comes first; this is the mod's second look. At the main menu, or while a load
+        -- runs, the toast stays silent (a stale agent state fired it ~20 s before a join's load began, 2026-10-07).
+        local where = "world"
+        if KCD2MP_Wo124WhereNow then
+            local okW, wv = pcall(KCD2MP_Wo124WhereNow)
+            if okW and type(wv) == "string" then where = wv end
+        end
+        if where ~= "world" then
+            w.sepHeld = (w.sepHeld or 0) + 1
+            if w.sepHeld % 30 == 1 then
+                mp_log(string.format("WO160-SEPARATE held at the %s -- no 'own save' verdict without a loaded world (held %d)", where, w.sepHeld))
+            end
+            return
+        end
         local first = w.sep == nil
         w.sep = { text = tostring(text), at = os.clock() }
         w.stats.sepSaid = w.stats.sepSaid + 1
