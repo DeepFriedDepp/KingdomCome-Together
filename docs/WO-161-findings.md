@@ -238,7 +238,7 @@ starts from them, not from a guess:
 Done as 0.3 decided, per symptom: nothing was "the same fault as WO-160 §1.8", so **no fix was folded into the wake path**.
 9.4 (silent damage) is Phase 1's rule — built, counted and named on both machines. 9.1 (the sleeping NPC) is recorded for
 Part B and not fixed (the WO's own rule). 9.2 (the phantom stance on the host) and 9.3 (a swing and no combat) are separate,
-not fixed, and each has an **eye-test in the checklist** (items 165–166 below) that names the lines to look at. What the
+not fixed, and each has an **eye-test in the checklist** (items 166 and 167; 9.1's is item 169) that names the lines to look at. What the
 joiner's agent now logs for 9.3: the first blow lands before combat mode (37 ms in the field) — `WO161-HIT … shown=` and
 `MP-W132 engage on` are on the same machine's log within a second of each other, so the order can be read.
 
@@ -253,3 +253,78 @@ joiner's agent now logs for 9.3: the first blow lands before combat mode (37 ms 
 | `kcd_launcher.log`, `kcdmp-native.log` (root leftovers, already ignored) | `research/root-leftovers/` | session artefacts |
 | `KCDC_Review/` (an empty folder, untracked) | removed | nothing in it |
 | everything else at the root | unchanged | `AUTHORS`, `Directory.Build.props`, `KCD2-MP.sln`, `LICENSE`, `NOTICE`, `README.md`, `VERSION` and the source folders (`KCDMP_launcher`, `assets`, `docs`, `dotnet`, `installer`, `kdcmp`, `native`, `tools`); `release/` and `research/` are ignored build output and private notes. There is no `.gitattributes` or `.editorconfig` to keep |
+
+## Phase 6 — README and LAUNCHING (what was stale, and what backs the new wording)
+
+Method: the WO's grep over `README.md` and `docs/LAUNCHING.md` (`holds the host`, `real human`, `live-tested`, `not yet`,
+`reviewed, not observed`, `unverified`, every `0.4x.` version string). A claim stays only if a checklist item or a tester log
+backs it; the three-level evidence legend was kept, and its "scripted partner" level now points at the checklist that asks two
+people. **The credit and licence section (from "License and provenance" to the last line) is untouched.**
+
+| Where | The claim | Verdict | What backs the new wording |
+|---|---|---|---|
+| README badge | `main-0.46.0` | rewrite → 0.46.5 | `VERSION` (the maintainer's string) |
+| README "Two version numbers" | main is ahead of the last published installer | rewrite into a current-version block: 0.46.5, five plain-words bullets, a known-not-fixed paragraph | this file; checklist 150–154, 162–170 |
+| README legend (`not yet with two people`, `Not yet proven`) | definitions | keep; the 🧪 level gains the checklist pointer | `docs/TWO-PLAYER-CHECKLIST.md` |
+| README "Joining" row | "waits at the main menu, clicks CONNECT" | rewrite (Join Game); a **Start Game / Join Game** row added | the testers' first 0.45.8 pair: the menu armed by the launcher, 5 joins (`ready sent for join`) on the joiner, 5 `resume join` on the host |
+| README "Joining holds the host's world" | "(until 0.42.8 it kept running)" | rewrite (history cut); stays 🧪 | the testers' host logs show each join resume; the standstill itself is checklist-confirmed only |
+| README "Voice chat" | "nobody has confirmed hearing the other yet" | rewrite → "no tester has reported hearing the other (checklist item 124)" | checklist 124 |
+| README "Picking herbs" | "stands … 0.43.0 tutorial session … `mp_avatar_herbs on`" | rewrite: the plain clip, `off` = stand; ⚠️ | WO-160 §5 (clip accepted solo), checklist 156 |
+| README evidence cells and their history parentheses | "new / changed / fixed in 0.4x.y" | cut (24 suffixes); the history is in the release notes and `docs/FEATURE-HISTORY.md` | — |
+| README "Cutscenes" gap | "0.43.0 helps a scene…" | rewrite (version cut) | — |
+| README "How to play with a friend" steps 2–3 | the CONNECT clicks | rewrite: Start Game / New adventure / Join Game / Join with a new character / Waiting for the host…; the first-run note | `docs/DISCORD-TEXT.md` (0.45.5), checklist 145–149 |
+| README "Not done": ranged swings | "recorded but not yet wired" | keep (true; named in the known-not-fixed list) | — |
+| README "Not done": auto-detecting "you are in the world" | "the launcher still asks you to confirm" | struck through: Start Game / Join Game say it | WO-159, checklist 147 |
+| README "Not done": the installer on a fresh machine | "Not yet seen on a real fresh machine" | keep (WO-150's B1b and a real UAC "Yes" are still open) | `docs/WO-150-findings.md` |
+| LAUNCHING "KCDMP_launcher" | "CONNECT loads `KCDMP.dll`…" | rewrite: the connect step is the menu's since 0.45.5 | WO-159 |
+| LAUNCHING "Still unverified" | "the launcher has not been run against a real game launch … reviewed, not observed" | rewritten to **one sentence**: it has driven every tester session since 0.45.0 | the testers' launcher logs and sessions since WO-154 |
+| LAUNCHING "The master server chain" (the Flask service, "Not verified: never executed") | stale — the service is gone | cut to a two-line pointer to `docs/MASTER-SERVER.md` and `docs/WO-35-findings.md`; the WO-35 note kept | WO-35 |
+| `docs/TWO-PLAYER-CHECKLIST.md` "Setup" steps 2–3 (found on the way) | the CONNECT clicks | rewrite (Start Game / Join Game) | WO-159 |
+
+## What only two players, or the next session, can verify
+
+* **Everything that is "[not tested]" above:** the verdict path in the game (the host's real NPC hits on an avatar → one
+  `0x72` each → the joiner's `WO161-HIT … applied=yes`), `applied=dup` never appearing, the `shown=`/`reason=` split on real
+  fights; the checklist's items 162–169 are the asks.
+* **The solo live run the WO asked for** (the scripted host's 10 verdicts at the local player, 10 `WO161-HIT` lines, total
+  damage equal to the sum of the verdicts, none unmatched; the 3-enemy fight with a scripted partner and its frame rate; a
+  launcher-started game showing the logo) was **not made**: the game and Steam were not running, starting them would put
+  Steam's cloud copies of old autosaves back into a playline (WO-154's finding) and take the foreground, and the verdict path
+  and the logo's pak are the only things that changed since the last live run. **The game's process is unchanged**: no Lua file
+  and no native file differs from 0.46.0 (`git diff 444caac HEAD -- kdcmp native` is empty), so the frame rate before and
+  after is the same code; the rule's measurement is **waived by identity, not run**, and is asked of the maintainer's own
+  first session. The runbook for the next solo session is: `tools/wo118/start_joiner.py` (the agent as the joiner of the
+  synthetic host), `synthpeer` verbs `hverdict hit 8.9 0 <npc> 0` × 10, then `hverdict hit 8.9 0 <npc> 0 1 7` twice (the same
+  id twice: one `applied=dup`), read `WO161-HIT` and `MP-WO161-STATS`.
+* **A real fight's `shown=no` causes**, **block and parry**, the **phantom stance**, **ganging up**, **the host's lock-on**,
+  **snapping in a brawl** — items 162–169, with the lines to send.
+
+## Pocket list (outside this scope, recorded)
+
+* **The victim's hit test, by replaying the hit** (the study's technique for arrows): call the chokepoint's slot 0x150 with a
+  built hit (attacker = the copy's combat soul, victim = the local player) so the real block, parry and armour decide. Gates:
+  G1 a built hit passes the engine's own guard test, G2 the verdict follows the player's own block state, G3 the delay from
+  the host's row to the contact against the window, G4 no double damage under both paths, G5 the frame rate; an empty or
+  wrong cause crashed this very slot once. Needs its own native probe WO. The wire for it exists: verdict values 3 and 4.
+* **The swing capture gap**: 26–36 % of enemy blows had no captured attack row (chain follow-ups, bites): which attacks bypass
+  the DLL's attack capture.
+* **Snapping** (0.2): the three causes with their fixes (state on the ring, swings on the pose clock, the hold ends with the
+  swing), measured by the correction maximum per window and `fight118.py`'s resume step, not by the over-5 m counter; a
+  `WO161-SNAP` line that carries both. Needs the game's window in front for the measurement.
+* **Shared targeting, host side** (0.1): read the engine's lock-on candidate rule first; then a skirmish add of the host's soul
+  with override 0, and the `mp_fair_crime` window for the host's blow on a guard.
+* **The ganging-up retarget**: a stickier `wo136::decide()` (hysteresis keyed to the other source's damage), once it can be measured.
+* The Cuman brawl and the Moravians' flags (set pieces), the standing dead copy, bows — as in WO-160's pocket.
+* The checklist's per-WO sections make a very long page; a condensed tester page per release would help the testers (not built).
+* `logs/` (248 MB of tester bundles) sits in the working tree, now git-ignored; whether it moves under `research/` is the
+  maintainer's.
+
+## Standing rules checked
+
+Modding Tools build only; no game was started, so no save was touched (the playlines are backed up, 412 files, and no launch
+followed); no native line was written (so no RVA, export, slot, hook or thread-id question arose); protocol changes are
+append-only (a new pair 0x72/0x73, no existing byte or length changed, protocol version 10); no Lua depends on a debug console
+command; no window, key or mouse; no quest NPC's logic touched; no launcher setting, consent flag or Windows security touched;
+privacy: no player name, username, address or machine path in any file this WO committed, and no tester log line was copied
+(counts only); no external project or person is named (the reference study is "the study"). Soak waived by the maintainer's
+standing rule, said in the build record.
