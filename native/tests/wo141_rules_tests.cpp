@@ -85,6 +85,21 @@ int wo141_rules_tests(int* passed) {
     ACHECK(gave_up(8, 0) && gave_up(30, 299.9), "WO-160: the eighth refusal: not asked again for 300 s");
     ACHECK(!gave_up(8, kGiveUpRetryS) && !gave_up(8, 1e6), "WO-160: ...and asked again after that");
     ACHECK(kGiveUpRetryS >= 5 * kBackoffS, "WO-160: the give-up window is long against the 15 s retries it replaces");
+    // WO-160 (wake): the game's own text of a state decides whether a body is still in the night's undress
+    ACHECK(sleep_outfit_text("Stance Stance: lying Using object: WUID:(SmartObject)D85 smartObjectRightSide[Bed.bed_high_double3_x], cart slot: any; ChangeEquipment Equipment stash inventory: WUID:(DynamicLinkableObject)22A stash[Chest/chest10_x] Equipment preset filter: sleepUnequip Outfitting mode: Unequip InstantPreSearch: included; "),
+           "WO-160: the blacksmith's field state is a sleep undress");
+    ACHECK(sleep_outfit_text("ChangeEquipment Equipment stash inventory: WUID:(DynamicLinkableObject)195 stash[Chest/c] Equipment preset filter: sleepSoldierUnequip Outfitting mode: Unequip InstantPreSearch: included; "),
+           "WO-160: a soldier's sleep undress too");
+    ACHECK(!sleep_outfit_text("ChangeEquipment Equipment stash inventory: WUID:(DynamicLinkableObject)15A stash[Chest/c] Equipment preset filter: guard_normal Outfitting mode: Equip InstantPreSearch: included; "),
+           "WO-160: guard armour is an outfit on purpose, not a sleep undress");
+    ACHECK(!sleep_outfit_text("ChangeEquipment Equipment preset filter: spaBath Outfitting mode: Unequip InstantPreSearch: included; "),
+           "WO-160: the bath's undress is on purpose too");
+    ACHECK(!sleep_outfit_text("Unstance Unstance: seller2 Using location object: WUID:(SmartObject)620; ") && !sleep_outfit_text("") && !sleep_outfit_text(nullptr),
+           "WO-160: no equipment element, no sleep undress");
+    ACHECK(wake_dress(true, kStanding, true) && wake_dress(true, 0, true) && wake_dress(true, kSitting, true),
+           "WO-160: awake in the host's world and still in the night's undress: dressed");
+    ACHECK(!wake_dress(true, kLying, true), "WO-160: lying in the host's world: the sleep stays");
+    ACHECK(!wake_dress(true, kStanding, false) && !wake_dress(false, kStanding, true), "WO-160: not a sleep undress, or the switch off: nothing"); 
 
     // the host's capture: a change now, an activity again every 10 s, "none" once
     ACHECK(send_due(true, true, 0) && send_due(true, false, 0), "a change is sent at once");

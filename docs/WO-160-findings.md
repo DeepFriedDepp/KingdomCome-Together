@@ -20,12 +20,25 @@ and unstance are released the game's own way first). Solo, on 13 bodies in a tow
 refused, all three shopkeepers lost their shop element**; this build **13 placed, no error line, every shop kept**,
 across a real 8-hour skip too. The false "You loaded your own save" at join (a stale "World" in an agent that outlived a
 crashed game) cannot fire without the mod's own recent word that a world is loaded and 60 s after any join activity. A
-partner's conversation now stands the NPC still on the other machine. Not delivered: the naked NPC after a wait or a
-sleep (it needs the host's equipment on the wire), and the testers' 20-second dead talks are **not reproduced solo**.
+partner's conversation now stands the NPC still on the other machine.
+
+**Second pass (the maintainer's correction: naked NPCs were never a problem before, they went away when the host reloaded,
+so it is our code; and "the joiner cannot talk to traders or NPCs" is the primary goal).** Right on both. It is the same
+fault as the dead talks, found by building the field's state solo (§1.8): a copy is **paused**, so it never runs the NPC's
+own morning routine; through a night or a wait it keeps the night the game put it to (the `sleepUnequip` undress, the
+sleeping contexts, the sleep buff), and our placement stood it up *in that state* — naked, and a talk to it never started
+(`CanTalk` false, no dialogue request at all). Separately, a placement the planner **refused** left the loaded state holding
+the demand it could not meet, and a talk resumes the brain, which tries to meet it: the field's 20-second waits (reproduced:
+a seated-by-refusal copy, no dialogue in 24 s). Both are fixed in the DLL (§1.8): a body shown awake whose state still holds
+the sleep undress is placed from a cleared state with no equipment element, so the planner takes the sleep extras off and
+dresses it; a refused placement makes the loaded state say what the body is. Solo, 8 of 8 night sleepers were placed
+seated, **dressed, no extras, no planner line** (before: 8 of 8 naked), and a talk to the innkeeper and the woodworker
+copies started in **0.4 s** (before: no dialogue at all); four refused copies all took a talk in 0.4 s (before: one of two
+never did). **Not proven with two players** — the testers' items 150, 153 and 154 are the proof.
 
 | # | Item | Result | Mark |
 |---|---|---|---|
-| 1 | The copy's torn context | root cause found and fixed; talk reset made honest; settle after a skip; naked NPC **not** fixed | [L][syn][unit][native] |
+| 1 | The copy's torn context, the naked NPC, the dead talks | torn context fixed (§1.4); **naked NPC fixed in the DLL (§1.8)**; refused placements no longer leave an unreachable demand (§1.8); two-player proof pending | [L][native]; [syn][unit] for §1.4 |
 | 2 | False "own save" at join | gated on the mod's own proof + 60 s quiet; real own-save still fires | [syn][unit]; [not tested] live join |
 | 3 | The NPC in conversation keeps walking | the non-talking machine holds it (host freezes, joiner holds the copy) | [L] both halves; [syn][unit]; [not tested] two players |
 | 4 | Items 2–8 of the 0.45.6–0.45.8 notes | all four fixes are in this build, with their log lines | [code] |
@@ -129,10 +142,8 @@ Two more findings, both from the solo runs:
 * **After a time skip** (this player's own sleep or wait ended, or the host's announced skip was applied) every copy the
   joiner holds is released and placed again (`WO160-CTX settle after …: N copies`), after three seconds for the game's
   own skip sim, at most 80, at most one settle in five seconds.
-* **Not built (said plainly):** the host's **equipment state is not on the wire**, so a copy undressed by the game's
-  night routine (`ChangeEquipment … sleepUnequip`) keeps the current equipment element (WO-144 4.5, kept, not cleared) but
-  is not dressed again when the host's NPC is. That is the field's naked NPC. It needs the host's slot 4 (a preset name
-  and the mode) on the WO-141 wire and a way to build the element on the joiner [pocket].
+* **The naked NPC was left open in the first pass** (it was pocketed as "needs the host's equipment on the wire"); the
+  maintainer's correction was right and it is built in §1.8 without any new wire data.
 
 ### 1.5 The crash this work found, and what it changed [L]
 
@@ -148,10 +159,8 @@ slots are never emptied by this mod.
 Through the mod's own `BasicAIActions.OnTalk` wrap on puppeted copies (the stream a scripted host), the dialogue started in
 **0.40–0.49 s on 7 of 9 copies**, among them three whose stream was walking away at 1.4 m/s (the copy dragged 5–12 m). The
 two that did not start: `ttkc_man_4`, a town guard on duty (his state is `guard_normal` + a guard-post behaviour: the game's
-own refusal), and `ttkc_man_11` dragged away at 45–50 m. **The testers' 20-second waits are not reproduced solo.** The
-candidates left are the ones the logs name: a seated or working copy whose brain cannot get back into its activity
-(`Agent is stuck` while the dialogue waited), and the host's NPC walking on while the joiner's copy is written to its
-walk (§3, which removes both the walking and the stream's drag). The testers' check is item 150 of the list.
+own refusal), and `ttkc_man_11` dragged away at 45–50 m. Those were **standing, never-placed copies**: the first pass did not
+reproduce the 20-second waits because it did not test the field's states. §1.8 does, and finds them.
 
 ### 1.7 Acceptance
 
@@ -160,7 +169,69 @@ walk (§3, which removes both the walking and the stream's drag). The testers' c
 | Solo: planner error rate on a puppeted town ~0 after the fix | 13 placements, 0 refusals; a second wave on bodies the brains had moved: 3 `…counldn't reach…` lines on the tool users, no refusal, all in step | [L] |
 | ...and stays there across a time skip | a real 8 h sleep skip (clock 551,245 → 580,104 s) with 13 placed copies paused: **0** planner lines during and after, **0** in the 8 s after the settle, **0** in the next 40 s | [L] |
 | Scripted talk on a shopkeeper copy starts in < 2 s | 0.40–0.49 s on 7 copies (shopkeepers `ttkc_man_11`'s stall mate, the innkeeper among them) | [L] |
-| Live: a joiner sells to a keeper the host just traded with; no "can't talk to you right now" for an idle keeper; overflow < 50 per hour for copies; no naked NPC after a wait or a sleep | testers (items 150, 153, 154); the naked NPC is not fixed | [not tested] |
+| Solo (§1.8): copies left in the night state through a wait: placed awake, dressed, talked to | 8 of 8 placed seated and dressed, 0 planner lines; the innkeeper and the woodworker: dialogue in 0.4 s | [L] |
+| Solo (§1.8): copies whose placement was refused: a talk starts | 4 of 4 in 0.4 s (one of two never started before) | [L] |
+| Live: a joiner sells to a keeper the host just traded with; no "can't talk to you right now" for an idle keeper; overflow < 50 per hour for copies; no naked NPC after a wait or a sleep | testers (items 150, 153, 154) | [not tested] |
+
+### 1.8 Second pass: the night state, the refused demand, and what the field's failed talks were
+
+**What the field's failed talks looked like.** Of the 15 never-started joiner talks in the three 0.45.8-era bundles, the last
+planner line for the NPC before the talk shows **the sleep undress in both the current and the loaded state** for 6
+(`ttkc_man_23`, `ttac_procek`, `ttac_blacksmith` twice, `tzel_vavrinec` twice: `ChangeEquipment … Equipment preset filter:
+sleepUnequip / sleepSoldierUnequip … Outfitting mode: Unequip`) and **an empty current state against a demand it could not
+reach** for 7 more (`ttac_blacksmith` ×2, `ttkc_inkeeper` ×2, `ttkc_woman_2`, `tvez_kocour` ×2; `Current state ''`, the
+loaded state a forging or a tool use) [L-field]. The native log has the cause for the blacksmith: at 16:48 the copy was lying
+on a bed in step with the host's; at 17:01 the host's blacksmith worked and the copy was asked for `blacksmith_forging` with
+a tool in hand, **refused** (`exec 0`) every 1.5 s, and stayed lying [L-field].
+
+**Reproduced solo** (a throwaway playline; the world waited to midnight with the game's own wait, so the sleepers lie in their
+beds with the night's state; unpaused controls woken by a further 5 h wait are dressed again and carry no sleep elements, while
+the **paused copies stay undressed with every night element** — eight of eight) [L]:
+
+| State of the copy | What the shipped placement did | Mark |
+|---|---|---|
+| lying, `sleepUnequip`, 3 sleeping contexts + the sleep buff; the host says "awake, standing" | stood up **naked** with the night extras kept (kept by design since WO-144 4.5); `CanTalk` false even resumed for 4 s (`IdleToMove`, `Agent is stuck`); a talk through the mod's wrap: `OnTalk` and **no dialogue request at all** | [L] |
+| placed with an activity the planner **refuses** (a work activity from a seat, tools), no release | the loaded state keeps the refused demand; the next resume of the brain tries to meet it; a copy: **no dialogue in 24 s** | [L] |
+
+**What was built (DLL only, `wo141.cpp`, `wo141_rules.h`; no new address, slot or hook):**
+
+* **Wake.** A body shown awake in the host's world (the host's activity is not lying) whose *current* state still holds the
+  game's sleep undress — decided by the game's own text of the state (the function the research verbs already use, found by its
+  string): an equipment element with `Equipment preset filter: sleep…` **and** `Outfitting mode: Unequip` — is placed from a
+  **cleared loaded state with no equipment element**. The planner then removes the sleeping contexts and the buff and dresses
+  the body (the controls end the same way). Guard armour (`guard_normal`, `Equip`), a party outfit, the bath (`spaBath`) are
+  not sleep undresses and are left alone (native test). It runs from the reconcile as well as from the apply: a host row of
+  **"none"** (a walker, an idler) asked the game for nothing, so a naked copy stayed naked for the whole session; now the body
+  is not "in step" while it is still in the night's undress. The outfit text is read once per equipment element (the game's text
+  function leaks ~100 B a call), at most every 5 s per body. `WO160-WAKE npc=… thread=…` once a body a minute; `mode`-independent;
+  research verb `wake 0|1`; status line `woke_dressed N`.
+* **Neutral on refusal.** Every refused placement (`exec 0`) makes the loaded state say what the body is (its own current
+  activity, hands and equipment): no unreachable demand stays on a body, so a resumed brain has nothing to do and a talk starts.
+  The host's activity stays wanted and is asked again, paced, until the 8-refusal give-up of §1.4. `WO160-NEUTRAL npc=…` once a
+  body a minute; status line `neutral N`.
+
+**Solo results with the final DLL** [L]:
+
+| Test | Result |
+|---|---|
+| 8 night sleepers (naked, lying) given "sitting on bench N" through the shipped path (pause, Lua release, DLL reconcile) | **8 / 8 placed, `eq=-` (dressed), no extras, 0 planner lines** |
+| 4 night sleepers given "awake, standing" | dressed in one go; innkeeper and woodworker copies: **dialogue in 0.40 s** (the innkeeper's is the game's own closed-at-night line) |
+| 13 daytime bodies through the shipped path (the §1.3 test) with the wake code in | 13 / 13, every shop kept, 0 planner lines, **0 wake triggers** (no day copy was taken for a sleeper) |
+| 4 daytime copies with a **refused** placement, then a talk through the mod's wrap | **4 / 4 dialogues in 0.40 s** (the build before: the scribe, no dialogue in 24 s) |
+| The talk matrix on a clean daytime world: untouched standing, placed OK + the mod's talk, placed OK + a plain request, refused | 8 / 8 start in 0.4 s except the one refused copy of the build before neutral |
+
+**Findings that are not about this build.** (1) The first-pass talk acceptance used never-placed copies and a world the
+experiments had not yet worn out; after many night skips and cancelled dialogues in one session even untouched copies stopped
+taking a talk (restart cleared it) — treat solo talk numbers from a long session as void. (2) A 16 h wait makes WO-137's
+quest reader fault ~11.8 k times (guarded, counted, three sites, `wo137::set_send_callback` in the log) — **the same count on
+the session-start build**, so it is not this WO's; pocketed. (3) The `Game.QuickLoad()` and herb items are unchanged.
+
+**The sword.** The report ("the host sees an enemy with a sword, the joiner sees none"; item 9.2 of the earlier notes, never
+investigated) is **not fixed and not investigated as its own item**. What §1.8 changes for it: the draw on a copy
+(`human:DrawWeapon`, WO-40) draws what the copy's *equipment state* holds, and a copy left in `sleepUnequip` /
+`sleepSoldierUnequip` has had its weapons put away in the stash; the wake path returns the default outfit. **Unverified**: the
+solo harness has no way to see a weapon (`IsWeaponDrawn` answers true on an unarmed copy; the inventory's `entity` field does
+not change), so whether a woken soldier shows its sword needs eyes. The checklist's item 160 asks for it.
 
 ## 2. The false "You loaded your own save" at join
 
@@ -276,8 +347,10 @@ them was run live in this WO.
 
 ## Pocket list (outside this scope, recorded)
 
-* The naked NPC after a wait or a sleep (the host's equipment on the WO-141 wire; WO-144 4.5).
-* The testers' 20 s dead talks: the mechanism is not reproduced (§1.6); item 150 is their evidence.
+* The reverse of the wake path: a copy of a body that sleeps in the host's world but is dressed on the joiner (paused copies
+  never undress; the host's sleeper shows dressed on the joiner's screen). Harmless; not built.
+* WO-137's quest reader faults ~11.8 k times (guarded, counted) during a 16 h wait in solo; the same on the session-start build.
+* The sword (§1.8): not investigated; probably the same state, unverified.
 * A residual `…counldn't reach the loaded state…` line now and then on a tool user placed after its brain moved it (3 in a
   second wave of 13); nothing is dismantled by it.
 * The release is still the game's debug reset through Lua (field-proven since WO-118); the native route is the handler's own

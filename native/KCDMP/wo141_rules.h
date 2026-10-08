@@ -184,6 +184,26 @@ inline bool gave_up(int refusals, double sinceGaveUpS) {
     return refusals >= kMissesBeforeGiveUp && sinceGaveUpS < kGiveUpRetryS;
 }
 
+// WO-160 (wake): a copy that was paused through the night keeps the sleep it was put to by the game's own skip simulation: the
+// undress (a ChangeEquipment element, preset "sleepUnequip", mode Unequip), the sleeping contexts and the sleep buff. The host's
+// NPC woke and dressed; the copy is stood up by its placement and stays naked, and a talk never starts (the field's blacksmith,
+// innkeeper and the naked NPCs after a wait; solo: 8 of 8 copies naked after a 5 h wait, the unpaused controls dressed). A body
+// that is shown awake (the host's activity is not lying) and whose current state is that undress is placed from a cleared loaded
+// state with no equipment element, so the planner takes the sleep extras off and dresses it. The game's own text of the state
+// is the test (one function, found by its string, no offset of ours); an outfit on purpose (guard armour, a party, the bath) is
+// not a sleep undress and stays.
+inline bool sleep_outfit_text(const char* stateText) {
+    if (!stateText) return false;
+    const char* e = std::strstr(stateText, "ChangeEquipment");
+    if (!e) return false;
+    const char* f = std::strstr(e, "Equipment preset filter: sleep");
+    const char* m = std::strstr(e, "Outfitting mode: Unequip");
+    return f && m;
+}
+inline bool wake_dress(bool enabled, uint8_t wantedStance, bool sleepOutfit) {
+    return enabled && sleepOutfit && wantedStance != kLying;
+}
+
 // The host's capture: a change is sent at once; an activity that is not "none"
 // is sent again every kRefreshS (a joiner that came late, a lost frame).
 constexpr double kRefreshS = 10.0;

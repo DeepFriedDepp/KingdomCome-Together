@@ -765,8 +765,11 @@ npcs=… worst=[…]` once a minute while there is anything to say.
 
 150. **The joiner sells to a shopkeeper the host just traded with.** The host trades with a keeper (blacksmith, innkeeper,
      a market stall) and walks off; the joiner then talks to the same keeper and chooses Trade, and sells him something.
-     Marker: `mark_sellkeeper`. * The conversation starts within about two seconds (no 20 s wait, no "can't talk to you
-     right now" for an idle keeper) and Trade opens the shop. Note any keeper whose talk does not start, with the time.
+     Do this **early in the session and again after a night** (the field's blacksmith and innkeeper copies were left in their
+     night state). Marker: `mark_sellkeeper`. * The conversation starts within about two seconds (no 20 s wait, no "can't talk
+     to you right now" for an idle keeper) and Trade opens the shop. Note any keeper whose talk does not start, with the time.
+     * kcdmp-native.log `WO160-WAKE` / `WO160-NEUTRAL npc=<keeper>` show the two repairs (a night state dressed; a refused
+       placement made neutral) when one was needed.
      * kcd.log (joiner) `WO157-TALK free npc=…` and no `WO137-TALK resume … timed out`; agent log `MP-W139 joiner: <npc> ready
      to sell here … set` (WO-159's shop context); agent log `WO160-CTX npc=… placed=… released=… loaded=kept
      cleared=no errors_before=… errors_after=…` per copy.
@@ -784,8 +787,10 @@ npcs=… worst=[…]` once a minute while there is anything to say.
      stop stays block-only (`why=w139-stop`) by design.
 153. **Naked-NPC check after a wait.** Wait 2 hours in a town (T, wait), then look at the NPCs on the joiner's screen: how
      many are in underclothes who were dressed on the host's screen? Marker: `mark_naked`. * Write the number and the time.
-     **Known:** this build does **not** fix the naked NPC (WO-160 §1.4, pocketed); the number is the baseline for the next fix.
-     Agent log (joiner) `WO160-CTX settle after …: N copies` shows the post-skip placement ran.
+     **Expected: none** — this build dresses a copy whose state still holds the night's undress while the host's NPC is awake
+     (WO-160 §1.8). kcdmp-native.log (joiner) `WO160-WAKE npc=… state still holds the sleep undress…` per body (once a
+     minute), agent log `WO160-CTX settle after …: N copies`; the status line's `woke_dressed N`. A body that is still naked
+     with no `WO160-WAKE` line for it is a **finding** (send the time and the NPC).
 154. **Naked-NPC check after a sleep.** The same, after a sleep to morning (item 139's way). Marker: `mark_naked`.
      * Also look for the copies being **in step** with the host's NPCs (sitting where they sit) and no flood of planner
        lines: agent log `MP-WO160-STATS` for the minute after the sleep.
@@ -813,6 +818,8 @@ npcs=… worst=[…]` once a minute while there is anything to say.
 160. **A host kill, watched by the joiner.** The host kills an NPC (a bandit, a deer) while the joiner watches from a few
      metres. Marker: `mark_hostkill`. * The NPC falls on the joiner's screen when it dies and not before; no "standing dead
      copy" afterwards. Note the time if it stands up again or stays upright.
+     **And the sword:** an enemy who draws a sword on the host's screen — does the joiner see the sword in its hand? Marker:
+     `mark_odd` right after if not, with the enemy's name (WO-160 §1.8: probably the night's undress, unverified).
 161. **Check from 0.45.5–0.45.8 (in this build).** (a) The prologue recap: the sound plays, the world is silent, and one skip
      skips all (item 149, `mark_recap`; kcd.log `WO159-RECAP sound setup on … / off`). (b) The joiner is never shown a trespass
      warning for a house the host owns or a shop that is open (item 133, kcdmp-native.log `WO139-BUILD trespass HUD gate ARMED`).

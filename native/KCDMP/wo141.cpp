@@ -249,6 +249,10 @@ std::atomic<uint64_t> c_equipKept{0};
 //       unreachable demand). With the stance/unstance released first (the Lua side, KCD2MP_W160Release) the planner placed 13 of
 //       13 solo bodies with no error and every shop kept
 std::atomic<int> g_loadedMode{4};
+// WO-160 (wake): a copy shown awake whose state still holds the game's sleep undress is placed from a cleared state with no
+// equipment element (wo141_rules.h, sleep_outfit_text); research verb `wake 0|1`
+std::atomic<bool> g_wakeDress{true};
+std::atomic<uint64_t> c_wakeDressed{0};
 
 // A new element of a reflected class: the variant holds std::shared_ptr<T>
 // inline (policy as_std_shared_ptr); one reference is taken for the caller.
@@ -503,10 +507,25 @@ int count_extras(uint32_t eid) {
     return k;
 }
 
+// WO-160 (wake): the body's current state still holds the game's sleep undress (the equipment slot is occupied, so the text is read
+// only then; the game's own text of the state is the test -- wo141_rules.h)
+void* equipment_element(void* ctx) {
+    void* cur = static_cast<char*>(ctx) + kCtxCurrent;
+    void* cb = nullptr; void* ce = nullptr;
+    if (!rd(cur, kStateElemsB, &cb) || !rd(cur, kStateElemsE, &ce) || !cb
+        || static_cast<size_t>(static_cast<char*>(ce) - static_cast<char*>(cb)) / 16 <= kSlotEquipment) return nullptr;
+    void* el = nullptr;
+    return rd(cb, kSlotEquipment * 16, &el) ? el : nullptr;
+}
+bool in_sleep_outfit(void* ctx) {
+    if (!equipment_element(ctx)) return false;
+    return R::sleep_outfit_text(state_text(static_cast<char*>(ctx) + kCtxCurrent).c_str());
+}
+
 // The body's loaded state (the context's search state) holds this activity and
 // these tools, nothing else. hands: null = no hand element (WO-141 as before).
 uint8_t build_loaded(uint32_t eid, const R::Activity& want, const KH::Hands* hands, const char* name, KH::Hands* missing,
-                     void** ctxOut) {
+                     void** ctxOut, bool neutral = false) {
     if (missing) *missing = KH::Hands{};
     if (!g_applyArmed) return kApNotArmed;
     void* ctx = ctx_of_eid(eid);
@@ -555,7 +574,20 @@ uint8_t build_loaded(uint32_t eid, const R::Activity& want, const KH::Hands* han
     // the save's leftovers go (contexts, links, buffs, equipment of whatever the
     // body was loaded in); the stance and unstance are ours
     const int lmode = g_loadedMode.load();
-    if (lmode < 2) fcall_void(vslot(loaded, kStateClear), loaded);
+    // WO-160 (wake): is this body awake in the host's world while its own state is still the night's?
+    const bool wake = !neutral && g_wakeDress.load() && a.stance != R::kLying && in_sleep_outfit(ctx);
+    if (wake) {
+        c_wakeDressed.fetch_add(1, std::memory_order_relaxed);
+        static std::unordered_map<std::string, double> wokeLogged;   // one line per body per minute (the retries are paced, not silent)
+        const double t = npcdrive::now_s();
+        double& last = wokeLogged.try_emplace(name ? name : "?", -1e9).first->second;
+        if (t - last >= 60.0) {
+            last = t;
+            logf("WO160-WAKE npc=%s thread=%lu state still holds the sleep undress while the host's body is awake: placed from a cleared state, no equipment element (the planner dresses it and takes the sleep contexts off)",
+                 name ? name : "?", static_cast<unsigned long>(GetCurrentThreadId()));
+        }
+    }
+    if (lmode < 2 || wake) fcall_void(vslot(loaded, kStateClear), loaded);
     bool ok = state_set_slot(loaded, 0, s) && state_set_slot(loaded, 3, u);
     if (hl.p) ok = state_set_slot(loaded, KH::kSlotLeft, hl) && ok;
     if (hr.p) ok = state_set_slot(loaded, KH::kSlotRight, hr) && ok;
@@ -571,7 +603,7 @@ uint8_t build_loaded(uint32_t eid, const R::Activity& want, const KH::Hands* han
                 if (sl == 3) continue;
                 if ((sl == KH::kSlotLeft && hl.p) || (sl == KH::kSlotRight && hr.p)) continue;
                 SharedPtr sp{};
-                if (sl < cn && (sl != 5)) {
+                if (sl < cn && (sl != 5) && !(wake && sl == kSlotEquipment)) {
                     rd(static_cast<char*>(cb) + sl * 16, 0, &sp.p);
                     rd(static_cast<char*>(cb) + sl * 16, 8, &sp.ctrl);
                     if (!(sp.p && sp.ctrl && ilock_add(static_cast<char*>(sp.ctrl) + 8, 1))) sp = {};
@@ -605,7 +637,7 @@ uint8_t build_loaded(uint32_t eid, const R::Activity& want, const KH::Hands* han
     // action ChangeEquipmentFromDefault has failed! Action for request 'KCDMP one-shot'", "Couldn't
     // find actions to get NPC into game loaded state" with "ChangeEquipment ... sleepUnequip" in the
     // current state (the field: 102 / 60 / 40 lines on three copies).
-    if (ok && g_keepEquipment && lmode != 4) {
+    if (ok && g_keepEquipment && lmode != 4 && !wake) {
         void* cur = static_cast<char*>(ctx) + kCtxCurrent;
         void* cb = nullptr; void* ce = nullptr;
         if (rd(cur, kStateElemsB, &cb) && rd(cur, kStateElemsE, &ce) && cb
@@ -620,6 +652,13 @@ uint8_t build_loaded(uint32_t eid, const R::Activity& want, const KH::Hands* han
     }
     return ok ? kApOk : kApBuild;
 }
+
+// WO-160: a refused placement left the loaded state holding the demand the planner could not meet (the field: a current state of
+// '' against a forging or a tool use). The body's brain tries to meet it whenever it runs, and a conversation that resumes the
+// brain waited 20 s for the dialogue (solo: a copy placed with a refused activity: no dialogue in 24 s). The loaded state is made
+// to say what the body is (its own current activity); the host's activity stays wanted and is asked again, paced.
+std::atomic<uint64_t> c_neutral{0};
+void neutralise_loaded(uint32_t eid, const char* name);
 
 // hands: null = WO-141's apply exactly as before (no hand element).
 uint8_t apply_now(uint32_t eid, const R::Activity& want, uint8_t* execResult, const KH::Hands* hands = nullptr,
@@ -662,6 +701,9 @@ struct Desired {
     int handsTries = 0;          // applies with every tool owned that did not bring the body in step
     int refusals = 0;            // WO-160: the planner's own refusals of this activity (exec 0); set_desired starts it again
     double gaveUpAt = -1e9;      // WO-160: when kMissesBeforeGiveUp was reached
+    double wakeCheckAt = -1e9;   // WO-160 (wake): when the body's outfit was last read
+    bool wakeWanted = false;     // ... and what it said: still the night's undress while the host's body is awake
+    void* wakeElem = nullptr;    // ... for this equipment element (the game's text of a state leaks ~100 B a call: read once per element)
 };
 std::unordered_set<std::string> g_seatedHandsNoted;   // bodies told once: seated, their hands stay as they are
 std::unordered_set<uint64_t> g_bedSitNoted;          // WO-144 5: beds told once (a player's bed-edge sit shown lying)
@@ -735,6 +777,22 @@ void capture_tick(double now) {
     flush_rows();
 }
 
+void neutralise_loaded(uint32_t eid, const char* name) {
+    R::Activity now;
+    if (!read_activity(eid, &now)) return;
+    void* ctx = nullptr;
+    const uint8_t r = build_loaded(eid, now, nullptr, name, nullptr, &ctx, true);
+    c_neutral.fetch_add(1, std::memory_order_relaxed);
+    static std::unordered_map<std::string, double> told;   // one line per body per minute
+    const double t = npcdrive::now_s();
+    double& last = told.try_emplace(name ? name : "?", -1e9).first->second;
+    if (t - last >= 60.0) {
+        last = t;
+        logf("WO160-NEUTRAL npc=%s the planner refused the host's activity: the loaded state now says what the body is (%s); the host's activity is asked again, paced",
+             name ? name : "?", applied_name(r));
+    }
+}
+
 void reconcile_tick(double now) {
     if (!g_applyOn.load() || !g_applyArmed) return;
     for (auto it = g_desired.begin(); it != g_desired.end();) {
@@ -773,7 +831,20 @@ void reconcile_tick(double now) {
             logf("WO143-HANDS %s sits, lies or kneels: its hands stay as they are (a seated copy's take would stand it up)", d.name.c_str());
         const bool useHands = hands_ride(d);
         const bool handsOk = !useHands || (read_hands(d.eid, &curHands) && curHands == d.hands);
-        if (R::same_body(cur, d.a) && handsOk) {
+        // WO-160 (wake): in step is not enough while the body is still in the night's undress and awake in the host's world --
+        // a host row of "none" (a walker, an idler) asks the game for nothing, so a copy stayed naked for the whole session
+        bool wakePending = false;
+        if (g_wakeDress.load() && d.a.stance != R::kLying && !R::is_avatar_name(d.name.c_str()) && !R::gave_up(d.refusals, now - d.gaveUpAt)) {
+            if (now - d.wakeCheckAt >= 5.0) {
+                d.wakeCheckAt = now;
+                void* wc = ctx_of_eid(d.eid);
+                void* el = wc ? equipment_element(wc) : nullptr;
+                if (!el) { d.wakeWanted = false; d.wakeElem = nullptr; }
+                else if (el != d.wakeElem) { d.wakeElem = el; d.wakeWanted = in_sleep_outfit(wc); }
+            }
+            wakePending = d.wakeWanted;
+        }
+        if (R::same_body(cur, d.a) && handsOk && !wakePending) {
             hold_to(owns);
             if (!d.matched) logf("WO141-APPLY %s in step: %s%s", d.name.c_str(), describe(d.a).c_str(), useHands ? hands_text(d.hands).c_str() : "");
             d.matched = true; d.pace.misses = 0; KH::log_reset(d.logPace); d.handsTries = 0; d.refusals = 0;
@@ -801,7 +872,9 @@ void reconcile_tick(double now) {
         c_applies.fetch_add(1); ++d.applies;
         if (r == kApOk && useHands && g_handApplied) g_handApplied(d.eid);
         (r == kApOk ? c_applyOk : c_applyFail).fetch_add(1);
+        if (r == kApOk && res != 0) d.wakeCheckAt = -1e9;   // WO-160 (wake): read the outfit again at once
         if (r == kApOk && res == 0) {
+            neutralise_loaded(d.eid, d.name.c_str());   // WO-160: no unreachable demand stays behind on the body
             if (++d.refusals == R::kMissesBeforeGiveUp) {
                 d.gaveUpAt = now;
                 logf("WO160-CTX npc=%s gave_up refusals=%d -- the game's planner will not place %s; the body is shown by the writer alone (asked again after %.0f s or when the host's activity changes)",
@@ -997,6 +1070,7 @@ void research_watch() {
         else if (k >= 2 && !std::strcmp(verb, "slots")) cmd_slots(a1);
         else if (k >= 2 && !std::strcmp(verb, "hardreset")) cmd_hardreset(a1, k >= 3 ? rest : "");
         else if (k >= 2 && !std::strcmp(verb, "mode")) { g_loadedMode = atoi(a1); logf("WO160-R loaded mode = %d", g_loadedMode.load()); }
+        else if (k >= 2 && !std::strcmp(verb, "wake")) { g_wakeDress = atoi(a1) != 0; logf("WO160-R wake dress = %d", g_wakeDress.load() ? 1 : 0); }
         else if (k >= 3 && !std::strcmp(verb, "mk")) cmd_mk(a1, rest);
         else if (k >= 3 && !std::strcmp(verb, "want")) cmd_want(a1, rest);
         else if (!std::strcmp(verb, "applyon")) { g_applyOn = true; logf("WO141-R apply on (research)"); }
@@ -1016,15 +1090,16 @@ void research_watch() {
 }
 
 std::string status_text() {
-    char b[400];
+    char b[480];
     _snprintf_s(b, sizeof b, _TRUNCATE,
-                "read %s apply %s | capture npcs=%d player=%d period=%ums | apply %s desired=%zu | rows %llu reads %llu applies %llu (ok %llu fail %llu) leaves %llu shows %llu equip_kept %llu",
+                "read %s apply %s | capture npcs=%d player=%d period=%ums | apply %s desired=%zu | rows %llu reads %llu applies %llu (ok %llu fail %llu) leaves %llu shows %llu equip_kept %llu woke_dressed %llu neutral %llu",
                 g_readArmed ? "armed" : "NOT ARMED", g_applyArmed ? "armed" : "NOT ARMED", g_captureNpcs.load() ? 1 : 0,
                 g_capturePlayer.load() ? 1 : 0, g_periodMs.load(), g_applyOn.load() ? "on" : "off", g_desired.size(),
                 static_cast<unsigned long long>(c_rowsSent.load()), static_cast<unsigned long long>(c_reads.load()),
                 static_cast<unsigned long long>(c_applies.load()), static_cast<unsigned long long>(c_applyOk.load()),
                 static_cast<unsigned long long>(c_applyFail.load()), static_cast<unsigned long long>(c_leaves.load()),
-                static_cast<unsigned long long>(c_shows.load()), static_cast<unsigned long long>(c_equipKept.load()));
+                static_cast<unsigned long long>(c_shows.load()), static_cast<unsigned long long>(c_equipKept.load()),
+                static_cast<unsigned long long>(c_wakeDressed.load()), static_cast<unsigned long long>(c_neutral.load()));
     return b;
 }
 

@@ -25,6 +25,10 @@ check live is `docs/TWO-PLAYER-CHECKLIST.md`, items 150–161.
   code: 2 of 13) and every shop was kept, including across an 8-hour skip. After a time skip the copies are placed again.
 - **No false "You loaded your own save" when joining.** The mod now needs its own recent word that a world is loaded, and is
   silent for 60 s around a join. Loading your own save first and then pressing CONNECT is still caught at once.
+- **NPCs are no longer left naked on the joiner's screen, and talks to them start.** A copy is paused, so it never ran its
+  own morning: through a night or a wait it kept the game's sleep undress and sleeping state, and was stood up in it —
+  naked, and a conversation never started. A copy shown awake whose state still holds the night is now dressed by the game's
+  own planner. A placement the game refused no longer leaves behind a demand a talk then waited 20 s for.
 - **A conversation stands the NPC still on the other screen.** When one of you talks to an NPC, it stops on the other
   player's screen for the whole conversation.
 - **A joiner's own horse comes when he whistles.** A horse bought or bonded by the joiner is told to the host, and his
@@ -34,9 +38,10 @@ check live is `docs/TWO-PLAYER-CHECKLIST.md`, items 150–161.
 
 ## Known issues
 
-- **The naked NPC after a wait or a sleep is not fixed.** It needs the host's equipment on the wire. 0.46.0 only keeps the
-  copy's state intact; the number the testers count is the baseline for the next fix.
-- The testers' 20-second dead talks were **not reproduced** solo.
+- Whether an enemy's **sword** shows on the joiner's screen was not investigated (it probably shares the night-undress cause;
+  unverified).
+- The dressing of naked copies and the talk fixes are verified solo only (a throwaway save); the testers' items 150, 153 and
+  154 are their proof.
 - None of the two-player fixes has been seen in a live session yet; the herb clip's look, the mount wait and the horse fetch
   were not run live at all.
 - Those of 0.45.5–0.45.8 (`docs/releases/`).
