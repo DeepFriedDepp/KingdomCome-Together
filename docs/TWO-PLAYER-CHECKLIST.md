@@ -16,11 +16,14 @@ Both of you can type the same marker; that is fine.
 1. **Install** the same build on both machines (the Setup the maintainer sends).
    After installing, run `tools\Verify-Install.ps1` if you have it; it must end
    with "all present". Marker: `mark_setup`.
-2. **The host** starts the game from the launcher, loads their save, and clicks
-   CONNECT once they can move.
+2. **The host** starts the game from the launcher and, on the game's main menu,
+   presses **Start Game** (one of their worlds, or New adventure). Since 0.45.5
+   nobody clicks CONNECT: the launcher connects the game by itself once the world
+   is loaded.
 3. **The partner** starts the game from the launcher and **stays at the main
-   menu. Don't load a save.** The launcher says so. Click CONNECT at the menu;
-   the partner joins the host's world by itself. Marker: `mark_join`.
+   menu. Don't load a save.** Press **Join Game**, then **Join with a new
+   character** or **Bring my character**; the partner joins the host's world by
+   itself. Marker: `mark_join`.
    * If the partner loads their own save by mistake, both games say so ("You
      loaded your own save…"), in the game and in the launcher. Quit, start
      again, and wait at the main menu (item 140.6 below checks this on purpose).
@@ -827,6 +830,57 @@ npcs=… worst=[…]` once a minute while there is anything to say.
 
 Lines worth a look: `WO160-` (kcd.log), `WO160-CTX` (agent log and kcdmp-native.log), `WO160-NUDGE` (kcdmp-native.log),
 `MP-WO160-STATS` (agent log). Switches (all default on): `mp_ctx_release`, `mp_conv_hold`, `mp_horse_fetch`, `mp_avatar_herbs`.
+
+## WO-161 — shared combat: what the host decides, what is counted, and what the next work order needs (0.46.5)
+
+Evidence and the design call: `docs/WO-161-findings.md`. **What changed in 0.46.5 is bookkeeping, not combat:** every blow an
+enemy lands on a player is now numbered, applied once and written to the log with the swing it came from — or the reason
+there was none (`WO161-HIT` on both machines, `MP-WO161-STATS` once a minute). **What did not change:** the host's game
+still decides whether a blow hits or is blocked (against the host's copy of the player; the player's own block is not asked),
+enemies are not made lockable for the other player, two players on one enemy and a figure that steps in a fight are as in
+0.46.0. These items give the next work order its numbers; none of them expects a fix. Use a throwaway copy of the host's
+save, as always.
+
+162. **Both players on one enemy.** Both of you fight the same bandit or guard at once, for about a minute. Marker:
+     `mark_gang`. * Write down: does the enemy turn back and forth between you (how often)? Do both players' blows count (its
+     health falls with both)? Host kcd.log `WO136-TARGET npc=… -> …` (each retarget, with `threat=a/b`) and `WO136-FORCED …`;
+     agent.log `MP-W132 npc hit on avatar …`. This is the baseline, not a pass/fail.
+163. **The host and a guard that beats the partner.** On the throwaway save, the partner commits a theft and lets a guard attack
+     them; the host tries to lock onto the guard and to hit it (a blow at a guard is an assault in the host's own world —
+     only on the throwaway). Marker: `mark_guard`. * Write down: could the host lock on at all? Did the guard turn to the
+     host? Host native log `WO139-PURSUE host-struck …`; agent log `host_struck=` in the minute line (it was 0 in the first
+     0.45.8 session).
+164. **An enemy attacks the joiner: the swing, the hit, once.** An enemy fights the joiner; both of you watch. Marker:
+     `mark_hit` each time the joiner takes a hit. * The host sees the enemy swing; the joiner's screen shows the same enemy
+     swing a moment before the damage; the joiner takes the hit **once**. Host agent.log `WO161-HIT victim=<n> by=<npc>
+     sid=… hid=… verdict=… sent=verdict`; joiner agent.log `WO161-HIT victim=me … shown=yes applied=yes`. Every damage line
+     has `shown=yes` or a `reason=…` (`no-swing-captured`: the host's game made a blow the mod did not see; `row-not-received`;
+     `row-refused-…`). A line with `applied=dup` or `refused=malformed` is a **finding** (it was caught, never applied twice —
+     send it). `MP-WO161-STATS`: `applied` equals the `[playerhit] took …` lines; `not_shown_why=[…]` is the count by cause.
+165. **Block and parry, each side.** The joiner blocks an enemy's blow, then the host does, each once with a parry. Marker:
+     `mark_block`. * Write down what happened. In 0.46.5 the host's copy of the joiner decides the joiner's block (the
+     verdict reads `blocked` when the blow cost only stamina); a block the joiner raised late or early may not count —
+     note it. A parry is **not** decided by the victim in this build: note, do not expect.
+166. **The sword and the phantom stance.** (a) An enemy who draws a sword on the host's screen: does the joiner see the sword in
+     its hand? (WO-160's item 160, once more.) (b) An enemy that fights the joiner on the host's screen but stands as if
+     holding a weapon you cannot see. Marker: `mark_odd`, with the enemy's name. * Joiner agent.log `[npcsync] <npc>: N
+     equipped item class(es) read for swing resolution` for that enemy.
+167. **A swing with no combat; damage with no swing.** While any fight runs, `mark_odd` the moment you see a swing and no combat
+     mode coming up on the other screen, or take damage with no swing visible on the other screen. * Send `WO161-HIT … shown=no
+     reason=…` and `MP-W132 engage on …` — the reason names the cause (in the 0.45.8 sessions 16 of 45 enemy blows had no
+     captured swing: 9 of 35 in the first session, 7 of 10 in the second, six of those a cat's bites).
+168. **A three-minute brawl, with `mark_snap`.** Both of you fight two or three enemies for about three minutes, moving about.
+     Marker: `mark_snap` on **every jump or step** you see in the other player's figure or in an enemy. * Count them (each
+     machine its own number) and send both logs: kcd.log `MP-GHOSTCORR … corr_max_m` per 10 s window and `TELEPORT` lines
+     next to each marker are the data for the snapping work (the old counter counts only steps over 5 m; the fight's are
+     smaller).
+169. **The sleeping NPC.** An NPC lies asleep for the host but not for the joiner (or the other way round). Marker: `mark_odd`,
+     the NPC's name and the time. * Joiner kcd.log `[NPCStateSearch]` / `Couldn't find actions…` lines for that NPC;
+     kcdmp-native.log `WO160-WAKE` / `WO160-NEUTRAL npc=…`. Not fixed in 0.46.5 (Part B).
+170. **Still pending from 0.46.0:** items 150–161 above — nothing in them changed in 0.46.5; send them as before.
+
+Lines worth a look: `WO161-HIT`, `MP-WO161-STATS` (agent log, both machines), `MP-WO161 verdict … not sent` (the fallback), `WO136-TARGET`
+(kcd.log, host). Switch (default on): `HitVerdictEnabled` in `kcdmp-client.json`, or `--no-hit-verdict` on the agent.
 
 ## Logs to send afterwards
 
