@@ -262,6 +262,18 @@ them was run live in this WO.
   against this build (after): **main menu 178.2 / 180.0 FPS → 178.3 / 180.0**; **town** (four stable one-minute windows after the
   load) **76.8–77.0 → 76.9–77.5 FPS**, the mod's own work per frame 533–538 µs → 521–526 µs. No change.
 
+## The 0.46.0 build
+
+* From a fresh clone of `85fd56a` (`release\c0460`) with the three git-ignored start saves copied in,
+  `tools\Build-Installer.ps1 -SoakWaiver "The maintainer decided on 2026-10-07: no soak test for 0.46.0."` (the standing
+  rule for this release candidate, as for 0.45.8): `release\KingdomComeTogether-Setup-0.46.0.exe`, 106,355,863 bytes,
+  sha256 `7cd7ba9e0f6eefa651c5f9a60a073454efc0a9204f858e7bf3b630841c1290a0`. Local only; not tagged; unsigned (no signing settings).
+* Inside the build: relay 62, agent 1,197, setup 77, **all 50 synthetic suites** (`Test-WO160Synthetic` among them), the static
+  and native checks, the installer cases, the payload smoke (`protocol=v10 release=0.46.0`); no FAIL line. Payload 1,035 manifest
+  entries; the payload carries no player or machine name.
+* One compiler warning is new and harmless: `GameBridge._w160StatsMs` is never used (left in; removing it would change the
+  commit the installer was built from).
+
 ## Pocket list (outside this scope, recorded)
 
 * The naked NPC after a wait or a sleep (the host's equipment on the WO-141 wire; WO-144 4.5).
