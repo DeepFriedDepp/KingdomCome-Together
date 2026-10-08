@@ -21355,6 +21355,14 @@ do
     end
 end
 
+-- WO-163 Stage B (docs/WO-163-findings.md): the probes' console surface, the maintainer present, one probe at a time. The agent does them
+-- (GameBridge.Wo163.cs) and answers in its log (WO163-PROBE / WO163-MODEL lines):
+--   mp_w163_probe status | model [npc|me] | relation <npc> | pair <npc> on|off [override] | swing2 <npc> <gap_ms> <spec A> | <spec B>
+function KCD2MP_W163Probe(arg)
+    KCD2MP_EmitEvent("w163_probe", tostring(arg or "status"))
+    return true
+end
+
 -- ===== WO-151: the safeguards and the live session's fixes (docs/WO-151-findings.md) ======
 -- Phase 0 switches (the agent reads them through w151_cfg and pushes them to KCDMP.dll):
 --   mp_fault_switchoff on|off (default on) a call into the game's code that faulted 8 times
@@ -23698,6 +23706,7 @@ local ok, err = pcall(function()
     System.AddCCommand("mp_gait_hysteresis", 'KCD2MP_W154SetGaitHyst(%line)', "WO-154: a partner's figure (and a host copy) changes its gait only past a band around each boundary, so a pace on a boundary keeps its gait (default on): mp_gait_hysteresis on|off")
     System.AddCCommand("mp_join_panel", 'KCD2MP_W154SetJoinPanel(%line)', "WO-154: (host) the join's progress is the game's own tutorial panel, so it shows through the engine's hold (default on; off = 0.44.0's drawn bar, which the hold stops): mp_join_panel on|off")
     System.AddCCommand("mp_join_patient", 'KCD2MP_W154SetJoinPatient(%line)', "WO-154: (joiner) a join's load is given up only when the game answers from its menu, never while it is busy loading, and the world file is kept until no load can read it (default on): mp_join_patient on|off")
+    System.AddCCommand("mp_w163_probe", 'KCD2MP_W163Probe(%line)', "WO-163 probes (the maintainer present): mp_w163_probe status | model [npc|me] | relation <npc> | pair <npc> on|off [override] | swing2 <npc> <gap_ms> <spec A> | <spec B>")
     System.AddCCommand("mp_w154_check", 'KCD2MP_W154Check(%line)', "WO-154 live checks (test NPCs named w154_ only): mp_w154_check hostfight <npc> [secs] | hostfight off | pursue <npc> <ghost> on|off | where | status")
     System.AddCCommand("mp_avatar_falls", 'KCD2MP_W154SetFalls(%line)', "WO-155: a partner's figure falls on this screen only when he dies (lies until he respawns) or for a knockdown of your own friendly-fire hit (the game's own fall and get-up); off: nothing falls (default on): mp_avatar_falls on|off")
     System.AddCCommand("mp_hit_knockdown", 'KCD2MP_W155SetHitKnockdown(%line)', "WO-155: a blow of an NPC or an animal knocks a player down (0.45.0); off = it only takes health and stamina (default off): mp_hit_knockdown on|off")

@@ -151,6 +151,22 @@ struct NpcCombat {
 };
 bool read_npc_combat(uint32_t eid, NpcCombat* out);   // false = no actor for eid
 
+// WO-163 (the probes P1 / P3, read-only, main thread): the combat model fields the engine's hit core reads -- the victim's
+// State / GuardZone / BlockZoneId / BlockHandSlot / BlockMode / PerfectBlockState / Opponent and the attacker's AttackZone / AttackType /
+// AttackStrength / AttackHandSlot (docs/WO-100 s10, research/WO-162 Q1.4). Each field is valid only when the property block at its
+// offset names itself (the model reader's own check); an invalid field reads 0 and its valid flag is false.
+struct ModelRead {
+    uint8_t hasCa = 0, hasModel = 0, isPlayerCa = 0, opponentIsPlayer = 0;
+    uint16_t valid = 0;                       // bit per field, kModelValid* below
+    int32_t state = 0, guardZone = 0, blockZone = 0, blockHand = 0, blockMode = 0, atkZone = 0, atkType = 0, atkHand = 0;
+    uint8_t perfectBlock = 0, combatMode = 0;
+    float atkStrength = 0;
+    uint32_t opponentEid = 0;
+};
+constexpr uint16_t kMvState = 1, kMvGuardZone = 2, kMvBlockZone = 4, kMvBlockHand = 8, kMvBlockMode = 16, kMvPerfect = 32,
+                   kMvAtkZone = 64, kMvAtkType = 128, kMvAtkStrength = 256, kMvAtkHand = 512, kMvCombatMode = 1024;
+bool read_model(uint32_t eid, ModelRead* out);        // false = no actor for eid
+
 // For hits.cpp: is this entity id a native-written avatar, and its soul.
 bool is_avatar_eid(uint32_t eid);
 // The local player's combat actor (main-thread cache; 0 when unknown).

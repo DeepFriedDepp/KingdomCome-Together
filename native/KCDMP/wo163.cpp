@@ -6,6 +6,7 @@
 #include "engine.h"
 #include "hits.h"
 #include "log.h"
+#include "motion.h"
 
 #include <atomic>
 #include <cstdio>
@@ -65,6 +66,48 @@ uint8_t handle(const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t
             out[0] = 1; out[1] = hostile ? 1 : 0;
             *outLen = 2;
             return kROk;
+        }
+        case kOpModelRead: {
+            if (len < 2 || cap < 190) return kRBadRequest;
+            const size_t n0 = body[1];
+            if (len != 2 + n0 || (n0 && !name_ok(reinterpret_cast<const char*>(body + 2), n0))) return kRBadRequest;
+            uint32_t eid = 0;
+            if (n0 == 0) eid = player_eid();
+            else { const std::string nm(reinterpret_cast<const char*>(body + 2), n0); eid = hits::eid_of_name(nm.c_str()); }
+            motion::ModelRead m{};
+            if (!eid || !motion::read_model(eid, &m)) return kRNoActor;
+            const unsigned v = m.valid;
+            const int n = std::snprintf(reinterpret_cast<char*>(out), cap,
+                "ca=%u pca=%u model=%u state=%d(0x%X)%s gz=%d%s bz=%d%s bh=%d%s bm=%d%s pb=%u%s az=%d%s at=%d%s as=%.3f%s ah=%d%s cm=%u%s opp=0x%X%s",
+                m.hasCa, m.isPlayerCa, m.hasModel, m.state, static_cast<unsigned>(m.state), (v & motion::kMvState) ? "" : "!",
+                m.guardZone, (v & motion::kMvGuardZone) ? "" : "!", m.blockZone, (v & motion::kMvBlockZone) ? "" : "!",
+                m.blockHand, (v & motion::kMvBlockHand) ? "" : "!", m.blockMode, (v & motion::kMvBlockMode) ? "" : "!",
+                m.perfectBlock, (v & motion::kMvPerfect) ? "" : "!", m.atkZone, (v & motion::kMvAtkZone) ? "" : "!",
+                m.atkType, (v & motion::kMvAtkType) ? "" : "!", m.atkStrength, (v & motion::kMvAtkStrength) ? "" : "!",
+                m.atkHand, (v & motion::kMvAtkHand) ? "" : "!", m.combatMode, (v & motion::kMvCombatMode) ? "" : "!",
+                m.opponentEid, m.opponentIsPlayer ? "(me)" : "");
+            *outLen = (n > 0 && static_cast<size_t>(n) < cap) ? static_cast<size_t>(n) : 0;
+            return kROk;
+        }
+        case kOpSkirmishPair: {
+            if (len < 4 || cap < 1) return kRBadRequest;
+            const bool on = body[1] != 0;
+            const uint8_t ovr = body[2];
+            const size_t n0 = body[3];
+            if (len != 4 + n0 || (on && n0 == 0) || (n0 && !name_ok(reinterpret_cast<const char*>(body + 4), n0))) return kRBadRequest;
+            uint32_t eid = 0;
+            if (n0) { const std::string nm(reinterpret_cast<const char*>(body + 4), n0); eid = hits::eid_of_name(nm.c_str()); }
+            if (on && !eid) return kRNoActor;
+            const uint32_t peid = player_eid();
+            void* hostSoul = peid ? hits::soul_of_eid(peid) : nullptr;
+            void* npcSoul = eid ? hits::soul_of_eid(eid) : nullptr;
+            if (!hostSoul || (on && !npcSoul)) return kRNoSoul;
+            uint64_t rv = 0;
+            const bool done = on ? hits::skirmish_add(hostSoul, npcSoul, ovr, &rv) : hits::skirmish_remove(hostSoul, &rv);
+            logf("WO163-PAIR host %s npc=0x%X override=%u -> %s", on ? "joins the skirmish of" : "leaves its skirmish; was against", eid, ovr, done ? "done" : "FAILED");
+            out[0] = done ? 1 : 0;
+            *outLen = 1;
+            return done ? kROk : kRFailed;
         }
         case kOpStatus: {
             const int n = status_text(reinterpret_cast<char*>(out), static_cast<int>(cap));

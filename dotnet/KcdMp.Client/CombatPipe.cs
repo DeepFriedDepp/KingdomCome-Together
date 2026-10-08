@@ -1040,6 +1040,35 @@ public sealed class CombatPipe : IAsyncDisposable
         return (x.Payload[0] != 0, x.Payload[1] != 0);
     }
 
+    /// <summary>
+    /// WO-163 op 3 (probes P1 / P3, read-only): the combat model fields the hit core reads, as the DLL's text (see wo163.h for the keys), for the
+    /// NPC of that name or the local player (null / "me" / empty). Null = no answer; the text starts "no actor" when the DLL had none.
+    /// </summary>
+    public async Task<string?> Wo163ModelReadAsync(string? npc, CancellationToken ct = default)
+    {
+        var name = string.IsNullOrEmpty(npc) || npc == "me" ? [] : System.Text.Encoding.ASCII.GetBytes(npc);
+        if (name.Length > 63) return null;
+        var a = new byte[1 + name.Length];
+        a[0] = (byte)name.Length; name.CopyTo(a, 1);
+        var r = await Wo163Async(3, a, ct);
+        if (r is null) return null;
+        return r.Value.Ok ? System.Text.Encoding.ASCII.GetString(r.Value.Payload) : $"refused (reason {r.Value.Reason}: " + (r.Value.Reason switch { 1 => "bad request", 2 => "no such actor", 3 => "no soul", _ => "failed" }) + ")";
+    }
+
+    /// <summary>
+    /// WO-163 op 4 (probe P6 / the host lock-on): the HOST's soul joins the skirmish of <paramref name="npc"/> (override 1 = the explicit hostile pair)
+    /// or leaves its skirmish. Done = the engine call completed.
+    /// </summary>
+    public async Task<bool?> Wo163PairAsync(string? npc, bool on, byte overrideRelation, CancellationToken ct = default)
+    {
+        var name = string.IsNullOrEmpty(npc) ? [] : System.Text.Encoding.ASCII.GetBytes(npc);
+        if (name.Length > 63) return null;
+        var a = new byte[3 + name.Length];
+        a[0] = (byte)(on ? 1 : 0); a[1] = overrideRelation; a[2] = (byte)name.Length; name.CopyTo(a, 3);
+        var r = await Wo163Async(4, a, ct);
+        return r is null ? null : r.Value.Ok && r.Value.Payload.Length >= 1 && r.Value.Payload[0] != 0;
+    }
+
     /// <summary>WO-163 op 2: the native half's counters as text, or null.</summary>
     public async Task<string?> Wo163StatusAsync(CancellationToken ct = default)
     {

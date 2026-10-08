@@ -5972,6 +5972,7 @@ public partial class GameBridge(ClientConfig config)
                 Wo154OnVoiceEvent(arg);
                 return;
             case "w163_hostile":     // WO-163 A7: the host's 5 s judge asks the engine whether the victim is in a skirmish fight with the host
+            case "w163_probe":       // WO-163 Stage B: mp_w163_probe (the maintainer present; reads and the P6 / P8 levers)
                 Wo163OnEvent(name, arg);
                 return;
         }

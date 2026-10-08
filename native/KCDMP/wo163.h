@@ -10,6 +10,15 @@
 //       true iff they are hostile opponents in one skirmish. Main thread, fault-guarded, both souls looked up in this frame.
 //       answered 0 = the call could not be made (not armed on this build, no such NPC, no soul).
 //   2 Status -> text
+//   3 ModelRead [nameLen:1][name] -> text   (nameLen 0 = the local player) -- the probes P1 / P3 (docs/WO-163-findings.md), read-only: the combat model's
+//       State / guard / block fields and the attack fields the hit core reads (research/WO-162 Q1.4), each marked valid only when its
+//       property block names itself (a trailing '!' = it did not); the Opponent's entity id. Keys: ca / pca = has a combat actor / it is
+//       the player's; state (a bitmask: 1 Idle 2 Guard 4 ReadyToStrike 8 Striking 0x10 FailedAttack 0x20 Withdraw 0x40 Hit 0x80 PreparingToParry
+//       0x100 ParryInPlace 0x200 Dodge 0x400 Transition); gz GuardZone; bz BlockZoneId; bh BlockHandSlot; bm BlockMode; pb PerfectBlockState;
+//       az AttackZone; at AttackType; as AttackStrength; ah AttackHandSlot; cm CombatMode; opp the Opponent's entity id ((me) = the player).
+//   4 SkirmishPair [on:1][override:1][nameLen:1][name] -> [done:1]   -- the probe P6 and the host lock-on's lever (C1): on = the HOST's soul joins the
+//       skirmish of the NPC with the given override (1 = the explicit hostile pair the lock-on rule needs, WO-162 Q2.3); off = the host's
+//       soul leaves its skirmish (RemoveSoulFromSkirmish; the fight itself goes on). Main thread, fault-guarded, souls looked up this frame.
 #pragma once
 #include <cstddef>
 #include <cstdint>
@@ -18,6 +27,8 @@ namespace kcdmp::wo163 {
 
 constexpr uint8_t kOpSkirmishHostile = 1;
 constexpr uint8_t kOpStatus = 2;
+constexpr uint8_t kOpModelRead = 3;
+constexpr uint8_t kOpSkirmishPair = 4;
 
 constexpr uint8_t kROk = 0, kRBadRequest = 1, kRNoActor = 2, kRNoSoul = 3, kRFailed = 4;
 

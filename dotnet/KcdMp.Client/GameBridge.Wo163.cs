@@ -28,11 +28,83 @@ public partial class GameBridge
     /// </summary>
     private void Wo163OnEvent(string name, string? arg)
     {
+        if (name == "w163_probe") { _ = Wo163ProbeAsync(arg ?? ""); return; }
         if (name != "w163_hostile") return;
         var f = (arg ?? "").Split(' ', StringSplitOptions.RemoveEmptyEntries);
         if (f.Length != 2 || !uint.TryParse(f[0], out uint id) || !CarryText.IsName(f[1])) return;
         _ = Wo163HostileAsync(id, f[1]);
     }
+
+    /// <summary>
+    /// Stage B's console surface (mp_w163_probe; maintainer present, one probe at a time -- the instruments, never the verdicts; every answer is
+    /// a WO163-PROBE / WO163-MODEL line in this log):
+    ///   status | model [npc|me] | relation &lt;npc&gt; | pair &lt;npc&gt; on|off [override] | swing2 &lt;npc&gt; &lt;gap_ms&gt; &lt;spec A&gt; | &lt;spec B&gt;
+    /// pair joins / leaves the host's soul in the NPC's skirmish (P6); swing2 plays row A on the NPC's copy, then row B after the gap (P8).
+    /// </summary>
+    private async Task Wo163ProbeAsync(string line)
+    {
+        try
+        {
+            var parts = line.Trim().Split(' ', 2, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            string verb = parts.Length > 0 ? parts[0].ToLowerInvariant() : "status", rest = parts.Length > 1 ? parts[1] : "";
+            switch (verb)
+            {
+                case "status":
+                {
+                    string? nat = await _combat.Wo163StatusAsync();
+                    Console.WriteLine($"WO163-PROBE status native: {nat ?? "no answer"} | {Wo163StatsLine()}");
+                    return;
+                }
+                case "model":
+                {
+                    string who = rest.Length == 0 ? "me" : rest;
+                    if (who != "me" && !CarryText.IsName(who)) { Console.WriteLine("WO163-PROBE model: not an entity name"); return; }
+                    string? t = await _combat.Wo163ModelReadAsync(who == "me" ? null : who);
+                    Console.WriteLine($"WO163-MODEL npc={who} {t ?? "no answer"}");
+                    return;
+                }
+                case "relation":
+                {
+                    if (!CarryText.IsName(rest)) { Console.WriteLine("WO163-PROBE relation: not an entity name"); return; }
+                    var r = await _combat.Wo163SkirmishHostileAsync(rest);
+                    Console.WriteLine($"WO163-PROBE relation host vs npc={rest}: " + (r is null ? "no answer" : r.Value.Answered ? (r.Value.Hostile ? "HOSTILE (one skirmish)" : "not hostile") : "could not be asked"));
+                    return;
+                }
+                case "pair":
+                {
+                    var f = rest.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                    if (f.Length < 2 || !CarryText.IsName(f[0]) || f[1] is not ("on" or "off")) { Console.WriteLine("WO163-PROBE pair <npc> on|off [override]"); return; }
+                    byte ovr = f.Length > 2 && byte.TryParse(f[2], out byte o) ? o : (byte)1;
+                    bool? done = await _combat.Wo163PairAsync(f[0], f[1] == "on", ovr);
+                    Console.WriteLine($"WO163-PROBE pair host {f[1]} npc={f[0]} override={ovr}: {(done is null ? "no answer" : done.Value ? "done" : "FAILED")}");
+                    return;
+                }
+                case "swing2":
+                {
+                    int sp = rest.IndexOf(' ');
+                    int sp2 = sp < 0 ? -1 : rest.IndexOf(' ', sp + 1);
+                    string[] specs = sp2 < 0 ? [] : rest[(sp2 + 1)..].Split('|', 2, StringSplitOptions.TrimEntries);
+                    if (sp < 0 || sp2 < 0 || specs.Length != 2 || !CarryText.IsName(rest[..sp]) || !int.TryParse(rest[(sp + 1)..sp2], out int gap) || gap is < 0 or > 5000)
+                    { Console.WriteLine("WO163-PROBE swing2 <npc> <gap_ms 0-5000> <FragmentId, tags> | <FragmentId, tags>"); return; }
+                    string npc = rest[..sp];
+                    if (!_npcEntityIds.TryGetValue(npc, out uint neid)) { Console.WriteLine($"WO163-PROBE swing2: {npc} is not a copy here (a joiner's NPC puppet)"); return; }
+                    _ = _combat.NpcHoldAsync(npc, (ushort)(1500 + gap), CancellationToken.None);
+                    var a = await _combat.GhostSwingForResultAsync(neid, specs[0], CancellationToken.None);
+                    await Task.Delay(gap);
+                    var b = await _combat.GhostSwingForResultAsync(neid, specs[1], CancellationToken.None);
+                    Console.WriteLine($"WO163-PROBE swing2 npc={npc} A=\"{specs[0]}\" -> {a.ReasonTag}; after {gap} ms B=\"{specs[1]}\" -> {b.ReasonTag}");
+                    return;
+                }
+                default:
+                    Console.WriteLine("WO163-PROBE verbs: status | model [npc|me] | relation <npc> | pair <npc> on|off [override] | swing2 <npc> <gap_ms> <spec A> | <spec B>");
+                    return;
+            }
+        }
+        catch (Exception ex) { Console.WriteLine($"WO163-PROBE failed ({ex.GetType().Name}: {ex.Message})"); }
+    }
+
+    private string Wo163StatsLine() => FormattableString.Invariant(
+        $"hostile_asked={Interlocked.Read(ref _w163HostileAsked)} hostile={Interlocked.Read(ref _w163HostileYes)} not_hostile={Interlocked.Read(ref _w163HostileNo)} unanswered={Interlocked.Read(ref _w163HostileUnanswered)} generic_swings={_w161Stats.GenericShown}");
 
     private async Task Wo163HostileAsync(uint id, string npc)
     {

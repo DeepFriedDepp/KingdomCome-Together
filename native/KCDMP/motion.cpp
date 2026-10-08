@@ -95,6 +95,15 @@ constexpr Prop kPropGuardZone{0x140, "GuardZone"};
 constexpr Prop kPropReqAtkZone{0x200, "RequestedAtkZone"};
 constexpr Prop kPropAttackType{0x2C0, "AttackType"};
 constexpr Prop kPropReqInputClass{0x300, "RequestedInputClass"};
+// WO-163 (read_model; the names and offsets are docs/WO-100 s10's table, each verified by the block's own name at +0x30)
+constexpr Prop kPropState{0x040, "State"};
+constexpr Prop kPropBlockZone{0x7C0, "BlockZoneId"};
+constexpr Prop kPropBlockHand{0x800, "BlockHandSlot"};
+constexpr Prop kPropBlockMode{0x868, "BlockMode"};
+constexpr Prop kPropPerfectBlock{0x8A8, "PerfectBlockState"};
+constexpr Prop kPropAtkZone{0x1C0, "AttackZone"};
+constexpr Prop kPropAtkStrength{0x280, "AttackStrength"};
+constexpr Prop kPropAtkHand{0x240, "AttackHandSlot"};
 
 // ---- SEH-isolated primitives (no destructible locals) --------------------------
 // WO-153 5: an address no user-mode pointer can hold (the null page, or above the canonical range) is refused before the
@@ -1666,6 +1675,43 @@ bool read_npc_combat(uint32_t eid, NpcCombat* out) {
     if (rd(model, kModelOpponent, &opp) && opp) {
         if (void* oca = as_combat_actor(opp)) {
             void* pca = g_playerCa.load();
+            if (pca && oca == pca) out->opponentIsPlayer = 1;
+            void* owner = nullptr;
+            uint32_t oeid = 0;
+            if (rd(oca, kCaOwnerEntity, &owner) && owner && rd(owner, kActorEntityId, &oeid)) out->opponentEid = oeid;
+        }
+    }
+    return true;
+}
+
+bool read_model(uint32_t eid, ModelRead* out) {
+    *out = ModelRead{};
+    void* actor = actor_by_eid(eid);
+    if (!actor) return false;
+    void* ca = combat_actor_of(actor, false);
+    if (!ca) return true;
+    out->hasCa = 1;
+    void* pca = g_playerCa.load();
+    out->isPlayerCa = (pca && ca == pca) ? 1 : 0;
+    void* model = nullptr;
+    if (!rd(ca, kCaModel, &model) || !model) return true;
+    out->hasModel = 1;
+    auto i32 = [&](const Prop& p, int32_t* dst, uint16_t bit) { if (prop_value(model, p, dst)) out->valid |= bit; };
+    i32(kPropState, &out->state, kMvState);
+    i32(kPropGuardZone, &out->guardZone, kMvGuardZone);
+    i32(kPropBlockZone, &out->blockZone, kMvBlockZone);
+    i32(kPropBlockHand, &out->blockHand, kMvBlockHand);
+    i32(kPropBlockMode, &out->blockMode, kMvBlockMode);
+    i32(kPropAtkZone, &out->atkZone, kMvAtkZone);
+    i32(kPropAttackType, &out->atkType, kMvAtkType);
+    i32(kPropAtkHand, &out->atkHand, kMvAtkHand);
+    // the one-byte bools and the float: the width is part of the map (WO-100 s10.5)
+    if (prop_value(model, kPropPerfectBlock, &out->perfectBlock)) out->valid |= kMvPerfect;
+    if (prop_value(model, kPropCombatMode, &out->combatMode)) out->valid |= kMvCombatMode;
+    if (prop_value(model, kPropAtkStrength, &out->atkStrength)) out->valid |= kMvAtkStrength;
+    void* opp = nullptr;
+    if (rd(model, kModelOpponent, &opp) && opp) {
+        if (void* oca = as_combat_actor(opp)) {
             if (pca && oca == pca) out->opponentIsPlayer = 1;
             void* owner = nullptr;
             uint32_t oeid = 0;
