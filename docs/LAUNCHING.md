@@ -46,7 +46,7 @@ DLL-injection design before that design existed, and every assumption in it has
 since been settled by the native-plugin work.
 
 `LaunchGame` starts the Modding Tools build, waits until `WHGame.dll` is loaded
-in the game process; CONNECT loads `KCDMP.dll` into it from the launcher's own process
+in the game process; the connect step (done by Start Game / Join Game on the game's main menu since 0.45.5; nobody clicks CONNECT) loads `KCDMP.dll` into it from the launcher's own process
 (WO-157: the game it started, the shipped DLL by sha256, x64 -- the separate
 `KCDMP_LauncherInjector.exe` was removed by antivirus programs on fresh installs), and then starts
 `KcdMpClient.exe --host <ip> --port <port>`.
@@ -63,100 +63,19 @@ What changed and why:
 
 New settings: `AgentPath`, `InjectDelaySeconds`, `ServerInfoPort`.
 
-**Still unverified:** the launcher has not been run against a real game launch.
-Its pieces are verified individually — the injector, the DLL and the agent are
-all exercised by `tools\Test-CombatOutbound.ps1` — but the launcher's own
-sequencing of them has only been reviewed, not observed. The `WHGame.dll` wait
-in particular is a reasoned choice, not a measured one.
+**Verified:** the launcher has driven every tester session since 0.45.0 (WO-154): the game start, the wait for
+`WHGame.dll`, the injection and the agent, as the testers' logs show.
 
-## The master server chain
+## The master server
 
-Both breaks are closed.
-
-**The URL was wrong.** The launcher defaulted to
-`http://localhost:5000/api/servers`. Flask registers the blueprint at
-`url_prefix="/servers"` with a `/servers_list` route, so the real URL is
-`http://localhost:5000/servers/servers_list`. That is now the default.
-
-**A third break, not previously recorded:** even with the right URL the list
-would have arrived blank. `MasterServerEntry` bound `"ip"`, but
-`Server.to_dict()` emits `"ip_address"` and `"map_name"`. The DTO's comment
-admitted it was a guess. It now matches the Python, verified by deserialising
-`to_dict()`'s exact output.
-
-**Nothing registered a relay.** `MasterRegistrationService` in the relay is that
-missing half. It is **opt-in**: with no `MasterServer:Url` set it does nothing,
-because publishing a relay's address to a third party is the operator's call.
-
-```jsonc
-"MasterServer": {
-  "Url": "http://localhost:5000/servers/register",
-  "Name": "",            // defaults to the machine name
-  "Description": "",
-  "AdvertisedIp": "",    // only when the master cannot see the real address
-  "HeartbeatSeconds": 120
-}
-```
-
-Registration doubles as the heartbeat, which forced two changes on the master:
-
-- **`/register` is now an upsert** keyed on `(ip_address, port)`. It inserted
-  unconditionally, so every relay restart added another row for the same server.
-- **`last_seen` is recorded and `/servers_list` hides anything older than five
-  minutes** (`?all=1` to see everything). A relay that crashes cannot deregister
-  itself, so without this the browser only ever grows.
-
-`ip_address` is now optional and falls back to `request.remote_addr` — a relay
-behind NAT does not know the address peers reach it on, but the master can see
-it. Set `AdvertisedIp` when the master is behind a reverse proxy.
-
-Related fixes this turned up:
-
-- `ServerInfo:Tags` shipped as `["PvP", "PvE", "RP", "Feeling quite hungry"]` —
-  four tags where the master allows three, and one that is not in its fixed list
-  (`PvP, PvE, RP, Hardcore, Friendly, Modded`). Either alone rejects the whole
-  registration. Corrected in **both** `appsettings.json` and
-  `appsettings.Development.json`; the latter overrides the former in the dev
-  environment, so fixing only the base file changes nothing.
-- `GetDedicatedServerInfoAsync` returned **random numbers** behind a
-  `TODO: actual udp`, so the browser showed a plausible map and player count for
-  servers that were not running. It now reads the relay's existing
-  `/api/information` and returns null when there is no answer, so the row is
-  marked offline instead of invented.
-- `ValidateIpAddr` rejected every IPv6 address. Since the master falls back to
-  `remote_addr`, a same-machine relay registers as `::1` and a remote one may
-  register as real IPv6; those rows reached the browser and were then dropped as
-  unreachable, unpinged. It now uses `IPAddress.TryParse`, and IPv6 literals are
-  bracketed when building the info URL.
-
-### What was verified, and what was not
-
-Verified by running it:
-
-- The relay registers on start and re-registers on the heartbeat, carrying its
-  token; a restart **refreshes** the existing entry rather than duplicating it.
-- The tag warning fires when the count is wrong, and registration is clean once
-  it is corrected.
-- `/api/information` returns `{"mapName","players","maxPlayers","tags"}`, which
-  is what the launcher's DTO expects.
-- `MasterServerEntry` binds `Server.to_dict()`'s exact payload.
-
-**Not verified:** the Python master server was never executed — there is no
-Python on the development machine. The registration flow above was exercised
-against a stub that mimics the Flask contract, so `servers.py` and `models.py`
-are reviewed, not run. Anyone with a Python environment should run the real
-thing before trusting it.
-
-**Also note:** `models.py` gains a `last_seen` column and a unique constraint on
-`(ip_address, port)`. There is no `migrations/` directory, so a fresh database
-gets these from `db.create_all()`. An **existing** database needs a migration
-(`migrate.sh`) — `create_all` does not alter tables that already exist.
+The master server is the C# `dotnet/KcdMp.MasterServer/`: see `docs/MASTER-SERVER.md` and `docs/WO-35-findings.md`.
+The Flask service this page once described was never run and is gone (the note below).
 
 ### WO-35: replaced by a C# master server
 
-Everything above described the Flask service, which was never run on any
-machine that touched this project — the "never verified" caveat throughout
-this section was the actual cause of the launcher's confusing "Master Server
+Everything this page once said about the master server described the Flask
+service, which was never run on any machine that touched this project — the
+"never verified" caveat throughout that section was the actual cause of the launcher's confusing "Master Server
 not found" error for non-technical users. `kcd2_master_server/` is gone;
 `dotnet/KcdMp.MasterServer/` replaces it, contributed by a community member
 and adopted after a full contract comparison, safety review, and live

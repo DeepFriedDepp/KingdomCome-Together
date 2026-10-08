@@ -7,7 +7,7 @@
 <strong>Not affiliated with or endorsed by Warhorse Studios or PLAION.</strong></p>
 
 <p align="center">
-  <a href="docs/releases/RELEASE-NOTES-0.46.0.md"><img alt="main" src="https://img.shields.io/badge/main-0.46.0-b8860b?style=flat-square"></a>
+  <a href="docs/releases/RELEASE-NOTES-0.46.5.md"><img alt="main" src="https://img.shields.io/badge/main-0.46.5-b8860b?style=flat-square"></a>
   <a href="https://github.com/DeepFriedDepp/KingdomCome-Together/releases/latest"><img alt="latest release" src="https://img.shields.io/github/v/release/DeepFriedDepp/KingdomCome-Together?label=latest%20release&color=8a3324&style=flat-square"></a>
   <a href="LICENSE"><img alt="License: GPLv3" src="https://img.shields.io/badge/license-GPLv3-2c3e50?style=flat-square"></a>
   <a href="docs/LAUNCHING.md"><img alt="Platform" src="https://img.shields.io/badge/platform-Windows-555555?style=flat-square"></a>
@@ -28,13 +28,34 @@ against each other from inside the game itself.
 > Kingdom Come: Deliverance II, its assets and its content belong to Warhorse
 > Studios and PLAION; this is a free, non-commercial fan project.
 
-> **Two version numbers**. `main` (this
-> repo's source) is ahead of the last published installer; the feature list
-> below describes `main`. Installing from the
+> **The current version is 0.46.5**, a release candidate for the maintainer and one tester (not on the releases
+> page). `main` (this repo's source) is ahead of the last published installer; the feature list below describes
+> `main`. Installing from the
 > [releases page](https://github.com/DeepFriedDepp/KingdomCome-Together/releases)
 > gets you that published build's feature set, not everything described
 > here — [Building from source](#building-from-source) gets you current
 > `main`.
+>
+> **What 0.46.5 is, in plain words**
+>
+> - **Start Game / Join Game** sit on the game's own main menu. Nobody clicks CONNECT any more, and the partner needs no
+>   save of the host's world.
+> - **The host's people on a joiner's screen** are put in place the way the game would put them: the joiner can talk to
+>   them and trade with them, and nobody is left in underclothes after a wait or a sleep. Proven alone in the game; the
+>   testers' checklist (items 150–154) asks two people to confirm it.
+> - **A person in a conversation stands still** on the other screen too, and walks on when it ends.
+> - **Shared combat, step one:** every blow an enemy lands on a player is numbered, applied once, and written to the log
+>   with the swing it came from — or the reason there was none. The host's game still decides whether a blow hits or is
+>   blocked; your own block is not asked yet. Tested with scripts only so far; the checklist's items 162–169 ask two
+>   people.
+> - **Doors, shops, herbs, horses and the prologue's cutscenes** got their own fixes since 0.45.5; the checklist lists each.
+>
+> **Known, not fixed in 0.46.5:** set-piece brawls (the Cuman brawl, the Moravians' flags); a killed person standing up
+> again on the other screen (the standing dead copy); people left naked after a wait or a sleep — fixed in 0.46.0 and
+> waiting for the testers to confirm it; bows and arrows (not built); the host cannot lock onto a guard who is beating
+> you; two players on one enemy can make it turn between them; in the testers' fights about one enemy blow in three
+> reached the player with no swing shown on the partner's screen (now counted and named in the log, not fixed); in a
+> fight the other player's figure can still step or snap a little.
 
 <!-- screenshot/gif here -->
 
@@ -60,26 +81,28 @@ and weather. Each feature below says how far it is proven:
 - ✅ **Proven with two players** — seen working on a real evening of two people
   on two computers.
 - 🧪 **Works with a scripted partner** — tested in the real game on one
-  computer, against a scripted second player; not yet with two people.
+  computer, against a scripted second player; not yet with two people (the
+  [two-player checklist](docs/TWO-PLAYER-CHECKLIST.md) asks the testers to confirm each).
 - ⚠️ **Not yet proven** — built, but not seen working with a second player yet.
 
 ### Playing together
 
 | Feature | What you get | Evidence |
 |---|---|---|
-| Joining | The partner waits at the main menu, clicks CONNECT and lands beside the host, with their own character, money and gear | ✅ |
+| Joining | The partner presses **Join Game** on the main menu and lands beside the host, with their own character (or **Join with a new character**), money and gear | ✅ |
+| Start Game / Join Game | Both choices sit on the game's own main menu; nobody clicks CONNECT; a join pressed too early waits for the host and goes on by itself | ✅ the menu and the joins were in the testers' 0.45.8 sessions; 🧪 New adventure |
 | Seeing each other | Position, walking, running, riding, nameplates; each player has their own face | ✅ |
 | Clothes and weapons | The other player's figure wears what they wear and holds what they hold | ✅ |
 | Crouching, sneaking, torches | The figure crouches and sneaks with its player and holds a light only when its player does | 🧪 |
 | Riding | The rider sits on a horse on both screens | ✅ |
-| Smooth riding | The partner's horse is moved every frame with the game's own walk, trot and gallop (frozen frames 50 % → 0 % measured) | 🧪 new in 0.45.0 |
-| The join, seen by the host | The game's own panel shows the partner's progress through the whole join, while the world is held | 🧪 new in 0.45.0 |
-| A join that can't work | Plain words why (saves from the regular game, only copies of this world, no character) and **Join with a new character**; a load that freezes the game is told plainly (restart the game) | 🧪 new in 0.45.0 |
+| Smooth riding | The partner's horse is moved every frame with the game's own walk, trot and gallop (frozen frames 50 % → 0 % measured) | 🧪 |
+| The join, seen by the host | The game's own panel shows the partner's progress through the whole join, while the world is held | 🧪 |
+| A join that can't work | Plain words why (saves from the regular game, only copies of this world, no character) and **Join with a new character**; a load that freezes the game is told plainly (restart the game) | 🧪 |
 | Nobody's menu stops the other | The host's world keeps running while either player is in a menu, the map or the inventory | ✅ |
-| Joining holds the host's world | While the partner joins, the host's world really stands still (until 0.42.8 it kept running) | 🧪 new in 0.43.0 |
-| Whistling | Your whistle (call your horse) is heard at your figure on the other screen | 🧪 new in 0.43.0 |
-| Riding the host's horses | The rider's horse is the rider's: nothing of the mod moves, pauses or animates it while it is ridden | 🧪 new in 0.43.0 |
-| Voice chat | Speech by distance; **off** unless you turn it on (the launcher's Settings or the mod menu) | ⚠️ changed in 0.45.0; nobody has confirmed hearing the other yet |
+| Joining holds the host's world | While the partner joins, the host's world really stands still | 🧪 |
+| Whistling | Your whistle (call your horse) is heard at your figure on the other screen | 🧪 |
+| Riding the host's horses | The rider's horse is the rider's: nothing of the mod moves, pauses or animates it while it is ridden | 🧪 |
+| Voice chat | Speech by distance; **off** unless you turn it on (the launcher's Settings or the mod menu) | ⚠️ no tester has reported hearing the other (checklist item 124) |
 
 ### Fighting
 
@@ -87,18 +110,18 @@ and weather. Each feature below says how far it is proven:
 |---|---|---|
 | Fighting the host's enemies together | Both players' hits count; an enemy dies on both screens | ✅ |
 | Enemies hurt the partner | An enemy's blow on the partner's figure hurts the partner | ✅ |
-| The partner fights on their own | Bandits and wild animals near the partner fight the partner even when the host is not fighting them: lock on, block, hit; friendly people never join in | 🧪 new in 0.42.5 |
-| Blocks and tiring blows | A blow that only tires an enemy counts too | 🧪 new in 0.42.5 |
+| The partner fights on their own | Bandits and wild animals near the partner fight the partner even when the host is not fighting them: lock on, block, hit; friendly people never join in | 🧪 |
+| Blocks and tiring blows | A blow that only tires an enemy counts too | 🧪 |
 | Animals | Wolves and dogs bite both players; their bites hurt | ✅ |
 | Knockouts and takedowns | A knocked-out NPC is down on both screens; takedowns go through the host | 🧪 |
-| One fight, the host's | An enemy both of you fight shows the host's own reactions on the partner's screen; no falling over by itself, no tools mid-fight | 🧪 new in 0.43.0 |
+| One fight, the host's | An enemy both of you fight shows the host's own reactions on the partner's screen; no falling over by itself, no tools mid-fight | 🧪 |
 | Dying | A grave with your things, and you wake up nearby; nobody's world reloads | ✅ |
-| The host's blows count | An enemy fighting the partner reacts to the host's blows and turns on the host the way it would in the game | 🧪 new in 0.45.0 |
-| A partner who falls | Every fight against the partner's figure ends when they fall or respawn; guards leave them alone for two minutes after | 🧪 new in 0.45.0 |
-| Hits never knock you down | An enemy's or an animal's blow only takes health and stamina; nobody is knocked down by it (a death still kills) | 🧪 new in 0.45.1 |
-| A death shows | When a player dies, their figure falls on the other screen and lies there until they respawn | 🧪 new in 0.45.1 |
-| Knocked down by a friend | A friendly-fire hit knocks the victim down on their own screen (never twice within 5 s); on yours their figure falls and gets up with the game's own animations | 🧪 new in 0.45.1 |
-| Friendly fire | A hit on the partner never turns their figure against you (no "threatened" bark, no attack) | 🧪 new in 0.45.0 |
+| The host's blows count | An enemy fighting the partner reacts to the host's blows and turns on the host the way it would in the game | 🧪 |
+| A partner who falls | Every fight against the partner's figure ends when they fall or respawn; guards leave them alone for two minutes after | 🧪 |
+| Hits never knock you down | An enemy's or an animal's blow only takes health and stamina; nobody is knocked down by it (a death still kills) | 🧪 |
+| A death shows | When a player dies, their figure falls on the other screen and lies there until they respawn | 🧪 |
+| Knocked down by a friend | A friendly-fire hit knocks the victim down on their own screen (never twice within 5 s); on yours their figure falls and gets up with the game's own animations | 🧪 |
+| Friendly fire | A hit on the partner never turns their figure against you (no "threatened" bark, no attack) | 🧪 |
 
 ### The world
 
@@ -106,30 +129,30 @@ and weather. Each feature below says how far it is proven:
 |---|---|---|
 | The host's people | Where the host's villagers walk, sit, work and sleep, on the partner's screen too | ✅ |
 | One clock | The partner's time follows the host's | ✅ |
-| Weather | The host's own weather, read from the game as it changes; on the partner's screen only the host's weather blends | 🧪 new in 0.43.0 (until 0.42.8 one profile was picked at the start, then each game ran its own weather) |
-| Doors | The host's world owns every door: what opens, closes or locks there opens, closes or locks on the partner's screen; the partner's own door asks the host | 🧪 new in 0.43.0 |
+| Weather | The host's own weather, read from the game as it changes; on the partner's screen only the host's weather blends | 🧪 |
+| Doors | The host's world owns every door: what opens, closes or locks there opens, closes or locks on the partner's screen; the partner's own door asks the host | 🧪 |
 | Sleeping together | One player lies down, the other is asked, and both sleep | ✅ |
 | Crime and guards | The host's guards judge the partner's crimes; hitting a bandit is no crime | ✅ |
-| Crimes count for both | A crime by either player counts for both; a fine or punishment by either clears both, and the wanted icon goes with it (`mp_crime_mode individual` for the old way) | ⚠️ new in 0.43.0 |
+| Crimes count for both | A crime by either player counts for both; a fine or punishment by either clears both, and the wanted icon goes with it (`mp_crime_mode individual` for the old way) | ⚠️ |
 | Looting | Bodies are the host's (first come, first served); loose items exist once; chests are per player | ✅ |
 | Dropping items for each other | What one drops, the other can pick up; the first pickup wins | ✅ |
-| Carrying | A body (dead or knocked out) or a sack one player carries is carried by that player's figure on the other screen and lies where it was put down; one carrier at a time, decided by the host's world | 🧪 new in 0.42.7 |
-| Carrying a living quest person | A person a quest lets you carry alive (the wounded hunter) is carried the same way | ⚠️ new in 0.43.0 (built and tested in scripts; not seen in the game yet) |
-| Fast travel | **Off** during a co-op session unless the host turns it on in the mod menu; then only the host fast travels and the partner is brought along | 🧪 changed in 0.45.0 |
-| The leash | A partner more than 650 m from the host is brought back after a countdown | 🧪 fixed in 0.42.5 (in the field it never brought anyone back) |
+| Carrying | A body (dead or knocked out) or a sack one player carries is carried by that player's figure on the other screen and lies where it was put down; one carrier at a time, decided by the host's world | 🧪 |
+| Carrying a living quest person | A person a quest lets you carry alive (the wounded hunter) is carried the same way | ⚠️ built and tested in scripts; not seen in the game yet |
+| Fast travel | **Off** during a co-op session unless the host turns it on in the mod menu; then only the host fast travels and the partner is brought along | 🧪 |
+| The leash | A partner more than 650 m from the host is brought back after a countdown | 🧪 |
 
 ### Quests and conversations
 
 | Feature | What you get | Evidence |
 |---|---|---|
 | Shared quests | The partner's quest steps reach the host's world, the host's reach the partner's | ✅ |
-| Quest steps the game's AI makes | Duels, brawls, distance triggers and other steps made by the game's AI now go both ways too (until 0.44.0 most were lost) | 🧪 new in 0.45.0 |
+| Quest steps the game's AI makes | Duels, brawls, distance triggers and other steps made by the game's AI go both ways too | 🧪 |
 | Talking to the host's people | They wait for the partner while the partner talks to them | ✅ |
-| The host's quests are safe | A partner's step that would fail a quest or count someone as dead happens only if the host's world agrees | 🧪 new in 0.42.5 |
-| Catching up | After a join or the host's reload the partner acts only once their quests match the host's; a step the host has already done is never done again | 🧪 new in 0.43.0 |
-| Black screens after a scene | A scene that waits on the host's people is helped along and never leaves the partner on a black screen for long | ⚠️ new in 0.43.0 |
-| Smithing and other work | The partner at a forge or grindstone shows on the other screen where they stand; nobody's station looks taken | 🧪 new in 0.43.0 |
-| Picking herbs | The partner's figure **stands** while they pick herbs (its pick loop crashed the game twice in the 0.43.0 tutorial session; `mp_avatar_herbs on` brings it back for a test) | ⚠️ changed in 0.44.0 |
+| The host's quests are safe | A partner's step that would fail a quest or count someone as dead happens only if the host's world agrees | 🧪 |
+| Catching up | After a join or the host's reload the partner acts only once their quests match the host's; a step the host has already done is never done again | 🧪 |
+| Black screens after a scene | A scene that waits on the host's people is helped along and never leaves the partner on a black screen for long | ⚠️ |
+| Smithing and other work | The partner at a forge or grindstone shows on the other screen where they stand; nobody's station looks taken | 🧪 |
+| Picking herbs | The partner's figure bends and picks with a plain animation clip while they pick herbs (the old pick loop crashed the game twice in a tutorial session; `mp_avatar_herbs off` makes the figure stand instead) | ⚠️ the clip was accepted by the game in a solo run; whether it shows is the testers' to say (checklist item 156) |
 | Dice with villagers | The dice game after a conversation starts on the partner's screen | 🧪 |
 
 ### Dice between players, and the tools
@@ -138,8 +161,8 @@ and weather. Each feature below says how far it is proven:
 |---|---|---|
 | Dice against each other | A full game of Farkle in the game, with wagers | 🧪 against a scripted opponent |
 | Launcher | Host or join, version check, Report a bug (collects the logs); explains Windows blocking the mod in plain words | ✅ |
-| The mod menu | **Insert** in the game: every setting in plain words; the host's settings locked on the partner's screen | 🧪 new in 0.45.0 |
-| Setup that does itself | The launcher's checklist links the game into the Modding Tools for you (no Workspace Setup) | 🧪 new in 0.45.0 |
+| The mod menu | **Insert** in the game: every setting in plain words; the host's settings locked on the partner's screen | 🧪 |
+| Setup that does itself | The launcher's checklist links the game into the Modding Tools for you (no Workspace Setup) | 🧪 |
 | Installer | One Setup for everything; checks its own files | ✅ |
 | Server browser | Find a host's session in the launcher | 🧪 |
 
@@ -150,8 +173,8 @@ and weather. Each feature below says how far it is proven:
 - **Animals' positions:** where the host's animals are (a wolf pack, a deer)
   can differ on the partner's screen until they come close, and an animal
   from a random encounter on the host's side may be missing there.
-- **Cutscenes** play for each player separately. 0.43.0 helps a scene that waits
-  on the host's people, but a scene that waits for a quest step can still stay
+- **Cutscenes** play for each player separately. A scene that waits on the host's
+  people is helped along, but a scene that waits for a quest step can still stay
   black until the next load.
 - **Friendly fire:** a blow on the partner hurts and a knockdown shows, but the
   figure's small flinch on an ordinary hit is not shown yet.
@@ -173,12 +196,17 @@ earlier detailed status table is kept in
 1. Both of you install the mod (below); the launcher's checklist sets up the
    rest the first time.
 2. The **host** clicks **HOST GAME** in the launcher (it starts a relay and shows
-   the address to share), clicks **PLAY**, loads one of their own saves in the
-   game, and clicks **CONNECT** once the launcher says the game is ready.
-3. The **partner** clicks **ADD SERVER**, enters that address, clicks **PLAY**,
-   waits at the game's **main menu**, and clicks **CONNECT**. The host's world comes
-   to them: their own character lands beside the host. A partner with no save of
-   their own in the Modding Tools uses **Join with a new character**.
+   the address to share, or a Steam code) and **PLAY**. On the game's main menu:
+   **Start Game** → one of your worlds, or **New adventure** (pick a playstyle, then
+   **Skip the prologue**, recommended with a partner). The launcher connects the
+   game by itself once the world is loaded; nobody clicks CONNECT.
+3. The **partner** clicks **ADD SERVER** (or **JOIN THROUGH STEAM**), enters that
+   address, clicks **PLAY**, and on the game's main menu presses **Join Game**, then
+   **Join with a new character** (no save of their own needed) or **Bring my
+   character**. Pressed too early? It says "Waiting for the host…" and joins by
+   itself. The host's world comes to them: their character lands beside the host.
+   First time ever starting the game? Start it once from Steam and accept its two
+   first-run pages, then use the launcher.
 4. In the game, **Insert** opens the mod menu: every setting in plain words
    (`docs/MOD-MENU.md`). The console commands still work for those who like them.
 
@@ -503,11 +531,10 @@ rather than hardcoding it — never add a new literal version byte to a script.
   in-progress state isn't reachable from outside it. That's why dice is a
   separate relay-authoritative engine instead of mirroring the vanilla
   minigame.
-- **Auto-detecting "you are actually in the world"** — the launcher still asks
-  you to confirm you have loaded your save before it injects. Injecting too
-  early is no longer fatal (the plugin waits for the game's tick instead of
-  giving up on it), but the launcher cannot yet decide for you when you are
-  really in the world, so it asks.
+- ~~**Auto-detecting "you are actually in the world"**~~ — done with Start Game /
+  Join Game (0.45.5 on): the game's own menu says when you are in, and nobody
+  clicks CONNECT. Injecting too early was never fatal (the plugin waits for the
+  game's tick).
 - **Nameplates are hidden while *your own* menu is open** — ghost bodies keep
   moving during your menu, but the `System.DrawLabel`/`DrawText` calls that
   draw names are immediate-mode, one frame per call, and the update pump is
