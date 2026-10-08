@@ -4377,10 +4377,10 @@ public partial class GameBridge(ClientConfig config)
     /// the sender, whose own locally-damaged ghost health is deliberately not
     /// treated as the truth.
     /// </summary>
-    private async Task ApplyPlayerHitAsync(float healthLoss, float staminaLoss, CancellationToken ct)
+    private async Task<bool> ApplyPlayerHitAsync(float healthLoss, float staminaLoss, CancellationToken ct)
     {
-        if (healthLoss <= 0 && staminaLoss <= 0) return;
-        if (Wo132RefuseLocal(healthLoss)) return;   // WO-132: never while I am down or waking
+        if (healthLoss <= 0 && staminaLoss <= 0) return false;
+        if (Wo132RefuseLocal(healthLoss)) return false;   // WO-132: never while I am down or waking
 
         // A stamina reading the sender could not obtain arrives as
         // Protocol.UnknownStat; passing that straight into TakeDamage would
@@ -4397,6 +4397,7 @@ public partial class GameBridge(ClientConfig config)
         else
             Console.WriteLine($"[playerhit] {healthLoss:F1} damage NOT applied -- KCDMP.dll is not injected, so " +
                               "NPC hits from other players' worlds cannot reach this player");
+        return applied;   // WO-161: the verdict's line says whether it landed
     }
 
     /// <summary>
@@ -4979,7 +4980,7 @@ public partial class GameBridge(ClientConfig config)
                     // precisely because it is about us.
                     float healthLoss  = ReadFloat(payload, 0);
                     float staminaLoss = ReadFloat(payload, 4);
-                    await ApplyPlayerHitAsync(healthLoss, staminaLoss, ct);
+                    await Wo161OnLegacyHitInAsync(healthLoss, staminaLoss, ct);   // WO-161: counted and logged; applied as before
                 }
                 else if (type == Protocol.PlayerRespawnedDown && payloadLen == Protocol.PlayerRespawnedDownPayloadLen)
                 {
@@ -6012,7 +6013,7 @@ public partial class GameBridge(ClientConfig config)
                 // DLL's hit watch armed the real hits come from the hit chokepoint
                 // (0x9A); otherwise only a drop of 1 hp or more outside a down.
                 if (!Wo132AllowGhostHit(hitGhostId, loss)) break;
-                _ = send(hitGhostId, loss, 0f)
+                _ = Wo161SendHitAsync(hitGhostId, loss, 0f, "", false)   // WO-161: the sampler names no attacker: a verdict with the NoAttacker flag
                     .ContinueWith(_ => Wo131RestoreAvatarAsync(hitGhostId), TaskScheduler.Default);   // WO-131 1e
                 break;
             }

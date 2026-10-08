@@ -65,6 +65,12 @@ public sealed class ClientConfig
     public bool WeatherSyncEnabled { get; set; } = true;
 
     /// <summary>
+    /// WO-161: the host sends an NPC's hit on an avatar as a verdict (0x72: a hit id applied once, the swing it belongs
+    /// to, hit or blocked) instead of the bare 0.46.0 PlayerHit (0x21). False = the 0.46.0 path. Ships on.
+    /// </summary>
+    public bool HitVerdictEnabled { get; set; } = true;
+
+    /// <summary>
     /// WO-100.5 Phase 4: whether the guid-addressed damage fallback (0x12/0x14)
     /// may fire.
     ///
@@ -357,6 +363,12 @@ public sealed class ClientConfig
                         break;
                     case "--no-guid-damage-fallback":
                         GuidDamageFallbackEnabled = false;
+                        break;
+                    case "--hit-verdict":
+                        HitVerdictEnabled = true;
+                        break;
+                    case "--no-hit-verdict":
+                        HitVerdictEnabled = false;
                         break;
                     case "--weather-sync":
                         WeatherSyncEnabled = true;

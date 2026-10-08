@@ -99,6 +99,8 @@
 //       setting ff|crime|ft 0|1    (WO-154) the host's session lever (SessionSetting), as a real host sends it
 //       vitals <hp> <st> [knockeddown|downed]   (WO-154) the host's own PlayerState (0x1F), at once and every 2 s
 //       phit <hp> <st> [joinerId=1]   (WO-155) the host's NPC blow on the joiner (PlayerHitUp 0x21)
+//       hverdict <hit|blocked|parried|missed> <hp> <st> <npc|-> [swing=0] [joinerId=1] [hitId=auto]   (WO-161) the host's verdict of an NPC's hit
+//                                 on the joiner (HitVerdictUp 0x72); a repeated hitId must be applied once; `-` names nobody (the NoAttacker fallback)
 //       ffhit <hp> <st> [unarmed] [joinerId=1]   (WO-155) the host's friendly-fire hit on the joiner (PlayerHitV8Up 0x44)
 //       death                     (WO-155) the host dies (PlayerDeathUp 0x23); pair it with vitals <hp> <st> downed
 //                                 (hstate downed=1|0: the Downed bit of the host's state block)
@@ -155,6 +157,7 @@ static class Host125
         Protocol.TrySplitJoinDown(p, out byte src, out _, out uint jid, out var body) ? (src, jid, body.ToArray()) : null;
 
     static string Tag(World w) => w.Seed is uint s ? WhsSave.SeedTag(s) : "-";
+    static uint _hitVerdictId;   // WO-161: the host's hit numbering (hverdict)
 
     public static async Task<int> RunAsync(string[] a, string release)
     {
@@ -610,6 +613,18 @@ static class Host125
                                 hp9[12] = 0;
                                 await W(hp9);
                                 Say($"PHIT hp={p[1]} st={p[2]} -> ghost {tgt} (an NPC blow of the host's world)");
+                                break;
+                            }
+                            case "hverdict":   // WO-161: hverdict <hit|blocked|parried|missed> <hp> <st> <npc|-> [swing=0] [joinerId=1] [hitId=auto]
+                            {
+                                var verdict = p[1] switch { "hit" => HitVerdict.Hit, "blocked" => HitVerdict.Blocked, "parried" => HitVerdict.Parried, "missed" => HitVerdict.Missed, _ => throw new FormatException("verdict: hit|blocked|parried|missed") };
+                                string vnpc = p[4] == "-" ? "" : p[4];
+                                uint vswing = p.Length > 5 ? uint.Parse(p[5], CultureInfo.InvariantCulture) : 0u;
+                                byte vtgt = p.Length > 6 ? byte.Parse(p[6], CultureInfo.InvariantCulture) : (byte)1;
+                                uint vid = p.Length > 7 ? uint.Parse(p[7], CultureInfo.InvariantCulture) : ++_hitVerdictId;
+                                byte vflags = (byte)((vswing != 0 ? Protocol.HitFlagSwingKnown : 0) | (vnpc.Length == 0 ? Protocol.HitFlagNoAttacker : 0));
+                                await W(new HitVerdictMsg(vid, verdict, vflags, 0, vswing, float.Parse(p[2], CultureInfo.InvariantCulture), float.Parse(p[3], CultureInfo.InvariantCulture), vnpc).BuildUp(vtgt));
+                                Say($"HVERDICT id={vid} {p[1]} hp={p[2]} st={p[3]} npc={(vnpc.Length == 0 ? "-" : vnpc)} swing={vswing} -> ghost {vtgt}");
                                 break;
                             }
                             case "ffhit":   // WO-155: ffhit <hp> <st> [unarmed] [joinerId=1] -- the host's friendly-fire hit on the joiner (PlayerHitV8Up 0x44 -> 0x45)

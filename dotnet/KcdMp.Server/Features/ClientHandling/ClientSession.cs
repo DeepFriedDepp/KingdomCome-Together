@@ -771,7 +771,7 @@ public class ClientSession
                         continue;
                     }
                     bool carryHeld = type == Protocol.CarryUp && body.Length > Protocol.JoinHeaderLen && body[Protocol.JoinHeaderLen] == Protocol.CarryHeld;   // WO-148: every 2 s while carrying
-                    if (type != Protocol.WorldChunkUp && type != Protocol.WorldAckUp && type != Protocol.ActivityHostUp && type != Protocol.ActivityPeerUp && !carryHeld)   // WO-141: rows every few seconds, counted not logged
+                    if (type != Protocol.WorldChunkUp && type != Protocol.WorldAckUp && type != Protocol.ActivityHostUp && type != Protocol.ActivityPeerUp && type != Protocol.HitVerdictUp && !carryHeld)   // WO-141: rows every few seconds, counted not logged; WO-161: a verdict per hit in a fight, the agents log each (WO161-HIT)
                         _logger.Information("[join] {Kind} '{Name}' (id={Id}) -> id={Dest} join=0x{Join:X8} ({Len} B).",
                             jw.Name, Name, Id, dest.Id, BinaryPrimitives.ReadUInt32LittleEndian(body.AsSpan(1)), payloadLen);
                     continue;

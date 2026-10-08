@@ -64,6 +64,7 @@ public partial class GameBridge
         _combat.OnDiscardedHit = null;
         _w132Watched.Clear();
         _w132LastSent.Clear();
+        Wo161OnDisconnect();   // WO-161: the swing ledger and the applied-id memory are per connection
         foreach (var (name, e) in _w132Engaged.ToArray())
         {
             _w132Engaged.TryRemove(name, out _);
@@ -102,6 +103,7 @@ public partial class GameBridge
                     string? nat = await _combat.Wo132StatusAsync(ct);
                     Console.WriteLine(FormattableString.Invariant(
                         $"MP-W132-STATS hits_fwd={_w132HitsFwd} hits_blocked={_w132HitsBlocked} ticks_dropped={_w132TicksDropped} sampler_superseded={_w132SamplerSuperseded} ghost_guid_dropped={_w132GhostGuidDropped} leave_ok={_w132LeaveOk} leave_fail={_w132LeaveFail} combat_out={_w132CombatOut} combat_in={_w132CombatIn} engage_on={_w132EngageOn} engage_off={_w132EngageOff} engage_far={_w132EngageFar} discarded={_w132Discarded} local_refused={_w132LocalRefused} native_watch={(_w132NativeHitWatch ? "armed" : "off")} | {nat ?? "native: no answer"}"));
+                    Wo161WriteStats();   // WO-161
                 }
             }
             catch (OperationCanceledException) { return; }
@@ -141,7 +143,7 @@ public partial class GameBridge
         var send = _sendPlayerHit;
         if (send is null) return;
         if (attacker.Length > 0) Wo147WatchFight(attacker, $"it hit avatar {g}");   // WO-147: the joiner gets combat mode against it
-        await send(g, health, stamina);
+        await Wo161SendHitAsync(g, health, stamina, attacker, (flags & 0x02) != 0);   // WO-161: one verdict per hit (0x72), the 0.46.0 0x21 only as its fallback
         Interlocked.Increment(ref _w132HitsFwd);
         Wo132KeepAvatarUp(g, force: true);
         Console.WriteLine(FormattableString.Invariant(

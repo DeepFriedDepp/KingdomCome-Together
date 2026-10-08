@@ -293,6 +293,7 @@ public partial class GameBridge
         await WritePacketAsync(s, pkt, _wo121Ct);
         _w121EvOut++;
         var outKind = f.Eid == 0 ? (ActionKind)f.Kind : (ActionKind)f.Kind == ActionKind.NpcHit ? ActionKind.NpcHit : ActionKind.NpcAttack;
+        if (f.Eid != 0 && outKind == ActionKind.NpcAttack) Wo161NoteSwingOut(f.Name, f.Row);   // WO-161: the swing is in the host's ledger (its id goes with the hit it causes)
         Console.WriteLine(FormattableString.Invariant($"MP-ACTION section=outbound kind={outKind} gen={_actionOut.Gen} {what}"));
     }
 
@@ -413,23 +414,27 @@ public partial class GameBridge
                 if (!RowEvent.TryFromBytes(a.Payload, out var ne) || ne.Name.Length == 0) return true;
                 _w121NpcRowsIn++;
                 _npcRowAt[ne.Name] = DateTime.UtcNow;
-                if (!_npcRows) return true;
-                if (catalog is null || !catalog.TryGet(ne.Row, out var row)) { _w121EvNoRow++; Console.WriteLine($"MP-ACTION section=inbound kind=NpcAttack npc={ne.Name} row={ne.Row} dispatch=dropped-unknown-row"); return true; }
+                Wo161NoteRowIn(ne.Name);   // WO-161: a row of this NPC came in (the victim's check of the next hit)
+                if (!_npcRows) { Wo161NoteRowRefused(ne.Name, "rows-off"); return true; }
+                if (catalog is null || !catalog.TryGet(ne.Row, out var row)) { _w121EvNoRow++; Wo161NoteRowRefused(ne.Name, "unknown-row"); Console.WriteLine($"MP-ACTION section=inbound kind=NpcAttack npc={ne.Name} row={ne.Row} dispatch=dropped-unknown-row"); return true; }
                 if (!_npcEntityIds.TryGetValue(ne.Name, out uint neid))
                 {
                     _w121EvNoBody++;
+                    Wo161NoteRowRefused(ne.Name, "no-entity");
                     Console.WriteLine($"MP-ACTION section=inbound kind=NpcAttack npc={ne.Name} dispatch=dropped-no-entity (not a puppet here)");
                     return true;
                 }
                 bool animal = _w141Animals.ContainsKey(ne.Name);
                 if (animal && !_w141Bites)
                 {
+                    Wo161NoteRowRefused(ne.Name, "animal-off");
                     Console.WriteLine($"MP-ACTION section=inbound kind=NpcAttack npc={ne.Name} row={ne.Row} dispatch=off (mp_animal_attacks off: an animal's attack is not animated here; its damage still comes through the host)");
                     return true;
                 }
                 _ = _combat.NpcHoldAsync(ne.Name, 900, ct);
                 var r = await _combat.GhostSwingForResultAsync(neid, row.Spec, ct);
                 if (animal) Interlocked.Increment(ref _w141Bite);
+                if (r.Ok) Wo161NoteRowPlayed(ne.Name); else Wo161NoteRowRefused(ne.Name, r.ReasonTag);   // WO-161
                 Console.WriteLine($"MP-ACTION section=inbound kind=NpcAttack npc={ne.Name} row={ne.Row} spec=\"{row.Spec}\" dispatch=native-row result={r.ReasonTag}");
                 if (r.Ok) await ExecLuaAsync($"if KCD2MP_NpcNativeSwingHold then KCD2MP_NpcNativeSwingHold(\"{ne.Name}\") end");
                 return true;

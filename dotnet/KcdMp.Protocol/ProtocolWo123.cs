@@ -99,6 +99,8 @@ public static partial class Protocol
         (ActivityExtraUp, ActivityExtraDown, "activity-extra", JoinHeaderLen + ExtraBodyMin, JoinHeaderLen + ExtraBodyMax, JoinFrom.Host),
         // WO-148: carrying (ProtocolWo148.cs) -- the LootMsg shape; a joiner's goes to the host, the host's to one joiner
         (CarryUp,       CarryDown,       "carry",        JoinHeaderLen + LootFixedLen + 1, JoinHeaderLen + LootFixedLen + CarryTextMax, JoinFrom.Either),
+        // WO-161: the hit verdict (ProtocolWo161.cs) -- the host's verdict of an NPC's hit on one joiner's avatar; the host only
+        (HitVerdictUp,  HitVerdictDown,  "hit-verdict",  JoinHeaderLen + HitVerdictFixedLen, JoinHeaderLen + HitVerdictBodyMax, JoinFrom.Host),
     };
 
     /// <summary>The JoinWire row for an up type, or null.</summary>

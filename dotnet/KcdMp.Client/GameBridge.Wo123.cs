@@ -286,6 +286,9 @@ public partial class GameBridge
             case Protocol.CarryDown:        // WO-148
                 await Wo148OnFrameAsync(src, body);
                 return;
+            case Protocol.HitVerdictDown:   // WO-161
+                await Wo161OnVerdictInAsync(src, joinId, body, ct);
+                return;
             case Protocol.WorldOfferDown:
                 await OnWorldOfferInAsync(src, joinId, body, ct);
                 return;

@@ -1122,6 +1122,50 @@ public class RelayRoundTripTests : IClassFixture<RelayFixture>
         Assert.NotNull(await a.ReadUntilAsync(Protocol.CarryDown, Wait));
     }
 
+    // ---- WO-161: the hit verdict, 0x72 / 0x73 (join channel) ----------------
+
+    [Fact]
+    public async Task A_hit_verdict_crosses_the_relay_host_to_one_joiner_only()
+    {
+        var (a, b) = await TwoPeersAsync();   // a = the host (damage authority), b = the joiner
+        await using var _a = a; await using var _b = b;
+
+        // the host's verdict reaches the joiner it names, with the host's id, whole
+        var blocked = new HitVerdictMsg(41, HitVerdict.Blocked, Protocol.HitFlagSwingKnown, 3, 12, 0f, 24.3f, "ttkc_man_23");
+        await a.SendRawAsync(blocked.BuildUp(b.Id));
+        var d = await b.ReadUntilAsync(Protocol.HitVerdictDown, Wait);
+        Assert.True(HitVerdictMsg.TryDecodeDown(d, out byte src, out var got));
+        Assert.Equal(a.Id, src);
+        Assert.Equal(blocked, got);
+
+        // the widest verdict (a 64-character name) crosses whole, and so does a name-less one
+        var widest = new HitVerdictMsg(uint.MaxValue, HitVerdict.Hit, Protocol.HitFlagSwingKnown | Protocol.HitFlagMissile, 6, uint.MaxValue, 999.9f, 999.9f, new string('n', Protocol.MaxNpcNameLen));
+        await a.SendRawAsync(widest.BuildUp(b.Id));
+        Assert.True(HitVerdictMsg.TryDecodeDown(await b.ReadUntilAsync(Protocol.HitVerdictDown, Wait), out _, out var gotWide));
+        Assert.Equal(widest, gotWide);
+        var anon = new HitVerdictMsg(2, HitVerdict.Hit, Protocol.HitFlagNoAttacker, 0, 0, 5f, 0f, "");
+        await a.SendRawAsync(anon.BuildUp(b.Id));
+        Assert.True(HitVerdictMsg.TryDecodeDown(await b.ReadUntilAsync(Protocol.HitVerdictDown, Wait), out _, out var gotAnon));
+        Assert.Equal(anon, gotAnon);
+
+        // a joiner may not send one: not to the host, not to anyone (only the damage authority speaks for its NPCs)
+        await b.SendRawAsync(blocked.BuildUp(a.Id));
+        await b.SendRawAsync(blocked.BuildUp(Protocol.JoinTargetHost));
+        Assert.True(await a.NoneOfAsync(Protocol.HitVerdictDown, Quiet));
+
+        // a frame one byte over the row's maximum is dropped, and the framing survives it
+        var over = new byte[Protocol.HitVerdictBodyMax + 1];
+        over[0] = Protocol.HitVerdictWire; over[1] = (byte)HitVerdict.Hit;
+        await a.SendRawAsync(Protocol.BuildJoinUp(Protocol.HitVerdictUp, b.Id, 9, over));
+        Assert.True(await b.NoneOfAsync(Protocol.HitVerdictDown, Quiet));
+        await a.SendRawAsync(blocked.BuildUp(b.Id));
+        Assert.NotNull(await b.ReadUntilAsync(Protocol.HitVerdictDown, Wait));
+
+        // nobody gets his own message back, and the host aiming one at itself is dropped
+        await a.SendRawAsync(blocked.BuildUp(a.Id));
+        Assert.True(await a.NoneOfAsync(Protocol.HitVerdictDown, Quiet));
+    }
+
     // ---- WO-141: activities 0x6A..0x6D (join channel) -----------------------
 
     [Fact]
