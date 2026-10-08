@@ -210,3 +210,46 @@ relay 63, all green. The synthetic host (`tools/wo118/synthpeer`) has a new verb
 authority; see "What only two players, or the next session, can verify"): the 10 verdicts from a scripted host, 10
 `WO161-HIT` lines, total damage equal to the sum, none unmatched, is the first line of the next session's runbook, with the
 `hverdict` verb ready.
+
+## Phases 2 and 3 — not built (the design call's consequence), and why each part
+
+Per the WO's own branch for "puppet unworkable" (0.4): the puppet's parts of Phases 1–3 are void, and the appendix lists
+what is still done (Phase 1's verdict path, 4, 5, 6 and the build). The reasons are recorded here per part so the next WO
+starts from them, not from a guess:
+
+* **2 shared targeting — the host's side** (a guard beating the avatar made lockable by the host's Henry, without changing the
+  guard's target): rests on an engine rule not read (what the lock-on offers: 0.1), would add the host's soul to the guard's
+  skirmish (`hits::skirmish_add`, override 0 exists), cannot be produced solo (an NPC that fights an avatar on demand is not
+  available: WO-155, WO-132 §2.4), and would make a hit on a guard an assault in the host's own world unless WO-154's
+  `mp_fair_crime` window judges it. Not built; the design is above and in the pocket list.
+* **2 — the joiner's side and the "ganging up" retarget**: the joiner already engages any enemy copy it fights (WO-147,
+  `engage on … whether or not the host fights it`) and its blows reach the host attributed; the retarget rule is
+  `wo136::decide()` (switch at most every 3 s when the other source clearly beats the current one). A stickier rule is a
+  native change with no way to measure it solo. Not built.
+* **3 snapping**: the three causes are located (0.2), but the keeping rule ("a fix that does not move the number is
+  reverted") needs a before/after in a scripted-partner fight, and the 0.45.2 counter measures steps over 5 m — which no
+  fight in the field produced. The measure for a fight is the correction maximum per window and the largest render step after a
+  hold (`tools/wo118/fight118.py`), and that harness needs the game's window in front (below 26 fps otherwise); this session
+  never focuses the game. Three core writer changes with no measurement would be three guesses shipped. Not built.
+  `WO161-SNAP` was therefore **not introduced** (a log line for a fix that does not exist).
+
+## Phase 4 — the item 9 set
+
+Done as 0.3 decided, per symptom: nothing was "the same fault as WO-160 §1.8", so **no fix was folded into the wake path**.
+9.4 (silent damage) is Phase 1's rule — built, counted and named on both machines. 9.1 (the sleeping NPC) is recorded for
+Part B and not fixed (the WO's own rule). 9.2 (the phantom stance on the host) and 9.3 (a swing and no combat) are separate,
+not fixed, and each has an **eye-test in the checklist** (items 165–166 below) that names the lines to look at. What the
+joiner's agent now logs for 9.3: the first blow lands before combat mode (37 ms in the field) — `WO161-HIT … shown=` and
+`MP-W132 engage on` are on the same machine's log within a second of each other, so the order can be read.
+
+## Phase 5 — the repo cleanup (its own commit, `2a72ddb`: moves only)
+
+| What | Where it went | Why / proof |
+|---|---|---|
+| `testing_findings.md` | `research/` (private, git-ignored; untracked now) | the maintainer's field notes; a pointer line is in `docs/WO-160-findings.md` |
+| `wo150-dryrun.txt` | `docs/wo150-dryrun.txt` | beside its WO findings (the default of the WO) |
+| `kdcmp_brand/Libs/…/KCDLogo.dds` | `docs/branding/pak-source/Libs/…` | **the brand pak:** two readers (`tools/Publish-Release.ps1`, `tools/Build-MenuLogo.py`) — fewer than the WO's 3 — so the source moved and both were repointed; the pak's entry name `Libs/UI/Textures/KCDLogo.dds` does not depend on the folder. The shipped pak code, run against the new path, built a pak of **524,655 bytes with the one entry of 524,416 bytes, DDS sha256 `7d913350…1de86`** — the same entry, size and hash as 0.46.0's pak (the zip's own bytes differ by the entry timestamp, which is why the proof is the entry) [syn]. A launcher-started game showing the logo is **[not tested] live** (no launcher drive from here); the pak that game loads is byte-for-byte the one it loaded in 0.46.0 |
+| `/logs/` (the maintainer's tester bundles, 248 MB, untracked) | stays; now git-ignored | so `git add -A` cannot publish players' logs; listed, not moved (they are the maintainer's evidence); proposed home `research/logs/` if they want it out of the tree |
+| `kcd_launcher.log`, `kcdmp-native.log` (root leftovers, already ignored) | `research/root-leftovers/` | session artefacts |
+| `KCDC_Review/` (an empty folder, untracked) | removed | nothing in it |
+| everything else at the root | unchanged | `AUTHORS`, `Directory.Build.props`, `KCD2-MP.sln`, `LICENSE`, `NOTICE`, `README.md`, `VERSION` and the source folders (`KCDMP_launcher`, `assets`, `docs`, `dotnet`, `installer`, `kdcmp`, `native`, `tools`); `release/` and `research/` are ignored build output and private notes. There is no `.gitattributes` or `.editorconfig` to keep |

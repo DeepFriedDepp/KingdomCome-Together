@@ -124,11 +124,8 @@ public partial class GameBridge
             Console.WriteLine($"WO161-HIT victim=me by=? hid={hitId} verdict=? refused=malformed len={body.Length} from=ghost {src} -- nothing applied");
             return;
         }
-        if (_isDamageAuthority)
-        {
-            Console.WriteLine($"WO161-HIT victim=me by={(m.Attacker.Length > 0 ? m.Attacker : "-")} hid={hitId} refused=this-machine-is-the-host from=ghost {src} -- a host takes no verdict");
-            return;
-        }
+        // never drop damage: the relay lets only the damage authority send a verdict, so a machine that still thinks it is the
+        // host when one arrives (a role change in flight) applies it all the same and says so in the line below
         long now = Environment.TickCount64;
         string by = m.Attacker.Length > 0 ? m.Attacker : "-";
         if (!_w161Dedupe.Accept(src, hitId, now))
@@ -150,7 +147,7 @@ public partial class GameBridge
         bool applied = hasDamage && await ApplyPlayerHitAsync(m.Health, m.Stamina, ct);
         _w161Stats.In(applied, m.Verdict, m.Health, m.Stamina, shown, reason);
         Console.WriteLine(FormattableString.Invariant(
-            $"WO161-HIT victim=me by={by} sid={m.SwingId} hid={hitId} verdict={HitVerdictMsg.VerdictName(m.Verdict)} dmg={m.Health:F1}/{m.Stamina:F1} dir={Wo161Zone(m.Zone)} shown={(shown ? "yes" : "no")} reason={reason} applied={(applied ? "yes" : hasDamage ? "no" : "none")}"));
+            $"WO161-HIT victim=me by={by} sid={m.SwingId} hid={hitId} verdict={HitVerdictMsg.VerdictName(m.Verdict)} dmg={m.Health:F1}/{m.Stamina:F1} dir={Wo161Zone(m.Zone)} shown={(shown ? "yes" : "no")} reason={reason} applied={(applied ? "yes" : hasDamage ? "no" : "none")}{(_isDamageAuthority ? " note=this-machine-thinks-it-is-the-host" : "")}"));
     }
 
     /// <summary>Victim: a bare 0.46.0 hit (0x22) -- a peer without the verdict path, or the host's fallback. Counted, never lost.</summary>
