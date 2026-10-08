@@ -335,7 +335,15 @@ them was run live in this WO.
 
 ## The 0.46.0 build
 
-* From a fresh clone of `85fd56a` (`release\c0460`) with the three git-ignored start saves copied in,
+**Second build (the current one, with the §1.8 DLL).** From a fresh clone of `e39caae` (`release\c0460b`) with the three
+git-ignored start saves, the same `tools\Build-Installer.ps1 -SoakWaiver "The maintainer decided on 2026-10-07: no soak test
+for 0.46.0."`: `release\KingdomComeTogether-Setup-0.46.0.exe`, 106,346,393 bytes, sha256
+`8fdd24065edc7ae3948472793880637e84d6671c6f8d00283ef2a52499ffb508`. Local only; not tagged; unsigned. Inside the build: relay
+62, agent 1,197, setup 77, native 421, **all 50 synthetic suites**, the static and native checks, the installer cases, the payload
+smoke (`protocol=v10 release=0.46.0`); no FAIL line; payload 1,035 manifest entries, no player or machine name in the payload. The
+first build (below) is superseded: it has the DLL without §1.8 and was kept beside it as `…superseded-first-build.exe`.
+
+**First build.** From a fresh clone of `85fd56a` (`release\c0460`) with the three git-ignored start saves copied in,
   `tools\Build-Installer.ps1 -SoakWaiver "The maintainer decided on 2026-10-07: no soak test for 0.46.0."` (the standing
   rule for this release candidate, as for 0.45.8): `release\KingdomComeTogether-Setup-0.46.0.exe`, 106,355,863 bytes,
   sha256 `7cd7ba9e0f6eefa651c5f9a60a073454efc0a9204f858e7bf3b630841c1290a0`. Local only; not tagged; unsigned (no signing settings).
