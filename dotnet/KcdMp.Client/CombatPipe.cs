@@ -112,6 +112,8 @@ public sealed class CombatPipe : IAsyncDisposable
     private const byte Wo147Reply        = 0xAA;
     private const byte Wo151             = 0x2A;   // WO-151 [op][...] -> 0xAB [ok][seq][op][reason][payload] (native wo151.h)
     private const byte Wo151Reply        = 0xAB;
+    private const byte Wo163             = 0x2B;   // WO-163 [op][...] -> 0xAC [ok][seq][op][reason][payload] (native wo163.h)
+    private const byte Wo163Reply        = 0xAC;
     private const byte ExtraOut          = 0xA9;   // WO-143, unsolicited: hands, gaits, looks, one-shots, need-item, one-shot done
 
     private const int GuidLen = 16;
@@ -1011,6 +1013,37 @@ public sealed class CombatPipe : IAsyncDisposable
     public async Task<string?> Wo147StatusAsync(CancellationToken ct = default)
     {
         var r = await Wo147Async(2, [], ct);
+        return r is { Ok: true } x ? System.Text.Encoding.ASCII.GetString(x.Payload) : null;
+    }
+
+    public async Task<(bool Ok, byte Reason, byte[] Payload)?> Wo163Async(byte op, byte[] args, CancellationToken ct = default)
+    {
+        var p = new byte[1 + args.Length];
+        p[0] = op; args.CopyTo(p, 1);
+        var (body, _) = await SendAndAwaitAsync(Wo163, p, Wo163Reply, ct);
+        if (body is null || body.Length < 4) return null;
+        return (body[0] == 1, body[3], body.AsSpan(4).ToArray());
+    }
+
+    /// <summary>
+    /// WO-163 op 1 (A7, read-only): the engine's own skirmish relation test between this machine's player and the NPC of that name --
+    /// Hostile = they are hostile opponents in one skirmish. Answered false = the DLL could not make the call (null = no answer at all).
+    /// </summary>
+    public async Task<(bool Answered, bool Hostile)?> Wo163SkirmishHostileAsync(string npc, CancellationToken ct = default)
+    {
+        var name = System.Text.Encoding.ASCII.GetBytes(npc);
+        if (name.Length is 0 or > 63) return null;
+        var a = new byte[1 + name.Length];
+        a[0] = (byte)name.Length; name.CopyTo(a, 1);
+        var r = await Wo163Async(1, a, ct);
+        if (r is not { Ok: true, Payload.Length: >= 2 } x) return r is null ? null : (false, false);
+        return (x.Payload[0] != 0, x.Payload[1] != 0);
+    }
+
+    /// <summary>WO-163 op 2: the native half's counters as text, or null.</summary>
+    public async Task<string?> Wo163StatusAsync(CancellationToken ct = default)
+    {
+        var r = await Wo163Async(2, [], ct);
         return r is { Ok: true } x ? System.Text.Encoding.ASCII.GetString(x.Payload) : null;
     }
 
@@ -1950,19 +1983,25 @@ public sealed class CombatPipe : IAsyncDisposable
 /// WO-121: the DLL's 0x96 frame -- an action the local engine committed.
 /// <c>[kind:1][phase:1][inputClass:1][zone(table id):1][attackType:1][flags:1][rowGuid:16][eid:4][nameLen:1][name]</c>.
 /// eid 0 = the local player; otherwise an NPC (by its authored entity name).
+/// WO-163 (A1): an optional 16-byte tail after the name, <c>[altGuid:16]</c> -- what the DLL's legacy read (+0x84) of a sync
+/// attack's descriptor holds, so the agent can say if BOTH reads hit the game's tables (they never should). Absent = none.
 /// </summary>
 public readonly record struct LocalActionFrame(byte Kind, byte Phase, sbyte InputClass, sbyte ZoneTableId, sbyte AttackType,
                                                byte Flags, Guid Row, uint Eid, string Name)
 {
+    /// <summary>The legacy-offset read of a sync attack's row (WO-163 A1); <see cref="Guid.Empty"/> when the frame had none.</summary>
+    public Guid AltRow { get; init; }
+
     public static bool TryParse(ReadOnlySpan<byte> b, out LocalActionFrame f)
     {
         f = default;
         if (b.Length < 27) return false;
         int n = b[26];
-        if (b.Length != 27 + n || n > 63) return false;
+        if (n > 63 || (b.Length != 27 + n && b.Length != 27 + n + 16)) return false;
         f = new LocalActionFrame(b[0], b[1], unchecked((sbyte)b[2]), unchecked((sbyte)b[3]), unchecked((sbyte)b[4]), b[5],
                                  new Guid(b.Slice(6, 16)), BinaryPrimitives.ReadUInt32LittleEndian(b[22..]),
-                                 n == 0 ? "" : System.Text.Encoding.UTF8.GetString(b.Slice(27, n)));
+                                 n == 0 ? "" : System.Text.Encoding.UTF8.GetString(b.Slice(27, n)))
+        { AltRow = b.Length == 27 + n + 16 ? new Guid(b.Slice(27 + n, 16)) : Guid.Empty };
         return true;
     }
 }

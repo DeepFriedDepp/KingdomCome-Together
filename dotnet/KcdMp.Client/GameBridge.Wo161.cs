@@ -19,12 +19,18 @@ namespace KcdMp.Client;
 //          TakeDamage, no knockdown, never while down or waking); damage is NEVER dropped for lacking a swing. The line
 //          WO161-HIT says whether the swing was shown with it, or why it was not; MP-WO161-STATS counts them.
 //
-//   WO161-HIT victim=<ghost|me> by=<npc|-> sid=<n> hid=<n> verdict=<hit|blocked> dmg=<hp>/<st> dir=<zone> shown=yes|no reason=<why>
+//   WO161-HIT victim=<ghost|me> by=<npc|-> sid=<n> hid=<n> verdict=<hit|blocked> dmg=<hp>/<st> dir=<zone> shown=yes|no|generic reason=<why>
 //             <sent=verdict|fallback|no | applied=yes|no|dup>
 //
-// Reasons a hit had no shown swing: no-swing-captured (the host's DLL saw no attack row for that blow: a chain follow-up, a
-// bite), row-not-received, row-not-played / row-refused-<why> (it came and the copy did not play it), row-stale, no-attacker
-// (the fallback path names nobody), missile, legacy (a bare 0x22 from a peer without this path).
+// Reasons a hit had no shown swing: no-swing-captured (the host's DLL saw no attack row of that NPC at all: an animal's bite),
+// swing-unmatched (WO-163 A3: rows exist, none fits the blow's own start+hit timing), row-not-received, row-not-played /
+// row-refused-<why> (it came and the copy did not play it), row-stale, no-attacker (the fallback path names nobody), missile,
+// legacy (a bare 0x22 from a peer without this path).
+//
+// WO-163 (A3): the host pairs a hit with the swing whose OWN start+hit lag (the row's table: attack_time_to_start +
+// attack_time_to_hit) it matches +-0.35 s, not with "the newest swing inside 1.2 s"; the victim judges a verdict against the
+// played row that lag fits. (A4): a blow with nothing shown (no-swing-captured / swing-unmatched / row-not-received / row-stale)
+// is shown as one generic lunge on the copy before its damage -- shown=generic, reason keeps why it was needed.
 public partial class GameBridge
 {
     private readonly Wo161SwingLedger _w161Swings = new();
@@ -33,7 +39,7 @@ public partial class GameBridge
     private readonly Wo161Stats _w161Stats = new();
     // the victim's half: when a row of an NPC came in, was played on its copy, or was refused (TickCount64)
     private readonly ConcurrentDictionary<string, long> _w161RowRecvAt = new(StringComparer.Ordinal);
-    private readonly ConcurrentDictionary<string, long> _w161RowPlayedAt = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, Wo161PlayedLog> _w161Played = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, (string Tag, long At)> _w161RowRefused = new(StringComparer.Ordinal);
 
     private void Wo161OnDisconnect()
@@ -41,7 +47,7 @@ public partial class GameBridge
         _w161Swings.Clear();
         _w161Dedupe.Clear();
         _w161RowRecvAt.Clear();
-        _w161RowPlayedAt.Clear();
+        _w161Played.Clear();
         _w161RowRefused.Clear();
     }
 
@@ -51,7 +57,14 @@ public partial class GameBridge
     private void Wo161NoteSwingOut(string npc, Guid row)
     {
         if (npc.Length == 0) return;
-        _w161Swings.Record(npc, row, Environment.TickCount64);
+        _w161Swings.Record(npc, row, Environment.TickCount64, Wo161LagOf(row));
+    }
+
+    /// <summary>WO-163 (A3): the lag from a row's start to the blow it causes, from the row's own table; unknown rows are never paired.</summary>
+    private int Wo161LagOf(Guid row)
+    {
+        if (!_rowCatalog.IsCompletedSuccessfully || _rowCatalog.Result is not { } cat) return Wo161Rules.LagNone;   // no catalog loaded: the 0.46.5 window
+        return cat.TryGet(row, out var r) ? (r.HitLagMs >= 0 ? r.HitLagMs : Wo161Rules.LagNone) : Wo161Rules.LagUnknownRow;
     }
 
     /// <summary>
@@ -72,9 +85,10 @@ public partial class GameBridge
         if (health < 0) health = 0;
         if (stamina < 0) stamina = 0;
         var verdict = Wo161Rules.Classify(health, stamina);
-        var sw = named ? _w161Swings.Latest(attacker, Environment.TickCount64) : null;
+        var pair = named ? _w161Swings.Match(attacker, Environment.TickCount64) : default;
+        var sw = named ? pair.Swing : null;
         byte zone = named && _w132LastSent.TryGetValue(attacker, out var ev) ? (byte)ev.State.AtkZone : (byte)0;
-        string hostWhy = sw is not null ? "-" : !named ? "no-attacker" : missile ? "missile" : "no-swing-captured";
+        string hostWhy = sw is not null ? "-" : !named ? "no-attacker" : missile ? "missile" : pair.Why;
         string how = "fallback";
         uint hid = 0;
         if (config.HitVerdictEnabled && _wo122Stream is not null)
@@ -99,7 +113,7 @@ public partial class GameBridge
             if (send is not null) await send(ghost, health, stamina);
         }
         Console.WriteLine(FormattableString.Invariant(
-            $"WO161-HIT victim={ghost} by={by} sid={sw?.Id ?? 0} hid={hid} verdict={HitVerdictMsg.VerdictName(verdict)} dmg={health:F1}/{stamina:F1} dir={Wo161Zone(zone)} shown={(sw is not null ? "yes" : "no")} reason={hostWhy} sent={how}"));
+            $"WO161-HIT victim={ghost} by={by} sid={sw?.Id ?? 0} hid={hid} verdict={HitVerdictMsg.VerdictName(verdict)} dmg={health:F1}/{stamina:F1} dir={Wo161Zone(zone)} shown={(sw is not null ? "yes" : "no")} reason={hostWhy}{(sw is not null ? $" fit_ms={pair.ErrMs}" : "")} sent={how}"));
     }
 
     private static string Wo161Zone(byte z) => z == 0 ? "-" : ((WireZone)z).ToString().ToLowerInvariant();
@@ -110,7 +124,33 @@ public partial class GameBridge
     private void Wo161NoteRowIn(string npc) => _w161RowRecvAt[npc] = Environment.TickCount64;
 
     /// <summary>Victim: that row was played on the copy.</summary>
-    private void Wo161NoteRowPlayed(string npc) { _w161RowPlayedAt[npc] = Environment.TickCount64; _w161Stats.RowPlayed(); }
+    private void Wo161NoteRowPlayed(string npc, int lagMs = Wo161Rules.LagNone)
+    {
+        _w161Played.GetOrAdd(npc, _ => new Wo161PlayedLog()).Note(Environment.TickCount64, lagMs);
+        _w161Stats.RowPlayed();
+    }
+
+    /// <summary>
+    /// WO-163 (A4), victim: a blow with no swing of its own is shown as one generic lunge on the copy -- an animal's bite row, a
+    /// man's unarmed punch (the catalog's own rows, chosen by content) -- before its damage is applied. True = it was played.
+    /// </summary>
+    private async Task<bool> Wo161ShowGenericAsync(string npc, CancellationToken ct)
+    {
+        if (!config.GenericSwingEnabled || !_npcRows || !_rowCatalog.IsCompletedSuccessfully || _rowCatalog.Result is not { } cat) return false;
+        if (!_npcEntityIds.TryGetValue(npc, out uint neid)) return false;                 // not a puppet here: nothing to move
+        bool animal = _w141Animals.ContainsKey(npc);
+        if (animal && !_w141Bites) return false;                                           // mp_animal_attacks off: an animal's attack is not animated here
+        var row = cat.GenericRow(animal);
+        if (row is not { } g) { Console.WriteLine($"MP-WO163 generic swing: the catalog holds no {(animal ? "animal" : "unarmed")} row -- nothing shown"); return false; }
+        _ = _combat.NpcHoldAsync(npc, 900, ct);
+        var r = await _combat.GhostSwingForResultAsync(neid, g.Spec, ct);
+        if (r.Ok)
+        {
+            _w161Stats.Generic();
+            await ExecLuaAsync($"if KCD2MP_NpcNativeSwingHold then KCD2MP_NpcNativeSwingHold(\"{npc}\") end");
+        }
+        return r.Ok;
+    }
 
     /// <summary>Victim: that row was not played, and why.</summary>
     private void Wo161NoteRowRefused(string npc, string tag) => _w161RowRefused[npc] = (tag, Environment.TickCount64);
@@ -134,20 +174,23 @@ public partial class GameBridge
             Console.WriteLine(FormattableString.Invariant($"WO161-HIT victim=me by={by} sid={m.SwingId} hid={hitId} verdict={HitVerdictMsg.VerdictName(m.Verdict)} dmg={m.Health:F1}/{m.Stamina:F1} applied=dup -- this id was applied already"));
             return;
         }
-        long? played = null, recv = null; string? refused = null;
+        long? played = null, recv = null; string? refused = null; bool fits = false;
         if (m.Attacker.Length > 0)
         {
-            if (_w161RowPlayedAt.TryGetValue(m.Attacker, out long pa)) played = now - pa;
+            if (_w161Played.TryGetValue(m.Attacker, out var pl) && pl.Best(now) is { } best) { played = best.Ago; fits = best.Fits; }
             if (_w161RowRecvAt.TryGetValue(m.Attacker, out long ra)) recv = now - ra;
             if (_w161RowRefused.TryGetValue(m.Attacker, out var rf) && Math.Abs(now - rf.At) <= Wo161Rules.RowBeforeMs + Wo161Rules.RowAfterMs) refused = rf.Tag;
         }
-        var (shown, reason) = Wo161Rules.Judge(m.SwingKnown, m.Missile, m.NoAttacker, played, recv, refused);
+        var (shown, reason) = Wo161Rules.Judge(m.SwingKnown, m.Missile, m.NoAttacker, played, recv, refused, fits);
+        bool generic = false;
+        if (Wo161Rules.WantsGenericSwing(shown, reason) && m.Attacker.Length > 0 && (m.Health > 0 || m.Stamina > 0))
+            generic = await Wo161ShowGenericAsync(m.Attacker, ct);   // before the damage: the lunge is on the screen when it lands
         // a verdict of no damage (the reserved parried / missed) has nothing to apply; every other one is applied exactly as 0.46.0's hit was
         bool hasDamage = m.Health > 0 || m.Stamina > 0;
         bool applied = hasDamage && await ApplyPlayerHitAsync(m.Health, m.Stamina, ct);
-        _w161Stats.In(applied, m.Verdict, m.Health, m.Stamina, shown, reason);
+        _w161Stats.In(applied, m.Verdict, m.Health, m.Stamina, shown || generic, generic ? "generic" : reason);
         Console.WriteLine(FormattableString.Invariant(
-            $"WO161-HIT victim=me by={by} sid={m.SwingId} hid={hitId} verdict={HitVerdictMsg.VerdictName(m.Verdict)} dmg={m.Health:F1}/{m.Stamina:F1} dir={Wo161Zone(m.Zone)} shown={(shown ? "yes" : "no")} reason={reason} applied={(applied ? "yes" : hasDamage ? "no" : "none")}{(_isDamageAuthority ? " note=this-machine-thinks-it-is-the-host" : "")}"));
+            $"WO161-HIT victim=me by={by} sid={m.SwingId} hid={hitId} verdict={HitVerdictMsg.VerdictName(m.Verdict)} dmg={m.Health:F1}/{m.Stamina:F1} dir={Wo161Zone(m.Zone)} shown={(shown ? "yes" : generic ? "generic" : "no")} reason={reason} applied={(applied ? "yes" : hasDamage ? "no" : "none")}{(_isDamageAuthority ? " note=this-machine-thinks-it-is-the-host" : "")}"));
     }
 
     /// <summary>Victim: a bare 0.46.0 hit (0x22) -- a peer without the verdict path, or the host's fallback. Counted, never lost.</summary>

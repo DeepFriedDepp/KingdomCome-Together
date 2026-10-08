@@ -21140,9 +21140,65 @@ do
                     tostring(src), npc, wait))
                 return
             end
+            -- WO-163 (A7): a guard in a fight with an AVATAR reads IsInCombatMode() false (WO-154 L2), so that test misses it. The engine
+            -- answers the question itself: are the host and this NPC hostile opponents in one skirmish (the lock-on rule's own relation)?
+            if KCD2MP_W163AskHostile and KCD2MP_W163AskHostile(src, npc) then return end
             KCD2MP_W139HostViolentNow(src, npc, "assault", x)
         end)
         return true
+    end
+
+    -- WO-163 (A7, WO-162 Q2.3): "the victim fights" becomes "the victim is in a skirmish fight with the host", asked of the engine through
+    -- the agent (w163_hostile -> the DLL's read-only relation call -> KCD2MP_W163HostileAnswer). No answer in hostileWaitMs, or an answer
+    -- of "not hostile": judged as 0.46.5 judged it. mp_hostile_crime on|off (default on).
+    --   WO163-JUDGE src=<n> assault on <npc> -- not a crime: the engine says ...
+    if W.hostileCrime == nil then W.hostileCrime = true end
+    W.hostileWaitMs = W.hostileWaitMs or 1500
+    W.hostileSeq = W.hostileSeq or 0
+    W.hostilePending = W.hostilePending or {}
+    W.stats.hostileAsked = W.stats.hostileAsked or 0
+    W.stats.hostileExempt = W.stats.hostileExempt or 0
+    W.stats.hostileTimeout = W.stats.hostileTimeout or 0
+
+    local function judgeAssaultNow(src, npc)
+        local x = nil
+        pcall(function() x = System.GetEntityByName(npc) end)
+        if not x then return end
+        if isDead(x) then murder(src, npc, x); return end
+        KCD2MP_W139HostViolentNow(src, npc, "assault", x)
+    end
+
+    -- true = asked (the judgement is parked until the answer or the timeout); false = judge now
+    function KCD2MP_W163AskHostile(src, npc)
+        if W.hostileCrime == false then return false end
+        W.hostileSeq = W.hostileSeq + 1
+        local id = W.hostileSeq
+        W.hostilePending[id] = { src = src, npc = npc }
+        W.stats.hostileAsked = W.stats.hostileAsked + 1
+        KCD2MP_EmitEvent("w163_hostile", tostring(id) .. " " .. tostring(npc))
+        Script.SetTimer(W.hostileWaitMs, function()
+            local p = W.hostilePending[id]
+            if not p then return end
+            W.hostilePending[id] = nil
+            W.stats.hostileTimeout = W.stats.hostileTimeout + 1
+            mp_log(string.format("WO163-JUDGE src=%s assault on %s -- no answer from the engine in %d ms: judged as before", tostring(p.src), tostring(p.npc), W.hostileWaitMs))
+            judgeAssaultNow(p.src, p.npc)
+        end)
+        return true
+    end
+
+    -- the agent's reply (answered: the DLL could make the call; hostile: the engine's relation test between the host and the victim)
+    function KCD2MP_W163HostileAnswer(id, answered, hostile)
+        local p = W.hostilePending[id]
+        if not p then return end                      -- the timeout judged it already
+        W.hostilePending[id] = nil
+        if answered == true and hostile == true then
+            W.stats.hostileExempt = W.stats.hostileExempt + 1
+            mp_log(string.format("WO163-JUDGE src=%s assault on %s -- not a crime: the engine says it is in a skirmish fight with the host (the relation test, read-only)",
+                tostring(p.src), tostring(p.npc)))
+            return
+        end
+        judgeAssaultNow(p.src, p.npc)
     end
 
     local function fightSwitch(key, field, arg, what)
@@ -21156,6 +21212,7 @@ do
     function KCD2MP_W154SetHostTarget(arg) return fightSwitch("host_target", "hostTarget", arg, "a host blow frees an NPC from the mod's locks on an avatar") end
     function KCD2MP_W154SetGuardRespite(arg) return fightSwitch("guard_respite", "guardRespite", arg, "no guard acts on a partner who is down or just up again") end
     function KCD2MP_W154SetFairCrime(arg) return fightSwitch("fair_crime", "fairCrime", arg, "a murder only on a death; an assault judged 5 s later") end
+    function KCD2MP_W163SetHostileCrime(arg) return fightSwitch("hostile_crime", "hostileCrime", arg, "an assault is no crime when the engine says the victim is in a skirmish fight with the host") end
     function KCD2MP_W154SetSceneResume(arg) return fightSwitch("scene_resume", "sceneResume", arg, "on = 0.44.0's copy resume for a stuck scene") end
     -- Phase 4.2 (joiner): mp_join_patient on|off (default on) -- a join's load is given up only on a responsive menu
     if W.joinPatient == nil then W.joinPatient = true end
@@ -23629,6 +23686,7 @@ local ok, err = pcall(function()
     System.AddCCommand("mp_ctx_release", 'KCD2MP_W160SetRelease(%line)', "WO-160: (joiner) a copy's stance and unstance are released the game's own way before its next placement, so the game's planner only places it (default on): mp_ctx_release on|off")
     System.AddCCommand("mp_sleep_rest", 'KCD2MP_W157SetSleepRest(%line)', "WO-157: a real sleep (a vote's, or your own) that the game gave no rest gets the rest its own sleep gives -- in this game build its no-bed sleep often gives none (default on): mp_sleep_rest on|off")
     System.AddCCommand("mp_w157_status", "KCD2MP_W157Status()", "WO-157: the trespass check and the stop grace (WO157-STATUS here); also the area here: private, public, open (a shop) or unknown")
+    System.AddCCommand("mp_hostile_crime", 'KCD2MP_W163SetHostileCrime(%line)', "WO-163: (host) an assault is no crime when the engine says the victim is in a skirmish fight with the host, asked 5 s after the blow (default on): mp_hostile_crime on|off")
     System.AddCCommand("mp_fair_crime", 'KCD2MP_W154SetFairCrime(%line)', "WO-154: (host) a partner's murder only on the victim's death, and an assault judged 5 s later -- no crime if the victim fights by then, a quest brawl (default on): mp_fair_crime on|off")
     System.AddCCommand("mp_scene_resume", 'KCD2MP_W154SetSceneResume(%line)', "WO-154: (joiner) a scene stuck at its end resumes the host's copies, as in 0.44.0 (default off: no copy is resumed; the engine's own rescue, a save request, runs at once): mp_scene_resume on|off")
     System.AddCCommand("mp_bind_far", 'KCD2MP_W154SetBindFar(%line)', "WO-154: (joiner) KCDMP.dll writes a host copy that has no physics yet (far away) and one seated on a cart (held in its seat until it gets off), instead of refusing them as not-living / parented (default on): mp_bind_far on|off")

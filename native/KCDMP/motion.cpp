@@ -3,6 +3,7 @@
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 // WO-121 -- movement and combat on native-written bodies. See motion.h.
 #include "motion.h"
+#include "wo163_rules.h"
 #include "fault_guard.h"
 
 #include <windows.h>
@@ -298,6 +299,7 @@ std::vector<PendingEvent> g_events;
 // ---- captured actions (any thread -> main thread) --------------------------------
 struct Captured {
     uint8_t kind, flags; int8_t ic, zone, type; uint8_t guid[16]; uint32_t eid; char name[64];
+    uint8_t alt[16]; bool hasAlt;   // WO-163 (A1): a sync attack's legacy-offset read, for the agent's both-offsets check
 };
 std::mutex g_capMutex;
 std::vector<Captured> g_captured;
@@ -518,7 +520,9 @@ void dump_hit_action(void* action) {
 struct RowPath { size_t descOff; size_t guidOff; const char* rtti; };
 constexpr RowPath kPathAttack{kActionDescriptor, kDescRowGuid, nullptr};
 constexpr RowPath kPathHit{0x58, 0x7C, "CombatActionHitData"};
-constexpr RowPath kPathSync{0x60, 0x84, "CombatActionSyncAttackData"};
+// WO-163 (A1): the sync row's GUID is at +0x7C (WO-162 Q3.1/Q3.3: 16 of 16 field dumps); +0x84, the attack class's offset, read half
+// of it. The legacy offset stays as a check (capture() below), never as the row.
+constexpr RowPath kPathSync{0x60, kcdmp::wo163::kSyncGuidOff, "CombatActionSyncAttackData"};
 const RowPath& row_path(uint8_t cls) { return cls == kClsHit ? kPathHit : cls == kClsSyncAttack ? kPathSync : kPathAttack; }
 std::atomic<void*> g_rowVptrOk[kClsCount]{};
 std::atomic<int> g_rowRttiLogged[kClsCount]{};
@@ -559,7 +563,9 @@ void capture(uint8_t cls, void* action) {
     void* ca = as_combat_actor(raw);
     void* playerCa = g_playerCa.load(std::memory_order_relaxed);
     const bool isPlayer = ca && ca == playerCa;
-    const bool npcKind = cls == kClsAttack || cls == kClsHit || cls == kClsSyncAttack;
+    // WO-163 (A2): an NPC's perfect-block-class action is read too -- its master strike (the blocker's counter) is a swing; the agent
+    // sorts it by the row's table (flags bit 0 marks the class) and drops the block itself.
+    const bool npcKind = cls == kClsAttack || cls == kClsHit || cls == kClsSyncAttack || cls == kClsPerfect;
     if (isPlayer && (cls == kClsHit || cls == kClsSyncAttack)) return;   // WO-151: NPCs only
     if (!isPlayer && !(npcKind && g_cfgNpcRows.load(std::memory_order_relaxed))) return;
     if (!ca) { note_drop(c_dropNotCa, "owner-not-a-combat-actor", cls, raw); return; }
@@ -577,7 +583,13 @@ void capture(uint8_t cls, void* action) {
     uint64_t g0 = 0, g1 = 0;
     if (!rd(desc, path.guidOff, &g0) || !rd(desc, path.guidOff + 8, &g1) || (g0 == 0 && g1 == 0)) { note_drop(c_dropNoGuid, "no-row-guid", cls, raw); return; }
     std::memcpy(c.guid, &g0, 8); std::memcpy(c.guid + 8, &g1, 8);
-    c.kind = cls == kClsAttack || cls == kClsSyncAttack ? 1 : cls == kClsHit ? kKindNpcHit : cls == kClsDodge ? 7 : 6;
+    if (cls == kClsSyncAttack) {
+        uint64_t a0 = 0, a1 = 0;
+        if (rd(desc, kcdmp::wo163::kSyncGuidLegacyOff, &a0) && rd(desc, kcdmp::wo163::kSyncGuidLegacyOff + 8, &a1) && (a0 || a1)) {
+            std::memcpy(c.alt, &a0, 8); std::memcpy(c.alt + 8, &a1, 8); c.hasAlt = true;
+        }
+    }
+    c.kind = cls == kClsAttack || cls == kClsSyncAttack || (cls == kClsPerfect && !isPlayer) ? 1 : cls == kClsHit ? kKindNpcHit : cls == kClsDodge ? 7 : 6;
     c.flags = cls == kClsPerfect ? 0x01 : 0;
     c.ic = -1; c.zone = -1; c.type = -1;
     void* model = nullptr;
@@ -1532,7 +1544,7 @@ void tick() {
     std::vector<Captured> caps;
     { std::lock_guard<std::mutex> lock(g_capMutex); caps.swap(g_captured); }
     if (ActionFn fn = g_actionFn.load())
-        for (const auto& c : caps) fn(c.kind, 1, c.ic, c.zone, c.type, c.flags, c.guid, c.eid, c.name);
+        for (const auto& c : caps) fn(c.kind, 1, c.ic, c.zone, c.type, c.flags, c.guid, c.eid, c.name, c.hasAlt ? c.alt : nullptr);
     if (g_cfgChanged.exchange(false) && !(g_cfgCombat && g_cfgAvatarGait && g_cfgMoves)) {
         for (auto& kv : g_bodies) {
             Body& b = kv.second;

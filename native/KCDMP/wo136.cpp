@@ -218,8 +218,8 @@ void decide(uint32_t npc, NpcThreat& t, double now, const char* why) {
     if (ok) c_switch.fetch_add(1);
     else if (asked) queue(npc, p.to, Kind::Switch, why);
     else c_switchFail.fetch_add(1);
-    logf("WO136-TARGET npc=%s %s -> %s threat=%d/%d why=%s -> %s", nb, src_name(cur, b1, sizeof b1), src_name(p.to, b2, sizeof b2),
-         p.toScore, p.curScore, why, ok ? "switched (read back)" : asked ? "asked (leave + re-add; read back over the next frames)" : "NOT switched (no soul / the skirmish call failed)");
+    logf("WO136-TARGET npc=%s %s -> %s threat=%d/%d damage=%.1f/%.1f why=%s -> %s", nb, src_name(cur, b1, sizeof b1), src_name(p.to, b2, sizeof b2),
+         p.toScore, p.curScore, p.toDamage, p.curDamage, why, ok ? "switched (read back)" : asked ? "asked (leave + re-add; read back over the next frames)" : "NOT switched (no soul / the skirmish call failed)");
 }
 
 // for_each_entity: the nearest fighting NPC within reach of a point.
@@ -256,7 +256,7 @@ bool hand_visit(void* e, void* ctx) {
 void set_enabled(bool on) { g_on.store(on); }
 bool enabled() { return g_on.load(); }
 
-void note_threat(uint32_t npcEid, uint32_t srcEid, int weight, const char* why) {
+void note_threat(uint32_t npcEid, uint32_t srcEid, int weight, const char* why, float damage) {
     if (!g_on.load() || !npcEid) return;
     const bool host = srcEid == kPlayer;
     const bool hostTarget = host && g_hostTarget.load();
@@ -278,7 +278,7 @@ void note_threat(uint32_t npcEid, uint32_t srcEid, int weight, const char* why) 
         it = g_threat.emplace(npcEid, NpcThreat{}).first;
     }
     const double now = now_s();
-    it->second.evs.push_back({srcEid, now, weight});
+    it->second.evs.push_back({srcEid, now, weight, damage});
     if (it->second.evs.size() > 64) it->second.evs.erase(it->second.evs.begin());
     c_threat.fetch_add(1);
     decide(npcEid, it->second, now, why);

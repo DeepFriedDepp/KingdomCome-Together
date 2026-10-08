@@ -104,6 +104,7 @@ public partial class GameBridge
                     Console.WriteLine(FormattableString.Invariant(
                         $"MP-W132-STATS hits_fwd={_w132HitsFwd} hits_blocked={_w132HitsBlocked} ticks_dropped={_w132TicksDropped} sampler_superseded={_w132SamplerSuperseded} ghost_guid_dropped={_w132GhostGuidDropped} leave_ok={_w132LeaveOk} leave_fail={_w132LeaveFail} combat_out={_w132CombatOut} combat_in={_w132CombatIn} engage_on={_w132EngageOn} engage_off={_w132EngageOff} engage_far={_w132EngageFar} discarded={_w132Discarded} local_refused={_w132LocalRefused} native_watch={(_w132NativeHitWatch ? "armed" : "off")} | {nat ?? "native: no answer"}"));
                     Wo161WriteStats();   // WO-161
+                    Wo163WriteStats();   // WO-163
                 }
             }
             catch (OperationCanceledException) { return; }

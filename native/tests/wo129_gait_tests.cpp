@@ -31,6 +31,7 @@ int wo143_rules_tests(int* passed);        // wo143_rules_tests.cpp
 int wo148_x64_tests(int* passed);          // wo148_x64_tests.cpp
 int wo151_tests(int* passed);              // wo151_tests.cpp
 int wo155_rules_tests(int* passed);        // wo155_rules_tests.cpp
+int wo163_tests(int* passed);              // wo163_tests.cpp (WO-163: sync GUID offsets, MP-FIGHTSNAP)
 
 static int g_fail = 0, g_pass = 0;
 #define CHECK(cond, ...) do { if (cond) ++g_pass; else { ++g_fail; std::printf("FAIL  %s:%d  ", __FILE__, __LINE__); std::printf(__VA_ARGS__); std::printf("\n"); } } while (0)
@@ -216,6 +217,14 @@ int main() {
     {
         int fp = 0;
         const int ff = wo155_rules_tests(&fp);
+        g_pass += fp;
+        g_fail += ff;
+    }
+
+    // WO-163: the sync-attack GUID offsets and the MP-FIGHTSNAP accumulator
+    {
+        int fp = 0;
+        const int ff = wo163_tests(&fp);
         g_pass += fp;
         g_fail += ff;
     }

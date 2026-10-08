@@ -24,10 +24,26 @@ namespace KcdMp.Client;
 /// </summary>
 public sealed class ActionRowCatalog
 {
-    public readonly record struct Row(string Table, string Fragment, string Tags, int Zone, int InputClass, int AttackType)
+    /// <summary>
+    /// One authored row. WO-163 adds, as optional trailing fields: the table's action type, the row's own timings (a blow lands
+    /// <c>attack_time_to_start + attack_time_to_hit</c> after the row starts -- the pairing rule of A3), the actor class hash
+    /// (an animal's rows carry another one than a man's) and the two weapon classes (the failed-attack choice of C3).
+    /// </summary>
+    public readonly record struct Row(string Table, string Fragment, string Tags, int Zone, int InputClass, int AttackType,
+                                      int ActionType = -1, float TimeToStart = 0f, float TimeToHit = 0f, long ActorClass = 0,
+                                      int WeaponR = -1, int WeaponL = -1)
     {
         public string Spec => $"{Fragment}, {Tags}";
+
+        /// <summary>The lag from the row's start to the blow it causes, in ms (WO-162 Q3.2: 33 of 35 field hits fit this +-0.35 s); -1 = the row says none.</summary>
+        public int HitLagMs => TimeToStart <= 0f && TimeToHit <= 0f ? -1 : (int)MathF.Round((TimeToStart + TimeToHit) * 1000f);
     }
+
+    /// <summary>combat_action_perfect_block action types 55 / 62: the blocker's counter (a master strike; 62 is the one that kills). WO-162 Q3.3.</summary>
+    public static bool IsMasterStrike(int actionType) => actionType == 55 || actionType == 62;
+
+    /// <summary>A table's action type for the attacker-side answer to a block (WO-162 Q4): 27 failedAttackOnBlock, 15 failedAttackOnPB.</summary>
+    public const int ActionFailedAttackOnBlock = 27, ActionFailedAttackOnPerfectBlock = 15;
 
     private readonly Dictionary<Guid, Row> _rows;
     private ActionRowCatalog(Dictionary<Guid, Row> rows) { _rows = rows; }
@@ -44,6 +60,10 @@ public sealed class ActionRowCatalog
         // WO-151: an NPC's hit reaction (NpcHit) and an animal's paired bite (a sync attack, sent as NpcAttack)
         "Libs/Tables/combat/combat_action_hit.xml",
         "Libs/Tables/combat/combat_action_sync_attack.xml",
+        // WO-163 (C3, appended at the end): the attacker-side answer to a block / perfect block (WO-162 Q4) and the paired
+        // hit half of a perfect block's riposte / master strike
+        "Libs/Tables/combat/combat_action_failed_attack.xml",
+        "Libs/Tables/combat/combat_action_sync_perfect_block_hit.xml",
     };
 
     public static ActionRowCatalog LoadFrom(string tablesPakPath)
@@ -64,13 +84,43 @@ public sealed class ActionRowCatalog
                 if (g is null || frag is null || !Guid.TryParse(g, out var guid)) continue;
                 rows[guid] = new Row(table, frag, (string?)el.Attribute("mn_tags") ?? "",
                     Int((string?)el.Attribute("attack_zone_id") ?? (string?)el.Attribute("block_zone_id")),
-                    Int((string?)el.Attribute("input_class_id")), Int((string?)el.Attribute("attack_type_id")));
+                    Int((string?)el.Attribute("input_class_id")), Int((string?)el.Attribute("attack_type_id")),
+                    Int((string?)el.Attribute("action_type_id")), Flt((string?)el.Attribute("attack_time_to_start")),
+                    Flt((string?)el.Attribute("attack_time_to_hit")), Long((string?)el.Attribute("actor_class_hash")),
+                    Int((string?)el.Attribute("r_weapon_class_id")), Int((string?)el.Attribute("l_weapon_class_id")));
             }
         }
         return new ActionRowCatalog(rows);
     }
 
     private static int Int(string? s) => int.TryParse(s, out int v) ? v : -1;
+    private static float Flt(string? s) => float.TryParse(s, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float v) ? v : 0f;
+    private static long Long(string? s) => long.TryParse(s, out long v) ? v : 0L;
+
+    /// <summary>
+    /// WO-163 (A4): one existing row to show a blow that came with no swing of its own -- an animal's bite (an anim-collision
+    /// started from a procedural clip, no row exists for it in any table: WO-162 Q3.1/Q3.3) or a man's blow nothing captured.
+    /// An animal: the plain bite row of the attack table (attack type 8, no lying / sitting condition); a man: the unarmed
+    /// punch (the FreeAttack punch row of two empty hands). Chosen by content, the lowest tag then GUID, so the choice is
+    /// the same on every machine; null when the table holds none (the caller then shows nothing and says so).
+    /// </summary>
+    public Row? GenericRow(bool animal)
+    {
+        Row? best = null; Guid bestGuid = default;
+        foreach (var (g, r) in _rows)
+        {
+            if (r.Table != "combat_action_attack") continue;
+            bool fits = animal
+                ? r.AttackType == 8 && !r.Tags.Contains("oppLying", StringComparison.Ordinal) && !r.Tags.Contains("oppSitting", StringComparison.Ordinal)
+                : r.AttackType == 5 && r.ActionType == 26 && r.Tags.Contains("l_noweapon+r_noweapon", StringComparison.Ordinal);
+            if (!fits) continue;
+            if (best is null || string.CompareOrdinal(r.Tags, best.Value.Tags) < 0 || (r.Tags == best.Value.Tags && g.CompareTo(bestGuid) < 0)) { best = r; bestGuid = g; }
+        }
+        return best;
+    }
+
+    /// <summary>WO-163 (A1): the row behind a GUID, for both reads of a sync attack's descriptor -- both hitting the catalog is the one thing that must never happen.</summary>
+    public bool BothResolve(Guid a, Guid b) => a != Guid.Empty && b != Guid.Empty && _rows.ContainsKey(a) && _rows.ContainsKey(b);
 
     public static ActionRowCatalog? TryLoad(Action<string> log)
     {
@@ -79,7 +129,7 @@ public sealed class ActionRowCatalog
             string? pak = WeaponSwingCatalog.FindTablesPak();
             if (pak is null) { log("[rowcatalog] Tables.pak not found -- v8 attack events fall back to the weapon swing rows"); return null; }
             var c = LoadFrom(pak);
-            log($"[rowcatalog] loaded {c.Count} combat rows (attack/block/perfect_block/dodge/hit/sync_attack) from {pak}");
+            log($"[rowcatalog] loaded {c.Count} combat rows (attack/block/perfect_block/dodge/hit/sync_attack/failed_attack/sync_perfect_block_hit) from {pak}");
             return c;
         }
         catch (Exception ex)

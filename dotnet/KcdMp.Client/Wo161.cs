@@ -16,9 +16,33 @@ namespace KcdMp.Client;
 /// </summary>
 public static class Wo161Rules
 {
-    /// <summary>Host: a swing of this NPC committed this soon before the hit is the swing the hit belongs to (the field: the
-    /// hit lands ~0.3 s after the swing's row, never more than ~1 s).</summary>
+    /// <summary>Host: for a swing whose row states no lag of its own (the catalog knows the row but its table has no timings),
+    /// the 0.46.5 rule -- a swing committed this soon before the hit is the swing the hit belongs to. A row the catalog does
+    /// not know at all is never paired by it (WO-162 Q3.2: the window had matched an unreadable swing).</summary>
     public const long SwingWindowMs = 1200;
+
+    /// <summary>WO-163 (A3): a hit belongs to the swing whose own <c>attack_time_to_start + attack_time_to_hit</c> it matches, +-this
+    /// (WO-162 Q3.2: 33 of the 35 field hits with a catalogued row within 2 s fit it; the fit's median error 0.16 s).</summary>
+    public const long PairToleranceMs = 350;
+
+    /// <summary>WO-163 (A3): swings older than this are never candidates (the longest start+hit seen is a sync attack's 3.2 s).</summary>
+    public const long LookbackMs = 4000;
+
+    /// <summary>Victim: a played row fits a verdict when the time between them is its lag +- <see cref="PairToleranceMs"/> plus this
+    /// (two messages on one ordered stream, one native call a frame after the row arrived).</summary>
+    public const long VictimSkewMs = 250;
+
+    /// <summary>The reasons the host and the victim name. no-swing-captured = no row of this NPC at all; swing-unmatched = rows
+    /// exist but none fits this blow's timing (a chain follow-up, a blow the row's table does not time).</summary>
+    public const string ReasonNone = "no-swing-captured", ReasonUnmatched = "swing-unmatched";
+
+    /// <summary>A swing whose row the catalog does not know (lag unknown, never paired); and one the catalog knows with no lag.</summary>
+    public const int LagUnknownRow = -2, LagNone = -1;
+
+    /// <summary>Victim (A4): the reasons that mean "damage with nothing shown" and so get a generic lunge on the copy. A named
+    /// attacker only -- not a missile, not a bare legacy hit, not a row the copy refused to play.</summary>
+    public static bool WantsGenericSwing(bool shown, string reason) =>
+        !shown && (reason == ReasonNone || reason == ReasonUnmatched || reason == "row-not-received" || reason == "row-stale");
 
     /// <summary>Victim: a swing row played on the copy this soon before the verdict is "the swing shown with it".</summary>
     public const long RowBeforeMs = 1500;
@@ -46,16 +70,34 @@ public static class Wo161Rules
     /// <param name="dispatchedAgoMs">ms from a row played on the copy (OK) to the verdict's arrival; null = none; negative = after</param>
     /// <param name="receivedAgoMs">ms from a row of this NPC received (played or not) to the verdict; null = none</param>
     /// <param name="refusedTag">the dispatcher's reason when a received row was not played</param>
+    /// <param name="dispatchedFits">WO-163 (A3): the played row is the one whose own start+hit lag the time since it fits -- it is
+    /// shown however long that lag is (a sync attack's 3.2 s), where the 0.46.5 bound would call it stale</param>
     public static (bool Shown, string Reason) Judge(bool swingKnown, bool missile, bool noAttacker,
-                                                    long? dispatchedAgoMs, long? receivedAgoMs, string? refusedTag)
+                                                    long? dispatchedAgoMs, long? receivedAgoMs, string? refusedTag, bool dispatchedFits = false)
     {
-        if (dispatchedAgoMs is long d && d >= -RowAfterMs && d <= RowBeforeMs) return (true, "-");
+        if (dispatchedAgoMs is long d && (dispatchedFits || (d >= -RowAfterMs && d <= RowBeforeMs))) return (true, "-");
         if (noAttacker) return (false, "no-attacker");
         if (missile) return (false, "missile");
         if (receivedAgoMs is long r && r >= -RowAfterMs && r <= RowBeforeMs)
             return (false, string.IsNullOrEmpty(refusedTag) ? "row-not-played" : "row-refused-" + refusedTag);
         if (receivedAgoMs is not null || dispatchedAgoMs is not null) return (false, "row-stale");
         return (false, swingKnown ? "row-not-received" : "no-swing-captured");
+    }
+
+    /// <summary>WO-163 (A3), victim: of the rows played on a copy, the ms since the one this verdict belongs to -- the one whose own
+    /// lag the time since it fits (best fit wins), else the newest (the 0.46.5 view, which <see cref="Judge"/> still bounds).</summary>
+    public static (long Ago, bool Fits)? BestPlayedAgo(IReadOnlyList<(long Ago, int LagMs)> played)
+    {
+        long? fit = null; long fitErr = long.MaxValue, newest = long.MaxValue;
+        foreach (var (ago, lag) in played)
+        {
+            if (ago < newest) newest = ago;
+            if (lag < 0) continue;
+            long err = Math.Abs(ago - lag);
+            if (err <= PairToleranceMs + VictimSkewMs && err < fitErr) { fit = ago; fitErr = err; }
+        }
+        if (fit is long f) return (f, true);
+        return newest == long.MaxValue ? null : (newest, false);
     }
 
     /// <summary>Host: the verdict's flags byte.</summary>
@@ -66,15 +108,19 @@ public static class Wo161Rules
 /// <summary>WO-161, host: the swings it sent for its NPCs (the rows of ActionKind.NpcAttack), per NPC, with an id each.</summary>
 public sealed class Wo161SwingLedger
 {
-    public readonly record struct Swing(uint Id, Guid Row, long AtMs);
+    /// <summary><paramref name="LagMs"/>: the row's own start+hit lag; <see cref="Wo161Rules.LagNone"/> / <see cref="Wo161Rules.LagUnknownRow"/> when it has none.</summary>
+    public readonly record struct Swing(uint Id, Guid Row, long AtMs, int LagMs = Wo161Rules.LagNone);
+
+    /// <summary>A hit's pairing: the swing it belongs to (null = none) and, when none, why.</summary>
+    public readonly record struct Pairing(Swing? Swing, string Why, long ErrMs);
 
     private const int PerNpc = 8, MaxNpcs = 256;
     private readonly Dictionary<string, List<Swing>> _by = new(StringComparer.Ordinal);
     private readonly object _gate = new();
     private uint _next;
 
-    /// <summary>A swing the host sent (its id, from 1).</summary>
-    public uint Record(string npc, Guid row, long nowMs)
+    /// <summary>A swing the host sent (its id, from 1). <paramref name="lagMs"/> comes from the row's own timings.</summary>
+    public uint Record(string npc, Guid row, long nowMs, int lagMs = Wo161Rules.LagNone)
     {
         lock (_gate)
         {
@@ -86,19 +132,36 @@ public sealed class Wo161SwingLedger
                 _by[npc] = l = new List<Swing>(PerNpc);
             }
             if (l.Count >= PerNpc) l.RemoveAt(0);
-            l.Add(new Swing(_next, row, nowMs));
+            l.Add(new Swing(_next, row, nowMs, lagMs));
             return _next;
         }
     }
 
-    /// <summary>The newest swing of <paramref name="npc"/> committed within <paramref name="windowMs"/> before now, or null.</summary>
-    public Swing? Latest(string npc, long nowMs, long windowMs = Wo161Rules.SwingWindowMs)
+    /// <summary>
+    /// WO-163 (A3): the swing of <paramref name="npc"/> a hit at <paramref name="nowMs"/> belongs to. Not "the newest inside a
+    /// window": the swing whose own lag (<c>attack_time_to_start + attack_time_to_hit</c>) the hit's age matches within
+    /// <see cref="Wo161Rules.PairToleranceMs"/>, the best fit winning; a swing whose row states no lag falls back to
+    /// <see cref="Wo161Rules.SwingWindowMs"/>; a row the catalog does not know is never paired. No match: <c>no-swing-captured</c> when the
+    /// NPC has no swing in <see cref="Wo161Rules.LookbackMs"/>, else <c>swing-unmatched</c>.
+    /// </summary>
+    public Pairing Match(string npc, long nowMs)
     {
         lock (_gate)
         {
-            if (!_by.TryGetValue(npc, out var l) || l.Count == 0) return null;
-            var s = l[^1];
-            return nowMs - s.AtMs >= 0 && nowMs - s.AtMs <= windowMs ? s : null;
+            if (!_by.TryGetValue(npc, out var l)) return new Pairing(null, Wo161Rules.ReasonNone, 0);
+            Swing? best = null; long bestErr = long.MaxValue; bool any = false;
+            foreach (var s in l)
+            {
+                long age = nowMs - s.AtMs;
+                if (age < 0 || age > Wo161Rules.LookbackMs) continue;   // a clock that ran backwards matches nothing
+                any = true;
+                long err;
+                if (s.LagMs >= 0) { err = Math.Abs(age - s.LagMs); if (err > Wo161Rules.PairToleranceMs) continue; }
+                else if (s.LagMs == Wo161Rules.LagNone) { if (age > Wo161Rules.SwingWindowMs) continue; err = age; }
+                else continue;                                           // an unreadable row: it cannot be matched
+                if (err < bestErr || (err == bestErr && best is { } b && s.AtMs > b.AtMs)) { best = s; bestErr = err; }
+            }
+            return best is { } hit ? new Pairing(hit, "-", bestErr) : new Pairing(null, any ? Wo161Rules.ReasonUnmatched : Wo161Rules.ReasonNone, 0);
         }
     }
 
@@ -109,6 +172,29 @@ public sealed class Wo161SwingLedger
     private void Prune(long nowMs)
     {
         foreach (var k in _by.Where(kv => kv.Value.Count == 0 || nowMs - kv.Value[^1].AtMs > 60_000).Select(kv => kv.Key).ToArray()) _by.Remove(k);
+    }
+}
+
+/// <summary>WO-163 (A3), victim: the rows played on one NPC's copy (when, and the row's own lag), so a verdict can be judged against the row it belongs to.</summary>
+public sealed class Wo161PlayedLog
+{
+    private const int Keep = 8;
+    private readonly List<(long At, int LagMs)> _rows = new(Keep);
+    private readonly object _gate = new();
+
+    public void Note(long atMs, int lagMs)
+    {
+        lock (_gate)
+        {
+            if (_rows.Count >= Keep) _rows.RemoveAt(0);
+            _rows.Add((atMs, lagMs));
+        }
+    }
+
+    /// <summary>The ms since the played row this verdict belongs to, and whether its own lag fits (see <see cref="Wo161Rules.BestPlayedAgo"/>); null = none played.</summary>
+    public (long Ago, bool Fits)? Best(long nowMs)
+    {
+        lock (_gate) return Wo161Rules.BestPlayedAgo(_rows.Select(r => (nowMs - r.At, r.LagMs)).ToList());
     }
 }
 
@@ -157,7 +243,7 @@ public sealed class Wo161Dedupe
 /// <summary>WO-161: the counters of MP-WO161-STATS, both roles (a role fills only its own half).</summary>
 public sealed class Wo161Stats
 {
-    private long _out, _fallback, _noDamage, _in, _applied, _refused, _dup, _malformed, _shown, _notShown, _hit, _blocked, _none, _rowsPlayed;
+    private long _out, _fallback, _noDamage, _in, _applied, _refused, _dup, _malformed, _shown, _notShown, _hit, _blocked, _none, _rowsPlayed, _generic;
     private long _hpX100, _stX100;
     private readonly Dictionary<string, long> _why = new(StringComparer.Ordinal);
     private readonly object _gate = new();
@@ -169,6 +255,8 @@ public sealed class Wo161Stats
     public void Dup() => Interlocked.Increment(ref _dup);
     /// <summary>Victim: an NPC's swing row was played on its copy (a swing with no verdict after it is a miss, not a fault).</summary>
     public void RowPlayed() => Interlocked.Increment(ref _rowsPlayed);
+    /// <summary>WO-163 (A4), victim: a blow with no swing of its own was shown as a generic lunge on the copy.</summary>
+    public void Generic() => Interlocked.Increment(ref _generic);
 
     /// <summary>A verdict received on the victim: whether it was applied, what it was and whether its swing was shown.</summary>
     public void In(bool applied, HitVerdict v, float hp, float st, bool shown, string reason)
@@ -194,6 +282,7 @@ public sealed class Wo161Stats
     public long Applied => Interlocked.Read(ref _applied);
     public long Dups => Interlocked.Read(ref _dup);
     public long Shown => Interlocked.Read(ref _shown);
+    public long GenericShown => Interlocked.Read(ref _generic);
     public long NotShown => Interlocked.Read(ref _notShown);
     public long HpTotalX100 => Interlocked.Read(ref _hpX100);
     public long StTotalX100 => Interlocked.Read(ref _stX100);
@@ -207,7 +296,7 @@ public sealed class Wo161Stats
         lock (_gate) why = _why.Count == 0 ? "-" : string.Join(",", _why.OrderByDescending(kv => kv.Value).ThenBy(kv => kv.Key, StringComparer.Ordinal).Select(kv => $"{kv.Key}:{kv.Value}"));
         return string.Concat(
             FormattableString.Invariant($"MP-WO161-STATS out={Interlocked.Read(ref _out)} out_fallback={Interlocked.Read(ref _fallback)} out_nodamage={Interlocked.Read(ref _noDamage)} "),
-            FormattableString.Invariant($"in={Interlocked.Read(ref _in)} applied={Interlocked.Read(ref _applied)} refused={Interlocked.Read(ref _refused)} no_damage={Interlocked.Read(ref _none)} dup_ignored={Interlocked.Read(ref _dup)} malformed={Interlocked.Read(ref _malformed)} rows_played={Interlocked.Read(ref _rowsPlayed)} "),
+            FormattableString.Invariant($"in={Interlocked.Read(ref _in)} applied={Interlocked.Read(ref _applied)} refused={Interlocked.Read(ref _refused)} no_damage={Interlocked.Read(ref _none)} dup_ignored={Interlocked.Read(ref _dup)} malformed={Interlocked.Read(ref _malformed)} rows_played={Interlocked.Read(ref _rowsPlayed)} generic={Interlocked.Read(ref _generic)} "),
             FormattableString.Invariant($"hit={Interlocked.Read(ref _hit)} blocked={Interlocked.Read(ref _blocked)} dmg_hp={Interlocked.Read(ref _hpX100) / 100.0:F1} dmg_st={Interlocked.Read(ref _stX100) / 100.0:F1} "),
             FormattableString.Invariant($"shown={Interlocked.Read(ref _shown)} not_shown={Interlocked.Read(ref _notShown)} not_shown_why=[{why}]"));
     }

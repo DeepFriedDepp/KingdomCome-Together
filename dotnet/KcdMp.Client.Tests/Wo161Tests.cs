@@ -155,13 +155,14 @@ public class Wo161Tests
         Assert.Equal(1u, l.Record("guard_a", rowA, 1000));
         Assert.Equal(2u, l.Record("guard_b", rowB, 1100));
         Assert.Equal(3u, l.Record("guard_a", rowB, 2000));
-        var s = l.Latest("guard_a", 2300)!.Value;                                   // the latest swing, 0.3 s old: the hit's
+        // WO-163: rows that state no lag of their own keep the 0.46.5 window (these were recorded with none)
+        var s = l.Match("guard_a", 2300).Swing!.Value;                              // the latest swing, 0.3 s old: the hit's
         Assert.Equal((3u, rowB), (s.Id, s.Row));
-        Assert.Equal(2u, l.Latest("guard_b", 1300)!.Value.Id);                      // a different NPC: its own swing
-        Assert.Null(l.Latest("guard_a", 2000 + Wo161Rules.SwingWindowMs + 1));     // older than the window: no swing
-        Assert.NotNull(l.Latest("guard_a", 2000 + Wo161Rules.SwingWindowMs));
-        Assert.Null(l.Latest("nobody", 2000));
-        Assert.Null(l.Latest("guard_a", 1999));                                    // a clock that ran backwards matches nothing
+        Assert.Equal(2u, l.Match("guard_b", 1300).Swing!.Value.Id);                 // a different NPC: its own swing
+        Assert.Null(l.Match("guard_a", 2000 + Wo161Rules.SwingWindowMs + 1).Swing); // older than the window: no swing
+        Assert.NotNull(l.Match("guard_a", 2000 + Wo161Rules.SwingWindowMs).Swing);
+        Assert.Equal(Wo161Rules.ReasonNone, l.Match("nobody", 2000).Why);
+        Assert.Null(l.Match("guard_a", 999).Swing);                                 // a clock that ran backwards (before every swing) matches nothing
     }
 
     [Fact]
@@ -171,7 +172,7 @@ public class Wo161Tests
         for (int i = 0; i < 1000; i++) l.Record("npc_" + i, Guid.Empty, 1000 + i);
         Assert.InRange(l.Npcs, 1, 256);
         for (int i = 0; i < 100; i++) l.Record("one", Guid.Empty, 5000 + i);
-        Assert.Equal(1u + 1000 + 99, l.Latest("one", 5099)!.Value.Id);
+        Assert.Equal(1u + 1000 + 99, l.Match("one", 5099).Swing!.Value.Id);
         l.Clear(); Assert.Equal(0, l.Npcs);
     }
 

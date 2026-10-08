@@ -71,6 +71,13 @@ public sealed class ClientConfig
     public bool HitVerdictEnabled { get; set; } = true;
 
     /// <summary>
+    /// WO-163 (A4): a blow that arrives with no swing of its own (an animal's bite, a blow nothing captured) is shown on the
+    /// copy as one generic lunge before its damage is applied, so "damage with nothing shown" ends for the victim.
+    /// False = 0.46.5 (the damage alone). Ships on.
+    /// </summary>
+    public bool GenericSwingEnabled { get; set; } = true;
+
+    /// <summary>
     /// WO-100.5 Phase 4: whether the guid-addressed damage fallback (0x12/0x14)
     /// may fire.
     ///
@@ -369,6 +376,12 @@ public sealed class ClientConfig
                         break;
                     case "--no-hit-verdict":
                         HitVerdictEnabled = false;
+                        break;
+                    case "--generic-swing":
+                        GenericSwingEnabled = true;
+                        break;
+                    case "--no-generic-swing":
+                        GenericSwingEnabled = false;
                         break;
                     case "--weather-sync":
                         WeatherSyncEnabled = true;

@@ -31,6 +31,7 @@
 #include "wo143.h"
 #include "wo147.h"
 #include "wo151.h"
+#include "wo163.h"
 #include "buffs.h"
 #include "log.h"
 
@@ -218,8 +219,8 @@ void send_npc_dropped(uint8_t reason, const char* name) {
 
 // WO-121: one committed action (main thread, motion::tick).
 void send_local_action(uint8_t kind, uint8_t phase, int8_t ic, int8_t zone, int8_t type, uint8_t flags,
-                       const uint8_t guid[16], uint32_t eid, const char* name) {
-    BYTE body[27 + 63]{};
+                       const uint8_t guid[16], uint32_t eid, const char* name, const uint8_t* altGuid) {
+    BYTE body[27 + 63 + 16]{};
     const size_t n = name ? std::strlen(name) : 0;
     if (n > 63) return;
     body[0] = kind; body[1] = phase; body[2] = static_cast<BYTE>(ic); body[3] = static_cast<BYTE>(zone);
@@ -228,7 +229,9 @@ void send_local_action(uint8_t kind, uint8_t phase, int8_t ic, int8_t zone, int8
     std::memcpy(body + 22, &eid, 4);
     body[26] = static_cast<BYTE>(n);
     if (n) std::memcpy(body + 27, name, n);
-    send_unsolicited(kLocalAction, body, static_cast<uint16_t>(27 + n), "LocalAction");
+    size_t len = 27 + n;
+    if (altGuid) { std::memcpy(body + len, altGuid, 16); len += 16; }   // WO-163 (A1): the optional legacy-offset tail
+    send_unsolicited(kLocalAction, body, static_cast<uint16_t>(len), "LocalAction");
 }
 
 // WO-121: the local player's hit on a peer's avatar (main thread, hits::tick).
@@ -1333,6 +1336,25 @@ void serve(HANDLE h) {
                 if (r.n) std::memcpy(rb + 4, r.buf, r.n);
                 EnterCriticalSection(&g_write_lock);
                 send_frame(h, kWo151Reply, rb, static_cast<uint16_t>(4 + r.n));
+                LeaveCriticalSection(&g_write_lock);
+                break;
+            }
+            case kWo163: {   // WO-163: shared combat (the skirmish relation read; the probes' and the build's switches)
+                std::vector<uint8_t> copy(body, body + len);
+                struct R { uint8_t reason = kcdmp::wo163::kRFailed; uint8_t op = 0; uint8_t buf[200]{}; size_t n = 0; };
+                R r{};
+                bool faulted = false;
+                const bool ran = run_sync_bounded<R>(
+                    [copy](R& out) {
+                        out.op = copy.empty() ? 0 : copy[0];
+                        out.reason = kcdmp::wo163::handle(copy.data(), copy.size(), out.buf, sizeof(out.buf), &out.n);
+                    }, "Wo163", r, &faulted);
+                if (!ran) { r.reason = faulted ? kReasonTaskFaulted : kcdmp::wo163::kRFailed; r.n = 0; r.op = len ? body[0] : 0; }
+                BYTE rb[4 + 200]{};
+                rb[0] = (ran && r.reason == kcdmp::wo163::kROk) ? 1 : 0; rb[1] = seq; rb[2] = r.op; rb[3] = r.reason;
+                if (r.n) std::memcpy(rb + 4, r.buf, r.n);
+                EnterCriticalSection(&g_write_lock);
+                send_frame(h, kWo163Reply, rb, static_cast<uint16_t>(4 + r.n));
                 LeaveCriticalSection(&g_write_lock);
                 break;
             }

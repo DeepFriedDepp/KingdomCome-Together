@@ -2,6 +2,7 @@
 // GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 #include "npc_drive.h"
+#include "wo163_rules.h"
 #include "fault_guard.h"
 #include "npc_scan.h"   // WO-144 2.3: body_kind (a horse or an animal is entity-written)
 #include "anchors.h"
@@ -288,6 +289,11 @@ struct Puppet {
     double   winStart = 0;
     uint32_t winFrames = 0, winMoved = 0, winFlyChecks = 0, winFlying = 0, cosN = 0, winLag = 0;
     double   sumCm = 0, maxCm = 0, sumDzCm = 0, cosSum = 0;
+    // WO-163 (A5) MP-FIGHTSNAP: this puppet's fight window (holds, resume steps, the correction), and what write_one read as the engine's position
+    kcdmp::wo163::FightSnap snap;
+    float    curRead[3]{};
+    bool     curValid = false;
+    double   winBlendMaxCm = 0;
 };
 
 std::unordered_map<std::string, Stream> g_streams;
@@ -500,6 +506,7 @@ void blend_start(Puppet& p, void* e, const float pose[4]) {
     ++g_cost.blends;
     const double cm = static_cast<double>(len) * 100.0;
     if (cm > g_cost.blendMaxCm) g_cost.blendMaxCm = cm;
+    if (cm > p.winBlendMaxCm) p.winBlendMaxCm = cm;
 }
 
 // One frame of the blend: shrink the offset, then add it to the stream pose.
@@ -528,7 +535,22 @@ void blend_apply(Puppet& p, float pose[4], double dt) {
     }
 }
 
+// WO-163 (A5): the fight snap line (docs/WO-162 Q6) -- one per puppet per window, only when the window held a hold or the puppet was
+// engaged. thread id comes with every logf line.
+void fightsnap_flush(Puppet& p, double now) {
+    const bool line = p.snap.worth_a_line();
+    const double windowS = now - p.winStart;
+    const auto o = p.snap.flush(static_cast<float>(p.winBlendMaxCm));
+    p.winBlendMaxCm = 0;
+    if (!line || o.frames == 0) return;
+    logf("MP-FIGHTSNAP npc=%s window_s=%.1f frames=%u fight_frames=%u holds=%u hold_ms_max=%.0f corr_max_cm=%.2f corr_p95_cm=%.2f "
+         "resume_max_cm=%.2f resume_mean_cm=%.2f step_max_cm=%.2f post_hold_step_max_cm=%.2f blend_max_cm=%.2f snaps_gt5m=%u",
+         p.name.c_str(), windowS, o.frames, o.fightFrames, o.holds, o.holdMsMax, o.corrMaxCm, o.corrP95Cm, o.resumeMaxCm, o.resumeMeanCm,
+         o.stepMaxCm, o.postHoldStepMaxCm, o.blendMaxCm, o.snapsGt5m);
+}
+
 void pull_flush(Puppet& p, double now) {
+    fightsnap_flush(p, now);
     if (p.winFrames > 0 && p.maxCm >= kPullFloorCm) {
         const float ax = p.anchor[0] - p.last[0], ay = p.anchor[1] - p.last[1];
         logf("MP-NPCPULL npc=%s mean_cm=%.2f max_cm=%.2f frames=%u moved_frames=%u toward_anchor_cos=%.2f anchor_m=%.1f "
@@ -546,6 +568,8 @@ bool write_one(Puppet& p, void* e, const float pose[4], bool* wrote) {
     *wrote = false;
     float cur[3]{};
     const bool haveCur = read_pos(e, cur);
+    p.curValid = haveCur;
+    if (haveCur) { p.curRead[0] = cur[0]; p.curRead[1] = cur[1]; p.curRead[2] = cur[2]; }
 
     // Phase 4: how far did the ENGINE move the body since our last write?
     // One case is not a pull: the physics body lags a write that was queued
@@ -1024,6 +1048,14 @@ void tick() {
             p.haveLast = false;
             p.havePrev = false;
             p.blendPending = true;   // it resumes from wherever the engine or the one-shot leaves the body
+            // WO-163 (A5): a swing hold is a fight hold -- the frame is an unwritten one, the engine's position is what is seen.
+            // The other reasons are not a fight: no hold, no step across them.
+            float held[3];
+            if (now < p.holdUntil && (s.flags & (0x01 | 0x02 | 0x10)) == 0 && !parented && read_pos(e, held))
+                p.snap.frame(now, {held[0], held[1], held[2]}, {held[0], held[1], held[2]}, false, true);
+            else
+                p.snap.break_run();
+            if (now - p.winStart >= kPullWindowS) pull_flush(p, now);
             ++it;
             continue;
         }
@@ -1071,6 +1103,10 @@ void tick() {
             return;
         }
         if (wrote) { ++writing; g_statWrites.fetch_add(1, std::memory_order_relaxed); npctrace::note_write(e, pose); }
+        if (p.curValid) {   // WO-163 (A5): cur = the engine's position before our write; pose = ours; the applied one is the render position
+            const bool engaged = now < p.holdUntil || p.blending || (s.haveSt2 && (s.st2.bits & motion::kBitCombat) != 0 && now - s.st2At < 2.0);
+            p.snap.frame(now, {p.curRead[0], p.curRead[1], p.curRead[2]}, {pose[0], pose[1], pose[2]}, wrote, engaged);
+        }
         // WO-121: gait / crouch / combat hold for this body, right after its write.
         motion::body_frame(p.key.c_str(), e, p.eid, p.speedMps, p.velX, p.velY, s.haveSt2 ? &s.st2 : nullptr, s.haveSt2 ? now - s.st2At : 1e9, now);
         if (now - p.winStart >= kPullWindowS) pull_flush(p, now);

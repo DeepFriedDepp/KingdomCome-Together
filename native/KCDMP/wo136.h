@@ -41,8 +41,9 @@
 namespace kcdmp::wo136 {
 
 // A hit or a swing on npcEid from srcEid (0 = the local player). weight: a
-// landed hit 2, a swing 1. Decides at once whether the NPC turns.
-void note_threat(uint32_t npcEid, uint32_t srcEid, int weight, const char* why);
+// landed hit 2, a swing 1. Decides at once whether the NPC turns. damage: the hit's
+// measured health damage (0 = blocked / none); < 0 = not measured (WO-163 A6: a landed hit then counts a nominal damage).
+void note_threat(uint32_t npcEid, uint32_t srcEid, int weight, const char* why, float damage = -1.0f);
 
 // An avatar committed an attack (a joiner's swing): the NPC it swings at (the
 // nearest live one within 4 m in its facing half) becomes its opponent and

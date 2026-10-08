@@ -35,6 +35,11 @@ constexpr size_t kSlotMelee   = 0x150;
 constexpr size_t kSlotMissile = 0x158;
 constexpr size_t kSmAddSoul   = 0x10;    // I_SkirmishManager::AddSoulToSkirmish(soul, reference, override)
 constexpr size_t kSmRemoveSoul = 0x18;   // I_SkirmishManager::RemoveSoulFromSkirmish(soul) (WO-132)
+// WO-163 (A7): the relation object the manager carries at +0x80 (RTTI C_SkirmishSituation) and its relation call at the vtable's byte
+// offset +0x08 -- relation(this, soulA, soulB, bool true) -> bool (WO-162 Q2.2/Q2.3 [disasm]: FindSkirmishOf(A), B a member of that same
+// skirmish, active, not flagged, then the hostile test: an explicit pair or a negative faction value). Read-only.
+constexpr size_t kSmSituation = 0x80;
+constexpr size_t kSitRelation = 0x08;
 constexpr size_t kActorGetSoul = 0x6E0;
 constexpr size_t kSoulCombat  = 0x108;   // C_CombatSoul from the actor's soul (WO-119 s2.1, observed)
 constexpr double kEngagementS = 30.0;    // one skirmish add per (victim, avatar) per this
@@ -75,6 +80,11 @@ bool call_remove_soul(void* fn, void* mgr, void* soul, uint64_t* out) {
     KCDMP_FAULT_CALL(site, "hits::call_remove_soul");
     return fault::guarded(site, [&] { *out = reinterpret_cast<uint64_t (__fastcall*)(void*, void*)>(fn)(mgr, soul); });
 }
+// WO-163 (A7): the skirmish relation test, guarded; true when the call completed (its answer in *out).
+bool call_relation(void* fn, void* sit, void* a, void* b, bool* out) {
+    KCDMP_FAULT_CALL(site, "hits::call_relation");
+    return fault::guarded(site, [&] { *out = reinterpret_cast<bool (__fastcall*)(void*, void*, void*, bool)>(fn)(sit, a, b, true); });
+}
 bool is_a(void* obj, void* const* vft) { void* vp = nullptr; return obj && vft && rd(obj, 0, &vp) && vp == static_cast<const void*>(vft); }
 bool bytes_eq(const void* p, const uint8_t* pat, size_t n) {
     KCDMP_FAULT_READ(site, "hits::bytes_eq");
@@ -84,6 +94,8 @@ bool bytes_eq(const void* p, const uint8_t* pat, size_t n) {
 // ---- anchors ---------------------------------------------------------------------
 void* const* g_vftCombatSoul = nullptr;
 void* const* g_vftSkirmish = nullptr;
+void* const* g_vftSituation = nullptr;   // WO-163: RTTI C_SkirmishSituation
+void* g_fnRelation = nullptr;            // WO-163: the relation call, set only when its prologue is the verified one
 void* g_fnHistory = nullptr, *g_fnSkirmishGetter = nullptr;
 std::atomic<bool> g_hookArmed{false};
 bool g_attribArmed = false;
@@ -152,7 +164,7 @@ std::unordered_map<std::string, uint32_t> g_nameEids;
 
 std::atomic<uint32_t> c_melee{0}, c_missile{0}, c_avatarHits{0}, c_restored{0}, c_ffQueued{0}, c_marks{0},
     c_attrib{0}, c_attribHistory{0}, c_skirmish{0}, c_pvpIn{0}, c_faults{0},
-    c_npcAvatarHits{0}, c_npcHitsSent{0}, c_discardHits{0}, c_discarded{0}, c_skirmishKept{0}, c_skirmishRemove{0};
+    c_npcAvatarHits{0}, c_npcHitsSent{0}, c_discardHits{0}, c_discarded{0}, c_skirmishKept{0}, c_skirmishRemove{0}, c_relationAsked{0};
 
 double now_s() { LARGE_INTEGER q, f; QueryPerformanceCounter(&q); QueryPerformanceFrequency(&f); return double(q.QuadPart) / double(f.QuadPart); }
 
@@ -315,6 +327,16 @@ void install() {
     if (!rpg) { logf("WO121-HITS DISARMED -- RPGModule not loaded"); return; }
     g_vftCombatSoul = anchor::find_vftable(rpg, ".?AVC_CombatSoul@rpgmodule@wh@@", 0);
     g_vftSkirmish = anchor::find_vftable(rpg, ".?AVC_SkirmishManager@rpgmodule@wh@@", 0);
+    // WO-163 (A7): the relation call, named by RTTI (C_SkirmishSituation's vtable) and accepted only when its prologue is the one read in
+    // the game's own code (a build that moved the function leaves it unarmed, never mis-called): push the callee-saved registers, rbx = this,
+    // ebp = the flag argument.
+    g_vftSituation = anchor::find_vftable(rpg, ".?AVC_SkirmishSituation@rpgmodule@wh@@", 0);
+    if (g_vftSituation) {
+        static const uint8_t kRelPro[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x6C, 0x24, 0x10, 0x48, 0x89, 0x74, 0x24, 0x18, 0x48, 0x89, 0x7C, 0x24, 0x20,
+                                           0x41, 0x56, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0xD9, 0x41, 0x0F, 0xB6, 0xE9};
+        void* fn = g_vftSituation[kSitRelation / 8];
+        if (fn && bytes_eq(fn, kRelPro, sizeof(kRelPro))) g_fnRelation = fn;
+    }
     void* melee = g_vftCombatSoul ? g_vftCombatSoul[kSlotMelee / 8] : nullptr;
     void* missile = g_vftCombatSoul ? g_vftCombatSoul[kSlotMissile / 8] : nullptr;
 
@@ -453,7 +475,7 @@ AttribResult apply_attributed(const uint8_t* body, size_t len) {
         }
         // WO-136: the hit the engine cannot perceive (no hit volume) counts as the
         // avatar's threat; the NPC turns to it the way it would to a real attacker.
-        kcdmp::wo136::note_threat(veid, avatarEid, 2, "avatar-hit");
+        kcdmp::wo136::note_threat(veid, avatarEid, 2, "avatar-hit", hp);   // WO-163 (A6): the hit's own measured damage
     }
     r.ok = (r.steps & 1) != 0;
     return r;
@@ -535,6 +557,23 @@ bool skirmish_remove(void* soul, uint64_t* rv) {
     if (!call_remove_soul(g_vftSkirmish[kSmRemoveSoul / 8], mgr, soul, &r)) { c_faults.fetch_add(1); return false; }
     c_skirmishRemove.fetch_add(1);
     if (rv) *rv = r;
+    return true;
+}
+
+bool skirmish_relation_armed() { return skirmish_ready() && g_vftSituation && g_fnRelation; }
+
+bool skirmish_hostile(void* soulA, void* soulB, bool* answered, bool* hostile) {
+    if (answered) *answered = false;
+    if (hostile) *hostile = false;
+    if (!skirmish_relation_armed() || !soulA || !soulB || !answered || !hostile) return false;
+    void* mgr = nullptr;
+    if (!call_getter(g_fnSkirmishGetter, &mgr) || !is_a(mgr, g_vftSkirmish)) return false;
+    void* sit = static_cast<char*>(mgr) + kSmSituation;
+    if (!is_a(sit, g_vftSituation)) return false;          // the object at manager+0x80 is a C_SkirmishSituation, this frame
+    bool r = false;
+    if (!call_relation(g_fnRelation, sit, soulA, soulB, &r)) { c_faults.fetch_add(1); return false; }
+    c_relationAsked.fetch_add(1);
+    *answered = true; *hostile = r;
     return true;
 }
 
@@ -665,12 +704,13 @@ int status_text(char* out, int n) {
     return std::snprintf(out, n,
         "hit_slot=%s attribution=%s ff=%d attrib_cfg=%d melee=%u missile=%u avatar_hits=%u restored=%u ff_sent=%u player_marks=%u "
         "attributed=%u history=%u skirmish=%u pvp_in=%u hit_faults=%u npc_watch=%s npc_avatar_hits=%u npc_hits_sent=%u "
-        "discard_hits=%u discarded=%u discard_eids=%d skirmish_kept_host=%u skirmish_remove=%u",
+        "discard_hits=%u discarded=%u discard_eids=%d skirmish_kept_host=%u skirmish_remove=%u skirmish_relation=%s relation_asked=%u",
         g_hookArmed ? "armed" : "off", g_attribArmed ? "armed" : "off", g_ff.load() ? 1 : 0, g_attribution.load() ? 1 : 0,
         c_melee.load(), c_missile.load(), c_avatarHits.load(), c_restored.load(), c_ffQueued.load(), c_marks.load(),
         c_attrib.load(), c_attribHistory.load(), c_skirmish.load(), c_pvpIn.load(), c_faults.load(),
         (g_hookArmed && g_npcWatch.load()) ? "armed" : "off", c_npcAvatarHits.load(), c_npcHitsSent.load(),
-        c_discardHits.load(), c_discarded.load(), discard_count(), c_skirmishKept.load(), c_skirmishRemove.load());
+        c_discardHits.load(), c_discarded.load(), discard_count(), c_skirmishKept.load(), c_skirmishRemove.load(),
+        skirmish_relation_armed() ? "armed" : "off", c_relationAsked.load());
 }
 
 } // namespace kcdmp::hits

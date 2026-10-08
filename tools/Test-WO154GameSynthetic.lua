@@ -265,6 +265,9 @@ do
     check("B3: an assault is not judged at once", countLog("WO139-JUDGE src=1 id=0 assault", mark) == 0 and #TIMERS == 1 and TIMERS[1].ms == 5000,
         tostring(#TIMERS))
     runTimers()
+    -- WO-163 (A7): at the 5 s mark the engine is asked (a stubbed answer here); "not hostile" judges as before
+    check("B3: ... at 5 s the engine is asked, nothing judged yet", countEvt("w163_hostile", "", mark) == 1 and countLog("WO139-JUDGE src=1 id=0 assault", mark) == 0)
+    KCD2MP_W163HostileAnswer(KCD2MP.w154.hostileSeq, true, false)
     check("B3: ... but 5 s later, when the victim does not fight", countLog("WO139-JUDGE src=1 id=0 assault", mark) == 1, lastLog("WO139-JUDGE", mark))
     local v2 = mkNpc("zbranePanaSemina_moravak_jurko", 5, 5)
     mark = #LOG
@@ -294,6 +297,39 @@ do
     mark = #LOG
     KCD2MP_W139HostViolent(1, "taborVictim_5", "knockout")
     check("B3: a takedown's knockout is judged at once, as before", countLog("WO139-JUDGE src=1 id=0 knockout", mark) == 1)
+    -- WO-163 (A7): a victim the engine says is in a skirmish fight with the host: not a crime; no answer: judged after the wait, as before
+    local v7 = mkNpc("taborGuard_7", 5, 5)
+    mark = #LOG
+    KCD2MP_W139HostViolent(1, "taborGuard_7", "assault")
+    runTimers()
+    KCD2MP_W163HostileAnswer(KCD2MP.w154.hostileSeq, true, true)
+    check("B3/A7: the engine says hostile -> not a crime, said so", countLog("WO139-JUDGE src=1 id=0 assault", mark) == 0
+        and lastLog("WO163-JUDGE src=1 assault on taborGuard_7 -- not a crime: the engine says", mark) ~= nil, lastLog("JUDGE", mark))
+    KCD2MP_W163HostileAnswer(KCD2MP.w154.hostileSeq, true, false)   -- a late second answer is ignored
+    check("B3/A7: ... and a late answer judges nothing twice", countLog("WO139-JUDGE src=1 id=0 assault", mark) == 0)
+    mkNpc("taborGuard_8", 5, 5)
+    mark = #LOG
+    KCD2MP_W139HostViolent(1, "taborGuard_8", "assault")
+    runTimers()                                            -- the 5 s timer: asked, parked, a fallback timer set
+    check("B3/A7: asked, parked", countEvt("w163_hostile", "", mark) == 1 and countLog("WO139-JUDGE src=1 id=0 assault", mark) == 0 and #TIMERS == 1 and TIMERS[1].ms == 1500, tostring(#TIMERS))
+    runTimers()                                            -- no answer in time
+    check("B3/A7: no answer in 1.5 s -> judged as before, and said so", countLog("WO139-JUDGE src=1 id=0 assault", mark) == 1
+        and lastLog("WO163-JUDGE src=1 assault on taborGuard_8 -- no answer", mark) ~= nil, lastLog("JUDGE", mark))
+    KCD2MP_W163HostileAnswer(KCD2MP.w154.hostileSeq, true, true)   -- the answer that arrives after the timeout
+    check("B3/A7: ... the late 'hostile' does not undo it", countLog("WO139-JUDGE src=1 id=0 assault", mark) == 1)
+    mkNpc("taborGuard_9", 5, 5)
+    mark = #LOG
+    KCD2MP_W139HostViolent(1, "taborGuard_9", "assault")
+    runTimers()
+    KCD2MP_W163HostileAnswer(KCD2MP.w154.hostileSeq, false, false)   -- the DLL could not make the call: not an answer
+    check("B3/A7: an unanswered ask (the call could not be made) judges as before", countLog("WO139-JUDGE src=1 id=0 assault", mark) == 1)
+    KCD2MP.w154.hostileCrime = false
+    mkNpc("taborGuard_10", 5, 5)
+    mark = #LOG; TIMERS = {}
+    KCD2MP_W139HostViolent(1, "taborGuard_10", "assault")
+    runTimers()
+    check("B3/A7: mp_hostile_crime off -> 0.46.5: judged at 5 s with no question", countEvt("w163_hostile", "", mark) == 0 and countLog("WO139-JUDGE src=1 id=0 assault", mark) == 1)
+    KCD2MP.w154.hostileCrime = true
     KCD2MP.w154.fairCrime = false
     mkNpc("taborVictim_6", 5, 5)
     mark = #LOG; TIMERS = {}
@@ -327,7 +363,8 @@ end
 do
     ERRS = {}
     local cases = { { "mp_host_target", KCD2MP_W154SetHostTarget, "host_target" }, { "mp_guard_respite", KCD2MP_W154SetGuardRespite, "guard_respite" },
-                    { "mp_fair_crime", KCD2MP_W154SetFairCrime, "fair_crime" }, { "mp_scene_resume", KCD2MP_W154SetSceneResume, "scene_resume" } }
+                    { "mp_fair_crime", KCD2MP_W154SetFairCrime, "fair_crime" }, { "mp_scene_resume", KCD2MP_W154SetSceneResume, "scene_resume" },
+                    { "mp_hostile_crime", KCD2MP_W163SetHostileCrime, "hostile_crime" } }   -- WO-163 A7
     for _, c in ipairs(cases) do
         local mark = #LOG
         c[2]("off")
@@ -339,7 +376,7 @@ do
         check("B5: " .. c[1] .. " is registered with an unquoted %line", CCMDS[c[1]] ~= nil and CCMDS[c[1]].body:find("(%line)", 1, true) ~= nil)
     end
     KCD2MP_W154SetSceneResume("off")   -- its default
-    check("B5: the defaults are on, on, on, off", KCD2MP.w154.hostTarget and KCD2MP.w154.guardRespite and KCD2MP.w154.fairCrime and not KCD2MP.w154.sceneResume)
+    check("B5: the defaults are on, on, on, off, on", KCD2MP.w154.hostTarget and KCD2MP.w154.guardRespite and KCD2MP.w154.fairCrime and not KCD2MP.w154.sceneResume and KCD2MP.w154.hostileCrime)
     noErrs("B5")
 end
 

@@ -46,6 +46,7 @@ add_library(KCDMP SHARED
     wo147.cpp
     fault_guard.cpp
     wo151.cpp
+    wo163.cpp
     weather.cpp
 )
 

@@ -283,6 +283,7 @@ public partial class GameBridge
             if (((ActionKind)f.Kind != ActionKind.Attack && !npcHit) || !_npcRows || !_isDamageAuthority) return;
             if (npcHit && !_w151Reactions) return;
             if (!NpcNamePattern.IsMatch(f.Name) || Protocol.IsNeverSyncedNpcName(f.Name)) return;
+            if (!Wo163OutboundRowOk(f)) return;
             pkt = _actionOut.Build(npcHit ? ActionKind.NpcHit : ActionKind.NpcAttack, ActionPhase.Commit, new RowEvent(ms, 0, f.Row, f.Name).ToBytes());
             what = $"npc={f.Name} row={f.Row}";
             // WO-151: the table the row came from (a hit or a paired bite proves the DLL's descriptor read)
@@ -434,7 +435,7 @@ public partial class GameBridge
                 _ = _combat.NpcHoldAsync(ne.Name, 900, ct);
                 var r = await _combat.GhostSwingForResultAsync(neid, row.Spec, ct);
                 if (animal) Interlocked.Increment(ref _w141Bite);
-                if (r.Ok) Wo161NoteRowPlayed(ne.Name); else Wo161NoteRowRefused(ne.Name, r.ReasonTag);   // WO-161
+                if (r.Ok) Wo161NoteRowPlayed(ne.Name, row.HitLagMs >= 0 ? row.HitLagMs : Wo161Rules.LagNone); else Wo161NoteRowRefused(ne.Name, r.ReasonTag);   // WO-161 / WO-163: with the row's own lag
                 Console.WriteLine($"MP-ACTION section=inbound kind=NpcAttack npc={ne.Name} row={ne.Row} spec=\"{row.Spec}\" dispatch=native-row result={r.ReasonTag}");
                 if (r.Ok) await ExecLuaAsync($"if KCD2MP_NpcNativeSwingHold then KCD2MP_NpcNativeSwingHold(\"{ne.Name}\") end");
                 return true;

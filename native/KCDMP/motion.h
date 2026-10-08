@@ -113,8 +113,10 @@ void tick();
 // One committed action on this machine, for the agent (pipe frame 0x96).
 // kind: ActionKind (1 attack, 2 jump, 6 block impulse, 7 dodge). eid 0 = the
 // local player; otherwise an NPC by its entity name.
+// WO-163 (A1): altGuid = what the legacy read (+0x84) of a sync attack's descriptor holds, or null -- the agent logs if both reads
+// hit its catalog. Sent as an optional 16-byte tail of the frame.
 using ActionFn = void (*)(uint8_t kind, uint8_t phase, int8_t inputClass, int8_t zoneTableId, int8_t attackType,
-                          uint8_t flags, const uint8_t guid[16], uint32_t eid, const char* name);
+                          uint8_t flags, const uint8_t guid[16], uint32_t eid, const char* name, const uint8_t* altGuid);
 void set_action_callback(ActionFn fn);
 
 // Human-readable armed/off state and counters for the 0x1B status reply.
