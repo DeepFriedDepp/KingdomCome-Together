@@ -10,6 +10,8 @@ backed up first, checked after every run); **[L-field]** read in the testers' lo
 game's own machine code (XGenAIModule, by its strings and RTTI, never by a fixed address); **[not tested]** no run. No
 names, paths or addresses of players are in this file. The version is the maintainer's (0.46.0); no tag, nothing uploaded.
 
+Field notes 0.45.6–0.45.8: `research/testing_findings.md` (private, not in git; moved there from the repo root in WO-161).
+
 ## The answer
 
 Every planner error in the joiner's log was on a body this mod had placed (60 of 60 NPCs), and the placement was the

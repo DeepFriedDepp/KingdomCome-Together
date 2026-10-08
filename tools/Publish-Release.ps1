@@ -129,12 +129,13 @@ Copy-Item $nativeDll $OutDir -Force
 Remove-Item (Join-Path $OutDir "KCDMP_LauncherInjector.exe") -Force -ErrorAction SilentlyContinue
 
 # --- WO-159: our logo on the main menu of a game the launcher starts. kdcmp_brand.pak (stored entries, like
-#     kdcmp.pak) carries kdcmp_brand\Libs\UI\Textures\KCDLogo.dds (tools\Build-MenuLogo.py); the launcher puts it into
+#     kdcmp.pak) carries docs\branding\pak-source\Libs\UI\Textures\KCDLogo.dds (tools\Build-MenuLogo.py; the folder moved
+#     from the repo root in WO-161, the pak's own entry name is unchanged); the launcher puts it into
 #     the mod's Data folder for its own game only and takes it out when that game exits. ---
 Add-Type -AssemblyName System.IO.Compression
 Add-Type -AssemblyName System.IO.Compression.FileSystem
-$brandDds = Join-Path $root "kdcmp_brand\Libs\UI\Textures\KCDLogo.dds"
-if (-not (Test-Path $brandDds)) { throw "kdcmp_brand\Libs\UI\Textures\KCDLogo.dds missing (tools\Build-MenuLogo.py makes it)" }
+$brandDds = Join-Path $root "docs\branding\pak-source\Libs\UI\Textures\KCDLogo.dds"
+if (-not (Test-Path $brandDds)) { throw "docs\branding\pak-source\Libs\UI\Textures\KCDLogo.dds missing (tools\Build-MenuLogo.py makes it)" }
 $brandPak = Join-Path $OutDir "kdcmp_brand.pak"
 if (Test-Path $brandPak) { Remove-Item $brandPak -Force }
 $bz = [System.IO.Compression.ZipFile]::Open($brandPak, [System.IO.Compression.ZipArchiveMode]::Create)

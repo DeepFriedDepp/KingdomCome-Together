@@ -48,3 +48,6 @@ research/
 
 # WO-159: the bundled start saves are the maintainer's play data: copied into the release build, never committed
 assets/start-save/*/*.whs
+
+# WO-161: the maintainer's tester bundles (zips of the players' logs) -- private, never committed
+/logs/

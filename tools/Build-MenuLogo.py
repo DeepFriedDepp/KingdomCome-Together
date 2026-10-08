@@ -5,7 +5,8 @@
 
 The game draws its main-menu logo from Libs/UI/Textures/KCDLogo.dds (1024x512, DXT5, no mips). This builds our own
 texture of exactly that shape from docs/branding/KCT_txt.png -- scaled to the same visible box the game's own logo
-fills, so it sits where the original sits -- into kdcmp_brand/Libs/UI/Textures/KCDLogo.dds. tools/Publish-Release.ps1
+fills, so it sits where the original sits -- into docs/branding/pak-source/Libs/UI/Textures/KCDLogo.dds (the pak's source,
+beside its artwork; it was kdcmp_brand/ at the repo root before WO-161). tools/Publish-Release.ps1
 packs it into kdcmp_brand.pak; the launcher puts that pak into the mod's folder only for a game it starts and takes it
 out again when that game exits, so a game started any other way keeps the game's own logo.
 
@@ -18,7 +19,7 @@ from PIL import Image
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SRC = os.path.join(ROOT, "docs", "branding", "KCT_txt.png")
-OUT = os.path.join(ROOT, "kdcmp_brand", "Libs", "UI", "Textures", "KCDLogo.dds")
+OUT = os.path.join(ROOT, "docs", "branding", "pak-source", "Libs", "UI", "Textures", "KCDLogo.dds")
 W, H = 1024, 512
 BOX = (28, 47, 966, 465)   # the game's own logo, alpha > 8: left, top, right, bottom (measured on 1.5.5)
 
