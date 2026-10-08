@@ -90,11 +90,18 @@ public:
             if (postUntil_ > 0 && now <= postUntil_) postMax_ = std::max(postMax_, cm);
         }
         if (wrote) {
+            // The first written frame of a body (a bind: the writer puts a fresh copy on the stream, a teleport of tens of metres) or after a
+            // non-fight hold is a placement, not a correction: it counts as a frame, not in the correction (live, the first window of a bind
+            // read corr_max 65 m).
+            // (live: a bind's teleport also reads as tens of metres for the two frames the physics body lags the write -- so a "correction" over
+            // kSnapStepM is a placement too; a real snap shows in the applied step and snaps_gt5m)
             const float corrCm = dist3(pose, cur) * 100.0f;
-            corrMax_ = std::max(corrMax_, corrCm);
-            int b = static_cast<int>(corrCm / kCorrBucketCm);
-            if (b >= kCorrBuckets) b = kCorrBuckets - 1;
-            ++hist_[b]; ++corrN_;
+            if (haveLast_ && corrCm <= kSnapStepM * 100.0f) {
+                corrMax_ = std::max(corrMax_, corrCm);
+                int b = static_cast<int>(corrCm / kCorrBucketCm);
+                if (b >= kCorrBuckets) b = kCorrBuckets - 1;
+                ++hist_[b]; ++corrN_;
+            }
             if (resuming) {
                 const float resumeCm = dist_xy(pose, cur) * 100.0f;
                 ++holds_;

@@ -216,6 +216,8 @@ static class P
         // WO-121: `row <t_s> <npc> <rowGuid>` -- the host NPC committed that
         // attack row at stream time t: an NpcAttack action event (v8).
         var rows = new List<(double T, string Npc, Guid Row)>();
+        var verdicts = new List<(double T, HitVerdict V, float Hp, float St, string Npc, uint Swing, byte Tgt, uint Id)>();   // WO-163: plan verb `verdict`
+        uint verdictId = 0;
         var saves = new List<(double T, byte Kind, byte Playline, ushort Idx)>(); uint wsSeq = 0;
         var raws = new List<(double T, byte Type, byte[] Body, int Stamp)>();   // WO-131
         var ncombats = new List<NCombat>();   // WO-132
@@ -254,6 +256,11 @@ static class P
                     break;
                 case "start": startDelay = double.Parse(f[1], CultureInfo.InvariantCulture); break;
                 case "row": rows.Add((double.Parse(f[1], CultureInfo.InvariantCulture), f[2], Guid.Parse(f[3]))); break;
+                case "verdict":   // verdict <t> <hit|blocked> <hp> <st> <npc|-> [swing=0] [joinerId=1]  (WO-161 0x72, the host's verdict of an NPC's hit on the joiner)
+                    verdicts.Add((double.Parse(f[1], CultureInfo.InvariantCulture), f[2] == "blocked" ? HitVerdict.Blocked : HitVerdict.Hit,
+                                  float.Parse(f[3], CultureInfo.InvariantCulture), float.Parse(f[4], CultureInfo.InvariantCulture), f[5] == "-" ? "" : f[5],
+                                  f.Length > 6 ? uint.Parse(f[6], CultureInfo.InvariantCulture) : 0u, f.Length > 7 ? byte.Parse(f[7], CultureInfo.InvariantCulture) : (byte)1, ++verdictId));
+                    break;
                 case "saved": saves.Add((double.Parse(f[1], CultureInfo.InvariantCulture), byte.Parse(f[2]), byte.Parse(f[3]), ushort.Parse(f[4]))); break;
                 case "die": dies[f[2]] = double.Parse(f[1], CultureInfo.InvariantCulture); break;
                 case "hp":
@@ -337,6 +344,15 @@ static class P
                     await st.WriteAsync(s_actions.Build(ActionKind.NpcAttack, ActionPhase.Commit, ev.ToBytes()));
                     Console.WriteLine(FormattableString.Invariant($"SYNTH t={t:F1}s NpcAttack npc={rows[ri].Npc} row={rows[ri].Row}"));
                     rows.RemoveAt(ri);
+                }
+                for (int vi = verdicts.Count - 1; vi >= 0; vi--)   // WO-163: the verdicts of the plan, when due
+                {
+                    var vd = verdicts[vi];
+                    if (vd.T > t) continue;
+                    byte vflags = (byte)((vd.Swing != 0 ? Protocol.HitFlagSwingKnown : 0) | (vd.Npc.Length == 0 ? Protocol.HitFlagNoAttacker : 0));
+                    await st.WriteAsync(new HitVerdictMsg(vd.Id, vd.V, vflags, 0, vd.Swing, vd.Hp, vd.St, vd.Npc).BuildUp(vd.Tgt));
+                    Console.WriteLine(FormattableString.Invariant($"SYNTH t={t:F1}s HVERDICT id={vd.Id} {vd.V} hp={vd.Hp} st={vd.St} npc={(vd.Npc.Length == 0 ? "-" : vd.Npc)} swing={vd.Swing} -> ghost {vd.Tgt}"));
+                    verdicts.RemoveAt(vi);
                 }
                 // WO-132: the host NPC's combat state, 1 Hz while on, one "off" at the end.
                 foreach (var nc in ncombats)

@@ -54,12 +54,21 @@ uint8_t handle(const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t
             c_asked.fetch_add(1);
             // every pointer is looked up here, in this frame, and used here
             const uint32_t veid = hits::eid_of_name(name.c_str());
-            if (!veid) { c_unanswered.fetch_add(1); return kRNoActor; }
+            if (!veid) { c_unanswered.fetch_add(1); logf("WO163-RELATION host vs npc=%s NOT answered: no such entity", name.c_str()); return kRNoActor; }
             void* hostSoul = hits::soul_of_eid(player_eid());
             void* victimSoul = hits::soul_of_eid(veid);
-            if (!hostSoul || !victimSoul) { c_unanswered.fetch_add(1); return kRNoSoul; }
+            if (!hostSoul || !victimSoul) {
+                c_unanswered.fetch_add(1);
+                logf("WO163-RELATION host vs npc=%s NOT answered: no soul (host %s, npc %s)", name.c_str(), hostSoul ? "yes" : "no", victimSoul ? "yes" : "no");
+                return kRNoSoul;
+            }
             bool answered = false, hostile = false;
-            if (!hits::skirmish_hostile(hostSoul, victimSoul, &answered, &hostile) || !answered) { c_unanswered.fetch_add(1); return kRFailed; }
+            const char* why = "";
+            if (!hits::skirmish_hostile(hostSoul, victimSoul, &answered, &hostile, &why) || !answered) {
+                c_unanswered.fetch_add(1);
+                logf("WO163-RELATION host vs npc=%s NOT answered: %s", name.c_str(), why);
+                return kRFailed;
+            }
             (hostile ? c_answeredHostile : c_answeredNot).fetch_add(1);
             logf("WO163-RELATION host vs npc=%s -> %s (the engine's own skirmish relation test, read-only)", name.c_str(),
                  hostile ? "hostile opponents in one skirmish" : "not hostile opponents in one skirmish");

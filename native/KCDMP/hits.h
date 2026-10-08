@@ -81,7 +81,8 @@ bool skirmish_remove(void* soul, uint64_t* rv);
 // WO-163 (A7; docs/WO-162 Q2.3, read-only, main thread, fault-guarded): the engine's own relation test on two souls -- true iff
 // they are hostile opponents inside ONE skirmish (the player-lock rule's own question: same skirmish, active members, a hostile pair or
 // a negative faction value). false/false = the call could not be made (not armed, no manager, a soul missing): *answered stays false.
-bool skirmish_hostile(void* soulA, void* soulB, bool* answered, bool* hostile);
+// why (optional): on a false return, the reason in words ("not armed", "no manager", "no relation object", "the call faulted").
+bool skirmish_hostile(void* soulA, void* soulB, bool* answered, bool* hostile, const char** why = nullptr);
 bool skirmish_relation_armed();
 // WO-136: the avatars (entity id, soul) the hook knows; returns the count.
 int avatar_list(uint32_t* eids, void** souls, int max);

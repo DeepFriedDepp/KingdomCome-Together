@@ -1,0 +1,11 @@
+# WO-163 (A3/A4 live check, a throwaway save by Troskowitz): a bound copy, one swing row, and the host's verdicts of its blows.
+# The row is the catalog's unarmed punch (FreeAttack, start 0 + hit 0.22 s). The first verdict comes 0.3 s after it: a swing whose own lag fits
+# (shown=yes). The next two come seconds later with only that old row behind them: nothing is shown, so the copy lunges once (shown=generic).
+# The last names nobody (the fallback path): nothing to move (shown=no reason=no-attacker).
+start 22
+fight ttkc_bailiffSon 2305.14 2058.71 110.705 1.0
+row 6.0 ttkc_bailiffSon 3e27732b-b152-4a27-97d2-1ebba717a588
+verdict 6.3 hit 6 0 ttkc_bailiffSon 1
+verdict 10.0 hit 5 0 ttkc_bailiffSon 0
+verdict 13.0 blocked 0 12 ttkc_bailiffSon 0
+verdict 16.0 hit 4 0 - 0

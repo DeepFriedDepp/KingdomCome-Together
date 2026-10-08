@@ -1036,6 +1036,7 @@ public sealed class CombatPipe : IAsyncDisposable
         var a = new byte[1 + name.Length];
         a[0] = (byte)name.Length; name.CopyTo(a, 1);
         var r = await Wo163Async(1, a, ct);
+        Wo163LastReason = r?.Reason ?? (byte)0xFF;
         if (r is not { Ok: true, Payload.Length: >= 2 } x) return r is null ? null : (false, false);
         return (x.Payload[0] != 0, x.Payload[1] != 0);
     }
@@ -1068,6 +1069,9 @@ public sealed class CombatPipe : IAsyncDisposable
         var r = await Wo163Async(4, a, ct);
         return r is null ? null : r.Value.Ok && r.Value.Payload.Length >= 1 && r.Value.Payload[0] != 0;
     }
+
+    /// <summary>The reason byte of the last WO-163 relation ask (0 ok, 1 bad request, 2 no such NPC, 3 no soul, 4 the call could not be made, 0xFF no reply).</summary>
+    public byte Wo163LastReason { get; private set; }
 
     /// <summary>WO-163 op 2: the native half's counters as text, or null.</summary>
     public async Task<string?> Wo163StatusAsync(CancellationToken ct = default)

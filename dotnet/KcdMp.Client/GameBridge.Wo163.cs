@@ -67,7 +67,7 @@ public partial class GameBridge
                 {
                     if (!CarryText.IsName(rest)) { Console.WriteLine("WO163-PROBE relation: not an entity name"); return; }
                     var r = await _combat.Wo163SkirmishHostileAsync(rest);
-                    Console.WriteLine($"WO163-PROBE relation host vs npc={rest}: " + (r is null ? "no answer" : r.Value.Answered ? (r.Value.Hostile ? "HOSTILE (one skirmish)" : "not hostile") : "could not be asked"));
+                    Console.WriteLine($"WO163-PROBE relation host vs npc={rest}: " + (r is null ? "no answer" : r.Value.Answered ? (r.Value.Hostile ? "HOSTILE (one skirmish)" : "not hostile") : $"could not be asked (reason {_combat.Wo163LastReason}; the DLL's WO163-RELATION line says why)"));
                     return;
                 }
                 case "pair":

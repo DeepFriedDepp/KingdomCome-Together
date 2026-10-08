@@ -562,16 +562,25 @@ bool skirmish_remove(void* soul, uint64_t* rv) {
 
 bool skirmish_relation_armed() { return skirmish_ready() && g_vftSituation && g_fnRelation; }
 
-bool skirmish_hostile(void* soulA, void* soulB, bool* answered, bool* hostile) {
+bool skirmish_hostile(void* soulA, void* soulB, bool* answered, bool* hostile, const char** why) {
     if (answered) *answered = false;
     if (hostile) *hostile = false;
-    if (!skirmish_relation_armed() || !soulA || !soulB || !answered || !hostile) return false;
+    const char* w = "";
+    if (!why) why = &w;
+    if (!answered || !hostile || !soulA || !soulB) { *why = "bad arguments"; return false; }
+    if (!skirmish_relation_armed()) { *why = "not armed"; return false; }
     void* mgr = nullptr;
-    if (!call_getter(g_fnSkirmishGetter, &mgr) || !is_a(mgr, g_vftSkirmish)) return false;
+    if (!call_getter(g_fnSkirmishGetter, &mgr) || !is_a(mgr, g_vftSkirmish)) { *why = "no skirmish manager"; return false; }
+    // The relation object WO-162 places at manager+0x80: it is checked by its vtable THIS frame, whether it lies in the manager (the object's
+    // own vptr is at +0x80) or is held by a pointer there (the pointer's target carries it) -- the one that matches is used, anything else is refused.
     void* sit = static_cast<char*>(mgr) + kSmSituation;
-    if (!is_a(sit, g_vftSituation)) return false;          // the object at manager+0x80 is a C_SkirmishSituation, this frame
+    if (!is_a(sit, g_vftSituation)) {
+        void* held = nullptr;
+        if (rd(mgr, kSmSituation, &held) && held && is_a(held, g_vftSituation)) sit = held;
+        else { *why = "manager+0x80 is not a C_SkirmishSituation"; return false; }
+    }
     bool r = false;
-    if (!call_relation(g_fnRelation, sit, soulA, soulB, &r)) { c_faults.fetch_add(1); return false; }
+    if (!call_relation(g_fnRelation, sit, soulA, soulB, &r)) { c_faults.fetch_add(1); *why = "the call faulted"; return false; }
     c_relationAsked.fetch_add(1);
     *answered = true; *hostile = r;
     return true;

@@ -137,20 +137,36 @@ client **1,258** (was 1,236: +22), setup 77, farkle 59, relay 63, native **530**
 trace and definitions, A6), Lua synthetic suites **50 of 50**, 0 failures. Native build with `Test-NativeGuards` clean (no raw
 `__try`, no pointer-taking `build_argument(`).
 
-### Stage A solo live check — not run
+### Stage A solo live check [L] — run 2026-10-08, with synthetic peers
 
-No game was started in this session so far. What the live check needs, and what it will read:
+**Setup.** This machine's Modding Tools build (1.5.5), started minimized, the new `KCDMP.dll` injected by hand (a copy of the build, a
+new file name per rebuild), the new pak installed with `tools/Build-And-Install-Mod.ps1` (the previous `Mods\kdcmp` was copied aside
+first), a **throwaway** save (`playline4/quicksave022`, the one earlier sessions used) loaded by `wh_sys_LoadGame 4 quicksave022`
+(the log line read back), a local relay, the agent as the **joiner** from a copy of the Release build, and `tools/wo118`'s synthetic
+authority peer driving a plan. **The playlines were backed up first (727 files, 1.3 GB, the copy checked equal); afterwards playlines
+0-3 are byte-identical to the backup, and the throwaway gained three autosaves (023-025, written by the agent in shared-world host
+mode before the harness switched it off) — `quicksave022` untouched.** The game window was never brought forward; it restored
+itself after the load and was minimized once (the one push-down after my own load); the frame rate below is therefore the
+background-limited one.
 
-* the Modding Tools build (never retail), a **throwaway** playline loaded (the playlines were backed up wholesale before any launch:
-  727 files, 1.3 GB, the copy checked equal; the loaded save is read back before any test action);
-* the new `KCDMP.dll` injected, the new agent running, `kdcmp.lua` re-packed (`tools/Build-And-Install-Mod.ps1`: a Lua edit needs the
-  pak rebuild and a game restart);
-* a scripted fight with one NPC (the host's own combat automation, `mp_w154_check hostfight <npc>`), then: `MP-WO163-STATS` /
-  `MP-ACTION ... table=combat_action_sync_attack` lines show a sync attack resolved (**`dropped-unknown-row` = 0**), `MP-FIGHTSNAP`
-  lines appear for a bound puppet, the frame rate is recorded;
-* the game window brought to the front by the maintainer (never by this session): an unfocused window runs at ~26 fps whatever the mod does.
+| What | Result | Mark |
+|---|---|---|
+| New pak, DLL, agent | `MOD INIT`; hit slot, attribution and capture armed on the new DLL; the agent connected to the DLL; catalog **1,710 rows** (the two new tables add 222); no Lua error | [L] |
+| Probe surface | `mp_w163_probe status` through the console: Lua -> agent -> pipe op 0x2B -> DLL -> back: **`skirmish_relation=armed`** (the relation function's prologue verified on 1.5.5) | [L] |
+| `model me` (P1/P3 instrument) | `ca=1 pca=1 model=1 state=1 gz=2 bz=-1 bh=1 bm=0 pb=0 az=2 at=-1 as=0.000 ah=1 cm=0 opp=0x0`: **all eleven property blocks name themselves** (no `!`), widths right (float strength, byte bools). An NPC with no combat actor: `ca=0` | [L] |
+| A7 relation read | `relation <npc>` for an NPC in no fight: answered, **not hostile**. The first ask (NPC ~95 m away, the first session) was "could not be asked" — the DLL then said nothing about why; every refusal now logs its reason (`WO163-RELATION ... NOT answered: ...`), and the relation object is accepted whether it lies inside the manager at +0x80 or is held by a pointer there (the layout was **not** recorded which; see the pocket list). The **hostile** answer, and the judge's own 5 s path, are **not exercised** (they need a fight with the host: P6 / P7) | [L] partial |
+| **A5** `MP-FIGHTSNAP` | lines appear per 10 s window for the bound puppet with `holds=2-4`, `hold_ms_max` 906-938 ms, `resume_max_cm` 3.0-10.1, `post_hold_step_max_cm` 6.2-18.0, `snaps_gt5m=0`. On the first run the fight118 harness read the **same trace**: holds of 910-938 ms (the line: 931-938), worst resume step 9.5 cm (line: 10.06 in the window that held the bind), a render step of 16.4 cm after a resume (line: 16.44 in a window wholly inside the trace) — **the line agrees with the harness to the numbers it can be aligned on**. Two artefacts found and fixed in the accumulator (native tests): a bind's first write and the two frames the physics body lags it read **tens of metres** as a "correction" (`corr_max` 65 m and 81 m); a correction over 5 m is now a placement | [L] + [native] |
+| **A3** + **A4** (victim) | a plan sends one swing row (the unarmed punch, lag 0.22 s) for the bound copy and four verdicts: the row **played natively** (`dispatch=native-row result=ok`); verdict 1, 0.3 s after it: **`shown=yes`** (the copy's row fits); verdicts 2 and 3, seconds later with only that old row behind them: **`shown=generic reason=row-stale`** (the copy lunged once before the damage); verdict 4 names nobody: `shown=no reason=no-attacker`. Each applied **once** (`applied=4`, `dup_ignored=0`; hp 15.0 / st 12.0 = the sum sent); `MP-WO161-STATS ... generic=2 shown=3 not_shown=1 not_shown_why=[no-attacker:1]`. That the lunge is *visible* is **[not determined]** here (the window was minimized): the dispatcher said ok, the same answer a played row gives | [L] |
+| A1 / A2 capture | **not exercised live**: a host-side NPC fight (and a sync attack) was not staged — the host's combat automation wants a `w154_` test NPC and the spawn route was not worth a rabbit hole. Covered by the unit gates (24 of 24 field dumps; the frame tail; the master-strike filter on the game's own table). P5 is the live check, with a throwing / combo NPC | **[not tested]** |
+| Frame rate | **not recorded** (background-limited, ~24 fps while minimized; ~72 fps while the window was visible between runs): the WO-148 rule — menu, town, 3-enemy fight, before / after — needs the window in front and is for the maintainer's session | **[not tested]** |
 
-<!-- STAGE-A-LIVE-RESULT -->
+**Noted, not mine.** The native log shows `wo137::set_send_callback` read faults at ~11.9 k per minute from the moment the save loaded
+(`FAULT-SUM ... 0 switched off`): WO-160 recorded the same flood (the quest reader on a loaded world), guarded and counted; no
+`wo163` site faulted. **Harness note:** in shared-world mode (default on since 0.30.0) the agent *claims host* and outranks a plan
+peer, so verdicts (host-only on the relay) never reach it; `mp_shared_world off` restores the older "lowest id is the authority"
+rule the WO-118 harness relies on.
+
+
 
 ## Stage B — the eight probes (the instruments are built; **no probe has been run**)
 

@@ -152,7 +152,7 @@ int wo163_tests(int* passed) {
     {
         // the correction's 95th percentile from the histogram; the snaps counter; break_run keeps the window
         FightSnap fs; double t = 0;
-        for (int i = 0; i < 100; ++i, t += 0.016) fs.frame(t, {0, 0, 0}, {i < 95 ? 0.01f : 0.10f, 0, 0}, true, false);
+        for (int i = 0; i < 101; ++i, t += 0.016) fs.frame(t, {0, 0, 0}, {i < 96 ? 0.01f : 0.10f, 0, 0}, true, false);   // the first frame is a placement, so 100 corrections: 95 of 1 cm, 5 of 10
         const FightSnapOut o = fs.flush(0);
         RCHECK(std::fabs(o.corrMaxCm - 10.0f) < 0.01f && std::fabs(o.corrP95Cm - 2.0f) < 0.01f, "corr max 10 cm, p95 inside the first 2 cm bucket (got %.2f / %.2f)", o.corrMaxCm, o.corrP95Cm);
         FightSnap g; t = 0;
@@ -165,6 +165,26 @@ int wo163_tests(int* passed) {
         t += 0.016; h.frame(t, {9, 9, 0}, {9, 9, 0}, true, false);             // a body re-placed after a non-fight hold: no step across it
         const FightSnapOut ho = h.flush(0);
         RCHECK(ho.frames == 2 && ho.fightFrames == 1 && ho.stepMaxCm == 0.0f, "break_run keeps the window's frames and drops the step across it");
+    }
+    {
+        // a bind is a placement: its 65 m first write is no correction (the live first window read corr_max 65 m)
+        FightSnap fs; double t = 0;
+        fs.frame(t, {0, 0, 0}, {65, 0, 0}, true, false);                      // the first written frame of a fresh body
+        for (int i = 0; i < 10; ++i) { t += 0.016; fs.frame(t, {65, 0, 0}, {65.01f, 0, 0}, true, false); }
+        const FightSnapOut o = fs.flush(0);
+        RCHECK(o.frames == 11 && std::fabs(o.corrMaxCm - 1.0f) < 0.05f, "the bind's write is a frame but not a correction: corr max %.2f cm (not 6500)", o.corrMaxCm);
+        FightSnap g; t = 0;
+        g.frame(t, {0, 0, 0}, {0, 0, 0}, true, true);
+        g.break_run();
+        t += 0.016; g.frame(t, {9, 9, 0}, {0, 0, 0}, true, false);             // re-placed after a non-fight hold
+        RCHECK(g.flush(0).corrMaxCm == 0.0f, "a placement after a break is not a correction either");
+        // the physics body lags a bind's write for two frames: the second frame still reads the old spot 81 m away (the live second window)
+        FightSnap h; t = 0;
+        h.frame(t, {0, 0, 0}, {81, 0, 0}, true, false);
+        t += 0.016; h.frame(t, {0, 0, 0}, {81.02f, 0, 0}, true, false);       // the body has not moved yet
+        t += 0.016; h.frame(t, {81, 0, 0}, {81.04f, 0, 0}, true, false);      // it has now
+        const FightSnapOut ho = h.flush(0);
+        RCHECK(ho.corrMaxCm <= 4.01f, "a correction over 5 m is a placement: corr max %.2f cm (not 8100)", ho.corrMaxCm);
     }
     if (passed) *passed = g_pass;
     return g_fail;
