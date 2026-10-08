@@ -79,8 +79,12 @@ void install();
 // ---- pipe thread: parse + queue ------------------------------------------------
 // 0x16 MotionConfig: [avatarGait][npcGait][avatarMoves][avatarCombat][npcRows]
 uint8_t on_config(const uint8_t* body, size_t len);
-// 0x17 AvatarEvent: [kind:1][eid:4]; kind 1 = jump
+// 0x17 AvatarEvent: [kind:1][eid:4]; kind 1 = jump, kind 2 (WO-160) = a loop on this avatar was stopped: the T-pose pulse again
 uint8_t on_avatar_event(const uint8_t* body, size_t len);
+// WO-160: an avatar's looping animation stopped (a one-shot's end, a clip the mod stopped): its locomotion graph can stand in the
+// T-pose again until something moves it (the WO-155 bind transient, seen at a loop's end too) -- the walk-class pulse runs again,
+// once, if the body is still. Main thread.
+void rearm_nudge(uint32_t eid, const char* why);
 
 // ---- main thread ---------------------------------------------------------------
 // npc_drive calls this for every body it wrote this frame. `st` is the newest

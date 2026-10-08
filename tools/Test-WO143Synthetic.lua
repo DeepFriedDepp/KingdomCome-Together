@@ -278,7 +278,7 @@ do
     ERRS = {}
     local w = KCD2MP.w143
     check("A: the first five default on", w.hands == true and w.gaits == true and w.oneshots == true and w.minigames == true and w.idles == true)
-    check("A: WO-153: mp_avatar_herbs defaults OFF (the herb loop ended the 0.43.0 joiner crashes)", w.herbs == false, tostring(w.herbs))
+    check("A: WO-160 5: mp_avatar_herbs defaults ON (the avatar's plain bend-and-pick clip; the minigame's own fragment is never played)", w.herbs == true, tostring(w.herbs))
     check("A: ...and its command is registered", CCMDS["mp_avatar_herbs"] ~= nil and CCMDS["mp_avatar_herbs"].body == "KCD2MP_SetAvatarHerbs(%line)",
           CCMDS["mp_avatar_herbs"] and CCMDS["mp_avatar_herbs"].body)
     check("A: the commands are registered", CCMDS["mp_hand_items"] ~= nil and CCMDS["mp_activity_gaits"] ~= nil and CCMDS["mp_oneshots"] ~= nil and

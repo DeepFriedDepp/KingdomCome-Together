@@ -216,8 +216,9 @@ do
     KCD2MP_W157TalkFree("ttac_blacksmith")
     local resets = 0
     for _, c in ipairs(CMDS) do if c:find("^wh_ai_NPCStateResetElement ttac_blacksmith ") then resets = resets + 1 end end
-    check("T1: its hands, activity and stance reset (the engine's own console command)", resets == 4
-        and CMDS[1] == "wh_ai_NPCStateResetElement ttac_blacksmith LeftHand", CMDS[1])
+    -- WO-160: the game's reset knows two elements only (Unstance, Stance); the LeftHand/RightHand resets answered "Unsupported element type"
+    check("T1: its activity and stance reset (the engine's own console command; WO-160: the two elements it has)", resets == 2
+        and CMDS[1] == "wh_ai_NPCStateResetElement ttac_blacksmith Unstance", CMDS[1])
     check("T2: the placement holds for the conversation", countEvt("w157_talkfree", "on ttac_blacksmith", mark) == 1 and w.talking["ttac_blacksmith"].freed == true)
     KCD2MP_W157SetTalkFree("off")
     CMDS = {}

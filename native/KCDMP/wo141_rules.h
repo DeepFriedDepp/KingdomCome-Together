@@ -174,6 +174,16 @@ inline double next_delay(int misses) {
     return misses < kMissesBeforeBackoff ? kRecheckS : misses < kMissesBeforeLongBackoff ? kBackoffS : kLongBackoffS;
 }
 
+// WO-160: the game's planner refusing a placement is three error lines and a search each time (5,308 of 8,316 field applies were
+// refused). A body it has refused kMissesBeforeGiveUp times with one activity is not asked again for kGiveUpRetryS; a host row
+// with another activity starts the count again (set_desired). Only the planner's own refusals count here (not an object that is
+// not streamed yet, not a body that is not there).
+constexpr int    kMissesBeforeGiveUp = 8;
+constexpr double kGiveUpRetryS = 300.0;
+inline bool gave_up(int refusals, double sinceGaveUpS) {
+    return refusals >= kMissesBeforeGiveUp && sinceGaveUpS < kGiveUpRetryS;
+}
+
 // The host's capture: a change is sent at once; an activity that is not "none"
 // is sent again every kRefreshS (a joiner that came late, a lost frame).
 constexpr double kRefreshS = 10.0;

@@ -30,11 +30,11 @@ public partial class GameBridge
     /// <summary>The maintainer's rule: new fail-closed mechanisms ship ON (mp_hand_items, mp_activity_gaits, mp_oneshots, mp_player_minigames, mp_idles).</summary>
     public const bool W143Default = true;
 
-    /// <summary>WO-153 1: mp_avatar_herbs ships OFF -- the avatar's herb-picking loop ended both of the joiner's 0.43.0 crashes.</summary>
-    public const bool W143HerbsDefault = false;
+    /// <summary>WO-153 1 / WO-160 5: mp_avatar_herbs. The engine's own herb fragment ended both of the joiner's 0.43.0 crashes and is never played; the avatar bends and picks with a plain clip (default ON).</summary>
+    public const bool W143HerbsDefault = true;   // WO-160 5: ON -- the plain bend-and-pick clip (never the PickingHerbs fragment)
 
     private volatile bool _w143Hands = W143Default, _w143Gaits = W143Default, _w143Shots = W143Default, _w143Minigames = W143Default, _w143Idles = W143Default;
-    // WO-153 1: mp_avatar_herbs -- the avatar's herb-picking loop, OFF by default (the joiner's 0.43.0 crashes ended on it)
+    // WO-153 1 / WO-160 5: mp_avatar_herbs -- the avatar's plain bend-and-pick clip (the PickingHerbs fragment is never played)
     private volatile bool _w143Herbs = W143HerbsDefault;
     private long _w143HerbsWithheldAtMs;
     private volatile bool _w143Connected;
@@ -317,10 +317,12 @@ public partial class GameBridge
     {
         if (!_w143Minigames || !W141Active || peer == _myGhostId) return;
         var show = Wo143Rules.AvatarShow(a, _w143Herbs);
-        if (show is null && a.Minigame == Wo143Rules.HerbMinigame && Environment.TickCount64 - _w143HerbsWithheldAtMs > 60_000)
+        // WO-160 5: herb gathering is a plain bend-and-pick clip on the avatar, never the minigame's PickingHerbs fragment
+        await W160HerbProxyAsync(peer, Wo160Rules.HerbProxyWanted(a.Minigame, Wo143Rules.HerbMinigame, _w143Herbs));
+        if (show is null && a.Minigame == Wo143Rules.HerbMinigame && !_w143Herbs && Environment.TickCount64 - _w143HerbsWithheldAtMs > 60_000)
         {
             _w143HerbsWithheldAtMs = Environment.TickCount64;
-            Console.WriteLine($"MP-W143 player {peer}: herb gathering -- the avatar stands (mp_avatar_herbs is off: the 0.43.0 joiner crashes ended on its PickingHerbs loop)");
+            Console.WriteLine($"MP-W143 player {peer}: herb gathering -- the avatar stands (mp_avatar_herbs is off)");
         }
         var cur = _w143Mini.GetValueOrDefault(peer);
         if (cur is not null && show is not null && cur.Type == show.Type && cur.Obj == a.MinigameObj) return;

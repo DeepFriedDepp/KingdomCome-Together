@@ -4031,7 +4031,10 @@ public partial class GameBridge(ClientConfig config)
             // WO-102 Phase 6: a peer's announced sleep/wait/fast travel is a
             // resync point here too (quiet clock reports are not).
             if (!quiet)
+            {
                 await RequestNpcResyncAsync(kind == Protocol.TimeSkipKindFastTravel ? NpcResyncReason.FastTravel : NpcResyncReason.Sleep, _resyncStream, ct);
+                _ = W160SettleAfterSkipAsync("the host's announced skip was applied");   // WO-160 1
+            }
         }
         catch { /* game might have unloaded */ }
 
@@ -5907,6 +5910,9 @@ public partial class GameBridge(ClientConfig config)
             case "w137_sync":        // WO-137: shared quests
             case "w137_talk":
             case "w157_talkfree":    // WO-157 3b.4: a talked-to copy's placement waits
+            case "w160_conv":        // WO-160 3: the host's conversation: the joiner's copy of the NPC stands
+            case "w160_loopstop":    // WO-160 5: a loop on an avatar was stopped: the T-pose pulse again
+            case "w160_ownhorse":    // WO-160 6: a joiner's own horse is told to the host
             case "w137_status":
                 Wo137OnEvent(name, arg);
                 return;

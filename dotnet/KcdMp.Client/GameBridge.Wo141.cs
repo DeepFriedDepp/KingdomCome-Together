@@ -211,7 +211,7 @@ public partial class GameBridge
     private async Task Wo141ApplyAsync(string name, ActivityState a, string why)
     {
         if (!W141Active) { Interlocked.Increment(ref _w141HeldRows); return; }   // a load: kept, applied after the settle
-        bool? known = await _combat.Wo141ApplyAsync(name, a);
+        bool? known = await W160ApplyAsync(name, a);   // WO-160: the body's stance and unstance released first when its activity changes
         Interlocked.Increment(ref _w141Applies);
         if (known is null) Console.WriteLine($"MP-W141 {name}: the DLL did not take the activity ({why}: {a})");
     }
@@ -226,7 +226,7 @@ public partial class GameBridge
         int n = 0;
         if (W141Joiner)
             foreach (var (name, a) in _w141HostRows)
-                if (!a.IsNone && !_w141Blocked.ContainsKey(name)) { await _combat.Wo141ApplyAsync(name, a); n++; }
+                if (!a.IsNone && !_w141Blocked.ContainsKey(name)) { await W160ApplyAsync(name, a); n++; }
         foreach (var (peer, a) in _w141PeerRows)
             if (!a.IsNone && peer != _myGhostId) { await _combat.Wo141ApplyAsync(Wo141Rules.AvatarName(peer), Wo141Rules.ForAvatar(a)); n++; }
         if (n > 0) Console.WriteLine($"MP-W141 {n} activit{(n == 1 ? "y" : "ies")} applied again ({why})");

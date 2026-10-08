@@ -79,6 +79,13 @@ int wo141_rules_tests(int* passed) {
     ACHECK(next_delay(8) == kLongBackoffS && next_delay(40) == kLongBackoffS && kLongBackoffS >= 4 * kBackoffS,
            "WO-153: ...and from the eighth miss once a minute, never faster again (the 104 CartMounts)");
 
+    // WO-160: the game's planner refusing one activity eight times ends the asking for 300 s (the field: 5,308 of 8,316 placements were
+    // refused, each three error lines and a search); only its own refusals count; a changed row starts the count again (set_desired)
+    ACHECK(kMissesBeforeGiveUp == 8 && !gave_up(0, 1e9) && !gave_up(7, 0), "WO-160: seven refusals: still asked");
+    ACHECK(gave_up(8, 0) && gave_up(30, 299.9), "WO-160: the eighth refusal: not asked again for 300 s");
+    ACHECK(!gave_up(8, kGiveUpRetryS) && !gave_up(8, 1e6), "WO-160: ...and asked again after that");
+    ACHECK(kGiveUpRetryS >= 5 * kBackoffS, "WO-160: the give-up window is long against the 15 s retries it replaces");
+
     // the host's capture: a change now, an activity again every 10 s, "none" once
     ACHECK(send_due(true, true, 0) && send_due(true, false, 0), "a change is sent at once");
     ACHECK(!send_due(false, false, 9.9) && send_due(false, false, 10.0), "an activity again after 10 s");

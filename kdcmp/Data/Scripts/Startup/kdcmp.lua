@@ -7192,17 +7192,21 @@ function KCD2MP_W137Session(host, joiner, active)
     if KCD2MP_W151DoorInstall then pcall(KCD2MP_W151DoorInstall) end   -- WO-151 3.9: the door wraps
     if wasJoiner and not joiner then KCD2MP_W137TalkEndAll("no-longer-joiner") end
     if wasHost and not host then KCD2MP_W137HoldReleaseAll("no-longer-host") end
+    if (wasJoiner and not joiner) or (wasHost and not host) then pcall(KCD2MP_W160ConvReleaseAll, "no longer in the session") end   -- WO-160 3
     pcall(KCD2MP_W137TalkTick)
     pcall(KCD2MP_W137HoldTick)
+    pcall(KCD2MP_W160ConvTick)   -- WO-160 3: the host's own conversations end here
+    pcall(KCD2MP_W160OwnHorseTick)   -- WO-160 6: a joiner's own horse is told to the host
 end
 
 -- The 8 ms draw loop: the agent went away without telling (a crash) -> give back.
 function KCD2MP_W137Backstop()
     local w = KCD2MP.w137
     if not w.aliveAt or (os.clock() - w.aliveAt) <= w.aliveTimeoutS then return end
-    if next(w.talking) == nil and next(w.held) == nil then return end
+    if next(w.talking) == nil and next(w.held) == nil and next(KCD2MP.w160.conv) == nil and next(KCD2MP.w160.hostTalks) == nil then return end
     KCD2MP_W137TalkEndAll("agent-silent")
     KCD2MP_W137HoldReleaseAll("agent-silent")
+    if KCD2MP_W160ConvReleaseAll then KCD2MP_W160ConvReleaseAll("agent-silent") end   -- WO-160 3
 end
 
 -- mp_quest_sync on|off (the kill switch). The host's value is the session's: off
@@ -7263,6 +7267,7 @@ function KCD2MP_W137InstallTalk()
                 local bok, blocked = pcall(KCD2MP_W151HostTalkBlocked, self, user)   -- WO-151 3.6
                 if bok and blocked then return end
                 pcall(KCD2MP_W137BeforeTalk, self, user, via)
+                pcall(KCD2MP_W160HostTalk, self, user, via)   -- WO-160 3: the host's talk: the joiner's copy stands
                 return orig(self, user, slot)
             end
             w.talkWraps[fn] = wrap
@@ -7583,7 +7588,14 @@ function KCD2MP_W137HoldPause(npc, e, h)
     h.at = os.clock()
     -- WO-151 3.6: a hold blocks only a second conversation (KCD2MP_W151HostTalkBlocked); the NPC keeps its
     -- own activity. The field: the blacksmith stood still 71.7 s while the partner talked to his copy.
-    if KCD2MP.w151 and not KCD2MP.w151.holdFreeze then h.blockOnly = true; return "block-only" end
+    -- WO-160 3: but the NPC a partner is TALKING to stands still for exactly that conversation (the field's two sessions: it walked on
+    -- on the host's screen while the partner's copy talked to him). The hold ends with the talk's own end event (the joiner's
+    -- w137_talk off), and in heldMaxS at the latest; a guard's stop stays block-only (mp_conv_hold on|off, default on).
+    local freezeTalk = h.why == "talk" and KCD2MP.w160 and KCD2MP.w160.convHold ~= false
+    if KCD2MP.w151 and not KCD2MP.w151.holdFreeze and not freezeTalk then
+        h.blockOnly = true
+        return string.format("block-only(why=%s,hold_freeze=off%s)", tostring(h.why), h.why == "talk" and ",mp_conv_hold=off" or "")
+    end
     if busy then return "waits:in-a-conversation-here" end
     local ok, err = pcall(System.ExecuteCommand, "wh_ai_PauseNPC " .. npc)
     if ok then h.paused = true end
@@ -10038,6 +10050,8 @@ function KCD2MP_NpcPuppetTick(arg, gen)
             -- Lua detectors below (MP-NPCFIGHT, MP-AUTHORITY-VIOLATION, MP-NPCZ) are
             -- the LEGACY path's instruments: a native puppet has no Lua write to
             -- measure against and is measured by the DLL's MP-NPCPULL instead.
+            -- WO-160 3: the host is talking to this NPC: its copy stands where it is (no Lua write, the native writer held)
+            if KCD2MP_W160ConvHeld and KCD2MP_W160ConvHeld(name, p, e) then return end
             KCD2MP_NpcNativeSync(name, p, e, KCD2MP_NpcNativeHealthy() and not isReplica, "tick")
             -- A fresh puppet's first bind is in flight for one agent round trip
             -- (~50-200 ms). Writing it meanwhile drew the WO-77 seed slide at
@@ -11034,6 +11048,9 @@ function KCD2MP_MountNPCOnHorse(id)
     end
     ghost.w157MountFarTold = nil
 
+    -- WO-160 5: the mount gate -- the horse is polled for readiness (0.25 s, up to 5 s) before the ForceMount the engine would roll back
+    local gateId = id
+    if KCD2MP_W160MountGate and not KCD2MP_W160MountGate(id, ghost, horse, function() KCD2MP_MountNPCOnHorse(gateId) end) then return end
     local ok1 = pcall(function() human:ForceMount(horse.id) end)
     mp_log("ForceMount ok=" .. tostring(ok1) .. " id=" .. id)
     if not ok1 then return end
@@ -12374,6 +12391,9 @@ end
 
 function KCD2MP_UpdateAnimation(id, ghost, pumped)
     local istate = ghost.istate
+
+    -- WO-160 5: the avatar's herb gathering is a plain clip (KCD2MP_W160HerbProxy): the locomotion loop stays off while it plays
+    if istate.herbProxy and KCD2MP_W160HerbHold and KCD2MP_W160HerbHold(id, ghost, istate) then return end
 
     -- WO-39: a one-shot combat animation (swing/block) is mid-play. This
     -- function restarts locomotion every tick, which would stomp it on the
@@ -17849,7 +17869,9 @@ KCD2MP_MARKS = { "setup", "join", "fight", "fightboth", "ko", "hostdown", "horse
     "conn", "horsefar", "lookflood", "saved", "launcher", "startsave",
     -- WO-154: the 0.45.0 tester page's markers
     "quest", "knock", "turn", "partnerdown", "endfight", "joinbar", "joinslow", "newchar", "fasttravel", "menu", "skip",
-    "voice", "caravan" }
+    "voice", "caravan",
+    -- WO-160: the 0.46.0 tester page's markers
+    "sellkeeper", "joinclean", "convstand", "naked", "mount5", "ownhorse", "hostkill" }
 function KCD2MP_Mark(word)
     word = tostring(word or "odd"):gsub("[^%w_]", "")
     if word == "" then word = "odd" end
@@ -18000,10 +18022,11 @@ KCD2MP.w143.gaits = (KCD2MP.w143.gaits == nil) and true or KCD2MP.w143.gaits    
 KCD2MP.w143.oneshots = (KCD2MP.w143.oneshots == nil) and true or KCD2MP.w143.oneshots   -- mp_oneshots
 KCD2MP.w143.minigames = (KCD2MP.w143.minigames == nil) and true or KCD2MP.w143.minigames -- mp_player_minigames
 KCD2MP.w143.idles = (KCD2MP.w143.idles == nil) and true or KCD2MP.w143.idles            -- mp_idles
--- WO-153 1: the one switch that ships OFF. The avatar's herb-picking loop (`PickingHerbs`) ended both of the joiner's
--- 0.43.0 crashes; with it off the avatar stands while its player gathers herbs. (`x == nil and false or x` would
--- give nil in Lua, hence the explicit test.)
-if KCD2MP.w143.herbs == nil then KCD2MP.w143.herbs = false end                            -- mp_avatar_herbs
+-- WO-153 1: the avatar's herb-picking loop (`PickingHerbs`) ended both of the joiner's 0.43.0 crashes, so the switch shipped OFF
+-- (the avatar stood while its player gathered herbs). WO-160 5: the avatar never plays that fragment now -- it bends and picks
+-- with a plain clip (KCD2MP_W160HerbProxy: no minigame fragment, no camera selector, no context 5) -- and the switch is ON.
+-- (`x == nil and true or x` would give nil for an explicit false, hence the explicit test.)
+if KCD2MP.w143.herbs == nil then KCD2MP.w143.herbs = true end                             -- mp_avatar_herbs
 KCD2MP.w143.temps = KCD2MP.w143.temps or {}    -- copy name -> class id -> the temporary item's id
 KCD2MP.w143.looks = KCD2MP.w143.looks or {}    -- copy name -> who it is made to look at
 KCD2MP.w143.stats = KCD2MP.w143.stats or { provided = 0, released = 0, inhand = 0, looks = 0, cleared = 0 }
@@ -18019,7 +18042,7 @@ KCD2MP_W143_SWITCHES = {
       off = "the avatar stands at the spot" },
     { key = "idles", cmd = "mp_idles", on = "standing NPCs look at who they look at on the host's screen",
       off = "copies look straight ahead" },
-    { key = "herbs", cmd = "mp_avatar_herbs", on = "the partner's avatar plays the herb-picking loop (the 0.43.0 joiner crashes ended on it)",
+    { key = "herbs", cmd = "mp_avatar_herbs", on = "the partner's avatar bends and picks with a plain clip while its player gathers herbs (never the minigame's own fragment: the 0.43.0 joiner crashes ended on it)",
       off = "the avatar stands while its player gathers herbs" },
 }
 
@@ -20256,12 +20279,436 @@ function KCD2MP_W157TalkFree(name)
     KCD2MP_EmitEvent("w157_talkfree", "on " .. tostring(name))
     if t then t.freed = true end
     local res = {}
-    for _, el in ipairs({ "LeftHand", "RightHand", "Unstance", "Stance" }) do
+    -- WO-160: the game's reset knows two elements only, Unstance and Stance ("Unsupported element type to reset!" answered the
+    -- LeftHand and RightHand resets of all 26 field talks of 2026-10-07; pcall said ok each time). The other 13 element types of
+    -- its enum (hands, equipment, set-aside items, behaviour states, contexts, links ...) have no reset.
+    for _, el in ipairs({ "Unstance", "Stance" }) do
         local ok = pcall(System.ExecuteCommand, "wh_ai_NPCStateResetElement " .. tostring(name) .. " " .. el)
         res[#res + 1] = el .. "=" .. (ok and "ok" or "err")
     end
     w.stats.freed = (w.stats.freed or 0) + 1
     mp_log(string.format("WO157-TALK free npc=%s reset=%s placement=held -- the copy can take the conversation (and a trade)", tostring(name), table.concat(res, ",")))
+end
+
+-- ===== WO-160: the joiner's NPC copies -- one context root cause (docs/WO-160-findings.md) =====
+-- The game's planner (C_NPCContext::ExecuteStateChangeIntoLoadedState) has no way out of a work activity: a body in an Unstance with a
+-- tool cannot be taken to another activity ("NPC state search failed: can't find a path from actions"). In the 2026-10-07 field log 5,308 of
+-- the joiner's 8,316 placements were refused (63 %), 2,478 + 3,684 error lines in 54 minutes, every one on a body this mod had placed; and
+-- the placement cleared the loaded state, which takes the body's shop, labels and contexts off it (the planner dismantles what the
+-- required state lacks: 13 solo bodies, 2 placed, 11 refused, all 3 shopkeepers lost their shop element). The DLL no longer clears the
+-- loaded state (wo141.cpp loaded mode 4); this releases the body's stance and unstance the game's own way first -- the reset WO-118 has
+-- issued at every puppet start since 0.28.3 -- so the planner only has to place a body, not to take it out of something (solo: 13 of 13
+-- placed, no error line, every shop kept).
+--   WO160-REL npc=<n> why=<w> unstance=ok|err stance=ok|err
+--   mp_ctx_release on|off   default ON
+KCD2MP.w160 = KCD2MP.w160 or { release = true, stats = { released = 0, skipped = 0 } }
+function KCD2MP_W160Release(name, why)
+    local w = KCD2MP.w160
+    if not w.release then return false end
+    local st = w.stats
+    local e = nil
+    pcall(function() e = System.GetEntityByName(name) end)
+    if not e then st.skipped = st.skipped + 1; return false end
+    local p = KCD2MP.npcPuppets[name]
+    local skip = nil
+    if KCD2MP.w137 and KCD2MP.w137.talking and KCD2MP.w137.talking[name] then skip = "talking" end
+    if not skip then
+        local dead = (p and (p.dead == true or p.deadHint == true)) or false
+        if not dead then pcall(function() dead = e.actor ~= nil and e.actor:IsDead() == true end) end
+        if dead then skip = "dead" end
+    end
+    if not skip then
+        local inDialog = false
+        pcall(function() if e.human and e.human.IsInDialog then inDialog = e.human:IsInDialog() == true end end)
+        if inDialog then skip = "dialog" elseif KCD2MP.cutsceneActive then skip = "cutscene" end
+    end
+    if skip then
+        st.skipped = st.skipped + 1
+        return false
+    end
+    local ok1 = pcall(System.ExecuteCommand, "wh_ai_NPCStateResetElement " .. tostring(name) .. " Unstance")
+    local ok2 = pcall(System.ExecuteCommand, "wh_ai_NPCStateResetElement " .. tostring(name) .. " Stance")
+    st.released = st.released + 1
+    if st.released <= 20 or st.released % 25 == 0 then
+        mp_log(string.format("WO160-REL npc=%s why=%s unstance=%s stance=%s (released %d)", tostring(name), tostring(why or "?"),
+            ok1 and "ok" or "err", ok2 and "ok" or "err", st.released))
+    end
+    return true
+end
+
+function KCD2MP_W160SetRelease(arg)
+    local v = KCD2MP_Wo122ParseBool(arg)
+    if v == "bad" then mp_log("mp_ctx_release: expected on|off"); return false end
+    if v ~= nil then KCD2MP.w160.release = v end
+    local st = KCD2MP.w160.stats
+    mp_log(string.format("WO160-TOGGLE mp_ctx_release %s released=%d skipped=%d -- a copy's stance and unstance are released before its next placement",
+        KCD2MP.w160.release and "on" or "off", st.released, st.skipped))
+    return true
+end
+
+-- ===== WO-160 3: the NPC in a conversation stands still on the other screen =====
+-- Both testers' sessions: a joiner's talk left the host's NPC walking on (WO-151 3.6 made the hold block-only), and a host's talk
+-- froze the stream while the joiner's copy carried on with its last gait. Now both machines are told, per NPC, when a conversation
+-- starts and ends, and the machine that is NOT talking holds that NPC where it stands:
+--   * joiner talks -> the host's hold (WO-137) FREEZES the NPC for the conversation (the 71.7 s statue of WO-151 was a hold that
+--     outlived its talk; this one ends with the talk's own end event, and in heldMaxS at the latest);
+--   * host talks -> its OnTalk wrap tells the joiner (w160_conv, QuestHostConverse); the copy's writers stop and it stands until
+--     the host's conversation ends (the host's IsInDialog, 3 s out) or convMaxS.
+--   WO160-CONV host-talk|copy-held|copy-released npc=<n> ...
+--   mp_conv_hold on|off   default ON
+KCD2MP.w160.convHold = KCD2MP.w160.convHold ~= false
+KCD2MP.w160.conv = KCD2MP.w160.conv or {}          -- joiner: name -> { since, x, y, z, holdAt }
+KCD2MP.w160.hostTalks = KCD2MP.w160.hostTalks or {} -- host: name -> { since, via, saw, outSince }
+KCD2MP.w160.convMaxS = 300.0
+KCD2MP.w160.hostTalkStartS, KCD2MP.w160.hostTalkOutS, KCD2MP.w160.hostTalkMaxS = 25.0, 3.0, 900.0
+
+-- JOINER: the host talks to <name> (QuestHostConverse): its copy is held where it stands.
+function KCD2MP_W160Conversation(on, name)
+    local w = KCD2MP.w160
+    name = tostring(name or "")
+    if not string.find(name, "^[%w_]+$") then return false end
+    local now = os.clock()
+    if not on then
+        local c = w.conv[name]
+        if c then
+            w.conv[name] = nil
+            mp_log(string.format("WO160-CONV copy-released npc=%s held_s=%.1f -- the host's conversation is over", name, now - c.since))
+        end
+        return true
+    end
+    if not w.convHold then return false end
+    local e = nil
+    pcall(function() e = System.GetEntityByName(name) end)
+    local p = KCD2MP.npcPuppets[name]
+    if not e or not p then
+        mp_log(string.format("WO160-CONV copy-held refused npc=%s -- no streamed copy here (%s)", name, e and "not a puppet" or "no such NPC"))
+        return false
+    end
+    local pos = nil
+    pcall(function() pos = e:GetWorldPos() end)
+    w.conv[name] = { since = now, x = pos and pos.x, y = pos and pos.y, z = pos and pos.z, holdAt = now }
+    KCD2MP_NpcNativeHold(name, 2.0)
+    mp_log(string.format("WO160-CONV copy-held npc=%s at %.2f %.2f %.2f -- the host talks to it: its copy stands until that ends", name,
+        pos and pos.x or 0, pos and pos.y or 0, pos and pos.z or 0))
+    return true
+end
+
+-- JOINER, from the puppet tick: true = this copy is held (no writer runs for it).
+function KCD2MP_W160ConvHeld(name, p, e)
+    local w = KCD2MP.w160
+    local c = w.conv[name]
+    if not c then return false end
+    local now = os.clock()
+    if (now - c.since) > w.convMaxS then
+        w.conv[name] = nil
+        mp_log(string.format("WO160-CONV copy-released npc=%s held_s=%.1f -- past %.0f s (no end ever came)", name, now - c.since, w.convMaxS))
+        return false
+    end
+    if (now - c.holdAt) >= 1.0 then
+        c.holdAt = now
+        KCD2MP_NpcNativeHold(name, 2.0)
+    end
+    return true
+end
+
+-- Everything held is given back (the agent went away, this machine is no longer a joiner).
+function KCD2MP_W160ConvReleaseAll(why)
+    local w = KCD2MP.w160
+    for name, c in pairs(w.conv) do
+        mp_log(string.format("WO160-CONV copy-released npc=%s held_s=%.1f -- %s", name, os.clock() - c.since, tostring(why)))
+    end
+    w.conv = {}
+    for name in pairs(w.hostTalks) do KCD2MP_EmitEvent("w160_conv", "off " .. name) end
+    w.hostTalks = {}
+end
+
+-- HOST: this player pressed Talk/Chat on an NPC (the BasicAIActions wrap): the joiner is told its copy stands.
+function KCD2MP_W160HostTalk(npc, user, via)
+    local w = KCD2MP.w160
+    if not w.convHold then return end
+    local w137 = KCD2MP.w137
+    if not (w137 and w137.host and w137.active) then return end
+    if not (npc and user and player and user.id == player.id) then return end
+    local name = nil
+    pcall(function() name = npc:GetName() end)
+    if not name or not string.find(name, "^[%w_]+$") or KCD2MP.npcPuppets[name] then return end
+    local t = w.hostTalks[name]
+    if t then t.since = os.clock(); return end
+    w.hostTalks[name] = { since = os.clock(), via = tostring(via) }
+    KCD2MP_EmitEvent("w160_conv", "on " .. name)
+    mp_log(string.format("WO160-CONV host-talk start npc=%s via=%s -- the joiner's copy of it stands until this ends", name, tostring(via)))
+end
+
+-- HOST, each second (the WO-137 session tick): a conversation's end, from the NPC's own IsInDialog.
+function KCD2MP_W160ConvTick()
+    local w = KCD2MP.w160
+    if next(w.hostTalks) == nil then return end
+    local now = os.clock()
+    local ending = {}
+    for name, t in pairs(w.hostTalks) do
+        local e = nil
+        pcall(function() e = System.GetEntityByName(name) end)
+        local inDialog = false
+        if e then pcall(function() inDialog = e.human ~= nil and e.human:IsInDialog() == true end) end
+        if inDialog then t.saw = true; t.outSince = nil else t.outSince = t.outSince or now end
+        local age = now - t.since
+        local why = nil
+        if not e then why = "gone"
+        elseif not t.saw and age > w.hostTalkStartS then why = "never-started"
+        elseif t.saw and t.outSince and (now - t.outSince) > w.hostTalkOutS then why = "dialog-ended"
+        elseif age > w.hostTalkMaxS then why = "max-time" end
+        if why then ending[#ending + 1] = { name, why, age } end
+    end
+    for _, x in ipairs(ending) do
+        w.hostTalks[x[1]] = nil
+        KCD2MP_EmitEvent("w160_conv", "off " .. x[1])
+        mp_log(string.format("WO160-CONV host-talk end npc=%s why=%s after_s=%.1f", x[1], x[2], x[3]))
+    end
+end
+
+-- ===== WO-160 5: the avatar's herb gathering as a plain clip (the herb proxy) ===================================================
+-- The avatar never plays the minigame's own fragment (PickingHerbs): it is a PLAYER fragment, it selects the camera bone and the
+-- MasterSlave context 5 on `Dude`, and both 0.43.0 joiner crashes ended the moment it was stopped (WO-153 1). The avatar bends and
+-- picks with a plain animation clip instead (the herbalist NPCs' own behaviour loop, animations/humans/male/behavior/
+-- herbs_picking_area_loop.caf, in male_general.dba; its _in and _out clips are beside it): no minigame fragment, no camera
+-- selector, no context. (Solo: the clip is accepted and prints no camera/context line; that it visibly bends is for the testers --
+-- a paused NPC's mannequin shows no layer-0 clip at all, so the solo run could not see it.) The ghost's locomotion clip is held off while it plays (oneShotUntil).
+--   WO160-HERB id=<n> on|off clip=<c>
+--   mp_avatar_herbs on|off   (WO-153's switch, now: the plain clip; default ON)
+KCD2MP.w160.herbClip = KCD2MP.w160.herbClip or "herbs_picking_area_loop"
+function KCD2MP_W160HerbProxy(peer, on)
+    local w = KCD2MP.w160
+    local id = tostring(peer)
+    local g = KCD2MP.ghosts and KCD2MP.ghosts[id]
+    local st = g and g.istate
+    if not (g and g.entity and st) then return false end
+    local now = os.clock()
+    if on then
+        if st.herbProxy then return true end
+        st.herbProxy = now
+        st.herbClipAt = now
+        st.oneShotUntil = now + 2.0
+        pcall(function() g.entity:StartAnimation(0, w.herbClip, 0, 0.3, 1.0, true) end)
+        mp_log(string.format("WO160-HERB id=%s on clip=%s -- a plain bend-and-pick loop, no minigame fragment (no camera selector, no context 5)", id, w.herbClip))
+    elseif st.herbProxy then
+        local held = now - st.herbProxy
+        st.herbProxy, st.herbClipAt, st.oneShotUntil = nil, nil, nil
+        st.animLoopName = nil   -- the locomotion clip starts again at the next update
+        mp_log(string.format("WO160-HERB id=%s off held_s=%.1f", id, held))
+        if KCD2MP_W160AvatarLoopStopped then pcall(KCD2MP_W160AvatarLoopStopped, id, "herb clip stopped") end
+    end
+    return true
+end
+
+-- The ghost animation update asks first: while the herb clip plays, the locomotion loop stays off (and the clip is kept alive).
+function KCD2MP_W160HerbHold(id, ghost, st)
+    if not st.herbProxy then return false end
+    local now = os.clock()
+    if (now - st.herbProxy) > 600 then   -- no end ever came
+        KCD2MP_W160HerbProxy(id, false)
+        return false
+    end
+    st.oneShotUntil = now + 2.0
+    if (now - (st.herbClipAt or 0)) > 4.0 then
+        st.herbClipAt = now
+        pcall(function() ghost.entity:StartAnimation(0, KCD2MP.w160.herbClip, 0, 0.3, 1.0, true) end)
+    end
+    return true
+end
+
+-- The agent hears an avatar's loop stopped and asks the DLL for the T-pose pulse again (AvatarEvent kind 2).
+function KCD2MP_W160AvatarLoopStopped(id, why)
+    KCD2MP_EmitEvent("w160_loopstop", tostring(id) .. " " .. tostring(why or "?"))
+end
+
+-- ===== WO-160 5: the mount gate (the avatar's ForceMount waits for a horse the engine can take a rider on) =======================
+-- The engine rolls back a mount issued before the horse is ready (streamed, active, not hidden, within reach of the rider's body).
+-- Before the ForceMount the horse is polled every 0.25 s for up to 5 s; a horse that is not ready then is refused (logged with its
+-- reason) and tried again by the caller's own 3 s retry. The claim is "fewer refused mounts", not "fixes the mount crash".
+--   WO160-MOUNT id=<n> ready after <s> s | refused after <s> s: <why>
+KCD2MP.w160.mountPollS, KCD2MP.w160.mountMaxS, KCD2MP.w160.mountReachM = 0.25, 5.0, 25.0
+KCD2MP.w160.mountStats = KCD2MP.w160.mountStats or { ready = 0, waited = 0, refused = 0 }
+function KCD2MP_W160MountReady(ghost, horse)
+    local w = KCD2MP.w160
+    if not horse.GetWorldPos then return true, nil end   -- no way to ask the body: the gate does not block what it cannot read
+    local hp = nil
+    pcall(function() hp = horse:GetWorldPos() end)
+    if not hp or (hp.x == 0 and hp.y == 0 and hp.z == 0) then return false, "horse-not-streamed-in" end
+    local hidden = false
+    pcall(function() if horse.IsHidden then hidden = horse:IsHidden() == true end end)
+    if hidden then return false, "horse-hidden" end
+    local inactive = false
+    pcall(function() if horse.IsActive then inactive = horse:IsActive() == false end end)
+    if inactive then return false, "horse-inactive" end
+    local human = nil
+    pcall(function() human = ghost.entity and ghost.entity.human end)
+    if not human then return false, "rider-has-no-body" end
+    local gp = nil
+    pcall(function() gp = ghost.entity:GetWorldPos() end)
+    if gp then
+        local d = math.sqrt((gp.x - hp.x) ^ 2 + (gp.y - hp.y) ^ 2)
+        if d > w.mountReachM then return false, string.format("horse-%.0f-m-from-the-rider", d) end
+    end
+    return true, nil
+end
+
+-- true = go ahead; false = the caller returns (a retry is already scheduled here)
+function KCD2MP_W160MountGate(id, ghost, horse, again)
+    local w = KCD2MP.w160
+    local st = w.mountStats
+    local now = os.clock()
+    local ready, why = KCD2MP_W160MountReady(ghost, horse)
+    local ep = ghost.w160Mount
+    if ready then
+        if ep then
+            st.waited = st.waited + 1
+            mp_log(string.format("WO160-MOUNT id=%s ready after %.2f s", tostring(id), now - ep.since))
+            ghost.w160Mount = nil
+        end
+        st.ready = st.ready + 1
+        return true
+    end
+    ep = ep or { since = now }
+    ghost.w160Mount = ep
+    ep.why = why
+    if (now - ep.since) < w.mountMaxS then
+        Script.SetTimer(math.floor(w.mountPollS * 1000), again)
+        return false
+    end
+    st.refused = st.refused + 1
+    mp_log(string.format("WO160-MOUNT id=%s refused after %.1f s: %s -- no ForceMount into a horse the engine would roll back; tried again in 3 s", tostring(id), now - ep.since, tostring(why)))
+    ghost.w160Mount = nil
+    Script.SetTimer(3000, again)
+    return false
+end
+
+-- ===== WO-160 6: the joiner's own horse -- the purchase crosses the wire, the whistle fetches it ===========================================
+-- 0.45.1 pair: the joiner bought `tsem_horseForSale_2`; his whistle crossed fine (a sound at his avatar), but the horse on his machine
+-- is a paused copy of the HOST's stream and in the host's world the trader still owned it, so nothing came. Now:
+--   * (a) the joiner's own game says which horse is his (player.player:GetHorseId(), read every 5 s); a new one is told to the host
+--         (QuestAsk OwnHorse); the host's world marks it as that peer's (peerHorses) -- the WO-136 ride ownership extended from "while
+--         he rides" to "his";
+--   * (b) the host answers the joiner's whistle (the emote it already receives): that horse is put at the joiner's avatar. The game's
+--         own wh_ai_PlayerHorseSchedulerProxy is ONE entity name (a cvar: "Name of entity to be used as the player's horse's scheduler
+--         proxy") and cannot serve a second rider, so the answer is a placement 7 m from the avatar, not a gallop. A horse the host's
+--         game has not loaded (far from both players) cannot be fetched: said in the log, nothing moved.
+--   WO160-HORSE own|told|marked|fetch|refused ...
+--   mp_horse_fetch on|off   default ON
+KCD2MP.w160.horseFetch = KCD2MP.w160.horseFetch ~= false
+KCD2MP.w160.ownHorse = KCD2MP.w160.ownHorse or { name = nil, at = -1e9 }   -- joiner: the horse this player owns, as told
+KCD2MP.w160.peerHorses = KCD2MP.w160.peerHorses or {}                       -- host: peer (string) -> horse name
+KCD2MP.w160.horseNearM, KCD2MP.w160.horseSpotM = 15.0, 7.0
+KCD2MP.w160.horseStats = KCD2MP.w160.horseStats or { told = 0, marked = 0, fetched = 0, near = 0, refused = 0 }
+
+-- JOINER, from the session tick: this player's own horse changed (bought, bonded, sold) -> the host is told its name.
+function KCD2MP_W160OwnHorseTick()
+    local w = KCD2MP.w160
+    if not w.horseFetch then return end
+    if not (KCD2MP.w137 and KCD2MP.w137.joiner and KCD2MP.w137.active) then return end
+    local o = w.ownHorse
+    local now = os.clock()
+    if (now - o.at) < 5.0 then return end
+    o.at = now
+    local id = nil
+    if player and player.player and player.player.GetHorseId then pcall(function() id = player.player:GetHorseId() end) end
+    local name = nil
+    if id and id ~= 0 then
+        local e = nil
+        pcall(function() e = System.GetEntity(id) end)
+        if e and e.class == "Horse" then pcall(function() name = e:GetName() end) end
+    end
+    if name and (not string.find(name, "^[%w_]+$") or string.find(name, "^kcd2mp_")) then name = nil end
+    if name == o.name then return end
+    o.name = name
+    if not name then
+        mp_log("WO160-HORSE own: this player has no horse of his own now")
+        return
+    end
+    KCD2MP.w160.horseStats.told = KCD2MP.w160.horseStats.told + 1
+    mp_log(string.format("WO160-HORSE own %s -- told to the host (its world marks it as this player's)", name))
+    KCD2MP_EmitEvent("w160_ownhorse", name)
+end
+
+-- HOST: a joiner's own horse (QuestAsk OwnHorse): marked as his in this world.
+function KCD2MP_W160PeerHorse(peer, name)
+    local w = KCD2MP.w160
+    peer = tostring(peer)
+    name = tostring(name or "")
+    if not string.find(name, "^[%w_]+$") then return false end
+    local e = nil
+    pcall(function() e = System.GetEntityByName(name) end)
+    local isHorse = e and e.class == "Horse"
+    w.peerHorses[peer] = name
+    w.horseStats.marked = w.horseStats.marked + 1
+    mp_log(string.format("WO160-HORSE marked %s as ghost %s's own horse here (%s)", name, peer,
+        isHorse and "loaded in this world" or "not loaded here now -- it is fetched when it is"))
+    return true
+end
+
+-- HOST: the joiner whistled (KCD2MP_W151PlayEmote): his horse comes to his avatar.
+function KCD2MP_W160Whistle(src)
+    local w = KCD2MP.w160
+    if not w.horseFetch then return false end
+    src = tostring(src)
+    local name = w.peerHorses[src]
+    if not name then return false end
+    local st = w.horseStats
+    local g = KCD2MP.ghosts and (KCD2MP.ghosts[src] or KCD2MP.ghosts[tonumber(src) or -1])
+    local av = g and g.entity
+    local e = nil
+    pcall(function() e = System.GetEntityByName(name) end)
+    local function refuse(why)
+        st.refused = st.refused + 1
+        mp_log(string.format("WO160-HORSE refused fetch of %s for ghost %s: %s", name, src, why))
+        return false
+    end
+    if not av then return refuse("his avatar is not here") end
+    if not e then return refuse("the horse is not loaded in the host's world (far from both players)") end
+    if KCD2MP_W151HorseRidden and KCD2MP_W151HorseRidden(name) then return refuse("someone is riding it") end
+    local rider = false
+    pcall(function() rider = e.human ~= nil and e.human:IsMounted() == true end)
+    pcall(function() if e.horse and e.horse.HasRider then rider = rider or e.horse:HasRider() == true end end)
+    if rider then return refuse("it has a rider") end
+    local ap, hp = nil, nil
+    pcall(function() ap = av:GetWorldPos() end)
+    pcall(function() hp = e:GetWorldPos() end)
+    if not ap or not hp then return refuse("no position") end
+    local d = math.sqrt((ap.x - hp.x) ^ 2 + (ap.y - hp.y) ^ 2)
+    if d <= w.horseNearM then
+        st.near = st.near + 1
+        mp_log(string.format("WO160-HORSE %s is already %.0f m from ghost %s's avatar -- left where it is", name, d, src))
+        return true
+    end
+    -- 7 m beside the avatar, on the side the avatar does not face
+    local yaw = 0
+    pcall(function() local a = av:GetWorldAngles(); yaw = a and a.z or 0 end)
+    local px = ap.x + math.cos(yaw) * w.horseSpotM
+    local py = ap.y + math.sin(yaw) * w.horseSpotM
+    local ok1 = pcall(function() e:SetWorldPos({ x = px, y = py, z = ap.z + 0.3 }) end)
+    pcall(function() e:SetWorldAngles({ x = 0, y = 0, z = yaw }) end)
+    if not ok1 then return refuse("the placement failed") end
+    st.fetched = st.fetched + 1
+    mp_log(string.format("WO160-HORSE fetch %s: was %.0f m away, now %.0f m beside ghost %s's avatar", name, d, w.horseSpotM, src))
+    return true
+end
+
+function KCD2MP_W160SetHorseFetch(arg)
+    local v = KCD2MP_Wo122ParseBool(arg)
+    if v == "bad" then mp_log("mp_horse_fetch: expected on|off"); return false end
+    if v ~= nil then KCD2MP.w160.horseFetch = v end
+    local st = KCD2MP.w160.horseStats
+    mp_log(string.format("WO160-TOGGLE mp_horse_fetch %s told=%d marked=%d fetched=%d near=%d refused=%d -- a joiner's own horse comes to his avatar when he whistles",
+        KCD2MP.w160.horseFetch and "on" or "off", st.told, st.marked, st.fetched, st.near, st.refused))
+    return true
+end
+
+function KCD2MP_W160SetConvHold(arg)
+    local v = KCD2MP_Wo122ParseBool(arg)
+    if v == "bad" then mp_log("mp_conv_hold: expected on|off"); return false end
+    if v ~= nil then KCD2MP.w160.convHold = v end
+    if not KCD2MP.w160.convHold then KCD2MP_W160ConvReleaseAll("mp_conv_hold off") end
+    mp_log("WO160-TOGGLE mp_conv_hold " .. (KCD2MP.w160.convHold and "on" or "off") .. " -- an NPC in a conversation stands still on the other machine (the host's freezes for a joiner's talk; a joiner's copy is held for the host's)")
+    return true
 end
 
 function KCD2MP_W157SetTalkFree(arg)
@@ -21157,6 +21604,7 @@ do
         local ok = false
         if AudioUtils and AudioUtils.PlayAudioTrigger then ok = pcall(AudioUtils.PlayAudioTrigger, av, W.whistleTrigger) end
         if ok then W.whistleStats.played = W.whistleStats.played + 1 else W.whistleStats.failed = W.whistleStats.failed + 1 end
+        if KCD2MP_W160Whistle then pcall(KCD2MP_W160Whistle, src) end   -- WO-160 6: the host fetches the joiner's own horse
         if W.whistleStats.played + W.whistleStats.failed <= 10 then
             mp_log(string.format("WO151-WHISTLE ghost=%s %s at its avatar (%s)", tostring(src), ok and "played" or "FAILED", W.whistleTrigger))
         end
@@ -23175,7 +23623,10 @@ local ok, err = pcall(function()
     System.AddCCommand("mp_stop_grace", 'KCD2MP_W157SetStopGrace(%line)', "WO-157: (joiner) the first time you walk away from a guard's stop it is told, not counted as fleeing (default on): mp_stop_grace on|off")
     System.AddCCommand("mp_trespass_hud", 'KCD2MP_W157SetTrespassHud(%line)', "WO-157: (joiner) your own game's trespass warning in a co-op session; off = hidden, the host's world decides a trespass (default off): mp_trespass_hud on|off")
     System.AddCCommand("mp_avatar_look", 'KCD2MP_W157SetAvatarLook(%line)', "WO-157: a partner's figure looks around on its own (its look IK); off = no look poses, which flooded its animation queue (default off): mp_avatar_look on|off")
-    System.AddCCommand("mp_talk_free", 'KCD2MP_W157SetTalkFree(%line)', "WO-157: (joiner) talking to a host copy resets its hands, stance and activity first, so it takes the conversation and a trade (default on): mp_talk_free on|off")
+    System.AddCCommand("mp_talk_free", 'KCD2MP_W157SetTalkFree(%line)', "WO-157: (joiner) talking to a host copy resets its stance and activity first (the game's reset knows no other element), so it takes the conversation and a trade (default on): mp_talk_free on|off")
+    System.AddCCommand("mp_horse_fetch", 'KCD2MP_W160SetHorseFetch(%line)', "WO-160: a joiner's own horse (bought, bonded) is told to the host and comes to his avatar when he whistles (default on): mp_horse_fetch on|off")
+    System.AddCCommand("mp_conv_hold", 'KCD2MP_W160SetConvHold(%line)', "WO-160: an NPC in a conversation stands still on the other machine -- the host's freezes for the joiner's talk, a joiner's copy is held for the host's (default on): mp_conv_hold on|off")
+    System.AddCCommand("mp_ctx_release", 'KCD2MP_W160SetRelease(%line)', "WO-160: (joiner) a copy's stance and unstance are released the game's own way before its next placement, so the game's planner only places it (default on): mp_ctx_release on|off")
     System.AddCCommand("mp_sleep_rest", 'KCD2MP_W157SetSleepRest(%line)', "WO-157: a real sleep (a vote's, or your own) that the game gave no rest gets the rest its own sleep gives -- in this game build its no-bed sleep often gives none (default on): mp_sleep_rest on|off")
     System.AddCCommand("mp_w157_status", "KCD2MP_W157Status()", "WO-157: the trespass check and the stop grace (WO157-STATUS here); also the area here: private, public, open (a shop) or unknown")
     System.AddCCommand("mp_fair_crime", 'KCD2MP_W154SetFairCrime(%line)', "WO-154: (host) a partner's murder only on the victim's death, and an assault judged 5 s later -- no crime if the victim fights by then, a quest brawl (default on): mp_fair_crime on|off")
@@ -23193,7 +23644,7 @@ local ok, err = pcall(function()
     System.AddCCommand("mp_avatar_falls", 'KCD2MP_W154SetFalls(%line)', "WO-155: a partner's figure falls on this screen only when he dies (lies until he respawns) or for a knockdown of your own friendly-fire hit (the game's own fall and get-up); off: nothing falls (default on): mp_avatar_falls on|off")
     System.AddCCommand("mp_hit_knockdown", 'KCD2MP_W155SetHitKnockdown(%line)', "WO-155: a blow of an NPC or an animal knocks a player down (0.45.0); off = it only takes health and stamina (default off): mp_hit_knockdown on|off")
     System.AddCCommand("mp_ff_knockdown", 'KCD2MP_W155SetFfKnockdown(%line)', "WO-155: a friendly-fire hit knocks the victim down, never twice within 5 s; off = friendly fire never knocks down (default on): mp_ff_knockdown on|off")
-    System.AddCCommand("mp_avatar_herbs", 'KCD2MP_SetAvatarHerbs(%line)', "WO-153: the partner's avatar plays its herb-picking loop (default OFF: the avatar stands; the loop ended both 0.43.0 joiner crashes): mp_avatar_herbs on|off")
+    System.AddCCommand("mp_avatar_herbs", 'KCD2MP_SetAvatarHerbs(%line)', "WO-153/160: the partner's avatar bends and picks with a plain clip while its player gathers herbs (default ON; never the minigame's own fragment, which ended both 0.43.0 joiner crashes; off: the avatar stands): mp_avatar_herbs on|off")
     System.AddCCommand("mp_avatar_dress", 'KCD2MP_SetAvatarDress(%line)', "WO-144: a partner's avatar wears pieces from its own inventory, equipped through the actor (default on; off = 0.42.0's REST EquipItem): mp_avatar_dress on|off")
     System.AddCCommand("mp_show_animals", 'KCD2MP_SetShowAnimals(%line)', "WO-144: a horse or animal the host streams is shown here even where this world keeps it hidden (default on): mp_show_animals on|off")
     System.AddCCommand("mp_avatar_lights", 'KCD2MP_SetAvatarLights(%line)', "WO-144: a partner's avatar holds a light only while its player does -- its own NPC lamps and torches are taken out (default on): mp_avatar_lights on|off")

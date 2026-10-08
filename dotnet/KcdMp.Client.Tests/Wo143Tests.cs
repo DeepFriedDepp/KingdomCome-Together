@@ -223,16 +223,17 @@ public class Wo143Tests
     }
 
     [Fact]
-    public void WO153_the_herb_loop_is_off_unless_asked_for_and_a_pickup_is_never_aligned()
+    public void WO153_the_herb_fragment_is_never_played_and_a_pickup_is_never_aligned()
     {
         // the field: both 0.43.0 joiner crashes ended on the avatar's PickingHerbs loop being stopped
-        Assert.Null(Wo143Rules.AvatarShow(Minigame(4), herbsOn: false));                    // default: the avatar stands
-        Assert.Equal("PickingHerbs", Wo143Rules.AvatarShow(Minigame(4), herbsOn: true)!.Loop);   // mp_avatar_herbs on = 0.43.0's loop
+        // WO-160 5: the engine's own fragment is never played, switch or not; the avatar's plain clip is the proxy (Wo160Rules.HerbProxyWanted)
+        Assert.Null(Wo143Rules.AvatarShow(Minigame(4), herbsOn: false));
+        Assert.Null(Wo143Rules.AvatarShow(Minigame(4), herbsOn: true));
         // every other minigame is untouched by the herb switch
         foreach (byte t in new byte[] { 1, 2, 3, 5, 6, 12 }) Assert.NotNull(Wo143Rules.AvatarShow(Minigame(t), herbsOn: false));
         Assert.Equal("Digging", Wo143Rules.AvatarShow(Minigame(6), herbsOn: false)!.Loop);
         Assert.Null(Wo143Rules.AvatarShow(ActivityState.None, herbsOn: true));
-        Assert.False(GameBridge.W143HerbsDefault);                                           // the one W143 piece that ships off
+        Assert.True(GameBridge.W143HerbsDefault);                                            // WO-160 5: the plain clip ships ON
         // a pick-up or a dig never aligns to a world object, whatever the row names: it plays where the avatar stands
         Assert.False(Wo143Rules.MayAlignAt(Wo143Rules.HerbMinigame));
         Assert.False(Wo143Rules.MayAlignAt(6));

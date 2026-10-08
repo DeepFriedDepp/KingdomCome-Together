@@ -358,6 +358,13 @@ public partial class GameBridge
                 case Protocol.QuestHostHold when Wo137Rules.TryParseTalkText(m.Text, out bool hon, out string npc):
                     Console.WriteLine($"MP-W137 joiner: the host {(hon ? "holds" : "released")} {npc} {(hon ? "for this conversation (busy on the host)" : "")}");
                     return;
+                case Protocol.QuestHostConverse when Wo137Rules.TryParseTalkText(m.Text, out bool con, out string cnpc):
+                    // WO-160 3: the host's player talks to cnpc: its copy here stands where it is until that ends
+                    if (!W137Joiner) return;
+                    Interlocked.Increment(ref _w160ConvIn);
+                    Console.WriteLine($"MP-WO160 joiner: the host {(con ? "talks to" : "finished talking to")} {cnpc} -- its copy {(con ? "STANDS (held in place)" : "is free again")}");
+                    _ = ExecLuaAsync($"if KCD2MP_W160Conversation then KCD2MP_W160Conversation({B(con)}, \"{cnpc}\") end");
+                    return;
                 default:
                     Wo137Veto("host-frame-unparsed");
                     Console.WriteLine($"MP-W137 joiner: {Protocol.QuestHostName(m.Kind)} from ghost {src} refused (malformed text)");
@@ -376,6 +383,12 @@ public partial class GameBridge
                 case Protocol.QuestAskTalk when Wo137Rules.TryParseTalkText(m.Text, out bool on, out string npc):
                     Interlocked.Increment(ref _w137TalksIn);
                     Wo137Post(() => Wo137HostTalkAsync(src, m.Tok, on, npc));
+                    return;
+                case Protocol.QuestAskOwnHorse when Wo137Text.IsNpc(m.Text):
+                    // WO-160 6: the joiner's own horse (bought, bonded): this world marks it his, and fetches it when he whistles
+                    Console.WriteLine($"MP-WO160 host: ghost {src}'s own horse is {m.Text} -- marked in this world (fetched to his avatar when he whistles)");
+                    string horse = m.Text;
+                    _ = ExecLuaAsync($"if KCD2MP_W160PeerHorse then KCD2MP_W160PeerHorse({src}, \"{horse}\") end");
                     return;
                 case Protocol.QuestAskResync when Wo137Rules.TryParseResyncText(m.Text, out string rwhy):
                     if (!_w137SyncOn || Wo136Holding) { Console.WriteLine($"MP-W137 host: ghost {src} asked for a checkpoint ({rwhy}) -- not now ({(!_w137SyncOn ? "mp_quest_sync off" : "this world is loading")}; the periodic one follows)"); return; }
@@ -761,6 +774,26 @@ public partial class GameBridge
                 return;
             case "w157_talkfree":  // WO-157 3b.4: on|off <npc> -- the copy's NPC-state placement waits while this player talks to it
                 if (f.Length >= 2 && f[0] is "on" or "off" && Wo137Text.IsNpc(f[1])) Wo141OnTalk(f[0] == "on", f[1]);
+                return;
+            case "w160_ownhorse":  // WO-160 6: <horse> -- this joiner's own horse (bought, bonded): the host is told
+                if (f.Length >= 1 && Wo137Text.IsNpc(f[0]) && W137Joiner)
+                {
+                    uint htok = Interlocked.Increment(ref _w137Tok);
+                    Console.WriteLine($"MP-WO160 joiner: its own horse is {f[0]} -- told to the host");
+                    _ = Wo137SendAsync(Protocol.QuestAskUp, Protocol.JoinTargetHost, Protocol.QuestAskOwnHorse, htok, f[0]);
+                }
+                return;
+            case "w160_loopstop":  // WO-160 5: <id> <why> -- a loop on an avatar was stopped by the mod: the T-pose pulse again
+                if (f.Length >= 1) _ = W160LoopStoppedAsync(f[0], string.Join(' ', f.Skip(1)));
+                return;
+            case "w160_conv":      // WO-160 3: on|off <npc> -- the host's own player talks to this NPC: the joiner's copy of it stands
+                if (f.Length >= 2 && f[0] is "on" or "off" && Wo137Text.IsNpc(f[1]) && W137Host)
+                {
+                    Interlocked.Increment(ref _w160ConvOut);
+                    string ctext = Wo137Rules.TalkText(f[0] == "on", f[1]);
+                    foreach (byte g in Wo134Peers()) _ = Wo137SendAsync(Protocol.QuestHostUp, g, Protocol.QuestHostConverse, 0, ctext);
+                    Console.WriteLine($"MP-WO160 host: its player {(f[0] == "on" ? "talks to" : "finished talking to")} {f[1]} -- the joiner's copy {(f[0] == "on" ? "is told to STAND" : "is freed")}");
+                }
                 return;
             case "w137_status":
                 Console.WriteLine(Wo137StatsLine());

@@ -237,6 +237,19 @@ constexpr unsigned kSlotEquipment = 4;
 bool g_keepEquipment = true;
 std::atomic<uint64_t> c_equipKept{0};
 
+// WO-160: how an apply builds the loaded state (research switch `mode`; the field's cause is in docs/WO-160-findings.md).
+//   0 = WO-141 as shipped (0.45.8): cleared, the activity + the equipment slot. Clear takes the body's shop, labels and contexts
+//       off the loaded state, so the planner dismantles them (13 solo bodies: 2 placed, 11 refused, all 3 shopkeepers lost
+//       their shop element)
+//   1 = 0 + the current state's hand slots (when the host sends none for that hand) and minigame slot
+//   2 = not cleared: only the stance/unstance (+ the host's hands) are written over the engine's own loaded state
+//   3 = 2 + the current state's hand slots when the host sends none for that hand
+//   4 = WO-160, the default: not cleared (the body keeps what the game put on it); every fixed slot is the activity's, else the
+//       host's hands, else what the body holds, else empty -- never the save's leftovers (a log in a hand that is gone is an
+//       unreachable demand). With the stance/unstance released first (the Lua side, KCD2MP_W160Release) the planner placed 13 of
+//       13 solo bodies with no error and every shop kept
+std::atomic<int> g_loadedMode{4};
+
 // A new element of a reflected class: the variant holds std::shared_ptr<T>
 // inline (policy as_std_shared_ptr); one reference is taken for the caller.
 bool sp_create(const RType& t, void* const* wantVft, SharedPtr* out) {
@@ -477,6 +490,19 @@ uint64_t own_item_of_class(uint32_t eid, const KH::ClassId& cls) {
     return item ? actions::item_wuid(item) : 0;
 }
 
+// WO-160: the elements on the body beyond the fixed slots (its shop, labels, contexts, links) -- what an apply must not take off it.
+int count_extras(uint32_t eid) {
+    void* ctx = ctx_of_eid(eid);
+    if (!ctx) return -1;
+    void* st = static_cast<char*>(ctx) + kCtxCurrent;
+    void* b = nullptr; void* e = nullptr;
+    if (!rd(st, kStateElemsB, &b) || !rd(st, kStateElemsE, &e) || !b) return -1;
+    const size_t n = static_cast<size_t>(static_cast<char*>(e) - static_cast<char*>(b)) / 16;
+    int k = 0;
+    for (size_t i = 6; i < n && i < 256; ++i) { void* el = nullptr; if (rd(b, i * 16, &el) && el) ++k; }
+    return k;
+}
+
 // The body's loaded state (the context's search state) holds this activity and
 // these tools, nothing else. hands: null = no hand element (WO-141 as before).
 uint8_t build_loaded(uint32_t eid, const R::Activity& want, const KH::Hands* hands, const char* name, KH::Hands* missing,
@@ -528,17 +554,58 @@ uint8_t build_loaded(uint32_t eid, const R::Activity& want, const KH::Hands* han
     }
     // the save's leftovers go (contexts, links, buffs, equipment of whatever the
     // body was loaded in); the stance and unstance are ours
-    fcall_void(vslot(loaded, kStateClear), loaded);
+    const int lmode = g_loadedMode.load();
+    if (lmode < 2) fcall_void(vslot(loaded, kStateClear), loaded);
     bool ok = state_set_slot(loaded, 0, s) && state_set_slot(loaded, 3, u);
     if (hl.p) ok = state_set_slot(loaded, KH::kSlotLeft, hl) && ok;
     if (hr.p) ok = state_set_slot(loaded, KH::kSlotRight, hr) && ok;
+    if (ok && lmode == 4) {
+        // WO-160: the loaded state keeps its own extras (labels, contexts, the shop) so the planner does not take them off the
+        // body; every fixed slot is the activity's, the host's hands, else what the body holds, else empty -- never what the
+        // save held (a log in a hand that is gone is an unreachable demand)
+        void* cur = static_cast<char*>(ctx) + kCtxCurrent;
+        void* cb = nullptr; void* ce = nullptr;
+        if (rd(cur, kStateElemsB, &cb) && rd(cur, kStateElemsE, &ce) && cb) {
+            const size_t cn = static_cast<size_t>(static_cast<char*>(ce) - static_cast<char*>(cb)) / 16;
+            for (unsigned sl = 1; sl <= 5; ++sl) {
+                if (sl == 3) continue;
+                if ((sl == KH::kSlotLeft && hl.p) || (sl == KH::kSlotRight && hr.p)) continue;
+                SharedPtr sp{};
+                if (sl < cn && (sl != 5)) {
+                    rd(static_cast<char*>(cb) + sl * 16, 0, &sp.p);
+                    rd(static_cast<char*>(cb) + sl * 16, 8, &sp.ctrl);
+                    if (!(sp.p && sp.ctrl && ilock_add(static_cast<char*>(sp.ctrl) + 8, 1))) sp = {};
+                }
+                state_set_slot(loaded, sl, sp);   // null empties the slot
+            }
+        }
+    }
+    if (ok && (lmode == 1 || lmode == 3)) {
+        // the planner is not asked to put a tool away (it cannot, away from the tool's own work): a hand the host sent nothing
+        // for keeps what the body holds
+        void* cur = static_cast<char*>(ctx) + kCtxCurrent;
+        void* cb = nullptr; void* ce = nullptr;
+        if (rd(cur, kStateElemsB, &cb) && rd(cur, kStateElemsE, &ce) && cb) {
+            const size_t cn = static_cast<size_t>(static_cast<char*>(ce) - static_cast<char*>(cb)) / 16;
+            const unsigned keep[3] = { KH::kSlotLeft, KH::kSlotRight, 5u };
+            for (unsigned k = 0; k < 3; ++k) {
+                const unsigned sl = keep[k];
+                if (sl >= cn) continue;
+                if ((sl == KH::kSlotLeft && hl.p) || (sl == KH::kSlotRight && hr.p)) continue;
+                SharedPtr sp{};
+                rd(static_cast<char*>(cb) + sl * 16, 0, &sp.p);
+                rd(static_cast<char*>(cb) + sl * 16, 8, &sp.ctrl);
+                if (sp.p && sp.ctrl && ilock_add(static_cast<char*>(sp.ctrl) + 8, 1)) state_set_slot(loaded, sl, sp);
+            }
+        }
+    }
     // WO-144 2.1 / 4.5: the body's own equipment element (slot 4: an NPC's sleep undress, an outfit
     // change) goes into the loaded state as it is -- a placement or a one-shot never changes clothes.
     // Cleared, the game looked for a way back into the default outfit and found none: "Execution of
     // action ChangeEquipmentFromDefault has failed! Action for request 'KCDMP one-shot'", "Couldn't
     // find actions to get NPC into game loaded state" with "ChangeEquipment ... sleepUnequip" in the
     // current state (the field: 102 / 60 / 40 lines on three copies).
-    if (ok && g_keepEquipment) {
+    if (ok && g_keepEquipment && lmode != 4) {
         void* cur = static_cast<char*>(ctx) + kCtxCurrent;
         void* cb = nullptr; void* ce = nullptr;
         if (rd(cur, kStateElemsB, &cb) && rd(cur, kStateElemsE, &ce) && cb
@@ -593,6 +660,8 @@ struct Desired {
     KH::LogPace logPace;
     bool handsDropped = false;   // the game refused its tools with this activity: shown without them (WO-141's apply)
     int handsTries = 0;          // applies with every tool owned that did not bring the body in step
+    int refusals = 0;            // WO-160: the planner's own refusals of this activity (exec 0); set_desired starts it again
+    double gaveUpAt = -1e9;      // WO-160: when kMissesBeforeGiveUp was reached
 };
 std::unordered_set<std::string> g_seatedHandsNoted;   // bodies told once: seated, their hands stay as they are
 std::unordered_set<uint64_t> g_bedSitNoted;          // WO-144 5: beds told once (a player's bed-edge sit shown lying)
@@ -707,11 +776,15 @@ void reconcile_tick(double now) {
         if (R::same_body(cur, d.a) && handsOk) {
             hold_to(owns);
             if (!d.matched) logf("WO141-APPLY %s in step: %s%s", d.name.c_str(), describe(d.a).c_str(), useHands ? hands_text(d.hands).c_str() : "");
-            d.matched = true; d.pace.misses = 0; KH::log_reset(d.logPace); d.handsTries = 0;
+            d.matched = true; d.pace.misses = 0; KH::log_reset(d.logPace); d.handsTries = 0; d.refusals = 0;
             if (R::none(d.a) && (!d.handsSet || d.hands.empty())) { if (d.held) npcdrive::set_activity_hold(d.eid, false); it = g_desired.erase(it); continue; }
             ++it; continue;
         }
         d.matched = false;
+        // WO-160: the planner has refused this activity kMissesBeforeGiveUp times: the body is shown by the writer alone until the
+        // host's activity changes (or kGiveUpRetryS passes), not asked again every minute
+        if (R::gave_up(d.refusals, now - d.gaveUpAt)) { hold_to(false); ++it; continue; }
+        if (d.refusals >= R::kMissesBeforeGiveUp) d.refusals = R::kMissesBeforeGiveUp - 2;   // the retry window opened: two more tries
         const bool waiting = now < d.pace.nextAt;
         hold_to(R::hold_wanted(owns, false, d.pace.misses, waiting, d.a.stance));   // (J3: a cart stance stays held)
         if (waiting) { ++it; continue; }
@@ -728,6 +801,13 @@ void reconcile_tick(double now) {
         c_applies.fetch_add(1); ++d.applies;
         if (r == kApOk && useHands && g_handApplied) g_handApplied(d.eid);
         (r == kApOk ? c_applyOk : c_applyFail).fetch_add(1);
+        if (r == kApOk && res == 0) {
+            if (++d.refusals == R::kMissesBeforeGiveUp) {
+                d.gaveUpAt = now;
+                logf("WO160-CTX npc=%s gave_up refusals=%d -- the game's planner will not place %s; the body is shown by the writer alone (asked again after %.0f s or when the host's activity changes)",
+                     d.name.c_str(), d.refusals, describe(d.a).c_str(), R::kGiveUpRetryS);
+            }
+        }
         ++d.pace.misses;
         d.pace.nextAt = now + R::next_delay(d.pace.misses);
         // WO-143 Phase 7: the first three tries, then once a minute with the count
@@ -741,6 +821,9 @@ void reconcile_tick(double now) {
                  describe(d.a).c_str(), useHands ? hands_text(d.hands).c_str() : "",
                  missing.empty() ? "" : " (a tool it does not own was asked for)", describe(after).c_str(),
                  useHands ? hands_text(afterHands).c_str() : "");
+            // WO-160: one line per body per treatment -- how the loaded state was built, what it left on the body, what the game did
+            logf("WO160-CTX npc=%s loaded=mode%d extras_on_body=%d exec=%u try=%d refusals=%d", d.name.c_str(), g_loadedMode.load(),
+                 count_extras(d.eid), res, d.pace.misses, d.refusals);
         }
         ++it;
     }
@@ -765,6 +848,59 @@ void cmd_state(const char* name) {
     logf("WO141-R state %s: pendingRequest=%d activity: %s", name, static_cast<int>(req), describe(a).c_str());
     dump_state(name, "current", static_cast<char*>(ctx) + kCtxCurrent);
     dump_state(name, "loaded", static_cast<char*>(ctx) + kCtxLoaded);
+}
+// WO-160 research: an element's class by RTTI (vftable[-1] -> complete object locator -> type descriptor name).
+bool rtti_class(void* obj, char* out, size_t n) {
+    out[0] = 0;
+    void* vt = nullptr; void* col = nullptr;
+    if (!obj || !rd(obj, 0, &vt) || !vt || !rd(static_cast<char*>(vt) - 8, 0, &col) || !col) return false;
+    uint32_t sig = 9, typeRva = 0, selfRva = 0;
+    if (!rd32(col, 0, &sig) || sig != 1 || !rd32(col, 0x0C, &typeRva) || !rd32(col, 0x14, &selfRva)) return false;
+    char raw[160];
+    if (!rdstr(static_cast<const char*>(col) - selfRva + typeRva + 0x10, raw, sizeof raw)) return false;
+    // ".?AVC_StanceElement@NPCState@xgenaimodule@wh@@" -> "C_StanceElement"
+    const char* p = raw; if (!std::strncmp(p, ".?AV", 4) || !std::strncmp(p, ".?AU", 4)) p += 4;
+    size_t i = 0; for (; p[i] && p[i] != '@' && i + 1 < n; ++i) out[i] = p[i];
+    out[i] = 0;
+    return true;
+}
+void dump_slots(const char* who, const char* which, void* state) {
+    void* b = nullptr; void* e = nullptr;
+    if (!rd(state, kStateElemsB, &b) || !rd(state, kStateElemsE, &e) || !b) { logf("WO160-R %s %s: unreadable", who, which); return; }
+    const size_t n = static_cast<size_t>(static_cast<char*>(e) - static_cast<char*>(b)) / 16;
+    std::string line;
+    for (size_t i = 0; i < n && i < 64; ++i) {
+        void* el = nullptr; char cls[64];
+        char one[96];
+        if (rd(b, i * 16, &el) && el && rtti_class(el, cls, sizeof cls)) _snprintf_s(one, sizeof one, _TRUNCATE, " [%zu]%s", i, cls);
+        else _snprintf_s(one, sizeof one, _TRUNCATE, " [%zu]-", i);
+        line += one;
+    }
+    logf("WO160-R %s %s: %zu slot(s):%s", who, which, n, line.c_str());
+}
+void cmd_slots(const char* name) {
+    void* ent = entity_by_name(name);
+    void* ctx = ent ? ctx_of_eid(engine::entity_id(ent)) : nullptr;
+    if (!ctx) { logf("WO160-R slots %s: no context", name); return; }
+    dump_slots(name, "current", static_cast<char*>(ctx) + kCtxCurrent);
+    dump_slots(name, "loaded", static_cast<char*>(ctx) + kCtxLoaded);
+}
+// WO-160 research: empty the current state's fixed slots (stance, hands, unstance, equipment, minigame) and clear the loaded
+// state -- what a context reset could do (the game's own reset only reaches stance and unstance, on the body).
+void cmd_hardreset(const char* name, const char* which) {
+    void* ent = entity_by_name(name);
+    void* ctx = ent ? ctx_of_eid(engine::entity_id(ent)) : nullptr;
+    if (!ctx) { logf("WO160-R hardreset %s: no context", name); return; }
+    void* cur = static_cast<char*>(ctx) + kCtxCurrent;
+    void* loaded = static_cast<char*>(ctx) + kCtxLoaded;
+    int nulled = 0;
+    for (unsigned sl = 0; sl <= 5; ++sl) {
+        if (which && which[0] && std::strpbrk(which, "012345") && !std::strchr(which, static_cast<char>('0' + sl))) continue;
+        if (state_set_slot(cur, sl, SharedPtr{})) ++nulled;
+    }
+    const bool keepLoaded = which && std::strstr(which, "keep");
+    if (!keepLoaded) fcall_void(vslot(loaded, kStateClear), loaded);
+    logf("WO160-R hardreset %s slots=[%s]: %d current slot(s) emptied, loaded %s", name, which ? which : "", nulled, keepLoaded ? "kept" : "cleared");
 }
 struct NearCtx { float p[3]; float r2; int n; };
 bool near_visit(void* e, void* c) {
@@ -858,6 +994,9 @@ void research_watch() {
         logf("WO141-RESEARCH line: %s", line.c_str());
         if (k >= 2 && !std::strcmp(verb, "state")) cmd_state(a1);
         else if (k >= 2 && !std::strcmp(verb, "near")) cmd_near(static_cast<float>(atof(a1)));
+        else if (k >= 2 && !std::strcmp(verb, "slots")) cmd_slots(a1);
+        else if (k >= 2 && !std::strcmp(verb, "hardreset")) cmd_hardreset(a1, k >= 3 ? rest : "");
+        else if (k >= 2 && !std::strcmp(verb, "mode")) { g_loadedMode = atoi(a1); logf("WO160-R loaded mode = %d", g_loadedMode.load()); }
         else if (k >= 3 && !std::strcmp(verb, "mk")) cmd_mk(a1, rest);
         else if (k >= 3 && !std::strcmp(verb, "want")) cmd_want(a1, rest);
         else if (!std::strcmp(verb, "applyon")) { g_applyOn = true; logf("WO141-R apply on (research)"); }
@@ -893,7 +1032,7 @@ void set_desired(const std::string& name, const R::Activity& a) {
     Desired& d = g_desired[lower(name.c_str())];
     const bool changed = d.name.empty() || !R::same(d.a, a);
     d.name = name;
-    if (changed) { d.a = R::normalised(a); d.pace = {}; d.matched = false; d.handsDropped = false; d.handsTries = 0; }
+    if (changed) { d.a = R::normalised(a); d.pace = {}; d.matched = false; d.handsDropped = false; d.handsTries = 0; d.refusals = 0; d.gaveUpAt = -1e9; }
 }
 
 } // namespace

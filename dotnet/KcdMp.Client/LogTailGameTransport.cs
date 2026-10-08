@@ -378,6 +378,9 @@ public sealed class LogTailGameTransport : IGameTransport
         " into waiting players",
         "Dialog interrupted.",
         "Dialog ends but no response was played",
+        // WO-160: the game's planner failing a placement this mod asked for (counted per NPC, GameBridge.Wo160)
+        "[NPCContext]:Couldn't find actions to get NPC into game loaded state",
+        "counldn't reach the loaded state in",
     ];
 
     /// <summary>

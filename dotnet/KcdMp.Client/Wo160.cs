@@ -49,4 +49,45 @@ public static class Wo160Rules
     /// <summary>True when the mod should be asked where the game is again (never confirmed, or the proof is aging).</summary>
     public static bool WhereRefreshDue(long msSinceWorldConfirmed, long msSinceAsked)
         => msSinceAsked >= 3_000 && (msSinceWorldConfirmed < 0 || msSinceWorldConfirmed >= WhereRefreshMs);
+
+    // ------------------------------------------------------------------ 5: the herb proxy
+
+    /// <summary>
+    /// The avatar bends and picks with a plain clip while its player gathers herbs (mp_avatar_herbs on, the default): true for the
+    /// herb minigame only. The engine's own PickingHerbs fragment is never played (AvatarShow returns null for it).
+    /// </summary>
+    public static bool HerbProxyWanted(byte minigame, byte herbMinigame, bool herbsOn) => herbsOn && minigame == herbMinigame;
+
+    // ------------------------------------------------------------------ 1: the joiner's NPC copies (one context root cause)
+
+    /// <summary>
+    /// A copy's stance and unstance are released (the game's own reset, KCD2MP_W160Release) before a placement that CHANGES the
+    /// activity of a body this agent already placed: the game's planner has no way out of a work activity (field 2026-10-07: 5,308 of
+    /// 8,316 placements refused). The first placement of a copy follows the puppet start's own release (WO-118); an avatar is a
+    /// figure of this mod, never in the game's NPC schedule; a repeated row of the same activity (the host's 10 s refresh) asks for
+    /// nothing at all.
+    /// </summary>
+    public static bool ReleaseBeforeApply(bool isAvatar, bool placedBefore, bool activityChanged)
+        => !isAvatar && placedBefore && activityChanged;
+
+    /// <summary>
+    /// "[Error] /ai//(NPC)ttkc_woman_12/NPC Context [NPCContext]:Couldn't find actions to get NPC into game loaded state" (refused) or
+    /// "...:Execution of 1 actions from load counldn't reach the loaded state in 3 updates" (unreached) -> the NPC's name; null for
+    /// every other line. Both are the game's planner failing a placement this mod asked for.
+    /// </summary>
+    public static string? PlannerErrorNpc(string line, out bool refused)
+    {
+        refused = false;
+        const string marker = "/NPC Context [NPCContext]:";
+        int m = line.IndexOf(marker, StringComparison.Ordinal);
+        if (m < 0) return null;
+        string tail = line.Substring(m + marker.Length);
+        if (tail.StartsWith("Couldn't find actions to get NPC into game loaded state", StringComparison.Ordinal)) refused = true;
+        else if (!(tail.StartsWith("Execution of ", StringComparison.Ordinal) && tail.Contains("counldn't reach the loaded state", StringComparison.Ordinal))) return null;
+        const string npc = "(NPC)";
+        int a = line.IndexOf(npc, StringComparison.Ordinal);
+        if (a < 0 || a + npc.Length >= m) return null;
+        string name = line.Substring(a + npc.Length, m - (a + npc.Length));
+        return name.Length > 0 && name.IndexOf('/') < 0 ? name : null;
+    }
 }

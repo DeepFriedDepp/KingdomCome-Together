@@ -1282,6 +1282,16 @@ uint8_t on_config(const uint8_t* body, size_t len) {
     return 0;
 }
 
+void rearm_nudge(uint32_t eid, const char* why) {
+    auto it = g_bodies.find(eid);
+    if (it == g_bodies.end() || !it->second.avatar) return;
+    Body& b = it->second;
+    b.nudged = false;
+    b.attachAt = npcdrive::now_s() - kNudgeAfterS;   // the pulse starts at once and runs kNudgeS
+    logf("WO160-NUDGE body=%s: %s -- the walk-class pulse runs again (an avatar's locomotion graph can stand in a T-pose after a loop ends)",
+         b.key.c_str(), why ? why : "?");
+}
+
 uint8_t on_avatar_event(const uint8_t* body, size_t len) {
     if (len != 5) return 8;
     PendingEvent e{ body[0], 0 };
@@ -1504,6 +1514,7 @@ void tick() {
     std::vector<PendingEvent> evs;
     { std::lock_guard<std::mutex> lock(g_evMutex); evs.swap(g_events); }
     for (const auto& e : evs) {
+        if (e.kind == 2) { rearm_nudge(e.eid, "a loop was stopped (the agent)"); continue; }   // WO-160
         if (e.kind != 1) continue;
         if (!g_moves || !g_cfgMoves) continue;
         auto it = g_bodies.find(e.eid);

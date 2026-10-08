@@ -11,6 +11,7 @@
 #include "hook_prologues.h"
 #include "inline_hook.h"
 #include "log.h"
+#include "motion.h"
 #include "npc_drive.h"
 #include "respawn_actions.h"
 #include "script_context.h"
@@ -740,6 +741,7 @@ void flight_tick(double now) {
                 for (int i = 0; i < 4; ++i) out.push_back(static_cast<uint8_t>(static_cast<uint32_t>(id) >> (8 * i)));
                 g_frame(out.data(), static_cast<uint16_t>(out.size()));
             }
+            if (!f.name.compare(0, 7, "kcd2mp_")) motion::rearm_nudge(f.eid, "an avatar one-shot ended");   // WO-160 5: the stop-time re-pulse
             it = g_flight.erase(it);
             continue;
         }

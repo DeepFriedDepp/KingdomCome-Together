@@ -39,11 +39,15 @@ namespace KcdMp.Wire;
 //                States that changed this session (the periodic compare)
 //   4 Hold       "<on|off> <npc>"                            tok = the talk's: the host's NPC is held (busy)
 //   5 Mode       "<on|off> <why>"                            the host's quest sync (mp_quest_sync)
+//   6 Converse   "<on|off> <npc>"                            WO-160: the host's player talks to this NPC: the joiner's copy
+//                                                            of it stands where it is until the conversation ends
 // Ask kinds (APPEND-ONLY):
 //   1 Request    "<flags> <old> <new> <port> <questLen> <path>"   tok = request id
 //   2 Talk       "<on|off> <npc>"                                 tok = talk id
 //   3 Resync     "<why>"                                          the joiner's world has just loaded:
 //                                                                 the host answers with a Checkpoint now
+//   4 OwnHorse   "<horse>"                                        WO-160: the horse this joiner owns (bought, bonded): the
+//                                                                 host's world marks it his, and fetches it to his avatar when he whistles
 //
 // No protocol bump: two new types on the join channel. A mixed release is
 // refused at the relay (WO-110 R9), so a peer that does not know them never
@@ -58,19 +62,20 @@ public static partial class Protocol
     public const int QuestTextMax = 1400;
 
     // ---- host kinds (APPEND-ONLY) ----
-    public const byte QuestHostChange = 1, QuestHostResult = 2, QuestHostCheckpoint = 3, QuestHostHold = 4, QuestHostMode = 5;
+    public const byte QuestHostChange = 1, QuestHostResult = 2, QuestHostCheckpoint = 3, QuestHostHold = 4, QuestHostMode = 5,
+                      QuestHostConverse = 6;
     // ---- ask kinds (APPEND-ONLY) ----
-    public const byte QuestAskRequest = 1, QuestAskTalk = 2, QuestAskResync = 3;
+    public const byte QuestAskRequest = 1, QuestAskTalk = 2, QuestAskResync = 3, QuestAskOwnHorse = 4;
 
     public static string QuestHostName(byte k) => k switch
     {
         QuestHostChange => "change", QuestHostResult => "result", QuestHostCheckpoint => "checkpoint",
-        QuestHostHold => "hold", QuestHostMode => "mode", _ => $"unknown-{k}",
+        QuestHostHold => "hold", QuestHostMode => "mode", QuestHostConverse => "converse", _ => $"unknown-{k}",
     };
 
     public static string QuestAskName(byte k) => k switch
     {
-        QuestAskRequest => "request", QuestAskTalk => "talk", QuestAskResync => "resync", _ => $"unknown-{k}",
+        QuestAskRequest => "request", QuestAskTalk => "talk", QuestAskResync => "resync", QuestAskOwnHorse => "ownhorse", _ => $"unknown-{k}",
     };
 }
 

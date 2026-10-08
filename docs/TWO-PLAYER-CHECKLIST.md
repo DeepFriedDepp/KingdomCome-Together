@@ -755,6 +755,72 @@ Lines worth a look: `MP-W157`, `MP-INJECT` (agent / launcher logs), `WO157-` (kc
 Lines worth a look: `MP-W159` (launcher log), `WO159-MENU`, `WO159-RECAP` (kcd.log), `MP-HENRY joiner: a new character`
 (agent log).
 
+## WO-160 — the joiner's NPC copies, the false "own save", and conversations (0.46.0)
+
+Evidence and what each item is for: `docs/WO-160-findings.md`. Use a throwaway copy of the host's save, as always. For
+items 150–155 both of you type `mp_npc_trace on` first; the first thing to look at afterwards is kcd.log on the **joiner**:
+the planner's `Couldn't find actions to get NPC into game loaded state` lines were 2,478 in the 0.45.8 session (the host:
+0) — this build should show **almost none** for copies. The agent log prints `MP-WO160-STATS planner refused=… unreached=…
+npcs=… worst=[…]` once a minute while there is anything to say.
+
+150. **The joiner sells to a shopkeeper the host just traded with.** The host trades with a keeper (blacksmith, innkeeper,
+     a market stall) and walks off; the joiner then talks to the same keeper and chooses Trade, and sells him something.
+     Marker: `mark_sellkeeper`. * The conversation starts within about two seconds (no 20 s wait, no "can't talk to you
+     right now" for an idle keeper) and Trade opens the shop. Note any keeper whose talk does not start, with the time.
+     * kcd.log (joiner) `WO157-TALK free npc=…` and no `WO137-TALK resume … timed out`; agent log `MP-W139 joiner: <npc> ready
+     to sell here … set` (WO-159's shop context); agent log `WO160-CTX npc=… placed=… released=… loaded=kept
+     cleared=no errors_before=… errors_after=…` per copy.
+151. **No false "You loaded your own save".** The joiner starts from the launcher, stays at the menu, connects, and joins
+     (item 3). Marker: `mark_joinclean`. * **No** toast and no launcher line about "own save" at any point from CONNECT to
+     the loaded world — including when the game was restarted by the launcher after a crash earlier in the session.
+     * kcd.log may show `WO160-SEPARATE held at the menu` / `… at the loading` (that is the guard working, not a fault). The
+     real case still works: load your own save first, then CONNECT — both games say so at once (item 40).
+152. **The talking NPC stands still on the other screen, both ways.** (a) The joiner talks to an NPC who is walking (a
+     passer-by, a guard on his rounds): on the **host's** screen that NPC stops for the whole conversation and walks on after.
+     (b) The host talks to a walking NPC: on the **joiner's** screen the copy stops for the conversation too, and does not
+     jump when it ends. Marker: `mark_convstand`. * No jitter, no sliding. Host kcd.log `WO137-HOLD on … why=talk` / `off … why=talk
+     held_s=…` (a hold that says `block-only(…)` instead of freezing is a **finding**: send the line). Joiner kcd.log `WO160-CONV
+     host-talk start` (on the host) and `WO160-CONV copy-held npc=…` / `copy-released npc=…` (on the joiner). A guard's
+     stop stays block-only (`why=w139-stop`) by design.
+153. **Naked-NPC check after a wait.** Wait 2 hours in a town (T, wait), then look at the NPCs on the joiner's screen: how
+     many are in underclothes who were dressed on the host's screen? Marker: `mark_naked`. * Write the number and the time.
+     **Known:** this build does **not** fix the naked NPC (WO-160 §1.4, pocketed); the number is the baseline for the next fix.
+     Agent log (joiner) `WO160-CTX settle after …: N copies` shows the post-skip placement ran.
+154. **Naked-NPC check after a sleep.** The same, after a sleep to morning (item 139's way). Marker: `mark_naked`.
+     * Also look for the copies being **in step** with the host's NPCs (sitting where they sit) and no flood of planner
+       lines: agent log `MP-WO160-STATS` for the minute after the sleep.
+155. **T-pose count.** After 15–20 minutes of walking about together, count the times either of you saw a T-pose figure (the
+     other's avatar or an NPC). Marker: `mark_tpose` each time. * kcdmp-native.log `WO160-NUDGE body=… …` lines are the mod's
+     answer (a body that stood still after a one-shot or a stopped clip got its walk pulse again).
+156. **Herbs together.** One player picks herbs (the minigame) while the other watches. Marker: `mark_herbs`. * The watching
+     player sees the picker **bend and pick** with a plain loop (it is a plain clip; if it does not bend, **say so** — this
+     was not visible in our solo run). No crash, no T-pose after he stops. kcd.log `WO160-HERB id=… on clip=…` / `off held_s=…`.
+     `mp_avatar_herbs off` makes the avatar stand instead.
+157. **Mount and dismount, five times each.** Each of you mounts and dismounts a horse five times in a row, the other
+     watching. Marker: `mark_mount5`. * The host's game does not freeze or crash. kcd.log `WO160-MOUNT id=… ready after N s`
+     (it waited for the horse) or `refused after N s: <reason>` (it declined; it is tried again). Send any mount that did not
+     happen, and any freeze, with the time and the marker.
+158. **The joiner buys a horse and whistles once.** The joiner buys a horse from a seller, rides it a little and dismounts a
+     way off; the host is near the joiner. The joiner whistles **once**. Marker: `mark_ownhorse`, then **`mark_odd` right after the
+     whistle** (so the moment is easy to find). * The horse appears 7 m from the joiner's avatar on the host's screen *and* on
+     the joiner's own screen (it is a placement, not a gallop). Host kcd.log `WO160-HORSE marked <horse> as ghost 0's own horse
+     here` and `WO160-HORSE fetch <horse>: was N m away, now 7 m beside …` (or `refused fetch … <reason>` — that is a finding);
+     joiner kcd.log `WO160-HORSE own <horse> -- told to the host`.
+159. **Doors.** (a) The host opens a door (not a locked one) and walks away: it stays open on the joiner's screen and does not
+     shut by itself. (b) The joiner walks up to a door that is merely **shut** (not locked): **no lockpick prompt**. Markers:
+     `mark_door` (a), `mark_door2` (b). * kcd.log (joiner) `mp_door_sync` status `privacy_skipped`; nothing like `WO151-DOOR ask
+     … unlocked here` for a door he did not pick.
+160. **A host kill, watched by the joiner.** The host kills an NPC (a bandit, a deer) while the joiner watches from a few
+     metres. Marker: `mark_hostkill`. * The NPC falls on the joiner's screen when it dies and not before; no "standing dead
+     copy" afterwards. Note the time if it stands up again or stays upright.
+161. **Check from 0.45.5–0.45.8 (in this build).** (a) The prologue recap: the sound plays, the world is silent, and one skip
+     skips all (item 149, `mark_recap`; kcd.log `WO159-RECAP sound setup on … / off`). (b) The joiner is never shown a trespass
+     warning for a house the host owns or a shop that is open (item 133, kcdmp-native.log `WO139-BUILD trespass HUD gate ARMED`).
+     (c) The keeper "ready to sell" check is item 150; the doors check is item 159.
+
+Lines worth a look: `WO160-` (kcd.log), `WO160-CTX` (agent log and kcdmp-native.log), `WO160-NUDGE` (kcdmp-native.log),
+`MP-WO160-STATS` (agent log). Switches (all default on): `mp_ctx_release`, `mp_conv_hold`, `mp_horse_fetch`, `mp_avatar_herbs`.
+
 ## Logs to send afterwards
 
 Both machines: Report a bug in the launcher. Since 0.42.2 it also collects the

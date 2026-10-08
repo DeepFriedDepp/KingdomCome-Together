@@ -253,7 +253,9 @@ public static class Wo143Rules
     public static MinigameShow? AvatarShow(ActivityState a, bool herbsOn)
     {
         var show = ShowFor(a);
-        return show is { Type: HerbMinigame } && !herbsOn ? null : show;
+        // WO-160 5: never the engine's own herb fragment (a player fragment: camera bone selector, context 5 on Dude). The avatar bends
+        // and picks with a plain clip instead (KCD2MP_W160HerbProxy; Wo160Rules.HerbProxyWanted decides when).
+        return show is { Type: HerbMinigame } ? null : show;
     }
 
     /// <summary>

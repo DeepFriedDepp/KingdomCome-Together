@@ -332,8 +332,9 @@ do
     KCD2MP.hitSensorOn = true
     KCD2MP_W137Session(true, false, true)
     local e = mkEntity("e_smith", 1, 1, 0)
-    KCD2MP_W137HostHold(true, "e_smith", 1, "talk")
-    check("e: a hold is block-only by default (no pause)", cmdCount("wh_ai_PauseNPC e_smith") == 0 and logCount("exec=block-only") == 1, lastLog("WO137-HOLD"))
+    -- WO-160 3: a partner's TALK now freezes the NPC for the conversation (mp_conv_hold); a guard's stop stays block-only (WO-151 3.6)
+    KCD2MP_W137HostHold(true, "e_smith", 1, "w139-stop")
+    check("e: a guard's stop is block-only by default (no pause)", cmdCount("wh_ai_PauseNPC e_smith") == 0 and logCount("exec=block-only") == 1, lastLog("WO137-HOLD"))
     NOW = NOW + 11; KCD2MP_W137Session(true, false, true)
     check("e: ...never re-paused by the hold tick", cmdCount("wh_ai_PauseNPC e_smith") == 0)
     check("e: the host's own talk to that NPC is refused", KCD2MP_W151HostTalkBlocked(e, player) == true)
@@ -342,6 +343,11 @@ do
     check("e: the partner leaves -> his holds are given back", KCD2MP_W151ReleasePeerHolds(1) == 1 and KCD2MP.w137.held["e_smith"] == nil)
     check("e: ...the release resumes nothing (nothing was paused)", cmdCount("wh_ai_ResumeNPC e_smith") == 0 and logCount("exec=was-not-paused") == 1)
     KCD2MP.hitSensorOn = false
+    local talker = mkEntity("e_talker", 3, 3, 0)
+    KCD2MP_W137HostHold(true, "e_talker", 1, "talk")
+    check("e: WO-160 3: a partner's talk FREEZES the NPC for the conversation", cmdCount("wh_ai_PauseNPC e_talker") == 1 and KCD2MP.w137.held["e_talker"].paused == true, lastLog("WO137-HOLD"))
+    KCD2MP_W137HostHold(false, "e_talker", 1, "talk")
+    check("e: ...and the end of the talk resumes it", cmdCount("wh_ai_ResumeNPC e_talker") == 1)
     check("e: no Lua errors", #ERRS == 0, ERRS[1])
 end
 
