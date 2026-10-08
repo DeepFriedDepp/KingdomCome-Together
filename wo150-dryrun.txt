@@ -1,0 +1,10 @@
+checked_in_ms=147
+1. [Done] Steam running and signed in: Steam is running and signed in.
+2. [Done] Kingdom Come: Deliverance II installed: Found in your Steam library.
+3. [Done] Disk space for the Modding Tools: Not needed: the Modding Tools are already there.
+4. [Done] KCD2 Modding Tools installed: Found in your Steam library.
+5. [Done] Game files linked into the Modding Tools: All 91 game files are in place (91 copies).
+6. [Done] Kingdom Come: Together mod installed and complete: Installed and verified.
+7. [Done] Ready!: Everything is set up. Host or Join whenever you like.
+ready=1
+workspace: 91/91 in place (91 copies)
