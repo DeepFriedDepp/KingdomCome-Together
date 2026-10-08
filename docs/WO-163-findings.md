@@ -139,4 +139,37 @@ trace and definitions, A6), Lua synthetic suites **50 of 50**, 0 failures. Nativ
 
 ### Stage A solo live check — not run
 
-<!-- STAGE-A-LIVE -->
+No game was started in this session so far. What the live check needs, and what it will read:
+
+* the Modding Tools build (never retail), a **throwaway** playline loaded (the playlines were backed up wholesale before any launch:
+  727 files, 1.3 GB, the copy checked equal; the loaded save is read back before any test action);
+* the new `KCDMP.dll` injected, the new agent running, `kdcmp.lua` re-packed (`tools/Build-And-Install-Mod.ps1`: a Lua edit needs the
+  pak rebuild and a game restart);
+* a scripted fight with one NPC (the host's own combat automation, `mp_w154_check hostfight <npc>`), then: `MP-WO163-STATS` /
+  `MP-ACTION ... table=combat_action_sync_attack` lines show a sync attack resolved (**`dropped-unknown-row` = 0**), `MP-FIGHTSNAP`
+  lines appear for a bound puppet, the frame rate is recorded;
+* the game window brought to the front by the maintainer (never by this session): an unfocused window runs at ~26 fps whatever the mod does.
+
+<!-- STAGE-A-LIVE-RESULT -->
+
+## Stage B — the eight probes (the instruments are built; **no probe has been run**)
+
+Each probe is run one at a time with the maintainer at the keyboard; the session asks before each; its setup, reads, result lines,
+verdict and Stage C consequence are written here before the next. Nothing from Stage C is built before its probe passes.
+
+| # | Instrument (all in `mp_w163_probe`, answers in the agent log as `WO163-PROBE` / `WO163-MODEL`) | Needs |
+|---|---|---|
+| P1 | `model <copy>` read during a host row on an engaged copy: `state` 8 (Striking) with `az at as ah` set? | a joiner's copy fighting the avatar (WO-147 engages it); read at the row's start+hit |
+| P2 | **new instrument, built only after P1** (a hand-built record through slot 0x150 on dummy NPCs) | dummy NPCs, the hp/stamina watcher |
+| P3 | **new instrument, built only after P1** (`RPGProcessHit` on the local player under the death guard); `model me` before/after for the block fields | the maintainer holding block |
+| P4 | as P3, on dummies first | |
+| P5 | none new: a throwing / combo NPC; `MP-ACTION ... table=combat_action_sync_attack` + `dispatch=native-row` on the joiner | a sync-attack NPC |
+| P6 | `pair <guard> on 1` while the guard fights the avatar; `model <guard>` for its `opp`; the controller's `Player: Opponent change ...` line; the guard stays on the avatar >= 10 s | a guard beating the partner |
+| P7 | the host's first blow; `relation <guard>` at the 5 s mark; the `WO139-JUDGE` / `WO163-JUDGE` lines | as P6 |
+| P8 | `swing2 <npc> <gap> <attack row> | <CombatAttackFailed row>` on a copy | a joiner's NPC copy |
+
+P2 / P3 / P4 need native code that calls the engine's combat path (`RPGProcessHit`, slot 0x150) — **not built**: WO-162's contract
+names the call but not the result struct's size or constructor (`[not determined]`), so its first instrument is designed from P1's
+result, on the main thread under `fault::guarded` with the pointers validated in the frame they are used.
+
+<!-- STAGE-B-RESULTS -->
