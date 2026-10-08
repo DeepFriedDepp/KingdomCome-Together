@@ -14,6 +14,29 @@ players are in this file, and no tester log line is copied: the numbers were cou
 This file is written phase by phase: a section is appended when its phase ends, so a cut-off session still leaves a
 complete record.
 
+## The answer
+
+**The WO's default design — the victim's game decides a hit by testing the puppet's swing — cannot be built: a joiner's copy of
+an enemy fires no hit event on the joiner (0 of 161 field windows, with 35 blows landing on the partner in the same minutes).**
+So the host's game still decides hit or blocked, and this WO built the rest of what the rule needed that does not depend on it:
+every enemy blow on a player is numbered, matched to its swing, applied once and logged with the swing shown or the reason there
+was none (a new message pair 0x72/0x73). In the testers' fights 16 of 45 blows had no captured swing — that is now counted and
+named, not fixed. Shared targeting and the snapping fixes were not built (the engine's lock-on rule was not read; a snapping fix
+is kept only if a fight measurement moves, and the old counter only sees steps over 5 m). The repo root is tidy, the README and
+LAUNCHING say what is true now, and 0.46.5 is built (local, unsigned, soak waived). **No game was started in this WO.**
+
+| Phase | Result | Mark |
+|---|---|---|
+| 0 Discovery | answered per question; design call: **puppet unworkable** (no hit event on a puppet); the alternative (a brain per machine) lost | [L-field][code] |
+| 1 Victim decides | **verdict path only**: `0x72/0x73`, swing ledger, exactly-once, `WO161-HIT` / `MP-WO161-STATS`; the victim-side hit test not built | [unit][syn]; **[not tested]** in the game |
+| 2 Shared targeting | **not built** (engine lock-on rule unread; unproducible solo; designs and gates recorded) | — |
+| 3 Snapping | **not built**; the three causes located with their log lines; the 0.45.2 counter measures only steps over 5 m | [code][L-field] |
+| 4 The item 9 set | per symptom: **none is the WO-160 wake fault**; 9.4 = Phase 1's rule; eye-tests 166, 167, 169; 9.1 recorded for Part B | [L-field] |
+| 5 Cleanup | its own commit (`2a72ddb`); the brand pak rebuilt from the new path: same entry bytes; payload manifest: the same 1,035 paths | [syn]; **[not tested]** a launcher-started logo |
+| 6 README / LAUNCHING | rewritten; every stale claim in a table; credit section untouched | [static] |
+| Gates and build | relay 63, agent 1,236, setup 77, native 421, **all 50 synthetic suites**, payload smoke `protocol=v10 release=0.46.5`; installer built | [unit][syn][native] |
+| Solo live (verdicts, 3-enemy fight, frame rate, logo) | **not made**; the frame-rate rule waived by identity of the source | — |
+
 ## A. Setup record
 
 * Start: `main` at `444caac` (WO-160's second 0.46.0 build record), VERSION 0.46.0, working tree clean apart from the
@@ -292,8 +315,10 @@ people. **The credit and licence section (from "License and provenance" to the l
   Steam's cloud copies of old autosaves back into a playline (WO-154's finding) and take the foreground, and the verdict path
   and the logo's pak are the only things that changed since the last live run. **The game's process is unchanged**: no Lua file
   and no native file differs from 0.46.0 (`git diff 444caac HEAD -- kdcmp native` is empty), so the frame rate before and
-  after is the same code; the rule's measurement is **waived by identity, not run**, and is asked of the maintainer's own
-  first session. The runbook for the next solo session is: `tools/wo118/start_joiner.py` (the agent as the joiner of the
+  after is the same source (the rebuilt `KCDMP.dll` is not byte-identical to 0.46.0's — a second build of unchanged sources
+  differs in 28,587 bytes of code and data at the same size, the linker's own variation; the Lua pak's entries are
+  byte-identical); the rule's measurement is **waived by identity of the source, not run**, and is asked of the maintainer's
+  own first session. The runbook for the next solo session is: `tools/wo118/start_joiner.py` (the agent as the joiner of the
   synthetic host), `synthpeer` verbs `hverdict hit 8.9 0 <npc> 0` × 10, then `hverdict hit 8.9 0 <npc> 0 1 7` twice (the same
   id twice: one `applied=dup`), read `WO161-HIT` and `MP-WO161-STATS`.
 * **A real fight's `shown=no` causes**, **block and parry**, the **phantom stance**, **ganging up**, **the host's lock-on**,
@@ -328,3 +353,22 @@ command; no window, key or mouse; no quest NPC's logic touched; no launcher sett
 privacy: no player name, username, address or machine path in any file this WO committed, and no tester log line was copied
 (counts only); no external project or person is named (the reference study is "the study"). Soak waived by the maintainer's
 standing rule, said in the build record.
+
+## The 0.46.5 build
+
+From a fresh clone of `834e21c` (`release\c0465`) with the three git-ignored start saves, `tools\Build-Installer.ps1 -SoakWaiver
+"The maintainer's standing rule, stated in WO-161 on 2026-10-08: release candidates are built without the soak test (0.46.5)."`
+(an earlier attempt from `0c20dd3` was stopped when its header said 0.46.0: the VERSION commit had carried only the release
+notes; VERSION is `834e21c`'s). **`release\KingdomComeTogether-Setup-0.46.5.exe`, 106,367,537 bytes, sha256
+`5dc0f20071f26dea4940003e42f9ab6488ca0ef730987388564d145303749c7f`.** Local only; not tagged; not pushed; **unsigned** (no signing
+settings). Transcript `release\BUILD-0.46.5.log`, waiver `release\SOAK-WAIVED-0.46.5.txt`.
+
+* Inside the build: relay 63, agent 1,236, setup 77, native 421, **all 50 synthetic suites**, the static and native checks, the
+  installer cases, the payload smoke (`protocol=v10 release=0.46.5`); no FAIL line. No player or machine name in the payload
+  (checked for the user and machine names in every file, both builds).
+* **Manifest against the 0.46.0 second build:** the same 1,035 entries, none added or removed. 26 differ by hash: the agent
+  (`KcdMpClient.dll` 2,328,064 → 2,345,984 bytes) and the shared protocol (`KcdMp.Protocol.dll`, also under `MasterServer\`,
+  142,336 → 146,944) with their pdbs — the expected ones — and 17 files of the same size whose hashes differ because a rebuild
+  is not byte-deterministic (launcher, relay, setup, `KCDMP.dll`, the two paks). The two paks' **entries are byte-identical** to
+  0.46.0's (`kdcmp.pak` 3 entries, `kdcmp_brand.pak` 1); `KCDMP.dll` is the same size from unchanged sources.
+* One compiler warning set is as before (nothing new from this WO's files).
