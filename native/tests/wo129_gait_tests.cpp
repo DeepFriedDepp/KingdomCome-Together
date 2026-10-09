@@ -32,6 +32,7 @@ int wo148_x64_tests(int* passed);          // wo148_x64_tests.cpp
 int wo151_tests(int* passed);              // wo151_tests.cpp
 int wo155_rules_tests(int* passed);        // wo155_rules_tests.cpp
 int wo163_tests(int* passed);              // wo163_tests.cpp (WO-163: sync GUID offsets, MP-FIGHTSNAP)
+int wo165_tests(int* passed);              // wo165_tests.cpp (WO-165: the replay's call site, structs, outcome)
 
 static int g_fail = 0, g_pass = 0;
 #define CHECK(cond, ...) do { if (cond) ++g_pass; else { ++g_fail; std::printf("FAIL  %s:%d  ", __FILE__, __LINE__); std::printf(__VA_ARGS__); std::printf("\n"); } } while (0)
@@ -225,6 +226,14 @@ int main() {
     {
         int fp = 0;
         const int ff = wo163_tests(&fp);
+        g_pass += fp;
+        g_fail += ff;
+    }
+
+    // WO-165: the replay's call-site parser, the structs we hand the engine, the outcome rule
+    {
+        int fp = 0;
+        const int ff = wo165_tests(&fp);
         g_pass += fp;
         g_fail += ff;
     }

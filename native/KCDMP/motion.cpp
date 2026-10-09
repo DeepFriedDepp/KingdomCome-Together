@@ -1728,4 +1728,51 @@ bool is_avatar_eid(uint32_t eid) {
 
 void* player_combat_actor() { return g_playerCa.load(); }
 
+// ---- WO-165: the attacker's four attack fields (the replay's precondition) ------------------------------------------------
+namespace {
+template <class T> bool wr(void* base, size_t off, const T& v) {
+    KCDMP_FAULT_READ(site, "motion::wr");
+    if (!plausible_addr(reinterpret_cast<uintptr_t>(base) + off)) return false;
+    return fault::guarded(site, [&] { *reinterpret_cast<T*>(static_cast<char*>(base) + off) = v; });
+}
+}   // namespace
+
+bool combat_parts(uint32_t eid, bool create, void** ca, void** model) {
+    *ca = nullptr; *model = nullptr;
+    void* actor = actor_by_eid(eid);
+    if (!actor) return false;
+    void* c = combat_actor_of(actor, false);
+    if (!c && create) c = combat_actor_of(actor, true);
+    if (!c) return false;
+    void* m = nullptr;
+    if (!rd(c, kCaModel, &m) || !m) return false;
+    *ca = c; *model = m;
+    return true;
+}
+
+bool player_combat_parts(void** ca, void** model) {
+    *ca = nullptr; *model = nullptr;
+    void* c = g_playerCa.load();
+    if (!c || !as_combat_actor(c)) return false;
+    void* m = nullptr;
+    if (!rd(c, kCaModel, &m) || !m) return false;
+    *ca = c; *model = m;
+    return true;
+}
+
+bool read_attack_fields(void* model, AttackFields* out) {
+    *out = AttackFields{};
+    return model && prop_value(model, kPropAttackType, &out->type) && prop_value(model, kPropAtkZone, &out->zone) &&
+           prop_value(model, kPropAtkHand, &out->hand) && prop_value(model, kPropAtkStrength, &out->strength);
+}
+
+bool write_attack_fields(void* model, const AttackFields& f) {
+    // every block names itself first (the reader's own check): a layout that moved writes nothing at all
+    if (!model || !prop_named(model, kPropAttackType) || !prop_named(model, kPropAtkZone) || !prop_named(model, kPropAtkHand) ||
+        !prop_named(model, kPropAtkStrength))
+        return false;
+    return wr(model, kPropAttackType.off + 8, f.type) && wr(model, kPropAtkZone.off + 8, f.zone) && wr(model, kPropAtkHand.off + 8, f.hand) &&
+           wr(model, kPropAtkStrength.off + 8, f.strength);
+}
+
 } // namespace kcdmp::motion

@@ -19,6 +19,11 @@
 //   4 SkirmishPair [on:1][override:1][nameLen:1][name] -> [done:1]   -- the probe P6 and the host lock-on's lever (C1): on = the HOST's soul joins the
 //       skirmish of the NPC with the given override (1 = the explicit hostile pair the lock-on rule needs, WO-162 Q2.3); off = the host's
 //       soul leaves its skirmish (RemoveSoulFromSkirmish; the fight itself goes on). Main thread, fault-guarded, souls looked up this frame.
+//   5 Replay [flags:1][type:i8][zone:i8][hand:i8][strength:f32][aLen:1][attacker][vLen:1][victim] -> text   (WO-165, wo165.h: the blow
+//       replayed through the engine's own hit processor; vLen 0 = the local player; flags wo165::kFlag*). The text starts
+//       "seq=<n> engine=<hit|blocked|pb|broken|filtered|none> ..." or "refused=<reason>".
+//   6 ReplayDamage [seq:4] -> [state:1][health:f32][stamina:f32][victimLive:1]   (WO-165: 0 unknown, 1 pending, 2 measured, 3 merged)
+//   7 ReplayStatus -> text
 #pragma once
 #include <cstddef>
 #include <cstdint>
@@ -29,6 +34,9 @@ constexpr uint8_t kOpSkirmishHostile = 1;
 constexpr uint8_t kOpStatus = 2;
 constexpr uint8_t kOpModelRead = 3;
 constexpr uint8_t kOpSkirmishPair = 4;
+constexpr uint8_t kOpReplay = 5;
+constexpr uint8_t kOpReplayDamage = 6;
+constexpr uint8_t kOpReplayStatus = 7;
 
 constexpr uint8_t kROk = 0, kRBadRequest = 1, kRNoActor = 2, kRNoSoul = 3, kRFailed = 4;
 

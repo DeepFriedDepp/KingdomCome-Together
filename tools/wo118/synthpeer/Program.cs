@@ -26,7 +26,7 @@
 //   saved <t> <kind> <playline> <idx>                           (WO-122: a WorldSaved 0x46 at stream time t, as the host)
 //   path <npc> <speed> <x1> <y1> <z1> <x2> <y2> <z2> ...        (ping-pong)
 //   timed <npc> <yaw> t0 x0 y0 z0 t1 x1 y1 z1 ...              (piecewise linear in time)
-//   fight <npc> <cx> <cy> <cz> <r>      (circles; flag 0x04 drawn, a 0x08 swing cue every 2.5 s)
+//   fight <npc> <cx> <cy> <cz> <r> [phase]   (circles; flag 0x04 drawn, a 0x08 swing cue every 2.5 s; WO-165 phase in radians)
 //   ghost <x0> <y0> <z0> <ux> <uy> <len> <speed> [ms]          (a player position stream, ping-pong)
 //   ride <t0_s> <t1_s>                                         (WO-124 6a: the ghost rides between t0 and t1)
 //   start <seconds>                                             (delay before streaming)
@@ -36,6 +36,7 @@
 //                                                               (WO-132: the host NPC's combat state, NpcCombat on the
 //                                                                action channel, every 1 s from t0 to t1 with combat on,
 //                                                                then one "off"; zones are table ids, -1 none)
+//   swingat / verdict (pb|broken, hid=N) / avatarfight / flee / teleport   (WO-165: Wo165Verbs.cs; --selftest-wo165 checks their packets)
 //   raw <t_s> <typeHex> <payloadHex> [stampOffset]              (WO-131: send this packet as-is at stream time t;
 //                                                                 the 4 bytes at stampOffset are re-stamped with this
 //                                                                 peer's clock -- a recorded host stream replayed,
@@ -129,11 +130,11 @@ static class P
     // fight <npc> <cx> <cy> <cz> <radius> : strafes a circle at 1.2 m/s facing the centre, weapon drawn, a swing cue every 2.5 s
     sealed class Fight : Mover
     {
-        public float Cx, Cy, Cz, R;
+        public float Cx, Cy, Cz, R, Phase;   // WO-165: Phase (radians) spreads several fighters round one centre
         public override (float, float, float, float) At(double t)
         {
             double w = 1.2 / Math.Max(0.5, R);
-            double a = w * t + 0.4 * Math.Sin(t * 0.9);
+            double a = Phase + w * t + 0.4 * Math.Sin(t * 0.9);
             float x = (float)(Cx + R * Math.Cos(a)), y = (float)(Cy + R * Math.Sin(a));
             float yaw = (float)Math.Atan2(-(Cx - x), Cy - y);
             return (x, y, Cz, yaw);
@@ -204,6 +205,7 @@ static class P
         // WO-131: the ghost's Position carries the host-claim bit (0x40): against a real agent that
         // claims host in its own world, the relay's tie-break (lowest id) keeps this peer the authority.
         bool claimHost = a.Contains("--claim-host");
+        if (a.Contains("--selftest-wo165")) return Wo165Verbs.SelfTest() == 0 ? 0 : 1;
         string versionFile = Arg(a, "--version-file", FindUp("VERSION"));
         string release = File.ReadAllText(versionFile).Trim();
         // WO-123: the synthetic joiner and the transfer-ceiling host (JoinPeer.cs).
@@ -227,6 +229,10 @@ static class P
         var ncombats = new List<NCombat>();   // WO-132
         var dies = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);   // WO-131
         var hps = new Dictionary<string, List<(double T, float Hp)>>(StringComparer.OrdinalIgnoreCase);   // WO-131
+        var fights = new List<(double T0, double T1, string Npc, double Every, float Hp, float St)>();       // WO-165 avatarfight
+        var lastFight = new Dictionary<int, double>();
+        var tports = new Dictionary<string, List<(double T, float Dx, float Dy)>>(StringComparer.OrdinalIgnoreCase);   // WO-165 teleport
+        uint swingSeq = 0;
         foreach (var raw in File.ReadAllLines(Arg(a, "--plan", "plan.txt")))
         {
             var t = raw.Trim(); if (t.Length == 0 || t.StartsWith('#')) continue;
@@ -248,7 +254,7 @@ static class P
                     for (int i = 3; i + 3 < f.Length; i += 4) tm.K.Add((double.Parse(f[i], CultureInfo.InvariantCulture), F(f[i + 1]), F(f[i + 2]), F(f[i + 3])));
                     movers.Add(tm); break;
                 }
-                case "fight": movers.Add(new Fight { Name = f[1], Cx = F(f[2]), Cy = F(f[3]), Cz = F(f[4]), R = F(f[5]) }); break;
+                case "fight": movers.Add(new Fight { Name = f[1], Cx = F(f[2]), Cy = F(f[3]), Cz = F(f[4]), R = F(f[5]), Phase = f.Length > 6 ? F(f[6]) : 0f }); break;
                 case "ghost":
                     ghost = new Line { Name = "ghost", X0 = F(f[1]), Y0 = F(f[2]), Z0 = F(f[3]), Ux = F(f[4]), Uy = F(f[5]), Len = F(f[6]), Speed = F(f[7]), PingPong = true };
                     ghostMs = f.Length > 8 ? int.Parse(f[8]) : 30;
@@ -260,10 +266,41 @@ static class P
                     break;
                 case "start": startDelay = double.Parse(f[1], CultureInfo.InvariantCulture); break;
                 case "row": rows.Add((double.Parse(f[1], CultureInfo.InvariantCulture), f[2], Guid.Parse(f[3]))); break;
-                case "verdict":   // verdict <t> <hit|blocked> <hp> <st> <npc|-> [swing=0] [joinerId=1]  (WO-161 0x72, the host's verdict of an NPC's hit on the joiner)
-                    verdicts.Add((double.Parse(f[1], CultureInfo.InvariantCulture), f[2] == "blocked" ? HitVerdict.Blocked : HitVerdict.Hit,
+                case "verdict":   // verdict <t> <hit|blocked|pb|broken> <hp> <st> <npc|-> [swing=0] [joinerId=1] [hid=N]  (WO-161 0x72; WO-165 values and ids)
+                {
+                    if (!Wo165Verbs.TryVerdict(f[2], out var vv)) throw new FormatException($"verdict: unknown value {f[2]}");
+                    var pos = f.Skip(6).Where(x => !x.StartsWith("hid=", StringComparison.Ordinal)).ToArray();
+                    var hidTok = f.FirstOrDefault(x => x.StartsWith("hid=", StringComparison.Ordinal));
+                    uint vid = hidTok is not null ? uint.Parse(hidTok[4..], CultureInfo.InvariantCulture) : ++verdictId;
+                    verdicts.Add((double.Parse(f[1], CultureInfo.InvariantCulture), vv,
                                   float.Parse(f[3], CultureInfo.InvariantCulture), float.Parse(f[4], CultureInfo.InvariantCulture), f[5] == "-" ? "" : f[5],
-                                  f.Length > 6 ? uint.Parse(f[6], CultureInfo.InvariantCulture) : 0u, f.Length > 7 ? byte.Parse(f[7], CultureInfo.InvariantCulture) : (byte)1, ++verdictId));
+                                  pos.Length > 0 ? uint.Parse(pos[0], CultureInfo.InvariantCulture) : 0u, pos.Length > 1 ? byte.Parse(pos[1], CultureInfo.InvariantCulture) : (byte)1, vid));
+                    break;
+                }
+                case "swingat":   // WO-165: swingat <t> <npc> local <rowGuid> <lag_ms> <hit|blocked|pb|broken> <hp> <st> [joinerId=1]
+                {
+                    if (f[3] != "local") throw new FormatException("swingat <t> <npc> local ...");
+                    if (!Wo165Verbs.TryVerdict(f[6], out var sv)) throw new FormatException($"swingat: unknown verdict {f[6]}");
+                    double t0 = Wo165Verbs.D(f[1]);
+                    rows.Add((t0, f[2], Guid.Parse(f[4])));
+                    uint sid = ++swingSeq;
+                    verdicts.Add((t0 + Wo165Verbs.D(f[5]) / 1000.0, sv, Wo165Verbs.F(f[7]), Wo165Verbs.F(f[8]), f[2], sid,
+                                  f.Length > 9 ? byte.Parse(f[9], CultureInfo.InvariantCulture) : (byte)1, ++verdictId));
+                    break;
+                }
+                case "avatarfight":   // WO-165: avatarfight <t0> <t1> <npc> <every_s> <hp> <st>
+                    fights.Add((Wo165Verbs.D(f[1]), Wo165Verbs.D(f[2]), f[3], Wo165Verbs.D(f[4]), Wo165Verbs.F(f[5]), Wo165Verbs.F(f[6])));
+                    break;
+                case "flee":   // WO-165: flee <t0> <npc> <x0> <y0> <z0> <ux> <uy> <speed> <len>
+                {
+                    var tm = new Timed { Name = f[2], Yaw = 0 };
+                    tm.K.AddRange(Wo165Verbs.FleeKeys(Wo165Verbs.D(f[1]), F(f[3]), F(f[4]), F(f[5]), F(f[6]), F(f[7]), F(f[8]), F(f[9])));
+                    movers.Add(tm);
+                    break;
+                }
+                case "teleport":   // WO-165: teleport <t> <npc|ghost> <dx> <dy>
+                    if (!tports.TryGetValue(f[2], out var tl)) tports[f[2]] = tl = new();
+                    tl.Add((Wo165Verbs.D(f[1]), F(f[3]), F(f[4])));
                     break;
                 case "saved": saves.Add((double.Parse(f[1], CultureInfo.InvariantCulture), byte.Parse(f[2]), byte.Parse(f[3]), ushort.Parse(f[4]))); break;
                 case "die": dies[f[2]] = double.Parse(f[1], CultureInfo.InvariantCulture); break;
@@ -388,6 +425,15 @@ static class P
                     Console.WriteLine(FormattableString.Invariant($"SYNTH t={t:F1}s HVERDICT id={vd.Id} {vd.V} hp={vd.Hp} st={vd.St} npc={(vd.Npc.Length == 0 ? "-" : vd.Npc)} swing={vd.Swing} -> ghost {vd.Tgt}"));
                     verdicts.RemoveAt(vi);
                 }
+                for (int fi = 0; fi < fights.Count; fi++)   // WO-165: the avatar's attributed blows on a host NPC
+                {
+                    var fg = fights[fi];
+                    if (t < fg.T0 || t >= fg.T1) continue;
+                    if (lastFight.TryGetValue(fi, out double lf) && t - lf < fg.Every) continue;
+                    lastFight[fi] = t;
+                    await st.WriteAsync(Wo165Verbs.AttributedHit(fg.Npc, fg.St, fg.Hp));
+                    Console.WriteLine(FormattableString.Invariant($"SYNTH t={t:F1}s AVATARFIGHT hit npc={fg.Npc} hp={fg.Hp} st={fg.St} (attributed)"));
+                }
                 // WO-132: the host NPC's combat state, 1 Hz while on, one "off" at the end.
                 foreach (var nc in ncombats)
                 {
@@ -435,6 +481,7 @@ static class P
                 {
                     if (now - m.LastSent < emitMs) continue;
                     var (x, y, z, yaw) = m.At(t);
+                    if (tports.TryGetValue(m.Name, out var mtp)) { var (odx, ody) = Wo165Verbs.Offset(mtp, t); x += odx; y += ody; }
                     double dx = x - m.LastSentX, dy = y - m.LastSentY, dz = z - m.LastSentZ;
                     bool moved = Math.Abs(dx) > 0.05 || Math.Abs(dy) > 0.05 || Math.Abs(dz) > 0.05;
                     bool deadNow = dies.TryGetValue(m.Name, out double dieT) && t >= dieT;   // WO-131
@@ -459,6 +506,7 @@ static class P
             {
                 lastGhost = now;
                 var (gx, gy, gz, gyaw) = ghost.At(ts - streamT0);
+                if (tports.TryGetValue("ghost", out var gtp)) { var (odx, ody) = Wo165Verbs.Offset(gtp, ts - streamT0); gx += odx; gy += ody; }
                 int glen = Protocol.PositionPayloadLen + (ghostSenderMs ? Protocol.SenderMsLen : 0);
                 var gp = new byte[3 + glen]; gp[0] = Protocol.Position; BinaryPrimitives.WriteUInt16LittleEndian(gp.AsSpan(1), (ushort)glen);
                 BinaryPrimitives.WriteSingleLittleEndian(gp.AsSpan(3), gx); BinaryPrimitives.WriteSingleLittleEndian(gp.AsSpan(7), gy);

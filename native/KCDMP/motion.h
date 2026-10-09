@@ -172,4 +172,15 @@ bool is_avatar_eid(uint32_t eid);
 // The local player's combat actor (main-thread cache; 0 when unknown).
 void* player_combat_actor();
 
+// WO-165 (main thread): the combat actor and its model for an entity (create = make the combat actor when it has none, as the
+// avatars do); the local player's from the cache, checked by class. False when either is missing.
+bool combat_parts(uint32_t eid, bool create, void** ca, void** model);
+bool player_combat_parts(void** ca, void** model);
+// WO-165: the four attack fields the hit core reads from the ATTACKER's model (research/WO-162 Q1.4; WO-163 P1: a copy playing a host
+// row never sets them). Read and written as plain values at the property block's value slot (+8), each block checked by its own name
+// first -- no setter runs, so no change listener fires. write: all four or none.
+struct AttackFields { int32_t type = -1, zone = -1, hand = 0; float strength = 0; };
+bool read_attack_fields(void* model, AttackFields* out);
+bool write_attack_fields(void* model, const AttackFields& f);
+
 } // namespace kcdmp::motion

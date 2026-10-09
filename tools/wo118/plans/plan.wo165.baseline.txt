@@ -1,0 +1,52 @@
+# WO-165 Stage 0.3 / P9 / the Stage D gate: the synthetic baseline fight (joiner role, a throwaway save by Troskowitz, the local
+# player standing at about (2338.0, 2048.3, 109.2), no player input). Three host NPCs circle the player 2.6-3.4 m away, weapon-drawn,
+# fighting the joiner's avatar (ncombat avatar:1); 40 swings (the catalog's unarmed punch, lag 0.22 s) at the local player, each followed
+# by the host's verdict after the row's own lag: hits of 1 hp and blocks of 4 stamina, alternating. 3 minutes from t=20 s.
+start 25
+ghost 2335.0 2044.0 109.2 1 0 0.01 0.01 30
+fight ttkc_man_31 2338.0 2048.3 109.2 2.6 0.000
+ncombat 0 215 ttkc_man_31 avatar:1 3 1 0 3
+fight ttkc_man_30 2338.0 2048.3 109.2 3.0 2.094
+ncombat 0 215 ttkc_man_30 avatar:1 3 1 0 3
+fight ttkc_man_3 2338.0 2048.3 109.2 3.4 4.189
+ncombat 0 215 ttkc_man_3 avatar:1 3 1 0 3
+swingat 20.0 ttkc_man_31 local 3e27732b-b152-4a27-97d2-1ebba717a588 220 hit 1 0
+swingat 24.5 ttkc_man_30 local 3e27732b-b152-4a27-97d2-1ebba717a588 220 blocked 0 4
+swingat 29.0 ttkc_man_3 local 3e27732b-b152-4a27-97d2-1ebba717a588 220 hit 1 0
+swingat 33.5 ttkc_man_31 local 3e27732b-b152-4a27-97d2-1ebba717a588 220 blocked 0 4
+swingat 38.0 ttkc_man_30 local 3e27732b-b152-4a27-97d2-1ebba717a588 220 hit 1 0
+swingat 42.5 ttkc_man_3 local 3e27732b-b152-4a27-97d2-1ebba717a588 220 blocked 0 4
+swingat 47.0 ttkc_man_31 local 3e27732b-b152-4a27-97d2-1ebba717a588 220 hit 1 0
+swingat 51.5 ttkc_man_30 local 3e27732b-b152-4a27-97d2-1ebba717a588 220 blocked 0 4
+swingat 56.0 ttkc_man_3 local 3e27732b-b152-4a27-97d2-1ebba717a588 220 hit 1 0
+swingat 60.5 ttkc_man_31 local 3e27732b-b152-4a27-97d2-1ebba717a588 220 blocked 0 4
+swingat 65.0 ttkc_man_30 local 3e27732b-b152-4a27-97d2-1ebba717a588 220 hit 1 0
+swingat 69.5 ttkc_man_3 local 3e27732b-b152-4a27-97d2-1ebba717a588 220 blocked 0 4
+swingat 74.0 ttkc_man_31 local 3e27732b-b152-4a27-97d2-1ebba717a588 220 hit 1 0
+swingat 78.5 ttkc_man_30 local 3e27732b-b152-4a27-97d2-1ebba717a588 220 blocked 0 4
+swingat 83.0 ttkc_man_3 local 3e27732b-b152-4a27-97d2-1ebba717a588 220 hit 1 0
+swingat 87.5 ttkc_man_31 local 3e27732b-b152-4a27-97d2-1ebba717a588 220 blocked 0 4
+swingat 92.0 ttkc_man_30 local 3e27732b-b152-4a27-97d2-1ebba717a588 220 hit 1 0
+swingat 96.5 ttkc_man_3 local 3e27732b-b152-4a27-97d2-1ebba717a588 220 blocked 0 4
+swingat 101.0 ttkc_man_31 local 3e27732b-b152-4a27-97d2-1ebba717a588 220 hit 1 0
+swingat 105.5 ttkc_man_30 local 3e27732b-b152-4a27-97d2-1ebba717a588 220 blocked 0 4
+swingat 110.0 ttkc_man_3 local 3e27732b-b152-4a27-97d2-1ebba717a588 220 hit 1 0
+swingat 114.5 ttkc_man_31 local 3e27732b-b152-4a27-97d2-1ebba717a588 220 blocked 0 4
+swingat 119.0 ttkc_man_30 local 3e27732b-b152-4a27-97d2-1ebba717a588 220 hit 1 0
+swingat 123.5 ttkc_man_3 local 3e27732b-b152-4a27-97d2-1ebba717a588 220 blocked 0 4
+swingat 128.0 ttkc_man_31 local 3e27732b-b152-4a27-97d2-1ebba717a588 220 hit 1 0
+swingat 132.5 ttkc_man_30 local 3e27732b-b152-4a27-97d2-1ebba717a588 220 blocked 0 4
+swingat 137.0 ttkc_man_3 local 3e27732b-b152-4a27-97d2-1ebba717a588 220 hit 1 0
+swingat 141.5 ttkc_man_31 local 3e27732b-b152-4a27-97d2-1ebba717a588 220 blocked 0 4
+swingat 146.0 ttkc_man_30 local 3e27732b-b152-4a27-97d2-1ebba717a588 220 hit 1 0
+swingat 150.5 ttkc_man_3 local 3e27732b-b152-4a27-97d2-1ebba717a588 220 blocked 0 4
+swingat 155.0 ttkc_man_31 local 3e27732b-b152-4a27-97d2-1ebba717a588 220 hit 1 0
+swingat 159.5 ttkc_man_30 local 3e27732b-b152-4a27-97d2-1ebba717a588 220 blocked 0 4
+swingat 164.0 ttkc_man_3 local 3e27732b-b152-4a27-97d2-1ebba717a588 220 hit 1 0
+swingat 168.5 ttkc_man_31 local 3e27732b-b152-4a27-97d2-1ebba717a588 220 blocked 0 4
+swingat 173.0 ttkc_man_30 local 3e27732b-b152-4a27-97d2-1ebba717a588 220 hit 1 0
+swingat 177.5 ttkc_man_3 local 3e27732b-b152-4a27-97d2-1ebba717a588 220 blocked 0 4
+swingat 182.0 ttkc_man_31 local 3e27732b-b152-4a27-97d2-1ebba717a588 220 hit 1 0
+swingat 186.5 ttkc_man_30 local 3e27732b-b152-4a27-97d2-1ebba717a588 220 blocked 0 4
+swingat 191.0 ttkc_man_3 local 3e27732b-b152-4a27-97d2-1ebba717a588 220 hit 1 0
+swingat 195.5 ttkc_man_31 local 3e27732b-b152-4a27-97d2-1ebba717a588 220 blocked 0 4

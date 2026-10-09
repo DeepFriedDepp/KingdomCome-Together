@@ -1103,6 +1103,47 @@ public sealed class CombatPipe : IAsyncDisposable
         return r is { Ok: true } x ? System.Text.Encoding.ASCII.GetString(x.Payload) : null;
     }
 
+    /// <summary>
+    /// WO-165 op 5 (wo165.h): a blow replayed through the engine's own hit processor -- <paramref name="attacker"/> (a copy or a local NPC)
+    /// on <paramref name="victim"/> (null = this machine's player), with the attacker's four attack fields written first. The text starts
+    /// "seq=&lt;n&gt; engine=&lt;hit|blocked|pb|broken|filtered|none&gt;" or "refused=&lt;why&gt;"; null = no answer.
+    /// </summary>
+    public async Task<(bool Ok, string Text)?> Wo165ReplayAsync(string attacker, string? victim, sbyte type, sbyte zone, sbyte hand, float strength, byte flags,
+                                                               CancellationToken ct = default)
+    {
+        var an = System.Text.Encoding.ASCII.GetBytes(attacker);
+        var vn = string.IsNullOrEmpty(victim) || victim == "me" ? [] : System.Text.Encoding.ASCII.GetBytes(victim);
+        if (an.Length is 0 or > 63 || vn.Length > 63 || !float.IsFinite(strength)) return null;
+        var a = new byte[1 + 3 + 4 + 1 + an.Length + 1 + vn.Length];
+        a[0] = flags; a[1] = unchecked((byte)type); a[2] = unchecked((byte)zone); a[3] = unchecked((byte)hand);
+        System.Buffers.Binary.BinaryPrimitives.WriteSingleLittleEndian(a.AsSpan(4), strength);
+        a[8] = (byte)an.Length; an.CopyTo(a, 9);
+        a[9 + an.Length] = (byte)vn.Length; vn.CopyTo(a, 10 + an.Length);
+        var r = await Wo163Async(5, a, ct);
+        if (r is null) return null;
+        string text = System.Text.Encoding.ASCII.GetString(r.Value.Payload);
+        if (text.Length == 0) text = $"refused=reason-{r.Value.Reason}";
+        return (r.Value.Ok, text);
+    }
+
+    /// <summary>WO-165 op 6: the measured damage of replay <paramref name="seq"/>: State 0 unknown, 1 pending, 2 measured, 3 merged into an earlier one.</summary>
+    public async Task<(byte State, float Health, float Stamina, bool VictimLive)?> Wo165ReplayDamageAsync(uint seq, CancellationToken ct = default)
+    {
+        var a = new byte[4];
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(a, seq);
+        var r = await Wo163Async(6, a, ct);
+        if (r is not { Ok: true, Payload.Length: >= 10 } x) return null;
+        var p = x.Payload;
+        return (p[0], System.Buffers.Binary.BinaryPrimitives.ReadSingleLittleEndian(p.AsSpan(1)), System.Buffers.Binary.BinaryPrimitives.ReadSingleLittleEndian(p.AsSpan(5)), p[9] != 0);
+    }
+
+    /// <summary>WO-165 op 7: the replay's counters as text, or null.</summary>
+    public async Task<string?> Wo165StatusAsync(CancellationToken ct = default)
+    {
+        var r = await Wo163Async(7, [], ct);
+        return r is { Ok: true } x ? System.Text.Encoding.ASCII.GetString(x.Payload) : null;
+    }
+
     public async Task<(bool Ok, byte Reason, byte[] Payload)?> Wo151Async(byte op, byte[] args, CancellationToken ct = default)
     {
         var p = new byte[1 + args.Length];

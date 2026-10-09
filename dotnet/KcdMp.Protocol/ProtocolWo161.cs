@@ -24,6 +24,8 @@ namespace KcdMp.Wire;
 //   2 Blocked  the avatar's guard absorbed it: no health lost, stamina paid
 //   3 Parried  reserved -- the victim's own verdict (never sent by 0.46.5: the victim cannot hit-test a puppet's swing)
 //   4 Missed   reserved -- likewise
+//   5 PerfectBlock  WO-165: the victim's engine said "perfect block" (the replay, wo165.h); the synthetic host may send it
+//   6 Broken        WO-165: the victim's engine said "the block was broken" (a stagger; the damage the engine applied)
 // flags: 1 SwingKnown (the host's ledger had a swing of this NPC just before the hit), 2 Missile, 4 NoAttacker.
 //
 // A verdict replaces the 0.46.0 PlayerHit (0x21/0x22) for an NPC's hit on an avatar; the old pair stays for the agents'
@@ -45,7 +47,7 @@ public static partial class Protocol
 }
 
 /// <summary>WO-161: the verdict of one hit on an avatar (APPEND-ONLY).</summary>
-public enum HitVerdict : byte { None = 0, Hit = 1, Blocked = 2, Parried = 3, Missed = 4 }
+public enum HitVerdict : byte { None = 0, Hit = 1, Blocked = 2, Parried = 3, Missed = 4, PerfectBlock = 5, Broken = 6 }
 
 /// <summary>WO-161: one HitVerdict message (the body after the join header; the join header's id slot is the hit id).</summary>
 public readonly record struct HitVerdictMsg(uint HitId, HitVerdict Verdict, byte Flags, byte Zone, uint SwingId, float Health, float Stamina, string Attacker)
@@ -57,14 +59,26 @@ public readonly record struct HitVerdictMsg(uint HitId, HitVerdict Verdict, byte
     public static string VerdictName(HitVerdict v) => v switch
     {
         HitVerdict.Hit => "hit", HitVerdict.Blocked => "blocked", HitVerdict.Parried => "parried", HitVerdict.Missed => "missed",
+        HitVerdict.PerfectBlock => "pb", HitVerdict.Broken => "broken",
         _ => $"unknown-{(byte)v}",
     };
+
+    /// <summary>WO-165: the name a verdict carries in the logs and the synthetic peer's plans (hit, blocked, pb, broken, parried, missed).</summary>
+    public static bool TryParseVerdict(string s, out HitVerdict v)
+    {
+        v = s switch
+        {
+            "hit" => HitVerdict.Hit, "blocked" => HitVerdict.Blocked, "pb" => HitVerdict.PerfectBlock, "broken" => HitVerdict.Broken,
+            "parried" => HitVerdict.Parried, "missed" => HitVerdict.Missed, _ => HitVerdict.None,
+        };
+        return v != HitVerdict.None;
+    }
 
     /// <summary>The framed Up packet to <paramref name="target"/>: [type][len:2][target][hitId:4][body].</summary>
     public byte[] BuildUp(byte target)
     {
         if (HitId == 0) throw new ArgumentOutOfRangeException(nameof(HitId), "hit ids start at 1");
-        if (Verdict == HitVerdict.None || (byte)Verdict > (byte)HitVerdict.Missed) throw new ArgumentOutOfRangeException(nameof(Verdict));
+        if (Verdict == HitVerdict.None || (byte)Verdict > (byte)HitVerdict.Broken) throw new ArgumentOutOfRangeException(nameof(Verdict));
         if (!StatOk(Health) || !StatOk(Stamina)) throw new ArgumentOutOfRangeException(nameof(Health), "health and stamina are finite, 0..1000");
         string name = Attacker ?? "";
         if (name.Length > 0 && !CarryText.IsName(name)) throw new ArgumentException("an attacker is an authored entity name ([A-Za-z0-9_], 1..64) or empty", nameof(Attacker));
@@ -92,7 +106,7 @@ public readonly record struct HitVerdictMsg(uint HitId, HitVerdict Verdict, byte
         if (hitId == 0 || body.Length < Protocol.HitVerdictFixedLen || body.Length > Protocol.HitVerdictBodyMax) return false;
         if (body[0] != Protocol.HitVerdictWire) return false;
         var verdict = (HitVerdict)body[1];
-        if (verdict == HitVerdict.None || verdict > HitVerdict.Missed) return false;
+        if (verdict == HitVerdict.None || verdict > HitVerdict.Broken) return false;
         byte flags = body[2];
         if ((flags & ~(Protocol.HitFlagSwingKnown | Protocol.HitFlagMissile | Protocol.HitFlagNoAttacker)) != 0) return false;
         byte zone = body[3];

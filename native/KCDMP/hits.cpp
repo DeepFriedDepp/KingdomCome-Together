@@ -129,7 +129,9 @@ std::vector<PlayerHitMark> g_marks;
 // a bleed tick), and an engaged copy's hit on the local player on a joiner (kind
 // kWatchDiscard: put back, never forwarded -- the joiner's damage comes only
 // from the host).
-enum WatchKind : uint8_t { kWatchPvp = 0, kWatchNpc = 1, kWatchDiscard = 2 };
+// WO-165: kWatchReplay -- a replayed blow (wo165.cpp) on the local player or a dummy NPC: measured, never put back, reported to
+// the replay's own callback (the engine applied it; this only says how much).
+enum WatchKind : uint8_t { kWatchPvp = 0, kWatchNpc = 1, kWatchDiscard = 2, kWatchReplay = 3 };
 struct NewWatch { void* soul; uint32_t eid; float hp0, st0; uint8_t flags, material; uint8_t kind; uint32_t attackerEid; };
 std::vector<NewWatch> g_newWatches;
 struct Watch { void* soul; uint32_t eid; float hp0, st0, dh = 0, ds = 0; uint8_t flags, material; double t0; int frames = 0, landedAt = -1;
@@ -155,6 +157,14 @@ bool is_discard_attacker(uint32_t eid) {
 }
 std::atomic<bool> g_npcWatch{true};
 
+// WO-165: the replay window (main thread opens and closes it around its own call; the hook runs on the same thread inside it).
+struct ReplayWindow { uint32_t attacker = 0, victim = 0, seq = 0; void* victimSoul = nullptr; bool victimIsPlayer = false; DWORD tid = 0; };
+ReplayWindow g_replay;                 // main thread only (the hook reads it only on the opening thread)
+std::atomic<bool> g_replayOpen{false};
+ReplayCapture g_replayCap;
+std::atomic<ReplayDmgFn> g_replayDmgFn{nullptr};
+std::atomic<uint32_t> c_replaySeen{0};
+
 // Recently-hit souls (main thread only).
 std::unordered_map<void*, double> g_hitSouls;
 // Engagements (victim eid << 32 | avatar eid) -> last skirmish add time.
@@ -176,6 +186,26 @@ void* hit_common(bool missile, HitFn orig, void* self, void* out, const uint8_t*
     (missile ? c_missile : c_melee).fetch_add(1, std::memory_order_relaxed);
     uint64_t aw = 0, vw = 0; uint32_t aeid = 0, veid = 0; uint8_t mat = 0;
     if (!g_pvpHook.load(std::memory_order_relaxed) || !read_hit(data, &aw, &aeid, &vw, &veid, &mat)) return orig(self, out, data);
+    // WO-165: our own replay of a blow (wo165.cpp) -- on the thread that opened the window, this attacker on this victim. Exempt from
+    // the discard (WO-162 Q1.3 #9: a replay from an engaged copy would be put back) and from every other branch: the record the engine
+    // built is copied (the probe's reads: block +0x54/+0x55, perfect +0x56, broken +0x57, zone mismatch +0x61), the victim is watched
+    // to MEASURE the damage the engine applies, and the original runs (never skipped: Q1.3).
+    if (!missile && g_replayOpen.load(std::memory_order_relaxed) && GetCurrentThreadId() == g_replay.tid && aeid == g_replay.attacker &&
+        veid == g_replay.victim) {
+        c_replaySeen.fetch_add(1, std::memory_order_relaxed);
+        g_replayCap.seen = true; g_replayCap.self = self;
+        KCDMP_FAULT_READ(cpSite, "hits::replay_copy");
+        fault::guarded(cpSite, [&] { std::memcpy(g_replayCap.rec, data, sizeof g_replayCap.rec); });
+        void* vs = g_replay.victimSoul;
+        float hp0 = 0, st0 = 0;
+        const bool r0 = vs && rttr::soul_state(vs, "health", &hp0) && rttr::soul_state(vs, "stamina", &st0);
+        void* res = orig(self, out, data);
+        if (r0) {
+            std::lock_guard<std::mutex> lock(g_qMutex);
+            g_newWatches.push_back({vs, veid, hp0, st0, 0, mat, static_cast<uint8_t>(kWatchReplay), g_replay.seq});
+        }
+        return res;
+    }
     void* vsoul = avatar_soul(veid);
     if (vsoul) {
         // A hit on a peer's avatar. NEVER skipped: the caller expects a cause
@@ -601,6 +631,21 @@ int avatar_list(uint32_t* eids, void** souls, int max) {
 
 void set_npc_watch(bool on) { g_npcWatch = on; }
 
+void replay_begin(uint32_t attackerEid, uint32_t victimEid, uint32_t seq, void* victimSoul, bool victimIsPlayer) {
+    g_replay = ReplayWindow{attackerEid, victimEid, seq, victimSoul, victimIsPlayer, GetCurrentThreadId()};
+    g_replayCap = ReplayCapture{};
+    g_replayOpen.store(true, std::memory_order_relaxed);
+}
+
+void replay_end(ReplayCapture* out) {
+    g_replayOpen.store(false, std::memory_order_relaxed);
+    if (out) *out = g_replayCap;
+    g_replay = ReplayWindow{};
+}
+
+void set_replay_damage_callback(ReplayDmgFn fn) { g_replayDmgFn.store(fn); }
+uint32_t replay_seen() { return c_replaySeen.load(); }
+
 uint32_t eid_of_name(const char* name) { return name && *name ? eid_by_name(name) : 0; }
 
 void mark_player_hit(uint32_t victimEid) {
@@ -630,6 +675,12 @@ void tick() {
     for (const auto& n : nw) {
         bool merged = false;   // a second hit inside the window: same baseline, longer window
         for (auto& w : g_watches) if (w.soul == n.soul && w.kind == n.kind) { w.t0 = now; w.flags |= n.flags; merged = true; break; }
+        // WO-165: a second replay on the same victim inside the window shares the first one's measure (one soul, one baseline); its
+        // own report says so (health -1) at once, so no caller waits for a number that cannot be separated.
+        if (merged && n.kind == kWatchReplay) {
+            logf("WO165-REPLAY-DMG seq=%u victim=0x%X merged into the open measure of an earlier replay on the same victim", n.attackerEid, n.eid);
+            if (ReplayDmgFn fn = g_replayDmgFn.load()) fn(n.attackerEid, n.eid, -1.0f, -1.0f, true);
+        }
         if (!merged) {
             Watch w{n.soul, n.eid, n.hp0, n.st0, 0, 0, n.flags, n.material, now};
             w.kind = n.kind; w.attackerEid = n.attackerEid;
@@ -642,9 +693,15 @@ void tick() {
         ++w.frames;
         // The soul must still be this avatar's (a release or a respawn ends the watch).
         // A discard watch is on the local player's soul (a load replaces it).
-        const bool live = w.kind == kWatchDiscard ? rttr::read_player_soul() == w.soul : avatar_soul(w.eid) == w.soul;
+        const bool live = w.kind == kWatchDiscard ? rttr::read_player_soul() == w.soul
+                        : w.kind == kWatchReplay ? (rttr::read_player_soul() == w.soul || soul_of_eid(w.eid) == w.soul)
+                        : avatar_soul(w.eid) == w.soul;
         float hp = 0, st = 0;
-        if (live && rttr::soul_state(w.soul, "health", &hp) && rttr::soul_state(w.soul, "stamina", &st)) {
+        if (live && w.kind == kWatchReplay && rttr::soul_state(w.soul, "health", &hp) && rttr::soul_state(w.soul, "stamina", &st)) {
+            // measured from the lowest point, nothing put back: the engine's own application is the result
+            if (w.hp0 - hp > w.dh + 0.01f) { w.dh = w.hp0 - hp; if (w.landedAt < 0) w.landedAt = w.frames; }
+            if (w.st0 - st > w.ds + 0.25f) { w.ds = w.st0 - st; if (w.landedAt < 0) w.landedAt = w.frames; }
+        } else if (live && rttr::soul_state(w.soul, "health", &hp) && rttr::soul_state(w.soul, "stamina", &st)) {
             bool dropped = false;
             if (hp < w.hp0 - 0.01f) { w.dh += w.hp0 - hp; rttr::soul_set_state(w.soul, "health", w.hp0); dropped = true; }
             // WO-157 3b.1: an NPC's blow on an avatar keeps the stamina it cost (only the health is put back -- the joiner's
@@ -658,7 +715,12 @@ void tick() {
             if (dropped) { c_restored.fetch_add(1); if (w.landedAt < 0) w.landedAt = w.frames; }
         }
         if (live && now - w.t0 < kWatchS) { ++it; continue; }
-        if (w.kind == kWatchPvp) {
+        if (w.kind == kWatchReplay) {
+            // attackerEid carries the replay's sequence number here
+            logf("WO165-REPLAY-DMG seq=%u victim=0x%X hp -%.2f st -%.2f (landed at frame %d of %d)%s", w.attackerEid, w.eid, w.dh, w.ds,
+                 w.landedAt, w.frames, live ? "" : " -- victim gone");
+            if (ReplayDmgFn fn = g_replayDmgFn.load()) fn(w.attackerEid, w.eid, w.dh, w.ds, live);
+        } else if (w.kind == kWatchPvp) {
             logf("WO121-HITS player hit on avatar eid=0x%X measured hp -%.2f st -%.2f (landed at frame %d of %d) -> %s", w.eid, w.dh, w.ds,
                  w.landedAt, w.frames, !live ? "avatar gone, dropped" : (w.dh > 0 || w.ds > 0) ? (g_ff.load() ? "forwarded" : "dropped (friendly fire off)") : "no damage, nothing sent");
             if (live && (w.dh > 0 || w.ds > 0)) pvp.push_back({w.eid, w.ds, w.dh, w.flags, w.material});

@@ -20,6 +20,9 @@ namespace KcdMp.Wire;
 //                                session: the host's torch never reached the joiner through the block, the joiner's did)
 //   3 Escort    "<npc> 1|0"      a joiner: a quest NPC follows this player in its own world (the quest asked it to) -- the host
 //                                walks its NPC behind the joiner's figure until 0 (or the quest's end step, or 15 minutes)
+//   4 HitOutcome "<hid> <outcome> <hp> <st>"   WO-165: a joiner's own engine decided the host's verdict <hid> (the replay, wo165.h):
+//                                outcome hit|blocked|pb|broken, the health / stamina it took (measured; -1 = not separable).
+//                                The host logs it beside its own verdict (WO165-OUTCOME) and counts agreement
 //
 // An older peer never sees these (a mixed release is refused at the relay, WO-110 R9); a receiver that meets an unknown
 // kind ignores it (counted). No protocol bump.
@@ -32,14 +35,14 @@ public static partial class Protocol
     public const int W164TextMax = 80;
 
     // ---- kinds (APPEND-ONLY) ----
-    public const byte W164MarkPing = 1, W164Torch = 2, W164Escort = 3;
+    public const byte W164MarkPing = 1, W164Torch = 2, W164Escort = 3, W164HitOutcome = 4;
 
     /// <summary>While the torch is out, the side-channel repeats it this often (a lost edge recovers).</summary>
     public const int W164TorchRepeatMs = 10_000;
 
     public static string W164KindName(byte k) => k switch
     {
-        W164MarkPing => "mark-ping", W164Torch => "torch", W164Escort => "escort", _ => $"unknown-{k}",
+        W164MarkPing => "mark-ping", W164Torch => "torch", W164Escort => "escort", W164HitOutcome => "hit-outcome", _ => $"unknown-{k}",
     };
 }
 
@@ -67,6 +70,24 @@ public static class W164Text
     public static string Torch(byte ghost, bool on) => $"{ghost} {(on ? 1 : 0)}";
 
     public static string Escort(string npc, bool on) => $"{npc} {(on ? 1 : 0)}";
+
+    /// <summary>WO-165: "&lt;hid&gt; &lt;outcome&gt; &lt;hp&gt; &lt;st&gt;" -- the joiner's engine's outcome of the host's verdict hid.</summary>
+    public static string HitOutcome(uint hid, HitVerdict outcome, float hp, float st) =>
+        FormattableString.Invariant($"{hid} {HitVerdictMsg.VerdictName(outcome)} {Clamp(hp):F1} {Clamp(st):F1}");
+
+    private static float Clamp(float v) => !float.IsFinite(v) || v < 0 ? -1f : Math.Min(v, Protocol.HitVerdictStatMax);
+
+    public static bool TryParseHitOutcome(string? text, out uint hid, out HitVerdict outcome, out float hp, out float st)
+    {
+        hid = 0; outcome = HitVerdict.None; hp = st = 0;
+        var f = (text ?? "").Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+        if (f.Length != 4 || !uint.TryParse(f[0], System.Globalization.NumberStyles.None, inv, out hid) || hid == 0) return false;
+        if (!HitVerdictMsg.TryParseVerdict(f[1], out outcome) || outcome is HitVerdict.Parried or HitVerdict.Missed) return false;
+        if (!float.TryParse(f[2], System.Globalization.NumberStyles.Float, inv, out hp) || !float.TryParse(f[3], System.Globalization.NumberStyles.Float, inv, out st)) return false;
+        bool ok(float v) => float.IsFinite(v) && (v == -1f || (v >= 0 && v <= Protocol.HitVerdictStatMax));
+        return ok(hp) && ok(st);
+    }
 
     /// <summary>"&lt;npc&gt; 1|0" -> the NPC (an authored entity name) and on/off.</summary>
     public static bool TryParseEscort(string? text, out string npc, out bool on)

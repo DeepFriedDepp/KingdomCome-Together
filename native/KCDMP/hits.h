@@ -91,6 +91,17 @@ uint32_t eid_of_name(const char* name);   // one entity walk per name, cached an
 // WO-147: as the hit hook marks a real blow of the local player's on this body (any thread).
 void mark_player_hit(uint32_t victimEid);
 
+// WO-165 (main thread): the replay window around one call into the engine's hit processor (wo165.cpp). While it is open, the slot hook
+// treats a blow of exactly this attacker on exactly this victim, on this thread, as the replay: never discarded (WO-162 Q1.3 #9), the
+// engine-built 0x90-byte record copied into the capture, the victim's soul watched for kWatchS and the damage the engine applied
+// reported (measured, nothing put back) to the callback with the replay's sequence number.
+struct ReplayCapture { bool seen = false; void* self = nullptr; uint8_t rec[0x90]{}; };
+void replay_begin(uint32_t attackerEid, uint32_t victimEid, uint32_t seq, void* victimSoul, bool victimIsPlayer);
+void replay_end(ReplayCapture* out);
+using ReplayDmgFn = void (*)(uint32_t seq, uint32_t victimEid, float health, float stamina, bool victimLive);
+void set_replay_damage_callback(ReplayDmgFn fn);
+uint32_t replay_seen();
+
 void tick();   // main thread: drain the hook's queue, resolve victims
 int status_text(char* out, int n);
 

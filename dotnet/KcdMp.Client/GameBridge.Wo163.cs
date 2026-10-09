@@ -137,8 +137,44 @@ public partial class GameBridge
                     Console.WriteLine($"WO163-PROBE modelwatch {f[0]} done: {reads} reads, {changes} changes");
                     return;
                 }
+                case "replay":
+                case "replayn":
+                {
+                    // WO-165 P2/P3/P4: replay <attacker> <victim|me> <type> <zone> <strength> [hand=0] [flags=1]
+                    //                  replayn <attacker> <victim|me> <n> <gap_ms> <type> <zone> <strength> [hand=0] [flags=1]
+                    var f = rest.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                    int k = verb == "replayn" ? 2 : 0;
+                    int n = 1, gap = 0;
+                    var inv = System.Globalization.CultureInfo.InvariantCulture;
+                    if (f.Length < 5 + k || !CarryText.IsName(f[0]) || (f[1] != "me" && !CarryText.IsName(f[1])) ||
+                        (k > 0 && (!int.TryParse(f[2], out n) || n is < 1 or > 40 || !int.TryParse(f[3], out gap) || gap is < 0 or > 10000)) ||
+                        !sbyte.TryParse(f[2 + k], out sbyte at) || !sbyte.TryParse(f[3 + k], out sbyte az) ||
+                        !float.TryParse(f[4 + k], System.Globalization.NumberStyles.Float, inv, out float str) || str is < 0 or > 4)
+                    { Console.WriteLine("WO165-PROBE replay <attacker> <victim|me> <type> <zone> <strength 0-4> [hand=0] [flags=1] | replayn <attacker> <victim|me> <n 1-40> <gap_ms> <type> <zone> <strength> [hand] [flags]"); return; }
+                    sbyte ah = f.Length > 5 + k && sbyte.TryParse(f[5 + k], out sbyte h2) ? h2 : (sbyte)0;
+                    byte fl = f.Length > 6 + k && byte.TryParse(f[6 + k], out byte fl2) ? fl2 : (byte)1;
+                    var seqs = new List<uint>();
+                    for (int i = 0; i < n; i++)
+                    {
+                        var r = await _combat.Wo165ReplayAsync(f[0], f[1], at, az, ah, str, fl);
+                        Console.WriteLine($"WO165-PROBE replay #{i + 1}/{n} {f[0]} -> {f[1]}: {(r is null ? "no answer" : r.Value.Text)}");
+                        if (r is { Ok: true } ok && ok.Text.StartsWith("seq=", StringComparison.Ordinal) && uint.TryParse(ok.Text[4..].Split(' ')[0], out uint sq)) seqs.Add(sq);
+                        if (i + 1 < n) await Task.Delay(gap);
+                    }
+                    await Task.Delay(900);
+                    foreach (uint sq in seqs)
+                    {
+                        var d = await _combat.Wo165ReplayDamageAsync(sq);
+                        Console.WriteLine(FormattableString.Invariant($"WO165-PROBE replay seq={sq} damage: {(d is null ? "no answer" : d.Value.State switch { 2 => $"hp -{d.Value.Health:F2} st -{d.Value.Stamina:F2}", 3 => "merged into an earlier replay's measure", 1 => "still pending", _ => "unknown seq" })}"));
+                    }
+                    Console.WriteLine($"WO165-PROBE replay status: {await _combat.Wo165StatusAsync() ?? "no answer"}");
+                    return;
+                }
+                case "replaystatus":
+                    Console.WriteLine($"WO165-PROBE replay status: {await _combat.Wo165StatusAsync() ?? "no answer"}");
+                    return;
                 default:
-                    Console.WriteLine("WO163-PROBE verbs: status | model [npc|me] | relation <npc> | pair <npc> on|off [override] | swing2 <npc> <gap_ms> <spec A> | <spec B> | engage <npc> on|off | modelwatch <npc> <secs> [every_ms]");
+                    Console.WriteLine("WO163-PROBE verbs: status | model [npc|me] | relation <npc> | pair <npc> on|off [override] | swing2 <npc> <gap_ms> <spec A> | <spec B> | engage <npc> on|off | modelwatch <npc> <secs> [every_ms] | replay ... | replayn ... | replaystatus");
                     return;
             }
         }

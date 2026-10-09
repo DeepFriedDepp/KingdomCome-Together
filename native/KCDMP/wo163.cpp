@@ -7,6 +7,7 @@
 #include "hits.h"
 #include "log.h"
 #include "motion.h"
+#include "wo165.h"
 
 #include <atomic>
 #include <cstdio>
@@ -117,6 +118,55 @@ uint8_t handle(const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t
             out[0] = done ? 1 : 0;
             *outLen = 1;
             return done ? kROk : kRFailed;
+        }
+        case kOpReplay: {   // WO-165
+            if (len < 10 || cap < 120) return kRBadRequest;
+            wo165::Request rq{};
+            rq.flags = body[1];
+            rq.fields.type = static_cast<int8_t>(body[2]);
+            rq.fields.zone = static_cast<int8_t>(body[3]);
+            rq.fields.hand = static_cast<int8_t>(body[4]);
+            std::memcpy(&rq.fields.strength, body + 5, 4);
+            if (!(rq.fields.strength >= 0.0f && rq.fields.strength <= 4.0f)) return kRBadRequest;   // NaN refused too
+            const size_t an = body[9];
+            if (len < 10 + an + 1 || !name_ok(reinterpret_cast<const char*>(body + 10), an)) return kRBadRequest;
+            const size_t vn = body[10 + an];
+            if (len != 11 + an + vn || (vn && !name_ok(reinterpret_cast<const char*>(body + 11 + an), vn))) return kRBadRequest;
+            const std::string an_s(reinterpret_cast<const char*>(body + 10), an);
+            rq.attackerEid = hits::eid_of_name(an_s.c_str());
+            if (!rq.attackerEid) return kRNoActor;
+            if (vn) {
+                const std::string vn_s(reinterpret_cast<const char*>(body + 11 + an), vn);
+                rq.victimEid = hits::eid_of_name(vn_s.c_str());
+                if (!rq.victimEid) return kRNoActor;
+            }
+            const wo165::Result r = wo165::replay(rq);
+            int n = 0;
+            if (r.reason != wo165::kOk)
+                n = std::snprintf(reinterpret_cast<char*>(out), cap, "refused=%s", wo165::reason_name(r.reason));
+            else
+                n = std::snprintf(reinterpret_cast<char*>(out), cap, "seq=%u engine=%s returned=%d core=%s blk=%u pb=%u dmgflag=%u broken=%u zm=%u vstate=0x%X opp_me=%u",
+                                  r.seq, wo165::outcome_name(r.outcome), r.returned ? 1 : 0, r.seen ? "ran" : "not-run", r.flags[0], r.flags[3], r.flags[2],
+                                  r.recBroken, r.recZoneMismatch, static_cast<unsigned>(r.victimModel.state), r.victimModel.opponentIsPlayer);
+            *outLen = (n > 0 && static_cast<size_t>(n) < cap) ? static_cast<size_t>(n) : 0;
+            return r.reason == wo165::kOk ? kROk : r.reason == wo165::kFault ? kRFailed : kRNoActor;
+        }
+        case kOpReplayDamage: {   // WO-165
+            if (len != 5 || cap < 10) return kRBadRequest;
+            uint32_t seq = 0;
+            std::memcpy(&seq, body + 1, 4);
+            const wo165::Damage d = wo165::damage_of(seq);
+            out[0] = d.state;
+            std::memcpy(out + 1, &d.health, 4);
+            std::memcpy(out + 5, &d.stamina, 4);
+            out[9] = d.victimLive ? 1 : 0;
+            *outLen = 10;
+            return kROk;
+        }
+        case kOpReplayStatus: {   // WO-165
+            const int n = wo165::status_text(reinterpret_cast<char*>(out), static_cast<int>(cap));
+            *outLen = (n > 0 && static_cast<size_t>(n) < cap) ? static_cast<size_t>(n) : 0;
+            return kROk;
         }
         case kOpStatus: {
             const int n = status_text(reinterpret_cast<char*>(out), static_cast<int>(cap));

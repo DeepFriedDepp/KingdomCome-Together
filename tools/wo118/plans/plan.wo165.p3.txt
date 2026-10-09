@@ -1,0 +1,8 @@
+# WO-165 P3 / P4b (joiner role, the throwaway save by Troskowitz, the local player at about (2338.0, 2048.3, 109.2)): ONE host NPC held
+# 2.5 m north of the player, weapon drawn, fighting the joiner's avatar for 15 minutes (its copy is engaged on the local player, WO-132). No
+# swings: the probe replays a blow of that copy through the engine's hit processor (mp_w163_probe replay) while the maintainer holds block or not.
+# The stand-in partner's figure stands on open ground 6 m east.
+start 5
+ghost 2344.0 2048.0 108.2 1 0 0.01 0.01 30
+hold ttkc_man_3 2338.0 2049.9 109.1 3.14 drawn
+ncombat 0 900 ttkc_man_3 avatar:1 3 1 0 3
