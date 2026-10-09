@@ -689,6 +689,7 @@ public partial class GameBridge
                 await Wo151WeatherTickAsync();
                 await Wo151SceneTickAsync();
                 await Wo151CatchUpTickAsync();
+                await Wo164TickAsync();   // WO-164: the torch side-channel, the flee watchdog, the stale seats, quest values, the marker notice
                 long now = Environment.TickCount64;
                 if (now - lastStatus >= 60_000)
                 {

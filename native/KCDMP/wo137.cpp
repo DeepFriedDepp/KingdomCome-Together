@@ -586,6 +586,60 @@ Applied apply(const char* path, const char* portNm, Val* before, Val* after) {
     return res;
 }
 
+// ---------------------------------------------------------------------------
+// WO-164 T6: the direct write of a quest State's value, for a value no port is known to produce (the field: the Mutt bait's
+// numberOfMealsIgnazHasEaten stood at 2 against the host's 1 for 7 minutes). What the State's own setter does after its port
+// fires: the variant at +0x68 takes the value, then slot 42 (the change notification WO-137 hooks) runs with the old and the
+// new value, so its consumers run exactly as they would. Only an inline "int" or "bool" variant (no enum: its width and range
+// are not read here); the write is read back and undone when it does not read as written.
+// ---------------------------------------------------------------------------
+std::atomic<uint32_t> c_setOk{0}, c_setRefused{0}, c_setFault{0};
+bool set_value_call(void* node, const void* oldV, int v, bool isBool) {
+    KCDMP_FAULT_CALL(site, "wo137::set_value");
+    return fault::guarded(site, [&] {
+        char* at = static_cast<char*>(node) + kOffStateValue;
+        if (isBool) *reinterpret_cast<uint8_t*>(at) = v ? 1 : 0;
+        else *reinterpret_cast<int32_t*>(at) = v;
+        ++t_applyDepth;   // a mirror of the host's value, never sent back as this player's own step
+        hooked_changed(node, oldV, at, true);
+        --t_applyDepth;
+    });
+}
+bool undo_value(void* node, const uint8_t* oldCopy) {
+    KCDMP_FAULT_READ(site, "wo137::set_value_undo");
+    return fault::guarded(site, [&] { std::memcpy(static_cast<char*>(node) + kOffStateValue, oldCopy, 24); });
+}
+Applied set_value(const char* path, int v, Val* before, Val* after) {
+    *before = Val{}; *after = Val{};
+    if (!A.apply || !g_origChanged) return Applied::Unarmed;
+    void* node = find_node(path);
+    if (!node) return Applied::NoNode;
+    Applied res = Applied::Fault;
+    do {
+        if (!is_state(node)) { res = Applied::NotAState; break; }
+        { char qp[kMaxPath + 64]; size_t qe = 0; if (!node_path(node, qp, sizeof qp, &qe) || qe == 0) { res = Applied::NotAQuest; break; } }
+        if (node_runtime(node) == 1) { res = Applied::Asleep; break; }
+        decode(static_cast<char*>(node) + kOffStateValue, before);
+        const bool isInt = std::strcmp(before->type, "int") == 0, isBool = std::strcmp(before->type, "bool") == 0;
+        if (!before->valid || !before->ok || !(isInt || isBool)) { res = Applied::TypeRefused; break; }
+        if (isBool && v != 0 && v != 1) { res = Applied::TypeRefused; break; }
+        if (before->i == v) { res = Applied::Unchanged; break; }
+        alignas(8) uint8_t oldCopy[32]{};
+        if (!copy_bytes(static_cast<char*>(node) + kOffStateValue, oldCopy, 24)) { res = Applied::Fault; break; }
+        if (!set_value_call(node, oldCopy, v, isBool)) { res = Applied::Fault; break; }
+        decode(static_cast<char*>(node) + kOffStateValue, after);
+        if (!(after->ok && after->i == v && std::strcmp(after->type, before->type) == 0)) {
+            // not what was written: the old bytes go back (no notification: the consumers saw the change, the next checkpoint compares)
+            undo_value(node, oldCopy);
+            res = Applied::Fault; break;
+        }
+        res = Applied::Changed;
+    } while (false);
+    call_release(node);
+    (res == Applied::Changed ? c_setOk : res == Applied::Fault ? c_setFault : c_setRefused).fetch_add(1);
+    return res;
+}
+
 const char* applied_text(Applied a) {
     switch (a) {
         case Applied::Changed: return "changed";
@@ -598,6 +652,7 @@ const char* applied_text(Applied a) {
         case Applied::Fault: return "FAULT";
         case Applied::Unarmed: return "apply not armed";
         case Applied::NotAQuest: return "not under a quest";
+        case Applied::TypeRefused: return "type refused (only int / bool are written directly)";
     }
     return "?";
 }
@@ -1166,6 +1221,29 @@ uint8_t handle(const uint8_t* req, size_t n, uint8_t* out, size_t cap, size_t* o
         out[o++] = a.ok; std::memcpy(out + o, &a.i, 4); o += 4;
         const size_t tl = std::strlen(a.type[0] ? a.type : b.type);
         out[o++] = static_cast<uint8_t>(tl); std::memcpy(out + o, a.type[0] ? a.type : b.type, tl); o += tl;
+        *outN = o;
+        return kROk;
+    }
+    case kOpSetValue: {   // WO-164 T6: [tag:4][pathLen:2][path][value:4] -> the op 2 reply shape
+        if (n < 1 + 4 + 2) return kRBadRequest;
+        uint32_t tag; std::memcpy(&tag, req + 1, 4);
+        const uint16_t pl = get_u16(req + 5);
+        if (pl == 0 || pl > kMaxPath || n != 7u + pl + 4u) return kRBadRequest;
+        char path[kMaxPath + 1]{}; std::memcpy(path, req + 7, pl);
+        int32_t v; std::memcpy(&v, req + 7 + pl, 4);
+        if (std::strncmp(path, "Barbora.", 8) != 0) return kRBadRequest;   // quests only
+        Val b{}, a{};
+        const Applied r = set_value(path, v, &b, &a);
+        logf("WO164-QSET tag=%u %s = %d -> %s (from %d to %d, %s) thread=%lu", tag, path, v, applied_text(r), b.i, a.i,
+             a.type[0] ? a.type : b.type, static_cast<unsigned long>(GetCurrentThreadId()));
+        if (cap < 12 + 48) return kRFailed;
+        size_t o = 0;
+        out[o++] = static_cast<uint8_t>(r);
+        out[o++] = b.ok; std::memcpy(out + o, &b.i, 4); o += 4;
+        out[o++] = a.ok; std::memcpy(out + o, &a.i, 4); o += 4;
+        const char* ty = a.type[0] ? a.type : b.type;
+        const size_t tl = std::strlen(ty);
+        out[o++] = static_cast<uint8_t>(tl); std::memcpy(out + o, ty, tl); o += tl;
         *outN = o;
         return kROk;
     }

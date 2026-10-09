@@ -170,3 +170,92 @@ unpacked copy is on this machine) **[not determined]**. **The baseline T6 is jud
 quest-value cause for these three**: they were the NPC being busy (talking with the host, then carried). T6 is still built
 (the `no port` drift is real and lasted 7 minutes on the Mutt bait), and T0 now names the case: `host_busy=1` when the host
 holds that NPC for its own talk.
+
+## Phases A–G — what was built (the live results follow in "Solo live")
+
+Every item below is gated by tests: **[unit]** `dotnet/KcdMp.Client.Tests/Wo164Tests.cs` (22), **[syn]**
+`tools/Test-WO164Synthetic.lua` (58, the real kdcmp.lua under MoonSharp), **[native]** `native/tests/wo141_rules_tests.cpp`
+(+3). The older suites that pinned the changed behaviour were updated where the change is the point (two timing lines in
+`Test-WO137Synthetic.lua`: a press under 3 s after a talk to the same copy is now not passed on — T2).
+
+### A — instrument
+* **M** — `mark_odd` ("Something's wrong here") makes a mark id (10 × [a-z0-9]); the agent writes `MP-MARK-SNAP mark=<id> agent …`
+  (≤ 60 lines, scrubbed of paths, addresses and e-mail: role, build, open talk requests and the last 5 outcomes, sweep counts,
+  the copies with planner errors in the last 30 s and their host activity, every avatar's wanted vs body activity (the DLL's
+  read), the engaged copies with ages, current quest mismatches, the map-marker state, the activity counters), the Lua writes
+  `MP-MARK-SNAP mark=<id> lua …` (≤ 40 lines: game time, position, in-dialogue / in-combat, leash and join hold, talks, the 5
+  nearest copies within 25 m with paused / dead / flee / last sweep, the avatars, random-event actors within 40 m with their
+  owner, the last 10 toasts, fps over 5 s and the largest frame gap), and a new append-only join message **0x74/0x75 `W164`
+  kind 1 MarkPing** makes the other machine write its own two blocks under the same id (the host passes a joiner's ping on).
+  [unit] [syn]
+* **T0** — `WO164-TALK npc=… kind=talk via=… placed=… paused_before=… planner_err_10s=… open_requests=… oldest_request_s=…
+  quest_mismatch=… first_mismatch=… host_busy=…` at the ask, and `WO164-TALK npc=… kind=… -> started_ms=… | ended why=…
+  commands=… cause=busy|preempted|quest|torn|wedged|neither preempted_by=… …` at the end (kind from the dialogue's own name:
+  haggle / chat / dice / quest / other; commands = the engine's `DialogCommand-*` lines of that dialogue id). [unit]
+
+### B — talk, trade, haggle
+* **T1** — the sweep = the game's stance/unstance release + native **WO-141 op 9** (loaded := the body, the host's refused
+  activity not asked again for a hold). Triggers: after a skip (replaces WO-160's re-placement: every copy within 300 m,
+  nearest first, 4 per tick, a 0.6–5 s frame gap waits), adaptive (5 refusals in 10 s, the agent), focus (the copy faced within
+  4 m, 0.5 s cadence), retry (T3). `WO164-SWEEP npc=… trigger=… errors_before=… errors_after_6s=…`. **And the cause found in
+  0.1 is cut at the source: the reconcile now gives a refused activity up after 3 refusals (was 8)**. [syn] [native]
+* **T2** — a press to a copy whose talk ended under 3 s ago is not passed on ("Wait a moment…" once); presses while a request
+  is open were already ignored by the engine and by the WO-137 entry (no churn). [syn]
+* **T3** — a request open 4 s: the player soul's `RestrictDialog(true/false)` (the script-bind docs: "deletes all unfinished
+  requests"; restricted-again is checked and undone), the copy swept, the same game action re-run once 300 ms later; never a
+  second time; then "Try again in a moment." [syn]; whether the engine honours the cancel is in "Solo live".
+* **T4** — no own code: haggles are classified (`kind=haggle`) and get T1–T3.
+* **T5** — the copy's soul `RestrictDialog(true/false)` before its talk is resumed (its own unfinished greeting / bark
+  requests deleted); the agent records `preempted_by=` from the engine's "Running dialogue … with soul '<copy>'" lines. [syn]
+* **T6** — native **WO-137 op 9 SetValue** writes an `int` / `bool` quest State directly (the variant at +0x68, then slot 42
+  with old/new/notify, inside the apply depth so it is a mirror; read back, undone if it does not read as written; any other
+  type answers `type-refused`); the agent writes a `no port` mismatch that stood 10 s, and every current one before a talk
+  (`WO164-QFIX var=… joiner=… host=… applied=…`). Never on the host. [unit] [native build]
+
+### C — the map
+* **C1** — `mark_add` waits until the map is ready (the world looked at 5 s ago, the map object found, ≥ 1 of the game's own
+  marks in it); a grave / mirror with no mark is retried by the 100 ms guard (one per entity); a fault in the add removes the
+  half-added mark with the map's own remove, turns markers **off for the session**, logs `WO164-MAPMARK FAULT site=C_UIMap::add`,
+  and the agent shows "Map markers are off this session (a game error)." once (the WO-151 status line carries `markers=`).
+  [native build]
+* **C2** — **not built** (pocket list): the safe form (a hidden marker entity of our own, moved every 2 s) needs its own
+  load-safe lifetime; a mark on the avatar entity itself would hold a raw pointer that a reload destroys (the WO-113 crash).
+
+### D — fleeing enemies
+* **D1** — Lua: one weapon re-assert per 2 s at most, none while the host's NPC flees (the agent reads the host row's unstance
+  name through native **WO-141 op 10**), 20 s of rest after 3 in 10 s (`WO164-FLEE npc=… backoff`); agent: a fleeing copy is
+  given no hand tool. [syn]
+* **D2** — the agent's watchdog over the holds the mod makes (WO-132 and WO-147 engagements): older than 45 s, the enemy's
+  host row in flee for 20 s → released (`WO164-FLEE disengage`). Forced targets (WO-136) already clear themselves (0.4). [unit]
+
+### E — sitting and unstuck
+* **S1** — native: an avatar's refused seat logs `-> FAILED` (exec 0, body not in step), and after 3 the figure stands beside
+  the seat (`WO164-SIT body=… apply=failed obj=… fallback=stand`), kept 120 s while the same seat is asked again. [native]
+* **S2** — agent: a peer's stream leaving its seat → 1.5 s later the avatar body is read; still seated → Leave + release
+  (`WO164-SIT cleared why=stale`); a (re)joining peer's figure is cleared first (`why=rejoin`).
+* **S3** — `mp_unstuck` step 1 also resets this player's stance and unstance (the same game reset, on his own body); a second
+  press within 10 s asks the agent to place him beside his partner (the leash's own placement). [syn]
+* **S4 / WA** — `WO164-SITSTATE enter|leave obj=…` and `WO164-USE enter|leave obj=… kind=<unstance name|minigame-N>` from the
+  DLL's capture of this player.
+
+### F — random events
+* **R0** (Mutt pair) [L-field]: the host streams `dummyWanderer_horse_8` and its rider; on the joiner the rider copy is paused
+  (35 pause re-asserts) and written by the native writer while the horse copy is a separate puppet (77 `idle` anims) — **the
+  rider is never mounted on the horse copy** (no mount line for horse_8 on the joiner), so it moves at saddle height without a
+  horse. Meanwhile the joiner's **own** random event used the same rider name on another horse ("starts mounting horse
+  'dummyWanderer_horse_7' instantly"). R1 removes the second cause; the first is R2 (pocketed).
+* **R1** — on a joiner in a session the Lua sets the game's `wh_pl_RandomEventsAutoSpawnEnabled 0` (WO-145's census found it;
+  it gates the trigger-area spawns) and puts the old value back when the session ends; toggle `mp_joiner_events` (on = the
+  joiner's own events off). [syn]
+
+### G — the 0.47.0 additions
+* **TR** — the host's torch never reached the joiner through the state block (0 `MP-W136 peer` lines on the joiner in 0.47.0,
+  2 in the Mutt joiner; the host's packets came at the 2 s position heartbeat while it stood with the torch out, i.e. without
+  the 1 s state-block heartbeat a set torch bit forces) — the exact cause is **[not determined]**. Built: a reliable
+  side-channel, `W164` kind 2 Torch `"<ghost> 1|0"`, on every local torch edge and every 10 s while lit; the receiver applies
+  an edge the block did not already show (`MP-W136 peer N torch OUT … (side-channel)`). [unit]
+* **RL** — "Your host is reloading the world - please wait" when the host starts a load, "Back with your host" at the rejoin,
+  on the game's own HUD line.
+* **N** (clothing on the wire), **ESC** (Ignatius) — **not built** (pocket list). **ID**, **SL** — not built (dropped first
+  by the WO's order). **DI** — the minigame entity lines are logged (`WO164-TALK kind=minigame`); dice dialogues get
+  `kind=dice`.

@@ -74,6 +74,8 @@ constexpr uint8_t kOpHud       = 6;
 constexpr uint8_t kOpHold      = 7;
 // WO-147: op 3 with each State's value type too: [n]([len:2][path])* -> [n]([state][rt][ok][val:4][typeLen][type])*
 constexpr uint8_t kOpReadStateTyped = 8;
+// WO-164 T6: the direct write of an int / bool quest State: [tag:4][pathLen:2][path][value:4] -> op 2's reply shape
+constexpr uint8_t kOpSetValue = 9;
 
 constexpr uint8_t kROk         = 0;
 constexpr uint8_t kRBadRequest = 1;
@@ -92,6 +94,7 @@ enum class Applied : uint8_t {
     Fault = 7,
     Unarmed = 8,
     NotAQuest = 9,    // not under a C_Quest: never pulsed
+    TypeRefused = 10, // WO-164: op 9 writes an int or bool State only
 };
 
 // Flags on 0x9E.

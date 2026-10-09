@@ -150,6 +150,16 @@ public partial class GameBridge
         if (!W141Joiner || !W141Active) return;
         long now = Environment.TickCount64;
         if (now - Interlocked.Exchange(ref _w160SettleMs, now) < 5_000) return;
+        if (_w164On)
+        {
+            // WO-164 T1: the field showed the re-placement below refused again and again after a skip (the error storm 60-100 s
+            // later); every copy within 300 m is swept instead (released, its loaded state := its body), paced by the Lua, and the
+            // reconcile places it again at its own pace
+            try { await Task.Delay(3_000); } catch { return; }
+            await ExecLuaAsync($"if KCD2MP_W164AfterSkip then KCD2MP_W164AfterSkip(\"{EscapeLua(why)}\") end");
+            Console.WriteLine($"WO164-SWEEP after {why}: every copy within 300 m is swept (the Lua paces it, 4 per tick)");
+            return;
+        }
         try { await Task.Delay(3_000); } catch { return; }
         int n = 0;
         foreach (var (name, a) in _w141HostRows)

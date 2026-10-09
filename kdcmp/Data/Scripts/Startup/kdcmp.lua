@@ -1068,6 +1068,7 @@ end
 -- the UIAction path ever fails.
 function KCD2MP_ShowNativeToast(text)
     mp_log_text("native", text)   -- WO-98 Phase 6
+    if KCD2MP_W164NoteToast then pcall(KCD2MP_W164NoteToast, text) end   -- WO-164 M
     if KCD2MP.w154menu and KCD2MP.w154menu.clean then return end   -- WO-154: the clean screen shows no toast (still logged)
     local ok = pcall(function()
         UIAction.CallFunction("hud", -1, "ShowInfoText", tostring(text), 10, 5000, true)
@@ -5545,6 +5546,7 @@ function KCD2MP_Wo114DrawUI()
     pcall(KCD2MP_W137Backstop)   -- WO-137: talking copies and the host's holds back if the agent went silent
     pcall(KCD2MP_W139Backstop)   -- WO-139: a stop, the legal horses and the skip-time data back if the agent went silent
     pcall(KCD2MP_W140Backstop)   -- WO-140: nothing stays held if the agent went silent
+    pcall(KCD2MP_W164Frame)      -- WO-164: the after-skip sweep queue, the focus pre-warm, the talk retry (4 Hz inside)
     local w = KCD2MP.w114
     -- A line queued while a menu held the timers (the map after a refused fast
     -- travel): shown now, for the usual 5 s, instead of expiring unseen.
@@ -7266,7 +7268,13 @@ function KCD2MP_W137InstallTalk()
             local wrap = function(self, user, slot)
                 local bok, blocked = pcall(KCD2MP_W151HostTalkBlocked, self, user)   -- WO-151 3.6
                 if bok and blocked then return end
+                local dok, deb = pcall(KCD2MP_W164TalkDebounce, self, user, via)   -- WO-164 T2: one attempt at a time
+                if dok and deb then return end
                 pcall(KCD2MP_W137BeforeTalk, self, user, via)
+                pcall(function()   -- WO-164 T3: the press, kept for one retry through the same action
+                    local nm = self and self.GetName and self:GetName()
+                    if nm and KCD2MP.npcPuppets[nm] and user and player and user.id == player.id then KCD2MP_W164NotePress(nm, orig, self, user, slot) end
+                end)
                 pcall(KCD2MP_W160HostTalk, self, user, via)   -- WO-160 3: the host's talk: the joiner's copy stands
                 return orig(self, user, slot)
             end
@@ -7298,6 +7306,8 @@ function KCD2MP_W137TalkResume(name, via)
     local wasPaused = KCD2MP._npcPaused[name] ~= nil
     t = { since = os.clock(), via = tostring(via), resumed = wasPaused }
     w.talking[name] = t
+    if KCD2MP_W164PreClear then pcall(KCD2MP_W164PreClear, name) end   -- WO-164 T5: its own greeting / bark requests go first
+    KCD2MP_EmitEvent("w164_talk", "ask " .. name .. " " .. tostring(via) .. " " .. (wasPaused and "1" or "0"))   -- WO-164 T0
     if KCD2MP_W157TalkFree then KCD2MP_W157TalkFree(name) end   -- WO-157 3b.4: the copy free to talk (and to trade)
     if wasPaused then mp_wo102_resume(name, "w137-talk") end
     w.stats.talks = w.stats.talks + 1
@@ -7387,6 +7397,7 @@ function KCD2MP_W137TalkAttempt(id, souls)
                 if not t.started then
                     t.started, t.id = true, id or t.id
                     w.stats.started = w.stats.started + 1
+                    KCD2MP_EmitEvent("w164_talk", "start " .. name .. " " .. tostring(id))   -- WO-164 T0
                     mp_log(string.format("WO137-TALK start npc=%s id=%s after_s=%.1f via=%s -- the conversation runs on this copy; the host holds its NPC once this player is in it",
                         name, tostring(id), os.clock() - t.since, tostring(t.via)))
                 end
@@ -7440,6 +7451,8 @@ function KCD2MP_W137TalkEnd(name, why)
     end
     w.talking[name] = nil
     w.stats.ended = w.stats.ended + 1
+    if KCD2MP.w164 then KCD2MP.w164.lastEnd[name] = os.clock() end   -- WO-164 T2
+    KCD2MP_EmitEvent("w164_talk", string.format("end %s %s %.1f", name, tostring(why), os.clock() - t.since))   -- WO-164 T0
     local p = KCD2MP.npcPuppets[name]
     local how
     if p then
@@ -7459,7 +7472,8 @@ function KCD2MP_W137TalkEnd(name, why)
     if t.freed then KCD2MP_EmitEvent("w157_talkfree", "off " .. name) end   -- WO-157 3b.4: the host's activity again
     if why == "never-started" then
         w.stats.neverStarted = (w.stats.neverStarted or 0) + 1
-        KCD2MP_ShowNativeToast("This person can't talk to you right now.")
+        -- WO-164 T3: after the one retry the player is told to try again (never a third automatic try)
+        KCD2MP_ShowNativeToast(t.w164Retried and "Try again in a moment." or "This person can't talk to you right now.")
     end
 end
 
@@ -9761,11 +9775,15 @@ function KCD2MP_NpcPuppetTick(arg, gen)
             -- the game's combat mode, which draws its weapon; the stream's "sheathed" lags the host's own draw.
             -- The field: 56 holsterings of tbuk_man_1 in one fight, each undone by the combat mode.
             local inFight = KCD2MP.w151 and KCD2MP.w151.copyFight and KCD2MP.w151.fight[name]
-            if e.human and not inFight and (now - (p.drawnCheckAt or 0)) >= 1.5 then
+            -- WO-164 D1: at most one re-assert per 2 s, none while the host's NPC flees, 20 s of rest after 3 in 10 s (the field: 118
+            -- re-asserts and 260 weapon-collision re-creations on two fleeing bandits before the joiner's game died)
+            local fleeHold = KCD2MP_W164ReassertBlocked and KCD2MP_W164ReassertBlocked(name, now)
+            if e.human and not inFight and not fleeHold and (now - (p.drawnCheckAt or 0)) >= 2.0 then
                 p.drawnCheckAt = now
                 local actual = nil
                 pcall(function() actual = e.human:IsWeaponDrawn() == true end)
                 if actual ~= nil and actual ~= (p.drawn or false) then
+                    if KCD2MP_W164ReassertNote then KCD2MP_W164ReassertNote(name, now) end
                     if p.drawn then mp_npc_draw(name, e)
                     else pcall(function() e.human:HolsterWeapon() end) end
                     mp_log("NPC-SYNC " .. name .. " re-asserted "
@@ -20629,6 +20647,434 @@ function KCD2MP_W160OwnHorseTick()
     KCD2MP_EmitEvent("w160_ownhorse", name)
 end
 
+-- ===== WO-164: the joiner's talk, the flee tug-of-war, sitting and unstuck, random events, the mark snapshot =====
+-- docs/WO-164-findings.md. The agent's half is GameBridge.Wo164.cs; the native half wo141.cpp (op 9 sweep), wo137.cpp (op 9 the
+-- direct write of an int / bool quest State) and respawn_actions.cpp (the map marker gate).
+--   T1 the sweep: a copy's stance and unstance released the game's own way (wh_ai_NPCStateResetElement), then the DLL makes its loaded
+--      state what the body is and does not ask the host's refused activity of it again for a while. Triggers: after a skip (every copy
+--      within 300 m, 4 per tick), adaptive (the agent: 5 planner refusals in 10 s), focus (this player within 4 m and facing it).
+--   T2 one attempt at a time: a talk to a copy whose last talk ended under 3 s ago is not asked again (E mashing).
+--   T3 a request open 4 s without its dialogue: cancelled (the player soul's RestrictDialog on/off: "deletes all unfinished requests"),
+--      the copy swept, the same talk asked once more through the game's own action; never more than once.
+--   T5 a copy freed for this player's talk first drops its own unfinished dialogue requests (its soul's RestrictDialog on/off).
+--   D1 a fleeing copy's weapon state is not fought over: at most one re-assert per 2 s, none while the host's NPC flees, 20 s of rest
+--      after 3 re-asserts in 10 s.
+--   S3 mp_unstuck step 1 also resets this player's stance and unstance; pressed again within 10 s, step 2 puts him beside his partner.
+--   R1 a joiner's own random events off while it is in a session (wh_pl_RandomEventsAutoSpawnEnabled 0), back when it ends.
+--   M  MP-MARK-SNAP mark=<id> lua ... : this machine's state at a "Something's wrong here".
+--   mp_talk_sweep on|off   mp_talk_guard on|off   mp_flee_limit on|off   mp_joiner_events on|off   mp_w164_status   mp_w164_sweep <npc>
+KCD2MP.w164 = KCD2MP.w164 or {
+    sweep = true, talkGuard = true, fleeLimit = true,
+    joinerEvents = true,         -- R1 (see docs/WO-164-findings.md for the default's evidence)
+    sweptAt = {}, queue = {}, flee = {}, reassert = {}, lastEnd = {}, presses = {}, toasts = {},
+    focusAt = 0, frameAt = 0, frameGapMax = 0, ft = {}, reOff = nil, reOld = nil,
+    lastUnstuckAt = -1e9,
+    stats = { sweeps = 0, skipped = 0, focus = 0, adaptive = 0, skip = 0, retry = 0, debounced = 0, preclears = 0, preclearErr = 0,
+              retries = 0, cancelErr = 0, reissueErr = 0, fleeBackoffs = 0, fleeSkips = 0, unstuck1 = 0, unstuck2 = 0, reSwitched = 0 },
+}
+local W164_SWEEP_COOLDOWN_S = 20.0
+local W164_HOLD = { adaptive = 120, focus = 20, skip = 0, retry = 30, console = 20 }
+local W164_FOCUS_M = 4.0
+local W164_SKIP_RADIUS_M = 300.0
+local W164_PER_TICK = 4
+local W164_DEBOUNCE_S = 3.0
+local W164_RETRY_S = 4.0
+local W164_RE_CVAR = "wh_pl_RandomEventsAutoSpawnEnabled"
+
+local function w164_exec(cmd)   -- the console, when this build has it (a test stub may not)
+    if type(System.ExecuteCommand) ~= "function" then return false end
+    return pcall(System.ExecuteCommand, cmd)
+end
+
+local function w164_joiner()
+    local w = KCD2MP.w137
+    return w ~= nil and w.joiner == true and w.active == true
+end
+
+local function w164_ppos()
+    local pp = nil
+    pcall(function() pp = player and player:GetWorldPos() end)
+    return pp
+end
+
+local function w164_dist2(a, b) return (a.x - b.x) ^ 2 + (a.y - b.y) ^ 2 end
+
+-- T1: the sweep of one copy. trigger = skip | adaptive | focus | retry | console. True when it went out.
+function KCD2MP_W164Sweep(name, trigger)
+    local w = KCD2MP.w164
+    name, trigger = tostring(name or ""), tostring(trigger or "console")
+    if not w.sweep or not string.find(name, "^[%w_]+$") then return false end
+    if not KCD2MP.npcPuppets[name] then w.stats.skipped = w.stats.skipped + 1; return false end   -- the host's copies only
+    local now = os.clock()
+    if trigger ~= "retry" and (now - (w.sweptAt[name] or -1e9)) < W164_SWEEP_COOLDOWN_S then return false end
+    local released
+    if trigger == "retry" then
+        -- the copy is in this player's talk (W160Release would skip it): the two resets the game has, directly
+        local ok1 = w164_exec("wh_ai_NPCStateResetElement " .. name .. " Unstance")
+        local ok2 = w164_exec("wh_ai_NPCStateResetElement " .. name .. " Stance")
+        released = ok1 and ok2
+    else
+        released = KCD2MP_W160Release and KCD2MP_W160Release(name, "w164-" .. trigger) or false
+    end
+    w.sweptAt[name] = now
+    w.stats.sweeps = w.stats.sweeps + 1
+    w.stats[trigger] = (w.stats[trigger] or 0) + 1
+    local hold = W164_HOLD[trigger] or 20
+    KCD2MP_EmitEvent("w164_sweep", name .. " " .. trigger .. " " .. tostring(hold))
+    mp_log(string.format("WO164-SWEEP-LUA npc=%s trigger=%s released=%s hold_s=%d", name, trigger, tostring(released == true), hold))
+    return true
+end
+
+-- T1 (a): after a skip, every copy within 300 m, nearest first; the frame function sends 4 per tick.
+function KCD2MP_W164AfterSkip(why)
+    local w = KCD2MP.w164
+    if not w.sweep then mp_log("WO164-SWEEP after-skip: mp_talk_sweep is off -- nothing swept"); return 0 end
+    local pp = w164_ppos()
+    local list = {}
+    for name, p in pairs(KCD2MP.npcPuppets) do
+        if not (p.dead or p.ko) then
+            local e, pos = nil, nil
+            pcall(function() e = System.GetEntityByName(name) end)
+            if e then pcall(function() pos = e:GetWorldPos() end) end
+            if pos and (not pp or w164_dist2(pos, pp) <= W164_SKIP_RADIUS_M * W164_SKIP_RADIUS_M) then
+                list[#list + 1] = { name = name, d = pp and w164_dist2(pos, pp) or 0 }
+            end
+        end
+    end
+    table.sort(list, function(a, b) return a.d < b.d end)
+    w.queue = {}
+    for i, x in ipairs(list) do w.queue[i] = x.name; w.sweptAt[x.name] = nil end
+    mp_log(string.format("WO164-SWEEP after-skip (%s): %d cop%s within %.0f m queued, %d per tick", tostring(why or "?"), #w.queue,
+        #w.queue == 1 and "y" or "ies", W164_SKIP_RADIUS_M, W164_PER_TICK))
+    return #w.queue
+end
+
+-- T2: true = this key press is not passed on (a talk to the same copy ended under 3 s ago).
+function KCD2MP_W164TalkDebounce(npc, user, via)
+    local w = KCD2MP.w164
+    if not w.talkGuard or not (KCD2MP_W137TalkWanted and KCD2MP_W137TalkWanted()) then return false end
+    if not (npc and user and player and user.id == player.id) then return false end
+    local name = nil
+    pcall(function() name = npc:GetName() end)
+    if not name or not KCD2MP.npcPuppets[name] then return false end
+    local now = os.clock()
+    local t = KCD2MP.w137.talking[name]
+    if not t and (now - (w.lastEnd[name] or -1e9)) < W164_DEBOUNCE_S then
+        w.stats.debounced = w.stats.debounced + 1
+        if (now - (w.debounceToldAt or -1e9)) > 5.0 then
+            w.debounceToldAt = now
+            KCD2MP_ShowNativeToast("Wait a moment...")
+        end
+        return true
+    end
+    return false
+end
+
+-- T3: the press that asked for the talk, kept so the same game action can ask once more.
+function KCD2MP_W164NotePress(name, orig, npc, user, slot)
+    KCD2MP.w164.presses[name] = { orig = orig, npc = npc, user = user, slot = slot, at = os.clock() }
+end
+
+-- T5: a copy freed for this player's talk drops its own unfinished dialogue requests first (a greeting would answer instead).
+function KCD2MP_W164PreClear(name)
+    local w = KCD2MP.w164
+    if not w.talkGuard then return "off" end
+    local e = nil
+    pcall(function() e = System.GetEntityByName(name) end)
+    if not e or not e.soul or not e.soul.RestrictDialog then return "no-soul" end
+    local ok1 = pcall(function() e.soul:RestrictDialog(true) end)
+    local ok2 = pcall(function() e.soul:RestrictDialog(false) end)
+    if ok1 and ok2 then w.stats.preclears = w.stats.preclears + 1 else w.stats.preclearErr = w.stats.preclearErr + 1 end
+    local res = (ok1 and ok2) and "deleted" or "err"
+    mp_log(string.format("WO164-TALK preclear npc=%s soul_requests=%s", tostring(name), res))
+    return res
+end
+
+-- T3: one retry of a request that did not start within 4 s.
+function KCD2MP_W164Retry(name, t)
+    local w = KCD2MP.w164
+    t.w164Retried = true
+    w.stats.retries = w.stats.retries + 1
+    local oldId = t.id
+    t.id = nil                       -- the engine's "Canceling dialog request id <old>" must not end this talk
+    t.since = os.clock()             -- the talk's own 25 s start window begins again
+    local cancel = "err"
+    pcall(function()
+        local s = player and player.soul
+        if s and s.RestrictDialog then
+            s:RestrictDialog(true); s:RestrictDialog(false)
+            cancel = "ok"
+            if s.IsDialogRestricted and s:IsDialogRestricted() == true then s:RestrictDialog(false); cancel = "restricted-again" end
+        end
+    end)
+    if cancel == "err" then w.stats.cancelErr = w.stats.cancelErr + 1 end
+    KCD2MP_W164Sweep(name, "retry")
+    local press = w.presses[name]
+    local reissue = "none"
+    if press and press.orig then
+        reissue = "asked"
+        Script.SetTimer(300, function()
+            local ok = pcall(press.orig, press.npc, press.user, press.slot)
+            if not ok then w.stats.reissueErr = w.stats.reissueErr + 1 end
+            mp_log(string.format("WO164-TALK retry npc=%s reissue=%s", name, ok and "ok" or "err"))
+        end)
+    end
+    mp_log(string.format("WO164-TALK retry npc=%s old_id=%s cancel=%s reissue=%s -- the request did not start in %.0f s", name, tostring(oldId), cancel, reissue, W164_RETRY_S))
+    KCD2MP_EmitEvent("w164_talk", "retry " .. name .. " cancel=" .. cancel .. " reissue=" .. reissue)
+end
+
+-- D1: the host's NPC flees (the agent, from its activity row): no weapon re-assert on its copy meanwhile.
+function KCD2MP_W164Flee(name, on)
+    KCD2MP.w164.flee[tostring(name)] = on == true or nil
+    mp_log(string.format("WO164-FLEE npc=%s host_flee=%s", tostring(name), tostring(on == true)))
+end
+
+-- D1: true = the Lua's weapon re-assert waits (a flee, a backoff, or under 2 s since the last).
+function KCD2MP_W164ReassertBlocked(name, now)
+    local w = KCD2MP.w164
+    if not w.fleeLimit then return false end
+    if w.flee[name] then w.stats.fleeSkips = w.stats.fleeSkips + 1; return true end
+    local r = w.reassert[name]
+    if r and r.backoffUntil and now < r.backoffUntil then return true end
+    if r and r.last and (now - r.last) < 2.0 then return true end
+    return false
+end
+
+function KCD2MP_W164ReassertNote(name, now)
+    local w = KCD2MP.w164
+    local r = w.reassert[name] or { times = {} }
+    w.reassert[name] = r
+    r.last = now
+    r.times[#r.times + 1] = now
+    while #r.times > 0 and (now - r.times[1]) > 10.0 do table.remove(r.times, 1) end
+    if w.fleeLimit and #r.times >= 3 then
+        r.backoffUntil = now + 20.0
+        r.times = {}
+        w.stats.fleeBackoffs = w.stats.fleeBackoffs + 1
+        mp_log(string.format("WO164-FLEE npc=%s backoff 20 s -- its own brain overrode the weapon state 3 times in 10 s; its state stands", name))
+    end
+end
+
+-- R1: the joiner's own random events off in a session, back after it.
+function KCD2MP_W164EventsTick()
+    local w = KCD2MP.w164
+    local want = w.joinerEvents and w164_joiner()
+    if want and not w.reOff then
+        local old = nil
+        pcall(function() old = System.GetCVarValue and System.GetCVarValue(W164_RE_CVAR) end)
+        local ok = w164_exec(W164_RE_CVAR .. " 0")
+        w.reOff, w.reOld = true, (old ~= nil and tostring(old) ~= "" and tostring(old)) or "1"
+        w.stats.reSwitched = w.stats.reSwitched + 1
+        mp_log(string.format("WO164-EVENTS joiner: this game's own random events OFF for the session (%s 0, was %s, %s) -- the host's event actors are the only ones",
+            W164_RE_CVAR, tostring(w.reOld), ok and "ok" or "err"))
+    elseif not want and w.reOff then
+        local ok = w164_exec(W164_RE_CVAR .. " " .. tostring(w.reOld or "1"))
+        w.reOff = nil
+        mp_log(string.format("WO164-EVENTS this game's own random events back (%s %s, %s)", W164_RE_CVAR, tostring(w.reOld or "1"), ok and "ok" or "err"))
+    end
+end
+
+-- The draw loop, 4 Hz: the after-skip queue, the focus pre-warm, the retry, the frame gaps.
+function KCD2MP_W164Frame()
+    local w = KCD2MP.w164
+    local now = os.clock()
+    local gap = now - (w.frameAt or now)
+    if gap > (w.frameGapMax or 0) then w.frameGapMax = gap end
+    local ft = nil
+    pcall(function() ft = System.GetFrameTime and System.GetFrameTime() end)
+    if type(ft) == "number" and ft > 0 then
+        w.ft[#w.ft + 1] = { at = now, ft = ft }
+        while #w.ft > 0 and (now - w.ft[1].at) > 5.0 do table.remove(w.ft, 1) end
+    end
+    if gap < 0.25 then return end
+    w.frameAt = now
+    pcall(KCD2MP_W164EventsTick)
+    if not w164_joiner() then w.queue = {}; return end
+    -- the after-skip queue (a hitch -- a frame gap of 0.6..5 s -- makes this tick wait; a longer gap is a menu or a load: go on)
+    if #w.queue > 0 and (gap < 0.6 or gap > 5.0) then
+        for _ = 1, W164_PER_TICK do
+            if #w.queue == 0 then break end
+            local name = table.remove(w.queue, 1)
+            KCD2MP_W164Sweep(name, "skip")
+        end
+        if #w.queue == 0 then mp_log("WO164-SWEEP after-skip: the queue is done") end
+    end
+    -- T2: the copy this player faces within 4 m is swept before the key press
+    if w.sweep and (now - (w.focusAt or 0)) >= 0.5 then
+        w.focusAt = now
+        local pp = w164_ppos()
+        local dir = nil
+        pcall(function() if player and player.GetDirectionVector then dir = player:GetDirectionVector() end end)
+        if pp then
+            local best, bestD = nil, W164_FOCUS_M * W164_FOCUS_M
+            for name, p in pairs(KCD2MP.npcPuppets) do
+                if not (p.dead or p.ko) and not KCD2MP.w137.talking[name] then
+                    local e, pos = nil, nil
+                    pcall(function() e = System.GetEntityByName(name) end)
+                    if e then pcall(function() pos = e:GetWorldPos() end) end
+                    if pos then
+                        local d = w164_dist2(pos, pp)
+                        local facing = true
+                        if dir and d > 0.01 then facing = ((pos.x - pp.x) * dir.x + (pos.y - pp.y) * dir.y) / math.sqrt(d) > 0.5 end
+                        if d < bestD and facing then best, bestD = name, d end
+                    end
+                end
+            end
+            if best and (now - (w.sweptAt[best] or -1e9)) >= W164_SWEEP_COOLDOWN_S then KCD2MP_W164Sweep(best, "focus") end
+        end
+    end
+    -- T3: a request open 4 s without its dialogue
+    if w.talkGuard then
+        for name, t in pairs(KCD2MP.w137.talking) do
+            if t.id and not t.started and not t.sawDialog and not t.w164Retried and (now - t.since) > W164_RETRY_S then
+                KCD2MP_W164Retry(name, t)
+            end
+        end
+    end
+end
+
+-- S3: the unstuck ladder. Step 1 (also every first press): this player's stance and unstance reset; step 2: beside the partner.
+function KCD2MP_W164Unstuck()
+    local w = KCD2MP.w164
+    local now = os.clock()
+    local step = (now - (w.lastUnstuckAt or -1e9)) <= 10.0 and 2 or 1
+    w.lastUnstuckAt = now
+    local nm = nil
+    pcall(function() if player and player.GetName then nm = player:GetName() end end)
+    local stood = "no"
+    if nm and string.find(tostring(nm), "^[%w_]+$") then
+        local ok1 = w164_exec("wh_ai_NPCStateResetElement " .. tostring(nm) .. " Unstance")
+        local ok2 = w164_exec("wh_ai_NPCStateResetElement " .. tostring(nm) .. " Stance")
+        stood = (ok1 and ok2) and "asked" or "err"
+    end
+    if step == 2 then
+        w.stats.unstuck2 = w.stats.unstuck2 + 1
+        w.lastUnstuckAt = -1e9   -- a third press starts again at step 1
+        KCD2MP_EmitEvent("w164_unstuck2", "")
+    else
+        w.stats.unstuck1 = w.stats.unstuck1 + 1
+    end
+    mp_log(string.format("WO164-UNSTUCK step=%d stood=%s moved=%s", step, stood, step == 2 and "asked" or "no"))
+    return step
+end
+
+-- RL / C1: a line on the game's own HUD.
+function KCD2MP_W164Notice(text)
+    mp_log("WO164-NOTICE " .. tostring(text))
+    KCD2MP_ShowNativeToast(tostring(text))
+end
+
+-- M: the last toasts, for the snapshot.
+function KCD2MP_W164NoteToast(text)
+    local w = KCD2MP.w164
+    w.toasts[#w.toasts + 1] = string.format("%.1f %s", os.clock(), tostring(text):gsub("[\r\n]", " "):sub(1, 80))
+    while #w.toasts > 10 do table.remove(w.toasts, 1) end
+end
+
+local W164_RE_PATTERNS = { "dummyWanderer", "karavany", "Caravan", "pocestny", "prepadeni", "rvacka", "taboryUCesty", "SpawnedAnimal" }
+
+-- M: this machine's block. Lines are game facts only (no names of people, no paths).
+function KCD2MP_W164MarkSnap(id, origin)
+    local w = KCD2MP.w164
+    id = tostring(id or "?"):gsub("[^%w]", "")
+    local n = 0
+    local function line(s)
+        if n >= 40 then return end
+        n = n + 1
+        System.LogAlways(string.format("[KCD2-MP] MP-MARK-SNAP mark=%s lua %s t=%.3f", id, s, os.clock()))
+    end
+    local w137 = KCD2MP.w137 or {}
+    local gt = 0
+    pcall(function() gt = Calendar.GetWorldTime() end)
+    line(string.format("origin=%s role=%s session_active=%s game_time=%.0f", tostring(origin), w137.host and "host" or (w137.joiner and "joiner" or "none"), tostring(w137.active == true), gt))
+    local pp = w164_ppos()
+    if pp then line(string.format("pos %.1f %.1f %.1f", pp.x, pp.y, pp.z)) end
+    local inDialog, combat = false, false
+    pcall(function() if player.human and player.human.IsInDialog then inDialog = player.human:IsInDialog() == true end end)
+    pcall(function() local s = player.soul; if not s then return end; combat = (s.IsInCombatDanger ~= nil and s:IsInCombatDanger() == true) or (s.IsInCombatMode ~= nil and s:IsInCombatMode() == true) end)
+    line(string.format("self in_dialog=%s in_combat=%s unstuck_last_s=%.0f", tostring(inDialog), tostring(combat), os.clock() - (w.lastUnstuckAt or -1e9)))
+    local w114 = KCD2MP.w114 or {}
+    local w123 = KCD2MP.w123 or {}
+    line(string.format("leash countdown=%s join_input_hold=%s", tostring(w114.cdN or 0), tostring(w123.holdOn == true)))
+    for name, t in pairs(w137.talking or {}) do
+        line(string.format("talk npc=%s age_s=%.1f id=%s started=%s retried=%s via=%s", name, os.clock() - (t.since or 0), tostring(t.id), tostring(t.started == true), tostring(t.w164Retried == true), tostring(t.via)))
+    end
+    if pp then
+        local near = {}
+        for name, p in pairs(KCD2MP.npcPuppets) do
+            local e, pos = nil, nil
+            pcall(function() e = System.GetEntityByName(name) end)
+            if e then pcall(function() pos = e:GetWorldPos() end) end
+            if pos then
+                local d = math.sqrt(w164_dist2(pos, pp))
+                if d <= 25 then near[#near + 1] = { name = name, d = d, p = p } end
+            end
+        end
+        table.sort(near, function(a, b) return a.d < b.d end)
+        for i = 1, math.min(5, #near) do
+            local x = near[i]
+            line(string.format("copy npc=%s d=%.1f paused=%s dead=%s flee=%s swept_s=%.0f", x.name, x.d, tostring(KCD2MP._npcPaused[x.name] ~= nil),
+                tostring(x.p.dead == true), tostring(w.flee[x.name] == true), os.clock() - (w.sweptAt[x.name] or -1e9)))
+        end
+        for i = 0, 7 do
+            local e, pos = nil, nil
+            pcall(function() e = System.GetEntityByName("kcd2mp_" .. i) end)
+            if e then pcall(function() pos = e:GetWorldPos() end) end
+            if pos then line(string.format("avatar kcd2mp_%d d=%.1f pos %.1f %.1f %.1f", i, math.sqrt(w164_dist2(pos, pp)), pos.x, pos.y, pos.z)) end
+        end
+        local ents = nil
+        pcall(function() ents = System.GetEntitiesInSphere(pp, 40) end)
+        local nre = 0
+        for _, e in ipairs(ents or {}) do
+            local nm = nil
+            pcall(function() if e.GetName then nm = e:GetName() end end)
+            if nm and nre < 8 then
+                for _, pat in ipairs(W164_RE_PATTERNS) do
+                    if string.find(nm, pat, 1, true) then
+                        nre = nre + 1
+                        line(string.format("event_actor %s owner=%s", nm, KCD2MP.npcPuppets[nm] and "host-copy" or "this-game"))
+                        break
+                    end
+                end
+            end
+        end
+    end
+    for _, s in ipairs(w.toasts) do line("toast " .. s) end
+    local sum, cnt = 0, 0
+    for _, x in ipairs(w.ft) do sum = sum + x.ft; cnt = cnt + 1 end
+    line(string.format("fps_5s=%s frame_gap_max_s=%.2f joiner_events_off=%s", cnt > 0 and string.format("%.1f", cnt / sum) or "?", w.frameGapMax or 0, tostring(w.reOff == true)))
+    local st = w.stats
+    line(string.format("stats sweeps=%d focus=%d adaptive=%d skip=%d retry=%d debounced=%d preclears=%d retries=%d flee_backoffs=%d flee_skips=%d unstuck1=%d unstuck2=%d",
+        st.sweeps, st.focus or 0, st.adaptive or 0, st.skip or 0, st.retry or 0, st.debounced, st.preclears, st.retries, st.fleeBackoffs, st.fleeSkips, st.unstuck1, st.unstuck2))
+    System.LogAlways(string.format("[KCD2-MP] MP-MARK-SNAP mark=%s lua end lines=%d t=%.3f", id, n, os.clock()))
+    w.frameGapMax = 0
+    return n
+end
+
+local function w164_toggle(field, label, arg, what)
+    local v = KCD2MP_Wo122ParseBool(arg)
+    if v == "bad" then mp_log(label .. ": expected on|off"); return false end
+    if v ~= nil then KCD2MP.w164[field] = v end
+    mp_log(string.format("WO164-TOGGLE %s %s -- %s", label, KCD2MP.w164[field] and "on" or "off", what))
+    return true
+end
+function KCD2MP_W164SetSweep(arg) return w164_toggle("sweep", "mp_talk_sweep", arg, "a joiner's copies are swept after a skip, on a planner storm and when faced (released, loaded state := body)") end
+function KCD2MP_W164SetTalkGuard(arg) return w164_toggle("talkGuard", "mp_talk_guard", arg, "one talk attempt at a time, one retry of a stuck request, a copy's own requests dropped first") end
+function KCD2MP_W164SetFleeLimit(arg) return w164_toggle("fleeLimit", "mp_flee_limit", arg, "no weapon tug-of-war on a fleeing copy") end
+function KCD2MP_W164SetJoinerEvents(arg) return w164_toggle("joinerEvents", "mp_joiner_events", arg, "on = a joiner's own random events are off during a session (the host's are the only ones)") end
+function KCD2MP_W164SweepCmd(arg)   -- %line arrives already quoted (WO-106/109)
+    local nm = tostring(arg or ""):match("([%w_]+)")
+    if not nm then mp_log("mp_w164_sweep: expected an NPC name"); return false end
+    return KCD2MP_W164Sweep(nm, "console")
+end
+function KCD2MP_W164Status()
+    local w = KCD2MP.w164
+    local st = w.stats
+    mp_log(string.format("WO164-STATUS sweep=%s talk_guard=%s flee_limit=%s joiner_events=%s re_off=%s queue=%d sweeps=%d skipped=%d debounced=%d preclears=%d preclear_err=%d retries=%d cancel_err=%d reissue_err=%d flee_backoffs=%d flee_skips=%d unstuck1=%d unstuck2=%d re_switched=%d",
+        tostring(w.sweep), tostring(w.talkGuard), tostring(w.fleeLimit), tostring(w.joinerEvents), tostring(w.reOff == true), #w.queue, st.sweeps, st.skipped,
+        st.debounced, st.preclears, st.preclearErr, st.retries, st.cancelErr, st.reissueErr, st.fleeBackoffs, st.fleeSkips, st.unstuck1, st.unstuck2, st.reSwitched))
+end
+
 -- HOST: a joiner's own horse (QuestAsk OwnHorse): marked as his in this world.
 function KCD2MP_W160PeerHorse(peer, name)
     local w = KCD2MP.w160
@@ -22045,6 +22491,10 @@ do
     function KCD2MP_W151Unstuck(arg)
         local hard = tostring(arg or ""):find("hard", 1, true) ~= nil
         local did = {}
+        if KCD2MP_W164Unstuck then   -- WO-164 S3: a seat / bed / work station let go too; a second press within 10 s: beside the partner
+            local ok, step = pcall(KCD2MP_W164Unstuck)
+            if ok then did[#did + 1] = "seat-reset"; if step == 2 then did[#did + 1] = "beside-partner" end end
+        end
         if pcall(UIAction.CallFunction, "SkipTime", 0, "Cancel") then did[#did + 1] = "picker-back" end
         local w123 = KCD2MP.w123
         if w123 and w123.holdOn and KCD2MP_JoinHold then pcall(KCD2MP_JoinHold, false); did[#did + 1] = "join-input-hold" end
@@ -23691,6 +24141,12 @@ local ok, err = pcall(function()
     System.AddCCommand("mp_talk_free", 'KCD2MP_W157SetTalkFree(%line)', "WO-157: (joiner) talking to a host copy resets its stance and activity first (the game's reset knows no other element), so it takes the conversation and a trade (default on): mp_talk_free on|off")
     System.AddCCommand("mp_horse_fetch", 'KCD2MP_W160SetHorseFetch(%line)', "WO-160: a joiner's own horse (bought, bonded) is told to the host and comes to his avatar when he whistles (default on): mp_horse_fetch on|off")
     System.AddCCommand("mp_conv_hold", 'KCD2MP_W160SetConvHold(%line)', "WO-160: an NPC in a conversation stands still on the other machine -- the host's freezes for the joiner's talk, a joiner's copy is held for the host's (default on): mp_conv_hold on|off")
+    System.AddCCommand("mp_talk_sweep", 'KCD2MP_W164SetSweep(%line)', "WO-164: (joiner) a host copy is swept -- released the game's own way, its loaded state made what its body is, the host's refused activity not asked again for a while -- after a skip, on a planner storm and when you face it within 4 m (default on): mp_talk_sweep on|off")
+    System.AddCCommand("mp_talk_guard", 'KCD2MP_W164SetTalkGuard(%line)', "WO-164: (joiner) one talk attempt per copy at a time, one retry of a request that does not start in 4 s, a copy's own greeting requests dropped before your talk (default on): mp_talk_guard on|off")
+    System.AddCCommand("mp_flee_limit", 'KCD2MP_W164SetFleeLimit(%line)', "WO-164: (joiner) no weapon tug-of-war on a fleeing host copy: one re-assert per 2 s, none while it flees, 20 s of rest after 3 in 10 s (default on): mp_flee_limit on|off")
+    System.AddCCommand("mp_joiner_events", 'KCD2MP_W164SetJoinerEvents(%line)', "WO-164: (joiner) on = this game's own random events (caravans, riders, ambushes) are off during a session so the host's are the only ones; back when the session ends: mp_joiner_events on|off")
+    System.AddCCommand("mp_w164_status", "KCD2MP_W164Status()", "WO-164: the sweep, the talk guard, the flee limiter, the random-event switch (WO164-STATUS here; MP-WO164-STATS in agent.log)")
+    System.AddCCommand("mp_w164_sweep", 'KCD2MP_W164SweepCmd(%line)', "WO-164: sweep one host copy now (a test): mp_w164_sweep <npc>")
     System.AddCCommand("mp_ctx_release", 'KCD2MP_W160SetRelease(%line)', "WO-160: (joiner) a copy's stance and unstance are released the game's own way before its next placement, so the game's planner only places it (default on): mp_ctx_release on|off")
     System.AddCCommand("mp_sleep_rest", 'KCD2MP_W157SetSleepRest(%line)', "WO-157: a real sleep (a vote's, or your own) that the game gave no rest gets the rest its own sleep gives -- in this game build its no-bed sleep often gives none (default on): mp_sleep_rest on|off")
     System.AddCCommand("mp_w157_status", "KCD2MP_W157Status()", "WO-157: the trespass check and the stop grace (WO157-STATUS here); also the area here: private, public, open (a shop) or unknown")

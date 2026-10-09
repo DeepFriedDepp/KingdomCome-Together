@@ -185,7 +185,7 @@ public static class Wo137Rules
     public static string AppliedName(byte r) => r switch
     {
         0 => "changed", 1 => "unchanged", 2 => "no-node", 3 => "not-a-state", 4 => "no-port", 5 => "port-refused",
-        6 => "asleep", 7 => "fault", 8 => "unarmed", 9 => "not-a-quest", _ => $"code-{r}",
+        6 => "asleep", 7 => "fault", 8 => "unarmed", 9 => "not-a-quest", 10 => "type-refused", _ => $"code-{r}",
     };
 
     /// <summary>An apply result worth another try later (the module is hibernating here, or the DLL did not answer).</summary>

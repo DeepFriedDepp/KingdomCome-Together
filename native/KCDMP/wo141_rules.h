@@ -178,8 +178,24 @@ inline double next_delay(int misses) {
 // refused). A body it has refused kMissesBeforeGiveUp times with one activity is not asked again for kGiveUpRetryS; a host row
 // with another activity starts the count again (set_desired). Only the planner's own refusals count here (not an object that is
 // not streamed yet, not a body that is not there).
-constexpr int    kMissesBeforeGiveUp = 8;
+// WO-164 0.1: the field's planner "storm" was this retry pace itself (gaps of 1.5 s, 15 s and 60 s between one copy's refusals,
+// 2,614 refusals in the 0.47.0 joiner's 75 minutes): eight asks of a refused activity printed eight refusals and gave nothing.
+// Three asks now (the first, and two after the game's own release), then the body is shown by the writer alone.
+constexpr int    kMissesBeforeGiveUp = 3;
 constexpr double kGiveUpRetryS = 300.0;
+// WO-164 S1: an avatar (a player's figure) the planner refuses a seat / bed this many times stands beside it instead (the
+// field: three "-> ok (exec 0)" tries with "now stance=none" -- logged ok while the body never sat); kept for kSitFallbackS
+// while the same activity is asked again.
+constexpr int    kSitRefusalsBeforeStand = 3;
+constexpr double kSitFallbackS = 120.0;
+inline bool sit_fallback_due(bool avatar, int refusals, int stance) {
+    return avatar && refusals >= kSitRefusalsBeforeStand && (stance == kSitting || stance == kLying);
+}
+// WO-164 S1: an apply the game ran (exec 0 = refused) whose body is not in the wanted stance afterwards is FAILED, not ok.
+inline const char* apply_word(bool ranOk, unsigned execResult, bool bodyInStep) {
+    if (!ranOk) return "not-run";
+    return (execResult == 0 && !bodyInStep) ? "FAILED" : "ok";
+}
 inline bool gave_up(int refusals, double sinceGaveUpS) {
     return refusals >= kMissesBeforeGiveUp && sinceGaveUpS < kGiveUpRetryS;
 }

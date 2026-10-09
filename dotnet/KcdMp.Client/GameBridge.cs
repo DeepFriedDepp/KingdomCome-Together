@@ -5937,6 +5937,14 @@ public partial class GameBridge(ClientConfig config)
                 return;
             case "mp_mark":          // WO-140: the checklist's markers (mark_<word>)
                 Console.WriteLine($"MP-MARK {(arg ?? "").Trim()} -- the tester's marker (typed on this machine)");
+                // WO-164 M: "Something's wrong here" (mark_odd) -- a state snapshot here and on the partner's machine, joined by mark=
+                if ((arg ?? "").Trim().StartsWith("odd", StringComparison.Ordinal)) _ = W164MarkAsync(Wo164Rules.NewMarkId(_w164Rnd), "local");
+                return;
+            case "w164_talk":        // WO-164: the talk line (T0), the sweep (T1), unstuck step 2 (S3), the agent half's switch
+            case "w164_sweep":
+            case "w164_unstuck2":
+            case "w164_cfg":
+                Wo164OnEvent(name, arg);
                 return;
             case "w141":             // WO-141: mp_activities on|off / kinds <n> / status
                 Wo141OnModLine(arg);

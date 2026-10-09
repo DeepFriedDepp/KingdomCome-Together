@@ -314,6 +314,7 @@ public partial class GameBridge
         _rewinding = true;
         _rejoinPending = false;
         const string msg = "Your host is reloading... what you do now won't be kept.";
+        _ = W164NoticeAsync(Wo164Rules.ReloadStartText);   // WO-164 RL: the game's own HUD line, queued if a menu holds the timers
         Console.WriteLine($"MP-HENRY joiner: the host started a load -- this game's progress from here on is NOT kept; it rewinds with the host");
         SetJoinUi("rewinding", "Your host is reloading...");
         _ = ExecLuaAsync($"if KCD2MP_Wo124Msg then KCD2MP_Wo124Msg(\"{EscapeLua(msg)}\") end");
@@ -705,6 +706,7 @@ public partial class GameBridge
     /// <summary>After Ready: the join save pairs with the Henry just loaded (a matched pair: the joiner has not played in it yet).</summary>
     private void Wo125AfterReady(string tag, string mode, WhsSave.HenryParts parts, byte[]? offerMd5, uint seq)
     {
+        if (_rejoinPending || _rewinding) _ = W164NoticeAsync(Wo164Rules.ReloadBackText);   // WO-164 RL: the rejoin after the host's reload
         _joinedTag = tag;
         _rewinding = false;
         _rejoinPending = false;

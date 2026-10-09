@@ -181,6 +181,7 @@ public partial class GameBridge
             case "w136_torch":
                 _w136TorchLocal = arg.Trim() == "1";
                 Console.WriteLine($"MP-W136 local torch {(_w136TorchLocal ? "OUT (lit)" : "away")} -- rides the state block (bit 0x20) to the partner");
+                _ = W164TorchOutTickAsync(true);   // WO-164 TR: and the reliable side-channel (the host's torch never reached a joiner by the block)
                 return;
             case "w136_check":
                 _ = Task.Run(() => Wo136CheckAsync(arg));
@@ -355,6 +356,7 @@ public partial class GameBridge
         _w136PeerTorchState[ghost] = st;
         if (Wo136Rules.TorchEdge(before, st) is not bool on) return;
         Interlocked.Increment(ref _w136TorchEdges);
+        W164NoteTorchShown(ghost, on);   // WO-164 TR: the side-channel does not apply this edge twice
         Console.WriteLine($"MP-W136 peer {ghost} torch {(on ? "OUT" : "away")} -> its avatar {(on ? "holds and lights the game's torch" : "puts it away")}");
         _ = ExecLuaAsync($"if KCD2MP_W136AvatarTorch then KCD2MP_W136AvatarTorch(\"{ghost}\", {B(on)}) end");
     }

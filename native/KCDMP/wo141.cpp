@@ -704,6 +704,9 @@ struct Desired {
     double wakeCheckAt = -1e9;   // WO-160 (wake): when the body's outfit was last read
     bool wakeWanted = false;     // ... and what it said: still the night's undress while the host's body is awake
     void* wakeElem = nullptr;    // ... for this equipment element (the game's text of a state leaks ~100 B a call: read once per element)
+    int sitRefusals = 0;         // WO-164 S1: an avatar's seat / bed refused by the planner (exec 0, body not in step)
+    R::Activity refusedSit;      // ... the seat it fell back from (stands beside it while the same seat is asked again)
+    double refusedSitAt = -1e9;
 };
 std::unordered_set<std::string> g_seatedHandsNoted;   // bodies told once: seated, their hands stay as they are
 std::unordered_set<uint64_t> g_bedSitNoted;          // WO-144 5: beds told once (a player's bed-edge sit shown lying)
@@ -718,6 +721,7 @@ bool hands_ride(const Desired& d) { return g_handsArmed && R::hands_ride(d.hands
 std::unordered_map<std::string, Desired> g_desired;
 
 std::atomic<uint64_t> c_rowsSent{0}, c_applies{0}, c_applyOk{0}, c_applyFail{0}, c_leaves{0}, c_reads{0}, c_shows{0};
+std::atomic<uint64_t> c_sweeps{0}, c_sweepMissing{0}, c_sitFailed{0}, c_sitFallback{0};   // WO-164
 
 // op 8: a one-shot of the player's, shown as an NPC unstance (with_shown)
 R::Activity g_shown;
@@ -873,6 +877,26 @@ void reconcile_tick(double now) {
         if (r == kApOk && useHands && g_handApplied) g_handApplied(d.eid);
         (r == kApOk ? c_applyOk : c_applyFail).fetch_add(1);
         if (r == kApOk && res != 0) d.wakeCheckAt = -1e9;   // WO-160 (wake): read the outfit again at once
+        // WO-164 S1: an avatar's seat the planner refused: FAILED (not ok); after kSitRefusalsBeforeStand the figure stands beside
+        // the seat (idle) instead of a frozen pose without one -- kept while the same seat is asked again
+        if (r == kApOk && res == 0 && R::is_avatar_name(d.name.c_str()) && R::object_stance(d.a.stance)) {
+            R::Activity after0; read_activity(d.eid, &after0);
+            if (!R::same_body(after0, d.a)) {
+                c_sitFailed.fetch_add(1, std::memory_order_relaxed);
+                if (R::sit_fallback_due(true, ++d.sitRefusals, d.a.stance)) {
+                    char sn[96] = "";
+                    void* so = d.a.stanceObj ? engine::entity_by_guid(d.a.stanceObj) : nullptr;
+                    if (so && engine::entity_name(so)) rdstr(engine::entity_name(so), sn, sizeof sn);
+                    logf("WO164-SIT body=%s apply=failed obj=%s tries=%d fallback=stand thread=%lu -- the planner will not seat this figure; it stands beside the seat until its player's seat changes",
+                         d.name.c_str(), sn[0] ? sn : "?", d.sitRefusals, static_cast<unsigned long>(GetCurrentThreadId()));
+                    c_sitFallback.fetch_add(1, std::memory_order_relaxed);
+                    d.refusedSit = d.a; d.refusedSitAt = now;
+                    d.a = R::normalised(R::Activity{});
+                    d.pace = {}; d.refusals = 0; d.sitRefusals = 0; d.gaveUpAt = -1e9;
+                    ++it; continue;
+                }
+            }
+        }
         if (r == kApOk && res == 0) {
             neutralise_loaded(d.eid, d.name.c_str());   // WO-160: no unreachable demand stays behind on the body
             if (++d.refusals == R::kMissesBeforeGiveUp) {
@@ -890,7 +914,9 @@ void reconcile_tick(double now) {
             KH::Hands afterHands; if (useHands) read_hands(d.eid, &afterHands);
             char more[64] = "";
             if (suppressed) _snprintf_s(more, sizeof more, _TRUNCATE, " (%d more tries since the last line)", suppressed);
-            logf("WO141-APPLY %s -> %s (exec %u, try %d%s): wanted %s%s%s; now %s%s", d.name.c_str(), applied_name(r), res, d.pace.misses, more,
+            // WO-164 S1: exec 0 with the body out of step is FAILED, not ok
+            const char* word = r == kApOk ? R::apply_word(true, res, R::same_body(after, d.a)) : applied_name(r);
+            logf("WO141-APPLY %s -> %s (exec %u, try %d%s): wanted %s%s%s; now %s%s", d.name.c_str(), word, res, d.pace.misses, more,
                  describe(d.a).c_str(), useHands ? hands_text(d.hands).c_str() : "",
                  missing.empty() ? "" : " (a tool it does not own was asked for)", describe(after).c_str(),
                  useHands ? hands_text(afterHands).c_str() : "");
@@ -1090,21 +1116,25 @@ void research_watch() {
 }
 
 std::string status_text() {
-    char b[480];
+    char b[640];
     _snprintf_s(b, sizeof b, _TRUNCATE,
-                "read %s apply %s | capture npcs=%d player=%d period=%ums | apply %s desired=%zu | rows %llu reads %llu applies %llu (ok %llu fail %llu) leaves %llu shows %llu equip_kept %llu woke_dressed %llu neutral %llu",
+                "read %s apply %s | capture npcs=%d player=%d period=%ums | apply %s desired=%zu | rows %llu reads %llu applies %llu (ok %llu fail %llu) leaves %llu shows %llu equip_kept %llu woke_dressed %llu neutral %llu sweeps %llu sweep_missing %llu sit_failed %llu sit_fallback %llu",
                 g_readArmed ? "armed" : "NOT ARMED", g_applyArmed ? "armed" : "NOT ARMED", g_captureNpcs.load() ? 1 : 0,
                 g_capturePlayer.load() ? 1 : 0, g_periodMs.load(), g_applyOn.load() ? "on" : "off", g_desired.size(),
                 static_cast<unsigned long long>(c_rowsSent.load()), static_cast<unsigned long long>(c_reads.load()),
                 static_cast<unsigned long long>(c_applies.load()), static_cast<unsigned long long>(c_applyOk.load()),
                 static_cast<unsigned long long>(c_applyFail.load()), static_cast<unsigned long long>(c_leaves.load()),
                 static_cast<unsigned long long>(c_shows.load()), static_cast<unsigned long long>(c_equipKept.load()),
-                static_cast<unsigned long long>(c_wakeDressed.load()), static_cast<unsigned long long>(c_neutral.load()));
+                static_cast<unsigned long long>(c_wakeDressed.load()), static_cast<unsigned long long>(c_neutral.load()),
+                static_cast<unsigned long long>(c_sweeps.load()), static_cast<unsigned long long>(c_sweepMissing.load()),
+                static_cast<unsigned long long>(c_sitFailed.load()), static_cast<unsigned long long>(c_sitFallback.load()));
     return b;
 }
 
 void set_desired(const std::string& name, const R::Activity& a) {
     Desired& d = g_desired[lower(name.c_str())];
+    // WO-164 S1: the seat this figure fell back from, asked again: it keeps standing beside it for a while
+    if (d.refusedSitAt > -1e8 && R::same(d.refusedSit, a) && now_s() - d.refusedSitAt < R::kSitFallbackS) { d.name = name; return; }
     const bool changed = d.name.empty() || !R::same(d.a, a);
     d.name = name;
     if (changed) { d.a = R::normalised(a); d.pace = {}; d.matched = false; d.handsDropped = false; d.handsTries = 0; d.refusals = 0; d.gaveUpAt = -1e9; }
@@ -1364,6 +1394,45 @@ uint8_t handle(const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t
         }
         case kOpResync: {
             g_resync = true;
+            return kROk;
+        }
+        case kOpSweep: {
+            // WO-164 T1: [nameLen][name][holdS:2] -> [found:1][refusals:1] -- the loaded state := what the body is now (the Lua side
+            // released its stance and unstance first, the game's own reset), and the host's refused activity is not asked of this
+            // body again for holdS seconds (0 = the reconcile goes on at its own pace)
+            std::string nm; size_t at = 0;
+            if (!name_at(1, &nm, &at) || nm.empty() || len != at + 2 || cap < 2) return kRBadRequest;
+            const int holdS = body[at] | (body[at + 1] << 8);
+            out[0] = 0; out[1] = 0; *outLen = 2;
+            void* e = entity_by_name(nm.c_str());
+            if (!e) { c_sweepMissing.fetch_add(1, std::memory_order_relaxed); return kRNotFound; }
+            neutralise_loaded(engine::entity_id(e), nm.c_str());
+            c_sweeps.fetch_add(1, std::memory_order_relaxed);
+            out[0] = 1;
+            auto it = g_desired.find(lower(nm.c_str()));
+            const bool had = it != g_desired.end();
+            if (had) {
+                Desired& d = it->second;
+                out[1] = static_cast<uint8_t>(d.refusals > 255 ? 255 : (d.refusals < 0 ? 0 : d.refusals));
+                if (holdS > 0 && !R::is_avatar_name(d.name.c_str())) {
+                    d.refusals = R::kMissesBeforeGiveUp;
+                    d.gaveUpAt = now_s() - (R::kGiveUpRetryS - holdS);
+                    if (d.held && d.eid) { npcdrive::set_activity_hold(d.eid, false); d.held = false; }
+                }
+            }
+            logf("WO164-SWEEP-NATIVE npc=%s loaded=neutral hold_s=%d desired=%s thread=%lu", nm.c_str(), holdS, had ? "yes" : "no",
+                 static_cast<unsigned long>(GetCurrentThreadId()));
+            return kROk;
+        }
+        case kOpUnstanceName: {
+            // WO-164 D1: [id:2] -> [name] (the agent's flee check: FleeLookingAround and the like)
+            if (len != 3 || cap < 2) return kRBadRequest;
+            char nb[80];
+            const char* n = unstance_name(static_cast<uint16_t>(body[1] | (body[2] << 8)), nb, sizeof nb);
+            const size_t k = n ? std::strlen(n) : 0;
+            if (!k || n[0] == '?') return kRNotFound;
+            const size_t m = k < cap ? k : cap;
+            std::memcpy(out, n, m); *outLen = m;
             return kROk;
         }
         case kOpShow: {

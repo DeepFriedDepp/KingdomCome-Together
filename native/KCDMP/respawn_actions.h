@@ -92,6 +92,8 @@ int graves_list(GraveInfo* out, int max);
 // A save was loaded: re-find this player's graves by name, re-add their map
 // markers (the game does not save entity marks), forget NO_SAVE mirrors.
 void on_world_changed();
+// WO-164 C1: "markers=on|off|unarmed mark_faults=.. mark_queued=.. mark_added=.. mark_half_removed=.." (the WO-151 status line carries it)
+int marker_status(char* out, int n);
 
 // Every sample, session or not: a NO_SAVE sentinel entity is purged by any
 // load or level change (observed for a NO_SAVE mirror). When it is gone,

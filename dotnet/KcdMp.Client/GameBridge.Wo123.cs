@@ -289,6 +289,9 @@ public partial class GameBridge
             case Protocol.HitVerdictDown:   // WO-161
                 await Wo161OnVerdictInAsync(src, joinId, body, ct);
                 return;
+            case Protocol.W164Down:         // WO-164: the mark ping, the torch side-channel
+                await Wo164OnFrameAsync(src, body);
+                return;
             case Protocol.WorldOfferDown:
                 await OnWorldOfferInAsync(src, joinId, body, ct);
                 return;

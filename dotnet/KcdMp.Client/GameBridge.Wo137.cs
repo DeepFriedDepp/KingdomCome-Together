@@ -361,6 +361,7 @@ public partial class GameBridge
                 case Protocol.QuestHostConverse when Wo137Rules.TryParseTalkText(m.Text, out bool con, out string cnpc):
                     // WO-160 3: the host's player talks to cnpc: its copy here stands where it is until that ends
                     if (!W137Joiner) return;
+                    W164NoteHostConverse(cnpc, con);   // WO-164 T0: host_busy on the talk line
                     Interlocked.Increment(ref _w160ConvIn);
                     Console.WriteLine($"MP-WO160 joiner: the host {(con ? "talks to" : "finished talking to")} {cnpc} -- its copy {(con ? "STANDS (held in place)" : "is free again")}");
                     _ = ExecLuaAsync($"if KCD2MP_W160Conversation then KCD2MP_W160Conversation({B(con)}, \"{cnpc}\") end");
@@ -553,6 +554,7 @@ public partial class GameBridge
         for (int i = 0; i < entries.Count; i++)
         {
             var e = entries[i]; var l = local[i];
+            if (l.Found && l.Ok && l.Val == e.Val) W164NoteMatch(e.Path);   // WO-164 T6: a mismatch that is over
             if (!l.Found || !l.Ok || l.Val == e.Val) continue;
             if (_w154Contest.IsContested(e.Path)) { Interlocked.Increment(ref _w154ContestSkippedCp); continue; }   // WO-154 1: each world's own
             mism++;
@@ -563,8 +565,8 @@ public partial class GameBridge
             // WO-144 4.1: a port that did not land on the host's value last time is not fired again (the
             // field re-ran SetAroundBoulder's consequences every 30 s: 0 -> 3 while the host had 15)
             if (port is not null && Wo144CorrectionSkipped(e.Path, port, e.Val)) continue;
-            Console.WriteLine(FormattableString.Invariant($"MP-W137 MISMATCH {e.Path}: this copy {l.Val}, the host {e.Val}{(port is null ? " -- no port to correct it (the next join loads it exactly)" : $" -- corrected toward the host ({port})")}"));
-            if (port is null) continue;
+            Console.WriteLine(FormattableString.Invariant($"MP-W137 MISMATCH {e.Path}: this copy {l.Val}, the host {e.Val}{(port is null ? " -- no port to correct it (WO-164: written directly once it stands 10 s, an int or bool State only)" : $" -- corrected toward the host ({port})")}"));
+            if (port is null) { W164NoteMismatch(e.Path, e.Val, l.Val); continue; }
             _w137Queue.EnqueueFront(new QuestChange(0, QuestChange.FNotify, l.Val, e.Val, port, "", e.Path, 0));
             fixedN++;
             Interlocked.Increment(ref _w137Corrected);

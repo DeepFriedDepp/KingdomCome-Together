@@ -1,0 +1,66 @@
+// Copyright (C) 2026 the Kingdom Come: Together contributors (AUTHORS). SPDX-License-Identifier: GPL-3.0-only
+// GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
+// content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
+namespace KcdMp.Wire;
+
+// ---------------------------------------------------------------------------
+// WO-164 -- the mark snapshot and the torch side-channel (docs/WO-164-findings.md).
+//
+// One message rides the WO-123 join channel (same header, same routing, a row in Protocol.JoinWire; "Either": a joiner's
+// goes to the host (target 0xFF), the host's to one joiner by id -- the relay needs no code of its own):
+//
+//   type up/down  name   up body (after [target:1][joinId:4])
+//   0x74 / 0x75   W164   [kind:1][tok:4][text:1..W164TextMax]     (the LootMsg shape)
+//
+// Kinds (APPEND-ONLY):
+//   1 MarkPing  "<markId>"       a tester pressed "Something's wrong here" (mark_odd) on the sender: the receiver writes its
+//                                own MP-MARK-SNAP block under the same mark id (the two blocks join by mark=, not by clock)
+//   2 Torch     "<ghost> 1|0"    the sender's torch is out (1) or away (0): sent on every edge and every 10 s while out.
+//                                The state block's bit 0x20 (WO-136) still rides; this is the reliable copy (the 0.47.0
+//                                session: the host's torch never reached the joiner through the block, the joiner's did)
+//
+// An older peer never sees these (a mixed release is refused at the relay, WO-110 R9); a receiver that meets an unknown
+// kind ignores it (counted). No protocol bump.
+// ---------------------------------------------------------------------------
+
+public static partial class Protocol
+{
+    public const byte W164Up = 0x74, W164Down = 0x75;   // WO-164
+
+    public const int W164TextMax = 48;
+
+    // ---- kinds (APPEND-ONLY) ----
+    public const byte W164MarkPing = 1, W164Torch = 2;
+
+    /// <summary>While the torch is out, the side-channel repeats it this often (a lost edge recovers).</summary>
+    public const int W164TorchRepeatMs = 10_000;
+
+    public static string W164KindName(byte k) => k switch
+    {
+        W164MarkPing => "mark-ping", W164Torch => "torch", _ => $"unknown-{k}",
+    };
+}
+
+/// <summary>WO-164: the text rules of the W164 message (pure; Wo164Tests pins them).</summary>
+public static class W164Text
+{
+    /// <summary>A mark id: 6..16 characters of [a-z0-9] (no name, no path, no clock text).</summary>
+    public static bool IsMarkId(string? s)
+    {
+        if (s is null || s.Length < 6 || s.Length > 16) return false;
+        foreach (char c in s) if (!(c is >= 'a' and <= 'z' || c is >= '0' and <= '9')) return false;
+        return true;
+    }
+
+    /// <summary>"&lt;ghost&gt; 1|0" -> the ghost id and the torch state.</summary>
+    public static bool TryParseTorch(string? text, out byte ghost, out bool on)
+    {
+        ghost = 0; on = false;
+        var f = (text ?? "").Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (f.Length != 2 || !byte.TryParse(f[0], out ghost) || f[1] is not ("1" or "0")) return false;
+        on = f[1] == "1";
+        return true;
+    }
+
+    public static string Torch(byte ghost, bool on) => $"{ghost} {(on ? 1 : 0)}";
+}

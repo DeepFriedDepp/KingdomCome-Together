@@ -370,6 +370,9 @@ public sealed class LogTailGameTransport : IGameTransport
         "Canceling dialog request id ",
         "[Warning] [MinigameActivityComponent]:",
         "Faders are faded out",
+        // WO-164: the talk line's dialogue name, kind and preemption; the random events (the mark snapshot)
+        "Running dialogue '",
+        "<RandomEvent>",
     ];
 
     public static readonly string[] Wo144Contains =
@@ -381,6 +384,9 @@ public sealed class LogTailGameTransport : IGameTransport
         // WO-160: the game's planner failing a placement this mod asked for (counted per NPC, GameBridge.Wo160)
         "[NPCContext]:Couldn't find actions to get NPC into game loaded state",
         "counldn't reach the loaded state in",
+        // WO-164: a dialogue's commands (the talk line's count: a haggle that played nothing) and the minigame entities (dice)
+        "] DialogCommand-",
+        "of minigame entity",
     ];
 
     /// <summary>

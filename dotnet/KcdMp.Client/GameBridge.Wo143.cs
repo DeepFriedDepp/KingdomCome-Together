@@ -247,6 +247,8 @@ public partial class GameBridge
     {
         // WO-151 1.1: a copy in a fight holds no tool (its weapon is the fight's); the row waits for the fight's end
         if (W151InFight(r.Name)) { Interlocked.Increment(ref _w151HandsHeld); return; }
+        // WO-164 D1: a fleeing copy is given no tool (its weapon in hand on every placement was half of the field's tug-of-war)
+        if (_w164FleeSince.ContainsKey(r.Name)) { Interlocked.Increment(ref _w151HandsHeld); return; }
         await _combat.Wo143HandsAsync(r.Name, r.Left, r.Right);
         // a temporary tool the copy no longer wants goes (once it is out of the hand: the mod checks)
         if (_w143Temps.TryGetValue(r.Name, out var set))

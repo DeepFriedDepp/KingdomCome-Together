@@ -962,6 +962,29 @@ public sealed class CombatPipe : IAsyncDisposable
         return r is { Payload.Length: >= 1 } x ? x.Ok && x.Payload[0] == 1 : null;
     }
 
+    /// <summary>
+    /// WO-164 T1, op 9: the body's loaded state := what it is now, and the host's refused activity is not asked of it again for
+    /// <paramref name="holdS"/> seconds (0 = the usual pace). (found, refusals before), or null when the DLL did not answer.
+    /// </summary>
+    public async Task<(bool Found, int Refusals)?> Wo141SweepAsync(string name, int holdS, CancellationToken ct = default)
+    {
+        var nb = Wo141Codec.Name(name);
+        var a = new byte[nb.Length + 2];
+        nb.CopyTo(a, 0);
+        ushort h = (ushort)Math.Clamp(holdS, 0, 3600);
+        a[nb.Length] = (byte)(h & 0xFF); a[nb.Length + 1] = (byte)(h >> 8);
+        var r = await Wo141Async(9, a, ct);
+        if (r is not { } x) return null;
+        return x.Payload.Length >= 2 ? (x.Payload[0] == 1, x.Payload[1]) : (false, 0);
+    }
+
+    /// <summary>WO-164 D1, op 10: the game's name of an unstance id (null = unknown or no answer).</summary>
+    public async Task<string?> Wo141UnstanceNameAsync(ushort id, CancellationToken ct = default)
+    {
+        var r = await Wo141Async(10, [(byte)(id & 0xFF), (byte)(id >> 8)], ct);
+        return r is { Ok: true } x && x.Payload.Length > 0 ? Encoding.ASCII.GetString(x.Payload) : null;
+    }
+
     // ---- WO-143 (native wo143.h) ---------------------------------------------
 
     /// <summary>One WO-143 op: (ok, reason, payload after the 4-byte head), or null when the DLL did not answer.</summary>
@@ -1354,6 +1377,28 @@ public sealed class CombatPipe : IAsyncDisposable
         a[6 + pb.Length] = (byte)qb.Length;
         qb.CopyTo(a, 7 + pb.Length);
         var r = await Wo137Async(2, a, ct);
+        if (r is not { Ok: true } v || v.Payload.Length < 11) return null;
+        var b = v.Payload;
+        int tl = b[10];
+        string type = b.Length >= 11 + tl ? Encoding.ASCII.GetString(b, 11, tl) : "";
+        return new QuestApplied(b[0], b[1] != 0, BinaryPrimitives.ReadInt32LittleEndian(b.AsSpan(2)), b[6] != 0,
+                                BinaryPrimitives.ReadInt32LittleEndian(b.AsSpan(7)), type);
+    }
+
+    /// <summary>
+    /// WO-164 T6, op 9: the direct write of an int / bool quest State on this machine (a value no port is known to produce).
+    /// The reply has op 2's shape; result 10 = the type is not one the write may set.
+    /// </summary>
+    public async Task<QuestApplied?> Wo137SetValueAsync(uint tag, string path, int value, CancellationToken ct = default)
+    {
+        byte[] pb = Encoding.ASCII.GetBytes(path);
+        if (pb.Length == 0 || pb.Length > 400) return null;
+        var a = new byte[4 + 2 + pb.Length + 4];
+        BinaryPrimitives.WriteUInt32LittleEndian(a, tag);
+        BinaryPrimitives.WriteUInt16LittleEndian(a.AsSpan(4), (ushort)pb.Length);
+        pb.CopyTo(a, 6);
+        BinaryPrimitives.WriteInt32LittleEndian(a.AsSpan(6 + pb.Length), value);
+        var r = await Wo137Async(9, a, ct);
         if (r is not { Ok: true } v || v.Payload.Length < 11) return null;
         var b = v.Payload;
         int tl = b[10];

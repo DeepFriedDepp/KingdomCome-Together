@@ -140,6 +140,7 @@ public partial class GameBridge
     /// <summary>The engine lines LogTailGameTransport.Wo144Line routes here.</summary>
     private void Wo144OnEngineLine(string line)
     {
+        Wo164OnEngineLine(line);              // WO-164: refusal times (the adaptive sweep), dialogues and their commands (the talk line)
         if (W160OnEngineLine(line)) return;   // WO-160: a planner failure, counted per NPC
         if (Wo144Rules.ParseCantEquip(line) is { } ce) { _w144EquipReasons[ce.Item] = (ce.Reason, DateTime.UtcNow); return; }
         Wo144OnEngineLineMore(line);

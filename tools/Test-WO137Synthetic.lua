@@ -288,6 +288,7 @@ do -- (c) talking (joiner)
     check("c: ...logged", logCount("WO137-TALK end npc=tzel_olbram id=241 why=dialog-ended") == 1, lastLog("WO137-TALK end"))
 
     -- never started (the engine dropped the request)
+    NOW = NOW + 3.5   -- WO-164 T2: a press under 3 s after a talk to the same copy ended is not passed on
     local markNs = #LOG
     BasicAIActions.OnTalk(e, player, 0)
     NOW = NOW + 10; KCD2MP_W137Session(false, true, true)
@@ -351,6 +352,7 @@ do -- (c) talking (joiner)
     if KCD2MP.w151 then KCD2MP.w151.sceneGuard = sceneGuardWas end
 
     -- the host's stream stops mid-conversation: never parked until it ends
+    NOW = NOW + 3.5   -- WO-164 T2: past the one-attempt-at-a-time window after the last talk with this copy
     BasicAIActions.OnTalk(e, player, 0)
     KCD2MP_W131Tick(true, true)
     local deferred = KCD2MP_W131ParkReleased("tzel_olbram", "silence")

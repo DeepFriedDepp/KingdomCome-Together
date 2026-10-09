@@ -147,6 +147,7 @@ public partial class GameBridge
             if (mgWas != mgNow) _ = ExecLuaAsync($"if KCD2MP_W137Minigame then KCD2MP_W137Minigame({(mgNow ? "true" : "false")}) end");   // WO-144 3.2
             var mine = new List<ActivityRow> { new(_myGhostId, "", r.A) };
             Console.WriteLine($"MP-W141 this player: {r.A}");
+            await W164OnLocalActivityAsync(r.A);   // WO-164 S4 / WA: seats, beds, work stations, minigames entered and left
             if (host) foreach (byte j in Wo134Peers()) await Wo141SendAsync(Protocol.ActivityHostUp, j, Protocol.ActivityKindPlayer, mine);
             else await Wo141SendAsync(Protocol.ActivityPeerUp, Protocol.JoinTargetHost, Protocol.ActivityKindPlayer, mine);
         }
@@ -186,6 +187,7 @@ public partial class GameBridge
                 else if (r.Peer != _myGhostId)
                 {
                     _w141PeerRows[r.Peer] = r.A;
+                    W164OnPeerRow(r.Peer, r.A);   // WO-164 S2: a seat the stream left
                     await Wo141ApplyAsync(Wo141Rules.AvatarName(r.Peer), Wo141Rules.ForAvatar(r.A), $"player {r.Peer}");
                     await Wo141AvatarLabelAsync(r.Peer, Wo141Rules.ForAvatar(r.A));
                     await Wo143OnPlayerRowAsync(r.Peer, r.A);   // WO-143: the player's minigame on the avatar
@@ -198,6 +200,7 @@ public partial class GameBridge
             if (!W141Host || kind != Protocol.ActivityKindPlayer || rows.Count != 1) return;
             var a = rows[0].A;
             _w141PeerRows[src] = a;
+            W164OnPeerRow(src, a);   // WO-164 S2: a seat the stream left
             Console.WriteLine($"MP-W141 player {src}: {a}");
             await Wo141ApplyAsync(Wo141Rules.AvatarName(src), Wo141Rules.ForAvatar(a), $"player {src}");
             await Wo141AvatarLabelAsync(src, Wo141Rules.ForAvatar(a));
@@ -282,6 +285,7 @@ public partial class GameBridge
         await _combat.Wo141ResyncAsync();   // the DLL sends every NPC activity again on its next tick
         foreach (byte j in fresh)
         {
+            await W164ClearAvatarSeatAsync(j, "rejoin");   // WO-164 S2: a (re)joining player's figure starts neutral
             var rows = new List<ActivityRow>();
             if (!_w141Mine.IsNone) rows.Add(new ActivityRow(_myGhostId, "", _w141Mine));
             foreach (var (peer, a) in _w141PeerRows) if (peer != j && !a.IsNone) rows.Add(new ActivityRow(peer, "", a));

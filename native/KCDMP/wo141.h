@@ -37,6 +37,9 @@
 //        the local player's captured activity is that unstance at that object for
 //        tenths/10 s (a one-shot of his the NPC state never holds: the trough's
 //        WashFace shown as housekeeper_faceWash); 0 tenths ends it
+//   op 9 Sweep  [nameLen:1][name][holdS:2]       -> [found:1][refusals:1]   WO-164 T1: loaded := the body now; the
+//        host's refused activity is not asked again for holdS (0 = the usual pace)
+//   op 10 UnstanceName [id:2]                    -> [name]                  WO-164 D1
 // 0xA7 Activity (unsolicited): [count:1]{[kind:1][nameLen:1][name][activity:30]}
 //        kind 1 a tracked NPC, 2 the local player (name empty)
 // The activity is wo141rules::Activity on the wire (objects as entity GUIDs).
@@ -54,6 +57,8 @@ constexpr uint8_t kOpRead   = 5;
 constexpr uint8_t kOpForget = 6;
 constexpr uint8_t kOpResync = 7;
 constexpr uint8_t kOpShow   = 8;
+constexpr uint8_t kOpSweep  = 9;          // WO-164 T1: [nameLen][name][holdS:2] -> [found:1][refusals:1]
+constexpr uint8_t kOpUnstanceName = 10;   // WO-164 D1: [id:2] -> [name]
 
 constexpr uint8_t kROk         = 0;
 constexpr uint8_t kRBadRequest = 1;

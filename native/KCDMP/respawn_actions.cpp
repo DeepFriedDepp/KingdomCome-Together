@@ -11,6 +11,7 @@
 #include "log.h"
 
 #include <windows.h>
+#include <atomic>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -490,8 +491,38 @@ void sp_release(SharedPtr& sp) {
     sp = SharedPtr{};
 }
 
+// WO-164 C1: a marker is added only when the map is ready, else it waits (the 100 ms guard retries it); a fault in the add
+// turns markers off for the session, loudly (the field's z2 crash: an add swallowed during a join's load, the game dead 70 s later).
+std::atomic<bool> g_markOff{false};
+std::atomic<uint32_t> c_markFaults{0}, c_markQueued{0}, c_markAdded{0}, c_markHalfRemoved{0};
+uint64_t g_worldLookedMs = 0;           // GetTickCount64 of the last world look (the grave rescan); 0 = none yet this world
+constexpr uint64_t kMarkSettleMs = 5000;
+int map_mark_count();
+
+// Ready = the world was looked at (rescan) kMarkSettleMs ago, the map object is there and its mark vector already holds one of
+// the game's own marks (a loaded world always has quest / POI marks; 0 = the map's content is not built yet).
+bool mark_ready(const char** why) {
+    if (g_markOff.load()) { *why = "markers off this session"; return false; }
+    if (!g_worldLookedMs) { *why = "the world was not looked at yet"; return false; }
+    if (GetTickCount64() - g_worldLookedMs < kMarkSettleMs) { *why = "the world is settling"; return false; }
+    if (!ui_map()) { *why = "no map object"; return false; }
+    if (map_mark_count() < 1) { *why = "the map holds none of the game's own marks yet"; return false; }
+    *why = "ready";
+    return true;
+}
+
 bool mark_add(void* ent, SharedPtr* out) {
-    if (!g_markArmed) return false;
+    if (!g_markArmed || g_markOff.load()) return false;
+    const char* why = "";
+    if (!mark_ready(&why)) {
+        static uint64_t toldMs = 0;
+        c_markQueued.fetch_add(1, std::memory_order_relaxed);
+        if (GetTickCount64() - toldMs > 30000) {
+            toldMs = GetTickCount64();
+            logf("WO164-MAPMARK queued (%s) -- added when the map is ready thread=%lu", why, static_cast<unsigned long>(GetCurrentThreadId()));
+        }
+        return false;
+    }
     void* map = ui_map();
     if (!map) { logf("MP-GRAVE marker: the C_UIMap was not found (UI not built yet?)"); return false; }
     uint64_t w = 0;
@@ -508,11 +539,21 @@ bool mark_add(void* ent, SharedPtr* out) {
         return false;
     }
     SharedPtr arg = sp;
-    if (!sp_addref(arg) || !vcall_void(map, kMapAdd, &arg)) {
-        logf("MP-GRAVE marker: C_UIMap add FAULTED");
+    if (!sp_addref(arg)) { sp_release(sp); return false; }
+    if (!vcall_void(map, kMapAdd, &arg)) {
+        // WO-164 C1: never swallowed. The add may have put the mark in the map's vector before it faulted: the map's own remove
+        // (slot 0x60: it never reads the linkable) takes it out again, then markers stay off for the session.
+        g_markOff = true;
+        c_markFaults.fetch_add(1, std::memory_order_relaxed);
+        SharedPtr arg2 = sp;
+        const bool removed = sp_addref(arg2) && vcall_void(map, kMapRemove, &arg2);
+        if (removed) c_markHalfRemoved.fetch_add(1, std::memory_order_relaxed);
+        logf("WO164-MAPMARK FAULT site=C_UIMap::add (map holds %d marks) -- the half-added mark %s; map markers are OFF this session thread=%lu",
+             map_mark_count(), removed ? "was removed again" : "could not be removed", static_cast<unsigned long>(GetCurrentThreadId()));
         sp_release(sp);
         return false;
     }
+    c_markAdded.fetch_add(1, std::memory_order_relaxed);
     *out = sp;
     return true;
 }
@@ -1107,6 +1148,7 @@ namespace {
 // not hold (an unsaved grave, a load of an older save): peers must drop their
 // mirrors of those, or a stone and marker stay where nothing is.
 int world_changed(const char* why, uint64_t* vanished, int max) {
+    g_worldLookedMs = GetTickCount64();   // WO-164 C1: markers wait kMarkSettleMs after this look
     if (!g_graveArmed) return 0;
     logf("MP-GRAVE world changed (%s) -- rescanning graves and re-adding markers (map holds %d marks; ours %zu graves + %zu mirrors)",
          why, map_mark_count(), g_graves.size(), g_mirrors.size());
@@ -1157,6 +1199,22 @@ bool marked_mirror_alive(const Mirror& m) {
 }
 
 void marks_guard() {
+    // WO-164 C1: the queue -- a grave or mirror with no mark gets one once the map is ready (one per entity: coalesced)
+    const char* why = "";
+    if (g_markArmed && !g_markOff.load() && mark_ready(&why)) {
+        for (Grave& g : g_graves) {
+            if (g.mark.ctrl) continue;
+            void* e = grave_entity(g);
+            if (e && mark_add(e, &g.mark)) { g.markEid = g.eid; logf("WO164-MAPMARK added grave 0x%016llX (from the queue)", static_cast<unsigned long long>(g.id)); }
+            if (g_markOff.load()) break;
+        }
+        for (Mirror& m : g_mirrors) {
+            if (m.mark.ctrl || g_markOff.load()) continue;
+            void* e = engine::entity_by_id(m.eid);
+            if (e && marked_mirror_alive(m) && mark_add(e, &m.mark))
+                logf("WO164-MAPMARK added mirror owner=%u 0x%016llX (from the queue)", static_cast<unsigned>(m.owner), static_cast<unsigned long long>(m.id));
+        }
+    }
     for (Grave& g : g_graves) {
         if (!g.mark.ctrl || marked_grave_alive(g)) continue;
         mark_remove(&g.mark);
@@ -1187,6 +1245,12 @@ bool sentinel_alive() {
 } // namespace
 
 void on_world_changed() { world_changed("a load", nullptr, 0); }
+
+int marker_status(char* out, int n) {
+    return _snprintf_s(out, static_cast<size_t>(n), _TRUNCATE, "markers=%s mark_faults=%u mark_queued=%u mark_added=%u mark_half_removed=%u",
+                       !g_markArmed ? "unarmed" : g_markOff.load() ? "off" : "on", c_markFaults.load(), c_markQueued.load(), c_markAdded.load(),
+                       c_markHalfRemoved.load());
+}
 
 namespace {
 // The sentinel half of world_check: true when the world was replaced.

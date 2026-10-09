@@ -101,6 +101,8 @@ public static partial class Protocol
         (CarryUp,       CarryDown,       "carry",        JoinHeaderLen + LootFixedLen + 1, JoinHeaderLen + LootFixedLen + CarryTextMax, JoinFrom.Either),
         // WO-161: the hit verdict (ProtocolWo161.cs) -- the host's verdict of an NPC's hit on one joiner's avatar; the host only
         (HitVerdictUp,  HitVerdictDown,  "hit-verdict",  JoinHeaderLen + HitVerdictFixedLen, JoinHeaderLen + HitVerdictBodyMax, JoinFrom.Host),
+        // WO-164: the mark snapshot ping and the torch side-channel (ProtocolWo164.cs) -- the LootMsg shape, either way
+        (W164Up,        W164Down,        "w164",         JoinHeaderLen + LootFixedLen + 1, JoinHeaderLen + LootFixedLen + W164TextMax, JoinFrom.Either),
     };
 
     /// <summary>The JoinWire row for an up type, or null.</summary>

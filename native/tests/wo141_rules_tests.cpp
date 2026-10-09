@@ -81,9 +81,12 @@ int wo141_rules_tests(int* passed) {
 
     // WO-160: the game's planner refusing one activity eight times ends the asking for 300 s (the field: 5,308 of 8,316 placements were
     // refused, each three error lines and a search); only its own refusals count; a changed row starts the count again (set_desired)
-    ACHECK(kMissesBeforeGiveUp == 8 && !gave_up(0, 1e9) && !gave_up(7, 0), "WO-160: seven refusals: still asked");
-    ACHECK(gave_up(8, 0) && gave_up(30, 299.9), "WO-160: the eighth refusal: not asked again for 300 s");
-    ACHECK(!gave_up(8, kGiveUpRetryS) && !gave_up(8, 1e6), "WO-160: ...and asked again after that");
+    ACHECK(kMissesBeforeGiveUp == 3 && !gave_up(0, 1e9) && !gave_up(2, 0), "WO-164: two refusals: still asked");
+    ACHECK(gave_up(3, 0) && gave_up(30, 299.9), "WO-164: the third refusal: not asked again for 300 s (was the eighth, WO-160)");
+    ACHECK(!gave_up(3, kGiveUpRetryS) && !gave_up(3, 1e6), "WO-160: ...and asked again after that");
+    ACHECK(sit_fallback_due(true, 3, kSitting) && sit_fallback_due(true, 4, kLying), "WO-164 S1: an avatar refused a seat 3 times stands");
+    ACHECK(!sit_fallback_due(true, 2, kSitting) && !sit_fallback_due(false, 9, kSitting) && !sit_fallback_due(true, 9, 0), "WO-164 S1: not before, not an NPC, not a non-seat");
+    ACHECK(std::strcmp(apply_word(true, 0, false), "FAILED") == 0 && std::strcmp(apply_word(true, 0, true), "ok") == 0 && std::strcmp(apply_word(true, 1, false), "ok") == 0 && std::strcmp(apply_word(false, 1, true), "not-run") == 0, "WO-164 S1: exec 0 with the body out of step is FAILED");
     ACHECK(kGiveUpRetryS >= 5 * kBackoffS, "WO-160: the give-up window is long against the 15 s retries it replaces");
     // WO-160 (wake): the game's own text of a state decides whether a body is still in the night's undress
     ACHECK(sleep_outfit_text("Stance Stance: lying Using object: WUID:(SmartObject)D85 smartObjectRightSide[Bed.bed_high_double3_x], cart slot: any; ChangeEquipment Equipment stash inventory: WUID:(DynamicLinkableObject)22A stash[Chest/chest10_x] Equipment preset filter: sleepUnequip Outfitting mode: Unequip InstantPreSearch: included; "),
