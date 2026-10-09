@@ -94,6 +94,9 @@ int graves_list(GraveInfo* out, int max);
 void on_world_changed();
 // WO-164 C1: "markers=on|off|unarmed mark_faults=.. mark_queued=.. mark_added=.. mark_half_removed=.." (the WO-151 status line carries it)
 int marker_status(char* out, int n);
+// WO-164 C2: a map pin at a partner's position (set / move), and its removal (0xFF = every pin). Main thread.
+bool partner_pin(uint8_t owner, float x, float y, float z);
+bool partner_pin_remove(uint8_t owner);
 
 // Every sample, session or not: a NO_SAVE sentinel entity is purged by any
 // load or level change (observed for a NO_SAVE mirror). When it is gone,

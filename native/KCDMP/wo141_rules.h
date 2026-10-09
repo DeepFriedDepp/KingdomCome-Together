@@ -23,6 +23,9 @@ enum : uint8_t { kUndefined = 0, kStanding = 1, kLying = 2, kSitting = 3, kKneel
 constexpr uint16_t kNoUnstance = 0xFFFF;
 constexpr uint8_t  kNoMinigame = 0xFF;
 constexpr uint8_t  kFlagOwnsPos = 0x01;   // the activity holds the body on its object (the writer yields)
+// WO-164 N: the host's body is in the game's night undress (its equipment element is a sleep unequip): a copy whose host body is
+// dressed and that is still undressed is dressed (the herbalist in night clothes on the joiner, 0.47.0)
+constexpr uint8_t  kFlagNightDress = 0x02;
 
 struct Activity {
     uint8_t  stance = 0;             // 0 = not in a synced stance
@@ -66,7 +69,7 @@ inline Activity normalised(Activity a) {
     if (a.stance != kCart) a.cart = 0;
     if (a.unstance == kNoUnstance) a.unstanceObj = 0;
     if (a.minigame == kNoMinigame) a.minigameObj = 0;
-    a.flags = owns_position(a) ? kFlagOwnsPos : 0;
+    a.flags = static_cast<uint8_t>((owns_position(a) ? kFlagOwnsPos : 0) | (a.flags & kFlagNightDress));
     return a;
 }
 

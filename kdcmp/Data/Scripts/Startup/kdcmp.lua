@@ -10070,6 +10070,7 @@ function KCD2MP_NpcPuppetTick(arg, gen)
             -- measure against and is measured by the DLL's MP-NPCPULL instead.
             -- WO-160 3: the host is talking to this NPC: its copy stands where it is (no Lua write, the native writer held)
             if KCD2MP_W160ConvHeld and KCD2MP_W160ConvHeld(name, p, e) then return end
+            if KCD2MP_W164RiderHeld and KCD2MP_W164RiderHeld(name, p, e) then return end   -- WO-164 R2: a rider rides its horse's copy
             KCD2MP_NpcNativeSync(name, p, e, KCD2MP_NpcNativeHealthy() and not isReplica, "tick")
             -- A fresh puppet's first bind is in flight for one agent round trip
             -- (~50-200 ms). Writing it meanwhile drew the WO-77 seed slide at
@@ -20215,7 +20216,7 @@ end
 --   WO157-REST rested: the game gave <n> for <h> h of real sleep -> exhaust <a> -> <b>, health <c> -> <d>
 KCD2MP.w157.sleepRest = KCD2MP.w157.sleepRest ~= false
 KCD2MP.W157_REST_EXHAUST_PER_H, KCD2MP.W157_REST_HEALTH_PER_H = 12.45, 7.0
-function KCD2MP_W157RestLine(edge, id)
+function KCD2MP_W157RestLine(edge, id, hoursAsked)
     local w = KCD2MP.w157
     local h, e, f, t = nil, nil, nil, nil
     pcall(function() h = player.soul:GetState("health") end)
@@ -20227,6 +20228,20 @@ function KCD2MP_W157RestLine(edge, id)
         f or -1, t or -1, id and (" id=" .. tostring(id)) or ""))
     if edge == "start" then
         w.restStart = (h and e and t) and { h = h, e = e, t = t, id = tonumber(id) } or nil
+        -- WO-164 SL: the rest is given at the skip's START when this game's own sleep has given none so far, so its sleep screen
+        -- shows it (the partner who did not start the sleep saw the rest only after a reload); the end does not give it twice
+        local hrs = tonumber(hoursAsked)
+        local s0 = w.restStart
+        if s0 and s0.id == 2 and w.sleepRest ~= false and not w.gameRests and hrs and hrs >= 0.5 and hrs <= 24 and e < 99 then
+            local e2 = math.min(100, e + KCD2MP.W157_REST_EXHAUST_PER_H * hrs)
+            local h2 = math.min(100, h + KCD2MP.W157_REST_HEALTH_PER_H * hrs)
+            pcall(function() player.soul:SetState("exhaust", e2) end)
+            if h2 > h then pcall(function() player.soul:SetState("health", h2) end) end
+            s0.pre = e2 - e
+            w.stats.restPre = (w.stats.restPre or 0) + 1
+            mp_log(string.format("WO164-REST pre-applied at the skip's start: %.1f h -> exhaust %.1f -> %.1f, health %.1f -> %.1f (the sleep screen shows it)",
+                hrs, e, e2, h, h2))
+        end
         return
     end
     local s = w.restStart
@@ -20236,6 +20251,7 @@ function KCD2MP_W157RestLine(edge, id)
     if hours < 0.5 or hours > 24 then return end
     local want = KCD2MP.W157_REST_EXHAUST_PER_H * hours
     local got = e - s.e
+    if (got - (s.pre or 0)) >= 0.25 * want then w.gameRests = true end   -- WO-164 SL: this game's own sleep rests now: no more pre-rest
     if got >= 0.25 * want or e >= 99 then return end   -- the game rested him (or he is rested): its own result stands
     local e2 = math.min(100, s.e + want)
     local h2 = math.max(h, math.min(100, s.h + KCD2MP.W157_REST_HEALTH_PER_H * hours))
@@ -20664,7 +20680,7 @@ end
 --   M  MP-MARK-SNAP mark=<id> lua ... : this machine's state at a "Something's wrong here".
 --   mp_talk_sweep on|off   mp_talk_guard on|off   mp_flee_limit on|off   mp_joiner_events on|off   mp_w164_status   mp_w164_sweep <npc>
 KCD2MP.w164 = KCD2MP.w164 or {
-    sweep = true, talkGuard = true, fleeLimit = true,
+    sweep = true, talkGuard = true, fleeLimit = true, partnerPin = true,
     joinerEvents = true,         -- R1 (see docs/WO-164-findings.md for the default's evidence)
     sweptAt = {}, queue = {}, flee = {}, reassert = {}, lastEnd = {}, presses = {}, toasts = {},
     focusAt = 0, frameAt = 0, frameGapMax = 0, ft = {}, reOff = nil, reOld = nil,
@@ -20893,6 +20909,7 @@ function KCD2MP_W164Frame()
     if gap < 0.25 then return end
     w.frameAt = now
     pcall(KCD2MP_W164EventsTick)
+    pcall(KCD2MP_W164EscortTick)   -- ESC (host): an escorted NPC walks behind its leader's figure
     if not w164_joiner() then w.queue = {}; return end
     -- the after-skip queue (a hitch -- a frame gap of 0.6..5 s -- makes this tick wait; a longer gap is a menu or a load: go on)
     if #w.queue > 0 and (gap < 0.6 or gap > 5.0) then
@@ -21065,7 +21082,174 @@ end
 function KCD2MP_W164SetSweep(arg) return w164_toggle("sweep", "mp_talk_sweep", arg, "a joiner's copies are swept after a skip, on a planner storm and when faced (released, loaded state := body)") end
 function KCD2MP_W164SetTalkGuard(arg) return w164_toggle("talkGuard", "mp_talk_guard", arg, "one talk attempt at a time, one retry of a stuck request, a copy's own requests dropped first") end
 function KCD2MP_W164SetFleeLimit(arg) return w164_toggle("fleeLimit", "mp_flee_limit", arg, "no weapon tug-of-war on a fleeing copy") end
+function KCD2MP_W164SetPartnerPin(arg)
+    local ok = w164_toggle("partnerPin", "mp_partner_marker", arg, "a pin on the map where your partner is")
+    if ok then KCD2MP_EmitEvent("w164_pin", KCD2MP.w164.partnerPin and "on" or "off") end
+    return ok
+end
 function KCD2MP_W164SetJoinerEvents(arg) return w164_toggle("joinerEvents", "mp_joiner_events", arg, "on = a joiner's own random events are off during a session (the host's are the only ones)") end
+-- ---- WO-164 ESC: a quest NPC that follows the joiner ----------------------------------------------------------------------------
+-- Joiner: the quest just made an NPC follow this player (its follow step went to the host): the nearest of this game's own
+-- people / animals within 8 m that is not a host copy is it; the host is told. Host: its NPC of that name is paused and walked
+-- behind the joiner's figure (4 Hz, the draw loop) until the quest's end step, 15 minutes, or the joiner's off.
+KCD2MP.w164.escort = KCD2MP.w164.escort or {}       -- host: npc -> { ghost, since }
+function KCD2MP_W164EscortFind()
+    local pp = w164_ppos()
+    if not pp then return nil end
+    local ents = nil
+    pcall(function() ents = System.GetEntitiesInSphere(pp, 8) end)
+    local best, bestD = nil, 64
+    for _, e in ipairs(ents or {}) do
+        local nm, cls = nil, nil
+        pcall(function() if e.GetName then nm = e:GetName() end; cls = e.class end)
+        if nm and e.soul and e ~= player and not KCD2MP.npcPuppets[nm] and not string.find(nm, "^kcd2mp_") and not (mp_is_mod_entity and mp_is_mod_entity(e)) then
+            local pos = nil
+            pcall(function() pos = e:GetWorldPos() end)
+            if pos then
+                local d = w164_dist2(pos, pp)
+                if d < bestD then best, bestD = nm, d end
+            end
+        end
+    end
+    if best then
+        KCD2MP.w164.escortLocal = best
+        mp_log(string.format("WO164-ESCORT follower npc=%s d=%.1f -- the host walks its own behind this player's figure", best, math.sqrt(bestD)))
+        KCD2MP_EmitEvent("w164_escort", best .. " 1")
+    else
+        mp_log("WO164-ESCORT follower: no person or animal of this game's own within 8 m -- the host's NPC stays where it is")
+    end
+    return best
+end
+function KCD2MP_W164EscortEnd(why)
+    local nm = KCD2MP.w164.escortLocal
+    if not nm then return end
+    KCD2MP.w164.escortLocal = nil
+    mp_log("WO164-ESCORT follower npc=" .. nm .. " off (" .. tostring(why) .. ")")
+    KCD2MP_EmitEvent("w164_escort", nm .. " 0")
+end
+-- Host: name nil = every escort of that ghost
+function KCD2MP_W164EscortFollow(name, ghost, on)
+    local w = KCD2MP.w164
+    if on then
+        name = tostring(name or "")
+        local e = nil
+        pcall(function() e = System.GetEntityByName(name) end)
+        if not e then mp_log("WO164-ESCORT host: no NPC named " .. name .. " in this world -- nothing follows"); return false end
+        w.escort[name] = { ghost = tonumber(ghost), since = os.clock() }
+        w164_exec("wh_ai_PauseNPC " .. name)
+        mp_log(string.format("WO164-ESCORT host npc=%s ghost=%s on -- paused, walked behind the figure kcd2mp_%s", name, tostring(ghost), tostring(ghost)))
+        return true
+    end
+    for nm, x in pairs(w.escort) do
+        if (name == nil or nm == name) and (ghost == nil or x.ghost == tonumber(ghost)) then
+            w.escort[nm] = nil
+            w164_exec("wh_ai_ResumeNPC " .. nm)
+            mp_log("WO164-ESCORT host npc=" .. nm .. " off -- its own brain again")
+        end
+    end
+    return true
+end
+function KCD2MP_W164EscortTick()
+    local w = KCD2MP.w164
+    if next(w.escort) == nil then return end
+    local now = os.clock()
+    for nm, x in pairs(w.escort) do
+        local e, a = nil, nil
+        pcall(function() e = System.GetEntityByName(nm); a = System.GetEntityByName("kcd2mp_" .. tostring(x.ghost)) end)
+        if not e or not a or (now - x.since) > 900 then
+            KCD2MP_W164EscortFollow(nm, nil, false)
+        else
+            local ep, ap = nil, nil
+            pcall(function() ep = e:GetWorldPos(); ap = a:GetWorldPos() end)
+            if ep and ap then
+                local dx, dy = ep.x - ap.x, ep.y - ap.y
+                local d = math.sqrt(dx * dx + dy * dy)
+                if d > 3.0 then
+                    -- 2 m from the figure on the side it already stands (it trails, never on top)
+                    local k = 2.0 / math.max(d, 0.01)
+                    local tz = ap.z
+                    pcall(function() tz = System.GetTerrainElevation({ x = ap.x + dx * k, y = ap.y + dy * k, z = ap.z }) or ap.z end)
+                    if math.abs(tz - ap.z) > 2.5 then tz = ap.z end
+                    pcall(function() e:SetWorldPos({ x = ap.x + dx * k, y = ap.y + dy * k, z = tz }) end)
+                    x.moves = (x.moves or 0) + 1
+                end
+            end
+        end
+    end
+end
+
+-- ---- WO-164 R2: a host rider and its horse as one unit (joiner) ----------------------------------------------------------------
+-- The host streams a mounted NPC and its horse as two bodies; the joiner's copies were written apart (the rider at saddle height
+-- with no horse under it, the horse idling). A rider copy whose stream stays on a horse copy's (within 1 m across, 0.3-2.6 m
+-- above) for 3 ticks is let go by the writer and mounted on that horse copy (ForceMount, the horse near and streamed); it gets
+-- off when the streams part for 3 ticks. mp_rider_unit on|off (default on).
+KCD2MP.w164.riderUnit = KCD2MP.w164.riderUnit ~= false
+KCD2MP.w164.riders = KCD2MP.w164.riders or {}
+local function w164_horse_under(name, p)
+    local best, bestD = nil, 1.0
+    for hn, q in pairs(KCD2MP.npcPuppets) do
+        if hn ~= name and q.tx and q.isHorse ~= false then
+            if q.isHorse == nil then
+                local he = nil
+                pcall(function() he = System.GetEntityByName(hn) end)
+                q.isHorse = he ~= nil and tostring(he.class) == "Horse"
+            end
+            if q.isHorse then
+                local dx, dy, dz = p.tx - q.tx, p.ty - q.ty, (p.tz or 0) - (q.tz or 0)
+                local d = math.sqrt(dx * dx + dy * dy)
+                if d < bestD and dz >= 0.3 and dz <= 2.6 then best, bestD = hn, d end
+            end
+        end
+    end
+    return best
+end
+function KCD2MP_W164RiderHeld(name, p, e)
+    local w = KCD2MP.w164
+    if not w.riderUnit or not p.tx then return false end
+    local cls = tostring(e.class)
+    if cls ~= "NPC" and cls ~= "NPC_Female" then return false end
+    local r = w.riders[name]
+    if p.dead or p.ko then
+        if r and r.mounted then pcall(function() e.human:ForceDismount() end) end
+        w.riders[name] = nil
+        return false
+    end
+    local horse = w164_horse_under(name, p)
+    if not r then
+        if not horse then return false end
+        r = { horse = horse, n = 0 }
+        w.riders[name] = r
+    end
+    if horse == r.horse then r.n, r.apart = r.n + 1, 0 else r.apart = (r.apart or 0) + 1 end
+    if r.mounted then
+        if (r.apart or 0) >= 3 then
+            local ok = pcall(function() e.human:ForceDismount() end)
+            mp_log(string.format("WO164-RIDER dismount rider=%s horse=%s ok=%s -- the streams parted", name, r.horse, tostring(ok)))
+            w.riders[name] = nil
+            return false
+        end
+        return true   -- the horse's writer carries it
+    end
+    if r.n < 3 then return false end
+    local he = nil
+    pcall(function() he = System.GetEntityByName(r.horse) end)
+    local hp, ep = nil, nil
+    if he then pcall(function() hp = he:GetWorldPos(); ep = e:GetWorldPos() end) end
+    local pp = w164_ppos()
+    if not (hp and ep and pp) or w164_dist2(hp, pp) > 80 * 80 then return false end   -- never a ForceMount far away (WO-157 3.1)
+    KCD2MP_NpcNativeSync(name, p, e, false, "rider")
+    pcall(function() e:SetWorldPos({ x = hp.x, y = hp.y, z = hp.z }) end)
+    local ok = pcall(function() e.human:ForceMount(he.id) end)
+    local now = false
+    pcall(function() now = e.human:IsMounted() == true end)
+    r.mounted = ok
+    w.stats.riders = (w.stats.riders or 0) + 1
+    mp_log(string.format("WO164-RIDER mount rider=%s horse=%s ok=%s mounted=%s -- one unit: the horse's stream carries both", name, r.horse, tostring(ok), tostring(now)))
+    if not ok then w.riders[name] = nil; r.n = -30 end
+    return ok
+end
+function KCD2MP_W164SetRiderUnit(arg) return w164_toggle("riderUnit", "mp_rider_unit", arg, "a host rider is mounted on its horse's copy (one unit)") end
+
 function KCD2MP_W164SweepCmd(arg)   -- %line arrives already quoted (WO-106/109)
     local nm = tostring(arg or ""):match("([%w_]+)")
     if not nm then mp_log("mp_w164_sweep: expected an NPC name"); return false end
@@ -22989,6 +23173,9 @@ do
         { id = "ping_line", group = "Display", label = "Ping and clock line", kind = "onoff", save = "PingLine",
           cmd = "mp_ping_line", fn = "KCD2MP_W154SetPingLine", get = function() return M.pingLine end,
           help = "Shows the ping and clock line in the top left corner." },
+        { id = "partner_marker", group = "Display", label = "Partner on the map", kind = "onoff", save = "PartnerMarker",
+          cmd = "mp_partner_marker", fn = "KCD2MP_W164SetPartnerPin", get = function() return KCD2MP.w164 ~= nil and KCD2MP.w164.partnerPin end,
+          help = "A pin on the map where your partner is." },
         { id = "clean_screen", group = "Display", label = "Clean screen", kind = "onoff", save = "CleanScreen",
           cmd = "mp_clean_screen", fn = "KCD2MP_W154SetCleanScreen", get = function() return M.clean end,
           help = "Hides everything the mod draws -- its lines, names and messages. For screenshots and recording." },
@@ -24149,6 +24336,8 @@ local ok, err = pcall(function()
     System.AddCCommand("mp_talk_guard", 'KCD2MP_W164SetTalkGuard(%line)', "WO-164: (joiner) one talk attempt per copy at a time, one retry of a request that does not start in 4 s, a copy's own greeting requests dropped before your talk (default on): mp_talk_guard on|off")
     System.AddCCommand("mp_flee_limit", 'KCD2MP_W164SetFleeLimit(%line)', "WO-164: (joiner) no weapon tug-of-war on a fleeing host copy: one re-assert per 2 s, none while it flees, 20 s of rest after 3 in 10 s (default on): mp_flee_limit on|off")
     System.AddCCommand("mp_joiner_events", 'KCD2MP_W164SetJoinerEvents(%line)', "WO-164: (joiner) on = this game's own random events (caravans, riders, ambushes) are off during a session so the host's are the only ones; back when the session ends: mp_joiner_events on|off")
+    System.AddCCommand("mp_partner_marker", 'KCD2MP_W164SetPartnerPin(%line)', "WO-164: a pin on the map where your partner is, moved as they walk, gone when they leave (default on): mp_partner_marker on|off")
+    System.AddCCommand("mp_rider_unit", 'KCD2MP_W164SetRiderUnit(%line)', "WO-164: (joiner) a host rider is mounted on its horse's copy -- one unit, carried by the horse's stream (default on): mp_rider_unit on|off")
     System.AddCCommand("mp_w164_status", "KCD2MP_W164Status()", "WO-164: the sweep, the talk guard, the flee limiter, the random-event switch (WO164-STATUS here; MP-WO164-STATS in agent.log)")
     System.AddCCommand("mp_w164_sweep", 'KCD2MP_W164SweepCmd(%line)', "WO-164: sweep one host copy now (a test): mp_w164_sweep <npc>")
     System.AddCCommand("mp_ctx_release", 'KCD2MP_W160SetRelease(%line)', "WO-160: (joiner) a copy's stance and unstance are released the game's own way before its next placement, so the game's planner only places it (default on): mp_ctx_release on|off")

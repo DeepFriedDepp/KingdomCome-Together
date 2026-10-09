@@ -58,9 +58,13 @@ public class Wo141Tests
     [Fact]
     public void Normalised_keeps_only_what_is_synced()
     {
-        var standing = new ActivityState(1, 3, 77, ActivityState.NoUnstance, 44, ActivityState.NoMinigame, 55, 0xFF).Normalised();
+        var standing = new ActivityState(1, 3, 77, ActivityState.NoUnstance, 44, ActivityState.NoMinigame, 55, 0xFD).Normalised();
         Assert.True(standing.IsNone);
         Assert.Equal(ActivityState.None, standing);
+        // WO-164 N: the night-undress bit is kept (only it); the owns-position bit is always derived
+        var night = new ActivityState(1, 3, 77, ActivityState.NoUnstance, 44, ActivityState.NoMinigame, 55, 0xFF).Normalised();
+        Assert.True(night.IsNone);
+        Assert.Equal(ActivityState.FlagNightDress, night.Flags);
         var horse = new ActivityState(5, 0, 77, ActivityState.NoUnstance, 0, ActivityState.NoMinigame, 0, 0).Normalised();
         Assert.True(horse.IsNone);   // riding is WO-40/WO-136's
         var crouch = new ActivityState(ActivityState.Crouch, 0, 0, ActivityState.NoUnstance, 0, ActivityState.NoMinigame, 0, 0).Normalised();

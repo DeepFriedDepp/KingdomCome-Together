@@ -126,6 +126,43 @@ public static partial class Wo164Rules
 
     public static int UnstuckStep(double sinceLastS) => sinceLastS >= 0 && sinceLastS <= UnstuckStep2S ? 2 : 1;
 
+    // ------------------------------------------------------------------ ESC: a quest NPC that follows a joiner
+
+    /// <summary>An escort lasts at most this long without its end step.</summary>
+    public const double EscortMaxS = 900.0;
+
+    /// <summary>The quest step that starts an escort (the quest makes its NPC follow the player): SetFollowsPlayer and the like.</summary>
+    public static bool IsFollowPort(string? port) => port is not null && port.Contains("Follow", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>The step that ends it (the NPC goes home, lies down at the bait, stops).</summary>
+    public static bool IsEscortEndPort(string? port) =>
+        port is not null && (port.Contains("Home", StringComparison.OrdinalIgnoreCase) || port.Contains("Stop", StringComparison.OrdinalIgnoreCase)
+                             || port.Contains("LiesDown", StringComparison.OrdinalIgnoreCase) || port.Contains("Leave", StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// The States an escort covers: the logic's parent (State "...ignac_jako_bait.ignaz_logic.state66" -> "...ignac_jako_bait"),
+    /// so the logic's own counters and the bait's triggers are the joiner's too while it leads the NPC. Null for a path too short.
+    /// </summary>
+    public static string? EscortScope(string? statePath)
+    {
+        if (string.IsNullOrEmpty(statePath)) return null;
+        int a = statePath.LastIndexOf('.');
+        if (a <= 0) return null;
+        int b = statePath.LastIndexOf('.', a - 1);
+        return b > "Barbora.".Length ? statePath[..b] : null;
+    }
+
+    public static bool InEscortScope(string scope, string path) => path.StartsWith(scope + ".", StringComparison.Ordinal);
+
+    // ------------------------------------------------------------------ C2: the partner's pin
+
+    /// <summary>The pin moves only when its partner moved more than 3 m since it was set.</summary>
+    public static bool PinMoveDue(float x0, float y0, float x1, float y1)
+    {
+        float dx = x1 - x0, dy = y1 - y0;
+        return dx * dx + dy * dy > 9f;
+    }
+
     // ------------------------------------------------------------------ M: the mark snapshot
 
     public const int SnapMaxLines = 60;

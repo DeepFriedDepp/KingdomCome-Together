@@ -533,7 +533,7 @@ public partial class GameBridge
                 return;
             case Wo140Frame.EdgeBegan:
                 _w154SkipBeganKind = Wo140Rules.KindOfSkipId(f.Id);   // WO-154 6.3: the ended edge reads id -1 (live L6)
-                _ = ExecLuaAsync($"if KCD2MP_W157RestLine then KCD2MP_W157RestLine('start', {f.Id}) end");   // WO-157: rest measured
+                _ = ExecLuaAsync(FormattableString.Invariant($"if KCD2MP_W157RestLine then KCD2MP_W157RestLine('start', {f.Id}, {f.Hours:F2}) end"));   // WO-157: rest measured (WO-164 SL: with the hours)
                 await Wo140OnLocalBeganAsync(f);
                 return;
             case Wo140Frame.EdgeBackedOut:

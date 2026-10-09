@@ -891,8 +891,11 @@ void serve(HANDLE h) {
                     [op, owner, id, x, y, z](bool& result) {
                         if (op == 1) result = actions::mirror_add(owner, id, x, y, z);
                         else if (op == 0) result = actions::mirror_remove(owner, id);
+                        else if (op == 3) result = actions::partner_pin(owner, x, y, z);       // WO-164 C2: a partner's pin set / moved
+                        else if (op == 4) result = actions::partner_pin_remove(owner);         // WO-164 C2: ... removed
                         else { actions::mirror_clear(owner); result = true; }
                     }, "MirrorGrave", ok, &faultedFlag);
+                if (op != 3 || !(ran && ok))   // WO-164: a pin is set every 2 s -- its own lines say what changed
                 logf("PIPE: MirrorGrave op=%u owner=%u id=0x%016llX -> %s", op, owner,
                      static_cast<unsigned long long>(id), (ran && ok) ? "applied" : "refused");
                 send_result(h, ran && ok, seq, (ran && ok) ? 0 : (faultedFlag ? kReasonTaskFaulted : 0));

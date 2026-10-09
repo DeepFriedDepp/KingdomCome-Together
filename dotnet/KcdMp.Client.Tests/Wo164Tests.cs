@@ -180,4 +180,37 @@ public class Wo164Tests
         Assert.Equal("Your host is reloading the world - please wait", Wo164Rules.ReloadStartText);
         Assert.Equal("Back with your host", Wo164Rules.ReloadBackText);
     }
+
+    // ---------------------------------------------------------------- ESC / C2 / N (the second pass)
+
+    [Fact]
+    public void An_escort_starts_on_a_follow_step_covers_the_logics_parent_and_ends_on_its_end_step()
+    {
+        const string st = "Barbora.trosecko.hledaniPsa.h.prvni_smecka.polozit_bait_pro_prilakani_smecky.ignac_jako_bait.ignaz_logic.state66";
+        Assert.True(Wo164Rules.IsFollowPort("SetFollowsPlayer"));
+        Assert.False(Wo164Rules.IsFollowPort("SetEats"));
+        Assert.True(Wo164Rules.IsEscortEndPort("SetGoesHome"));
+        Assert.True(Wo164Rules.IsEscortEndPort("SetLiesDown"));
+        Assert.False(Wo164Rules.IsEscortEndPort("Increment"));
+        string? scope = Wo164Rules.EscortScope(st);
+        Assert.Equal("Barbora.trosecko.hledaniPsa.h.prvni_smecka.polozit_bait_pro_prilakani_smecky.ignac_jako_bait", scope);
+        Assert.True(Wo164Rules.InEscortScope(scope!, scope + ".ignaz_logic.numberOfMealsIgnazHasEaten"));
+        Assert.True(Wo164Rules.InEscortScope(scope!, scope + ".areatrigger_monologonplayer_oneshot.triggerActive"));
+        Assert.False(Wo164Rules.InEscortScope(scope!, "Barbora.trosecko.hledaniPsa.h.prvni_smecka.lurewolves.lureWolves"));
+        Assert.Null(Wo164Rules.EscortScope("Barbora.x"));
+        Assert.True(W164Text.TryParseEscort(W164Text.Escort("hledaniPsa_ignaz", true), out var n, out var on) && n == "hledaniPsa_ignaz" && on);
+        Assert.False(W164Text.TryParseEscort("a/b 1", out _, out _));
+        Assert.False(W164Text.TryParseEscort("npc 2", out _, out _));
+        Assert.Equal("escort", Protocol.W164KindName(Protocol.W164Escort));
+    }
+
+    [Fact]
+    public void A_pin_moves_only_past_three_metres_and_the_night_bit_survives_normalisation()
+    {
+        Assert.False(Wo164Rules.PinMoveDue(0, 0, 2, 2));
+        Assert.True(Wo164Rules.PinMoveDue(0, 0, 3, 1));
+        var a = new ActivityState(3, 0, 9, ActivityState.NoUnstance, 0, ActivityState.NoMinigame, 0, ActivityState.FlagNightDress).Normalised();
+        Assert.Equal(ActivityState.FlagOwnsPos | ActivityState.FlagNightDress, a.Flags);
+        Assert.Equal(ActivityState.FlagNightDress, ActivityState.TryRead(a.ToBytes(), out var b) ? (b.Flags & ActivityState.FlagNightDress) : -1);
+    }
 }

@@ -114,14 +114,14 @@ public class Wo154MenuTests
     private static JsonObject AllSaved() => new()
     {
         ["NameBadges"] = false, ["PingLine"] = false, ["CleanScreen"] = true, ["FriendlyFire"] = false, ["CrimeMode"] = "individual",
-        ["FastTravel"] = true, ["Leash"] = false, ["SleepVote"] = false, ["Whistle"] = false, ["PartnerHerbs"] = true,
+        ["FastTravel"] = true, ["Leash"] = false, ["SleepVote"] = false, ["Whistle"] = false, ["PartnerHerbs"] = true, ["PartnerMarker"] = true,
     };
 
     [Fact]
     public void The_hosts_levers_are_pushed_only_when_this_player_hosts()
     {
         var joiner = Wo154MenuRules.RestorePlan(AllSaved(), hosting: false);
-        Assert.Equal(new[] { "NameBadges", "PingLine", "CleanScreen", "SleepVote", "Whistle", "PartnerHerbs" }, joiner.Select(p => p.Key));
+        Assert.Equal(new[] { "NameBadges", "PingLine", "CleanScreen", "SleepVote", "Whistle", "PartnerHerbs", "PartnerMarker" }, joiner.Select(p => p.Key));
         var host = Wo154MenuRules.RestorePlan(AllSaved(), hosting: true);
         Assert.Equal(Wo154MenuRules.Settings.Select(s => s.Key), host.Select(p => p.Key));
         Assert.Contains(("CrimeMode", "individual"), host);

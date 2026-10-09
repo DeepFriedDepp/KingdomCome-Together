@@ -42,6 +42,7 @@ public static class Wo154MenuRules
         new("SleepVote", Kind.OnOff, false),
         new("Whistle", Kind.OnOff, false),
         new("PartnerHerbs", Kind.OnOff, false),
+        new("PartnerMarker", Kind.OnOff, false),   // WO-164 C2: mp_partner_marker
     };
 
     /// <summary>WO-154: the session's fast travel ships OFF (0.45.0): the host turns it on in the menu.</summary>

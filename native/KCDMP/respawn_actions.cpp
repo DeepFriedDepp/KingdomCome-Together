@@ -511,7 +511,9 @@ bool mark_ready(const char** why) {
     return true;
 }
 
-bool mark_add(void* ent, SharedPtr* out) {
+bool mark_add_typed(void* ent, SharedPtr* out, int type);
+bool mark_add(void* ent, SharedPtr* out) { return mark_add_typed(ent, out, g_markType); }
+bool mark_add_typed(void* ent, SharedPtr* out, int type) {
     if (!g_markArmed || g_markOff.load()) return false;
     const char* why = "";
     if (!mark_ready(&why)) {
@@ -534,7 +536,7 @@ bool mark_add(void* ent, SharedPtr* out) {
     }
     SharedPtr sp{};
     void* ret = nullptr;
-    if (!vcall(map, kMapCreate, &ret, &sp, g_markType, lo, kMarkSource) || !sp.p || !sp.ctrl) {
+    if (!vcall(map, kMapCreate, &ret, &sp, type, lo, kMarkSource) || !sp.p || !sp.ctrl) {
         logf("MP-GRAVE marker: C_UIMap create refused");
         return false;
     }
@@ -656,6 +658,23 @@ struct Mirror {
     uint32_t  eid = 0;
     SharedPtr mark{};
 };
+
+// WO-164 C2: a map pin at a partner's position -- a mark on an entity of the mod's own (the mirror's class, no model, NO_SAVE,
+// 30 m under the partner so nothing can touch it), moved when the partner moved more than 3 m. Never a mark on the avatar
+// itself: a mark holds a raw linkable pointer and a reload destroys the avatar (the WO-113 map crash); the 100 ms guard takes a
+// pin's mark off the moment its entity is gone, as it does a mirror's.
+struct Pin {
+    uint8_t   owner = 0;
+    uint32_t  eid = 0;
+    SharedPtr mark{};
+    float     x = 0, y = 0, z = 0;
+};
+std::vector<Pin> g_pins;
+constexpr const char* kPinPrefix = "kcdmp_partner_";
+constexpr float kPinDepthM = 30.0f;
+constexpr float kPinMoveM = 3.0f;
+constexpr int   kMarkGeneralPoi = 0x30;
+std::atomic<uint32_t> c_pinSpawned{0}, c_pinMoved{0}, c_pinMarked{0}, c_pinRemoved{0};
 
 bool                g_graveArmed = false;
 std::vector<Grave>  g_graves;
@@ -1169,6 +1188,9 @@ int world_changed(const char* why, uint64_t* vanished, int max) {
     // within 30 s.
     for (Mirror& m : g_mirrors) mark_remove(&m.mark);
     g_mirrors.clear();
+    // WO-164 C2: pins are NO_SAVE too: the load purged their entities; the agent sets them again within 2 s
+    for (Pin& pn : g_pins) mark_remove(&pn.mark);
+    g_pins.clear();
     logf("MP-GRAVE after the rescan the map holds %d marks", map_mark_count());
     return n;
 }
@@ -1198,7 +1220,30 @@ bool marked_mirror_alive(const Mirror& m) {
     return n && copy_str(n, name, sizeof(name)) && std::strcmp(name, want) == 0;
 }
 
+bool pin_alive(const Pin& pn) {
+    void* e = pn.eid ? engine::entity_by_id(pn.eid) : nullptr;
+    const char* n = e ? engine::entity_name(e) : nullptr;
+    char name[64]{}, want[64]{};
+    _snprintf_s(want, sizeof(want), _TRUNCATE, "%s%u", kPinPrefix, static_cast<unsigned>(pn.owner));
+    return n && copy_str(n, name, sizeof(name)) && std::strcmp(name, want) == 0;
+}
+
+// The pin's mark type: GeneralPoi when the map draws that category (its byte at map+0x648), else the grave's type.
+int pin_mark_type() {
+    void* map = g_markArmed ? ui_map() : nullptr;
+    uint8_t b = 0;
+    if (map && rd8(map, 0x648 + static_cast<size_t>(kMarkGeneralPoi), &b) && b) return kMarkGeneralPoi;
+    return g_markType;
+}
+
 void marks_guard() {
+    // WO-164 C2: the pins -- a gone entity takes its mark with it; a pin with no mark gets one once the map is ready
+    for (Pin& pn : g_pins) {
+        if (pn.mark.ctrl && !pin_alive(pn)) {
+            mark_remove(&pn.mark);
+            logf("WO164-MAPMARK pin owner=%u entity gone -- its map mark removed", static_cast<unsigned>(pn.owner));
+        }
+    }
     // WO-164 C1: the queue -- a grave or mirror with no mark gets one once the map is ready (one per entity: coalesced)
     const char* why = "";
     if (g_markArmed && !g_markOff.load() && mark_ready(&why)) {
@@ -1207,6 +1252,15 @@ void marks_guard() {
             void* e = grave_entity(g);
             if (e && mark_add(e, &g.mark)) { g.markEid = g.eid; logf("WO164-MAPMARK added grave 0x%016llX (from the queue)", static_cast<unsigned long long>(g.id)); }
             if (g_markOff.load()) break;
+        }
+        for (Pin& pn : g_pins) {
+            if (pn.mark.ctrl || g_markOff.load() || !pin_alive(pn)) continue;
+            void* e = engine::entity_by_id(pn.eid);
+            const int type = pin_mark_type();
+            if (e && mark_add_typed(e, &pn.mark, type)) {
+                c_pinMarked.fetch_add(1, std::memory_order_relaxed);
+                logf("WO164-MAPMARK pin owner=%u added (type 0x%X) at (%.1f, %.1f)", static_cast<unsigned>(pn.owner), static_cast<unsigned>(type), pn.x, pn.y);
+            }
         }
         for (Mirror& m : g_mirrors) {
             if (m.mark.ctrl || g_markOff.load()) continue;
@@ -1247,9 +1301,64 @@ bool sentinel_alive() {
 void on_world_changed() { world_changed("a load", nullptr, 0); }
 
 int marker_status(char* out, int n) {
-    return _snprintf_s(out, static_cast<size_t>(n), _TRUNCATE, "markers=%s mark_faults=%u mark_queued=%u mark_added=%u mark_half_removed=%u",
+    return _snprintf_s(out, static_cast<size_t>(n), _TRUNCATE,
+                       "markers=%s mark_faults=%u mark_queued=%u mark_added=%u mark_half_removed=%u pins=%zu pin_spawned=%u pin_moved=%u pin_marked=%u pin_removed=%u",
                        !g_markArmed ? "unarmed" : g_markOff.load() ? "off" : "on", c_markFaults.load(), c_markQueued.load(), c_markAdded.load(),
-                       c_markHalfRemoved.load());
+                       c_markHalfRemoved.load(), g_pins.size(), c_pinSpawned.load(), c_pinMoved.load(), c_pinMarked.load(), c_pinRemoved.load());
+}
+
+bool partner_pin(uint8_t owner, float x, float y, float z) {
+    if (!engine::ready()) return false;
+    Pin* pn = nullptr;
+    for (Pin& q : g_pins) if (q.owner == owner) { pn = &q; break; }
+    const float below[3] = {x, y, z - kPinDepthM};
+    if (pn && !pin_alive(*pn)) { mark_remove(&pn->mark); pn->eid = 0; }
+    if (!pn) { g_pins.push_back(Pin{}); pn = &g_pins.back(); pn->owner = owner; }
+    if (!pn->eid) {
+        char name[64]{};
+        _snprintf_s(name, sizeof(name), _TRUNCATE, "%s%u", kPinPrefix, static_cast<unsigned>(owner));
+        void* e = engine::spawn(kMirrorClass, name, below, engine::kFlagNoSave, 0);
+        if (!e) { logf("WO164-MAPMARK pin owner=%u spawn FAILED", static_cast<unsigned>(owner)); return false; }
+        pn->eid = engine::entity_id(e);
+        pn->x = x; pn->y = y; pn->z = z;
+        c_pinSpawned.fetch_add(1, std::memory_order_relaxed);
+        logf("WO164-MAPMARK pin owner=%u spawned entity=%u at (%.1f, %.1f) thread=%lu", static_cast<unsigned>(owner), pn->eid, x, y,
+             static_cast<unsigned long>(GetCurrentThreadId()));
+    } else {
+        const float dx = x - pn->x, dy = y - pn->y;
+        if (dx * dx + dy * dy > kPinMoveM * kPinMoveM) {
+            void* e = engine::entity_by_id(pn->eid);
+            if (e && engine::entity_set_pos(e, below)) {
+                pn->x = x; pn->y = y; pn->z = z;
+                if (c_pinMoved.fetch_add(1, std::memory_order_relaxed) % 30 == 0)
+                    logf("WO164-MAPMARK pin owner=%u moved to (%.1f, %.1f) (one line per 30 moves)", static_cast<unsigned>(owner), x, y);
+            }
+        }
+    }
+    if (!pn->mark.ctrl && !g_markOff.load()) {
+        void* e = engine::entity_by_id(pn->eid);
+        const int type = pin_mark_type();
+        if (e && mark_add_typed(e, &pn->mark, type)) {
+            c_pinMarked.fetch_add(1, std::memory_order_relaxed);
+            logf("WO164-MAPMARK pin owner=%u added (type 0x%X) at (%.1f, %.1f)", static_cast<unsigned>(owner), static_cast<unsigned>(type), x, y);
+        }
+    }
+    return true;
+}
+
+bool partner_pin_remove(uint8_t owner) {
+    bool any = false;
+    for (size_t i = 0; i < g_pins.size();) {
+        Pin& pn = g_pins[i];
+        if (owner != 0xFF && pn.owner != owner) { ++i; continue; }
+        mark_remove(&pn.mark);
+        if (pn.eid && pin_alive(pn)) engine::remove(pn.eid);
+        logf("WO164-MAPMARK pin owner=%u removed", static_cast<unsigned>(pn.owner));
+        c_pinRemoved.fetch_add(1, std::memory_order_relaxed);
+        g_pins.erase(g_pins.begin() + static_cast<long long>(i));
+        any = true;
+    }
+    return any || owner == 0xFF;
 }
 
 namespace {

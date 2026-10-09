@@ -2123,6 +2123,13 @@ public partial class GameBridge(ClientConfig config)
                 LocalState? nat = null;
                 if (_posNative && state.HasValue)
                     nat = await ReadNativeStateAsync(state.Value, cts.Token);
+                // WO-164 TR: the state block (gait, combat, the torch bit) is read natively even while the native POSITION is
+                // refused -- in 0.47.0 one oracle refusal (the host mounted) stopped every state block for the rest of the session
+                LocalState? natState2 = nat;
+                if (nat is null && _posNative && state.HasValue && _posNativeRefusedByOracle)
+                {
+                    try { natState2 = await _combat.ReadLocalStateAsync(cts.Token); } catch (OperationCanceledException) { throw; } catch { }
+                }
                 else if (!_posNative || !state.HasValue)
                     _cadNative.Break();
                 if (IntervalElapsed(ref lastCadenceReport, CadenceReportInterval, nowTimestamp))
@@ -2193,7 +2200,7 @@ public partial class GameBridge(ClientConfig config)
                     // WO-121: the v8 state block is change-gated on its own, and
                     // a change sends a packet even when the body stood still (a
                     // block raised, a crouch, combat mode entered).
-                    Wo121State2For(nat, nowTimestamp, consume: false, out bool st2Due);
+                    Wo121State2For(natState2, nowTimestamp, consume: false, out bool st2Due);
                     if (!_hasPushed || HasChanged(x, y, z, rotZ) || posHeartbeat || st2Due)
                     {
                         bool moved = !_hasPushed || HasChanged(x, y, z, rotZ);
@@ -2209,7 +2216,7 @@ public partial class GameBridge(ClientConfig config)
                         // problem the engine does not have.
                         if (nat is null) local = await ReadLocalBodyStateAsync(cts.Token);   // log path: the separate 0x09 read, as before
                         await SendPositionAsync(stream, x, y, z, rotZ, riding,
-                                                state2: Wo121State2For(nat, nowTimestamp, consume: true, out _));
+                                                state2: Wo121State2For(natState2, nowTimestamp, consume: true, out _));
                         // WO-100.5 Phase 3: the accepted input rides the same
                         // read -- one pipe round trip serves both channels.
                         if (local is LocalBodyState lb)
@@ -4541,6 +4548,7 @@ public partial class GameBridge(ClientConfig config)
             if (!_w136Ridden.IsEmpty && Wo136Rules.DropRidden(_w136Ridden, npcName, DateTime.UtcNow)) return;   // WO-136: the rider's horse
             if (!_w148Held.IsEmpty && Wo148DropCarried(npcName)) return;   // WO-148: a carried body is the carrier's
             int o = 2 + nameLen;
+            _w164NpcPos[npcName] = (ReadFloat(payload, o), ReadFloat(payload, o + 4), Environment.TickCount64);   // WO-164 D2
             _nativeFeed.Enqueue(new NativeNpcSample(payload[0], npcName,
                 ReadFloat(payload, o), ReadFloat(payload, o + 4), ReadFloat(payload, o + 8), ReadFloat(payload, o + 12),
                 // WO-121: 0x80 is the pipe's own "state block follows" bit, never a wire flag.
@@ -5944,6 +5952,8 @@ public partial class GameBridge(ClientConfig config)
             case "w164_sweep":
             case "w164_unstuck2":
             case "w164_cfg":
+            case "w164_pin":         // WO-164 C2: mp_partner_marker
+            case "w164_escort":      // WO-164 ESC: a quest NPC follows this joiner
                 Wo164OnEvent(name, arg);
                 return;
             case "w141":             // WO-141: mp_activities on|off / kinds <n> / status
@@ -7044,8 +7054,17 @@ public partial class GameBridge(ClientConfig config)
     /// sampled (returned as the cached sample so the coordinates stay native,
     /// but not counted as a fresh one).
     /// </summary>
+    private long _posNativeRefusedAtMs;   // WO-164 TR: when the oracle refused (re-armed after PosNativeRearmMs)
+    private const long PosNativeRearmMs = 60_000;
+
     private async Task<LocalState?> ReadNativeStateAsync(PlayerState oracle, CancellationToken ct)
     {
+        // WO-164 TR: a refusal is one stretch (a mount, a cutscene, a teleport), not the session: tried again after a minute
+        if (_posNativeRefusedByOracle && !_posNativeGaveUp && Environment.TickCount64 - _posNativeRefusedAtMs >= PosNativeRearmMs)
+        {
+            _posNativeRefusedByOracle = false; _oracleBadRun = 0;
+            Console.WriteLine("MP-POSNATIVE re-armed after 60 s -- the native read is checked against the log line again");
+        }
         if (_posNativeGaveUp || _posNativeRefusedByOracle) return null;
         LocalState? r = null;
         try { r = await _combat.ReadLocalStateAsync(ct); }
@@ -7082,8 +7101,9 @@ public partial class GameBridge(ClientConfig config)
             if (++_oracleBadRun >= OracleBadRunToRefuse)
             {
                 _posNativeRefusedByOracle = true;
+                _posNativeRefusedAtMs = Environment.TickCount64;
                 Console.WriteLine(FormattableString.Invariant(
-                    $"MP-POSNATIVE verdict=refused reason=oracle-mismatch run={_oracleBadRun} last_delta_m={d:F2} native=({ls.X:F2},{ls.Y:F2},{ls.Z:F2}) log=({oracle.X:F2},{oracle.Y:F2},{oracle.Z:F2}) -- the native read is not this player's position; position stays on the log tail"));
+                    $"MP-POSNATIVE verdict=refused reason=oracle-mismatch run={_oracleBadRun} last_delta_m={d:F2} native=({ls.X:F2},{ls.Y:F2},{ls.Z:F2}) log=({oracle.X:F2},{oracle.Y:F2},{oracle.Z:F2}) -- the native read is not this player's position; position stays on the log tail for a minute (the state block is still read natively)"));
                 _cadNative.Break();
                 return null;
             }

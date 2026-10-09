@@ -329,4 +329,90 @@ do
     noErrs("M")
 end
 
+-- (H) R2: a host rider and its horse as one unit ------------------------------------------------------------------------------------
+do
+    ERRS = {}
+    joiner(true)
+    local horse = copy("dw_horse_8", 10, 0); horse.class = "Horse"
+    local rider = copy("dw_rider_3", 10, 0); rider.class = "NPC"
+    local mounted = nil
+    rider.human.ForceMount = function(self, id) mounted = id end
+    rider.human.IsMounted = function() return mounted ~= nil end
+    rider.human.ForceDismount = function() mounted = nil end
+    rider.SetWorldPos = function() end
+    local hp, rp = KCD2MP.npcPuppets["dw_horse_8"], KCD2MP.npcPuppets["dw_rider_3"]
+    hp.tx, hp.ty, hp.tz = 10, 0, 0
+    rp.tx, rp.ty, rp.tz = 10.3, 0.2, 1.2
+    local mark = #LOG
+    local held1 = KCD2MP_W164RiderHeld("dw_rider_3", rp, rider)
+    KCD2MP_W164RiderHeld("dw_rider_3", rp, rider)
+    local held3 = KCD2MP_W164RiderHeld("dw_rider_3", rp, rider)
+    check("H1: three ticks on the horse's stream: mounted on its copy, the writer lets it go", held1 == false and held3 == true and mounted == horse.id
+        and lastLog("WO164-RIDER mount rider=dw_rider_3 horse=dw_horse_8 ok=true", mark) ~= nil, lastLog("WO164-RIDER", mark))
+    check("H2: the horse itself is never a rider", KCD2MP_W164RiderHeld("dw_horse_8", hp, horse) == false)
+    rp.tx = 20
+    KCD2MP_W164RiderHeld("dw_rider_3", rp, rider); KCD2MP_W164RiderHeld("dw_rider_3", rp, rider)
+    local after = KCD2MP_W164RiderHeld("dw_rider_3", rp, rider)
+    check("H3: the streams part for 3 ticks: off the horse, written again", after == false and mounted == nil and lastLog("WO164-RIDER dismount rider=dw_rider_3", mark) ~= nil)
+    rp.tx = 10.3
+    KCD2MP_W164SetRiderUnit("off")
+    for _ = 1, 4 do KCD2MP_W164RiderHeld("dw_rider_3", rp, rider) end
+    check("H4: mp_rider_unit off: never mounted", mounted == nil)
+    KCD2MP_W164SetRiderUnit("on")
+    for _, n in ipairs({ "dw_horse_8", "dw_rider_3" }) do ENTS[n] = nil; KCD2MP.npcPuppets[n] = nil end
+    noErrs("H")
+end
+
+-- (C) ESC: a quest NPC that follows the joiner ---------------------------------------------------------------------------------------
+do
+    ERRS = {}
+    local dog = { id = 777, class = "Dog", soul = {}, GetName = function() return "hledaniPsa_ignaz" end, GetWorldPos = function() return { x = 3, y = 0, z = 0 } end }
+    local mine = copy("tc_copy", 1, 0)
+    SPHERE = { dog, mine }
+    local mark = #LOG
+    check("C1 (joiner): the nearest of this game's own (not a host copy) within 8 m is the follower; the agent is told",
+        KCD2MP_W164EscortFind() == "hledaniPsa_ignaz" and countEvt("w164_escort", "hledaniPsa_ignaz 1", mark) == 1)
+    KCD2MP_W164EscortEnd("quest-step")
+    check("C2 (joiner): its end is told", countEvt("w164_escort", "hledaniPsa_ignaz 0", mark) == 1)
+    local moved = nil
+    dog.SetWorldPos = function(self, p) moved = p end
+    ENTS["hledaniPsa_ignaz"] = dog
+    ENTS["kcd2mp_1"] = { GetWorldPos = function() return { x = 20, y = 0, z = 0 } end }
+    CMDS = {}
+    check("C3 (host): paused and followed", KCD2MP_W164EscortFollow("hledaniPsa_ignaz", 1, true) == true and cmdCount("wh_ai_PauseNPC hledaniPsa_ignaz") == 1)
+    KCD2MP_W164EscortTick()
+    check("C4 (host): 2 m behind the figure, on its own side", moved ~= nil and math.abs(moved.x - 18) < 0.01, moved and moved.x)
+    KCD2MP_W164EscortFollow(nil, 1, false)
+    check("C5 (host): the end gives its brain back", cmdCount("wh_ai_ResumeNPC hledaniPsa_ignaz") == 1 and next(KCD2MP.w164.escort) == nil)
+    ENTS["hledaniPsa_ignaz"] = nil; ENTS["kcd2mp_1"] = nil; ENTS["tc_copy"] = nil; KCD2MP.npcPuppets["tc_copy"] = nil
+    SPHERE = {}
+    noErrs("C")
+end
+
+-- (Z) SL: the rest shown on the sleep screen ---------------------------------------------------------------------------------------
+do
+    ERRS = {}
+    local st = { health = 60, exhaust = 30, hunger = 50 }
+    local soulWas = player.soul
+    player.soul = { GetState = function(self, n) return st[n] end, SetState = function(self, n, v) st[n] = v end,
+                    RestrictDialog = soulWas.RestrictDialog, IsDialogRestricted = soulWas.IsDialogRestricted }
+    local t = 1000000
+    Calendar.GetWorldTime = function() return t end
+    local mark = #LOG
+    KCD2MP.w157.gameRests = nil
+    KCD2MP_W157RestLine("start", 2, 4.0)
+    check("Z1: a real sleep of 4 h: the rest given at its start (the screen shows it)", math.abs(st.exhaust - (30 + 12.45 * 4)) < 0.01
+        and lastLog("WO164-REST pre-applied", mark) ~= nil, st.exhaust)
+    t = t + 4 * 3600
+    local e1 = st.exhaust
+    KCD2MP_W157RestLine("end")
+    check("Z2: ... and not again at its end", st.exhaust == e1 and lastLog("WO157-REST rested", mark) == nil)
+    st.exhaust = 30
+    KCD2MP_W157RestLine("start", 1, 4.0)
+    check("Z3: a wait (id 1) never rests", st.exhaust == 30)
+    player.soul = soulWas
+    Calendar.GetWorldTime = function() return 1000000 end
+    noErrs("Z")
+end
+
 OUT = table.concat(RESULTS, "\n")

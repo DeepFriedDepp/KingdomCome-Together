@@ -18,6 +18,8 @@ namespace KcdMp.Wire;
 //   2 Torch     "<ghost> 1|0"    the sender's torch is out (1) or away (0): sent on every edge and every 10 s while out.
 //                                The state block's bit 0x20 (WO-136) still rides; this is the reliable copy (the 0.47.0
 //                                session: the host's torch never reached the joiner through the block, the joiner's did)
+//   3 Escort    "<npc> 1|0"      a joiner: a quest NPC follows this player in its own world (the quest asked it to) -- the host
+//                                walks its NPC behind the joiner's figure until 0 (or the quest's end step, or 15 minutes)
 //
 // An older peer never sees these (a mixed release is refused at the relay, WO-110 R9); a receiver that meets an unknown
 // kind ignores it (counted). No protocol bump.
@@ -27,17 +29,17 @@ public static partial class Protocol
 {
     public const byte W164Up = 0x74, W164Down = 0x75;   // WO-164
 
-    public const int W164TextMax = 48;
+    public const int W164TextMax = 80;
 
     // ---- kinds (APPEND-ONLY) ----
-    public const byte W164MarkPing = 1, W164Torch = 2;
+    public const byte W164MarkPing = 1, W164Torch = 2, W164Escort = 3;
 
     /// <summary>While the torch is out, the side-channel repeats it this often (a lost edge recovers).</summary>
     public const int W164TorchRepeatMs = 10_000;
 
     public static string W164KindName(byte k) => k switch
     {
-        W164MarkPing => "mark-ping", W164Torch => "torch", _ => $"unknown-{k}",
+        W164MarkPing => "mark-ping", W164Torch => "torch", W164Escort => "escort", _ => $"unknown-{k}",
     };
 }
 
@@ -63,4 +65,17 @@ public static class W164Text
     }
 
     public static string Torch(byte ghost, bool on) => $"{ghost} {(on ? 1 : 0)}";
+
+    public static string Escort(string npc, bool on) => $"{npc} {(on ? 1 : 0)}";
+
+    /// <summary>"&lt;npc&gt; 1|0" -> the NPC (an authored entity name) and on/off.</summary>
+    public static bool TryParseEscort(string? text, out string npc, out bool on)
+    {
+        npc = ""; on = false;
+        var f = (text ?? "").Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (f.Length != 2 || f[1] is not ("1" or "0") || f[0].Length is 0 or > 64) return false;
+        foreach (char c in f[0]) if (!(char.IsAsciiLetterOrDigit(c) || c == '_')) return false;
+        npc = f[0]; on = f[1] == "1";
+        return true;
+    }
 }

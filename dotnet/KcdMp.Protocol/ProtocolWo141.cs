@@ -62,6 +62,8 @@ public readonly record struct ActivityState(byte Stance, byte Cart, ulong Stance
     public const ushort NoUnstance = 0xFFFF;
     public const byte NoMinigame = 0xFF;
     public const byte FlagOwnsPos = 0x01;
+    /// <summary>WO-164 N: the host's body is in the game's night undress (kept through normalisation, like native wo141_rules.h).</summary>
+    public const byte FlagNightDress = 0x02;
 
     public static ActivityState None => new(0, 0, 0, NoUnstance, 0, NoMinigame, 0, 0);
 
@@ -80,7 +82,7 @@ public readonly record struct ActivityState(byte Stance, byte Cart, ulong Stance
         ulong uo = Unstance == NoUnstance ? 0 : UnstanceObj;
         ulong mo = Minigame == NoMinigame ? 0 : MinigameObj;
         var a = new ActivityState(st, cart, so, Unstance, uo, Minigame, mo, 0);
-        return a with { Flags = a.OwnsPosition ? FlagOwnsPos : (byte)0 };
+        return a with { Flags = (byte)((a.OwnsPosition ? FlagOwnsPos : 0) | (Flags & FlagNightDress)) };
     }
 
     /// <summary>The body-visible part (what an apply changes).</summary>

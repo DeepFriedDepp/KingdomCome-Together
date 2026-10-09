@@ -310,6 +310,12 @@ public partial class GameBridge
                 // the host passes a joiner's ping on to the other joiners
                 if (W137Host) foreach (byte j in Wo134Peers()) if (j != src) await W164SendAsync(j, Protocol.W164MarkPing, m.Text);
                 return;
+            case Protocol.W164Escort when W164Text.TryParseEscort(m.Text, out string enpc, out bool eon):
+                if (!W137Host) { Interlocked.Increment(ref _w164Malformed); return; }
+                Interlocked.Increment(ref _w164EscortFollows);
+                Console.WriteLine($"WO164-ESCORT npc={enpc} leader=player{src} follow={(eon ? "on" : "off")} -- the host's NPC {(eon ? "walks behind the joiner's figure" : "is its own again")}");
+                await ExecLuaAsync($"if KCD2MP_W164EscortFollow then KCD2MP_W164EscortFollow(\"{EscapeLua(enpc)}\", {src}, {B(eon)}) end");
+                return;
             case Protocol.W164Torch when W164Text.TryParseTorch(m.Text, out byte ghost, out bool on):
                 if (W137Host && ghost != src) { Interlocked.Increment(ref _w164Malformed); return; }   // a joiner speaks for itself
                 await W164TorchInAsync(ghost, on, "side-channel");
@@ -359,7 +365,19 @@ public partial class GameBridge
     private readonly ConcurrentDictionary<ushort, string> _w164UnstName = new();
     private readonly ConcurrentDictionary<string, double> _w164FleeSince = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, double> _w164HoldSince = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, (float X, float Y, long AtMs)> _w164NpcPos = new(StringComparer.Ordinal);   // the host's stream, at the read
+
+    /// <summary>D2: the enemy's distance to the nearest player (this one, every fresh partner); +inf when its stream is older than 10 s.</summary>
+    private double W164NearestPlayerM(string npc)
+    {
+        if (!_w164NpcPos.TryGetValue(npc, out var p) || Environment.TickCount64 - p.AtMs > 10_000) return double.PositiveInfinity;
+        double best = Math.Sqrt((p.X - _lastX) * (p.X - _lastX) + (p.Y - _lastY) * (p.Y - _lastY));
+        foreach (var (_, g) in _ghostLastPos.ToArray())
+            if ((DateTime.UtcNow - g.AtUtc).TotalSeconds < 10) best = Math.Min(best, Math.Sqrt((p.X - g.X) * (p.X - g.X) + (p.Y - g.Y) * (p.Y - g.Y)));
+        return best;
+    }
     private long _w164FleeDisengaged;
+    private readonly ConcurrentDictionary<string, double> _w164FarSince = new(StringComparer.Ordinal);
 
     private async Task<string?> W164UnstanceNameAsync(ushort id)
     {
@@ -388,13 +406,18 @@ public partial class GameBridge
         {
             double since = _w164HoldSince.GetOrAdd(name, now);
             bool flee = _w164FleeSince.TryGetValue(name, out double fs);
-            double fleeFor = flee ? now - fs : 0;   // a fleeing copy deals no blow: the flee's length stands in for "no blow"
-            if (!Wo164Rules.WatchdogRelease(now - since, fleeFor, flee, 0)) continue;
+            double far = W164NearestPlayerM(name);
+            // no blow: a fleeing copy deals none (the flee's length), a far one none either (its distance held 20 s: the hold's age)
+            double quiet = flee ? now - fs : far > Wo164Rules.WatchFarM ? now - _w164FarSince.GetOrAdd(name, now) : 0;
+            if (far <= Wo164Rules.WatchFarM) _w164FarSince.TryRemove(name, out _);
+            if (!Wo164Rules.WatchdogRelease(now - since, quiet, flee, far)) continue;
+            double fleeFor = quiet;
             Interlocked.Increment(ref _w164FleeDisengaged);
             if (_w147Local.ContainsKey(name)) await Wo147ReleaseAsync(name, "WO-164: it fled");
             if (_w132Engaged.TryRemove(name, out var e)) { Interlocked.Increment(ref _w132EngageOff); await _combat.Wo132EngageAsync(false, e.Eid, default); }
             _w164HoldSince.TryRemove(name, out _);
-            Console.WriteLine(FormattableString.Invariant($"WO164-FLEE disengage npc={name} age={now - since:F0} why=host-flee-{fleeFor:F0}s -- the mod's hold on a fleeing enemy is let go"));
+            _w164FarSince.TryRemove(name, out _);
+            Console.WriteLine(FormattableString.Invariant($"WO164-FLEE disengage npc={name} age={now - since:F0} why={(flee ? "host-flee" : "far")}-{fleeFor:F0}s nearest_player_m={(double.IsInfinity(far) ? "?" : far.ToString("F0"))} -- the mod's hold on a fleeing or distant enemy is let go"));
         }
     }
 
@@ -471,6 +494,14 @@ public partial class GameBridge
             case "w164_unstuck2":   // S3 step 2: this player beside the partner (the leash's own placement)
                 _ = W164UnstuckBesideAsync();
                 return;
+            case "w164_escort":   // ESC (joiner): <npc> 1|0 -- this NPC follows this player (the quest asked it); the host is told
+                if (f.Length == 2 && W164Text.TryParseEscort(string.Join(' ', f), out string en, out bool eo) && W137Joiner)
+                    _ = W164SendAsync(Protocol.JoinTargetHost, Protocol.W164Escort, W164Text.Escort(en, eo));
+                return;
+            case "w164_pin":   // C2: mp_partner_marker on|off
+                if (f.Length >= 1 && f[0] is "on" or "off") _w164PinOn = f[0] == "on";
+                Console.WriteLine($"WO164-CFG partner marker {(_w164PinOn ? "on" : "off")}");
+                return;
             case "w164_cfg":
                 if (f.Length >= 1 && f[0] is "on" or "off") _w164On = f[0] == "on";
                 Console.WriteLine($"WO164-CFG agent half {(_w164On ? "on" : "off")}");
@@ -489,6 +520,73 @@ public partial class GameBridge
         if (ok) await W164NoticeAsync("You are beside your partner.");
     }
 
+    // ================================================================ ESC: a quest NPC that follows the joiner
+
+    private readonly ConcurrentDictionary<(byte Peer, string Scope), double> _w164Escorts = new();
+    private long _w164EscortAccepted, _w164EscortFollows;
+
+    /// <summary>
+    /// Host: a joiner's quest step the host's world would refuse (its own value is elsewhere) is applied when the joiner leads that
+    /// quest's NPC -- a follow step starts the escort, its end step ends it (the 0.47.0 Mutt bait: every step of Ignatius' logic was
+    /// refused because the host's own logic never started; the counter then drifted for 7 minutes).
+    /// </summary>
+    private bool W164EscortAccepts(byte src, QuestChange req, int hostVal, string head)
+    {
+        if (!_w164On) return false;
+        double now = W164Now();
+        foreach (var k in _w164Escorts.Keys) if (now - _w164Escorts[k] > Wo164Rules.EscortMaxS) _w164Escorts.TryRemove(k, out _);
+        string? scope = Wo164Rules.EscortScope(req.Path);
+        bool follow = Wo164Rules.IsFollowPort(req.Port);
+        bool active = _w164Escorts.Keys.Any(k => k.Peer == src && Wo164Rules.InEscortScope(k.Scope, req.Path));
+        if (!follow && !active) return false;
+        if (follow && scope is not null) _w164Escorts[(src, scope)] = now;
+        Interlocked.Increment(ref _w164EscortAccepted);
+        Console.WriteLine(FormattableString.Invariant($"WO164-ESCORT logic={scope ?? req.Path} leader=player{src} accepted={req.Port} host_value={hostVal} -- {(follow ? "the joiner leads this quest's NPC: its steps are applied here" : "a step of the joiner's escort")}"));
+        if (Wo164Rules.IsEscortEndPort(req.Port))
+        {
+            foreach (var k in _w164Escorts.Keys.Where(k => k.Peer == src && Wo164Rules.InEscortScope(k.Scope, req.Path)).ToList()) _w164Escorts.TryRemove(k, out _);
+            _ = ExecLuaAsync($"if KCD2MP_W164EscortFollow then KCD2MP_W164EscortFollow(nil, {src}, false) end");
+        }
+        return true;
+    }
+
+    /// <summary>Joiner: its own step went to the host -- a follow step asks the Lua which NPC follows this player now.</summary>
+    private void W164JoinerStepSent(string path, string port)
+    {
+        if (!_w164On) return;
+        if (Wo164Rules.IsFollowPort(port)) _ = ExecLuaAsync("if KCD2MP_W164EscortFind then KCD2MP_W164EscortFind() end");
+        else if (Wo164Rules.IsEscortEndPort(port)) _ = ExecLuaAsync("if KCD2MP_W164EscortEnd then KCD2MP_W164EscortEnd(\"quest-step\") end");
+    }
+
+    // ================================================================ C2: the partner's pin on the map
+
+    private volatile bool _w164PinOn = true;   // mp_partner_marker (the Lua's switch, the mod menu's Display group)
+    private readonly ConcurrentDictionary<byte, (float X, float Y)> _w164PinAt = new();
+    private long _w164PinSets, _w164PinRemoves;
+
+    /// <summary>Every 2 s: a pin at each partner in this world (moved when it moved more than 3 m); none when not in one session.</summary>
+    private async Task W164PinTickAsync()
+    {
+        bool want = _w164PinOn && (W137Host || W137Joiner);
+        var fresh = new HashSet<byte>();
+        if (want)
+            foreach (var (g, p) in _ghostLastPos.ToArray())
+            {
+                if (g == _myGhostId || (DateTime.UtcNow - p.AtUtc).TotalSeconds > 10) continue;
+                fresh.Add(g);
+                if (_w164PinAt.TryGetValue(g, out var was) && Wo164Rules.PinMoveDue(was.X, was.Y, p.X, p.Y) == false) continue;
+                if (await _combat.MirrorGraveAsync(3, g, 0, p.X, p.Y, p.Z)) { _w164PinAt[g] = (p.X, p.Y); Interlocked.Increment(ref _w164PinSets); }
+            }
+        foreach (var g in _w164PinAt.Keys.ToArray())
+        {
+            if (fresh.Contains(g)) continue;
+            _w164PinAt.TryRemove(g, out _);
+            await _combat.MirrorGraveAsync(4, g, 0, 0, 0, 0);
+            Interlocked.Increment(ref _w164PinRemoves);
+            Console.WriteLine($"WO164-MAPMARK pin of player {g} removed ({(!_w164PinOn ? "mp_partner_marker off" : !(W137Host || W137Joiner) ? "not in a session" : "no position for 10 s")})");
+        }
+    }
+
     private long _w164TickN;
 
     /// <summary>Once a second (the WO-151 loop).</summary>
@@ -499,6 +597,7 @@ public partial class GameBridge
         await W164TorchOutTickAsync(false);
         await W164FleeTickAsync();
         await W164SitTickAsync();
+        if (n % 2 == 0) await W164PinTickAsync();
         if (n % 2 == 0 && _w164Mism.Count > 0) await W164QuestFixAllAsync("mismatch-10s", Wo164Rules.QuestFixAfterS);
         if (n % 10 == 0 && !_w164MarkersOffTold)
         {
@@ -511,7 +610,7 @@ public partial class GameBridge
             }
         }
         if (n % 60 == 0 && (_w164TalkAsks + _w164Sweeps + _w164QFixOk + _w164QFixRefused + _w164FleeDisengaged + _w164SitCleared + _w164TorchSide) > 0)
-            Console.WriteLine($"MP-WO164-STATS talks={_w164TalkAsks} started={_w164TalkStarts} failed={_w164TalkFails} preempted={_w164Preempted} sweeps={_w164Sweeps} sweep_found={_w164SweepFound} sweep_still_erroring={_w164SweepStillErr} qfix_ok={_w164QFixOk} qfix_refused={_w164QFixRefused} flee_disengaged={_w164FleeDisengaged} sit_cleared={_w164SitCleared} torch_side={_w164TorchSide} marks={_w164Marks} mark_pings_in={_w164MarkPingsIn} malformed={_w164Malformed} random_event_lines={_w164RandomEvents}");
+            Console.WriteLine($"MP-WO164-STATS talks={_w164TalkAsks} started={_w164TalkStarts} failed={_w164TalkFails} preempted={_w164Preempted} sweeps={_w164Sweeps} sweep_found={_w164SweepFound} sweep_still_erroring={_w164SweepStillErr} qfix_ok={_w164QFixOk} qfix_refused={_w164QFixRefused} flee_disengaged={_w164FleeDisengaged} sit_cleared={_w164SitCleared} torch_side={_w164TorchSide} pin_sets={_w164PinSets} pin_removes={_w164PinRemoves} escort_accepted={_w164EscortAccepted} escort_follows={_w164EscortFollows} marks={_w164Marks} mark_pings_in={_w164MarkPingsIn} malformed={_w164Malformed} random_event_lines={_w164RandomEvents}");
     }
 
     // ================================================================ ID: the host's idles on the joiner, per minute with reasons

@@ -289,6 +289,7 @@ public partial class GameBridge
         var sent = conv ? c with { Flags = (byte)(c.Flags | Wo147Rules.FlagConversation) } : c;
         await Wo137SendAsync(Protocol.QuestAskUp, Protocol.JoinTargetHost, Protocol.QuestAskRequest, tok, Wo137Rules.RequestText(sent));
         Interlocked.Increment(ref _w137AsksOut);
+        W164JoinerStepSent(c.Path, c.Port);   // WO-164 ESC: a follow step: which NPC follows this player here (the host walks its own)
         Console.WriteLine(FormattableString.Invariant($"MP-W137 joiner -> host request #{tok}: {c.Path} {c.Port} {c.Old}->{c.New} ({c.Type}{(conv ? ", from this player's conversation" : "")}) -- this game's own step, the host applies it to the world"));
     }
 
@@ -623,6 +624,9 @@ public partial class GameBridge
                 Interlocked.Increment(ref _w137VerdictAlready);
                 await Wo137ReplyAsync(src, tok, "already", h.Val, hostPort, req.Path);
                 Console.WriteLine(FormattableString.Invariant($"{head}: already done in the host's world (host value {h.Val}) -- counted once"));
+                return;
+            case Wo137Rules.Verdict.Refused when W164EscortAccepts(src, req, h.Val, head):
+                await Wo137ApplyRequestAsync(src, tok, req, h.Val, hostPort, head);   // WO-164 ESC: the joiner leads this quest's NPC
                 return;
             case Wo137Rules.Verdict.Refused:
                 Interlocked.Increment(ref _w137VerdictRefused);

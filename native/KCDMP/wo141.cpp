@@ -704,6 +704,10 @@ struct Desired {
     double wakeCheckAt = -1e9;   // WO-160 (wake): when the body's outfit was last read
     bool wakeWanted = false;     // ... and what it said: still the night's undress while the host's body is awake
     void* wakeElem = nullptr;    // ... for this equipment element (the game's text of a state leaks ~100 B a call: read once per element)
+    bool hostNight = false;      // WO-164 N: the host's body is in its night undress (the row's flag)
+    bool copyNight = false;      // ... and this copy is (read when its equipment element changes)
+    void* dressElem = nullptr;
+    double dressCheckAt = -1e9, dressNextAt = -1e9;
     int sitRefusals = 0;         // WO-164 S1: an avatar's seat / bed refused by the planner (exec 0, body not in step)
     R::Activity refusedSit;      // ... the seat it fell back from (stands beside it while the same seat is asked again)
     double refusedSitAt = -1e9;
@@ -722,6 +726,11 @@ std::unordered_map<std::string, Desired> g_desired;
 
 std::atomic<uint64_t> c_rowsSent{0}, c_applies{0}, c_applyOk{0}, c_applyFail{0}, c_leaves{0}, c_reads{0}, c_shows{0};
 std::atomic<uint64_t> c_sweeps{0}, c_sweepMissing{0}, c_sitFailed{0}, c_sitFallback{0};   // WO-164
+std::atomic<uint64_t> c_outfitSent{0}, c_outfitDressed{0};                                 // WO-164 N
+// WO-164 N (host): each tracked NPC's night-undress flag, read only when its equipment element changes (the game's text of a
+// state leaks ~100 B a call)
+struct NightRead { void* elem = nullptr; bool night = false; };
+std::unordered_map<std::string, NightRead> g_nightRead;
 
 // op 8: a one-shot of the player's, shown as an NPC unstance (with_shown)
 R::Activity g_shown;
@@ -758,10 +767,19 @@ void capture_one(uint8_t kind, const char* name, uint32_t eid, double now) {
     if (!read_activity(eid, &a)) return;
     c_reads.fetch_add(1);
     if (kind == kKindPlayer) a = R::without_crouch(R::with_shown(a, g_shown, now < g_shownUntil));   // WO-144 2.2: crouch rides the state block
+    if (kind == kKindNpc) {   // WO-164 N: the night undress rides the row's flags
+        void* c = ctx_of_eid(eid);
+        void* el = c ? equipment_element(c) : nullptr;
+        NightRead& nr = g_nightRead[lower(name)];
+        if (el != nr.elem) { nr.elem = el; nr.night = el ? in_sleep_outfit(c) : false; }
+        if (nr.night) a.flags = static_cast<uint8_t>(a.flags | R::kFlagNightDress);
+    }
     Sent& s = g_sent[kind == kKindPlayer ? std::string() : lower(name)];
-    const bool changed = !s.have || !R::same(s.a, a);
+    const bool changed = !s.have || !R::same(s.a, a) || ((s.a.flags ^ a.flags) & R::kFlagNightDress) != 0;
     if (!R::send_due(changed || g_resync, R::none(a), now - s.at)) return;
-    if (changed) logf("WO141-CAPTURE %s %s: %s", kind == kKindPlayer ? "player" : "npc", kind == kKindPlayer ? "(local)" : name, describe(a).c_str());
+    if (changed) logf("WO141-CAPTURE %s %s: %s%s", kind == kKindPlayer ? "player" : "npc", kind == kKindPlayer ? "(local)" : name, describe(a).c_str(),
+                      (a.flags & R::kFlagNightDress) ? " night-undress" : "");
+    if (changed && s.have && ((s.a.flags ^ a.flags) & R::kFlagNightDress)) c_outfitSent.fetch_add(1, std::memory_order_relaxed);
     s.a = a; s.at = now; s.have = true;
     add_row(kind, kind == kKindPlayer ? std::string() : std::string(name), a);
 }
@@ -838,7 +856,7 @@ void reconcile_tick(double now) {
         // WO-160 (wake): in step is not enough while the body is still in the night's undress and awake in the host's world --
         // a host row of "none" (a walker, an idler) asks the game for nothing, so a copy stayed naked for the whole session
         bool wakePending = false;
-        if (g_wakeDress.load() && d.a.stance != R::kLying && !R::is_avatar_name(d.name.c_str()) && !R::gave_up(d.refusals, now - d.gaveUpAt)) {
+        if (g_wakeDress.load() && !d.hostNight && d.a.stance != R::kLying && !R::is_avatar_name(d.name.c_str()) && !R::gave_up(d.refusals, now - d.gaveUpAt)) {
             if (now - d.wakeCheckAt >= 5.0) {
                 d.wakeCheckAt = now;
                 void* wc = ctx_of_eid(d.eid);
@@ -856,6 +874,27 @@ void reconcile_tick(double now) {
             ++it; continue;
         }
         d.matched = false;
+        // WO-164 N: the host's body is dressed and this copy is still in its night undress -- dressed from what the body is now (a
+        // placement the planner can always reach), even when the host's activity was given up (the 0.47.0 herbalist: refused
+        // placements, so WO-160's wake never ran)
+        if (g_wakeDress.load() && !d.hostNight && !R::is_avatar_name(d.name.c_str()) && cur.stance != R::kLying) {
+            if (now - d.dressCheckAt >= 5.0) {
+                d.dressCheckAt = now;
+                void* wc = ctx_of_eid(d.eid);
+                void* el = wc ? equipment_element(wc) : nullptr;
+                if (!el) { d.copyNight = false; d.dressElem = nullptr; }
+                else if (el != d.dressElem) { d.dressElem = el; d.copyNight = in_sleep_outfit(wc); }
+            }
+            if (d.copyNight && now >= d.dressNextAt) {
+                d.dressNextAt = now + 20.0;
+                uint8_t dres = 0;
+                const uint8_t dr = apply_now(d.eid, cur, &dres, nullptr, d.name.c_str());
+                c_outfitDressed.fetch_add(1, std::memory_order_relaxed);
+                d.dressElem = nullptr;   // read again: did the planner dress it?
+                logf("WO164-OUTFIT npc=%s applied (%s, exec %u) -- the host's body is dressed, this copy was still in its night undress thread=%lu",
+                     d.name.c_str(), applied_name(dr), dres, static_cast<unsigned long>(GetCurrentThreadId()));
+            }
+        }
         // WO-160: the planner has refused this activity kMissesBeforeGiveUp times: the body is shown by the writer alone until the
         // host's activity changes (or kGiveUpRetryS passes), not asked again every minute
         if (R::gave_up(d.refusals, now - d.gaveUpAt)) { hold_to(false); ++it; continue; }
@@ -1118,7 +1157,7 @@ void research_watch() {
 std::string status_text() {
     char b[640];
     _snprintf_s(b, sizeof b, _TRUNCATE,
-                "read %s apply %s | capture npcs=%d player=%d period=%ums | apply %s desired=%zu | rows %llu reads %llu applies %llu (ok %llu fail %llu) leaves %llu shows %llu equip_kept %llu woke_dressed %llu neutral %llu sweeps %llu sweep_missing %llu sit_failed %llu sit_fallback %llu",
+                "read %s apply %s | capture npcs=%d player=%d period=%ums | apply %s desired=%zu | rows %llu reads %llu applies %llu (ok %llu fail %llu) leaves %llu shows %llu equip_kept %llu woke_dressed %llu neutral %llu sweeps %llu sweep_missing %llu sit_failed %llu sit_fallback %llu outfit_sent %llu outfit_dressed %llu",
                 g_readArmed ? "armed" : "NOT ARMED", g_applyArmed ? "armed" : "NOT ARMED", g_captureNpcs.load() ? 1 : 0,
                 g_capturePlayer.load() ? 1 : 0, g_periodMs.load(), g_applyOn.load() ? "on" : "off", g_desired.size(),
                 static_cast<unsigned long long>(c_rowsSent.load()), static_cast<unsigned long long>(c_reads.load()),
@@ -1127,12 +1166,14 @@ std::string status_text() {
                 static_cast<unsigned long long>(c_shows.load()), static_cast<unsigned long long>(c_equipKept.load()),
                 static_cast<unsigned long long>(c_wakeDressed.load()), static_cast<unsigned long long>(c_neutral.load()),
                 static_cast<unsigned long long>(c_sweeps.load()), static_cast<unsigned long long>(c_sweepMissing.load()),
-                static_cast<unsigned long long>(c_sitFailed.load()), static_cast<unsigned long long>(c_sitFallback.load()));
+                static_cast<unsigned long long>(c_sitFailed.load()), static_cast<unsigned long long>(c_sitFallback.load()),
+                static_cast<unsigned long long>(c_outfitSent.load()), static_cast<unsigned long long>(c_outfitDressed.load()));
     return b;
 }
 
 void set_desired(const std::string& name, const R::Activity& a) {
     Desired& d = g_desired[lower(name.c_str())];
+    d.hostNight = (a.flags & R::kFlagNightDress) != 0;   // WO-164 N
     // WO-164 S1: the seat this figure fell back from, asked again: it keeps standing beside it for a while
     if (d.refusedSitAt > -1e8 && R::same(d.refusedSit, a) && now_s() - d.refusedSitAt < R::kSitFallbackS) { d.name = name; return; }
     const bool changed = d.name.empty() || !R::same(d.a, a);

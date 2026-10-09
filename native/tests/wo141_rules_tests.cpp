@@ -39,7 +39,9 @@ int wo141_rules_tests(int* passed) {
     {
         Activity a; a.stance = kStanding; a.stanceObj = 7; a.cart = 3; a.flags = 0xFF;
         const Activity n = normalised(a);
-        ACHECK(n.stance == 0 && n.stanceObj == 0 && n.cart == 0 && n.flags == 0, "standing on an object: nothing (and the flags are recomputed)");
+        ACHECK(n.stance == 0 && n.stanceObj == 0 && n.cart == 0 && n.flags == kFlagNightDress, "standing on an object: nothing (and the flags are recomputed; only WO-164's night-undress bit is kept)");
+        a.flags = 0x01;
+        ACHECK(normalised(a).flags == 0, "WO-164: a sender's owns-position bit is never taken over");
     }
     {
         Activity a = bench(9); a.cart = 2;

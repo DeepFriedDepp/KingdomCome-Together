@@ -20,7 +20,7 @@ namespace KCDMP_launcher.Models
         public static readonly string[] KnownKeys =
         {
             "NameBadges", "PingLine", "CleanScreen", "FriendlyFire", "CrimeMode",
-            "FastTravel", "Leash", "SleepVote", "Whistle", "PartnerHerbs",
+            "FastTravel", "Leash", "SleepVote", "Whistle", "PartnerHerbs", "PartnerMarker",
         };
 
         public static string? Filter(byte[]? file)

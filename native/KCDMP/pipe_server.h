@@ -96,6 +96,7 @@
 //                        when the toggle is typed on the Lua side. The DLL's
 //                        own native console command sets the same flag.
 //     0x0E MirrorGrave  [op:1][owner:1][graveId:8 LE][x:4f][y:4f][z:4f]  (22)
+//          op 1 add, 0 remove, 2 clear the owner's; WO-164: 3 the owner's map pin set / moved to x y z, 4 the pin removed
 //                        WO-113: op 1 = add a peer's gravestone + marker
 //                        (never lootable, never saved), op 0 = remove it,
 //                        op 2 = remove every mirror of `owner` (0xFF = all).
