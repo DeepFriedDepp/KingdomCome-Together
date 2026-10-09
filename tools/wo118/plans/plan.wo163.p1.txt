@@ -1,0 +1,13 @@
+# WO-163 probes P1 + P5 (joiner half), a throwaway save by Troskowitz, the local player standing at about (2338, 2048, 109.2).
+# A host NPC fights the joiner's avatar (ncombat avatar:1), so the joiner's copy of it is ENGAGED against the local player (WO-132/147), 3.6 m away.
+# Four host swing rows (the catalog's unarmed punch) at 12, 16, 20 and 24 s; a sync-attack row (a field dump's GUID, read at +0x7C) at 28 s.
+# The runner engages the copy at ~28 s of its own clock (mp_w163_probe engage: no join session here) and watches its model (modelwatch).
+# P1 reads the copy's combat model around each row (mp_w163_probe model <npc>, sampled by the runner).
+start 22
+hold ttkc_bailiffSon 2341.0 2050.0 109.2 3.14 drawn
+ncombat 0 40 ttkc_bailiffSon avatar:1 3 1 0 3
+row 12.0 ttkc_bailiffSon 3e27732b-b152-4a27-97d2-1ebba717a588
+row 16.0 ttkc_bailiffSon 3e27732b-b152-4a27-97d2-1ebba717a588
+row 20.0 ttkc_bailiffSon 3e27732b-b152-4a27-97d2-1ebba717a588
+row 24.0 ttkc_bailiffSon 3e27732b-b152-4a27-97d2-1ebba717a588
+row 28.0 ttkc_bailiffSon 9abf1058-e945-38e8-ad87-b5471c939c53

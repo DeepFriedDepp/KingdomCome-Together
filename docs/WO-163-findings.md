@@ -188,4 +188,34 @@ P2 / P3 / P4 need native code that calls the engine's combat path (`RPGProcessHi
 names the call but not the result struct's size or constructor (`[not determined]`), so its first instrument is designed from P1's
 result, on the main thread under `fault::guarded` with the pointers validated in the frame they are used.
 
+### P1 — does an engaged copy playing a host row enter Striking? **FAIL** (asked, answered 2026-10-08, synthetic peers, maintainer's go)
+
+* **Setup [L].** The throwaway save, Henry standing at (2338, 2048); the plan's host NPC held 3.6 m from him with a host combat state
+  targeting the joiner's avatar and five host rows (four unarmed punches and one combo sync attack). No join session exists in this
+  harness, so the agent's own engagement does not fire (`JudgeEngage` wants a joiner session); the copy was engaged through the DLL's
+  own engage op (`mp_w163_probe engage`), the same call the agent makes: `ok=True first=True skirmish=True dist=3.6 m` — the copy joins a
+  skirmish against the player and its combat state is held. (The first attempt read `dist=350.2 m reason=6`: the **agent's leash had
+  dragged Henry 350 m toward the synthetic host's avatar** — `mp_leash off` and a teleport back fixed the harness; the leash itself is
+  working as designed.)
+* **Reads.** `mp_w163_probe modelwatch`: the DLL's model reader every ~45 ms for 26 s, logging only changes, with each host row's arrival
+  marked on the same clock. **327 reads, 1 change** (the first): `ca=1 pca=0 model=1 state=2 gz=1 bz=-1 bh=1 bm=0 pb=0 az=-1 at=-1 as=0.000 ah=1
+  cm=1 opp=0x7777(me)` — *Guard*, combat mode on, **the Opponent is the local player**, every property block names itself. Through all five
+  rows (and a first run with the copy *not* engaged: 331 reads, state 1 / Idle, no opponent) **State never left its value, AttackType stayed
+  −1, AttackStrength 0.000, AttackZone −1 (engaged: −1; unengaged: its default 2)**.
+* **Verdict: FAIL.** A copy that plays a host row through the cosmetic route does not enter `Striking` (State 8) and its attack fields are not
+  set (WO-162 Q1.7 / Q1.4: the hit core *reads* them). **Consequence for C.2:** it must write `AttackType / AttackZone / AttackStrength /
+  AttackHandSlot` on the copy's model itself before the Level-B call, from the row it just played (the catalog row carries `attack_type_id`,
+  `attack_zone_id`; strength 1.0; the hand slot from the weapon) — "recorded, still allowed" in the WO. **Level C (`OnCollision`) stays a no-go**: it
+  needs `State == Striking`, which only a combat action committed by the combat module produces. The engaged copy's `Opponent == me` and
+  `State == Guard` are exactly what the block test reads on the *victim* side (Q1.4); on the attacker side they are what a replay would use.
+* **Not answered:** whether the fields *can* be written (their property blocks are named and writable by the same reader's offsets; no
+  write was made) — that is the first step of the P3 instrument.
+
+### P5 (joiner half) — does a sync-attack row, resolved at +0x7C, play on a copy? **PASS**
+
+A plan sent the catalog row of one of the 24 field dumps (`combat_action_sync_attack`, `CombatAttackComboGen`, a hook combo): the agent
+resolved it (`spec="CombatAttackComboGen, r_noweapon+c01+sZ2+leftGuard+eZ1+aZ5+hook+attack_heavy+l_noShield+oppMale"`) and the copy played it:
+`dispatch=native-row result=ok` (no `dropped-unknown-row`) — the joiner half of A1's live check. **The host half — the DLL reading the GUID at +0x7C
+from a real committed sync attack — is not tested** (needs a throwing / combo NPC fighting the host).
+
 <!-- STAGE-B-RESULTS -->

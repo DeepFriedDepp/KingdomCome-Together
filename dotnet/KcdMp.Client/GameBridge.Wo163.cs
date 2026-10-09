@@ -20,6 +20,15 @@ public partial class GameBridge
 {
     private long _w163SyncOut, _w163SyncUnknown, _w163MasterOut, _w163PerfectDropped, _w163BothOffsets;
     private long _w163HostileAsked, _w163HostileYes, _w163HostileNo, _w163HostileUnanswered;
+    private volatile string? _w163WatchNpc;                       // P1: a modelwatch is running on this NPC's copy
+    private volatile System.Diagnostics.Stopwatch? _w163WatchClock;
+
+    /// <summary>P1 (modelwatch): a swing row was played on the watched copy -- logged on the watch's own clock, between the model's changes.</summary>
+    private void Wo163NoteRowForWatch(string npc, string spec)
+    {
+        if (_w163WatchNpc == npc && _w163WatchClock is { } c)
+            Console.WriteLine(FormattableString.Invariant($"WO163-MODEL t={c.ElapsedMilliseconds}ms npc={npc} >>> a host row was played on the copy: {spec}"));
+    }
 
     /// <summary>
     /// A7 (host): the Lua judge's question "is this NPC in a skirmish fight with the host?" (<c>w163_hostile &lt;id&gt; &lt;npc&gt;</c>) goes to the
@@ -39,6 +48,9 @@ public partial class GameBridge
     /// Stage B's console surface (mp_w163_probe; maintainer present, one probe at a time -- the instruments, never the verdicts; every answer is
     /// a WO163-PROBE / WO163-MODEL line in this log):
     ///   status | model [npc|me] | relation &lt;npc&gt; | pair &lt;npc&gt; on|off [override] | swing2 &lt;npc&gt; &lt;gap_ms&gt; &lt;spec A&gt; | &lt;spec B&gt;
+    ///   | engage &lt;npc&gt; on|off | modelwatch &lt;npc&gt; &lt;secs&gt; [every_ms=40]
+    /// engage = the joiner's engagement of a bound copy against the local player (the DLL's own op, WO-132) without a join session; modelwatch
+    /// reads the copy's combat model every few ms and logs only what CHANGED, with the rows that played on it in between (P1).
     /// pair joins / leaves the host's soul in the NPC's skirmish (P6); swing2 plays row A on the NPC's copy, then row B after the gap (P8).
     /// </summary>
     private async Task Wo163ProbeAsync(string line)
@@ -95,8 +107,38 @@ public partial class GameBridge
                     Console.WriteLine($"WO163-PROBE swing2 npc={npc} A=\"{specs[0]}\" -> {a.ReasonTag}; after {gap} ms B=\"{specs[1]}\" -> {b.ReasonTag}");
                     return;
                 }
+                case "engage":
+                {
+                    var f = rest.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                    if (f.Length != 2 || !CarryText.IsName(f[0]) || f[1] is not ("on" or "off")) { Console.WriteLine("WO163-PROBE engage <npc> on|off"); return; }
+                    if (!_npcEntityIds.TryGetValue(f[0], out uint eid)) { Console.WriteLine($"WO163-PROBE engage: {f[0]} is not a copy here"); return; }
+                    var st2 = new BodyState2(0, 0, BodyState2Bits.CombatMode | BodyState2Bits.Locked, Protocol.ZoneFromTableId(3), Protocol.StanceFromTableId(1), Protocol.ZoneFromTableId(3), 0, 0, 0);
+                    var r = await _combat.Wo132EngageAsync(f[1] == "on", eid, st2, CancellationToken.None);
+                    Console.WriteLine($"WO163-PROBE engage {f[0]} {f[1]}: ok={r.Ok} first={r.First} skirmish={r.Skirmish} dist={r.DistM:F1} m reason={r.Reason}");
+                    return;
+                }
+                case "modelwatch":
+                {
+                    var f = rest.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                    if (f.Length < 2 || !CarryText.IsName(f[0]) || !double.TryParse(f[1], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double secs) || secs is <= 0 or > 120)
+                    { Console.WriteLine("WO163-PROBE modelwatch <npc> <secs 0-120> [every_ms 20-500]"); return; }
+                    int every = f.Length > 2 && int.TryParse(f[2], out int e2) ? Math.Clamp(e2, 20, 500) : 40;
+                    var sw = System.Diagnostics.Stopwatch.StartNew();
+                    _w163WatchNpc = f[0]; _w163WatchClock = sw;
+                    string? last = null; int reads = 0, changes = 0;
+                    while (sw.Elapsed.TotalSeconds < secs)
+                    {
+                        string? t = await _combat.Wo163ModelReadAsync(f[0]);
+                        reads++;
+                        if (t is not null && t != last) { changes++; last = t; Console.WriteLine(FormattableString.Invariant($"WO163-MODEL t={sw.ElapsedMilliseconds}ms npc={f[0]} {t}")); }
+                        await Task.Delay(every);
+                    }
+                    _w163WatchNpc = null; _w163WatchClock = null;
+                    Console.WriteLine($"WO163-PROBE modelwatch {f[0]} done: {reads} reads, {changes} changes");
+                    return;
+                }
                 default:
-                    Console.WriteLine("WO163-PROBE verbs: status | model [npc|me] | relation <npc> | pair <npc> on|off [override] | swing2 <npc> <gap_ms> <spec A> | <spec B>");
+                    Console.WriteLine("WO163-PROBE verbs: status | model [npc|me] | relation <npc> | pair <npc> on|off [override] | swing2 <npc> <gap_ms> <spec A> | <spec B> | engage <npc> on|off | modelwatch <npc> <secs> [every_ms]");
                     return;
             }
         }
