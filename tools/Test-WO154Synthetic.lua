@@ -156,7 +156,7 @@ end
 do
     local b = lastLog("WO154-BUILD") or ""
     check("a: WO154-BUILD logged once", logCount("WO154-BUILD") == 1, logCount("WO154-BUILD"))
-    for _, kv in ipairs({ "menu=on", "menu_key=insert", "name_badges=on", "ping_line=on", "clean_screen=off", "fast_travel=off", "items=16" }) do
+    for _, kv in ipairs({ "menu=on", "menu_key=insert", "name_badges=on", "ping_line=on", "clean_screen=off", "fast_travel=off", "items=17" }) do
         check("a: the build line says " .. kv, b:find(kv, 1, true) ~= nil, b)
     end
     check("a: w154_menu_cfg fast_travel=off told to the agent at load", evts("w154_menu_cfg")[1] == "fast_travel=off", evts("w154_menu_cfg")[1])
@@ -309,12 +309,12 @@ do
     key("kcd2mp_menu_toggle"); frame()
     local n, sel = #M.ITEMS, 0
     for i = 1, n do if M.selectable(i) then sel = sel + 1 end end
-    check("d: 16 items, 14 that can be chosen (version and connection are information)", n == 16 and sel == 14, n .. "/" .. sel)
+    check("d: 17 items, 15 that can be chosen (version and connection are information; WO-164 added the partner pin)", n == 17 and sel == 15, n .. "/" .. sel)
     local mark = #LOG
     NOW = NOW + 0.1
     key("kcd2mp_menu_up")
-    check("d: PgUp on the first wraps to the last that can be chosen (not an information row)", M.menu.sel == 14 and M.ITEMS[14].id == "report"
-        and logCount("MP-MENU select 14 report", mark) == 1, M.menu.sel)
+    check("d: PgUp on the first wraps to the last that can be chosen (not an information row)", M.menu.sel == 15 and M.ITEMS[15].id == "report"
+        and logCount("MP-MENU select 15 report", mark) == 1, M.menu.sel)
     NOW = NOW + 0.1
     key("kcd2mp_menu_down")
     check("d: PgDn on the last wraps to the first", M.menu.sel == 1, M.menu.sel)
@@ -324,7 +324,7 @@ do
     DRAWS = {}; frame()
     check("d: the marker follows the choice, with its explanation", drawn("> Clean screen: Off") ~= nil and drawn("  Partner's name badge: On") ~= nil
         and drawn("Hides everything the mod draws") ~= nil)
-    check("d: mp_menu select 15 (the version) is refused", KCD2MP_W154Menu("select 15") == false and M.menu.sel == 3)
+    check("d: mp_menu select 16 (the version) is refused", KCD2MP_W154Menu("select 16") == false and M.menu.sel == 3)
     check("d: mp_menu select fast_travel", KCD2MP_W154Menu("select fast_travel") == true and M.ITEMS[M.menu.sel].id == "fast_travel")
     check("d: mp_menu select 2", KCD2MP_W154Menu("select 2") == true and M.menu.sel == 2)
     check("d: no Lua errors", #ERRS == 0, ERRS[1])
@@ -652,9 +652,10 @@ do
     local st = lastLog("MP-MENU status") or ""
     local n = 0
     for _ in st:gmatch("%d+:[%w_]+=") do n = n + 1 end
-    check("j: the status line has every item with its whose", n == 16 and st:find("1:name_badges=on(own)", 1, true) ~= nil
-        and st:find("fast_travel=off(host)", 1, true) ~= nil and st:find("13:unstuck=action(help)", 1, true) ~= nil
-        and st:find('15:version="0.45.0"(info)', 1, true) ~= nil and st:find("16:connection=", 1, true) ~= nil, st)
+    check("j: the status line has every item with its whose", n == 17 and st:find("1:name_badges=on(own)", 1, true) ~= nil
+        and st:find("fast_travel=off(host)", 1, true) ~= nil and st:find("14:unstuck=action(help)", 1, true) ~= nil
+        and st:find("4:partner_marker=on(own)", 1, true) ~= nil
+        and st:find('16:version="0.45.0"(info)', 1, true) ~= nil and st:find("17:connection=", 1, true) ~= nil, st)
     check("j: a bad verb shows the usage", KCD2MP_W154Menu("dance") == false and lastLog("mp_menu: expected open|close|up|down|change|status|select") ~= nil)
     check("j: mp_menu close", KCD2MP_W154Menu("close") == true and M.menu.open == false and logCount("MP-MENU close (by console)", mark) == 1)
     check("j: no Lua errors", #ERRS == 0, ERRS[1])

@@ -9,7 +9,7 @@ PLAION. Kingdom Come: Deliverance II, its assets and its content belong to
 Warhorse Studios and PLAION; this project's copyright covers only its own code.
 
 0.47.0 plus WO-164 (2026-10-09). The installer, `KingdomComeTogether-Setup-0.47.5.exe`, comes from the maintainer. The evidence is
-`docs/WO-164-findings.md`; what to check live is `docs/TWO-PLAYER-CHECKLIST.md`, items 177–196 (and the earlier ones still pending).
+`docs/WO-164-findings.md`; what to check live is `docs/TWO-PLAYER-CHECKLIST.md`, items 177–204 (and the earlier ones still pending).
 
 **Both machines and the relay must run the same build.** It refuses every other version at the handshake.
 
@@ -39,17 +39,27 @@ Warhorse Studios and PLAION; this project's copyright covers only its own code.
 - **The host's reload is told:** "Your host is reloading the world - please wait", then "Back with your host".
 - **For bug reports:** "Something's wrong here" now writes a state snapshot on **both** machines under one mark, so the two logs
   can be read side by side; every talk writes one line saying how it went and why (`WO164-TALK`).
-
-## Not in this version (`docs/WO-164-findings.md`)
-
-- A map pin for your partner, people's clothes following the host's world (the herbalist in night clothes), leading Ignatius to
-  the bait on the joiner, a rider and horse moving as one, the sleep screen of the partner who did not start the sleep.
+- **Your partner on the map:** a pin shows where your partner is and follows them; it goes when they leave. Mod menu → Display →
+  "Partner on the map" (`mp_partner_marker`).
+- **People's clothes follow the host's world:** a person the host sees dressed is dressed on the joiner's screen too, also after
+  a wait or a sleep (no more night clothes at dawn).
+- **Leading a quest animal (Ignatius):** the host's world accepts the joiner's steps of the quest he is leading, and the host
+  sees the animal walk behind the joiner.
+- **Riders and their horses move as one** on the joiner's screen.
+- **The host's walk, gait and torch after a ride:** a refused position read no longer stops the host's movement details (and
+  torch) for the rest of the session; it is tried again after a minute.
+- **Enemies keep their swords out** on the joiner's screen while they fight; **talking to a villager** next to one of the host's
+  people no longer freezes the host's person for 20 seconds.
+- **The sleep screen** of the partner who did not start the sleep shows the rest gained.
 
 ## Known issues
 
-- **Not checked in the game at all** in this build: the maintainer chose to skip the development session's solo run (2026-10-09).
-  Every change above is covered by the unit, synthetic and native tests only; the checklist's items 177–196 are the live proof.
-  Each new piece has its own switch: `mp_talk_sweep`, `mp_talk_guard`, `mp_flee_limit`, `mp_joiner_events` (console, default on).
+- **Checked in the game with a synthetic host only** (2026-10-09, a throwaway save): the partner pin, the quest-value fix, the
+  snapshot and its ping, the torch, the clothes, the sit fallback, "I'm stuck", the random-event switch, the escort walk, the
+  sweep. **Talking** could not be driven by a script and is not checked live: the checklist's items 177–204 are the proof. Each
+  new piece has its own switch: `mp_talk_sweep`, `mp_talk_guard`, `mp_flee_limit`, `mp_joiner_events`, `mp_partner_marker`,
+  `mp_rider_unit` (console, default on).
 - **Not soak-tested** (the maintainer's standing rule; the waiver is recorded beside the installer). The native plugin, the agent,
-  the relay's shared wire and the mod's Lua all changed since 0.47.0. The frame rate (menu, town, three-enemy fight) was not
-  measured. Not signed unless the build says so.
+  the relay's shared wire and the mod's Lua all changed since 0.47.0. The mod's own cost per frame was measured against 0.47.0 in
+  the same scenes (a town, a three-person fight): 0.64–0.67 ms against 0.70–0.72 ms. The frame rate with the window in front was
+  not measured. Not signed unless the build says so.

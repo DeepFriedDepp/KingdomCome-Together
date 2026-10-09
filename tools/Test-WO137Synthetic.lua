@@ -329,6 +329,7 @@ do -- (c) talking (joiner)
     check("c: the game's own function ran every time", #TALKS >= 5)
 
     -- the request fallback (a conversation asked another way)
+    NOW = NOW + 3   -- WO-164: not right after a talk to this game's own NPC (that request is that NPC's)
     CMDS = {}
     KCD2MP_W137TalkRequest(400)
     check("c: a request by another path: the copy in reach is freed", cmdCount("wh_ai_ResumeNPC tzel_olbram") == 1

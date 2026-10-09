@@ -35,11 +35,13 @@ Kingdom Come: Together 0.47.5 — mostly for the joiner.
 • Fleeing bandits no longer flicker their swords on your screen, and combat ends by itself once they have run off.
 • A partner who can't be seated stands beside the bench instead of freezing; "I'm stuck" also gets you out of a seat — press it again within 10 s to land beside your partner.
 • The joiner's own random events (caravans, riders) are off during a session, so you both see the host's.
-• The host's torch shows on the joiner's screen, and the joiner is told when the host reloads.
+• The host's torch shows on the joiner's screen (and the host's walk and gait no longer go missing after a ride), and the joiner is told when the host reloads.
+• Your partner on the map: a pin follows them (mod menu → Display → "Partner on the map").
+• People are dressed like in the host's world (no night clothes at dawn), riders sit on their horses, and a quest animal you lead (Ignatius) follows you on the host's screen too.
+• Enemies keep their swords out on your screen while they fight.
 • "Something's wrong here" now writes a snapshot on BOTH machines under one mark — press it at every problem and send both logs.
-Switches (console, default on): mp_talk_sweep, mp_talk_guard, mp_flee_limit, mp_joiner_events.
-Not fixed yet: a map pin for your partner, people's clothes following the host's world (night clothes at dawn), Ignatius following the joiner, riders and horses moving as one.
-Not tested in the game before release — the checklist's items 177–196 are the test. Both players and the relay need 0.47.5.
+Switches (console, default on): mp_talk_sweep, mp_talk_guard, mp_flee_limit, mp_joiner_events, mp_partner_marker, mp_rider_unit.
+Checked in the game with a stand-in partner; talking needs two real players — the checklist's items 177–204 are the test. Both players and the relay need 0.47.5.
 ```
 
 ## Version 0.47.0 — shared combat, the first part (WO-163) — DRAFT, not released; the build is not made

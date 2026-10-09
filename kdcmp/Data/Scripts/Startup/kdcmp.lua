@@ -7295,6 +7295,9 @@ function KCD2MP_W137BeforeTalk(npc, user, via)
     if not (npc and user and player and user.id == player.id) then return end
     local name = nil
     pcall(function() name = npc:GetName() end)
+    -- WO-164: a talk to one of this game's own people: the request that follows is that one's, never a nearby copy's (live: the
+    -- fallback below resumed the innkeeper copy 1.5 m away for a talk to someone else, and held it 20 s)
+    if name and not KCD2MP.npcPuppets[name] then KCD2MP.w137.ownTalkAt = os.clock() end
     if not name or not KCD2MP.npcPuppets[name] then return end   -- only the host's NPC (its copy is a puppet here)
     KCD2MP_W137TalkResume(name, via)
 end
@@ -7306,7 +7309,6 @@ function KCD2MP_W137TalkResume(name, via)
     local wasPaused = KCD2MP._npcPaused[name] ~= nil
     t = { since = os.clock(), via = tostring(via), resumed = wasPaused }
     w.talking[name] = t
-    if KCD2MP_W164PreClear then pcall(KCD2MP_W164PreClear, name) end   -- WO-164 T5: its own greeting / bark requests go first
     KCD2MP_EmitEvent("w164_talk", "ask " .. name .. " " .. tostring(via) .. " " .. (wasPaused and "1" or "0"))   -- WO-164 T0
     if KCD2MP_W157TalkFree then KCD2MP_W157TalkFree(name) end   -- WO-157 3b.4: the copy free to talk (and to trade)
     if wasPaused then mp_wo102_resume(name, "w137-talk") end
@@ -7370,6 +7372,7 @@ function KCD2MP_W137TalkRequest(id)
         if not t.id and t.since > bestAt and (now - t.since) < 5.0 then best, bestAt = name, t.since end
     end
     if best then w.talking[best].id = tonumber(id); return end
+    if w.ownTalkAt and (now - w.ownTalkAt) < 2.0 then return end   -- WO-164: this player just talked to one of this game's own
     -- a request that did not come through the wrapped actions: the copy in reach
     local name = KCD2MP_W137NearestCopy(w.talkRangeM)
     if not name then return end
@@ -9777,7 +9780,7 @@ function KCD2MP_NpcPuppetTick(arg, gen)
             local inFight = KCD2MP.w151 and KCD2MP.w151.copyFight and KCD2MP.w151.fight[name]
             -- WO-164 D1: at most one re-assert per 2 s, none while the host's NPC flees, 20 s of rest after 3 in 10 s (the field: 118
             -- re-asserts and 260 weapon-collision re-creations on two fleeing bandits before the joiner's game died)
-            local fleeHold = KCD2MP_W164ReassertBlocked and KCD2MP_W164ReassertBlocked(name, now)
+            local fleeHold = KCD2MP_W164ReassertBlocked and KCD2MP_W164ReassertBlocked(name, now, p.drawn == true)
             if e.human and not inFight and not fleeHold and (now - (p.drawnCheckAt or 0)) >= 2.0 then
                 p.drawnCheckAt = now
                 local actual = nil
@@ -20682,7 +20685,7 @@ end
 KCD2MP.w164 = KCD2MP.w164 or {
     sweep = true, talkGuard = true, fleeLimit = true, partnerPin = true,
     joinerEvents = true,         -- R1 (see docs/WO-164-findings.md for the default's evidence)
-    sweptAt = {}, queue = {}, flee = {}, reassert = {}, lastEnd = {}, presses = {}, toasts = {},
+    sweptAt = {}, queue = {}, flee = {}, reassert = {}, lastEnd = {}, presses = {}, toasts = {}, hostCombat = {},
     focusAt = 0, frameAt = 0, frameGapMax = 0, ft = {}, reOff = nil, reOld = nil,
     lastUnstuckAt = -1e9,
     stats = { sweeps = 0, skipped = 0, focus = 0, adaptive = 0, skip = 0, retry = 0, debounced = 0, preclears = 0, preclearErr = 0,
@@ -20795,7 +20798,24 @@ function KCD2MP_W164NotePress(name, orig, npc, user, slot)
     KCD2MP.w164.presses[name] = { orig = orig, npc = npc, user = user, slot = slot, at = os.clock() }
 end
 
--- T5: a copy freed for this player's talk drops its own unfinished dialogue requests first (a greeting would answer instead).
+-- T5: the copy started its own line (a greeting, a bark) while this player's request to it is open (the agent saw the engine's
+-- "Running dialogue ... with soul '<copy>'"): that line is interrupted (the copy's human:InterruptDialogs, the game's own), so the
+-- player's request is the one it takes. Live (2026-10-09): InterruptDialogs exists in this build (InterruptDialog does not).
+function KCD2MP_W164Preempted(name)
+    local w = KCD2MP.w164
+    if not w.talkGuard then return "off" end
+    local t = KCD2MP.w137 and KCD2MP.w137.talking[tostring(name)]
+    if not t or t.started then return "not-waiting" end
+    local e = nil
+    pcall(function() e = System.GetEntityByName(name) end)
+    local ok = false
+    if e and e.human and e.human.InterruptDialogs then ok = pcall(function() e.human:InterruptDialogs() end) end
+    w.stats.preclears = w.stats.preclears + 1
+    mp_log(string.format("WO164-TALK preempted npc=%s own_line=interrupted:%s -- this player's request is the one it takes", tostring(name), tostring(ok)))
+    return ok and "interrupted" or "err"
+end
+
+-- (kept for the console's diagnosis only: RestrictDialog on/off deletes the soul's unfinished requests)
 function KCD2MP_W164PreClear(name)
     local w = KCD2MP.w164
     if not w.talkGuard then return "off" end
@@ -20844,15 +20864,23 @@ function KCD2MP_W164Retry(name, t)
 end
 
 -- D1: the host's NPC flees (the agent, from its activity row): no weapon re-assert on its copy meanwhile.
+-- The agent: the host's NPC reported combat (its NpcCombat event), at most once a second per NPC.
+function KCD2MP_W164HostCombat(name)
+    KCD2MP.w164.hostCombat[tostring(name)] = os.clock()
+end
+
 function KCD2MP_W164Flee(name, on)
     KCD2MP.w164.flee[tostring(name)] = on == true or nil
     mp_log(string.format("WO164-FLEE npc=%s host_flee=%s", tostring(name), tostring(on == true)))
 end
 
 -- D1: true = the Lua's weapon re-assert waits (a flee, a backoff, or under 2 s since the last).
-function KCD2MP_W164ReassertBlocked(name, now)
+function KCD2MP_W164ReassertBlocked(name, now, wantDrawn)
     local w = KCD2MP.w164
     if not w.fleeLimit then return false end
+    -- the host's NPC was in combat in the last 10 s: its copy is never holstered (the field: the copies were sheathed ~2 s before
+    -- the fight set caught up and again right after it ended, while the host's bandits still held their swords)
+    if not wantDrawn and w.hostCombat[name] and (now - w.hostCombat[name]) < 10.0 then w.stats.combatHolds = (w.stats.combatHolds or 0) + 1; return true end
     if w.flee[name] then w.stats.fleeSkips = w.stats.fleeSkips + 1; return true end
     local r = w.reassert[name]
     if r and r.backoffUntil and now < r.backoffUntil then return true end
@@ -21013,7 +21041,8 @@ function KCD2MP_W164MarkSnap(id, origin)
     local inDialog, combat = false, false
     pcall(function() if player.human and player.human.IsInDialog then inDialog = player.human:IsInDialog() == true end end)
     pcall(function() local s = player.soul; if not s then return end; combat = (s.IsInCombatDanger ~= nil and s:IsInCombatDanger() == true) or (s.IsInCombatMode ~= nil and s:IsInCombatMode() == true) end)
-    line(string.format("self in_dialog=%s in_combat=%s unstuck_last_s=%.0f", tostring(inDialog), tostring(combat), os.clock() - (w.lastUnstuckAt or -1e9)))
+    local function ago(at) return (at and at > -1e8) and string.format("%.0f", os.clock() - at) or "never" end
+    line(string.format("self in_dialog=%s in_combat=%s unstuck_last_s=%s", tostring(inDialog), tostring(combat), ago(w.lastUnstuckAt)))
     local w114 = KCD2MP.w114 or {}
     local w123 = KCD2MP.w123 or {}
     line(string.format("leash countdown=%s join_input_hold=%s", tostring(w114.cdN or 0), tostring(w123.holdOn == true)))
@@ -21034,8 +21063,8 @@ function KCD2MP_W164MarkSnap(id, origin)
         table.sort(near, function(a, b) return a.d < b.d end)
         for i = 1, math.min(5, #near) do
             local x = near[i]
-            line(string.format("copy npc=%s d=%.1f paused=%s dead=%s flee=%s swept_s=%.0f", x.name, x.d, tostring(KCD2MP._npcPaused[x.name] ~= nil),
-                tostring(x.p.dead == true), tostring(w.flee[x.name] == true), os.clock() - (w.sweptAt[x.name] or -1e9)))
+            line(string.format("copy npc=%s d=%.1f paused=%s dead=%s flee=%s swept_s=%s host_combat_s=%s", x.name, x.d, tostring(KCD2MP._npcPaused[x.name] ~= nil),
+                tostring(x.p.dead == true), tostring(w.flee[x.name] == true), ago(w.sweptAt[x.name]), ago(w.hostCombat[x.name])))
         end
         for i = 0, 7 do
             local e, pos = nil, nil
@@ -21049,7 +21078,7 @@ function KCD2MP_W164MarkSnap(id, origin)
         for _, e in ipairs(ents or {}) do
             local nm = nil
             pcall(function() if e.GetName then nm = e:GetName() end end)
-            if nm and nre < 8 then
+            if nm and nre < 8 and e.soul then   -- people and animals only (not the event's cameras and markers)
                 for _, pat in ipairs(W164_RE_PATTERNS) do
                     if string.find(nm, pat, 1, true) then
                         nre = nre + 1
@@ -23173,12 +23202,12 @@ do
         { id = "ping_line", group = "Display", label = "Ping and clock line", kind = "onoff", save = "PingLine",
           cmd = "mp_ping_line", fn = "KCD2MP_W154SetPingLine", get = function() return M.pingLine end,
           help = "Shows the ping and clock line in the top left corner." },
-        { id = "partner_marker", group = "Display", label = "Partner on the map", kind = "onoff", save = "PartnerMarker",
-          cmd = "mp_partner_marker", fn = "KCD2MP_W164SetPartnerPin", get = function() return KCD2MP.w164 ~= nil and KCD2MP.w164.partnerPin end,
-          help = "A pin on the map where your partner is." },
         { id = "clean_screen", group = "Display", label = "Clean screen", kind = "onoff", save = "CleanScreen",
           cmd = "mp_clean_screen", fn = "KCD2MP_W154SetCleanScreen", get = function() return M.clean end,
           help = "Hides everything the mod draws -- its lines, names and messages. For screenshots and recording." },
+        { id = "partner_marker", group = "Display", label = "Partner on the map", kind = "onoff", save = "PartnerMarker",
+          cmd = "mp_partner_marker", fn = "KCD2MP_W164SetPartnerPin", get = function() return KCD2MP.w164 ~= nil and KCD2MP.w164.partnerPin end,
+          help = "A pin on the map where your partner is." },
         { id = "friendly_fire", group = "Gameplay", label = "Friendly fire", kind = "onoff", host = true, save = "FriendlyFire",
           cmd = "mp_friendly_fire", fn = "KCD2MP_Wo121SetFriendlyFire",
           get = function() return KCD2MP.w121 ~= nil and KCD2MP.w121.friendlyFire end,

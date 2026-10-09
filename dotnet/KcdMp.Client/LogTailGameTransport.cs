@@ -372,6 +372,7 @@ public sealed class LogTailGameTransport : IGameTransport
         "Faders are faded out",
         // WO-164: the talk line's dialogue name, kind and preemption; the random events (the mark snapshot)
         "Running dialogue '",
+        "New dialogue '",
         "<RandomEvent>",
     ];
 

@@ -43,7 +43,9 @@ against each other from inside the game itself.
 >   asked once more, then "Try again in a moment". Quest counters that drift from the host's are set back to the host's value.
 > - **No more map crash for a fresh joiner**, calmer fleeing enemies (combat can end), figures that cannot sit stand instead of
 >   freezing, "I'm stuck" also frees you from a seat, your own random events are off in a session, the host's torch shows, and
->   the host's reload is told on screen. Built and tested without the game; the checklist's items 177–196 are the live proof.
+>   the host's reload is told on screen, a pin on the map shows your partner, people are dressed like in the host's world, riders
+>   sit on their horses, and a quest animal you lead (Ignatius) follows you on the host's screen too. Checked in the game with a
+>   synthetic partner; talking and the rest need two people (the checklist's items 177–204).
 > - **Start Game / Join Game** sit on the game's own main menu. Nobody clicks CONNECT any more, and the partner needs no
 >   save of the host's world.
 > - **The host's people on a joiner's screen** are put in place the way the game would put them: the joiner can talk to
@@ -59,8 +61,7 @@ against each other from inside the game itself.
 >   game, not yet with two people; the checklist's items 162–176 ask two people.
 > - **Doors, shops, herbs, horses and the prologue's cutscenes** got their own fixes since 0.45.5; the checklist lists each.
 >
-> **Known, not fixed in 0.47.5:** a partner pin on the map, people's clothes following the host's world, leading Ignatius on
-> the joiner, riders and horses as one unit; set-piece brawls (the Cuman brawl, the Moravians' flags); a killed person standing up
+> **Known, not fixed in 0.47.5:** set-piece brawls (the Cuman brawl, the Moravians' flags); a killed person standing up
 > again on the other screen (the standing dead copy); people left naked after a wait or a sleep — fixed in 0.46.0 and
 > waiting for the testers to confirm it; bows and arrows (not built); the host cannot lock onto a guard who is beating
 > you; the attacker does not recoil when his blow is blocked; two players on one enemy can still make it turn between them,

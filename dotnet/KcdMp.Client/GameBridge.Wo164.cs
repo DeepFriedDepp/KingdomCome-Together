@@ -26,6 +26,7 @@ public partial class GameBridge
     private long _w164RandomEvents, _w164MinigameLines;
 
     private static readonly Regex W164Running = new(@"^Running dialogue '([^'(]+?)(?: / [^']*)? \(\w+ - Id: (\d+)\) \[Ex0: (\S+)(?: [EN]x1: (\S+))?[^']*'.* with soul '([^']+)'", RegexOptions.Compiled);
+    private static readonly Regex W164New = new(@"^New dialogue '([^'(]+?)(?: / [^']*)? \(\w+ - Id: (\d+)\).*souls = 'Ex: ([^;']+); Ex: ([^;' ]+)", RegexOptions.Compiled);
     private static readonly Regex W164Cmd = new(@"\] DialogCommand-\w+: dialogId=(\d+)", RegexOptions.Compiled);
 
     /// <summary>LogTailGameTransport.Wo144Line routes these engine lines here first (Wo144OnEngineLine).</summary>
@@ -53,6 +54,13 @@ public partial class GameBridge
             return;
         }
         if (line.StartsWith("Running dialogue '", StringComparison.Ordinal)) { W164OnRunningDialogue(line); return; }
+        if (line.StartsWith("New dialogue '", StringComparison.Ordinal))
+        {
+            var nm = W164New.Match(line);   // the player's own talk: its dialogue's name and id (the T0 line's kind and commands)
+            if (nm.Success && nm.Groups[3].Value.Trim() == "Dude" && _w164Talks.TryGetValue(nm.Groups[4].Value.Trim(), out var nt) && int.TryParse(nm.Groups[2].Value, out int nid))
+            { nt.DialogId = nid; nt.Dialogue = nm.Groups[1].Value.Trim(); }
+            return;
+        }
         var cm = W164Cmd.Match(line);
         if (cm.Success && int.TryParse(cm.Groups[1].Value, out int did)) { _w164DialogCmds.AddOrUpdate(did, 1, (_, n) => n + 1); return; }
         if (line.StartsWith("<RandomEvent>", StringComparison.Ordinal)) { Interlocked.Increment(ref _w164RandomEvents); return; }
@@ -117,6 +125,7 @@ public partial class GameBridge
         {
             t2.PreemptedBy = dlg.Contains('.') ? dlg[(dlg.LastIndexOf('.') + 1)..] : dlg;
             Interlocked.Increment(ref _w164Preempted);
+            _ = ExecLuaAsync($"if KCD2MP_W164Preempted then KCD2MP_W164Preempted(\"{EscapeLua(soul)}\") end");   // T5: its own line goes
         }
     }
 
@@ -379,6 +388,17 @@ public partial class GameBridge
     private long _w164FleeDisengaged;
     private readonly ConcurrentDictionary<string, double> _w164FarSince = new(StringComparer.Ordinal);
 
+    private readonly ConcurrentDictionary<string, long> _w164HostCombatTold = new(StringComparer.Ordinal);
+
+    /// <summary>The host's NPC is in combat: told to the Lua at most once a second (its copy keeps its weapon).</summary>
+    private void W164NoteHostCombat(string npc)
+    {
+        long now = Environment.TickCount64;
+        if (_w164HostCombatTold.TryGetValue(npc, out long at) && now - at < 1000) return;
+        _w164HostCombatTold[npc] = now;
+        _ = ExecLuaAsync($"if KCD2MP_W164HostCombat then KCD2MP_W164HostCombat(\"{EscapeLua(npc)}\") end");
+    }
+
     private async Task<string?> W164UnstanceNameAsync(ushort id)
     {
         if (id == ActivityState.NoUnstance) return null;
@@ -589,9 +609,19 @@ public partial class GameBridge
 
     private long _w164TickN;
 
+    // The development harness only (tools/wo118, a synthetic host): KCDMP_TEST_JOINER_IN_WORLD=1 makes a non-authority agent a joiner
+    // in the host's shared world without the join's own load. Never set by the launcher or the installer.
+    private static readonly bool W164TestJoinerInWorld = Environment.GetEnvironmentVariable("KCDMP_TEST_JOINER_IN_WORLD") == "1";
+
     /// <summary>Once a second (the WO-151 loop).</summary>
     private async Task Wo164TickAsync()
     {
+        if (W164TestJoinerInWorld && _combatRoleApplied && !_isDamageAuthority && !_joinedWorld)
+        {
+            _hostModeKnown = true; _hostSharedWorld = true;
+            SetJoinedWorld(true);
+            Console.WriteLine("WO164-TEST KCDMP_TEST_JOINER_IN_WORLD: this agent is a joiner in its host's shared world (the harness; no join load)");
+        }
         if (!_w164On) return;
         long n = ++_w164TickN;
         await W164TorchOutTickAsync(false);

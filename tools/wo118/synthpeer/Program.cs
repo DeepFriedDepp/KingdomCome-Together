@@ -220,6 +220,10 @@ static class P
         uint verdictId = 0;
         var saves = new List<(double T, byte Kind, byte Playline, ushort Idx)>(); uint wsSeq = 0;
         var raws = new List<(double T, byte Type, byte[] Body, int Stamp)>();   // WO-131
+        // WO-164: `act <t> <npc|-player> <stance> <stanceObjHex|0> <unstanceId|-> <unstObjHex|0> [night]` (a host activity row),
+        // `w164 <t> <kind> <text...>` (a W164 message), `qcp <t> <value> <path>` (a host quest checkpoint of one State)
+        var joinMsgs = new List<(double T, byte[] Pkt, string Note)>();
+        uint joinTok = 0;
         var ncombats = new List<NCombat>();   // WO-132
         var dies = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);   // WO-131
         var hps = new Dictionary<string, List<(double T, float Hp)>>(StringComparer.OrdinalIgnoreCase);   // WO-131
@@ -280,6 +284,29 @@ static class P
                     ncombats.Add(nc);
                     break;
                 }
+                case "act":
+                {
+                    bool player = f[2] == "-player";
+                    ushort un = f[5] == "-" ? ActivityState.NoUnstance : ushort.Parse(f[5], CultureInfo.InvariantCulture);
+                    byte fl = f.Length > 7 && f[7] == "night" ? ActivityState.FlagNightDress : (byte)0;
+                    var actSt = new ActivityState(byte.Parse(f[3], CultureInfo.InvariantCulture), 0, Convert.ToUInt64(f[4], 16), un, Convert.ToUInt64(f[6], 16),
+                                               ActivityState.NoMinigame, 0, fl);
+                    var rowsA = new List<ActivityRow> { new(0, player ? "" : f[2], actSt) };
+                    joinMsgs.Add((double.Parse(f[1], CultureInfo.InvariantCulture),
+                                  ActivityCodec.BuildUp(Protocol.ActivityHostUp, 1, player ? Protocol.ActivityKindPlayer : Protocol.ActivityKindNpc, rowsA),
+                                  $"ACT {f[2]} {actSt}"));
+                    break;
+                }
+                case "w164":
+                    joinMsgs.Add((double.Parse(f[1], CultureInfo.InvariantCulture),
+                                  new LootMsg(byte.Parse(f[2], CultureInfo.InvariantCulture), ++joinTok, string.Join(' ', f.Skip(3))).BuildUp(Protocol.W164Up, 1),
+                                  $"W164 kind={f[2]} {string.Join(' ', f.Skip(3))}"));
+                    break;
+                case "qcp":
+                    joinMsgs.Add((double.Parse(f[1], CultureInfo.InvariantCulture),
+                                  new LootMsg(Protocol.QuestHostCheckpoint, ++joinTok, $"1 1 {f[2]}:-:{f[3]}").BuildUp(Protocol.QuestHostUp, 1),
+                                  $"QCP {f[3]}={f[2]}"));
+                    break;
                 case "raw": raws.Add((double.Parse(f[1], CultureInfo.InvariantCulture), Convert.ToByte(f[2], 16), Convert.FromHexString(f[3]), f.Length > 4 ? int.Parse(f[4]) : -1)); break;
             }
         }
@@ -344,6 +371,13 @@ static class P
                     await st.WriteAsync(s_actions.Build(ActionKind.NpcAttack, ActionPhase.Commit, ev.ToBytes()));
                     Console.WriteLine(FormattableString.Invariant($"SYNTH t={t:F1}s NpcAttack npc={rows[ri].Npc} row={rows[ri].Row}"));
                     rows.RemoveAt(ri);
+                }
+                for (int ji = joinMsgs.Count - 1; ji >= 0; ji--)   // WO-164: activity rows, W164 messages, checkpoints, when due
+                {
+                    if (joinMsgs[ji].T > t) continue;
+                    await st.WriteAsync(joinMsgs[ji].Pkt);
+                    Console.WriteLine(FormattableString.Invariant($"SYNTH t={t:F1}s {joinMsgs[ji].Note}"));
+                    joinMsgs.RemoveAt(ji);
                 }
                 for (int vi = verdicts.Count - 1; vi >= 0; vi--)   // WO-163: the verdicts of the plan, when due
                 {

@@ -965,7 +965,27 @@ quest value disagreed, `torn` their placement was refused just before, `wedged` 
      stops says which part fails.
 196. **Frame rate** (the WO-148 rule, the window in front): the menu, a town, a fight with three enemies — before and after.
 
-Switches (console, default on): `mp_talk_sweep`, `mp_talk_guard`, `mp_flee_limit`, `mp_joiner_events`; `mp_w164_status` prints
+**Added in the second pass (the same build):**
+
+197. **Your partner on the map** (both). Open the map: a pin where your partner is; walk apart and open it again (it moved); the
+     partner leaves the session (the pin goes); Display → "Partner on the map" off (no pin). * `WO164-MAPMARK pin owner=… added|moved|removed`.
+198. **People dressed at dawn** (both, after a sleep or an 8 h wait at night). The herbalist and a guard look the same on both
+     screens. * Joiner: `WO164-OUTFIT npc=… applied` for each copy that was still in night clothes; host: `WO141-CAPTURE … night-undress`.
+199. **Leading Ignatius** (the Mutt bait, joiner leads). The host sees Ignatius walk behind the joiner's figure, and the bait step
+     advances on both. * Joiner: `WO164-ESCORT follower npc=…`; host: `WO164-ESCORT logic=… leader=player1 accepted=…` and
+     `WO164-ESCORT host npc=… on`.
+200. **A rider on the road** (joiner watching a host rider pass). The rider sits on the horse, they move as one. * Joiner:
+     `WO164-RIDER mount rider=… horse=… ok=true`, `dismount` when he gets off. Off: `mp_rider_unit off`.
+201. **The sleep screen of the partner who did not start the sleep.** It shows the rest gained. * `WO164-REST pre-applied …`.
+202. **Enemies keep their swords.** In a fight with bandits (the lackeys), their figures on the joiner's screen keep their weapons
+     out while they fight (no punches). * Few or no `re-asserted sheathed` lines.
+203. **Talk to a villager standing next to one of the host's people** (joiner): only the villager reacts; the host's NPC beside
+     them stays where it is.
+204. **The host mounts a horse, rides a minute, dismounts, then lights a torch** (joiner watching): the host's walk, gait and torch
+     look right after the ride. * Host agent: `MP-POSNATIVE re-armed after 60 s` if its read was refused during the ride.
+
+Switches (console, default on): `mp_talk_sweep`, `mp_talk_guard`, `mp_flee_limit`, `mp_joiner_events`, `mp_partner_marker`,
+`mp_rider_unit`; `mp_w164_status` prints
 their counters. Lines worth a look: `WO164-TALK`, `WO164-SWEEP`, `WO164-QFIX`, `WO164-FLEE`, `WO164-SIT`, `WO164-UNSTUCK`,
 `WO164-MAPMARK`, `MP-MARK-SNAP`, `MP-WO164-STATS`, `MP-W143 stats … idle_window …`.
 

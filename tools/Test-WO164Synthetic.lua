@@ -198,8 +198,8 @@ do
     RESTRICT = {}
     local mark = #LOG
     BasicAIActions.OnTalk(e, player, 0)
-    check("P1: the copy's own requests dropped first (its soul: restrict on, then off)", RESTRICT[1] == "tvid_huntsman true" and RESTRICT[2] == "tvid_huntsman false", RESTRICT[1])
-    check("P2: ... logged", lastLog("WO164-TALK preclear npc=tvid_huntsman soul_requests=deleted", mark) ~= nil)
+    check("P1: nothing is restricted at the key press (live: a soul restricted in the same frame can drop the request that follows)", #RESTRICT == 0, RESTRICT[1])
+    check("P2: ... no pre-clear line", lastLog("WO164-TALK preclear", mark) == nil)
     check("T0: the agent is told of the ask", countEvt("w164_talk", "ask tvid_huntsman OnTalk", mark) == 1)
     KCD2MP_W137TalkRequest(90)
     check("R0: the request's id is kept", KCD2MP.w137.talking["tvid_huntsman"].id == 90)
@@ -309,7 +309,7 @@ do
     joiner(true)
     copy("tm_near", 5, 5)
     KCD2MP.w137.talking["tm_near"] = { since = NOW - 3, id = 7 }
-    SPHERE = { { GetName = function() return "dummyWanderer_horseRider_1" end }, { GetName = function() return "ttac_man_2" end } }
+    SPHERE = { { soul = {}, GetName = function() return "dummyWanderer_horseRider_1" end }, { GetName = function() return "dummyWanderer_camera_1" end }, { soul = {}, GetName = function() return "ttac_man_2" end } }
     KCD2MP_ShowNativeToast("This person can't talk to you right now.")
     local mark = #LOG
     local n = KCD2MP_W164MarkSnap("ab12cd34ef", "local")
@@ -413,6 +413,37 @@ do
     player.soul = soulWas
     Calendar.GetWorldTime = function() return 1000000 end
     noErrs("Z")
+end
+
+-- (B) the host's NPC fights: its copy is never holstered; T5 reacts to the copy's own line; the fallback never takes a copy for an own NPC
+do
+    ERRS = {}
+    local mark = #LOG
+    KCD2MP_W164HostCombat("tbuk_man_3")
+    check("B1: the host's NPC fights: no holster for 10 s", KCD2MP_W164ReassertBlocked("tbuk_man_3", NOW + 1, false) == true)
+    check("B2: ... a draw is never held back by it", KCD2MP_W164ReassertBlocked("tbuk_man_3", NOW + 1, true) == false)
+    check("B3: ... and 10 s after its last combat report, a holster passes again", KCD2MP_W164ReassertBlocked("tbuk_man_3", NOW + 11, false) == false)
+    joiner(true)
+    local e = copy("tb_talker", 1, 0)
+    local interrupted = false
+    e.human.InterruptDialogs = function() interrupted = true end
+    KCD2MP.w137.talking["tb_talker"] = { since = NOW, id = 5 }
+    check("B4 (T5): the copy's own line while this player's request is open: interrupted", KCD2MP_W164Preempted("tb_talker") == "interrupted" and interrupted
+        and lastLog("WO164-TALK preempted npc=tb_talker own_line=interrupted:true", mark) ~= nil)
+    KCD2MP.w137.talking["tb_talker"].started = true
+    interrupted = false
+    check("B5 (T5): never once the conversation started", KCD2MP_W164Preempted("tb_talker") == "not-waiting" and not interrupted)
+    KCD2MP.w137.talking["tb_talker"] = nil
+    local own = { id = 4242, GetName = function() return "tb_villager" end }
+    ENTS["tb_villager"] = own
+    local m2 = #LOG
+    NOW = NOW + 5
+    BasicAIActions.OnTalk(own, player, 0)
+    KCD2MP_W137TalkRequest(777)
+    check("B6: a talk to this game's own NPC never resumes the copy beside it (the request fallback)", KCD2MP.w137.talking["tb_talker"] == nil
+        and countEvt("w164_talk", "ask", m2) == 0)
+    ENTS["tb_villager"] = nil; ENTS["tb_talker"] = nil; KCD2MP.npcPuppets["tb_talker"] = nil
+    noErrs("B")
 end
 
 OUT = table.concat(RESULTS, "\n")

@@ -297,6 +297,8 @@ with 13 bodies; the frame rate in the three scenes.
 
 ## Pocket list (outside this WO, or put out of reach by its probes)
 
+**Superseded by the second pass below: every item was built (or, the birch tree, withdrawn by the maintainer).**
+
 * **C2 — a map pin for the partner.** Built safely it is a marker on a hidden entity of the mod's own (no model, NO_SAVE),
   moved every 2 s and removed before any load or leave; a mark on the avatar entity itself holds a raw linkable pointer that a
   reload destroys (the WO-113 map crash). The C1 gate (queue, readiness, the disable) is what it would ride on.
@@ -328,3 +330,70 @@ settings). Transcript `release\BUILD-0.47.5.log`, waiver `release\SOAK-WAIVED-0.
 native 536, **all 51 synthetic suites**, the static checks, the installer cases, the payload smoke (`protocol=v10 release=0.47.5`); no
 FAIL line; no user or machine name in the payload. `mp_joiner_events` ships **on** (the maintainer's choice, 2026-10-09, when asked:
 the WO's solo run that would have decided it was skipped).
+
+## Second pass — the pocket list built, and a live run with synthetic peers (2026-10-09)
+
+The maintainer asked for everything on the pocket list to be built and allowed a live game with synthetic peers. The partner's
+map pin was asked for explicitly; "carry him to the tavern completes at a birch tree" was withdrawn (the maintainer: the quest
+does go to the birch tree; the step most likely fired from the agreement in the dialogue).
+
+### Setup [L]
+This machine's Modding Tools build, started at the bottom of the window stack (never activated; it took the foreground once by
+itself while no other window held focus and was minimized at once), the WO-164 DLL injected by hand, the new pak installed (the
+installed `Mods\kdcmp` was copied aside first and put back afterwards: all three files match their backup hashes), a **throwaway**
+copy of `OLD/playline4/quicksave022` in `saves/playline4` (moved out again afterwards; `OLD/playline4` unchanged), `playline0`
+**byte-identical** before and after (167 files hashed). The saves folder was backed up first (753 files, byte-equal copy). Note:
+Steam was started on this machine at 08:55 today; at 08:56 Steam Cloud put `playline1`–`3` and four `playline2_wo*backup` folders
+back into `saves` (the cloud-restore behaviour seen before) — they were left as they are.
+A local relay, the **synthetic host** (`tools/wo118/synthpeer`, started first = the authority), and the agent as the **joiner in
+the host's shared world**. That last part needs a join's load, so the agent has a harness-only switch,
+`KCDMP_TEST_JOINER_IN_WORLD=1` (environment only; never set by the launcher or the installer). Three plan verbs were added to the
+synthetic peer (`act` a host activity row, `w164` a W164 message, `qcp` a host quest checkpoint).
+
+### What the run proved [L]
+
+| Item | Live result |
+|---|---|
+| **C2 partner pin** | the host figure's pin spawned (`WO164-MAPMARK pin owner=0 spawned … added (type 0x30)`: the map draws the GeneralPoi category), moved with it every 3 m (81 moves in a minute), no fault; removed by a load with the other NO_SAVE marks |
+| **T6 direct quest write** | the host's checkpoint said `numberOfMealsIgnazHasEaten` = 1 (the field's drifted counter, an active `int` State in this save at 0): `MP-W137 MISMATCH … no port` → 11 s later `WO164-QFIX … applied=yes`, native `WO164-QSET … -> changed (from 0 to 1, int)` |
+| **M mark snapshot** | a host `MarkPing` made this machine write its agent block (8 lines) and its Lua block (17 lines) under the host's id; a local `mark_odd` wrote both blocks and pinged the host |
+| **TR torch** | the host's side-channel torch edge: `MP-W136 peer 0 torch OUT … (side-channel)` and the avatar drew and lit it (`WO136-TORCH avatar id=0 on`) |
+| **TR root cause (found in the field logs)** | the 0.47.0 host's native position read was refused once by its oracle (`MP-POSNATIVE verdict=refused reason=oracle-mismatch` at 20:10, a mount or a teleport) and **never re-armed**: from then on the agent built no state block at all, so the torch bit (and gait and combat bits) never left the host for the remaining 72 minutes. Fixed: the state block is read natively even while the position is refused, and the refusal is tried again after 60 s |
+| **T1 sweep** | `mp_w164_sweep` → the game's release → the agent → native op 9 → `WO164-SWEEP npc=ttkc_scribe op=release+neutral … native=ok refusals_before=3` |
+| **give-up after 3** | two copies asked into occupied beds: `-> FAILED (exec 0, try 1..3)`, then silence (was 8 tries and ~70 s of errors) |
+| **N night clothes** | three soldiers asleep by day in the game's `sleepSoldierUnequip`. The host said one was awake (no night bit): `WO164-OUTFIT npc=ttkc_man_23 applied (ok, exec 1)` — its equipment element gone (10 → 6 slots), dressed. The one the host said was still asleep (night bit) kept its undress |
+| **S1 seat truth** | the partner's figure asked onto a "seat" the planner cannot use: `FAILED (exec 0)` twice, then `WO164-SIT … apply=failed … tries=3 fallback=stand`; a real free seat was taken (`exec 1`) and left again on the next row |
+| **S3 unstuck ladder** | step 1 `seat-reset` (no engine error), a second press within 10 s: `WO164-UNSTUCK step=2 … moved=yes` beside the host's figure |
+| **R1 random events** | the cvar exists in the Modding Tools build: `wh_pl_RandomEventsAutoSpawnEnabled 0, was 1, ok`, back to 1 when the session ended |
+| **ESC follow** | an NPC escorted behind the host's figure while it walked: 2.1 m behind after 12 moves, its brain back at the end |
+| **D1 host combat** | a synthetic NpcCombat on a copy reached the Lua (`host_combat_s=0` in the snapshot): its copy is not holstered for 10 s |
+| **talk (scripted)** | **not reproducible by script**: a scripted `OnTalk` (and the engine's `Human:RequestDialog`) timed out even on this game's own NPC beside the player, while a quest-forced greeting started (`barbora__welcome_to_ow_dialog`, 94 ms). What the run did establish: `human:InterruptDialogs()` exists in this build and closes a dialogue (`InterruptDialog`, singular, does not exist); `soul:RestrictDialog` exists. The talk items stay for the maintainer's key press |
+| **request-fallback bug (found live)** | a talk to one of this game's own people standing 1.5 m from the innkeeper's copy was claimed by WO-137's request fallback, which freed and resumed the copy and held it 20 s. Fixed: no fallback for 2 s after a talk to an own NPC; re-checked live (request 127, no resume) |
+| **frame cost** | the DLL's own FRAME line, same scene (town, 3 copies; then a three-copy fight), this build vs 0.47.0: `ours_us_mean` **642–674 µs** vs **697–720 µs** — no regression. The frame rates themselves (72 vs 25 fps) are not comparable: 0.47.0 was measured with the window behind others (the game's background limiter), the new build while Windows had given it the foreground. The menu cannot be measured by script (timers halt, frame time reads 0) |
+
+### Built in this pass
+* **C2** partner pin: native (a NO_SAVE marker entity 30 m under the partner, the C1 gate, the 100 ms guard), MirrorGrave op 3/4,
+  the agent every 2 s (moved over 3 m, removed when the partner is gone 10 s or the session ends), `mp_partner_marker` (mod menu,
+  Display, remembered).
+* **N** night clothes on the wire: the activity row's flag 0x02 (host body in the game's night undress, read only when its equipment
+  element changes); the joiner dresses a copy still undressed whose host body is dressed — also after its activity was given up.
+* **TR** root cause (above).
+* **ESC**: host — a joiner's follow step on a quest logic starts an escort; that logic's parent scope's steps are applied though the
+  host's value lags; its end step ends it; the host walks its NPC behind the joiner's figure. Joiner — the NPC that follows it is
+  named to the host. New W164 kind 3 Escort.
+* **R2**: a host rider copy whose stream stays on a horse copy's is mounted on it (ForceMount, only within 80 m), dismounted when
+  they part; `mp_rider_unit`.
+* **D2** distance clause: the host NPC stream's positions are kept at the read; a hold on an enemy over 30 m from every player
+  for 20 s is let go.
+* **SL**: the rest is given at the skip's start when this game's own sleep has not rested so far (the sleep screen shows it).
+* **Enemies' copies fighting by their own brain** (the lackey fight): the copies were holstered ~2 s before the fight set caught
+  up and right after it ended while the host's bandits held their swords (`re-asserted sheathed` 118×, the title's "non-weapon
+  attacks"). A copy whose host NPC reported combat in the last 10 s is never holstered now. The host did capture the fight (13
+  skirmish attacks, 16 rows sent and received).
+* **T5** reworked: no restriction at the key press; when the copy's own line starts while the player's request is open, the agent
+  has the copy's `InterruptDialogs` run.
+* **T0** also reads the engine's "New dialogue …" line (the dialogue's name and id for kind and commands).
+
+### Not proven live (the maintainer's two-player session)
+The talk items (T1 trigger timing, T2, T3's cancel, T4, T5), R2 (the only horses near the throwaway save have bracketed names the
+stream refuses), ESC's host acceptance with a real joiner, D2 with a real flee, SL with a real sleep, RL, the in-front frame rate.
