@@ -7,7 +7,7 @@
 <strong>Not affiliated with or endorsed by Warhorse Studios or PLAION.</strong></p>
 
 <p align="center">
-  <a href="docs/releases/RELEASE-NOTES-0.46.5.md"><img alt="main" src="https://img.shields.io/badge/main-0.46.5-b8860b?style=flat-square"></a>
+  <a href="docs/releases/RELEASE-NOTES-0.47.0.md"><img alt="main" src="https://img.shields.io/badge/main-0.47.0-b8860b?style=flat-square"></a>
   <a href="https://github.com/DeepFriedDepp/KingdomCome-Together/releases/latest"><img alt="latest release" src="https://img.shields.io/github/v/release/DeepFriedDepp/KingdomCome-Together?label=latest%20release&color=8a3324&style=flat-square"></a>
   <a href="LICENSE"><img alt="License: GPLv3" src="https://img.shields.io/badge/license-GPLv3-2c3e50?style=flat-square"></a>
   <a href="docs/LAUNCHING.md"><img alt="Platform" src="https://img.shields.io/badge/platform-Windows-555555?style=flat-square"></a>
@@ -28,7 +28,7 @@ against each other from inside the game itself.
 > Kingdom Come: Deliverance II, its assets and its content belong to Warhorse
 > Studios and PLAION; this is a free, non-commercial fan project.
 
-> **The current version is 0.46.5**, a release candidate for the maintainer and one tester (not on the releases
+> **The current version is 0.47.0**, a release candidate for the maintainer and one tester (not on the releases
 > page). `main` (this repo's source) is ahead of the last published installer; the feature list below describes
 > `main`. Installing from the
 > [releases page](https://github.com/DeepFriedDepp/KingdomCome-Together/releases)
@@ -36,7 +36,7 @@ against each other from inside the game itself.
 > here — [Building from source](#building-from-source) gets you current
 > `main`.
 >
-> **What 0.46.5 is, in plain words**
+> **What 0.47.0 is, in plain words**
 >
 > - **Start Game / Join Game** sit on the game's own main menu. Nobody clicks CONNECT any more, and the partner needs no
 >   save of the host's world.
@@ -44,18 +44,21 @@ against each other from inside the game itself.
 >   them and trade with them, and nobody is left in underclothes after a wait or a sleep. Proven alone in the game; the
 >   testers' checklist (items 150–154) asks two people to confirm it.
 > - **A person in a conversation stands still** on the other screen too, and walks on when it ends.
-> - **Shared combat, step one:** every blow an enemy lands on a player is numbered, applied once, and written to the log
->   with the swing it came from — or the reason there was none. The host's game still decides whether a blow hits or is
->   blocked; your own block is not asked yet. Tested with scripts only so far; the checklist's items 162–169 ask two
->   people.
+> - **Shared combat, step two (the certain fixes):** a blow that arrives with no swing of its own now shows one (a short
+>   lunge on the enemy's copy, before the damage); combos, throws and the counter after a perfect block are shown on the other
+>   screen; the host pairs a blow with its swing by the swing's own timing; an enemy turns from one player to the other only
+>   when the other has clearly hurt it more; hitting a guard who fights your partner asks the game itself whether the guard is
+>   fighting you before it is judged a crime. Every blow is still numbered, applied once and logged (0.46.5). The host's game
+>   still decides whether a blow hits or is blocked; your own block is not asked yet. Checked with synthetic partners in the
+>   game, not yet with two people; the checklist's items 162–176 ask two people.
 > - **Doors, shops, herbs, horses and the prologue's cutscenes** got their own fixes since 0.45.5; the checklist lists each.
 >
-> **Known, not fixed in 0.46.5:** set-piece brawls (the Cuman brawl, the Moravians' flags); a killed person standing up
+> **Known, not fixed in 0.47.0:** set-piece brawls (the Cuman brawl, the Moravians' flags); a killed person standing up
 > again on the other screen (the standing dead copy); people left naked after a wait or a sleep — fixed in 0.46.0 and
 > waiting for the testers to confirm it; bows and arrows (not built); the host cannot lock onto a guard who is beating
-> you; two players on one enemy can make it turn between them; in the testers' fights about one enemy blow in three
-> reached the player with no swing shown on the partner's screen (now counted and named in the log, not fixed); in a
-> fight the other player's figure can still step or snap a little.
+> you; the attacker does not recoil when his blow is blocked; two players on one enemy can still make it turn between them,
+> less often; an enemy blow whose swing the host's game never produced (a bite, a stealth takedown) now shows a generic lunge,
+> not the real one; in a fight the other player's figure can still step or snap a little (now measured in the log).
 
 <!-- screenshot/gif here -->
 
