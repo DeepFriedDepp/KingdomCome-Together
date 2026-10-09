@@ -25,6 +25,20 @@ How to play together (0.45.5):
 Nobody clicks CONNECT any more, and you don't need anyone's save file. First time ever starting the game? Start it once from Steam and accept its two first-run pages, then use the launcher.
 ```
 
+## Version 0.47.0 — shared combat, the first part (WO-163) — DRAFT, not released; the build is not made
+
+```
+Kingdom Come: Together 0.47.0 — fighting together, part one.
+• An enemy blow you never saw coming now comes with a swing: if the host's game showed none (an animal's bite, a blow its game could not read), your copy of the enemy lunges once before the damage lands.
+• Combos, throws and the counter-strike after a perfect block are shown on your screen (before, they were dropped).
+• An enemy that is fighting one of you only turns to the other if the other has clearly hurt it more — less flip-flopping when you gang up on it.
+• Hitting a guard who is fighting your partner: the game itself is now asked whether the guard is fighting you before it counts as a crime.
+• New log line for testers that measures how much an enemy's figure steps in a fight.
+Switches: host console `mp_hostile_crime on|off` (default on); agent `--no-generic-swing` / `GenericSwingEnabled` in kcdmp-client.json (default on).
+Not in this version: your own block deciding a blow on your own screen, locking on to an enemy that fights your partner, the attacker's recoil on a block (each waits for a live check).
+Both players and the relay need 0.47.0.
+```
+
 ## Version 0.42.7 (WO-148)
 
 ```

@@ -882,6 +882,40 @@ save, as always.
 Lines worth a look: `WO161-HIT`, `MP-WO161-STATS` (agent log, both machines), `MP-WO161 verdict … not sent` (the fallback), `WO136-TARGET`
 (kcd.log, host). Switch (default on): `HitVerdictEnabled` in `kcdmp-client.json`, or `--no-hit-verdict` on the agent.
 
+## WO-163 — shared combat, the certain fixes (a build after 0.46.5; not released, not built as an installer)
+
+Evidence: `docs/WO-163-findings.md`. **What is in this build:** an enemy blow that arrives with no swing of its own now shows one
+(a generic lunge), sync attacks (combos, throws) are read correctly, a counter-strike after a perfect block is a swing, the host
+pairs a blow with its swing by the swing's own timing, the fight "snap" is measured as a log line, an enemy is turned from its
+opponent only by clearly more *damage*, and the host's assault judge asks the engine whether the victim is in a fight with the host.
+**What is NOT in it** (the probes did not pass or were not run; see the findings): the player's own block deciding the hit on his
+own machine, the host locking onto an enemy that fights the partner, the attacker's recoil on a block. Use a throwaway copy of the
+host's save, as always.
+
+171. **A blow with nothing behind it.** Let a cat, a dog or a man whose swing you did not see hit you. Marker: `mark_odd`. * Send
+     `WO161-HIT … shown=generic reason=…` (the copy lunged once before the damage) and `shown=no …` (nothing could be shown: a
+     missile, no named attacker). In the 0.45.8 sessions 16 of 45 blows had no swing; the generic lunge is for those.
+172. **A combo or a throw.** Fight someone who throws or chains attacks (a bandit chief, a guard). Marker: `mark_odd` if the
+     other screen shows nothing. * Send the host agent's `MP-ACTION section=outbound kind=NpcAttack … table=combat_action_sync_attack`
+     lines (the joiner's `dispatch=native-row` for the same row) and `MP-WO163-STATS rows_out_sync=… rows_out_unknown_table=…`;
+     `WO163-SYNCGUID` must never appear. (`dropped-unknown-row` was 8 % and 20 % of the host's rows before.)
+173. **A counter after a perfect block.** Perfect-block a guard's swing and watch the guard's counter on both screens. * Send
+     `MP-WO163-STATS master_strikes_out=… perfect_block_rows_dropped=…`.
+174. **Two players on one enemy, with the snap line.** Both of you fight one enemy for a minute, moving about. Marker: `mark_snap` on
+     every jump you see. * Send both native logs: `MP-FIGHTSNAP … resume_max_cm … post_hold_step_max_cm …` per 10 s window (the
+     baseline from the development traces: resume step median 13.1 cm, 90th percentile 15.4 cm; the largest step in the next second
+     median 13.3 cm, 90th percentile 30.4 cm) — a later snap fix is kept only if these 90th percentiles fall.
+175. **A guard that fights your partner, and you hit it.** The host hits a guard that is fighting the joiner's avatar; wait six
+     seconds. * Send `WO163-JUDGE …` and `MP-WO163 hostile? … -> hostile opponents in one skirmish | not hostile` (agent log): does
+     the engine say the guard is in a skirmish with you, and was the blow then judged a crime (`WO139-JUDGE … assault`) or not?
+     `mp_hostile_crime off` (host) returns to the 0.46.5 rule.
+176. **Frame rate.** The WO-148 rule, with the game window in front: the menu, a town, and a fight with three enemies — before and
+     after. Not measured by the development session (it never brings the game forward).
+
+Lines worth a look: `WO161-HIT`, `MP-WO161-STATS` (`generic=`), `MP-WO163-STATS`, `MP-FIGHTSNAP`, `WO163-JUDGE`, `WO136-TARGET … damage=<to>/<cur>`.
+Switches: `mp_hostile_crime on|off` (host console, default on); `GenericSwingEnabled` in `kcdmp-client.json`, or `--no-generic-swing`
+on the agent (default on).
+
 ## Logs to send afterwards
 
 Both machines: Report a bug in the launcher. Since 0.42.2 it also collects the

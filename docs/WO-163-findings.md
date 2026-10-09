@@ -218,4 +218,64 @@ resolved it (`spec="CombatAttackComboGen, r_noweapon+c01+sZ2+leftGuard+eZ1+aZ5+h
 `dispatch=native-row result=ok` (no `dropped-unknown-row`) — the joiner half of A1's live check. **The host half — the DLL reading the GUID at +0x7C
 from a real committed sync attack — is not tested** (needs a throwing / combo NPC fighting the host).
 
-<!-- STAGE-B-RESULTS -->
+### P2 / P3 / P4 — **not run; their instrument is not built** (stopped on purpose)
+
+Level B (`RPGProcessHit`) is the only replay WO-162 left standing, and it needs native code that builds engine structs and calls the
+engine's combat path. What the game's own caller shows (read statically this session, `OnCollision`'s code on 1.5.5; named by structure,
+not by address): the call is `RPGProcessHit(this = [combat actor's owner + 0x478], out, hitIn, flags)`; **`out`** is a stack object the caller
+**constructs with a call that takes only its address, just before** (size and destructor: `[not determined]`); **`hitIn`** is a **0x40-byte**
+stack object — bytes +0..+3 flags (0 / contact / contact / 0), dword +4 the hit index (from a virtual call), dword +8 = 2, dword +0xC = 2, qword
++0x10 the victim actor (from the collision details), qword +0x18 the collision-details pointer, +0x20 / +0x28 / +0x30 the sub-hit vector (begin, end,
+a third word), filled by a helper from an entry the caller builds — the one WO-162 describes; **`flags`** a 16-byte stack block. That confirms the
+WO-162 contract and names what is still unread: the **constructor and destructor of `out`** (it holds refcounted events the caller must release),
+the **vector builder** (allocator ownership), and the **collision-details record's size and the fields the core reads from it**. A wrong
+guess is a crash hours later (WO-148's rule), the call touches the player in P3, and P3 needs the maintainer holding block — so the instrument
+is designed **with the maintainer**, from these three reads, **on dummy NPCs first** (P2, P4), on the main thread under `fault::guarded`,
+every pointer looked up in the frame it is used. P1's result adds its first step: **write the four attack fields on the attacker's model** before
+the call (their property blocks are the ones the reader already names).
+
+### P6 / P7 / P8 — not run
+
+P6 (the lock-on selector picking a guard that fights the avatar) needs the **maintainer's lock-on press** — the selector runs on his input — and a
+guard fighting an avatar; P7 needs the host's real blow on that guard; P8 (does a queued failed-attack row end a swing in the recoil) is a **visual**
+result and the window was minimized. The instruments are built: `mp_w163_probe pair <guard> on 1` (the host joins the guard's skirmish with the
+explicit hostile pair), `relation <guard>` (A7's read, at the 5 s mark), `swing2 <npc> <gap_ms> <attack row> | <CombatAttackFailed row>`, and
+`model <guard>` for its `opp`. Nothing was run with the host's Henry in a skirmish.
+
+## Stage C — what was built, and what was not
+
+| Item | Built? | Why |
+|---|---|---|
+| C1 host lock-on | **no** | its probe P6 was not run (needs the lock-on press); the lever (`pair`) exists as a probe verb and as the DLL op |
+| C2 victim decides (Level B) | **no** | P3 / P4 not run; P1 FAILED, so the four attack fields would have to be written first; the instrument is not designed (above) |
+| C3 attacker-side recoil | **no** | P8 not run (visual); the two tables are in the catalog (`combat_action_failed_attack`, `combat_action_sync_perfect_block_hit`, 222 rows) |
+| C4 checklist | **partly** | `docs/TWO-PLAYER-CHECKLIST.md` §WO-163, items 171-176 — the items for what exists; the C-items wait for their builds |
+
+## Gates and build
+
+* All offline gates green after the last code change: client **1,258**, setup 77, farkle 59, relay 63 (the agent changed after the last full run by the
+  probe verbs only: rebuilt, the client suite passes), native **533** (was 421), Lua synthetic suites **50 of 50**.
+* **The live fight gate (the one that matters) was not run** — a real fight of each kind, logs read on both machines — **so there is no installer**.
+  No version string was written (0.47.0 is the maintainer's; `VERSION` is 0.46.5; the README badge untouched), nothing tagged, nothing pushed.
+* The maintainer's installed mod pak was **restored** after the live runs (the copy taken before the install, checked); the repo's tracked
+  `kdcmp.pak` was returned to its committed state.
+
+## Pocket list (outside this scope, or `[not determined]`)
+
+1. **0.46.5 bundles** — none exist on disk; when a pair is dropped into `logs/`, re-run the per-blow baseline from the real `WO161-HIT` lines
+   (the proxy numbers here are from the two sessions WO-162 counted).
+2. **The host's damage on an NPC** is not measured (the DLL marks the blow, it does not read the victim's health): A6 counts a nominal 10 hp
+   for a landed host hit. A health read per host blow (a watch like the one for blows on avatars) would make the hysteresis exact.
+3. **A7's relation object layout** (embedded in the manager at +0x80, or held by a pointer there) was accepted either way and **not recorded
+   which**; the hostile=true answer and the 5 s judge path were not exercised live (P6 / P7).
+4. **A1 / A2 live on the host** (the DLL reading +0x7C from a committed sync attack; an NPC's perfect-block-class capture) — not staged; P5's host half.
+5. **P2 / P3 / P4's instrument** (above): the `out` struct's constructor / destructor, the vector builder, the collision-details record.
+6. **`MP-FIGHTSNAP` `fight_frames`** counts "engaged" as a swing hold, a blend, or a host combat bit streamed in the last 2 s; `corr_*` is 3D, the
+   rest horizontal; corrections over 5 m are placements. A per-puppet baseline from a real two-player session is still needed (the 0.45.x traces
+   are solo).
+7. **Harness facts:** shared-world mode makes the agent claim host and outrank a plan peer (`mp_shared_world off`); the agent's leash drags a joiner
+   toward the synthetic host's avatar (`mp_leash off`); a loaded game restores its own minimized window; the agent engages a copy only in a
+   joiner session (`mp_w163_probe engage` calls the DLL's engage op directly).
+8. **WO-137's quest reader** floods `FAULT-SUM` (~11.9 k a minute on a loaded world), guarded and counted — WO-160 recorded it; not touched.
+9. **Frame rate** (menu / town / 3-enemy fight, before and after): not measured; needs the window in front.
+
