@@ -513,4 +513,26 @@ public partial class GameBridge
         if (n % 60 == 0 && (_w164TalkAsks + _w164Sweeps + _w164QFixOk + _w164QFixRefused + _w164FleeDisengaged + _w164SitCleared + _w164TorchSide) > 0)
             Console.WriteLine($"MP-WO164-STATS talks={_w164TalkAsks} started={_w164TalkStarts} failed={_w164TalkFails} preempted={_w164Preempted} sweeps={_w164Sweeps} sweep_found={_w164SweepFound} sweep_still_erroring={_w164SweepStillErr} qfix_ok={_w164QFixOk} qfix_refused={_w164QFixRefused} flee_disengaged={_w164FleeDisengaged} sit_cleared={_w164SitCleared} torch_side={_w164TorchSide} marks={_w164Marks} mark_pings_in={_w164MarkPingsIn} malformed={_w164Malformed} random_event_lines={_w164RandomEvents}");
     }
+
+    // ================================================================ ID: the host's idles on the joiner, per minute with reasons
+
+    private readonly ConcurrentDictionary<string, long> _w164IdleWhy = new(StringComparer.Ordinal);
+    private long _w164IdlePrevIn, _w164IdlePrevPlayed, _w164IdlePrevRefused, _w164IdleRefusedTotal;
+
+    private void W164IdleRefused(string why)
+    {
+        Interlocked.Increment(ref _w164IdleRefusedTotal);
+        _w164IdleWhy.AddOrUpdate(why, 1, (_, n) => n + 1);
+    }
+
+    /// <summary>The MP-W143 stats line's tail: one-shot (idle) rows received / played / refused since the last line, and why.</summary>
+    private string W164IdleMinuteText()
+    {
+        long inN = Interlocked.Read(ref _w143ShotsIn), played = Interlocked.Read(ref _w143ShotsPlayed), refused = Interlocked.Read(ref _w164IdleRefusedTotal);
+        string why = string.Join(",", _w164IdleWhy.OrderByDescending(kv => kv.Value).Take(4).Select(kv => $"{kv.Key}:{kv.Value}"));
+        string t = $"idle_window in={inN - _w164IdlePrevIn} played={played - _w164IdlePrevPlayed} refused={refused - _w164IdlePrevRefused} refused_why=[{why}]";
+        _w164IdlePrevIn = inN; _w164IdlePrevPlayed = played; _w164IdlePrevRefused = refused;
+        _w164IdleWhy.Clear();
+        return t;
+    }
 }

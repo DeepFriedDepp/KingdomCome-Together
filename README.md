@@ -7,7 +7,7 @@
 <strong>Not affiliated with or endorsed by Warhorse Studios or PLAION.</strong></p>
 
 <p align="center">
-  <a href="docs/releases/RELEASE-NOTES-0.47.0.md"><img alt="main" src="https://img.shields.io/badge/main-0.47.0-b8860b?style=flat-square"></a>
+  <a href="docs/releases/RELEASE-NOTES-0.47.5.md"><img alt="main" src="https://img.shields.io/badge/main-0.47.5-b8860b?style=flat-square"></a>
   <a href="https://github.com/DeepFriedDepp/KingdomCome-Together/releases/latest"><img alt="latest release" src="https://img.shields.io/github/v/release/DeepFriedDepp/KingdomCome-Together?label=latest%20release&color=8a3324&style=flat-square"></a>
   <a href="LICENSE"><img alt="License: GPLv3" src="https://img.shields.io/badge/license-GPLv3-2c3e50?style=flat-square"></a>
   <a href="docs/LAUNCHING.md"><img alt="Platform" src="https://img.shields.io/badge/platform-Windows-555555?style=flat-square"></a>
@@ -28,7 +28,7 @@ against each other from inside the game itself.
 > Kingdom Come: Deliverance II, its assets and its content belong to Warhorse
 > Studios and PLAION; this is a free, non-commercial fan project.
 
-> **The current version is 0.47.0**, a release candidate for the maintainer and one tester (not on the releases
+> **The current version is 0.47.5**, a release candidate for the maintainer and one tester (not on the releases
 > page). `main` (this repo's source) is ahead of the last published installer; the feature list below describes
 > `main`. Installing from the
 > [releases page](https://github.com/DeepFriedDepp/KingdomCome-Together/releases)
@@ -36,8 +36,14 @@ against each other from inside the game itself.
 > here — [Building from source](#building-from-source) gets you current
 > `main`.
 >
-> **What 0.47.0 is, in plain words**
+> **What 0.47.5 is, in plain words**
 >
+> - **Talking to the host's people (joiner):** the mod no longer floods the game with placements it already refused; people
+>   near you are reset after a wait or a sleep; the person you walk up to is ready before you press the key; a stuck request is
+>   asked once more, then "Try again in a moment". Quest counters that drift from the host's are set back to the host's value.
+> - **No more map crash for a fresh joiner**, calmer fleeing enemies (combat can end), figures that cannot sit stand instead of
+>   freezing, "I'm stuck" also frees you from a seat, your own random events are off in a session, the host's torch shows, and
+>   the host's reload is told on screen. Built and tested without the game; the checklist's items 177–196 are the live proof.
 > - **Start Game / Join Game** sit on the game's own main menu. Nobody clicks CONNECT any more, and the partner needs no
 >   save of the host's world.
 > - **The host's people on a joiner's screen** are put in place the way the game would put them: the joiner can talk to
@@ -53,7 +59,8 @@ against each other from inside the game itself.
 >   game, not yet with two people; the checklist's items 162–176 ask two people.
 > - **Doors, shops, herbs, horses and the prologue's cutscenes** got their own fixes since 0.45.5; the checklist lists each.
 >
-> **Known, not fixed in 0.47.0:** set-piece brawls (the Cuman brawl, the Moravians' flags); a killed person standing up
+> **Known, not fixed in 0.47.5:** a partner pin on the map, people's clothes following the host's world, leading Ignatius on
+> the joiner, riders and horses as one unit; set-piece brawls (the Cuman brawl, the Moravians' flags); a killed person standing up
 > again on the other screen (the standing dead copy); people left naked after a wait or a sleep — fixed in 0.46.0 and
 > waiting for the testers to confirm it; bows and arrows (not built); the host cannot lock onto a guard who is beating
 > you; the attacker does not recoil when his blow is blocked; two players on one enemy can still make it turn between them,

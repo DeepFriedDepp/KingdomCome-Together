@@ -916,6 +916,59 @@ Lines worth a look: `WO161-HIT`, `MP-WO161-STATS` (`generic=`), `MP-WO163-STATS`
 Switches: `mp_hostile_crime on|off` (host console, default on); `GenericSwingEnabled` in `kcdmp-client.json`, or `--no-generic-swing`
 on the agent (default on).
 
+## WO-164 — talking to the host's people, the map crash, fleeing enemies, sitting, random events (0.47.5)
+
+**Not run in the game by the development session** (the maintainer skipped the solo run, 2026-10-09): every item here is the
+first live proof. **Press "Something's wrong here" (`mark_odd`) at every miss** — the snapshot is written on both machines under
+one `mark=` id (`MP-MARK-SNAP mark=…` in kcd.log and agent.log), then send both logs. Each talk writes `WO164-TALK` (agent.log):
+its `cause=` names why one failed (`busy` the host was talking to or carrying them, `preempted` they greeted first, `quest` a
+quest value disagreed, `torn` their placement was refused just before, `wedged` another request was open, `neither` — a new cause).
+
+177. **A wait, then talk to five people** (joiner). Wait 8 hours, then talk to five people, one of them seated (a bench) and one at
+     work. * Send `WO164-SWEEP after …` and the `WO164-SWEEP npc=… trigger=skip … errors_before=… errors_after_6s=…` lines, the five
+     `WO164-TALK` pairs, `MP-WO160-STATS planner refused=… (+N/min)` before and after the wait (the 0.47.0 joiner: 2,614 refusals in
+     75 minutes, ~35 per minute; the target: under twice the pre-wait rate within a minute).
+178. **Haggle with a standing keeper.** * `WO164-TALK … kind=haggle … commands=` (≥ 5; the host's played 7–11) and `ended why=dialog-ended`.
+179. **Haggle with a bartender.** As 178.
+180. **Haggle with a stall seller** (one who works a stall: `seller2`). As 178. The 0.47.0 talk right after a haggle stuck here.
+181. **Haggle, then talk to a different seller.** The second talk starts (`started_ms=` under 2,000).
+182. **Mash the key on a blacksmith, then talk to someone else.** Press the talk key ten times fast on the blacksmith, then walk to
+     another person and talk. * The blacksmith: one `WO164-TALK … ask`, no repeated `WO157-TALK free` within 3 s; the other person
+     starts within ~5 s. If a request hangs 4 s: `WO164-TALK retry npc=… cancel=… reissue=…` (then "Try again in a moment.").
+183. **The same quest giver three times in a row** (mid-quest). * Three `WO164-TALK … started_ms=…`; a failure names its cause and,
+     for `quest`, `first_mismatch=`; `WO164-QFIX var=… applied=yes` lines if a quest value was set back.
+184. **The Mutt line from the bait onward** (both). Lead Ignatius to the bait; watch the joiner's
+     `MP-W137 MISMATCH … numberOfMealsIgnazHasEaten` — it must not stay for minutes: `WO164-QFIX var=…numberOfMealsIgnazHasEaten …
+     applied=yes` within ~10 s. (Ignatius following the joiner on the host is not built — note what the host sees.)
+185. **Open the map after joining as a fresh character** (joiner; the host has a grave somewhere). * No crash. The grave shows on
+     the map. In the native log: no `WO164-MAPMARK FAULT`; `WO164-MAPMARK queued (…)` during the join and `added … (from the queue)`
+     after. If a fault ever appears: the game goes on and says "Map markers are off this session".
+186. **Chase the lackey bandits and let them run** (Vostatek). Wait 60–70 s without fighting. * Combat ends by itself on both
+     machines (you can rest or save); the joiner's game does not crash; `WO164-FLEE npc=… host_flee=true`, at most a few
+     `re-asserted sheathed` per bandit (was 118), `WO164-FLEE … backoff` or `disengage` lines.
+187. **Sit on a bench and be seen sitting** (each player in turn). * The other screen shows the figure seated, or standing beside
+     the bench with `WO164-SIT body=… apply=failed … fallback=stand` (never frozen in a pose without a seat).
+188. **Reload the joiner's save while seated** (joiner sits, then loads a save). * The host sees him where he is, not sitting in
+     the old place: `WO164-SIT cleared why=rejoin|stale` on the host.
+189. **"I'm stuck" while seated, then again.** Sit on a bench, open the mod menu, Help → I'm stuck; then again within 10 s.
+     * `WO164-UNSTUCK step=1 stood=asked …` (are you standing?), then `step=2 … moved=yes` (beside your partner).
+190. **The random-event road walk** (both, the road by the tavern). * The joiner's kcd.log has no `<RandomEvent> … starting` of its
+     own (`WO164-EVENTS joiner: this game's own random events OFF`); both see the same riders and caravans, no doubled carts.
+191. **The host lights a torch at night.** * The joiner sees it (`MP-W136 peer 0 torch OUT …` on the joiner, `(side-channel)` if
+     the old path missed it); away again when the host puts it away.
+192. **The herbalist and a guard at dawn after a sleep** (both). Dressed on both screens? (Clothing is not synced in 0.47.5: report
+     what you see; `mark_odd` on a mismatch.)
+193. **The host reloads** (joiner watching). * "Your host is reloading the world - please wait", then "Back with your host".
+194. **The joiner washes twice at a tub.** * `WO164-USE enter|leave obj=… kind=…` lines for each wash (joiner agent.log); neither
+     figure stays in a washing pose.
+195. **The joiner tries dice.** * `WO164-TALK … kind=dice` and `WO164-TALK kind=minigame line="Enable of minigame entity …"` — where it
+     stops says which part fails.
+196. **Frame rate** (the WO-148 rule, the window in front): the menu, a town, a fight with three enemies — before and after.
+
+Switches (console, default on): `mp_talk_sweep`, `mp_talk_guard`, `mp_flee_limit`, `mp_joiner_events`; `mp_w164_status` prints
+their counters. Lines worth a look: `WO164-TALK`, `WO164-SWEEP`, `WO164-QFIX`, `WO164-FLEE`, `WO164-SIT`, `WO164-UNSTUCK`,
+`WO164-MAPMARK`, `MP-MARK-SNAP`, `MP-WO164-STATS`, `MP-W143 stats … idle_window …`.
+
 ## Logs to send afterwards
 
 Both machines: Report a bug in the launcher. Since 0.42.2 it also collects the

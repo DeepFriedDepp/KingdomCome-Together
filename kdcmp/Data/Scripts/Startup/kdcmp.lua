@@ -20713,6 +20713,10 @@ function KCD2MP_W164Sweep(name, trigger)
         local ok1 = w164_exec("wh_ai_NPCStateResetElement " .. name .. " Unstance")
         local ok2 = w164_exec("wh_ai_NPCStateResetElement " .. name .. " Stance")
         released = ok1 and ok2
+    elseif trigger == "focus" then
+        -- only looked at: no stance reset (a seated guest would stand up as this player walks past); the DLL's half makes its loaded
+        -- state what it is, so its brain can take a talk -- the key press still releases it (WO-157's talk free)
+        released = "no-focus"
     else
         released = KCD2MP_W160Release and KCD2MP_W160Release(name, "w164-" .. trigger) or false
     end
@@ -20721,7 +20725,7 @@ function KCD2MP_W164Sweep(name, trigger)
     w.stats[trigger] = (w.stats[trigger] or 0) + 1
     local hold = W164_HOLD[trigger] or 20
     KCD2MP_EmitEvent("w164_sweep", name .. " " .. trigger .. " " .. tostring(hold))
-    mp_log(string.format("WO164-SWEEP-LUA npc=%s trigger=%s released=%s hold_s=%d", name, trigger, tostring(released == true), hold))
+    mp_log(string.format("WO164-SWEEP-LUA npc=%s trigger=%s released=%s hold_s=%d", name, trigger, tostring(released), hold))
     return true
 end
 

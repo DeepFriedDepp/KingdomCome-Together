@@ -234,10 +234,10 @@ public partial class GameBridge
                     break;
                 case Protocol.ExtraKindOneShot:
                     Interlocked.Increment(ref _w143ShotsIn);
-                    if (!W141Active || !_w143Shots) break;
-                    if (Wo143Rules.Quiet(_w141Blocked.GetValueOrDefault(r.Name))) { Interlocked.Increment(ref _w143ShotsSkipped); break; }
+                    if (!W141Active || !_w143Shots) { W164IdleRefused(!W141Active ? "not-active" : "oneshots-off"); break; }
+                    if (Wo143Rules.Quiet(_w141Blocked.GetValueOrDefault(r.Name))) { Interlocked.Increment(ref _w143ShotsSkipped); W164IdleRefused("blocked-" + (_w141Blocked.GetValueOrDefault(r.Name) ?? "?").Replace(' ', '_')); break; }
                     var id = await _combat.Wo143OneShotAsync(r.Name, r.Fragment, r.Tags, r.AlignGuid, r.Flags);
-                    if (id is >= 0) Interlocked.Increment(ref _w143ShotsPlayed); else Interlocked.Increment(ref _w143ShotsSkipped);
+                    if (id is >= 0) Interlocked.Increment(ref _w143ShotsPlayed); else { Interlocked.Increment(ref _w143ShotsSkipped); W164IdleRefused(id is null ? "dll-no-answer" : "dll-refused"); }
                     break;
             }
         }
@@ -460,7 +460,7 @@ public partial class GameBridge
     }
 
     private string Wo143StatsLine() => FormattableString.Invariant(
-        $"MP-W143 stats: hands={(_w143Hands ? "on" : "off")} gaits={(_w143Gaits ? "on" : "off")} oneshots={(_w143Shots ? "on" : "off")} minigames={(_w143Minigames ? "on" : "off")} idles={(_w143Idles ? "on" : "off")} herbs={(_w143Herbs ? "on" : "off")} armed=0x{_w143Armed:X2} host={W141Host} joiner={W141Joiner} out hands={Interlocked.Read(ref _w143HandRowsOut)} gaits={Interlocked.Read(ref _w143GaitRowsOut)} looks={Interlocked.Read(ref _w143LookRowsOut)} shots={Interlocked.Read(ref _w143ShotsOut)} | in rows={Interlocked.Read(ref _w143RowsIn)} shots={Interlocked.Read(ref _w143ShotsIn)} played={Interlocked.Read(ref _w143ShotsPlayed)} skipped={Interlocked.Read(ref _w143ShotsSkipped)} done={Interlocked.Read(ref _w143ShotsDone)} failed={Interlocked.Read(ref _w143ShotsFailed)} looks={Interlocked.Read(ref _w143Looks)} temps={Interlocked.Read(ref _w143Temps0)} released={Interlocked.Read(ref _w143TempsReleased)} avatar_loops={Interlocked.Read(ref _w143Loops)} copies_with_tools={_w143HostHands.Count(kv => !kv.Value.HandsEmpty)}");
+        $"MP-W143 stats: hands={(_w143Hands ? "on" : "off")} gaits={(_w143Gaits ? "on" : "off")} oneshots={(_w143Shots ? "on" : "off")} minigames={(_w143Minigames ? "on" : "off")} idles={(_w143Idles ? "on" : "off")} herbs={(_w143Herbs ? "on" : "off")} armed=0x{_w143Armed:X2} host={W141Host} joiner={W141Joiner} out hands={Interlocked.Read(ref _w143HandRowsOut)} gaits={Interlocked.Read(ref _w143GaitRowsOut)} looks={Interlocked.Read(ref _w143LookRowsOut)} shots={Interlocked.Read(ref _w143ShotsOut)} | in rows={Interlocked.Read(ref _w143RowsIn)} shots={Interlocked.Read(ref _w143ShotsIn)} played={Interlocked.Read(ref _w143ShotsPlayed)} skipped={Interlocked.Read(ref _w143ShotsSkipped)} done={Interlocked.Read(ref _w143ShotsDone)} failed={Interlocked.Read(ref _w143ShotsFailed)} looks={Interlocked.Read(ref _w143Looks)} temps={Interlocked.Read(ref _w143Temps0)} released={Interlocked.Read(ref _w143TempsReleased)} avatar_loops={Interlocked.Read(ref _w143Loops)} copies_with_tools={_w143HostHands.Count(kv => !kv.Value.HandsEmpty)} {W164IdleMinuteText()}");
 }
 
 /// <summary>WO-143: the five switches as the bridge keeps them.</summary>

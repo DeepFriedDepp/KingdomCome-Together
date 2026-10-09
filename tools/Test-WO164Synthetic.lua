@@ -178,8 +178,10 @@ do
     NOW = NOW + 30
     local mark = #LOG
     frame(0.6)
-    check("F1: the copy faced within 4 m is swept (focus, 20 s hold)", countEvt("w164_sweep", "tf_front focus 20", mark) == 1)
+    CMDS = {}
+    check("F1: the copy faced within 4 m is swept (focus, 20 s hold)", countEvt("w164_sweep", "tf_front focus 20", mark) == 1 and cmdCount("wh_ai_NPCStateResetElement tf_front") == 0)
     check("F2: not the one behind", countEvt("w164_sweep", "tf_behind", mark) == 0)
+    check("F3: a faced copy is not stood up (no stance reset, only the DLL's half)", lastLog("WO164-SWEEP-LUA npc=tf_front trigger=focus released=no-focus", mark) ~= nil)
     ENTS["tf_front"] = nil; KCD2MP.npcPuppets["tf_front"] = nil; ENTS["tf_behind"] = nil; KCD2MP.npcPuppets["tf_behind"] = nil
     noErrs("F")
 end

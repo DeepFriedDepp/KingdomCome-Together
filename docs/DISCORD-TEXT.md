@@ -25,6 +25,23 @@ How to play together (0.45.5):
 Nobody clicks CONNECT any more, and you don't need anyone's save file. First time ever starting the game? Start it once from Steam and accept its two first-run pages, then use the launcher.
 ```
 
+## Version 0.47.5 — talking to the host's people, the map crash, fleeing enemies (WO-164)
+
+```
+Kingdom Come: Together 0.47.5 — mostly for the joiner.
+• Talking to the host's people: the mod stopped flooding the game with placements it had already refused (that is what broke talks after a wait). After a wait or a sleep the people near you are reset, the person you walk up to is made ready before you press the key, a talk that hangs is asked once more, then you see "Try again in a moment". Mashing the talk key no longer restarts the conversation.
+• Quest counters that drift from the host's (the Mutt bait) are set back to the host's value within seconds.
+• The map no longer crashes a fresh joiner. If the game's map ever fails, markers switch off for the session and you are told.
+• Fleeing bandits no longer flicker their swords on your screen, and combat ends by itself once they have run off.
+• A partner who can't be seated stands beside the bench instead of freezing; "I'm stuck" also gets you out of a seat — press it again within 10 s to land beside your partner.
+• The joiner's own random events (caravans, riders) are off during a session, so you both see the host's.
+• The host's torch shows on the joiner's screen, and the joiner is told when the host reloads.
+• "Something's wrong here" now writes a snapshot on BOTH machines under one mark — press it at every problem and send both logs.
+Switches (console, default on): mp_talk_sweep, mp_talk_guard, mp_flee_limit, mp_joiner_events.
+Not fixed yet: a map pin for your partner, people's clothes following the host's world (night clothes at dawn), Ignatius following the joiner, riders and horses moving as one.
+Not tested in the game before release — the checklist's items 177–196 are the test. Both players and the relay need 0.47.5.
+```
+
 ## Version 0.47.0 — shared combat, the first part (WO-163) — DRAFT, not released; the build is not made
 
 ```
