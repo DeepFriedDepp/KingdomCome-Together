@@ -259,3 +259,72 @@ Every item below is gated by tests: **[unit]** `dotnet/KcdMp.Client.Tests/Wo164T
 * **N** (clothing on the wire), **ESC** (Ignatius) — **not built** (pocket list). **ID**, **SL** — not built (dropped first
   by the WO's order). **DI** — the minigame entity lines are logged (`WO164-TALK kind=minigame`); dice dialogues get
   `kind=dice`.
+
+### Two changes made after the record above
+* **The focus sweep does not reset the stance.** As first built, looking at a seated guest within 4 m would have stood him up for
+  20 s (the release). The focus trigger now runs only the DLL's half (the loaded state := the body, so its brain can take a
+  talk); the key press still releases the copy as before (WO-157's talk free). `released=no-focus` in `WO164-SWEEP-LUA`. [syn]
+* **ID** — the agent's `MP-W143 stats` line ends with `idle_window in=… played=… refused=… refused_why=[…]` (the host's one-shot /
+  idle rows since the last line, and why each refused one was: `not-active`, `oneshots-off`, `blocked-<why>`, `dll-refused`,
+  `dll-no-answer`). [build]
+
+## Solo live — not run (the maintainer's decision, 2026-10-09)
+
+The run needs the Steam client, a throwaway playline copied into the saves folder (the maintainer's saves now hold only
+`playline0`; the older playlines were moved to `OLD`), the installed `Mods\kdcmp` swapped and restored, and the Modding Tools
+game, which takes the foreground at start and after a load. Asked before any of it, the maintainer chose **"Skip live, build
+RC"**. So **no item of this WO was run in the game**: every result above is **[unit] / [syn] / [native]**, and the
+TWO-PLAYER-CHECKLIST items 177–196 are the first live proof. What a solo run would have answered first, in order: does
+`soul:RestrictDialog(true/false)` cancel the player's pending request in this build (T3); does the WO-137 op 9 write read back
+on an `int` State and notify its consumers (T6); does `wh_pl_RandomEventsAutoSpawnEnabled` exist in the Modding Tools build
+and stop `<RandomEvent> … starting` lines (R1 — `mp_joiner_events` ships **on** under the standing "ship new features on"
+rule: it is a reversible cvar the Lua puts back at the session's end, and its failure is a console error, not a fault);
+does the sweep reduce a seated copy's refusals (T1: the WO's ≥ 80 % target against the 15–26 % of 0.1); the 15-minute soak
+with 13 bodies; the frame rate in the three scenes.
+
+## Gates
+
+| Gate | Before (0.47.0) | Now | Mark |
+|---|---|---|---|
+| Agent unit tests (`KcdMp.Client.Tests`) | 1,258 | **1,280** (Wo164 22; Wo123's join-range pin widened to 0x75) | [unit] |
+| Setup | 77 | 77 | [unit] |
+| Farkle | 59 | 59 | [unit] |
+| Relay round trip | 63 | 63 (the W164 row crosses the real relay like every JoinWire row) | [unit] |
+| Native | 533 | **536** (give-up after 3, the sit fallback, the FAILED word) | [native] |
+| Lua synthetic suites | 50 / 50 | **51 / 51** (WO-164: 59 checks; WO-137: two timing lines for T2) | [syn] |
+| Static (no raw `__try`, console placeholders, Lua locals, WO-157) | pass | pass | [code] |
+| Frame rate (WO-148 rule) | not measured | **not measured** (no game run) | [not tested] |
+
+## Pocket list (outside this WO, or put out of reach by its probes)
+
+* **C2 — a map pin for the partner.** Built safely it is a marker on a hidden entity of the mod's own (no model, NO_SAVE),
+  moved every 2 s and removed before any load or leave; a mark on the avatar entity itself holds a raw linkable pointer that a
+  reload destroys (the WO-113 map crash). The C1 gate (queue, readiness, the disable) is what it would ride on.
+* **N — NPC clothing on the wire** (the herbalist in night clothes on the joiner): the host's equipment element (slot 4, the
+  `ChangeEquipment … sleepUnequip` text) as an outfit id on the WO-141 wire, applied through the WO-144 dress path after a
+  sweep. Needs its own native read and a live check of the dress path on a paused copy.
+* **ESC — Ignatius following the joiner.** The host's `SetFollowsPlayer` / `SetLiesDown` refusal stands; the probe (can the
+  game's follow behaviour target an avatar's soul?) needs a live session. T6 now corrects the `numberOfMealsIgnazHasEaten`
+  drift itself; the port attribution of that counter is Part B.
+* **R2 — a rider and its horse as one unit** (R0: the rider copy is never mounted on the horse copy on the joiner).
+* **TR's root cause** — why the host's torch bit never reached the joiner through the state block (the side-channel works
+  around it; the block path stays as it was).
+* **D2's distance clause** (> 30 m from every player) — the agent has no copy positions; the watchdog uses the host's flee only.
+* **SL** — the non-initiator's sleep screen and the rest top-up timing.
+* **The "neither" talk cause** — Manka and Procek (wait bundle) failed with no planner error and no other request open; T0's
+  `cause=neither` plus the mark snapshot is how the next round names it.
+* **"Carry him to the tavern completes at a birch tree"** — needs the host's quest trace of that step.
+* **The lackey fight's sync** (Part B set pieces) and **enemies' copies fighting by their own brain** (the `re-asserted sheathed
+  (local brain fought back)` lines are D1's symptom, not its cause).
+* Noted, not this WO's: WO-163's `wo137::set_send_callback` read-fault flood on a loaded world (guarded, counted).
+
+## The 0.47.5 build
+
+From a fresh clone of `1c17cb6` (`release\c0475`) with the three git-ignored start saves (sha1 checked equal), `tools\Build-Installer.ps1
+-SoakWaiver "The maintainer's standing rule, stated in WO-161 on 2026-10-08 and applied to WO-164 on 2026-10-09: release candidates are
+built without the soak test (0.47.5)."` The header says **0.47.5**. **`release\KingdomComeTogether-Setup-0.47.5.exe`, 106,396,246 bytes, sha256
+`3d017566532723dd60322336e7d69c9253a58b1ccd7bcb8a6b8ed76bc2099990`.** Local only; not tagged; not pushed; **unsigned** (no signing
+settings). Transcript `release\BUILD-0.47.5.log`, waiver `release\SOAK-WAIVED-0.47.5.txt`. Inside the build: relay 63, agent 1,280, setup 77,
+native 536, **all 51 synthetic suites**, the static checks, the installer cases, the payload smoke (`protocol=v10 release=0.47.5`); no
+FAIL line; no user or machine name in the payload. `mp_joiner_events` ships **on** (the maintainer's choice, 2026-10-09, when asked:
+the WO's solo run that would have decided it was skipped).
