@@ -397,3 +397,11 @@ synthetic peer (`act` a host activity row, `w164` a W164 message, `qcp` a host q
 ### Not proven live (the maintainer's two-player session)
 The talk items (T1 trigger timing, T2, T3's cancel, T4, T5), R2 (the only horses near the throwaway save have bracketed names the
 stream refuses), ESC's host acceptance with a real joiner, D2 with a real flee, SL with a real sleep, RL, the in-front frame rate.
+
+## The 0.47.5 build (second, supersedes the first)
+
+From a fresh clone of `a09116d` (`release\c0475b`), the same waiver text with "(0.47.5, second build)". The header says **0.47.5**.
+**`release\KingdomComeTogether-Setup-0.47.5.exe`, 106,420,484 bytes, sha256 `514d634138b314883fc0bc8977e8692fd89168d1b81edad3deda28b8c0dbe871`.**
+Local only; not tagged; not pushed; **unsigned**. The first 0.47.5 build is kept as `KingdomComeTogether-Setup-0.47.5.superseded-first-build.exe`.
+Inside the build: relay 63, agent 1,282, setup 77, native 537, all 51 synthetic suites, the static checks, the installer cases, the payload
+smoke (`protocol=v10 release=0.47.5`); no FAIL line; no user or machine name in the payload.
