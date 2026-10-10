@@ -185,8 +185,22 @@ public static class Wo137Rules
     public static string AppliedName(byte r) => r switch
     {
         0 => "changed", 1 => "unchanged", 2 => "no-node", 3 => "not-a-state", 4 => "no-port", 5 => "port-refused",
-        6 => "asleep", 7 => "fault", 8 => "unarmed", 9 => "not-a-quest", 10 => "type-refused", _ => $"code-{r}",
+        6 => "asleep", 7 => "fault", 8 => "unarmed", 9 => "not-a-quest", 10 => "type-refused", 11 => "changed-hibernated", _ => $"code-{r}",
     };
+
+    /// <summary>WO-166 T2: the op 2 / op 9 write took (11 = written into a hibernated State: the graph reads it when it wakes).</summary>
+    public static bool WriteTook(byte r) => r is 0 or 1 or 11;
+
+    /// <summary>
+    /// WO-166: the type name at the end of an op 2 / op 9 reply: [result][old ok][old i32][new ok][new i32][len][name] -- the length is
+    /// byte 11. (Read at byte 10, the new value's top byte, every type came out empty: the field's "type-refused type=".)
+    /// </summary>
+    public static string ReplyType(byte[] b)
+    {
+        if (b.Length < 12) return "";
+        int tl = b[11];
+        return b.Length >= 12 + tl ? System.Text.Encoding.ASCII.GetString(b, 12, tl) : "";
+    }
 
     /// <summary>An apply result worth another try later (the module is hibernating here, or the DLL did not answer).</summary>
     public static bool Retryable(byte r) => r is 6 or 255;

@@ -233,6 +233,8 @@ public partial class GameBridge
     {
         if (!W137Joiner) return;
         double now = W164Now();
+        QuestValueIndex? qidx = null;
+        try { qidx = await Wo147QuestIndexAsync(); } catch { }
         foreach (var (path, m) in _w164Mism.ToArray())
         {
             if (now - m.SeenAt > 90) { _w164Mism.TryRemove(path, out _); continue; }   // no checkpoint lists it any more
@@ -241,18 +243,21 @@ public partial class GameBridge
             // the type is the DLL's to judge (it writes an int or bool State only and says type-refused otherwise); before a talk
             // (minAgeS 0) a young mismatch is corrected at once
             double judgedAge = minAgeS <= 0 ? Math.Max(age, Wo164Rules.QuestFixAfterS) : age;
-            string? refusal = Wo164Rules.QuestFixRefusal(true, "int", judgedAge, _w154Contest.IsContested(path), false);
+            // WO-166 T2: the type is the quest's own State definition (Scripts.pak, TypeT) when the index knows it; the DLL still checks
+            // the live variant (int / uint / bool only)
+            string? typeDef = qidx?.StateType(path);
+            string? refusal = Wo164Rules.QuestFixRefusal(true, typeDef ?? "int", judgedAge, _w154Contest.IsContested(path), false);
             if (refusal is not null)
             {
                 Interlocked.Increment(ref _w164QFixRefused);
-                Console.WriteLine($"WO164-QFIX var={path} joiner={m.Local} host={m.Host} applied=no why={refusal}");
+                Console.WriteLine($"WO164-QFIX var={path} joiner={m.Local} host={m.Host} applied=no why={refusal} type_def={typeDef ?? "?"}");
                 continue;
             }
             var r = await _combat.Wo137SetValueAsync(Interlocked.Increment(ref _w137Tok), path, m.Host);
-            bool ok = r is { Result: 0 or 1 };
+            bool ok = r is { } rr && Wo137Rules.WriteTook(rr.Result);
             if (ok) Interlocked.Increment(ref _w164QFixOk); else Interlocked.Increment(ref _w164QFixRefused);
             Console.WriteLine(FormattableString.Invariant(
-                $"WO164-QFIX var={path} joiner={m.Local} host={m.Host} applied={(ok ? "yes" : "no")} why={(r is null ? "no-answer" : Wo137Rules.AppliedName(r.Value.Result))} type={(r?.Type ?? "?")} age_s={age:F0} trigger={why}"));
+                $"WO164-QFIX var={path} joiner={m.Local} host={m.Host} applied={(ok ? "yes" : "no")} why={(r is null ? "no-answer" : Wo137Rules.AppliedName(r.Value.Result))} type={(r?.Type ?? "?")} type_def={typeDef ?? "?"} age_s={age:F0} trigger={why}"));
             if (ok) _w164Mism.TryRemove(path, out _);
         }
     }
@@ -643,6 +648,8 @@ public partial class GameBridge
                 await W164NoticeAsync("Map markers are off this session (a game error).");
             }
         }
+        if (n % 60 == 0 && Interlocked.Read(ref _w166LootCloseLines) + Interlocked.Read(ref _w166TalkTimeouts) + Interlocked.Read(ref _w166TalkBusy) > 0)
+            Console.WriteLine("MP-WO166-STATS " + Wo166StatsText());
         if (n % 60 == 0 && (_w164TalkAsks + _w164Sweeps + _w164QFixOk + _w164QFixRefused + _w164FleeDisengaged + _w164SitCleared + _w164TorchSide) > 0)
             Console.WriteLine($"MP-WO164-STATS talks={_w164TalkAsks} started={_w164TalkStarts} failed={_w164TalkFails} preempted={_w164Preempted} sweeps={_w164Sweeps} sweep_found={_w164SweepFound} sweep_still_erroring={_w164SweepStillErr} qfix_ok={_w164QFixOk} qfix_refused={_w164QFixRefused} flee_disengaged={_w164FleeDisengaged} sit_cleared={_w164SitCleared} torch_side={_w164TorchSide} pin_sets={_w164PinSets} pin_removes={_w164PinRemoves} escort_accepted={_w164EscortAccepted} escort_follows={_w164EscortFollows} marks={_w164Marks} mark_pings_in={_w164MarkPingsIn} malformed={_w164Malformed} random_event_lines={_w164RandomEvents}");
     }

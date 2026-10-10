@@ -132,3 +132,76 @@ bundles carry the testers' own time zone (UTC+13); the maintainer's are UTC−7.
   (WO-139, observed); the crime record is untouched by it.
 * **Steam friends:** the OCE joiner's launcher looked up friends five times: twice `hosting=0` (the host was not up yet), three
   times `hosting=1`. The lookup runs once per button press; a list opened before the host is up stays empty.
+
+## Phase 1 — the crash and talking (built)
+
+### L1 — never rewrite a corpse copy under an open loot screen [code][syn]
+* `kdcmp.lua` WO-166 section: the mod marks the screen open on a body when its own open path calls the game's loot
+  (`KCD2MP_W166LootOpened`), and closed on the game's `ItemTransfer` **OnClosed** event (an element listener, armed on the first
+  open), on the agent's relay of the engine line `PlayAudio: ui_inv_screen_out…` (a second signal), when the player is more than
+  5 m from the body (nobody walks with a menu open), when the body is gone, or after 10 minutes.
+* While it is open, `W134.bodyState` keeps a host `update` for that body instead of applying it (`WO166-LOOT deferred npc=…`; the
+  newest list wins) and applies it **one frame after the close** (`WO166-LOOT applied npc=… after_ms=…`), or before the next open (the
+  open answer always applies first). A refused take is not taken back off Henry under the open screen either
+  (`WO166-LOOT takeback-deferred` → `takeback-applied`, with the "Someone already took that." notice after the close).
+* No switch: a crash fix. *Checks:* Lua suite L1–L13: an update under the open screen leaves the copy untouched, is applied one
+  frame after OnClosed, the newest list wins, a refused take waits, the 5 m rule and the agent's line close a screen whose event
+  was missed, **30 open/update/close cycles** never rewrite under the screen and always apply after **[syn]**. Live: see the live
+  section.
+
+### T1 — our own requests never block the player [code][syn]
+* `KCD2MP_W137TalkRequest`: the request-fallback attaches **only** when the player is not in a dialogue, his last dialogue ended
+  ≥ 3 s ago, and he has no request of his own open; otherwise `WO166-TALK own-request suppressed via=request-fallback why=in-dialogue|after-dialogue|player-request-open`.
+* The player's own talk press ends every not-yet-started talk the mod attached to another copy (`WO166-TALK own-request cancelled
+  npc=… for=…`; the copy is paused again). The WO-164 retry (which clears **all** of the player's requests) never fires for a
+  request-fallback or forced talk — only for the player's own press. The retry's `IsDialogRestricted()` call (a script error at every
+  retry in the field: it takes an argument) is gone. A forced conversation now reports its start to the agent, so it no longer
+  counts as an open request (the field's `open_requests=2..3` included such entries).
+* *Checks:* Lua T1–T6 **[syn]**.
+
+### T2 — quest values reach the joiner [code][native][unit][disasm]
+* Native `set_value` (WO-164 op 9): the runtime gate is now `runtime_loaded(rt)` = Awake (0) **or Hibernating (1)** — both loaded,
+  both keep their value; a hibernated write returns the new result **`ChangedHibernated` (11)** ("the graph reads it when it wakes").
+  Only a runtime state that is neither is refused (`asleep`). *The corrected test, recorded:* "genuinely not loaded" is `NoNode` (the
+  module was never deserialised); Hibernating is loaded and dormant.
+* The type gate (`wo137_rules.h set_value_type_ok`): `int`; **`uint` with a non-negative value** (the quest files declare 13 States
+  `TypeT="uint"`, among them the smith's `kvalitaMece`); `bool` 0/1. Everything else stays refused (the WO-164 guard: enums, floats,
+  strings). The write is still read back and undone if it does not read as written; the notification is the State's own.
+* The agent reads the reply's type at its real offset (byte 11; `Wo137Rules.ReplyType`), in both parsers. The type also comes from
+  **the quest's own State definition**: `QuestValueIndex` now indexes every State's `TypeT` by its engine path (Scripts.pak
+  `Quests/Final/…`, ~5,150 files, the same background load as WO-147's value index); the QFIX line prints `type=` (the live variant) and
+  `type_def=` (the file), and a declared enum/float is refused before the DLL is asked.
+* *Checks:* native — runtime and type gates, and **the field's 635 cases replayed through the new gates: 635 of 635 pass** (612
+  hibernated uint + 23 awake uint; ≥ 90 % required) **[native]**; agent — the reply parser byte for byte, the hibernated result counted
+  as applied, uint safe and enums not, the State-type index on the smith's file, the 635 cases through the agent's gate **[unit]**.
+  A synthetic mismatch on a loaded quest: see the live section.
+
+### T3 — the `neither` case [code][syn]
+* **Root cause by structure (Phase 0 + this reading):** while the player's request waits (and during the conversation), the
+  copy is still **written by the host's stream every frame** (the native writer is bound; WO-157's "talk free" only released its
+  stance and paused the NPC-state placement) — and the host's NPC goes on with its work until the conversation has started (the
+  host holds its NPC only then, WO-144 1.3). The copy is dragged along with the host's NPC and never turns to the player; the
+  engine's dialogue never leaves the request (blacksmith, villager) or, for a forced haggle, waits for its twin until the dialogue
+  controller's "NPC pause request" times out (`WAITING_FOR_TWINS`, the field's haggle).
+* **`mp_talk_resume_first`** (default **on**): (1) a press on a **paused** copy resumes it first and passes the press on **200 ms**
+  later (`WO166-TALK resume-first npc=… delay_ms=200`); (2) the stream **does not move** a copy while its request waits (up to 6 s) or
+  while its conversation (or a forced one) runs: the puppet tick returns before any write and the native writer is held, renewed
+  once a second (`WO166-TALK hold npc=…`); the copy stays resumed (the pause path already skips a talking copy).
+* At every talk that never started the Lua sends the copy's facts and the agent adds the engine's: `WO166-TALK timeout npc=…
+  state=<last engine dialogue state for that copy | request-only> pause_requests=<timed-out|-> waited_s=… placed=… paused=…
+  copy_dialog=… dead=… resumed_for_talk=… stream=held|native-driven|lua-driven via=… retried=…`.
+* *Checks:* Lua R1–R11 (resume first, the 200 ms press, the hold and its 6 s end, the switch, the facts) **[syn]**; agent: the state
+  line parser **[unit]**. Whether the blacksmith now answers: **[needs two players]** (scripted talks do not start a request at all —
+  WO-164).
+
+### T4 — `busy` says so [code][syn]
+* A press on a copy whose host NPC is talking to the host (`w160.conv`, the host's own talk) or fought in the last 3 s (the host's
+  combat event) sends no request: "They're busy with your partner." (`WO166-TALK busy npc=… why=host-talking|host-fighting`). *Checks:*
+  Lua B1–B3 **[syn]**.
+
+### T5 — haggling
+Rides on T1–T3: the haggle is a forced conversation; with T3 its copy is held still and resumed for it. `kind=haggle` keeps its own
+WO-164 line. **[needs two players]**.
+
+### Phase 1 gates (offline)
+Lua: the new suite **45/45**; WO-165's 11/11 unchanged. Native: **625** (0.48.0: 593). Agent: **1,329** (0.48.0: 1,320).

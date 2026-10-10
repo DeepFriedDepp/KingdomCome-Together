@@ -94,7 +94,8 @@ enum class Applied : uint8_t {
     Fault = 7,
     Unarmed = 8,
     NotAQuest = 9,    // not under a C_Quest: never pulsed
-    TypeRefused = 10, // WO-164: op 9 writes an int or bool State only
+    TypeRefused = 10, // WO-164: op 9 writes an int, uint or bool State only (WO-166: uint)
+    ChangedHibernated = 11, // WO-166 T2: op 9 wrote the value of a hibernated (loaded, dormant) State: the graph reads it when it wakes
 };
 
 // Flags on 0x9E.

@@ -1418,10 +1418,9 @@ public sealed class CombatPipe : IAsyncDisposable
         a[6 + pb.Length] = (byte)qb.Length;
         qb.CopyTo(a, 7 + pb.Length);
         var r = await Wo137Async(2, a, ct);
-        if (r is not { Ok: true } v || v.Payload.Length < 11) return null;
+        if (r is not { Ok: true } v || v.Payload.Length < 12) return null;
         var b = v.Payload;
-        int tl = b[10];
-        string type = b.Length >= 11 + tl ? Encoding.ASCII.GetString(b, 11, tl) : "";
+        string type = Wo137Rules.ReplyType(b);   // WO-166: the length is byte 11 (it was read at 10: every type printed empty)
         return new QuestApplied(b[0], b[1] != 0, BinaryPrimitives.ReadInt32LittleEndian(b.AsSpan(2)), b[6] != 0,
                                 BinaryPrimitives.ReadInt32LittleEndian(b.AsSpan(7)), type);
     }
@@ -1440,10 +1439,9 @@ public sealed class CombatPipe : IAsyncDisposable
         pb.CopyTo(a, 6);
         BinaryPrimitives.WriteInt32LittleEndian(a.AsSpan(6 + pb.Length), value);
         var r = await Wo137Async(9, a, ct);
-        if (r is not { Ok: true } v || v.Payload.Length < 11) return null;
+        if (r is not { Ok: true } v || v.Payload.Length < 12) return null;
         var b = v.Payload;
-        int tl = b[10];
-        string type = b.Length >= 11 + tl ? Encoding.ASCII.GetString(b, 11, tl) : "";
+        string type = Wo137Rules.ReplyType(b);   // WO-166: the length is byte 11 (it was read at 10: every type printed empty)
         return new QuestApplied(b[0], b[1] != 0, BinaryPrimitives.ReadInt32LittleEndian(b.AsSpan(2)), b[6] != 0,
                                 BinaryPrimitives.ReadInt32LittleEndian(b.AsSpan(7)), type);
     }

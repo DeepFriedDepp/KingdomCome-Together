@@ -83,8 +83,9 @@ public static partial class Wo164Rules
     /// <summary>A no-port mismatch older than this is written directly (seconds).</summary>
     public const double QuestFixAfterS = 10.0;
 
-    /// <summary>The quest value types the direct write may set (stored inline in the State's variant, no enum range to break).</summary>
-    public static bool QuestFixTypeSafe(string? type) => type is "int" or "bool";
+    /// <summary>The quest value types the direct write may set (stored inline in the State's variant, no enum range to break). WO-166: uint
+    /// (the quest files' TypeT="uint", the smith's kvalitaMece) with a non-negative value -- the DLL refuses a negative one.</summary>
+    public static bool QuestFixTypeSafe(string? type) => type is "int" or "bool" or "uint";
 
     /// <summary>
     /// The direct write of a quest State on a joiner: never on the host, only a value the checkpoint says differs, only a safe

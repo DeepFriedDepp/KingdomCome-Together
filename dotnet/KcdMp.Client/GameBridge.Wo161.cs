@@ -47,6 +47,7 @@ public partial class GameBridge
         _w161Swings.Clear();
         _w161Dedupe.Clear();
         Wo165OnDisconnect();
+        Wo166OnDisconnect();
         _w161RowRecvAt.Clear();
         _w161Played.Clear();
         _w161RowRefused.Clear();

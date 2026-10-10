@@ -52,4 +52,20 @@ inline bool is_punishment_path(const char* p) {
     return end == 0 || end == '.';
 }
 
+// WO-166 T2: C_Node's runtime state (ConceptModule: C_Node::HibernateInternal writes 1 to [node+0x18], WakeInternal writes 0).
+// Both are loaded nodes that keep their values -- a hibernated quest module is dormant, not absent (a module that is not loaded
+// has no node at all). Only these two values are known; anything else is refused as not read.
+inline bool runtime_loaded(int rt) { return rt == 0 || rt == 1; }
+inline bool runtime_hibernating(int rt) { return rt == 1; }
+
+// WO-166 T2: the variant types op 9 may store directly (an inline 32-bit integer, no enum range to break): int; uint (the quest
+// files' TypeT="uint", e.g. the smith's kvalitaMece) with a non-negative value; bool with 0 or 1. The WO-164 guard otherwise.
+inline bool set_value_type_ok(const char* type, int v) {
+    if (!type) return false;
+    if (std::strcmp(type, "int") == 0) return true;
+    if (std::strcmp(type, "uint") == 0 || std::strcmp(type, "unsigned int") == 0) return v >= 0;
+    if (std::strcmp(type, "bool") == 0) return v == 0 || v == 1;
+    return false;
+}
+
 } // namespace kcdmp::wo137rules

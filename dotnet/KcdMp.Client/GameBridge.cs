@@ -5992,6 +5992,10 @@ public partial class GameBridge(ClientConfig config)
             case "w165_cfg":         // WO-165: mp_host_lock, mp_victim_decides, mp_block_recoil
                 Wo165OnEvent(name, arg);
                 return;
+            case "w166_talkstate":   // WO-166 T3: a talk that never started -- the copy's facts
+            case "w166_talk":        // WO-166 T4: a talk refused, the host's NPC busy
+                Wo166OnEvent(name, arg);
+                return;
             case "w163_hostile":     // WO-163 A7: the host's 5 s judge asks the engine whether the victim is in a skirmish fight with the host
             case "w163_probe":       // WO-163 Stage B: mp_w163_probe (the maintainer present; reads and the P6 / P8 levers)
                 Wo163OnEvent(name, arg);

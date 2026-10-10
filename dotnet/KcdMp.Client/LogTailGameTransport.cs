@@ -374,6 +374,8 @@ public sealed class LogTailGameTransport : IGameTransport
         "Running dialogue '",
         "New dialogue '",
         "<RandomEvent>",
+        // WO-166 L1: the loot screen closing (the joiner applies a host update it held back while the screen was open)
+        "PlayAudio: ui_inv_screen_out",
     ];
 
     public static readonly string[] Wo144Contains =
@@ -388,6 +390,8 @@ public sealed class LogTailGameTransport : IGameTransport
         // WO-164: a dialogue's commands (the talk line's count: a haggle that played nothing) and the minigame entities (dice)
         "] DialogCommand-",
         "of minigame entity",
+        // WO-166 T3: a conversation's NPC never stopped its behaviour for it (the haggle's death)
+        "PlayerDialogController::NPCPauseRequests timed out",
     ];
 
     /// <summary>

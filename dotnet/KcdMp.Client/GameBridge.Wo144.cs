@@ -140,6 +140,7 @@ public partial class GameBridge
     /// <summary>The engine lines LogTailGameTransport.Wo144Line routes here.</summary>
     private void Wo144OnEngineLine(string line)
     {
+        if (Wo166OnEngineLine(line)) return;  // WO-166: the loot screen's close (L1); dialogue states and pause-request timeouts (T3)
         Wo164OnEngineLine(line);              // WO-164: refusal times (the adaptive sweep), dialogues and their commands (the talk line)
         if (W160OnEngineLine(line)) return;   // WO-160: a planner failure, counted per NPC
         if (Wo144Rules.ParseCantEquip(line) is { } ce) { _w144EquipReasons[ce.Item] = (ce.Reason, DateTime.UtcNow); return; }

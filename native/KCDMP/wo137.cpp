@@ -618,11 +618,13 @@ Applied set_value(const char* path, int v, Val* before, Val* after) {
     do {
         if (!is_state(node)) { res = Applied::NotAState; break; }
         { char qp[kMaxPath + 64]; size_t qe = 0; if (!node_path(node, qp, sizeof qp, &qe) || qe == 0) { res = Applied::NotAQuest; break; } }
-        if (node_runtime(node) == 1) { res = Applied::Asleep; break; }
+        // WO-166 T2: a hibernated State is loaded and keeps its value (the field's 612 refusals were the smith's dormant module);
+        // only a runtime state that is neither awake nor hibernating is refused.
+        const int rt = node_runtime(node);
+        if (!wo137rules::runtime_loaded(rt)) { res = Applied::Asleep; break; }
         decode(static_cast<char*>(node) + kOffStateValue, before);
-        const bool isInt = std::strcmp(before->type, "int") == 0, isBool = std::strcmp(before->type, "bool") == 0;
-        if (!before->valid || !before->ok || !(isInt || isBool)) { res = Applied::TypeRefused; break; }
-        if (isBool && v != 0 && v != 1) { res = Applied::TypeRefused; break; }
+        const bool isBool = std::strcmp(before->type, "bool") == 0;
+        if (!before->valid || !before->ok || !wo137rules::set_value_type_ok(before->type, v)) { res = Applied::TypeRefused; break; }
         if (before->i == v) { res = Applied::Unchanged; break; }
         alignas(8) uint8_t oldCopy[32]{};
         if (!copy_bytes(static_cast<char*>(node) + kOffStateValue, oldCopy, 24)) { res = Applied::Fault; break; }
@@ -633,10 +635,10 @@ Applied set_value(const char* path, int v, Val* before, Val* after) {
             undo_value(node, oldCopy);
             res = Applied::Fault; break;
         }
-        res = Applied::Changed;
+        res = wo137rules::runtime_hibernating(rt) ? Applied::ChangedHibernated : Applied::Changed;
     } while (false);
     call_release(node);
-    (res == Applied::Changed ? c_setOk : res == Applied::Fault ? c_setFault : c_setRefused).fetch_add(1);
+    (res == Applied::Changed || res == Applied::ChangedHibernated ? c_setOk : res == Applied::Fault ? c_setFault : c_setRefused).fetch_add(1);
     return res;
 }
 
@@ -652,7 +654,8 @@ const char* applied_text(Applied a) {
         case Applied::Fault: return "FAULT";
         case Applied::Unarmed: return "apply not armed";
         case Applied::NotAQuest: return "not under a quest";
-        case Applied::TypeRefused: return "type refused (only int / bool are written directly)";
+        case Applied::TypeRefused: return "type refused (only int / uint / bool are written directly)";
+        case Applied::ChangedHibernated: return "changed (the State's module is hibernated: read when it wakes)";
     }
     return "?";
 }

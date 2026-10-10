@@ -29,6 +29,36 @@ public sealed class QuestValueIndex
     public int TypeCount => _types.Count;
     public int FileCount { get; private set; }
 
+    // WO-166 T2: State path -> its declared TypeT ("Barbora.trosecko.kovar.hibernace.porovnani_kvality.kvalitaMece" -> "uint").
+    private readonly Dictionary<string, string> _stateTypes = new(StringComparer.Ordinal);
+    public int StateCount => _stateTypes.Count;
+    private static readonly Regex StateRx = new(@"<State Name=""([^""]+)""([^>]*)>", RegexOptions.CultureInvariant);
+    private static readonly Regex TypeTRx = new(@"TypeT=""([^""]+)""", RegexOptions.CultureInvariant);
+
+    /// <summary>WO-166 T2: the State's own declared type (the quest file's TypeT), or null when no file declares it.</summary>
+    public string? StateType(string path) => _stateTypes.TryGetValue(path, out var t) ? t : null;
+
+    /// <summary>
+    /// WO-166 T2: the States of one quest file. The engine's path of a node is the file's path under Quests/Final/ with dots, then the
+    /// node's name (Quests/Final/Barbora/trosecko/kovar/hibernace/porovnani_kvality.xml + kvalitaMece). Returns the States added.
+    /// </summary>
+    public int AddStates(string entry, string xml)
+    {
+        string e = entry.Replace('\\', '/');
+        const string root = "Quests/Final/";
+        if (!e.StartsWith(root, StringComparison.OrdinalIgnoreCase) || !e.EndsWith(".xml", StringComparison.OrdinalIgnoreCase)) return 0;
+        string module = e[root.Length..^4].Replace('/', '.');
+        int n = 0;
+        foreach (Match m in StateRx.Matches(xml))
+        {
+            var t = TypeTRx.Match(m.Groups[2].Value);
+            if (!t.Success) continue;
+            _stateTypes[module + "." + m.Groups[1].Value] = t.Groups[1].Value;
+            n++;
+        }
+        return n;
+    }
+
     /// <summary>The engine's own quest progress (wh::questmodule::QuestProgress, IPL_GameData definitions.xml).</summary>
     public static readonly Value[] QuestProgress =
         [new("None", "None"), new("Active", "Started"), new("Done", "Completed"), new("Failed", "Canceled")];
@@ -79,14 +109,18 @@ public sealed class QuestValueIndex
         var idx = new QuestValueIndex();
         using var zip = ZipFile.OpenRead(scriptsPak);
         byte[] marker = Encoding.ASCII.GetBytes("<StateTypeEnumeration ");
+        byte[] stateMarker = Encoding.ASCII.GetBytes("<State ");   // WO-166 T2
         foreach (var e in zip.Entries)
         {
             if (!e.FullName.StartsWith("Quests/", StringComparison.OrdinalIgnoreCase) || !e.FullName.EndsWith(".xml", StringComparison.OrdinalIgnoreCase)) continue;
             if (IsTestingFile(e.FullName)) continue;   // WO-154 1: developer test projects are no part of the game's quest database
             byte[] bytes;
             using (var s = e.Open()) using (var ms = new MemoryStream()) { s.CopyTo(ms); bytes = ms.ToArray(); }
-            if (bytes.AsSpan().IndexOf(marker) < 0) continue;
-            if (idx.AddXml(Encoding.UTF8.GetString(bytes)) > 0) idx.FileCount++;
+            bool types = bytes.AsSpan().IndexOf(marker) >= 0, states = bytes.AsSpan().IndexOf(stateMarker) >= 0;
+            if (!types && !states) continue;
+            string text = Encoding.UTF8.GetString(bytes);
+            if (states) idx.AddStates(e.FullName, text);
+            if (types && idx.AddXml(text) > 0) idx.FileCount++;
         }
         return idx;
     }

@@ -7270,6 +7270,8 @@ function KCD2MP_W137InstallTalk()
                 if bok and blocked then return end
                 local dok, deb = pcall(KCD2MP_W164TalkDebounce, self, user, via)   -- WO-164 T2: one attempt at a time
                 if dok and deb then return end
+                local hok, handled = pcall(KCD2MP_W166TalkPress, self, user, slot, orig, via)   -- WO-166 T1/T3/T4
+                if hok and handled then return end
                 pcall(KCD2MP_W137BeforeTalk, self, user, via)
                 pcall(function()   -- WO-164 T3: the press, kept for one retry through the same action
                     local nm = self and self.GetName and self:GetName()
@@ -7376,6 +7378,14 @@ function KCD2MP_W137TalkRequest(id)
     -- a request that did not come through the wrapped actions: the copy in reach
     local name = KCD2MP_W137NearestCopy(w.talkRangeM)
     if not name then return end
+    -- WO-166 T1: never while the player is in a dialogue, just left one, or has his own request open (the field: the fallback took
+    -- the shop's own next step, held a copy, and the retry it triggered cleared the player's requests -- his next talk was dead)
+    local blocked = KCD2MP_W166OwnRequestBlocked and KCD2MP_W166OwnRequestBlocked()
+    if blocked then
+        KCD2MP.w166.talk.stats.suppressed = KCD2MP.w166.talk.stats.suppressed + 1
+        mp_log(string.format("WO166-TALK own-request suppressed via=request-fallback npc=%s id=%s why=%s", name, tostring(id), blocked))
+        return
+    end
     w.stats.fallbacks = w.stats.fallbacks + 1
     local t = KCD2MP_W137TalkResume(name, "request-fallback")
     if t then t.id = tonumber(id) end
@@ -7422,6 +7432,7 @@ function KCD2MP_W137TalkAttempt(id, souls)
                     w.talking[name] = ft
                 end
                 w.stats.forced = w.stats.forced + 1
+                KCD2MP_EmitEvent("w164_talk", "start " .. name .. " " .. tostring(id))   -- WO-166: a forced conversation has started (no open request)
                 mp_log(string.format("WO137-TALK forced npc=%s id=%s -- a conversation the game started on this copy; the host holds its NPC once this player is in it%s",
                     name, tostring(id), resume and " (WO151: resumed for it)" or ""))
             end
@@ -7435,6 +7446,7 @@ function KCD2MP_W137DialogEnd(id, souls)
     id = tonumber(id)
     local names = {}
     for soul in string.gmatch(tostring(souls or ""), "[%w_]+") do names[soul] = true end
+    if names.Dude and KCD2MP_W166NoteDialogEnd then KCD2MP_W166NoteDialogEnd("dialog-ended") end   -- WO-166 T1
     local ending = {}
     for name, t in pairs(w.talking) do
         if (id and t.id == id) or (names[name] and names.Dude) then ending[#ending + 1] = name end
@@ -7452,6 +7464,7 @@ function KCD2MP_W137TalkEnd(name, why)
         t.endAt, t.endWhy = os.clock() + w.endDeferS, why
         return
     end
+    if why == "never-started" and KCD2MP_W166TalkTimeoutFacts then pcall(KCD2MP_W166TalkTimeoutFacts, name, t) end   -- WO-166 T3
     w.talking[name] = nil
     w.stats.ended = w.stats.ended + 1
     if KCD2MP.w164 then KCD2MP.w164.lastEnd[name] = os.clock() end   -- WO-164 T2
@@ -10073,6 +10086,7 @@ function KCD2MP_NpcPuppetTick(arg, gen)
             -- measure against and is measured by the DLL's MP-NPCPULL instead.
             -- WO-160 3: the host is talking to this NPC: its copy stands where it is (no Lua write, the native writer held)
             if KCD2MP_W160ConvHeld and KCD2MP_W160ConvHeld(name, p, e) then return end
+            if KCD2MP_W166TalkHeld and KCD2MP_W166TalkHeld(name, p, e) then return end   -- WO-166 T3: asked or talking: the stream waits
             if KCD2MP_W164RiderHeld and KCD2MP_W164RiderHeld(name, p, e) then return end   -- WO-164 R2: a rider rides its horse's copy
             KCD2MP_NpcNativeSync(name, p, e, KCD2MP_NpcNativeHealthy() and not isReplica, "tick")
             -- A fresh puppet's first bind is in flight for one agent round trip
@@ -16286,6 +16300,7 @@ end
 
 function W134.bodyState(name, reason, flags, list)
     local w = KCD2MP.w134
+    if KCD2MP_W166LootDefer and KCD2MP_W166LootDefer(name, reason, flags, list) then return end   -- WO-166 L1: the loot screen is open on it
     w.stats.states = w.stats.states + 1
     local e = nil
     pcall(function() e = System.GetEntityByName(name) end)
@@ -16329,6 +16344,7 @@ function W134.bodyState(name, reason, flags, list)
         local s2 = w.sessions[name]
         s2.snap = W134.items(e); s2.at = os.clock(); s2.pinv = W134.wuidSet(player)
         local ok, err = pcall(function() po.orig(po.ent, po.user or player, po.slot) end)
+        if ok and KCD2MP_W166LootOpened then KCD2MP_W166LootOpened(name, "ours") end   -- WO-166 L1
         W134.log(string.format("WO134-BODY open npc=%s -- the loot screen opens on the host's items (%d) ok=%s%s", name, #want, tostring(ok), ok and "" or (" err=" .. tostring(err))))
         W134.startLoop()
     end
@@ -16470,11 +16486,13 @@ function KCD2MP_W134TakeResult(tok, verdict, name)
                 -- a single take, a retry) or an item the host's body never held
                 -- (the copy's own): taken back quietly -- nobody else got anything.
                 w.stats.takeDup = (w.stats.takeDup or 0) + 1
+                if KCD2MP_W166TakebackDefer and KCD2MP_W166TakebackDefer(bname, t, verdict) then return end   -- WO-166 L1
                 local n = W134.deleteClass(player, t.cls, t.amt, t.hp, t.pinv)
                 W134.log(string.format("WO134-BODY result npc=%s tok=%s %s -- %s: %d of %d taken back off Henry, no notice", bname, tok, verdict,
                     verdict == "mine" and "already mine (a duplicate of my own take)" or "never in the host's body", n, t.amt))
             else
                 w.stats.takeGone = w.stats.takeGone + 1
+                if KCD2MP_W166TakebackDefer and KCD2MP_W166TakebackDefer(bname, t, "gone") then return end   -- WO-166 L1
                 local n = W134.deleteClass(player, t.cls, t.amt, t.hp, t.pinv)
                 W134.log(string.format("WO134-BODY result npc=%s tok=%s gone -- someone else took it first: %d of %d taken back off Henry", bname, tok, n, t.amt))
                 KCD2MP_ShowNativeToast("Someone already took that.")
@@ -16914,6 +16932,7 @@ function W134.forgetWorld(why)
     local n = 0
     for _ in pairs(w.chestSess) do n = n + 1 end
     w.chestSess = {}; w.sessions = {}; w.pendingOpen = {}; w.itemReq = {}; w.stash = {}; w.partial = {}; w.hostVerify = {}
+    if KCD2MP.w166 then KCD2MP.w166.loot.openOn = nil; KCD2MP.w166.loot.deferred = {}; KCD2MP.w166.loot.takebacks = {} end   -- WO-166 L1: a new world
     if n > 0 then W134.log(string.format("WO134-CHEST reset why=%s -- %d chest snapshot(s) dropped; the next pass takes new ones", tostring(why), n)) end
 end
 
@@ -20843,8 +20862,7 @@ function KCD2MP_W164Retry(name, t)
         local s = player and player.soul
         if s and s.RestrictDialog then
             s:RestrictDialog(true); s:RestrictDialog(false)
-            cancel = "ok"
-            if s.IsDialogRestricted and s:IsDialogRestricted() == true then s:RestrictDialog(false); cancel = "restricted-again" end
+            cancel = "ok"   -- WO-166: IsDialogRestricted takes an argument (the field's script error at every retry): not asked
         end
     end)
     if cancel == "err" then w.stats.cancelErr = w.stats.cancelErr + 1 end
@@ -20975,7 +20993,8 @@ function KCD2MP_W164Frame()
     -- T3: a request open 4 s without its dialogue
     if w.talkGuard then
         for name, t in pairs(KCD2MP.w137.talking) do
-            if t.id and not t.started and not t.sawDialog and not t.w164Retried and (now - t.since) > W164_RETRY_S then
+            if t.id and not t.started and not t.sawDialog and not t.w164Retried and (now - t.since) > W164_RETRY_S
+               and t.via ~= "request-fallback" and t.via ~= "forced" then   -- WO-166 T1: only the player's own press is retried
                 KCD2MP_W164Retry(name, t)
             end
         end
@@ -21047,6 +21066,255 @@ function KCD2MP_W165SetBlockRecoil(arg) return w165Switch("block_recoil", "block
 function KCD2MP_W165Say(text)
     mp_log("WO165-NOTICE " .. tostring(text))
     KCD2MP_ShowNativeToast(tostring(text))
+end
+
+-- ===== WO-166: 0.48.2 (docs/WO-166-findings.md) -- the game-side halves =====
+--   L1 never rewrite a corpse copy under an open loot screen: a host update of the body (and a refused take put back off Henry)
+--      waits while the game's ItemTransfer screen is open on it, and is applied one frame after it closes (or before the next open)
+--   T1 our own requests never block the player: no request-fallback while he is in a dialogue, within 3 s after one ended, or with a
+--      request of his own open; his talk press ends any talk the mod attached first; the WO-164 retry never fires for one of ours
+--   T3 mp_talk_resume_first (default ON): a talked-to copy is resumed first (the press waits 200 ms for its brain) and the host's
+--      stream does not move it while the request waits (6 s) or the conversation runs; a timeout says the copy's state
+--   T4 a copy whose host NPC is busy (the host's own talk, a fight) is not asked: "They're busy with your partner"
+--   WO166-LOOT deferred|applied|takeback-deferred|takeback-applied npc=<n> ...   WO166-TALK own-request suppressed|cancelled|busy|resume-first ...
+KCD2MP.w166 = KCD2MP.w166 or {
+    talkResumeFirst = true,      -- mp_talk_resume_first
+    copyStrikes = true,          -- mp_copy_strikes (C3; the agent and the DLL act on it)
+    snapFix = true,              -- mp_snap_fix (C4)
+    loot = { openOn = nil, openAt = nil, via = nil, deferred = {}, takebacks = {}, listening = false,
+             stats = { opens = 0, closes = 0, deferred = 0, applied = 0, takebacks = 0, takebacksApplied = 0 } },
+    talk = { lastDlgEndAt = nil, wasInDialog = false, stats = { suppressed = 0, cancelled = 0, busy = 0, resumeFirst = 0, holds = 0 } },
+}
+local W166_TALK_AFTER_S = 3.0      -- T1: a request-fallback this soon after the player's dialogue ended is his game's own step
+local W166_TALK_HOLD_S = 6.0       -- T3: the stream waits this long for a request to become a conversation
+local W166_RESUME_DELAY_MS = 200   -- T3: the press waits for a resumed copy's brain
+
+-- ---- L1 ---------------------------------------------------------------------------------------------------------------
+-- The game's loot screen is its ItemTransfer element (BasicAIActions.OnLoot -> actor:RequestItemExchange); its OnOpened /
+-- OnClosed events reach Lua through an element listener (the WO-159 menu's route).
+function KCD2MP.w166.OnItemTransfer(self, el, inst, ev, args)
+    if ev == "OnClosed" then KCD2MP_W166LootClosed("element") end
+end
+
+function KCD2MP_W166LootListen()
+    local L = KCD2MP.w166.loot
+    if L.listening then return true end
+    if type(UIAction) ~= "table" or type(UIAction.RegisterElementListener) ~= "function" then return false end
+    local ok = pcall(UIAction.RegisterElementListener, KCD2MP.w166, "ItemTransfer", -1, "OnClosed", "OnItemTransfer")
+    L.listening = ok == true
+    mp_log("WO166-LOOT listener " .. (L.listening and "armed: the loot screen's close is seen" or "NOT armed: the agent's audio line and the 5 m rule decide the close"))
+    return L.listening
+end
+
+-- The open screen's body (nil = none). A screen we opened stays open until a close is seen, the player is 5 m away (nobody walks
+-- with a menu open), or 10 minutes pass.
+function KCD2MP_W166LootOpenOn(name)
+    local L = KCD2MP.w166.loot
+    if not L.openOn then return false end
+    if name ~= nil and L.openOn ~= name then return false end
+    local e = nil
+    pcall(function() e = System.GetEntityByName(L.openOn) end)
+    if not e or (os.clock() - (L.openAt or 0)) > 600 or (W134 and W134.near and not W134.near(e, 5.0)) then
+        KCD2MP_W166LootClosed(not e and "body-gone" or "player-away")
+        return false
+    end
+    return true
+end
+
+function KCD2MP_W166LootOpened(name, via)
+    local L = KCD2MP.w166.loot
+    if L.openOn and L.openOn ~= name then KCD2MP_W166LootClosed("another-screen") end
+    L.openOn, L.openAt, L.via = name, os.clock(), tostring(via or "ours")
+    L.stats.opens = L.stats.opens + 1
+    pcall(KCD2MP_W166LootListen)
+end
+
+-- The close (the element's event, the agent's "ui_inv_screen_out" line, or a fallback rule): what waited is applied one frame later.
+function KCD2MP_W166LootClosed(via)
+    local L = KCD2MP.w166.loot
+    local name = L.openOn
+    if not name then return false end
+    L.openOn, L.openAt = nil, nil
+    L.stats.closes = L.stats.closes + 1
+    local closedAt = os.clock()
+    Script.SetTimer(1, function() KCD2MP_W166LootFlush(name, via, closedAt) end)
+    return true
+end
+
+function KCD2MP_W166LootFlush(name, via, closedAt)
+    local L = KCD2MP.w166.loot
+    if L.openOn == name then return end   -- opened again meanwhile: the next close flushes
+    local d = L.deferred[name]
+    if d then
+        L.deferred[name] = nil
+        L.stats.applied = L.stats.applied + 1
+        mp_log(string.format("WO166-LOOT applied npc=%s reason=%s host_items=%d after_ms=%.0f close=%s -- the screen is closed: the host's list now",
+            name, tostring(d.reason), #d.list, (os.clock() - (closedAt or os.clock())) * 1000, tostring(via)))
+        W134.bodyState(name, d.reason == "open" and "update" or d.reason, d.flags, d.list)
+    end
+    local tb = L.takebacks[name]
+    if tb then
+        L.takebacks[name] = nil
+        for _, t in ipairs(tb) do
+            local n = W134.deleteClass(player, t.cls, t.amt, t.hp, t.pinv)
+            L.stats.takebacksApplied = L.stats.takebacksApplied + 1
+            mp_log(string.format("WO166-LOOT takeback-applied npc=%s cls=%s %d of %d taken back off Henry (%s)", name, t.cls, n, t.amt, t.verdict))
+            if t.verdict == "gone" then KCD2MP_ShowNativeToast("Someone already took that.") end
+        end
+    end
+end
+
+-- W134.bodyState's gate: true = this update waits for the screen to close.
+function KCD2MP_W166LootDefer(name, reason, flags, list)
+    if reason == "open" or not KCD2MP_W166LootOpenOn(name) then return false end
+    local L = KCD2MP.w166.loot
+    L.deferred[name] = { reason = reason, flags = flags, list = list, at = os.clock() }   -- the newest list wins
+    L.stats.deferred = L.stats.deferred + 1
+    mp_log(string.format("WO166-LOOT deferred npc=%s reason=%s host_items=%d -- the loot screen is open on this body: applied after it closes",
+        name, tostring(reason), #(list or {})))
+    return true
+end
+
+-- KCD2MP_W134TakeResult's gate for a take put back off Henry (the screen's other pane).
+function KCD2MP_W166TakebackDefer(name, t, verdict)
+    if not KCD2MP_W166LootOpenOn(name) then return false end
+    local L = KCD2MP.w166.loot
+    L.takebacks[name] = L.takebacks[name] or {}
+    table.insert(L.takebacks[name], { cls = t.cls, amt = t.amt, hp = t.hp, pinv = t.pinv, verdict = tostring(verdict) })
+    L.stats.takebacks = L.stats.takebacks + 1
+    mp_log(string.format("WO166-LOOT takeback-deferred npc=%s cls=%s amt=%d verdict=%s -- the loot screen is open: taken back after it closes",
+        name, tostring(t.cls), t.amt or 0, tostring(verdict)))
+    return true
+end
+
+-- ---- T1 ---------------------------------------------------------------------------------------------------------------
+-- nil = a request-fallback may attach; else why not.
+function KCD2MP_W166OwnRequestBlocked()
+    local T = KCD2MP.w166.talk
+    local inDialog = false
+    pcall(function() inDialog = player ~= nil and player.human ~= nil and player.human:IsInDialog() == true end)
+    if inDialog then return "in-dialogue" end
+    if T.lastDlgEndAt and (os.clock() - T.lastDlgEndAt) < W166_TALK_AFTER_S then return "after-dialogue" end
+    for _, t in pairs(KCD2MP.w137.talking) do
+        if not t.started and t.via ~= "request-fallback" then return "player-request-open" end
+    end
+    return nil
+end
+
+function KCD2MP_W166NoteDialogEnd(why)
+    KCD2MP.w166.talk.lastDlgEndAt = os.clock()
+end
+
+-- The player's own press on `name`: talks the mod attached to other copies end first.
+function KCD2MP_W166CancelOwnRequests(name)
+    local T = KCD2MP.w166.talk
+    local ending = {}
+    for n, t in pairs(KCD2MP.w137.talking) do
+        if n ~= name and not t.started and (t.via == "request-fallback" or t.via == "forced") then ending[#ending + 1] = n end
+    end
+    for _, n in ipairs(ending) do
+        T.stats.cancelled = T.stats.cancelled + 1
+        mp_log(string.format("WO166-TALK own-request cancelled npc=%s for=%s -- the player's own talk comes first", n, tostring(name)))
+        KCD2MP_W137TalkEndNow(n, "own-request-cancelled")
+    end
+    return #ending
+end
+
+-- ---- T4 ---------------------------------------------------------------------------------------------------------------
+-- nil = free; else why the host's NPC is busy.
+function KCD2MP_W166HostBusy(name)
+    if KCD2MP.w160 and KCD2MP.w160.conv and KCD2MP.w160.conv[name] then return "host-talking" end
+    local hc = KCD2MP.w164 and KCD2MP.w164.hostCombat and KCD2MP.w164.hostCombat[name]
+    if hc and (os.clock() - hc) < 3.0 then return "host-fighting" end
+    return nil
+end
+
+-- ---- T3 ---------------------------------------------------------------------------------------------------------------
+-- The puppet tick's gate: true = the stream does not move this copy now (it is being asked, or it is in the conversation).
+function KCD2MP_W166TalkHeld(name, p, e)
+    local w = KCD2MP.w166
+    if not w.talkResumeFirst then return false end
+    local t = KCD2MP.w137 and KCD2MP.w137.talking[name]
+    if not t or t.endAt or t.minigame then return false end
+    local now = os.clock()
+    local waiting = not (t.started or t.sawDialog) and (now - t.since) <= W166_TALK_HOLD_S
+    if not (waiting or t.started or t.sawDialog) then return false end
+    if not t.w166Held then
+        t.w166Held = true
+        w.talk.stats.holds = w.talk.stats.holds + 1
+        mp_log(string.format("WO166-TALK hold npc=%s -- the host's stream does not move it while %s", name, waiting and "the request waits" or "the conversation runs"))
+    end
+    if (now - (t.w166HoldAt or -1e9)) >= 1.0 then
+        t.w166HoldAt = now
+        if KCD2MP_NpcNativeHold then KCD2MP_NpcNativeHold(name, 2.0) end
+    end
+    return true
+end
+
+-- The talk wrap, after the debounce: true = handled here (the press is not passed on now).
+function KCD2MP_W166TalkPress(npc, user, slot, orig, via)
+    if not (KCD2MP_W137TalkWanted and KCD2MP_W137TalkWanted()) then return false end
+    if not (npc and user and player and user.id == player.id) then return false end
+    local name = nil
+    pcall(function() name = npc:GetName() end)
+    if not name then return false end
+    local w = KCD2MP.w166
+    if KCD2MP.npcPuppets[name] then KCD2MP_W166CancelOwnRequests(name) end
+    if not KCD2MP.npcPuppets[name] then return false end
+    local busy = KCD2MP_W166HostBusy(name)
+    if busy then
+        w.talk.stats.busy = w.talk.stats.busy + 1
+        mp_log(string.format("WO166-TALK busy npc=%s why=%s via=%s -- no request: the host's world has this person occupied", name, busy, tostring(via)))
+        KCD2MP_EmitEvent("w166_talk", "busy " .. name .. " " .. busy)
+        KCD2MP_ShowNativeToast("They're busy with your partner.")
+        return true
+    end
+    if not w.talkResumeFirst or KCD2MP._npcPaused[name] == nil or KCD2MP.w137.talking[name] then return false end
+    -- paused: resumed now (KCD2MP_W137BeforeTalk), the press after the brain has run a few updates
+    pcall(KCD2MP_W137BeforeTalk, npc, user, via)
+    pcall(function() KCD2MP_W164NotePress(name, orig, npc, user, slot) end)
+    w.talk.stats.resumeFirst = w.talk.stats.resumeFirst + 1
+    mp_log(string.format("WO166-TALK resume-first npc=%s via=%s delay_ms=%d -- the copy is resumed before the request is made", name, tostring(via), W166_RESUME_DELAY_MS))
+    Script.SetTimer(W166_RESUME_DELAY_MS, function()
+        local ok, err = pcall(orig, npc, user, slot)
+        if not ok then mp_log("WO166-TALK resume-first npc=" .. name .. " press failed: " .. tostring(err)) end
+    end)
+    return true
+end
+
+-- A request that never started: this copy's facts at the timeout (the agent adds the engine's dialogue state and logs
+-- WO166-TALK timeout ...). Called before the talk's end re-pauses the copy.
+function KCD2MP_W166TalkTimeoutFacts(name, t)
+    local e, copyDialog, dead = nil, false, false
+    pcall(function() e = System.GetEntityByName(name) end)
+    if e then
+        pcall(function() copyDialog = e.human ~= nil and e.human:IsInDialog() == true end)
+        pcall(function() dead = e.actor ~= nil and e.actor:IsDead() == true end)
+    end
+    local p = KCD2MP.npcPuppets[name]
+    local paused = KCD2MP._npcPaused[name] ~= nil
+    local stream = (t and t.w166Held) and "held" or ((p and p.nativeOwned) and "native-driven" or "lua-driven")
+    KCD2MP_EmitEvent("w166_talkstate", string.format("%s paused=%d copy_dialog=%d dead=%d resumed_for_talk=%d stream=%s via=%s retried=%d",
+        name, paused and 1 or 0, copyDialog and 1 or 0, dead and 1 or 0, (t and t.resumed) and 1 or 0, stream,
+        tostring(t and t.via or "?"), (t and t.w164Retried) and 1 or 0))
+end
+
+function KCD2MP_W166SetTalkResumeFirst(arg)
+    local v = KCD2MP_Wo122ParseBool(arg)
+    if v == "bad" then mp_log("mp_talk_resume_first: expected on|off"); return false end
+    if v ~= nil then KCD2MP.w166.talkResumeFirst = v end
+    mp_log("WO166-TOGGLE mp_talk_resume_first " .. (KCD2MP.w166.talkResumeFirst and "on" or "off")
+        .. " -- a talked-to copy is resumed first and the host's stream leaves it alone while it is asked and while it talks")
+    return true
+end
+
+function KCD2MP_W166Status()
+    local w = KCD2MP.w166
+    local L, T = w.loot.stats, w.talk.stats
+    mp_log(string.format("WO166-STATUS loot open=%s listening=%s opens=%d closes=%d deferred=%d applied=%d takebacks=%d/%d | talk resume_first=%s suppressed=%d cancelled=%d busy=%d resume_first_n=%d holds=%d | copy_strikes=%s snap_fix=%s",
+        tostring(w.loot.openOn or "-"), tostring(w.loot.listening), L.opens, L.closes, L.deferred, L.applied, L.takebacksApplied, L.takebacks,
+        w.talkResumeFirst and "on" or "off", T.suppressed, T.cancelled, T.busy, T.resumeFirst, T.holds,
+        w.copyStrikes and "on" or "off", w.snapFix and "on" or "off"))
 end
 
 local W164_RE_PATTERNS = { "dummyWanderer", "karavany", "Caravan", "pocestny", "prepadeni", "rvacka", "taboryUCesty", "SpawnedAnimal" }
@@ -24404,6 +24672,8 @@ local ok, err = pcall(function()
     System.AddCCommand("mp_host_lock", 'KCD2MP_W165SetHostLock(%line)', "WO-165: (host) you can lock onto an NPC that is beating your partner: near it (6 m) and facing it, you join its fight as its foe; it keeps fighting your partner until you hit it (default on): mp_host_lock on|off")
     System.AddCCommand("mp_victim_decides", 'KCD2MP_W165SetVictimDecides(%line)', "WO-165: (joiner) your own game judges an enemy's blow and applies it; while you hold block the host's game decides, as before (UNTESTED with two players; default on): mp_victim_decides on|off")
     System.AddCCommand("mp_block_recoil", 'KCD2MP_W165SetBlockRecoil(%line)', "WO-165: (joiner) an enemy whose blow you blocked plays the game's own bounce-back (UNTESTED with two players; default on): mp_block_recoil on|off")
+    System.AddCCommand("mp_talk_resume_first", 'KCD2MP_W166SetTalkResumeFirst(%line)', "WO-166: (joiner) a person you talk to is woken first and the host's movement leaves them alone while they answer (default on): mp_talk_resume_first on|off")
+    System.AddCCommand("mp_w166_status", 'KCD2MP_W166Status()', "WO-166: loot screen, talk and combat counters of this build")
     System.AddCCommand("mp_hostile_crime", 'KCD2MP_W163SetHostileCrime(%line)', "WO-163: (host) an assault is no crime when the engine says the victim is in a skirmish fight with the host, asked 5 s after the blow (default on): mp_hostile_crime on|off")
     System.AddCCommand("mp_fair_crime", 'KCD2MP_W154SetFairCrime(%line)', "WO-154: (host) a partner's murder only on the victim's death, and an assault judged 5 s later -- no crime if the victim fights by then, a quest brawl (default on): mp_fair_crime on|off")
     System.AddCCommand("mp_scene_resume", 'KCD2MP_W154SetSceneResume(%line)', "WO-154: (joiner) a scene stuck at its end resumes the host's copies, as in 0.44.0 (default off: no copy is resumed; the engine's own rescue, a save request, runs at once): mp_scene_resume on|off")
