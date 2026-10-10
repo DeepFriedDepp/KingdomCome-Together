@@ -2,6 +2,7 @@
 // GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 using KcdMp.Client;
+using KcdMp.Steam;
 using KcdMp.Wire;
 using Xunit;
 
@@ -221,5 +222,55 @@ public class Wo166Tests
         Assert.True(Wo166Rules.DefaultCopyStrikes);
         Assert.True(Wo166Rules.DefaultSnapFix);
         Assert.False(Wo165Rules.DefaultVictimDecides);                     // WO-166: stays off
+    }
+    // ---------------------------------------------------------------- W1, M1, R1, L2
+
+    [Fact]
+    public void The_weather_text_round_trips_and_refuses_garbage()
+    {
+        Assert.Equal("0.62 semicloudy_clear_B", W164Text.Weather(0.6249f, "semicloudy_clear_B"));
+        Assert.Equal("1.00 -", W164Text.Weather(1.7f, null));
+        Assert.Equal("0.00 -", W164Text.Weather(float.NaN, "bad name!"));
+        Assert.True(W164Text.TryParseWeather("0.62 semicloudy_clear_B", out float r, out string? p));
+        Assert.Equal((0.62f, "semicloudy_clear_B"), (r, p));
+        Assert.True(W164Text.TryParseWeather("0.10 -", out r, out p));
+        Assert.Null(p);
+        Assert.False(W164Text.TryParseWeather("1.5 x", out _, out _));
+        Assert.False(W164Text.TryParseWeather("0.5", out _, out _));
+        Assert.False(W164Text.TryParseWeather("0.5 a;b", out _, out _));
+        Assert.Equal("weather", Protocol.W164KindName(Protocol.W164Weather));
+        Assert.Equal(5, Protocol.W164Weather);   // appended: kinds 1..4 unchanged
+        Assert.Contains("[Info] C_GameProfileManager: Activating profile 'weather_", LogTailGameTransport.Wo144Prefixes);
+    }
+
+    [Fact]
+    public void A_pin_is_only_for_a_live_partner_and_one_per_partner()
+    {
+        var names = new Dictionary<byte, string> { [1] = "Partner", [2] = "Partner", [3] = "Other" };
+        var seen = new Dictionary<byte, DateTime> { [1] = new DateTime(2026, 1, 1, 0, 0, 0), [2] = new DateTime(2026, 1, 1, 0, 0, 5), [3] = new DateTime(2026, 1, 1) };
+        var keep = Wo166Rules.PinOwners(new byte[] { 0, 1, 2, 3 }, 0, g => names.TryGetValue(g, out var n) ? n : null,
+                                        g => seen.TryGetValue(g, out var t) ? t : DateTime.MinValue, DateTime.UtcNow);
+        Assert.Equal(new byte[] { 2, 3 }, keep.OrderBy(x => x).ToArray());     // the crash-rejoin's old id 1 loses to 2; never myself
+        var keep2 = Wo166Rules.PinOwners(new byte[] { 2 }, 0, g => names[g], g => seen[g], DateTime.UtcNow);
+        Assert.Equal(new byte[] { 2 }, keep2.ToArray());                       // id 1 not live any more: no pin, whatever its position
+    }
+
+    [Fact]
+    public void The_amnesty_names_the_recent_strikers()
+    {
+        var struck = new Dictionary<string, long> { ["ttkc_drozd"] = 100_000, ["ttkc_old"] = 100_000 - 200_000, ["ttkc_guard"] = 150_000 };
+        Assert.Equal(new[] { "ttkc_guard", "ttkc_drozd" }, Wo166Rules.RecentStrikers(struck, 160_000));
+        Assert.Empty(Wo166Rules.RecentStrikers(struck, 500_000));
+    }
+
+    [Fact]
+    public void A_friends_presence_says_ready_or_starting()
+    {
+        Assert.True(SteamApps.TryParsePresence("host;0.48.2", out var st, out var rel));
+        Assert.Equal(("ready", "0.48.2"), (st, rel));
+        Assert.True(SteamApps.TryParsePresence("starting;0.48.2", out st, out rel));
+        Assert.Equal(("starting", "0.48.2"), (st, rel));
+        Assert.False(SteamApps.TryParsePresence("playing", out _, out _));
+        Assert.False(SteamApps.TryParsePresence(null, out _, out _));
     }
 }

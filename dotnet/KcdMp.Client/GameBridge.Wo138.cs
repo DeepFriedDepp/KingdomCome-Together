@@ -312,6 +312,7 @@ public partial class GameBridge
                         Console.WriteLine($"MP-WO138 native sender {(wantOn ? "ON" : "off")} ({(r is null ? "the DLL did not answer: the Lua sender streams" : $"{_w138Track.Count} tracked")})");
                     lastSentOn = wantOn;
                 }
+                if (host) await Wo166ScanFallbackAsync(ct);   // WO-166 S1: the partners' surroundings even while the host's own loop is quiet
                 if (wantOn && now - lastAnchors >= 500)
                 {
                     lastAnchors = now;

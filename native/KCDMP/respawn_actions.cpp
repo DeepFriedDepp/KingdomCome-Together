@@ -1228,10 +1228,24 @@ bool pin_alive(const Pin& pn) {
     return n && copy_str(n, name, sizeof(name)) && std::strcmp(name, want) == 0;
 }
 
-// The pin's mark type: GeneralPoi when the map draws that category (its byte at map+0x648), else the grave's type.
+// The pin's mark type. WO-166 M1: the game's companion icon (0x09 "Dog", GUIModule's own name table) when the map draws that
+// category (its byte at map+0x648), else GeneralPoi when drawn, else the grave's type. The first call with a map logs which of the
+// 97 categories the map draws (the record the WO asked for; the names are docs/WO-166-findings.md's list).
+constexpr int kMarkCompanion = 0x09;
+bool g_drawnLogged = false;
 int pin_mark_type() {
     void* map = g_markArmed ? ui_map() : nullptr;
+    if (map && !g_drawnLogged) {
+        g_drawnLogged = true;
+        char line[400]; int k = std::snprintf(line, sizeof(line), "WO166-MAPMARK the map draws categories:");
+        for (int t = 0; t <= 0x60 && k < static_cast<int>(sizeof(line)) - 8; ++t) {
+            uint8_t on = 0;
+            if (rd8(map, 0x648 + static_cast<size_t>(t), &on) && on) k += std::snprintf(line + k, sizeof(line) - k, " 0x%02X", t);
+        }
+        logf("%s", line);
+    }
     uint8_t b = 0;
+    if (map && rd8(map, 0x648 + static_cast<size_t>(kMarkCompanion), &b) && b) return kMarkCompanion;
     if (map && rd8(map, 0x648 + static_cast<size_t>(kMarkGeneralPoi), &b) && b) return kMarkGeneralPoi;
     return g_markType;
 }

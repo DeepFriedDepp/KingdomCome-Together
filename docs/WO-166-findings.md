@@ -279,3 +279,65 @@ counts in its status). Kept on only if the synthetic fight does not regress: see
 ### Phase 2 gates (offline)
 Agent **1,335**; Lua WO-166 suite **51**, WO-165 suite 11 (its default check updated for victim-decides off); native **625**; the
 native guard check clean.
+
+## Phase 3 — the rest (built)
+
+### W1 — weather follows the host [code][syn][unit]
+* **Host:** its Lua reads its game's own computed rain (`EnvironmentModule.GetRainIntensity`) from the once-a-second session tick
+  (every 2 s), and the agent sends `rain + the session's time-of-day profile` to every joiner on a change of ≥ 0.05, every 60 s, and
+  at once whenever its game switches a weather layer profile (`Activating/Deactivating profile 'weather_…'`). Wire: **W164 kind 5
+  `Weather` "<rain> <profile|->"** (appended; kinds 1–4 unchanged; no protocol bump, a mixed release is refused at the relay as
+  before). `WO166-WEATHER sent rain=… profile=… to=…`.
+* **Joiner:** holds its rain at the host's through the engine's own cvar **`wh_env_RainIntensityOverride`** (−1 = off) for as long
+  as the session lasts (`WO166-WEATHER applied rain=… read_back=…`), back to −1 when it ends; the profile goes through WO-151's gate
+  and apply as before. Its game's weather layer profiles then follow the host's rain instead of its own clouds. The agent counts the
+  joiner's own `Activating profile 'weather_…'` lines in a session (`weather_profile_lines_in_session` in `MP-WO166-STATS`).
+* *Checks:* Lua P1–P8 (the host's sends: change, threshold, 60 s refresh, the profile line's forced read; the joiner's override, its
+  read-back, its end) **[syn]**; the wire text **[unit]**. Live and two-player: see below.
+
+### F1 — the fast-travel message only on a real attempt [code][syn]
+* The engine's refusal line is also printed by the map's own checks. The message is now said only when the player **confirmed** a
+  trip within the last 3 s — the map's double click (`ApseMap OnDoubleClicked`) or the travel question's confirm (`ApseModalDialog
+  OnQuestionDialogConfirmClicked`), element listeners armed for the session — and **at most once per session**. Otherwise:
+  `WO166-FASTTRAVEL silent path=wo114|wo154` (once a minute). Both refusal paths (the joiner's block, the host's session switch) ask
+  first. *Checks:* Lua P9–P13 **[syn]**. A real confirm cannot be produced unattended (no input): **[needs two players]**.
+
+### M1 — map pin owners [code][unit][native]
+* A pin is kept only for a **live peer** (the relay's own set, `LivePartners()`: a crash-rejoin's old id leaves it at once, so its pin
+  goes within 2 s), never this machine, and **one per partner**: two live ids with the same name keep the freshest
+  (`Wo166Rules.PinOwners`; the removal line says `not a live partner (WO-166 M1)`).
+* The marker: the game's own mark types were read from GUIModule's name table (0x00 Checkpoint … 0x60 FastTravelSedlec, 97 types;
+  among them 0x09 **Dog** — the companion's icon —, 0x26 Camp, 0x2B Grave, 0x30 GeneralPoi). The pin now uses the **companion icon**
+  when the map draws that category, else GeneralPoi, else the grave's type; the first map read logs which categories the map draws
+  (`WO166-MAPMARK the map draws categories: …`). The custom icon and a name label stay pocketed. *Checks:* the owner rule **[unit]**.
+
+### S1 — stream around both players [code]
+* The scan was already centred on the host and every partner with a position fresher than 5 s; but it ran **only from the host's
+  own position loop**, which stops while the host is dead, held black, loading, or failing its position read. Now the host's WO-138
+  loop (4 Hz) runs the scan itself when the last one is older than twice its cadence and a partner has a fresh position, with that
+  partner as the first anchor (`WO166-SCAN fallback anchor=player<n>`, once a minute; `scan_fallbacks` in the stats).
+* *Check:* the synthetic joiner 200 m from the host next to an NPC: see the live section.
+
+### R1 — respawn amnesty [code][syn][unit]
+* The host remembers which NPCs struck each partner's figure (its WO161-HIT lines) and where each player went down. When a player
+  wakes after a **death**: every NPC that struck him in the last 2 minutes and every NPC still in combat within 40 m of where he fell
+  gets **the game's own `stopFight` message** (the attack interrupt's own end, WO-139); for a partner, the WO-154 "end fights" step
+  also runs (his figure leaves its fights and the mod's locks on it, WO-139 pursuits end, a guard respite). The joiner lets go of its
+  engaged copies. **The crime record is never touched** (a guard who remembers the crime may come again when the player returns —
+  the game's own behaviour). `WO166-AMNESTY …`.
+* The bailiff episode (0.6): `ttkc_drozd` struck the joiner twice before his death; with this build he gets the stopFight at the
+  joiner's wake (named), and the host's own death sends it to every NPC still fighting where the host fell. Whether his pursuit was
+  quest-driven was **[not determined]** (no quest line names him in the host's log).
+* *Checks:* Lua P14–P16 (the named striker and the one still fighting near the death spot get it; a bystander and a corpse do not)
+  **[syn]**; the striker list **[unit]**.
+
+### L2 — Steam friends [code][unit]
+* Cause (0.6): the joiner's launcher looks once per button press, and the host's relay publishes its Steam presence only once it
+  accepts joins — a list opened a few seconds early stays empty.
+* Now the relay also publishes `starting;<release>` while Steam's network warms up (then `host;<release>` as before); the helper
+  reports each friend's state; the launcher's Join-through-Steam dialog **looks at once and every 10 s while it is open**, shows a
+  starting host as "**(starting...)**" (not clickable) and a ready one as before. No look change beyond the one word and the note.
+  *Checks:* the presence parser **[unit]**; the dialog **[needs two players]**.
+
+### Phase 3 gates (offline)
+Agent **1,339**; Lua WO-166 suite **70**; relay 63; setup 77; farkle 59; native 625 (the pin type rule is engine-bound: live).

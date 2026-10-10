@@ -145,6 +145,20 @@ namespace KCDMP_launcher.Pages
             steamFriendsNote = "";
             steamFriends = null;
             StateHasChanged();
+            _ = SteamFriendsRefreshLoopAsync();   // WO-166 L2: the list fills by itself, every 10 s while this dialog is open
+        }
+
+        private int steamFriendsLoopGen;
+
+        /// <summary>WO-166 L2: a lookup at once and every 10 s while the Steam dialog stays open (a host shows up as soon as his session is up).</summary>
+        private async Task SteamFriendsRefreshLoopAsync()
+        {
+            int gen = ++steamFriendsLoopGen;
+            while (showJoinSteam && gen == steamFriendsLoopGen)
+            {
+                if (!steamBusy) await FindSteamFriendsAsync(quiet: true);
+                for (int i = 0; i < 10 && showJoinSteam && gen == steamFriendsLoopGen; i++) await Task.Delay(1000);
+            }
         }
 
         private string? AgentPathOrError()
@@ -155,23 +169,38 @@ namespace KCDMP_launcher.Pages
             return null;
         }
 
-        private async Task FindSteamFriendsAsync()
+        private Task FindSteamFriendsAsync() => FindSteamFriendsAsync(quiet: false);
+
+        private int lastFriendsLogged = -1;
+        private string lastFriendsStateLogged = "";
+
+        /// <summary>The lookup. quiet (WO-166 L2, the dialog's own refresh): no busy text, the buttons stay usable, a log line only on a change.</summary>
+        private async Task FindSteamFriendsAsync(bool quiet)
         {
             if (AgentPathOrError() is not { } agent) return;
-            steamBusy = true; steamBusyText = "Asking Steam which friends are hosting..."; steamFriendsNote = ""; StateHasChanged();
+            if (quiet && steamBusy) return;
+            if (!quiet) { steamBusy = true; steamBusyText = "Asking Steam which friends are hosting..."; steamFriendsNote = ""; StateHasChanged(); }
             var (r, blocked) = await RunHelperAsync<SteamFriendsData>(agent, $"--steam-friends --steam-app {settings.SteamAppId}{SteamGameArg}", "STEAM-FRIENDS", TimeSpan.FromSeconds(25));
-            steamBusy = false;
+            if (!quiet) steamBusy = false;
             if (blocked) { StateHasChanged(); return; }   // WO-154: told in plain words
-            if (r is null) steamFriendsNote = "Steam didn't answer. Type the host's code instead.";
-            else if (r.State != "ok") steamFriendsNote = $"{r.Message} {r.Next}".Trim();
+            if (r is null) { if (!quiet) steamFriendsNote = "Steam didn't answer. Type the host's code instead."; }
+            else if (r.State != "ok") { if (!quiet) steamFriendsNote = $"{r.Message} {r.Next}".Trim(); }
             else
             {
                 steamFriends = r.Friends;
+                bool anyReady = r.Friends.Any(f => f.State != "starting");
                 steamFriendsNote = r.Friends.Count == 0
-                    ? "No friends are hosting right now. Friends only show up here while they host, and only when both of you use the same Steam app. Their code works either way."
-                    : "Click a friend to use their code.";
+                    ? "No friends are hosting right now (this list looks again every 10 seconds). Friends only show up here while they host, and only when both of you use the same Steam app. Their code works either way."
+                    : anyReady ? "Click a friend to use their code." : "Your friend's game is starting -- it can be joined in a moment.";
             }
-            Log.Information("Steam friends lookup: state={State} hosting={Count}", r?.State ?? "no-answer", r?.Friends.Count ?? 0);
+            int count = r?.Friends.Count ?? -1;
+            string states = r is null ? "" : string.Join(",", r.Friends.Select(f => f.State));
+            if (!quiet || count != lastFriendsLogged || states != lastFriendsStateLogged)
+            {
+                lastFriendsLogged = count; lastFriendsStateLogged = states;
+                Log.Information("Steam friends lookup: state={State} hosting={Count} starting={Starting}{Auto}", r?.State ?? "no-answer", r?.Friends.Count(f => f.State != "starting") ?? 0,
+                    r?.Friends.Count(f => f.State == "starting") ?? 0, quiet ? " (auto)" : "");
+            }
             StateHasChanged();
         }
 

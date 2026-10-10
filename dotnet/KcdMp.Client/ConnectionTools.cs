@@ -201,12 +201,14 @@ public static class SteamFriendsList
             bool first = true;
             foreach (var (id, persona, value) in s.FriendsWithPresence(SteamApps.PresenceKey))
             {
-                if (!value.StartsWith("host;", StringComparison.Ordinal)) continue;
+                // WO-166 L2: "host;<release>" accepts joins; "starting;<release>" is a host whose Steam side is not ready yet
+                if (!SteamApps.TryParsePresence(value, out string state, out string release)) continue;
                 if (!first) sb.Append(',');
                 first = false;
                 sb.Append('{').Append(Js.Str("name", persona)).Append(',')
                   .Append(Js.Str("code", SteamJoinCode.Encode(id, config.SteamAppId))).Append(',')
-                  .Append(Js.Str("release", value[5..])).Append('}');
+                  .Append(Js.Str("release", release)).Append(',')
+                  .Append(Js.Str("state", state)).Append('}');
             }
             sb.Append("]}");
             return sb.ToString();

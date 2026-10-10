@@ -5648,6 +5648,7 @@ end
 function KCD2MP_Wo114FastTravelTried(how)
     local w = KCD2MP.w114
     if not w.ftBlocked then return false end
+    if KCD2MP_W166FastTravelTell and not KCD2MP_W166FastTravelTell("wo114") then return true end   -- WO-166 F1
     if (os.clock() - w.ftToldAt) < 5 then return true end
     w.ftToldAt = os.clock()
     local text = "Only the host can fast travel in co-op."
@@ -7198,6 +7199,10 @@ function KCD2MP_W137Session(host, joiner, active)
     pcall(KCD2MP_W137TalkTick)
     pcall(KCD2MP_W137HoldTick)
     pcall(KCD2MP_W160ConvTick)   -- WO-160 3: the host's own conversations end here
+    pcall(KCD2MP_W166WeatherTick, host and active, false, joiner and active)   -- WO-166 W1
+    if KCD2MP.w166 and KCD2MP.w166.ft then   -- WO-166 F1: armed for the session, said at most once per session
+        if active and (host or joiner) then pcall(KCD2MP_W166FtListen) elseif not active then KCD2MP.w166.ft.told = false end
+    end
     pcall(KCD2MP_W160OwnHorseTick)   -- WO-160 6: a joiner's own horse is told to the host
 end
 
@@ -21328,6 +21333,144 @@ function KCD2MP_W166SetTalkResumeFirst(arg)
     return true
 end
 
+-- ---- W1: the host's live weather ----------------------------------------------------------------------------------
+-- The game's rain is computed per machine from the local cloud density (EnvironmentModule); its weather layer profiles follow it.
+-- The host reads its own rain (EnvironmentModule.GetRainIntensity) and the agent sends it on a change and every 60 s; a joiner holds
+-- its rain at the host's through the engine's own override (wh_env_RainIntensityOverride, -1 = off) while the session lasts, so its
+-- weather profiles follow the host's rain instead of its own clouds.
+--   WO166-WEATHER applied rain=<r> profile=<p> read_back=<r'> | override off
+KCD2MP.w166.wx = KCD2MP.w166.wx or { lastRain = nil, lastAt = -1e9, readAt = -1e9, applied = false, appliedRain = nil,
+    stats = { reads = 0, emits = 0, applies = 0, resets = 0 } }
+
+-- From the session tick (once a second): host = this machine hosts a session with a partner; joiner = it is one.
+function KCD2MP_W166WeatherTick(host, force, joiner)
+    local X = KCD2MP.w166.wx
+    if host then
+        local now = os.clock()
+        if not force and (now - X.readAt) < 2.0 then return end
+        X.readAt = now
+        local rain = nil
+        pcall(function() rain = tonumber(EnvironmentModule.GetRainIntensity()) end)
+        if not rain then return end
+        X.stats.reads = X.stats.reads + 1
+        if force or X.lastRain == nil or math.abs(rain - X.lastRain) >= 0.05 or (now - X.lastAt) >= 60 then
+            X.lastRain, X.lastAt = rain, now
+            X.stats.emits = X.stats.emits + 1
+            KCD2MP_EmitEvent("w166_wx", string.format("%.2f", rain))
+        end
+    elseif not joiner and X.applied then
+        pcall(function() System.SetCVar("wh_env_RainIntensityOverride", -1) end)
+        X.applied, X.appliedRain = false, nil
+        X.stats.resets = X.stats.resets + 1
+        mp_log("WO166-WEATHER override off -- the session ended: this game's own rain again")
+    end
+end
+
+-- Agent -> joiner: the host's weather.
+function KCD2MP_W166WeatherApply(rain, profile)
+    local X = KCD2MP.w166.wx
+    rain = tonumber(rain)
+    if not rain then return false end
+    if rain < 0 then rain = 0 elseif rain > 1 then rain = 1 end
+    local was = X.appliedRain
+    local ok = pcall(function() System.SetCVar("wh_env_RainIntensityOverride", rain) end)
+    X.applied, X.appliedRain = ok, rain
+    X.stats.applies = X.stats.applies + 1
+    if was == nil or math.abs(rain - was) >= 0.05 then
+        local back = nil
+        pcall(function() back = tonumber(EnvironmentModule.GetRainIntensity()) end)
+        mp_log(string.format("WO166-WEATHER applied rain=%.2f profile=%s read_back=%s set=%s -- the host's rain here", rain, tostring(profile),
+            back and string.format("%.2f", back) or "?", tostring(ok)))
+    end
+    return ok
+end
+
+-- ---- F1: the fast-travel message only on a real attempt ---------------------------------------------------------------
+-- With the session's fast travel off the engine prints its refusal for the map's own checks too (opening the map, a highlighted
+-- point). The player's confirmed travel is a double click on the map or the confirm of its question dialog (the elements' own
+-- events): the message is said only within 3 s of one, and once per session.
+--   WO166-FASTTRAVEL told|silent|told-already path=<wo114|wo154>
+KCD2MP.w166.ft = KCD2MP.w166.ft or { confirmAt = nil, told = false, silent = 0, silentLogAt = -1e9, listening = false }
+function KCD2MP.w166.OnTravelConfirm(self, el, inst, ev, args)
+    KCD2MP.w166.ft.confirmAt = os.clock()
+end
+
+function KCD2MP_W166FtListen()
+    local F = KCD2MP.w166.ft
+    if F.listening or type(UIAction) ~= "table" or type(UIAction.RegisterElementListener) ~= "function" then return F.listening end
+    local a = pcall(UIAction.RegisterElementListener, KCD2MP.w166, "ApseMap", -1, "OnDoubleClicked", "OnTravelConfirm")
+    local b = pcall(UIAction.RegisterElementListener, KCD2MP.w166, "ApseModalDialog", -1, "OnQuestionDialogConfirmClicked", "OnTravelConfirm")
+    F.listening = a or b
+    mp_log("WO166-FASTTRAVEL listener " .. (F.listening and "armed (the map's double click, the travel question's confirm)" or "NOT armed: no message is said"))
+    return F.listening
+end
+
+-- true = say the refusal now; false = stay silent (the map's own check, or said already this session).
+function KCD2MP_W166FastTravelTell(path)
+    local F = KCD2MP.w166.ft
+    pcall(KCD2MP_W166FtListen)
+    local now = os.clock()
+    if not (F.confirmAt and (now - F.confirmAt) <= 3.0) then
+        F.silent = F.silent + 1
+        if (now - F.silentLogAt) >= 60 then
+            F.silentLogAt = now
+            mp_log(string.format("WO166-FASTTRAVEL silent path=%s n=%d -- the map's own check (no confirmed trip): no message", tostring(path), F.silent))
+        end
+        return false
+    end
+    if F.told then
+        mp_log("WO166-FASTTRAVEL told-already path=" .. tostring(path) .. " -- once per session")
+        return false
+    end
+    F.told = true
+    mp_log("WO166-FASTTRAVEL told path=" .. tostring(path) .. " -- the player's own confirmed trip was refused")
+    return true
+end
+
+-- ---- R1: respawn amnesty (host) ----------------------------------------------------------------------------------------
+-- A player who died to an NPC and woke: the NPCs that struck him (named by the agent) and every NPC still in combat within 40 m of
+-- where he died get the game's own stopFight message (the attack interrupt's end: WO-139). The crime record is never touched.
+--   WO166-AMNESTY victim=<who> stopped=<n> npcs=<names>
+function KCD2MP_W166Amnesty(victim, x, y, z, names)
+    local sent, seen = {}, {}
+    local function stop(e)
+        local n = nil
+        pcall(function() n = e:GetName() end)
+        if not n or seen[n] then return end
+        seen[n] = true
+        if mp_is_mod_entity and mp_is_mod_entity(e) then return end
+        local dead = false
+        pcall(function() dead = e.actor ~= nil and e.actor:IsDead() == true end)
+        if dead then return end
+        local t = W139.stim("stopFight")
+        if not t then return end
+        t.soulCount = 1
+        t.messageId = "w166amnesty" .. n .. tostring(math.floor(os.clock() * 10))
+        local ok = W139.send(e, "stopFight", t)
+        sent[#sent + 1] = n .. (ok and "" or ":err")
+    end
+    for name in string.gmatch(tostring(names or ""), "[%w_]+") do
+        local e = nil
+        pcall(function() e = System.GetEntityByName(name) end)
+        if e then stop(e) end
+    end
+    x, y, z = tonumber(x), tonumber(y), tonumber(z)
+    if x and y then
+        local ents = {}
+        pcall(function() ents = System.GetEntitiesInSphere({ x = x, y = y, z = z or 0 }, 40) or {} end)
+        for _, e in ipairs(ents) do
+            if e.class == "NPC" or e.class == "NPC_Female" then
+                local fighting = false
+                pcall(function() fighting = e.soul ~= nil and e.soul:IsInCombatMode() == true end)
+                if fighting then stop(e) end
+            end
+        end
+    end
+    mp_log(string.format("WO166-AMNESTY victim=%s stopped=%d npcs=%s -- the game's own stopFight; the crime record is untouched",
+        tostring(victim), #sent, #sent > 0 and table.concat(sent, ",") or "-"))
+    return #sent
+end
+
 function KCD2MP_W166Status()
     local w = KCD2MP.w166
     local L, T = w.loot.stats, w.talk.stats
@@ -23446,6 +23589,7 @@ do
     -- The map holds the timers: the game's own toast now, the plain row again when the map closes.
     function KCD2MP_W154FastTravelTried(how)
         if not M.ftHeld then return false end
+        if KCD2MP_W166FastTravelTell and not KCD2MP_W166FastTravelTell("wo154") then return true end   -- WO-166 F1
         if (os.clock() - (M.ftToldAt or -1e9)) < 5 then return true end
         M.ftToldAt = os.clock()
         local text = M.ftText(M.roleNow() == "joiner")

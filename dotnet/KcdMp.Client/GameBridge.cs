@@ -1754,7 +1754,7 @@ public partial class GameBridge(ClientConfig config)
         // out on THIS connection's stream, so the handlers are re-bound per
         // connection like OnLocalHit.
         _combat.OnLocalDowned = OnLocalDownedAsync;
-        _combat.OnLocalRespawned = (x, y, z, reason) => { Wo139OnLocalRespawned(reason); return SendPlayerRespawnedAsync(stream, x, y, z, reason, cts.Token); };   // WO-139: an execution clears the joiner's record
+        _combat.OnLocalRespawned = (x, y, z, reason) => { Wo139OnLocalRespawned(reason); _ = Wo166OnLocalRespawnedAsync(reason); return SendPlayerRespawnedAsync(stream, x, y, z, reason, cts.Token); };   // WO-166 R1   // WO-139: an execution clears the joiner's record
         _combat.OnLocalGrave = (add, id, x, y, z) => SendGraveAsync(stream, add, id, x, y, z, cts.Token);
         // WO-118: the native writer's own drops and the trace's completion go
         // to Lua (the drop makes Lua write that puppet again at once).
@@ -3837,6 +3837,7 @@ public partial class GameBridge(ClientConfig config)
     {
         _localDowned = on;
         _localDownedKind = kind;
+        if (on) Wo166NoteLocalDown(_lastX, _lastY, _lastZ);   // WO-166 R1: where this player went down
         if (on) _w132LocalGate.Down(DateTime.UtcNow); else _w132LocalGate.Up(DateTime.UtcNow);   // WO-132
         Console.WriteLine($"[respawn] local player {(on ? "DOWNED" : "back up")} kind={Protocol.RespawnReasonName(kind)} -- 0x1F unconscious bit {(on ? "set" : "cleared")}");
         return Task.CompletedTask;
@@ -5001,6 +5002,7 @@ public partial class GameBridge(ClientConfig config)
                     Console.WriteLine(FormattableString.Invariant(
                         $"[respawn] {who} respawned at ({rx:F1}, {ry:F1}, {rz:F1}) reason={Protocol.RespawnReasonName(payload[13])}"));
                     _ = Wo132OnPeerUpAsync(sourceId, "respawned");   // WO-132 (was WO-131 1g's StopFight)
+                    _ = Wo166OnPeerRespawnedAsync(sourceId, payload[13]);   // WO-166 R1: the respawn amnesty (host)
                 }
                 else if (type == Protocol.GraveAddDown && payloadLen == Protocol.GraveAddDownPayloadLen)
                 {
@@ -5028,6 +5030,7 @@ public partial class GameBridge(ClientConfig config)
                     string who = _ghostNames.TryGetValue(sourceId, out var dn) ? dn : $"player {sourceId}";
                     Console.WriteLine($"[death] {who} died and is reloading their own save");
                     _ = Wo132OnPeerDownAsync(sourceId, "died", hide: !_w154AvatarFalls);   // WO-132 (was WO-131 1g's StopFight); WO-155: his figure lies instead of vanishing
+                    Wo166NotePeerDeath(sourceId);   // WO-166 R1: where he died
                     Wo155CollapseFigure(sourceId, "his death packet");
                     try
                     {
@@ -5995,6 +5998,7 @@ public partial class GameBridge(ClientConfig config)
             case "w166_talkstate":   // WO-166 T3: a talk that never started -- the copy's facts
             case "w166_talk":        // WO-166 T4: a talk refused, the host's NPC busy
             case "w166_cfg":         // WO-166: mp_copy_strikes / mp_snap_fix / the C1 lever
+            case "w166_wx":          // WO-166 W1: the host's rain
                 Wo166OnEvent(name, arg);
                 return;
             case "w163_hostile":     // WO-163 A7: the host's 5 s judge asks the engine whether the victim is in a skirmish fight with the host
@@ -7140,6 +7144,7 @@ public partial class GameBridge(ClientConfig config)
     private async Task NpcScanTickAsync(float px, float py, float pz, CancellationToken ct)
     {
         if (!_npcScanNative || _npcScanGaveUp) return;
+        Interlocked.Exchange(ref _w166LastScanMs, Environment.TickCount64);   // WO-166 S1: the fallback scan watches this
 
         var anchors = new List<(float X, float Y, float Z)> { (px, py, pz) };
         var cutoff = DateTime.UtcNow - NpcScanGhostStaleAfter;

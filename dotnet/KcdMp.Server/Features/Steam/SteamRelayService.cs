@@ -111,6 +111,8 @@ public sealed class SteamRelayService : BackgroundService
 		if (detail.Length > 0) _logger.Information("[steam] {Detail}", SteamLogScrub.Scrub(detail));
 		string code = SteamJoinCode.Encode(session.LocalSteamId, appId);
 		_status.Set("starting", "Connecting to Steam's network...", appId, code);
+		// WO-166 L2: friends see this host at once, as "starting", until it accepts joins (then host;<release>, below)
+		session.SetRichPresence(SteamApps.PresenceKey, $"starting;{RelayReleaseVersion.Current}");
 
 		bool ready;
 		try { ready = await session.WaitNetworkReadyAsync(TimeSpan.FromSeconds(30), ct); }

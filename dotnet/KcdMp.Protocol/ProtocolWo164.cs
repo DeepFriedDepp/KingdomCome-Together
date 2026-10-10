@@ -23,6 +23,9 @@ namespace KcdMp.Wire;
 //   4 HitOutcome "<hid> <outcome> <hp> <st>"   WO-165: a joiner's own engine decided the host's verdict <hid> (the replay, wo165.h):
 //                                outcome hit|blocked|pb|broken, the health / stamina it took (measured; -1 = not separable).
 //                                The host logs it beside its own verdict (WO165-OUTCOME) and counts agreement
+//   5 Weather   "<rain> <profile|->"   WO-166 W1: the host's live weather -- its game's rain intensity (0..1, the engine's own computed
+//                                value) and its time-of-day profile when known; sent on a change and every 60 s. The joiner holds
+//                                its own rain at the host's (the engine's wh_env_RainIntensityOverride) while the session lasts
 //
 // An older peer never sees these (a mixed release is refused at the relay, WO-110 R9); a receiver that meets an unknown
 // kind ignores it (counted). No protocol bump.
@@ -35,14 +38,14 @@ public static partial class Protocol
     public const int W164TextMax = 80;
 
     // ---- kinds (APPEND-ONLY) ----
-    public const byte W164MarkPing = 1, W164Torch = 2, W164Escort = 3, W164HitOutcome = 4;
+    public const byte W164MarkPing = 1, W164Torch = 2, W164Escort = 3, W164HitOutcome = 4, W164Weather = 5;
 
     /// <summary>While the torch is out, the side-channel repeats it this often (a lost edge recovers).</summary>
     public const int W164TorchRepeatMs = 10_000;
 
     public static string W164KindName(byte k) => k switch
     {
-        W164MarkPing => "mark-ping", W164Torch => "torch", W164Escort => "escort", W164HitOutcome => "hit-outcome", _ => $"unknown-{k}",
+        W164MarkPing => "mark-ping", W164Torch => "torch", W164Escort => "escort", W164HitOutcome => "hit-outcome", W164Weather => "weather", _ => $"unknown-{k}",
     };
 }
 
@@ -70,6 +73,33 @@ public static class W164Text
     public static string Torch(byte ghost, bool on) => $"{ghost} {(on ? 1 : 0)}";
 
     public static string Escort(string npc, bool on) => $"{npc} {(on ? 1 : 0)}";
+
+    /// <summary>WO-166 W1: "&lt;rain&gt; &lt;profile|-&gt;" -- the host's rain (0..1, two decimals) and its time-of-day profile name.</summary>
+    public static string Weather(float rain, string? profile)
+    {
+        float r = float.IsFinite(rain) ? Math.Clamp(rain, 0f, 1f) : 0f;
+        string p = !string.IsNullOrEmpty(profile) && IsProfileName(profile) ? profile : "-";
+        return FormattableString.Invariant($"{r:F2} {p}");
+    }
+
+    /// <summary>A time-of-day profile name as the game's tables spell them: [A-Za-z0-9_], 1..48.</summary>
+    public static bool IsProfileName(string s)
+    {
+        if (s.Length is 0 or > 48) return false;
+        foreach (char c in s) if (!(c is >= 'a' and <= 'z' || c is >= 'A' and <= 'Z' || c is >= '0' and <= '9' || c == '_')) return false;
+        return true;
+    }
+
+    public static bool TryParseWeather(string? text, out float rain, out string? profile)
+    {
+        rain = 0; profile = null;
+        var f = (text ?? "").Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (f.Length != 2 || !float.TryParse(f[0], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out rain)) return false;
+        if (!float.IsFinite(rain) || rain < 0f || rain > 1f) return false;
+        if (f[1] != "-" && !IsProfileName(f[1])) return false;
+        profile = f[1] == "-" ? null : f[1];
+        return true;
+    }
 
     /// <summary>WO-165: "&lt;hid&gt; &lt;outcome&gt; &lt;hp&gt; &lt;st&gt;" -- the joiner's engine's outcome of the host's verdict hid.</summary>
     public static string HitOutcome(uint hid, HitVerdict outcome, float hp, float st) =>

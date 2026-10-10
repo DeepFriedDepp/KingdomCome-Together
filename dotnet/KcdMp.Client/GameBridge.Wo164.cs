@@ -339,6 +339,10 @@ public partial class GameBridge
                 if (!W137Host) { Interlocked.Increment(ref _w164Malformed); return; }
                 Wo165OnOutcomeIn(src, m.Text);
                 return;
+            case Protocol.W164Weather when W164Text.TryParseWeather(m.Text, out float wrain, out string? wprof):   // WO-166 W1
+                if (W137Host) { Interlocked.Increment(ref _w164Malformed); return; }   // only the host's weather is the session's
+                await Wo166OnHostWeatherAsync(wrain, wprof);
+                return;
             default:
                 Interlocked.Increment(ref _w164Malformed);
                 return;
@@ -598,10 +602,13 @@ public partial class GameBridge
     {
         bool want = _w164PinOn && (W137Host || W137Joiner);
         var fresh = new HashSet<byte>();
+        // WO-166 M1: only a live peer has a pin, and one per partner (a crash-rejoin's old id is gone from the relay's set at once)
+        var keep = Wo166Rules.PinOwners(LivePartners(), _myGhostId, g => _ghostNames.TryGetValue(g, out var nm) ? nm : null,
+                                        g => _ghostLastPos.TryGetValue(g, out var gp) ? gp.AtUtc : DateTime.MinValue, DateTime.UtcNow);
         if (want)
             foreach (var (g, p) in _ghostLastPos.ToArray())
             {
-                if (g == _myGhostId || (DateTime.UtcNow - p.AtUtc).TotalSeconds > 10) continue;
+                if (g == _myGhostId || !keep.Contains(g) || (DateTime.UtcNow - p.AtUtc).TotalSeconds > 10) continue;
                 fresh.Add(g);
                 if (_w164PinAt.TryGetValue(g, out var was) && Wo164Rules.PinMoveDue(was.X, was.Y, p.X, p.Y) == false) continue;
                 if (await _combat.MirrorGraveAsync(3, g, 0, p.X, p.Y, p.Z)) { _w164PinAt[g] = (p.X, p.Y); Interlocked.Increment(ref _w164PinSets); }
@@ -612,7 +619,7 @@ public partial class GameBridge
             _w164PinAt.TryRemove(g, out _);
             await _combat.MirrorGraveAsync(4, g, 0, 0, 0, 0);
             Interlocked.Increment(ref _w164PinRemoves);
-            Console.WriteLine($"WO164-MAPMARK pin of player {g} removed ({(!_w164PinOn ? "mp_partner_marker off" : !(W137Host || W137Joiner) ? "not in a session" : "no position for 10 s")})");
+            Console.WriteLine($"WO164-MAPMARK pin of player {g} removed ({(!_w164PinOn ? "mp_partner_marker off" : !(W137Host || W137Joiner) ? "not in a session" : !keep.Contains(g) ? "not a live partner (WO-166 M1)" : "no position for 10 s")})");
         }
     }
 

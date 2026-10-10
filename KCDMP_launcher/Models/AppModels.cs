@@ -91,6 +91,7 @@ namespace KCDMP_launcher.Models
         public string Name { get; set; } = "";
         public string Code { get; set; } = "";
         public string Release { get; set; } = "";
+        public string State { get; set; } = "ready";   // WO-166 L2: "starting" until the host accepts joins
     }
 
     public class DedicatedServerInfoData

@@ -29,10 +29,20 @@
                     {
                         @foreach (var f in Friends)
                         {
-                            <div class="kcd-input" style="margin-top: 6px; cursor: pointer; @(f.Code == Code ? "font-weight: bold;" : "")"
-                                 @onclick="() => CodeChanged.InvokeAsync(f.Code)">
-                                @f.Name <span style="opacity: 0.7;">(version @f.Release)</span>
-                            </div>
+                            @if (f.State == "starting")
+                            {
+                                @* WO-166 L2: a host whose Steam side is still coming up: shown, not joinable yet *@
+                                <div class="kcd-input" style="margin-top: 6px; opacity: 0.7;">
+                                    @f.Name <span style="opacity: 0.7;">(starting...)</span>
+                                </div>
+                            }
+                            else
+                            {
+                                <div class="kcd-input" style="margin-top: 6px; cursor: pointer; @(f.Code == Code ? "font-weight: bold;" : "")"
+                                     @onclick="() => CodeChanged.InvokeAsync(f.Code)">
+                                    @f.Name <span style="opacity: 0.7;">(version @f.Release)</span>
+                                </div>
+                            }
                         }
                     }
                     @if (!string.IsNullOrEmpty(FriendsNote))

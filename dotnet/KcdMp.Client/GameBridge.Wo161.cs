@@ -115,6 +115,7 @@ public partial class GameBridge
             var send = _sendPlayerHit;
             if (send is not null) await send(ghost, health, stamina);
         }
+        if (named) Wo166NoteStruck(ghost, attacker);   // WO-166 R1: who struck this figure (the respawn amnesty names them)
         Console.WriteLine(FormattableString.Invariant(
             $"WO161-HIT victim={ghost} by={by} sid={sw?.Id ?? 0} hid={hid} verdict={HitVerdictMsg.VerdictName(verdict)} dmg={health:F1}/{stamina:F1} dir={Wo161Zone(zone)} shown={(sw is not null ? "yes" : "no")} reason={hostWhy}{(sw is not null ? $" fit_ms={pair.ErrMs}" : "")} sent={how}"));
     }

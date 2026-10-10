@@ -25,6 +25,19 @@ public static class SteamApps
     /// <summary>The virtual port the relay listens on and the agent dials (P2P ports are per app, not per machine).</summary>
     public const int RelayVirtualPort = 7778;
 
+    /// <summary>
+    /// WO-166 L2: a friend's presence value -> "ready" ("host;&lt;release&gt;": the relay accepts joins) or "starting" ("starting;&lt;release&gt;":
+    /// its Steam side is still coming up). Anything else is not a host.
+    /// </summary>
+    public static bool TryParsePresence(string? value, out string state, out string release)
+    {
+        state = ""; release = "";
+        if (string.IsNullOrEmpty(value)) return false;
+        if (value.StartsWith("host;", StringComparison.Ordinal)) { state = "ready"; release = value[5..]; return true; }
+        if (value.StartsWith("starting;", StringComparison.Ordinal)) { state = "starting"; release = value[9..]; return true; }
+        return false;
+    }
+
     /// <summary>Rich presence key the hosting relay sets: "host;&lt;release&gt;".</summary>
     public const string PresenceKey = "kcdmp";
 

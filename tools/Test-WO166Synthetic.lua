@@ -47,6 +47,13 @@ UIAction.RegisterElementListener = function(tbl, el, inst, ev, fn) LISTENERS[#LI
 Calendar = mkstub()
 Calendar.GetWorldTime = function() return 1000000 end
 XGenAIModule = mkstub()
+MSGS = {}
+XGenAIModule.MakeTableFromType = function(t) return { kind = t } end
+XGenAIModule.SendMessageToEntityData = function(to, kind, t) MSGS[#MSGS + 1] = { to = to, kind = kind, t = t } end
+CVARS = {}
+System.SetCVar = function(n, v) CVARS[n] = v end
+RAIN = 0.0
+EnvironmentModule = { GetRainIntensity = function() return (CVARS["wh_env_RainIntensityOverride"] and tonumber(CVARS["wh_env_RainIntensityOverride"]) >= 0) and tonumber(CVARS["wh_env_RainIntensityOverride"]) or RAIN end }
 
 -- ---- items and inventories (the WO-134 suite's) ----
 ITEMS = {}
@@ -442,6 +449,102 @@ do
         and KCD2MP_W166SetAutoMode("10") == false and KCD2MP_W166SetAutoMode("x") == false and KCD2MP_W166SetAutoMode("1.5") == false)
     check("W10: mp_victim_decides is off again (WO-166)", KCD2MP.w165.victimDecides == false and CCMDS["mp_victim_decides"].help:find("default off", 1, true) ~= nil)
     noErrs("W")
+end
+
+-- (P) Phase 3: W1 weather, F1 fast travel, R1 amnesty --------------------------------------------------------------------------
+do
+    ERRS = {}
+    world()
+    local X = KCD2MP.w166.wx
+    X.lastRain, X.lastAt, X.readAt, X.applied, X.appliedRain = nil, -1e9, -1e9, false, nil
+    RAIN = 0.31
+    local mark = #LOG
+    KCD2MP_W166WeatherTick(true, false, false)
+    check("P1: the host reads its rain and tells the agent", countEvt("w166_wx", "0.31", mark) == 1)
+    NOW = NOW + 3; RAIN = 0.33
+    mark = #LOG
+    KCD2MP_W166WeatherTick(true, false, false)
+    check("P2: a change under 0.05 is not sent again", countEvt("w166_wx", "", mark) == 0)
+    NOW = NOW + 3; RAIN = 0.8
+    KCD2MP_W166WeatherTick(true, false, false)
+    check("P3: a real change is", countEvt("w166_wx", "0.80", mark) == 1)
+    NOW = NOW + 61
+    mark = #LOG
+    KCD2MP_W166WeatherTick(true, false, false)
+    check("P4: and every 60 s as a refresh", countEvt("w166_wx", "0.80", mark) == 1)
+    mark = #LOG
+    KCD2MP_W166WeatherTick(true, true, false)
+    check("P5: a weather profile line forces a read at once", countEvt("w166_wx", "0.80", mark) == 1)
+    -- the joiner
+    RAIN = 0.0
+    mark = #LOG
+    check("P6: a joiner holds its rain at the host's (the engine's override)", KCD2MP_W166WeatherApply(0.62, "semicloudy_clear_B") == true
+        and CVARS["wh_env_RainIntensityOverride"] == 0.62 and lastLog("WO166-WEATHER applied rain=0.62 profile=semicloudy_clear_B read_back=0.62", mark) ~= nil,
+        lastLog("WO166-WEATHER", mark))
+    KCD2MP_W166WeatherTick(false, false, true)
+    check("P7: while the session lasts the override stays", CVARS["wh_env_RainIntensityOverride"] == 0.62)
+    mark = #LOG
+    KCD2MP_W166WeatherTick(false, false, false)
+    check("P8: the session over: the game's own rain again", CVARS["wh_env_RainIntensityOverride"] == -1 and lastLog("WO166-WEATHER override off", mark) ~= nil)
+    noErrs("P-W1")
+end
+do
+    ERRS = {}
+    local F = KCD2MP.w166.ft
+    F.confirmAt, F.told, F.silent, F.silentLogAt, F.listening = nil, false, 0, -1e9, false
+    KCD2MP.w114.ftBlocked = true
+    local before = #TOASTS
+    local mark = #LOG
+    KCD2MP_Wo114FastTravelTried("engine-refused")
+    check("P9: the engine's refusal without a confirmed trip (the map's own check) is silent", #TOASTS == before
+        and lastLog("WO166-FASTTRAVEL silent path=wo114", mark) ~= nil)
+    check("P10: the confirm listeners are on the map and its question dialog", F.listening == true)
+    local armed = 0
+    for _, l in ipairs(LISTENERS) do if (l.el == "ApseMap" and l.ev == "OnDoubleClicked") or (l.el == "ApseModalDialog" and l.ev == "OnQuestionDialogConfirmClicked") then armed = armed + 1 end end
+    check("P11: ... both registered", armed == 2, armed)
+    KCD2MP.w166.OnTravelConfirm(KCD2MP.w166, "ApseMap", -1, "OnDoubleClicked", {})
+    NOW = NOW + 1
+    KCD2MP.w114.ftToldAt = -1e9
+    mark = #LOG
+    KCD2MP_Wo114FastTravelTried("engine-refused")
+    check("P12: a refusal 1 s after the player's own confirm is said", #TOASTS == before + 1 and lastLog("WO166-FASTTRAVEL told path=wo114", mark) ~= nil)
+    KCD2MP.w166.OnTravelConfirm(KCD2MP.w166, "ApseModalDialog", -1, "OnQuestionDialogConfirmClicked", {})
+    NOW = NOW + 10; KCD2MP.w114.ftToldAt = -1e9
+    KCD2MP.w166.OnTravelConfirm(KCD2MP.w166, "ApseMap", -1, "OnDoubleClicked", {})
+    mark = #LOG
+    KCD2MP_Wo114FastTravelTried("engine-refused")
+    check("P13: ... once per session", #TOASTS == before + 1 and lastLog("WO166-FASTTRAVEL told-already", mark) ~= nil)
+    KCD2MP.w114.ftBlocked = false
+    noErrs("P-F1")
+end
+do
+    ERRS = {}
+    world()
+    MSGS = {}
+    local function npc(name, x, y, fighting, dead)
+        NEXTID = NEXTID + 1
+        local e = { id = NEXTID, class = "NPC", this = { id = "eid" .. name } }
+        e.GetName = function() return name end
+        e.GetWorldPos = function() return { x = x, y = y, z = PZ } end
+        e.actor = { IsDead = function() return dead == true end }
+        e.soul = { IsInCombatMode = function() return fighting == true end }
+        ENTS[name] = e
+        return e
+    end
+    npc("ttkc_drozd", 400, 400, true)           -- the bailiff that struck him: named by the agent, far from his death by now
+    npc("ttkc_guard_2", 101, 101, true)         -- still fighting where he fell
+    npc("ttkc_man_7", 102, 100, false)          -- near, not fighting: left alone
+    npc("ttkc_man_8", 103, 100, true, true)     -- dead: nothing to stop
+    local mark = #LOG
+    local n = KCD2MP_W166Amnesty("ghost1", 100, 100, 10, "ttkc_drozd")
+    local to = {}
+    for _, m in ipairs(MSGS) do if m.kind == "stopFight" then to[#to + 1] = m.to end end
+    table.sort(to)
+    check("P14: the amnesty: the game's own stopFight to the NPC that struck him and to the one still fighting where he fell", n == 2
+        and table.concat(to, ",") == "eidttkc_drozd,eidttkc_guard_2", table.concat(to, ","))
+    check("P15: ... never to a bystander or a corpse, and the line says so", lastLog("WO166-AMNESTY victim=ghost1 stopped=2", mark) ~= nil)
+    check("P16: each message is the attack interrupt's own (soulCount 1, a unique id)", MSGS[1] and MSGS[1].t.soulCount == 1 and tostring(MSGS[1].t.messageId):find("w166amnesty", 1, true) ~= nil)
+    noErrs("P-R1")
 end
 
 OUT = table.concat(RESULTS, "\n")

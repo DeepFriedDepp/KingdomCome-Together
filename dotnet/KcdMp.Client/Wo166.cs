@@ -13,6 +13,10 @@ public static class Wo166Rules
     /// <summary>L1: the loot screen closing ("PlayAudio: ui_inv_screen_out_one_pane" in both field crashes).</summary>
     public const string LootScreenOutPrefix = "PlayAudio: ui_inv_screen_out";
 
+    /// <summary>W1: the game's weather layer profiles switching on / off (C_GameProfileManager; weather_heavy_rain, weather_flies ...).</summary>
+    public const string WeatherProfilePrefix = "[Info] C_GameProfileManager: Activating profile 'weather_";
+    public const string WeatherProfileOffPrefix = "[Info] C_GameProfileManager: Deactivating profile 'weather_";
+
     /// <summary>T3: the dialogue controller's request that the NPC stop its behaviour for the conversation ran out (the haggle's death).</summary>
     public const string PauseRequestsTimedOut = "PlayerDialogController::NPCPauseRequests timed out";
 
@@ -47,6 +51,39 @@ public static class Wo166Rules
     /// </summary>
     public static ushort SwingHoldMs(int hitLagMs, bool snapFix) =>
         (ushort)(!snapFix || hitLagMs <= 0 ? 900 : Math.Clamp(hitLagMs + 250, 300, 900));
+
+    // ------------------------------------------------------------------ R1, M1
+
+    /// <summary>R1: an NPC that struck the player this recently is named in his respawn amnesty.</summary>
+    public const long AmnestyStrikeWindowMs = 120_000;
+    /// <summary>R1: a death position older than this is not used (the wake came long after; the place means nothing now).</summary>
+    public const long AmnestyDeathFreshMs = 600_000;
+
+    /// <summary>R1: the NPCs that struck the player within the window, most recent first (at most 8).</summary>
+    public static List<string> RecentStrikers(IReadOnlyDictionary<string, long> struck, long nowMs) =>
+        struck.Where(kv => nowMs - kv.Value <= AmnestyStrikeWindowMs).OrderByDescending(kv => kv.Value).Take(8).Select(kv => kv.Key).ToList();
+
+    /// <summary>
+    /// M1: the ghost ids that may carry a partner pin -- live peers only (the relay's own set: a crash-rejoin's old id leaves it at once),
+    /// never this machine, and one per partner: two live ids with the same name keep the one with the freshest position.
+    /// </summary>
+    public static HashSet<byte> PinOwners(IEnumerable<byte> livePeers, byte me, Func<byte, string?> nameOf, Func<byte, DateTime> seenAt, DateTime now)
+    {
+        var byName = new Dictionary<string, byte>(StringComparer.Ordinal);
+        var keep = new HashSet<byte>();
+        foreach (byte g in livePeers)
+        {
+            if (g == me) continue;
+            string? n = nameOf(g);
+            if (string.IsNullOrEmpty(n)) { keep.Add(g); continue; }
+            if (byName.TryGetValue(n, out byte other))
+            {
+                if (seenAt(g) > seenAt(other)) { keep.Remove(other); byName[n] = g; keep.Add(g); }
+            }
+            else { byName[n] = g; keep.Add(g); }
+        }
+        return keep;
+    }
 
     /// <summary>The Lua's "w166_cfg key=value ..." event.</summary>
     public static IEnumerable<(string Key, string Value)> ParseCfg(string? arg)
