@@ -176,6 +176,9 @@ int wo165_tests(int* passed) {
         WCHECK(facing_cos(0.0f, 0, 0, 0, -5) < -0.99f, "yaw 0: an NPC behind");
         WCHECK(std::fabs(facing_cos(1.5707963f, 0, 0, -5, 0) - 1.0f) < 1e-3f, "yaw +90 degrees faces -x");
         WCHECK(facing_cos(0.0f, 0, 0, 0, 0) == 1.0f, "on top of each other: counts as facing");
+        WCHECK(std::strcmp(lock_not_set_why(far), "farther-than-6m") == 0 && std::strcmp(lock_not_set_why(away), "not-facing") == 0 &&
+               std::strcmp(lock_not_set_why(idle), "npc-not-fighting") == 0 && std::strcmp(lock_not_set_why(notAvatar), "not-fighting-a-partner") == 0 &&
+               std::strcmp(lock_not_set_why(dead), "npc-dead") == 0 && lock_not_set_why(v)[0] == 0, "a missed lock names its reason");
     }
     if (passed) *passed = g_pass;
     return g_fail;

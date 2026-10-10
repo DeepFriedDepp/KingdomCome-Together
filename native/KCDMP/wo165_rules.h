@@ -153,7 +153,8 @@ constexpr float kLockFarM = 30.0f;
 struct LockView {
     bool paired = false;          // the pair this module set is in place
     bool alive = true;
-    bool combat = false;          // the NPC's combat mode
+    bool combat = false;          // the NPC fights: its combat mode, or an opponent held (live: a guard beating the figure read CombatMode 0
+                                  // with its Opponent on the avatar -- the opponent link is the signal WO-136 also ends a fight on)
     bool oppIsAvatar = false;     // its opponent is a partner's avatar
     bool oppIsHost = false;       // its opponent is the host himself
     float dist = 1e9f;            // host -> NPC (horizontal, m)
@@ -162,6 +163,16 @@ struct LockView {
 };
 enum class LockAct : uint8_t { None, Set, Keep, Remove, Forget };
 struct LockDecision { LockAct act; const char* why; };
+
+// Why a candidate near the host was not paired (the field line's reason); "" when it is.
+inline const char* lock_not_set_why(const LockView& v) {
+    if (!v.alive) return "npc-dead";
+    if (!v.combat) return "npc-not-fighting";
+    if (!v.oppIsAvatar) return "not-fighting-a-partner";
+    if (v.dist > kLockSetM) return "farther-than-6m";
+    if (v.facingCos < kLockFacingCos) return "not-facing";
+    return "";
+}
 
 inline LockDecision lock_rule(const LockView& v) {
     if (!v.paired) {

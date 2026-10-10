@@ -989,6 +989,29 @@ Switches (console, default on): `mp_talk_sweep`, `mp_talk_guard`, `mp_flee_limit
 their counters. Lines worth a look: `WO164-TALK`, `WO164-SWEEP`, `WO164-QFIX`, `WO164-FLEE`, `WO164-SIT`, `WO164-UNSTUCK`,
 `WO164-MAPMARK`, `MP-MARK-SNAP`, `MP-WO164-STATS`, `MP-W143 stats … idle_window …`.
 
+## WO-165 — the host's lock-on; your own block and the bounce-back (switched off) (0.48.0)
+
+Checked in the game with a stand-in partner (the maintainer at the keyboard for the lock-on). **Press "Something's wrong here"
+(`mark_odd`) at every jump or odd moment**, then send both logs. Lines worth a look: `WO165-LOCK` (host: `pair=set|removed|forgotten|not-set
+why=…`), `WO161-HIT` (joiner), `MP-FIGHTSNAP`, `MP-WO165-STATS`.
+
+205. **Both on one enemy** (any bandit). Both hit it for a minute. No snapping between the two figures; both players' hits count
+     (the enemy's health falls for both). * Joiner: `WO161-HIT … applied=yes`, never `applied=dup`.
+206. **The host locks onto a guard who is beating the joiner.** The joiner provokes a guard (or bandit) and lets it fight him; the
+     host walks within 6 m, faces it and locks on **without hitting**. The lock takes, and the guard keeps fighting the joiner for
+     at least 10 s. * Host: `WO165-LOCK npc=… pair=set why=near-and-facing`; the game's own `Player: Opponent change from … to …`.
+207. **Then the host hits that guard once.** What happens: does the guard turn to the host, or stay on the joiner (the joiner has
+     been hurting it all along)? Is it a crime (`WO154-JUDGE` / `WO163-JUDGE` on the host)? The host walks 15 m away afterwards:
+     `WO165-LOCK … pair=removed why=host-left-10m` — unless the guard now fights the host (`pair=forgotten`).
+208. **The joiner blocks three enemy swings and lets one through** (`mp_victim_decides` stays **off**): blocked = stamina, not
+     health, the same on both screens. Compare `WO161-HIT … verdict=` with what the joiner really held.
+209. **A perfect block** (joiner, timed as the blow lands): what does the joiner see, what does `WO161-HIT … verdict=` say?
+210. **The bounce-back** (both, `mp_block_recoil on` on the joiner's console first): an enemy with a longsword, short sword,
+     halberd or sword-and-shield whose blow the joiner blocks should visibly bounce back on the joiner's screen.
+     `WO165-RECOIL … recoil="…"` (or `none why=…`). Switch it off again afterwards.
+211. **A 3-minute brawl** with three enemies: press `mark_odd` at every jump of a figure. Afterwards both logs; the measure is
+     `MP-FIGHTSNAP` (resume and post-hold steps).
+
 ## Logs to send afterwards
 
 Both machines: Report a bug in the launcher. Since 0.42.2 it also collects the

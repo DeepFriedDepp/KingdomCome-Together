@@ -293,7 +293,7 @@ Damage damage_of(uint32_t seq) {
 // ---------------------------------------------------------------------------------------------------- C1
 namespace {
 std::atomic<bool> g_lockOn{true}, g_lockOff{false};
-struct LockRow { bool paired = false; double farSince = -1; };
+struct LockRow { bool paired = false; double farSince = -1, notSetLogged = -1e9; };
 std::unordered_map<uint32_t, LockRow> g_locks;   // main thread only
 double g_lockNext = 0;
 std::atomic<uint32_t> c_lockSet{0}, c_lockRemoved{0}, c_lockForgot{0}, c_lockFail{0};
@@ -361,7 +361,7 @@ void lock_tick(const uint32_t* npcs, int n) {
         if (!e || !engine::entity_world_pos(e, p)) continue;
         LockView v{};
         v.alive = npc_alive(npcs[i]);
-        v.combat = c.combat != 0;
+        v.combat = c.combat != 0 || c.opponentEid != 0 || c.opponentIsPlayer != 0;
         v.oppIsHost = c.opponentIsPlayer != 0;
         v.oppIsAvatar = c.opponentEid && motion::is_avatar_eid(c.opponentEid);
         v.dist = std::sqrt((p[0] - ls.x) * (p[0] - ls.x) + (p[1] - ls.y) * (p[1] - ls.y));
@@ -413,6 +413,14 @@ void lock_tick(const uint32_t* npcs, int n) {
                 c_lockForgot.fetch_add(1);
                 logf("WO165-LOCK npc=%s pair=forgotten why=%s dist_m=%.1f (the host's own fight: not left) tid=%lu", npc_name(cs[i].eid), d.why, cs[i].v.dist,
                      GetCurrentThreadId());
+                break;
+            case LockAct::None:
+                // a candidate within reach that was not paired says why (once per 5 s per NPC), so a missed lock explains itself
+                if (on && cs[i].v.dist <= kLockDropM && now - row.notSetLogged > 5.0) {
+                    row.notSetLogged = now;
+                    logf("WO165-LOCK npc=%s pair=not-set why=%s dist_m=%.1f facing_cos=%.2f tid=%lu", npc_name(cs[i].eid), lock_not_set_why(cs[i].v),
+                         cs[i].v.dist, cs[i].v.facingCos, GetCurrentThreadId());
+                }
                 break;
             default: break;
         }

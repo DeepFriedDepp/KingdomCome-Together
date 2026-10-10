@@ -18,11 +18,23 @@ Kingdom Come: Together is unofficial and free, made by its contributors and main
 ## How to start a game together (WO-159; for the how-to / FAQ channel)
 
 ```
-How to play together (0.45.5):
+How to play together (0.48.0):
 1. Both: open the Kingdom Come: Together launcher.
 2. Host: HOST GAME, share the address (or the Steam code), PLAY. On the game's main menu press Start Game: pick one of your worlds, or New adventure — choose your playstyle (Soldier / Adviser / Scout), then Skip the prologue (recommended with a partner) or watch its cutscenes (16 min; skipping one skips them all). You start where Hans and Henry part ways.
 3. Partner: JOIN with the host's address (or JOIN THROUGH STEAM), PLAY. On the main menu press Join Game, then Join with a new character (pick a playstyle; no save of your own needed) or Bring my character. Pressed too early? It says "Waiting for the host…" and joins by itself when they're ready.
 Nobody clicks CONNECT any more, and you don't need anyone's save file. First time ever starting the game? Start it once from Steam and accept its two first-run pages, then use the launcher.
+```
+
+## Version 0.48.0 — the host's lock-on (WO-165)
+
+```
+Kingdom Come: Together 0.48.0 — fighting together, part two.
+• Host: you can now lock onto an enemy that is beating your partner. Walk up to it (within 6 m) and face it, and the game's own lock-on can pick it. It keeps fighting your partner until you hit it. (mp_host_lock, on)
+• Built but OFF, because they are not proven yet:
+  – mp_victim_decides: your own game judging an enemy's blow against your own block. The game applies the blow, but it does not count a held block yet, so this stays off.
+  – mp_block_recoil: an enemy whose blow you blocked bounces back. Not checked by eye yet.
+• Fight snapping: two fixes were measured and neither helped enough, so neither ships.
+Checked in the game with a stand-in partner. The checklist's items 205–211 need two real players. Both players and the relay need 0.48.0.
 ```
 
 ## Version 0.47.6 — talking to the host's people, the map crash, fleeing enemies (WO-164)
@@ -44,7 +56,7 @@ Switches (console, default on): mp_talk_sweep, mp_talk_guard, mp_flee_limit, mp_
 Checked in the game with a stand-in partner; talking needs two real players — the checklist's items 177–204 are the test. Both players and the relay need 0.47.6.
 ```
 
-## Version 0.47.0 — shared combat, the first part (WO-163) — DRAFT, not released; the build is not made
+## Version 0.47.0 — shared combat, the first part (WO-163) — built and played (the 0.47.0 session of 2026-10-08)
 
 ```
 Kingdom Come: Together 0.47.0 — fighting together, part one.
