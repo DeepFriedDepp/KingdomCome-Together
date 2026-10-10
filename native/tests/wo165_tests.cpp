@@ -134,6 +134,11 @@ int wo165_tests(int* passed) {
                std::strcmp(outcome_name(Outcome::Hit), "hit") == 0 && std::strcmp(outcome_name(Outcome::Broken), "broken") == 0,
                "the names the logs and the wire use");
     }
+    // ---- C2's referral: a victim holding block is not replayed ----
+    WCHECK(victim_blocking_state(0x80, true) && victim_blocking_state(0x100, true), "PreparingToParry and ParryInPlace are blocking (P3: a held block read 0x80)");
+    WCHECK(!victim_blocking_state(0x2, true) && !victim_blocking_state(0x1, true) && !victim_blocking_state(0x8, true), "guard, idle, striking are not");
+    WCHECK(!victim_blocking_state(0x80, false), "an unread state is not blocking (the replay runs)");
+
     // ---- C1: the host's lock-on ----
     {
         LockView v{};

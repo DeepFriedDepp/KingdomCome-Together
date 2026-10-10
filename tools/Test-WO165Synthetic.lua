@@ -98,23 +98,23 @@ do
     check("W1: the switches are registered", CCMDS["mp_host_lock"] ~= nil and CCMDS["mp_host_lock"].body == "KCD2MP_W165SetHostLock(%line)"
         and CCMDS["mp_victim_decides"] ~= nil and CCMDS["mp_victim_decides"].body == "KCD2MP_W165SetVictimDecides(%line)"
         and CCMDS["mp_block_recoil"] ~= nil and CCMDS["mp_block_recoil"].body == "KCD2MP_W165SetBlockRecoil(%line)")
-    check("W2: the defaults follow the probes: host lock on, victim decides off, block recoil off",
-        KCD2MP.w165.hostLock == true and KCD2MP.w165.victimDecides == false and KCD2MP.w165.blockRecoil == false)
-    check("W3: the untested two say so in their help", CCMDS["mp_victim_decides"].help:find("UNTESTED", 1, true) ~= nil
+    check("W2: the defaults: all three on",
+        KCD2MP.w165.hostLock == true and KCD2MP.w165.victimDecides == true and KCD2MP.w165.blockRecoil == true)
+    check("W3: the two not proven with two players say so in their help", CCMDS["mp_victim_decides"].help:find("UNTESTED", 1, true) ~= nil
         and CCMDS["mp_block_recoil"].help:find("UNTESTED", 1, true) ~= nil)
     local mark = #LOG
     check("W4: mp_host_lock off", KCD2MP_W165SetHostLock("off") == true and KCD2MP.w165.hostLock == false
         and countEvt("w165_cfg", "host_lock=off", mark) == 1 and lastLog("WO165-TOGGLE mp_host_lock off", mark) ~= nil)
     mark = #LOG
-    check("W5: mp_victim_decides on / mp_block_recoil on tell the agent", KCD2MP_W165SetVictimDecides("on") == true and KCD2MP_W165SetBlockRecoil("on") == true
-        and countEvt("w165_cfg", "victim_decides=on", mark) == 1 and countEvt("w165_cfg", "block_recoil=on", mark) == 1)
+    check("W5: mp_victim_decides off / mp_block_recoil off tell the agent", KCD2MP_W165SetVictimDecides("off") == true and KCD2MP_W165SetBlockRecoil("off") == true
+        and countEvt("w165_cfg", "victim_decides=off", mark) == 1 and countEvt("w165_cfg", "block_recoil=off", mark) == 1)
     mark = #LOG
     check("W6: a bad word changes nothing and tells nobody", KCD2MP_W165SetHostLock("maybe") == false and KCD2MP.w165.hostLock == false
         and countEvt("w165_cfg", "", mark) == 0)
     mark = #LOG
     check("W7: the bare command repeats the state", KCD2MP_W165SetHostLock(nil) == true and countEvt("w165_cfg", "host_lock=off", mark) == 1)
-    KCD2MP_W165SetHostLock("on"); KCD2MP_W165SetVictimDecides("off"); KCD2MP_W165SetBlockRecoil("off")
-    check("W8: back to the defaults", KCD2MP.w165.hostLock == true and KCD2MP.w165.victimDecides == false and KCD2MP.w165.blockRecoil == false)
+    KCD2MP_W165SetHostLock("on"); KCD2MP_W165SetVictimDecides("on"); KCD2MP_W165SetBlockRecoil("on")
+    check("W8: back to the defaults", KCD2MP.w165.hostLock == true and KCD2MP.w165.victimDecides == true and KCD2MP.w165.blockRecoil == true)
     noErrs("W")
 end
 

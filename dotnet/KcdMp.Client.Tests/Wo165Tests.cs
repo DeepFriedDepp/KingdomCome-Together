@@ -35,11 +35,13 @@ public class Wo165Tests
     }
 
     [Fact]
-    public void The_switches_default_to_the_probes_verdicts()
+    public void The_switches_default_on()
     {
-        Assert.True(Wo165Rules.DefaultHostLock);        // P6 passed live
-        Assert.False(Wo165Rules.DefaultVictimDecides);  // P3 failed live: a held block is not honoured
-        Assert.False(Wo165Rules.DefaultBlockRecoil);    // P8: dispatched, its look not determined
+        // all on (the maintainer: testing needs a real partner -- new pieces ship on, each with its switch)
+        Assert.True(Wo165Rules.DefaultHostLock);
+        Assert.True(Wo165Rules.DefaultVictimDecides);
+        Assert.True(Wo165Rules.DefaultBlockRecoil);
+        Assert.Equal(0x11, Wo165Rules.ReplayFlags);     // skip the repeat filter + refer a blocking victim (P3) to the host's verdict
     }
 
     // ---------------------------------------------------------------- the DLL's answer

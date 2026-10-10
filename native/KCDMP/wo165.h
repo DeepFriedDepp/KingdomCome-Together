@@ -25,6 +25,9 @@ constexpr uint8_t kFlagSkipFilter = 0x01;   // hit-in byte 0: the engine's repea
 constexpr uint8_t kFlagKeepFields = 0x02;   // leave the written attack fields in place (a probe reading them afterwards)
 constexpr uint8_t kFlagOwnFields = 0x04;    // write nothing: call with the attacker's own fields (a real NPC, P4a's control)
 constexpr uint8_t kFlagCreateCa = 0x08;     // a dummy without a combat actor gets one (the avatars' own route); never for copies
+// A victim holding block (State PreparingToParry 0x80 or ParryInPlace 0x100) is not replayed: the engine honours a block only against an
+// attacker it sees Striking, which a copy never is (WO-165 P3, live) -- the host's verdict decides that blow instead.
+constexpr uint8_t kFlagReferBlocking = 0x10;
 
 struct Request {
     uint32_t attackerEid = 0;
@@ -35,7 +38,7 @@ struct Request {
 
 enum Reason : uint8_t {
     kOk = 0, kOff = 1, kNotArmed = 2, kNoAttacker = 3, kNoVictim = 4, kNoProcessor = 5, kFieldsUnnamed = 6, kFault = 7, kSameActor = 8,
-    kNoPosition = 9,
+    kNoPosition = 9, kVictimBlocking = 10,
 };
 const char* reason_name(uint8_t r);
 

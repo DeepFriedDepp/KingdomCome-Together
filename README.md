@@ -41,9 +41,10 @@ against each other from inside the game itself.
 > - **The host can lock onto an enemy that is beating his partner** (new in 0.48.0): stand within 6 m of it and face it, and
 >   the game's own lock-on can pick it; it keeps fighting your partner until you hit it. `mp_host_lock` (default on). Checked
 >   live with a stand-in partner; the checklist's items 205–211 ask two people.
-> - **Built but switched off (not proven):** your own game judging an enemy's blow against your own block (`mp_victim_decides`) —
->   the game honours a held block only against an enemy it sees striking, which the copy never is; and the enemy's bounce-back
->   when you block (`mp_block_recoil`). Each needs a live check before it is switched on.
+> - **Your own game judges an enemy's blow on your screen** (joiner, new in 0.48.0): the hit and its damage come from your game,
+>   applied once; while you hold block the host's game still decides, as before (the game counts a held block only against an
+>   enemy it sees striking, which the copy never is). And an enemy whose blow you blocked bounces back. `mp_victim_decides`,
+>   `mp_block_recoil` (default on; not yet checked with two players).
 > - **Talking to the host's people (joiner):** the mod no longer floods the game with placements it already refused; people
 >   near you are reset after a wait or a sleep; the person you walk up to is ready before you press the key; a stuck request is
 >   asked once more, then "Try again in a moment". Quest counters that drift from the host's are set back to the host's value.
@@ -69,7 +70,7 @@ against each other from inside the game itself.
 >
 > **Known, not fixed in 0.48.0:** set-piece brawls (the Cuman brawl, the Moravians' flags); a killed person standing up
 > again on the other screen (the standing dead copy); people left naked after a wait or a sleep — fixed in 0.46.0 and
-> waiting for the testers to confirm it; bows and arrows (not built); your own block does not decide an enemy's blow on your
+> waiting for the testers to confirm it; bows and arrows (not built); your own block does not yet decide a blocked blow on your
 > screen (the host's game does); the attacker does not recoil when his blow is blocked; two players on one enemy can still make it turn between them,
 > less often; an enemy blow whose swing the host's game never produced (a bite, a stealth takedown) now shows a generic lunge,
 > not the real one; in a fight the other player's figure can still step or snap a little (now measured in the log).

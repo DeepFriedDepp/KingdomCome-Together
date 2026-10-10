@@ -21025,10 +21025,11 @@ end
 --   mp_host_lock on|off       (host, default ON)  the host can lock onto an NPC beating his partner: while he stands within 6 m of it and faces
 --                             it, his soul joins its skirmish with the explicit hostile pair the engine's lock-on needs (removed past 10 m, when
 --                             the fight ends, the NPC dies or is left 20 s over 30 m away); the NPC's own target is never written
---   mp_victim_decides on|off  (joiner, default OFF) the joiner's engine judges a host's blow against his own guard (not proven live: the
---                             engine honours a held block only against an attacker it sees striking, which a copy never is)
---   mp_block_recoil on|off    (joiner, default OFF) a blocked blow makes the copy that swung recoil (not proven live)
-KCD2MP.w165 = KCD2MP.w165 or { hostLock = true, victimDecides = false, blockRecoil = false }
+--   mp_victim_decides on|off  (joiner, default ON) the joiner's engine judges a host's blow and applies it; while he holds block the
+--                             host's verdict decides (the engine honours a held block only against an attacker it sees striking, which a
+--                             copy never is -- WO-165 P3)
+--   mp_block_recoil on|off    (joiner, default ON) a blocked blow makes the copy that swung recoil (not judged by eye yet)
+KCD2MP.w165 = KCD2MP.w165 or { hostLock = true, victimDecides = true, blockRecoil = true }
 
 local function w165Switch(key, field, arg, what)
     local v = KCD2MP_Wo122ParseBool(arg)
@@ -24401,8 +24402,8 @@ local ok, err = pcall(function()
     System.AddCCommand("mp_sleep_rest", 'KCD2MP_W157SetSleepRest(%line)', "WO-157: a real sleep (a vote's, or your own) that the game gave no rest gets the rest its own sleep gives -- in this game build its no-bed sleep often gives none (default on): mp_sleep_rest on|off")
     System.AddCCommand("mp_w157_status", "KCD2MP_W157Status()", "WO-157: the trespass check and the stop grace (WO157-STATUS here); also the area here: private, public, open (a shop) or unknown")
     System.AddCCommand("mp_host_lock", 'KCD2MP_W165SetHostLock(%line)', "WO-165: (host) you can lock onto an NPC that is beating your partner: near it (6 m) and facing it, you join its fight as its foe; it keeps fighting your partner until you hit it (default on): mp_host_lock on|off")
-    System.AddCCommand("mp_victim_decides", 'KCD2MP_W165SetVictimDecides(%line)', "WO-165: (joiner) your own game judges an enemy's blow against your own guard instead of the host's (UNTESTED live -- a held block is not honoured yet; default off): mp_victim_decides on|off")
-    System.AddCCommand("mp_block_recoil", 'KCD2MP_W165SetBlockRecoil(%line)', "WO-165: (joiner) an enemy whose blow you blocked plays the game's own bounce-back (UNTESTED live; default off): mp_block_recoil on|off")
+    System.AddCCommand("mp_victim_decides", 'KCD2MP_W165SetVictimDecides(%line)', "WO-165: (joiner) your own game judges an enemy's blow and applies it; while you hold block the host's game decides, as before (UNTESTED with two players; default on): mp_victim_decides on|off")
+    System.AddCCommand("mp_block_recoil", 'KCD2MP_W165SetBlockRecoil(%line)', "WO-165: (joiner) an enemy whose blow you blocked plays the game's own bounce-back (UNTESTED with two players; default on): mp_block_recoil on|off")
     System.AddCCommand("mp_hostile_crime", 'KCD2MP_W163SetHostileCrime(%line)', "WO-163: (host) an assault is no crime when the engine says the victim is in a skirmish fight with the host, asked 5 s after the blow (default on): mp_hostile_crime on|off")
     System.AddCCommand("mp_fair_crime", 'KCD2MP_W154SetFairCrime(%line)', "WO-154: (host) a partner's murder only on the victim's death, and an assault judged 5 s later -- no crime if the victim fights by then, a quest brawl (default on): mp_fair_crime on|off")
     System.AddCCommand("mp_scene_resume", 'KCD2MP_W154SetSceneResume(%line)', "WO-154: (joiner) a scene stuck at its end resumes the host's copies, as in 0.44.0 (default off: no copy is resumed; the engine's own rescue, a save request, runs at once): mp_scene_resume on|off")

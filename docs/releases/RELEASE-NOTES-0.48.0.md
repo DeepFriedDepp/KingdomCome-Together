@@ -23,12 +23,12 @@ Warhorse Studios and PLAION; this project's copyright covers only its own code.
   turned to the host only when he hit it. The host leaves that fight again past 10 m, when the fight ends, when the enemy dies, or
   when it has been left behind for 20 seconds. If the enemy turns on the host, that fight is his own and is never cut.
   `mp_host_lock on|off` (default on).
-- **Built, switched off, not proven:**
-  - `mp_victim_decides` — the joiner's own game judges an enemy's blow against the joiner's own guard, and applies it once. Checked
-    live: the game applies the blow, but it does **not** honour a held block, because it counts a block only against an enemy it
-    sees mid-strike, and the enemy's copy on the joiner's screen never is. Off until that is solved.
-  - `mp_block_recoil` — an enemy whose blow was blocked plays the game's own bounce-back (only for halberds, longswords, short
-    swords and sword-and-shield: the game has no other). Not judged by eye yet.
+- **The joiner's own game judges an enemy's blow** (`mp_victim_decides`, default on): the hit and its damage come from the
+  joiner's game and are applied once (checked live: four blows, each applied by the joiner's game, none twice). While the joiner
+  holds block the host's game still decides that blow, as in 0.47.x: the game counts a held block only against an enemy it sees
+  mid-strike, and the enemy's copy on the joiner's screen never is.
+- **The bounce-back** (`mp_block_recoil`, default on): an enemy whose blow was blocked plays the game's own bounce-back (only for
+  halberds, longswords, short swords and sword-and-shield: the game has no other). Not judged by eye yet.
 - **For testers:** new log lines `WO165-LOCK` (the host's lock-on: set, removed and why, or why not), `WO165-REPLAY`,
   `WO165-OUTCOME`, `WO165-RECOIL` (the two switched-off pieces), `MP-WO165-STATS`.
 
@@ -39,7 +39,7 @@ Warhorse Studios and PLAION; this project's copyright covers only its own code.
 - **Fight snapping:** two fixes from the study were measured and **neither** made the step after a swing 30 % smaller in the
   test fight, so neither ships. The test fight snaps far less than real sessions do; the next measurement needs network delay
   and a moving host.
-- **Your own block** still does not decide an enemy's blow on your screen (the host's game does, as in 0.47.x). Bows and arrows
-  wait on the same question.
+- **A blocked blow** is still decided by the host's game (see above). Bows and arrows wait on the same question. Both new joiner
+  pieces are on by default and not yet checked with two players: `mp_victim_decides off` / `mp_block_recoil off` turn them off.
 - **Not soak-tested** (the maintainer's standing rule; the waiver is recorded beside the installer). The mod's own cost per frame
   in a three-person fight: 0.54–0.61 ms (0.47.5: 0.64–0.67 ms). Not signed unless the build says so.

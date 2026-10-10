@@ -29,8 +29,8 @@ person at a keyboard.
 | P8 a queued failed-attack row | dispatched 4/4, no crash; its look **not determined** | [L] | — |
 | P9 3-copy fight, window in front | 40/40; fight p90 resume 12.3 / post-hold 13.1 cm | [L][syn] | — |
 | **C1** host lock-on | built; live gate set at 3.5 m facing, removed past 10 m | [L][native] | **on** (`mp_host_lock`) |
-| **C2** victim decides | built behind its switch; not proven (P3) | [unit] | **off** (`mp_victim_decides`) |
-| **C3** attacker's recoil | built behind its switch; not proven (P8) | [unit] | **off** (`mp_block_recoil`) |
+| **C2** victim decides | built; live end-to-end: 4/4 `applied=engine`, nothing applied twice; a player holding block is referred to the host's verdict (P3) | [L][unit][native] | **on** (`mp_victim_decides`) |
+| **C3** attacker's recoil | built; not judged by eye (P8) | [unit] | **on** (`mp_block_recoil`) |
 | **C4** fight snapping | C (hold) −10 %/−19 %, B (pose) +5 %/−13 %: **neither kept**; A not measurable here | [L][syn] | none shipped |
 
 ## Inputs (read)
@@ -126,7 +126,7 @@ not run (moot). *Reads:* `model me` (State, BlockZone, Opponent), the engine's f
 
 *Verdict:* **FAIL.** The engine counts a block only in **ParryInPlace (0x100)** (WO-162 Q1.4), and a held block enters it only in answer to an
 attacker the engine sees **Striking** — a copy never is (WO-163 P1). The replay reads the player's block as not yet raised, every time.
-*Consequence:* C2 is built behind `mp_victim_decides` and ships **off**; P4b (the perfect block's window also opens on the attacker's real
+*Consequence:* C2 refers a player holding block to the host's verdict and ships **on** (the maintainer's decision, below); P4b (the perfect block's window also opens on the attacker's real
 strike) is not run. Earlier zero-damage replays in this probe were the harness's fault (the copy held 0.7 m above the ground; 2.5 m away).
 
 ### P5h — not run
@@ -152,7 +152,7 @@ stays on (fail-closed); the README wording is unchanged.
 ### P8 — a queued failed-attack row on a copy whose swing is in flight [L]
 `swing2 ttkc_man_31 300 <the punch> | <CombatAttackFailed, short swords / longsword>`, four times: every row dispatched **ok**, no crash. Whether
 the swing *looks* interrupted into the recoil is **not determined** (the maintainer did not see it as a bounce; the townsman's weapon is neither
-a short sword nor a longsword, the only rows that exist besides halberd and sword-and-shield — WO-162 Q4). C3 ships **off**.
+a short sword nor a longsword, the only rows that exist besides halberd and sword-and-shield — WO-162 Q4). C3 ships **on** (the maintainer's decision, below), unjudged by eye.
 
 ### P9 — snapping, window in front [L][syn]
 The 3-copy fight round the player on open ground (terrain rings), 3 minutes, the window in front: **40 / 40** shown and applied once, 0
@@ -171,15 +171,23 @@ why (`pair=not-set why=farther-than-6m|not-facing|npc-not-fighting|…`, once pe
 *Found live:* a guard beating the figure read **CombatMode 0** with its Opponent on the figure — the first build required combat mode and never
 set the pair; the rule now treats the opponent link as fighting (the signal WO-136 also ends a fight on).
 
-### C2 — victim decides (`mp_victim_decides`, default **off**) [unit]
+### C2 — victim decides (`mp_victim_decides`, default **on**) [L][unit][native]
 Joiner, in the verdict path (`GameBridge.Wo161.cs` → `GameBridge.Wo165.cs`): preconditions in order — switch, missile, attacker named, a copy
 here, engaged, the row it played known, the player not down — else `fallback=<why>` and the WO-161 path. The replay writes the row's attack type
 and zone (strength 1.0: lower strengths round to 0), reads the damage back after 0.8 s, and **one side applies the blow**: the engine
 (`applied=engine`), or — when the engine applied nothing for a hit, or the measure never came — the host's verdict (`Wo165Rules.Decide`, tested
 over every outcome × state × damage: never both, never neither). The outcome goes to the host on W164 kind 4 (`WO165-OUTCOME … host_said=`).
 `WO165-REPLAY hid=… by=… engine=… dmg=… host_said=… fallback=-|<why>`; `MP-WO165-STATS`.
+**A player holding block is referred to the host's verdict** (replay flag 0x10, native: the victim's State is PreparingToParry 0x80 or
+ParryInPlace 0x100 → `refused=victim-blocking`, `fallback=victim-blocking`): P3 showed the engine never honours such a block from a copy, so
+without the referral every blocked blow would land as a full hit; with it a block costs what the host's game says, as in 0.47.x.
+*Live, after the switch-on (2026-10-09, the shipping build, a copy's four blows on the joiner, no input):* `WO165-REPLAY … engine=hit
+dmg=4.7/27.2 … fallback=-` ×3 and `dmg=16.7/33.8` ×1, each `WO161-HIT … applied=engine`, **no WO-161 application for those blows** (no
+`[playerhit]` line), `MP-WO165-STATS replays=4 applied_engine=4 fallback_apply_host=0 agree_host=2 disagree_host=2` — the host had said
+"blocked" twice (the synthetic verdicts), the joiner was not blocking, his engine said hit. The referral itself was not exercised live (it
+needs a held block: checklist 208).
 
-### C3 — the attacker's recoil (`mp_block_recoil`, default **off**) [unit]
+### C3 — the attacker's recoil (`mp_block_recoil`, default **on**) [unit]
 Joiner: a blocked / perfectly blocked outcome plays `combat_action_failed_attack` (action 27 / 15) chosen by the swing row's weapon tags
 (`ActionRowCatalog.FailedAttackRow`: every weapon tag of the failed row in the swing's, most tags first, then the GUID) on the copy that swung;
 none for unarmed and other weapons (`recoil=none why=no-row-for-this-weapon`). The installed tables give a row for exactly the four weapon sets.
@@ -226,6 +234,13 @@ changing `ncombat` rows, or a two-player session.
   session (started 08:55; restarted with Windows after the crash); no new cloud restore seen in the comparison.
 * **Harness errors (mine), fixed:** the stand-in figure flipped north/south every second (a 1 cm ping-pong path); copies held at a fixed height
   floated 0.7 m on the slope (hence `fightz`); the P6 reads were 12 s apart.
+
+## The defaults (the maintainer's decision, 2026-10-09)
+
+The first 0.48.0 build shipped C2 and C3 **off** (the WO's "a failed probe ships switched off"). The maintainer: *"Testing cannot happen
+WITHOUT a real partner. This should be enabled by default with a switch to disable it."* — his standing rule (new mechanisms ship on, each
+with its switch). Both are **on** in the second 0.48.0 build; `mp_victim_decides off` and `mp_block_recoil off` turn them off. C2 got the
+blocking referral above so that "on" cannot make blocking worse than 0.47.x.
 
 ## Pocket list
 

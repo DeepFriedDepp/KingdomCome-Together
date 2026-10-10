@@ -1003,12 +1003,14 @@ why=…`), `WO161-HIT` (joiner), `MP-FIGHTSNAP`, `MP-WO165-STATS`.
 207. **Then the host hits that guard once.** What happens: does the guard turn to the host, or stay on the joiner (the joiner has
      been hurting it all along)? Is it a crime (`WO154-JUDGE` / `WO163-JUDGE` on the host)? The host walks 15 m away afterwards:
      `WO165-LOCK … pair=removed why=host-left-10m` — unless the guard now fights the host (`pair=forgotten`).
-208. **The joiner blocks three enemy swings and lets one through** (`mp_victim_decides` stays **off**): blocked = stamina, not
-     health, the same on both screens. Compare `WO161-HIT … verdict=` with what the joiner really held.
+208. **The joiner blocks three enemy swings and lets one through** (`mp_victim_decides` on, the default): blocked = stamina, not
+     health, the same on both screens; the one let through hurts as much as a hit from that enemy should. * Joiner: the blocks
+     `WO165-REPLAY … fallback=victim-blocking` (the host's verdict), the hit `WO165-REPLAY … engine=hit` + `WO161-HIT … applied=engine`;
+     never a blow applied twice.
 209. **A perfect block** (joiner, timed as the blow lands): what does the joiner see, what does `WO161-HIT … verdict=` say?
-210. **The bounce-back** (both, `mp_block_recoil on` on the joiner's console first): an enemy with a longsword, short sword,
+210. **The bounce-back** (both; `mp_block_recoil` is on by default): an enemy with a longsword, short sword,
      halberd or sword-and-shield whose blow the joiner blocks should visibly bounce back on the joiner's screen.
-     `WO165-RECOIL … recoil="…"` (or `none why=…`). Switch it off again afterwards.
+     `WO165-RECOIL … recoil="…"` (or `none why=…`).
 211. **A 3-minute brawl** with three enemies: press `mark_odd` at every jump of a figure. Afterwards both logs; the measure is
      `MP-FIGHTSNAP` (resume and post-hold steps).
 

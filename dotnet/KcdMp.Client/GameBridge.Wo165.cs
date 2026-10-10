@@ -11,12 +11,13 @@ namespace KcdMp.Client;
 //   C1 mp_host_lock     (host, default ON -- P6 passed live): the DLL sets the host's explicit hostile pair with an NPC that fights a
 //                       partner's avatar while the host stands near and faces it, so the engine's own lock-on can pick it
 //                       (native wo165.cpp lock_tick; this side only pushes the switch: op 8).
-//   C2 mp_victim_decides (joiner, default OFF -- P3 failed live: the engine honours a block only in ParryInPlace, which a held
-//                       block enters only against an attacker the engine sees Striking; a copy never does): a host verdict is
+//   C2 mp_victim_decides (joiner, default ON -- P3 live: the engine honours a block only in ParryInPlace, which a held block enters
+//                       only against an attacker the engine sees Striking; a copy never does, so a player holding block is referred to
+//                       the host's verdict, fallback=victim-blocking): a host verdict is
 //                       replayed through the engine's hit processor against this player; the engine's outcome replaces the host's,
 //                       the damage is applied once by the engine (applied=engine) or, when it applied nothing, by the host's verdict.
 //                       Every precondition missing = the WO-161 path, fallback=<why>.
-//   C3 mp_block_recoil  (joiner, default OFF -- P8 dispatched but its look was not determined): a blocked / perfectly blocked blow
+//   C3 mp_block_recoil  (joiner, default ON -- P8 dispatched, its look not judged yet): a blocked / perfectly blocked blow
 //                       plays the matching failed-attack row on the copy that swung (none for unarmed and other weapons, WO-162 Q4).
 //
 //   WO165-REPLAY hid=<n> by=<npc> engine=hit|blocked|pb|broken dmg=<hp>/<st> host_said=<v> fallback=-|<why>
@@ -90,7 +91,7 @@ public partial class GameBridge
             return null;
         }
         int zone = row.Zone >= 0 ? row.Zone : m.Zone != 0 ? Protocol.ZoneToTableId((WireZone)m.Zone) : 2;   // the table's default zone (upper right) when neither says
-        var r = await _combat.Wo165ReplayAsync(m.Attacker, null, (sbyte)row.AttackType, (sbyte)zone, 1, 1.0f, 0x01, ct);
+        var r = await _combat.Wo165ReplayAsync(m.Attacker, null, (sbyte)row.AttackType, (sbyte)zone, 1, 1.0f, Wo165Rules.ReplayFlags, ct);
         if (!Wo165Rules.TryParseReplay(r?.Text, out uint seq, out string engine, out string refused) || Wo165Rules.Outcome(engine) == HitVerdict.None)
         {
             string fb = refused.Length > 0 ? refused : "engine-" + engine;

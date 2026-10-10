@@ -30,9 +30,9 @@ Nobody clicks CONNECT any more, and you don't need anyone's save file. First tim
 ```
 Kingdom Come: Together 0.48.0 — fighting together, part two.
 • Host: you can now lock onto an enemy that is beating your partner. Walk up to it (within 6 m) and face it, and the game's own lock-on can pick it. It keeps fighting your partner until you hit it. (mp_host_lock, on)
-• Built but OFF, because they are not proven yet:
-  – mp_victim_decides: your own game judging an enemy's blow against your own block. The game applies the blow, but it does not count a held block yet, so this stays off.
-  – mp_block_recoil: an enemy whose blow you blocked bounces back. Not checked by eye yet.
+• Joiner: your own game now judges an enemy's blow and applies it once. While you hold block, the host's game still decides (your game can't count a block against the enemy's copy yet). (mp_victim_decides, on)
+• Joiner: an enemy whose blow you blocked bounces back (longsword, short sword, halberd, sword-and-shield). (mp_block_recoil, on)
+Both are new and not yet checked with two players — if something looks wrong, turn one off in the console (mp_victim_decides off / mp_block_recoil off) and press "Something's wrong here".
 • Fight snapping: two fixes were measured and neither helped enough, so neither ships.
 Checked in the game with a stand-in partner. The checklist's items 205–211 need two real players. Both players and the relay need 0.48.0.
 ```

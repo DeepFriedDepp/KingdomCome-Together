@@ -113,6 +113,13 @@ inline void build_sub_hit(uint8_t* e) {
     std::memcpy(e + 12, &cond, 4);
 }
 
+// WO-165 P3 (live): a held block reads State PreparingToParry (0x80); the engine blocks only in ParryInPlace (0x100), which a held block
+// enters only against an attacker it sees Striking -- never a copy. A victim in either state is not replayed (the host's verdict decides).
+constexpr int32_t kStatePreparingToParry = 0x80, kStateParryInPlace = 0x100;
+inline bool victim_blocking_state(int32_t state, bool stateValid) {
+    return stateValid && (state & (kStatePreparingToParry | kStateParryInPlace)) != 0;
+}
+
 // The engine's outcome, from what it wrote (flags) and the record it built (captured in the slot hook).
 enum class Outcome : uint8_t { None = 0, Hit = 1, Blocked = 2, PerfectBlock = 3, Broken = 4, Filtered = 5 };
 inline const char* outcome_name(Outcome o) {

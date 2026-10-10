@@ -86,6 +86,8 @@ void switch_off(const char* what) {
     }
 }
 
+bool victim_blocking(const motion::ModelRead& m) { return victim_blocking_state(m.state, (m.valid & motion::kMvState) != 0); }
+
 uint32_t player_eid() {
     void* e = engine::entity_by_id(kPlayerEntity);
     return e ? engine::entity_id(e) : 0;
@@ -105,6 +107,7 @@ const char* reason_name(uint8_t r) {
         case kFault: return "fault";
         case kSameActor: return "attacker-is-victim";
         case kNoPosition: return "no-victim-position";
+        case kVictimBlocking: return "victim-blocking";
         default: return "?";
     }
 }
@@ -188,6 +191,7 @@ Result replay(const Request& rq) {
     pos[2] += 1.2f;   // the chest, not the feet: the record's hit position is only used for effects
     void* vSoul = victimIsPlayer ? rttr::read_player_soul() : hits::soul_of_eid(veid);
     motion::read_model(veid, &res.victimModel);
+    if ((rq.flags & kFlagReferBlocking) && victim_blocking(res.victimModel)) { res.reason = kVictimBlocking; c_refused.fetch_add(1); return res; }
 
     // ---- the attacker's four fields (WO-163 P1) ----
     if (!motion::read_attack_fields(aModel, &res.before)) { res.reason = kFieldsUnnamed; c_refused.fetch_add(1); return res; }

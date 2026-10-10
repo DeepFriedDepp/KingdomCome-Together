@@ -11,8 +11,15 @@ namespace KcdMp.Client;
 /// </summary>
 public static class Wo165Rules
 {
-    /// <summary>The switches and their defaults (P6 passed: the host lock ON; P3 failed: the victim decides OFF; P8 not determined: the recoil OFF).</summary>
-    public const bool DefaultHostLock = true, DefaultVictimDecides = false, DefaultBlockRecoil = false;
+    /// <summary>
+    /// The switches and their defaults: all ON, each with a console switch to turn it off (the maintainer, 2026-10-09: testing needs a real
+    /// partner, so new pieces ship on). P6 passed live; C2 (P3: a held block is not honoured -- a blocking player is referred to the host's
+    /// verdict, flag 0x10) and C3 (P8: dispatched, look not judged) are not proven with two players.
+    /// </summary>
+    public const bool DefaultHostLock = true, DefaultVictimDecides = true, DefaultBlockRecoil = true;
+
+    /// <summary>The replay's flags: skip the engine's repeat filter (our verdicts are deduped by id), refer a blocking victim to the host's verdict.</summary>
+    public const byte ReplayFlags = 0x01 | 0x10;
 
     /// <summary>How long after the replay its damage is read back (the slot hook watches the victim 0.6 s).</summary>
     public const int DamageReadMs = 800;
