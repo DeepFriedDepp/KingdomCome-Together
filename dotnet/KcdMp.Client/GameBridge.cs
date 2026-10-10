@@ -5994,6 +5994,7 @@ public partial class GameBridge(ClientConfig config)
                 return;
             case "w166_talkstate":   // WO-166 T3: a talk that never started -- the copy's facts
             case "w166_talk":        // WO-166 T4: a talk refused, the host's NPC busy
+            case "w166_cfg":         // WO-166: mp_copy_strikes / mp_snap_fix / the C1 lever
                 Wo166OnEvent(name, arg);
                 return;
             case "w163_hostile":     // WO-163 A7: the host's 5 s judge asks the engine whether the victim is in a skirmish fight with the host

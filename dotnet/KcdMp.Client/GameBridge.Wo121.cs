@@ -432,8 +432,9 @@ public partial class GameBridge
                     Console.WriteLine($"MP-ACTION section=inbound kind=NpcAttack npc={ne.Name} row={ne.Row} dispatch=off (mp_animal_attacks off: an animal's attack is not animated here; its damage still comes through the host)");
                     return true;
                 }
-                _ = _combat.NpcHoldAsync(ne.Name, 900, ct);
+                _ = _combat.NpcHoldAsync(ne.Name, Wo166Rules.SwingHoldMs(row.HitLagMs, _w166SnapFix), ct);   // WO-166 C4: the hold ends with the swing
                 var r = await _combat.GhostSwingForResultAsync(neid, row.Spec, ct);
+                if (r.Ok && !animal) _ = Wo166StrikeAsync(ne.Name, row, ct);   // WO-166 C3: the copy counts as striking for the swing's window
                 if (animal) Interlocked.Increment(ref _w141Bite);
                 if (r.Ok) Wo163NoteRowForWatch(ne.Name, row.Spec);
                 if (r.Ok) Wo165NoteRowPlayed(ne.Name, ne.Row);   // WO-165: the replay's attack fields and the recoil's weapon tags

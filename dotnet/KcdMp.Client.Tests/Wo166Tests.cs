@@ -140,4 +140,86 @@ public class Wo166Tests
         Assert.Contains("PlayAudio: ui_inv_screen_out", LogTailGameTransport.Wo144Prefixes);
         Assert.Contains("PlayerDialogController::NPCPauseRequests timed out", LogTailGameTransport.Wo144Contains);
     }
+    // ---------------------------------------------------------------- C2: the stale rule
+
+    [Fact]
+    public void The_fields_46_blows_through_the_new_rule()
+    {
+        // docs/WO-166-findings.md 0.4 (the OCE pair, joined by hit id; counts only): 27 the host captured no swing for (an older row of the
+        // NPC played 3-20 s before), 2 the host could not pair (likewise), 15 shown with their row, 2 with no row at all
+        var blows = new List<(bool Known, long? Played, long? Recv, bool Fits)>();
+        for (int i = 0; i < 27; i++) blows.Add((false, 6000 + i * 500, 6000 + i * 500, false));
+        for (int i = 0; i < 2; i++) blows.Add((false, 4000, 4000, false));
+        for (int i = 0; i < 15; i++) blows.Add((true, 1200, 1210, true));
+        for (int i = 0; i < 2; i++) blows.Add((false, null, null, false));
+        int stale = 0, generic = 0, shown = 0;
+        foreach (var b in blows)
+        {
+            var (s, why) = Wo161Rules.Judge(b.Known, false, false, b.Played, b.Recv, null, b.Fits);
+            if (why == "row-stale") stale++;
+            if (s) shown++;
+            if (Wo161Rules.WantsGenericSwing(s, why)) generic++;
+        }
+        Assert.Equal(46, blows.Count);
+        Assert.Equal(0, stale);                       // field: 29 (63 %); required < 10 %
+        Assert.Equal(15, shown);
+        Assert.Equal(31, generic);                    // a blow with no row of its own still gets the generic lunge before its damage
+    }
+
+    [Fact]
+    public void A_late_row_fits_up_to_its_hit_time_plus_half_a_second_plus_the_one_way_latency()
+    {
+        // a row whose own start+hit is 1200 ms, played 1840 ms before the verdict: 640 ms late
+        var played = new List<(long, int)> { (1840, 1200) };
+        Assert.False(Wo161Rules.BestPlayedAgo(played, 0)!.Value.Fits);       // 640 > 600 (the WO-163 tolerance) and > 500 + 0
+        Assert.True(Wo161Rules.BestPlayedAgo(played, 150)!.Value.Fits);      // 640 <= 500 + 150
+        Assert.False(Wo161Rules.BestPlayedAgo(new List<(long, int)> { (500, 1200) }, 500)!.Value.Fits);   // early stays within 600
+        Assert.Equal(77, Wo161Rules.OneWayMs(154));
+        Assert.Equal(0, Wo161Rules.OneWayMs(null));
+        Assert.Equal(1000, Wo161Rules.OneWayMs(5000));
+    }
+
+    [Fact]
+    public void A_host_without_a_swing_is_never_stale_a_known_one_still_is()
+    {
+        Assert.Equal((false, Wo161Rules.ReasonNone), Wo161Rules.Judge(false, false, false, 9000, 9000, null));
+        Assert.Equal((false, "row-stale"), Wo161Rules.Judge(true, false, false, 9000, 9000, null));
+    }
+
+    // ---------------------------------------------------------------- C3 / C4 / C1
+
+    private static ActionRowCatalog.Row Row(int type, int zone, float start, float hit) =>
+        new("combat_action_attack", "frag", "tags", zone, 0, type, 1, start, hit);
+
+    [Fact]
+    public void A_strike_carries_the_rows_timings_and_attack_fields()
+    {
+        var s = Wo166Rules.StrikeFor(Row(1, 3, 0.4f, 0.3f))!.Value;
+        Assert.Equal((400, 300, (sbyte)1, (sbyte)3, (sbyte)1, 1.0f), (s.StartMs, s.HitMs, s.Type, s.Zone, s.Hand, s.Strength));
+        var d = Wo166Rules.StrikeFor(Row(2, -1, 0f, 0f))!.Value;
+        Assert.Equal((-1, -1, (sbyte)2), (d.StartMs, d.HitMs, d.Zone));    // no timings: the DLL's default window; zone 2 by default
+        Assert.Null(Wo166Rules.StrikeFor(Row(-1, 2, 0.4f, 0.3f)));         // nothing to strike with
+        Assert.Null(Wo166Rules.StrikeFor(Row(16, 2, 0.4f, 0.3f)));
+    }
+
+    [Fact]
+    public void The_swing_hold_ends_with_the_swing()
+    {
+        Assert.Equal(900, Wo166Rules.SwingHoldMs(700, false));             // mp_snap_fix off: 0.48.0's flat 900 ms
+        Assert.Equal(900, Wo166Rules.SwingHoldMs(-1, true));               // no timings: 900
+        Assert.Equal(650, Wo166Rules.SwingHoldMs(400, true));              // start+hit 400 + 250
+        Assert.Equal(300, Wo166Rules.SwingHoldMs(10, true));               // never below 300
+        Assert.Equal(900, Wo166Rules.SwingHoldMs(3200, true));             // never above 900 (a sync attack's 3.2 s)
+    }
+
+    [Fact]
+    public void The_switch_events_parse_and_refuse_garbage()
+    {
+        var all = Wo166Rules.ParseCfg("copy_strikes=off snap_fix=on auto_mode=3").ToList();
+        Assert.Equal(new[] { ("copy_strikes", "off"), ("snap_fix", "on"), ("auto_mode", "3") }, all);
+        Assert.Empty(Wo166Rules.ParseCfg("copy_strikes=maybe auto_mode=x1 auto_mode=123 =on snap_fix="));
+        Assert.True(Wo166Rules.DefaultCopyStrikes);
+        Assert.True(Wo166Rules.DefaultSnapFix);
+        Assert.False(Wo165Rules.DefaultVictimDecides);                     // WO-166: stays off
+    }
 }

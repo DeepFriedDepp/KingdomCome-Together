@@ -1,4 +1,4 @@
-// Copyright (C) 2026 the Kingdom Come: Together contributors (AUTHORS). SPDX-License-Identifier: GPL-3.0-only
+﻿// Copyright (C) 2026 the Kingdom Come: Together contributors (AUTHORS). SPDX-License-Identifier: GPL-3.0-only
 // GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 using System.IO.Compression;
@@ -37,9 +37,10 @@ public class Wo165Tests
     [Fact]
     public void The_switches_default_on()
     {
-        // all on (the maintainer: testing needs a real partner -- new pieces ship on, each with its switch)
+        // on (the maintainer: testing needs a real partner -- new pieces ship on, each with its switch), except victim decides: WO-166
+        // says it stays off (its proof needs a human holding block; with WO-166 C3 the host decides the outcome)
         Assert.True(Wo165Rules.DefaultHostLock);
-        Assert.True(Wo165Rules.DefaultVictimDecides);
+        Assert.False(Wo165Rules.DefaultVictimDecides);
         Assert.True(Wo165Rules.DefaultBlockRecoil);
         Assert.Equal(0x11, Wo165Rules.ReplayFlags);     // skip the repeat filter + refer a blocking victim (P3) to the host's verdict
     }

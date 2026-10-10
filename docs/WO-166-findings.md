@@ -205,3 +205,77 @@ WO-164 line. **[needs two players]**.
 
 ### Phase 1 gates (offline)
 Lua: the new suite **45/45**; WO-165's 11/11 unchanged. Native: **625** (0.48.0: 593). Agent: **1,329** (0.48.0: 1,320).
+
+## Phase 2 — enemies that fight the joiner (built)
+
+### C1 — host NPCs attack the joiner's figure [code][native] — the live A/B decides the default
+* Phase 0.5 points at our own switch: while the joiner's combat bit is set, `motion.cpp apply_combat` turns **all four** of the
+  figure's combat automations off (`combat_EnableAutomation(false)`); in that state no NPC ever committed an attack on it in the
+  field, while the WO-165 harness (figure not in combat, automation on) took 369 real guard blows in 9 minutes.
+* Read in CombatModule this session: the automation switch calls four setters of the actor's automation manager — two gated by
+  the command's bytes `+0x7A` and `+0x79`, one by the enable flag alone, one with `+0x7B` as an argument (the module's own classes:
+  `C_CombatAutomationAttack / Defense / Guard / ZoneChange / Weapons / Director …`).
+* Built: a lever for the figure's pattern while held in combat (`wo166::auto_mode`: 0 = all off as 0.48.0, 1 = all left on, 2–9 =
+  the enable flag with the byte patterns); **NPC copies are always all off** (a copy never acts on its own). Console
+  `mp_w166_automode <n>` (a test tool); the agent pushes the mode with the other WO-166 switches every 10 s. The default is set
+  from the live A/B (below): the guard's attack rate on the figure per pattern, and the figure's own committed actions
+  (`cap_ours`) — a pattern that lets the figure attack on its own is never the default.
+
+### C2 — real swings are shown, not dropped [code][unit]
+* 0.4 showed the 29 "stale" blows had **no row at all** on the host. The rule now takes the host's word: a verdict whose host
+  captured no swing (`SwingKnown` clear) is `no-swing-captured`, never `row-stale` (an older row of that NPC is another blow's); the
+  generic lunge still plays before its damage. A row the host did pair is accepted late up to **its own start+hit time + 0.5 s +
+  the measured one-way latency** (half the clock's median round trip, which is already a median of the last samples), early within
+  the WO-163 tolerance.
+* *Checks:* the OCE joiner's 46 blows through the new rule: **row-stale 0 of 46** (field 29, 63 %), 15 shown with their row, 31 with
+  the generic lunge **[unit]**; the late-row bound with and without latency **[unit]**. The synthetic fight with 150 ms added delay:
+  see the live section.
+
+### C3 — copies count as striking (Option B) [code][native][unit] — `mp_copy_strikes`, default **on**
+* Joiner: every host row played on a copy (`MP-ACTION … dispatch=native-row` ok) also asks the DLL for that swing's **striking
+  window**: from the row's own `attack_time_to_start` until its hit + 150 ms (no timings: 250 ms → +450 ms). At the window's start
+  (main thread, the copy looked up that frame) the copy's model State is read; only from **Idle or Guard** (never over the engine's
+  own Hit / PreparingToParry / ParryInPlace / Dodge) the four attack fields are written (AttackType/Zone from the row, strength 1.0,
+  the right hand) and State := **Striking (8)** — each property block checked by its own name first (no setter, no listener). At the
+  end the prior State goes back **only if the model still reads our Striking**, and the prior fields always. A swing that arrives
+  inside an open window extends it with the new row's fields. `WO166-STRIKE npc=… window=… begin|mid|end …` (the first 30 windows,
+  then every 50th); the mid read logs the copy's state and **the local player's opponent** (`player_opponent=this-copy|another|none`).
+* **Double damage guard:** the copy is on the WO-132 discard list for its window + 1.5 s (added only if it was not already, removed
+  only if this module added it): any engine blow it lands on the local player is measured and put back, and counted
+  `WO166-LOCALHIT dropped attacker_eid=… striking=1` — the host's verdict stays the only damage. `mp_victim_decides` is **off** again
+  (below), so the replay never applies a blow either.
+* **No silent guard:** a failed write after the block named itself switches C3 off for the session (`WO166-STRIKE switched OFF …`),
+  the next request is refused `switched-off`, and the agent says it on screen once.
+* *Checks:* native rules (the window, the states it may and may not overwrite, the restore rule, the field ranges) **[native]**;
+  agent (the request from a row, refused rows) **[unit]**; the switch **[syn]**. The unattended checks (Striking read mid-window,
+  restored after, the player's opponent, 0 faults over 200 windows, LOCALHIT = the copies' would-be hits, `applied=dup` 0): see the
+  live section.
+
+### `mp_victim_decides` — **off** again
+The WO: "stays off (its proof needs a human holding block)". The second 0.48.0 build had shipped it on under the maintainer's
+"new mechanisms ship on" rule (WO-165); this WO names that existing switch explicitly, and its C3 design has the host decide the
+outcome (the local engine's blow put back), which C2's engine-applied path would contradict. So 0.48.2 ships it **off**
+(`mp_victim_decides on` turns it back on; the help says so). Recorded for the next attended session.
+
+### C4 — fight snapping, from the field [L-field][code] — `mp_snap_fix`, default **on**
+`tools/wo118/snapcause166.py` over the five 0.48.0 joiner native logs (counts only): 1,288 fight windows, 17 excluded (a step over
+20 m), **212 with a resume ≥ 50 cm**:
+
+| cause (WO-161 0.2) | rule (the DLL's own lines in the window) | windows | share |
+|---|---|---|---|
+| A combat state applied on arrival | the copy's combat state changed in the window while no whole-swing hold ran | 0 | 0 % |
+| B pose / placement (swing on arrival) | a large resume after a short hold (< 900 ms): the body moved during it | 26 | 12 % |
+| **C hold-resume** | a hold of a swing or longer (≥ 900 ms) ended in the large resume | **186** | **88 %** |
+
+The field's fight-window holds ran **p50 1.0–1.7 s, p90 3.9–4.0 s** (the 900 ms swing hold renewed by every next swing while the
+host's NPC moved on). C is the largest share (≥ 50 %): fixed. With `mp_snap_fix` (default on): the writer's hold for a swing is the
+row's own start+hit + 250 ms (300–900 ms; no timings: 900 as before), and **one stretch of chained holds is capped at 1.2 s**, then
+the writer catches up (the existing blend) for 0.35 s before the next hold may take the body (`npc_drive.cpp`; capped / skipped
+counts in its status). Kept on only if the synthetic fight does not regress: see the live section.
+
+### C5 — the lock-on's not-set line [native]
+`WO165-LOCK … pair=not-set` once per NPC per minute (`wo166_rules.h LineLimiter`, the field's 417 lines in 104 s → 2) **[native]**.
+
+### Phase 2 gates (offline)
+Agent **1,335**; Lua WO-166 suite **51**, WO-165 suite 11 (its default check updated for victim-decides off); native **625**; the
+native guard check clean.

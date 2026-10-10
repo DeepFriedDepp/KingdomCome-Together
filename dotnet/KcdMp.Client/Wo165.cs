@@ -16,7 +16,9 @@ public static class Wo165Rules
     /// partner, so new pieces ship on). P6 passed live; C2 (P3: a held block is not honoured -- a blocking player is referred to the host's
     /// verdict, flag 0x10) and C3 (P8: dispatched, look not judged) are not proven with two players.
     /// </summary>
-    public const bool DefaultHostLock = true, DefaultVictimDecides = true, DefaultBlockRecoil = true;
+    // WO-166: mp_victim_decides OFF again -- the WO's own line ("stays off: its proof needs a human holding block"); with C3 the copy is
+    // Striking on the joiner's screen and the host decides the outcome (the local engine's blow is put back)
+    public const bool DefaultHostLock = true, DefaultVictimDecides = false, DefaultBlockRecoil = true;
 
     /// <summary>The replay's flags: skip the engine's repeat filter (our verdicts are deduped by id), refer a blocking victim to the host's verdict.</summary>
     public const byte ReplayFlags = 0x01 | 0x10;

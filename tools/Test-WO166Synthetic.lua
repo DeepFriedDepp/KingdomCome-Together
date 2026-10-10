@@ -427,6 +427,20 @@ do
     local mark = #LOG
     KCD2MP_W166Status()
     check("W4: the status line", lastLog("WO166-STATUS loot open=", mark) ~= nil)
+    check("W5: C3 / C4 switches and the C1 lever are registered", CCMDS["mp_copy_strikes"] ~= nil and CCMDS["mp_copy_strikes"].body == "KCD2MP_W166SetCopyStrikes(%line)"
+        and CCMDS["mp_snap_fix"] ~= nil and CCMDS["mp_snap_fix"].body == "KCD2MP_W166SetSnapFix(%line)" and CCMDS["mp_w166_automode"] ~= nil)
+    check("W6: copy strikes and the snap fix default on; copy strikes says it is untested", KCD2MP.w166.copyStrikes == true and KCD2MP.w166.snapFix == true
+        and CCMDS["mp_copy_strikes"].help:find("UNTESTED", 1, true) ~= nil)
+    mark = #LOG
+    check("W7: a toggle tells the agent", KCD2MP_W166SetCopyStrikes("off") == true and KCD2MP.w166.copyStrikes == false
+        and countEvt("w166_cfg", "copy_strikes=off", mark) == 1 and lastLog("WO166-TOGGLE mp_copy_strikes off", mark) ~= nil)
+    mark = #LOG
+    check("W8: the snap fix toggles likewise", KCD2MP_W166SetSnapFix("off") == true and countEvt("w166_cfg", "snap_fix=off", mark) == 1)
+    KCD2MP_W166SetCopyStrikes("on"); KCD2MP_W166SetSnapFix("on")
+    mark = #LOG
+    check("W9: the C1 lever takes 0..9 only", KCD2MP_W166SetAutoMode("3") == true and countEvt("w166_cfg", "auto_mode=3", mark) == 1
+        and KCD2MP_W166SetAutoMode("10") == false and KCD2MP_W166SetAutoMode("x") == false and KCD2MP_W166SetAutoMode("1.5") == false)
+    check("W10: mp_victim_decides is off again (WO-166)", KCD2MP.w165.victimDecides == false and CCMDS["mp_victim_decides"].help:find("default off", 1, true) ~= nil)
     noErrs("W")
 end
 

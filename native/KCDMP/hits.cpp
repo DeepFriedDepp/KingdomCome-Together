@@ -3,6 +3,7 @@
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 // WO-121 Phases 5 and 6 -- see hits.h.
 #include "hits.h"
+#include "wo166.h"
 #include "fault_guard.h"
 
 #include <windows.h>
@@ -150,7 +151,7 @@ std::atomic<DiscardFn> g_discardFn{nullptr};
 // the scan per hit is 256 relaxed loads.
 constexpr int kMaxDiscard = 256;
 std::atomic<uint32_t> g_discard[kMaxDiscard]{};
-bool is_discard_attacker(uint32_t eid) {
+bool is_discard_attacker_impl(uint32_t eid) {
     if (!eid) return false;
     for (auto& d : g_discard) if (d.load(std::memory_order_relaxed) == eid) return true;
     return false;
@@ -550,6 +551,7 @@ bool hit_by_player(void* soul, double withinS) {
 void set_pvp_callback(PvpFn fn) { g_pvpFn.store(fn); }
 void set_npc_hit_callback(NpcHitFn fn) { g_npcHitFn.store(fn); }
 void set_discard_callback(DiscardFn fn) { g_discardFn.store(fn); }
+bool is_discard_attacker(uint32_t eid) { return is_discard_attacker_impl(eid); }
 
 void note_player_damage(float st, float hp) {
     // A forwarded host hit landed on the local player: a discard watch open
@@ -732,6 +734,7 @@ void tick() {
             c_discarded.fetch_add(1);
             logf("WO132-HITS local hit on the player by engaged copy eid=0x%X discarded: hp -%.2f st -%.2f put back (landed at frame %d of %d)",
                  w.attackerEid, w.dh, w.ds, w.landedAt, w.frames);
+            kcdmp::wo166::note_local_hit_dropped(w.attackerEid, w.dh, w.ds);   // WO-166 C3: counted, the host decides
             if (DiscardFn fn = g_discardFn.load()) fn(w.attackerEid, w.ds, w.dh);
         }
         it = g_watches.erase(it);

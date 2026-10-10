@@ -180,7 +180,7 @@ public partial class GameBridge
         long? played = null, recv = null; string? refused = null; bool fits = false;
         if (m.Attacker.Length > 0)
         {
-            if (_w161Played.TryGetValue(m.Attacker, out var pl) && pl.Best(now) is { } best) { played = best.Ago; fits = best.Fits; }
+            if (_w161Played.TryGetValue(m.Attacker, out var pl) && pl.Best(now, Wo161Rules.OneWayMs(_clockRttMedianMs)) is { } best) { played = best.Ago; fits = best.Fits; }   // WO-166 C2
             if (_w161RowRecvAt.TryGetValue(m.Attacker, out long ra)) recv = now - ra;
             if (_w161RowRefused.TryGetValue(m.Attacker, out var rf) && Math.Abs(now - rf.At) <= Wo161Rules.RowBeforeMs + Wo161Rules.RowAfterMs) refused = rf.Tag;
         }

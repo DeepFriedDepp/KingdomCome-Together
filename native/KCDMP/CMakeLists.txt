@@ -48,6 +48,7 @@ add_library(KCDMP SHARED
     wo151.cpp
     wo163.cpp
     wo165.cpp
+    wo166.cpp
     weather.cpp
 )
 

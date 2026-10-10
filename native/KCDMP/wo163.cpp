@@ -8,6 +8,7 @@
 #include "log.h"
 #include "motion.h"
 #include "wo165.h"
+#include "wo166.h"
 
 #include <atomic>
 #include <cstdio>
@@ -180,6 +181,10 @@ uint8_t handle(const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t
             *outLen = (n > 0 && static_cast<size_t>(n) < cap) ? static_cast<size_t>(n) : 0;
             return kROk;
         }
+        case kcdmp::wo166::kOpStrike:   // WO-166 C3
+        case kcdmp::wo166::kOpStatus:
+        case kcdmp::wo166::kOpConfig:
+            return kcdmp::wo166::handle(body[0], body, len, out, cap, outLen);
         default:
             return kRBadRequest;
     }

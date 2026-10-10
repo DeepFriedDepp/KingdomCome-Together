@@ -90,6 +90,10 @@ void on_pipe_closed();
 // resume, not from the last sample before the pause. Any thread.
 void set_hold_all(bool on);
 bool hold_all();
+// WO-166 C4 (mp_snap_fix): a swing hold that chains into the next never holds a copy longer than kHoldChainCapS in one stretch; after
+// a capped stretch the writer catches up (the blend) for kHoldCooldownS before the next hold takes the body.
+void set_snap_fix(bool on);
+bool snap_fix();
 // WO-141: an activity owns this body's position (a bed, a seat, a kneeler, a cart
 // slot, an aligned unstance): the writer neither writes nor drives its gait while
 // set, and blends back from wherever the activity leaves the body when cleared.

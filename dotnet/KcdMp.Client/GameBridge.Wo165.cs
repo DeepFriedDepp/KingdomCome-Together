@@ -11,7 +11,7 @@ namespace KcdMp.Client;
 //   C1 mp_host_lock     (host, default ON -- P6 passed live): the DLL sets the host's explicit hostile pair with an NPC that fights a
 //                       partner's avatar while the host stands near and faces it, so the engine's own lock-on can pick it
 //                       (native wo165.cpp lock_tick; this side only pushes the switch: op 8).
-//   C2 mp_victim_decides (joiner, default ON -- P3 live: the engine honours a block only in ParryInPlace, which a held block enters
+//   C2 mp_victim_decides (joiner, default OFF since WO-166 -- the WO: its proof needs a human holding block; P3 live: the engine honours a block only in ParryInPlace, which a held block enters
 //                       only against an attacker the engine sees Striking; a copy never does, so a player holding block is referred to
 //                       the host's verdict, fallback=victim-blocking): a host verdict is
 //                       replayed through the engine's hit processor against this player; the engine's outcome replaces the host's,

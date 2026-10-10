@@ -21044,11 +21044,10 @@ end
 --   mp_host_lock on|off       (host, default ON)  the host can lock onto an NPC beating his partner: while he stands within 6 m of it and faces
 --                             it, his soul joins its skirmish with the explicit hostile pair the engine's lock-on needs (removed past 10 m, when
 --                             the fight ends, the NPC dies or is left 20 s over 30 m away); the NPC's own target is never written
---   mp_victim_decides on|off  (joiner, default ON) the joiner's engine judges a host's blow and applies it; while he holds block the
---                             host's verdict decides (the engine honours a held block only against an attacker it sees striking, which a
---                             copy never is -- WO-165 P3)
+--   mp_victim_decides on|off  (joiner, default OFF since WO-166 -- the WO's own line: its proof needs a human holding block) the joiner's
+--                             engine judges a host's blow and applies it; while he holds block the host's verdict decides
 --   mp_block_recoil on|off    (joiner, default ON) a blocked blow makes the copy that swung recoil (not judged by eye yet)
-KCD2MP.w165 = KCD2MP.w165 or { hostLock = true, victimDecides = true, blockRecoil = true }
+KCD2MP.w165 = KCD2MP.w165 or { hostLock = true, victimDecides = false, blockRecoil = true }
 
 local function w165Switch(key, field, arg, what)
     local v = KCD2MP_Wo122ParseBool(arg)
@@ -21297,6 +21296,27 @@ function KCD2MP_W166TalkTimeoutFacts(name, t)
     KCD2MP_EmitEvent("w166_talkstate", string.format("%s paused=%d copy_dialog=%d dead=%d resumed_for_talk=%d stream=%s via=%s retried=%d",
         name, paused and 1 or 0, copyDialog and 1 or 0, dead and 1 or 0, (t and t.resumed) and 1 or 0, stream,
         tostring(t and t.via or "?"), (t and t.w164Retried) and 1 or 0))
+end
+
+-- C3 / C4 / the C1 lever: the agent and the DLL act on them (w166_cfg)
+local function w166Switch(key, field, arg, what)
+    local v = KCD2MP_Wo122ParseBool(arg)
+    if v == "bad" then mp_log("mp_" .. key .. ": expected on|off"); return false end
+    if v ~= nil then KCD2MP.w166[field] = v end
+    KCD2MP_EmitEvent("w166_cfg", key .. "=" .. (KCD2MP.w166[field] and "on" or "off"))
+    mp_log(string.format("WO166-TOGGLE mp_%s %s -- %s", key, KCD2MP.w166[field] and "on" or "off", what))
+    return true
+end
+function KCD2MP_W166SetCopyStrikes(arg) return w166Switch("copy_strikes", "copyStrikes", arg, "an enemy's swing on your screen counts as a real strike (block and riposte prompts); the host still decides the damage") end
+function KCD2MP_W166SetSnapFix(arg) return w166Switch("snap_fix", "snapFix", arg, "a copy's swing hold ends with the swing and never runs on for long (less snapping in fights)") end
+-- The C1 lever (a test tool): the partner's figure's combat automation pattern while it is held in combat (0 all off, 1 all on, 2.. patterns).
+function KCD2MP_W166SetAutoMode(arg)
+    local n = tonumber(arg)
+    if not n or n < 0 or n > 9 or n ~= math.floor(n) then mp_log("mp_w166_automode: expected 0..9"); return false end
+    KCD2MP.w166.autoMode = n
+    KCD2MP_EmitEvent("w166_cfg", "auto_mode=" .. tostring(n))
+    mp_log("WO166-TOGGLE mp_w166_automode " .. tostring(n))
+    return true
 end
 
 function KCD2MP_W166SetTalkResumeFirst(arg)
@@ -24670,8 +24690,11 @@ local ok, err = pcall(function()
     System.AddCCommand("mp_sleep_rest", 'KCD2MP_W157SetSleepRest(%line)', "WO-157: a real sleep (a vote's, or your own) that the game gave no rest gets the rest its own sleep gives -- in this game build its no-bed sleep often gives none (default on): mp_sleep_rest on|off")
     System.AddCCommand("mp_w157_status", "KCD2MP_W157Status()", "WO-157: the trespass check and the stop grace (WO157-STATUS here); also the area here: private, public, open (a shop) or unknown")
     System.AddCCommand("mp_host_lock", 'KCD2MP_W165SetHostLock(%line)', "WO-165: (host) you can lock onto an NPC that is beating your partner: near it (6 m) and facing it, you join its fight as its foe; it keeps fighting your partner until you hit it (default on): mp_host_lock on|off")
-    System.AddCCommand("mp_victim_decides", 'KCD2MP_W165SetVictimDecides(%line)', "WO-165: (joiner) your own game judges an enemy's blow and applies it; while you hold block the host's game decides, as before (UNTESTED with two players; default on): mp_victim_decides on|off")
+    System.AddCCommand("mp_victim_decides", 'KCD2MP_W165SetVictimDecides(%line)', "WO-165: (joiner) your own game judges an enemy's blow and applies it; while you hold block the host's game decides, as before (UNTESTED with two players; default off since 0.48.2): mp_victim_decides on|off")
     System.AddCCommand("mp_block_recoil", 'KCD2MP_W165SetBlockRecoil(%line)', "WO-165: (joiner) an enemy whose blow you blocked plays the game's own bounce-back (UNTESTED with two players; default on): mp_block_recoil on|off")
+    System.AddCCommand("mp_copy_strikes", 'KCD2MP_W166SetCopyStrikes(%line)', "WO-166: (joiner) an enemy swinging at you counts as a real strike on your screen: the game's own block and riposte prompts; the host still decides the damage (UNTESTED with two players; default on): mp_copy_strikes on|off")
+    System.AddCCommand("mp_snap_fix", 'KCD2MP_W166SetSnapFix(%line)', "WO-166: (joiner) an enemy's swing holds its figure only as long as the swing, never for seconds (less snapping in fights; default on): mp_snap_fix on|off")
+    System.AddCCommand("mp_w166_automode", 'KCD2MP_W166SetAutoMode(%line)', "WO-166: test tool -- the partner figure's combat automation pattern while it is in combat (0 all off, 1 all on, 2-9 patterns)")
     System.AddCCommand("mp_talk_resume_first", 'KCD2MP_W166SetTalkResumeFirst(%line)', "WO-166: (joiner) a person you talk to is woken first and the host's movement leaves them alone while they answer (default on): mp_talk_resume_first on|off")
     System.AddCCommand("mp_w166_status", 'KCD2MP_W166Status()', "WO-166: loot screen, talk and combat counters of this build")
     System.AddCCommand("mp_hostile_crime", 'KCD2MP_W163SetHostileCrime(%line)', "WO-163: (host) an assault is no crime when the engine says the victim is in a skirmish fight with the host, asked 5 s after the blow (default on): mp_hostile_crime on|off")

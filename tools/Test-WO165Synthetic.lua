@@ -98,8 +98,8 @@ do
     check("W1: the switches are registered", CCMDS["mp_host_lock"] ~= nil and CCMDS["mp_host_lock"].body == "KCD2MP_W165SetHostLock(%line)"
         and CCMDS["mp_victim_decides"] ~= nil and CCMDS["mp_victim_decides"].body == "KCD2MP_W165SetVictimDecides(%line)"
         and CCMDS["mp_block_recoil"] ~= nil and CCMDS["mp_block_recoil"].body == "KCD2MP_W165SetBlockRecoil(%line)")
-    check("W2: the defaults: all three on",
-        KCD2MP.w165.hostLock == true and KCD2MP.w165.victimDecides == true and KCD2MP.w165.blockRecoil == true)
+    check("W2: the defaults: host lock and block recoil on, victim decides off (WO-166: its proof needs a human holding block)",
+        KCD2MP.w165.hostLock == true and KCD2MP.w165.victimDecides == false and KCD2MP.w165.blockRecoil == true)
     check("W3: the two not proven with two players say so in their help", CCMDS["mp_victim_decides"].help:find("UNTESTED", 1, true) ~= nil
         and CCMDS["mp_block_recoil"].help:find("UNTESTED", 1, true) ~= nil)
     local mark = #LOG
@@ -113,8 +113,8 @@ do
         and countEvt("w165_cfg", "", mark) == 0)
     mark = #LOG
     check("W7: the bare command repeats the state", KCD2MP_W165SetHostLock(nil) == true and countEvt("w165_cfg", "host_lock=off", mark) == 1)
-    KCD2MP_W165SetHostLock("on"); KCD2MP_W165SetVictimDecides("on"); KCD2MP_W165SetBlockRecoil("on")
-    check("W8: back to the defaults", KCD2MP.w165.hostLock == true and KCD2MP.w165.victimDecides == true and KCD2MP.w165.blockRecoil == true)
+    KCD2MP_W165SetHostLock("on"); KCD2MP_W165SetVictimDecides("off"); KCD2MP_W165SetBlockRecoil("on")
+    check("W8: back to the defaults", KCD2MP.w165.hostLock == true and KCD2MP.w165.victimDecides == false and KCD2MP.w165.blockRecoil == true)
     noErrs("W")
 end
 

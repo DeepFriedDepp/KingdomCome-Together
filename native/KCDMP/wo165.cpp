@@ -3,6 +3,7 @@
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 // WO-165: the replay through the engine's hit processor (wo165.h).
 #include "wo165.h"
+#include "wo166_rules.h"
 
 #include <windows.h>
 #include <atomic>
@@ -418,14 +419,17 @@ void lock_tick(const uint32_t* npcs, int n) {
                 logf("WO165-LOCK npc=%s pair=forgotten why=%s dist_m=%.1f (the host's own fight: not left) tid=%lu", npc_name(cs[i].eid), d.why, cs[i].v.dist,
                      GetCurrentThreadId());
                 break;
-            case LockAct::None:
-                // a candidate within reach that was not paired says why (once per 5 s per NPC), so a missed lock explains itself
-                if (on && cs[i].v.dist <= kLockDropM && now - row.notSetLogged > 5.0) {
+            case LockAct::None: {
+                // a candidate within reach that was not paired says why, so a missed lock explains itself -- WO-166 C5: once per NPC per
+                // minute (the field: 417 lines "npc-dead" in one session at the old 5 s)
+                static kcdmp::wo166rules::LineLimiter s_notSet;
+                if (on && cs[i].v.dist <= kLockDropM && s_notSet.allow(cs[i].eid, now)) {
                     row.notSetLogged = now;
                     logf("WO165-LOCK npc=%s pair=not-set why=%s dist_m=%.1f facing_cos=%.2f tid=%lu", npc_name(cs[i].eid), lock_not_set_why(cs[i].v),
                          cs[i].v.dist, cs[i].v.facingCos, GetCurrentThreadId());
                 }
                 break;
+            }
             default: break;
         }
     }

@@ -637,6 +637,7 @@ public partial class GameBridge
         await W164FleeTickAsync();
         await W164SitTickAsync();
         if (n % 2 == 0) await W164PinTickAsync();
+        if (n % 10 == 0) await Wo166PushConfigAsync();   // WO-166: the DLL's copy-strike / snap-fix / automation switches
         if (n % 2 == 0 && _w164Mism.Count > 0) await W164QuestFixAllAsync("mismatch-10s", Wo164Rules.QuestFixAfterS);
         if (n % 10 == 0 && !_w164MarkersOffTold)
         {

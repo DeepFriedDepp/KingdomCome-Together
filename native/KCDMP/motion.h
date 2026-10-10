@@ -182,5 +182,9 @@ bool player_combat_parts(void** ca, void** model);
 struct AttackFields { int32_t type = -1, zone = -1, hand = 0; float strength = 0; };
 bool read_attack_fields(void* model, AttackFields* out);
 bool write_attack_fields(void* model, const AttackFields& f);
+// WO-166 C3: the combat model's State (E_CombatActorStateId: 1 Idle 2 Guard 8 Striking ...), the property block named first; write = a
+// plain value at the block's value slot (no setter, no listener) -- the copy's striking window.
+bool read_state(void* model, int32_t* out);
+bool write_state(void* model, int32_t v);
 
 } // namespace kcdmp::motion

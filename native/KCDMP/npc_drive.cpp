@@ -121,6 +121,9 @@ std::atomic<bool> g_bindFar{true};        // WO-154 6.2: mp_bind_far -- a body w
 std::atomic<uint32_t> c_bindNoPhys{0}, c_bindParented{0};
 std::atomic<bool> g_dropAll{false};
 std::atomic<bool> g_holdAll{false};      // WO-138: the host is paused, hold every copy
+std::atomic<bool> g_snapFix{true};       // WO-166 C4: mp_snap_fix
+constexpr double kHoldChainCapS = 1.2, kHoldCooldownS = 0.35;
+std::atomic<uint32_t> c_holdCapped{0}, c_holdCooldown{0};
 std::atomic<bool> g_holdEnded{false};    // WO-138: the hold just ended (restart the silence clocks)
 std::atomic<DropFn> g_dropFn{nullptr};
 
@@ -269,6 +272,8 @@ struct Puppet {
     double   delay = 0.12;
     double   lateApplied = 0;       // the jitter allowance in use (slewed toward late_target)
     double   holdUntil = 0;
+    double   holdStartedAt = 0;     // WO-166 C4: when this stretch of holds began
+    double   holdCooldownUntil = 0; // WO-166 C4: no new hold before this (the writer catches up)
     bool     blendPending = true;   // the next rendered frame starts from the body (bind, resume)
     bool     blending = false;
     float    off[3]{};              // body minus stream at the blend's start, decaying to zero
@@ -833,6 +838,13 @@ void set_hold_all(bool on) {
 }
 bool hold_all() { return g_holdAll.load(std::memory_order_relaxed); }
 
+void set_snap_fix(bool on) {
+    if (g_snapFix.exchange(on) != on)
+        logf("MP-NPCWRITE snap_fix=%s (a stretch of chained swing holds is capped at %.1f s, then %.2f s of catch-up) capped=%u cooldown_skips=%u",
+             on ? "on" : "off", kHoldChainCapS, kHoldCooldownS, c_holdCapped.load(), c_holdCooldown.load());
+}
+bool snap_fix() { return g_snapFix.load(std::memory_order_relaxed); }
+
 // WO-141: bodies an activity holds (main thread only: wo141's reconcile and this tick).
 std::unordered_set<uint32_t> g_activityHeld;
 void set_activity_hold(uint32_t eid, bool on) {
@@ -996,9 +1008,26 @@ void tick() {
     for (const auto& h : holds) {
         auto it = g_bound.find(lower(h.name));
         if (it != g_bound.end()) {
-            it->second.holdUntil = now + h.ms / 1000.0;
-            it->second.haveLast = false;
-            it->second.havePrev = false;
+            Puppet& hp = it->second;
+            double until = now + h.ms / 1000.0;
+            if (g_snapFix.load(std::memory_order_relaxed)) {
+                // WO-166 C4: the field's large resumes came after holds of up to 4.6 s (swing holds chained while the host's NPC moved on):
+                // one stretch is capped, then the writer catches up before the next hold
+                if (now < hp.holdCooldownUntil) { c_holdCooldown.fetch_add(1, std::memory_order_relaxed); continue; }
+                if (now < hp.holdUntil) {
+                    const double cap = hp.holdStartedAt + kHoldChainCapS;
+                    if (until > cap) {
+                        until = cap;
+                        hp.holdCooldownUntil = cap + kHoldCooldownS;
+                        c_holdCapped.fetch_add(1, std::memory_order_relaxed);
+                    }
+                } else {
+                    hp.holdStartedAt = now;
+                }
+            }
+            hp.holdUntil = until;
+            hp.haveLast = false;
+            hp.havePrev = false;
         }
     }
     if (g_dropAll.exchange(false)) {

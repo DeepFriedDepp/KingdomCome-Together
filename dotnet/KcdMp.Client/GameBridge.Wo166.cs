@@ -67,6 +67,9 @@ public partial class GameBridge
                     $"WO166-TALK timeout npc={npc} state={st} pause_requests={(pauseTimedOut ? "timed-out" : "-")} waited_s={now - asked:F1} placed={(t?.Placed ?? "?").Replace(' ', '_')} {string.Join(' ', f.Skip(1))}"));
                 return;
             }
+            case "w166_cfg":         // copy_strikes=on|off snap_fix=on|off auto_mode=<n>
+                Wo166OnCfg(arg);
+                return;
             case "w166_talk":        // busy <npc> <why>
                 if (f.Length >= 3 && f[0] == "busy" && Wo137Text.IsNpc(f[1]))
                 {
@@ -77,6 +80,60 @@ public partial class GameBridge
         }
     }
 
+    // ---------------------------------------------------------------- C3 / C4 / C1: the switches and the striking window
+
+    private volatile bool _w166CopyStrikes = Wo166Rules.DefaultCopyStrikes, _w166SnapFix = Wo166Rules.DefaultSnapFix;
+    private volatile byte _w166AutoMode = Wo166Rules.DefaultAutoMode;
+    private long _w166Strikes, _w166StrikeRefused;
+    private int _w166StrikeSaid;
+
+    /// <summary>C3, joiner: a host row was played on this copy -- its striking window (the row's own timings and attack fields).</summary>
+    private async Task Wo166StrikeAsync(string npc, ActionRowCatalog.Row row, CancellationToken ct)
+    {
+        if (!_w166CopyStrikes || !W137JoinerSession) return;
+        var f = Wo166Rules.StrikeFor(row);
+        if (f is null) { Interlocked.Increment(ref _w166StrikeRefused); return; }
+        string? r;
+        try { r = await _combat.Wo166StrikeAsync(npc, f.Value.StartMs, f.Value.HitMs, f.Value.Type, f.Value.Zone, f.Value.Hand, f.Value.Strength, ct); }
+        catch (OperationCanceledException) { return; }
+        catch (Exception ex) { Console.WriteLine($"WO166-STRIKE npc={npc} not sent ({ex.GetType().Name})"); return; }
+        if (r is null) return;
+        if (r.StartsWith("queued", StringComparison.Ordinal) || r.StartsWith("merged", StringComparison.Ordinal)) Interlocked.Increment(ref _w166Strikes);
+        else Interlocked.Increment(ref _w166StrikeRefused);
+        if (r.StartsWith("refused=switched-off", StringComparison.Ordinal) && Interlocked.Exchange(ref _w166StrikeSaid, 1) == 0)
+        {
+            Console.WriteLine($"WO166-STRIKE switched off by a fault ({r}) -- told on screen once");
+            await ExecLuaAsync("if KCD2MP_W165Say then KCD2MP_W165Say(\"Enemies' strikes on your screen were switched off by a fault -- the host decides as before.\") end");
+        }
+    }
+
+    /// <summary>Every 10 s (the WO-164 tick): the DLL's WO-166 switches (cheap; survives a DLL re-injection or a reconnect).</summary>
+    private async Task Wo166PushConfigAsync()
+    {
+        try
+        {
+            var r = await _combat.Wo166ConfigAsync(_w166CopyStrikes, _w166AutoMode, (byte)(_w166SnapFix ? 1 : 0));
+            if (r is { } c && (c.CopyStrikes != _w166CopyStrikes || c.AutoMode != _w166AutoMode || c.SnapFix != _w166SnapFix))
+                Console.WriteLine($"MP-WO166 the DLL holds copy_strikes={(c.CopyStrikes ? "on" : "off")} auto_mode={c.AutoMode} snap_fix={(c.SnapFix ? "on" : "off")} (asked {(_w166CopyStrikes ? "on" : "off")}/{_w166AutoMode}/{(_w166SnapFix ? "on" : "off")})");
+        }
+        catch (Exception ex) { Console.WriteLine($"MP-WO166 config not pushed ({ex.GetType().Name})"); }
+    }
+
+    private void Wo166OnCfg(string? arg)
+    {
+        foreach (var (k, v) in Wo166Rules.ParseCfg(arg))
+        {
+            switch (k)
+            {
+                case "copy_strikes": _w166CopyStrikes = v == "on"; break;
+                case "snap_fix": _w166SnapFix = v == "on"; break;
+                case "auto_mode": if (byte.TryParse(v, NumberStyles.None, CultureInfo.InvariantCulture, out byte m) && m <= Wo166Rules.MaxAutoMode) _w166AutoMode = m; break;
+            }
+        }
+        Console.WriteLine($"MP-WO166 cfg copy_strikes={(_w166CopyStrikes ? "on" : "off")} snap_fix={(_w166SnapFix ? "on" : "off")} auto_mode={_w166AutoMode}");
+        _ = Wo166PushConfigAsync();
+    }
+
     private string Wo166StatsText() =>
-        $"loot_close_lines={Interlocked.Read(ref _w166LootCloseLines)} talk_timeouts={Interlocked.Read(ref _w166TalkTimeouts)} talk_busy={Interlocked.Read(ref _w166TalkBusy)}";
+        $"loot_close_lines={Interlocked.Read(ref _w166LootCloseLines)} talk_timeouts={Interlocked.Read(ref _w166TalkTimeouts)} talk_busy={Interlocked.Read(ref _w166TalkBusy)} strikes={Interlocked.Read(ref _w166Strikes)} strike_refused={Interlocked.Read(ref _w166StrikeRefused)}";
 }

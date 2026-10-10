@@ -150,7 +150,9 @@ public class Wo163Tests
         var best = log.Best(now)!.Value;
         Assert.Equal((2_900L, true), (best.Ago, best.Fits));
         Assert.Equal((true, "-"), Wo161Rules.Judge(false, false, false, best.Ago, best.Ago, null, best.Fits));
-        Assert.Equal((false, "row-stale"), Wo161Rules.Judge(false, false, false, best.Ago, best.Ago, null, false));   // without the fit it was stale
+        Assert.Equal((false, "row-stale"), Wo161Rules.Judge(true, false, false, best.Ago, best.Ago, null, false));   // without the fit it was stale
+        // WO-166 C2: unless the host said it captured no swing for the blow -- then an older row is another blow's, never stale
+        Assert.Equal((false, Wo161Rules.ReasonNone), Wo161Rules.Judge(false, false, false, best.Ago, best.Ago, null, false));
         // nothing fits: the newest played row is the answer the old window judges
         var late = new Wo161PlayedLog();
         late.Note(now - 4_000, 800);

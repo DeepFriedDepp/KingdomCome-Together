@@ -72,6 +72,7 @@ void set_discard_callback(DiscardFn fn);
 // WO-132 (joiner, main thread): hits by this attacker on the local player are discarded.
 bool discard_from(uint32_t eid, bool on);
 int discard_count();
+bool is_discard_attacker(uint32_t eid);   // WO-166 C3: already on the list (the strike window adds and removes only its own)
 // WO-132: a forwarded host hit just landed on the local player (main thread).
 void note_player_damage(float stamina, float health);
 // WO-132 (main thread): the skirmish manager's own add / remove-one-soul.

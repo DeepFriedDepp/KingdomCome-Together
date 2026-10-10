@@ -1126,6 +1126,38 @@ public sealed class CombatPipe : IAsyncDisposable
         return (r.Value.Ok, text);
     }
 
+    /// <summary>WO-166 C3, op 9: a host swing's striking window on this copy (the DLL writes Striking and the row's attack fields at its start).</summary>
+    public async Task<string?> Wo166StrikeAsync(string npc, int startMs, int hitMs, sbyte type, sbyte zone, sbyte hand, float strength, CancellationToken ct = default)
+    {
+        var nb = System.Text.Encoding.ASCII.GetBytes(npc);
+        if (nb.Length is 0 or > 63 || !float.IsFinite(strength)) return null;
+        var a = new byte[2 + 2 + 3 + 4 + 1 + nb.Length];
+        System.Buffers.Binary.BinaryPrimitives.WriteInt16LittleEndian(a, (short)Math.Clamp(startMs, -1, short.MaxValue));
+        System.Buffers.Binary.BinaryPrimitives.WriteInt16LittleEndian(a.AsSpan(2), (short)Math.Clamp(hitMs, -1, short.MaxValue));
+        a[4] = unchecked((byte)type); a[5] = unchecked((byte)zone); a[6] = unchecked((byte)hand);
+        System.Buffers.Binary.BinaryPrimitives.WriteSingleLittleEndian(a.AsSpan(7), strength);
+        a[11] = (byte)nb.Length; nb.CopyTo(a, 12);
+        var r = await Wo163Async(9, a, ct);
+        if (r is null) return null;
+        string text = System.Text.Encoding.ASCII.GetString(r.Value.Payload);
+        return text.Length > 0 ? text : $"refused=reason-{r.Value.Reason}";
+    }
+
+    /// <summary>WO-166, op 11: mp_copy_strikes, the figure's automation pattern (C1 lever; 255 = unchanged), mp_snap_fix (255 = unchanged).</summary>
+    public async Task<(bool CopyStrikes, byte AutoMode, bool SnapFix)?> Wo166ConfigAsync(bool copyStrikes, byte autoMode, byte snapFix, CancellationToken ct = default)
+    {
+        var r = await Wo163Async(11, [(byte)(copyStrikes ? 1 : 0), autoMode, snapFix], ct);
+        if (r is not { Ok: true, Payload.Length: >= 3 } x) return null;
+        return (x.Payload[0] != 0, x.Payload[1], x.Payload[2] != 0);
+    }
+
+    /// <summary>WO-166, op 10: the native half's counters.</summary>
+    public async Task<string?> Wo166StatusAsync(CancellationToken ct = default)
+    {
+        var r = await Wo163Async(10, [], ct);
+        return r is { Ok: true } x ? System.Text.Encoding.ASCII.GetString(x.Payload) : null;
+    }
+
     /// <summary>WO-165 op 6: the measured damage of replay <paramref name="seq"/>: State 0 unknown, 1 pending, 2 measured, 3 merged into an earlier one.</summary>
     public async Task<(byte State, float Health, float Stamina, bool VictimLive)?> Wo165ReplayDamageAsync(uint seq, CancellationToken ct = default)
     {

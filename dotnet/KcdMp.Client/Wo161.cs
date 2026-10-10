@@ -80,13 +80,22 @@ public static class Wo161Rules
         if (missile) return (false, "missile");
         if (receivedAgoMs is long r && r >= -RowAfterMs && r <= RowBeforeMs)
             return (false, string.IsNullOrEmpty(refusedTag) ? "row-not-played" : "row-refused-" + refusedTag);
+        // WO-166 C2: the host said it captured no swing for this blow (27 of the field's 29 "row-stale" blows; the other 2 it could not
+        // pair): an older row of the same NPC is another blow's, never this one's -- the host's word names the reason
+        if (!swingKnown) return (false, ReasonNone);
         if (receivedAgoMs is not null || dispatchedAgoMs is not null) return (false, "row-stale");
-        return (false, swingKnown ? "row-not-received" : "no-swing-captured");
+        return (false, "row-not-received");
     }
+
+    /// <summary>WO-166 C2: a played row still fits a verdict up to its own start+hit lag + this + the measured one-way latency.</summary>
+    public const long LateGraceMs = 500;
+
+    /// <summary>WO-166 C2: the one-way latency the late bound adds -- half the clock's median round trip, 0 when unknown, at most 1 s.</summary>
+    public static long OneWayMs(double? rttMedianMs) => rttMedianMs is double r && r > 0 && double.IsFinite(r) ? (long)Math.Min(1000, Math.Round(r / 2)) : 0;
 
     /// <summary>WO-163 (A3), victim: of the rows played on a copy, the ms since the one this verdict belongs to -- the one whose own
     /// lag the time since it fits (best fit wins), else the newest (the 0.46.5 view, which <see cref="Judge"/> still bounds).</summary>
-    public static (long Ago, bool Fits)? BestPlayedAgo(IReadOnlyList<(long Ago, int LagMs)> played)
+    public static (long Ago, bool Fits)? BestPlayedAgo(IReadOnlyList<(long Ago, int LagMs)> played, long oneWayMs = 0)
     {
         long? fit = null; long fitErr = long.MaxValue, newest = long.MaxValue;
         foreach (var (ago, lag) in played)
@@ -94,7 +103,10 @@ public static class Wo161Rules
             if (ago < newest) newest = ago;
             if (lag < 0) continue;
             long err = Math.Abs(ago - lag);
-            if (err <= PairToleranceMs + VictimSkewMs && err < fitErr) { fit = ago; fitErr = err; }
+            // WO-166 C2: late is accepted up to the row's own hit time + 0.5 s + the one-way latency (the verdict travels after the hit;
+            // the row travelled before it); early stays within the WO-163 tolerance
+            bool ok = ago >= lag ? ago - lag <= Math.Max(PairToleranceMs + VictimSkewMs, LateGraceMs + oneWayMs) : err <= PairToleranceMs + VictimSkewMs;
+            if (ok && err < fitErr) { fit = ago; fitErr = err; }
         }
         if (fit is long f) return (f, true);
         return newest == long.MaxValue ? null : (newest, false);
@@ -192,9 +204,9 @@ public sealed class Wo161PlayedLog
     }
 
     /// <summary>The ms since the played row this verdict belongs to, and whether its own lag fits (see <see cref="Wo161Rules.BestPlayedAgo"/>); null = none played.</summary>
-    public (long Ago, bool Fits)? Best(long nowMs)
+    public (long Ago, bool Fits)? Best(long nowMs, long oneWayMs = 0)
     {
-        lock (_gate) return Wo161Rules.BestPlayedAgo(_rows.Select(r => (nowMs - r.At, r.LagMs)).ToList());
+        lock (_gate) return Wo161Rules.BestPlayedAgo(_rows.Select(r => (nowMs - r.At, r.LagMs)).ToList(), oneWayMs);
     }
 }
 

@@ -22,6 +22,7 @@
 #include "leash.h"
 #include "wo131.h"
 #include "wo132.h"
+#include "wo166.h"
 #include "wo137.h"
 #include "weather.h"
 #include "wo138.h"
@@ -1411,6 +1412,7 @@ void serve(HANDLE h) {
     main_thread::post([] { kcdmp::motion::on_pipe_closed(); });  // WO-154 2: the avatars' identities go with the session
     kcdmp::wo137::on_disconnect();   // WO-137: no agent -- no quest frames, no HUD proxy
     kcdmp::wo138::on_pipe_closed();  // WO-138: no agent -- the native sender, the pause gate and the hold go off
+    kcdmp::wo166::on_pipe_closed();  // WO-166 C3: no agent -- the striking windows end (restored at the next tick)
     kcdmp::weather::on_pipe_closed();  // WO-151: no agent -- the weather gate opens
     kcdmp::wo139::on_pipe_closed();
     kcdmp::wo140::on_pipe_closed();  // WO-140: no agent -- the sleep gate off  // WO-139: no agent -- the trespass detector off

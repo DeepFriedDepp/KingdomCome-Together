@@ -9,6 +9,7 @@
 #include "motion.h"
 #include "hits.h"
 #include "wo132.h"
+#include "wo166.h"
 #include "wo135.h"
 #include "wo137.h"
 #include "weather.h"
@@ -232,6 +233,7 @@ DWORD WINAPI plugin_main(LPVOID) {
     kcdmp::main_thread::post_repeating("motion::tick", &kcdmp::motion::tick);
     kcdmp::main_thread::post_repeating("hits::tick", &kcdmp::hits::tick);
     kcdmp::main_thread::post_repeating("wo132::tick", &kcdmp::wo132::tick);   // WO-132: the host's NPC combat-state watch
+    kcdmp::main_thread::post_repeating("wo166::tick", &kcdmp::wo166::tick);   // WO-166 C3: the copies' striking windows
     // WO-124: the joiner's placement gives the fall damage back; the save-list
     // research trigger (kcdmp-savelist-test.txt, opt-in, absent = idle).
     // Observed: this tick runs at the MAIN MENU too on 1.5.5 (the pipe is up

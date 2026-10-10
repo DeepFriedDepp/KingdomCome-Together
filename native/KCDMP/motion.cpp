@@ -24,6 +24,7 @@
 #include <vector>
 
 #include "anchors.h"
+#include "wo166.h"
 #include "buffs.h"
 #include "engine.h"
 #include "gait_logic.h"
@@ -240,6 +241,7 @@ struct Body {
     int   slot = -1;              // WO-129: index into g_gaitTable, -1 none
     // moves
     bool crouchApplied = false;
+    uint8_t autoMode = 255;       // WO-166 C1: the automation pattern applied while held in combat (255 = none)
     // combat
     bool automationOff = false, combatHeld = false, blockApplied = false;
     int appliedGz = -2, appliedGs = -2, appliedAz = -2;
@@ -325,6 +327,7 @@ std::atomic<uint32_t> c_gaitWrites{0}, c_crouch{0}, c_jumps{0}, c_jumpFail{0}, c
 
 void* g_autoCmd = nullptr;   // a zeroed stand-in for the test command the automation function reads (+0x79..+0x7B)
 void* g_autoCmdOn = nullptr; // the same with every enable byte set
+void* g_autoCmdVar = nullptr; // WO-166 C1: the lever's byte patterns (mode 2+: bit 0 = +0x79, bit 1 = +0x7A, bit 2 = +0x7B)
 
 bool prop_named(void* model, const Prop& p) {
     void* s = nullptr;
@@ -784,11 +787,28 @@ void apply_combat(Body& b, const State2* st, double now) {
         return;
     }
     if (want) {
+        // WO-166 C1: a partner's figure keeps the automation pattern of the lever (the attack gate's A/B); an NPC copy is always all off
+        // (a copy never acts on its own). A pattern change re-applies from all-on.
+        const uint8_t amode = b.avatar ? kcdmp::wo166::auto_mode() : kcdmp::wo166::kAutoAllOff;
+        if (b.automationOff && b.autoMode != amode && g_autoCmdOn) {
+            call_auto(A.fnAuto, g_autoCmdOn, b.ca, true);
+            b.automationOff = false;
+        }
         if (!b.automationOff) {
-            if (!call_auto(A.fnAuto, g_autoCmd, b.ca, false)) { c_faults.fetch_add(1); g_combat = false; g_whyCombat = "automation call faulted"; return; }
+            bool ok = true;
+            if (amode == kcdmp::wo166::kAutoAllOff) ok = call_auto(A.fnAuto, g_autoCmd, b.ca, false);
+            else if (amode >= kcdmp::wo166::kAutoBytesBase && g_autoCmdVar) {
+                auto* c = static_cast<uint8_t*>(g_autoCmdVar);
+                const uint8_t bits = static_cast<uint8_t>(amode - kcdmp::wo166::kAutoBytesBase);
+                c[0x79] = (bits & 1) ? 1 : 0; c[0x7A] = (bits & 2) ? 1 : 0; c[0x7B] = (bits & 4) ? 1 : 0;
+                ok = call_auto(A.fnAuto, g_autoCmdVar, b.ca, true);
+            }
+            if (!ok) { c_faults.fetch_add(1); g_combat = false; g_whyCombat = "automation call faulted"; return; }
             b.automationOff = true;
+            b.autoMode = amode;
             c_autoOff.fetch_add(1);
-            logf("WO121-MOTION body=%s combat automation OFF (combat_EnableAutomation path)", b.key.c_str());
+            logf("WO121-MOTION body=%s combat automation %s (combat_EnableAutomation path, amode %u)", b.key.c_str(),
+                 amode == kcdmp::wo166::kAutoAllOff ? "OFF" : amode == kcdmp::wo166::kAutoAllOn ? "left ON" : "pattern", amode);
         }
         uint8_t mode = 0;
         rd(model, kPropCombatMode.off + 8, &mode);
@@ -1163,6 +1183,7 @@ void install() {
     if (why.empty()) {
         g_autoCmd = VirtualAlloc(nullptr, 0x100, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
         g_autoCmdOn = VirtualAlloc(nullptr, 0x100, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+        g_autoCmdVar = VirtualAlloc(nullptr, 0x100, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);   // WO-166 C1
         if (g_autoCmdOn) { auto* c = static_cast<uint8_t*>(g_autoCmdOn); c[0x79] = c[0x7A] = c[0x7B] = 1; }
         if (!g_autoCmd || !g_autoCmdOn) why = "no memory for the automation stand-in";
     }
@@ -1764,6 +1785,16 @@ bool read_attack_fields(void* model, AttackFields* out) {
     *out = AttackFields{};
     return model && prop_value(model, kPropAttackType, &out->type) && prop_value(model, kPropAtkZone, &out->zone) &&
            prop_value(model, kPropAtkHand, &out->hand) && prop_value(model, kPropAtkStrength, &out->strength);
+}
+
+bool read_state(void* model, int32_t* out) {
+    *out = 0;
+    return model && prop_value(model, kPropState, out);
+}
+
+bool write_state(void* model, int32_t v) {
+    if (!model || !prop_named(model, kPropState)) return false;
+    return wr(model, kPropState.off + 8, v);
 }
 
 bool write_attack_fields(void* model, const AttackFields& f) {
