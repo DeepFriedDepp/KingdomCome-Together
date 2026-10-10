@@ -258,9 +258,12 @@ Lua: the new suite **45/45**; WO-165's 11/11 unchanged. Native: **625** (0.48.0:
 
 ### `mp_victim_decides` — **off** again
 The WO: "stays off (its proof needs a human holding block)". The second 0.48.0 build had shipped it on under the maintainer's
-"new mechanisms ship on" rule (WO-165); this WO names that existing switch explicitly, and its C3 design has the host decide the
-outcome (the local engine's blow put back), which C2's engine-applied path would contradict. So 0.48.2 ships it **off**
-(`mp_victim_decides on` turns it back on; the help says so). Recorded for the next attended session.
+"new mechanisms ship on" rule (WO-165); this WO names that existing switch and its state explicitly, so 0.48.2 ships it **off**
+(`mp_victim_decides on` turns it back on; the help says so). *Corrected after the live work:* the two do not conflict in the code —
+C3's double-damage guard puts back only blows a copy lands on its own; a replayed blow is exempt from the discard (WO-165,
+`hits.cpp`), so `mp_victim_decides on` and `mp_copy_strikes on` can run together, and with C3 the copy is Striking when the replay
+runs, which is what a held block needs. **For the maintainer:** the standing "ship new mechanisms on" rule would argue for on; the
+WO's explicit "stays off" was followed because the run was unattended and could not ask.
 
 ### C4 — fight snapping, from the field [L-field][code] — `mp_snap_fix`, default **on**
 `tools/wo118/snapcause166.py` over the five 0.48.0 joiner native logs (counts only): 1,288 fight windows, 17 excluded (a step over
@@ -426,3 +429,15 @@ WO-166's; 3,716 checks), the static checks (console placeholders, Lua locals, na
    the C1 result uses the native log's timed lines.
 8. **The weather read-back** shows the previous value at the apply (the override acts from the next frame); a read one frame later
    would make the line exact.
+
+## The 0.48.2 build
+
+From a fresh clone of `685953d` (`release\c0482`) with the three git-ignored start saves (sha1 equal to the 0.48.0 build's),
+`tools\Build-Installer.ps1 -SoakWaiver "The maintainer's standing rule, stated in WO-161 on 2026-10-08 and applied to WO-166 on
+2026-10-10: release candidates are built without the soak test (0.48.2)."` The header says **0.48.2** (file and product version).
+**`release\KingdomComeTogether-Setup-0.48.2.exe`, 106,467,257 bytes, sha256
+`83c0636612a59e042f1dd46488cc9c282a5f31296051394bf6ce09be06b3aec6`.** Local only; not tagged, not uploaded; **unsigned** (no signing
+settings). Transcript `release\BUILD-0.48.2.log`, waiver `release\SOAK-WAIVED-0.48.2.txt`. Inside the build: relay 63, agent 1,339,
+setup 77, native 625, **all 53 synthetic suites**, the static checks, the installer cases, the relay smoke (`protocol=v10
+release=0.48.2`); no FAIL line; no account or machine name in the payload headers. Farkle 59 ran outside the build (it is not one of
+its gates).
