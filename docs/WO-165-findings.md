@@ -247,4 +247,11 @@ changing `ncombat` rows, or a two-player session.
 
 ## The 0.48.0 build
 
-BUILD_PLACEHOLDER
+From a fresh clone of `ccdfcb1` (`release\c0480`) with the three git-ignored start saves (sha1 equal to the 0.47.6 build's), `tools\Build-Installer.ps1
+-SoakWaiver "The maintainer's standing rule, stated in WO-161 on 2026-10-08 and applied to WO-165 on 2026-10-09: release candidates are built
+without the soak test (0.48.0)."` The header says **0.48.0**. **`release\KingdomComeTogether-Setup-0.48.0.exe`, 106,434,966 bytes, sha256
+`562c722961fb6ca017d0c247cf948d7a8515efe3c2fbcdb4592c52b344b2b157`.** Local only; not tagged; **unsigned** (no signing settings). Transcript
+`release\BUILD-0.48.0.log`, waiver `release\SOAK-WAIVED-0.48.0.txt`. Inside the build: relay 63, agent 1,320, setup 77, native 590, **all 52
+synthetic suites**, the static checks, the installer cases, the payload smoke (`protocol=v10 release=0.48.0`); no FAIL line; no account or
+machine name in the payload. The maintainer's installed `Mods\kdcmp` was restored after the live runs (three files, hashes equal to the copy
+taken before).
