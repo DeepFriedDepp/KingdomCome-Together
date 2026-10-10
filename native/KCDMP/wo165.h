@@ -61,6 +61,13 @@ Result replay(const Request& rq);
 struct Damage { uint8_t state = 0; float health = 0, stamina = 0; bool victimLive = false; };
 Damage damage_of(uint32_t seq);
 
+// C1 (host, main thread): the host's lock-on onto an NPC fighting a partner's avatar (wo165_rules.h lock_rule). Called from
+// wo136::tick with the NPCs WO-136 knows in a fight with an avatar; paces itself (4 Hz). set_host_lock = mp_host_lock (pipe op 8).
+//   WO165-LOCK npc=<name> pair=set|removed|forgotten why=<why> dist_m=<f> [skirmish=done|FAILED]
+void lock_tick(const uint32_t* npcs, int n);
+void set_host_lock(bool on);
+bool host_lock();
+
 int status_text(char* out, int n);
 
 } // namespace kcdmp::wo165

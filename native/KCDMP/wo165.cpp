@@ -10,11 +10,13 @@
 #include <cstdio>
 #include <cstring>
 #include <mutex>
+#include <unordered_map>
 
 #include "anchors.h"
 #include "engine.h"
 #include "fault_guard.h"
 #include "hits.h"
+#include "local_state.h"
 #include "log.h"
 #include "rttr_abi.h"
 
@@ -288,11 +290,142 @@ Damage damage_of(uint32_t seq) {
     return s->seq == seq ? s->d : Damage{};
 }
 
+// ---------------------------------------------------------------------------------------------------- C1
+namespace {
+std::atomic<bool> g_lockOn{true}, g_lockOff{false};
+struct LockRow { bool paired = false; double farSince = -1; };
+std::unordered_map<uint32_t, LockRow> g_locks;   // main thread only
+double g_lockNext = 0;
+std::atomic<uint32_t> c_lockSet{0}, c_lockRemoved{0}, c_lockForgot{0}, c_lockFail{0};
+
+double qpc_s() { LARGE_INTEGER q, f; QueryPerformanceCounter(&q); QueryPerformanceFrequency(&f); return double(q.QuadPart) / double(f.QuadPart); }
+
+const char* npc_name(uint32_t eid) {
+    void* e = engine::entity_by_id(eid);
+    const char* n = e ? engine::entity_name(e) : nullptr;
+    return n ? n : "?";
+}
+
+bool npc_alive(uint32_t eid) {
+    void* soul = hits::soul_of_eid(eid);
+    float hp = 0;
+    return soul && rttr::soul_state(soul, "health", &hp) && hp > 0.0f;
+}
+
+// The host leaves its skirmish only when no other pair of ours remains and no NPC fights the host himself (that fight is his own).
+void drop_pair(uint32_t npc, const char* why, float dist, bool hostInOwnFight) {
+    int others = 0;
+    for (const auto& kv : g_locks) if (kv.first != npc && kv.second.paired) ++others;
+    const char* how = "kept (another pair of ours remains)";
+    if (!others && hostInOwnFight) how = "kept (the host is in a fight of his own)";
+    else if (!others) {
+        uint64_t rv = 0;
+        const uint32_t peid = player_eid();
+        void* hs = peid ? hits::soul_of_eid(peid) : nullptr;
+        const bool ok = hs && hits::skirmish_remove(hs, &rv);
+        how = ok ? "done" : "FAILED";
+        if (!ok) c_lockFail.fetch_add(1);
+    }
+    c_lockRemoved.fetch_add(1);
+    logf("WO165-LOCK npc=%s pair=removed why=%s dist_m=%.1f skirmish_leave=%s tid=%lu", npc_name(npc), why, dist, how, GetCurrentThreadId());
+}
+}   // namespace
+
+void set_host_lock(bool on) {
+    if (g_lockOn.exchange(on) == on) return;
+    logf("WO165-LOCK mp_host_lock %s tid=%lu", on ? "on" : "off", GetCurrentThreadId());
+    if (!on) g_lockNext = 0;   // the next tick releases every pair
+}
+bool host_lock() { return g_lockOn.load() && !g_lockOff.load(); }
+
+void lock_tick(const uint32_t* npcs, int n) {
+    const double now = qpc_s();
+    const bool on = host_lock();
+    if (!on && g_locks.empty()) return;
+    if (now < g_lockNext) return;
+    g_lockNext = now + 0.25;
+    localstate::LocalState ls{};
+    if (!localstate::read_local_state(&ls)) return;
+    uint32_t aeids[16]; void* asouls[16];
+    const int na = hits::avatar_list(aeids, asouls, 16);
+    // what each candidate is doing, read this frame
+    bool hostInOwnFight = false;
+    struct C { uint32_t eid; LockView v; };
+    C cs[96]; int nc = 0;
+    for (int i = 0; i < n && nc < 96; ++i) {
+        motion::NpcCombat c{};
+        if (!motion::read_npc_combat(npcs[i], &c)) continue;
+        if (c.opponentIsPlayer) hostInOwnFight = true;
+        float p[3]{};
+        void* e = engine::entity_by_id(npcs[i]);
+        if (!e || !engine::entity_world_pos(e, p)) continue;
+        LockView v{};
+        v.alive = npc_alive(npcs[i]);
+        v.combat = c.combat != 0;
+        v.oppIsHost = c.opponentIsPlayer != 0;
+        v.oppIsAvatar = c.opponentEid && motion::is_avatar_eid(c.opponentEid);
+        v.dist = std::sqrt((p[0] - ls.x) * (p[0] - ls.x) + (p[1] - ls.y) * (p[1] - ls.y));
+        v.facingCos = facing_cos(ls.rotZ, ls.x, ls.y, p[0], p[1]);
+        float nearest = v.dist;
+        for (int k = 0; k < na; ++k) {
+            float ap[3]{};
+            void* ae = engine::entity_by_id(aeids[k]);
+            if (ae && engine::entity_world_pos(ae, ap))
+                nearest = (std::min)(nearest, std::sqrt((p[0] - ap[0]) * (p[0] - ap[0]) + (p[1] - ap[1]) * (p[1] - ap[1])));
+        }
+        LockRow& row = g_locks[npcs[i]];
+        if (nearest > kLockFarM) { if (row.farSince < 0) row.farSince = now; } else row.farSince = -1;
+        v.farForS = row.farSince < 0 ? 0.0 : now - row.farSince;
+        v.paired = row.paired;
+        cs[nc++] = C{npcs[i], v};
+    }
+    // a pair whose NPC is no longer a candidate (WO-136 forgot it, the body is gone): the fight is over for us
+    for (auto it = g_locks.begin(); it != g_locks.end();) {
+        bool seen = false;
+        for (int i = 0; i < nc; ++i) if (cs[i].eid == it->first) { seen = true; break; }
+        if (!seen && it->second.paired) { it->second.paired = false; drop_pair(it->first, "npc-gone", -1.0f, hostInOwnFight); }
+        if (!seen) it = g_locks.erase(it); else ++it;
+    }
+    for (int i = 0; i < nc; ++i) {
+        LockRow& row = g_locks[cs[i].eid];
+        LockDecision d = on ? lock_rule(cs[i].v) : LockDecision{cs[i].v.paired ? LockAct::Remove : LockAct::None, "mp_host_lock-off"};
+        switch (d.act) {
+            case LockAct::Set: {
+                const uint32_t peid = player_eid();
+                void* hs = peid ? hits::soul_of_eid(peid) : nullptr;
+                void* ns = hits::soul_of_eid(cs[i].eid);
+                uint64_t rv = 0;
+                const bool ok = hs && ns && hits::skirmish_add(hs, ns, 1, &rv);
+                if (ok) { row.paired = true; c_lockSet.fetch_add(1); }
+                else if (c_lockFail.fetch_add(1) + 1 >= 3 && !g_lockOff.exchange(true))
+                    logf("WO165-LOCK switched OFF for this session: the skirmish add failed 3 times (the host can no longer lock onto a partner's attacker) tid=%lu",
+                         GetCurrentThreadId());
+                logf("WO165-LOCK npc=%s pair=%s why=%s dist_m=%.1f facing_cos=%.2f skirmish=%s tid=%lu", npc_name(cs[i].eid), ok ? "set" : "not-set", d.why,
+                     cs[i].v.dist, cs[i].v.facingCos, ok ? "done" : "FAILED", GetCurrentThreadId());
+                break;
+            }
+            case LockAct::Remove:
+                row.paired = false;
+                drop_pair(cs[i].eid, d.why, cs[i].v.dist, hostInOwnFight);
+                break;
+            case LockAct::Forget:
+                row.paired = false;
+                c_lockForgot.fetch_add(1);
+                logf("WO165-LOCK npc=%s pair=forgotten why=%s dist_m=%.1f (the host's own fight: not left) tid=%lu", npc_name(cs[i].eid), d.why, cs[i].v.dist,
+                     GetCurrentThreadId());
+                break;
+            default: break;
+        }
+    }
+}
+
 int status_text(char* out, int n) {
-    return std::snprintf(out, n, "replay=%s calls=%u hit=%u blocked=%u pb=%u broken=%u filtered=%u none=%u refused=%u faults=%u seen=%u",
+    return std::snprintf(out, n, "replay=%s calls=%u hit=%u blocked=%u pb=%u broken=%u filtered=%u none=%u refused=%u faults=%u seen=%u "
+                         "lock=%s lock_set=%u lock_removed=%u lock_forgotten=%u lock_failed=%u",
                          g_off.load() ? "OFF(fault)" : g_armed ? "armed" : g_resolved ? "not-armed" : "unresolved", c_calls.load(), c_hits.load(),
                          c_blocked.load(), c_perfect.load(), c_broken.load(), c_filtered.load(), c_none.load(), c_refused.load(), c_faults.load(),
-                         hits::replay_seen());
+                         hits::replay_seen(), g_lockOff.load() ? "OFF(fault)" : g_lockOn.load() ? "on" : "off", c_lockSet.load(), c_lockRemoved.load(),
+                         c_lockForgot.load(), c_lockFail.load());
 }
 
 }   // namespace kcdmp::wo165

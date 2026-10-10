@@ -4,6 +4,7 @@
 // WO-165: engine-free checks of native/KCDMP/wo165_rules.h -- the call-site parser that lifts the result ctor, the processor offset
 // and RPGProcessHit out of the collision handler's live bytes; the structs we hand the engine; the outcome rule. Linked into
 // KCDMP_NativeTests; wo165_tests() returns the number of failures.
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 
@@ -132,6 +133,49 @@ int wo165_tests(int* passed) {
         WCHECK(std::strcmp(outcome_name(Outcome::PerfectBlock), "pb") == 0 && std::strcmp(outcome_name(Outcome::Blocked), "blocked") == 0 &&
                std::strcmp(outcome_name(Outcome::Hit), "hit") == 0 && std::strcmp(outcome_name(Outcome::Broken), "broken") == 0,
                "the names the logs and the wire use");
+    }
+    // ---- C1: the host's lock-on ----
+    {
+        LockView v{};
+        v.combat = true; v.oppIsAvatar = true; v.dist = 4.0f; v.facingCos = 0.9f;
+        WCHECK(lock_rule(v).act == LockAct::Set, "near (4 m) and facing an NPC that fights the avatar: the pair is set");
+        LockView far = v; far.dist = 6.5f;
+        WCHECK(lock_rule(far).act == LockAct::None, "6.5 m: not yet");
+        LockView edge = v; edge.dist = kLockSetM;
+        WCHECK(lock_rule(edge).act == LockAct::Set, "exactly 6 m: set");
+        LockView away = v; away.facingCos = 0.3f;
+        WCHECK(lock_rule(away).act == LockAct::None, "near but looking away (more than 60 degrees): not set");
+        LockView notAvatar = v; notAvatar.oppIsAvatar = false;
+        WCHECK(lock_rule(notAvatar).act == LockAct::None, "an NPC fighting someone else (not a partner): never");
+        LockView idle = v; idle.combat = false;
+        WCHECK(lock_rule(idle).act == LockAct::None, "an NPC not in combat: never");
+        LockView dead = v; dead.alive = false;
+        WCHECK(lock_rule(dead).act == LockAct::None, "a dead NPC: never");
+
+        LockView p = v; p.paired = true;
+        WCHECK(lock_rule(p).act == LockAct::Keep, "paired and still near: kept");
+        LockView pAway = p; pAway.facingCos = -1.0f; pAway.dist = 9.9f;
+        WCHECK(lock_rule(pAway).act == LockAct::Keep, "paired: turning away or stepping back to 9.9 m keeps it (hysteresis 6 -> 10 m)");
+        LockView pFar = p; pFar.dist = 10.1f;
+        WCHECK(lock_rule(pFar).act == LockAct::Remove && std::strcmp(lock_rule(pFar).why, "host-left-10m") == 0, "past 10 m: removed");
+        LockView pEnd = p; pEnd.combat = false;
+        WCHECK(lock_rule(pEnd).act == LockAct::Remove && std::strcmp(lock_rule(pEnd).why, "fight-ended") == 0, "the fight ended: removed");
+        LockView pOther = p; pOther.oppIsAvatar = false;
+        WCHECK(lock_rule(pOther).act == LockAct::Remove, "the NPC left the avatar for someone else: removed");
+        LockView pHost = p; pHost.oppIsHost = true; pHost.oppIsAvatar = false;
+        WCHECK(lock_rule(pHost).act == LockAct::Forget, "the NPC turned on the host (his blow, P7): forgotten, never removed -- his own fight goes on");
+        LockView pDead = p; pDead.alive = false; pDead.oppIsHost = true;
+        WCHECK(lock_rule(pDead).act == LockAct::Remove && std::strcmp(lock_rule(pDead).why, "npc-dead") == 0, "dead wins over everything: removed");
+        LockView pWd = p; pWd.farForS = kLockFarS;
+        WCHECK(lock_rule(pWd).act == LockAct::Remove && std::strcmp(lock_rule(pWd).why, "watchdog-20s-over-30m") == 0, "20 s over 30 m from every player: released");
+        LockView pWd2 = p; pWd2.farForS = kLockFarS - 0.1;
+        WCHECK(lock_rule(pWd2).act == LockAct::Keep, "19.9 s: kept");
+
+        // the facing from a yaw: CryEngine faces +y at yaw 0
+        WCHECK(facing_cos(0.0f, 0, 0, 0, 5) > 0.99f, "yaw 0 faces +y");
+        WCHECK(facing_cos(0.0f, 0, 0, 0, -5) < -0.99f, "yaw 0: an NPC behind");
+        WCHECK(std::fabs(facing_cos(1.5707963f, 0, 0, -5, 0) - 1.0f) < 1e-3f, "yaw +90 degrees faces -x");
+        WCHECK(facing_cos(0.0f, 0, 0, 0, 0) == 1.0f, "on top of each other: counts as facing");
     }
     if (passed) *passed = g_pass;
     return g_fail;

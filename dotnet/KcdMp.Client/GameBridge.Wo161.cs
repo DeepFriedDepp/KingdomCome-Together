@@ -46,6 +46,7 @@ public partial class GameBridge
     {
         _w161Swings.Clear();
         _w161Dedupe.Clear();
+        Wo165OnDisconnect();
         _w161RowRecvAt.Clear();
         _w161Played.Clear();
         _w161RowRefused.Clear();
@@ -98,6 +99,7 @@ public partial class GameBridge
             {
                 var msg = new HitVerdictMsg(hid, verdict, Wo161Rules.Flags(sw is not null, missile, !named), zone, sw?.Id ?? 0, health, stamina, named ? attacker : "");
                 await WriteJoinAsync(msg.BuildUp(ghost));
+                Wo165NoteVerdictSent(hid, verdict);   // WO-165: the joiner's engine outcome is logged against it
                 _w161Stats.Out();
                 how = "verdict";
             }
@@ -187,10 +189,21 @@ public partial class GameBridge
             generic = await Wo161ShowGenericAsync(m.Attacker, ct);   // before the damage: the lunge is on the screen when it lands
         // a verdict of no damage (the reserved parried / missed) has nothing to apply; every other one is applied exactly as 0.46.0's hit was
         bool hasDamage = m.Health > 0 || m.Stamina > 0;
-        bool applied = hasDamage && await ApplyPlayerHitAsync(m.Health, m.Stamina, ct);
+        // WO-165 C2 (mp_victim_decides, default off): this machine's engine decides the blow against this player's own guard; the engine
+        // applies it, or -- when it applied nothing for a hit -- the host's verdict does. Never both (Wo165Rules.Decide).
+        var c2 = hasDamage ? await Wo165VictimDecidesAsync(hitId, m, ct) : null;
+        bool byEngine = c2 is { } e2 && e2.Call != Wo165Rules.DamageCall.FallbackApplyHost;
+        bool applied = byEngine || (hasDamage && await ApplyPlayerHitAsync(m.Health, m.Stamina, ct));
+        if (c2 is { } e3)
+        {
+            HitVerdict said = e3.Call == Wo165Rules.DamageCall.FallbackApplyHost ? m.Verdict : e3.Outcome;
+            await Wo165SendOutcomeAsync(hitId, said, byEngine ? e3.Hp : m.Health, byEngine ? e3.St : m.Stamina);
+        }
+        // WO-165 C3 (mp_block_recoil, default off): a blocked blow bounces off -- the copy that swung plays its failed attack
+        _ = Wo165RecoilAsync(m.Attacker, c2 is { } e4 && e4.Call != Wo165Rules.DamageCall.FallbackApplyHost ? e4.Outcome : m.Verdict, ct);
         _w161Stats.In(applied, m.Verdict, m.Health, m.Stamina, shown || generic, generic ? "generic" : reason);
         Console.WriteLine(FormattableString.Invariant(
-            $"WO161-HIT victim=me by={by} sid={m.SwingId} hid={hitId} verdict={HitVerdictMsg.VerdictName(m.Verdict)} dmg={m.Health:F1}/{m.Stamina:F1} dir={Wo161Zone(m.Zone)} shown={(shown ? "yes" : generic ? "generic" : "no")} reason={reason} applied={(applied ? "yes" : hasDamage ? "no" : "none")}{(_isDamageAuthority ? " note=this-machine-thinks-it-is-the-host" : "")}"));
+            $"WO161-HIT victim=me by={by} sid={m.SwingId} hid={hitId} verdict={HitVerdictMsg.VerdictName(m.Verdict)} dmg={m.Health:F1}/{m.Stamina:F1} dir={Wo161Zone(m.Zone)} shown={(shown ? "yes" : generic ? "generic" : "no")} reason={reason} applied={(byEngine ? "engine" : applied ? "yes" : hasDamage ? "no" : "none")}{(_isDamageAuthority ? " note=this-machine-thinks-it-is-the-host" : "")}"));
     }
 
     /// <summary>Victim: a bare 0.46.0 hit (0x22) -- a peer without the verdict path, or the host's fallback. Counted, never lost.</summary>
@@ -206,5 +219,6 @@ public partial class GameBridge
     private void Wo161WriteStats()
     {
         if (!_w161Stats.Quiet) Console.WriteLine(_w161Stats.Line());
+        Wo165WriteStats();
     }
 }

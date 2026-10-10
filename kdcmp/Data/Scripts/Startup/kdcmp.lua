@@ -21020,6 +21020,34 @@ function KCD2MP_W164NoteToast(text)
     while #w.toasts > 10 do table.remove(w.toasts, 1) end
 end
 
+-- ===== WO-165: shared combat with one human (docs/WO-165-findings.md) =====
+-- Three switches, the agent's (GameBridge.Wo165.cs) and the DLL's (wo165.cpp) to act on:
+--   mp_host_lock on|off       (host, default ON)  the host can lock onto an NPC beating his partner: while he stands within 6 m of it and faces
+--                             it, his soul joins its skirmish with the explicit hostile pair the engine's lock-on needs (removed past 10 m, when
+--                             the fight ends, the NPC dies or is left 20 s over 30 m away); the NPC's own target is never written
+--   mp_victim_decides on|off  (joiner, default OFF) the joiner's engine judges a host's blow against his own guard (not proven live: the
+--                             engine honours a held block only against an attacker it sees striking, which a copy never is)
+--   mp_block_recoil on|off    (joiner, default OFF) a blocked blow makes the copy that swung recoil (not proven live)
+KCD2MP.w165 = KCD2MP.w165 or { hostLock = true, victimDecides = false, blockRecoil = false }
+
+local function w165Switch(key, field, arg, what)
+    local v = KCD2MP_Wo122ParseBool(arg)
+    if v == "bad" then mp_log("mp_" .. key .. ": expected on|off"); return false end
+    if v ~= nil then KCD2MP.w165[field] = v end
+    KCD2MP_EmitEvent("w165_cfg", key .. "=" .. (KCD2MP.w165[field] and "on" or "off"))
+    mp_log(string.format("WO165-TOGGLE mp_%s %s -- %s", key, KCD2MP.w165[field] and "on" or "off", what))
+    return true
+end
+function KCD2MP_W165SetHostLock(arg) return w165Switch("host_lock", "hostLock", arg, "the host can lock onto an NPC beating his partner") end
+function KCD2MP_W165SetVictimDecides(arg) return w165Switch("victim_decides", "victimDecides", arg, "the joiner's own engine judges a host's blow against his guard (untested live)") end
+function KCD2MP_W165SetBlockRecoil(arg) return w165Switch("block_recoil", "blockRecoil", arg, "a blocked blow makes the copy that swung recoil (untested live)") end
+
+-- A WO-165 piece switched itself off (a fault): said once, on the game's own HUD.
+function KCD2MP_W165Say(text)
+    mp_log("WO165-NOTICE " .. tostring(text))
+    KCD2MP_ShowNativeToast(tostring(text))
+end
+
 local W164_RE_PATTERNS = { "dummyWanderer", "karavany", "Caravan", "pocestny", "prepadeni", "rvacka", "taboryUCesty", "SpawnedAnimal" }
 
 -- M: this machine's block. Lines are game facts only (no names of people, no paths).
@@ -24372,6 +24400,9 @@ local ok, err = pcall(function()
     System.AddCCommand("mp_ctx_release", 'KCD2MP_W160SetRelease(%line)', "WO-160: (joiner) a copy's stance and unstance are released the game's own way before its next placement, so the game's planner only places it (default on): mp_ctx_release on|off")
     System.AddCCommand("mp_sleep_rest", 'KCD2MP_W157SetSleepRest(%line)', "WO-157: a real sleep (a vote's, or your own) that the game gave no rest gets the rest its own sleep gives -- in this game build its no-bed sleep often gives none (default on): mp_sleep_rest on|off")
     System.AddCCommand("mp_w157_status", "KCD2MP_W157Status()", "WO-157: the trespass check and the stop grace (WO157-STATUS here); also the area here: private, public, open (a shop) or unknown")
+    System.AddCCommand("mp_host_lock", 'KCD2MP_W165SetHostLock(%line)', "WO-165: (host) you can lock onto an NPC that is beating your partner: near it (6 m) and facing it, you join its fight as its foe; it keeps fighting your partner until you hit it (default on): mp_host_lock on|off")
+    System.AddCCommand("mp_victim_decides", 'KCD2MP_W165SetVictimDecides(%line)', "WO-165: (joiner) your own game judges an enemy's blow against your own guard instead of the host's (UNTESTED live -- a held block is not honoured yet; default off): mp_victim_decides on|off")
+    System.AddCCommand("mp_block_recoil", 'KCD2MP_W165SetBlockRecoil(%line)', "WO-165: (joiner) an enemy whose blow you blocked plays the game's own bounce-back (UNTESTED live; default off): mp_block_recoil on|off")
     System.AddCCommand("mp_hostile_crime", 'KCD2MP_W163SetHostileCrime(%line)', "WO-163: (host) an assault is no crime when the engine says the victim is in a skirmish fight with the host, asked 5 s after the blow (default on): mp_hostile_crime on|off")
     System.AddCCommand("mp_fair_crime", 'KCD2MP_W154SetFairCrime(%line)', "WO-154: (host) a partner's murder only on the victim's death, and an assault judged 5 s later -- no crime if the victim fights by then, a quest brawl (default on): mp_fair_crime on|off")
     System.AddCCommand("mp_scene_resume", 'KCD2MP_W154SetSceneResume(%line)', "WO-154: (joiner) a scene stuck at its end resumes the host's copies, as in 0.44.0 (default off: no copy is resumed; the engine's own rescue, a save request, runs at once): mp_scene_resume on|off")

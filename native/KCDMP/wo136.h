@@ -79,6 +79,8 @@ int forget_avatar(uint32_t avatarEid, const char* why);
 
 void set_enabled(bool on);
 bool enabled();
+// WO-165 C1: the NPCs this module knows in a fight a partner is part of (threat rows and forced pairs), up to max.
+int fight_npcs(uint32_t* out, int max);
 int status_text(char* out, int n);
 
 } // namespace kcdmp::wo136

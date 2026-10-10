@@ -70,6 +70,18 @@ static class Wo165Verbs
         return (x, y);
     }
 
+    /// <summary>fightz: the ground height at angle <paramref name="a"/> (radians) from n samples taken every 2*pi/n from angle 0, linear between.</summary>
+    public static float RingZ(float[] zs, double a)
+    {
+        int n = zs.Length;
+        double u = (a / (2 * Math.PI)) % 1.0;
+        if (u < 0) u += 1.0;
+        double x = u * n;
+        int i = (int)Math.Floor(x) % n;
+        double f = x - Math.Floor(x);
+        return (float)(zs[i] + (zs[(i + 1) % n] - zs[i]) * f);
+    }
+
     // ---------------------------------------------------------------- the self-test (harness gate, not shipped)
 
     public static int SelfTest()
@@ -116,6 +128,11 @@ static class Wo165Verbs
         Check(k.Count == 3 && k[1].t == 10 && Math.Abs(k[2].t - 15) < 1e-9 && Math.Abs(k[2].x - 115) < 1e-4 && Math.Abs(k[2].y - 220) < 1e-4, "flee: stand to t0, then 25 m in 5 s along (3,4)");
         var tps = new List<(double, float, float)> { (5, 30, 0), (9, 0, -40) };
         Check(Offset(tps, 4) == (0, 0) && Offset(tps, 5) == (30, 0) && Offset(tps, 9.5) == (30, -40), "teleport offsets add up from their times on");
+
+        // fightz: the ring heights interpolate, wrap and take negative angles
+        var ring = new float[] { 0f, 1f, 2f, 3f };
+        Check(RingZ(ring, 0) == 0f && Math.Abs(RingZ(ring, Math.PI / 4) - 0.5f) < 1e-5 && Math.Abs(RingZ(ring, 1.75 * Math.PI) - 1.5f) < 1e-5 &&
+              Math.Abs(RingZ(ring, -Math.PI / 4) - 1.5f) < 1e-5 && Math.Abs(RingZ(ring, 2 * Math.PI) - 0f) < 1e-5, "fightz ring heights");
 
         // a WO-165 outcome the joiner sends back parses on the host
         string txt = W164Text.HitOutcome(12, HitVerdict.PerfectBlock, 0, 7.5f);

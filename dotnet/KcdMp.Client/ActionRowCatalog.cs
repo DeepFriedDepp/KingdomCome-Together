@@ -119,6 +119,27 @@ public sealed class ActionRowCatalog
         return best;
     }
 
+    /// <summary>
+    /// WO-165 (C3): the attacker-side answer to a blocked (or perfectly blocked) swing -- a row of <c>combat_action_failed_attack</c>
+    /// (action type 27 on a block, 15 on a perfect block; WO-162 Q4: four of each) whose weapon tags (l_* / r_*) all appear in the swing's
+    /// own row tags; of several the one naming the most weapon tags, then the lowest GUID. Null = no row fits: an unarmed or other-weapon
+    /// attacker has no recoil in the game's tables at all (the caller logs recoil=none and plays nothing).
+    /// </summary>
+    public Row? FailedAttackRow(Row swing, bool perfect)
+    {
+        int want = perfect ? ActionFailedAttackOnPerfectBlock : ActionFailedAttackOnBlock;
+        var have = new HashSet<string>(swing.Tags.Split('+', StringSplitOptions.RemoveEmptyEntries), StringComparer.Ordinal);
+        Row? best = null; Guid bestGuid = default; int bestN = -1;
+        foreach (var (g, r) in _rows)
+        {
+            if (r.Table != "combat_action_failed_attack" || r.ActionType != want) continue;
+            var wt = Wo165Rules.WeaponTags(r.Tags);
+            if (wt.Count == 0 || !wt.All(have.Contains)) continue;
+            if (wt.Count > bestN || (wt.Count == bestN && g.CompareTo(bestGuid) < 0)) { best = r; bestGuid = g; bestN = wt.Count; }
+        }
+        return best;
+    }
+
     /// <summary>WO-163 (A1): the row behind a GUID, for both reads of a sync attack's descriptor -- both hitting the catalog is the one thing that must never happen.</summary>
     public bool BothResolve(Guid a, Guid b) => a != Guid.Empty && b != Guid.Empty && _rows.ContainsKey(a) && _rows.ContainsKey(b);
 

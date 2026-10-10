@@ -131,13 +131,14 @@ static class P
     sealed class Fight : Mover
     {
         public float Cx, Cy, Cz, R, Phase;   // WO-165: Phase (radians) spreads several fighters round one centre
+        public float[]? Zs;                  // WO-165 fightz: the ground height every 360/n degrees round the circle (no floating on a slope)
         public override (float, float, float, float) At(double t)
         {
             double w = 1.2 / Math.Max(0.5, R);
             double a = Phase + w * t + 0.4 * Math.Sin(t * 0.9);
             float x = (float)(Cx + R * Math.Cos(a)), y = (float)(Cy + R * Math.Sin(a));
             float yaw = (float)Math.Atan2(-(Cx - x), Cy - y);
-            return (x, y, Cz, yaw);
+            return (x, y, Zs is { Length: > 0 } ? Wo165Verbs.RingZ(Zs, a) : Cz, yaw);
         }
         public byte FlagsAt(double t) => (byte)(0x04 | (((int)(t / 2.5)) != (int)((t - 0.1) / 2.5) ? 0x08 : 0));
     }
@@ -254,6 +255,9 @@ static class P
                     for (int i = 3; i + 3 < f.Length; i += 4) tm.K.Add((double.Parse(f[i], CultureInfo.InvariantCulture), F(f[i + 1]), F(f[i + 2]), F(f[i + 3])));
                     movers.Add(tm); break;
                 }
+                case "fightz":   // WO-165: fightz <npc> <cx> <cy> <r> <phase> <z0> <z1> ... (ground heights round the circle, from angle 0)
+                    movers.Add(new Fight { Name = f[1], Cx = F(f[2]), Cy = F(f[3]), R = F(f[4]), Phase = F(f[5]), Zs = f.Skip(6).Select(F).ToArray() });
+                    break;
                 case "fight": movers.Add(new Fight { Name = f[1], Cx = F(f[2]), Cy = F(f[3]), Cz = F(f[4]), R = F(f[5]), Phase = f.Length > 6 ? F(f[6]) : 0f }); break;
                 case "ghost":
                     ghost = new Line { Name = "ghost", X0 = F(f[1]), Y0 = F(f[2]), Z0 = F(f[3]), Ux = F(f[4]), Uy = F(f[5]), Len = F(f[6]), Speed = F(f[7]), PingPong = true };

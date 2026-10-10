@@ -18,6 +18,7 @@
 #pragma once
 #include <cstddef>
 #include <cstdint>
+#include <cmath>
 #include <cstring>
 
 namespace kcdmp::wo165 {
@@ -135,6 +136,54 @@ inline Outcome classify(bool returned, bool seen, const uint8_t flags[kFlagsByte
     if (rec && rec[0x57]) return Outcome::Broken;
     if (flags[0]) return Outcome::Blocked;
     return Outcome::Hit;
+}
+
+// ---------------------------------------------------------------------------------------------------- C1: the host's lock-on
+// research/WO-162 Q2.2/Q2.3: a combat target is lockable iff the player and the candidate share a skirmish and the pair is hostile
+// (an explicit pair stored by AddSoulToSkirmish with override 1, or a negative faction value). An NPC beating the partner's avatar is
+// in a skirmish with the avatar only, so the host cannot lock onto it. The host's explicit pair is set while he stands near and faces
+// such an NPC, and removed when that ends. The NPC's own target is never written (P6, live: the guard stayed on the avatar while the
+// host only locked; the engine's selector logged "Player: Opponent change from '<none>' to '<the guard>'").
+constexpr float kLockSetM = 6.0f;          // set the pair within this distance ...
+constexpr float kLockFacingCos = 0.5f;     // ... while the host faces the NPC (within 60 degrees of his forward)
+constexpr float kLockDropM = 10.0f;        // removed once the host is this far
+constexpr double kLockFarS = 20.0;         // the WO-164 D2 watchdog's rule: 20 s further than kLockFarM from every player
+constexpr float kLockFarM = 30.0f;
+
+struct LockView {
+    bool paired = false;          // the pair this module set is in place
+    bool alive = true;
+    bool combat = false;          // the NPC's combat mode
+    bool oppIsAvatar = false;     // its opponent is a partner's avatar
+    bool oppIsHost = false;       // its opponent is the host himself
+    float dist = 1e9f;            // host -> NPC (horizontal, m)
+    float facingCos = -1.0f;      // the host's forward . the direction to the NPC
+    double farForS = 0.0;         // how long the NPC has been further than kLockFarM from every player
+};
+enum class LockAct : uint8_t { None, Set, Keep, Remove, Forget };
+struct LockDecision { LockAct act; const char* why; };
+
+inline LockDecision lock_rule(const LockView& v) {
+    if (!v.paired) {
+        if (v.alive && v.combat && v.oppIsAvatar && v.dist <= kLockSetM && v.facingCos >= kLockFacingCos) return {LockAct::Set, "near-and-facing"};
+        return {LockAct::None, ""};
+    }
+    if (!v.alive) return {LockAct::Remove, "npc-dead"};
+    // the NPC turned on the host: that is the host's own fight now -- the pair is forgotten, never removed (removing would end it)
+    if (v.oppIsHost) return {LockAct::Forget, "npc-fights-the-host"};
+    if (!v.combat || !v.oppIsAvatar) return {LockAct::Remove, "fight-ended"};
+    if (v.dist > kLockDropM) return {LockAct::Remove, "host-left-10m"};
+    if (v.farForS >= kLockFarS) return {LockAct::Remove, "watchdog-20s-over-30m"};
+    return {LockAct::Keep, ""};
+}
+
+// The host's forward on the ground plane from his yaw (CryEngine: an entity faces +y rotated by yaw about z).
+inline float facing_cos(float yaw, float hx, float hy, float nx, float ny) {
+    const float dx = nx - hx, dy = ny - hy;
+    const float d = std::sqrt(dx * dx + dy * dy);
+    if (d < 1e-3f) return 1.0f;
+    const float fx = -std::sin(yaw), fy = std::cos(yaw);
+    return (fx * dx + fy * dy) / d;
 }
 
 } // namespace kcdmp::wo165

@@ -3,6 +3,7 @@
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 // WO-136 -- see wo136.h.
 #include "wo136.h"
+#include "wo165.h"
 #include "fault_guard.h"
 
 #include <windows.h>
@@ -375,8 +376,24 @@ int handover_fights(bool removePlayer, const char* why) {
     return np_;
 }
 
+int fight_npcs(uint32_t* out, int max) {
+    int n = 0;
+    for (const auto& kv : g_threat) { if (n >= max) break; out[n++] = kv.first; }
+    for (const auto& kv : g_forced) {
+        if (n >= max) break;
+        bool dup = false;
+        for (int i = 0; i < n; ++i) if (out[i] == kv.first) { dup = true; break; }
+        if (!dup) out[n++] = kv.first;
+    }
+    return n;
+}
+
 void tick() {
     const double now = now_s();
+    if (g_on.load()) {   // WO-165 C1: the host's lock-on (host only: this module runs only there)
+        uint32_t ids[96];
+        kcdmp::wo165::lock_tick(ids, fight_npcs(ids, 96));
+    }
     // A forced pair lives while its NPC still fights: with no opponent for
     // 2 s (an animal never reads combat=1 -- H6 -- so the opponent is the
     // test), or a body gone, it is cleared (checked twice a second).

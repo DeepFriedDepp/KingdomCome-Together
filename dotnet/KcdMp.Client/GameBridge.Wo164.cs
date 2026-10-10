@@ -330,6 +330,10 @@ public partial class GameBridge
                 await W164TorchInAsync(ghost, on, "side-channel");
                 if (W137Host) foreach (byte j in Wo134Peers()) if (j != src) await W164SendAsync(j, Protocol.W164Torch, m.Text);
                 return;
+            case Protocol.W164HitOutcome:   // WO-165: a joiner's engine decided the host's verdict
+                if (!W137Host) { Interlocked.Increment(ref _w164Malformed); return; }
+                Wo165OnOutcomeIn(src, m.Text);
+                return;
             default:
                 Interlocked.Increment(ref _w164Malformed);
                 return;

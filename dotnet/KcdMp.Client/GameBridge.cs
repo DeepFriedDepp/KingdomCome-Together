@@ -5989,6 +5989,9 @@ public partial class GameBridge(ClientConfig config)
             case "w154_voice":       // WO-154 6.7: the mod menu's voice switch (on|off), connected or not
                 Wo154OnVoiceEvent(arg);
                 return;
+            case "w165_cfg":         // WO-165: mp_host_lock, mp_victim_decides, mp_block_recoil
+                Wo165OnEvent(name, arg);
+                return;
             case "w163_hostile":     // WO-163 A7: the host's 5 s judge asks the engine whether the victim is in a skirmish fight with the host
             case "w163_probe":       // WO-163 Stage B: mp_w163_probe (the maintainer present; reads and the P6 / P8 levers)
                 Wo163OnEvent(name, arg);

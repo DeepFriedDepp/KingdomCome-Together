@@ -106,7 +106,8 @@ public class Wo161Tests
         Assert.False(HitVerdictMsg.TryDecode(1, [], out _));
         var extra = Good().Concat(new byte[] { 0 }).ToArray(); Assert.False(HitVerdictMsg.TryDecode(1, extra, out _));   // trailing byte
         var ver = Good(); ver[0] = 2; Assert.False(HitVerdictMsg.TryDecode(1, ver, out _));
-        foreach (byte bad in new byte[] { 0, 5, 200 }) { var v = Good(); v[1] = bad; Assert.False(HitVerdictMsg.TryDecode(1, v, out _), $"verdict {bad}"); }
+        // WO-165 appended 5 (perfect block) and 6 (broken): 7 is the first value no build knows
+        foreach (byte bad in new byte[] { 0, 7, 200 }) { var v = Good(); v[1] = bad; Assert.False(HitVerdictMsg.TryDecode(1, v, out _), $"verdict {bad}"); }
         var fl = Good(); fl[2] |= 0x80; Assert.False(HitVerdictMsg.TryDecode(1, fl, out _));                  // an unknown flag bit
         var z = Good(); z[3] = 7; Assert.False(HitVerdictMsg.TryDecode(1, z, out _));                         // a zone past Lower
         foreach (float badf in new[] { float.NaN, float.PositiveInfinity, float.NegativeInfinity, -0.5f, 1000.01f, 1e30f })

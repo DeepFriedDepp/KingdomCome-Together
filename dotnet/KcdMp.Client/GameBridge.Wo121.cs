@@ -436,6 +436,7 @@ public partial class GameBridge
                 var r = await _combat.GhostSwingForResultAsync(neid, row.Spec, ct);
                 if (animal) Interlocked.Increment(ref _w141Bite);
                 if (r.Ok) Wo163NoteRowForWatch(ne.Name, row.Spec);
+                if (r.Ok) Wo165NoteRowPlayed(ne.Name, ne.Row);   // WO-165: the replay's attack fields and the recoil's weapon tags
                 if (r.Ok) Wo161NoteRowPlayed(ne.Name, row.HitLagMs >= 0 ? row.HitLagMs : Wo161Rules.LagNone); else Wo161NoteRowRefused(ne.Name, r.ReasonTag);   // WO-161 / WO-163: with the row's own lag
                 Console.WriteLine($"MP-ACTION section=inbound kind=NpcAttack npc={ne.Name} row={ne.Row} spec=\"{row.Spec}\" dispatch=native-row result={r.ReasonTag}");
                 if (r.Ok) await ExecLuaAsync($"if KCD2MP_NpcNativeSwingHold then KCD2MP_NpcNativeSwingHold(\"{ne.Name}\") end");

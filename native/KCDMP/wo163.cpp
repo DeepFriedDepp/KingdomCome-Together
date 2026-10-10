@@ -163,6 +163,13 @@ uint8_t handle(const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t
             *outLen = 10;
             return kROk;
         }
+        case kOpHostLock: {   // WO-165 C1
+            if (len != 2 || cap < 1) return kRBadRequest;
+            wo165::set_host_lock(body[1] != 0);
+            out[0] = wo165::host_lock() ? 1 : 0;
+            *outLen = 1;
+            return kROk;
+        }
         case kOpReplayStatus: {   // WO-165
             const int n = wo165::status_text(reinterpret_cast<char*>(out), static_cast<int>(cap));
             *outLen = (n > 0 && static_cast<size_t>(n) < cap) ? static_cast<size_t>(n) : 0;

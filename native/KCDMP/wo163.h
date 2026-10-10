@@ -24,6 +24,7 @@
 //       "seq=<n> engine=<hit|blocked|pb|broken|filtered|none> ..." or "refused=<reason>".
 //   6 ReplayDamage [seq:4] -> [state:1][health:f32][stamina:f32][victimLive:1]   (WO-165: 0 unknown, 1 pending, 2 measured, 3 merged)
 //   7 ReplayStatus -> text
+//   8 HostLock [on:1] -> [on:1]   (WO-165 C1: mp_host_lock)
 #pragma once
 #include <cstddef>
 #include <cstdint>
@@ -37,6 +38,7 @@ constexpr uint8_t kOpSkirmishPair = 4;
 constexpr uint8_t kOpReplay = 5;
 constexpr uint8_t kOpReplayDamage = 6;
 constexpr uint8_t kOpReplayStatus = 7;
+constexpr uint8_t kOpHostLock = 8;
 
 constexpr uint8_t kROk = 0, kRBadRequest = 1, kRNoActor = 2, kRNoSoul = 3, kRFailed = 4;
 
