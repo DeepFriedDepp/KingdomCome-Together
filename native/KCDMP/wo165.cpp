@@ -4,6 +4,7 @@
 // WO-165: the replay through the engine's hit processor (wo165.h).
 #include "wo165.h"
 #include "wo166_rules.h"
+#include "wo166.h"
 
 #include <windows.h>
 #include <atomic>
@@ -298,7 +299,7 @@ Damage damage_of(uint32_t seq) {
 // ---------------------------------------------------------------------------------------------------- C1
 namespace {
 std::atomic<bool> g_lockOn{true}, g_lockOff{false};
-struct LockRow { bool paired = false; double farSince = -1, notSetLogged = -1e9; };
+struct LockRow { bool paired = false; double farSince = -1, notSetLogged = -1e9, onFigureSince = -1; };   // WO-166 C1: onFigureSince
 std::unordered_map<uint32_t, LockRow> g_locks;   // main thread only
 double g_lockNext = 0;
 std::atomic<uint32_t> c_lockSet{0}, c_lockRemoved{0}, c_lockForgot{0}, c_lockFail{0};
@@ -380,6 +381,30 @@ void lock_tick(const uint32_t* npcs, int n) {
         }
         LockRow& row = g_locks[npcs[i]];
         if (nearest > kLockFarM) { if (row.farSince < 0) row.farSince = now; } else row.farSince = -1;
+        // WO-166 C1 (diagnostic): an NPC on a partner's figure within 3 m for 10 s that commits no attack says what both combat models
+        // read, once per NPC per minute -- the field's zero blows on the figure (0.48.0) was not reproduced by the harness (the same
+        // setup landed blows every ~1.5 s), so the next session names the gate
+        if (v.oppIsAvatar && v.alive) {
+            float od = 1e9f;
+            float op[3]{};
+            void* oe = engine::entity_by_id(c.opponentEid);
+            if (oe && engine::entity_world_pos(oe, op)) od = std::sqrt((p[0] - op[0]) * (p[0] - op[0]) + (p[1] - op[1]) * (p[1] - op[1]));
+            if (od <= 3.0f) {
+                if (row.onFigureSince < 0) row.onFigureSince = now;
+                const double la = motion::last_npc_attack_s(npcs[i]);
+                static kcdmp::wo166rules::LineLimiter s_c1;
+                if (now - row.onFigureSince >= 10.0 && (la < 0 || now - la >= 10.0) && s_c1.allow(npcs[i], now)) {
+                    motion::ModelRead nm{}, fm{};
+                    const bool nok = motion::read_model(npcs[i], &nm), fok = motion::read_model(c.opponentEid, &fm);
+                    logf("WO166-C1 npc=%s on the figure eid=0x%X for %.0f s within %.1f m, no attack committed for %s: npc state=0x%X cm=%u at=%d "
+                         "figure state=0x%X cm=%u opp=%s automation_mode=%u tid=%lu", npc_name(npcs[i]), c.opponentEid, now - row.onFigureSince, od,
+                         la < 0 ? "ever" : "10 s+", nok ? static_cast<unsigned>(nm.state) : 0u, nok ? nm.combatMode : 0u, nok ? nm.atkType : -9,
+                         fok ? static_cast<unsigned>(fm.state) : 0u, fok ? fm.combatMode : 0u,
+                         fok ? (fm.opponentEid == npcs[i] ? "this-npc" : fm.opponentEid ? "another" : "none") : "?",
+                         kcdmp::wo166::auto_mode(), GetCurrentThreadId());
+                }
+            } else row.onFigureSince = -1;
+        } else row.onFigureSince = -1;
         v.farForS = row.farSince < 0 ? 0.0 : now - row.farSince;
         v.paired = row.paired;
         cs[nc++] = C{npcs[i], v};

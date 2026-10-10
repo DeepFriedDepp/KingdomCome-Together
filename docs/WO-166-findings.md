@@ -208,7 +208,7 @@ Lua: the new suite **45/45**; WO-165's 11/11 unchanged. Native: **625** (0.48.0:
 
 ## Phase 2 — enemies that fight the joiner (built)
 
-### C1 — host NPCs attack the joiner's figure [code][native] — the live A/B decides the default
+### C1 — host NPCs attack the joiner's figure [code][native][L] — the hypothesis refuted live; default 0 (as 0.48.0) and a diagnostic
 * Phase 0.5 points at our own switch: while the joiner's combat bit is set, `motion.cpp apply_combat` turns **all four** of the
   figure's combat automations off (`combat_EnableAutomation(false)`); in that state no NPC ever committed an attack on it in the
   field, while the WO-165 harness (figure not in combat, automation on) took 369 real guard blows in 9 minutes.
@@ -217,9 +217,14 @@ Lua: the new suite **45/45**; WO-165's 11/11 unchanged. Native: **625** (0.48.0:
   `C_CombatAutomationAttack / Defense / Guard / ZoneChange / Weapons / Director …`).
 * Built: a lever for the figure's pattern while held in combat (`wo166::auto_mode`: 0 = all off as 0.48.0, 1 = all left on, 2–9 =
   the enable flag with the byte patterns); **NPC copies are always all off** (a copy never acts on its own). Console
-  `mp_w166_automode <n>` (a test tool); the agent pushes the mode with the other WO-166 switches every 10 s. The default is set
-  from the live A/B (below): the guard's attack rate on the figure per pattern, and the figure's own committed actions
-  (`cap_ours`) — a pattern that lets the figure attack on its own is never the default.
+  `mp_w166_automode <n>` (a test tool); the agent pushes the mode with the other WO-166 switches every 10 s.
+* **The live A/B refuted it** (live section): with the figure held in combat, a local guard landed **48–58 blows per 75 s in every
+  pattern**, the 0.48.0 setting (0) included (50, 54, 54). The automation switch does not stop NPCs attacking the figure. The default
+  stays **0** (the 0.48.0 behaviour; no pattern earned a change), the lever stays as a test tool.
+* Built instead: a host diagnostic for the next time it happens — an NPC within 3 m of a partner's figure for 10 s that has
+  committed no attack for 10 s logs `WO166-C1 npc=… on the figure … npc state/cm/at, figure state/cm/opp=this-npc|another|none,
+  automation_mode` (both models read by name, once per NPC per minute; the capture hook's own clock of committed attacks).
+  Why the field's guard never swung at the figure is **[not determined]**.
 
 ### C2 — real swings are shown, not dropped [code][unit]
 * 0.4 showed the 29 "stale" blows had **no row at all** on the host. The rule now takes the host's word: a verdict whose host
@@ -341,3 +346,83 @@ native guard check clean.
 
 ### Phase 3 gates (offline)
 Agent **1,339**; Lua WO-166 suite **70**; relay 63; setup 77; farkle 59; native 625 (the pin type rule is engine-bound: live).
+
+## Live — unattended, this machine
+
+**Setup.** Modding Tools build 1.5.5; the throwaway `playline4` (a copy of `OLD/playline4`), `quicksave022` loaded before every run
+and the loaded-save line checked; the game minimised the whole time (window state checked after every start: minimised, never in
+front); no key, mouse or game action injected; every DLL a new copy per rebuild. The synthetic peer and the relay on the loopback.
+Before the first launch the whole saves folder was copied (767 files, byte-equal); after the last run **every one of the 767 is
+byte-identical**, no Steam Cloud restore happened, and the throwaway playline moved to `OLD/playline4_wo166_after`. The maintainer's
+installed `Mods\kdcmp` was restored after the live work (three files, hashes equal to the copy taken first). None of the maintainer's
+launcher, agent or relay was running; none was stopped.
+
+| item | what ran | result | mark |
+|---|---|---|---|
+| L1 | joiner role, a corpse copy beside the player; the loot screen opened on it through the mod's path, a host update while open | the update deferred, **applied 68 ms after the game's own OnClosed**; 0 rewrites under the screen. The next opens were refused by the engine ("already open": a scripted close does not release its transfer — a harness limit), so 1 real cycle plus 5 scripted defer/apply pairs (6/6); the 30 cycles are synthetic | [L] 1 · [syn] 30 |
+| T2 | the synthetic host's checkpoint for the smith's `kvalitaMece` (host 3, here 1: a hibernated uint State) | `WO164-QFIX … applied=yes why=changed-hibernated type=uint type_def=uint`, in two game sessions; no refusal | [L] |
+| T3 | a paused copy walked by the synthetic host; a scripted press through the game's own talk action, off/on ×3 | 6 of 6 started (off 3, on 3; resume-first and hold lines each time on); the field's never-started case is not reproduced by scripted presses | [L] · [needs two players] |
+| C1 | host role: the synthetic joiner's figure in combat strikes a local guard; 12 windows × 75 s over the ten patterns | blows landed on the figure **48–58 per window in every pattern** (pattern 0: 50/54/54): the switch is not the cause | [L] |
+| C2 | joiner, **150 ms added delay**, 5 min, 200 host verdicts | 200 shown with their row, 0 `row-stale`, `applied=dup` 0 | [L] |
+| C3 | joiner, three copies; the soak (30 min) and the final DLL's run | soak: **1,200 windows** — written 1,200, Striking read mid-window 1,200, restored 1,200, refused 0, missed 0, the engine's own state taken over 0, faults 0, switched off 0; `WO166-LOCALHIT` 0 (the copies land no engine blow: they carry the state only); `applied=dup` 0. The player's model names **the striking copy** as its opponent in 26 of 80 windows (final DLL, exact), another of the three copies in the rest of the samples, none in 1 of 34 samples | [L] |
+| C4 | joiner, 3 min each, no delay: snap fix + C3 off vs on; the 0.48.0 build on the same plan (5 min); the soak | off: resume p90 **11.84** cm, post-hold p90 22.57; on: **9.48** / 20.98; 0.48.0: 11.19 / 21.69; 0.48.2 soak: **9.25 / 19.64** (−17 % / −9 % against 0.48.0). Kept on. Maxima about 1 m in every run, 0.48.0 included (the copies' first placement) | [L] |
+| W1 | joiner: the host's rain twice over W164 kind 5; host role: the send | joiner `WO166-WEATHER applied rain=0.62 …` then `0.10`, `set=true` both times; the read-back at the apply shows the previous value (the override acts from the next frame; each next read shows the last one applied). Host `WO166-WEATHER sent rain=0.00 profile=cloudy_no_rain to=1` | [L] · an hour: [needs two players] |
+| M1 | joiner: the partner's pin | `WO166-MAPMARK the map draws categories: 0x00 …` (all of them), the pin added with **type 0x09** (the companion icon), removed when the peer left | [L] · rejoin [unit] |
+| S1 | host role: the host 200 m from the synthetic joiner's figure for a minute | the NPCs round the figure stayed tracked (0 untracked; 80 tracked with the host's new neighbourhood added); the host's own loop kept running, so the fallback was not needed (0) | [L] · fallback [code] |
+| R1 | host role: the figure fights a guard; the synthetic joiner dies (0x23) and wakes (0x3E) | `WO166-AMNESTY victim=ghost1 stopped=1` — the NPC that had fought the figure (the agent named one striker); see the note below | [L] |
+| F1, T1, T4, T5, L2 | — | no confirmed trip, real press, haggle or second Steam account can be produced unattended | [syn]/[unit] · [needs two players] |
+
+**R1, recorded as seen.** The crime record is untouched by design: 0.5 s after the amnesty WO-151's joint assault was raised for the
+figure's blows ("planted in 3 of 3 witnesses … the host's Henry answers for it too"), and 40 s later the bailiff's son drew and killed
+the host's unarmed Henry 30 m away; the host's own wake then ran its amnesty (`stopped=0`: nothing still fighting where he fell). The
+joint-assault rule worked as WO-151 built it. Whether the host should answer for a figure's assault is the maintainer's call (pocket).
+
+**Frame rate** (the DLL's `FRAME`, same machine, same save, the window minimised in both — the background frame rate):
+
+| | 0.48.0 (second build) | 0.48.2 | change |
+|---|---|---|---|
+| main menu, before a load | `ours_us_mean` 429, 34.6 fps | 426, 34.6 fps | −1 % |
+| town, idle, no session | 582–592, 26.8 fps | 597–610, 26.5–26.6 fps | +2–3 % |
+| three-copy fight (joiner, a swing every 1.5 s) | 669–711 (mean 692), 25.5–26.4 fps | soak 685–739 (mean 716), 25.2–25.6 fps | +3.5 % (fps −2.6 %) |
+
+Within 10 % everywhere.
+
+**The 30-minute run** (joiner, three copies fighting, a swing every 1.5 s = 1,200, C3 and C4 on): 0 faults, 0 switched off, 0
+applied twice, 1,200 verdicts shown with their row, the game up throughout. The frame-rate soak against the game without the mod is
+**waived** under the maintainer's standing rule: *"The maintainer's standing rule, stated in WO-161 on 2026-10-08 and applied to
+WO-166 on 2026-10-10: release candidates are built without the soak test (0.48.2)."*
+
+**Faults.** WO-166's own sites: 0 in every run. Two runs show 11,818 and 23,650 faults at one WO-137 read site: each agent disconnect
+(the harness restarts the agent between runs) makes the DLL switch the research HUD proxy off, and with the quest module never found
+that brute-forces the game interface's pointer slots (~16,000 guarded reads, counted, never switched off by design). WO-137's code,
+not this WO's; the field logs show at most 8 faults (players rarely restart the agent). Pocketed.
+
+**Fixed during the live work.** (1) The WO-163 pipe channel's reply was 200 bytes and cut wo166's status (~330 characters) — the
+per-minute `MP-WO166 native:` line lost the opponent and local-hit counts; both buffers are 512 now (the reply is never written past
+it), and the final DLL's line arrived whole. (2) The run of every synthetic suite before the build found five older suites failing:
+four assert behaviour this WO changes on purpose (WO-114 and WO-154: the fast-travel refusal now needs a confirmed trip; WO-134: a
+take-back waits for the loot screen to close; WO-137: the press on a paused copy goes on 200 ms after the resume) — their scenarios now
+confirm the trip, close the screen and fire the 200 ms timer — and one was a real defect: the weather read inside a `pcall` without
+the module present (the stubs of WO-137 and WO-151 count a swallowed error); the Lua now checks for the module first. Phases 1–3 had
+run only the WO-165 and WO-166 suites — recorded.
+
+### Gates (final)
+Agent **1,339** (0.48.0: 1,320), relay 63, setup 77, farkle 59, native **625** (590), **all 53 synthetic suites** (the 52 of 0.48.0 and
+WO-166's; 3,716 checks), the static checks (console placeholders, Lua locals, native guards, WO-157) — all green.
+
+## Pocket list (outside this WO; not built)
+1. **WO-137's disconnect scan:** `on_disconnect` posts `hud_on(false)`, which, with no quest module found, runs `find_quest_module`'s
+   two-level brute scan (~16,000 guarded reads) at every agent disconnect. Post it only when the research proxy was turned on; give
+   `rd<T>`'s site its own name (it is labelled `wo137::set_send_callback`).
+2. **C1:** why the field's guard never swung at the joiner's figure; the `WO166-C1` line names both models' state next time.
+3. **The joint assault and the amnesty (R1):** WO-151 holds the host's Henry answerable for the figure's assault; with the crime
+   untouched, a guard killed the unarmed host 30 m away after the joiner's wake. The maintainer's decision.
+4. **L1 in the game:** a scripted close does not release the engine's item transfer, so only one real loot cycle ran unattended; three
+   corpses with two players is checklist 212.
+5. **T3:** the never-started talk (the blacksmith, the frozen haggle) was not reproduced by scripted presses; the timeout line now names
+   the engine's last state.
+6. **M1:** a custom pin icon and a name label (from the WO).
+7. **The harness:** the agent's log lines carry no time, so per-window counts of agent lines (the C1 runner's guard rows) came out 0;
+   the C1 result uses the native log's timed lines.
+8. **The weather read-back** shows the previous value at the apply (the override acts from the next frame); a read one frame later
+   would make the line exact.

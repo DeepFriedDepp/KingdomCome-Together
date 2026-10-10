@@ -186,5 +186,7 @@ bool write_attack_fields(void* model, const AttackFields& f);
 // plain value at the block's value slot (no setter, no listener) -- the copy's striking window.
 bool read_state(void* model, int32_t* out);
 bool write_state(void* model, int32_t v);
+// WO-166 C1: when this NPC last committed an attack-class action (the capture's own clock, QPC seconds; -1 = never seen).
+double last_npc_attack_s(uint32_t eid);
 
 } // namespace kcdmp::motion

@@ -281,6 +281,12 @@ b.inventory:RemoveItem(cw); player.inventory:AddItem(cw)
 LOG = {}; loop()
 tok = firstTok("w134_take")
 KCD2MP_W134TakeResult(tok, "gone", "bandit_7")
+-- WO-166 L1: never under the open loot screen -- the take-back waits for its close (Test-WO166Synthetic L-section)
+check("B3 host says gone under the open loot screen: the coat stays until it closes", player.inventory:GetCountOfClass(COAT) == 1)
+TIMERS = {}
+KCD2MP_W166LootClosed("element")
+for _, t in ipairs(TIMERS) do t.f() end
+TIMERS = {}
 check("B3 host says gone: the coat is taken back off Henry", player.inventory:GetCountOfClass(COAT) == 0)
 check("B3 ... with the plain line", lastToast() == "Someone already took that.", lastToast())
 KCD2MP_W134BodyState("bandit_7", "update", 1, 1, 1, {})

@@ -37,6 +37,9 @@
 //                                                                action channel, every 1 s from t0 to t1 with combat on,
 //                                                                then one "off"; zones are table ids, -1 none)
 //   swingat / verdict (pb|broken, hid=N) / avatarfight / flee / teleport   (WO-165: Wo165Verbs.cs; --selftest-wo165 checks their packets)
+//   gcombat <t0_s> <t1_s> [gz]                                  (WO-166 C1: the ghost's Position carries a state block with the
+//                                                                combat bit between t0 and t1 -- the joiner "in combat", which
+//                                                                holds its figure in combat on the host)
 //   raw <t_s> <typeHex> <payloadHex> [stampOffset]              (WO-131: send this packet as-is at stream time t;
 //                                                                 the 4 bytes at stampOffset are re-stamped with this
 //                                                                 peer's clock -- a recorded host stream replayed,
@@ -233,6 +236,7 @@ static class P
         var fights = new List<(double T0, double T1, string Npc, double Every, float Hp, float St)>();       // WO-165 avatarfight
         var lastFight = new Dictionary<int, double>();
         var tports = new Dictionary<string, List<(double T, float Dx, float Dy)>>(StringComparer.OrdinalIgnoreCase);   // WO-165 teleport
+        var gcombats = new List<(double T0, double T1, int Gz)>();   // WO-166 C1
         uint swingSeq = 0;
         foreach (var raw in File.ReadAllLines(Arg(a, "--plan", "plan.txt")))
         {
@@ -306,6 +310,10 @@ static class P
                     if (!tports.TryGetValue(f[2], out var tl)) tports[f[2]] = tl = new();
                     tl.Add((Wo165Verbs.D(f[1]), F(f[3]), F(f[4])));
                     break;
+                case "gcombat":   // WO-166 C1: gcombat <t0> <t1> [gz]
+                    gcombats.Add((double.Parse(f[1], CultureInfo.InvariantCulture), double.Parse(f[2], CultureInfo.InvariantCulture),
+                                  f.Length > 3 ? int.Parse(f[3], CultureInfo.InvariantCulture) : 1));
+                    break;
                 case "saved": saves.Add((double.Parse(f[1], CultureInfo.InvariantCulture), byte.Parse(f[2]), byte.Parse(f[3]), ushort.Parse(f[4]))); break;
                 case "die": dies[f[2]] = double.Parse(f[1], CultureInfo.InvariantCulture); break;
                 case "hp":
@@ -348,7 +356,7 @@ static class P
                                   new LootMsg(Protocol.QuestHostCheckpoint, ++joinTok, $"1 1 {f[2]}:-:{f[3]}").BuildUp(Protocol.QuestHostUp, 1),
                                   $"QCP {f[3]}={f[2]}"));
                     break;
-                case "raw": raws.Add((double.Parse(f[1], CultureInfo.InvariantCulture), Convert.ToByte(f[2], 16), Convert.FromHexString(f[3]), f.Length > 4 ? int.Parse(f[4]) : -1)); break;
+                case "raw": raws.Add((double.Parse(f[1], CultureInfo.InvariantCulture), Convert.ToByte(f[2], 16), Convert.FromHexString(f[3] == "-" ? "" : f[3]), f.Length > 4 ? int.Parse(f[4]) : -1)); break;
             }
         }
 
@@ -511,7 +519,10 @@ static class P
                 lastGhost = now;
                 var (gx, gy, gz, gyaw) = ghost.At(ts - streamT0);
                 if (tports.TryGetValue("ghost", out var gtp)) { var (odx, ody) = Wo165Verbs.Offset(gtp, ts - streamT0); gx += odx; gy += ody; }
-                int glen = Protocol.PositionPayloadLen + (ghostSenderMs ? Protocol.SenderMsLen : 0);
+                double gtc = ts - streamT0;
+                var gc = gcombats.FirstOrDefault(c => gtc >= c.T0 && gtc < c.T1);
+                bool gInCombat = gcombats.Any(c => gtc >= c.T0 && gtc < c.T1);   // WO-166 C1
+                int glen = Protocol.PositionPayloadLen + (gInCombat ? Protocol.BodyState2Len : 0) + (ghostSenderMs ? Protocol.SenderMsLen : 0);
                 var gp = new byte[3 + glen]; gp[0] = Protocol.Position; BinaryPrimitives.WriteUInt16LittleEndian(gp.AsSpan(1), (ushort)glen);
                 BinaryPrimitives.WriteSingleLittleEndian(gp.AsSpan(3), gx); BinaryPrimitives.WriteSingleLittleEndian(gp.AsSpan(7), gy);
                 BinaryPrimitives.WriteSingleLittleEndian(gp.AsSpan(11), gz); BinaryPrimitives.WriteSingleLittleEndian(gp.AsSpan(15), gyaw);
@@ -521,10 +532,17 @@ static class P
                 if (riding) gp[19] |= Protocol.PositionFlagRiding;
                 if (claimHost) gp[19] |= Protocol.PositionFlagHostClaim;
                 if (riding != ghostWasRiding) { Console.WriteLine(FormattableString.Invariant($"SYNTH ghost riding={(riding ? "ON" : "OFF")} at t={gt:F1}s")); ghostWasRiding = riding; }
+                int go = 20;
+                if (gInCombat)
+                {
+                    gp[19] |= Protocol.PositionFlagBodyState2;
+                    new BodyState2(0, 0, BodyState2Bits.CombatMode, Protocol.ZoneFromTableId(gc.Gz), WireGuardStance.Left, Protocol.ZoneFromTableId(gc.Gz), 0, 0, 0).Write(gp.AsSpan(go));
+                    go += Protocol.BodyState2Len;
+                }
                 // Stamped at the sample, before the injected delay: the jitter then
                 // shows as lateness against the stamp, exactly as on a real link.
                 if (ghostSenderMs)
-                    BinaryPrimitives.WriteUInt32LittleEndian(gp.AsSpan(20), senderClock == "tick" ? unchecked((uint)Environment.TickCount64)
+                    BinaryPrimitives.WriteUInt32LittleEndian(gp.AsSpan(go), senderClock == "tick" ? unchecked((uint)Environment.TickCount64)
                         : unchecked((uint)(Stopwatch.GetTimestamp() * 1000 / Stopwatch.Frequency)));
                 double d = delayMs + rng.NextDouble() * jitterMs + (rng.NextDouble() * 100 < spikePct ? spikeMs : 0);
                 queue.Enqueue(gp, now + d);

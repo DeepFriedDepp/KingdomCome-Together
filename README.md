@@ -7,7 +7,7 @@
 <strong>Not affiliated with or endorsed by Warhorse Studios or PLAION.</strong></p>
 
 <p align="center">
-  <a href="docs/releases/RELEASE-NOTES-0.48.0.md"><img alt="main" src="https://img.shields.io/badge/main-0.48.0-b8860b?style=flat-square"></a>
+  <a href="docs/releases/RELEASE-NOTES-0.48.2.md"><img alt="main" src="https://img.shields.io/badge/main-0.48.2-b8860b?style=flat-square"></a>
   <a href="https://github.com/DeepFriedDepp/KingdomCome-Together/releases/latest"><img alt="latest release" src="https://img.shields.io/github/v/release/DeepFriedDepp/KingdomCome-Together?label=latest%20release&color=8a3324&style=flat-square"></a>
   <a href="LICENSE"><img alt="License: GPLv3" src="https://img.shields.io/badge/license-GPLv3-2c3e50?style=flat-square"></a>
   <a href="docs/LAUNCHING.md"><img alt="Platform" src="https://img.shields.io/badge/platform-Windows-555555?style=flat-square"></a>
@@ -28,7 +28,7 @@ against each other from inside the game itself.
 > Kingdom Come: Deliverance II, its assets and its content belong to Warhorse
 > Studios and PLAION; this is a free, non-commercial fan project.
 
-> **The current version is 0.48.0**, a release candidate for the maintainer and one tester (not on the releases
+> **The current version is 0.48.2**, a release candidate for the maintainer and one tester (not on the releases
 > page). `main` (this repo's source) is ahead of the last published installer; the feature list below describes
 > `main`. Installing from the
 > [releases page](https://github.com/DeepFriedDepp/KingdomCome-Together/releases)
@@ -36,15 +36,25 @@ against each other from inside the game itself.
 > here — [Building from source](#building-from-source) gets you current
 > `main`.
 >
-> **What 0.48.0 is, in plain words**
+> **What 0.48.2 is, in plain words**
 >
+> - **No loot crash** (new in 0.48.2): a body you are looting is never changed under your open loot screen; the host's changes
+>   wait until you close it.
+> - **Talking (joiner, new in 0.48.2):** a talk the mod starts never blocks your own; the person you press talk on stands still
+>   and turns to you before the conversation starts (`mp_talk_resume_first`, default on); someone busy with your partner says so.
+>   Quest values such as the smith's sword quality now reach you even while that part of the quest is asleep.
+> - **Enemies that fight the joiner (new in 0.48.2):** the enemy's real swing plays before its damage much more often, also on a
+>   slow link; the host's enemies count as attacking on your screen while they swing, so your game's block and riposte prompts
+>   can show (`mp_copy_strikes`, default on; the host's game still decides every blow); figures snap less after a long hold
+>   (`mp_snap_fix`, default on). The joiner's rain follows the host's; the fast-travel message only shows on a real attempt; one
+>   map pin per partner; the NPCs that killed you stop fighting when you wake; Join through Steam shows a friend who is still
+>   starting and looks again by itself. Checked unattended with a stand-in partner; the checklist's items 212–223 ask two people.
 > - **The host can lock onto an enemy that is beating his partner** (new in 0.48.0): stand within 6 m of it and face it, and
 >   the game's own lock-on can pick it; it keeps fighting your partner until you hit it. `mp_host_lock` (default on). Checked
 >   live with a stand-in partner; the checklist's items 205–211 ask two people.
-> - **Your own game judges an enemy's blow on your screen** (joiner, new in 0.48.0): the hit and its damage come from your game,
->   applied once; while you hold block the host's game still decides, as before (the game counts a held block only against an
->   enemy it sees striking, which the copy never is). And an enemy whose blow you blocked bounces back. `mp_victim_decides`,
->   `mp_block_recoil` (default on; not yet checked with two players).
+> - **Your own game can judge an enemy's blow on your screen** (joiner, 0.48.0): the hit and its damage come from your game,
+>   applied once. **Off again since 0.48.2** (`mp_victim_decides on` turns it on): its proof needs someone holding block. An
+>   enemy whose blow you blocked bounces back (`mp_block_recoil`, default on; not yet checked with two players).
 > - **Talking to the host's people (joiner):** the mod no longer floods the game with placements it already refused; people
 >   near you are reset after a wait or a sleep; the person you walk up to is ready before you press the key; a stuck request is
 >   asked once more, then "Try again in a moment". Quest counters that drift from the host's are set back to the host's value.
@@ -68,7 +78,7 @@ against each other from inside the game itself.
 >   game, not yet with two people; the checklist's items 162–176 ask two people.
 > - **Doors, shops, herbs, horses and the prologue's cutscenes** got their own fixes since 0.45.5; the checklist lists each.
 >
-> **Known, not fixed in 0.48.0:** set-piece brawls (the Cuman brawl, the Moravians' flags); a killed person standing up
+> **Known, not fixed in 0.48.2:** set-piece brawls (the Cuman brawl, the Moravians' flags); a killed person standing up
 > again on the other screen (the standing dead copy); people left naked after a wait or a sleep — fixed in 0.46.0 and
 > waiting for the testers to confirm it; bows and arrows (not built); your own block does not yet decide a blocked blow on your
 > screen (the host's game does); the attacker does not recoil when his blow is blocked; two players on one enemy can still make it turn between them,

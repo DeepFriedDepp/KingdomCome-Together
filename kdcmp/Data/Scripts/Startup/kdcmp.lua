@@ -21350,6 +21350,7 @@ function KCD2MP_W166WeatherTick(host, force, joiner)
         if not force and (now - X.readAt) < 2.0 then return end
         X.readAt = now
         local rain = nil
+        if type(EnvironmentModule) ~= "table" or type(EnvironmentModule.GetRainIntensity) ~= "function" then return end
         pcall(function() rain = tonumber(EnvironmentModule.GetRainIntensity()) end)
         if not rain then return end
         X.stats.reads = X.stats.reads + 1
@@ -21378,7 +21379,9 @@ function KCD2MP_W166WeatherApply(rain, profile)
     X.stats.applies = X.stats.applies + 1
     if was == nil or math.abs(rain - was) >= 0.05 then
         local back = nil
-        pcall(function() back = tonumber(EnvironmentModule.GetRainIntensity()) end)
+        if type(EnvironmentModule) == "table" and type(EnvironmentModule.GetRainIntensity) == "function" then
+            pcall(function() back = tonumber(EnvironmentModule.GetRainIntensity()) end)
+        end
         mp_log(string.format("WO166-WEATHER applied rain=%.2f profile=%s read_back=%s set=%s -- the host's rain here", rain, tostring(profile),
             back and string.format("%.2f", back) or "?", tostring(ok)))
     end

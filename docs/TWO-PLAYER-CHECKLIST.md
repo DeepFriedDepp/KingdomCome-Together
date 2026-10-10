@@ -1014,6 +1014,42 @@ why=…`), `WO161-HIT` (joiner), `MP-FIGHTSNAP`, `MP-WO165-STATS`.
 211. **A 3-minute brawl** with three enemies: press `mark_odd` at every jump of a figure. Afterwards both logs; the measure is
      `MP-FIGHTSNAP` (resume and post-hold steps).
 
+## WO-166 — the loot crash, talking, quest values, enemies that fight the joiner, weather, the map pin, respawn, Steam friends (0.48.2)
+
+Built and checked unattended with a stand-in partner (the synthetic peer); nothing here was played by two people yet. **Press
+"Something's wrong here" (`mark_odd`) at every miss**, then send both logs. Lines worth a look: `WO166-LOOT`, `WO166-TALK`,
+`WO164-QFIX`, `WO166-STRIKE` / `WO166-LOCALHIT` (joiner), `WO161-HIT` (joiner), `WO166-C1` (host), `WO166-WEATHER`,
+`WO164-MAPMARK`, `WO166-AMNESTY`, `MP-WO166-STATS`.
+
+212. **Loot three corpses** (joiner), each while the host also takes something from the same body or kills nearby. No crash; the
+     loot screen never changes under you; when you close it, the body shows the host's list. * Joiner: `WO166-LOOT deferred …` while
+     open, `WO166-LOOT applied … close=element|audio` after; never a `WO134-BODY state` line between `open` and `applied`.
+213. **Talk to five of the host's people** (joiner), among them **the smith and the blacksmith**, then the same five again. Every
+     one answers. If one does not: `mark_odd`, and the joiner's `WO166-TALK timeout npc=… state=… stream=…` line says why. Your own
+     press is never blocked by a talk the mod started (`WO166-TALK own-request suppressed|cancelled` only).
+214. **Talk to someone the host is talking to** (joiner): "They're busy with your partner." on screen, no stuck request
+     (`WO166-TALK busy … why=host-talking`).
+215. **Haggle with a seller, then with another seller** (joiner). Both haggles open and close; no frozen copy afterwards.
+216. **The smith's sword-quality talk** (host, then the joiner speaks to the smith): the joiner's game takes the host's value —
+     `WO164-QFIX var=…kvalitaMece … applied=yes why=changed|changed-hibernated type=uint`.
+217. **Two bandits fight the joiner** (the host stands back): they swing at the joiner's figure on the host's screen and at the joiner
+     on his; the joiner sees the block and riposte prompts; **block one swing and take one**: the blocked one costs stamina, the
+     taken one costs health, each once. * Joiner: `WO161-HIT … applied=yes`, never `applied=dup`, no `reason=row-stale`. Host: if a
+     bandit stands on the figure without swinging, a `WO166-C1 npc=…` line says what both models read.
+218. **Both on one enemy** for a minute. Both players' hits count; no snapping between the figures (`MP-FIGHTSNAP`).
+219. **The host dies far away while the joiner fights** (the host 150 m off, killed by something there). The joiner's enemies keep
+     moving and fighting near him (the host keeps streaming around both players; `WO166-SCAN fallback` on the host if its own loop
+     stops).
+220. **Respawn after an NPC kill** (joiner, then host). After the wake, the NPCs that killed you stop fighting
+     (`WO166-AMNESTY … stopped=N`), nobody fights an empty spot; a crime you committed is still remembered by the guards.
+221. **Open the map** (both, a few times, also while a partner rejoins): no fast-travel message unless you actually confirm a trip
+     (then once per session); **one pin per partner** with the companion icon, never one for yourself, gone within 2 s when the
+     partner leaves.
+222. **Weather for an hour** (both): it rains on both screens or on neither. * Joiner: `WO166-WEATHER applied rain=…`; host:
+     `WO166-WEATHER sent …`.
+223. **The joiner finds the host in Join through Steam** while the host's game is still starting: the host appears as
+     "(starting...)" and becomes clickable by itself within about 10 s of the host's session being ready.
+
 ## Logs to send afterwards
 
 Both machines: Report a bug in the launcher. Since 0.42.2 it also collects the

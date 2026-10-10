@@ -569,6 +569,16 @@ void dump_row(void* desc) {
     logf("WO151-SYNCDUMP row %p: %s", desc, line);
 }
 
+// WO-166 C1: the last committed attack per NPC (any thread: the capture hook; read by wo165's lock tick on the main thread).
+std::mutex g_lastAtkMu;
+std::unordered_map<uint32_t, double> g_lastAtk;
+double qpc_now_s() { LARGE_INTEGER q, f; QueryPerformanceCounter(&q); QueryPerformanceFrequency(&f); return double(q.QuadPart) / double(f.QuadPart); }
+void note_npc_attack(uint32_t eid) {
+    std::lock_guard<std::mutex> lock(g_lastAtkMu);
+    if (g_lastAtk.size() > 512) g_lastAtk.clear();   // a bound, never a leak
+    g_lastAtk[eid] = qpc_now_s();
+}
+
 void capture(uint8_t cls, void* action) {
     void* raw = nullptr;
     if (!rd(action, kActionCombatActor, &raw) || !raw) return;
@@ -636,6 +646,7 @@ void capture(uint8_t cls, void* action) {
         if (_strnicmp(c.name, "kcd2mp_", 7) == 0 || _strnicmp(c.name, "DialogTwin_", 11) == 0) { c_capOurs.fetch_add(1); return; }   // never ours
         c.eid = ent ? engine::entity_id(ent) : oeid;
         c_capNpc.fetch_add(1);
+        if (c.kind == 1) note_npc_attack(c.eid);   // WO-166 C1: the diagnostic's "no attack committed" clock
         if (cls == kClsHit) c_capHit.fetch_add(1);
         else if (cls == kClsSyncAttack) c_capSync.fetch_add(1);
     }
@@ -1785,6 +1796,12 @@ bool read_attack_fields(void* model, AttackFields* out) {
     *out = AttackFields{};
     return model && prop_value(model, kPropAttackType, &out->type) && prop_value(model, kPropAtkZone, &out->zone) &&
            prop_value(model, kPropAtkHand, &out->hand) && prop_value(model, kPropAtkStrength, &out->strength);
+}
+
+double last_npc_attack_s(uint32_t eid) {
+    std::lock_guard<std::mutex> lock(g_lastAtkMu);
+    auto it = g_lastAtk.find(eid);
+    return it == g_lastAtk.end() ? -1.0 : it->second;
 }
 
 bool read_state(void* model, int32_t* out) {

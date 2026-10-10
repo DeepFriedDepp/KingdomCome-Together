@@ -1345,7 +1345,7 @@ void serve(HANDLE h) {
             }
             case kWo163: {   // WO-163: shared combat (the skirmish relation read; the probes' and the build's switches)
                 std::vector<uint8_t> copy(body, body + len);
-                struct R { uint8_t reason = kcdmp::wo163::kRFailed; uint8_t op = 0; uint8_t buf[200]{}; size_t n = 0; };
+                struct R { uint8_t reason = kcdmp::wo163::kRFailed; uint8_t op = 0; uint8_t buf[512]{}; size_t n = 0; };   // WO-166: wo166's status (~330 chars) was cut at 200
                 R r{};
                 bool faulted = false;
                 const bool ran = run_sync_bounded<R>(
@@ -1354,7 +1354,8 @@ void serve(HANDLE h) {
                         out.reason = kcdmp::wo163::handle(copy.data(), copy.size(), out.buf, sizeof(out.buf), &out.n);
                     }, "Wo163", r, &faulted);
                 if (!ran) { r.reason = faulted ? kReasonTaskFaulted : kcdmp::wo163::kRFailed; r.n = 0; r.op = len ? body[0] : 0; }
-                BYTE rb[4 + 200]{};
+                BYTE rb[4 + sizeof r.buf]{};
+                if (r.n > sizeof r.buf) r.n = 0;   // never past the buffer
                 rb[0] = (ran && r.reason == kcdmp::wo163::kROk) ? 1 : 0; rb[1] = seq; rb[2] = r.op; rb[3] = r.reason;
                 if (r.n) std::memcpy(rb + 4, r.buf, r.n);
                 EnterCriticalSection(&g_write_lock);

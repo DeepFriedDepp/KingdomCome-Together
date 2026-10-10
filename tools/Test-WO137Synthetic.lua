@@ -255,6 +255,9 @@ do -- (c) talking (joiner)
     local mark = #LOG
     BasicAIActions.OnTalk(e, player, 0)
     check("c: Talk on a copy: its brain back for the conversation", cmdCount("wh_ai_ResumeNPC tzel_olbram") == 1 and KCD2MP._npcPaused["tzel_olbram"] == nil)
+    -- WO-166 T3 (mp_talk_resume_first, default on): a press on a paused copy goes on 200 ms after the resume
+    local due = TIMERS; TIMERS = {}
+    for _, t in ipairs(due) do if t.ms == 200 then t.f() end end
     check("c: ...the game's own OnTalk still runs (the request)", TALKS[#TALKS] == "OnTalk:tzel_olbram", TALKS[#TALKS])
     -- WO-144 1.3: the key press holds nothing on the host; the conversation's start does
     check("c: ...the host is not told yet (WO-144: only once it starts)", countEvt("w137_talk", "on tzel_olbram", mark) == 0)

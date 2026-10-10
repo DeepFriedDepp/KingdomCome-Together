@@ -573,8 +573,9 @@ do
     NOW = NOW + 11
     KCD2MP_W154MenuBackstop()
     check("h: the agent silent 11 s: given back by the label loop's backstop", CVARS.wh_pl_FastTravelEnabled == 1 and M.ftHeld == false)
-    -- a refusal is told
+    -- a refusal is told (WO-166 F1: after the player's own confirmed trip, once per session; the silent case: Test-WO166Synthetic P9-P13)
     session("host", true)
+    if KCD2MP.w166 and KCD2MP.w166.ft then KCD2MP.w166.ft.confirmAt = os.clock(); KCD2MP.w166.ft.told = false end
     ui0 = #UICALLS
     check("h: the engine refused a fast travel: told", KCD2MP_W154FastTravelTried("engine-refused") == true and hasToast(M.TEXT_FT_HOST, ui0))
     NOW = NOW + 1

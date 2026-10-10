@@ -238,8 +238,9 @@ uint8_t handle(uint8_t op, const uint8_t* body, size_t len, uint8_t* out, size_t
             return wo163::kROk;
         }
         case kOpStatus: {
+            // a reply longer than the buffer is cut, never dropped (snprintf wrote cap-1 characters)
             const int n = status_text(reinterpret_cast<char*>(out), static_cast<int>(cap));
-            *outLen = (n > 0 && static_cast<size_t>(n) < cap) ? static_cast<size_t>(n) : 0;
+            *outLen = n <= 0 || cap == 0 ? 0 : (static_cast<size_t>(n) < cap ? static_cast<size_t>(n) : cap - 1);
             return wo163::kROk;
         }
         case kOpConfig: {

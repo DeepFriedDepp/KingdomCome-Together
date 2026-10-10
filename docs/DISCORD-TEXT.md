@@ -18,11 +18,27 @@ Kingdom Come: Together is unofficial and free, made by its contributors and main
 ## How to start a game together (WO-159; for the how-to / FAQ channel)
 
 ```
-How to play together (0.48.0):
+How to play together (0.48.2):
 1. Both: open the Kingdom Come: Together launcher.
 2. Host: HOST GAME, share the address (or the Steam code), PLAY. On the game's main menu press Start Game: pick one of your worlds, or New adventure — choose your playstyle (Soldier / Adviser / Scout), then Skip the prologue (recommended with a partner) or watch its cutscenes (16 min; skipping one skips them all). You start where Hans and Henry part ways.
 3. Partner: JOIN with the host's address (or JOIN THROUGH STEAM), PLAY. On the main menu press Join Game, then Join with a new character (pick a playstyle; no save of your own needed) or Bring my character. Pressed too early? It says "Waiting for the host…" and joins by itself when they're ready.
 Nobody clicks CONNECT any more, and you don't need anyone's save file. First time ever starting the game? Start it once from Steam and accept its two first-run pages, then use the launcher.
+```
+
+## Version 0.48.2 — the loot crash, talking, enemies that fight the joiner, weather (WO-166)
+
+```
+Kingdom Come: Together 0.48.2 — fixes from the last sessions.
+• Looting: the game no longer crashes when the host changes a body you are looting. Your loot screen stays as it is, and the body shows the host's items when you close it.
+• Talking (joiner): a talk the mod starts for you never blocks your own any more. A person you press talk on now stands still and turns to you before the conversation starts (mp_talk_resume_first, on). Someone busy with your partner says so ("They're busy with your partner.").
+• Quests: values like the smith's sword quality now reach the joiner even while that part of the quest is asleep.
+• Fighting (joiner): the enemy's real swing plays before its damage much more often, even on a slow connection. The host's enemies now count as attacking on your screen while they swing, so your game's block and riposte prompts should show up (mp_copy_strikes, on). Enemy figures snap less after a long hold (mp_snap_fix, on).
+• Weather: the joiner's rain follows the host's.
+• The fast-travel message only shows when you actually try to travel, once per session. The map shows one pin per partner, with the companion icon.
+• Respawn: the NPCs that killed you stop fighting when you wake. A crime is still remembered.
+• Join through Steam: a friend who is still starting shows as "(starting...)", and the list updates by itself every 10 seconds.
+Still off: mp_victim_decides (your own game judging an enemy's blow). It needs someone holding block to check it; turn it on in the console if you want to try it.
+None of this has been played by two people yet. If something looks wrong, turn the new switch off in the console (mp_talk_resume_first off / mp_copy_strikes off / mp_snap_fix off) and press "Something's wrong here". Both players and the relay need 0.48.2.
 ```
 
 ## Version 0.48.0 — the host's lock-on (WO-165)

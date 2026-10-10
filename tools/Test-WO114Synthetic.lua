@@ -216,6 +216,8 @@ CVARS.wh_pl_FastTravelEnabled = 1      -- something turned it back on (a load, t
 KCD2MP_Wo114FastTravelBlock(true, "re-assert")
 check("h: re-assert puts it back to 0, previous value kept", CVARS.wh_pl_FastTravelEnabled == 0 and w.ftPrev == 2)
 NOW = 300; clearLog(); TOASTS = {}; DRAWS = {}
+-- WO-166 F1: the refusal is told only after the player's own confirmed trip (once per session; the silent case: Test-WO166Synthetic P9-P13)
+if KCD2MP.w166 and KCD2MP.w166.ft then KCD2MP.w166.ft.confirmAt = NOW; KCD2MP.w166.ft.told = false end
 check("h: a refusal is logged", KCD2MP_Wo114FastTravelTried("map") == true and logCount("WO114-FASTTRAVEL refused (map)") == 1, lastLog("WO114-FASTTRAVEL"))
 check("h: ... the game's own HUD toast at once", TOASTS[1] == "Only the host can fast travel in co-op.", TOASTS[1])
 check("h: ... and reported", evtCount("wo114_ft_try", "map") == 1)
