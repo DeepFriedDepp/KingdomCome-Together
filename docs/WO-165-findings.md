@@ -270,3 +270,12 @@ without the soak test (0.48.0)."` The header says **0.48.0**. **`release\Kingdom
 synthetic suites**, the static checks, the installer cases, the payload smoke (`protocol=v10 release=0.48.0`); no FAIL line; no account or
 machine name in the payload. The maintainer's installed `Mods\kdcmp` was restored after the live runs (three files, hashes equal to the copy
 taken before).
+
+## The 0.48.0 build (second, supersedes the first)
+
+After the maintainer's decision above (C2 and C3 on, the blocking referral): from a fresh clone of `a66057b` (`release\c0480b`), the same
+start saves, the same waiver text with "(0.48.0, second build)". The header says **0.48.0**. **`release\KingdomComeTogether-Setup-0.48.0.exe`,
+106,435,217 bytes, sha256 `f5a8179e9ba4bef3e59a1846345983df7495cdbb977afa0ff7a3d2b7a899cfef`.** Local only; not tagged; **unsigned**. The first
+build is kept as `KingdomComeTogether-Setup-0.48.0.superseded-first-build.exe`. Transcript `release\BUILD-0.48.0-second.log`. Inside the build:
+relay 63, agent 1,320, setup 77, native 593, all 52 synthetic suites, the installer cases, the payload smoke; no FAIL line; no account or
+machine name in the payload.
