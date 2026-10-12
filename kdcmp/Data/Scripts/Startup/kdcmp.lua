@@ -21427,13 +21427,13 @@ function KCD2MP_W166SetAutoMode(arg)
     return true
 end
 
--- WO-173 (0.49.0): the joiner's blows become real hits in the host's world (docs/WO-173-findings.md). Default ON in 0.49.1-0.49.2 (WO-174 D), OFF again since 0.50.0 (WO-176 B1: its check could not be staged).
+-- WO-173 (0.49.0): the joiner's blows become real hits in the host's world (docs/WO-173-findings.md). Default ON since 0.49.1 (WO-174 D: the maintainer's choice), kept ON for 0.50.0 (the maintainer, after WO-176).
 --   mp_real_hits (host; the agent and the DLL act on it): the joiner's blow on a host NPC goes through the host game's own hit processor --
 --      the NPC's own rules decide hit / block / parry, it reacts as to the host's blows; off = the old raw damage, its stamina capped so
 --      one blow never knocks a fighter out.
 --   KCD2MP_W173Down(name, state) (joiner, from the agent): the host's NPC is up (0) / knocked out (1) / dead (2) -- its copy follows now.
 --   WO173-TOGGLE ...   WO173-DOWN npc=<n> state=<0|1|2> ...
-KCD2MP.w173 = KCD2MP.w173 or { realHits = false, fastWake = {}, stats = { down = 0, up = 0, dead = 0 } }   -- WO-176 B1: off again in 0.50.0
+KCD2MP.w173 = KCD2MP.w173 or { realHits = true, fastWake = {}, stats = { down = 0, up = 0, dead = 0 } }
 function KCD2MP_W173SetRealHits(arg)
     local v = KCD2MP_Wo122ParseBool(arg)
     if v == "bad" then mp_log("mp_real_hits: expected on|off"); return false end
@@ -26895,7 +26895,7 @@ local ok, err = pcall(function()
     System.AddCCommand("mp_host_lock", 'KCD2MP_W165SetHostLock(%line)', "WO-165: (host) you can lock onto an NPC that is beating your partner: near it (6 m) and facing it, you join its fight as its foe; it keeps fighting your partner until you hit it (default on): mp_host_lock on|off")
     System.AddCCommand("mp_victim_decides", 'KCD2MP_W165SetVictimDecides(%line)', "WO-165: (joiner) your own game judges an enemy's blow and applies it; while you hold block the host's game decides, as before (UNTESTED with two players; default off since 0.48.2): mp_victim_decides on|off")
     System.AddCCommand("mp_block_recoil", 'KCD2MP_W165SetBlockRecoil(%line)', "WO-165: (joiner) an enemy whose blow you blocked plays the game's own bounce-back (UNTESTED with two players; default on): mp_block_recoil on|off")
-    System.AddCCommand("mp_real_hits", 'KCD2MP_W173SetRealHits(%line)', "WO-173: (host) your partner's blows are real hits in your world: the enemy blocks, parries, staggers and fights back by its own rules, the same on both screens; off = the old raw damage, never a knock-out from one blow (UNTESTED with two players; default OFF since 0.50.0 -- WO-176 could not stage a bandit that fights your partner -- the capped raw fallback is the default): mp_real_hits on|off")
+    System.AddCCommand("mp_real_hits", 'KCD2MP_W173SetRealHits(%line)', "WO-173: (host) your partner's blows are real hits in your world: the enemy blocks, parries, staggers and fights back by its own rules, the same on both screens; off = the old raw damage, never a knock-out from one blow (UNTESTED with two players; default ON since 0.49.1, the capped raw fallback stays per blow): mp_real_hits on|off")
     System.AddCCommand("mp_arranged_guard", 'KCD2MP_W176SetArrangedGuard(%line)', "WO-176: (host) a quest's arranged fight is the story's: your partner's figure stays out of it -- no skirmish, no threat, no forced target, no lock-on, none of his blows land in it, and he is told once (default on): mp_arranged_guard on|off")
     System.AddCCommand("mp_copy_blocks", 'KCD2MP_W176SetCopyBlocks(%line)', "WO-176: (joiner) an enemy that blocks or parries your blow in the host's world shows its block on your screen (default on): mp_copy_blocks on|off")
     System.AddCCommand("mp_repair_combat", 'KCD2MP_W174Repair(%line)', "WO-174: frees stuck weapons -- clears partner-figure fight links, ends a stuck fight, re-equips a melee weapon -- and says so; on a save that was fine it changes nothing: mp_repair_combat")

@@ -30,9 +30,9 @@ public static class Wo173Rules
     /// mp_real_hits. WO-173 shipped it OFF (its public-release rule: the block-rate check could not be staged unattended, findings C1);
     /// WO-174 D (0.49.1, for the maintainer and one partner to test) is ON by the maintainer's choice. The capped raw path stays the per-blow fallback.
     /// </summary>
-    // WO-176 B1: OFF again in 0.50.0 -- the WO: "on stays only if it passes"; the block-rate check could not be staged (a camp bandit never
-    // fought the partner's figure: the figure's body is a villager's soul to the engine). The capped raw fallback is the default.
-    public const bool DefaultRealHits = false;
+    // On since 0.49.1 (WO-174 D). WO-176 B1 could not stage its block-rate check (a camp bandit never fought the partner's figure: the
+    // figure's body is a villager's soul to the engine); the maintainer kept it on for 0.50.0. The capped raw fallback stays per blow.
+    public const bool DefaultRealHits = true;
 
     /// <summary>The joiner's last swing row is the one a hit belongs to when it is at most this old (a swing's start + hit is under 1.3 s).</summary>
     public const long RowFreshMs = 2_500;

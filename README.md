@@ -7,7 +7,7 @@
 <strong>Not affiliated with or endorsed by Warhorse Studios or PLAION.</strong></p>
 
 <p align="center">
-  <a href="docs/releases/RELEASE-NOTES-0.49.2.md"><img alt="main" src="https://img.shields.io/badge/main-0.49.2-b8860b?style=flat-square"></a>
+  <a href="docs/releases/RELEASE-NOTES-0.50.0.md"><img alt="main" src="https://img.shields.io/badge/main-0.50.0-b8860b?style=flat-square"></a>
   <a href="https://github.com/DeepFriedDepp/KingdomCome-Together/releases/latest"><img alt="latest release" src="https://img.shields.io/badge/latest%20release-v0.48.6-8a3324?style=flat-square"></a>
   <a href="LICENSE"><img alt="License: GPLv3" src="https://img.shields.io/badge/license-GPLv3-2c3e50?style=flat-square"></a>
   <a href="docs/LAUNCHING.md"><img alt="Platform" src="https://img.shields.io/badge/platform-Windows-555555?style=flat-square"></a>
@@ -42,8 +42,7 @@ against each other from inside the game itself.
 >   quest fist fights), the partner's figure is kept out of it by the fight's own marks: none of the partner's blows count in it and they
 >   are told so once; the fight ends the way the story says and weapons draw afterwards. A save with the old weapon lock is repaired
 >   the moment it loads (checked in the game). An enemy that blocks or parries the joiner's blow shows its block on the joiner's
->   screen. `mp_real_hits` is **off** again by default (it could not be tested against a bandit that fights the partner). Not played by
->   two people yet.
+>   screen. `mp_real_hits` stays **on** (not yet tested against a bandit that fights the partner). Not played by two people yet.
 > - **0.49.2 (after 0.49.1): your saves are safe.** Co-op plays in its own copy of your world (a free save slot; your own saves are never written),
 >   the launcher backs up your saves before every session (RESTORE SAVES brings one back), and the weapon lock is found: a quest fist fight that ended
 >   without a winner left the game's "fists only" rule on; the mod no longer saves during a conversation, scene or fight, and a locked save gets a

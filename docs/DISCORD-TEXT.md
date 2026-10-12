@@ -207,7 +207,7 @@ Kingdom Come: Together 0.50.0 (a release candidate for the host and one partner)
 - Quest fights stay the story's. When a quest arranges a fight (like the Tachov and Zelejov meadow fight), the partner is kept out of it: none of their blows count in it, the mod never pulls them in, and they are told once: "This fight belongs to the story — your partner fights it." The fight ends the way the story says and everyone's weapons draw afterwards. Switch: mp_arranged_guard.
 - A save that still carries the old weapon lock is now repaired the moment you load it: the mod writes a fixed copy next to it (your original stays as it was), loads the copy and tells you once. Checked in the game this time, with the weapon key.
 - When an enemy in the host's world blocks or parries the joiner's blow, the joiner's screen now shows the enemy's own block. Switch: mp_copy_blocks.
-- mp_real_hits is OFF again by default. We could not test it against a bandit that fights back the joiner, so the joiner's blows use the old damage with the one-blow cap (never a knock-out from one blow). The host can type mp_real_hits on to try it.
+- mp_real_hits stays ON: the joiner's blows are real hits in the host's game (the enemy reacts by the game's own rules), and one blow still never knocks an enemy out. We could not yet test it against a bandit that fights the joiner back. The host can type mp_real_hits off to go back to the old damage.
 - Not there yet: the joiner's own block against an enemy's blow still counts by the host's verdict (mp_victim_decides stays off). The game judges your block only against your locked-on opponent, and the joiner's copy of an enemy never is one yet.
 Both players and the relay need 0.50.0.
 ```

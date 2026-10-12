@@ -1244,8 +1244,8 @@ Evidence: `docs/WO-176-findings.md`. **Type `mark_odd` at every miss.**
      The host's `kcdmp-native.log`: `WO176-ARRANGED … quest=context`, `WO176-SHIELD figure=… on`; `kcd.log`: `WO176-PAUSE figure=… on`.
 279. **Play your real world** (Start Game → your world) and save: afterwards **your original save files are untouched**; the menu offers
      **"Together: <your world>"** for the next session.
-280. **The switches:** `mp_arranged_guard`, `mp_copy_blocks` (both on), `mp_victim_decides`, `mp_real_hits` (see the findings for their
-     defaults in 0.50.0). **Report a bug → Collect logs** afterwards (both machines).
+280. **The switches:** `mp_arranged_guard`, `mp_copy_blocks`, `mp_real_hits` (all on), `mp_victim_decides` (off: a joiner's held block
+     still counts by the host's verdict). **Report a bug → Collect logs** afterwards (both machines).
 
 ## Logs to send afterwards
 

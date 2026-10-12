@@ -24,7 +24,7 @@ start save `quicksave022.whs` (WO-159, 18:53); it is left untouched and compared
 | **A2** S4 live | **pass**: the agent repaired the loaded `335` copy into `_fixed`, rescanned, loaded it, said so once; key 1 draws, HUD sword | `mp_save_health` on |
 | **A3** S1 headless | **pass** on a scratch saves root with the launcher's own calls (original byte-identical, "Together: …" → the copy); not live here (no free playline) | `mp_coop_playline` on |
 | **A4** the live save round trip | **PASS** with the game up (not skipped) | — |
-| **B1** real hits vs an armed bandit | host's own 45 blows: blocked + parried **68.9 %**; joiner's blows: **not stageable** — the bandit never fought the figure (72 engine hits, 0 blocks); applied once, no one-blow knock-out, 0 faults | `mp_real_hits` **off** (WO rule; flagged) |
+| **B1** real hits vs an armed bandit | host's own 45 blows: blocked + parried **68.9 %**; joiner's blows: **not stageable** — the bandit never fought the figure (72 engine hits, 0 blocks); applied once, no one-blow knock-out, 0 faults | `mp_real_hits` **on** (the maintainer's decision; second build) |
 | **B2** your own block decides | no block: **hit 20/20 ✔**; block held / perfect: **0/20** — the player reaches ParryInPlace against the striking copy, but has no Opponent, so the block zone is unset and the zone test fails; built: such a block is referred to the host | `mp_victim_decides` **off** |
 | **B3** blocked outcomes shown | (a) the copy's own block row **26/26**, (b) the attacker's recoil **18/18** (host-verdict path), screenshots show the poses, FIGHTSNAP p90 4.3 / 10.5 cm | `mp_copy_blocks` **on**, `mp_block_recoil` on |
 
@@ -211,11 +211,11 @@ known `wo137::set_send_callback` agent-disconnect scan).
 the numbers do not compare one engine against the other). The bandit's attack rate at the figure ≥ 70 % of its rate at Henry: **not
 met** (1 blow in all vs ~25 a minute). Every blow applied once, no knock-out from one blow, 0 faults: **met**.
 
-**`mp_real_hits`: OFF in 0.50.0** — the WO: *"on stays only if it passes; else off with the capped fallback, said plainly."* It did not
-pass. Plainly: the joiner's blows on the host's NPCs are WO-121's raw damage again, one blow's stamina capped at 35 % (never a knock-out
-from one blow); `mp_real_hits on` (host console) turns the engine path back on. This differs from the maintainer's standing "new
-mechanisms ship on" rule (and from 0.49.1's choice to turn it on) — flagged; one switch either way. The real blocker for a real
-partner is the figure's villager soul, not the engine path.
+**`mp_real_hits`: ON in 0.50.0 (the maintainer's decision, 2026-10-12).** The first 0.50.0 build shipped it off under the WO's rule
+(*"on stays only if it passes"*); the maintainer then asked for it on by default and a rebuild of 0.50.0 (the second build below). So
+the joiner's blows on the host's NPCs go through the host game's own hit processor; any refusal still takes WO-121's raw path with one
+blow's stamina capped at 35 % (never a knock-out from one blow); `mp_real_hits off` (host console) turns it off. The real blocker for a
+real partner is the figure's villager soul, not the engine path.
 
 ### B2 — your own block decides an enemy's blow on your screen [L][K]
 

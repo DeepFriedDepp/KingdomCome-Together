@@ -171,7 +171,7 @@ do
     reset()
     check("S1: mp_real_hits and mp_w173_status are registered", CCMDS["mp_real_hits"] ~= nil and CCMDS["mp_real_hits"].body == "KCD2MP_W173SetRealHits(%line)"
         and CCMDS["mp_w173_status"] ~= nil and CCMDS["mp_w173_status"].body == "KCD2MP_W173Status()")
-    check("S2: the default: OFF again in 0.50.0 (WO-176 B1)", KCD2MP.w173.realHits == false and CCMDS["mp_real_hits"].help:find("default OFF since 0.50.0", 1, true) ~= nil)
+    check("S2: the default: ON (0.49.1, WO-174 D; kept for 0.50.0 by the maintainer)", KCD2MP.w173.realHits == true and CCMDS["mp_real_hits"].help:find("default ON since 0.49.1", 1, true) ~= nil)
     local mark = #LOG
     check("S3: mp_real_hits on tells the agent", KCD2MP_W173SetRealHits("on") == true and KCD2MP.w173.realHits == true
         and countEvt("w173_cfg", "real_hits=on", mark) == 1 and lastLog("WO173-TOGGLE mp_real_hits on", mark) ~= nil)
