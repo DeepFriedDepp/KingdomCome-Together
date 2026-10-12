@@ -73,27 +73,42 @@ other partner (the same look twice — harmless).
 
 ## A2 — the second weapon-lock variant [L][F]
 
-**Reproduced** (fresh game sessions, the mod's pak and no DLL/agent; the scripted draw = holster, 1.5 s, `DrawWeapon`, read `IsWeaponDrawn`):
+**Reproduced** (fresh game sessions each time, the mod's pak and no DLL/agent; the scripted draw = holster, 1.5 s, `DrawWeapon`, read `IsWeaponDrawn`):
 
 | sequence | result |
 |---|---|
 | load `autosave922` (copy of the field's `322`) | draws |
 | …then reload `922` (no save) | **draws** |
-| …`Game.SaveGameViaResting()` → load the file it wrote | **REFUSED**, and then every later load in that process is refused (360, 922 …) |
+| …`Game.SaveGameViaResting()` → load the file it wrote (`autosave368`) | **REFUSED**, and the refusal then survives every later load in that process (360, 922 …) |
 | the same without drawing before the save | **REFUSED** |
-| `Game.AutoSave()` (guard on and off) | wrote **no file** on this build (no `SaveGame:` line) |
-| `Game.QuickSave()` | returns false, no file |
+| a **fresh process** that loads `368` first | **REFUSED** — the lock is in the *file* |
+| `Game.AutoSave()` (guard on and off), `Game.QuickSave()` | wrote **no file** on this build — there is no plain Lua save to switch to |
 
-So the resting save *is* the trigger in that world, and no plain Lua save exists here to switch to. The save written by it carries nothing the
-checks can read: **S4's stuck-fight check finds none** (the quest XML of the field's quest `konecZabomysichValek` is byte-identical in `922`
-and the rest-written file: accepted, no `souboj_na_poli`, no `_skirmishResult`); no arranged-fight / forced-unarmed context on Henry
-(`HasScriptContext` false for all six candidate names, also after the refusal); no fight, no scene; 400 m from any brawl it is still refused.
-`mp_repair_combat` ends at "equipped huntingSwordBasic but it does not draw". The one structural difference between the pristine `922` and
-every re-written file: Henry's soul record loses an optional field (`0x1300`, 6 bytes in `922`, 59 bytes in `923` on the fight's first frame,
-absent in `366…368` and in other worlds' saves that draw fine) — recorded, **not shown to be the cause**.
+So in that world the resting save *is* the trigger, and the file it writes carries the lock. **S4 finds nothing**: the quest XML of the field's quest
+`konecZabomysichValek` is byte-identical in `922` and `368` (accepted, no `souboj_na_poli`, no `_skirmishResult`); no arranged-fight / forced-unarmed
+context on Henry (`HasScriptContext` false for all six candidate names, also after the refusal); no fight, no scene; 400 m from any brawl it is
+still refused; `mp_repair_combat` ends at "equipped huntingSwordBasic but it does not draw".
 
-**Decision.** The state is **not named**. What shipped for it: nothing that claims a repair. The mod's own rest saves are unchanged (they pass
-the live round-trip gate on `autosave360`, WO-176); the gate keeps its documented start-save rule. See "Untested".
+**Bisect** (a scratch tool, never shipped, writes the pristine `922` with one node of `368` swapped in, re-deflated and re-signed; one fresh game
+process per file, the file loaded first, scripted draw):
+
+| node taken from the bad file | result |
+|---|---|
+| ConceptModule (`730a`, all quest XML) | draws |
+| RPGModule souls (`7308/3529`, every soul incl. Henry's) | draws |
+| RPGModule `352d` (Henry's perks / buffs / inventory) | draws |
+| RPGModule `352c` + `352e` | draws |
+| the bad file + the missing Henry-soul field `0x1300` put back (the one structural difference in Henry's record) | **still refused** — that field is not the cause |
+| `GameState` alone (the CryAction entity-state stream, 13 KB smaller in the bad file) | **does not load cleanly**: a crash dump in one run, an endless loading screen in another (a stream whose entities do not match the souls) — cannot be isolated this way |
+| `TerrainState` + `Timer` (a few KB) | not run |
+
+What is left, then, is the `GameState` stream (or a combination with another node; `TerrainState` and `Timer` were not tested): the lock is written into the entity state, not into any
+quest, soul or context the mod can read. A 4.5-minute round per file kept the bisect from going into the stream itself.
+
+**Decision.** The state is **not named** and nothing in this WO claims a repair. The mod's own rest saves are unchanged (they pass the live
+round-trip gate on `autosave360`); the gate stays on `360` and records that `922` fails in the game itself. The honest advice in the
+checklist: if a joined world's weapons refuse to draw after a world save, `mp_repair_combat` first; if it cannot free them, load the older
+save and tell us the save's name (`mark_odd`).
 
 ## A3 — the launcher's banner [unit-free]
 

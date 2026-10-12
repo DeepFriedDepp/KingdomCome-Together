@@ -300,6 +300,34 @@ for _, cfgName in ipairs({ "solo", "joiner", "host" }) do
     KCD2MP_ItemDropClaimed("3000000021", "1", true)
     check(C .. "D2b picking up one leaves the other on the ground", dB and dB.entName and ENTS[dB.entName] ~= nil and dB.state == "ground")
 
+    -- ---- D2c (WO-177 B1, found live): the avatar places ONE item at a time -- the engine mints the entity a tick after PlaceItem and a second
+    -- PlaceItem in that tick REPLACES the first (the first drop then "never appeared": one apple of two lost). Modelled here: two drops added in
+    -- one tick must BOTH end on the ground (the mod starts the second placement only when the first has finished) ----
+    freshWorld(); CONFIGS[cfgName]()
+    do
+        local gh = KCD2MP.ghosts["7"].entity
+        local slot = nil
+        gh.human.PlaceItem = function(self, w, anchorId, _)
+            slot = { w = w, anchorId = anchorId }
+        end
+        local function flush()
+            if not slot then return end
+            local a = nil
+            for _, e in pairs(ENTS) do if e.id == slot.anchorId then a = e end end
+            local it = ITEMS[slot.w]
+            gh.inventory:RemoveItem(slot.w)
+            if a and it then local p = a:GetWorldPos(); mkPickable(engineName(it.class), it.class, it.amount, it.health, p.x, p.y, p.z, slot.w) end
+            slot = nil
+        end
+        KCD2MP_ItemDropAdd("3000000031", ONION, 1, 0.8, 102, 100, 10, "7")
+        KCD2MP_ItemDropAdd("3000000032", ONION, 1, 0.8, 102.5, 100, 10, "7")
+        for _ = 1, 6 do flush(); tick() end
+        local dc, dd = KCD2MP.itemDrops["3000000031"], KCD2MP.itemDrops["3000000032"]
+        check(C .. "D2c two drops added in one tick both end on the ground (one placement in flight at a time)", dc and dd and dc.state == "ground" and dd.state == "ground",
+              tostring(dc and dc.state) .. "/" .. tostring(dd and dd.state))
+        check(C .. "D2c each holds its own entity", dc and dd and dc.entName ~= nil and dd.entName ~= nil and dc.entName ~= dd.entName)
+    end
+
     -- ---- D3: my own drop ----
     freshWorld(); CONFIGS[cfgName]()
     player.inventory:CreateItem(ONION, 1, 1)

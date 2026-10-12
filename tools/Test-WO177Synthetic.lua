@@ -155,10 +155,12 @@ do
 end
 
 -- (B2) corpses agree
+HIDDEN = {}
 do
     local function npc(name, x, y, dead)
         local e = { id = #name * 7 + x, class = "NPC", GetName = function() return name end, GetWorldPos = function() return { x = x, y = y, z = 10 } end }
         e.actor = { IsDead = function() return dead end }
+        e.IsHidden = function() return HIDDEN[name] == true end
         return e
     end
     local removed = {}
@@ -204,6 +206,9 @@ do
     removed = {}
     local nrem = KCD2MP_W177CorpseAnswer("tzel_a=1 tzel_alive=2 tzel_b=2 tzel_nobody=2 tzel_c=3 tzel_d=0")
     check("C10: only an answer 2 removes, only a dead copy here (an alive one and an unknown name are left)", nrem == 1 and #removed == 1 and removed[1] == b.id, tostring(nrem))
+    HIDDEN["tzel_b"] = true
+    check("C10b: a corpse this census already removed stays a hidden entity and is never asked about again", KCD2MP_W177IsDeadNpc(b) == false and KCD2MP_W177CorpseAskText(500):find("tzel_b", 1, true) == nil)
+    HIDDEN["tzel_b"] = nil
     check("C11: it is said", lastLog("WO177-CORPSE gone on the host: removed here npc=tzel_b", 0) ~= nil)
     KCD2MP_W177SetCorpseSync("off")
     check("C12: off -> an answer changes nothing", KCD2MP_W177CorpseAnswer("tzel_a=2") == 0 and #removed == 1)
@@ -221,6 +226,15 @@ do
     mark = #LOG
     KCD2MP_W177HostWatch(210)
     check("C14: and only once", countEvt("w177_corpse_gone", "", mark) == 0)
+    -- a corpse the engine only hid (the entity record stays) counts as gone
+    c.dead = { tzel_h = { x = 100, y = 100, at = 0 } }
+    ENTS["tzel_h"] = npc("tzel_h", 100, 100, true)
+    HIDDEN["tzel_h"] = true
+    System.GetEntitiesInSphere = function(p, r) return { player } end
+    mark = #LOG
+    KCD2MP_W177HostWatch(215)
+    check("C13b: a corpse that is only hidden (not in the scan any more) is told as gone", countEvt("w177_corpse_gone", "tzel_h=2", mark) == 1)
+    HIDDEN["tzel_h"] = nil; ENTS["tzel_h"] = nil
     -- a corpse that is out of the scan but still in the world is not a removal; one that goes while the host is far away is not told
     c.dead = { tzel_x = { x = 100, y = 100, at = 0 }, tzel_far = { x = 900, y = 900, at = 0 } }
     ENTS["tzel_x"] = npc("tzel_x", 100, 100, false)
@@ -315,12 +329,17 @@ do
                       AbortUse = function(self, user) aborted[#aborted + 1] = user and user.id or "nil" end }
     local bystander = { id = 902, class = "NPC", GetName = function() return "someone" end }
     System.GetEntitiesInSphere = function(p, r) return { station, bystander, player } end
+    local abortedAi, endedInteractive = {}, 0
+    AI = AI or {}
+    AI.AbortAction = function(id) abortedAi[#abortedAi + 1] = id end
+    player.player = { OnEndInteractive = function() endedInteractive = endedInteractive + 1 end }
     player.actor.StandUp = function() stood = stood + 1 end
     local mark = #LOG
     KCD2MP_W151Unstuck("")
     check("U1: step 1 calls the game's AbortUse on the interactive object within reach, with this Henry", #aborted == 1 and aborted[1] == 1, #aborted)
     check("U2: and stands him up", stood >= 1)
-    check("U3: the station is named in the unstuck line", lastLog("WO151-UNSTUCK", mark) ~= nil and lastLog("WO151-UNSTUCK", mark):find("station-end(wash_trough_1)", 1, true) ~= nil, lastLog("WO151-UNSTUCK", mark))
+    check("U3: the station is named in the unstuck line", lastLog("WO151-UNSTUCK", mark) ~= nil and lastLog("WO151-UNSTUCK", mark):find("station-end(wash_trough_1+ai-actions+interactive)", 1, true) ~= nil, lastLog("WO151-UNSTUCK", mark))
+    check("U3b: the game's own ends too: every AI action of the player aborted, the player's interactive state ended", #abortedAi == 1 and abortedAi[1] == 1 and endedInteractive == 1, #abortedAi .. "/" .. endedInteractive)
     check("U4: step 1 is no hit reaction", countEvt("w151", "takedamage", mark) == 0)
     mark = #LOG
     KCD2MP_W151Unstuck("")

@@ -15033,6 +15033,12 @@ function KCD2MP_W177IsDeadNpc(e)
     if mp_is_mod_entity(e) or mp_is_excluded_npc_name(nm) then return false end
     local dead = false
     pcall(function() dead = e.actor ~= nil and e.actor:IsDead() == true end)
+    -- a corpse this census already removed stays a hidden, inactive entity (live: RemoveEntity on a world NPC hides it; the entity record stays)
+    if dead and e.IsHidden then
+        local hidden = false
+        pcall(function() hidden = e:IsHidden() == true end)
+        if hidden then return false end
+    end
     return dead, nm
 end
 function KCD2MP_W177Dist2(a, b) return (a.x - b.x) ^ 2 + (a.y - b.y) ^ 2 end
@@ -15136,7 +15142,9 @@ function KCD2MP_W177HostWatch(now)
         if not seen[nm] then
             local e = nil
             pcall(function() e = System.GetEntityByName(nm) end)
-            if e then c.dead[nm] = nil   -- still there (alive again, or just outside the scan): not a removal
+            local hiddenGone = false   -- a world NPC the engine disposed of can stay a hidden, inactive entity (live): that is gone too
+            if e and e.IsHidden then pcall(function() hiddenGone = e:IsHidden() == true end) end
+            if e and not hiddenGone then c.dead[nm] = nil   -- still there (alive again, or just outside the scan): not a removal
             elseif KCD2MP_W177Dist2(pp, d) <= c.watchM * c.watchM then
                 gone[#gone + 1] = nm .. "=2"
                 c.dead[nm] = nil
@@ -15282,10 +15290,16 @@ function KCD2MP_W177EndStation()
             if ok then ended[#ended + 1] = tostring(nm or e.class or "?") end
         end
     end
-    pcall(function() if type(player.OnEndInteractive) == "function" then player:OnEndInteractive() end end)
-    KCD2MP.w177.stationEnds = (KCD2MP.w177.stationEnds or 0) + #ended
+    -- the game's own ends (found live: the stations here are ActionTrigger classes -- WaterTubeActionTrigger, Smithery, Grindstone, BedTrigger,
+    -- KettleActionTrigger -- not InteractiveObjectEx; the player's use of one is an AI action of the player and a player-level "interactive"):
+    -- AI.AbortAction(player) aborts every AI action of the player, player.player:OnEndInteractive() ends the player's interactive state
+    local aborted = pcall(function() AI.AbortAction(player.id) end)
+    local interactive = pcall(function() player.player:OnEndInteractive() end)
+    KCD2MP.w177.stationEnds = (KCD2MP.w177.stationEnds or 0) + #ended + ((aborted or interactive) and 1 or 0)
     mp_log("WO177-STATION mp_unstuck: AbortUse on " .. tostring(#ended) .. " interactive object(s) within " .. tostring(KCD2MP.w177.stationReachM) .. " m"
-        .. (#ended > 0 and (": " .. table.concat(ended, ",")) or ""))
+        .. (#ended > 0 and (": " .. table.concat(ended, ",")) or "") .. "; AI.AbortAction(player)=" .. tostring(aborted) .. " OnEndInteractive=" .. tostring(interactive))
+    if aborted then ended[#ended + 1] = "ai-actions" end
+    if interactive then ended[#ended + 1] = "interactive" end
     return ended
 end
 
@@ -16287,12 +16301,25 @@ end
 
 local function mp_item_materialize(pp)
     local r2 = KCD2MP.itemSync.materializeRadius * KCD2MP.itemSync.materializeRadius
+    -- WO-177 B1 (found live, 2026-10-12): the avatar places ONE item at a time. Two PlaceItem calls in one tick left ONE entity on the ground
+    -- (the first placement was replaced by the second: "placed entity never appeared") -- the field's "one of two apples": a drop of two
+    -- items lying together reached the other player as one. So: finalize what is placing first, and start the next pending drop only when
+    -- nothing is placing (one placement in flight at a time; the rest wait a tick or two).
+    local placing = false
     for key, d in pairs(KCD2MP.itemDrops) do
         if d.state == "placing" then
             mp_item_finalize(key, d)
-        elseif d.state == "pending" and not d.pendingRemove and d.x then
+            if d.state == "placing" then placing = true end
+        end
+    end
+    if placing then return end
+    for key, d in pairs(KCD2MP.itemDrops) do
+        if d.state == "pending" and not d.pendingRemove and d.x then
             local dx, dy = d.x - pp.x, d.y - pp.y
-            if dx * dx + dy * dy <= r2 then mp_item_spawn(key, d) end
+            if dx * dx + dy * dy <= r2 then
+                mp_item_spawn(key, d)
+                if d.state == "placing" then return end   -- one in flight: the next waits for the next tick
+            end
         end
     end
 end
