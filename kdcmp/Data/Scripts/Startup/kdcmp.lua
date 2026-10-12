@@ -22602,7 +22602,7 @@ do   -- WO-178's do-block
         qsKeyStored = nil,         -- the key stored for the next start
         waiting = nil,             -- a quicksave that waits: { by, why, since, reason }
         waitMaxS = 900, waitTickMs = 1000,
-        probeLoad = -1, probeBusy = false, loads = 0, lastKeyAt = -1e9,
+        probeAt = -1e9, probeBusy = false, loads = 0, lastKeyAt = -1e9, drawProbe = true,
         arrangedRadius = 40,
         stats = { asked = 0, saved = 0, waited = 0, refused = 0, partner = 0, probes = 0, probeOk = 0, probeRefused = 0, probeRepaired = 0, stuck = 0 },
     }
@@ -22868,9 +22868,13 @@ do   -- WO-178's do-block
     end
 
     -- ---- the draw probe after a load ---------------------------------------------------------------------------------------
-    local function w178_hasMelee()
-        local found = false
-        if not (player and player.inventory and player.inventory.GetInventoryTable and ItemManager and ItemManager.GetItem) then return false end
+    -- Two scripted draws, the second only if the first is refused: Human.DrawWeapon() ("draw the active weapon set") is refused
+    -- after some loads while the player's own key 1 draws (live, WO-178: a fresh process on a good schnapps save -- the active set is
+    -- not restored for a script; WO-176 saw it in vanilla too), so a refusal alone is no verdict. DrawFromInventory with the best
+    -- melee weapon draws in that state (live), as the key does. Only when both are refused is the save treated as stuck.
+    local function w178_bestMelee()
+        if not (player and player.inventory and player.inventory.GetInventoryTable and ItemManager and ItemManager.GetItem) then return nil end
+        local items = {}
         pcall(function()
             local t = player.inventory:GetInventoryTable()
             for i = 1, #t do
@@ -22878,11 +22882,13 @@ do   -- WO-178's do-block
                 if it and it.class then
                     local nm = ""
                     pcall(function() nm = ItemManager.GetItemName(it.class) end)
-                    if W174 and W174.weaponTier and W174.weaponTier(nm) > 0 then found = true; return end
+                    items[#items + 1] = { id = it.id, name = tostring(nm), health = it.health }
                 end
             end
         end)
-        return found
+        if not (W174 and W174.pickWeapon) then return nil end
+        local best = W174.pickWeapon(items)
+        return best
     end
 
     local function w178_probeEnd(result, detail)
@@ -22899,57 +22905,104 @@ do   -- WO-178's do-block
         end
     end
 
-    -- One per load, at the first moment the game can draw. why: the caller's word.
+    -- Holstered, and checked: after an inventory draw HolsterWeapon() is ignored (live, a fresh process on autosave323: the sword
+    -- stayed out through three asks) while ToggleWeapon() puts it away -- so a sword still out 1.2 s later is toggled away.
+    local function w178_holster(h)
+        pcall(function() h:HolsterWeapon() end)
+        for i, ms in ipairs({ 1200, 2600, 4000 }) do
+            Script.SetTimer(ms, function()
+                local d = false
+                pcall(function() d = h:IsWeaponDrawn() == true end)
+                if not d then return end
+                if i == 1 or i == 3 then pcall(function() h:ToggleWeapon() end) else pcall(function() h:HolsterWeapon() end) end
+                mp_log("WO178-DRAWPROBE still drawn after " .. ms .. " ms -- put away again (" .. ((i == 1 or i == 3) and "ToggleWeapon" or "HolsterWeapon") .. ")")
+            end)
+        end
+    end
+
+    -- The two draws in turn; cb(ok, how) once: how = drawweapon|from-inventory|refused|no-human.
+    function W178.drawBoth(cb)
+        local h = player and player.human
+        if not h then cb(false, "no-human"); return end
+        local function drawn() local d = false; pcall(function() d = h:IsWeaponDrawn() == true end); return d end
+        if drawn() then cb(true, "already-drawn"); return end
+        local t0 = os.clock()
+        pcall(function() h:DrawWeapon() end)
+        local function poll2(t1, best)
+            if drawn() then
+                w178_holster(h)
+                cb(true, string.format("from-inventory after_ms=%.0f", (os.clock() - t1) * 1000))
+                return
+            end
+            if os.clock() - t1 < 2.4 then Script.SetTimer(100, function() poll2(t1, best) end); return end
+            cb(false, "refused")
+        end
+        local function poll1()
+            if drawn() then
+                w178_holster(h)   -- holstered at the first sign: on a good save the draw barely starts
+                cb(true, string.format("drawweapon after_ms=%.0f", (os.clock() - t0) * 1000))
+                return
+            end
+            if os.clock() - t0 < 1.5 then Script.SetTimer(100, poll1); return end
+            local best = w178_bestMelee()
+            if not best then cb(false, "refused"); return end
+            pcall(function() h:DrawFromInventory(best.id, 0, true) end)
+            local t1 = os.clock()
+            Script.SetTimer(100, function() poll2(t1, best) end)
+        end
+        Script.SetTimer(100, poll1)
+    end
+
+    -- One per load, at the first moment the game can draw (a probe in the last 20 s is the same load's). why: the caller's word.
     function KCD2MP_W178DrawProbe(why)
         local w = KCD2MP.w178
-        if w.probeBusy or w.probeLoad == w.loads then return false end
+        if w.probeBusy or (os.clock() - (w.probeAt or -1e9)) < 20 then return false end
+        if not w.drawProbe then return false end
         if not (player and player.human) then return false end
-        w.probeLoad = w.loads
+        w.probeAt = os.clock()
         w.stats.probes = w.stats.probes + 1
-        if not w178_hasMelee() then mp_log("WO178-DRAWPROBE result=skipped why=no-melee-weapon"); return false end
+        if not w178_bestMelee() then mp_log("WO178-DRAWPROBE result=skipped why=no-melee-weapon"); return false end
         local busy = W175 and W175.busyReason and W175.busyReason() or nil
         if busy then mp_log("WO178-DRAWPROBE result=skipped why=" .. tostring(busy)); return false end
         w.probeBusy = true
-        local h = player.human
-        local drawn0 = false
-        pcall(function() drawn0 = h:IsWeaponDrawn() == true end)
-        if drawn0 then w178_probeEnd("ok", "why=already-drawn"); return true end
-        pcall(function() h:DrawWeapon() end)
-        local t0 = os.clock()
-        local function poll()
-            local d = false
-            pcall(function() d = h:IsWeaponDrawn() == true end)
-            if d then
-                pcall(function() h:HolsterWeapon() end)   -- holstered at the first sign: on a good save the draw barely starts
-                w178_probeEnd("ok", string.format("after_ms=%.0f", (os.clock() - t0) * 1000))
-                return
-            end
-            if os.clock() - t0 < 2.4 then Script.SetTimer(100, poll); return end
-            -- refused: the repair first (it re-tests the draw itself); its outcome is read from its own state
-            mp_log("WO178-DRAWPROBE draw refused after 2.4 s -- running mp_repair_combat")
+        W178.drawBoth(function(ok, how)
+            if ok then w178_probeEnd("ok", "how=" .. tostring(how)); return end
+            -- both refused: the repair (it re-tests itself); then both draws once more
+            mp_log("WO178-DRAWPROBE both draws refused -- running mp_repair_combat")
             local okR = pcall(KCD2MP_W174Repair, "drawprobe")
             local tries = 0
             local function waitRepair()
                 tries = tries + 1
                 local busyR = KCD2MP.w174 and KCD2MP.w174.busy
                 if busyR and tries < 40 then Script.SetTimer(500, waitRepair); return end
-                W174.drawTest(function(ok2, why2)
-                    if ok2 then w178_probeEnd("repaired", "why=" .. tostring(why2))
-                    else w178_probeEnd("refused", "why=" .. tostring(why2) .. " repair=" .. (okR and "ran" or "failed")) end
+                W178.drawBoth(function(ok2, how2)
+                    if ok2 then w178_probeEnd("repaired", "how=" .. tostring(how2))
+                    else w178_probeEnd("refused", "how=" .. tostring(how2) .. " repair=" .. (okR and "ran" or "failed")) end
                 end)
             end
             Script.SetTimer(500, waitRepair)
-        end
-        Script.SetTimer(100, poll)
+        end)
         return true
     end
 
-    -- Every load (WO-175's after-load hook calls this): count it, and probe.
+    -- Every load (WO-175's after-load hook calls this, at the load's start and again when its world settled): probe. A timer set
+    -- at the load's start dies with the load, so the settled call is the one that runs.
     function KCD2MP_W178AfterLoad(why)
         local w = KCD2MP.w178
-        if why ~= "settle" then w.loads = w.loads + 1 end   -- the settle follows the load it belongs to
+        w.loads = w.loads + 1
         w.waiting = nil   -- a load ends a waiting quicksave (its world is gone)
         Script.SetTimer(500, function() pcall(KCD2MP_W178DrawProbe, why) end)
+    end
+
+    -- mp_draw_probe on|off (default on): the after-load draw probe.
+    function KCD2MP_W178SetDrawProbe(arg)
+        local w = KCD2MP.w178
+        local v = KCD2MP_Wo122ParseBool(arg)
+        if v == "bad" then mp_log("mp_draw_probe: expected on|off, got '" .. tostring(arg) .. "'"); return false end
+        if v ~= nil then w.drawProbe = v end
+        mp_log("WO178-TOGGLE mp_draw_probe " .. (w.drawProbe and "on" or "off") .. " -- "
+            .. (w.drawProbe and "after every load one scripted draw-and-holster; stuck weapons are said and the backup to restore is marked" or "no draw probe after loads"))
+        return true
     end
 
     function KCD2MP_W178Status()
@@ -27778,6 +27831,7 @@ local ok, err = pcall(function()
     System.AddCCommand("mp_w177_status", 'KCD2MP_W177Status()', "WO-177: where the figure soul, the load gate, the corpse census, the tool-swing gate and the station end stand (WO177-STATUS here, MP-W177-STATS in the agent log)")
     System.AddCCommand("mp_figure_soul", 'KCD2MP_W177SetFigureSoul(%line)', "WO-177: your partner's figure is spawned from a soul of the mod's own, in no village and no quest group, so no village fight or quest takes it in (default on; applies to the next figure): mp_figure_soul on|off")
     System.AddCCommand("mp_quicksave", 'KCD2MP_W178QuickSave(%line)', "WO-178: save now the Saviour Schnapps way (no schnapps used; in a session the host's game saves the shared world): mp_quicksave; the host's setting: mp_quicksave on|off")
+    System.AddCCommand("mp_draw_probe", 'KCD2MP_W178SetDrawProbe(%line)', "WO-178: after every load one scripted draw-and-holster; stuck weapons are said and the backup to restore is marked (default on): mp_draw_probe on|off")
     System.AddCCommand("mp_world_autosave", 'KCD2MP_W178SetWorldAutosave(%line)', "WO-178: the mod's scheduled world saves (default off: saving is the player's choice): mp_world_autosave on|off")
     System.AddCCommand("mp_joiner_lock", 'KCD2MP_W178SetJoinerLock(%line)', "WO-178 C1: the joiner can lock on to the enemy copies fighting him or his host (the game's own lock-on): mp_joiner_lock on|off")
     System.AddCCommand("mp_host_lock_answer", 'KCD2MP_W178SetHostLockAnswer(%line)', "WO-178 C1: the host locks on to an NPC fighting the partner's figure without a skirmish change (compared live; default off): mp_host_lock_answer on|off")

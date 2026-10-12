@@ -55,8 +55,15 @@ player.GetName = function() return "Dude" end
 player.GetWorldPos = function() return { x = PX, y = PY, z = PZ } end
 player.GetWorldAngles = function() return { x = 0, y = 0, z = 0 } end
 player.actor = { GetHealth = function() return 100 end, IsDead = function() return false end, EquipInventoryItem = function() end }
+DRAW_INV_WORKS = true
+DRAWS_INV = 0
 player.human = { IsInDialog = function() return IN_DIALOG end, IsWeaponDrawn = function() return DRAWN end,
-                 DrawWeapon = function() DRAWS = DRAWS + 1; if DRAW_WORKS then DRAWN = true end end, HolsterWeapon = function() DRAWN = false end }
+                 DrawWeapon = function() DRAWS = DRAWS + 1; if DRAW_WORKS then DRAWN = true end end, HolsterWeapon = function() DRAWN = false end,
+                 DrawFromInventory = function(self, id, slot, anim) DRAWS_INV = DRAWS_INV + 1; if DRAW_INV_WORKS then DRAWN = true; INV_DRAWN = true end end,
+                 ToggleWeapon = function() TOGGLES = (TOGGLES or 0) + 1; DRAWN = false; INV_DRAWN = false end }
+-- after an inventory draw HolsterWeapon is ignored (live); ToggleWeapon puts it away
+local plainHolster = player.human.HolsterWeapon
+player.human.HolsterWeapon = function() if not INV_DRAWN then DRAWN = false end end
 player.soul = { GetState = function() return 0 end, IsInCombatDanger = function() return P_DANGER end, IsInCombatMode = function() return false end,
                 HasScriptContext = function(_, c) return CONTEXTS[c] == true end }
 player.inventory = { GetInventoryTable = function() local t = {} for i, it in ipairs(ITEMS) do t[i] = it.id end return t end }
@@ -291,45 +298,68 @@ end
 -- (D) the draw probe after a load
 do
     idle(); ERRS = {}
-    DRAWN = false; DRAW_WORKS = true; DRAWS = 0
+    DRAWN = false; DRAW_WORKS = true; DRAW_INV_WORKS = true; DRAWS = 0; DRAWS_INV = 0
     local mark = #LOG
-    KCD2MP_W178AfterLoad("reload")
+    advance(30)
+    check("D0: mp_draw_probe is on by default", KCD2MP.w178.drawProbe == true)
+    KCD2MP_W178AfterLoad("settle")
     advance(0.5)    -- the probe starts
     advance(0.1)    -- the first poll sees the draw
-    check("D1: a good save: the probe draws, holsters at once, says ok", lastLog("WO178-DRAWPROBE result=ok", mark) ~= nil and DRAWN == false and DRAWS == 1)
+    check("D1: a good save: the probe draws, holsters at once, says ok", lastLog("WO178-DRAWPROBE result=ok how=drawweapon", mark) ~= nil and DRAWN == false and DRAWS == 1 and DRAWS_INV == 0)
     check("D2: nothing on screen for a good save", countEvt("w178_stuck", "", mark) == 0 and not (lastToast():find("stuck", 1, true)))
     mark = #LOG
-    KCD2MP_W178AfterLoad("settle")   -- the settle of the same load: no second probe
+    KCD2MP_W178AfterLoad("settle")   -- a second call within 20 s is the same load's
     advance(0.5); advance(0.1)
-    check("D3: one probe per load (the settle belongs to the load before it)", logCount("WO178-DRAWPROBE", mark) == 0)
-    -- a stuck save the repair cannot free
-    DRAWN = false; DRAW_WORKS = false; DRAWS = 0
+    check("D3: one probe per load", logCount("WO178-DRAWPROBE", mark) == 0)
+    -- the field's state after some loads: the script's DrawWeapon refused, the inventory draw (as the key) works -> ok, nothing said
+    advance(30)
+    DRAWN = false; DRAW_WORKS = false; DRAW_INV_WORKS = true; DRAWS = 0; DRAWS_INV = 0
     mark = #LOG
-    KCD2MP_W178AfterLoad("reload")
+    KCD2MP_W178AfterLoad("settle")
+    for i = 1, 50 do advance(0.1) end
+    check("D4: DrawWeapon refused, the inventory draw works: ok, no repair, nothing said", lastLog("WO178-DRAWPROBE result=ok how=from-inventory", mark) ~= nil
+        and DRAWS_INV == 1 and lastLog("WO174-REPAIR", mark) == nil and countEvt("w178_stuck", "", mark) == 0)
+    check("D4b: the holster the engine ignored after an inventory draw: put away by ToggleWeapon within 1.2 s", DRAWN == false and (TOGGLES or 0) >= 1
+        and lastLog("WO178-DRAWPROBE still drawn after 1200 ms -- put away again (ToggleWeapon)", mark) ~= nil)
+    -- a stuck save the repair cannot free: both draws refused before and after
+    advance(30)
+    DRAWN = false; DRAW_WORKS = false; DRAW_INV_WORKS = false; DRAWS = 0; DRAWS_INV = 0
+    mark = #LOG
+    KCD2MP_W178AfterLoad("settle")
     for i = 1, 80 do advance(0.1) end
     for i = 1, 20 do advance(0.6) end
+    for i = 1, 60 do advance(0.2) end
     for i = 1, 10 do advance(2.5) end
-    check("D4: refused: mp_repair_combat ran", lastLog("WO178-DRAWPROBE draw refused after 2.4 s -- running mp_repair_combat", mark) ~= nil and lastLog("WO174-REPAIR", mark) ~= nil)
-    check("D5: still refused: the player is told plainly, the backup is marked", lastLog("WO178-DRAWPROBE result=refused", mark) ~= nil
+    check("D5: both refused: mp_repair_combat ran", lastLog("WO178-DRAWPROBE both draws refused -- running mp_repair_combat", mark) ~= nil and lastLog("WO174-REPAIR", mark) ~= nil)
+    check("D6: still refused: the player is told plainly, the backup is marked", lastLog("WO178-DRAWPROBE result=refused", mark) ~= nil
         and countEvt("w178_stuck", "draw-refused", mark) == 1)
     local told = false
     for _, t in ipairs(TOASTS) do if t == W178.STUCK_TEXT then told = true end end
-    check("D6: the message is the work order's words", told and W178.STUCK_TEXT:find("RESTORE SAVES", 1, true) ~= nil)
+    check("D7: the message is the work order's words", told and W178.STUCK_TEXT:find("RESTORE SAVES", 1, true) ~= nil)
     -- no melee weapon: no probe
+    advance(30)
     ITEMS = { { id = 9002, class = "bread_c", name = "bread" } }
     mark = #LOG
-    KCD2MP_W178AfterLoad("reload")
+    KCD2MP_W178AfterLoad("settle")
     advance(0.5)
-    check("D7: no melee weapon: the probe is skipped", lastLog("WO178-DRAWPROBE result=skipped why=no-melee-weapon", mark) ~= nil)
+    check("D8: no melee weapon: the probe is skipped", lastLog("WO178-DRAWPROBE result=skipped why=no-melee-weapon", mark) ~= nil)
     ITEMS = { { id = 9001, class = "sword_c", name = "sword_hunting" } }
     -- in a dialogue right after a load: skipped
-    DRAW_WORKS = true; IN_DIALOG = true
+    advance(30)
+    DRAW_WORKS = true; DRAW_INV_WORKS = true; IN_DIALOG = true
     mark = #LOG
-    KCD2MP_W178AfterLoad("reload")
+    KCD2MP_W178AfterLoad("settle")
     advance(0.5)
-    check("D8: busy (a dialogue): the probe is skipped", lastLog("WO178-DRAWPROBE result=skipped why=dialogue", mark) ~= nil)
+    check("D9: busy (a dialogue): the probe is skipped", lastLog("WO178-DRAWPROBE result=skipped why=dialogue", mark) ~= nil)
     IN_DIALOG = false
-    check("D9: no resting save in the probe", RESTSAVES == 0)
+    check("D10: no resting save in the probe", RESTSAVES == 0)
+    advance(30)
+    check("D11: mp_draw_probe off: no probe", KCD2MP_W178SetDrawProbe("off") == true and CCMDS["mp_draw_probe"] ~= nil)
+    mark = #LOG
+    DRAWS = 0; DRAWS_INV = 0
+    KCD2MP_W178AfterLoad("settle"); advance(0.5); advance(0.1)
+    check("D12: ...nothing runs while it is off", logCount("WO178-DRAWPROBE result", mark) == 0 and DRAWS == 0 and DRAWS_INV == 0, logCount("WO178-DRAWPROBE result", mark) .. "/" .. DRAWS)
+    KCD2MP_W178SetDrawProbe("on")
     ERRS = {}   -- the repair's own refusals above are its pcalls doing their job (WO-174's suite pins the repair)
 end
 

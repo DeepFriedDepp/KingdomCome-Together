@@ -34,7 +34,10 @@ user32 = ctypes.WinDLL('user32', use_last_error=True)
 
 # DirectInput games read scan codes: KEYEVENTF_SCANCODE.
 SCAN = {'1': 0x02, '2': 0x03, '3': 0x04, '4': 0x05, 'b': 0x30, 'r': 0x13, 'f': 0x21, 'e': 0x12, 'esc': 0x01, 'tab': 0x0F, 'i': 0x17,
-        'w': 0x11, 's': 0x1F, 'a': 0x1E, 'd': 0x20, 'space': 0x39, 'enter': 0x1C, 'q': 0x10, 'h': 0x23}
+        'w': 0x11, 's': 0x1F, 'a': 0x1E, 'd': 0x20, 'space': 0x39, 'enter': 0x1C, 'q': 0x10, 'h': 0x23,
+        'home': 0x47, 'delete': 0x53, 'insert': 0x52, 'end': 0x4F, 'pgup': 0x49, 'pgdn': 0x51}
+EXTENDED = {'home', 'delete', 'insert', 'end', 'pgup', 'pgdn'}   # WO-178: the navigation keys are extended scan codes
+KEYEVENTF_EXTENDEDKEY = 0x0001
 KEYEVENTF_SCANCODE, KEYEVENTF_KEYUP, INPUT_MOUSE, INPUT_KEYBOARD = 0x0008, 0x0002, 0, 1
 MOUSEEVENTF_MOVE, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP = 0x0001, 0x0002, 0x0004, 0x0008, 0x0010
 
@@ -108,6 +111,13 @@ class Game:
         user32.SetForegroundWindow(h)
         log(self.test, 'front: the game window brought to the front')
         time.sleep(0.5)
+        # WO-178: Windows may refuse a background process's SetForegroundWindow (the desktop app keeps the foreground); the game's own
+        # window is then switched to (it alone is touched -- still no input event before the foreground check)
+        for _ in range(3):
+            if foreground_is_game(self.pids): break
+            user32.SwitchToThisWindow(h, True)
+            log(self.test, 'front: switched to the game window (the first request was refused by the window manager)')
+            time.sleep(0.7)
         if foreground_is_game(self.pids):
             self.aim()
         time.sleep(settle_s)      # the game takes a moment to accept input after it regains focus
@@ -135,7 +145,8 @@ class Game:
 
     def key(self, name, down):
         i = INPUT(type=INPUT_KEYBOARD)
-        i.u.ki = KEYBDINPUT(0, SCAN[name], KEYEVENTF_SCANCODE | (0 if down else KEYEVENTF_KEYUP), 0, 0)
+        ext = KEYEVENTF_EXTENDEDKEY if name in EXTENDED else 0
+        i.u.ki = KEYBDINPUT(0, SCAN[name], KEYEVENTF_SCANCODE | ext | (0 if down else KEYEVENTF_KEYUP), 0, 0)
         self._send(i, 'key=%s %s' % (name, 'down' if down else 'up'))
 
     def tap(self, name, hold_ms=80):
