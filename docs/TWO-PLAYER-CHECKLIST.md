@@ -1247,6 +1247,30 @@ Evidence: `docs/WO-176-findings.md`. **Type `mark_odd` at every miss.**
 280. **The switches:** `mp_arranged_guard`, `mp_copy_blocks`, `mp_real_hits` (all on), `mp_victim_decides` (off: a joiner's held block
      still counts by the host's verdict). **Report a bug → Collect logs** afterwards (both machines).
 
+## WO-177 — the partner's own soul, pickups, corpses and stations (no version yet: code only, no installer)
+
+Evidence: `docs/WO-177-findings.md`. **Type `mark_odd` at every miss.**
+
+281. **The partner stands near a village brawl** (Tachov's pub neighbours) **and near a quest fight** (the Tachov–Zelejov meadow fight): nobody
+     turns on them for standing there, no villager attacks them, and the quest's own fight ends the way the story says. Afterwards both players'
+     weapons draw with the weapon key (1). (`kcd.log`: `Skirmish event: SoulAdded on kcd2mp_N` at most once at their arrival, `(target kcd2mp_N)` none.)
+282. **Drop items for each other, both ways** (drop an apple, a bandage, a weapon; the partner picks it up; then the other way round; 20 times):
+     each drop appears for the other player, the first to pick it up gets it, the other's copy is gone, nothing is doubled or lost. Two items of
+     the same kind dropped next to each other stay two items: picking up one leaves the other for both.
+283. **The joiner picks up what the host dropped; one apple of two lying together; an item beside a corpse after looting it**: pressing the use key
+     picks it up (or says plainly "Someone already took that." / "Asking the host..."), and it is gone for both screens. If the use key does
+     nothing, type `mark_odd` and say what the prompt on screen read (a hold-to-steal prompt would be the finding).
+284. **Corpses match after you both die and respawn**: stand where bodies lie, both die and come back; the bodies the host's world lost are gone
+     on the joiner's screen within seconds; `WO177-CORPSE gone on the host: removed here npc=…` in the joiner's `kcd.log`.
+285. **The joiner uses a station in the host's world**: cooks at a campfire (pan and pot), uses the anvil **while the blacksmith works** (the
+     blacksmith's hammer does no damage to them: the host's `agent.log` says `MP-W177 tool swing … NOT forwarded`), washes at a trough or tub.
+     **Never stuck**: if they cannot get away from a station, `mp_unstuck` (Help > "I'm stuck") frees them; pressed twice within 10 s it also
+     does the game's own hit reaction with no damage (`WO177-STATION`, `WO151-UNSTUCK … station-end(…)`).
+286. **Start a join, a leave or a repair load while an enemy is still hitting you**: the load waits ("A fight is on: the load waits until it is
+     over.") and starts about 10 seconds after the last hit; it is never issued mid-fight (`MP-W177 load why=… waiting`).
+287. **The switches:** `mp_figure_soul`, `mp_corpse_sync`, `mp_tool_swing` (all on). **Report a bug → Collect logs** afterwards (both machines);
+     the native logs of the last five launches are in the bundle (`kcdmp-native.1..5.log`).
+
 ## Logs to send afterwards
 
 Both machines: Report a bug in the launcher. Since 0.48.9 it collects the current launch by default as a small file (or a few numbered

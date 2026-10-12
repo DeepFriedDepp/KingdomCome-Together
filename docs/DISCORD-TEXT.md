@@ -211,3 +211,17 @@ Kingdom Come: Together 0.50.0 (a release candidate for the host and one partner)
 - Not there yet: the joiner's own block against an enemy's blow still counts by the host's verdict (mp_victim_decides stays off). The game judges your block only against your locked-on opponent, and the joiner's copy of an enemy never is one yet.
 Both players and the relay need 0.50.0.
 ```
+
+## Next build (WO-177, not released yet) — the partner's own soul, pickups, corpses, stations
+
+```
+Coming in the next build (code is in, no installer yet):
+- Your partner's figure now has a soul of its own. Until now the game treated it as a villager of Zelejov, so village fights and quest fights pulled it in. Now nobody turns on your partner for standing near a brawl or a quest fight. Switch: mp_figure_soul.
+- The joiner's pickups in the host's world: two items of the same kind dropped next to each other are two items; picking up one leaves the other. If the host is slow to answer, you are told ("Asking the host...") instead of nothing happening.
+- Corpses agree: a body the host's world no longer has is removed from the joiner's world too. Switch: mp_corpse_sync.
+- A blacksmith's hammer at the anvil no longer hurts your partner's figure (only a real fight's blows count). Switch: mp_tool_swing.
+- "I'm stuck" also ends the use of a station, and pressed twice within 10 seconds it does the game's own hit reaction (no damage), which is what freed a player stuck at a trough.
+- The mod never starts a load while you are in a fight or were hit in the last 10 seconds: it waits and says so.
+- The launcher's "Your saves are safe" banner is gone (the backups still happen); the logs of the last five launches are kept and go into the bug-report bundle.
+Not yet: a figure that holds a station for the NPCs, and enemy animals (a bandit's dog) in a shared fight.
+```

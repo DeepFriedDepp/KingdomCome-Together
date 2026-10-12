@@ -6024,6 +6024,7 @@ public partial class GameBridge(ClientConfig config)
                 Wo176OnEvent(name, arg);
                 return;
             case "w177_load_quiet":  // WO-177 A5: the Lua's answer to "may a load start" (ok | fight | hit)
+            case "w177_status":      // WO-177: mp_w177_status
             case "w177_calm_cfg":    // WO-177 B3: mp_tool_swing
             case "w177_calm":        // WO-177 B3 (host): the NPCs near a figure that are not in a fight
             case "w177_corpse_ask":  // WO-177 B2 (joiner): dead copies near him, asked of the host

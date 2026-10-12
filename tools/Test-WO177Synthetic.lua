@@ -180,10 +180,15 @@ do
     check("C6: due again after 20 s", KCD2MP_W177CorpseAskText(130) ~= "")
     -- the chain asks only as the shared world's joiner and emits one event per question
     KCD2MP_W134JoinerActive = function() return true end
-    c.asked = {}
+    c.asked = {}; c.lastAskAt = nil
     local mark = #LOG
     KCD2MP_W177CorpseTick(c.gen)
     check("C7: the joiner's tick emits w177_corpse_ask", countEvt("w177_corpse_ask", "tzel_", mark) == 1)
+    NOW = NOW + 2
+    c.asked = {}
+    mark = #LOG
+    KCD2MP_W177CorpseTick(c.gen)
+    check("C7b: the chain ticks every 2 s but the joiner asks only every 5 s (a second tick 2 s later asks nothing)", countEvt("w177_corpse_ask", "", mark) == 0 and c.tickS == 2 and c.askEveryS == 5)
     KCD2MP_W134JoinerActive = function() return false end
     mark = #LOG
     KCD2MP_W177CorpseTick(c.gen)
@@ -291,6 +296,16 @@ do
     KCD2MP.ghosts["1"] = nil
     System.GetEntitiesInSphere = function(p, r) return {} end
     noErrs("T")
+end
+
+-- (status) the one line that says where each piece stands
+do
+    local mark = #LOG
+    check("X1: mp_w177_status is a console command", CCMDS["mp_w177_status"] ~= nil)
+    check("X2: it says every piece's state in one line and tells the agent", KCD2MP_W177Status() == true
+        and lastLog("WO177-STATUS figure_soul=on corpse_sync=on", mark) ~= nil and lastLog("tool_swing=on", mark) ~= nil and countEvt("w177_status", "", mark) == 1,
+        lastLog("WO177-STATUS", mark))
+    noErrs("X")
 end
 
 -- (B4) mp_unstuck ends a station's use

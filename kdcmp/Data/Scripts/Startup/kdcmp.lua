@@ -15009,13 +15009,13 @@ end
 -- ===== WO-177 B2: corpses agree after deaths and respawns =====
 -- The tester (0.48.6): after both died and respawned, corpses were gone for the host but some still present for the guest. Each machine's
 -- engine disposes of corpses on its own clock, so the joiner's world keeps bodies the host's no longer has. The host's world decides:
---   * the joiner (every 5 s, shared world) asks the host about the dead NPC copies within 60 m of him, three at a time ("<npc>:<x>:<y>"):
+--   * the joiner (every 5 s, shared world; the chain ticks every 2 s) asks the host about the dead NPC copies within 60 m of him, three at a time ("<npc>:<x>:<y>"):
 --     W164 kind 10 -> the host answers (kind 11) per NPC: 1 a corpse there too, 2 gone from the host's world (the NPC is not there and the
 --     spot is within 60 m of the host's own player, so the host's world would have it), 3 alive there, 0 cannot say (too far from the host)
 --   * 2 = the joiner removes his copy ("WO177-CORPSE gone on the host: removed here"); 1, 3 and 0 change nothing
 --   * the host also tells every joiner unasked (kind 11, "<npc>=2") when a corpse it was watching within 55 m of its player goes
 -- mp_corpse_sync on|off (default on). Never touches a body the quest layer or a mod entity owns (the same name rules the NPC sync uses).
-KCD2MP.w177.corpse = KCD2MP.w177.corpse or { on = true, coverM = 60, watchM = 55, askEveryS = 5, askAgainS = 20, asked = {}, dead = {}, removed = 0, answers = 0,
+KCD2MP.w177.corpse = KCD2MP.w177.corpse or { on = true, coverM = 60, watchM = 55, askEveryS = 5, tickS = 2, askAgainS = 20, asked = {}, dead = {}, removed = 0, answers = 0,
                                               gone = 0, asks = 0, gen = 0 }
 function KCD2MP_W177SetCorpseSync(arg)
     local v = KCD2MP_Wo122ParseBool(arg)
@@ -15065,15 +15065,18 @@ function KCD2MP_W177CorpseTick(gen)
     if gen and gen ~= c.gen then return end
     local now = os.clock()
     if c.on and KCD2MP_W134JoinerActive and KCD2MP_W134JoinerActive() then
-        local text = KCD2MP_W177CorpseAskText(now)
-        if text ~= "" then
-            c.asks = c.asks + 1
-            KCD2MP_EmitEvent("w177_corpse_ask", text)
+        if now - (c.lastAskAt or -1e9) >= c.askEveryS then
+            c.lastAskAt = now
+            local text = KCD2MP_W177CorpseAskText(now)
+            if text ~= "" then
+                c.asks = c.asks + 1
+                KCD2MP_EmitEvent("w177_corpse_ask", text)
+            end
         end
     elseif c.on and KCD2MP_W134HostActive and KCD2MP_W134HostActive() then
-        KCD2MP_W177HostWatch(now)
+        KCD2MP_W177HostWatch(now)   -- every tick (2 s): a corpse that goes reaches the joiners within a few seconds
     end
-    Script.SetTimer(c.askEveryS * 1000, function() KCD2MP_W177CorpseTick(gen) end)
+    Script.SetTimer(c.tickS * 1000, function() KCD2MP_W177CorpseTick(gen) end)
 end
 function KCD2MP_W177CorpseArm()
     local c = KCD2MP.w177.corpse
@@ -15244,6 +15247,17 @@ function KCD2MP_W177CalmArm()
     KCD2MP_W177CalmTick(c.gen)
 end
 KCD2MP_W177CalmArm()
+
+-- WO-177: where each piece stands (the agent adds its own counters: MP-W177-STATS)
+function KCD2MP_W177Status()
+    local w = KCD2MP.w177
+    local c, k = w.corpse, w.calm
+    mp_log(string.format("WO177-STATUS figure_soul=%s corpse_sync=%s (asks=%d answers=%d removed=%d gone_told=%d) tool_swing=%s (lists=%d) load_reason=%s station_ends=%d",
+        w.figureSoul and "on" or "off", c.on and "on" or "off", c.asks, c.answers, c.removed, c.gone, k.on and "on" or "off", k.sent,
+        tostring(KCD2MP_W177LoadReason()), w.stationEnds or 0))
+    KCD2MP_EmitEvent("w177_status", "")
+    return true
+end
 
 -- ===== WO-177 B4: mp_unstuck step 1 also ends a station's use =====
 -- The field (0.48.6): a guest stuck washing at a trough in Tachov; mp_unstuck did not free him, a friendly-fire knockdown did (the engine's hit
@@ -27292,6 +27306,7 @@ local ok, err = pcall(function()
     System.AddCCommand("mp_copy_blocks", 'KCD2MP_W176SetCopyBlocks(%line)', "WO-176: (joiner) an enemy that blocks or parries your blow in the host's world shows its block on your screen (default on): mp_copy_blocks on|off")
     System.AddCCommand("mp_corpse_sync", 'KCD2MP_W177SetCorpseSync(%line)', "WO-177: a body the host's world no longer has is removed from the joiner's world too (the joiner asks the host every 5 s; default on): mp_corpse_sync on|off")
     System.AddCCommand("mp_tool_swing", 'KCD2MP_W177SetToolSwing(%line)', "WO-177: (host) a working NPC's tool swing (the blacksmith's hammer) is no damage on your partner's figure; blows of an NPC in a fight still are (default on): mp_tool_swing on|off")
+    System.AddCCommand("mp_w177_status", 'KCD2MP_W177Status()', "WO-177: where the figure soul, the load gate, the corpse census, the tool-swing gate and the station end stand (WO177-STATUS here, MP-W177-STATS in the agent log)")
     System.AddCCommand("mp_figure_soul", 'KCD2MP_W177SetFigureSoul(%line)', "WO-177: your partner's figure is spawned from a soul of the mod's own, in no village and no quest group, so no village fight or quest takes it in (default on; applies to the next figure): mp_figure_soul on|off")
     System.AddCCommand("mp_repair_combat", 'KCD2MP_W174Repair(%line)', "WO-174: frees stuck weapons -- clears partner-figure fight links, ends a stuck fight, re-equips a melee weapon -- and says so; on a save that was fine it changes nothing: mp_repair_combat")
     System.AddCCommand("mp_weapon_autofix", 'KCD2MP_W174SetAutofix(%line)', "WO-174: after mp_repair_combat freed your weapons, every later load in this game session equips that weapon again, because the lock returns on a reload (default on): mp_weapon_autofix on|off")

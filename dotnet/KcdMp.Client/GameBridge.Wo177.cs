@@ -40,6 +40,9 @@ public partial class GameBridge
                 if (reason is not null) _w177Probe?.TrySetResult(reason);
                 return;
             }
+            case "w177_status":
+                Console.WriteLine(Wo177StatsText());
+                return;
             case "w177_calm_cfg":     // WO-177 B3: mp_tool_swing
                 _w177ToolSwing = arg is not null && arg.StartsWith("on", StringComparison.Ordinal);
                 Console.WriteLine($"MP-W177 mp_tool_swing {(_w177ToolSwing ? "on" : "off")}");
