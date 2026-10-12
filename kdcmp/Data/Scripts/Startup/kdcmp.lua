@@ -15293,8 +15293,9 @@ function KCD2MP_W177EndStation()
     -- the game's own ends (found live: the stations here are ActionTrigger classes -- WaterTubeActionTrigger, Smithery, Grindstone, BedTrigger,
     -- KettleActionTrigger -- not InteractiveObjectEx; the player's use of one is an AI action of the player and a player-level "interactive"):
     -- AI.AbortAction(player) aborts every AI action of the player, player.player:OnEndInteractive() ends the player's interactive state
-    local aborted = pcall(function() AI.AbortAction(player.id) end)
-    local interactive = pcall(function() player.player:OnEndInteractive() end)
+    local aborted, interactive = false, false
+    if AI and type(AI.AbortAction) == "function" then aborted = pcall(function() AI.AbortAction(player.id) end) end
+    if player.player and type(player.player.OnEndInteractive) == "function" then interactive = pcall(function() player.player:OnEndInteractive() end) end
     KCD2MP.w177.stationEnds = (KCD2MP.w177.stationEnds or 0) + #ended + ((aborted or interactive) and 1 or 0)
     mp_log("WO177-STATION mp_unstuck: AbortUse on " .. tostring(#ended) .. " interactive object(s) within " .. tostring(KCD2MP.w177.stationReachM) .. " m"
         .. (#ended > 0 and (": " .. table.concat(ended, ",")) or "") .. "; AI.AbortAction(player)=" .. tostring(aborted) .. " OnEndInteractive=" .. tostring(interactive))
