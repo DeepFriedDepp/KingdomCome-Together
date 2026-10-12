@@ -134,6 +134,17 @@ public partial class GameBridge
             return null;
         }
         var x = h.Value;
+        if (x.Applied == Wo178Rules.AppliedHeld)
+        {
+            // WO-178 C4 (1): the DLL holds the blow up to 0.8 s for the figure's strike window, then applies it once (the engine, or the
+            // engine-like fallback). It counts as applied here (never twice, never dropped); its outcome reaches the joiner from the
+            // background completion.
+            _w173Touched[npc] = now;
+            Console.WriteLine(FormattableString.Invariant(
+                $"MP-W173 hit npc={npc} by_ghost={source} applied=held (waiting for the figure's strike window) joiner_said=st{stamina:F1}/hp{health:F1} hold_id={x.Seq}"));
+            Wo178FinishHeld(x.Seq, source, npc, stamina, health, f);
+            return (true, 1, 0, 0, x.Fallback);
+        }
         if (x.Fallback == Wo176Rules.FallbackArranged)
         {
             // WO-176 A1: the victim is in a quest's arranged fight -- neither the engine nor the raw path ran; nothing else may run either

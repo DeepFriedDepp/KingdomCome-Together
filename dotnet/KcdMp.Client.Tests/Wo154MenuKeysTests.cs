@@ -56,7 +56,7 @@ public class Wo154MenuKeysTests
         Assert.Equal("insert", KeybindPak.BoundKey(s, KeybindPak.MenuToggleAction));
         foreach (var (a, k) in KeybindPak.MenuNavKeys) Assert.Equal(k, KeybindPak.BoundKey(s, a));
         Assert.Equal(new[] { "pgup", "pgdn", "end" }, KeybindPak.MenuNavKeys.Select(x => x.Key));
-        Assert.Equal(14, KeybindPak.Actions.Length);
+        Assert.Equal(15, KeybindPak.Actions.Length);   // WO-178: + the quicksave key
     }
 
     [Fact]
@@ -180,7 +180,7 @@ public class Wo154MenuKeysTests
             File.WriteAllText(settings, "{\"MenuKey\":\"scrolllock\"}");
             sw = new StringWriter();
             Assert.Equal(0, KeybindPak.RunCli(Cli(), sw));
-            Assert.Equal("14 actions in both files; menu key insert (MenuKey 'scrolllock' is not one of insert|np_add|np_subtract -- insert used)",
+            Assert.Equal("15 actions in both files; menu key insert; quicksave key home (MenuKey 'scrolllock' is not one of insert|np_add|np_subtract -- insert used)",
                          Line(sw)["detail"]!.GetValue<string>());
             Assert.Equal("insert", KeybindPak.BoundMenuKeyInPak(pak));
 
@@ -188,7 +188,7 @@ public class Wo154MenuKeysTests
             File.Delete(settings);
             sw = new StringWriter();
             Assert.Equal(0, KeybindPak.RunCli(Cli(), sw));
-            Assert.Equal("14 actions in both files; menu key insert", Line(sw)["detail"]!.GetValue<string>());
+            Assert.Equal("15 actions in both files; menu key insert; quicksave key home", Line(sw)["detail"]!.GetValue<string>());
             Assert.Equal("unchanged", Line(sw)["action"]!.GetValue<string>());   // the same content: not rewritten
             Assert.Null(KeybindPak.BoundMenuKeyInPak(Path.Combine(root, "none.pak")));
         }

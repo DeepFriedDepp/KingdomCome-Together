@@ -44,6 +44,7 @@ public static class Wo154MenuRules
         new("PartnerHerbs", Kind.OnOff, false),
         new("PartnerMarker", Kind.OnOff, false),   // WO-164 C2: mp_partner_marker
         new("PartnerMarkerArt", Kind.OnOff, false),   // WO-171 M: "Marker style" (on = the knight, off = the game's plain pin)
+        new("Quicksave", Kind.OnOff, true),           // WO-178 0.d: mp_quicksave (the host's setting)
     };
 
     /// <summary>
@@ -67,6 +68,12 @@ public static class Wo154MenuRules
         if (f[0] == KeybindPak.MenuKeySetting)
         {
             if (Array.IndexOf(KeybindPak.MenuKeys, f[1]) < 0) return false;
+            key = f[0]; word = f[1]; value = JsonValue.Create(f[1]);
+            return true;
+        }
+        if (f[0] == Wo178Rules.QuickSaveKeySetting)   // WO-178 0.d: the quicksave key (the launcher's settings.json)
+        {
+            if (Array.IndexOf(Wo178Rules.QuickSaveKeys, f[1]) < 0) return false;
             key = f[0]; word = f[1]; value = JsonValue.Create(f[1]);
             return true;
         }

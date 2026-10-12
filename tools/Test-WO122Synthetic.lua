@@ -16,7 +16,7 @@
 --   (g) the joiner's lock: never with mp_shared_world off; add + read-back;
 --       a "load" wipe is noticed and re-asserted; a failed read-back is loud;
 --       release on off
---   (h) the host's world save calls EnqueueAutoSave (SaveGameViaResting)
+--   (h) the host's world save asks for the schnapps save (WO-178), never SaveGameViaResting
 --       once per request and measures the frame gap
 --   (i) mp_world_save needs mp_shared_world on
 --   (j) mp_autosave_minutes range; (k) presets; (l) the receiver's line
@@ -327,11 +327,13 @@ do
     local mark = #LOG
     SAVEREQ = 0
     TIMERS = {}
-    check("h: a request enqueues one autosave", KCD2MP_HostWorldSave("schedule", 1) == true and SAVEREQ == 1)
-    check("h: logged", countLog("MP-WORLDSAVE request why=schedule attempt=1 enqueue=true", mark) == 1)
+    -- WO-178 Part 0: the schnapps save (the DLL's ManualSave through the agent), never the resting save
+    check("h: a request asks for one schnapps save, never the resting save", KCD2MP_HostWorldSave("schedule", 1) == true and SAVEREQ == 0
+          and countLog("WO178-SAVE asked why=world:schedule path=schnapps", mark) == 1)
+    check("h: logged", countLog("MP-WORLDSAVE request why=schedule attempt=1 asked=true", mark) == 1)
     check("h: the frame-gap monitor is armed (a per-frame timer)", #TIMERS == 1 and TIMERS[1].ms == 0)
     KCD2MP_HostWorldSave("schedule", 2)
-    check("h: a retry does not stack a second monitor", #TIMERS == 1 and SAVEREQ == 2)
+    check("h: a retry does not stack a second monitor", #TIMERS == 1 and SAVEREQ == 0 and countLog("WO178-SAVE asked why=world:schedule path=schnapps", mark) == 2)
     -- drive the monitor: 60 fps with one 180 ms stall (the save)
     local guard = 0
     while #TIMERS > 0 and guard < 2000 do

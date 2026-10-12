@@ -387,7 +387,9 @@ do
     NOW = NOW + 46; session(true)
     check("K: a waiting line is never left behind (gone after 45 s)", frame():find("Waiting", 1, true) == nil)
     KCD2MP_W140RestSave()
-    check("K: the host's rest save is the game's own", RESTSAVES == 1 and logCount("WO140-RESTSAVE Game.SaveGameViaResting called") == 1)
+    -- WO-178 Part 0: the shared sleep's save is the schnapps save (the engine's ManualSave through the DLL), never the resting save
+    check("K: the host's sleep save is the schnapps save, never the resting save", RESTSAVES == 0 and logCount("WO140-RESTSAVE schnapps save asked") == 1
+          and logCount("WO178-SAVE asked why=rest-sleep path=schnapps") == 1)
     local mark = #LOG
     KCD2MP_SetSleepVote("off")
     check("K: mp_sleep_vote off reaches the agent", emitted("w140_cfg", mark)[1] == "vote=off")

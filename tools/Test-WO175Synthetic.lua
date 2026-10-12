@@ -166,7 +166,9 @@ do
     fresh()
     local mark = #LOG
     KCD2MP_HostWorldSave("schedule", 1)
-    check("G1: idle: the mod's world save is asked for, and the agent is asked to check the file", SAVES == 1 and countEvt("w175_check", "save", mark) == 1)
+    -- WO-178 Part 0: asked the schnapps way (w178_save -> the DLL's ManualSave), never Game.SaveGameViaResting
+    check("G1: idle: the mod's world save is asked for, and the agent is asked to check the file", SAVES == 0 and countEvt("w178_save", "world:schedule", mark) == 1
+          and countEvt("w175_check", "save", mark) == 1)
     local cases = {
         { "dialogue", function() IN_DIALOG = true end },
         { "scene", function() KCD2MP.w170.sceneRunning = 1 end },
@@ -182,13 +184,14 @@ do
         fresh(); c[2]()
         mark = #LOG
         local r = KCD2MP_HostWorldSave("schedule", 1)
-        check("G2." .. i .. ": " .. c[1] .. ": the world save waits (no request), logged", r == false and SAVES == 0
+        check("G2." .. i .. ": " .. c[1] .. ": the world save waits (no request), logged", r == false and SAVES == 0 and countEvt("w178_save", "world:schedule", mark) == 0
             and lastLog("WO175-SAVE deferred reason=" .. c[1] .. " kind=world-save:schedule", mark) ~= nil, lastLog("WO175-SAVE", mark))
     end
     fresh(); IN_DIALOG = true
     KCD2MP_W175SetGuard("off")
+    mark = #LOG
     KCD2MP_HostWorldSave("schedule", 1)
-    check("G3: mp_save_guard off: the old behaviour (asked at once)", SAVES == 1)
+    check("G3: mp_save_guard off: the old behaviour (asked at once)", SAVES == 0 and countEvt("w178_save", "world:schedule", mark) == 1)
     KCD2MP_W175SetGuard("on")
     check("G4: a bad value is refused", KCD2MP_W175SetGuard("maybe") == false and KCD2MP.w175.guard == true)
     noErrs("G")
@@ -225,7 +228,8 @@ do
     KCD2MP.w175.lockHeld = true
     KCD2MP_W175AfterLoad("settle")
     -- four timers since WO-177: WO-175's chain, WO-176's figure check, WO-177's corpse census and calm-NPC list (all re-armed by the same after-load hook)
-    check("L7: after a load: state reset, the chain runs, w175_check load", KCD2MP.w175.lockHeld == false and #TIMERS == 4 and countEvt("w175_check", "load", mark) == 1, #TIMERS)
+    -- WO-178 0.c: + the draw probe's timer (5)
+    check("L7: after a load: state reset, the chain runs, w175_check load", KCD2MP.w175.lockHeld == false and #TIMERS == 5 and countEvt("w175_check", "load", mark) == 1, #TIMERS)
     KCD2MP_W175SetHealth("off"); mark = #LOG
     KCD2MP_W175AfterLoad("settle")
     check("L8: mp_save_health off: no file check asked", countEvt("w175_check", "load", mark) == 0)

@@ -76,6 +76,13 @@ inline constexpr uint8_t kBlendToProfile[14] = {
     0x48, 0x89, 0x5C, 0x24, 0x10, 0x48, 0x89, 0x6C, 0x24, 0x18, 0x56, 0x57, 0x41, 0x57,
 };
 
+// wo178.cpp: the combat RPG's "is hostile to" test the player's opponent picker asks for every candidate (found through
+// C_CombatPlayerController::HandleOpponentSelection's label: its callee that loads the combat RPG and calls the test).
+// mov [rsp+10h],rbx; mov [rsp+18h],rsi; push rdi; sub rsp,20h
+inline constexpr uint8_t kHostileTest[15] = {
+    0x48, 0x89, 0x5C, 0x24, 0x10, 0x48, 0x89, 0x74, 0x24, 0x18, 0x57, 0x48, 0x83, 0xEC, 0x20,
+};
+
 struct Entry { const char* name; const uint8_t* bytes; size_t len; };
 inline constexpr Entry kAll[] = {
     {"motion UpdateMannequinTags", kMotionTags, sizeof kMotionTags},
@@ -87,6 +94,7 @@ inline constexpr Entry kAll[] = {
     {"wo140 SkipTime ShowDialog", kSkipTimeShow, sizeof kSkipTimeShow},
     {"wo143 NPC-state request", kNpcStateRequest, sizeof kNpcStateRequest},
     {"weather BlendToProfile", kBlendToProfile, sizeof kBlendToProfile},
+    {"wo178 hostility test", kHostileTest, sizeof kHostileTest},
 };
 
 } // namespace kcdmp::hookpro

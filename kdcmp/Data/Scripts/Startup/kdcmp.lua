@@ -3544,10 +3544,10 @@ end
 -- and every second, and every assert reads it back: a second add of the same
 -- name must be refused. Its UI text is the player-facing refusal.
 --
--- Phase 3/4, the host's world saves: Game.SaveGameViaResting() is
--- EnqueueAutoSave(1, "") (WHGame 0x18B7C0, code-verified): one queued
--- autosave the engine writes when CanSave passes. The agent schedules it and
--- watches the saves folder for the file.
+-- Phase 3/4, the host's world saves: WO-178 -- the schnapps save (the engine's
+-- ManualSave through the DLL, no item used), only while mp_world_autosave is on
+-- (default off) or on request. The agent schedules it and watches the saves
+-- folder for the file. (The resting save it used before is retired: WO-177 A2.)
 KCD2MP.w122 = {
     sharedWorld = true, ownerDeath = true, autosaveMinutes = 5,   -- 0.30.0: shared world ON by default
     lockName = "kcdmp_host_only", lockText = "The host saves this world.",
@@ -3741,16 +3741,17 @@ end
 function KCD2MP_HostWorldSave(why, attempt)
     local w = KCD2MP.w122
     if KCD2MP_W175SaveAllowed and not KCD2MP_W175SaveAllowed("world-save:" .. tostring(why)) then return false end   -- WO-175 S3
-    if KCD2MP_W175BeforeSave then pcall(KCD2MP_W175BeforeSave, why) end
-    if KCD2MP_W174Clean then pcall(KCD2MP_W174Clean, "save") end   -- WO-174: partner-figure fight records out before the save
-    if not (Game and Game.SaveGameViaResting) then
-        mp_log("MP-WORLDSAVE Game.SaveGameViaResting not registered on this build -- no world save")
-        return false
+    -- WO-178: an arranged fight set up near the player defers it too (S3 checks the player's own contexts)
+    if W178 and W178.arrangedNear then
+        local near = W178.arrangedNear()
+        if near then mp_log("WO175-SAVE deferred reason=arranged-fight-near:" .. tostring(near) .. " kind=world-save:" .. tostring(why) .. " -- asked again in 5 s"); return false end
     end
-    local ok, err = pcall(Game.SaveGameViaResting)
+    -- WO-178 Part 0: the schnapps save (the engine's ManualSave through the DLL, no item used), never Game.SaveGameViaResting
+    -- (WO-177 A2: a resting save written before the meadow fight carried the weapon lock in its file)
+    local ok = KCD2MP_W178RequestSave and KCD2MP_W178RequestSave("world:" .. tostring(why)) or false
     w.saveReqN = w.saveReqN + 1
-    mp_log(string.format("MP-WORLDSAVE request why=%s attempt=%s enqueue=%s%s -- EnqueueAutoSave: the engine writes it when it can save",
-        tostring(why), tostring(attempt), tostring(ok), ok and "" or (" err=" .. tostring(err))))
+    mp_log(string.format("MP-WORLDSAVE request why=%s attempt=%s asked=%s -- the schnapps save: the engine writes it when it can save",
+        tostring(why), tostring(attempt), tostring(ok)))
     if ok and tonumber(attempt) == 1 then KCD2MP_Wo122HitchArm(8.0) end
     return ok
 end
@@ -18337,8 +18338,9 @@ end
 function KCD2MP_W140RestSave()
     local w = KCD2MP.w140
     w.stats.restSaves = w.stats.restSaves + 1
-    local ok, err = pcall(function() Game.SaveGameViaResting() end)
-    mp_log("WO140-RESTSAVE Game.SaveGameViaResting " .. (ok and "called" or ("FAILED " .. tostring(err))))
+    -- WO-178 Part 0: the schnapps save (no item used), never the resting save
+    local ok = KCD2MP_W178RequestSave and KCD2MP_W178RequestSave("rest-sleep") or false
+    mp_log("WO140-RESTSAVE schnapps save " .. (ok and "asked" or "NOT asked (the WO-178 path is missing)"))
 end
 
 function KCD2MP_W140Session(on)
@@ -22509,6 +22511,7 @@ do   -- WO-175's do-block
         if KCD2MP_W177CorpseArm then KCD2MP_W177CorpseArm() end
         if KCD2MP_W177CalmArm then KCD2MP_W177CalmArm() end   -- WO-177 B3: the calm-NPC list for the tool-swing gate   -- WO-177 B2: the corpse census chain (a load kills the timer chains)
         if w.health then KCD2MP_EmitEvent("w175_check", "load") end
+        if KCD2MP_W178AfterLoad then pcall(KCD2MP_W178AfterLoad, why) end   -- WO-178 0.c: the draw probe
     end
 
     -- Before a save (the mod's own, and the game's InitiateSaveGame line through the agent): partner-figure records out
@@ -22577,6 +22580,412 @@ do   -- WO-175's do-block
         return true
     end
 end   -- WO-175's do-block
+
+do   -- WO-178's do-block
+    -- ===== WO-178 Part 0: save safety first ==================================================================================
+    -- WO-177 A2: in the field world before the feud quest's meadow fight, every save written by Game.SaveGameViaResting() carried a
+    -- weapon lock in the file. The mod's scheduled world saves used that path. So:
+    --   * the mod makes no scheduled world saves unless mp_world_autosave is on (default off): saving is the player's choice -- the
+    --     game's own saves and the quicksave key. The game's own saves still reach the joiner (the agent's folder watch, WO-125).
+    --   * every save the mod asks for goes the Saviour Schnapps way (the engine's ManualSave, no item used: the DLL's op 27) --
+    --     never Game.SaveGameViaResting() (tools/Test-WO178NoRestingSave.py fails the build on a call).
+    --   * no save is asked for in a dialogue, a scene, a fight, a quest's arranged fight (the player's or a nearby actor's context:
+    --     pending or running) or a mod transaction (WO-175 S3); the quicksave waits and saves after, with a one-line note.
+    --   * after a load, one scripted draw-and-holster (the draw probe); a refused draw runs mp_repair_combat, and if that cannot free
+    --     it the player is told plainly and the newest launcher backup is marked as the one to restore.
+    --   WO178-QUICKSAVE by=host|joiner result=saved|waited|refused why=...      WO178-DRAWPROBE result=ok|refused|repaired|...
+    KCD2MP.w178 = KCD2MP.w178 or {
+        worldAutosave = false,     -- mp_world_autosave: the mod's scheduled world saves (off: saving is the player's choice)
+        quicksave = true,          -- mp_quicksave: the host's setting (off for a schnapps-economy run)
+        hostQuicksave = nil,       -- a joiner: the host's mp_quicksave as last heard (nil = not known)
+        qsKey = "home",            -- the key bound in this game run (the agent reads the keys pak)
+        qsKeyStored = nil,         -- the key stored for the next start
+        waiting = nil,             -- a quicksave that waits: { by, why, since, reason }
+        waitMaxS = 900, waitTickMs = 1000,
+        probeLoad = -1, probeBusy = false, loads = 0, lastKeyAt = -1e9,
+        arrangedRadius = 40,
+        stats = { asked = 0, saved = 0, waited = 0, refused = 0, partner = 0, probes = 0, probeOk = 0, probeRefused = 0, probeRepaired = 0, stuck = 0 },
+    }
+    W178 = W178 or {}
+    W178.QS_KEYS = { "home", "delete", "np_add", "np_subtract" }   -- KeybindPak.QuickSaveKeys, in its order
+    W178.KEY_NAMES = { home = "Home", delete = "Delete", np_add = "Numpad +", np_subtract = "Numpad -" }
+    W178.ARRANGED = { "combat_arrangedFight", "combat_forceUnarmedWhileInUnarmedSkirmish" }
+    W178.STUCK_TEXT = "Your weapons are stuck in this save. Close the game and use RESTORE SAVES in the launcher to bring back the backup from before this session."
+
+    local function w178_say(text)
+        mp_log("WO178-MSG " .. tostring(text))
+        pcall(KCD2MP_ShowNativeToast, tostring(text))
+    end
+
+    local function w178_role()
+        local m = KCD2MP.w154menu
+        if m and m.roleNow then
+            local ok, r = pcall(m.roleNow)
+            if ok and r then return r end
+        end
+        return "none"
+    end
+
+    local function w178_session()
+        local m = KCD2MP.w154menu
+        if m and m.sessionUp then
+            local ok, r = pcall(m.sessionUp)
+            return ok and r == true
+        end
+        return false
+    end
+
+    -- An actor within the radius whose soul carries a quest's arranged-fight context (the fight is set up or running): its name, or nil.
+    function W178.arrangedNear()
+        local found = nil
+        if not (player and player.GetWorldPos and System and System.GetEntitiesInSphere) then return nil end   -- no world (a menu, a load)
+        pcall(function()
+            local p = player:GetWorldPos()
+            for _, e in ipairs(System.GetEntitiesInSphere(p, KCD2MP.w178.arrangedRadius) or {}) do
+                local s = e.soul
+                if e.actor ~= nil and s ~= nil and s.HasScriptContext and e.id ~= player.id then
+                    for _, c in ipairs(W178.ARRANGED) do
+                        local has = false
+                        pcall(function() has = s:HasScriptContext(c) == true end)
+                        if has then
+                            pcall(function() found = e:GetName() end)
+                            found = found or "?"
+                            return
+                        end
+                    end
+                end
+            end
+        end)
+        return found
+    end
+
+    -- Why no save may be asked for now (nil = it may): WO-175 S3's reasons, and an arranged fight set up near the player.
+    function W178.blockReason()
+        local r, txn = nil, false
+        if W175 and W175.busyReason then r, txn = W175.busyReason() end
+        if r then return r, txn end
+        local near = W178.arrangedNear()
+        if near then return "arranged-fight-near:" .. tostring(near), false end
+        return nil, false
+    end
+
+    -- The one way the mod asks for a save: the schnapps save through the agent and the DLL (op 27). why: the caller's word.
+    -- Returns true when the request went out (the file follows; the agent reports it with KCD2MP_W178SaveDone).
+    function KCD2MP_W178RequestSave(why)
+        local w = KCD2MP.w178
+        w.stats.asked = w.stats.asked + 1
+        if KCD2MP_W175BeforeSave then pcall(KCD2MP_W175BeforeSave, why) end   -- S4: the agent checks the file the engine writes
+        if KCD2MP_W174Clean then pcall(KCD2MP_W174Clean, "save") end          -- WO-174: partner-figure fight records out before the save
+        KCD2MP_EmitEvent("w178_save", tostring(why))
+        mp_log("WO178-SAVE asked why=" .. tostring(why) .. " path=schnapps (the engine's ManualSave, no item used)")
+        return true
+    end
+
+    -- The agent's answer: result = saved|refused|no-file|not-armed|no-agent; file = playlineN/x.whs.
+    function KCD2MP_W178SaveDone(result, file, why)
+        local w = KCD2MP.w178
+        result, why = tostring(result), tostring(why)
+        local qs = string.find(why, "^quicksave") ~= nil
+        local by = string.match(why, "^quicksave:(%a+)") or "host"
+        if result == "saved" then
+            w.stats.saved = w.stats.saved + 1
+            if qs then
+                mp_log(string.format("WO178-QUICKSAVE by=%s result=saved file=%s", by, tostring(file)))
+                if by == "joiner" then w178_say("Your partner saved the game.") else w178_say("Game saved.") end
+            end
+        else
+            if qs then
+                w.stats.refused = w.stats.refused + 1
+                mp_log(string.format("WO178-QUICKSAVE by=%s result=refused why=%s", by, result))
+                w178_say("The game could not save just now (" .. result .. "). Try again in a moment.")
+            end
+        end
+        mp_log(string.format("WO178-SAVE done result=%s file=%s why=%s", result, tostring(file), why))
+        return true
+    end
+
+    -- ---- the quicksave ----------------------------------------------------------------------------------------------------
+    local function w178_doQuicksave(by, src)
+        local w = KCD2MP.w178
+        KCD2MP_W178RequestSave("quicksave:" .. by .. ":" .. tostring(src))
+    end
+
+    local function w178_waitTick()
+        local w = KCD2MP.w178
+        local q = w.waiting
+        if not q then return end
+        local r = W178.blockReason()
+        if r then
+            if os.clock() - q.since > w.waitMaxS then
+                w.waiting = nil
+                w.stats.refused = w.stats.refused + 1
+                mp_log(string.format("WO178-QUICKSAVE by=%s result=refused why=waited-too-long:%s", q.by, tostring(r)))
+                w178_say("The quicksave gave up waiting (" .. tostring(r) .. " went on too long). Press the key again when you are free.")
+                return
+            end
+            q.reason = r
+            Script.SetTimer(w.waitTickMs, w178_waitTick)
+            return
+        end
+        w.waiting = nil
+        mp_log(string.format("WO178-QUICKSAVE by=%s result=saving why=after-wait waited_s=%.0f", q.by, os.clock() - q.since))
+        w178_say("Saving now.")
+        w178_doQuicksave(q.by, q.src)
+    end
+
+    -- by: host (this machine's own key, solo too) | joiner (the partner asked, on the host). src: key|menu|console|partner.
+    -- Returns the word logged: saved (asked) | waited | refused.
+    function W178.quicksave(by, src)
+        local w = KCD2MP.w178
+        if w.waiting then
+            mp_log(string.format("WO178-QUICKSAVE by=%s result=waited why=already-waiting:%s", by, tostring(w.waiting.reason)))
+            w178_say("A save is already waiting (" .. tostring(w.waiting.reason) .. ").")
+            return "waited"
+        end
+        local r = W178.blockReason()
+        if r then
+            w.waiting = { by = by, src = src, since = os.clock(), reason = r }
+            w.stats.waited = w.stats.waited + 1
+            mp_log(string.format("WO178-QUICKSAVE by=%s result=waited why=%s -- it saves as soon as that ends", by, tostring(r)))
+            local what = (r == "dialogue" and "the conversation") or (r == "combat" and "the fight") or (r == "scene" and "the scene")
+                         or (string.find(r, "^arranged") and "the quest's fight") or "the change in progress"
+            w178_say("The game will save after " .. what .. ".")
+            Script.SetTimer(w.waitTickMs, w178_waitTick)
+            return "waited"
+        end
+        mp_log(string.format("WO178-QUICKSAVE by=%s result=saving why=%s", by, tostring(src)))
+        w178_doQuicksave(by, src)
+        return "saved"
+    end
+
+    -- The key, the mod menu's "Save now" and mp_quicksave (no argument). An argument is the host's setting: on|off.
+    function KCD2MP_W178QuickSave(arg)
+        local w = KCD2MP.w178
+        local v = KCD2MP_Wo122ParseBool(arg)
+        if v == "bad" then
+            local s = tostring(arg or "")
+            if s ~= "key" and s ~= "menu" then mp_log("mp_quicksave: expected nothing (save now) or on|off (the host's setting), got '" .. s .. "'"); return false end
+            v = nil
+        end
+        if v ~= nil then
+            w.quicksave = v
+            mp_log("WO178-TOGGLE mp_quicksave " .. (v and "on" or "off") .. " -- " .. (v and "the quicksave key saves (no schnapps used)" or "no quicksave: saving is the game's own (schnapps, beds)"))
+            KCD2MP_EmitEvent("w178_cfg", "quicksave=" .. (v and "on" or "off"))
+            return true
+        end
+        local src = (arg == "key" or arg == "menu") and arg or "console"
+        local role = w178_role()
+        if role == "joiner" and w178_session() then
+            if w.hostQuicksave == false then
+                mp_log("WO178-QUICKSAVE by=joiner result=refused why=host-setting-off")
+                w178_say("Quicksave is off in this session (the host's setting).")
+                return false
+            end
+            mp_log("WO178-QUICKSAVE by=joiner result=asked why=" .. src .. " -- the host's game saves the shared world")
+            KCD2MP_EmitEvent("w178_qs_ask", src)
+            w178_say("Asked your host's game to save.")
+            return true
+        end
+        if not w.quicksave then
+            w.stats.refused = w.stats.refused + 1
+            mp_log("WO178-QUICKSAVE by=host result=refused why=mp_quicksave-off")
+            w178_say("Quicksave is off (mod menu > Gameplay). Save the game's own way.")
+            return false
+        end
+        return W178.quicksave("host", src) ~= "refused"
+    end
+    function KCD2MP_W178QuickSaveNow() return KCD2MP_W178QuickSave("menu") end
+
+    -- Host: the partner's key reached this game (the agent relays it). Answers through the agent (refused reasons go back).
+    function KCD2MP_W178PartnerQuickSave(who)
+        local w = KCD2MP.w178
+        w.stats.partner = w.stats.partner + 1
+        if not w.quicksave then
+            mp_log("WO178-QUICKSAVE by=joiner result=refused why=mp_quicksave-off (the host's setting)")
+            KCD2MP_EmitEvent("w178_qs_answer", "refused quicksave-off")
+            return false
+        end
+        local r = W178.quicksave("joiner", "partner")
+        KCD2MP_EmitEvent("w178_qs_answer", r)
+        return true
+    end
+
+    -- Joiner: the host's answer (saved|waited|refused <why>) and the host's setting.
+    function KCD2MP_W178PartnerAnswer(word, why)
+        word = tostring(word)
+        mp_log("WO178-QUICKSAVE by=joiner result=" .. word .. " why=host:" .. tostring(why or "-"))
+        if word == "refused" and tostring(why) == "quicksave-off" then
+            KCD2MP.w178.hostQuicksave = false
+            w178_say("Quicksave is off in this session (the host's setting).")
+        elseif word == "waited" then
+            w178_say("Your host's game will save after the current fight, scene or conversation.")
+        elseif word == "saved" then
+            w178_say("Your host's game saved the shared world.")
+        end
+        return true
+    end
+    function KCD2MP_W178HostSetting(on)
+        KCD2MP.w178.hostQuicksave = (on == true or on == "on")
+        mp_log("WO178-TOGGLE host mp_quicksave=" .. (KCD2MP.w178.hostQuicksave and "on" or "off") .. " (the host's setting, shown to the joiner)")
+        return true
+    end
+
+    -- The key's action (kcd2mp_quicksave, in the game's own action map): press only, one press once.
+    function KCD2MP_W178OnAction(action, activation)
+        if action ~= "kcd2mp_quicksave" then return false end
+        if activation ~= "press" and activation ~= 1 then return true end
+        local w = KCD2MP.w178
+        local now = os.clock()
+        if now - w.lastKeyAt < 0.25 then return true end
+        w.lastKeyAt = now
+        KCD2MP_W178QuickSave("key")
+        return true
+    end
+
+    -- The agent: the key bound in this game run and the one stored for the next start.
+    function KCD2MP_W178QsKeys(active, stored, result)
+        local w = KCD2MP.w178
+        if W178.KEY_NAMES[active] then w.qsKey = active end
+        if W178.KEY_NAMES[stored] then w.qsKeyStored = stored end
+        if result == "stored" or result == "not-saved" then
+            w.qsKeySave = result
+            mp_log(string.format("WO178-KEY quicksave_key=%s %s (bound now: %s)", tostring(w.qsKeyStored), result == "stored" and "stored -- from the next game start" or "NOT saved (no launcher settings file)", w.qsKey))
+        end
+        return true
+    end
+
+    -- ---- the mod's scheduled world saves ------------------------------------------------------------------------------------
+    function KCD2MP_W178SetWorldAutosave(arg)
+        local w = KCD2MP.w178
+        local v = KCD2MP_Wo122ParseBool(arg)
+        if v == "bad" then mp_log("mp_world_autosave: expected on|off, got '" .. tostring(arg) .. "'"); return false end
+        if v ~= nil then w.worldAutosave = v end
+        mp_log("WO178-TOGGLE mp_world_autosave " .. (w.worldAutosave and "on" or "off") .. " -- "
+            .. (w.worldAutosave and "the host's world is saved every mp_autosave_minutes the schnapps way (no item used)"
+                                 or "no scheduled world saves: saving is the player's choice (the game's own saves and the quicksave key)"))
+        KCD2MP_EmitEvent("w178_cfg", "world_autosave=" .. (w.worldAutosave and "on" or "off"))
+        return true
+    end
+
+    -- ---- the draw probe after a load ---------------------------------------------------------------------------------------
+    local function w178_hasMelee()
+        local found = false
+        if not (player and player.inventory and player.inventory.GetInventoryTable and ItemManager and ItemManager.GetItem) then return false end
+        pcall(function()
+            local t = player.inventory:GetInventoryTable()
+            for i = 1, #t do
+                local it = ItemManager.GetItem(t[i])
+                if it and it.class then
+                    local nm = ""
+                    pcall(function() nm = ItemManager.GetItemName(it.class) end)
+                    if W174 and W174.weaponTier and W174.weaponTier(nm) > 0 then found = true; return end
+                end
+            end
+        end)
+        return found
+    end
+
+    local function w178_probeEnd(result, detail)
+        local w = KCD2MP.w178
+        w.probeBusy = false
+        mp_log("WO178-DRAWPROBE result=" .. tostring(result) .. (detail and (" " .. tostring(detail)) or ""))
+        if result == "ok" then w.stats.probeOk = w.stats.probeOk + 1
+        elseif result == "repaired" then w.stats.probeRepaired = w.stats.probeRepaired + 1
+        elseif result == "refused" then
+            w.stats.probeRefused = w.stats.probeRefused + 1
+            w.stats.stuck = w.stats.stuck + 1
+            w178_say(W178.STUCK_TEXT)
+            KCD2MP_EmitEvent("w178_stuck", "draw-refused")   -- the agent marks the newest launcher backup as the one to restore
+        end
+    end
+
+    -- One per load, at the first moment the game can draw. why: the caller's word.
+    function KCD2MP_W178DrawProbe(why)
+        local w = KCD2MP.w178
+        if w.probeBusy or w.probeLoad == w.loads then return false end
+        if not (player and player.human) then return false end
+        w.probeLoad = w.loads
+        w.stats.probes = w.stats.probes + 1
+        if not w178_hasMelee() then mp_log("WO178-DRAWPROBE result=skipped why=no-melee-weapon"); return false end
+        local busy = W175 and W175.busyReason and W175.busyReason() or nil
+        if busy then mp_log("WO178-DRAWPROBE result=skipped why=" .. tostring(busy)); return false end
+        w.probeBusy = true
+        local h = player.human
+        local drawn0 = false
+        pcall(function() drawn0 = h:IsWeaponDrawn() == true end)
+        if drawn0 then w178_probeEnd("ok", "why=already-drawn"); return true end
+        pcall(function() h:DrawWeapon() end)
+        local t0 = os.clock()
+        local function poll()
+            local d = false
+            pcall(function() d = h:IsWeaponDrawn() == true end)
+            if d then
+                pcall(function() h:HolsterWeapon() end)   -- holstered at the first sign: on a good save the draw barely starts
+                w178_probeEnd("ok", string.format("after_ms=%.0f", (os.clock() - t0) * 1000))
+                return
+            end
+            if os.clock() - t0 < 2.4 then Script.SetTimer(100, poll); return end
+            -- refused: the repair first (it re-tests the draw itself); its outcome is read from its own state
+            mp_log("WO178-DRAWPROBE draw refused after 2.4 s -- running mp_repair_combat")
+            local okR = pcall(KCD2MP_W174Repair, "drawprobe")
+            local tries = 0
+            local function waitRepair()
+                tries = tries + 1
+                local busyR = KCD2MP.w174 and KCD2MP.w174.busy
+                if busyR and tries < 40 then Script.SetTimer(500, waitRepair); return end
+                W174.drawTest(function(ok2, why2)
+                    if ok2 then w178_probeEnd("repaired", "why=" .. tostring(why2))
+                    else w178_probeEnd("refused", "why=" .. tostring(why2) .. " repair=" .. (okR and "ran" or "failed")) end
+                end)
+            end
+            Script.SetTimer(500, waitRepair)
+        end
+        Script.SetTimer(100, poll)
+        return true
+    end
+
+    -- Every load (WO-175's after-load hook calls this): count it, and probe.
+    function KCD2MP_W178AfterLoad(why)
+        local w = KCD2MP.w178
+        if why ~= "settle" then w.loads = w.loads + 1 end   -- the settle follows the load it belongs to
+        w.waiting = nil   -- a load ends a waiting quicksave (its world is gone)
+        Script.SetTimer(500, function() pcall(KCD2MP_W178DrawProbe, why) end)
+    end
+
+    function KCD2MP_W178Status()
+        local w = KCD2MP.w178
+        local s = w.stats
+        local r = W178.blockReason()
+        mp_log(string.format("WO178-STATUS world_autosave=%s quicksave=%s host_quicksave=%s key=%s stored=%s waiting=%s block=%s asked=%d saved=%d waited=%d refused=%d partner=%d "
+            .. "probes=%d ok=%d repaired=%d refused=%d stuck=%d",
+            w.worldAutosave and "on" or "off", w.quicksave and "on" or "off", w.hostQuicksave == nil and "?" or (w.hostQuicksave and "on" or "off"),
+            tostring(w.qsKey), tostring(w.qsKeyStored or w.qsKey), w.waiting and tostring(w.waiting.reason) or "no", tostring(r or "none"),
+            s.asked, s.saved, s.waited, s.refused, s.partner, s.probes, s.probeOk, s.probeRepaired, s.probeRefused, s.stuck))
+        KCD2MP_EmitEvent("w178_status", "")
+        return true
+    end
+
+    -- C1 / C4 switches live in the DLL: the agent pushes them (w178_cfg). name: joiner_lock|host_lock_answer|fallback_hold|fallback_engine_cap.
+    W178.NATIVE = { joiner_lock = "mp_joiner_lock", host_lock_answer = "mp_host_lock_answer", fallback_hold = "mp_fallback_hold", fallback_engine_cap = "mp_fallback_engine_cap" }
+    function KCD2MP_W178SetNative(name, arg)
+        local label = W178.NATIVE[tostring(name)]
+        if not label then mp_log("WO178-TOGGLE unknown switch '" .. tostring(name) .. "'"); return false end
+        local v = KCD2MP_Wo122ParseBool(arg)
+        if v == "bad" then mp_log(label .. ": expected on|off, got '" .. tostring(arg) .. "'"); return false end
+        if v == nil then
+            mp_log("WO178-TOGGLE " .. label .. " (asking the agent; mp_w178_status shows the DLL's value)")
+            KCD2MP_EmitEvent("w178_status", "")
+            return true
+        end
+        mp_log("WO178-TOGGLE " .. label .. " " .. (v and "on" or "off") .. " -- sent to the DLL through the agent")
+        KCD2MP_EmitEvent("w178_cfg", tostring(name) .. "=" .. (v and "on" or "off"))
+        return true
+    end
+    function KCD2MP_W178SetJoinerLock(arg) return KCD2MP_W178SetNative("joiner_lock", arg) end
+    function KCD2MP_W178SetHostLockAnswer(arg) return KCD2MP_W178SetNative("host_lock_answer", arg) end
+    function KCD2MP_W178SetFallbackHold(arg) return KCD2MP_W178SetNative("fallback_hold", arg) end
+    function KCD2MP_W178SetFallbackEngineCap(arg) return KCD2MP_W178SetNative("fallback_engine_cap", arg) end
+end   -- WO-178's do-block
 
 function KCD2MP_W166SetTalkResumeFirst(arg)
     local v = KCD2MP_Wo122ParseBool(arg)
@@ -26159,6 +26568,11 @@ do
           cmd = "mp_leash", fn = "KCD2MP_SetLeash",
           get = function() return KCD2MP.w114 ~= nil and KCD2MP.w114.leash end, session = function() return M.hostLeash end,
           help = "Warns the joiner, then brings them back beside the host, when they wander too far apart." },
+        { id = "quicksave", group = "Gameplay", label = "Quicksave", kind = "onoff", host = true, save = "Quicksave",
+          cmd = "mp_quicksave", fn = "KCD2MP_W178QuickSave",
+          get = function() return KCD2MP.w178 ~= nil and KCD2MP.w178.quicksave end,
+          session = function() local w = KCD2MP.w178; if not w or w.hostQuicksave == nil then return nil end return w.hostQuicksave end,
+          help = "The quicksave key saves without using a schnapps. Off: saving is the game's own (schnapps, beds) -- a schnapps-economy run." },
         { id = "sleep_vote", group = "Gameplay", label = "Sleep and wait together", kind = "onoff", save = "SleepVote",
           cmd = "mp_sleep_vote", fn = "KCD2MP_SetSleepVote",
           get = function() return KCD2MP.w140 ~= nil and KCD2MP.w140.vote end,
@@ -26173,9 +26587,14 @@ do
           help = "Shows your partner picking herbs. Off: their figure stands while they pick." },
         { id = "voice", group = "Voice and keys", label = "Voice chat", kind = "voice", get = function() return M.voice end,
           help = "Talk to your partner through your microphone." },
+        { id = "quicksave_key", group = "Voice and keys", label = "Quicksave key", kind = "qskey",
+          get = function() local w = KCD2MP.w178; return w and (w.qsKeyStored or w.qsKey) or "home" end,
+          help = "The key that saves the game (no schnapps used). A new key works from the next game start." },
         { id = "menu_key", group = "Voice and keys", label = "Menu key", kind = "menukey",
           get = function() return M.menuKeyStored or M.menuKey end,
           help = "The key that opens this menu. A new key works from the next game start." },
+        { id = "save_now", group = "Help", label = "Save now", kind = "action", cmd = "mp_quicksave", fn = "KCD2MP_W178QuickSave", arg = "menu",
+          help = "Saves the game the Saviour Schnapps way, without using one. In a session the host's game saves the shared world." },
         { id = "unstuck", group = "Help", label = "I'm stuck", kind = "action", cmd = "mp_unstuck", fn = "KCD2MP_W151Unstuck",
           help = "Frees you from a stuck state: a bed, a picker that did not close, a knockdown." },
         { id = "repair_combat", group = "Help", label = "Fix my weapons / stuck fight", kind = "action", cmd = "mp_repair_combat", fn = "KCD2MP_W174Repair",
@@ -26228,6 +26647,14 @@ do
             if v == M.menuKey then return name end
             if M.menuKeySave == "not-saved" then return name .. " (could not be saved)" end
             if M.menuKeySave == "stored" then return name .. " (from the next game start)" end
+            return name .. " (saving...)"
+        end
+        if it.kind == "qskey" then
+            local w = KCD2MP.w178
+            local name = (W178 and W178.KEY_NAMES[v]) or tostring(v)
+            if not w or v == w.qsKey then return name end
+            if w.qsKeySave == "not-saved" then return name .. " (could not be saved)" end
+            if w.qsKeySave == "stored" then return name .. " (from the next game start)" end
             return name .. " (saving...)"
         end
         if it.kind == "info" then return tostring(v) end
@@ -26326,6 +26753,20 @@ do
             M.menuKeyStored, M.menuKeySave = nextKey, "asked"
             mp_log("MP-MENU menu_key=" .. nextKey .. " (by menu) -- from the next game start; asked the agent to store it")
             KCD2MP_EmitEvent("w154_menu_set", "MenuKey " .. nextKey)
+            return true
+        elseif it.kind == "qskey" then
+            local w = KCD2MP.w178
+            if not (w and W178) then return false end
+            local cur, idx = w.qsKeyStored or w.qsKey, 1
+            for i, k in ipairs(W178.QS_KEYS) do if k == cur then idx = i end end
+            local nextKey = cur
+            for step = 1, #W178.QS_KEYS do   -- never the menu key
+                local k = W178.QS_KEYS[((idx + step - 1) % #W178.QS_KEYS) + 1]
+                if k ~= (M.menuKeyStored or M.menuKey) then nextKey = k; break end
+            end
+            w.qsKeyStored, w.qsKeySave = nextKey, "asked"
+            mp_log("MP-MENU quicksave_key=" .. nextKey .. " (by menu) -- from the next game start; asked the agent to store it")
+            KCD2MP_EmitEvent("w154_menu_set", "QuickSaveKey " .. nextKey)
             return true
         elseif it.kind == "action" then
             local ok = M.call(it.fn, it.arg)
@@ -27336,6 +27777,13 @@ local ok, err = pcall(function()
     System.AddCCommand("mp_tool_swing", 'KCD2MP_W177SetToolSwing(%line)', "WO-177: (host) a working NPC's tool swing (the blacksmith's hammer) is no damage on your partner's figure; blows of an NPC in a fight still are (default on): mp_tool_swing on|off")
     System.AddCCommand("mp_w177_status", 'KCD2MP_W177Status()', "WO-177: where the figure soul, the load gate, the corpse census, the tool-swing gate and the station end stand (WO177-STATUS here, MP-W177-STATS in the agent log)")
     System.AddCCommand("mp_figure_soul", 'KCD2MP_W177SetFigureSoul(%line)', "WO-177: your partner's figure is spawned from a soul of the mod's own, in no village and no quest group, so no village fight or quest takes it in (default on; applies to the next figure): mp_figure_soul on|off")
+    System.AddCCommand("mp_quicksave", 'KCD2MP_W178QuickSave(%line)', "WO-178: save now the Saviour Schnapps way (no schnapps used; in a session the host's game saves the shared world): mp_quicksave; the host's setting: mp_quicksave on|off")
+    System.AddCCommand("mp_world_autosave", 'KCD2MP_W178SetWorldAutosave(%line)', "WO-178: the mod's scheduled world saves (default off: saving is the player's choice): mp_world_autosave on|off")
+    System.AddCCommand("mp_joiner_lock", 'KCD2MP_W178SetJoinerLock(%line)', "WO-178 C1: the joiner can lock on to the enemy copies fighting him or his host (the game's own lock-on): mp_joiner_lock on|off")
+    System.AddCCommand("mp_host_lock_answer", 'KCD2MP_W178SetHostLockAnswer(%line)', "WO-178 C1: the host locks on to an NPC fighting the partner's figure without a skirmish change (compared live; default off): mp_host_lock_answer on|off")
+    System.AddCCommand("mp_fallback_hold", 'KCD2MP_W178SetFallbackHold(%line)', "WO-178 C4: a joiner's blow waits up to 0.8 s for his figure's strike window before the raw fallback: mp_fallback_hold on|off")
+    System.AddCCommand("mp_fallback_engine_cap", 'KCD2MP_W178SetFallbackEngineCap(%line)', "WO-178 C4: a raw fallback blow costs what the engine's own blow costs, and never floors an NPC: mp_fallback_engine_cap on|off")
+    System.AddCCommand("mp_w178_status", 'KCD2MP_W178Status(%line)', "WO-178: the save switches, the quicksave, the draw probe, and the DLL's hostility answer (through the agent): mp_w178_status")
     System.AddCCommand("mp_repair_combat", 'KCD2MP_W174Repair(%line)', "WO-174: frees stuck weapons -- clears partner-figure fight links, ends a stuck fight, re-equips a melee weapon -- and says so; on a save that was fine it changes nothing: mp_repair_combat")
     System.AddCCommand("mp_weapon_autofix", 'KCD2MP_W174SetAutofix(%line)', "WO-174: after mp_repair_combat freed your weapons, every later load in this game session equips that weapon again, because the lock returns on a reload (default on): mp_weapon_autofix on|off")
     System.AddCCommand("mp_save_guard", 'KCD2MP_W175SetGuard(%line)', "WO-175: no save while a dialogue, a scene, a fight, a quest's arranged fight or one of the mod's own changes is in progress; the game's saves wait under a lock while the mod changes your inventory, equipment or body (max 10 s) (default on): mp_save_guard on|off")
@@ -27646,6 +28094,11 @@ local function handleAction(action, activation, value)
     if KCD2MP_W159OnAction then
         local okr, used = pcall(KCD2MP_W159OnAction, action, activation)   -- WO-159: hold E between the prologue's cutscenes skips the rest
         if okr and used then return end
+    end
+    -- WO-178 0.d: the quicksave key (its own action only)
+    if KCD2MP_W178OnAction then
+        local okq, used = pcall(KCD2MP_W178OnAction, action, activation)
+        if okq and used then return end
     end
     -- WO-154: the mod menu's keys (its own actions only; a game menu's action closes it and goes on)
     if KCD2MP_W154MenuOnAction then

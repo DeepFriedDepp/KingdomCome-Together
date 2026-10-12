@@ -93,7 +93,8 @@ Suspended g_sus;   // static: kMaxThreads handles do not belong on a stack
 
 } // namespace
 
-bool install_impl(void* target, const uint8_t* expect, size_t len, Callback cb, const char** why, bool gate);
+bool install_impl(void* target, const uint8_t* expect, size_t len, Callback cb, const char** why, bool gate, void* detour = nullptr,
+                  void** original = nullptr);
 
 bool install(void* target, const uint8_t* expect, size_t len, Callback cb, const char** why) {
     return install_impl(target, expect, len, cb, why, false);
@@ -119,10 +120,10 @@ static size_t read_code(const uint8_t* src, uint8_t* out, size_t n) {
 // boundary (per thread: callers log `why` right after the call).
 static thread_local char t_why[160];
 
-bool install_impl(void* target, const uint8_t* expect, size_t len, Callback cb, const char** why, bool gate) {
+bool install_impl(void* target, const uint8_t* expect, size_t len, Callback cb, const char** why, bool gate, void* detour, void** original) {
     const char* dummy = nullptr;
     if (!why) why = &dummy;
-    if (!target || !expect || !cb || len < 14 || len > 32) { *why = "bad arguments"; return false; }
+    if (!target || !expect || (!cb && !detour) || (detour && !original) || len < 14 || len > 32) { *why = "bad arguments"; return false; }
     auto* tgt = static_cast<uint8_t*>(target);
     bool same = false;
     KCDMP_FAULT_READ(s_prologue, "inline_hook::install/prologue");
@@ -154,13 +155,16 @@ bool install_impl(void* target, const uint8_t* expect, size_t len, Callback cb, 
     const uint64_t back = reinterpret_cast<uint64_t>(tgt + len);
     std::memcpy(q + 6, &back, 8);
     uint8_t* thunk = mem + 128;
-    emit_thunk(thunk, cb, mem, gate);
+    if (!detour) emit_thunk(thunk, cb, mem, gate);
     FlushInstructionCache(GetCurrentProcess(), mem, 4096);
+    // WO-178: a detour replaces the function -- the patch jumps straight to it and the trampoline (the copied prologue + the jump back)
+    // is its way to the original, published before the patch goes in.
+    if (detour) *original = mem;
 
     uint8_t patch[32];
     std::memset(patch, 0x90, sizeof(patch));
     patch[0] = 0xFF; patch[1] = 0x25; std::memset(patch + 2, 0, 4);
-    const uint64_t th = reinterpret_cast<uint64_t>(thunk);
+    const uint64_t th = reinterpret_cast<uint64_t>(detour ? static_cast<void*>(detour) : static_cast<void*>(thunk));
     std::memcpy(patch + 6, &th, 8);
 
     for (int tries = 0; tries < 50; ++tries) {
@@ -178,6 +182,10 @@ bool install_impl(void* target, const uint8_t* expect, size_t len, Callback cb, 
     }
     *why = "a thread stayed inside the patch range for 50 attempts";
     return false;
+}
+
+bool install_detour(void* target, const uint8_t* expect, size_t len, void* detour, void** original, const char** why) {
+    return install_impl(target, expect, len, nullptr, why, false, detour, original);
 }
 
 bool install_this(void* target, const uint8_t* expect, size_t len, ThisCallback cb, const char** why) {

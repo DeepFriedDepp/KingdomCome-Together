@@ -27,6 +27,8 @@
 #include "wo166.h"
 #include "wo166_rules.h"
 #include "wo172.h"
+#include "wo178.h"
+#include "wo178_rules.h"
 
 namespace kcdmp::wo173 {
 namespace {
@@ -108,6 +110,9 @@ struct Pending {
     int32_t stateAfter = 0;
     Fallback fb = Fallback::None;
     double t0 = 0;
+    int8_t atkType = -1;      // WO-178 C4: the row's attack type (-1 unknown) -- the engine's cost is kept per kind
+    float capMedian = -1;     // the engine median the fallback's stamina was held to (-1 none known: the default)
+    double heldS = -1;        // how long the blow waited for the figure's strike window (-1 not held)
 };
 std::vector<Pending> g_pending;                       // main thread only
 std::unordered_map<uint32_t, float> g_stMaxSeen;      // NPC entity id -> highest stamina seen (main thread)
@@ -116,6 +121,24 @@ std::atomic<uint32_t> c_kept{0};   // WO-176 (A1): blows refused because the vic
 std::atomic<uint32_t> c_requests{0}, c_engine{0}, c_fallback{0}, c_hit{0}, c_blocked{0}, c_pb{0}, c_broken{0}, c_reactQueued{0}, c_reactOther{0},
     c_corrected{0}, c_raised{0}, c_koAfter{0}, c_koFullStamina{0}, c_capped{0}, c_unmeasured{0}, c_stateHit{0}, c_faults{0};
 uint32_t c_fb[16]{};
+
+// WO-178 C4 (1): blows that wait for the figure's strike window, and their answers once done (main thread).
+struct Held { std::vector<uint8_t> body; double t0 = 0; uint32_t id = 0; uint32_t avatarEid = 0; };
+std::vector<Held> g_held;
+std::unordered_map<uint32_t, std::vector<uint8_t>> g_heldDone;   // id -> op 18's 33-byte answer
+uint32_t g_heldSeq = 0;
+std::atomic<uint32_t> c_held{0}, c_heldEngine{0}, c_heldRaw{0}, c_heldOther{0}, c_floorStopped{0}, c_medianCapped{0};
+// WO-178 C4 (2): the engine's own stamina cost of a landed blow, per NPC and attack kind, and per kind alone (main thread).
+std::unordered_map<uint64_t, kcdmp::wo178rules::Ring> g_medNpc;
+std::unordered_map<int, kcdmp::wo178rules::Ring> g_medKind;
+float engine_median(uint32_t veid, int8_t type) {
+    if (type < 0) return -1.0f;
+    auto a = g_medNpc.find((static_cast<uint64_t>(veid) << 8) | static_cast<uint8_t>(type));
+    if (a != g_medNpc.end() && a->second.n > 0) return a->second.median();
+    auto b = g_medKind.find(type);
+    if (b != g_medKind.end() && b->second.n > 0) return b->second.median();
+    return -1.0f;
+}
 
 void switch_off(const char* what) {
     if (g_faulted.exchange(true)) return;
@@ -200,6 +223,18 @@ float npc_max_stamina(uint32_t veid, void* soul) {
     return stamina_max_estimate(it == g_stMaxSeen.end() ? 0.0f : it->second, -1.0f);
 }
 
+// WO-178 C4: what the log says about the hold and the engine-like cap.
+std::string held_note(const Pending& p) {
+    char b[160] = "";
+    int n = 0;
+    if (p.heldS >= 0) n += std::snprintf(b + n, sizeof b - n, " held_ms=%.0f", p.heldS * 1000.0);
+    if (!p.engine && p.capSt >= 0) {
+        if (p.capMedian > 0) n += std::snprintf(b + n, sizeof b - n, " cap=engine-median:%.1f", p.capMedian);
+        else n += std::snprintf(b + n, sizeof b - n, " cap=default:%.0f", kcdmp::wo178rules::kDefaultFallbackSt);
+    }
+    return b;
+}
+
 void finish(Pending& p, bool measured, float eHp, float eSt) {
     void* soul = hits::soul_of_eid(p.veid);
     bool ko = false, dead = false;
@@ -225,6 +260,10 @@ void finish(Pending& p, bool measured, float eHp, float eSt) {
         }
         if (std::fabs(credit) > 0.01f) rttr::note_remote_damage(p.guid, credit);
     }
+    if (p.engine && measured && p.outcome == static_cast<uint8_t>(kcdmp::wo165::Outcome::Hit) && p.atkType >= 0 && std::isfinite(eSt) && eSt > 0) {
+        g_medNpc[(static_cast<uint64_t>(p.veid) << 8) | static_cast<uint8_t>(p.atkType)].add(eSt);   // WO-178 C4: what the engine took
+        g_medKind[p.atkType].add(eSt);
+    }
     if (ko) {
         c_koAfter.fetch_add(1);
         if (p.st0 >= 0.9f * p.stMax) c_koFullStamina.fetch_add(1);
@@ -235,20 +274,23 @@ void finish(Pending& p, bool measured, float eHp, float eSt) {
     if (p.engine && measured) { std::snprintf(est, sizeof est, "%.2f", eSt); std::snprintf(ehp, sizeof ehp, "%.2f", eHp); }
     else { std::snprintf(est, sizeof est, p.engine ? "?" : "raw"); std::snprintf(ehp, sizeof ehp, p.engine ? "?" : "raw"); }
     logf("WO173-HIT npc=%s seq=%u engine=%s st=%s/%.2f hp=%s/%.2f joiner_said=st%.2f/hp%.2f reaction=%s kind=%d state=0x%X knockdown=%s dead=%s "
-         "st_before=%.1f/%.0f correction=%s fallback=%s%s",
+         "st_before=%.1f/%.0f correction=%s fallback=%s%s%s",
          p.name.c_str(), p.seq, p.engine ? kcdmp::wo165::outcome_name(static_cast<kcdmp::wo165::Outcome>(p.outcome)) : "-", est,
          p.engine ? p.joinerSt : (p.capSt >= 0 ? p.capSt : p.joinerSt), ehp, p.joinerHp, p.joinerSt, p.joinerHp,
          react_name(static_cast<React>(p.react)), p.reactKind, p.stateRead ? static_cast<unsigned>(p.stateAfter) : 0u, ko ? "yes" : "no",
-         dead ? "yes" : "no", p.st0, p.stMax, corr, fallback_name(p.fb), p.capSt >= 0 && p.capSt < p.joinerSt ? " (stamina capped)" : "");
+         dead ? "yes" : "no", p.st0, p.stMax, corr, fallback_name(p.fb), p.capSt >= 0 && p.capSt < p.joinerSt ? " (stamina capped)" : "", held_note(p).c_str());
 }
 
-uint8_t do_real_hit(const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t* outLen) {
+// mayHold: WO-178 C4 (1) -- a blow whose only missing precondition is the figure's strike window is not applied: *held says so and the
+// caller keeps it (tick runs it again with mayHold false once the window opens or kHoldS runs out). heldS: how long it waited (-1 none).
+uint8_t do_real_hit(const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t* outLen, bool mayHold, bool* held, double heldS) {
+    if (held) *held = false;
     // [op][type][zone][hand][strength:f32][rflags][attributed body]
     if (len < 9 + 30 || cap < 33) return wo163::kRBadRequest;
     const uint8_t* ab = body + 9;
     const size_t alen = len - 9;
     if (alen != static_cast<size_t>(30 + ab[29])) return wo163::kRBadRequest;
-    c_requests.fetch_add(1);
+    if (heldS < 0) c_requests.fetch_add(1);   // a held blow run again is the same request
     motion::AttackFields f{};
     f.type = static_cast<int8_t>(body[1]); f.zone = static_cast<int8_t>(body[2]); f.hand = static_cast<int8_t>(body[3]);
     std::memcpy(&f.strength, body + 4, 4);
@@ -276,6 +318,12 @@ uint8_t do_real_hit(const uint8_t* body, size_t len, uint8_t* out, size_t cap, s
     pre.striking = avatarEid != 0 && wo166::striking_recently(avatarEid);
     pre.arranged = veid != 0 && hits::scene_owned_eid(veid, "wo173-real-hit");   // WO-176 (A1): a quest's arranged fight takes no figure's blow
     Fallback fb = precondition(pre);
+    if (mayHold && held && fb == Fallback::NoSwingWindow && kcdmp::wo178rules::should_hold(wo178::hold_on(), true, 0.0)) {
+        *held = true;   // nothing applied, nothing logged yet: the blow waits for the window (applied once either way)
+        return wo163::kROk;
+    }
+    p.atkType = (rflags & 1) ? f.type : static_cast<int8_t>(-1);
+    p.heldS = heldS;
     wo165::Result rr{};
     if (fb == Fallback::None) {
         wo165::Request rq{};
@@ -311,7 +359,16 @@ uint8_t do_real_hit(const uint8_t* body, size_t len, uint8_t* out, size_t cap, s
     } else if (routes_nowhere(fb)) {
         c_kept.fetch_add(1);   // WO-176 (A1): no engine, no raw blow -- the agent tells the joiner the fight is the story's
     } else {
-        const float capSt = cap_stamina(st, p.stMax);
+        float capSt;
+        if (wo178::engine_cap_on()) {
+            // WO-178 C4 (2): an engine-like blow -- at most the engine's own cost for this attack kind, never below the stamina floor
+            p.capMedian = engine_median(veid, p.atkType);
+            capSt = kcdmp::wo178rules::engine_like_cap(st, p.capMedian, p.st0, p.stMax);
+            if (p.capMedian > 0 && capSt < st) c_medianCapped.fetch_add(1);
+            if (p.st0 >= 0 && capSt <= 0.0f && st > 0) c_floorStopped.fetch_add(1);
+        } else {
+            capSt = cap_stamina(st, p.stMax);
+        }
         if (capSt < st) c_capped.fetch_add(1);
         ar = hits::apply_attributed_ex(ab, alen, true, capSt, true);
         applied = (ar.steps & 1) ? 2 : 0;
@@ -402,9 +459,28 @@ uint8_t react(void* aCa, void* vCa, uint8_t* result, int32_t* kindOut) {
     return static_cast<uint8_t>(taken ? React::Queued : React::NotTaken);
 }
 
+void tick_held(double now) {
+    for (auto it = g_held.begin(); it != g_held.end();) {
+        const double waited = now - it->t0;
+        const bool open = it->avatarEid && wo166::striking_recently(it->avatarEid);
+        if (!open && waited < kcdmp::wo178rules::kHoldS) { ++it; continue; }
+        uint8_t res[33]{};
+        size_t rl = 0;
+        const uint8_t r = do_real_hit(it->body.data(), it->body.size(), res, sizeof res, &rl, false, nullptr, waited);
+        if (r != wo163::kROk || rl != 33) { c_heldOther.fetch_add(1); std::memset(res, 0, sizeof res); }
+        else (res[0] == 1 ? c_heldEngine : res[0] == 2 ? c_heldRaw : c_heldOther).fetch_add(1);
+        logf("WO178-HOLD id=%u waited_ms=%.0f window=%s result=%s", it->id, waited * 1000.0, open ? "opened" : "timed-out",
+             r != wo163::kROk ? "bad-request" : res[0] == 1 ? "engine" : res[0] == 2 ? "raw" : "none");
+        if (g_heldDone.size() > 256) g_heldDone.clear();
+        g_heldDone[it->id] = std::vector<uint8_t>(res, res + 33);
+        it = g_held.erase(it);
+    }
+}
+
 void tick() {
-    if (g_pending.empty()) return;
     const double now = now_s();
+    if (!g_held.empty()) tick_held(now);
+    if (g_pending.empty()) return;
     for (auto it = g_pending.begin(); it != g_pending.end();) {
         Pending& p = *it;
         if (!p.stateRead && now - p.t0 >= kReactionReadS) {
@@ -431,8 +507,38 @@ void tick() {
 uint8_t handle(uint8_t op, const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t* outLen) {
     *outLen = 0;
     switch (op) {
-        case kOpRealHit:
-            return do_real_hit(body, len, out, cap, outLen);
+        case kOpRealHit: {
+            bool held = false;
+            const uint8_t r = do_real_hit(body, len, out, cap, outLen, true, &held, -1.0);
+            if (r != wo163::kROk || !held) return r;
+            // WO-178 C4 (1): applied = 4 (held) and the hold's id in the seq field; op 28 answers once tick has run it
+            Held h{};
+            h.body.assign(body, body + len);
+            h.t0 = now_s();
+            h.id = ++g_heldSeq;
+            std::memcpy(&h.avatarEid, body + 9 + 25, 4);
+            g_held.push_back(h);
+            c_held.fetch_add(1);
+            std::memset(out, 0, 33);
+            out[0] = 4;
+            out[2] = static_cast<uint8_t>(Fallback::NoSwingWindow);
+            std::memcpy(out + 21, &h.id, 4);
+            *outLen = 33;
+            return wo163::kROk;
+        }
+        case wo178::kOpHeldResult: {
+            if (len != 5 || cap < 34) return wo163::kRBadRequest;
+            uint32_t id = 0;
+            std::memcpy(&id, body + 1, 4);
+            auto d = g_heldDone.find(id);
+            bool pending = false;
+            for (const auto& h : g_held) if (h.id == id) { pending = true; break; }
+            std::memset(out, 0, 34);
+            out[0] = d != g_heldDone.end() ? 2 : pending ? 1 : 0;
+            if (d != g_heldDone.end()) { std::memcpy(out + 1, d->second.data(), 33); g_heldDone.erase(d); }
+            *outLen = 34;
+            return wo163::kROk;
+        }
         case kOpStatus: {
             const int n = status_text(reinterpret_cast<char*>(out), static_cast<int>(cap));
             *outLen = n <= 0 || cap == 0 ? 0 : (static_cast<size_t>(n) < cap ? static_cast<size_t>(n) : cap - 1);
@@ -483,7 +589,8 @@ int status_text(char* out, int n) {
     return std::snprintf(out, n,
         "wo173 real_hits=%s faulted=%s react=%s(%s) threat=%s requests=%u engine=%u hit=%u blocked=%u pb=%u broken=%u react_queued=%u react_other=%u "
         "fallback=%u [off=%u no_row=%u no_window=%u no_victim=%u dead=%u replay=%u filtered=%u core=%u not_armed=%u] capped=%u corrected=%u raised=%u "
-        "state_hit=%u ko_after=%u ko_full_stamina=%u unmeasured=%u faults=%u pending=%zu arranged_kept=%u",
+        "state_hit=%u ko_after=%u ko_full_stamina=%u unmeasured=%u faults=%u pending=%zu arranged_kept=%u held=%u[engine=%u raw=%u other=%u waiting=%zu] "
+        "median_capped=%u floor_stopped=%u hold=%s engine_cap=%s",
         g_on.load() ? "on" : "off", g_faulted.load() ? "yes" : "no", g_reactOn.load() ? (g_reactFaulted.load() ? "OFF(fault)" : "on") : "off",
         g_reactResolved ? g_reactWhy : "unresolved", g_threat.load() ? "on" : "off", c_requests.load(), c_engine.load(), c_hit.load(), c_blocked.load(),
         c_pb.load(), c_broken.load(), c_reactQueued.load(), c_reactOther.load(), c_fallback.load(),
@@ -491,7 +598,8 @@ int status_text(char* out, int n) {
         c_fb[static_cast<int>(Fallback::NoVictim)], c_fb[static_cast<int>(Fallback::VictimDead)], c_fb[static_cast<int>(Fallback::Replay)],
         c_fb[static_cast<int>(Fallback::Filtered)], c_fb[static_cast<int>(Fallback::CoreNotRun)], c_fb[static_cast<int>(Fallback::NotArmed)],
         c_capped.load(), c_corrected.load(), c_raised.load(), c_stateHit.load(), c_koAfter.load(), c_koFullStamina.load(), c_unmeasured.load(),
-        c_faults.load(), g_pending.size(), c_kept.load());
+        c_faults.load(), g_pending.size(), c_kept.load(), c_held.load(), c_heldEngine.load(), c_heldRaw.load(), c_heldOther.load(), g_held.size(),
+        c_medianCapped.load(), c_floorStopped.load(), wo178::hold_on() ? "on" : "off", wo178::engine_cap_on() ? "on" : "off");
 }
 
 }   // namespace kcdmp::wo173

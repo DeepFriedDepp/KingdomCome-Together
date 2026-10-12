@@ -59,4 +59,9 @@ bool install_gate(void* target, const uint8_t* expect, size_t len, GateCallback 
 using GateCallback4 = bool (*)(void* a1, void* a2, void* a3, void* a4);
 bool install_gate4(void* target, const uint8_t* expect, size_t len, GateCallback4 cb, const char** why);
 
+// WO-178: a full detour. The patch jumps straight to `detour` (a function with the hooked one's own signature and calling convention);
+// *original receives the trampoline -- the copied prologue and a jump back -- through which the detour calls the engine's own function.
+// *original is written before the patch goes in, so the detour never sees it unset.
+bool install_detour(void* target, const uint8_t* expect, size_t len, void* detour, void** original, const char** why);
+
 } // namespace kcdmp::inlinehook

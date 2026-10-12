@@ -44,7 +44,11 @@ public static class KeybindPak
         "kcd2mp_dice_mark_5", "kcd2mp_dice_mark_6", "kcd2mp_dice_cast", "kcd2mp_dice_bank",
         "kcd2mp_dice_yield", "kcd2mp_dice_cancel",
         "kcd2mp_menu_toggle", "kcd2mp_menu_up", "kcd2mp_menu_down", "kcd2mp_menu_change",
+        "kcd2mp_quicksave",
     };
+
+    /// <summary>WO-178 0.d: the quicksave key's action (its key is the player's choice: settings.json QuickSaveKey, Wo178Rules).</summary>
+    public const string QuickSaveAction = "kcd2mp_quicksave";
 
     /// <summary>WO-148's dice keys. Nothing after WO-148 changes them (WO-154's tests pin it).</summary>
     public static readonly (string Action, string Key)[] DiceKeys =
@@ -180,6 +184,40 @@ public static class KeybindPak
         if (ControlInput.Matches(inner).Count != 1) throw new InvalidDataException($"{MenuToggleAction} must have exactly one control");
         string replaced = ControlInput.Replace(inner, m => m.Groups[1].Value + key + m.Groups[3].Value);
         return superactionsBody[..b.Groups[2].Index] + replaced + superactionsBody[(b.Groups[2].Index + b.Groups[2].Length)..];
+    }
+
+    /// <summary>WO-178 0.d: our superactions with the quicksave action's one control set to <paramref name="key"/> (one of
+    /// Wo178Rules.QuickSaveKeys); every other line as it was.</summary>
+    public static string WithQuickSaveKey(string superactionsBody, string key)
+    {
+        if (Array.IndexOf(Wo178Rules.QuickSaveKeys, key) < 0) throw new ArgumentException("not a quicksave key: " + key, nameof(key));
+        var rx = new Regex(@"(<superaction\s+name=""" + QuickSaveAction + @"""[^>]*>)(.*?)(</superaction>)", RegexOptions.CultureInvariant | RegexOptions.Singleline);
+        var blocks = rx.Matches(superactionsBody);
+        if (blocks.Count != 1) throw new InvalidDataException($"{blocks.Count} {QuickSaveAction} superactions in our lines (expected 1)");
+        var b = blocks[0];
+        string inner = b.Groups[2].Value;
+        if (ControlInput.Matches(inner).Count != 1) throw new InvalidDataException($"{QuickSaveAction} must have exactly one control");
+        string replaced = ControlInput.Replace(inner, m => m.Groups[1].Value + key + m.Groups[3].Value);
+        return superactionsBody[..b.Groups[2].Index] + replaced + superactionsBody[(b.Groups[2].Index + b.Groups[2].Length)..];
+    }
+
+    /// <summary>One string setting of settings.json as written (null: no file, not an object, no such key, not a string).</summary>
+    public static string? ReadSetting(string settingsPath, string key)
+    {
+        try { return SettingsJson.Read(settingsPath)?[key] is System.Text.Json.Nodes.JsonValue v && v.TryGetValue(out string? s) ? s : null; }
+        catch (InvalidOperationException) { return null; }
+    }
+
+    /// <summary>WO-178: the quicksave key a built kdcmp_keys.pak binds, or null when it cannot be read.</summary>
+    public static string? BoundQuickSaveKeyInPak(string pakPath)
+    {
+        try
+        {
+            using ZipArchive z = ZipFile.OpenRead(pakPath);
+            ZipArchiveEntry? s = Find(z, SuperactionsEntry);
+            return s is null ? null : BoundKey(ReadText(s), QuickSaveAction);
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException) { return null; }
     }
 
     /// <summary>The key a keybindSuperactions.xml binds to one action (its superaction's first control), or null.</summary>
@@ -327,7 +365,7 @@ public static class KeybindPak
 
     /// <summary>The whole job: the game's files + our lines -> modDir\Data\kdcmp_keys.pak. WO-154:
     /// <paramref name="menuKeySetting"/> is settings.json's MenuKey as written (null = none: Insert).</summary>
-    public static Outcome Build(string gameRoot, string modDir, string? menuKeySetting = null)
+    public static Outcome Build(string gameRoot, string modDir, string? menuKeySetting = null, string? quickSaveKeySetting = null)
     {
         try
         {
@@ -337,9 +375,12 @@ public static class KeybindPak
             string? p = MergeProfile(profile, PatchBody(EmbeddedPatch("defaultProfile.interaction.xml")), out why);
             if (p is null) return new Outcome(false, "none", why, source);
             string menuKey = ResolveMenuKey(menuKeySetting, out string keyNote);
-            string? s = MergeSuperactions(supa, WithMenuKey(PatchBody(EmbeddedPatch("keybindSuperactions.append.xml")), menuKey), out why);
+            string qsKey = Wo178Rules.ResolveQuickSaveKey(quickSaveKeySetting, menuKey, out string qsNote);   // WO-178 0.d
+            string? s = MergeSuperactions(supa, WithQuickSaveKey(WithMenuKey(PatchBody(EmbeddedPatch("keybindSuperactions.append.xml")), menuKey), qsKey), out why);
             if (s is null) return new Outcome(false, "none", why, source);
             if (BoundKey(s, MenuToggleAction) != menuKey) return new Outcome(false, "none", "the menu key did not land in " + SuperactionsEntry, source);
+            if (BoundKey(s, QuickSaveAction) != qsKey) return new Outcome(false, "none", "the quicksave key did not land in " + SuperactionsEntry, source);
+            if (qsNote.Length > 0) keyNote = keyNote.Length > 0 ? keyNote + "; " + qsNote : qsNote;
             string data = Path.Combine(modDir, "Data");
             Directory.CreateDirectory(data);
             // The game's files are plain ASCII; written back without a byte-order mark.
@@ -349,7 +390,7 @@ public static class KeybindPak
                 (ProfileEntry, enc.GetBytes(p)),
                 (SuperactionsEntry, enc.GetBytes(s)),
             });
-            return new Outcome(true, action, $"{Actions.Length} actions in both files; menu key {menuKey}{(keyNote.Length > 0 ? " (" + keyNote + ")" : "")}", source);
+            return new Outcome(true, action, $"{Actions.Length} actions in both files; menu key {menuKey}; quicksave key {qsKey}{(keyNote.Length > 0 ? " (" + keyNote + ")" : "")}", source);
         }
         catch (Exception ex)
         {
@@ -388,7 +429,7 @@ public static class KeybindPak
         }
         string mod = Arg("--mod-dir") ?? Path.Combine(root, "Mods", "kdcmp");
         string settings = Arg("--settings") ?? Path.Combine(AppContext.BaseDirectory, "settings.json");
-        Outcome o = Build(root, mod, ReadMenuKeySetting(settings));
+        Outcome o = Build(root, mod, ReadMenuKeySetting(settings), ReadSetting(settings, Wo178Rules.QuickSaveKeySetting));
         output.WriteLine("KEYS-PAK " + o.ToJson());
         return o.Ok ? 0 : 1;
     }

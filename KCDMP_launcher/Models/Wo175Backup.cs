@@ -213,6 +213,33 @@ namespace KCDMP_launcher.Models
             return removed;
         }
 
+        // ------------------------------------------------------------------ WO-178 0.c: the backup to pick
+
+        /// <summary>The agent writes this beside the backups when a load found the weapons stuck (the draw probe): the stamp of the
+        /// newest backup (made before that session), why, and when.</summary>
+        public const string PickFileName = "restore-pick.txt";
+
+        /// <summary>The marked backup's folder, or null (no mark, a malformed mark, or a mark whose backup is gone).</summary>
+        public static string? ReadPick(string backupsRoot)
+        {
+            try
+            {
+                string f = System.IO.Path.Combine(backupsRoot, PickFileName);
+                if (!File.Exists(f)) return null;
+                string stamp = (File.ReadLines(f).FirstOrDefault() ?? "").Trim();
+                if (!StampRx.IsMatch(stamp)) return null;
+                string dir = System.IO.Path.Combine(backupsRoot, stamp);
+                return File.Exists(System.IO.Path.Combine(dir, ManifestName)) ? dir : null;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return null; }
+        }
+
+        /// <summary>The mark is gone once its backup was restored.</summary>
+        public static void ClearPick(string backupsRoot)
+        {
+            try { File.Delete(System.IO.Path.Combine(backupsRoot, PickFileName)); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        }
+
         /// <summary>The backups a player can restore, newest first.</summary>
         public static IReadOnlyList<BackupInfo> List(string backupsRoot)
         {

@@ -49,6 +49,9 @@ public static partial class Protocol
 
     public const int W164TextMax = 80;
 
+    // ---- WO-178: the DLL's ops in the WO-163 family (native/KCDMP/wo178.h) ----
+    public const byte Wo178OpOffer = 24, Wo178OpStatus = 25, Wo178OpConfig = 26, Wo178OpSaveManual = 27, Wo178OpHeldResult = 28;
+
     // ---- kinds (APPEND-ONLY) ----
     public const byte W164MarkPing = 1, W164Torch = 2, W164Escort = 3, W164HitOutcome = 4, W164Weather = 5, W164Travel = 6, W164RealHit = 7, W164NpcDown = 8;
     /// <summary>WO-176 (A1), host -> joiner: "&lt;npc&gt;" -- the joiner's blow hit an actor of a quest's arranged fight; it was not routed into
@@ -59,6 +62,12 @@ public static partial class Protocol
     /// <summary>WO-177 B2, host -> joiner: "&lt;npc&gt;=&lt;v&gt; ..." (1..4 entries) -- v 1 = a corpse on the host too, 2 = gone from the host's world (the joiner removes its copy),
     /// 3 = alive / knocked out there (not a corpse question), 0 = the host cannot say (too far from it). Also sent unasked when the host's own corpse goes.</summary>
     public const byte W164CorpseAnswer = 11;
+    /// <summary>WO-178 0.d, joiner -> host: "key|menu|console" -- the joiner's quicksave: the host's game saves the shared world (no vote).</summary>
+    public const byte W164QuickSaveAsk = 12;
+    /// <summary>WO-178 0.d, host -> the asking joiner: "saved" | "waited" | "refused &lt;why&gt;".</summary>
+    public const byte W164QuickSaveAnswer = 13;
+    /// <summary>WO-178 0.d, host -> joiners: "quicksave=on|off" -- the host's mp_quicksave (on a change and every 10 s).</summary>
+    public const byte W164QuickSaveSetting = 14;
 
     /// <summary>While the torch is out, the side-channel repeats it this often (a lost edge recovers).</summary>
     public const int W164TorchRepeatMs = 10_000;
@@ -67,7 +76,8 @@ public static partial class Protocol
     {
         W164MarkPing => "mark-ping", W164Torch => "torch", W164Escort => "escort", W164HitOutcome => "hit-outcome", W164Weather => "weather",
         W164Travel => "travel", W164RealHit => "real-hit", W164NpcDown => "npc-down", W164StoryFight => "story-fight",
-        W164CorpseAsk => "corpse-ask", W164CorpseAnswer => "corpse-answer", _ => $"unknown-{k}",
+        W164CorpseAsk => "corpse-ask", W164CorpseAnswer => "corpse-answer", W164QuickSaveAsk => "quicksave-ask",
+        W164QuickSaveAnswer => "quicksave-answer", W164QuickSaveSetting => "quicksave-setting", _ => $"unknown-{k}",
     };
 }
 

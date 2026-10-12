@@ -114,7 +114,7 @@ public class Wo154MenuTests
     private static JsonObject AllSaved() => new()
     {
         ["NameBadges"] = false, ["PingLine"] = false, ["CleanScreen"] = true, ["FriendlyFire"] = false, ["CrimeMode"] = "individual",
-        ["FastTravel"] = true, ["Leash"] = false, ["SleepVote"] = false, ["Whistle"] = false, ["PartnerHerbs"] = true, ["PartnerMarker"] = true, ["PartnerMarkerArt"] = true,
+        ["FastTravel"] = true, ["Leash"] = false, ["SleepVote"] = false, ["Whistle"] = false, ["PartnerHerbs"] = true, ["PartnerMarker"] = true, ["PartnerMarkerArt"] = true, ["Quicksave"] = true,
     };
 
     [Fact]
@@ -128,7 +128,7 @@ public class Wo154MenuTests
         Assert.Contains(("FastTravel", "on"), host);
         // became the host after the world's push: only the levers are still owed
         var owed = Wo154MenuRules.RestorePlan(AllSaved(), hosting: true, own: false);
-        Assert.Equal(new[] { "FriendlyFire", "CrimeMode", "FastTravel", "Leash" }, owed.Select(p => p.Key));
+        Assert.Equal(new[] { "FriendlyFire", "CrimeMode", "FastTravel", "Leash", "Quicksave" }, owed.Select(p => p.Key));   // WO-178: + mp_quicksave
         Assert.All(Wo154MenuRules.Settings.Where(s => s.HostOwned), s => Assert.Contains(s.Key, owed.Select(p => p.Key)));
     }
 

@@ -133,6 +133,7 @@ public partial class GameBridge
                     _w154mHostRestored = host;
                     await Wo154MenuRestoreAsync(host, own: true, host ? "host" : joiner ? "joiner" : "unknown role");
                     await ExecLuaAsync(Wo154MenuRules.KeysLua(_w154mActiveKey, _w154mStoredKey, ""));
+                    Wo178ReadKeys();   // WO-178 0.d: the quicksave key bound now and stored for the next start
                 }
                 else if (host && !_w154mHostRestored && epoch == _w154mRestoredEpoch)
                 {
@@ -194,6 +195,7 @@ public partial class GameBridge
             return;
         }
         if (key == KeybindPak.MenuKeySetting) { Wo154MenuSaveKey(word, value); return; }
+        if (key == Wo178Rules.QuickSaveKeySetting) { Wo178SaveKey(word, value); return; }   // WO-178 0.d: the launcher's settings.json
         var r = SettingsJson.Update(W154mModSettings, new[] { SettingsJson.Edit.Set(key, value) }, createIfMissing: true);
         Interlocked.Increment(ref _w154mSaves);
         Console.WriteLine($"MP-MENU-SAVE {key}={word} -> {Wo154MenuRules.ModSettingsFile} {r.Outcome.ToString().ToLowerInvariant()}"

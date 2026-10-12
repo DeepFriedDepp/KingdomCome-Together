@@ -6032,6 +6032,14 @@ public partial class GameBridge(ClientConfig config)
             case "w177_corpse_gone": // WO-177 B2 (host): "<npc=2 ...>" -- a corpse of the host's world went
                 Wo177OnEvent(name, arg);
                 return;
+            case "w178_save":        // WO-178 Part 0: a save the mod asks for -- the schnapps way (the DLL's ManualSave, no item used)
+            case "w178_cfg":         // WO-178: mp_world_autosave, mp_quicksave, mp_joiner_lock, mp_host_lock_answer, mp_fallback_*
+            case "w178_qs_ask":      // WO-178 0.d (joiner): the quicksave key -> the host's game saves
+            case "w178_qs_answer":   // WO-178 0.d (host): the answer to the asking joiner
+            case "w178_stuck":       // WO-178 0.c: the draw probe could not free the weapons
+            case "w178_status":      // WO-178: mp_w178_status
+                Wo178OnEvent(name, arg);
+                return;
             case "w166_talkstate":   // WO-166 T3: a talk that never started -- the copy's facts
             case "w166_talk":        // WO-166 T4: a talk refused, the host's NPC busy
             case "w166_cfg":         // WO-166: mp_copy_strikes / mp_snap_fix / the C1 lever

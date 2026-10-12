@@ -112,8 +112,9 @@ public partial class GameBridge
 
                 await Wo133TickAsync();   // WO-133: the shared-world quest gate to the mod
 
-                // Phase 3: the host's scheduled world save.
-                if (_sharedWorld && _combatRoleApplied && _isDamageAuthority && _autosaveMinutes > 0
+                // Phase 3: the host's scheduled world save -- WO-178: only while mp_world_autosave is on (default off: saving is the
+                // player's choice; the game's own saves still reach the joiner through the folder watch)
+                if (_w178WorldAutosave && _sharedWorld && _combatRoleApplied && _isDamageAuthority && _autosaveMinutes > 0
                     && (DateTime.UtcNow - _lastWorldSaveUtc).TotalMinutes >= _autosaveMinutes
                     && Volatile.Read(ref _worldSaveBusy) == 0
                     && !Wo123HostJoinActive)   // WO-123: never a scheduled save while a join holds the world

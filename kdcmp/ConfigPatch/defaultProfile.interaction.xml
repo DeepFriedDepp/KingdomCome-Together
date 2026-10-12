@@ -35,4 +35,7 @@
 		<action name="kcd2mp_menu_up" onPress="1" keyboard="_keybinds_ref_" />
 		<action name="kcd2mp_menu_down" onPress="1" keyboard="_keybinds_ref_" />
 		<action name="kcd2mp_menu_change" onPress="1" keyboard="_keybinds_ref_" />
+		<!-- KCD2MP (WO-178): the quicksave key: the game saves the Saviour Schnapps way without using one
+		     (Home, or the player's QuickSaveKey). Press only. -->
+		<action name="kcd2mp_quicksave" onPress="1" keyboard="_keybinds_ref_" />
 </kdcmp_patch>

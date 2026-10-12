@@ -693,6 +693,7 @@ public partial class GameBridge
                 await Wo164TickAsync();   // WO-164: the torch side-channel, the flee watchdog, the stale seats, quest values, the marker notice
                 await Wo167TickAsync();   // WO-167: a conversation's scene that never ends (T4)
                 await Wo173TickAsync(ct);   // WO-173: mp_real_hits pushed, the down poll of the NPCs in a joiner's fight
+                await Wo178TickAsync();      // WO-178: the hostility answer's and C4's switches, the host's quicksave setting
                 long now = Environment.TickCount64;
                 if (now - lastStatus >= 60_000)
                 {

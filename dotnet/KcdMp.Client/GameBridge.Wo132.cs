@@ -326,6 +326,8 @@ public partial class GameBridge
         // WO-136 Phase 4: a knockout (or a death) beats the engagement -- never engaged while down.
         if (!Wo136Rules.MayEngage(Wo136HostNpcDown(ev.Name)) && v != Wo132Rules.EngageVerdict.Ignore)
             v = engaged ? Wo132Rules.EngageVerdict.Release : Wo132Rules.EngageVerdict.Ignore;
+        // WO-178 C1: the copy is offered to the DLL's hostility answer (the joiner's lock-on) -- engaged with him, or fighting the host
+        if (guarded && bound && eid != 0) Wo178OfferFor(ev, eid, !Wo136Rules.MayEngage(Wo136HostNpcDown(ev.Name)));
         if (v == Wo132Rules.EngageVerdict.Ignore) return;
         if (v == Wo132Rules.EngageVerdict.Release)
         {

@@ -5,6 +5,7 @@
 #include "wo165.h"
 #include "wo166_rules.h"
 #include "wo166.h"
+#include "wo178.h"
 
 #include <windows.h>
 #include <atomic>
@@ -429,6 +430,13 @@ void lock_tick(const uint32_t* npcs, int n) {
     }
     for (int i = 0; i < nc; ++i) {
         LockRow& row = g_locks[cs[i].eid];
+        // WO-178 (mp_host_lock_answer, compared live, default off): an NPC fighting a partner's figure becomes lockable by the hostility
+        // answer instead of a hostile skirmish pair -- no skirmish is touched; a pair this module already holds is released as usual
+        if (kcdmp::wo178::host_answer_on()) {
+            const LockView& v = cs[i].v;
+            if (v.alive && v.combat && v.oppIsAvatar && !v.oppIsHost && v.dist <= kLockDropM) kcdmp::wo178::offer_local(cs[i].eid);
+            if (!row.paired) continue;
+        }
         LockDecision d = on ? lock_rule(cs[i].v) : LockDecision{cs[i].v.paired ? LockAct::Remove : LockAct::None, "mp_host_lock-off"};
         switch (d.act) {
             case LockAct::Set: {

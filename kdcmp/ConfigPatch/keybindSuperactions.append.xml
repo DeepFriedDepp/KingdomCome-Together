@@ -123,4 +123,14 @@
 		<action name="kcd2mp_menu_change" map="interaction" />
 		<control input="end" controller="keyboard" />
 	</superaction>
+
+	<!-- KCD2MP (WO-178): the quicksave key. The work order asked for F10; this build binds F10 itself (the Modding Tools
+	     build's debug map: togglepdrawhelpers), and the other F keys are the game's debug keys or the dice and invite keys
+	     above. Home is the nearest key the game names only in its own menus (resetting a key binding, map "menu"), never
+	     in play. kcd2mp_quicksave's key is the player's choice: settings.json QuickSaveKey (home, delete, np_add or
+	     np_subtract; never the menu key), written in here by the keys-pak verb (KeybindPak.cs WithQuickSaveKey). -->
+	<superaction name="kcd2mp_quicksave" ui_group="" keyboard="hidden">
+		<action name="kcd2mp_quicksave" map="interaction" />
+		<control input="home" controller="keyboard" />
+	</superaction>
 </kdcmp_patch>

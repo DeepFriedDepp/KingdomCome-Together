@@ -35,10 +35,20 @@
                     }
                     else
                     {
+                        @if (pickPath is not null)
+                        {
+                            <div class="kcd-hint" style="margin: 6px 0; color: var(--kcd-warn);">
+                                Your weapons got stuck in a save from your last session. Pick the marked backup: it is from before that session.
+                            </div>
+                        }
                         @foreach (var b in backups)
                         {
                             <div class="kcd-input" style="margin-top: 6px; cursor: pointer;" @onclick="() => Pick(b)">
                                 @When(b) <span style="opacity: 0.7;">(@b.Files files, @Size(b.Bytes))</span>
+                                @if (IsPick(b))
+                                {
+                                    <span style="color: var(--kcd-warn);"> -- pick this one</span>
+                                }
                             </div>
                         }
                     }
@@ -80,6 +90,7 @@
     [Parameter] public string GamePath { get; set; } = "";
 
     private IReadOnlyList<Wo175Backup.BackupInfo>? backups;
+    private string? pickPath;   // WO-178 0.c: the backup the agent marked when a load found the weapons stuck
     private Wo175Backup.BackupInfo? selected;
     private bool busy;
     private bool done;
@@ -105,6 +116,7 @@
         try
         {
             backups = await Task.Run(() => Wo175Backup.List(Wo175Backup.DefaultRoot()));
+            pickPath = Wo175Backup.ReadPick(Wo175Backup.DefaultRoot());
         }
         catch (Exception ex)
         {
@@ -168,6 +180,7 @@
         resultOk = r.Verified;
         if (r.Verified)
         {
+            if (IsPick(pick)) Wo175Backup.ClearPick(Wo175Backup.DefaultRoot());   // WO-178: the marked backup is back; the mark goes
             done = true;
             resultText = $"Done. Your saves are now the ones from {When(pick)} ({r.Files} files)."
                 + (r.SafetyBackup is not null ? " The saves you had before are in a new backup at the top of this list, if you want them back." : "");
@@ -192,6 +205,9 @@
         }
         return false;
     }
+
+    private bool IsPick(Wo175Backup.BackupInfo b) =>
+        pickPath is not null && string.Equals(System.IO.Path.GetFullPath(b.Path), System.IO.Path.GetFullPath(pickPath), StringComparison.OrdinalIgnoreCase);
 
     private static string When(Wo175Backup.BackupInfo b) => b.Taken.ToString("d MMMM yyyy, HH:mm:ss", CultureInfo.InvariantCulture);
 

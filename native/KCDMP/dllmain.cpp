@@ -12,6 +12,7 @@
 #include "wo166.h"
 #include "wo173.h"
 #include "wo176.h"
+#include "wo178.h"
 #include "combat_swing.h"
 #include "wo135.h"
 #include "wo137.h"
@@ -195,6 +196,9 @@ DWORD WINAPI plugin_main(LPVOID) {
     // RequestStateChange capture gate is patched here, off the main thread).
     // Fails closed per piece (WO143-BUILD).
     kcdmp::wo143::install();
+    // WO-178 C1: the hostility answer for the local player's own fight (the combat RPG's test, a detour through the prologue registry).
+    // Fails closed (WO178-HOOK not armed); off the main thread for the same reason as the gates above.
+    kcdmp::wo178::install();
 
     if (kcdmp::dice::install_pause_hook()) {
         kcdmp::main_thread::post_repeating("dice::sample_instance_if_changed", &kcdmp::dice::sample_instance_if_changed);
@@ -238,7 +242,8 @@ DWORD WINAPI plugin_main(LPVOID) {
     kcdmp::main_thread::post_repeating("wo132::tick", &kcdmp::wo132::tick);   // WO-132: the host's NPC combat-state watch
     kcdmp::main_thread::post_repeating("wo166::tick", &kcdmp::wo166::tick);   // WO-166 C3: the copies' striking windows
     kcdmp::main_thread::post_repeating("wo173::tick", &kcdmp::wo173::tick);
-    kcdmp::main_thread::post_repeating("wo176::tick", &kcdmp::wo176::tick);   // WO-176 A1: a figure already in a quest's arranged fight is taken out   // WO-173 C1: the joiner's real hits' measures and corrections
+    kcdmp::main_thread::post_repeating("wo176::tick", &kcdmp::wo176::tick);
+    kcdmp::main_thread::post_repeating("wo178::tick", &kcdmp::wo178::tick);   // WO-178 C1: the candidate table the hostility answer reads   // WO-176 A1: a figure already in a quest's arranged fight is taken out   // WO-173 C1: the joiner's real hits' measures and corrections
     kcdmp::main_thread::post_repeating("rttr::swing_watch_tick", &kcdmp::rttr::swing_watch_tick);   // WO-167 C3: shown means rendered
     // WO-124: the joiner's placement gives the fall damage back; the save-list
     // research trigger (kcdmp-savelist-test.txt, opt-in, absent = idle).
