@@ -123,10 +123,10 @@ public partial class GameBridge
                     _ = Wo134SendAsync(Protocol.LootAskUp, Protocol.JoinTargetHost, name == "w134_take" ? Protocol.LootAskBodyTake : Protocol.LootAskBodyPut,
                                        U(f[0]), $"{f[1]} {f[2]} {f[3]} {f[4]}");
                 return;
-            case "w134_item":      // <tok> <cls> <x> <y> <z> <fromBody>
-                if (f.Length == 6 && Wo134Rules.TryClass(f[1], out _) && Wo134Rules.TryCoord(f[2], out _) && Wo134Rules.TryCoord(f[3], out _)
-                    && Wo134Rules.TryCoord(f[4], out _) && f[5] is "0" or "1" && Wo134JoinerRole)
-                    _ = Wo134SendAsync(Protocol.LootAskUp, Protocol.JoinTargetHost, Protocol.LootAskItemTake, U(f[0]), $"{f[1]} {f[2]} {f[3]} {f[4]} {f[5]}");
+            case "w134_item":      // <tok> <cls> <x> <y> <z> <fromBody> [<amount>]   (WO-177 B1: the amount rides as an optional 7th field)
+                if (f.Length is 6 or 7 && Wo134Rules.TryClass(f[1], out _) && Wo134Rules.TryCoord(f[2], out _) && Wo134Rules.TryCoord(f[3], out _)
+                    && Wo134Rules.TryCoord(f[4], out _) && f[5] is "0" or "1" && (f.Length == 6 || Wo134Rules.TryAmount(f[6], out _)) && Wo134JoinerRole)
+                    _ = Wo134SendAsync(Protocol.LootAskUp, Protocol.JoinTargetHost, Protocol.LootAskItemTake, U(f[0]), $"{f[1]} {f[2]} {f[3]} {f[4]} {f[5]}{(f.Length == 7 ? " " + f[6] : "")}");
                 return;
             // ---- host -> joiner(s)
             case "w134_bstate":    // <peer> <tok> <body> <reason> <flags> <part> <nparts> <items>
@@ -218,9 +218,10 @@ public partial class GameBridge
                     string fn = m.Kind == Protocol.LootAskBodyTake ? "KCD2MP_W134HostTake" : "KCD2MP_W134HostPut";
                     await ExecLuaAsync($"if {fn} then {fn}({src}, {m.Tok}, \"{f[0]}\", \"{cls:D}\", {amt}, {Wo134Rules.F(hp)}) end");
                     return;
-                case Protocol.LootAskItemTake when f.Length == 5 && Wo134Rules.TryClass(f[0], out var icls) && Wo134Rules.TryCoord(f[1], out float x)
-                        && Wo134Rules.TryCoord(f[2], out float y) && Wo134Rules.TryCoord(f[3], out float z) && f[4] is "0" or "1":
-                    await ExecLuaAsync($"if KCD2MP_W134HostItem then KCD2MP_W134HostItem({src}, {m.Tok}, \"{icls:D}\", {Wo134Rules.F3(x)}, {Wo134Rules.F3(y)}, {Wo134Rules.F3(z)}, {f[4]}) end");
+                case Protocol.LootAskItemTake when f.Length is 5 or 6 && Wo134Rules.TryClass(f[0], out var icls) && Wo134Rules.TryCoord(f[1], out float x)
+                        && Wo134Rules.TryCoord(f[2], out float y) && Wo134Rules.TryCoord(f[3], out float z) && f[4] is "0" or "1"
+                        && (f.Length == 5 || Wo134Rules.TryAmount(f[5], out _)):
+                    await ExecLuaAsync($"if KCD2MP_W134HostItem then KCD2MP_W134HostItem({src}, {m.Tok}, \"{icls:D}\", {Wo134Rules.F3(x)}, {Wo134Rules.F3(y)}, {Wo134Rules.F3(z)}, {f[4]}, {(f.Length == 6 ? f[5] : "nil")}) end");
                     return;
             }
             Interlocked.Increment(ref _w134Dropped);

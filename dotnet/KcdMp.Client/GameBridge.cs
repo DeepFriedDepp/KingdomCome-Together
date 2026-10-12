@@ -6023,6 +6023,14 @@ public partial class GameBridge(ClientConfig config)
             case "w176_cfg":         // WO-176: mp_arranged_guard (A1), mp_copy_blocks (B3a)
                 Wo176OnEvent(name, arg);
                 return;
+            case "w177_load_quiet":  // WO-177 A5: the Lua's answer to "may a load start" (ok | fight | hit)
+            case "w177_calm_cfg":    // WO-177 B3: mp_tool_swing
+            case "w177_calm":        // WO-177 B3 (host): the NPCs near a figure that are not in a fight
+            case "w177_corpse_ask":  // WO-177 B2 (joiner): dead copies near him, asked of the host
+            case "w177_corpse_ans":  // WO-177 B2 (host): "<peer> <npc=v ...>" -- the answer to a joiner
+            case "w177_corpse_gone": // WO-177 B2 (host): "<npc=2 ...>" -- a corpse of the host's world went
+                Wo177OnEvent(name, arg);
+                return;
             case "w166_talkstate":   // WO-166 T3: a talk that never started -- the copy's facts
             case "w166_talk":        // WO-166 T4: a talk refused, the host's NPC busy
             case "w166_cfg":         // WO-166: mp_copy_strikes / mp_snap_fix / the C1 lever

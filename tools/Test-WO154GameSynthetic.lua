@@ -347,11 +347,13 @@ do
     local mark = #LOG
     KCD2MP_W151Unstuck("")
     check("B4: not fighting -> no end-fights step", countEvt("w154_endfights", "", mark) == 0)
+    NOW = NOW + 11   -- WO-177 B4: a second press within 10 s is step 2 (the hit reaction too); each press here is a first one
     p.danger = true
     mark = #LOG
     KCD2MP_W151Unstuck("")
     check("B4: in a fight -> the agent ends it (w154_endfights)", countEvt("w154_endfights", "unstuck", mark) == 1)
     check("B4: ... and the log says so", (lastLog("WO151-UNSTUCK soft", mark) or ""):find("end-fights", 1, true) ~= nil, lastLog("WO151-UNSTUCK", mark))
+    NOW = NOW + 11
     p.danger = false
     mark = #LOG
     KCD2MP_W151Unstuck("fight")

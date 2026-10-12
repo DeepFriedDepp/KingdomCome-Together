@@ -54,6 +54,11 @@ public static partial class Protocol
     /// <summary>WO-176 (A1), host -> joiner: "&lt;npc&gt;" -- the joiner's blow hit an actor of a quest's arranged fight; it was not routed into
     /// that fight (the story's), and the joiner is told once.</summary>
     public const byte W164StoryFight = 9;
+    /// <summary>WO-177 B2, joiner -> host: "&lt;npc&gt;:&lt;x&gt;:&lt;y&gt; ..." (1..3 entries) -- dead NPC copies this joiner has near him; does the host's world still have them?</summary>
+    public const byte W164CorpseAsk = 10;
+    /// <summary>WO-177 B2, host -> joiner: "&lt;npc&gt;=&lt;v&gt; ..." (1..4 entries) -- v 1 = a corpse on the host too, 2 = gone from the host's world (the joiner removes its copy),
+    /// 3 = alive / knocked out there (not a corpse question), 0 = the host cannot say (too far from it). Also sent unasked when the host's own corpse goes.</summary>
+    public const byte W164CorpseAnswer = 11;
 
     /// <summary>While the torch is out, the side-channel repeats it this often (a lost edge recovers).</summary>
     public const int W164TorchRepeatMs = 10_000;
@@ -61,7 +66,8 @@ public static partial class Protocol
     public static string W164KindName(byte k) => k switch
     {
         W164MarkPing => "mark-ping", W164Torch => "torch", W164Escort => "escort", W164HitOutcome => "hit-outcome", W164Weather => "weather",
-        W164Travel => "travel", W164RealHit => "real-hit", W164NpcDown => "npc-down", W164StoryFight => "story-fight", _ => $"unknown-{k}",
+        W164Travel => "travel", W164RealHit => "real-hit", W164NpcDown => "npc-down", W164StoryFight => "story-fight",
+        W164CorpseAsk => "corpse-ask", W164CorpseAnswer => "corpse-answer", _ => $"unknown-{k}",
     };
 }
 
@@ -127,6 +133,60 @@ public static class W164Text
         var f = (text ?? "").Split(' ', StringSplitOptions.RemoveEmptyEntries);
         if (f.Length != 2 || !IsNpcName(f[0]) || f[1] is not ("0" or "1" or "2")) return false;
         npc = f[0]; state = (byte)(f[1][0] - '0');
+        return true;
+    }
+
+    /// <summary>WO-177 B2: most entries one message carries (the text maximum is 80).</summary>
+    public const int CorpseAskMax = 3, CorpseAnswerMax = 4;
+
+    /// <summary>"&lt;npc&gt;:&lt;x&gt;:&lt;y&gt;" per entry (whole metres): where the joiner's dead copy lies.</summary>
+    public static string CorpseAsk(IEnumerable<(string Npc, int X, int Y)> entries)
+    {
+        // up to CorpseAskMax entries, and never past the text maximum: an entry that would overflow it waits for the next question
+        var sb = new System.Text.StringBuilder();
+        int n = 0;
+        foreach (var e in entries)
+        {
+            string one = FormattableString.Invariant($"{e.Npc}:{e.X}:{e.Y}");
+            if (n >= CorpseAskMax || sb.Length + (n > 0 ? 1 : 0) + one.Length > Protocol.W164TextMax) break;
+            if (n++ > 0) sb.Append(' ');
+            sb.Append(one);
+        }
+        return sb.ToString();
+    }
+
+    public static bool TryParseCorpseAsk(string? text, out List<(string Npc, int X, int Y)> entries)
+    {
+        entries = [];
+        var f = (text ?? "").Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (f.Length is 0 or > CorpseAskMax) return false;
+        foreach (var e in f)
+        {
+            var p = e.Split(':');
+            if (p.Length != 3 || !IsNpcName(p[0])) return false;
+            if (!int.TryParse(p[1], System.Globalization.NumberStyles.AllowLeadingSign, System.Globalization.CultureInfo.InvariantCulture, out int x)
+                || !int.TryParse(p[2], System.Globalization.NumberStyles.AllowLeadingSign, System.Globalization.CultureInfo.InvariantCulture, out int y)
+                || Math.Abs(x) > 100000 || Math.Abs(y) > 100000) return false;
+            entries.Add((p[0], x, y));
+        }
+        return true;
+    }
+
+    /// <summary>"&lt;npc&gt;=&lt;v&gt;" per entry, v 0..3 (see Protocol.W164CorpseAnswer).</summary>
+    public static string CorpseAnswer(IEnumerable<(string Npc, byte V)> entries) =>
+        string.Join(' ', entries.Take(CorpseAnswerMax).Select(e => $"{e.Npc}={e.V}"));
+
+    public static bool TryParseCorpseAnswer(string? text, out List<(string Npc, byte V)> entries)
+    {
+        entries = [];
+        var f = (text ?? "").Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (f.Length is 0 or > CorpseAnswerMax) return false;
+        foreach (var e in f)
+        {
+            var p = e.Split('=');
+            if (p.Length != 2 || !IsNpcName(p[0]) || p[1] is not ("0" or "1" or "2" or "3")) return false;
+            entries.Add((p[0], (byte)(p[1][0] - '0')));
+        }
         return true;
     }
 

@@ -284,6 +284,22 @@ for _, cfgName in ipairs({ "solo", "joiner", "host" }) do
     local msg = KCD2MP.interactionMsg and KCD2MP.interactionMsg.text
     check(C .. "D2 the loser is told", msg and string.find(msg, "someone already took that", 1, true) ~= nil, msg)
 
+    -- ---- D2b (WO-177 B1): two same-class drops placed in one tick, 0.5 m apart, are two items (they used to adopt ONE entity: the first
+    -- pickup then removed both items for the other player -- the field's "one apple of two, both gone") ----
+    freshWorld(); CONFIGS[cfgName]()
+    KCD2MP_ItemDropAdd("3000000021", ONION, 1, 0.8, 102, 100, 10, "7")
+    KCD2MP_ItemDropAdd("3000000022", ONION, 1, 0.8, 102.5, 100, 10, "7")
+    tick(); tick(); tick()
+    local dA, dB = KCD2MP.itemDrops["3000000021"], KCD2MP.itemDrops["3000000022"]
+    check(C .. "D2b both drops materialize", dA and dB and dA.state == "ground" and dB.state == "ground", (dA and dA.state) .. "/" .. (dB and dB.state))
+    check(C .. "D2b each drop holds its OWN entity", dA and dB and dA.entName ~= nil and dB.entName ~= nil and dA.entName ~= dB.entName,
+          tostring(dA and dA.entName) .. " / " .. tostring(dB and dB.entName))
+    local entA = dA and dA.entName and ENTS[dA.entName]
+    if entA then PickableItem.OnUsed(entA, player) end
+    tick()
+    KCD2MP_ItemDropClaimed("3000000021", "1", true)
+    check(C .. "D2b picking up one leaves the other on the ground", dB and dB.entName and ENTS[dB.entName] ~= nil and dB.state == "ground")
+
     -- ---- D3: my own drop ----
     freshWorld(); CONFIGS[cfgName]()
     player.inventory:CreateItem(ONION, 1, 1)

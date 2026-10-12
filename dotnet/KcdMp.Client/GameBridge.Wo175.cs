@@ -95,6 +95,7 @@ public partial class GameBridge
         Console.WriteLine($"MP-W175 {newRel} written and listed -- loading the repaired copy");
         await ExecLuaAsync($"if KCD2MP_W175Health then KCD2MP_W175Health(\"{why}\", \"repaired\", \"stuck-quest-fight:{Wo175Lua(res.What)}\", \"{newRel}\", true) end");
         await Task.Delay(2500);   // the toast is read before the loading screen
+        if (!await Wo177WaitQuietAsync("w175-repaired")) return;   // WO-177 A5: never a load while a fight is running (the copy stays listed; the player loads it later)
         await ExecLuaAsync($"if KCD2MP_Wo124LoadGame then KCD2MP_Wo124LoadGame({pl}, \"{baseName}\", \"w175-repaired\") end");
     }
 

@@ -358,6 +358,14 @@ public partial class GameBridge
                 if (W137Host) { Interlocked.Increment(ref _w164Malformed); return; }   // only the host's weather is the session's
                 await Wo166OnHostWeatherAsync(wrain, wprof);
                 return;
+            case Protocol.W164CorpseAsk:   // WO-177 B2: a joiner asks whether the host's world still has these corpses
+                if (!W137Host || !W164Text.TryParseCorpseAsk(m.Text, out _)) { Interlocked.Increment(ref _w164Malformed); return; }
+                await ExecLuaAsync($"if KCD2MP_W177HostCorpseAsk then KCD2MP_W177HostCorpseAsk({src}, \"{EscapeLua(m.Text)}\") end");
+                return;
+            case Protocol.W164CorpseAnswer:   // WO-177 B2: the host's answer (or its unasked "this corpse is gone")
+                if (W137Host || !W164Text.TryParseCorpseAnswer(m.Text, out _)) { Interlocked.Increment(ref _w164Malformed); return; }
+                await ExecLuaAsync($"if KCD2MP_W177CorpseAnswer then KCD2MP_W177CorpseAnswer(\"{EscapeLua(m.Text)}\") end");
+                return;
             default:
                 Interlocked.Increment(ref _w164Malformed);
                 return;

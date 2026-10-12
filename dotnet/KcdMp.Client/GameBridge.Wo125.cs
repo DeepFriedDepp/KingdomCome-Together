@@ -964,6 +964,12 @@ public partial class GameBridge
             if (listed is null || !listed.Listed) { Console.WriteLine($"MP-HENRY exit file not listed after the rescan -- removed; staying ({why})"); _henry.MoveOut(path, "exit file not listed"); return false; }
             Console.WriteLine($"MP-HENRY no own save to go back to ({why}) -- loading an empty file ({SaveDisplay(path)}, {file.Length} B, no world in it): the engine fails the load and returns to the MAIN MENU");
             SetJoinUi("exit-menu", "You have no save of your own to go back to, so the game returns to the main menu. It shows \"Game load failed\" -- press OK.");
+            if (!await Wo177WaitQuietAsync("exit-to-menu"))   // WO-177 A5: never a load while a fight is running
+            {
+                _henry.MoveOut(path, "a fight is still on: nothing was loaded");
+                await _combat.SaveListAsync(1, pl, name);
+                return false;
+            }
             _ownLoadExpected = true;
             await ExecLuaAsync($"if KCD2MP_Wo124LoadGame then KCD2MP_Wo124LoadGame({pl}, \"{name}\", \"exit-to-menu\") end");
             _ = Task.Run(async () =>

@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="us-ascii"?>
+<!-- Copyright (C) 2026 the Kingdom Come: Together contributors (AUTHORS). SPDX-License-Identifier: GPL-3.0-only
+     GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
+     content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them. -->
+<database xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" name="barbora" xsi:noNamespaceSchemaLocation="../database.xsd">
+	<souls version="2">
+		<!-- WO-177 A1: the souls of the partner figures (the bodies the mod spawns for another player). Each is the mod's own:
+		     in no village, group, schedule or quest array; the engine's empty "Default" brain (no sub-brain: it plans nothing, so the
+		     figure stays a puppet); the "cutsceneOnly" faction (no children, no relations, nobody's neighbour); social class 13 "player"
+		     (crime role 0: not a witness, not an authority, not a reporter). Each is a template: every body spawned with one gets a soul of its
+		     own, and the template also fixes the body's face and first clothes, so twelve templates are twelve faces (a partner's face
+		     is chosen by the partner's name, the same one every time). -->
+		<soul brain_id="00000000-0000-0000-0000-000000045000" digestion_multiplier="0" factionName="cutsceneOnly" initial_clothing_dirt="0" social_class_id="13" soul_archetype_id="0" soul_id="4b43444d-7301-4d67-b1a5-9e2f6d8c0a01" soul_name="kdcmp_partner_1" soul_vip_class_id="0" xp_multiplier="0" />
+		<soul brain_id="00000000-0000-0000-0000-000000045000" digestion_multiplier="0" factionName="cutsceneOnly" initial_clothing_dirt="0" social_class_id="13" soul_archetype_id="0" soul_id="4b43444d-7301-4d67-b1a5-9e2f6d8c0a02" soul_name="kdcmp_partner_2" soul_vip_class_id="0" xp_multiplier="0" />
+		<soul brain_id="00000000-0000-0000-0000-000000045000" digestion_multiplier="0" factionName="cutsceneOnly" initial_clothing_dirt="0" social_class_id="13" soul_archetype_id="0" soul_id="4b43444d-7301-4d67-b1a5-9e2f6d8c0a03" soul_name="kdcmp_partner_3" soul_vip_class_id="0" xp_multiplier="0" />
+		<soul brain_id="00000000-0000-0000-0000-000000045000" digestion_multiplier="0" factionName="cutsceneOnly" initial_clothing_dirt="0" social_class_id="13" soul_archetype_id="0" soul_id="4b43444d-7301-4d67-b1a5-9e2f6d8c0a04" soul_name="kdcmp_partner_4" soul_vip_class_id="0" xp_multiplier="0" />
+		<soul brain_id="00000000-0000-0000-0000-000000045000" digestion_multiplier="0" factionName="cutsceneOnly" initial_clothing_dirt="0" social_class_id="13" soul_archetype_id="0" soul_id="4b43444d-7301-4d67-b1a5-9e2f6d8c0a05" soul_name="kdcmp_partner_5" soul_vip_class_id="0" xp_multiplier="0" />
+		<soul brain_id="00000000-0000-0000-0000-000000045000" digestion_multiplier="0" factionName="cutsceneOnly" initial_clothing_dirt="0" social_class_id="13" soul_archetype_id="0" soul_id="4b43444d-7301-4d67-b1a5-9e2f6d8c0a06" soul_name="kdcmp_partner_6" soul_vip_class_id="0" xp_multiplier="0" />
+		<soul brain_id="00000000-0000-0000-0000-000000045000" digestion_multiplier="0" factionName="cutsceneOnly" initial_clothing_dirt="0" social_class_id="13" soul_archetype_id="0" soul_id="4b43444d-7301-4d67-b1a5-9e2f6d8c0a07" soul_name="kdcmp_partner_7" soul_vip_class_id="0" xp_multiplier="0" />
+		<soul brain_id="00000000-0000-0000-0000-000000045000" digestion_multiplier="0" factionName="cutsceneOnly" initial_clothing_dirt="0" social_class_id="13" soul_archetype_id="0" soul_id="4b43444d-7301-4d67-b1a5-9e2f6d8c0a08" soul_name="kdcmp_partner_8" soul_vip_class_id="0" xp_multiplier="0" />
+		<soul brain_id="00000000-0000-0000-0000-000000045000" digestion_multiplier="0" factionName="cutsceneOnly" initial_clothing_dirt="0" social_class_id="13" soul_archetype_id="0" soul_id="4b43444d-7301-4d67-b1a5-9e2f6d8c0a09" soul_name="kdcmp_partner_9" soul_vip_class_id="0" xp_multiplier="0" />
+		<soul brain_id="00000000-0000-0000-0000-000000045000" digestion_multiplier="0" factionName="cutsceneOnly" initial_clothing_dirt="0" social_class_id="13" soul_archetype_id="0" soul_id="4b43444d-7301-4d67-b1a5-9e2f6d8c0a0a" soul_name="kdcmp_partner_10" soul_vip_class_id="0" xp_multiplier="0" />
+		<soul brain_id="00000000-0000-0000-0000-000000045000" digestion_multiplier="0" factionName="cutsceneOnly" initial_clothing_dirt="0" social_class_id="13" soul_archetype_id="0" soul_id="4b43444d-7301-4d67-b1a5-9e2f6d8c0a0b" soul_name="kdcmp_partner_11" soul_vip_class_id="0" xp_multiplier="0" />
+		<soul brain_id="00000000-0000-0000-0000-000000045000" digestion_multiplier="0" factionName="cutsceneOnly" initial_clothing_dirt="0" social_class_id="13" soul_archetype_id="0" soul_id="4b43444d-7301-4d67-b1a5-9e2f6d8c0a0c" soul_name="kdcmp_partner_12" soul_vip_class_id="0" xp_multiplier="0" />
+	</souls>
+</database>

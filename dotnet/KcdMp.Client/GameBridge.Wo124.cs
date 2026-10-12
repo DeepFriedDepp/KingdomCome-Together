@@ -576,6 +576,12 @@ public partial class GameBridge
                 Console.WriteLine($"MP-JOIN joiner: join 0x{j.JoinId:x8}: the main menu's video stopped (wh_ui_StopMovie) -- the load starts in {W154StopVideoSettleMs / 1000.0:F1} s");
                 await Task.Delay(W154StopVideoSettleMs);
             }
+            // WO-177 A5: never a load while a fight is running (a join from inside a world waits for it to end)
+            if (!await Wo177WaitQuietAsync("join"))
+            {
+                await AbortJoinerJoinAsync(j, Protocol.JoinAbortLoadFailed, "load-fight", Wo177Rules.GaveUpText);
+                return;
+            }
             j.Phase = "loading";
             Wo137OnJoinLoading(j.JoinId);   // WO-137: host quest changes from before this world are in it already
             SetJoinUi("loading", "Loading your host's world...");
@@ -923,6 +929,7 @@ public partial class GameBridge
             if (!await Wo125ExitToMenuAsync(why)) { _leaveInProgress = false; SetJoinUi("left", message + " Quit the game to get back to the main menu."); }
             return;
         }
+        if (!await Wo177WaitQuietAsync("leave")) { _leaveInProgress = false; SetJoinUi("left", full + " " + Wo177Rules.GaveUpText); return; }   // WO-177 A5
         await Task.Delay(4000);
         _ownLoadExpected = true;
         await ExecLuaAsync($"if KCD2MP_Wo124LoadGame then KCD2MP_Wo124LoadGame({src.Playline}, \"{src.Base}\", \"leave\") end");

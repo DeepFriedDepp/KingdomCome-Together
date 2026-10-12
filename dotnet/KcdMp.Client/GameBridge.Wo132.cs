@@ -142,6 +142,13 @@ public partial class GameBridge
                 $"MP-W132 npc hit on avatar {g} by {attacker} hp -{health:F1} st -{stamina:F1} NOT forwarded: its player is {LifeGate.Tag(why)} (nobody is hit while dead or waking)"));
             return;
         }
+        if (Wo177IsToolSwing(attacker, (flags & 0x02) != 0))   // WO-177 B3: a working NPC's tool swing is no blow of a fight
+        {
+            Interlocked.Increment(ref _w177ToolSwings);
+            Console.WriteLine(FormattableString.Invariant($"MP-W177 tool swing: {attacker} (not in a fight) hit avatar {g} hp -{health:F1} -- NOT forwarded; the avatar's health was put back"));
+            Wo132KeepAvatarUp(g, force: true);
+            return;
+        }
         var send = _sendPlayerHit;
         if (send is null) return;
         if (attacker.Length > 0) Wo147WatchFight(attacker, $"it hit avatar {g}");   // WO-147: the joiner gets combat mode against it

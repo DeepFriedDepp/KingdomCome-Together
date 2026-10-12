@@ -47,7 +47,8 @@ $Manifest = Join-Path $RepoRoot 'kdcmp\mod.manifest'
 $Files = @(
     'Scripts\Startup\kdcmp.lua',
     'Libs\Tables\item\clothing_preset__kdcmp.xml',
-    'Libs\Tables\rpg\buff__kcdmp.xml'    # WO-113: the death-guard buff row
+    'Libs\Tables\rpg\buff__kcdmp.xml',   # WO-113: the death-guard buff row
+    'Libs\Tables\rpg\soul__kcdmp.xml'    # WO-177: the partner figures' own souls
 )
 # WO-148: no Libs\Config files any more. They were full copies of the game's own
 # defaultProfile.xml and keybindSuperactions.xml with our dice keys added; the repo

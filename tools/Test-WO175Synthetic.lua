@@ -224,8 +224,8 @@ do
     fresh(); mark = #LOG
     KCD2MP.w175.lockHeld = true
     KCD2MP_W175AfterLoad("settle")
-    -- two timers since 0.50.0: WO-175's chain and WO-176's figure check (re-armed by the same after-load hook)
-    check("L7: after a load: state reset, the chain runs, w175_check load", KCD2MP.w175.lockHeld == false and #TIMERS == 2 and countEvt("w175_check", "load", mark) == 1)
+    -- four timers since WO-177: WO-175's chain, WO-176's figure check, WO-177's corpse census and calm-NPC list (all re-armed by the same after-load hook)
+    check("L7: after a load: state reset, the chain runs, w175_check load", KCD2MP.w175.lockHeld == false and #TIMERS == 4 and countEvt("w175_check", "load", mark) == 1, #TIMERS)
     KCD2MP_W175SetHealth("off"); mark = #LOG
     KCD2MP_W175AfterLoad("settle")
     check("L8: mp_save_health off: no file check asked", countEvt("w175_check", "load", mark) == 0)

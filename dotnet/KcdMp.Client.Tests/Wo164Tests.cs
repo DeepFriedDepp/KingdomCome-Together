@@ -25,7 +25,7 @@ public class Wo164Tests
         Assert.Equal(10, Protocol.Version);   // append-only: no bump
         Assert.Equal("mark-ping", Protocol.W164KindName(Protocol.W164MarkPing));
         Assert.Equal("torch", Protocol.W164KindName(Protocol.W164Torch));
-        Assert.Equal("unknown-10", Protocol.W164KindName(10));   // WO-176: 9 is story-fight
+        Assert.Equal("unknown-12", Protocol.W164KindName(12));   // WO-176: 9 is story-fight; WO-177: 10 and 11 are the corpse question and answer
     }
 
     [Fact]
@@ -39,9 +39,9 @@ public class Wo164Tests
         Assert.True(LootMsg.TryDecode(body, out var m));
         Assert.Equal(Protocol.W164MarkPing, m.Kind);
         Assert.True(W164Text.IsMarkId(m.Text));
-        var odd = new LootMsg(10, 5, "whatever").BuildUp(Protocol.W164Up, Protocol.JoinTargetHost);
+        var odd = new LootMsg(12, 5, "whatever").BuildUp(Protocol.W164Up, Protocol.JoinTargetHost);
         Assert.True(LootMsg.TryDecode(odd.AsSpan(3 + Protocol.JoinHeaderLen).ToArray(), out var m2));
-        Assert.Equal("unknown-10", Protocol.W164KindName(m2.Kind));   // GameBridge counts it as malformed and does nothing
+        Assert.Equal("unknown-12", Protocol.W164KindName(m2.Kind));   // GameBridge counts it as malformed and does nothing
     }
 
     [Theory]

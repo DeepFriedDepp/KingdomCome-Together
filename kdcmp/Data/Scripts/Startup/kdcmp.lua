@@ -490,6 +490,12 @@ function KCD2MP_ReadSelfVitals()
 
     if player.actor then
         pcall(function() health = player.actor:GetHealth() end)
+        -- WO-177 A5: when this Henry last lost health (the load gate waits 10 s after a hit)
+        local w177 = KCD2MP.w177
+        if w177 and type(health) == "number" and health >= 0 then
+            if w177.hpPrev and health < w177.hpPrev - 0.5 then w177.hitAt = os.clock() end
+            w177.hpPrev = health
+        end
         -- Death is read, never derived from health reaching zero: KCD2 has a
         -- real unconscious state distinct from death (WO-22's A1 was an
         -- unending unconsciousness that the knockdown had registered
@@ -7224,6 +7230,7 @@ function KCD2MP_W137Session(host, joiner, active)
         if KCD2MP.w170 then KCD2MP_EmitEvent("w166_cfg", "figure_guard=" .. (KCD2MP.w170.figureGuard and "on" or "off")) end   -- WO-170 F1
         if KCD2MP.w173 then KCD2MP_EmitEvent("w173_cfg", "real_hits=" .. (KCD2MP.w173.realHits and "on" or "off")) end   -- WO-173
         if KCD2MP.w176 and KCD2MP_W176Emit then KCD2MP_W176Emit() end   -- WO-176
+        if KCD2MP.w177 and KCD2MP.w177.calm then KCD2MP_EmitEvent("w177_calm_cfg", KCD2MP.w177.calm.on and "on" or "off") end   -- WO-177 B3
         if KCD2MP.w172 then   -- WO-172: the switches the agent acts on
             KCD2MP_EmitEvent("w172_cfg", "dead_wins=" .. (KCD2MP.w172.deadWins and "on" or "off"))
             KCD2MP_EmitEvent("w172_cfg", "ride_repair=" .. (KCD2MP.w172.rideRepair and "on" or "off"))
@@ -10472,7 +10479,7 @@ function KCD2MP_SpawnGhost(id, x, y, z, rotZ)
     -- string the nameplate itself falls back to so a spawn is never blocked
     -- waiting on the name.
     local faceKey = identity or ("Player" .. tostring(id))
-    local facePick = KCD2MP_PickFaceForPlayer(faceKey)
+    local facePick = KCD2MP_PickFigureFace(faceKey)   -- WO-177 A1: a soul of the mod's own (mp_figure_soul off: the village roster)
 
     -- WO-27: an entity may still be standing under this exact spawn name with
     -- no KCD2MP.ghosts row behind it -- after a save load, after the mod
@@ -10924,7 +10931,7 @@ function KCD2MP_SetGhostName(id, name)
     -- remove the mispicked body; the next position packet respawns it
     -- through the normal path, which now has the name.
     if ghost and ghost.entity and ghost.identity == nil then
-        local rightPick = KCD2MP_PickFaceForPlayer(name)
+        local rightPick = KCD2MP_PickFigureFace(name)
         local current = ghost.facePick
         if not current or current.soulName ~= rightPick.soulName
            or current.className ~= rightPick.className then
@@ -11773,6 +11780,7 @@ local function sampleGhostHealth(id, ghost)
 
     local delta = prev - hp          -- positive = lost health
     if delta < HIT_MIN_DELTA then return end   -- guard 3: covers 0 and negatives
+    if KCD2MP.w177 then KCD2MP.w177.figHitAt = os.clock() end   -- WO-177 A5: a figure was hit (the load gate)
 
     -- Reported as a loss amount, matching CombatSoul::TakeDamage's own argument
     -- semantics on the other end. Stamina is not sampled: there is no confirmed
@@ -14964,6 +14972,348 @@ end
 KCD2MP.faceFallback = { className = "NPC", soulName = "ttkc_man_26",
                         guid = "cfa65480-f361-4cf8-80c5-1900b7846bc8" }
 
+-- ===== WO-177 A1 (docs/WO-177-findings.md): the partner's figure has a soul of its own =====
+-- Until 0.50.0 a figure's body was spawned from a village NPC's soul (the face roster above), so to the engine the partner WAS that
+-- villager: a village fight adopted it (SoulAdded on spawn and after every removal), a quest that pulls in "every soul of both groups"
+-- took it, and it counted as a neighbour of the village. The twelve templates below are souls of the mod's own (Libs/Tables/rpg/
+-- soul__kcdmp.xml in kdcmp.pak): faction "cutsceneOnly" (no village, no group, no relations), the engine's empty "Default" brain (it
+-- plans nothing; the figure stays a puppet), social class 13 (crime role 0: no witness, no authority). Live (2026-10-12): a body spawned
+-- with one gets a soul of its own (a new guid per body, the template guid as SharedSoulGuid), a face and first clothes that are a function
+-- of the template (two bodies of one template look alike, another template looks different), in the faction "cutsceneOnly".
+-- mp_figure_soul off = the old village face roster (the opt-out, e.g. when a pak without the table is installed).
+KCD2MP.w177 = KCD2MP.w177 or {}
+KCD2MP.w177.figureSoul = true
+KCD2MP.partnerSouls = {}
+for i = 1, 12 do
+    KCD2MP.partnerSouls[i] = { className = "NPC", soulName = "kdcmp_partner_" .. i,
+                               guid = string.format("4b43444d-7301-4d67-b1a5-9e2f6d8c%04x", 0x0a00 + i), mod = true }
+end
+
+-- The face of a partner's figure: one of the twelve mod souls by the partner's name (the same one every time, like the old roster).
+function KCD2MP_PickFigureFace(nameKey)
+    if not KCD2MP.w177.figureSoul then return KCD2MP_PickFaceForPlayer(nameKey) end
+    local h = KCD2MP_HashString(tostring(nameKey or ""))
+    local list = KCD2MP.partnerSouls
+    return list[(math.floor(h / 2) % #list) + 1]
+end
+
+function KCD2MP_W177SetFigureSoul(arg)
+    local v = KCD2MP_Wo122ParseBool(arg)
+    if v == "bad" then mp_log("mp_figure_soul: expected on|off"); return false end
+    if v ~= nil then KCD2MP.w177.figureSoul = v end
+    mp_log("WO177-TOGGLE mp_figure_soul " .. (KCD2MP.w177.figureSoul and "on" or "off")
+        .. " -- a partner's figure is spawned from a soul of the mod's own (no village, no quest group); applies to the next figure that spawns")
+    return true
+end
+
+-- ===== WO-177 B2: corpses agree after deaths and respawns =====
+-- The tester (0.48.6): after both died and respawned, corpses were gone for the host but some still present for the guest. Each machine's
+-- engine disposes of corpses on its own clock, so the joiner's world keeps bodies the host's no longer has. The host's world decides:
+--   * the joiner (every 5 s, shared world) asks the host about the dead NPC copies within 60 m of him, three at a time ("<npc>:<x>:<y>"):
+--     W164 kind 10 -> the host answers (kind 11) per NPC: 1 a corpse there too, 2 gone from the host's world (the NPC is not there and the
+--     spot is within 60 m of the host's own player, so the host's world would have it), 3 alive there, 0 cannot say (too far from the host)
+--   * 2 = the joiner removes his copy ("WO177-CORPSE gone on the host: removed here"); 1, 3 and 0 change nothing
+--   * the host also tells every joiner unasked (kind 11, "<npc>=2") when a corpse it was watching within 55 m of its player goes
+-- mp_corpse_sync on|off (default on). Never touches a body the quest layer or a mod entity owns (the same name rules the NPC sync uses).
+KCD2MP.w177.corpse = KCD2MP.w177.corpse or { on = true, coverM = 60, watchM = 55, askEveryS = 5, askAgainS = 20, asked = {}, dead = {}, removed = 0, answers = 0,
+                                              gone = 0, asks = 0, gen = 0 }
+function KCD2MP_W177SetCorpseSync(arg)
+    local v = KCD2MP_Wo122ParseBool(arg)
+    if v == "bad" then mp_log("mp_corpse_sync: expected on|off"); return false end
+    if v ~= nil then KCD2MP.w177.corpse.on = v end
+    mp_log("WO177-TOGGLE mp_corpse_sync " .. (KCD2MP.w177.corpse.on and "on" or "off")
+        .. " -- a body the host's world no longer has is removed from the joiner's world too (asked every 5 s, the host decides)")
+    return true
+end
+function KCD2MP_W177IsDeadNpc(e)
+    if not e or (e.class ~= "NPC" and e.class ~= "NPC_Female") then return false end
+    local nm = nil
+    pcall(function() nm = e:GetName() end)
+    if not nm or not tostring(nm):match("^[%w_]+$") then return false end
+    if mp_is_mod_entity(e) or mp_is_excluded_npc_name(nm) then return false end
+    local dead = false
+    pcall(function() dead = e.actor ~= nil and e.actor:IsDead() == true end)
+    return dead, nm
+end
+function KCD2MP_W177Dist2(a, b) return (a.x - b.x) ^ 2 + (a.y - b.y) ^ 2 end
+
+-- Joiner: the dead copies near him that are due a question; "<npc>:<x>:<y> ..." (at most 3), "" when none.
+function KCD2MP_W177CorpseAskText(now)
+    local c = KCD2MP.w177.corpse
+    local pp = nil
+    pcall(function() pp = player:GetWorldPos() end)
+    if not pp then return "" end
+    local out = {}
+    local ents = {}
+    pcall(function() ents = System.GetEntitiesInSphere(pp, c.coverM) or {} end)
+    for _, e in ipairs(ents) do
+        if #out >= 3 then break end
+        local dead, nm = KCD2MP_W177IsDeadNpc(e)
+        if dead and (not c.asked[nm] or now - c.asked[nm] >= c.askAgainS) then
+            local p = nil
+            pcall(function() p = e:GetWorldPos() end)
+            if p then
+                c.asked[nm] = now
+                out[#out + 1] = string.format("%s:%d:%d", nm, math.floor(p.x + 0.5), math.floor(p.y + 0.5))
+            end
+        end
+    end
+    return table.concat(out, " ")
+end
+function KCD2MP_W177CorpseTick(gen)
+    local c = KCD2MP.w177.corpse
+    if gen and gen ~= c.gen then return end
+    local now = os.clock()
+    if c.on and KCD2MP_W134JoinerActive and KCD2MP_W134JoinerActive() then
+        local text = KCD2MP_W177CorpseAskText(now)
+        if text ~= "" then
+            c.asks = c.asks + 1
+            KCD2MP_EmitEvent("w177_corpse_ask", text)
+        end
+    elseif c.on and KCD2MP_W134HostActive and KCD2MP_W134HostActive() then
+        KCD2MP_W177HostWatch(now)
+    end
+    Script.SetTimer(c.askEveryS * 1000, function() KCD2MP_W177CorpseTick(gen) end)
+end
+function KCD2MP_W177CorpseArm()
+    local c = KCD2MP.w177.corpse
+    c.gen = c.gen + 1
+    c.asked, c.dead = {}, {}   -- a load re-creates the world: nothing asked or watched before it counts
+    KCD2MP_W177CorpseTick(c.gen)
+end
+
+-- Host: a joiner asks "<npc>:<x>:<y> ..." -> "w177_corpse_ans <peer> <npc=v ...>".
+function KCD2MP_W177HostCorpseAsk(peer, text)
+    local c = KCD2MP.w177.corpse
+    if not c.on then return end
+    local pp = nil
+    pcall(function() pp = player:GetWorldPos() end)
+    local out = {}
+    for tok in string.gmatch(tostring(text or ""), "%S+") do
+        local nm, x, y = tok:match("^([%w_]+):(-?%d+):(-?%d+)$")
+        if nm then
+            local e = nil
+            pcall(function() e = System.GetEntityByName(nm) end)
+            local v = 0
+            if e then
+                local dead = false
+                pcall(function() dead = e.actor ~= nil and e.actor:IsDead() == true end)
+                v = dead and 1 or 3
+            elseif pp and KCD2MP_W177Dist2(pp, { x = tonumber(x), y = tonumber(y) }) <= c.coverM * c.coverM then
+                v = 2
+            end
+            out[#out + 1] = nm .. "=" .. v
+        end
+    end
+    if #out > 0 then
+        c.answers = c.answers + 1
+        KCD2MP_EmitEvent("w177_corpse_ans", tostring(peer) .. " " .. table.concat(out, " "))
+    end
+end
+
+-- Host: the corpses within 55 m of its player; one that was there and is gone now (the NPC is not in the world) goes to every joiner.
+function KCD2MP_W177HostWatch(now)
+    local c = KCD2MP.w177.corpse
+    local pp = nil
+    pcall(function() pp = player:GetWorldPos() end)
+    if not pp then return end
+    local seen = {}
+    local ents = {}
+    pcall(function() ents = System.GetEntitiesInSphere(pp, c.coverM) or {} end)
+    for _, e in ipairs(ents) do
+        local dead, nm = KCD2MP_W177IsDeadNpc(e)
+        if dead then
+            local p = nil
+            pcall(function() p = e:GetWorldPos() end)
+            if p then c.dead[nm] = { x = p.x, y = p.y, at = now }; seen[nm] = true end
+        end
+    end
+    local gone = {}
+    for nm, d in pairs(c.dead) do
+        if not seen[nm] then
+            local e = nil
+            pcall(function() e = System.GetEntityByName(nm) end)
+            if e then c.dead[nm] = nil   -- still there (alive again, or just outside the scan): not a removal
+            elseif KCD2MP_W177Dist2(pp, d) <= c.watchM * c.watchM then
+                gone[#gone + 1] = nm .. "=2"
+                c.dead[nm] = nil
+            end
+        end
+    end
+    local i = 1
+    while i <= #gone do
+        local chunk = {}
+        for k = i, math.min(i + 3, #gone) do chunk[#chunk + 1] = gone[k] end
+        c.gone = c.gone + #chunk
+        KCD2MP_EmitEvent("w177_corpse_gone", table.concat(chunk, " "))
+        mp_log("WO177-CORPSE host: gone from the host's world -> every joiner: " .. table.concat(chunk, " "))
+        i = i + 4
+    end
+end
+
+-- Joiner: the host's answers. Only 2 changes anything: a corpse of ours the host's world does not have is removed.
+function KCD2MP_W177CorpseAnswer(text)
+    local c = KCD2MP.w177.corpse
+    if not c.on then return 0 end
+    local n = 0
+    for tok in string.gmatch(tostring(text or ""), "%S+") do
+        local nm, v = tok:match("^([%w_]+)=(%d)$")
+        if nm and v == "2" then
+            local e = nil
+            pcall(function() e = System.GetEntityByName(nm) end)
+            local dead = e ~= nil and KCD2MP_W177IsDeadNpc(e)
+            if dead then
+                local eid = e.id
+                local ok = pcall(System.RemoveEntity, eid)
+                c.removed = c.removed + 1
+                n = n + 1
+                mp_log(string.format("WO177-CORPSE gone on the host: removed here npc=%s ok=%s", nm, tostring(ok)))
+            else
+                mp_log("WO177-CORPSE gone on the host: " .. nm .. " is not a corpse here (nothing to remove)")
+            end
+        end
+    end
+    return n
+end
+KCD2MP_W177CorpseArm()
+
+-- ===== WO-177 B3: a working NPC's tool swing is no damage on a partner's figure =====
+-- The tester (0.48.6): the blacksmith used the anvil at the same time as the guest and his hammer hurt the guest. The hammer's blow reaches the
+-- hit chokepoint like any weapon's (an NPC's hit on a figure, measured and put back by the DLL, then forwarded to the partner). A fight is what
+-- makes a hit real: the host's tick lists the NPCs within 10 m of any figure that are NOT in combat (no combat mode, no combat danger) as
+-- "calm" (event w177_calm, every 2 s; the agent keeps the names for 5 s) and the agent forwards no hit by a calm NPC (MP-W177 tool swing).
+-- A bandit, a wolf, a guard in a fight are in combat mode when they swing: nothing changes for them. mp_tool_swing on|off (default on).
+KCD2MP.w177.calm = KCD2MP.w177.calm or { on = true, radiusM = 10, everyS = 2, gen = 0, sent = 0 }
+function KCD2MP_W177SetToolSwing(arg)
+    local v = KCD2MP_Wo122ParseBool(arg)
+    if v == "bad" then mp_log("mp_tool_swing: expected on|off"); return false end
+    if v ~= nil then KCD2MP.w177.calm.on = v end
+    KCD2MP_EmitEvent("w177_calm_cfg", KCD2MP.w177.calm.on and "on" or "off")
+    mp_log("WO177-TOGGLE mp_tool_swing " .. (KCD2MP.w177.calm.on and "on" or "off")
+        .. " -- a working NPC's tool swing (the blacksmith's hammer) is no damage on your partner's figure; a fight's blows still are")
+    return true
+end
+function KCD2MP_W177CalmNames()
+    local c = KCD2MP.w177.calm
+    local names, seen = {}, {}
+    for _, g in pairs(KCD2MP.ghosts or {}) do
+        local fe = g and g.entity
+        local fp = nil
+        if fe then pcall(function() fp = fe:GetWorldPos() end) end
+        if fp then
+            local ents = {}
+            pcall(function() ents = System.GetEntitiesInSphere(fp, c.radiusM) or {} end)
+            for _, e in ipairs(ents) do
+                if e ~= fe and (e.class == "NPC" or e.class == "NPC_Female") and not mp_is_mod_entity(e) then
+                    local nm = nil
+                    pcall(function() nm = e:GetName() end)
+                    if nm and not seen[nm] and tostring(nm):match("^[%w_]+$") and not mp_is_excluded_npc_name(nm) then
+                        seen[nm] = true
+                        local fight = false
+                        pcall(function()
+                            local sl = e.soul
+                            fight = sl ~= nil and ((sl.IsInCombatMode ~= nil and sl:IsInCombatMode() == true) or (sl.IsInCombatDanger ~= nil and sl:IsInCombatDanger() == true))
+                        end)
+                        if fight then names.fighting = names.fighting or {}; names.fighting[#names.fighting + 1] = nm
+                        else names[#names + 1] = nm end
+                    end
+                end
+            end
+        end
+    end
+    return names
+end
+function KCD2MP_W177CalmTick(gen)
+    local c = KCD2MP.w177.calm
+    if gen and gen ~= c.gen then return end
+    if c.on and KCD2MP.ghosts and next(KCD2MP.ghosts) ~= nil then
+        local names = KCD2MP_W177CalmNames()
+        local fighting = names.fighting or {}
+        if #names > 0 or #fighting > 0 then
+            c.sent = c.sent + 1
+            -- "<calm names> ! <names in a fight>": a name that turned to a fight stops being calm at once
+            KCD2MP_EmitEvent("w177_calm", table.concat(names, " ", 1, math.min(#names, 12))
+                .. (#fighting > 0 and (" ! " .. table.concat(fighting, " ", 1, math.min(#fighting, 8))) or ""))
+        end
+    end
+    Script.SetTimer(c.everyS * 1000, function() KCD2MP_W177CalmTick(gen) end)
+end
+function KCD2MP_W177CalmArm()
+    local c = KCD2MP.w177.calm
+    c.gen = c.gen + 1
+    KCD2MP_W177CalmTick(c.gen)
+end
+KCD2MP_W177CalmArm()
+
+-- ===== WO-177 B4: mp_unstuck step 1 also ends a station's use =====
+-- The field (0.48.6): a guest stuck washing at a trough in Tachov; mp_unstuck did not free him, a friendly-fire knockdown did (the engine's hit
+-- reaction interrupts any activity). The game's own way out of an interactive object's use is InteractiveObjectEx:AbortUse (the entity script
+-- the use started through), and Actor:StandUp for the pose. Step 1 now calls AbortUse on every interactive object within reach (the objects are
+-- named in the log), then StandUp; pressed again within 10 s (step 2) the hit reaction is added -- the same interrupt that freed the guest, with no
+-- damage (KCD2MP_W151Unstuck's "hard"). Returns the names whose AbortUse ran.
+KCD2MP.w177.stationReachM = 4.0
+function KCD2MP_W177EndStation()
+    local ended = {}
+    if not player then return ended end
+    local pp = nil
+    pcall(function() pp = player:GetWorldPos() end)
+    if not pp then return ended end
+    local ents = {}
+    pcall(function() ents = System.GetEntitiesInSphere(pp, KCD2MP.w177.stationReachM) or {} end)
+    for _, e in ipairs(ents) do
+        if e.id ~= player.id and type(e.AbortUse) == "function" then
+            local nm = nil
+            pcall(function() nm = e:GetName() end)
+            local ok = pcall(e.AbortUse, e, player)
+            if ok then ended[#ended + 1] = tostring(nm or e.class or "?") end
+        end
+    end
+    pcall(function() if type(player.OnEndInteractive) == "function" then player:OnEndInteractive() end end)
+    KCD2MP.w177.stationEnds = (KCD2MP.w177.stationEnds or 0) + #ended
+    mp_log("WO177-STATION mp_unstuck: AbortUse on " .. tostring(#ended) .. " interactive object(s) within " .. tostring(KCD2MP.w177.stationReachM) .. " m"
+        .. (#ended > 0 and (": " .. table.concat(ended, ",")) or ""))
+    return ended
+end
+
+-- ===== WO-177 A5: no load while a fight is running =====
+-- WO-176: a game crash right after a load that was issued while a bandit was still hitting Henry. The mod's loads (a join, a rejoin, the
+-- way back to the player's own save, the repaired copy's load, the harness's) all go through KCD2MP_Wo124LoadGame; the agent asks here
+-- first (KCD2MP_W177LoadQuiet, answered as the event w177_load_quiet) and waits, with a short note, until the answer is "ok".
+--   "fight"  this Henry, or a partner's figure, is in a fight (the game's own combat flags)
+--   "hit"    this Henry or a figure lost health within the last 10 s
+--   "ok"     nothing running (also at the main menu, where there is no world)
+KCD2MP.w177.quietS = 10.0
+function KCD2MP_W177LoadReason()
+    local w = KCD2MP.w177
+    if not player then return "ok" end
+    local function flag(soul, fn)
+        if not soul or type(soul[fn]) ~= "function" then return false end
+        local v = nil
+        pcall(function() v = soul[fn](soul) end)
+        return v == true or (type(v) == "number" and v ~= 0)
+    end
+    local now = os.clock()
+    if flag(player.soul, "IsInCombatDanger") or flag(player.soul, "IsInCombatMode") then return "fight" end
+    for i = 0, 8 do
+        local e = nil
+        pcall(function() e = System.GetEntityByName("kcd2mp_" .. i) end)
+        if e and e.id and (flag(e.soul, "IsInCombatMode") or flag(e.soul, "IsInCombatDanger")) then return "fight" end
+    end
+    if (w.hitAt and now - w.hitAt < w.quietS) or (w.figHitAt and now - w.figHitAt < w.quietS) then return "hit" end
+    return "ok"
+end
+function KCD2MP_W177LoadQuiet(why)
+    local r = KCD2MP_W177LoadReason()
+    KCD2MP_EmitEvent("w177_load_quiet", tostring(why or "") .. " " .. r)
+    local w = KCD2MP.w177
+    if r ~= "ok" and (w.toldAt == nil or os.clock() - w.toldAt > 8) then
+        KCD2MP.w177.toldAt = os.clock()
+        mp_log("WO177-LOADWAIT " .. tostring(why) .. " reason=" .. r .. " -- the load waits until the fight is over and nothing has hit for " .. tostring(KCD2MP.w177.quietS) .. " s")
+        pcall(KCD2MP_ShowNativeToast, "A fight is on: the load waits until it is over.")
+    end
+    return r
+end
+
 -- WO-100.5 Phase 0: the one place that decides a ghost's entity class.
 -- Every spawn site calls this rather than reading facePick.className, so the
 -- toggle cannot be half-applied (the spawn, the System.SpawnEntity fallback,
@@ -15867,6 +16217,15 @@ end
 -- Second half of the spawn, one tick later: find the entity the engine
 -- minted (same class, at the anchor, not yet accounted for), adopt it, and
 -- only then discard the anchor.
+local function mp_item_adopted_by_other(name, key)
+    -- WO-177 B1: two same-class drops placed within 3 m in one tick used to adopt ONE engine entity (a pre-existing WO-48 edge case):
+    -- the first pickup then removed both items for the other player. An entity another tracked drop already holds is never adopted again.
+    for k2, d2 in pairs(KCD2MP.itemDrops) do
+        if k2 ~= key and d2.entName == name then return true end
+    end
+    return false
+end
+
 local function mp_item_finalize(key, d)
     local placed = nil
     pcall(function()
@@ -15875,6 +16234,7 @@ local function mp_item_finalize(key, d)
             if e.class == "PickableItem"
                and e.Properties and e.Properties.sItemClassId == d.cls
                and e:GetName() ~= d.anchorName
+               and not mp_item_adopted_by_other(e:GetName(), key)
                and not (d.preIds and d.preIds[tostring(e.id)]) then
                 placed = e
                 break
@@ -16195,8 +16555,9 @@ function W134.belongsToBody(e)
 end
 
 -- The world item of class cls nearest to (x, y, z) within tol metres, never a drop.
-function W134.findItem(cls, x, y, z, tol)
+function W134.findItem(cls, x, y, z, tol, amt)
     local best, bd = nil, tol * tol
+    local bestA, bdA = nil, tol * tol   -- WO-177 B1: the nearest one of the SAME amount (two apples side by side are two items; a pile of two is one)
     local ents = {}
     pcall(function() ents = System.GetEntitiesInSphere({ x = x, y = y, z = z }, tol + 0.5) or {} end)
     for _, e in ipairs(ents) do
@@ -16205,8 +16566,17 @@ function W134.findItem(cls, x, y, z, tol)
             if p then
                 local d = (p.x - x) ^ 2 + (p.y - y) ^ 2 + (p.z - z) ^ 2
                 if d <= bd then best, bd = e, d end
+                if amt and d <= bdA then
+                    local ea = 1
+                    pcall(function() ea = math.max(1, math.floor(tonumber(e.Properties.nAmount) or 1)) end)
+                    if ea == amt then bestA, bdA = e, d end
+                end
             end
         end
+    end
+    if bestA and bestA ~= best then
+        -- the nearest is another amount, one of this amount lies within the match radius: that one is the item the joiner means
+        return bestA, math.sqrt(bdA)
     end
     return best, math.sqrt(bd)
 end
@@ -16707,7 +17077,15 @@ function W134.onPickup(self, user, slot, hold, orig)
         if not KCD2MP_W134IsWorldItem(self) then return false end
         local name = W134.name(self)
         for _, r in pairs(w.itemReq) do
-            if r.name == name then return true, true end   -- already asked; the answer decides
+            if r.name == name then
+                -- already asked; the answer decides. WO-177 B1: never silent -- "E does nothing" was a field report; the player is told the host is being asked
+                if (os.clock() - (w.pendingToldAt or -1e9)) > 3 then
+                    w.pendingToldAt = os.clock()
+                    KCD2MP_ShowNativeToast("Asking the host...")
+                    W134.log(string.format("WO134-ITEM pickup of %s waits: the host's answer to tok has not come yet (%.1f s)", tostring(name), os.clock() - r.at))
+                end
+                return true, true
+            end
         end
         local p = W134.pos(self)
         if not p then return false end
@@ -16716,7 +17094,10 @@ function W134.onPickup(self, user, slot, hold, orig)
         w.itemReq[tok] = { name = name, ent = self, hold = hold, cls = cls, x = p.x, y = p.y, z = p.z, at = os.clock(), orig = orig, slot = slot,
                            body = W134.belongsToBody(self) }
         w.stats.itemAsk = w.stats.itemAsk + 1
-        KCD2MP_EmitEvent("w134_item", string.format("%s %s %.3f %.3f %.3f %d", tok, cls, p.x, p.y, p.z, w.itemReq[tok].body and 1 or 0))
+        local amt = 1
+        pcall(function() amt = math.max(1, math.floor(tonumber(self.Properties.nAmount) or 1)) end)
+        w.itemReq[tok].amt = amt
+        KCD2MP_EmitEvent("w134_item", string.format("%s %s %.3f %.3f %.3f %d %d", tok, cls, p.x, p.y, p.z, w.itemReq[tok].body and 1 or 0, amt))
         W134.log(string.format("WO134-ITEM ask tok=%s cls=%s at=(%.2f,%.2f,%.2f) name=%s -- the host decides", tok, cls, p.x, p.y, p.z, tostring(name)))
         W134.startLoop()
         return true, true
@@ -16751,11 +17132,12 @@ end
 
 -- Agent -> host: a joiner wants this world item. body = 1: an item that fell off a
 -- corpse (each machine's physics placed it; matched within deadBodyMatchM).
-function KCD2MP_W134HostItem(peer, tok, cls, x, y, z, body)
+function KCD2MP_W134HostItem(peer, tok, cls, x, y, z, body, amt)
     local w = KCD2MP.w134
     x, y, z = tonumber(x), tonumber(y), tonumber(z)
+    amt = tonumber(amt)
     local tol = (tonumber(body) == 1) and w.deadBodyMatchM or w.matchM
-    local e, d = W134.findItem(tostring(cls), x, y, z, tol)
+    local e, d = W134.findItem(tostring(cls), x, y, z, tol, amt)
     local verdict = "unknown"
     local how = ""
     if e then
@@ -16772,8 +17154,11 @@ function KCD2MP_W134HostItem(peer, tok, cls, x, y, z, body)
         end
     end
     KCD2MP_EmitEvent("w134_ires", string.format("%s %s %s %s %.3f %.3f %.3f", tostring(peer), tostring(tok), verdict, tostring(cls), x, y, z))
-    W134.log(string.format("WO134-ITEM host-take cls=%s at=(%.2f,%.2f,%.2f) from=%s -> %s%s", tostring(cls), x, y, z, tostring(peer), verdict,
-        e and string.format(" (matched %.3f m, %s)", d, how) or ""))
+    local hostAmt = nil
+    if e then pcall(function() hostAmt = math.max(1, math.floor(tonumber(e.Properties.nAmount) or 1)) end) end
+    W134.log(string.format("WO134-ITEM host-take cls=%s at=(%.2f,%.2f,%.2f) from=%s -> %s%s%s", tostring(cls), x, y, z, tostring(peer), verdict,
+        e and string.format(" (matched %.3f m, %s)", d, how) or "",
+        (amt and hostAmt) and string.format(" amount joiner=%d host=%d%s", amt, hostAmt, amt == hostAmt and "" or " -- DIFFERENT: each machine's own pickup counts") or ""))
 end
 
 -- Agent -> joiner: the host's answer. ok = the host's copy is gone, pick mine up;
@@ -22079,6 +22464,8 @@ do   -- WO-175's do-block
         w.tickAt = -1e9
         KCD2MP_W175Tick()
         if KCD2MP_W176Arm then KCD2MP_W176Arm() end   -- WO-176 A1: the figures' brain pause near a story fight
+        if KCD2MP_W177CorpseArm then KCD2MP_W177CorpseArm() end
+        if KCD2MP_W177CalmArm then KCD2MP_W177CalmArm() end   -- WO-177 B3: the calm-NPC list for the tool-swing gate   -- WO-177 B2: the corpse census chain (a load kills the timer chains)
         if w.health then KCD2MP_EmitEvent("w175_check", "load") end
     end
 
@@ -25202,7 +25589,7 @@ do
         local did = {}
         if KCD2MP_W164Unstuck then   -- WO-164 S3: a seat / bed / work station let go too; a second press within 10 s: beside the partner
             local ok, step = pcall(KCD2MP_W164Unstuck)
-            if ok then did[#did + 1] = "seat-reset"; if step == 2 then did[#did + 1] = "beside-partner" end end
+            if ok then did[#did + 1] = "seat-reset"; if step == 2 then did[#did + 1] = "beside-partner"; hard = true end end   -- WO-177 B4: step 2 also the hit reaction (what freed the guest)
         end
         if pcall(UIAction.CallFunction, "SkipTime", 0, "Cancel") then did[#did + 1] = "picker-back" end
         local w123 = KCD2MP.w123
@@ -25210,6 +25597,11 @@ do
         local w140 = KCD2MP.w140
         if w140 and (w140.held or w140.waiting) and KCD2MP_W140Drop then pcall(KCD2MP_W140Drop, "", false); did[#did + 1] = "kept-sleep" end
         if pcall(function() player.actor:StandUp() end) then did[#did + 1] = "stand-up" end
+        -- WO-177 B4: any station, tub, bench or workstation use ends the game's own way (InteractiveObject AbortUse on what is within reach)
+        if KCD2MP_W177EndStation then
+            local okS, ended = pcall(KCD2MP_W177EndStation)
+            if okS and ended and #ended > 0 then did[#did + 1] = "station-end(" .. table.concat(ended, "+") .. ")" end
+        end
         -- WO-154 3.4: a stuck fight ends too -- the game's own StopFight on this Henry, the copies engaged against
         -- him let go, and a joiner's host ends every fight against his avatar ("mp_unstuck fight": even when the
         -- game does not say he is fighting)
@@ -26898,6 +27290,9 @@ local ok, err = pcall(function()
     System.AddCCommand("mp_real_hits", 'KCD2MP_W173SetRealHits(%line)', "WO-173: (host) your partner's blows are real hits in your world: the enemy blocks, parries, staggers and fights back by its own rules, the same on both screens; off = the old raw damage, never a knock-out from one blow (UNTESTED with two players; default ON since 0.49.1, the capped raw fallback stays per blow): mp_real_hits on|off")
     System.AddCCommand("mp_arranged_guard", 'KCD2MP_W176SetArrangedGuard(%line)', "WO-176: (host) a quest's arranged fight is the story's: your partner's figure stays out of it -- no skirmish, no threat, no forced target, no lock-on, none of his blows land in it, and he is told once (default on): mp_arranged_guard on|off")
     System.AddCCommand("mp_copy_blocks", 'KCD2MP_W176SetCopyBlocks(%line)', "WO-176: (joiner) an enemy that blocks or parries your blow in the host's world shows its block on your screen (default on): mp_copy_blocks on|off")
+    System.AddCCommand("mp_corpse_sync", 'KCD2MP_W177SetCorpseSync(%line)', "WO-177: a body the host's world no longer has is removed from the joiner's world too (the joiner asks the host every 5 s; default on): mp_corpse_sync on|off")
+    System.AddCCommand("mp_tool_swing", 'KCD2MP_W177SetToolSwing(%line)', "WO-177: (host) a working NPC's tool swing (the blacksmith's hammer) is no damage on your partner's figure; blows of an NPC in a fight still are (default on): mp_tool_swing on|off")
+    System.AddCCommand("mp_figure_soul", 'KCD2MP_W177SetFigureSoul(%line)', "WO-177: your partner's figure is spawned from a soul of the mod's own, in no village and no quest group, so no village fight or quest takes it in (default on; applies to the next figure): mp_figure_soul on|off")
     System.AddCCommand("mp_repair_combat", 'KCD2MP_W174Repair(%line)', "WO-174: frees stuck weapons -- clears partner-figure fight links, ends a stuck fight, re-equips a melee weapon -- and says so; on a save that was fine it changes nothing: mp_repair_combat")
     System.AddCCommand("mp_weapon_autofix", 'KCD2MP_W174SetAutofix(%line)', "WO-174: after mp_repair_combat freed your weapons, every later load in this game session equips that weapon again, because the lock returns on a reload (default on): mp_weapon_autofix on|off")
     System.AddCCommand("mp_save_guard", 'KCD2MP_W175SetGuard(%line)', "WO-175: no save while a dialogue, a scene, a fight, a quest's arranged fight or one of the mod's own changes is in progress; the game's saves wait under a lock while the mod changes your inventory, equipment or body (max 10 s) (default on): mp_save_guard on|off")
