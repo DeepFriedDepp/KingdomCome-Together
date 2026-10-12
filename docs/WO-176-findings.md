@@ -50,6 +50,8 @@ The original `autosave935` was not written (the copy is a new file beside it).
 
 `tools/Test-WO175SaveRoundTrip.py` with the game up (throwaway `playline4`): draw before **DRAWN** → `Game.SaveGameViaResting` →
 `playline4/autosave336`: **0 stuck fights** → reloaded → draw after **DRAWN** → `WO175 save round-trip (live): PASS` (not SKIPPED).
+The gate depends on the start save: `autosave922` (the copy of `322`) fails it **in the game without the mod** too (Incidents). Start it
+from `autosave360` (both 0.50.0 builds passed there).
 
 ### A3 — S1 headless [syn: the launcher's own agent calls, real files]
 
@@ -316,6 +318,13 @@ releasing both buttons, and only while the game is in front. After the fix: 0 re
   thread hung (`PIPE: … still waiting on the main thread past 3500ms`) right after `GameLoadFinished` of a `wh_sys_LoadGame` that the
   B1(a) harness issued while the previous engagement's bandit was still hitting Henry. Not reproduced; cause not determined. The harness
   then always ended a fight (pair off, Henry 350 m away) before any load: no further crash in 40+ loads.
+- **The second build's first attempt stopped at the live save round trip (2026-10-12 07:53)**: draw **DRAWN** → resting save
+  `autosave323` (0 stuck fights) → reload → draw **REFUSED**; afterwards the scripted draw was refused for the rest of that game session,
+  even after reloading the start save. The start save was `autosave922` (the copy of `322`), not the `autosave360` the first build used.
+  Isolated on fresh launches, same save, same gate: the second build **FAIL**, the first build (`mp_real_hits` off) **FAIL**, and **the
+  game without the mod** (`Mods\kdcmp` moved out, no `MOD INIT` in `kcd.log`) **FAIL**. So it is that save with a resting save, in the
+  game itself, not 0.50.0. On `autosave360` the second build **PASSES** (standalone, then inside the build). The failed attempt's logs
+  are kept as `release\BUILD-0.50.0.second-build-gatefail.*`.
 - **Native logs of the 22:18–23:20 session (B1(a), B1(b), B2) were overwritten** by the next injection (the mirror log is truncated per
   injection, not rotated). Every number above was read from that log before it was lost (the harness's JSON records in
   `tools/wo118/logs/run176.*.json` and the counts quoted here).
@@ -335,11 +344,13 @@ releasing both buttons, and only while the game is in front. After the fix: 0 re
 
 ## Gates and the installer
 
-Full record: `docs/WO-176-installer.md`. `release\KingdomComeTogether-Setup-0.50.0.exe`, **106,949,330 bytes**, sha256
-`9e4ee30fc730d3b6093a8b8f2f2f1766949c62920762596fa6e7225541b1c021`, header **0.50.0**, unsigned, soak waived (quoted); built from a
-fresh clone of `f00aef7`. Inside the build: agent 1,512 · native 9,364 · 61 Lua suites / 4,049 checks · relay 63 · setup 77 · logpack 14
-· save tools 14 + 7 · guards 7/7 · no-input gate **0 hits** in our files · installer cases 26/26, 41/41 · **the live save round trip
-PASS** (the game was up). All at least 0.49.2's counts.
+Full record: `docs/WO-176-installer.md`. The current installer is the **second build** (`mp_real_hits` on, the maintainer's request):
+`release\KingdomComeTogether-Setup-0.50.0.exe`, **106,956,024 bytes**, sha256
+`85f535331afb12774b0d56026e91f45ad1ece6e94926c03b9319eecf36ff0e0e`, header **0.50.0**, unsigned, soak waived (quoted). It was built
+from a fresh clone of `b7ab169`. Inside the build: agent 1,512 · native 9,364 · 61 Lua suites / 4,049 checks · relay 63 · setup 77 ·
+logpack 14 · save tools 14 + 7 · guards 7/7 · no-input gate **0 hits** in our files · installer cases 26/26, 41/41 · **the live save
+round trip PASS** (the game was up, `autosave360`). All at least 0.49.2's counts. The first build (`f00aef7`, `mp_real_hits` off,
+106,949,330 bytes, sha256 `9e4ee30f…c021`) is kept beside it as `…0.50.0.superseded-first-build.exe`.
 
 ## Housekeeping
 
@@ -347,6 +358,10 @@ PASS** (the game was up). All at least 0.49.2's counts.
   0 changed, 0 added). This WO's 30 test saves in `playline4` (copies of `322`, `323`, `335`, the repaired copy, and the game's own
   autosaves of the throwaway) were moved out to the session's scratch folder; `playline4` holds only the launcher's `quicksave022.whs`
   again (unchanged). Nothing was saved into a real slot; no playline above 4 was used.
-- The installed `Mods\kdcmp` (four files) backed up and restored: hashes equal.
+- The installed `Mods\kdcmp` (four files) backed up and restored: hashes equal. After the second build (2026-10-12 08:30) the check
+  was repeated: the four files restored and hash-equal. The agent's map-legend name files from the harness runs
+  (`Localization\kct_n_*.xml`, partner name `synth-host`) were moved out, so the folder again holds only the backed-up four. The saves
+  folder was compared again: 826/826 identical. The second build's test saves (`autosave360`/`362`/`922` copies) were moved out of
+  `playline4`, and the one new screenshot was moved out.
 - This session's 22 screenshots moved out of the game's screenshot folder; three small crops are kept in `docs/wo176-shots/`.
 - The maintainer's own launcher relay (7778 / 5273) and master server were left running and untouched.
