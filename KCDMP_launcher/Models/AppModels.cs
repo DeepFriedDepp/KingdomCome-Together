@@ -244,8 +244,7 @@ namespace KCDMP_launcher.Models
         // A failed backup is logged and shown, and the game starts anyway. false = no backup (logged).
         public bool BackupSavesBeforeSession { get; set; } = true;
 
-        // WO-175 S6: the plain-words notice (co-op plays in its own copy of your world, backups are kept, how to restore)
-        // is shown once, on the first start of a launcher that has save safety.
+        // WO-175 S6 / WO-177 A3: the first-run notice is gone; the field stays so an older settings file still reads.
         public bool Wo175NoticeShown { get; set; }
 
         // WO-127 (Settings, advanced): the Steam app id both players use. 2429020 is the

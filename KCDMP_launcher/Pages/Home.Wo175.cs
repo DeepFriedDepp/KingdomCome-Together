@@ -64,15 +64,6 @@ namespace KCDMP_launcher.Pages
             }
         }
 
-        /// <summary>WO-175 S6: said once, in plain words, on the first start with save safety.</summary>
-        private void Wo175FirstRunNotice()
-        {
-            if (settings.Wo175NoticeShown) return;
-            settings.Wo175NoticeShown = true;
-            SaveSettings();
-            Wo175Status("Your saves are safe: co-op plays in its own copy of your world, and your saves are backed up before every session (RESTORE SAVES brings a backup back).", false, TimeSpan.FromSeconds(60));
-        }
-
         private void Wo175Status(string text, bool bad, TimeSpan? clearAfter)
         {
             int seq = Interlocked.Increment(ref wo175StatusSeq);

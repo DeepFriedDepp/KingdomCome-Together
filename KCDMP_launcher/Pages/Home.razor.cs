@@ -202,7 +202,6 @@ namespace KCDMP_launcher.Pages
             LoadFavorites();
             LoadSettings();
             LoadCustomServers();
-            Wo175FirstRunNotice();   // WO-175 S6: once
             StartSetupCheck();   // WO-150: in the background; replaces the old "open Settings when no game path" check
             CheckInstallIntegrity();
             Globals.OnStyleChanged += OnStyleChanged;
