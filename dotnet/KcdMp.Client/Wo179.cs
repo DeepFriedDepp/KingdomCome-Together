@@ -14,10 +14,13 @@ namespace KcdMp.Client;
 ///           20 s); a dialogue that makes no twins in 3.5 s released the game's own way (the field: 20 s each, 6 of 6 on the joiner).
 ///   Part B  the scene bus (W164 kind 15): which shared scene runs, who triggered it, where Henry ends up, how it ended.
 ///   Part C  videos both watch (C1), relocations bring the partner along (C2), the quiet exit ladder (C3), the landing and the ignore window (C4).
+///   WO-179B one skip ends the video for both (mp_scene_skip_both), the partner is safe while he watches (mp_scene_watch_safe), and he is moved
+///           after the video, to where the triggerer settles (the settle report), behind a fade bounded at 3 s.
 /// </summary>
 public static class Wo179Rules
 {
     public const bool DefaultBus = true, DefaultVideo = true, DefaultBring = true, DefaultIgnored = true, DefaultFightClear = true;
+    public const bool DefaultSkipBoth = true, DefaultWatchSafe = true;
 
     // ---- Part A ----
     /// <summary>A1: an end-positioning wait lasts at most this long past the later of the host's and this machine's content end.</summary>
@@ -45,6 +48,43 @@ public static class Wo179Rules
     /// <summary>The partner's own fade around the move (the move itself is ~1 frame; the fade hides the ladder).</summary>
     public const float OwnFadeS = 0.5f;
 
+    // ---- WO-179B ----
+    /// <summary>The settle report: with no fade after the video, Henry has settled this long after its end.</summary>
+    public const long SettleNoFadeMs = 2_000;
+    /// <summary>The settle report is sent by this time after the video's end whatever the fade does (a fade that never lifts).</summary>
+    public const long SettleCapMs = 10_000;
+    /// <summary>The partner's black after the video: never longer than this in total.</summary>
+    public const long PartnerFadeMaxMs = 3_000;
+    /// <summary>The partner's black after the video: at most this long past the triggerer's settle report (its own post-video fade + 1 s).</summary>
+    public const long PartnerFadePastSettleMs = 1_000;
+    /// <summary>The partner's fade to black at a video's end: as short as the fader takes (a flash of at most a frame or two).</summary>
+    public const float VideoEndFadeS = 0.05f;
+    /// <summary>The fade back in after the landing.</summary>
+    public const float VideoLandFadeInS = 0.3f;
+    /// <summary>A mod move of the local player (the DLL's own-teleport mark) holds the copy's skip check this long, then the pose is taken again.</summary>
+    public const long OwnMoveHoldMs = 1_000;
+    /// <summary>The ground under the landed partner is confirmed by two reads this far apart with the height steady to this much.</summary>
+    public const long GroundReadGapMs = 150;
+    public const float GroundSteadyM = 0.2f;
+
+    /// <summary>The settle report is due: after the post-video fade lifted, or 2 s after the end when no fade came; at the latest SettleCapMs.</summary>
+    public static bool SettleDue(long sinceEndMs, bool fadeSeen, bool fadedNow) =>
+        sinceEndMs >= SettleCapMs || (fadeSeen ? !fadedNow : sinceEndMs >= SettleNoFadeMs);
+
+    /// <summary>When the partner's black must lift: 3 s after it began, or 1 s past the settle report if that came first (0 = not yet).</summary>
+    public static long PartnerFadeDeadline(long fadeStartMs, long settleArrivedMs) =>
+        settleArrivedMs > 0 ? Math.Min(fadeStartMs + PartnerFadeMaxMs, Math.Max(settleArrivedMs, fadeStartMs) + PartnerFadePastSettleMs) : fadeStartMs + PartnerFadeMaxMs;
+
+    /// <summary>Item 1: the game's own skip key arms on the first press and skips on a second press within this long (WHGame's cutscene
+    /// interaction, a fixed 4.0 s; read statically, not live-proven) -- a first press alone is no skip.</summary>
+    public const long SkipArmMs = 4_000;
+
+    /// <summary>Item 1: this press is the game's skip (a second press within SkipArmMs of the one before it).</summary>
+    public static bool SkipConfirmed(long prevPressMs, long nowMs) => prevPressMs > 0 && nowMs - prevPressMs >= 0 && nowMs - prevPressMs <= SkipArmMs;
+
+    /// <summary>Item 3: the copy ended because of the triggerer (its end, its skip, the length) -- the partner's black and the move follow.</summary>
+    public static bool CopyEndFades(string why) => why is "partner-ended" or "ended";
+
     /// <summary>A crime punishment (an arrest, the pillory, jail) is out of scope: detected and logged only.</summary>
     public static bool IsCrimeScene(string? name) => name is not null && name.StartsWith("crime_", StringComparison.OrdinalIgnoreCase);
 
@@ -60,6 +100,8 @@ public static class Wo179Rules
     public static string SkipKey(int seq) => $"K {seq}";
     public static string Landed(int seq, float x, float y, float z) => FormattableString.Invariant($"L {seq} {x:F1} {y:F1} {z:F1}");
     public static string Clock(int seq, double delta) => FormattableString.Invariant($"T {seq} {delta:F0}");
+    /// <summary>WO-179B: the joiner watches the host's video here -- the host's world protects his figure (fight clear + ignore).</summary>
+    public static string Watch(int seq, float x, float y, float z) => FormattableString.Invariant($"W {seq} {x:F1} {y:F1} {z:F1}");
 
     public static bool IsName(string? s)
     {
@@ -81,6 +123,7 @@ public static class Wo179Rules
                 m = new Msg('S', seq, f[2][0], f[3], 0, 0, 0, "", 0); return true;
             case 'R':
             case 'L':
+            case 'W':
                 if (f.Length != 5 || !float.TryParse(f[2], NumberStyles.Float, inv, out float x) || !float.TryParse(f[3], NumberStyles.Float, inv, out float y)
                     || !float.TryParse(f[4], NumberStyles.Float, inv, out float z) || !float.IsFinite(x) || !float.IsFinite(y) || !float.IsFinite(z)) return false;
                 m = new Msg(f[0][0], seq, ' ', "", x, y, z, "", 0); return true;

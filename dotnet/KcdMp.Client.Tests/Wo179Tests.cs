@@ -85,4 +85,60 @@ public class Wo179Tests
         Assert.False(Wo179Rules.TryVideo("no_such_video", out _, out _));
         Assert.Equal([3f, 6f, 10f], Wo179Rules.LandingRingsM);
     }
+
+    // ---- WO-179B ----
+
+    [Fact]
+    public void B_new_switches_ship_on_and_the_watch_message_round_trips()
+    {
+        Assert.True(Wo179Rules.DefaultSkipBoth && Wo179Rules.DefaultWatchSafe);
+        Assert.True(Wo179Rules.TryParse(Wo179Rules.Watch(9, 2048.5f, 1024.25f, 33f), out var w));
+        Assert.Equal(('W', 9), (w.Op, w.Seq));
+        Assert.Equal(2048.5f, w.X, 1);
+        Assert.True(Wo179Rules.Watch(65535, -12345.6f, -12345.6f, -1234.5f).Length <= Protocol.W164TextMax);
+        Assert.False(Wo179Rules.TryParse("W 1 1 2", out _));
+    }
+
+    [Fact]
+    public void B_the_settle_report_waits_for_the_post_video_fade_else_two_seconds()
+    {
+        Assert.False(Wo179Rules.SettleDue(1_999, false, false));
+        Assert.True(Wo179Rules.SettleDue(2_000, false, false));
+        Assert.False(Wo179Rules.SettleDue(500, true, true));        // the fade still on
+        Assert.True(Wo179Rules.SettleDue(500, true, false));        // the fade lifted early: settled then
+        Assert.False(Wo179Rules.SettleDue(4_000, true, true));      // a long fade (the kidnapping's) is waited for
+        Assert.True(Wo179Rules.SettleDue(Wo179Rules.SettleCapMs, true, true));   // never forever
+    }
+
+    [Fact]
+    public void B_the_partners_black_is_bounded_three_seconds_and_one_second_past_the_report()
+    {
+        Assert.Equal(13_000, Wo179Rules.PartnerFadeDeadline(10_000, 0));          // no report: 3 s
+        Assert.Equal(11_600, Wo179Rules.PartnerFadeDeadline(10_000, 10_600));     // report at 0.6 s: 1 s past it
+        Assert.Equal(13_000, Wo179Rules.PartnerFadeDeadline(10_000, 12_500));     // report at 2.5 s: still 3 s in all
+        Assert.Equal(11_000, Wo179Rules.PartnerFadeDeadline(10_000, 9_000));      // a report kept from before the black
+        Assert.True(Wo179Rules.PartnerFadeMaxMs <= 3_000);
+    }
+
+    [Theory]
+    [InlineData("skip-key", false)]
+    [InlineData("skipped", false)]          // movement inside the copy: local only (the agent sends no skip for it)
+    [InlineData("partner-ended", true)]
+    [InlineData("triggerer-skipped", false)]   // its key may only jump a chapter: the end message ends the copy
+    [InlineData("both-skipped", false)]
+    [InlineData("ended", true)]
+    [InlineData("replaced", false)]
+    public void B_only_an_end_from_the_triggerers_side_brings_the_black(string why, bool fades)
+    {
+        Assert.Equal(fades, Wo179Rules.CopyEndFades(why));
+    }
+
+    [Fact]
+    public void B_the_skip_is_the_second_press_within_four_seconds_like_the_games_own_key()
+    {
+        Assert.False(Wo179Rules.SkipConfirmed(0, 5_000));          // the first press only arms
+        Assert.True(Wo179Rules.SkipConfirmed(5_000, 5_400));
+        Assert.True(Wo179Rules.SkipConfirmed(5_000, 9_000));
+        Assert.False(Wo179Rules.SkipConfirmed(5_000, 9_001));      // the prompt has gone: this press arms again
+    }
 }
