@@ -523,8 +523,8 @@ public partial class GameBridge
                 $"MP-JOIN joiner: join 0x{j.JoinId:x8} spliced world={hostBytes.Length} B + henry={choice.Detail} ({choice.Mode}) -> {res.File.Length} B in {spliceMs:F0} ms; check PASS, verify ok; quest items stripped={rp.QuestItemsRemoved.Count}, keys host_kept={rp.KeysHostKept} joiner_added={rp.KeysJoinerAdded}"));
             try { File.Delete(stagedPath); } catch { }
 
-            // ---- Phase 3: place, read back, rescan, listed. WO-175 S1 (mp_coop_playline, on by default): in the co-op
-            // playline of the host's world, never one holding this player's own saves. Off: in the playline of this
+            // ---- Phase 3: place, read back, rescan, listed. WO-175 S1 / WO-180 (mp_coop_playline, on by default): in the playline
+            // that already holds the host's world, else the lowest free one, never one holding this player's own saves. Off: in the playline of this
             // player's newest own save (= the menu's current playline, WO-124 s4.2); in a world: the playline it is in.
             string hostTag = WhsSave.ReadSeed(splicedRaw) is uint hostSeed ? WhsSave.SeedTag(hostSeed) : "";
             int? coopPl = Wo175JoinPlayline(saves, hostTag, j.JoinId);
@@ -554,7 +554,7 @@ public partial class GameBridge
                 return;
             }
             Console.WriteLine($"MP-JOIN joiner: join 0x{j.JoinId:x8} placed {SaveDisplay(final)} ({back.Length} B, read back: sha256 = the splice, verify ok)");
-            if (coopPl >= 0) Wo175JoinPlaced(j.JoinId, hostTag, j.Playline, final, j.SplicedSha);
+            if (coopPl >= 0) Wo175JoinPlaced(j.JoinId, hostTag, final, j.SplicedSha);
             var listed = await _combat.SaveListAsync(1, j.Playline, j.Name);
             if (listed is null || !listed.Listed)
             {

@@ -48,6 +48,51 @@ public class Wo177Tests
         Assert.True(Wo177Rules.ProbeTimeoutMs > Wo177Rules.PollMs / 2 && Wo177Rules.PollMs >= 500);
     }
 
+    // ---- WO-180: the gate at the main menu and with a silent script
+
+    [Fact]
+    public void No_world_loaded_goes_at_once_whatever_the_script_said()
+    {
+        var g = new Wo177Rules.Gate();
+        Assert.Equal(Wo177Rules.Verdict.GoNoWorld, g.Step(true, null, 0));      // the main menu: the question is never answered, never asked
+        Assert.Equal(Wo177Rules.Verdict.GoNoWorld, new Wo177Rules.Gate().Step(true, "fight", 0));
+    }
+
+    [Fact]
+    public void In_a_world_a_fight_waits_ok_goes_and_a_hit_waits_until_it_is_quiet()
+    {
+        var g = new Wo177Rules.Gate();
+        Assert.Equal(Wo177Rules.Verdict.Wait, g.Step(false, "fight", 0));
+        Assert.Equal(Wo177Rules.Verdict.Wait, g.Step(false, "fight", 60_000));   // a real fight is waited for (the 180 s bound is GaveUp's)
+        Assert.True(g.HasRealAnswer);
+        Assert.Equal(Wo177Rules.Verdict.Wait, g.Step(false, "hit", 61_000));
+        Assert.Equal(Wo177Rules.Verdict.Wait, g.Step(false, "hit", 65_000));
+        Assert.Equal(Wo177Rules.Verdict.Go, g.Step(false, "ok", 71_000));        // ten quiet seconds after the hit: the script says ok
+    }
+
+    [Fact]
+    public void In_a_world_no_answer_goes_at_ten_seconds_and_never_before()
+    {
+        var g = new Wo177Rules.Gate();
+        Assert.Equal(Wo177Rules.Verdict.Wait, g.Step(false, null, 1_000));
+        Assert.Equal(Wo177Rules.Verdict.Wait, g.Step(false, null, 10_999));
+        Assert.False(g.HasRealAnswer);   // a silent script is not a fight: the 180 s abort does not apply to it
+        Assert.Equal(Wo177Rules.Verdict.GoNoAnswer, g.Step(false, null, 11_000));
+        Assert.Equal(10_000, Wo177Rules.NoAnswerGoMs);
+    }
+
+    [Fact]
+    public void A_real_answer_resets_the_silence()
+    {
+        var g = new Wo177Rules.Gate();
+        Assert.Equal(Wo177Rules.Verdict.Wait, g.Step(false, null, 0));
+        Assert.Equal(Wo177Rules.Verdict.Wait, g.Step(false, null, 8_000));
+        Assert.Equal(Wo177Rules.Verdict.Wait, g.Step(false, "fight", 9_000));    // it answered: the silence starts over
+        Assert.Equal(Wo177Rules.Verdict.Wait, g.Step(false, null, 12_000));
+        Assert.Equal(Wo177Rules.Verdict.Wait, g.Step(false, null, 21_999));
+        Assert.Equal(Wo177Rules.Verdict.GoNoAnswer, g.Step(false, null, 22_000));
+    }
+
     // ---- B2: corpses agree (W164 kinds 10 and 11)
 
     [Fact]

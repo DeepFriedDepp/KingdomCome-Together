@@ -425,10 +425,8 @@ public static class Wo159
             case "saves":
             {
                 if (saves is null) { Out(new { ok = false, why = "no saves folder" }); return 1; }
-                // WO-175 S1: the co-op copies prepared for this launch are not worlds of their own; a co-op playline's
-                // newest save is listed as "Together: <the original world>"
-                string coop = Wo175Coop.LedgerPath(Path.GetDirectoryName(ledger));
-                var r = Wo175Coop.LabelTogether(HostWorlds(saves, ledger, Wo175Coop.PendingPaths(coop)), saves, Wo175Coop.ReadLedger(coop));
+                // WO-180: the list is the player's saves as they are (a co-op playline an old WO-175 copy made is an ordinary save)
+                var r = HostWorlds(saves, ledger);
                 // a staged start save never played: what New adventure loads
                 var st = ReadLedger(ledger).LastOrDefault(e => File.Exists(e.Path));
                 Out(new

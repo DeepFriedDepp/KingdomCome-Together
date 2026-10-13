@@ -23,8 +23,7 @@ if (args.Contains("--keys-pak"))
 if (args.Contains("--w159"))
     return Wo159.RunCli(args, Console.Out);
 
-// --w175coop (WO-175 S1): the co-op playline -- the host's world copied before the game starts, the menu's pick
-// committed, the copies not picked taken back; the mp_coop_playline switch. Before the config load, like --w159.
+// --w175coop (WO-175 S1, WO-180): the mp_coop_playline switch (the host-side copy is gone). Before the config load, like --w159.
 if (args.Contains("--w175coop"))
     return Wo175Coop.RunCli(args, Console.Out);
 

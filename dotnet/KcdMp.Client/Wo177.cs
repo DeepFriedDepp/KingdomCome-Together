@@ -33,7 +33,37 @@ public static class Wo177Rules
 
     public static bool IsQuiet(string? reason) => reason == ReasonOk;
 
-    /// <summary>Out of time: the load is not issued.</summary>
+    /// <summary>WO-180: a script that has not answered for this long is not a fight (the load goes); a world that answers "fight" or "hit" is waited for as before.</summary>
+    public const int NoAnswerGoMs = 10_000;
+
+    public enum Verdict { Wait, Go, GoNoWorld, GoNoAnswer }
+
+    /// <summary>
+    /// WO-180: the gate's decision, one question at a time (GameBridge.Wo177.cs asks, this decides; Wo177Tests pins it).
+    ///   no world loaded (the main menu, no level)   -> go at once, the Lua is never asked (a menu gate holds pushes until a world loads, so no answer would ever come)
+    ///   "ok"                                        -> go
+    ///   "fight" / "hit"                             -> wait (the 180 s bound, <see cref="GaveUp"/>, stays)
+    ///   no answer for <see cref="NoAnswerGoMs"/>    -> go: a missing answer never blocks a load, and never aborts a join for "load-fight"
+    /// </summary>
+    public sealed class Gate
+    {
+        private long _noAnswerSince = -1;
+
+        /// <param name="nowMs">a monotonic clock; <paramref name="reason"/> null = the question was not answered in time.</param>
+        public Verdict Step(bool noWorld, string? reason, long nowMs)
+        {
+            if (noWorld) return Verdict.GoNoWorld;
+            if (IsQuiet(reason)) { _noAnswerSince = -1; return Verdict.Go; }
+            if (reason is not null) { _noAnswerSince = -1; return Verdict.Wait; }   // fight | hit: a real answer
+            if (_noAnswerSince < 0) _noAnswerSince = nowMs;
+            return nowMs - _noAnswerSince >= NoAnswerGoMs ? Verdict.GoNoAnswer : Verdict.Wait;
+        }
+
+        /// <summary>The 180 s bound applies to a fight or a hit that never ends, not to a script that never answers.</summary>
+        public bool HasRealAnswer => _noAnswerSince < 0;
+    }
+
+    /// <summary>Out of time: the load is not issued (WO-180: only for a fight or hit that never ended; see <see cref="Gate"/>).</summary>
     public static bool GaveUp(long waitedMs) => waitedMs >= MaxWaitMs;
 
     /// <summary>What the player is told while the load waits (the Lua shows the same words once as a toast).</summary>

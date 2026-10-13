@@ -387,6 +387,7 @@ public partial class GameBridge
             }
             return false;
         }
+        if (!Wo180SlotAvailableOrTell()) { why = "no save slot for the host's world"; return false; }   // WO-180: before the first-join question and before any request
         if (_henry.HasWorld(_peerTag!)) return true;
         // WO-135: a first join's Henry comes from a save of the host world's game build only
         // (the splice's rule, WO-115). The host announces it; until it has (15 s at most),

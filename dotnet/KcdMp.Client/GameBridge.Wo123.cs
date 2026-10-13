@@ -634,6 +634,7 @@ public partial class GameBridge
         if (!_wo122Connected || !_combatRoleApplied) { Console.WriteLine("MP-JOIN mp_join_request: no session"); return; }
         if (_isDamageAuthority) { Console.WriteLine("MP-JOIN mp_join_request: this machine is the host -- the joiner asks"); return; }
         if (_joinRx is not null) { Console.WriteLine("MP-JOIN mp_join_request: a transfer is already running"); return; }
+        if (!Wo180SlotAvailableOrTell()) return;   // WO-180: no save slot for the host's world -- nothing is sent, the host is not paused
         _joinOutId = (uint)Random.Shared.Next(1, int.MaxValue);
         WorldReceiver.SweepStaging(WorldReceiver.DefaultStagingDir());
         SetJoinUi("requested", "Asking your host for the world...");

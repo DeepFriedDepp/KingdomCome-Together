@@ -98,7 +98,6 @@ namespace KCDMP_launcher.Pages
                     Log.Information("MP-W159 no new adventure this launch: {Why}", st?.Why ?? "the helper did not answer");
                 }
             }
-            await Wo175CoopBeforeLaunchAsync(hosting);   // WO-175 S1: the host's worlds copied into co-op playlines (listed at the game's start)
             Wo159PlaceLogo();
             w159Saves = await AgentHelper.RunAsync<W159SavesData>(agent, "--w159 saves", "W159", TimeSpan.FromSeconds(60));
             Log.Information("MP-W159 worlds: {N} usable, staged={Staged}, hidden=\"{Hidden}\"", w159Saves?.Usable.Count ?? -1,
@@ -186,7 +185,7 @@ namespace KCDMP_launcher.Pages
                         switch (c.Kind)
                         {
                             case "load" when hosting && !loadIssued:
-                                loadIssued = await Wo175HostLoadAsync(console, c.Playline, c.Name);   // WO-175 S1: in a co-op copy
+                                loadIssued = await Wo159LoadAsync(console, c.Playline, c.Name, false);   // WO-180: the save he picked, loaded as it is in its own playline (no copy)
                                 menuLoad |= loadIssued;
                                 break;
                             case "newadv" when hosting && !loadIssued && w159Saves?.Staged is { } st:
@@ -201,7 +200,6 @@ namespace KCDMP_launcher.Pages
                                     break;
                                 }
                                 Log.Information("MP-W159 new adventure: {Style}, a new world {Tag}; prologue {How}", c.Style, sw.SeedTag, c.Watch ? "watched" : "skipped");
-                                await Wo175CoopDropAsync("New adventure");   // WO-175 S1: the co-op copies prepared for this launch go
                                 loadIssued = await Wo159LoadAsync(console, st.Pl, st.Name, true);
                                 menuLoad |= loadIssued;
                                 recapPending = loadIssued && c.Watch;
@@ -292,7 +290,6 @@ namespace KCDMP_launcher.Pages
             string agent = ResolveAgainstLauncher(settings.AgentPath);
             if (await AgentHelper.RunAsync<W159UnstageData>(agent, "--w159 unstage", "W159", TimeSpan.FromSeconds(20)) is { } u && u.Lines.Count > 0)
                 Log.Information("MP-W159 start saves after the game: {Lines}", string.Join("; ", u.Lines));
-            await Wo175CoopDropAsync("the game exited");   // WO-175 S1
         }
 
         // ------------------------------------------------------------ our logo on the main menu (launcher-started only)
