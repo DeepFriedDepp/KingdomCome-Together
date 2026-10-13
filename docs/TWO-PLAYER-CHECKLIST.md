@@ -1288,6 +1288,33 @@ Evidence: `docs/WO-177-findings.md`. **Type `mark_odd` at every miss.**
      `mp_scene_bring_along`, `mp_scene_partner_ignored`, `mp_scene_fight_clear`.
 295. **Kill the joiner's agent mid-session** (or close the launcher hard): within about 20 seconds the joiner's game can save again.
 
+## WO-183 -- the 0.50.8 playtest patch: videos only, the joiner's saves, arrests, haggling, block icons, the T-pose (0.50.9)
+
+296. **A conversation followed by walking, riding or fast travel teleports nobody.** Talk to a villager (the host, then the joiner), end it,
+     then walk 200 m, ride, fast travel, die and respawn. Nobody is ever pulled to the other player; the log has `WO179-JUMP ... logged only`
+     lines and no `WO179-RELOCATE` or `WO179-BRING`. (Items 290-292 of WO-179 are gone: scenes that move Henry are not shared any more.)
+297. **After a shared video you stand together, never inside someone's house.** Start a story video (either of you); both watch it. When it ends
+     the partner is beside the one who started it, on open ground (`WO179-LAND ... placed ... public ground`). Try it with the one who started
+     it standing inside a building: the partner stays where he is, sees "Couldn't bring you to your partner, they're somewhere private.", and
+     the log says `NOT placed (no public spot ...)`. Never moved while arrested.
+298. **The joiner haggles to the end.** Haggle with a trader (a shop keeper such as the one in Tachov), start to finish, 3 times. The talk is
+     never cut at 4 seconds, no "That conversation couldn't start here" appears for a talk that is running. (A trader that never opens the
+     talk at all still ends within about 4 seconds with that message: that is right.)
+299. **The joiner is arrested, and afterwards his saves work.** Trespass on purpose, get arrested (pay or talk out of it). Then fight, loot, and
+     have the host save. `agent.log` never says `another save is pending` or `REFUSED the snapshot`; every host save has a `PAIRED host save`
+     line (or `WO183-SNAP owed` then `taken ... late`).
+300. **The host saves (also right after a fight), the joiner reloads, and his inventory is there.** The joiner picks up something, the host saves
+     (also at once after a fight, and while the joiner stands in a fade or a scene: `WO183-SNAP owed` is fine, it is taken a few seconds
+     later), the joiner leaves and rejoins: the item is there, not the join-time inventory.
+301. **The shield and swords icons show on blocks.** Let an enemy hit you while you hold block: the green shield (and the blue swords on a
+     perfect block) show on every blocked blow, not once per fight. `WO165-REPLAY ... engine=blocked` per blocked blow; no
+     `fallback=victim-blocking` while the block is held. Switch: `mp_replay_blocked on|off`.
+302. **An enemy switches from one player to the other with no T-pose.** Two of you fight the same enemy; it turns from one to the other. The
+     joiner's copy keeps fighting, no stiff T-pose, no `engage off ... left combat` in the middle (`MP-W132 ... combat=0 for a moment`
+     is the debounce); `WO164-SWEEP ... SKIPPED: the copy is in combat` is right.
+303. **Type `mark_odd` at every miss.** Switches (all on): `mp_scene_bus`, `mp_scene_video_shared`, `mp_scene_bring_along` (videos only now),
+     `mp_scene_partner_ignored`, `mp_scene_fight_clear`, `mp_replay_blocked`.
+
 ## Logs to send afterwards
 
 Both machines: Report a bug in the launcher. Since 0.48.9 it collects the current launch by default as a small file (or a few numbered

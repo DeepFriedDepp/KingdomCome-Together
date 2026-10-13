@@ -21335,6 +21335,23 @@ function KCD2MP_W164Sweep(name, trigger)
     if not w.sweep or not string.find(name, "^[%w_]+$") then return false end
     if not KCD2MP.npcPuppets[name] then w.stats.skipped = w.stats.skipped + 1; return false end   -- the host's copies only
     local now = os.clock()
+    -- WO-183 4b: never on a copy that is in combat (the host's NPC fought in the last 10 s, or the copy itself is in combat mode): the field's
+    -- mid-fight sweeps on tvez_man_15 / tvez_man_16 released the body the fight was playing on
+    -- (the host-conversation clear -- WO-167 T2, which ends the engagement first -- the talk retry and the console are the ones asked for)
+    if trigger ~= "hostconv" and trigger ~= "retry" and trigger ~= "console" then
+        local fighting = ((w.hostCombat or {})[name] or -1e9) > now - 10
+        if not fighting then
+            local ce = nil
+            pcall(function() ce = System.GetEntityByName(name) end)
+            if ce and ce.soul and ce.soul.IsInCombatMode then pcall(function() fighting = ce.soul:IsInCombatMode() == true end) end
+        end
+        if fighting then
+            w.stats.skipped = w.stats.skipped + 1
+            w.fightSkips = (w.fightSkips or 0) + 1
+            if w.fightSkips <= 20 or w.fightSkips % 50 == 0 then mp_log(string.format("WO164-SWEEP-LUA npc=%s trigger=%s SKIPPED: the copy is in combat -- never mid-fight [n=%d]", name, trigger, w.fightSkips)) end
+            return false
+        end
+    end
     if trigger ~= "retry" and trigger ~= "hostconv" and (now - (w.sweptAt[name] or -1e9)) < W164_SWEEP_COOLDOWN_S then return false end
     local released
     if trigger == "retry" then
@@ -21640,7 +21657,11 @@ end
 --   mp_victim_decides on|off  (joiner, default ON since 0.50.6 -- off from WO-166 until a human held block against a copy, WO-178 C2) the joiner's
 --                             engine judges a host's blow and applies it; while he holds block the host's verdict decides
 --   mp_block_recoil on|off    (joiner, default ON) a blocked blow makes the copy that swung recoil (not judged by eye yet)
-KCD2MP.w165 = KCD2MP.w165 or { hostLock = true, victimDecides = true, blockRecoil = true }
+--   mp_replay_blocked on|off  (joiner, default ON, WO-183 4a) a blow that arrives while he holds block is replayed through his engine too
+--                             (it used to be referred to the host's verdict and never reached the engine: no shield icon, no perfect-block
+--                             window); his own held block still decides it
+KCD2MP.w165 = KCD2MP.w165 or { hostLock = true, victimDecides = true, blockRecoil = true, replayBlocked = true }
+if KCD2MP.w165.replayBlocked == nil then KCD2MP.w165.replayBlocked = true end
 
 local function w165Switch(key, field, arg, what)
     local v = KCD2MP_Wo122ParseBool(arg)
@@ -21653,6 +21674,7 @@ end
 function KCD2MP_W165SetHostLock(arg) return w165Switch("host_lock", "hostLock", arg, "the host can lock onto an NPC beating his partner") end
 function KCD2MP_W165SetVictimDecides(arg) return w165Switch("victim_decides", "victimDecides", arg, "the joiner's own engine judges a host's blow against his guard (untested live)") end
 function KCD2MP_W165SetBlockRecoil(arg) return w165Switch("block_recoil", "blockRecoil", arg, "a blocked blow makes the copy that swung recoil (untested live)") end
+function KCD2MP_W165SetReplayBlocked(arg) return w165Switch("replay_blocked", "replayBlocked", arg, "a blow against his held block is replayed through his own engine too (the block icon, the perfect-block window)") end
 
 -- A WO-165 piece switched itself off (a fault): said once, on the game's own HUD.
 function KCD2MP_W165Say(text)
@@ -27900,6 +27922,7 @@ local ok, err = pcall(function()
     System.AddCCommand("mp_w157_status", "KCD2MP_W157Status()", "WO-157: the trespass check and the stop grace (WO157-STATUS here); also the area here: private, public, open (a shop) or unknown")
     System.AddCCommand("mp_host_lock", 'KCD2MP_W165SetHostLock(%line)', "WO-165: (host) you can lock onto an NPC that is beating your partner: near it (6 m) and facing it, you join its fight as its foe; it keeps fighting your partner until you hit it (default on): mp_host_lock on|off")
     System.AddCCommand("mp_victim_decides", 'KCD2MP_W165SetVictimDecides(%line)', "WO-165: (joiner) your own game judges an enemy's blow and applies it; your own block, perfect block and the swing's reach decide it (UNTESTED with two players; default on since 0.50.6): mp_victim_decides on|off")
+    System.AddCCommand("mp_replay_blocked", 'KCD2MP_W165SetReplayBlocked(%line)', "WO-183: (joiner) a blow that comes while you hold block goes through your own game's combat too, so the shield icon, the perfect-block window, the block sound and the stamina cost happen as in single player (default on): mp_replay_blocked on|off")
     System.AddCCommand("mp_block_recoil", 'KCD2MP_W165SetBlockRecoil(%line)', "WO-165: (joiner) an enemy whose blow you blocked plays the game's own bounce-back (UNTESTED with two players; default on): mp_block_recoil on|off")
     System.AddCCommand("mp_real_hits", 'KCD2MP_W173SetRealHits(%line)', "WO-173: (host) your partner's blows are real hits in your world: the enemy blocks, parries, staggers and fights back by its own rules, the same on both screens; off = the old raw damage, never a knock-out from one blow (UNTESTED with two players; default ON since 0.49.1, the capped raw fallback stays per blow): mp_real_hits on|off")
     System.AddCCommand("mp_arranged_guard", 'KCD2MP_W176SetArrangedGuard(%line)', "WO-176: (host) a quest's arranged fight is the story's: your partner's figure stays out of it -- no skirmish, no threat, no forced target, no lock-on, none of his blows land in it, and he is told once (default on): mp_arranged_guard on|off")
@@ -28230,10 +28253,11 @@ end
 --   * C1: the partner's copy of a video through the game's bare movie player and the video sound setup (the WO-159 route)
 --   * C3: the quiet exit ladder -- whatever this player is doing ends the game's own way before a bring-along
 --   * C4: the ignore window -- the host's people near the landing do not perceive the partner (XGenAIModule.IgnorePerception)
---   * the joiner's own clock jump inside its relocation scene, so the host's world can apply it once
 --   * WO-179B: mp_scene_skip_both (one skip ends the video for both), mp_scene_watch_safe (the partner is left alone while he
 --     watches), the copy's hold (KCD2MP_W179VideoHold: the ladder or a mod move is never read as a skip)
--- Log tags: WO179-TOGGLE, WO179-VIDEO, WO179-LADDER, WO179-IGNORE, WO179-CLOCK, WO179-SKIPKEY, WO179-PROTECT.
+-- Log tags: WO179-TOGGLE, WO179-VIDEO, WO179-LADDER, WO179-IGNORE, WO179-SKIPKEY, WO179-PROTECT.
+-- WO-183 (0.50.9): ONLY pre-rendered videos are shared; scenes that move Henry (relocations) are gone, and with them the joiner's
+-- clock-jump exception (KCD2MP_W179ClockWatch / ClockTick / ApplySkip). The landing after a video is on public ground only.
 KCD2MP.w179 = {
     bus = true, video = true, bring = true, ignored = true, fightClear = true, skipBoth = true, watchSafe = true,
     vid = nil, ign = nil, clock = nil, beatAt = -1e9, hold = false, holdUntil = 0,
@@ -28249,9 +28273,9 @@ function KCD2MP_W179Cfg()
 end
 
 KCD2MP_W179_SWITCHES = {
-    bus = { "mp_scene_bus", "both games agree which shared scene runs (videos and scenes that move Henry)" },
+    bus = { "mp_scene_bus", "both games agree which shared video runs" },
     video = { "mp_scene_video_shared", "a pre-rendered video one of you starts plays for both" },
-    bring = { "mp_scene_bring_along", "the partner is brought beside Henry when a video or a scene moves him" },
+    bring = { "mp_scene_bring_along", "after a shared video the partner is brought beside the one who watched it, on public ground (the video bring-along only)" },
     ignored = { "mp_scene_partner_ignored", "after a bring-along the scene's people and the guards leave the partner alone (10 min / 60 m)" },
     fightClear = { "mp_scene_fight_clear", "a fight the partner is in ends the game's own way before he is brought along" },
     skipBoth = { "mp_scene_skip_both", "one skip ends a shared video for both (the triggerer's skip ends the partner's copy on the same beat)" },
@@ -28547,48 +28571,19 @@ function KCD2MP_W179IgnoreTick()
     Script.SetTimer(3000, KCD2MP_W179IgnoreTick)
 end
 
--- ---- the joiner's own clock jump inside its relocation scene (the host applies it once) ---------------------------------
-function KCD2MP_W179ClockWatch(on, seq)
-    local W = KCD2MP.w179
-    if on then
-        local t = nil
-        pcall(function() t = Calendar.GetWorldTime() end)
-        W.clock = { seq = tostring(seq), last = tonumber(t) or 0, jumped = 0 }
-        Script.SetTimer(250, KCD2MP_W179ClockTick)
-        return true
+-- ---- WO-183 1: the landing's area check ---------------------------------------------------------------------------------
+-- The agent asks the game's own area state of each ring spot before it moves a partner beside the one who watched a video: only a
+-- public spot is a landing (WO-157's labels: private/personal areas, opened by antitrespass / publicServiceTrespassOverride).
+-- spec: "x,y,z;x,y,z" -> wo124_reply <tok> areas=public,private,open,unknown,...  (one per spot)
+function KCD2MP_W183AreasAt(tok, spec)
+    local out = {}
+    for x, y, z in tostring(spec or ""):gmatch("(-?[%d%.]+),(-?[%d%.]+),(-?[%d%.]+)") do
+        local a = "unknown"
+        pcall(function() a = KCD2MP_W157AreaAt({ x = tonumber(x), y = tonumber(y), z = tonumber(z) }) end)
+        out[#out + 1] = a
     end
-    local c = W.clock
-    W.clock = nil
-    if not c then return false end
-    mp_log(string.format("WO179-CLOCK seq=%s jumped=%.0f game-s", c.seq, c.jumped))
-    KCD2MP_EmitEvent("w179", string.format("clock %s %.0f", c.seq, c.jumped))
+    KCD2MP_EmitEvent("wo124_reply", tostring(tok) .. " areas=" .. table.concat(out, ","))
     return true
-end
-
-function KCD2MP_W179ClockTick()
-    local c = KCD2MP.w179.clock
-    if not c then return end
-    local t = nil
-    pcall(function() t = tonumber(Calendar.GetWorldTime()) end)
-    if t then
-        local d = t - c.last
-        if d > 120 then c.jumped = c.jumped + d end   -- a skip, not the clock running (Lua numbers are float32 here: whole minutes)
-        c.last = t
-    end
-    Script.SetTimer(250, KCD2MP_W179ClockTick)
-end
-
--- The host applies a joiner's relocation-scene skip once (the shared clock moves only here).
-function KCD2MP_W179ApplySkip(delta, who)
-    delta = tonumber(delta) or 0
-    if delta < 60 or delta > 7 * 86400 then mp_log("WO179-CLOCK refused delta=" .. tostring(delta)); return false end
-    local t = nil
-    pcall(function() t = tonumber(Calendar.GetWorldTime()) end)
-    if not t then return false end
-    local ok = pcall(function() Calendar.SetWorldTime(t + delta) end)
-    mp_log(string.format("WO179-CLOCK applied +%.0f game-s for %s (%s) -- the partner's scene skipped time; the host's world moves once",
-        delta, tostring(who), ok and "ok" or "ERR"))
-    return ok
 end
 
 function KCD2MP_W179SetBus(arg) return KCD2MP_W179Set("bus", arg) end
@@ -28598,10 +28593,10 @@ function KCD2MP_W179SetIgnored(arg) return KCD2MP_W179Set("ignored", arg) end
 function KCD2MP_W179SetFightClear(arg) return KCD2MP_W179Set("fightClear", arg) end
 function KCD2MP_W179SetSkipBoth(arg) return KCD2MP_W179Set("skipBoth", arg) end
 function KCD2MP_W179SetWatchSafe(arg) return KCD2MP_W179Set("watchSafe", arg) end
-System.AddCCommand("mp_scene_bus", 'KCD2MP_W179SetBus(%line)', "WO-179: both games agree which shared scene runs -- videos and scenes that move Henry (default on): mp_scene_bus on|off")
+System.AddCCommand("mp_scene_bus", 'KCD2MP_W179SetBus(%line)', "WO-179: both games agree which shared video runs (default on; WO-183: videos only): mp_scene_bus on|off")
 System.AddCCommand("mp_scene_video_shared", 'KCD2MP_W179SetVideo(%line)', "WO-179: a pre-rendered video one of you starts plays for both (default on): mp_scene_video_shared on|off")
-System.AddCCommand("mp_scene_bring_along", 'KCD2MP_W179SetBring(%line)', "WO-179: the partner is brought beside Henry when a video or a scene moves him (default on): mp_scene_bring_along on|off")
-System.AddCCommand("mp_scene_partner_ignored", 'KCD2MP_W179SetIgnored(%line)', "WO-179: after a bring-along the scene's people and the guards leave the partner alone, 10 min or 60 m (default on): mp_scene_partner_ignored on|off")
+System.AddCCommand("mp_scene_bring_along", 'KCD2MP_W179SetBring(%line)', "WO-179: after a shared video the partner is brought beside the one who watched it, on public ground (default on; WO-183: the video bring-along only): mp_scene_bring_along on|off")
+System.AddCCommand("mp_scene_partner_ignored", 'KCD2MP_W179SetIgnored(%line)', "WO-179: after a video landing the scene's people and the guards leave the partner alone, 10 min or 60 m (default on): mp_scene_partner_ignored on|off")
 System.AddCCommand("mp_scene_fight_clear", 'KCD2MP_W179SetFightClear(%line)', "WO-179: a fight the partner is in ends the game's own way before he is brought along (default on): mp_scene_fight_clear on|off")
 System.AddCCommand("mp_scene_skip_both", 'KCD2MP_W179SetSkipBoth(%line)', "WO-179B: one skip ends a shared video for both -- the triggerer's skip ends the partner's copy on the same beat (default on): mp_scene_skip_both on|off")
 System.AddCCommand("mp_scene_watch_safe", 'KCD2MP_W179SetWatchSafe(%line)', "WO-179B: while the partner watches a shared video he leaves what he was doing and the people near him leave him alone (default on): mp_scene_watch_safe on|off")

@@ -816,7 +816,10 @@ public partial class GameBridge
     // ---------------------------------------------------------------- asking the mod
 
     /// <summary>Call a mod function with a token; its reply comes back as wo124_reply &lt;tok&gt; &lt;payload&gt;.</summary>
-    private async Task<string> AskModAsync(string fn, int timeoutMs)
+    private Task<string> AskModAsync(string fn, int timeoutMs) => AskModAsync(fn, timeoutMs, null);
+
+    /// <summary>WO-183: with one more argument after the token, already a Lua literal ("..." for a string, a number).</summary>
+    private async Task<string> AskModAsync(string fn, int timeoutMs, string? luaArg)
     {
         string tok = Convert.ToHexString(RandomNumberGenerator.GetBytes(4)).ToLowerInvariant();
         var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -824,7 +827,8 @@ public partial class GameBridge
         try
         {
             long t0 = Environment.TickCount64;
-            await ExecLuaAsync($"if {fn} then {fn}(\"{tok}\") else KCD2MP_EmitEvent(\"wo124_reply\", \"{tok} missing\") end");
+            string call = luaArg is null ? $"{fn}(\"{tok}\")" : $"{fn}(\"{tok}\", {luaArg})";
+            await ExecLuaAsync($"if {fn} then {call} else KCD2MP_EmitEvent(\"wo124_reply\", \"{tok} missing\") end");
             long sent = Environment.TickCount64 - t0;
             var done = await Task.WhenAny(tcs.Task, Task.Delay(timeoutMs));
             if (done == tcs.Task) return tcs.Task.Result;

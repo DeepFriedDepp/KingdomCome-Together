@@ -747,7 +747,7 @@ public partial class GameBridge
     public const int SnapshotQuicksaveGuard = 95;
 
     /// <summary>A host world save (not a branch entry) while this game is in the host's world.</summary>
-    private async Task Wo125OnHostWorldSavedAsync(WorldSaved w, byte src)
+    private async Task Wo125OnHostWorldSavedAsync(WorldSaved w, byte src, long owedSinceMs = 0)
     {
         string md5 = Convert.ToHexString(w.Md5).ToLowerInvariant();
         string skip = !_joinedWorld ? "" : _jj is not null ? "a join is running" : _rewinding ? "the host is reloading (nothing is kept until the rejoin)"
@@ -755,8 +755,13 @@ public partial class GameBridge
                     : !_peerHenryWorld ? "the host's player is not Henry" : _where != GameWhere.World ? "not in the world" : "";
         if (!_joinedWorld) return;   // not in the host's world: nothing to pair
         if (skip != "") { Console.WriteLine($"MP-HENRY joiner: host save seq={w.Seq} md5={md5[..8]}: no snapshot -- {skip}"); return; }
-        if (Interlocked.CompareExchange(ref _snapBusy, 1, 0) != 0) { Console.WriteLine($"MP-HENRY joiner: host save seq={w.Seq}: no snapshot -- the previous one is still running"); return; }
-        var tIn = DateTime.UtcNow;
+        // WO-183 3c: the one gate. A game that cannot save now (a pending save, a scene, an arrest, downed, a menu, loading) is owed the snapshot:
+        // retried every 15 s with the newest host save, never a request into a game that will refuse it or leave it pending
+        string block = W183SaveBlock();
+        if (block == "" && Volatile.Read(ref _snapBusy) != 0) block = "the previous snapshot is still running";
+        if (block != "") { Wo183Owe(w, src, block, owedSinceMs); return; }
+        if (Interlocked.CompareExchange(ref _snapBusy, 1, 0) != 0) { Wo183Owe(w, src, "the previous snapshot is still running", owedSinceMs); return; }
+        var tIn = DateTime.UtcNow;   // WO-183: a snapshot taken late measures its lag from the moment the gate opened (this line), not from the host's save
         HenryStore.LedgerEntry? led = null;
         try
         {
@@ -776,8 +781,9 @@ public partial class GameBridge
             string r = await AskModAsync("KCD2MP_Wo125Snapshot", 6000);
             if (!r.StartsWith("ok=true", StringComparison.Ordinal))
             {
-                Console.WriteLine($"MP-HENRY joiner: host save seq={w.Seq} md5={md5[..8]}: the engine REFUSED the snapshot ({r}) -- no pair for it (its progress is kept up to the previous pair: loss, never duplication)");
+                Console.WriteLine($"MP-HENRY joiner: host save seq={w.Seq} md5={md5[..8]}: the engine REFUSED the snapshot ({r}) -- owed (retried every 15 s with the newest host save; its progress is kept up to the previous pair meanwhile: loss, never duplication)");
                 _henry.LedgerSet(led.Id, e => e.State = "done");
+                Wo183Owe(w, src, $"the engine refused the snapshot ({r})", owedSinceMs);
                 return;
             }
             var done = await Task.WhenAny(tcs.Task, Task.Delay(20000));

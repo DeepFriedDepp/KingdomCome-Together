@@ -236,3 +236,15 @@ Not yet: a figure that holds a station for the NPCs, and enemy animals (a bandit
 - Fewer black screens: a talk or a scene that can't start on the joiner's machine lets go within seconds instead of 20.
 - Not yet: skipping a video together. Please type mark_odd whenever something looks wrong, and send the logs.
 ```
+
+## Version 0.50.9 -- the playtest patch (WO-183)
+
+```
+0.50.9 (the playtest patch):
+- Only story videos are shared now. After a talk, a walk, a ride or a fast travel nobody is teleported to the other player any more. After a shared video you are placed beside your partner on open ground, never inside a building or during an arrest.
+- Haggling and other talks on the joiner's side run to the end instead of being cut at 4 seconds.
+- The joiner's progress is saved again: the mod no longer asks the game to save to un-stick a scene (that left a save pending and blocked every later save). When the game cannot save right now (a scene, an arrest, a menu), the save waits and is taken a few seconds later.
+- Blocked blows now show the shield and swords icons every time, not once per fight (switch: mp_replay_blocked).
+- An enemy that turns from one player to the other keeps fighting instead of freezing in a T-pose.
+- Please type mark_odd whenever something looks wrong, and send the logs.
+```

@@ -389,6 +389,10 @@ public sealed class LogTailGameTransport : IGameTransport
         "[Info] C_GameProfileManager: Deactivating profile 'weather_",
         // WO-172 H1: the inventory/trade screen's own UI sounds (ApseOpen / ApseClose): a joiner's trade holds its trader until the close
         "PlayAudio: Apse",
+        // WO-183 2: a dialogue's own state while the engine ends it (WO-179's guard counts a state other than WAITING_FOR_TWINS as running)
+        "Interrupting dialog '",
+        // WO-183 3: a save waiting for the engine's readiness (pending until "... is ready"): the joiner's one save owner never asks a second
+        "Readiness observer 'BeforeGameSave'",
     ];
 
     public static readonly string[] Wo144Contains =
@@ -397,6 +401,8 @@ public sealed class LogTailGameTransport : IGameTransport
         " into waiting players",
         "Dialog interrupted.",
         "Dialog ends but no response was played",
+        // WO-183 2 (the class test): Wo166Rules.TryParseDialogState reads every '[ID: n] Dialog <word>' line; this member of the family never passed
+        "] Dialog ending",
         // WO-160: the game's planner failing a placement this mod asked for (counted per NPC, GameBridge.Wo160)
         "[NPCContext]:Couldn't find actions to get NPC into game loaded state",
         "counldn't reach the loaded state in",
@@ -408,7 +414,20 @@ public sealed class LogTailGameTransport : IGameTransport
         // WO-167 T3: an NPC's behaviour-tree path in the engine's own lines (the timeout line names the last one); T4: a fader's end
         "/(BT)",
         "Last fader took ",
+        // WO-183 2: a conversation's dialogue twins (MasterSlaveManager lines naming 'DialogTwin_<soul>'): WO-179's A3 guard waited for
+        // them and the forward lists never passed one -- every joiner conversation was ended 3.6-3.9 s in (the field: 6 of 6 haggles)
+        "DialogTwin_",
+        // WO-183 3: the engine's refusal of a save while another is pending
+        "because there is another savegame pending",
     ];
+
+    /// <summary>WO-183 2: would <see cref="Wo144Line"/> receive this raw engine line? (The class test pins every handler's literals against it.)</summary>
+    public static bool Wo144Passes(ReadOnlySpan<char> line)
+    {
+        foreach (var pre in Wo144Prefixes) if (line.StartsWith(pre, StringComparison.Ordinal)) return true;
+        foreach (var mid in Wo144Contains) if (line.IndexOf(mid, StringComparison.Ordinal) >= 0) return true;
+        return false;
+    }
 
     /// <summary>
     /// WO-124: "Loading saved game '%USER%/saves/playlineN/x.whs' ..." -- a save
@@ -777,10 +796,7 @@ public sealed class LogTailGameTransport : IGameTransport
 
         if (Wo144Line is not null)
         {
-            bool hit = false;
-            foreach (var pre in Wo144Prefixes) if (line.StartsWith(pre, StringComparison.Ordinal)) { hit = true; break; }
-            if (!hit) foreach (var mid in Wo144Contains) if (line.IndexOf(mid, StringComparison.Ordinal) >= 0) { hit = true; break; }
-            if (hit)
+            if (Wo144Passes(line))
             {
                 try { Wo144Line.Invoke(line.ToString()); }
                 catch (Exception ex) { Console.WriteLine($"[wo144] engine-line handler threw: {ex.Message}"); }

@@ -24,7 +24,7 @@ public class Wo179Tests
         Assert.True(Wo179Rules.TryParse(Wo179Rules.Dest(7, 1690.04f, 2600f, -12.5f), out var r));
         Assert.Equal('R', r.Op); Assert.Equal(1690.0f, r.X, 1); Assert.Equal(-12.5f, r.Z, 1);
         Assert.True(Wo179Rules.TryParse(Wo179Rules.End(7, "skip"), out var e)); Assert.Equal("skip", e.How);
-        Assert.True(Wo179Rules.TryParse(Wo179Rules.Clock(7, 7200), out var t)); Assert.Equal(7200, t.Value);
+        Assert.True(Wo179Rules.TryParse("T 7 7200", out var t)); Assert.Equal(7200, t.Value);   // WO-183: read from an older build, ignored by the bridge
         Assert.True(Wo179Rules.TryParse(Wo179Rules.SkipKey(7), out var k)); Assert.Equal('K', k.Op);
         Assert.True(Wo179Rules.TryParse(Wo179Rules.Landed(7, 1, 2, 3), out var l)); Assert.Equal('L', l.Op);
         // the longest scene name in the game's video table still fits
@@ -55,16 +55,6 @@ public class Wo179Tests
     }
 
     [Fact]
-    public void A_jump_belongs_to_a_scene_while_it_runs_shortly_after_or_under_a_black_screen()
-    {
-        Assert.True(Wo179Rules.JumpInScene(true, -1, false));
-        Assert.True(Wo179Rules.JumpInScene(false, 1200, false));
-        Assert.False(Wo179Rules.JumpInScene(false, 3500, false));
-        Assert.True(Wo179Rules.JumpInScene(false, -1, true));
-        Assert.False(Wo179Rules.JumpInScene(false, -1, false));
-    }
-
-    [Fact]
     public void The_positioning_wait_is_bounded_two_seconds_past_the_later_content_end()
     {
         Assert.Equal(12_000, Wo179Rules.PositioningDeadline(10_000, 0));
@@ -83,7 +73,7 @@ public class Wo179Tests
         Assert.EndsWith(".bk2", p);
         Assert.InRange(s, 57.0, 59.0);   // the field's pillory video ran 57.9 s
         Assert.False(Wo179Rules.TryVideo("no_such_video", out _, out _));
-        Assert.Equal([3f, 6f, 10f], Wo179Rules.LandingRingsM);
+        Assert.Equal([3f, 6f, 10f, 15f, 25f], Wo183Rules.LandingRingsM);   // WO-183: the old three, then 15 and 25
     }
 
     // ---- WO-179B ----
@@ -97,17 +87,6 @@ public class Wo179Tests
         Assert.Equal(2048.5f, w.X, 1);
         Assert.True(Wo179Rules.Watch(65535, -12345.6f, -12345.6f, -1234.5f).Length <= Protocol.W164TextMax);
         Assert.False(Wo179Rules.TryParse("W 1 1 2", out _));
-    }
-
-    [Fact]
-    public void B_the_settle_report_waits_for_the_post_video_fade_else_two_seconds()
-    {
-        Assert.False(Wo179Rules.SettleDue(1_999, false, false));
-        Assert.True(Wo179Rules.SettleDue(2_000, false, false));
-        Assert.False(Wo179Rules.SettleDue(500, true, true));        // the fade still on
-        Assert.True(Wo179Rules.SettleDue(500, true, false));        // the fade lifted early: settled then
-        Assert.False(Wo179Rules.SettleDue(4_000, true, true));      // a long fade (the kidnapping's) is waited for
-        Assert.True(Wo179Rules.SettleDue(Wo179Rules.SettleCapMs, true, true));   // never forever
     }
 
     [Fact]

@@ -329,8 +329,38 @@ public partial class GameBridge
         // WO-178 C1: the copy is offered to the DLL's hostility answer (the joiner's lock-on) -- engaged with him, or fighting the host
         if (guarded && bound && eid != 0) Wo178OfferFor(ev, eid, !Wo136Rules.MayEngage(Wo136HostNpcDown(ev.Name)));
         if (v == Wo132Rules.EngageVerdict.Ignore) return;
+        bool fightingNow = ev.InCombat || ev.Target != NpcCombatTarget.None;
+        if (fightingNow) _w183Left.Report(ev.Name, true, Environment.TickCount64);   // WO-183 4b: a fight with anyone ends any "left combat" clock
+        if (v == Wo132Rules.EngageVerdict.Release && !fightingNow && engaged)
+        {
+            // WO-183 4b: the sender reports combat=0 target=None for a moment between two targets (the field: tvez_man_15 at the host's 16:12:06,
+            // the copy was released and T-posed while the host's game kept sending its rows). "Left combat" means no combat and no target for 1.5 s.
+            long nowMs = Environment.TickCount64;
+            if (!_w183Left.Report(ev.Name, false, nowMs))
+            {
+                if (_w183LeftWatch.TryAdd(ev.Name, nowMs))
+                {
+                    long n = Interlocked.Increment(ref _w183LeftHeld);
+                    if (n <= 20 || n % 50 == 0) Console.WriteLine($"MP-W132 {ev.Name}: combat=0 for a moment -- the copy stays in combat mode for {Wo183Rules.LeftCombatDebounceMs / 1000.0:F1} s (a retarget is no leave) [n={n}]");
+                    _ = Task.Run(async () =>
+                    {
+                        await Task.Delay((int)Wo183Rules.LeftCombatDebounceMs + 150, ct);
+                        _w183LeftWatch.TryRemove(ev.Name, out _);
+                        if (_w183Left.Zero(ev.Name, out long since) && Environment.TickCount64 - since >= Wo183Rules.LeftCombatDebounceMs && _w132Engaged.TryRemove(ev.Name, out var held))
+                        {
+                            _w183Left.Forget(ev.Name);
+                            Interlocked.Increment(ref _w132EngageOff);
+                            var r2 = await _combat.Wo132EngageAsync(false, held.Eid, default, ct);
+                            Console.WriteLine($"MP-W132 engage off {ev.Name}: the host's NPC left combat (combat=0 for {(Environment.TickCount64 - since) / 1000.0:F1} s) -> released, bound and paused ({(r2.Ok ? "ok" : "reason " + r2.Reason)})");
+                        }
+                    }, ct);
+                }
+                return;
+            }
+        }
         if (v == Wo132Rules.EngageVerdict.Release)
         {
+            _w183Left.Forget(ev.Name);
             _w132Engaged.TryRemove(ev.Name, out _);
             Interlocked.Increment(ref _w132EngageOff);
             var rr = await _combat.Wo132EngageAsync(false, cur.Eid, default, ct);

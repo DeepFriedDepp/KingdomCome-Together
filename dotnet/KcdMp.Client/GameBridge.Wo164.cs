@@ -196,6 +196,13 @@ public partial class GameBridge
         int hold = f.Length > 2 && int.TryParse(f[2], out int h) ? h : 0;
         double t0 = W164Now();
         _w164SweptAt[npc] = t0;
+        // WO-183 4b: never on a copy that is engaged or in combat (the field: mid-fight on tvez_man_15 and tvez_man_16)
+        if (!Wo183Rules.SweepAllowed(_w132Engaged.ContainsKey(npc), _w183Left.Zero(npc, out _)))
+        {
+            long n = Interlocked.Increment(ref _w183SweepSkipped);
+            if (n <= 20 || n % 50 == 0) Console.WriteLine($"WO164-SWEEP npc={npc} trigger={trigger} SKIPPED: the copy is engaged / in combat -- the sweep never runs mid-fight [n={n}]");
+            return;
+        }
         var r = await _combat.Wo141SweepAsync(npc, hold);
         Interlocked.Increment(ref _w164Sweeps);
         if (r is { Found: true }) Interlocked.Increment(ref _w164SweepFound);

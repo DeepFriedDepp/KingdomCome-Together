@@ -150,12 +150,28 @@ public class Wo132RulesTests
     private static NpcCombatEvent Ev(bool combat) =>
         new(1, new BodyState2(0, 0, combat ? BodyState2Bits.CombatMode : BodyState2Bits.None, 0, 0, 0, 0, 0, 0), combat ? NpcCombatTarget.Avatar : NpcCombatTarget.None, 1, "npc");
 
+    private static NpcCombatEvent Seq183(bool combat, NpcCombatTarget t, byte ghost = 0) =>
+        new(1, new BodyState2(0, 0, combat ? BodyState2Bits.CombatMode : BodyState2Bits.None, 0, 0, 0, 0, 0, 0), t, ghost, "npc");
+
+    [Fact]
+    public void WO183_a_retarget_is_not_a_leave_only_no_combat_and_no_target_releases()
+    {
+        // the field's tvez_man_15 (host log 16:12:06): combat=0 with target Host, None, Avatar:1, Host -- an engaged copy stays engaged for all but None
+        Assert.Equal(E.Engage, Wo132Rules.JudgeEngage(Seq183(false, NpcCombatTarget.Host), true, true, true, true, myGhost: 1));
+        Assert.Equal(E.Release, Wo132Rules.JudgeEngage(Seq183(false, NpcCombatTarget.None), true, true, true, true, myGhost: 1));   // the debounce decides this one
+        Assert.Equal(E.Engage, Wo132Rules.JudgeEngage(Seq183(false, NpcCombatTarget.Avatar, 1), true, true, true, true, myGhost: 1));
+        Assert.Equal(E.Engage, Wo132Rules.JudgeEngage(Seq183(false, NpcCombatTarget.Avatar, 2), true, true, true, true, myGhost: 1));   // another player's avatar: still a fight
+        // a copy that is NOT engaged is never engaged by a host fight with combat=0 (WO-153 unchanged)
+        Assert.Equal(E.Ignore, Wo132Rules.JudgeEngage(Seq183(false, NpcCombatTarget.Host), true, true, true, false, myGhost: 1));
+        Assert.Equal(E.Ignore, Wo132Rules.JudgeEngage(Seq183(true, NpcCombatTarget.Host), true, true, true, false, myGhost: 1));
+    }
+
     [Fact]
     public void WO153_a_copy_is_not_engaged_with_this_player_for_the_hosts_own_fight()
     {
         var hostFight = new NpcCombatEvent(1, new BodyState2(0, 0, BodyState2Bits.CombatMode, 0, 0, 0, 0, 0, 0), NpcCombatTarget.Host, 0, "npc");
         Assert.Equal(E.Ignore, Wo132Rules.JudgeEngage(hostFight, true, true, true, false));                   // the host's NPC fights the host
-        Assert.Equal(E.Release, Wo132Rules.JudgeEngage(hostFight, true, true, true, true));                   // ... and an engaged copy is let go
+        Assert.Equal(E.Engage, Wo132Rules.JudgeEngage(hostFight, true, true, true, true));                    // WO-183: an engaged copy stays engaged while its NPC fights anyone (a retarget to the host)
         Assert.Equal(E.Engage, Wo132Rules.JudgeEngage(Ev(true), true, true, true, false));                    // a fight with an avatar or anyone else: as before
         // a fight that IS this player's (the NPC's target is his avatar on the host's screen) still engages
         var mine = new NpcCombatEvent(1, new BodyState2(0, 0, BodyState2Bits.None, 0, 0, 0, 0, 0, 0), NpcCombatTarget.Avatar, 1, "npc");

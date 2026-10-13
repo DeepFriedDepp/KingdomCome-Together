@@ -26,7 +26,7 @@ namespace KcdMp.Client;
 public partial class GameBridge
 {
     private volatile bool _w165HostLock = Wo165Rules.DefaultHostLock, _w165VictimDecides = Wo165Rules.DefaultVictimDecides,
-                          _w165BlockRecoil = Wo165Rules.DefaultBlockRecoil;
+                          _w165BlockRecoil = Wo165Rules.DefaultBlockRecoil, _w165ReplayBlocked = Wo165Rules.DefaultReplayBlocked;
     private readonly ConcurrentDictionary<string, Guid> _w165LastRow = new(StringComparer.Ordinal);   // joiner: the row last played on each copy
     private readonly ConcurrentDictionary<uint, HitVerdict> _w165Sent = new();                        // host: the verdicts it sent, by hit id
     private readonly Wo165Stats _w165Stats = new();
@@ -46,9 +46,10 @@ public partial class GameBridge
                     break;
                 case "victim_decides": _w165VictimDecides = on; break;
                 case "block_recoil": _w165BlockRecoil = on; break;
+                case "replay_blocked": _w165ReplayBlocked = on; break;   // WO-183 4a
             }
         }
-        Console.WriteLine($"MP-WO165 cfg host_lock={(_w165HostLock ? "on" : "off")} victim_decides={(_w165VictimDecides ? "on" : "off")} block_recoil={(_w165BlockRecoil ? "on" : "off")}");
+        Console.WriteLine($"MP-WO165 cfg host_lock={(_w165HostLock ? "on" : "off")} victim_decides={(_w165VictimDecides ? "on" : "off")} block_recoil={(_w165BlockRecoil ? "on" : "off")} replay_blocked={(_w165ReplayBlocked ? "on" : "off")}");
     }
 
     private async Task Wo165PushHostLockAsync()
@@ -92,7 +93,7 @@ public partial class GameBridge
         }
         int zone = row.Zone >= 0 ? row.Zone : m.Zone != 0 ? Protocol.ZoneToTableId((WireZone)m.Zone) : 2;   // the table's default zone (upper right) when neither says
         // WO-178: with mp_player_recoil the engine's own hit reaction plays on the player too (the DLL hands over the ordinary hit reaction only)
-        byte flags = (byte)(Wo165Rules.ReplayFlags | (_w178PlayerRecoil ? Wo178Rules.ReplayFlagReact : 0));
+        byte flags = (byte)(Wo165Rules.FlagsFor(_w165ReplayBlocked) | (_w178PlayerRecoil ? Wo178Rules.ReplayFlagReact : 0));   // WO-183 4a: a blocking victim is replayed too
         var r = await _combat.Wo165ReplayAsync(m.Attacker, null, (sbyte)row.AttackType, (sbyte)zone, 1, 1.0f, flags, ct);
         if (!Wo165Rules.TryParseReplay(r?.Text, out uint seq, out string engine, out string refused) || Wo165Rules.Outcome(engine) == HitVerdict.None)
         {

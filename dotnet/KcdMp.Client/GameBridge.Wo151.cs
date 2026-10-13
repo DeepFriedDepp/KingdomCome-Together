@@ -368,9 +368,9 @@ public partial class GameBridge
     // (the end fast-forward); on a joiner they are the host's paused copies and never arrive (the field: 41-88 s,
     // two never). The guard: (1) the end edge at the engine's release; (2) on a joiner, the scene's copies
     // (the paused copies near this player) resumed SceneResumeAfterS after the content's end, held until the
-    // release; (3) still not positioned SceneRescueAfterS after it: the engine's own way out -- a save request
-    // ("Cancelling FF for all NPCs", which released every field case), through the WO-125 snapshot path, the
-    // file moved out at once; (4) SceneMaxS after it: given up, everything handed back, the end edge sent.
+    // release; (3) still not positioned SceneRescueAfterS after it: said in the log (WO-183 3a: the old rescue -- a save request through the
+    // WO-125 snapshot path -- is GONE: asked mid-arrest it stayed pending and the engine refused every later save of that machine; the
+    // bounded positioning lift of WO-179 A1 releases the scene); (4) SceneMaxS after it: given up, everything handed back, the end edge sent.
     // A load resets all of it. mp_scene_guard on|off (the Lua half also resumes a copy a forced dialogue runs on).
     private volatile bool _w151SceneGuard = true;
     // 4.2/4.3: an avatar's minigame never aligns at the station's object (mp_minigame_align on = WO-143's aligned entry)
@@ -458,10 +458,10 @@ public partial class GameBridge
                 // fast-forward and the positioning ends (mp_scene_resume on = 0.44.0).
                 if (!s.Rescued && since >= SceneResumeAfterS)
                 {
+                    // WO-183 3a: no save request to unstick a scene (the field: it stayed pending and the engine refused every later save)
                     s.Rescued = true;
                     Interlocked.Increment(ref _w151SceneRescues);
-                    Console.WriteLine(FormattableString.Invariant($"MP-W151 scene {s.Type} '{s.Name}' not positioned {since:F0} s after its content -- no copy is resumed (mp_scene_resume off); the rescue now: a save request (the engine cancels every NPC's fast-forward)"));
-                    _ = Wo151SceneRescueSaveAsync(s.Name);
+                    Console.WriteLine(FormattableString.Invariant($"MP-W151 scene {s.Type} '{s.Name}' not positioned {since:F0} s after its content -- no copy is resumed (mp_scene_resume off) and NO save is requested (WO-183): the scene guard's bounded positioning lift and the {SceneMaxS:F0} s give-up release it"));
                 }
                 continue;
             }
@@ -476,58 +476,8 @@ public partial class GameBridge
             {
                 s.Rescued = true;
                 Interlocked.Increment(ref _w151SceneRescues);
-                Console.WriteLine(FormattableString.Invariant($"MP-W151 scene {s.Type} '{s.Name}' still not positioned {since:F0} s after its content -- the rescue: a save request (the engine cancels every NPC's fast-forward)"));
-                _ = Wo151SceneRescueSaveAsync(s.Name);
+                Console.WriteLine(FormattableString.Invariant($"MP-W151 scene {s.Type} '{s.Name}' still not positioned {since:F0} s after its content -- NO save is requested (WO-183 3a); the scene guard's positioning lift and the {SceneMaxS:F0} s give-up release it"));
             }
-        }
-    }
-
-    /// <summary>
-    /// The rescue: a QuickSave through the WO-125 snapshot path (the one save type that passes the joiner's
-    /// lock; the engine cancels every NPC's fast-forward for it); the file is a copy of the host's world in
-    /// this player's playline and is moved out at once, exactly like a snapshot's. Nothing is paired or stored.
-    /// </summary>
-    private async Task Wo151SceneRescueSaveAsync(string scene)
-    {
-        string skip = !_joinedWorld ? "not in the host's world" : _jj is not null ? "a join is running" : _rewinding ? "the host is reloading"
-                    : _joinedTag is null ? "the world is not known" : _where != GameWhere.World ? "not in the world" : "";
-        if (skip != "") { Console.WriteLine($"MP-W151 scene '{scene}': no rescue save -- {skip}"); return; }
-        if (Interlocked.CompareExchange(ref _snapBusy, 1, 0) != 0) { Console.WriteLine($"MP-W151 scene '{scene}': no rescue save -- a snapshot is running (it releases the positioning too)"); return; }
-        try
-        {
-            string? saves = ResolveSavesDirForJoin();
-            int pl = _lastWorldPlayline;
-            if (saves is null || pl < 0) { Console.WriteLine($"MP-W151 scene '{scene}': no rescue save -- the playline of this world is not known"); return; }
-            string dir = Path.Combine(saves, $"playline{pl}");
-            int qs = Directory.Exists(dir) ? Directory.EnumerateFiles(dir, "quicksave*.whs").Count() : 0;
-            if (qs >= SnapshotQuicksaveGuard) { Console.WriteLine($"MP-W151 scene '{scene}': no rescue save -- playline{pl} holds {qs} quicksaves"); return; }
-            await _combat.SaveListAsync(1, pl, "-");
-            var led = _henry.LedgerAdd(new HenryStore.LedgerEntry { Playline = pl, SinceUtc = DateTime.UtcNow.AddSeconds(-1), WorldTag = _joinedTag!, Kind = "scene-rescue" });
-            var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
-            lock (_snapGate) _snapWait = (pl, DateTime.UtcNow.AddSeconds(-1), tcs);
-            string r = await AskModAsync("KCD2MP_Wo125Snapshot", 6000);
-            if (!r.StartsWith("ok=true", StringComparison.Ordinal))
-            {
-                Console.WriteLine($"MP-W151 scene '{scene}': the engine REFUSED the rescue save ({r})");
-                _henry.LedgerSet(led.Id, e => e.State = "done");
-                return;
-            }
-            if (await Task.WhenAny(tcs.Task, Task.Delay(20000)) != tcs.Task)
-            {
-                Console.WriteLine($"MP-W151 scene '{scene}': no rescue save file within 20 s (the ledger sweeps it later)");
-                return;
-            }
-            string path = tcs.Task.Result;
-            bool gone = _henry.MoveOut(path, "the scene guard's rescue QuickSave (the host's world)");
-            await _combat.SaveListAsync(1, pl, Path.GetFileNameWithoutExtension(path));
-            if (gone) _henry.LedgerSet(led.Id, e => e.State = "done");
-            Console.WriteLine($"MP-W151 scene '{scene}': rescue save {SaveDisplay(path)} written and moved out={On(gone)}");
-        }
-        catch (Exception ex) { Console.WriteLine($"MP-W151 scene '{scene}': rescue save failed: {ex.GetType().Name}: {ex.Message}"); }
-        finally
-        {
-            lock (_snapGate) _snapWait = null;
-            Volatile.Write(ref _snapBusy, 0);
         }
     }
 
@@ -663,7 +613,8 @@ public partial class GameBridge
     private void Wo151OnGameplayStarted()
     {
         Wo151SceneReset("load");   // 3.4: a load interrupts every scene (the field's two never-released ones)
-        Wo179Reset("load");        // WO-179: no shared scene survives a load
+        Wo179Reset("load");
+        Wo183Reset("load");        // WO-179: no shared scene survives a load
         Wo167SceneReset();         // WO-167 T4: the conversation scenes' counts start again
         if (_w151CatchUp && W137Host) _ = Task.Run(async () => { await Task.Delay(2000); await Wo151HostRebaseAsync(); });   // 3.1
         _lastAppliedWeatherProfile = null;
@@ -712,6 +663,7 @@ public partial class GameBridge
         }
         _w151Connected = false;
         Wo151SceneReset("disconnect");
+        Wo183Reset("disconnect");
         Wo167SceneReset();
         // the session is over: the weather gate opens (the DLL also opens it when the pipe closes)
         if (_w151WeatherGate is not null) { _w151WeatherGate = null; try { await _combat.Wo151WeatherGateAsync(null); } catch { } }

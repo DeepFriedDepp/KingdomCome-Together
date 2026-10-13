@@ -213,6 +213,7 @@ public partial class GameBridge
     {
         try { if (!W167Off("stand-in-pulse")) await Wo167StandInTickAsync(); } catch (Exception ex) { Wo167Fault("c1-pulse", "stand-in-pulse", ex); }
         try { await Wo167PushConfigAsync(); } catch (Exception ex) { Wo167Fault("c3-config", "swing-watch", ex); }
+        try { await Wo183TickAsync(); } catch (Exception ex) { Console.WriteLine($"WO183-SNAP tick failed: {ex.GetType().Name}: {ex.Message}"); }   // WO-183: the owed snapshot
         long now = W167NowMs();
         long held = Volatile.Read(ref _w167FaderHeldMs);
         if (held > 0 && now - held >= Wo167Rules.FaderHoldMaxMs) await Wo167FaderRestoreAsync("60 s after the black was lifted");
@@ -234,10 +235,8 @@ public partial class GameBridge
             Interlocked.Increment(ref _w167SceneReleases);
             long endsBefore = Interlocked.Read(ref _w167IsmEnd);
             Console.WriteLine(FormattableString.Invariant(
-                $"WO167-SCENE stuck dialogue_ended_s={(now - dlgEnd) / 1000.0:F0} scenes_running={Interlocked.Read(ref _w167IsmEnq) - endsBefore} -- the conversation's scene never ended (its NPCs are the host's copies): released the engine's own way, a save request (every NPC's fast-forward is cancelled)"));
-            // WO-179 A: the rescue save is asked and not waited for (its file wait held the black up to 20 s more); the end is waited 1 s
-            if (_w151SceneGuard) _ = Wo151SceneRescueSaveAsync("a conversation's scene (WO-167 T4)");
-            else await Wo151SceneRescueSaveAsync("a conversation's scene (WO-167 T4)");
+                $"WO167-SCENE stuck dialogue_ended_s={(now - dlgEnd) / 1000.0:F0} scenes_running={Interlocked.Read(ref _w167IsmEnq) - endsBefore} -- the conversation's scene never ended (its NPCs are the host's copies): released without a save request (WO-183 3a: the engine's own end waited 1 s, then the black lifted)"));
+            // WO-183 3a: no save request (it stayed pending mid-arrest and every later save of that machine was refused); the end is waited 1 s
             long until = W167NowMs() + (_w151SceneGuard ? Wo179Rules.ConversationEndWaitMs : Wo167Rules.SceneEndWaitMs);
             while (W167NowMs() < until && Interlocked.Read(ref _w167IsmEnd) <= endsBefore) await Task.Delay(250);
             bool ended = Interlocked.Read(ref _w167IsmEnd) > endsBefore;
@@ -555,6 +554,8 @@ public partial class GameBridge
     private async Task Wo167FtMirrorAsync(uint seq, string dest)
     {
         if (W167Off("shared-travel")) { Console.WriteLine($"WO167-FT the host's travel seq={seq} -- shared travel is off this session (a fault): the leash brings this player along"); return; }
+        string crime = W183CrimeProcess();
+        if (crime != "") { Console.WriteLine($"WO167-FT the host's travel seq={seq} -- NOT run here: {crime} (WO-183 3d: nothing of the mod moves a player in an arrest, a crime stop or a punishment)"); return; }
         _w167MirrorSeq = seq;
         _w167MirrorActive = true;
         _w167MirrorSinceMs = W167NowMs();

@@ -433,7 +433,7 @@ public partial class GameBridge
         if (_w140Separate) f |= Protocol.LeashFlagSeparate;   // WO-140: in its own world -- the host does not leash it
         if (_localDowned) f |= Protocol.LeashFlagDowned;
         if (_jj is not null || _rewinding || _where is GameWhere.Loading or GameWhere.Menu) f |= Protocol.LeashFlagLoading;
-        if (_localCutsceneActive) f |= Protocol.LeashFlagCutscene;
+        if (_localCutsceneActive || W183CrimeProcess() != "") f |= Protocol.LeashFlagCutscene;   // WO-183 3d: an arrest / crime stop / punishment holds the pull like a scene
         LuaBusyFresh(out bool dialogue, out bool mounted);
         if (dialogue) f |= Protocol.LeashFlagDialogue;
         if (_localAutoPaused || _localManualPaused) f |= Protocol.LeashFlagMenu;
@@ -546,6 +546,14 @@ public partial class GameBridge
             ushort f = JoinerLeashFlags();
             if (dlg) f |= Protocol.LeashFlagDialogue;
             var why = Wo147Rules.JoinerRefusesPull(LeashLogic.JoinerHold(f), forced);
+            string crimeNow = W183CrimeProcess();
+            if (crimeNow != "")
+            {
+                // WO-183 3d: nothing of the mod moves a player during an arrest, a crime stop or a punishment -- not even a forced pull
+                result = Protocol.LeashResultBusy;
+                Console.WriteLine($"MP-LEASH joiner: pull #{c.Seq} ({reason}) refused -- {crimeNow}; never pulled in an arrest");
+                return;
+            }
             if (why != LeashLogic.Hold.None)
             {
                 result = Protocol.LeashResultBusy;

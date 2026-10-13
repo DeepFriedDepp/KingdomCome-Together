@@ -66,8 +66,10 @@ public class Wo147FightAndQuestTests
         // a copy that is not the host's (not guarded, not bound) is never engaged
         Assert.Equal(E.Ignore, Wo132Rules.JudgeEngage(Ev(false, NpcCombatTarget.Avatar, 1), true, false, true, false, myGhost: 1));
         Assert.Equal(E.Ignore, Wo132Rules.JudgeEngage(Ev(false, NpcCombatTarget.Avatar, 1), true, true, false, false, myGhost: 1));
-        // the fight moved to the host's player and the NPC left combat: released
-        Assert.Equal(E.Release, Wo132Rules.JudgeEngage(Ev(false, NpcCombatTarget.Host, 0xFF), true, true, true, true, myGhost: 1));
+        // WO-183 4b: the fight moved to the host's player (combat=0 target=Host: the sender's reading of an NPC fighting the host): the engaged
+        // copy stays engaged -- a retarget is not a leave; only combat=0 with no target at all is one (the 1.5 s debounce decides it)
+        Assert.Equal(E.Engage, Wo132Rules.JudgeEngage(Ev(false, NpcCombatTarget.Host, 0xFF), true, true, true, true, myGhost: 1));
+        Assert.Equal(E.Release, Wo132Rules.JudgeEngage(Ev(false, NpcCombatTarget.None, 0xFF), true, true, true, true, myGhost: 1));
         // unknown own ghost id (0xFF): the old rule
         Assert.Equal(E.Ignore, Wo132Rules.JudgeEngage(Ev(false, NpcCombatTarget.Avatar, 0xFF), true, true, true, false));
     }

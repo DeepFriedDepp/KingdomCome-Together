@@ -139,7 +139,12 @@ public static class Wo132Rules
         // WO-153 2: a copy is engaged with THIS player only for a fight that is his: not one the host's NPC has with the
         // host's own Henry (target = Host). The field: 11 of 22 engages "target Host" put the joiner into a skirmish
         // with an NPC that was fighting someone else, and he stayed "in combat" for the length of the host's fights.
-        bool want = joinerActive && (mine || (e.InCombat && e.Target != NpcCombatTarget.Host)) && guarded && nativeBound;
+        // WO-183 4b: ... but a copy that is ALREADY engaged stays engaged while its NPC fights anyone: the host's NPC that switches from this
+        // player to the host (or to another player) is not leaving combat -- the sender reads combat=0 for an NPC fighting the host or an
+        // avatar (the field: tvez_man_15 reported combat=0 target=Host, None, Avatar, Host for 1.7 s; the copy was released, bound and
+        // paused while the host's game kept sending its attack rows: the T-pose). Only combat=0 with no target at all is a leave.
+        bool fighting = e.InCombat || e.Target != NpcCombatTarget.None;
+        bool want = joinerActive && (mine || (e.InCombat && e.Target != NpcCombatTarget.Host) || (engagedNow && fighting)) && guarded && nativeBound;
         if (want) return EngageVerdict.Engage;
         return engagedNow ? EngageVerdict.Release : EngageVerdict.Ignore;
     }

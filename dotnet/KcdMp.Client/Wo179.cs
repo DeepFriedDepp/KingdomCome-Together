@@ -6,7 +6,8 @@ using System.Globalization;
 namespace KcdMp.Client;
 
 /// <summary>
-/// WO-179 (0.50.7, docs/WO-179-findings.md): the pure rules of shared scenes. GameBridge.Wo179.cs is the bridge; native/KCDMP/wo179.* the
+/// WO-179 (0.50.7, docs/WO-179-findings.md): the pure rules of shared scenes. WO-183 (0.50.9): videos only -- the relocation, fallback,
+/// settle-window, jump-trigger and time-skip rules are gone (the landing's rules are Wo183Rules). GameBridge.Wo179.cs is the bridge; native/KCDMP/wo179.* the
 /// DLL's eyes (the fade edges, the relocation watch, the partner's own fade); the Lua half acts (the movie player, the ladder, the ignore
 /// window). Wo179Tests pins these.
 ///   Part A  the scene guard (mp_scene_guard, WO-151's switch): an end-positioning wait bounded at 2 s past the host's (or this machine's)
@@ -29,18 +30,63 @@ public static class Wo179Rules
     public const long ConversationSceneBoundMs = 2_000;
     /// <summary>A3 / T4: after asking the engine, its end is waited this long before the black is lifted instead.</summary>
     public const long ConversationEndWaitMs = 1_000;
-    /// <summary>A3: a conversation with this player that made no dialogue twin in this long cannot start here: released.</summary>
+    /// <summary>A3: a conversation with this player that made no sign of running in this long cannot start here: released.</summary>
     public const long TwinsBoundMs = 3_500;
+    /// <summary>WO-183 2: a sign of a conversation (a twin, a command) seen up to this long before its start attempt still counts (the log tail is not ordered to the ms).</summary>
+    public const long SignLeadMs = 1_500;
+
+    /// <summary>
+    /// WO-183 2: this player's own dialogue id from the engine's "New dialogue '...(kind - Id: N)...' is starting. Params: souls = 'Ex: Dude; ..."
+    /// line, or -1 (another dialogue, another line).
+    /// </summary>
+    public static int DudeDialogId(string? line)
+    {
+        if (line is null || !line.StartsWith("New dialogue '", StringComparison.Ordinal)) return -1;
+        int s = line.IndexOf("souls = 'Ex: Dude", StringComparison.Ordinal);
+        if (s < 0) return -1;
+        int id = line.IndexOf(" - Id: ", StringComparison.Ordinal);
+        if (id < 0 || id > s) return -1;
+        int i = id + 7, n = 0, d = 0;
+        while (i < line.Length && char.IsAsciiDigit(line[i]) && d < 9) { n = n * 10 + (line[i] - '0'); i++; d++; }
+        return d > 0 ? n : -1;
+    }
+
+    /// <summary>
+    /// WO-183 2: does this raw engine line show this player's conversation really running (so the A3 guard must not end it)?
+    ///   * any line naming a dialogue twin ('DialogTwin_&lt;soul&gt;' -- MasterSlaveManager's), or
+    ///   * a "] DialogCommand-" line of this player's dialogue (its id, or the player's alias HRAC; never a gossip's ambient speakers), or
+    ///   * an "Interrupting dialog" line of a dialogue with the player (Ex0: Dude) in a state other than WAITING_FOR_TWINS.
+    /// The conversations that really stay in WAITING_FOR_TWINS (the field's ttkc_emerich haggles) show none of these.
+    /// </summary>
+    public static bool ConversationRunning(string? line, int dudeDialogId)
+    {
+        if (string.IsNullOrEmpty(line)) return false;
+        if (line.Contains("DialogTwin_", StringComparison.Ordinal)) return true;
+        if (line.Contains("] DialogCommand-", StringComparison.Ordinal))
+        {
+            if (line.Contains("GOSSIP_", StringComparison.Ordinal) || line.Contains("SOUSEDSKY_", StringComparison.Ordinal)) return false;
+            if (line.Contains("HRAC", StringComparison.Ordinal)) return true;
+            if (dudeDialogId >= 0 && line.StartsWith("[ID: ", StringComparison.Ordinal))
+            {
+                int e = line.IndexOf(']');
+                if (e > 5 && int.TryParse(line.AsSpan(5, e - 5), NumberStyles.Integer, CultureInfo.InvariantCulture, out int id)) return id == dudeDialogId;
+            }
+            return false;
+        }
+        if (line.StartsWith("Interrupting dialog '", StringComparison.Ordinal) && line.Contains("[Ex0: Dude ", StringComparison.Ordinal))
+        {
+            int st = line.IndexOf(" state: ", StringComparison.Ordinal);
+            if (st < 0) return false;
+            int from = st + 8, end = from;
+            while (end < line.Length && (char.IsAsciiLetterOrDigit(line[end]) || line[end] == '_')) end++;
+            return end > from && !line.AsSpan(from, end - from).SequenceEqual("WAITING_FOR_TWINS");
+        }
+        return false;
+    }
 
     // ---- Part C ----
     /// <summary>C1: the partner's game waits this long for its own copy of the video (the shared quest graph usually plays it) before it plays one.</summary>
     public const long VideoOwnCopyWaitMs = 1_000;
-    /// <summary>C2 fallback: a scene that ends with Henry this far from where it started moved him.</summary>
-    public const float FallbackMovedM = 30f;
-    /// <summary>C2: a jump this soon after a scene ended still belongs to it (the end fade).</summary>
-    public const long JumpAfterSceneMs = 3_000;
-    /// <summary>C4: the landing rings, nearest first (metres from the relocated Henry).</summary>
-    public static readonly float[] LandingRingsM = [3f, 6f, 10f];
     /// <summary>C4: the ignore window's length (the WO's 10 minutes); it also ends when the partner walks 60 m away (the Lua).</summary>
     public const int IgnoreWindowS = 600;
     /// <summary>C3: a dead or downed partner is waited for this long (then he is brought along when he stands); the scene does not wait.</summary>
@@ -49,10 +95,6 @@ public static class Wo179Rules
     public const float OwnFadeS = 0.5f;
 
     // ---- WO-179B ----
-    /// <summary>The settle report: with no fade after the video, Henry has settled this long after its end.</summary>
-    public const long SettleNoFadeMs = 2_000;
-    /// <summary>The settle report is sent by this time after the video's end whatever the fade does (a fade that never lifts).</summary>
-    public const long SettleCapMs = 10_000;
     /// <summary>The partner's black after the video: never longer than this in total.</summary>
     public const long PartnerFadeMaxMs = 3_000;
     /// <summary>The partner's black after the video: at most this long past the triggerer's settle report (its own post-video fade + 1 s).</summary>
@@ -66,10 +108,6 @@ public static class Wo179Rules
     /// <summary>The ground under the landed partner is confirmed by two reads this far apart with the height steady to this much.</summary>
     public const long GroundReadGapMs = 150;
     public const float GroundSteadyM = 0.2f;
-
-    /// <summary>The settle report is due: after the post-video fade lifted, or 2 s after the end when no fade came; at the latest SettleCapMs.</summary>
-    public static bool SettleDue(long sinceEndMs, bool fadeSeen, bool fadedNow) =>
-        sinceEndMs >= SettleCapMs || (fadeSeen ? !fadedNow : sinceEndMs >= SettleNoFadeMs);
 
     /// <summary>When the partner's black must lift: 3 s after it began, or 1 s past the settle report if that came first (0 = not yet).</summary>
     public static long PartnerFadeDeadline(long fadeStartMs, long settleArrivedMs) =>
@@ -88,7 +126,7 @@ public static class Wo179Rules
     /// <summary>A crime punishment (an arrest, the pillory, jail) is out of scope: detected and logged only.</summary>
     public static bool IsCrimeScene(string? name) => name is not null && name.StartsWith("crime_", StringComparison.OrdinalIgnoreCase);
 
-    /// <summary>The kind letter on the wire: V = a pre-rendered video, R = a scene that moved Henry.</summary>
+    /// <summary>The kind letter on the wire: V = a pre-rendered video (R, a scene that moved Henry, is read from an older build and ignored).</summary>
     public static char KindOf(string type) => string.Equals(type, "Rendered", StringComparison.Ordinal) ? 'V' : 'R';
 
     // ---- the bus text (W164 kind 15, at most Protocol.W164TextMax = 80 characters) ----
@@ -99,7 +137,6 @@ public static class Wo179Rules
     public static string End(int seq, string how) => $"E {seq} {how}";
     public static string SkipKey(int seq) => $"K {seq}";
     public static string Landed(int seq, float x, float y, float z) => FormattableString.Invariant($"L {seq} {x:F1} {y:F1} {z:F1}");
-    public static string Clock(int seq, double delta) => FormattableString.Invariant($"T {seq} {delta:F0}");
     /// <summary>WO-179B: the joiner watches the host's video here -- the host's world protects his figure (fight clear + ignore).</summary>
     public static string Watch(int seq, float x, float y, float z) => FormattableString.Invariant($"W {seq} {x:F1} {y:F1} {z:F1}");
 
@@ -142,10 +179,6 @@ public static class Wo179Rules
     }
 
     public static float Dist2D(float ax, float ay, float bx, float by) => MathF.Sqrt((ax - bx) * (ax - bx) + (ay - by) * (ay - by));
-
-    /// <summary>C2: does a jump of the local player belong to a scene? (a scene runs, one ended a moment ago, or the screen was black)</summary>
-    public static bool JumpInScene(bool sceneOpen, long sinceSceneEndMs, bool screenBlack) =>
-        sceneOpen || (sinceSceneEndMs >= 0 && sinceSceneEndMs < JumpAfterSceneMs) || screenBlack;
 
     /// <summary>A1: when the end-positioning wait is over (the later content end + the bound).</summary>
     public static long PositioningDeadline(long ownEndMs, long hostEndMs) => Math.Max(ownEndMs, hostEndMs) + PositioningBoundMs;

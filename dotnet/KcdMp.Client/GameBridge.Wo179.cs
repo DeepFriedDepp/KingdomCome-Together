@@ -7,24 +7,30 @@ using KcdMp.Wire;
 
 namespace KcdMp.Client;
 
-// WO-179 -- 0.50.7: shared scenes. Only two kinds are shared: pre-rendered videos (both watch) and any scene that moves Henry
-// (the partner is brought along). Every other cutscene and dialogue stays as it was; the scene guard (Part A) applies to all.
+// WO-179 -- 0.50.7: shared scenes. WO-183 (0.50.9): ONLY pre-rendered videos are shared (the maintainer's decision of 2026-10-13: no
+// relocations of any kind -- the game moves Henry through fast travel, which already works). Every other cutscene and dialogue stays as
+// it was; the scene guard (Part A) applies to all. WO-179 counted a conversation as a scene that can move Henry, and that scene stayed
+// open after the talk: walking, riding, fast travel or a respawn afterwards was sent as a relocation and the partner was teleported
+// (the field: four of them, one into a private area, which began the trespass and arrest chain). Gone: the 20 Hz relocation watch as a
+// trigger (a log line only), the 30 m end fallback, relocation scenes and the WO179-RELOCATE path, the conversation-as-scene
+// bookkeeping, the joiner time-skip exception for relocation scenes, and WO-179B's settle window.
 //
-//   eyes      the DLL (wo179): every fade edge and every jump of the local player (op 32, polled at 10 Hz)
-//   local     the log tail's scene stages (WO-151's feed) and the conversations with this player (WO-167's) say which scene runs
-//   bus       W164 kind 15 (Wo179Rules): S start, R destination, E end, K skip key, L landed, T clock jump, W watching (WO-179B)
+//   eyes      the DLL (wo179): every fade edge (and, as a log line only, every jump of the local player; op 32, polled at 10 Hz)
+//   local     the log tail's scene stages (WO-151's feed) say which scene runs; the conversations with this player feed A3's guard only
+//   bus       W164 kind 15 (Wo179Rules): S start, R destination, E end, K skip key, L landed, W watching (T is read and ignored)
 //   partner   C1 the same video (its own quest copy, else the movie player), C3 the ladder, C4 the landing and the ignore window
 //
 // WO-179B: a video's partner is protected at its START (the ladder at once, the ignore window at his own spot, the host's world doing it
-// for a joiner's figure: W), stays where he is while he watches, and is moved AFTER it: the triggerer reports where its Henry settles
-// (after its own post-video fade, else 2 s after the end; a relocation inside that window is part of it -- one move per scene) and the
-// partner, black from the video's end (at most 3 s, at most 1 s past the report), lands beside it. Only the skip KEY is a skip on the
+// for a joiner's figure: W), stays where he is while he watches, and is moved AFTER it. WO-183: the triggerer tells where its Henry
+// STANDS at the video's end (no settle window) and the partner, black from the video's end (at most 3 s), lands beside it -- on a
+// public spot only (the game's own area state of each ring spot: 3, 6, 10, then 15 and 25 m; none public = not moved, a toast), never
+// while he is under arrest, in a crime stop or a punishment (held, at most 30 s, then dropped). Only the skip KEY is a skip on the
 // wire (a second press within 4 s, the game's own rule); the triggerer's skip ends the partner's copy on the same beat through its end
 // message, whatever the end (mp_scene_skip_both); the partner's skip ends his own copy (the game's own
 // skip of the triggerer's story video from outside is not proven). The copy's skip check is held around the ladder and any mod move.
 //
-// Log tags: WO179-FADE, WO179-SCENE, WO179-RELOCATE, WO179-FALLBACK, WO179-SKIP, WO179-BUS, WO179-VIDEO, WO179-BRING, WO179-QUEUE,
-//           WO179-RELEASE, WO179-TIME, WO179-STATS, WO179-WATCH, WO179-SETTLE, WO179-LAND.
+// Log tags: WO179-FADE, WO179-SCENE, WO179-JUMP, WO179-SKIP, WO179-BUS, WO179-VIDEO, WO179-BRING, WO179-QUEUE,
+//           WO179-RELEASE, WO179-STATS, WO179-WATCH, WO179-LAND.
 public partial class GameBridge
 {
     private volatile bool _w179Bus = Wo179Rules.DefaultBus, _w179Video = Wo179Rules.DefaultVideo, _w179Bring = Wo179Rules.DefaultBring,
@@ -35,7 +41,7 @@ public partial class GameBridge
     {
         public int Seq; public string Name = "", Type = ""; public char Kind;
         public long StartMs, EndMs; public float SX, SY, SZ;
-        public bool Sent, Relocated, Video, SkipKey, Skip, Ended, Settled, PartnerSkipKey;
+        public bool Sent, Video, SkipKey, Skip, Ended, PartnerSkipKey;
     }
 
     private sealed class W179Remote
@@ -50,9 +56,8 @@ public partial class GameBridge
     private W179Scene? _w179Cur, _w179LastEnded;
     private int _w179Seq;
     private readonly ConcurrentDictionary<byte, W179Remote> _w179Remote = new();
-    private readonly ConcurrentQueue<(byte Src, int Seq)> _w179Held = new();
+    private readonly ConcurrentQueue<(byte Src, int Seq, long AtMs)> _w179Held = new();
     private readonly ConcurrentDictionary<string, long> _w179LocalVideoAt = new(StringComparer.Ordinal);
-    private readonly ConcurrentDictionary<string, bool> _w179TimeApplied = new(StringComparer.Ordinal);
     private int _w179BringBusy;
     private uint _w179NatSeq;
     private volatile bool _w179Faded;
@@ -61,9 +66,9 @@ public partial class GameBridge
     private float _w179X, _w179Y, _w179Z;
     private volatile bool _w179HavePos;
     private long _w179DudeStartMs, _w179TwinSeenMs, _w179TwinReleasedFor;
-    private long _w179Fades, _w179FadesLong, _w179Relocations, _w179Fallbacks, _w179Skips, _w179Videos, _w179VideoCopies, _w179Brings,
-                 _w179BringsPlaced, _w179Queued, _w179TwinReleases, _w179PosLifts, _w179BusIn, _w179BusOut, _w179Unscened,
-                 _w179Watches, _w179Settles, _w179Lands, _w179LateDests, _w179Holds, _w179LastFadeOnMs;
+    private long _w179Fades, _w179FadesLong, _w179Skips, _w179Videos, _w179VideoCopies, _w179Brings,
+                 _w179BringsPlaced, _w179Queued, _w179QueueDropped, _w179TwinReleases, _w179PosLifts, _w179BusIn, _w179BusOut, _w179Unscened,
+                 _w179Watches, _w179Lands, _w179LandRefused, _w179LateDests, _w179Holds, _w179LastFadeOnMs;
     private int _w179HoldCount;
     private readonly ConcurrentDictionary<string, bool> _w179PosLifted = new(StringComparer.Ordinal);
 
@@ -111,9 +116,6 @@ public partial class GameBridge
                     if (r.Ended && Volatile.Read(ref r.Landing) == 0 && !r.OwnCopy && _w179Bring) _ = Wo179VideoLandAsync(r, "copy-ended-after-the-triggerer");
                 }
                 break;
-            case "clock" when f.Length >= 3 && int.TryParse(f[1], out int cseq) && double.TryParse(f[2], NumberStyles.Float, CultureInfo.InvariantCulture, out double d):
-                Wo179OnClock(cseq, d);
-                break;
             case "ignore-end":
                 Console.WriteLine($"WO179-IGNORE ended {string.Join(' ', f.Skip(1))}");
                 break;
@@ -142,7 +144,7 @@ public partial class GameBridge
                 if (now - lastStats >= 60_000)
                 {
                     lastStats = now;
-                    if (_w179Fades + _w179Relocations + _w179Videos + _w179BusIn + _w179BusOut > 0) Console.WriteLine(Wo179StatsLine());
+                    if (_w179Fades + _w179Videos + _w179BusIn + _w179BusOut > 0) Console.WriteLine(Wo179StatsLine());
                 }
             }
             catch (Exception ex) { Console.WriteLine($"WO179 tick failed: {ex.GetType().Name}: {ex.Message}"); }
@@ -151,7 +153,7 @@ public partial class GameBridge
     }
 
     private string Wo179StatsLine() =>
-        $"WO179-STATS fades={_w179Fades} fades_over_1_5s_past={_w179FadesLong} relocations={_w179Relocations} fallbacks={_w179Fallbacks} skips={_w179Skips} videos={_w179Videos} video_copies={_w179VideoCopies} brings={_w179Brings} placed={_w179BringsPlaced} queued={_w179Queued} twin_releases={_w179TwinReleases} positioning_lifts={_w179PosLifts} bus_in={_w179BusIn} bus_out={_w179BusOut} unscened_jumps={_w179Unscened} watches={_w179Watches} settles={_w179Settles} lands={_w179Lands} late_dests={_w179LateDests} holds={_w179Holds}";
+        $"WO179-STATS fades={_w179Fades} fades_over_1_5s_past={_w179FadesLong} skips={_w179Skips} videos={_w179Videos} video_copies={_w179VideoCopies} brings={_w179Brings} placed={_w179BringsPlaced} queued={_w179Queued} queue_dropped={_w179QueueDropped} twin_releases={_w179TwinReleases} positioning_lifts={_w179PosLifts} bus_in={_w179BusIn} bus_out={_w179BusOut} jumps_logged={_w179Unscened} watches={_w179Watches} lands={_w179Lands} lands_refused={_w179LandRefused} late_dests={_w179LateDests} holds={_w179Holds}";
 
     private async Task Wo179PollAsync()
     {
@@ -181,7 +183,7 @@ public partial class GameBridge
             {
                 case 1: Wo179OnFade(true, when); break;
                 case 2: Wo179OnFade(false, when); break;
-                case 3: await Wo179OnJumpAsync(fx, fy, fz, tx, ty, tz, when); break;
+                case 3: Wo179OnJump(fx, fy, fz, tx, ty, tz); break;   // WO-183: a log line only, never a trigger
                 case 4:   // this DLL's own teleport (a pull, a bring-along): the agent made it -- WO-179B: never a skip of a copy
                     if (_w179Remote.Values.Any(r => r.CopyPlaying)) _ = Wo179HoldBriefAsync("a mod move of this player (the DLL's own teleport)");
                     break;
@@ -216,7 +218,6 @@ public partial class GameBridge
         var c = _w179Cur;
         if (c is not null) return $"{c.Type}:{c.Name}";
         if (!_w151Scenes.IsEmpty) { var s = _w151Scenes.Values.First(); return $"{s.Type}:{s.Name}"; }
-        if (_w179DudeStartMs > 0) return "Dialogue:with-this-player";
         if (Volatile.Read(ref _w179BringBusy) != 0) return "BringAlong:partner-fade";
         return "-";
     }
@@ -264,29 +265,28 @@ public partial class GameBridge
     /// <summary>WO-167's conversation clock: a conversation with this player started / ended.</summary>
     private void Wo179OnDudeDialogue(bool ended)
     {
-        long now = Environment.TickCount64;
-        if (!ended)
-        {
-            _w179DudeStartMs = now;
-            _w179TwinSeenMs = 0;
-            lock (_w179Lock) if (_w179Cur is null) _w179Cur = Wo179NewScene("Dialogue", "conversation", now);
-        }
-        else
-        {
-            _w179DudeStartMs = 0;
-            Wo179LocalEnd("conversation", null, now);
-        }
+        // WO-183: a conversation is no scene (it moves nobody); only A3's guard clock runs
+        _w179DudeStartMs = ended ? 0 : Environment.TickCount64;
     }
 
-    /// <summary>The engine lines (Wo144OnEngineLine): a dialogue twin made = the conversation started properly (A3).</summary>
+    /// <summary>
+    /// The engine lines (Wo144OnEngineLine): a sign the conversation is really running (a twin, a command of its dialogue, a state past
+    /// WAITING_FOR_TWINS: Wo179Rules.ConversationRunning) = it started properly (A3). WO-183 2: the lines are forwarded now (the forward
+    /// lists never passed a "DialogTwin_" line: every joiner conversation was ended 3.6-3.9 s in).
+    /// </summary>
     private void Wo179OnEngineLine(string line)
     {
-        if (_w179DudeStartMs > 0 && line.Contains("DialogTwin_", StringComparison.Ordinal)) _w179TwinSeenMs = Environment.TickCount64;
+        int id = Wo179Rules.DudeDialogId(line);
+        if (id >= 0) _w179DudeDialogId = id;
+        if (Wo179Rules.ConversationRunning(line, _w179DudeDialogId)) _w179TwinSeenMs = Environment.TickCount64;
     }
+
+    private volatile int _w179DudeDialogId = -1;
 
     /// <summary>Part A, 2 Hz: the bounded end-positioning wait (A1) and the conversation that makes no twins (A3), joiner only.</summary>
     private async Task Wo179GuardTickAsync(long now)
     {
+        Wo179RunHeld();   // WO-183: the held bring-alongs, both roles (offered when free, dropped after 30 s)
         if (!_w151SceneGuard || !W137Joiner) return;
         // A1: a scene's NPCs that never reach their end spots on this machine (they are the host's copies; the stream places them)
         foreach (var s in _w151Scenes.Values.ToArray())
@@ -299,18 +299,18 @@ public partial class GameBridge
             Interlocked.Increment(ref _w179PosLifts);
             Console.WriteLine(FormattableString.Invariant(
                 $"WO179-RELEASE scene {s.Type} '{s.Name}' end positioning not done {(now - s.EndAtMs) / 1000.0:F1} s after its content -- bounded at 2 s: the copies stay where the host's stream puts them, the black is lifted, the player stood up"));
-            if (!s.Rescued) { s.Rescued = true; _ = Wo151SceneRescueSaveAsync(s.Name); }
+            // WO-183 3a: no save request to unstick a scene (the field: it left a save pending for the rest of the session)
             Volatile.Write(ref _w167FaderHeldMs, W167NowMs());
             await ExecLuaAsync("if KCD2MP_W167SceneReleased then KCD2MP_W167SceneReleased(false, \"wo179-positioning-2s\") end");
         }
         // A3: a conversation with this player that made no twin (the field: WAITING_FOR_TWINS for 20 s on a host copy, 6 of 6)
         long ds = _w179DudeStartMs;
-        if (ds > 0 && _w179TwinSeenMs == 0 && now - ds >= Wo179Rules.TwinsBoundMs && _w179TwinReleasedFor != ds)
+        if (ds > 0 && _w179TwinSeenMs < ds - Wo179Rules.SignLeadMs && now - ds >= Wo179Rules.TwinsBoundMs && _w179TwinReleasedFor != ds)
         {
             _w179TwinReleasedFor = ds;
             Interlocked.Increment(ref _w179TwinReleases);
             Console.WriteLine(FormattableString.Invariant(
-                $"WO179-RELEASE conversation made no dialogue twin in {(now - ds) / 1000.0:F1} s (WAITING_FOR_TWINS on a host copy) -- ended the game's own way (InterruptDialogs) instead of a 20 s black"));
+                $"WO179-RELEASE conversation made no dialogue twin in {(now - ds) / 1000.0:F1} s (WAITING_FOR_TWINS on a host copy; no twin line, no command of its dialogue, no state past WAITING_FOR_TWINS) -- ended the game's own way (InterruptDialogs) instead of a 20 s black"));
             await ExecLuaAsync("if KCD2MP_W179ReleaseDialog then KCD2MP_W179ReleaseDialog(\"no-twins\") end");
         }
     }
@@ -330,10 +330,7 @@ public partial class GameBridge
         W179Scene s;
         lock (_w179Lock)
         {
-            // a conversation that leads into a cutscene: the cutscene is the scene now (its start position is the conversation's)
-            var prev = _w179Cur;
             s = Wo179NewScene(type, name, now);
-            if (prev is not null && !prev.Ended && prev.Type == "Dialogue") { s.SX = prev.SX; s.SY = prev.SY; s.SZ = prev.SZ; s.StartMs = prev.StartMs; }
             _w179Cur = s;
         }
         if (s.Video) _w179LocalVideoAt[name] = now;
@@ -343,7 +340,6 @@ public partial class GameBridge
             Interlocked.Increment(ref _w179Skips);
             return;
         }
-        if (W137Joiner) _ = ExecLuaAsync($"if KCD2MP_W179ClockWatch then KCD2MP_W179ClockWatch(true, {s.Seq}) end");
         if (s.Video && _w179Bus && LivePartners().Count > 0)
         {
             s.Seq = Interlocked.Increment(ref _w179Seq);
@@ -360,117 +356,39 @@ public partial class GameBridge
         lock (_w179Lock)
         {
             s = _w179Cur;
-            if (s is null || (s.Name != name && name != "conversation")) return;
-            if (name == "conversation" && s.Type != "Dialogue") return;   // the cutscene it led into ends on its own release
+            if (s is null || s.Name != name) return;
             s.Ended = true; s.EndMs = now;
             _w179Cur = null; _w179LastEnded = s;
         }
-        if (W137Joiner) _ = ExecLuaAsync("if KCD2MP_W179ClockWatch then KCD2MP_W179ClockWatch(false) end");
+        Wo179RunHeld();   // WO-183: a bring-along held behind this scene is offered now
         if (Wo179Rules.IsCrimeScene(s.Name) || !_w179Bus) return;
-        float ex = _w179HavePos ? _w179X : _lastX, ey = _w179HavePos ? _w179Y : _lastY, ez = _w179HavePos ? _w179Z : _lastZ;
-        // C2 fallback: a scene that moved Henry without the jump being caught at the source
-        if (!s.Relocated && !s.Video && LivePartners().Count > 0 && Wo179Rules.Dist2D(s.SX, s.SY, ex, ey) > Wo179Rules.FallbackMovedM)
-        {
-            Interlocked.Increment(ref _w179Fallbacks);
-            Console.WriteLine(FormattableString.Invariant(
-                $"WO179-FALLBACK scene={s.Type}:{s.Name} moved {Wo179Rules.Dist2D(s.SX, s.SY, ex, ey):F0} m and the move was not caught at the source -- the partner is pulled now"));
-            Wo179SendRelocation(s, ex, ey, ez, "fallback");
-        }
         if (s.Sent)
         {
+            // WO-183: where this Henry STANDS at the video's end (no settle window, no later report) goes first, then the end:
+            // the partner's black waits for it and lands beside it
+            float ex = _w179HavePos ? _w179X : _lastX, ey = _w179HavePos ? _w179Y : _lastY, ez = _w179HavePos ? _w179Z : _lastZ;
             string h = how ?? (s.SkipKey ? "skip" : "end");
-            Console.WriteLine(FormattableString.Invariant($"WO179-SCENE end '{s.Name}' seq={s.Seq} how={h} after={(now - s.StartMs) / 1000.0:F1} s"));
-            _ = Wo179SendAsync(Wo179Rules.End(s.Seq, h));
-            if (s.Video) _ = Wo179SettleAsync(s);   // WO-179B item 3: where Henry settles after it
+            Console.WriteLine(FormattableString.Invariant($"WO179-SCENE end '{s.Name}' seq={s.Seq} how={h} after={(now - s.StartMs) / 1000.0:F1} s; this Henry stands at ({ex:F1}, {ey:F1}, {ez:F1}) -- told to the partner"));
+            _ = Task.Run(async () =>
+            {
+                await Wo179SendAsync(Wo179Rules.Dest(s.Seq, ex, ey, ez));
+                await Wo179SendAsync(Wo179Rules.End(s.Seq, h));
+            });
         }
     }
 
     /// <summary>
-    /// WO-179B item 3 (the triggerer): where this Henry settles after a shared video -- once its own post-video fade has lifted, or 2 s
-    /// after the end when no fade came (SettleDue). A relocation inside that window (the kidnapping fading into being tied up) is part of
-    /// it: the report carries where he is then. One report per scene.
+    /// WO-183: a jump of the local player is a LOG LINE ONLY (the DLL's 20 Hz watch stays as the eyes). It used to be a relocation sent to the
+    /// partner when a scene had run lately -- and a conversation counted as a scene: walking, riding, fast travel or a respawn after a
+    /// talk teleported the partner (the field: four of them, one into a private area). Nothing is shared from a jump now.
     /// </summary>
-    private async Task Wo179SettleAsync(W179Scene s)
+    private void Wo179OnJump(float fx, float fy, float fz, float tx, float ty, float tz)
     {
-        long end = s.EndMs;
-        bool fadeSeen = _w179Faded;
-        try
-        {
-            while (true)
-            {
-                await Task.Delay(50);
-                if (W179NotInWorld) { Console.WriteLine($"WO179-SETTLE seq={s.Seq} abandoned: a load -- the partner is not moved (a join catches him up as today)"); return; }
-                long now = Environment.TickCount64;
-                bool faded = _w179Faded;
-                if (!fadeSeen && (faded || Volatile.Read(ref _w179LastFadeOnMs) >= end - 200)) fadeSeen = true;
-                if (Wo179Rules.SettleDue(now - end, fadeSeen, faded)) break;
-            }
-            if (fadeSeen) await Task.Delay(200);   // a move made on the last black frame lands before the read
-            s.Settled = true;
-            float x = _w179HavePos ? _w179X : _lastX, y = _w179HavePos ? _w179Y : _lastY, z = _w179HavePos ? _w179Z : _lastZ;
-            float moved = Wo179Rules.Dist2D(s.SX, s.SY, x, y);
-            Interlocked.Increment(ref _w179Settles);
+        if (W179NotInWorld || Wo136Holding || _jj is not null) return;
+        long n = Interlocked.Increment(ref _w179Unscened);
+        if (n <= 20 || n % 50 == 0)
             Console.WriteLine(FormattableString.Invariant(
-                $"WO179-SETTLE seq={s.Seq} '{s.Name}' settled {(Environment.TickCount64 - end) / 1000.0:F2} s after the video's end ({(fadeSeen ? "after its own fade" : "no fade: 2 s")}) at ({x:F1}, {y:F1}, {z:F1}), {moved:F0} m from where it started -- told to the partner"));
-            if (moved > 8f) { s.Relocated = true; Interlocked.Increment(ref _w179Relocations); }
-            if (_w179Bus && LivePartners().Count > 0) await Wo179SendAsync(Wo179Rules.Dest(s.Seq, x, y, z));
-        }
-        catch (Exception ex) { Console.WriteLine($"WO179-SETTLE seq={s.Seq} failed: {ex.GetType().Name}: {ex.Message}"); }
-    }
-
-    private void Wo179SendRelocation(W179Scene s, float x, float y, float z, string how)
-    {
-        if (!s.Sent)
-        {
-            s.Seq = Interlocked.Increment(ref _w179Seq);
-            s.Sent = true;
-            _ = Wo179SendAsync(Wo179Rules.Start(s.Seq, s.Video ? 'V' : 'R', s.Name.Length > 0 ? s.Name : "scene"));
-        }
-        s.Relocated = true;
-        Interlocked.Increment(ref _w179Relocations);
-        Console.WriteLine(FormattableString.Invariant($"WO179-RELOCATE scene={s.Type}:{s.Name} seq={s.Seq} to=({x:F1}, {y:F1}, {z:F1}) source={how} -- the partner is brought along"));
-        _ = Wo179SendAsync(Wo179Rules.Dest(s.Seq, x, y, z));
-    }
-
-    /// <summary>C2 at the source: the game moved this player's Henry (the DLL's 20 Hz watch; our own teleports are kind 4).</summary>
-    private async Task Wo179OnJumpAsync(float fx, float fy, float fz, float tx, float ty, float tz, long whenMs)
-    {
-        if (W179NotInWorld || Wo136Holding || _jj is not null) return;   // a load or a join moves him: caught up as today
-        if (Environment.TickCount64 - _w179OwnMoveMs < 4000) return;               // a bring-along of ours
-        W179Scene? s;
-        long sinceEnd;
-        lock (_w179Lock)
-        {
-            s = _w179Cur;
-            var last = _w179LastEnded;
-            sinceEnd = last is null ? -1 : whenMs - last.EndMs;
-            if (s is null && last is not null && sinceEnd >= 0 && (sinceEnd < Wo179Rules.JumpAfterSceneMs || (last is { Video: true, Sent: true, Settled: false } && sinceEnd < Wo179Rules.SettleCapMs))) s = last;
-        }
-        if (s is { Video: true, Sent: true })
-        {
-            // WO-179B: a video's partner is moved once, after it, to where Henry settles -- a jump under or after the video is in that report
-            string dj = Wo179Rules.Dist2D(fx, fy, tx, ty).ToString("F0", CultureInfo.InvariantCulture);
-            Console.WriteLine(s.Settled
-                ? $"WO179-SETTLE seq={s.Seq} a {dj} m jump after the settle report -- not sent (one move per scene)"
-                : $"WO179-SETTLE seq={s.Seq} a {dj} m jump {(s.Ended ? "after" : "under")} the video -- part of its settle report (one move per scene)");
-            return;
-        }
-        float d = Wo179Rules.Dist2D(fx, fy, tx, ty);
-        if (!Wo179Rules.JumpInScene(_w179Cur is not null, sinceEnd, _w179Faded) || s is null)
-        {
-            long n = Interlocked.Increment(ref _w179Unscened);
-            if (n <= 20) Console.WriteLine(FormattableString.Invariant($"WO179-JUMP {d:F0} m with no scene running (a console, mod or fast-travel move) -- not shared"));
-            return;
-        }
-        if (Wo179Rules.IsCrimeScene(s.Name))
-        {
-            Interlocked.Increment(ref _w179Skips);
-            Console.WriteLine($"WO179-SKIP scene={s.Type}:{s.Name} reason=crime-punishment jump={d:F0} m -- not shared (out of scope)");
-            return;
-        }
-        if (!_w179Bus || LivePartners().Count == 0) { Console.WriteLine($"WO179-RELOCATE scene={s.Type}:{s.Name} jump={d:F0} m -- not sent ({(!_w179Bus ? "mp_scene_bus off" : "no partner")})"); return; }
-        Wo179SendRelocation(s, tx, ty, tz, "jump");
-        await Task.CompletedTask;
+                $"WO179-JUMP {Wo179Rules.Dist2D(fx, fy, tx, ty):F0} m scene={Wo179SceneLabel()} faded={(_w179Faded ? "yes" : "no")} -- logged only: nothing is shared from a jump (fast travel, a respawn, a console or mod move) [n={n}]"));
     }
 
     private long _w179OwnMoveMs;
@@ -546,13 +464,6 @@ public partial class GameBridge
         finally { await Wo179HoldAsync(false); }
     }
 
-    private void Wo179OnClock(int seq, double delta)
-    {
-        var s = _w179LastEnded;
-        if (s is null || !s.Relocated || delta < 60) return;
-        Console.WriteLine(FormattableString.Invariant($"WO179-TIME this joiner's relocation scene '{s.Name}' skipped {delta:F0} game-s -- the host's world applies it once"));
-        _ = Wo179SendAsync(Wo179Rules.Clock(s.Seq, delta));
-    }
 
     // ================================================================ the bus
 
@@ -577,6 +488,7 @@ public partial class GameBridge
         {
             case 'S':
             {
+                if (m.Kind != 'V') { Console.WriteLine($"WO179-BUS relocation scene '{m.Name}' seq={m.Seq} ignored: only pre-rendered videos are shared (WO-183)"); break; }
                 var r = new W179Remote { Src = src, Seq = m.Seq, Kind = m.Kind, Name = m.Name, AtMs = now };
                 _w179Remote[src] = r;
                 if (m.Kind == 'V')
@@ -588,24 +500,21 @@ public partial class GameBridge
             }
             case 'R':
             {
-                if (!_w179Remote.TryGetValue(src, out var r) || r.Seq != m.Seq) { r = new W179Remote { Src = src, Seq = m.Seq, Kind = 'R', Name = "scene", AtMs = now }; _w179Remote[src] = r; }
+                // WO-183: only a video's destination exists -- where the triggerer stands at its end (sent just before the end message)
+                if (!_w179Remote.TryGetValue(src, out var r) || r.Seq != m.Seq || r.Kind != 'V') { Console.WriteLine($"WO179-BUS destination seq={m.Seq} ignored: no shared video of that number (relocation scenes are gone, WO-183)"); break; }
                 r.X = m.X; r.Y = m.Y; r.Z = m.Z; r.HaveDest = true; r.DestAtMs = now;
-                if (r.Kind == 'V')
+                if (r.OwnCopy) { Console.WriteLine($"WO179-LAND seq={r.Seq} destination ignored: this game played its own quest copy (its own quest moves this Henry)"); break; }
                 {
-                    // WO-179B item 3: a video's destination is the triggerer's settle report -- the landing after the video uses it
-                    if (r.OwnCopy) { Console.WriteLine($"WO179-LAND seq={r.Seq} settle report ignored: this game played its own quest copy (its own quest moves this Henry)"); break; }
                     int landing = Volatile.Read(ref r.Landing);
                     if (landing == 2 && r.LateDest && !r.Brought)
                     {
                         Interlocked.Increment(ref _w179LateDests);
-                        Console.WriteLine(FormattableString.Invariant($"WO179-LAND seq={r.Seq} the settle report came after the 3 s black ({(now - r.FadeAtMs) / 1000.0:F1} s) -- moved now behind a short fade (still one move)"));
-                        _ = Wo179BringAlongAsync(r, "settle-late");
+                        Console.WriteLine(FormattableString.Invariant($"WO179-LAND seq={r.Seq} the destination came after the 3 s black ({(now - r.FadeAtMs) / 1000.0:F1} s) -- moved now behind a short fade (still one move)"));
+                        _ = Wo179BringAlongAsync(r, "destination-late");
                     }
                     else if (landing != 1)
-                        Console.WriteLine($"WO179-LAND seq={r.Seq} settle report kept: {(landing == 0 ? "the video has not ended here yet" : "already landed")}");
-                    break;
+                        Console.WriteLine($"WO179-LAND seq={r.Seq} destination kept: {(landing == 0 ? "the video has not ended here yet" : "already landed")}");
                 }
-                _ = Wo179BringAlongAsync(r, "destination");
                 break;
             }
             case 'E':
@@ -663,13 +572,7 @@ public partial class GameBridge
                 }
                 break;
             case 'T':
-                if (W137Host)
-                {
-                    string key = $"{src}:{m.Seq}";
-                    if (!_w179TimeApplied.TryAdd(key, true)) { Console.WriteLine($"WO179-TIME seq={m.Seq} from player {src} already applied -- once only"); break; }
-                    Console.WriteLine(FormattableString.Invariant($"WO179-TIME player {src}'s relocation scene skipped {m.Value:F0} game-s -- the host's world applies it once (the bus-confirmed exception to the joiner time-skip drop)"));
-                    await ExecLuaAsync(FormattableString.Invariant($"if KCD2MP_W179ApplySkip then KCD2MP_W179ApplySkip({m.Value:F0}, \"player {src}\") end"));
-                }
+                Console.WriteLine($"WO179-BUS time-skip report seq={m.Seq} from player {src} ignored: the relocation-scene time-skip exception is gone (WO-183)");
                 break;
         }
     }
@@ -782,24 +685,24 @@ public partial class GameBridge
                 await Task.Delay(60);   // the fader is black before the movie's last frame goes
                 await ExecLuaAsync($"if KCD2MP_W179StopVideo then KCD2MP_W179StopVideo(\"{why}\") end");
             }
-            Console.WriteLine($"WO179-LAND seq={r.Seq} the triggerer's video ended ({why}) -- black now (fade {(faded ? "ok" : "REFUSED")}), waiting for where Henry settles (at most {Wo179Rules.PartnerFadeMaxMs / 1000} s)");
-            // the settle report (kept if it already came)
+            Console.WriteLine($"WO179-LAND seq={r.Seq} the triggerer's video ended ({why}) -- black now (fade {(faded ? "ok" : "REFUSED")}), waiting for where Henry stands (at most {Wo179Rules.PartnerFadeMaxMs / 1000} s)");
+            // the destination (kept if it already came)
             while (!r.HaveDest && Environment.TickCount64 < fadeAt + Wo179Rules.PartnerFadeMaxMs - 300) await Task.Delay(25);
             if (!r.HaveDest)
             {
                 r.LateDest = true;
-                Console.WriteLine(FormattableString.Invariant($"WO179-LAND seq={r.Seq} no settle report within {(Environment.TickCount64 - fadeAt) / 1000.0:F1} s -- the black is lifted; the move follows the report behind a short fade"));
+                Console.WriteLine(FormattableString.Invariant($"WO179-LAND seq={r.Seq} no destination within {(Environment.TickCount64 - fadeAt) / 1000.0:F1} s -- the black is lifted; the move follows it behind a short fade"));
                 return;
             }
             long deadline = Wo179Rules.PartnerFadeDeadline(fadeAt, r.DestAtMs);
             float d0 = Wo179Rules.Dist2D(_w179HavePos ? _w179X : _lastX, _w179HavePos ? _w179Y : _lastY, r.X, r.Y);
             if (d0 < 8f) { r.Brought = true; Console.WriteLine($"WO179-LAND seq={r.Seq} already beside where Henry settled ({d0:F1} m): nothing to move"); return; }
-            var own = _w179Cur;
-            if (own is not null && own.Type != "Dialogue")
+            string busy = Wo183MoveBlock();
+            if (busy != "")
             {
                 Interlocked.Increment(ref _w179Queued);
-                _w179Held.Enqueue((r.Src, r.Seq));
-                Console.WriteLine($"WO179-QUEUE seq={r.Seq} landing held -- this player's own scene '{own.Name}' runs first");
+                _w179Held.Enqueue((r.Src, r.Seq, Environment.TickCount64));
+                Console.WriteLine($"WO179-QUEUE seq={r.Seq} landing held -- {busy} (offered again when it is over; dropped after {Wo183Rules.BringHeldMaxMs / 1000} s)");
                 return;
             }
             // C3 again, bounded: whatever he started after his own skip ends the game's own way
@@ -811,7 +714,7 @@ public partial class GameBridge
                     if (dm.Contains("mounted=no", StringComparison.Ordinal)) break;
                     await Task.Delay(150);
                 }
-            var (pr, ring) = await Wo179PlaceAsync(r.X, r.Y, r.Z);
+            var (pr, ring, refusal) = await Wo179PlaceAsync(r.X, r.Y, r.Z);
             // the ground: two reads GroundReadGapMs apart, the height steady and near the placed spot (or the deadline: lifted anyway)
             bool ground = false;
             if (pr is { Ok: true })
@@ -824,7 +727,9 @@ public partial class GameBridge
                 }
             if (pr is not { Ok: true })
             {
-                Console.WriteLine($"WO179-LAND seq={r.Seq} NOT placed (no free ground within 10 m{(pr is null ? "; no answer from the plugin" : "")}) -- the black is lifted");
+                Interlocked.Increment(ref _w179LandRefused);
+                Console.WriteLine($"WO179-LAND seq={r.Seq} NOT placed ({refusal}) -- the black is lifted");
+                if (refusal.StartsWith("no public", StringComparison.Ordinal)) _ = W164NoticeAsync(Wo183Rules.NoPublicSpotText);
                 return;
             }
             r.Brought = true;
@@ -833,7 +738,7 @@ public partial class GameBridge
             await Wo179LiftAsync(faded);
             lifted = true;
             Console.WriteLine(FormattableString.Invariant(
-                $"WO179-LAND seq={r.Seq} placed {Wo179Rules.Dist2D(ax, ay, r.X, r.Y):F1} m from where the triggerer settled (ring {ring:F0} m) at ({ax:F1}, {ay:F1}, {az:F1}); black {Environment.TickCount64 - fadeAt} ms (report {r.DestAtMs - fadeAt} ms in, bound {deadline - fadeAt} ms); ground {(ground ? "confirmed" : "not confirmed by the bound -- lifted anyway")}"));
+                $"WO179-LAND seq={r.Seq} placed {Wo179Rules.Dist2D(ax, ay, r.X, r.Y):F1} m from where the triggerer stands (ring {ring:F0} m, public ground) at ({ax:F1}, {ay:F1}, {az:F1}); black {Environment.TickCount64 - fadeAt} ms (destination {r.DestAtMs - fadeAt} ms in, bound {deadline - fadeAt} ms); ground {(ground ? "confirmed" : "not confirmed by the bound -- lifted anyway")}"));
             await Wo179AfterLandingAsync(r, ax, ay, az);
         }
         catch (Exception ex) { Console.WriteLine($"WO179-LAND seq={r.Seq} failed: {ex.GetType().Name}: {ex.Message}"); }
@@ -851,19 +756,38 @@ public partial class GameBridge
         await _combat.Wo163Async(Protocol.Wo179OpFade, [0, .. BitConverter.GetBytes(Wo179Rules.VideoLandFadeInS)]);
     }
 
-    /// <summary>C4: a free ground spot 3, 6 or 10 m from (x,y,z), on its floor (the DLL's navmesh snap within 3 m height).</summary>
-    private async Task<(CombatPipe.JoinPlaceReport? Report, float Ring)> Wo179PlaceAsync(float x, float y, float z)
+    /// <summary>
+    /// C4, WO-183: a free ground spot beside (x,y,z) -- the 3, 6 and 10 m rings, then 15 and 25 -- on PUBLIC ground only (the game's own area
+    /// state of each ring spot, KCD2MP_W183AreasAt), never while this player is under arrest, in a crime stop or a punishment. Not public
+    /// anywhere = not moved (the refusal text says why). The DLL's navmesh snap places him (within 3 m height of the spot).
+    /// </summary>
+    private async Task<(CombatPipe.JoinPlaceReport? Report, float Ring, string Refusal)> Wo179PlaceAsync(float x, float y, float z)
     {
-        CombatPipe.JoinPlaceReport? pr = null;
-        float ring = 0;
-        foreach (float rm in Wo179Rules.LandingRingsM)
+        string crime = W183CrimeProcess();
+        if (crime != "") return (null, 0, $"crime: {crime} -- a player in an arrest is never moved");
+        var areas = new List<IReadOnlyList<string>>();
+        for (int ri = 0; ri < Wo183Rules.LandingRingsM.Length; ri++)
         {
-            _w179OwnMoveMs = Environment.TickCount64;
-            pr = await _combat.JoinPlaceAsync(x, y, z, rm);
-            ring = rm;
-            if (pr is { Ok: true }) break;
+            float rm = Wo183Rules.LandingRingsM[ri];
+            var pts = Wo183Rules.RingPoints(x, y, rm);
+            var states = await Wo183AreasAtAsync(pts.Select(q => (q.X, q.Y, z)).ToList());
+            areas.Add(states);
+            for (int k = 0; k < states.Count; k++)
+            {
+                if (!Wo183Rules.IsPublicSpot(states[k])) continue;
+                _w179OwnMoveMs = Environment.TickCount64;
+                var pr = await _combat.JoinPlaceAsync(pts[k].X, pts[k].Y, z, 0.6f);   // the DLL's own ground search around the checked spot
+                if (pr is not { Ok: true }) continue;
+                // the snap may have moved him a little: the spot he stands on is checked too; a non-public one puts him back where he was
+                var after = await Wo183AreasAtAsync([(pr.After[0], pr.After[1], pr.After[2])]);
+                if (after.Count == 1 && Wo183Rules.IsPublicSpot(after[0])) return (pr, rm, "placed");
+                Console.WriteLine($"WO179-LAND the snapped spot is {(after.Count == 1 ? after[0] : "unknown")}, not public -- he is put back where he was");
+                _w179OwnMoveMs = Environment.TickCount64;
+                await _combat.JoinPlaceAsync(pr.Before[0], pr.Before[1], pr.Before[2], 0f);
+            }
         }
-        return (pr, ring);
+        string seen = string.Join("/", areas.SelectMany(a => a).GroupBy(a => a).Select(g => $"{g.Key}x{g.Count()}"));
+        return (null, 0, $"no public spot within {Wo183Rules.LandingRingsM[^1]:F0} m of where the triggerer stands (area states seen: {seen})");
     }
 
     /// <summary>C4: the landing's ignore window runs in the host's world (the scene's people are the host's).</summary>
@@ -876,16 +800,30 @@ public partial class GameBridge
 
     // ================================================================ C3 + C4: bring the partner along
 
+    /// <summary>
+    /// The held bring-alongs (this player's own scene or an arrest ran first): offered again when nothing blocks a move any more; one held
+    /// longer than <see cref="Wo183Rules.BringHeldMaxMs"/> is dropped with a log line (the field: three waited behind a stuck arrest for the
+    /// rest of the session). Runs from the 2 Hz guard tick and when this player's own scene ends.
+    /// </summary>
     private void Wo179RunHeld()
     {
-        if (_w179Cur is not null) return;
-        while (_w179Held.TryDequeue(out var h))
+        if (_w179Held.IsEmpty) return;
+        long now = Environment.TickCount64;
+        string busy = Wo183MoveBlock();
+        int n = _w179Held.Count;
+        for (int i = 0; i < n && _w179Held.TryDequeue(out var h); i++)
         {
-            if (_w179Remote.TryGetValue(h.Src, out var r) && r.Seq == h.Seq && r.HaveDest && !r.Brought)
+            bool live = _w179Remote.TryGetValue(h.Src, out var r) && r.Seq == h.Seq && r.HaveDest && !r.Brought;
+            if (!live) continue;
+            if (now - h.AtMs > Wo183Rules.BringHeldMaxMs)
             {
-                Console.WriteLine($"WO179-QUEUE the held scene seq={h.Seq} from player {h.Src} is offered again now");
-                _ = Wo179BringAlongAsync(r, "held");
+                Interlocked.Increment(ref _w179QueueDropped);
+                Console.WriteLine($"WO179-QUEUE the held bring-along seq={h.Seq} from player {h.Src} DROPPED after {(now - h.AtMs) / 1000} s -- still blocked by: {(busy == "" ? "(nothing now)" : busy)}; the partner is not moved");
+                continue;
             }
+            if (busy != "") { _w179Held.Enqueue(h); continue; }   // still blocked: kept (and counted down)
+            Console.WriteLine($"WO179-QUEUE the held bring-along seq={h.Seq} from player {h.Src} is offered again now");
+            _ = Wo179BringAlongAsync(r!, "held");
         }
     }
 
@@ -897,13 +835,13 @@ public partial class GameBridge
             Console.WriteLine($"WO179-BRING seq={r.Seq} not moved: this player is loading or joining (where={_where} holding={On(Wo136Holding)} join={On(_jj is not null)}) -- caught up on the next join as today");
             return;
         }
-        var own = _w179Cur;
-        if (own is not null && own.Type != "Dialogue")
+        string busy = Wo183MoveBlock();
+        if (busy != "")
         {
-            // two shared scenes at once: this machine's own scene plays first; the partner's is held and offered again after it
+            // this machine's own scene (or an arrest) first; the partner's is held and offered again after it -- at most 30 s, then dropped
             Interlocked.Increment(ref _w179Queued);
-            _w179Held.Enqueue((r.Src, r.Seq));
-            Console.WriteLine($"WO179-QUEUE seq={r.Seq} from player {r.Src} held -- this player's own scene '{own.Name}' runs first");
+            _w179Held.Enqueue((r.Src, r.Seq, Environment.TickCount64));
+            Console.WriteLine($"WO179-QUEUE seq={r.Seq} from player {r.Src} held -- {busy} (offered again when it is over; dropped after {Wo183Rules.BringHeldMaxMs / 1000} s)");
             return;
         }
         if (Interlocked.CompareExchange(ref _w179BringBusy, 1, 0) != 0)
@@ -916,13 +854,14 @@ public partial class GameBridge
         {
             Interlocked.Increment(ref _w179Brings);
             float d0 = Wo179Rules.Dist2D(_lastX, _lastY, r.X, r.Y);
-            Console.WriteLine(FormattableString.Invariant($"WO179-BRING seq={r.Seq} ({why}) from player {r.Src}'s {(r.Kind == 'V' ? "video" : "scene")} '{r.Name}' -- {d0:F0} m away"));
+            Console.WriteLine(FormattableString.Invariant($"WO179-BRING seq={r.Seq} ({why}) from player {r.Src}'s video '{r.Name}' -- {d0:F0} m away"));
             // dead, downed or respawning: wait until on his feet (the scene does not wait)
             long waitUntil = Environment.TickCount64 + Wo179Rules.DownWaitMaxMs;
             while (_localDowned && Environment.TickCount64 < waitUntil) await Task.Delay(1000);
             if (_localDowned) { Console.WriteLine($"WO179-BRING seq={r.Seq} not moved: still down after 180 s"); return; }
             if (d0 < 8f) { r.Brought = true; Console.WriteLine($"WO179-BRING seq={r.Seq} already beside ({d0:F1} m): nothing to do"); return; }
-            // WO-179B: a video's partner is never moved under the video any more (Wo179VideoLandAsync); what comes here moves behind the own fade
+            // WO-179B: a video's partner is never moved under the video (Wo179VideoLandAsync); what comes here (a late destination, a held
+            // landing) moves behind the own fade
             var fr = await _combat.Wo163Async(Protocol.Wo179OpFade, [1, .. BitConverter.GetBytes(Wo179Rules.OwnFadeS)]);
             bool faded = fr is { Ok: true } f && f.Payload.Length > 0 && f.Payload[0] == 1;
             await Task.Delay((int)(Wo179Rules.OwnFadeS * 1000) + 50);
@@ -939,18 +878,20 @@ public partial class GameBridge
                 }
             }
             // C4: the landing -- a free ground spot 3, 6 or 10 m from the relocated Henry, on his floor (the DLL's navmesh snap within 3 m height)
-            var (pr, ring) = await Wo179PlaceAsync(r.X, r.Y, r.Z);
+            var (pr, ring, refusal) = await Wo179PlaceAsync(r.X, r.Y, r.Z);
             if (faded) { await Task.Delay(200); await _combat.Wo163Async(Protocol.Wo179OpFade, [0, .. BitConverter.GetBytes(Wo179Rules.OwnFadeS)]); }
             if (pr is not { Ok: true })
             {
-                Console.WriteLine($"WO179-BRING seq={r.Seq} NOT placed (no free ground within 10 m{(pr is null ? "; no answer from the plugin" : "")})");
+                Interlocked.Increment(ref _w179LandRefused);
+                Console.WriteLine($"WO179-BRING seq={r.Seq} NOT placed ({refusal})");
+                if (refusal.StartsWith("no public", StringComparison.Ordinal)) _ = W164NoticeAsync(Wo183Rules.NoPublicSpotText);
                 return;
             }
             r.Brought = true;
             Interlocked.Increment(ref _w179BringsPlaced);
             float ax = pr.After[0], ay = pr.After[1], az = pr.After[2];
             Console.WriteLine(FormattableString.Invariant(
-                $"WO179-BRING seq={r.Seq} placed {Wo179Rules.Dist2D(ax, ay, r.X, r.Y):F1} m from the relocated Henry (ring {ring:F0} m) at ({ax:F1}, {ay:F1}, {az:F1}) behind the fade"));
+                $"WO179-BRING seq={r.Seq} placed {Wo179Rules.Dist2D(ax, ay, r.X, r.Y):F1} m from the triggerer (ring {ring:F0} m, public ground) at ({ax:F1}, {ay:F1}, {az:F1}) behind the fade"));
             await Wo179AfterLandingAsync(r, ax, ay, az);
         }
         catch (Exception ex) { Console.WriteLine($"WO179-BRING seq={r.Seq} failed: {ex.GetType().Name}: {ex.Message}"); }

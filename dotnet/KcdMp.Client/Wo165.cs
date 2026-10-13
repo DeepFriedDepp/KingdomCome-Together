@@ -19,6 +19,13 @@ public static class Wo165Rules
     // WO-166 turned mp_victim_decides off (its proof needed a human holding block). 0.50.6 (the maintainer): ON -- WO-178 gave the copy's swing
     // the engine's own defence chain and the joiner's held block its say, and a human held block against it (WO-178 C2, live)
     public const bool DefaultHostLock = true, DefaultVictimDecides = true, DefaultBlockRecoil = true;
+    /// <summary>
+    /// WO-183 4a (mp_replay_blocked, joiner): a blow that arrives while the player holds block is replayed through the engine too -- the
+    /// replay no longer refers a blocking victim to the host's verdict (flag 0x10), so the shield icon, the perfect-block window, the block
+    /// sound and the stamina cost happen as in single player; the player's own held block still decides (WO-178 own_block, in the DLL).
+    /// The field: 14 of Mystigan's 36 enemy blows were "not replayed, victim-blocking" and never reached his engine, so no icon was drawn.
+    /// </summary>
+    public const bool DefaultReplayBlocked = true;
 
     /// <summary>
     /// The replay's flags: skip the engine's repeat filter (our verdicts are deduped by id), refer a blocking victim to the host's verdict --
@@ -26,6 +33,11 @@ public static class Wo165Rules
     /// player's own block (a DLL without the flag refers as before).
     /// </summary>
     public const byte ReplayFlags = 0x01 | 0x10 | 0x80;
+
+    /// <summary>The replay's flags with mp_replay_blocked: the engine's repeat filter is skipped and nobody is referred to the host's verdict (0x10 / 0x80 only act together with it).</summary>
+    public const byte ReplayFlagsBlocked = 0x01;
+
+    public static byte FlagsFor(bool replayBlocked) => replayBlocked ? ReplayFlagsBlocked : ReplayFlags;
 
     /// <summary>How long after the replay its damage is read back (the slot hook watches the victim 0.6 s).</summary>
     public const int DamageReadMs = 800;
@@ -104,7 +116,7 @@ public static class Wo165Rules
             int eq = kv.IndexOf('=');
             if (eq <= 0) continue;
             string k = kv[..eq], v = kv[(eq + 1)..];
-            if (v is not ("on" or "off") || k is not ("host_lock" or "victim_decides" or "block_recoil")) continue;
+            if (v is not ("on" or "off") || k is not ("host_lock" or "victim_decides" or "block_recoil" or "replay_blocked")) continue;
             d[k] = v == "on";
         }
         return d;
