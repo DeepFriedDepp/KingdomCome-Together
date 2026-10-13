@@ -80,6 +80,22 @@ public partial class GameBridge
         _ = Wo122LoopAsync(ct);
     }
 
+    /// <summary>
+    /// WO-179 0.3: the agent is exiting -- the host-only save lock goes back to the game now (synchronously, at most
+    /// 1.5 s). A killed agent cannot do this; the mod's lease (20 s without a renewal) releases it then.
+    /// </summary>
+    public void ReleaseSaveLockOnExit(string why)
+    {
+        if (!_lockHeld) return;
+        try
+        {
+            _lockHeld = false;
+            Console.WriteLine($"MP-SAVELOCK releasing kcdmp_host_only (why={why}) -- the agent exits; this machine saves as before");
+            ExecLuaAsync($"if KCD2MP_HostOnlyLock then KCD2MP_HostOnlyLock(false, \"{why}\") end").Wait(1500);
+        }
+        catch (Exception ex) { Console.WriteLine($"MP-SAVELOCK exit release failed ({ex.GetType().Name}) -- the mod's lease releases it within 20 s"); }
+    }
+
     private async Task Wo122OnDisconnectAsync()
     {
         _wo122Connected = false;

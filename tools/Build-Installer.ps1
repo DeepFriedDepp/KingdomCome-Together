@@ -36,6 +36,17 @@
     its uninstaller, are signed with a timestamp and checked; when absent the build is unsigned
     and the build log says so.
 
+.PARAMETER SaveRoundTripWaiver
+    WO-179 0.2: the live save round trip (tools\Test-WO175SaveRoundTrip.py) must PASS for a build. A "skipped"
+    result (no Modding Tools game answered) fails the build unless this waiver is given: mandatory text (who
+    decided, why), printed and written to release\SAVE-ROUNDTRIP-WAIVED-<version>.txt with the git commit --
+    the same shape as -SoakWaiver. A FAIL or REFUSED result is never waived.
+
+.PARAMETER Push
+    WO-179 0.1: after the installer is built, push the pending commits to the remote's main -- only through the
+    publishing gate (tools\Check-Publishing.ps1: every added line, file name and commit message against the
+    denylist outside the repository; it fails closed). The gate also runs before the build, push or not.
+
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File tools\Build-Installer.ps1
 #>
@@ -43,7 +54,9 @@ param(
     [switch]$SkipPublish,
     [string]$Version,
     [string]$SoakWaiver,
-    [switch]$ReleaseCandidate
+    [switch]$ReleaseCandidate,
+    [string]$SaveRoundTripWaiver,
+    [switch]$Push
 )
 
 $ErrorActionPreference = "Stop"
@@ -92,6 +105,12 @@ if ($signing) {
 } else {
     Write-Host "Code signing: OFF -- no signing settings found (docs\CODE-SIGNING.md). This build is UNSIGNED." -ForegroundColor Yellow
 }
+
+# WO-179 0.1: the publishing gate -- nothing private in what a push of this code would publish (every added line,
+# file name and commit message of the pending commits against the denylist outside the repository; fails closed).
+Write-Host "Publishing gate (tools\Check-Publishing.ps1) ..."
+& powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Check-Publishing.ps1") -RepoDir $root
+if ($LASTEXITCODE -ne 0) { throw "the publishing gate FAILED. Not shipping." }
 
 # WO-151 Phase 0.3: no installer before the frame-rate soak has passed for exactly this
 # code (tools/perf/README.md). 0.42.7 was built with a frame-rate collapse listed as a
@@ -198,7 +217,16 @@ if (-not $SkipPublish) {
     if ($LASTEXITCODE -ne 0) { throw "tools\savegame\test_whs_dump.py FAILED. Not shipping." }
     Write-Host "Save round trip, live part (WO-175 S5) ..."
     & python (Join-Path $PSScriptRoot "Test-WO175SaveRoundTrip.py")
-    if ($LASTEXITCODE -ne 0) { throw "the live save round trip FAILED. Not shipping." }
+    $rt = $LASTEXITCODE
+    # WO-179 0.2: exit 3 = SKIPPED (no game answered). A skip is not a pass: it fails the build unless waived on the record.
+    if ($rt -eq 3) {
+        if (-not $SaveRoundTripWaiver) { throw "the live save round trip was SKIPPED (no Modding Tools game with a playline4 save answered) -- a skip fails a release build; run it with the game up, or pass -SaveRoundTripWaiver `"<who, why>`". Not shipping." }
+        $commit = (& git -C $root rev-parse HEAD 2>$null)
+        Write-Host ("WARNING: building WITHOUT the live save round trip -- waived: " + $SaveRoundTripWaiver) -ForegroundColor Yellow
+        @("The live save round trip (tools\Test-WO175SaveRoundTrip.py) was SKIPPED for this build; the maintainer waived it.",
+          "version : $Version", "commit  : $commit", "when    : $(Get-Date -Format s)", "waiver  : $SaveRoundTripWaiver") |
+            Set-Content -Encoding utf8 (Join-Path $relDir "SAVE-ROUNDTRIP-WAIVED-$Version.txt")
+    } elseif ($rt -ne 0) { throw "the live save round trip FAILED. Not shipping." }
 
     & powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Publish-Release.ps1")
     if ($LASTEXITCODE -ne 0) { throw "Publish-Release.ps1 failed" }
@@ -335,4 +363,9 @@ Write-Host "Installer: $setup ($mb MB)"
 Write-Host ("sha256   : " + (Get-FileHash $setup -Algorithm SHA256).Hash.ToLowerInvariant())
 Write-Host ("signed   : " + $(if ($signing) { "yes (Azure Artifact Signing)" } else { "NO -- unsigned build" }))
 if ($ReleaseCandidate) { Write-Host ("WARNING: " + $rcNote) -ForegroundColor Yellow }
+if ($Push) {
+    # WO-179 0.1: the push step goes through the publishing gate, never around it
+    & powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Check-Publishing.ps1") -RepoDir $root -Push
+    if ($LASTEXITCODE -ne 0) { Stop-Transcript | Out-Null; throw "the publishing gate refused the push (the installer above is built)" }
+}
 Stop-Transcript | Out-Null

@@ -9,7 +9,7 @@ tools/savegame/test_whs_repair.py, all in Build-Installer.ps1).
 Live: a running Modding Tools game (REST on localhost:1403) with a THROWAWAY save loaded from playline4 (anything else is
 refused: never a player's save, never a playline above 4). Steps: the draw test (holster, Human.DrawWeapon, read 2.5 s
 later) -> Game.SaveGameViaResting -> the new file has no stuck quest fight (tools/savegame/whs_repair.py check) ->
-reload it -> the draw test again. Without a game it prints SKIPPED with the reason and exits 0 -- never silently.
+reload it -> the draw test again. Without a game it prints SKIPPED with the reason and exits 3 (WO-179: the release build fails on a skip unless waived) -- never silently.
 The player's own draw key (weapon slot 1) is tested by hand or with tools/dev-input (never shipped).
 
     python tools/Test-WO175SaveRoundTrip.py [--action "<lua run before the save>"]
@@ -73,7 +73,7 @@ def draw():
 def main(argv):
     if not up():
         print('WO175 save round-trip (live): SKIPPED -- no Modding Tools game answers on %s (start one with a throwaway playline4 save loaded to run it)' % API)
-        return 0
+        return 3   # WO-179 0.2: a skip is not a pass -- the release build fails on it unless waived on the record
     loads = [l for l in klog() if l.startswith("Loading saved game '")]
     m = re.search(r"saves/(playline\d)/([^']+)\.whs", loads[-1]) if loads else None
     if not m or m.group(1) != 'playline4':

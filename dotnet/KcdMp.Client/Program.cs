@@ -292,5 +292,8 @@ Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
 AppDomain.CurrentDomain.ProcessExit += (_, _) => { cts.Cancel(); Thread.Sleep(500); };
 
 var bridge = new GameBridge(config);
+// WO-179 0.3: an agent that exits gives the joiner's host-only save lock back first (the mod's lease covers a kill)
+AppDomain.CurrentDomain.ProcessExit += (_, _) => bridge.ReleaseSaveLockOnExit("agent-exit");
 await bridge.RunAsync(cts.Token);
+bridge.ReleaseSaveLockOnExit("agent-stop");
 return 0;
