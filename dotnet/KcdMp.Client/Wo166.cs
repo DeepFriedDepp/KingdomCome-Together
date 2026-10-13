@@ -29,7 +29,7 @@ public static class Wo166Rules
     public const byte DefaultAutoMode = 0, MaxAutoMode = 9;
 
     /// <summary>C3: a striking window's request -- the row's own timings (ms; -1 when its table has none) and its attack fields.</summary>
-    public readonly record struct Strike(int StartMs, int HitMs, sbyte Type, sbyte Zone, sbyte Hand, float Strength);
+    public readonly record struct Strike(int StartMs, int HitMs, sbyte Type, sbyte Zone, sbyte Hand, float Strength, float HitDistance = 0f, float AlignMax = 0f);
 
     /// <summary>
     /// C3: the window for a row played on a copy. Null when the row carries no attack type (a defence, a gesture: nothing to strike with).
@@ -42,7 +42,7 @@ public static class Wo166Rules
         int start = row.TimeToStart > 0 ? (int)MathF.Round(row.TimeToStart * 1000f) : -1;
         int hit = row.TimeToHit > 0 ? (int)MathF.Round(row.TimeToHit * 1000f) : -1;
         sbyte zone = (sbyte)(row.Zone is >= 0 and <= 5 ? row.Zone : 2);
-        return new Strike(start, hit, (sbyte)row.AttackType, zone, 1, 1.0f);
+        return new Strike(start, hit, (sbyte)row.AttackType, zone, 1, 1.0f, row.HitDistance, row.AlignMax);   // WO-178: the row's own reach
     }
 
     /// <summary>

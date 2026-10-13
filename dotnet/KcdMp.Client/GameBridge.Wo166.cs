@@ -106,7 +106,7 @@ public partial class GameBridge
         var f = Wo166Rules.StrikeFor(row);
         if (f is null) { Interlocked.Increment(ref _w166StrikeRefused); return; }
         string? r;
-        try { r = await _combat.Wo166StrikeAsync(npc, f.Value.StartMs, f.Value.HitMs, f.Value.Type, f.Value.Zone, f.Value.Hand, f.Value.Strength, ct); }
+        try { r = await _combat.Wo166StrikeAsync(npc, f.Value.StartMs, f.Value.HitMs, f.Value.Type, f.Value.Zone, f.Value.Hand, f.Value.Strength, ct, f.Value.HitDistance, f.Value.AlignMax); }
         catch (OperationCanceledException) { return; }
         catch (Exception ex) { Console.WriteLine($"WO166-STRIKE npc={npc} not sent ({ex.GetType().Name})"); return; }
         if (r is null) return;

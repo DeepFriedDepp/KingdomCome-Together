@@ -81,9 +81,12 @@ constexpr size_t kSubHitBytes = 0x10;     // one entry: factor A, factor B, fact
 // and +0x80 are copied into the result only.
 struct HitInView { uint8_t skipFilter, c1, c2, forceBlock; uint32_t hitIndex, k8, kC; };
 
-inline void build_hit_in(uint8_t* hitIn, bool skipFilter, void* victimCa, void* details, void* subBegin, void* subEnd) {
+// WO-178: victimBlocking sets hit-in byte +3 -- the processor's own "victim is blocking" input (research/WO-162 Q1.3: record +0x54 is
+// the victim's ParryInPlace OR this byte), so the engine computes the block itself (CalcBlockingDefense: the block's stamina, not health).
+inline void build_hit_in(uint8_t* hitIn, bool skipFilter, void* victimCa, void* details, void* subBegin, void* subEnd, bool victimBlocking = false) {
     std::memset(hitIn, 0, kHitInBytes);
     hitIn[0] = skipFilter ? 1 : 0;
+    hitIn[3] = victimBlocking ? 1 : 0;
     const uint32_t two = 2;
     std::memcpy(hitIn + 0x08, &two, 4);
     std::memcpy(hitIn + 0x0C, &two, 4);

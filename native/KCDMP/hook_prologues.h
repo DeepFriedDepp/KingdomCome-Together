@@ -83,6 +83,29 @@ inline constexpr uint8_t kHostileTest[15] = {
     0x48, 0x89, 0x5C, 0x24, 0x10, 0x48, 0x89, 0x74, 0x24, 0x18, 0x57, 0x48, 0x83, 0xEC, 0x20,
 };
 
+// wo178.cpp: C_CombatActorClinch::StartSyncGuard (found by its __FUNCTION__ string) -- the clinch's start, gated.
+// push rbp; push rsi; push rdi; push r12; push r13; push r14; push r15; sub rsp,80h
+inline constexpr uint8_t kClinchStart[19] = {
+    0x40, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57, 0x48, 0x81, 0xEC, 0x80, 0x00, 0x00, 0x00,
+};
+
+// wo178.cpp (research, installed only by a duel trace): C_CombatActor's state handler -- the callback StartCombatMode registers on the
+// model's State property (its slot read from the registered thunk, the vftable by RTTI). Pass-through: logs the actor and old/new state.
+// push rbx; push rdi; push r14; sub rsp,30h; mov rbx,rcx; mov edi,r9d
+inline constexpr uint8_t kStateHandler[15] = {
+    0x40, 0x53, 0x57, 0x41, 0x56, 0x48, 0x83, 0xEC, 0x30, 0x48, 0x8B, 0xD9, 0x41, 0x8B, 0xF9,
+};
+
+// wo178.cpp (research, installed only by a duel trace): C_CombatSlotTrigger::StartSlot / EndSlot (their __FUNCTION__ strings). Pass-through.
+// mov [rsp+8],rbx; push rdi; sub rsp,40h; mov rdi,rcx; movzx ebx,dl
+inline constexpr uint8_t kSlotStart[16] = {
+    0x48, 0x89, 0x5C, 0x24, 0x08, 0x57, 0x48, 0x83, 0xEC, 0x40, 0x48, 0x8B, 0xF9, 0x0F, 0xB6, 0xDA,
+};
+// mov [rsp+10h],rsi; push rdi; sub rsp,40h; mov rdi,rcx; mov esi,edx
+inline constexpr uint8_t kSlotEnd[15] = {
+    0x48, 0x89, 0x74, 0x24, 0x10, 0x57, 0x48, 0x83, 0xEC, 0x40, 0x48, 0x8B, 0xF9, 0x8B, 0xF2,
+};
+
 struct Entry { const char* name; const uint8_t* bytes; size_t len; };
 inline constexpr Entry kAll[] = {
     {"motion UpdateMannequinTags", kMotionTags, sizeof kMotionTags},
@@ -95,6 +118,10 @@ inline constexpr Entry kAll[] = {
     {"wo143 NPC-state request", kNpcStateRequest, sizeof kNpcStateRequest},
     {"weather BlendToProfile", kBlendToProfile, sizeof kBlendToProfile},
     {"wo178 hostility test", kHostileTest, sizeof kHostileTest},
+    {"wo178 clinch start", kClinchStart, sizeof kClinchStart},
+    {"wo178 state handler (research)", kStateHandler, sizeof kStateHandler},
+    {"wo178 slot start (research)", kSlotStart, sizeof kSlotStart},
+    {"wo178 slot end (research)", kSlotEnd, sizeof kSlotEnd},
 };
 
 } // namespace kcdmp::hookpro

@@ -6,6 +6,8 @@
 #include "wo166_rules.h"
 #include "wo166.h"
 #include "wo178.h"
+#include "wo178_rules.h"
+#include "wo173_rules.h"
 
 #include <windows.h>
 #include <atomic>
@@ -112,6 +114,7 @@ const char* reason_name(uint8_t r) {
         case kSameActor: return "attacker-is-victim";
         case kNoPosition: return "no-victim-position";
         case kVictimBlocking: return "victim-blocking";
+        case kOutOfReach: return "out-of-reach";
         default: return "?";
     }
 }
@@ -202,6 +205,20 @@ Result replay(const Request& rq) {
         res.reason = kVictimBlocking; c_refused.fetch_add(1); return res;
     }
 
+    // ---- WO-178: a blow that cannot reach the local player on this screen is a miss (the replay has no contact test: it landed damage
+    // at ~3 m in a live run while the player's own screen showed the copy out of reach) ----
+    if (victimIsPlayer && wo178::hit_reach_on()) {
+        float ap[3]{};
+        void* aEnt = engine::entity_by_id(rq.attackerEid);
+        const float d = (aEnt && engine::entity_world_pos(aEnt, ap)) ? std::sqrt((ap[0] - pos[0]) * (ap[0] - pos[0]) + (ap[1] - pos[1]) * (ap[1] - pos[1])) : -1.0f;
+        const float limit = wo166::swing_reach_limit(rq.attackerEid);
+        if (d >= 0.0f && !wo178rules::in_reach(d, limit)) {
+            logf("WO178-REACH player blow=missed dist_m=%.2f reach_m=%.2f (the swing's contact distance + slack) attacker=0x%X -- out of reach on this screen: "
+                 "nothing applied, the host is told 'missed'", d, limit, rq.attackerEid);
+            res.reason = kOutOfReach; c_refused.fetch_add(1); return res;
+        }
+    }
+
     // ---- the attacker's four fields (WO-163 P1) ----
     if (!motion::read_attack_fields(aModel, &res.before)) { res.reason = kFieldsUnnamed; c_refused.fetch_add(1); return res; }
     res.written = res.before;
@@ -218,7 +235,21 @@ Result replay(const Request& rq) {
     alignas(16) uint8_t sub[kSubHitBytes]{};
     build_details(details, pos, veid);
     build_sub_hit(sub);
-    build_hit_in(hitIn, (rq.flags & kFlagSkipFilter) != 0, vCa, details, sub, sub + kSubHitBytes);
+    // WO-178 (mp_own_block): the player's own held block decides a copy's blow (wo178_rules.h own_block)
+    bool ownBlock = false;
+    float ownFacing = -2.0f;
+    if (victimIsPlayer && wo178::own_block_on() && (res.victimModel.valid & motion::kMvState)) {
+        localstate::LocalState ls{};
+        float ap[3]{};
+        void* aEnt = engine::entity_by_id(rq.attackerEid);
+        if (localstate::read_local_state(&ls) && aEnt && engine::entity_world_pos(aEnt, ap)) ownFacing = facing_cos(ls.rotZ, pos[0], pos[1], ap[0], ap[1]);
+        ownBlock = wo178rules::own_block(true, res.victimModel.state, true, ownFacing);
+        if (victim_blocking_state(res.victimModel.state, true))
+            logf("WO178-OWNBLOCK player state=0x%X facing_cos=%.2f block=%s block_zone=%d->%d attacker=0x%X", static_cast<unsigned>(res.victimModel.state),
+                 ownFacing, ownBlock ? "yes (the engine is told he blocks, facing the swing)" : "no (not facing the striker)", res.victimModel.blockZone,
+                 ownBlock ? res.written.zone : res.victimModel.blockZone, rq.attackerEid);
+    }
+    build_hit_in(hitIn, (rq.flags & kFlagSkipFilter) != 0, vCa, details, sub, sub + kSubHitBytes, ownBlock);
 
     res.seq = ++g_seq;
     {
@@ -234,13 +265,34 @@ Result replay(const Request& rq) {
         uint8_t prevIntended = 0;
         const bool marked = (rq.flags & kFlagIntended) && wo173::mark_intended(aModel, true, &prevIntended);
         hits::replay_begin(rq.attackerEid, veid, res.seq, vSoul, victimIsPlayer);
+        // WO-178: his own held block decides -- it faces the swing as the engine's "block in place" would (a copy's swing never puts
+        // him there: live, block zone 2 vs the swing's zone 5 left a "blocked" blow at almost a hit's damage); put back after the call
+        int32_t prevBz = 0;
+        const bool bzSet = ownBlock && motion::write_block_zone(vModel, res.written.zone, &prevBz);
         ok = call_process(g_fnProcess, rpg, result, hitIn, flags, &ret);
+        if (bzSet) motion::write_block_zone(vModel, prevBz, nullptr);
         hits::replay_end(&cap);
         if (marked && !prevIntended) wo173::mark_intended(aModel, false, nullptr);
         res.called = true;
     }
     // WO-173: the collision handler's reaction tail, in the same frame, with the result struct the processor filled
-    if (ok && ret && cap.seen && (rq.flags & kFlagReact)) res.react = wo173::react(aCa, vCa, result, &res.reactKind);
+    bool react = ok && ret && cap.seen && (rq.flags & kFlagReact);
+    if (react && victimIsPlayer) {
+        // WO-178: the player's own recoil only for a blow that can reach him on this screen -- the engine's hit core gives no damage
+        // past reach (live: pushed back ~3 m by the recoils, the held copy's later blows landed nothing, yet each played a recoil)
+        float ap[3]{};
+        void* aEnt = engine::entity_by_id(rq.attackerEid);
+        const float d = (aEnt && engine::entity_world_pos(aEnt, ap)) ? std::sqrt((ap[0] - pos[0]) * (ap[0] - pos[0]) + (ap[1] - pos[1]) * (ap[1] - pos[1])) : -1.0f;
+        const float rlimit = wo166::swing_reach_limit(rq.attackerEid);
+        if (!wo178rules::in_reach(d, rlimit)) {
+            react = false;
+            res.react = static_cast<uint8_t>(wo173rules::React::NotRun);
+            logf("WO178-RECOIL player reaction=out-of-reach dist_m=%.2f reach_m=%.2f seq=%u -- no recoil for a blow that cannot reach", d, rlimit, res.seq);
+        } else {
+            logf("WO178-RECOIL player reaction=asked dist_m=%.2f seq=%u", d, res.seq);
+        }
+    }
+    if (react) res.react = wo173::react(aCa, vCa, result, &res.reactKind);
     if (!(rq.flags & (kFlagKeepFields | kFlagOwnFields))) motion::write_attack_fields(aModel, res.before);
     if (!ok) {
         switch_off(res.called ? "RPGProcessHit" : "the result constructor");

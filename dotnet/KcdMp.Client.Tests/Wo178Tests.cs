@@ -26,6 +26,14 @@ public class Wo178Tests
         Assert.False(Wo178Rules.DefaultHostLockAnswer);     // compared live, never flipped here
         Assert.True(Wo178Rules.DefaultFallbackHold);
         Assert.True(Wo178Rules.DefaultFallbackEngineCap);
+        Assert.True(Wo178Rules.DefaultPlayerRecoil);
+        Assert.True(Wo178Rules.DefaultHitReach);
+        Assert.True(Wo178Rules.DefaultClinchGuard);
+        Assert.True(Wo178Rules.DefaultOwnBlock);
+        Assert.True(Wo178Rules.DefaultCopyEngineState);
+        Assert.Equal("out-of-reach", Wo178Rules.RefusedOutOfReach);   // native wo165.cpp reason_name(kOutOfReach)
+        Assert.Equal(0x20, Wo178Rules.ReplayFlagReact);                                    // native wo165.h kFlagReact
+        Assert.Equal(0, Wo165Rules.ReplayFlags & Wo178Rules.ReplayFlagReact);              // added only by the switch
     }
 
     [Fact]
@@ -144,6 +152,11 @@ public class Wo178Tests
     [InlineData("host_lock_answer=off", "host_lock_answer", false, true)]
     [InlineData("fallback_hold=on", "fallback_hold", true, true)]
     [InlineData("fallback_engine_cap=off", "fallback_engine_cap", false, true)]
+    [InlineData("player_recoil=on", "player_recoil", true, true)]
+    [InlineData("hit_reach=off", "hit_reach", false, true)]
+    [InlineData("clinch_guard=on", "clinch_guard", true, true)]
+    [InlineData("own_block=off", "own_block", false, true)]
+    [InlineData("copy_engine_state=on", "copy_engine_state", true, true)]
     [InlineData("rm_rf=on", "", false, false)]
     [InlineData("quicksave=1", "", false, false)]
     public void The_cfg_line_names_only_its_switches(string arg, string name, bool on, bool ok)
@@ -183,6 +196,19 @@ public class Wo178Tests
             Assert.False(File.Exists(Path.Combine(root, Wo178Rules.PickFileName)));
         }
         finally { Directory.Delete(root, true); }
+    }
+
+    [Fact]
+    public void An_attack_rows_reach_is_read_from_its_alignment()
+    {
+        Assert.Equal(2.699862f, ActionRowCatalog.AlignY("-0.000001;2.699862;0;0.000014;0.000014;1;0.000014"), 4);
+        Assert.Equal(0f, ActionRowCatalog.AlignY(null));
+        Assert.Equal(0f, ActionRowCatalog.AlignY("garbage"));
+        var row = new ActionRowCatalog.Row("combat_action_attack", "f", "t", 5, 1, 0, 3, 0.533f, 0.7f, HitDistance: 1.6f, AlignMax: 2.7f);
+        var s = Wo166Rules.StrikeFor(row);
+        Assert.NotNull(s);
+        Assert.Equal(1.6f, s!.Value.HitDistance);
+        Assert.Equal(2.7f, s.Value.AlignMax);
     }
 
     [Fact]

@@ -52,6 +52,23 @@ inline bool attack_fields_ok(int32_t type, int32_t zone, float strength, int32_t
     return type >= 0 && type <= 15 && zone >= 0 && zone <= 5 && strength >= 0.0f && strength <= 2.0f && (hand == 0 || hand == 1);
 }
 
+// ---- WO-178: the attacker's perfect-blocked sequence (the single-player duel trace: a real guard's 0x8 -> 0x10 -> 0x20 -> Guard when
+// the player's perfect block met its blow). The defender's riposte opens only while the attacker reads 0x10 with its OpponentHit set
+// (C_CombatActorActionPerfectBlock's update), so a copy's swing that ended straight in Guard never offered the counter.
+constexpr int32_t kStateWindupEngine = 4, kStatePerfectBlocked = 0x10, kStateAfterPerfectBlocked = 0x20;
+constexpr double kPbStage2S = 0.5;    // 0x10 -> 0x20 after this
+constexpr double kPbHoldS = 1.1;      // the copy is back in its prior state this long after the perfect block met it
+inline bool player_perfect_blocks(int32_t state, bool pb) { return pb && (state == kStatePrepParry || state == kStateParryInPlace); }
+// From the copy's wind-up to its window's end (live: the engine drops the attacker to Guard the very frame the player's perfect-block
+// action starts -- a real attack's own action takes it to 0x10 instead -- so the step follows the player's perfect block, not the hit time).
+inline bool pb_moment(double now, double windupAt, double end) { return windupAt > 0 && now >= windupAt && now <= end; }
+// The copy states the step takes over: our wind-up or strike, or the Guard the engine just dropped it to.
+inline bool pb_from_state(int32_t cur) { return cur == kStateWindupEngine || cur == kStateStriking || cur == kStateGuard; }
+// The engine-driven window's states that are ours to put back at its end.
+inline bool engine_state_ours(int32_t cur) {
+    return cur == kStateStriking || cur == kStateWindupEngine || cur == kStatePerfectBlocked || cur == kStateAfterPerfectBlocked;
+}
+
 // ---- C5 ---------------------------------------------------------------------------------------------------------------------
 // One line per key (an NPC's entity id) per minute; the rest counted.
 class LineLimiter {

@@ -145,7 +145,8 @@ constexpr size_t kPropertyValueOff = 8;   // the setter's own `movzx r8d, byte [
 
 // What the tail did (the WO173-HIT line's reaction=).
 // SameGroup (5): the handler's own skip -- same group, nobody killed, the victim's action may not be interrupted and its model's flag says so.
-enum class React : uint8_t { NotRun = 0, Queued = 1, Own = 2, NotAlive = 3, NoAction = 4, SameGroup = 5, NotTaken = 6, NotArmed = 7, Fault = 8, Off = 9 };
+enum class React : uint8_t { NotRun = 0, Queued = 1, Own = 2, NotAlive = 3, NoAction = 4, SameGroup = 5, NotTaken = 6, NotArmed = 7, Fault = 8, Off = 9,
+                             PlayerKept = 10 };   // WO-178: the local player gets the ordinary hit reaction only
 inline const char* react_name(React r) {
     switch (r) {
         case React::Queued: return "queued";
@@ -157,6 +158,7 @@ inline const char* react_name(React r) {
         case React::NotArmed: return "not-armed";
         case React::Fault: return "fault";
         case React::Off: return "off";
+        case React::PlayerKept: return "player-only-hit-reactions";
         default: return "-";
     }
 }

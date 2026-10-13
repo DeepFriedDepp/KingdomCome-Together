@@ -50,7 +50,7 @@ public static partial class Protocol
     public const int W164TextMax = 80;
 
     // ---- WO-178: the DLL's ops in the WO-163 family (native/KCDMP/wo178.h) ----
-    public const byte Wo178OpOffer = 24, Wo178OpStatus = 25, Wo178OpConfig = 26, Wo178OpSaveManual = 27, Wo178OpHeldResult = 28;
+    public const byte Wo178OpOffer = 24, Wo178OpStatus = 25, Wo178OpConfig = 26, Wo178OpSaveManual = 27, Wo178OpHeldResult = 28, Wo178OpTrace = 29;
 
     // ---- kinds (APPEND-ONLY) ----
     public const byte W164MarkPing = 1, W164Torch = 2, W164Escort = 3, W164HitOutcome = 4, W164Weather = 5, W164Travel = 6, W164RealHit = 7, W164NpcDown = 8;

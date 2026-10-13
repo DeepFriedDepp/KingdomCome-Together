@@ -27,6 +27,11 @@ public partial class GameBridge
     private volatile bool _w178HostLockAnswer = Wo178Rules.DefaultHostLockAnswer;
     private volatile bool _w178Hold = Wo178Rules.DefaultFallbackHold;
     private volatile bool _w178EngineCap = Wo178Rules.DefaultFallbackEngineCap;
+    private volatile bool _w178PlayerRecoil = Wo178Rules.DefaultPlayerRecoil;
+    private volatile bool _w178HitReach = Wo178Rules.DefaultHitReach;
+    private volatile bool _w178ClinchGuard = Wo178Rules.DefaultClinchGuard;
+    private volatile bool _w178OwnBlock = Wo178Rules.DefaultOwnBlock;
+    private volatile bool _w178CopyEngineState = Wo178Rules.DefaultCopyEngineState;
     private int _w178SaveBusy;
     private byte _w178LastAsker = 0xFF;
     private readonly ConcurrentDictionary<uint, (byte Why, byte Flags, long At)> _w178Offered = new();
@@ -52,6 +57,11 @@ public partial class GameBridge
                     case "host_lock_answer": _w178HostLockAnswer = on; break;
                     case "fallback_hold": _w178Hold = on; break;
                     case "fallback_engine_cap": _w178EngineCap = on; break;
+                    case "player_recoil": _w178PlayerRecoil = on; break;
+                    case "hit_reach": _w178HitReach = on; break;
+                    case "clinch_guard": _w178ClinchGuard = on; break;
+                    case "own_block": _w178OwnBlock = on; break;
+                    case "copy_engine_state": _w178CopyEngineState = on; break;
                 }
                 Console.WriteLine($"MP-W178 cfg {cfg}={(on ? "on" : "off")}");
                 _ = Wo178PushConfigAsync();
@@ -73,6 +83,11 @@ public partial class GameBridge
                 return;
             case "w178_status":
                 _ = Wo178StatusAsync();
+                return;
+            case "w178_trace":        // research: the DLL's duel trace for <secs>
+                if (!ushort.TryParse(arg, NumberStyles.Integer, CultureInfo.InvariantCulture, out ushort secs)) return;
+                _ = Task.Run(async () => { try { await _combat.Wo163Async(Protocol.Wo178OpTrace, [(byte)(secs & 0xFF), (byte)(secs >> 8)]); } catch { } });
+                Console.WriteLine($"MP-W178 duel trace {secs} s asked");
                 return;
         }
     }
@@ -127,7 +142,9 @@ public partial class GameBridge
         {
             byte host = (byte)(_combatRoleApplied ? (_isDamageAuthority ? 1 : 0) : 255);
             var r = await _combat.Wo163Async(Protocol.Wo178OpConfig, [(byte)(_w178JoinerLock ? 1 : 0), (byte)(_w178HostLockAnswer ? 1 : 0),
-                                                                      (byte)(_w178Hold ? 1 : 0), (byte)(_w178EngineCap ? 1 : 0), host]);
+                                                                      (byte)(_w178Hold ? 1 : 0), (byte)(_w178EngineCap ? 1 : 0), host,
+                                                                      (byte)(_w178HitReach ? 1 : 0), (byte)(_w178ClinchGuard ? 1 : 0),
+                                                                      (byte)(_w178OwnBlock ? 1 : 0), (byte)(_w178CopyEngineState ? 1 : 0)]);
             if (r is { Ok: true, Payload.Length: >= 5 } x && (x.Payload[0] != (_w178JoinerLock ? 1 : 0) || x.Payload[1] != (_w178HostLockAnswer ? 1 : 0)))
                 Console.WriteLine($"MP-W178 the DLL holds joiner_lock={x.Payload[0]} host_lock_answer={x.Payload[1]}");
         }
@@ -144,7 +161,7 @@ public partial class GameBridge
         }
         catch { }
         Console.WriteLine(FormattableString.Invariant(
-            $"MP-W178-STATS world_autosave={On(_w178WorldAutosave)} quicksave={On(_w178Quicksave)} joiner_lock={On(_w178JoinerLock)} host_lock_answer={On(_w178HostLockAnswer)} hold={On(_w178Hold)} engine_cap={On(_w178EngineCap)} saves={Interlocked.Read(ref _w178Saves)} refused={Interlocked.Read(ref _w178SaveRefused)} no_file={Interlocked.Read(ref _w178NoFile)} asks={Interlocked.Read(ref _w178Asks)} asks_in={Interlocked.Read(ref _w178AsksIn)} answers={Interlocked.Read(ref _w178Answers)} offers={Interlocked.Read(ref _w178Offers)} withdrawn={Interlocked.Read(ref _w178Withdrawn)} held={Interlocked.Read(ref _w178Held)} held_done={Interlocked.Read(ref _w178HeldDone)} held_lost={Interlocked.Read(ref _w178HeldLost)} picks={Interlocked.Read(ref _w178Picks)} native: {n ?? "no answer"}"));
+            $"MP-W178-STATS world_autosave={On(_w178WorldAutosave)} quicksave={On(_w178Quicksave)} joiner_lock={On(_w178JoinerLock)} host_lock_answer={On(_w178HostLockAnswer)} hold={On(_w178Hold)} engine_cap={On(_w178EngineCap)} player_recoil={On(_w178PlayerRecoil)} hit_reach={On(_w178HitReach)} clinch_guard={On(_w178ClinchGuard)} own_block={On(_w178OwnBlock)} copy_engine_state={On(_w178CopyEngineState)} saves={Interlocked.Read(ref _w178Saves)} refused={Interlocked.Read(ref _w178SaveRefused)} no_file={Interlocked.Read(ref _w178NoFile)} asks={Interlocked.Read(ref _w178Asks)} asks_in={Interlocked.Read(ref _w178AsksIn)} answers={Interlocked.Read(ref _w178Answers)} offers={Interlocked.Read(ref _w178Offers)} withdrawn={Interlocked.Read(ref _w178Withdrawn)} held={Interlocked.Read(ref _w178Held)} held_done={Interlocked.Read(ref _w178HeldDone)} held_lost={Interlocked.Read(ref _w178HeldLost)} picks={Interlocked.Read(ref _w178Picks)} native: {n ?? "no answer"}"));
     }
 
     // ================================================================ Part 0: the schnapps save

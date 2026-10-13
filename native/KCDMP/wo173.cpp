@@ -97,6 +97,8 @@ std::atomic<bool> g_reactFaulted{false};
 bool g_reactResolved = false, g_reactArmed = false;
 const char* g_reactWhy = "not resolved";
 ReactionSites g_sites{};
+void* const* g_vftHitAction = nullptr;   // WO-178
+std::atomic<uint32_t> c_playerRecoil{0}, c_playerKept{0};
 uintptr_t g_setAction = 0;
 
 struct Pending {
@@ -200,6 +202,8 @@ bool resolve_react() {
     }
     g_sites = s;
     g_setAction = target;
+    // WO-178: the player's own hit reaction is the ordinary C_CombatActorActionHit only (react() checks the created action's class)
+    g_vftHitAction = anchor::find_vftable(cm, ".?AVC_CombatActorActionHit@combatmodule@wh@@", 0);
     g_reactArmed = true;
     g_reactWhy = "armed";
     char a[64], b[64], c[64];
@@ -429,6 +433,19 @@ uint8_t react(void* aCa, void* vCa, uint8_t* result, int32_t* kindOut) {
     void* act = nullptr;
     if (!call_cha(s.createHitAction, self, &act, vCa, kind, result)) { react_off("CreateHitAction"); return static_cast<uint8_t>(React::Fault); }
     if (!act) return static_cast<uint8_t>(React::NoAction);
+    // WO-178: a copy's blow on the LOCAL PLAYER (the joiner's replay) gets his recoil -- the engine's own hit reaction, nothing else:
+    // an action of any other class is released here (an NPC's blow never knocks the player down; a knockdown is not a combat action, but
+    // nothing but the ordinary hit reaction is handed over for the player)
+    if (vCa == motion::player_combat_actor()) {
+        void* vp = nullptr;
+        if (!g_vftHitAction || !rd(act, 0, &vp) || vp != static_cast<const void*>(g_vftHitAction)) {
+            vcall0(act, s.releaseSlot);
+            c_playerKept.fetch_add(1);
+            logf("WO178-RECOIL player reaction=kept kind=%d -- the created action is not the ordinary hit reaction (released)", kind);
+            return static_cast<uint8_t>(React::PlayerKept);
+        }
+        c_playerRecoil.fetch_add(1);
+    }
     // the handler's own test before the hand-over (block C): same group, nobody killed, the victim's action not interruptible, its flag set
     uint16_t ta = 0, tv = 0;
     if (!rd(aCa, s.teamOff, &ta) || !rd(vCa, s.teamOff, &tv)) { vcall0(act, s.releaseSlot); return static_cast<uint8_t>(React::NotTaken); }
@@ -590,7 +607,7 @@ int status_text(char* out, int n) {
         "wo173 real_hits=%s faulted=%s react=%s(%s) threat=%s requests=%u engine=%u hit=%u blocked=%u pb=%u broken=%u react_queued=%u react_other=%u "
         "fallback=%u [off=%u no_row=%u no_window=%u no_victim=%u dead=%u replay=%u filtered=%u core=%u not_armed=%u] capped=%u corrected=%u raised=%u "
         "state_hit=%u ko_after=%u ko_full_stamina=%u unmeasured=%u faults=%u pending=%zu arranged_kept=%u held=%u[engine=%u raw=%u other=%u waiting=%zu] "
-        "median_capped=%u floor_stopped=%u hold=%s engine_cap=%s",
+        "median_capped=%u floor_stopped=%u hold=%s engine_cap=%s player_recoil=%u player_kept=%u",
         g_on.load() ? "on" : "off", g_faulted.load() ? "yes" : "no", g_reactOn.load() ? (g_reactFaulted.load() ? "OFF(fault)" : "on") : "off",
         g_reactResolved ? g_reactWhy : "unresolved", g_threat.load() ? "on" : "off", c_requests.load(), c_engine.load(), c_hit.load(), c_blocked.load(),
         c_pb.load(), c_broken.load(), c_reactQueued.load(), c_reactOther.load(), c_fallback.load(),
@@ -599,7 +616,7 @@ int status_text(char* out, int n) {
         c_fb[static_cast<int>(Fallback::Filtered)], c_fb[static_cast<int>(Fallback::CoreNotRun)], c_fb[static_cast<int>(Fallback::NotArmed)],
         c_capped.load(), c_corrected.load(), c_raised.load(), c_stateHit.load(), c_koAfter.load(), c_koFullStamina.load(), c_unmeasured.load(),
         c_faults.load(), g_pending.size(), c_kept.load(), c_held.load(), c_heldEngine.load(), c_heldRaw.load(), c_heldOther.load(), g_held.size(),
-        c_medianCapped.load(), c_floorStopped.load(), wo178::hold_on() ? "on" : "off", wo178::engine_cap_on() ? "on" : "off");
+        c_medianCapped.load(), c_floorStopped.load(), wo178::hold_on() ? "on" : "off", wo178::engine_cap_on() ? "on" : "off", c_playerRecoil.load(), c_playerKept.load());
 }
 
 }   // namespace kcdmp::wo173

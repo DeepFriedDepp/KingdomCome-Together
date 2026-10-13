@@ -47,6 +47,7 @@ struct Request {
 enum Reason : uint8_t {
     kOk = 0, kOff = 1, kNotArmed = 2, kNoAttacker = 3, kNoVictim = 4, kNoProcessor = 5, kFieldsUnnamed = 6, kFault = 7, kSameActor = 8,
     kNoPosition = 9, kVictimBlocking = 10,
+    kOutOfReach = 11,   // WO-178: the striking copy is out of reach of the local player on this screen (mp_hit_reach): a miss, nothing applied
 };
 const char* reason_name(uint8_t r);
 

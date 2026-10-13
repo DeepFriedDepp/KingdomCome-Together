@@ -116,6 +116,52 @@ inline bool offer_live(double at, double now) { return at > 0 && now >= at && no
 // The table the hook reads: how many rows fit (more fighters than this near one player is not a fight anyone can lock in).
 constexpr int kMaxRows = 48;
 
+// ------------------------------------------------------------------------------------------------------------ the player's recoil
+// An enemy copy's blow replayed on the local player plays his hit reaction only within this planar distance of the striking copy:
+// the engine's hit core lands nothing past reach, and a recoil for a blow that cannot reach looks like a hit from thin air.
+// The reach is the swing's own (its row's hit_distance -- 0.6..1.8 m across the game's attack rows) plus kReachSlackM for the stream's
+// lag and the two bodies; kRecoilReachM only when the row says nothing (an older agent, a row without the column).
+constexpr float kRecoilReachM = 2.0f;
+constexpr float kReachSlackM = 0.4f;
+inline float reach_limit(float hitDistance) {
+    return (std::isfinite(hitDistance) && hitDistance > 0.1f) ? hitDistance + kReachSlackM : kRecoilReachM;
+}
+inline bool in_reach(float d, float limit) { return std::isfinite(d) && d >= 0.0f && std::isfinite(limit) && d <= limit; }
+inline bool recoil_in_reach(float d) { return in_reach(d, kRecoilReachM); }
+// The engine's "target reachable by attack" for a copy's wind-up: within the row's alignment range (the engine steps the attacker in over
+// it during the swing -- 1.6..2.7 m for the longsword stab), else within its reach.
+inline bool target_reachable(float d, float hitDistance, float alignMax) {
+    if (std::isfinite(alignMax) && alignMax > 0.1f) return in_reach(d, alignMax + kReachSlackM);
+    return in_reach(d, reach_limit(hitDistance));
+}
+
+// The engine's own reach for the attacker's weapon (C_CombatActor's reach: the weapon's data -- its length + 0.4 m against its class
+// reach and the guard -- the same number the engine's "can hit by attack" test compares with the distance to its target every frame).
+// A copy's blow lands, and the green shield opens, only within it; kEngineReachSlackM for the stream's lag. The row's number when the
+// engine's could not be read (another build, a body without a weapon).
+constexpr float kEngineReachSlackM = 0.2f;
+inline bool engine_reach_ok(float r) { return std::isfinite(r) && r >= 0.3f && r <= 8.0f; }
+inline float copy_reach_limit(float engineReach, float hitDistance) {
+    return engine_reach_ok(engineReach) ? engineReach + kEngineReachSlackM : reach_limit(hitDistance);
+}
+// A blow LANDS only at contact distance: the row's hit_distance + slack (the swing's own, 0.6..1.8 m), never the wind-up reach above
+// (the engine's includes the attacker's step in -- 2.7 m for a bandit's sword). Capped by the engine's reach when that is shorter.
+inline float contact_limit(float engineReach, float hitDistance) {
+    const float row = reach_limit(hitDistance);
+    return engine_reach_ok(engineReach) && engineReach + kEngineReachSlackM < row ? engineReach + kEngineReachSlackM : row;
+}
+
+// ------------------------------------------------------------------------------------------------------------ the player's own block
+// A copy's swing is an animation on the joiner, not an engine attack: his held block never reaches the engine's "block in place" nor turns
+// to the swing (live: State 0x80, block zone 1 vs the swing's zone 5 -> zone mismatch -> a full hit while he held block). So his own
+// block decides: holding block (0x80 PreparingToParry or 0x100 ParryInPlace) and facing the striking copy within kOwnBlockFacingCos -> the
+// engine is told he blocks (hit-in +3) and computes the block itself.
+constexpr float kOwnBlockFacingCos = 0.25f;   // about 75 degrees either side
+inline bool own_block(bool on, int32_t victimState, bool stateValid, float facingCos) {
+    if (!on || !stateValid || !(victimState & 0x180)) return false;
+    return std::isfinite(facingCos) && facingCos >= kOwnBlockFacingCos;
+}
+
 // ------------------------------------------------------------------------------------------------------------ C4: the fallback
 
 constexpr double kHoldS = 0.8;                 // a joiner's hit waits this long for the figure's strike window

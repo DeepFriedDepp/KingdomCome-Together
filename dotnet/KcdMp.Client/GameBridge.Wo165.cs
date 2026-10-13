@@ -91,9 +91,18 @@ public partial class GameBridge
             return null;
         }
         int zone = row.Zone >= 0 ? row.Zone : m.Zone != 0 ? Protocol.ZoneToTableId((WireZone)m.Zone) : 2;   // the table's default zone (upper right) when neither says
-        var r = await _combat.Wo165ReplayAsync(m.Attacker, null, (sbyte)row.AttackType, (sbyte)zone, 1, 1.0f, Wo165Rules.ReplayFlags, ct);
+        // WO-178: with mp_player_recoil the engine's own hit reaction plays on the player too (the DLL hands over the ordinary hit reaction only)
+        byte flags = (byte)(Wo165Rules.ReplayFlags | (_w178PlayerRecoil ? Wo178Rules.ReplayFlagReact : 0));
+        var r = await _combat.Wo165ReplayAsync(m.Attacker, null, (sbyte)row.AttackType, (sbyte)zone, 1, 1.0f, flags, ct);
         if (!Wo165Rules.TryParseReplay(r?.Text, out uint seq, out string engine, out string refused) || Wo165Rules.Outcome(engine) == HitVerdict.None)
         {
+            if (refused == Wo178Rules.RefusedOutOfReach)
+            {
+                // WO-178 (mp_hit_reach): out of reach on this screen -- a miss: nothing applied here, the host is told 'missed'
+                _w165Stats.Fallback(refused);
+                Console.WriteLine($"WO165-REPLAY hid={hitId} by={by} engine=missed dmg=0.0/0.0 host_said={HitVerdictMsg.VerdictName(m.Verdict)} fallback=- reason=out-of-reach");
+                return (Wo165Rules.DamageCall.Engine, HitVerdict.Missed, 0f, 0f);
+            }
             string fb = refused.Length > 0 ? refused : "engine-" + engine;
             _w165Stats.Fallback(fb);
             if (refused is "switched-off" or "fault") await Wo165SayOnceAsync("The victim-decides replay was switched off by a fault -- the host's verdicts apply as before.");

@@ -1141,16 +1141,24 @@ public sealed class CombatPipe : IAsyncDisposable
     }
 
     /// <summary>WO-166 C3, op 9: a host swing's striking window on this copy (the DLL writes Striking and the row's attack fields at its start).</summary>
-    public async Task<string?> Wo166StrikeAsync(string npc, int startMs, int hitMs, sbyte type, sbyte zone, sbyte hand, float strength, CancellationToken ct = default)
+    public async Task<string?> Wo166StrikeAsync(string npc, int startMs, int hitMs, sbyte type, sbyte zone, sbyte hand, float strength, CancellationToken ct = default,
+                                                float hitDistance = 0f, float alignMax = 0f)
     {
         var nb = System.Text.Encoding.ASCII.GetBytes(npc);
         if (nb.Length is 0 or > 63 || !float.IsFinite(strength)) return null;
-        var a = new byte[2 + 2 + 3 + 4 + 1 + nb.Length];
+        // WO-178: the row's own reach (hit distance, alignment maximum) as an 8-byte tail after the name; an older DLL takes the short form
+        bool reach = float.IsFinite(hitDistance) && float.IsFinite(alignMax) && (hitDistance > 0f || alignMax > 0f);
+        var a = new byte[2 + 2 + 3 + 4 + 1 + nb.Length + (reach ? 8 : 0)];
         System.Buffers.Binary.BinaryPrimitives.WriteInt16LittleEndian(a, (short)Math.Clamp(startMs, -1, short.MaxValue));
         System.Buffers.Binary.BinaryPrimitives.WriteInt16LittleEndian(a.AsSpan(2), (short)Math.Clamp(hitMs, -1, short.MaxValue));
         a[4] = unchecked((byte)type); a[5] = unchecked((byte)zone); a[6] = unchecked((byte)hand);
         System.Buffers.Binary.BinaryPrimitives.WriteSingleLittleEndian(a.AsSpan(7), strength);
         a[11] = (byte)nb.Length; nb.CopyTo(a, 12);
+        if (reach)
+        {
+            System.Buffers.Binary.BinaryPrimitives.WriteSingleLittleEndian(a.AsSpan(12 + nb.Length), hitDistance);
+            System.Buffers.Binary.BinaryPrimitives.WriteSingleLittleEndian(a.AsSpan(16 + nb.Length), alignMax);
+        }
         var r = await Wo163Async(9, a, ct);
         if (r is null) return null;
         string text = System.Text.Encoding.ASCII.GetString(r.Value.Payload);

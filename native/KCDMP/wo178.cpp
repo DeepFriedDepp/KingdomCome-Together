@@ -11,6 +11,7 @@
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 #include "anchors.h"
 #include "engine.h"
@@ -30,6 +31,7 @@ namespace {
 using namespace kcdmp::wo178rules;
 
 constexpr char kSelectionLabel[] = "wh::combatmodule::C_CombatPlayerController::HandleOpponentSelection";
+constexpr char kClinchLabel[] = "wh::combatmodule::C_CombatActorClinch::StartSyncGuard";
 constexpr char kManagerClass[] = ".?AVC_PlayerProfileWHManager@framework@wh@@";
 constexpr char kExpInitiateSave[] = "?InitiateSaveGame@C_PlayerProfileWHManager@framework@wh@@QEAA_NW4Type@E_SaveGameType@23@HPEBD@Z";
 constexpr char kExpCanSave[] = "?CanSave@C_PlayerProfileWHManager@framework@wh@@QEBA_NW4Type@E_SaveGameType@23@@Z";
@@ -44,6 +46,10 @@ std::atomic<bool> g_joinerLock{true};    // mp_joiner_lock
 std::atomic<bool> g_hostAnswer{false};   // mp_host_lock_answer (WO-178 compares it live; WO-165's pair stays the default)
 std::atomic<bool> g_hold{true};          // C4 (1)
 std::atomic<bool> g_engineCap{true};     // C4 (2)
+std::atomic<bool> g_hitReach{true};      // mp_hit_reach (the joiner's replay: out of reach = a miss)
+std::atomic<bool> g_clinchGuard{true};   // mp_clinch_guard (no clinch between the local player and a listed copy)
+std::atomic<bool> g_ownBlock{true};      // mp_own_block (the local player's held block decides a copy's blow)
+std::atomic<bool> g_copyEngineState{true};   // mp_copy_engine_state (a copy's swing through the engine's state setter)
 std::atomic<bool> g_isHost{false};       // the last Config's role word (which switch the answer reads)
 std::atomic<bool> g_off{false};          // a fault switched the answer to pass-through for this session
 
@@ -111,6 +117,33 @@ bool __fastcall hostile_detour(void* rpg, const void* candidate) {
     }
     s.yes.fetch_add(1, std::memory_order_relaxed);
     c_yes.fetch_add(1, std::memory_order_relaxed);
+    return true;
+}
+
+// ---- the clinch (C_CombatActorClinch::StartSyncGuard(type, fighterA, fighterB, ...) -> bool): a copy cannot take its half -- its body
+// plays the host's rows, so the paired push-back fought its own swings (the field: it jittered between the two). Refused when one fighter is
+// the local player and the other a copy in the table (engaged with him, or fighting his host); the engine's callers take "not started".
+std::atomic<bool> g_clinchArmed{false};
+std::atomic<uint32_t> c_clinchAsked{0}, c_clinchRefused{0};
+std::atomic<uint32_t> g_clinchLastEid{0};
+
+bool listed_eid(const void* ca, uint32_t* eid) {
+    const int cur = g_cur.load(std::memory_order_acquire);
+    if (cur < 0) return false;
+    const Table& t = g_tables[cur];
+    for (int i = 0; i < t.n; ++i) if (t.rows[i].ca == ca) { if (eid) *eid = t.rows[i].eid; return true; }
+    return false;
+}
+
+bool clinch_gate(void* /*type*/, void* a, void* b, void* /*r9*/) {
+    if (!g_clinchGuard.load(std::memory_order_relaxed)) return false;
+    void* me = motion::player_combat_actor();
+    if (!me || (a != me && b != me)) return false;
+    c_clinchAsked.fetch_add(1, std::memory_order_relaxed);
+    uint32_t eid = 0;
+    if (!listed_eid(a == me ? b : a, &eid)) return false;
+    c_clinchRefused.fetch_add(1, std::memory_order_relaxed);
+    g_clinchLastEid.store(eid, std::memory_order_relaxed);
     return true;
 }
 
@@ -293,7 +326,242 @@ void* manager() {
 
 std::string g_lastSave = "none";
 
+// ---- the duel trace: the actor state handler probe (installed with the first trace; pass-through) ----
+struct StateCall { double t; const void* ca; int32_t oldS, newS; };
+std::vector<StateCall> g_stateCalls;   // under g_traceMx
+struct SlotCall { double t; bool start; const void* trig; int32_t arg; };
+std::vector<SlotCall> g_slotCalls;     // under g_traceMx
+std::atomic<bool> g_stateProbe{false};
+bool g_stateProbeTried = false;
+std::mutex g_traceMx;
+std::atomic<double> g_traceUntil{0.0};
+bool state_probe_cb(void* ca, void* /*prop*/, void* oldS, void* newS) {
+    LARGE_INTEGER q, f; QueryPerformanceCounter(&q); QueryPerformanceFrequency(&f);
+    const double t = double(q.QuadPart) / double(f.QuadPart);
+    if (t > g_traceUntil.load()) return false;
+    std::lock_guard<std::mutex> lk(g_traceMx);
+    if (g_stateCalls.size() < 4096)
+        g_stateCalls.push_back(StateCall{t, ca, static_cast<int32_t>(reinterpret_cast<intptr_t>(oldS)), static_cast<int32_t>(reinterpret_cast<intptr_t>(newS))});
+    return false;   // never refuses: the engine's handler always runs
+}
+bool slot_cb(bool start, void* trig, void* arg) {
+    LARGE_INTEGER q, f; QueryPerformanceCounter(&q); QueryPerformanceFrequency(&f);
+    const double t = double(q.QuadPart) / double(f.QuadPart);
+    if (t > g_traceUntil.load()) return false;
+    std::lock_guard<std::mutex> lk(g_traceMx);
+    if (g_slotCalls.size() < 4096) g_slotCalls.push_back(SlotCall{t, start, trig, static_cast<int32_t>(reinterpret_cast<intptr_t>(arg))});
+    return false;
+}
+bool slot_start_cb(void* trig, void* dl, void*, void*) { return slot_cb(true, trig, dl); }
+bool slot_end_cb(void* trig, void* edx, void*, void*) { return slot_cb(false, trig, edx); }
+// an object's class by its RTTI (vptr[-1] = the complete object locator; its type descriptor name at +0x10), "?" when unreadable
+std::string rtti_name(const void* obj) {
+    void* vt = nullptr; void* col = nullptr;
+    if (!obj || !read_ptr(obj, 0, &vt) || !vt || !read_ptr(vt, -8, &col) || !col) return "?";
+    int32_t tdRva = 0, selfRva = 0;
+    KCDMP_FAULT_READ(site, "wo178::rtti");
+    if (!fault::guarded(site, [&] { tdRva = *reinterpret_cast<const int32_t*>(static_cast<const char*>(col) + 12);
+                                     selfRva = *reinterpret_cast<const int32_t*>(static_cast<const char*>(col) + 20); })) return "?";
+    const char* base = static_cast<const char*>(col) - selfRva;
+    char nm[96]{};
+    const char* td = base + tdRva + 16;
+    if (!fault::guarded(site, [&] { for (int i = 0; i < 95 && td[i]; ++i) nm[i] = td[i]; })) return "?";
+    return nm;
+}
+void install_slot_probes() {
+    HMODULE cm = GetModuleHandleA("CombatModule.dll");
+    int n = 0;
+    const uint8_t* s = cm ? anchor::function_by_string(cm, "wh::combatmodule::C_CombatSlotTrigger::StartSlot", &n) : nullptr;
+    const uint8_t* e = cm ? anchor::function_by_string(cm, "wh::combatmodule::C_CombatSlotTrigger::EndSlot", &n) : nullptr;
+    const char* why = nullptr;
+    const bool okS = s && inlinehook::install_gate4(const_cast<uint8_t*>(s), hookpro::kSlotStart, sizeof hookpro::kSlotStart, &slot_start_cb, &why);
+    const char* whyS = why;
+    const bool okE = e && inlinehook::install_gate4(const_cast<uint8_t*>(e), hookpro::kSlotEnd, sizeof hookpro::kSlotEnd, &slot_end_cb, &why);
+    logf("WO178-TRACE slot probes: StartSlot %s, EndSlot %s", okS ? "installed" : (whyS ? whyS : "not found"), okE ? "installed" : (why ? why : "not found"));
+}
+void install_state_probe() {
+    if (g_stateProbeTried) return;
+    g_stateProbeTried = true;
+    install_slot_probes();
+    HMODULE cm = GetModuleHandleA("CombatModule.dll");
+    int n = 0;
+    const uint8_t* scm = cm ? anchor::function_by_string(cm, "wh::combatmodule::C_CombatActor::StartCombatMode", &n) : nullptr;
+    void* const* vft = cm ? anchor::find_vftable(cm, ".?AVC_CombatActor@combatmodule@wh@@", 0) : nullptr;
+    anchor::Range text{};
+    if (!scm || !vft || !anchor::section(cm, ".text", &text)) { logf("WO178-TRACE state probe not installed: StartCombatMode / the vftable not found"); return; }
+    // the registered thunk: lea rax,[rip+X] where X = `mov rax,[rcx]; jmp [rax+disp32]` (48 8B 01 FF A0 d32)
+    static uint8_t buf[0x600];
+    const size_t want = static_cast<size_t>(text.end - scm) < sizeof buf ? static_cast<size_t>(text.end - scm) : sizeof buf;
+    if (!copy_code(scm, buf, want)) return;
+    uint32_t slot = 0;
+    for (size_t i = 0; i + 7 <= want && !slot; ++i) {
+        if (buf[i] != 0x48 || buf[i + 1] != 0x8D || buf[i + 2] != 0x05) continue;
+        int32_t d = 0; std::memcpy(&d, buf + i + 3, 4);
+        const uint8_t* th = scm + i + 7 + d;
+        uint8_t tb[9]{};
+        if (!text.contains(th) || !copy_code(th, tb, sizeof tb)) continue;
+        if (!(tb[0] == 0x48 && tb[1] == 0x8B && tb[2] == 0x01 && tb[3] == 0xFF && tb[4] == 0xA0)) continue;
+        // the State property's listener: registered on the list at model+0x58 (State +0x40, its list +0x18): lea rcx,[rbx+58h] follows
+        bool stateList = false;
+        for (size_t k = i + 7; k + 4 <= want && k < i + 0x50; ++k)
+            if (buf[k] == 0x48 && buf[k + 1] == 0x8D && buf[k + 2] == 0x4B && buf[k + 3] == 0x58) { stateList = true; break; }
+        if (stateList) std::memcpy(&slot, tb + 5, 4);
+    }
+    if (!slot || slot > 0x2000 || (slot & 7)) { logf("WO178-TRACE state probe not installed: StartCombatMode's registered thunk not found"); return; }
+    void* fn = nullptr;
+    if (!read_ptr(vft, static_cast<int>(slot), &fn) || !fn || !text.contains(fn)) { logf("WO178-TRACE state probe not installed: vftable slot unreadable"); return; }
+    const char* why = nullptr;
+    if (!inlinehook::install_gate4(fn, hookpro::kStateHandler, sizeof hookpro::kStateHandler, &state_probe_cb, &why)) {
+        logf("WO178-TRACE state probe not installed: %s", why ? why : "?");
+        return;
+    }
+    g_stateProbe.store(true);
+    char a[64];
+    anchor::describe(fn, a, sizeof a);
+    logf("WO178-TRACE state probe installed: C_CombatActor state handler=%s (StartCombatMode's registered thunk -> vftable slot 0x%X)", a, slot);
+}
+// the combat actor -> entity name (its owner C_Actor at +0x2D8, the entity id at +0x30), "me" for the local player
+std::string ca_name(const void* ca) {
+    void* me = motion::player_combat_actor();
+    if (ca && (ca == me || static_cast<const char*>(ca) - 8 == me)) return "me";
+    void* owner = nullptr; uint32_t eid = 0;
+    if (!ca || !read_ptr(ca, 0x2D8, &owner) || !owner) return "?";
+    KCDMP_FAULT_READ(site, "wo178::ca_name");
+    if (!fault::guarded(site, [&] { eid = *reinterpret_cast<const uint32_t*>(static_cast<const char*>(owner) + 0x30); })) return "?";
+    return name_of(eid);
+}
+
+// ---- the duel trace ----
+double g_traceT0 = 0;
+std::string g_traceLastMe, g_traceLastOpp;
+struct TraceAct { double t; uint8_t cls; bool player; uint32_t eid; };
+std::vector<TraceAct> g_traceActs;
+constexpr uint32_t kTracePlayerEntity = 0x7777;   // the player entity id every save binds to (WO-125)
+const char* cls_name(uint8_t c) {
+    switch (c) { case 0: return "Attack"; case 1: return "Dodge"; case 2: return "PerfectBlock"; case 3: return "Block"; case 4: return "Hit";
+                 case 5: return "SyncAttack"; default: return "?"; }
+}
+std::string model_text(const motion::ModelRead& m, bool attacker) {
+    char b[200];
+    if (attacker)
+        std::snprintf(b, sizeof b, "state=0x%X at=%d az=%d as=%.2f ah=%d pb=%u bz=%d gz=%d cm=%u", static_cast<unsigned>(m.state), m.atkType, m.atkZone,
+                      m.atkStrength, m.atkHand, m.perfectBlock, m.blockZone, m.guardZone, m.combatMode);
+    else
+        std::snprintf(b, sizeof b, "state=0x%X gz=%d bz=%d bm=%d bh=%d pb=%u at=%d az=%d cm=%u", static_cast<unsigned>(m.state), m.guardZone, m.blockZone,
+                      m.blockMode, m.blockHand, m.perfectBlock, m.atkType, m.atkZone, m.combatMode);
+    return b;
+}
+// research: a model's named property blocks (the name pointer at block+0x30, the value at +8) -- once per opponent, and +0x5C0 each sample
+bool prop_name_at(void* model, size_t off, char* out, size_t n) {
+    void* s = nullptr;
+    out[0] = 0;
+    if (!read_ptr(model, static_cast<int>(off + 0x30), &s) || !s || !fault::plausible_address(reinterpret_cast<uintptr_t>(s))) return false;
+    KCDMP_FAULT_READ(site, "wo178::prop_name");
+    size_t i = 0;
+    const bool ok = fault::guarded(site, [&] { for (; i + 1 < n; ++i) { const char c = static_cast<const char*>(s)[i]; if (!c) break; out[i] = c; } });
+    out[i] = 0;
+    if (!ok || i < 3) return false;
+    for (size_t k = 0; k < i; ++k) if (!((out[k] >= 'A' && out[k] <= 'Z') || (out[k] >= 'a' && out[k] <= 'z') || (out[k] >= '0' && out[k] <= '9') || out[k] == '_')) return false;
+    return true;
+}
+float prop_float(void* model, size_t off) {
+    float f = 0; KCDMP_FAULT_READ(site, "wo178::prop_float");
+    fault::guarded(site, [&] { f = *reinterpret_cast<const float*>(static_cast<const char*>(model) + off + 8); });
+    return f;
+}
+void dump_props(const char* who, void* model) {
+    char nm[48];
+    for (size_t off = 0; off < 0x1400; off += 8) {
+        if (!prop_name_at(model, off, nm, sizeof nm)) continue;
+        int32_t iv = 0; KCDMP_FAULT_READ(site, "wo178::dump_props");
+        fault::guarded(site, [&] { iv = *reinterpret_cast<const int32_t*>(static_cast<const char*>(model) + off + 8); });
+        logf("WO178-TRACE props %s off=0x%zX name=%s f=%.3f i=%d", who, off, nm, prop_float(model, off), iv);
+    }
+}
+std::unordered_map<uint32_t, bool> g_propsDumped;
+
+void trace_tick(double now) {
+    if (now > g_traceUntil.load()) return;
+    const double t = (now - g_traceT0) * 1000.0;
+    std::vector<TraceAct> acts;
+    std::vector<StateCall> calls;
+    std::vector<SlotCall> slots;
+    { std::lock_guard<std::mutex> lk(g_traceMx); acts.swap(g_traceActs); calls.swap(g_stateCalls); slots.swap(g_slotCalls); }
+    for (const auto& c : slots) {
+        void* owner = nullptr; void* att = nullptr;
+        read_ptr(c.trig, 8, &owner);
+        read_ptr(c.trig, 0x38, &att);
+        logf("WO178-TRACE t=%.0f slot%s class=%s owner=%s attacker=%s arg=%d trig=%p", (c.t - g_traceT0) * 1000.0, c.start ? "START" : "END",
+             rtti_name(c.trig).c_str(), ca_name(owner).c_str(), att ? ca_name(att).c_str() : "-", c.arg, c.trig);
+    }
+    for (const auto& c : calls)
+        logf("WO178-TRACE t=%.0f statehandler actor=%s 0x%X->0x%X", (c.t - g_traceT0) * 1000.0, ca_name(c.ca).c_str(), static_cast<unsigned>(c.oldS),
+             static_cast<unsigned>(c.newS));
+    for (const auto& a : acts)
+        logf("WO178-TRACE t=%.0f action=%s by=%s", (a.t - g_traceT0) * 1000.0, cls_name(a.cls), a.player ? "me" : name_of(a.eid));
+    motion::ModelRead me{};
+    if (!motion::read_model(kTracePlayerEntity, &me)) return;
+    std::string mt = model_text(me, false);
+    {   // the defender's own windows (named blocks: BlockSlot 0x998, PerfectBlockSlot 0x9D8, MasterStrikeSlot 0xA58, RiposteSlot 0xAD8)
+        void* pca = nullptr; void* pm = nullptr;
+        if (motion::player_combat_parts(&pca, &pm) && pm) {
+            char x[160]; int n = 0;
+            const struct { size_t off; const char* nm; const char* shortNm; } slots[] = {
+                {0x998, "BlockSlot", "bs"}, {0x9D8, "PerfectBlockSlot", "pbs"}, {0xA58, "MasterStrikeSlot", "mss"}, {0xAD8, "RiposteSlot", "rs"}};
+            for (const auto& sl : slots) {
+                char nm[32];
+                if (!prop_name_at(pm, sl.off, nm, sizeof nm) || std::strcmp(nm, sl.nm) != 0) continue;
+                int32_t v = 0; KCDMP_FAULT_READ(site, "wo178::slot_read");
+                fault::guarded(site, [&] { v = *reinterpret_cast<const int32_t*>(static_cast<const char*>(pm) + sl.off + 8); });
+                n += std::snprintf(x + n, sizeof x - n, " %s=%d", sl.shortNm, v);
+            }
+            mt += x;
+            // the combat cursor's own state (C_CombatPlayerController at the player's +0x568, its UI at +0x30): the shield's state machine
+            // (+0x94; 1 = the shield), the cursor's slot icon (+0x48; 7 = the shield) and its flags (+0x4C; bit 2 shows the slot icon), the
+            // indicator settings (+0x38 -> +0x11 off, +0x15)
+            void* ctrl = nullptr; void* ui = nullptr; void* cfg = nullptr;
+            int32_t st94 = -99, ic48 = -99, fl4c = -99; uint8_t c11 = 0xFF, c15 = 0xFF;
+            if (read_ptr(pca, 0x568, &ctrl) && ctrl && read_ptr(ctrl, 0x30, &ui) && ui) {
+                KCDMP_FAULT_READ(usite, "wo178::ui_read");
+                fault::guarded(usite, [&] {
+                    st94 = *reinterpret_cast<const int32_t*>(static_cast<const char*>(ui) + 0x94);
+                    ic48 = *reinterpret_cast<const int32_t*>(static_cast<const char*>(ui) + 0x48);
+                    fl4c = *reinterpret_cast<const int32_t*>(static_cast<const char*>(ui) + 0x4C);
+                });
+                if (read_ptr(ctrl, 0x38, &cfg) && cfg)
+                    fault::guarded(usite, [&] { c11 = *(static_cast<const uint8_t*>(cfg) + 0x11); c15 = *(static_cast<const uint8_t*>(cfg) + 0x15); });
+            }
+            char u[96];
+            std::snprintf(u, sizeof u, " ui94=%d ui48=%d ui4c=%d cfg11=%u cfg15=%u", st94, ic48, fl4c, c11, c15);
+            mt += u;
+        }
+    }
+    std::string ot = "-";
+    motion::ModelRead op{};
+    if (me.opponentEid && motion::read_model(me.opponentEid, &op)) {
+        ot = std::string(name_of(me.opponentEid)) + " " + model_text(op, true);
+        void* oca = nullptr; void* om = nullptr;
+        if (motion::combat_parts(me.opponentEid, false, &oca, &om) && om) {
+            char nm[48] = "?";
+            prop_name_at(om, 0x5C0, nm, sizeof nm);
+            char x[96]; std::snprintf(x, sizeof x, " p5c0=%s:%.3f", nm, prop_float(om, 0x5C0));
+            ot += x;
+            if (!g_propsDumped[me.opponentEid]) { g_propsDumped[me.opponentEid] = true; dump_props(name_of(me.opponentEid), om); }
+        }
+    }
+    if (mt != g_traceLastMe || ot != g_traceLastOpp) {
+        logf("WO178-TRACE t=%.0f me %s | opp %s", t, mt.c_str(), ot.c_str());
+        g_traceLastMe = mt; g_traceLastOpp = ot;
+    }
+}
+
 }   // namespace
+
+bool trace_on() { return now_s() <= g_traceUntil.load(); }
+void trace_action(uint8_t cls, bool isPlayer, uint32_t npcEid) {
+    std::lock_guard<std::mutex> lk(g_traceMx);
+    if (g_traceActs.size() < 4096) g_traceActs.push_back(TraceAct{now_s(), cls, isPlayer, npcEid});
+}
 
 uint8_t save_manual(const char* why) {
     why = why && *why ? why : "?";
@@ -339,7 +607,24 @@ uint8_t save_manual(const char* why) {
     return 1;
 }
 
+void install_clinch() {
+    HMODULE cm = GetModuleHandleA("CombatModule.dll");
+    int n = 0;
+    const uint8_t* fn = cm ? anchor::function_by_string(cm, kClinchLabel, &n) : nullptr;
+    if (!fn) { logf("WO178-CLINCH guard not armed: StartSyncGuard's label is not referenced by exactly one function (%d)", n); return; }
+    const char* why = nullptr;
+    if (!inlinehook::install_gate4(const_cast<uint8_t*>(fn), hookpro::kClinchStart, sizeof hookpro::kClinchStart, &clinch_gate, &why)) {
+        logf("WO178-CLINCH guard not armed: the patch was refused (%s)", why ? why : "?");
+        return;
+    }
+    g_clinchArmed.store(true);
+    char a[64];
+    anchor::describe(fn, a, sizeof a);
+    logf("WO178-CLINCH guard armed: StartSyncGuard=%s (label + the registry's prologue) -- no clinch between the local player and a listed copy", a);
+}
+
 void install() {
+    install_clinch();
     if (!resolve_hook()) { logf("WO178-HOOK not armed: %s -- the opponent picker keeps the game's own hostility (no lock on copies)", g_why); return; }
     const char* why = nullptr;
     void* orig = nullptr;
@@ -360,6 +645,9 @@ void install() {
 
 bool host_answer_on() { return g_isHost.load() && g_hostAnswer.load() && g_armed.load() && !g_off.load(); }
 bool hold_on() { return g_hold.load(); }
+bool hit_reach_on() { return g_hitReach.load(); }
+bool own_block_on() { return g_ownBlock.load(); }
+bool copy_engine_state_on() { return g_copyEngineState.load(); }
 bool engine_cap_on() { return g_engineCap.load(); }
 
 void offer_local(uint32_t eid) {
@@ -372,10 +660,20 @@ void offer_local(uint32_t eid) {
 void tick() {
     if (!g_mainTid) g_mainTid = GetCurrentThreadId();
     const double now = now_s();
+    trace_tick(now);
     if (g_off.load() && !g_offSaid) {
         g_offSaid = true;
         logf("WO178-HOSTILE switched to pass-through for this session: the test's owner could not be read (faults=%u) -- the game's own answer "
              "for every candidate until the game restarts", c_faults.load());
+    }
+    {
+        static uint32_t s_clinchSaid = 0;
+        const uint32_t r = c_clinchRefused.load();
+        if (r != s_clinchSaid) {
+            s_clinchSaid = r;
+            logf("WO178-CLINCH refused npc=%s refused=%u asked=%u -- a copy cannot take its half of the clinch (its body plays the host's swings)",
+                 name_of(g_clinchLastEid.load()), r, c_clinchAsked.load());
+        }
     }
     if (!g_armed.load() || now < g_next) return;
     g_next = now + 0.25;
@@ -407,12 +705,14 @@ int status_text(char* out, int n) {
         }
     }
     return std::snprintf(out, n, "hook=%s%s role=%s joiner_lock=%s host_answer=%s hold=%s engine_cap=%s asked=%u local=%u listed=%u yes=%u game_yes=%u "
-                         "game_no=%u foreign=%u faults=%u owner=%p me=%p cand=%p rows=%u%s save=%s(%s) saves=%u refused=%u last=%s",
+                         "game_no=%u foreign=%u faults=%u owner=%p me=%p cand=%p rows=%u%s save=%s(%s) saves=%u refused=%u last=%s clinch=%s(%s) clinch_asked=%u clinch_refused=%u reach=%s own_block=%s",
                          g_armed.load() ? "armed" : g_why, g_off.load() ? "(PASS-THROUGH)" : "", g_isHost.load() ? "host" : "joiner",
                          g_joinerLock.load() ? "on" : "off", g_hostAnswer.load() ? "on" : "off", g_hold.load() ? "on" : "off",
                          g_engineCap.load() ? "on" : "off", c_asked.load(), c_askedLocal.load(), c_listed.load(), c_yes.load(), c_gameYes.load(),
                          c_gameNo.load(), c_foreign.load(), c_faults.load(), g_lastOwner.load(), g_lastMe.load(), g_lastCand.load(), c_rows.load(), rows, g_saveArmed ? "armed" : "unresolved", g_saveWhy,
-                         c_saveReq.load(), c_saveRefused.load(), g_lastSave.c_str());
+                         c_saveReq.load(), c_saveRefused.load(), g_lastSave.c_str(), g_clinchArmed.load() ? "armed" : "not-armed",
+                         g_clinchGuard.load() ? "on" : "off", c_clinchAsked.load(), c_clinchRefused.load(), g_hitReach.load() ? "on" : "off",
+                         g_ownBlock.load() ? "on" : "off");
 }
 
 uint8_t handle(uint8_t op, const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t* outLen) {
@@ -440,7 +740,7 @@ uint8_t handle(uint8_t op, const uint8_t* body, size_t len, uint8_t* out, size_t
             return wo163::kROk;
         }
         case kOpConfig: {
-            if (len != 6 || cap < 5) return wo163::kRBadRequest;
+            if (len < 6 || len > 10 || cap < 9) return wo163::kRBadRequest;
             auto set = [](std::atomic<bool>& a, uint8_t v, const char* nm) {
                 if (v == 255) return;
                 const bool b = v != 0;
@@ -451,8 +751,28 @@ uint8_t handle(uint8_t op, const uint8_t* body, size_t len, uint8_t* out, size_t
             set(g_hold, body[3], "mp_fallback_hold");
             set(g_engineCap, body[4], "mp_fallback_engine_cap");
             if (body[5] != 255) set(g_isHost, body[5], "role=host");
+            if (len >= 7) set(g_hitReach, body[6], "mp_hit_reach");
+            if (len >= 8) set(g_clinchGuard, body[7], "mp_clinch_guard");
+            if (len >= 9) set(g_ownBlock, body[8], "mp_own_block");
+            if (len >= 10) set(g_copyEngineState, body[9], "mp_copy_engine_state");
             out[0] = g_joinerLock.load(); out[1] = g_hostAnswer.load(); out[2] = g_hold.load(); out[3] = g_engineCap.load(); out[4] = g_isHost.load();
-            *outLen = 5;
+            out[5] = g_hitReach.load(); out[6] = g_clinchGuard.load(); out[7] = g_ownBlock.load(); out[8] = g_copyEngineState.load();
+            *outLen = len - 1;
+            return wo163::kROk;
+        }
+        case kOpTrace: {
+            if (len != 3 || cap < 1) return wo163::kRBadRequest;
+            uint16_t secs = 0;
+            std::memcpy(&secs, body + 1, 2);
+            if (secs > 600) secs = 600;
+            g_traceT0 = now_s();
+            g_traceLastMe.clear(); g_traceLastOpp.clear();
+            g_traceUntil.store(secs ? g_traceT0 + secs : 0.0);
+            if (secs) install_state_probe();   // research: once, on the pipe thread (the patch suspends the others)
+            logf("WO178-TRACE %s for %u s (read-only: the player's and his opponent's combat models every frame, the actions entering)",
+                 secs ? "started" : "stopped", secs);
+            out[0] = 1;
+            *outLen = 1;
             return wo163::kROk;
         }
         case kOpSaveManual: {

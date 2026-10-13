@@ -6038,6 +6038,7 @@ public partial class GameBridge(ClientConfig config)
             case "w178_qs_answer":   // WO-178 0.d (host): the answer to the asking joiner
             case "w178_stuck":       // WO-178 0.c: the draw probe could not free the weapons
             case "w178_status":      // WO-178: mp_w178_status
+            case "w178_trace":       // WO-178 research: mp_w178_trace <secs>
                 Wo178OnEvent(name, arg);
                 return;
             case "w166_talkstate":   // WO-166 T3: a talk that never started -- the copy's facts

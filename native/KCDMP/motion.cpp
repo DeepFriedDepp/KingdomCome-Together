@@ -3,6 +3,7 @@
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 // WO-121 -- movement and combat on native-written bodies. See motion.h.
 #include "motion.h"
+#include "wo178.h"
 #include "wo163_rules.h"
 #include "fault_guard.h"
 
@@ -590,6 +591,12 @@ void capture(uint8_t cls, void* action) {
     void* ca = as_combat_actor(raw);
     void* playerCa = g_playerCa.load(std::memory_order_relaxed);
     const bool isPlayer = ca && ca == playerCa;
+    if (kcdmp::wo178::trace_on()) {   // WO-178 research: the duel trace (read-only)
+        uint32_t teid = 0;
+        void* towner = nullptr;
+        if (!isPlayer && ca && rd(ca, kCaOwnerEntity, &towner) && towner) rd(towner, 0x30, &teid);
+        kcdmp::wo178::trace_action(cls, isPlayer, teid);
+    }
     // WO-163 (A2): an NPC's perfect-block-class action is read too -- its master strike (the blocker's counter) is a swing; the agent
     // sorts it by the row's table (flags bit 0 marks the class) and drops the block itself.
     const bool npcKind = cls == kClsAttack || cls == kClsHit || cls == kClsSyncAttack || cls == kClsPerfect;
@@ -1857,6 +1864,15 @@ bool read_state(void* model, int32_t* out) {
 bool write_state(void* model, int32_t v) {
     if (!model || !prop_named(model, kPropState)) return false;
     return wr(model, kPropState.off + 8, v);
+}
+
+// WO-178: the victim's block zone, written through its own named property (the reader's check first); prev = the value before.
+bool write_block_zone(void* model, int32_t zone, int32_t* prev) {
+    if (!model || !prop_named(model, kPropBlockZone)) return false;
+    int32_t was = 0;
+    if (!rd(model, kPropBlockZone.off + 8, &was)) return false;
+    if (prev) *prev = was;
+    return wr(model, kPropBlockZone.off + 8, zone);
 }
 
 bool write_attack_fields(void* model, const AttackFields& f) {

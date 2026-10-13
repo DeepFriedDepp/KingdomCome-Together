@@ -66,6 +66,14 @@ int wo166_tests(int* passed) {
         WCHECK(!strike_state_ok(0x40) && !strike_state_ok(0x80) && !strike_state_ok(0x100) && !strike_state_ok(0x200),
                "never over Hit, PreparingToParry, ParryInPlace or Dodge (the engine's own states)");
         WCHECK(restore_ok(8, 8) && !restore_ok(8, 0x40), "the prior state goes back only if Striking is still ours");
+        // WO-178: the attacker's perfect-blocked sequence
+        WCHECK(player_perfect_blocks(0x80, true) && player_perfect_blocks(0x100, true), "a perfect block held or in place counts");
+        WCHECK(!player_perfect_blocks(0x80, false) && !player_perfect_blocks(0x2, true), "a plain block or guard is no perfect block");
+        WCHECK(pb_moment(10.0, 9.5, 10.3) && !pb_moment(9.4, 9.5, 10.3) && !pb_moment(10.4, 9.5, 10.3) && !pb_moment(10.0, 0.0, 10.3),
+               "from the copy's wind-up to its window's end");
+        WCHECK(pb_from_state(4) && pb_from_state(8) && pb_from_state(2) && !pb_from_state(0x40) && !pb_from_state(1), "wind-up, strike or the dropped Guard");
+        WCHECK(engine_state_ours(8) && engine_state_ours(4) && engine_state_ours(0x10) && engine_state_ours(0x20) && !engine_state_ours(0x40),
+               "the window puts back its own states only (never the engine's Hit)");
         WCHECK(attack_fields_ok(1, 2, 1.0f, 0) && !attack_fields_ok(-1, 2, 1.0f, 0) && !attack_fields_ok(1, 9, 1.0f, 0)
                && !attack_fields_ok(1, 2, 3.0f, 0) && !attack_fields_ok(1, 2, 1.0f, 5), "the four attack fields within the engine's ranges");
     }

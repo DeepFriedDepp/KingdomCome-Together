@@ -138,7 +138,12 @@ do
     check("P8: the DLL's switches go through the agent", KCD2MP_W178SetJoinerLock("off") == true and countEvt("w178_cfg", "joiner_lock=off", mark) == 1
         and KCD2MP_W178SetHostLockAnswer("on") == true and countEvt("w178_cfg", "host_lock_answer=on", mark) == 1
         and KCD2MP_W178SetFallbackHold("on") == true and countEvt("w178_cfg", "fallback_hold=on", mark) == 1
-        and KCD2MP_W178SetFallbackEngineCap("off") == true and countEvt("w178_cfg", "fallback_engine_cap=off", mark) == 1)
+        and KCD2MP_W178SetFallbackEngineCap("off") == true and countEvt("w178_cfg", "fallback_engine_cap=off", mark) == 1
+        and KCD2MP_W178SetPlayerRecoil("off") == true and countEvt("w178_cfg", "player_recoil=off", mark) == 1 and CCMDS["mp_player_recoil"] ~= nil
+        and KCD2MP_W178SetHitReach("off") == true and countEvt("w178_cfg", "hit_reach=off", mark) == 1 and CCMDS["mp_hit_reach"] ~= nil
+        and KCD2MP_W178SetClinchGuard("off") == true and countEvt("w178_cfg", "clinch_guard=off", mark) == 1 and CCMDS["mp_clinch_guard"] ~= nil
+        and KCD2MP_W178SetOwnBlock("off") == true and countEvt("w178_cfg", "own_block=off", mark) == 1 and CCMDS["mp_own_block"] ~= nil
+        and KCD2MP_W178SetCopyEngineState("off") == true and countEvt("w178_cfg", "copy_engine_state=off", mark) == 1 and CCMDS["mp_copy_engine_state"] ~= nil)
     check("P9: a bad word for a DLL switch is refused", KCD2MP_W178SetJoinerLock("perhaps") == false)
     noErrs("P")
 end

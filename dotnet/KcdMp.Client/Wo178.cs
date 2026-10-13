@@ -23,6 +23,21 @@ public static class Wo178Rules
     public const bool DefaultFallbackHold = true;
     /// <summary>C4 (2): a raw fallback blow costs what the engine's own costs and never floors an NPC.</summary>
     public const bool DefaultFallbackEngineCap = true;
+    /// <summary>mp_player_recoil: an enemy copy's blow that lands on the joiner plays his own hit reaction (the engine's, ordinary hits only).</summary>
+    public const bool DefaultPlayerRecoil = true;
+    /// <summary>mp_hit_reach: a copy's blow that cannot reach the joiner on his own screen is a miss (nothing applied, the host told).</summary>
+    public const bool DefaultHitReach = true;
+    /// <summary>mp_clinch_guard: no clinch between the joiner and an enemy copy (the copy cannot take its half: it fought its own swings).</summary>
+    public const bool DefaultClinchGuard = true;
+    /// <summary>mp_own_block: the joiner's held block, facing the striking copy, decides its blow (the engine computes the block).</summary>
+    public const bool DefaultOwnBlock = true;
+    /// <summary>mp_copy_engine_state: an enemy copy's swing winds up and strikes through the engine's own state setter, so the joiner's game
+    /// opens its perfect-block slot (the green shield) and his block reaches "block in place" as against a real attacker.</summary>
+    public const bool DefaultCopyEngineState = true;
+    /// <summary>The DLL's refusal word for it (wo165.h kOutOfReach).</summary>
+    public const string RefusedOutOfReach = "out-of-reach";
+    /// <summary>The replay's reaction-tail flag (native wo165.h kFlagReact).</summary>
+    public const byte ReplayFlagReact = 0x20;
 
     // ---- the quicksave key (the launcher's settings.json QuickSaveKey; the keys pak binds it at the next game start) ----
     public const string QuickSaveKeySetting = "QuickSaveKey";
@@ -116,7 +131,7 @@ public static class Wo178Rules
         name = ""; on = false;
         var f = (arg ?? "").Split('=', 2);
         if (f.Length != 2 || f[1] is not ("on" or "off")) return false;
-        if (f[0] is not ("world_autosave" or "quicksave" or "joiner_lock" or "host_lock_answer" or "fallback_hold" or "fallback_engine_cap")) return false;
+        if (f[0] is not ("world_autosave" or "quicksave" or "joiner_lock" or "host_lock_answer" or "fallback_hold" or "fallback_engine_cap" or "player_recoil" or "hit_reach" or "clinch_guard" or "own_block" or "copy_engine_state")) return false;
         name = f[0]; on = f[1] == "on";
         return true;
     }

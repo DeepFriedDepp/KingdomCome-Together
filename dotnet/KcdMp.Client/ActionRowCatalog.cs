@@ -31,7 +31,7 @@ public sealed class ActionRowCatalog
     /// </summary>
     public readonly record struct Row(string Table, string Fragment, string Tags, int Zone, int InputClass, int AttackType,
                                       int ActionType = -1, float TimeToStart = 0f, float TimeToHit = 0f, long ActorClass = 0,
-                                      int WeaponR = -1, int WeaponL = -1)
+                                      int WeaponR = -1, int WeaponL = -1, float HitDistance = 0f, float AlignMax = 0f)
     {
         public string Spec => $"{Fragment}, {Tags}";
 
@@ -87,7 +87,9 @@ public sealed class ActionRowCatalog
                     Int((string?)el.Attribute("input_class_id")), Int((string?)el.Attribute("attack_type_id")),
                     Int((string?)el.Attribute("action_type_id")), Flt((string?)el.Attribute("attack_time_to_start")),
                     Flt((string?)el.Attribute("attack_time_to_hit")), Long((string?)el.Attribute("actor_class_hash")),
-                    Int((string?)el.Attribute("r_weapon_class_id")), Int((string?)el.Attribute("l_weapon_class_id")));
+                    Int((string?)el.Attribute("r_weapon_class_id")), Int((string?)el.Attribute("l_weapon_class_id")),
+                    Flt((string?)el.Attribute("hit_distance")),
+                    MathF.Max(AlignY((string?)el.Attribute("init_align0")), AlignY((string?)el.Attribute("init_align1"))));
             }
         }
         return new ActionRowCatalog(rows);
@@ -96,6 +98,14 @@ public sealed class ActionRowCatalog
     private static int Int(string? s) => int.TryParse(s, out int v) ? v : -1;
     private static float Flt(string? s) => float.TryParse(s, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float v) ? v : 0f;
     private static long Long(string? s) => long.TryParse(s, out long v) ? v : 0L;
+
+    /// <summary>WO-178: an attack row's alignment ("x;y;z;...": the distance the engine steps the attacker to along y); 0 when absent.</summary>
+    public static float AlignY(string? s)
+    {
+        if (string.IsNullOrEmpty(s)) return 0f;
+        var f = s.Split(';');
+        return f.Length > 1 && float.TryParse(f[1], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float y) && y > 0 ? y : 0f;
+    }
 
     /// <summary>
     /// WO-163 (A4): one existing row to show a blow that came with no swing of its own -- an animal's bite (an anim-collision
