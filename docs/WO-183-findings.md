@@ -137,3 +137,21 @@ request from a scene release (should be zero: `MP-W151 … NO save is requested`
 * The landing's trespass check uses the game's area labels; a spot the engine cannot answer for counts as not public, so on a build where the call is
   missing no landing is made (a video still ends for both, the partner just stays where he watched it).
 * The 2-minute toast for an owed snapshot is the only message; there is no banner.
+
+## Build
+
+Fresh clone of `9bc28b2` (`release\c0509`, git-ignored), the three start saves copied in (SHA-1 equal to the source copies), then
+`tools\Build-Installer.ps1 -SoakWaiver "Standing rule of 2026-10-06 (the maintainer): release-candidate installers are built without the frame-rate soak;
+WO-183 restates it, 2026-10-13" -SaveRoundTripWaiver "The maintainer, 2026-10-13: skip the live checks for WO-183 (no game was run; the live save round trip is
+open)" -Push`. Exit 0. A first attempt in the working tree stopped at the start-save validation (the published agent could not load
+`System.Text.Json 10.0.0.0`: stale build output); the fresh clone, as for every release since 0.48.5, built clean.
+
+| | |
+|---|---|
+| file | `release\KingdomComeTogether-Setup-0.50.9.exe` (local only; nothing uploaded) |
+| size | 106,973,145 bytes |
+| sha256 | `3791b1ca119c413eb567925b5edfdfb614faceb2ff6599e56e53ab08aa15fa23` |
+| header version | **0.50.9** (the compile line `KCDMP.iss (version 0.50.9)` and the exe's ProductVersion / FileVersion) |
+| signed | no (no signing settings on this machine) |
+| gates | the publishing gate (passed, before the build and at the push), the agent suite 1631, relay 63, setup 77, LogPack 14, every Lua synthetic suite (including `Test-WO183Synthetic`), the static Lua/native checks, the payload coherence and smoke gate, the native tests; the live save round trip was SKIPPED and waived (`release\SAVE-ROUNDTRIP-WAIVED-0.50.9.txt`), the soak waived (`release\SOAK-WAIVED-0.50.9.txt`) |
+| pushed | `main` at `8a6f632` (the last commit is the rebuilt `kdcmp.pak` the installer carries) |
