@@ -14990,11 +14990,23 @@ for i = 1, 12 do
                                guid = string.format("4b43444d-7301-4d67-b1a5-9e2f6d8c%04x", 0x0a00 + i), mod = true }
 end
 
+-- WO-178 C1b: the twelve souls are in the game's friendly wayfarers' faction ("eventNPCs_civilians_friends": a civilian faction both
+-- regions' enemies are explicitly hostile to, in no village, group or schedule) -- in "cutsceneOnly" enemies that start a fight on their
+-- own left the partner alone (live: a bandit camp made 42 attacks on Henry, none on the figure beside him; "players_friends_henry" the
+-- same: the enemies leave the player's friends neutral, only the player himself carries their hostility). mp_figure_enemies off = twelve
+-- neutral templates (the same table, "cutsceneOnly"; their faces differ from the twelve above).
+KCD2MP.w177.figureEnemies = true
+KCD2MP.partnerSoulsNeutral = {}
+for i = 1, 12 do
+    KCD2MP.partnerSoulsNeutral[i] = { className = "NPC", soulName = "kdcmp_partner_neutral_" .. i,
+                                      guid = string.format("4b43444d-7301-4d67-b1a5-9e2f6d8c%04x", 0x0b00 + i), mod = true, neutral = true }
+end
+
 -- The face of a partner's figure: one of the twelve mod souls by the partner's name (the same one every time, like the old roster).
 function KCD2MP_PickFigureFace(nameKey)
     if not KCD2MP.w177.figureSoul then return KCD2MP_PickFaceForPlayer(nameKey) end
     local h = KCD2MP_HashString(tostring(nameKey or ""))
-    local list = KCD2MP.partnerSouls
+    local list = KCD2MP.w177.figureEnemies and KCD2MP.partnerSouls or KCD2MP.partnerSoulsNeutral
     return list[(math.floor(h / 2) % #list) + 1]
 end
 
@@ -15002,8 +15014,26 @@ function KCD2MP_W177SetFigureSoul(arg)
     local v = KCD2MP_Wo122ParseBool(arg)
     if v == "bad" then mp_log("mp_figure_soul: expected on|off"); return false end
     if v ~= nil then KCD2MP.w177.figureSoul = v end
+    if KCD2MP_W178EmitFigureCfg then KCD2MP_W178EmitFigureCfg() end
     mp_log("WO177-TOGGLE mp_figure_soul " .. (KCD2MP.w177.figureSoul and "on" or "off")
         .. " -- a partner's figure is spawned from a soul of the mod's own (no village, no quest group); applies to the next figure that spawns")
+    return true
+end
+
+-- The agent's faction sweep (WO-131 1d) joins a figure to the player's faction unless both are on: the figure is then one of the twelve
+-- souls above and keeps its own faction.
+function KCD2MP_W178EmitFigureCfg()
+    KCD2MP_EmitEvent("w178_cfg", "figure_enemies=" .. ((KCD2MP.w177.figureSoul and KCD2MP.w177.figureEnemies) and "on" or "off"))
+end
+
+function KCD2MP_W178SetFigureEnemies(arg)
+    local v = KCD2MP_Wo122ParseBool(arg)
+    if v == "bad" then mp_log("mp_figure_enemies: expected on|off"); return false end
+    if v ~= nil then KCD2MP.w177.figureEnemies = v end
+    KCD2MP_W178EmitFigureCfg()
+    mp_log("WO178-TOGGLE mp_figure_enemies " .. (KCD2MP.w177.figureEnemies and "on" or "off")
+        .. " -- a partner's figure is " .. (KCD2MP.w177.figureEnemies and "the player's companion to enemies (bandits attack it as they attack you)"
+            or "neutral to everyone (enemies leave it alone until it hits them)") .. "; applies to the next figure that spawns")
     return true
 end
 
@@ -27844,6 +27874,7 @@ local ok, err = pcall(function()
     System.AddCCommand("mp_corpse_sync", 'KCD2MP_W177SetCorpseSync(%line)', "WO-177: a body the host's world no longer has is removed from the joiner's world too (the joiner asks the host every 5 s; default on): mp_corpse_sync on|off")
     System.AddCCommand("mp_tool_swing", 'KCD2MP_W177SetToolSwing(%line)', "WO-177: (host) a working NPC's tool swing (the blacksmith's hammer) is no damage on your partner's figure; blows of an NPC in a fight still are (default on): mp_tool_swing on|off")
     System.AddCCommand("mp_w177_status", 'KCD2MP_W177Status()', "WO-177: where the figure soul, the load gate, the corpse census, the tool-swing gate and the station end stand (WO177-STATUS here, MP-W177-STATS in the agent log)")
+    System.AddCCommand("mp_figure_enemies", 'KCD2MP_W178SetFigureEnemies(%line)', "WO-178: enemies that start a fight on their own (bandits, an ambush) attack your partner's figure as they attack you -- its soul is the player's companion, still in no village or quest group (default on; applies to the next figure): mp_figure_enemies on|off")
     System.AddCCommand("mp_figure_soul", 'KCD2MP_W177SetFigureSoul(%line)', "WO-177: your partner's figure is spawned from a soul of the mod's own, in no village and no quest group, so no village fight or quest takes it in (default on; applies to the next figure): mp_figure_soul on|off")
     System.AddCCommand("mp_quicksave", 'KCD2MP_W178QuickSave(%line)', "WO-178: save now the Saviour Schnapps way (no schnapps used; in a session the host's game saves the shared world): mp_quicksave; the host's setting: mp_quicksave on|off")
     System.AddCCommand("mp_draw_probe", 'KCD2MP_W178SetDrawProbe(%line)', "WO-178: after every load one scripted draw-and-holster; stuck weapons are said and the backup to restore is marked (default on): mp_draw_probe on|off")

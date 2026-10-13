@@ -380,6 +380,37 @@ do
     noErrs("M")
 end
 
+-- (F) C1b: the partner's figure is the player's companion to enemies
+do
+    ERRS = {}
+    check("F1: default ON", KCD2MP.w177.figureEnemies == true)
+    local ok = #KCD2MP.partnerSoulsNeutral == 12
+    for i, s in ipairs(KCD2MP.partnerSoulsNeutral) do
+        if s.soulName ~= "kdcmp_partner_neutral_" .. i or not s.guid:match("^4b43444d%-7301%-4d67%-b1a5%-9e2f6d8c0b%x%x$") or s.guid == KCD2MP.partnerSouls[i].guid then ok = false end
+    end
+    check("F2: twelve neutral templates of their own (the table's names, guids ...0b01-0b0c)", ok)
+    local onPick = KCD2MP_PickFigureFace("synth-host")
+    check("F3: on = one of the twelve companion souls", onPick.mod == true and onPick.neutral == nil and onPick.soulName:match("^kdcmp_partner_%d+$") ~= nil)
+    check("F4: mp_figure_enemies is a console command with its default in the help", CCMDS["mp_figure_enemies"] ~= nil and CCMDS["mp_figure_enemies"].help:find("default on", 1, true) ~= nil)
+    check("F5: off = the neutral template of the same index", KCD2MP_W178SetFigureEnemies("off") == true and KCD2MP_PickFigureFace("synth-host").neutral == true
+        and KCD2MP_PickFigureFace("synth-host").soulName == onPick.soulName:gsub("kdcmp_partner_", "kdcmp_partner_neutral_"))
+    check("F6: a wrong word is refused", KCD2MP_W178SetFigureEnemies("maybe") == false and KCD2MP.w177.figureEnemies == false)
+    check("F7: on again", KCD2MP_W178SetFigureEnemies("on") == true and KCD2MP_PickFigureFace("synth-host").guid == onPick.guid)
+    check("F8: mp_figure_soul off still wins (the village roster)", KCD2MP_W177SetFigureSoul("off") == true and KCD2MP_PickFigureFace("synth-host").mod == nil
+        and KCD2MP_W177SetFigureSoul("on") == true)
+    local function lastFigCfg() local v = nil; for _, l in ipairs(LOG) do local m = l:match("w178_cfg.-figure_enemies=(%a+)"); if m then v = m end end; return v end
+    KCD2MP_W178SetFigureEnemies("off")
+    local offWord = lastFigCfg()
+    KCD2MP_W178SetFigureEnemies("on")
+    local onWord = lastFigCfg()
+    KCD2MP_W177SetFigureSoul("off")
+    local soulOffWord = lastFigCfg()
+    KCD2MP_W177SetFigureSoul("on")
+    check("F9: the agent is told (figure_enemies on only while mp_figure_soul is on too)", offWord == "off" and onWord == "on" and soulOffWord == "off"
+        and lastFigCfg() == "on", tostring(offWord) .. "/" .. tostring(onWord) .. "/" .. tostring(soulOffWord))
+    noErrs("F")
+end
+
 check("Z: Game.SaveGameViaResting was never called in the whole run", RESTSAVES == 0)
 
 OUT = table.concat(RESULTS, "\n")

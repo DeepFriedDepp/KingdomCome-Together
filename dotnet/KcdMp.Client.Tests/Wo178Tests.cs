@@ -31,9 +31,36 @@ public class Wo178Tests
         Assert.True(Wo178Rules.DefaultClinchGuard);
         Assert.True(Wo178Rules.DefaultOwnBlock);
         Assert.True(Wo178Rules.DefaultCopyEngineState);
+        Assert.True(Wo178Rules.DefaultFigureEnemies);
+        Assert.True(Wo178Rules.TryParseCfg("figure_enemies=off", out string fe, out bool feOn) && fe == "figure_enemies" && !feOn);
         Assert.Equal("out-of-reach", Wo178Rules.RefusedOutOfReach);   // native wo165.cpp reason_name(kOutOfReach)
         Assert.Equal(0x20, Wo178Rules.ReplayFlagReact);                                    // native wo165.h kFlagReact
         Assert.Equal(0, Wo165Rules.ReplayFlags & Wo178Rules.ReplayFlagReact);              // added only by the switch
+    }
+
+    [Fact]
+    public void The_partner_souls_are_the_players_companions_with_neutral_opt_out_templates()
+    {
+        // WO-178 C1b: the twelve figure templates in "eventNPCs_civilians_friends" (enemies are hostile to it as to Henry), twelve
+        // neutral ones in "cutsceneOnly" for mp_figure_enemies off; all in no village (no other faction), the empty brain, class 13
+        string xml = File.ReadAllText(Path.Combine(RepoRoot(), "kdcmp", "Data", "Libs", "Tables", "rpg", "soul__kcdmp.xml"));
+        var rows = Regex.Matches(xml, "<soul [^>]*/>").Select(m => m.Value).ToList();
+        Assert.Equal(24, rows.Count);
+        string Attr(string row, string a) => Regex.Match(row, a + "=\"([^\"]*)\"").Groups[1].Value;
+        for (int i = 1; i <= 12; i++)
+        {
+            string friend = rows.Single(r => Attr(r, "soul_name") == $"kdcmp_partner_{i}");
+            string neutral = rows.Single(r => Attr(r, "soul_name") == $"kdcmp_partner_neutral_{i}");
+            Assert.Equal("eventNPCs_civilians_friends", Attr(friend, "factionName"));
+            Assert.Equal("cutsceneOnly", Attr(neutral, "factionName"));
+            Assert.Equal($"4b43444d-7301-4d67-b1a5-9e2f6d8c{0x0a00 + i:x4}", Attr(friend, "soul_id"));
+            Assert.Equal($"4b43444d-7301-4d67-b1a5-9e2f6d8c{0x0b00 + i:x4}", Attr(neutral, "soul_id"));
+            foreach (string r in new[] { friend, neutral })
+            {
+                Assert.Equal("00000000-0000-0000-0000-000000045000", Attr(r, "brain_id"));
+                Assert.Equal("13", Attr(r, "social_class_id"));
+            }
+        }
     }
 
     [Fact]

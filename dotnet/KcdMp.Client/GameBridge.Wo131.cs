@@ -241,6 +241,9 @@ public partial class GameBridge
     /// <summary>1d: every avatar here joins the player's faction (once per spawn; retried every 10 s).</summary>
     private async Task Wo131FactionSweepAsync(CancellationToken ct)
     {
+        // WO-178 C1b: with mp_figure_enemies (and mp_figure_soul) on, the figure keeps its own soul's faction -- the player's faction left it
+        // neutral to bandits (their hostility to Henry is his personal reputation, not a relation of the faction he hangs from)
+        if (_w178FigureEnemies) return;
         long now = W131NowMs();
         foreach (var key in _ghostEntityIds.Keys.ToArray())
         {

@@ -32,6 +32,7 @@ public partial class GameBridge
     private volatile bool _w178ClinchGuard = Wo178Rules.DefaultClinchGuard;
     private volatile bool _w178OwnBlock = Wo178Rules.DefaultOwnBlock;
     private volatile bool _w178CopyEngineState = Wo178Rules.DefaultCopyEngineState;
+    private volatile bool _w178FigureEnemies = Wo178Rules.DefaultFigureEnemies;   // mp_figure_enemies (the mod sends it with mp_figure_soul)
     private int _w178SaveBusy;
     private byte _w178LastAsker = 0xFF;
     private readonly ConcurrentDictionary<uint, (byte Why, byte Flags, long At)> _w178Offered = new();
@@ -62,6 +63,7 @@ public partial class GameBridge
                     case "clinch_guard": _w178ClinchGuard = on; break;
                     case "own_block": _w178OwnBlock = on; break;
                     case "copy_engine_state": _w178CopyEngineState = on; break;
+                    case "figure_enemies": _w178FigureEnemies = on; break;
                 }
                 Console.WriteLine($"MP-W178 cfg {cfg}={(on ? "on" : "off")}");
                 _ = Wo178PushConfigAsync();

@@ -34,6 +34,10 @@ public static class Wo178Rules
     /// <summary>mp_copy_engine_state: an enemy copy's swing winds up and strikes through the engine's own state setter, so the joiner's game
     /// opens its perfect-block slot (the green shield) and his block reaches "block in place" as against a real attacker.</summary>
     public const bool DefaultCopyEngineState = true;
+    /// <summary>mp_figure_enemies: a partner's figure keeps its own soul's faction (the game's friendly wayfarers, which enemies are hostile to by
+    /// the game's own tables) instead of joining the player's faction -- the player's faction carries no hostility of its own (it is the player's
+    /// personal reputation), so a figure in it was neutral to bandits: 0 of their attacks went to it beside Henry (WO-178 C1b, live).</summary>
+    public const bool DefaultFigureEnemies = true;
     /// <summary>The DLL's refusal word for it (wo165.h kOutOfReach).</summary>
     public const string RefusedOutOfReach = "out-of-reach";
     /// <summary>The replay's reaction-tail flag (native wo165.h kFlagReact).</summary>
@@ -131,7 +135,7 @@ public static class Wo178Rules
         name = ""; on = false;
         var f = (arg ?? "").Split('=', 2);
         if (f.Length != 2 || f[1] is not ("on" or "off")) return false;
-        if (f[0] is not ("world_autosave" or "quicksave" or "joiner_lock" or "host_lock_answer" or "fallback_hold" or "fallback_engine_cap" or "player_recoil" or "hit_reach" or "clinch_guard" or "own_block" or "copy_engine_state")) return false;
+        if (f[0] is not ("world_autosave" or "quicksave" or "joiner_lock" or "host_lock_answer" or "fallback_hold" or "fallback_engine_cap" or "player_recoil" or "hit_reach" or "clinch_guard" or "own_block" or "copy_engine_state" or "figure_enemies")) return false;
         name = f[0]; on = f[1] == "on";
         return true;
     }
