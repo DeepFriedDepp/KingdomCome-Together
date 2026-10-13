@@ -40,7 +40,7 @@ public class Wo165Tests
         // on (the maintainer: testing needs a real partner -- new pieces ship on, each with its switch), except victim decides: WO-166
         // says it stays off (its proof needs a human holding block; with WO-166 C3 the host decides the outcome)
         Assert.True(Wo165Rules.DefaultHostLock);
-        Assert.False(Wo165Rules.DefaultVictimDecides);
+        Assert.True(Wo165Rules.DefaultVictimDecides);   // 0.50.6: on (the maintainer; WO-178 C2 held block live)
         Assert.True(Wo165Rules.DefaultBlockRecoil);
         Assert.Equal(0x91, Wo165Rules.ReplayFlags);     // skip the repeat filter + refer a blocking victim (P3) to the host's verdict, unless the copy strikes (WO-176 B2)
     }

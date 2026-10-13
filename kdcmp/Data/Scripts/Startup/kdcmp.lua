@@ -21604,10 +21604,10 @@ end
 --   mp_host_lock on|off       (host, default ON)  the host can lock onto an NPC beating his partner: while he stands within 6 m of it and faces
 --                             it, his soul joins its skirmish with the explicit hostile pair the engine's lock-on needs (removed past 10 m, when
 --                             the fight ends, the NPC dies or is left 20 s over 30 m away); the NPC's own target is never written
---   mp_victim_decides on|off  (joiner, default OFF since WO-166 -- the WO's own line: its proof needs a human holding block) the joiner's
+--   mp_victim_decides on|off  (joiner, default ON since 0.50.6 -- off from WO-166 until a human held block against a copy, WO-178 C2) the joiner's
 --                             engine judges a host's blow and applies it; while he holds block the host's verdict decides
 --   mp_block_recoil on|off    (joiner, default ON) a blocked blow makes the copy that swung recoil (not judged by eye yet)
-KCD2MP.w165 = KCD2MP.w165 or { hostLock = true, victimDecides = false, blockRecoil = true }
+KCD2MP.w165 = KCD2MP.w165 or { hostLock = true, victimDecides = true, blockRecoil = true }
 
 local function w165Switch(key, field, arg, what)
     local v = KCD2MP_Wo122ParseBool(arg)
@@ -27866,7 +27866,7 @@ local ok, err = pcall(function()
     System.AddCCommand("mp_sleep_rest", 'KCD2MP_W157SetSleepRest(%line)', "WO-157: a real sleep (a vote's, or your own) that the game gave no rest gets the rest its own sleep gives -- in this game build its no-bed sleep often gives none (default on): mp_sleep_rest on|off")
     System.AddCCommand("mp_w157_status", "KCD2MP_W157Status()", "WO-157: the trespass check and the stop grace (WO157-STATUS here); also the area here: private, public, open (a shop) or unknown")
     System.AddCCommand("mp_host_lock", 'KCD2MP_W165SetHostLock(%line)', "WO-165: (host) you can lock onto an NPC that is beating your partner: near it (6 m) and facing it, you join its fight as its foe; it keeps fighting your partner until you hit it (default on): mp_host_lock on|off")
-    System.AddCCommand("mp_victim_decides", 'KCD2MP_W165SetVictimDecides(%line)', "WO-165: (joiner) your own game judges an enemy's blow and applies it; while you hold block the host's game decides, as before (UNTESTED with two players; default off since 0.48.2): mp_victim_decides on|off")
+    System.AddCCommand("mp_victim_decides", 'KCD2MP_W165SetVictimDecides(%line)', "WO-165: (joiner) your own game judges an enemy's blow and applies it; your own block, perfect block and the swing's reach decide it (UNTESTED with two players; default on since 0.50.6): mp_victim_decides on|off")
     System.AddCCommand("mp_block_recoil", 'KCD2MP_W165SetBlockRecoil(%line)', "WO-165: (joiner) an enemy whose blow you blocked plays the game's own bounce-back (UNTESTED with two players; default on): mp_block_recoil on|off")
     System.AddCCommand("mp_real_hits", 'KCD2MP_W173SetRealHits(%line)', "WO-173: (host) your partner's blows are real hits in your world: the enemy blocks, parries, staggers and fights back by its own rules, the same on both screens; off = the old raw damage, never a knock-out from one blow (UNTESTED with two players; default ON since 0.49.1, the capped raw fallback stays per blow): mp_real_hits on|off")
     System.AddCCommand("mp_arranged_guard", 'KCD2MP_W176SetArrangedGuard(%line)', "WO-176: (host) a quest's arranged fight is the story's: your partner's figure stays out of it -- no skirmish, no threat, no forced target, no lock-on, none of his blows land in it, and he is told once (default on): mp_arranged_guard on|off")
@@ -27880,7 +27880,7 @@ local ok, err = pcall(function()
     System.AddCCommand("mp_draw_probe", 'KCD2MP_W178SetDrawProbe(%line)', "WO-178: after every load one scripted draw-and-holster; stuck weapons are said and the backup to restore is marked (default on): mp_draw_probe on|off")
     System.AddCCommand("mp_world_autosave", 'KCD2MP_W178SetWorldAutosave(%line)', "WO-178: the mod's scheduled world saves (default off: saving is the player's choice): mp_world_autosave on|off")
     System.AddCCommand("mp_joiner_lock", 'KCD2MP_W178SetJoinerLock(%line)', "WO-178 C1: the joiner can lock on to the enemy copies fighting him or his host (the game's own lock-on): mp_joiner_lock on|off")
-    System.AddCCommand("mp_host_lock_answer", 'KCD2MP_W178SetHostLockAnswer(%line)', "WO-178 C1: the host locks on to an NPC fighting the partner's figure without a skirmish change (compared live; default off): mp_host_lock_answer on|off")
+    System.AddCCommand("mp_host_lock_answer", 'KCD2MP_W178SetHostLockAnswer(%line)', "WO-178 C1: the host locks on to an NPC fighting the partner's figure by the game's own hostility answer, its fight untouched (default on since 0.50.6): mp_host_lock_answer on|off")
     System.AddCCommand("mp_fallback_hold", 'KCD2MP_W178SetFallbackHold(%line)', "WO-178 C4: a joiner's blow waits up to 0.8 s for his figure's strike window before the raw fallback: mp_fallback_hold on|off")
     System.AddCCommand("mp_fallback_engine_cap", 'KCD2MP_W178SetFallbackEngineCap(%line)', "WO-178 C4: a raw fallback blow costs what the engine's own blow costs, and never floors an NPC: mp_fallback_engine_cap on|off")
     System.AddCCommand("mp_player_recoil", 'KCD2MP_W178SetPlayerRecoil(%line)', "WO-178: an enemy's blow that lands on you plays your own hit reaction (the engine's; ordinary hits only, never a knockdown) (default on): mp_player_recoil on|off")

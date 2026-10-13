@@ -482,7 +482,7 @@ void lock_tick(const uint32_t* npcs, int n) {
     }
     for (int i = 0; i < nc; ++i) {
         LockRow& row = g_locks[cs[i].eid];
-        // WO-178 (mp_host_lock_answer, compared live, default off): an NPC fighting a partner's figure becomes lockable by the hostility
+        // WO-178 (mp_host_lock_answer, default on since 0.50.6): an NPC fighting a partner's figure becomes lockable by the hostility
         // answer instead of a hostile skirmish pair -- no skirmish is touched; a pair this module already holds is released as usual
         if (kcdmp::wo178::host_answer_on()) {
             const LockView& v = cs[i].v;

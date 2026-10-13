@@ -23,7 +23,7 @@ public class Wo178Tests
     {
         Assert.False(Wo178Rules.DefaultWorldAutosave);      // the maintainer's decision: no scheduled world saves
         Assert.True(Wo178Rules.DefaultQuicksave);
-        Assert.False(Wo178Rules.DefaultHostLockAnswer);     // compared live, never flipped here
+        Assert.True(Wo178Rules.DefaultHostLockAnswer);      // 0.50.6: on (the maintainer)
         Assert.True(Wo178Rules.DefaultFallbackHold);
         Assert.True(Wo178Rules.DefaultFallbackEngineCap);
         Assert.True(Wo178Rules.DefaultPlayerRecoil);

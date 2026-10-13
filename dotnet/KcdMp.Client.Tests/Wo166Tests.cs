@@ -221,7 +221,7 @@ public class Wo166Tests
         Assert.Empty(Wo166Rules.ParseCfg("copy_strikes=maybe auto_mode=x1 auto_mode=123 =on snap_fix="));
         Assert.True(Wo166Rules.DefaultCopyStrikes);
         Assert.True(Wo166Rules.DefaultSnapFix);
-        Assert.False(Wo165Rules.DefaultVictimDecides);                     // WO-166: stays off
+        Assert.True(Wo165Rules.DefaultVictimDecides);                      // WO-166 kept it off; 0.50.6 turns it on (the maintainer)
     }
     // ---------------------------------------------------------------- W1, M1, R1, L2
 

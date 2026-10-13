@@ -43,7 +43,7 @@ double now_s() { LARGE_INTEGER q, f; QueryPerformanceCounter(&q); QueryPerforman
 
 // ---------------------------------------------------------------------------------------------------------------- switches
 std::atomic<bool> g_joinerLock{true};    // mp_joiner_lock
-std::atomic<bool> g_hostAnswer{false};   // mp_host_lock_answer (WO-178 compares it live; WO-165's pair stays the default)
+std::atomic<bool> g_hostAnswer{true};    // mp_host_lock_answer (on since 0.50.6; the agent pushes the switch)
 std::atomic<bool> g_hold{true};          // C4 (1)
 std::atomic<bool> g_engineCap{true};     // C4 (2)
 std::atomic<bool> g_hitReach{true};      // mp_hit_reach (the joiner's replay: out of reach = a miss)

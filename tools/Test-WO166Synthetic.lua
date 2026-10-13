@@ -449,7 +449,7 @@ do
     mark = #LOG
     check("W9: the C1 lever takes 0..9 only", KCD2MP_W166SetAutoMode("3") == true and countEvt("w166_cfg", "auto_mode=3", mark) == 1
         and KCD2MP_W166SetAutoMode("10") == false and KCD2MP_W166SetAutoMode("x") == false and KCD2MP_W166SetAutoMode("1.5") == false)
-    check("W10: mp_victim_decides is off again (WO-166)", KCD2MP.w165.victimDecides == false and CCMDS["mp_victim_decides"].help:find("default off", 1, true) ~= nil)
+    check("W10: mp_victim_decides is on by default (0.50.6; WO-166 had it off)", CCMDS["mp_victim_decides"].help:find("default on", 1, true) ~= nil)
     noErrs("W")
 end
 
