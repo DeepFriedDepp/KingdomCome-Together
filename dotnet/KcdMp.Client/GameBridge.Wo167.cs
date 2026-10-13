@@ -193,6 +193,7 @@ public partial class GameBridge
     /// <summary>T4: a dialogue with this player ended / started (Wo137OnQuestLine): the scene's clock.</summary>
     private void Wo167OnDudeDialogue(bool ended)
     {
+        Wo179OnDudeDialogue(ended);   // WO-179: a conversation is a scene (A3's twin bound, C2's relocation context)
         long now = W167NowMs();
         if (ended) Volatile.Write(ref _w167DlgEndMs, now);
         else { Volatile.Write(ref _w167DlgEndMs, 0); Volatile.Write(ref _w167ProgressMs, now); }
@@ -219,7 +220,8 @@ public partial class GameBridge
         if (!_w151Scenes.IsEmpty) return;   // a cutscene runs: the WO-151 guard's own business
         long dlgEnd = Volatile.Read(ref _w167DlgEndMs);
         if (!Wo167Rules.SceneStuck(Interlocked.Read(ref _w167IsmEnq), Interlocked.Read(ref _w167IsmEnd), dlgEnd,
-                                   Volatile.Read(ref _w167ProgressMs), Volatile.Read(ref _w167ReleasedForMs), now)) return;
+                                   Volatile.Read(ref _w167ProgressMs), Volatile.Read(ref _w167ReleasedForMs), now,
+                                   _w151SceneGuard ? Wo179Rules.ConversationSceneBoundMs : Wo167Rules.SceneStuckMs)) return;   // WO-179 A: 2 s, was 20 s
         if (Interlocked.CompareExchange(ref _w167ReleaseBusy, 1, 0) != 0) return;
         Volatile.Write(ref _w167ReleasedForMs, dlgEnd);
         _ = Wo167ReleaseSceneAsync(dlgEnd, now);
@@ -233,8 +235,10 @@ public partial class GameBridge
             long endsBefore = Interlocked.Read(ref _w167IsmEnd);
             Console.WriteLine(FormattableString.Invariant(
                 $"WO167-SCENE stuck dialogue_ended_s={(now - dlgEnd) / 1000.0:F0} scenes_running={Interlocked.Read(ref _w167IsmEnq) - endsBefore} -- the conversation's scene never ended (its NPCs are the host's copies): released the engine's own way, a save request (every NPC's fast-forward is cancelled)"));
-            await Wo151SceneRescueSaveAsync("a conversation's scene (WO-167 T4)");
-            long until = W167NowMs() + Wo167Rules.SceneEndWaitMs;
+            // WO-179 A: the rescue save is asked and not waited for (its file wait held the black up to 20 s more); the end is waited 1 s
+            if (_w151SceneGuard) _ = Wo151SceneRescueSaveAsync("a conversation's scene (WO-167 T4)");
+            else await Wo151SceneRescueSaveAsync("a conversation's scene (WO-167 T4)");
+            long until = W167NowMs() + (_w151SceneGuard ? Wo179Rules.ConversationEndWaitMs : Wo167Rules.SceneEndWaitMs);
             while (W167NowMs() < until && Interlocked.Read(ref _w167IsmEnd) <= endsBefore) await Task.Delay(250);
             bool ended = Interlocked.Read(ref _w167IsmEnd) > endsBefore;
             if (ended) Interlocked.Increment(ref _w167SceneEnded);

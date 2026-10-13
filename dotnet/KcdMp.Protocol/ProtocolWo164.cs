@@ -51,6 +51,8 @@ public static partial class Protocol
 
     // ---- WO-178: the DLL's ops in the WO-163 family (native/KCDMP/wo178.h) ----
     public const byte Wo178OpOffer = 24, Wo178OpStatus = 25, Wo178OpConfig = 26, Wo178OpSaveManual = 27, Wo178OpHeldResult = 28, Wo178OpTrace = 29;
+    // ---- WO-179: the DLL's ops in the WO-163 family (native/KCDMP/wo179.h) ----
+    public const byte Wo179OpStatus = 30, Wo179OpConfig = 31, Wo179OpPoll = 32, Wo179OpFade = 33;
 
     // ---- kinds (APPEND-ONLY) ----
     public const byte W164MarkPing = 1, W164Torch = 2, W164Escort = 3, W164HitOutcome = 4, W164Weather = 5, W164Travel = 6, W164RealHit = 7, W164NpcDown = 8;
@@ -68,6 +70,9 @@ public static partial class Protocol
     public const byte W164QuickSaveAnswer = 13;
     /// <summary>WO-178 0.d, host -> joiners: "quicksave=on|off" -- the host's mp_quicksave (on a change and every 10 s).</summary>
     public const byte W164QuickSaveSetting = 14;
+    /// <summary>WO-179 Part B, either way: the scene bus -- "S|R|E|K|L|T|H &lt;seq&gt; ..." (Wo179Rules: start, destination, end, skip key,
+    /// landed, clock jump, held). A shared scene is a pre-rendered video or a scene that moves Henry; the sender is the triggerer.</summary>
+    public const byte W164SceneBus = 15;
 
     /// <summary>While the torch is out, the side-channel repeats it this often (a lost edge recovers).</summary>
     public const int W164TorchRepeatMs = 10_000;
@@ -77,7 +82,7 @@ public static partial class Protocol
         W164MarkPing => "mark-ping", W164Torch => "torch", W164Escort => "escort", W164HitOutcome => "hit-outcome", W164Weather => "weather",
         W164Travel => "travel", W164RealHit => "real-hit", W164NpcDown => "npc-down", W164StoryFight => "story-fight",
         W164CorpseAsk => "corpse-ask", W164CorpseAnswer => "corpse-answer", W164QuickSaveAsk => "quicksave-ask",
-        W164QuickSaveAnswer => "quicksave-answer", W164QuickSaveSetting => "quicksave-setting", _ => $"unknown-{k}",
+        W164QuickSaveAnswer => "quicksave-answer", W164QuickSaveSetting => "quicksave-setting", W164SceneBus => "scene-bus", _ => $"unknown-{k}",
     };
 }
 

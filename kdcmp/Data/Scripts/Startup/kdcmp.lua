@@ -3680,6 +3680,36 @@ function KCD2MP_OwnerDeathLanded(name, e, tx, ty, tz)
     return true
 end
 
+-- WO-179 0.3: the lock is a lease. The agent renews it every second while a live session wants it; a killed or
+-- frozen agent renews nothing, so the lock expires on its own after leaseS and the game saves as before (it used
+-- to stay until the next load). The watch is its own timer chain with a heartbeat (a load kills every chain; a
+-- load also wipes the lock, and the agent's after-load assert starts the watch again). Menus pause the chain:
+-- the expiry then lands the moment the menu closes.
+KCD2MP.w122.leaseS = 20.0
+KCD2MP.w122.leaseBeatAt = -1e9
+KCD2MP.w122.leaseExpired = 0
+function KCD2MP_HostOnlyLockWatch()
+    local w = KCD2MP.w122
+    if (os.clock() - (w.leaseBeatAt or -1e9)) < 12.0 then return end   -- the chain is alive
+    w.leaseBeatAt = os.clock()
+    Script.SetTimer(5000, KCD2MP_HostOnlyLockLeaseTick)
+end
+function KCD2MP_HostOnlyLockLeaseTick()
+    local w = KCD2MP.w122
+    if not w.lockHeld then w.leaseBeatAt = -1e9; return end           -- nothing held: the chain ends
+    w.leaseBeatAt = os.clock()
+    local age = os.clock() - (w.lockRenewedAt or -1e9)
+    if age > w.leaseS then
+        w.leaseExpired = w.leaseExpired + 1
+        mp_log(string.format("MP-SAVELOCK lease expired name=%s age_s=%.0f n=%d -- no live session renews it (the agent is gone or frozen): released, this machine saves as before",
+            w.lockName, age, w.leaseExpired))
+        KCD2MP_HostOnlyLock(false, "lease-expired")
+        w.leaseBeatAt = -1e9
+        return
+    end
+    Script.SetTimer(5000, KCD2MP_HostOnlyLockLeaseTick)
+end
+
 -- Phase 2. The agent calls this every second while this machine is the
 -- joiner with mp_shared_world on, and once with false when that ends.
 function KCD2MP_HostOnlyLock(want, why)
@@ -3695,6 +3725,9 @@ function KCD2MP_HostOnlyLock(want, why)
     if want then
         -- dormant: never lock unless this toggle, or the HOST's session mode (WO-124), says shared world
         if not (w.sharedWorld or (KCD2MP.w124 and KCD2MP.w124.sessionShared)) then return false end
+        -- WO-179 0.3: every assert renews the lock's lease; with no live session renewing it, it expires on its own
+        w.lockRenewedAt = os.clock()
+        KCD2MP_HostOnlyLockWatch()
         -- Every refused add costs one engine "[Error] Script save lock ... already
         -- exists" line (observed), so a held lock is re-checked on the agent's
         -- 1 s tick only every lockCheckS; a load ("after-load") or anything but
@@ -28190,6 +28223,332 @@ local function diceMarkIndex(action)
     return nil
 end
 
+-- ===== WO-179: shared scenes -- videos watched together, the partner brought along (docs/WO-179-findings.md) =====
+-- The agent decides (it reads the scene stages, the native fade and relocation watch, and the scene bus); this half acts:
+--   * the switches: mp_scene_bus, mp_scene_video_shared, mp_scene_bring_along, mp_scene_partner_ignored, mp_scene_fight_clear
+--     (each default on; mp_scene_guard is WO-151's, extended by the agent)
+--   * C1: the partner's copy of a video through the game's bare movie player and the video sound setup (the WO-159 route)
+--   * C3: the quiet exit ladder -- whatever this player is doing ends the game's own way before a bring-along
+--   * C4: the ignore window -- the host's people near the landing do not perceive the partner (XGenAIModule.IgnorePerception)
+--   * the joiner's own clock jump inside its relocation scene, so the host's world can apply it once
+-- Log tags: WO179-TOGGLE, WO179-VIDEO, WO179-LADDER, WO179-IGNORE, WO179-CLOCK, WO179-SKIPKEY.
+KCD2MP.w179 = {
+    bus = true, video = true, bring = true, ignored = true, fightClear = true,
+    vid = nil, ign = nil, clock = nil, beatAt = -1e9,
+    stats = { videos = 0, ladders = 0, ignores = 0, ignoreCalls = 0, skipKeys = 0 },
+}
+
+function KCD2MP_W179Cfg()
+    local W = KCD2MP.w179
+    local function o(v) return v and "on" or "off" end
+    KCD2MP_EmitEvent("w179_cfg", string.format("bus=%s video=%s bring=%s ignored=%s fight_clear=%s",
+        o(W.bus), o(W.video), o(W.bring), o(W.ignored), o(W.fightClear)))
+    return true
+end
+
+KCD2MP_W179_SWITCHES = {
+    bus = { "mp_scene_bus", "both games agree which shared scene runs (videos and scenes that move Henry)" },
+    video = { "mp_scene_video_shared", "a pre-rendered video one of you starts plays for both" },
+    bring = { "mp_scene_bring_along", "the partner is brought beside Henry when a video or a scene moves him" },
+    ignored = { "mp_scene_partner_ignored", "after a bring-along the scene's people and the guards leave the partner alone (10 min / 60 m)" },
+    fightClear = { "mp_scene_fight_clear", "a fight the partner is in ends the game's own way before he is brought along" },
+}
+
+function KCD2MP_W179Set(key, arg)
+    local W = KCD2MP.w179
+    local s = KCD2MP_W179_SWITCHES[key]
+    if not s then return false end
+    local v = KCD2MP_Wo122ParseBool(arg)
+    if v == "bad" then mp_log(s[1] .. ": expected on|off"); return false end
+    if v ~= nil then W[key] = v end
+    mp_log("WO179-TOGGLE " .. s[1] .. " " .. (W[key] and "on" or "off") .. " -- " .. s[2])
+    KCD2MP_W179Cfg()
+    return true
+end
+
+-- ---- C1: the partner's copy of a video -----------------------------------------------------------------------------
+-- path: "videos/<dir>/<name>/<file>.bk2" (the cutscene table's Root + Profile); secs: its length when known (0 = unknown).
+-- A video covers every bit of the game's UI, so nothing is drawn over it. The movie player's own skip ends it early (it
+-- writes nothing): this player moving or turning inside it, or the skip action, is the skip (WO-159), told to the agent.
+function KCD2MP_W179PlayVideo(seq, path, secs)
+    local W = KCD2MP.w179
+    if not W.video then mp_log("WO179-VIDEO refused: mp_scene_video_shared off"); return false end
+    if not player then return false end
+    if W.vid then KCD2MP_W179StopVideo("replaced") end
+    path = tostring(path or "")
+    if not path:match("^[%w_/%.\\-]+%.bk2$") then mp_log("WO179-VIDEO refused: bad path " .. path); return false end
+    local audio = nil
+    pcall(function()
+        local id = Sound.GetAudioTriggerID("audio_setup_video")
+        if not id then return end
+        local proxy = player:GetDefaultAuxAudioProxyID()
+        player:ExecuteAudioTrigger(id, proxy)
+        audio = { ent = player, id = id, proxy = proxy }
+    end)
+    pcall(System.ExecuteCommand, "wh_ui_PlayMovie " .. path)
+    W.vid = { seq = tostring(seq), path = path, secs = tonumber(secs) or 0, at = os.clock(), audio = audio, pose = nil }
+    W.stats.videos = W.stats.videos + 1
+    mp_log(string.format("WO179-VIDEO play seq=%s path=%s secs=%.0f sound=%s", tostring(seq), path, W.vid.secs, audio and "on" or "off"))
+    Script.SetTimer(100, KCD2MP_W179VideoTick)
+    return true
+end
+
+function KCD2MP_W179StopVideo(why)
+    local W = KCD2MP.w179
+    local v = W.vid
+    if not v then return false end
+    W.vid = nil
+    if why ~= "ended" and why ~= "skipped" then pcall(System.ExecuteCommand, "wh_ui_StopMovie") end
+    if v.audio then pcall(function() v.audio.ent:StopAudioTrigger(v.audio.id, v.audio.proxy) end) end
+    mp_log(string.format("WO179-VIDEO end seq=%s why=%s after=%.1f s", v.seq, tostring(why), os.clock() - v.at))
+    KCD2MP_EmitEvent("w179", "video-end " .. v.seq .. " " .. tostring(why))
+    return true
+end
+
+function KCD2MP_W179VideoTick()
+    local W = KCD2MP.w179
+    local v = W.vid
+    if not v then return end
+    local now = os.clock()
+    if v.secs > 0 and now - v.at >= v.secs + 0.3 then KCD2MP_W179StopVideo("ended"); return end
+    if now - v.at >= 1.5 then
+        local p = nil
+        pcall(function() local q = player:GetWorldPos(); local a = player:GetWorldAngles(); p = { x = q.x, y = q.y, z = q.z, rz = a.z } end)
+        if p then
+            if not v.pose then v.pose = p
+            else
+                local dx, dy = p.x - v.pose.x, p.y - v.pose.y
+                local turn = math.abs(p.rz - v.pose.rz); if turn > math.pi then turn = 2 * math.pi - turn end
+                if dx * dx + dy * dy > 0.09 or turn > 0.05 then KCD2MP_W179StopVideo("skipped"); return end
+            end
+        end
+    end
+    Script.SetTimer(100, KCD2MP_W179VideoTick)
+end
+
+-- The skip action (the player's own key, read through the mod's existing action hook): told to the agent once per press.
+function KCD2MP_W179OnAction(action, activation)
+    if action ~= "cutscene_skip" and action ~= "skip_cutscene" then return false end
+    if activation ~= "press" then return false end
+    local W = KCD2MP.w179
+    W.stats.skipKeys = W.stats.skipKeys + 1
+    mp_log("WO179-SKIPKEY " .. tostring(action) .. " n=" .. W.stats.skipKeys)
+    KCD2MP_EmitEvent("w179", "skip-key " .. tostring(action))
+    return false   -- never consumed: the game's own handling goes on
+end
+
+-- ---- Part A (A3): a conversation that cannot start here (no dialogue twin was made) ends the game's own way -----------------
+function KCD2MP_W179ReleaseDialog(why)
+    local was = false
+    pcall(function() was = player.human:IsInDialog() == true end)
+    local ok = pcall(function() player.human:InterruptDialogs() end)
+    mp_log(string.format("WO179-RELEASE conversation why=%s in_dialog=%s interrupt=%s -- it could not start on this machine; no black screen held",
+        tostring(why), tostring(was), ok and "ok" or "ERR"))
+    pcall(KCD2MP_ShowNativeToast, "That conversation couldn't start here -- try again in a moment.")
+    return ok
+end
+
+-- ---- C3: the quiet exit ladder -------------------------------------------------------------------------------------
+-- Everything this player is doing ends the game's own way; the reply names what was cleared:
+--   wo124_reply <tok> cleared=<a,b,...> dead=0|1 riding=0|1
+function KCD2MP_W179Ladder(tok, fightClear)
+    local W = KCD2MP.w179
+    local done = {}
+    local function add(s) done[#done + 1] = s end
+    -- talking: the game's own interrupt, as if he walked away
+    local talking = false
+    pcall(function() talking = KCD2MP_W131InConversation() == true or (player.human and player.human:IsInDialog() == true) end)
+    if talking then
+        local ok = pcall(function() player.human:InterruptDialogs() end)
+        add(ok and "dialogue-interrupted" or "dialogue-ERR")
+    end
+    -- fighting: own path, own switch -- the enemies get the game's stopFight (the attack interrupt's end), Henry TryEndCombat;
+    -- no crime record, no flee, no combat code touched
+    local fighting = false
+    pcall(function() local c = player.soul and player.soul:IsInCombatDanger(); fighting = c == true or (tonumber(c) or 0) ~= 0 end)
+    if fighting then
+        if fightClear ~= false and W.fightClear then
+            local n = KCD2MP_W179FightClear()
+            add("fight-cleared:" .. tostring(n))
+        else add("fight-kept(mp_scene_fight_clear off)") end
+    end
+    -- riding: down from the horse; the horse stays where it is (the whistle still calls it)
+    local riding = false
+    pcall(function() riding = player.human:IsMounted() == true end)
+    if riding then
+        local ok = pcall(function() player.human:ForceDismount() end)
+        add(ok and "dismounted" or "dismount-ERR")
+    end
+    -- a minigame, a station, a carry, any AI action of the player: the game's own aborts (WO-177's pair)
+    local carrying = false
+    pcall(function() carrying = player.actor and player.actor.IsCarryingCorpse and player.actor:IsCarryingCorpse() == true end)
+    local aborted = false
+    if AI and type(AI.AbortAction) == "function" then aborted = pcall(function() AI.AbortAction(player.id) end) end
+    if player.player and type(player.player.OnEndInteractive) == "function" then pcall(function() player.player:OnEndInteractive() end) end
+    if carrying then add("carry-set-down") end
+    if aborted then add("actions-aborted") end
+    local dead = false
+    pcall(function() dead = player.actor and player.actor:IsDead() == true end)
+    W.stats.ladders = W.stats.ladders + 1
+    local csv = #done > 0 and table.concat(done, ",") or "nothing"
+    mp_log(string.format("WO179-LADDER cleared=%s dead=%d -- the partner leaves what he was doing the game's own way", csv, dead and 1 or 0))
+    KCD2MP_EmitEvent("wo124_reply", tostring(tok) .. " cleared=" .. csv .. " dead=" .. (dead and 1 or 0) .. " riding=" .. (riding and 1 or 0))
+    return csv
+end
+
+-- The fight clear: every NPC within 40 m in combat gets the game's own stopFight (WO-166's amnesty message, the attack
+-- interrupt's end -- they drop him and go back to their business, no crime change), and the player the game's TryEndCombat.
+function KCD2MP_W179FightClear()
+    local n = 0
+    local pos = nil
+    pcall(function() pos = player:GetWorldPos() end)
+    if pos and W139 and W139.stim then
+        local ents = {}
+        pcall(function() ents = System.GetEntitiesInSphere(pos, 40) or {} end)
+        for _, e in ipairs(ents) do
+            if (e.class == "NPC" or e.class == "NPC_Female") and not (mp_is_mod_entity and mp_is_mod_entity(e)) then
+                local fighting, dead = false, false
+                pcall(function() fighting = e.soul ~= nil and e.soul:IsInCombatMode() == true end)
+                pcall(function() dead = e.actor ~= nil and e.actor:IsDead() == true end)
+                if fighting and not dead then
+                    local t = W139.stim("stopFight")
+                    if t then
+                        t.soulCount = 1
+                        local nm = "?"
+                        pcall(function() nm = e:GetName() end)
+                        t.messageId = "w179clear" .. tostring(nm) .. tostring(math.floor(os.clock() * 10))
+                        if W139.send(e, "stopFight", t) then n = n + 1 end
+                    end
+                end
+            end
+        end
+    end
+    pcall(function() XGenAIModule.TryEndCombat(player.this and player.this.id or player.id) end)
+    mp_log(string.format("WO179-LADDER fight clear: stopFight to %d NPC(s) within 40 m, TryEndCombat on Henry -- no crime record touched", n))
+    return n
+end
+
+-- ---- C4: the ignore window (the host: the scene's people are this world's) ---------------------------------------------
+-- who: "player" (this host's own Henry was brought along) or a ghost id (a joiner's figure). Every NPC within 40 m of the target
+-- gets XGenAIModule.IgnorePerception(npc, target, <seconds>) -- the game's own "do not perceive"; re-applied every 3 s to newcomers
+-- until the window ends: maxS (10 min), or the target 60 m from where it landed.
+function KCD2MP_W179Ignore(who, x, y, z, maxS)
+    local W = KCD2MP.w179
+    if not W.ignored then mp_log("WO179-IGNORE not started: mp_scene_partner_ignored off"); return false end
+    W.ign = { who = tostring(who), x = tonumber(x) or 0, y = tonumber(y) or 0, z = tonumber(z) or 0, untilAt = os.clock() + (tonumber(maxS) or 600),
+              done = {}, n = 0, startedAt = os.clock() }
+    W.stats.ignores = W.stats.ignores + 1
+    mp_log(string.format("WO179-IGNORE start who=%s at=%.1f,%.1f,%.1f max_s=%.0f -- the scene's people and the guards leave the partner alone",
+        W.ign.who, W.ign.x, W.ign.y, W.ign.z, tonumber(maxS) or 600))
+    KCD2MP_W179IgnoreTick()
+    return true
+end
+
+function KCD2MP_W179IgnoreTarget(who)
+    if who == "player" then return player end
+    local g = KCD2MP.ghosts and (KCD2MP.ghosts[who] or KCD2MP.ghosts[tonumber(who) or -1])
+    return g and g.entity
+end
+
+function KCD2MP_W179IgnoreEnd(why)
+    local W = KCD2MP.w179
+    if not W.ign then return false end
+    mp_log(string.format("WO179-IGNORE end who=%s why=%s npcs=%d after=%.0f s -- normal rules again", W.ign.who, tostring(why), W.ign.n, os.clock() - W.ign.startedAt))
+    KCD2MP_EmitEvent("w179", "ignore-end " .. W.ign.who .. " " .. tostring(why))
+    W.ign = nil
+    return true
+end
+
+function KCD2MP_W179IgnoreTick()
+    local W = KCD2MP.w179
+    local I = W.ign
+    if not I then return end
+    local now = os.clock()
+    if now >= I.untilAt then KCD2MP_W179IgnoreEnd("10-minutes"); return end
+    local t = KCD2MP_W179IgnoreTarget(I.who)
+    if not t then KCD2MP_W179IgnoreEnd("target-gone"); return end
+    local p = nil
+    pcall(function() p = t:GetWorldPos() end)
+    if not p then KCD2MP_W179IgnoreEnd("target-gone"); return end
+    local dx, dy = p.x - I.x, p.y - I.y
+    if dx * dx + dy * dy > 3600 then KCD2MP_W179IgnoreEnd("walked-60m"); return end
+    local tw = nil
+    pcall(function() tw = XGenAIModule.GetMyWUID(t) end)
+    if tw then
+        local left = math.max(5, math.floor(I.untilAt - now))
+        local ents = {}
+        pcall(function() ents = System.GetEntitiesInSphere(p, 40) or {} end)
+        for _, e in ipairs(ents) do
+            if (e.class == "NPC" or e.class == "NPC_Female") and e.id ~= t.id and not (mp_is_mod_entity and mp_is_mod_entity(e)) then
+                local nm = nil
+                pcall(function() nm = e:GetName() end)
+                if nm and not I.done[nm] then
+                    local ew = nil
+                    pcall(function() ew = XGenAIModule.GetMyWUID(e) end)
+                    local ok = ew and pcall(function() XGenAIModule.IgnorePerception(ew, tw, tostring(left), false, true) end)
+                    if ok then I.done[nm] = true; I.n = I.n + 1; W.stats.ignoreCalls = W.stats.ignoreCalls + 1 end
+                end
+            end
+        end
+    end
+    Script.SetTimer(3000, KCD2MP_W179IgnoreTick)
+end
+
+-- ---- the joiner's own clock jump inside its relocation scene (the host applies it once) ---------------------------------
+function KCD2MP_W179ClockWatch(on, seq)
+    local W = KCD2MP.w179
+    if on then
+        local t = nil
+        pcall(function() t = Calendar.GetWorldTime() end)
+        W.clock = { seq = tostring(seq), last = tonumber(t) or 0, jumped = 0 }
+        Script.SetTimer(250, KCD2MP_W179ClockTick)
+        return true
+    end
+    local c = W.clock
+    W.clock = nil
+    if not c then return false end
+    mp_log(string.format("WO179-CLOCK seq=%s jumped=%.0f game-s", c.seq, c.jumped))
+    KCD2MP_EmitEvent("w179", string.format("clock %s %.0f", c.seq, c.jumped))
+    return true
+end
+
+function KCD2MP_W179ClockTick()
+    local c = KCD2MP.w179.clock
+    if not c then return end
+    local t = nil
+    pcall(function() t = tonumber(Calendar.GetWorldTime()) end)
+    if t then
+        local d = t - c.last
+        if d > 120 then c.jumped = c.jumped + d end   -- a skip, not the clock running (Lua numbers are float32 here: whole minutes)
+        c.last = t
+    end
+    Script.SetTimer(250, KCD2MP_W179ClockTick)
+end
+
+-- The host applies a joiner's relocation-scene skip once (the shared clock moves only here).
+function KCD2MP_W179ApplySkip(delta, who)
+    delta = tonumber(delta) or 0
+    if delta < 60 or delta > 7 * 86400 then mp_log("WO179-CLOCK refused delta=" .. tostring(delta)); return false end
+    local t = nil
+    pcall(function() t = tonumber(Calendar.GetWorldTime()) end)
+    if not t then return false end
+    local ok = pcall(function() Calendar.SetWorldTime(t + delta) end)
+    mp_log(string.format("WO179-CLOCK applied +%.0f game-s for %s (%s) -- the partner's scene skipped time; the host's world moves once",
+        delta, tostring(who), ok and "ok" or "ERR"))
+    return ok
+end
+
+function KCD2MP_W179SetBus(arg) return KCD2MP_W179Set("bus", arg) end
+function KCD2MP_W179SetVideo(arg) return KCD2MP_W179Set("video", arg) end
+function KCD2MP_W179SetBring(arg) return KCD2MP_W179Set("bring", arg) end
+function KCD2MP_W179SetIgnored(arg) return KCD2MP_W179Set("ignored", arg) end
+function KCD2MP_W179SetFightClear(arg) return KCD2MP_W179Set("fightClear", arg) end
+System.AddCCommand("mp_scene_bus", 'KCD2MP_W179SetBus(%line)', "WO-179: both games agree which shared scene runs -- videos and scenes that move Henry (default on): mp_scene_bus on|off")
+System.AddCCommand("mp_scene_video_shared", 'KCD2MP_W179SetVideo(%line)', "WO-179: a pre-rendered video one of you starts plays for both (default on): mp_scene_video_shared on|off")
+System.AddCCommand("mp_scene_bring_along", 'KCD2MP_W179SetBring(%line)', "WO-179: the partner is brought beside Henry when a video or a scene moves him (default on): mp_scene_bring_along on|off")
+System.AddCCommand("mp_scene_partner_ignored", 'KCD2MP_W179SetIgnored(%line)', "WO-179: after a bring-along the scene's people and the guards leave the partner alone, 10 min or 60 m (default on): mp_scene_partner_ignored on|off")
+System.AddCCommand("mp_scene_fight_clear", 'KCD2MP_W179SetFightClear(%line)', "WO-179: a fight the partner is in ends the game's own way before he is brought along (default on): mp_scene_fight_clear on|off")
+
 local function handleAction(action, activation, value)
     if ACTS.AXIS_ACTIONS[action] then return end
     if KCD2MP.logActions then
@@ -28197,6 +28556,7 @@ local function handleAction(action, activation, value)
     end
     if KCD2MP_W148OnAction then pcall(KCD2MP_W148OnAction, action, activation) end   -- WO-148: put_item / deposit_item / put_corpse
     if KCD2MP_W151OnAction then pcall(KCD2MP_W151OnAction, action, activation) end   -- WO-151 3.5: the whistle
+    if KCD2MP_W179OnAction then pcall(KCD2MP_W179OnAction, action, activation) end   -- WO-179 C1: the skip key, told (never consumed)
     if KCD2MP_W159OnAction then
         local okr, used = pcall(KCD2MP_W159OnAction, action, activation)   -- WO-159: hold E between the prologue's cutscenes skips the rest
         if okr and used then return end

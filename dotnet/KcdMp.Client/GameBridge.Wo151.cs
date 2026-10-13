@@ -387,6 +387,7 @@ public partial class GameBridge
 
     private void Wo151OnSceneStage(string stage, string type, string name)
     {
+        Wo179OnSceneStage(stage, type, name);   // WO-179: shared scenes (videos, relocations) and the fade log
         long now = Environment.TickCount64;
         switch (stage)
         {
@@ -662,6 +663,7 @@ public partial class GameBridge
     private void Wo151OnGameplayStarted()
     {
         Wo151SceneReset("load");   // 3.4: a load interrupts every scene (the field's two never-released ones)
+        Wo179Reset("load");        // WO-179: no shared scene survives a load
         Wo167SceneReset();         // WO-167 T4: the conversation scenes' counts start again
         if (_w151CatchUp && W137Host) _ = Task.Run(async () => { await Task.Delay(2000); await Wo151HostRebaseAsync(); });   // 3.1
         _lastAppliedWeatherProfile = null;
@@ -674,6 +676,7 @@ public partial class GameBridge
         _w151Connected = true;
         _w151CfgKey = -1;
         _ = Wo151LoopAsync(ct);
+        Wo179OnConnect(ct);   // WO-179: the scene watch (10 Hz) and the bus
     }
 
     private async Task Wo151LoopAsync(CancellationToken ct)

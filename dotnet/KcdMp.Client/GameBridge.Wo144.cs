@@ -141,6 +141,7 @@ public partial class GameBridge
     private void Wo144OnEngineLine(string line)
     {
         Wo167OnEngineLine(line);              // WO-167: the host's collision barks (T2), tree paths (T3), faders (T4) -- never consumes
+        Wo179OnEngineLine(line);              // WO-179 A3: a dialogue twin made -- never consumes
         Wo172OnEngineLine(line);              // WO-172 H1: the trade screen's own UI sounds -- never consumes
         if (Wo166OnEngineLine(line)) return;  // WO-166: the loot screen's close (L1); dialogue states and pause-request timeouts (T3)
         Wo164OnEngineLine(line);              // WO-164: refusal times (the adaptive sweep), dialogues and their commands (the talk line)

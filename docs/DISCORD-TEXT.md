@@ -225,3 +225,14 @@ Coming in the next build (code is in, no installer yet):
 - The launcher's "Your saves are safe" banner is gone (the backups still happen); the logs of the last five launches are kept and go into the bug-report bundle.
 Not yet: a figure that holds a station for the NPCs, and enemy animals (a bandit's dog) in a shared fight.
 ```
+
+## Version 0.50.7 — scenes together (WO-179)
+
+```
+0.50.7 (scenes together):
+- When one of you starts a story video, the other watches it too, and you end up standing together afterwards.
+- When a story scene moves your partner's Henry somewhere else, you are brought along beside them behind a short fade. If you were talking, fighting or riding, that ends quietly first; enemies don't chase you there.
+- The people of that scene leave the newcomer alone for a while.
+- Fewer black screens: a talk or a scene that can't start on the joiner's machine lets go within seconds instead of 20.
+- Not yet: skipping a video together. Please type mark_odd whenever something looks wrong, and send the logs.
+```

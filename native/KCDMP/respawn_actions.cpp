@@ -2,6 +2,7 @@
 // GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 #include "respawn_actions.h"
+#include "wo179.h"
 #include "fault_guard.h"
 #include "anchors.h"
 #include "engine.h"
@@ -1083,6 +1084,16 @@ bool fade_is_black() {
     return out;
 }
 
+// WO-179: is the screen faded out right now, by any fader (the controller's own answer)? False = no answer (no fader armed).
+bool screen_faded_out(bool* out) {
+    if (!g_fadeArmed || !out) return false;
+    void* ctrl = fader_ctrl();
+    bool o = false;
+    if (!ctrl || !vcall(ctrl, kFadeIsOut, &o)) return false;
+    *out = o;
+    return true;
+}
+
 bool fade_in(float seconds) {
     if (!g_fadeArmed || !g_fadeActive) return false;
     g_fadeActive = false;
@@ -1144,6 +1155,7 @@ bool teleport_xgen(float x, float y, float z) {
 }
 
 bool teleport_player(float x, float y, float z) {
+    wo179::note_own_teleport();   // WO-179: the relocation watch knows this jump is ours
     if (teleport_xgen(x, y, z)) { resnap_player(); return true; }
     // Last resort, the `goto` shape (Framework wh::framework::TeleportPlayer):
     // the player entity's SetPos with why 0, then the ground re-snap. The

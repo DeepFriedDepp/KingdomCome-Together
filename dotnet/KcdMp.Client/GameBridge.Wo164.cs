@@ -366,6 +366,9 @@ public partial class GameBridge
                 if (W137Host || !W164Text.TryParseCorpseAnswer(m.Text, out _)) { Interlocked.Increment(ref _w164Malformed); return; }
                 await ExecLuaAsync($"if KCD2MP_W177CorpseAnswer then KCD2MP_W177CorpseAnswer(\"{EscapeLua(m.Text)}\") end");
                 return;
+            case Protocol.W164SceneBus:           // WO-179 Part B: the scene bus, either way
+                await Wo179OnBusAsync(src, m.Text);
+                return;
             case Protocol.W164QuickSaveAsk:       // WO-178 0.d: a joiner's quicksave (host)
             case Protocol.W164QuickSaveAnswer:    // WO-178 0.d: the host's answer (joiner)
             case Protocol.W164QuickSaveSetting:   // WO-178 0.d: the host's mp_quicksave (joiner)

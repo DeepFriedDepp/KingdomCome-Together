@@ -25,6 +25,8 @@ bool fade_in(float seconds);
 // True once the screen is fully black (or when no fader is available, so the
 // executor never waits on a fade that cannot happen).
 bool fade_is_black();
+// WO-179: the screen's fade right now (any fader, the controller's own answer); false = no answer.
+bool screen_faded_out(bool* out);
 
 // --- player -----------------------------------------------------------------
 bool player_position(float out[3]);

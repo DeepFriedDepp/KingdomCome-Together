@@ -6023,6 +6023,10 @@ public partial class GameBridge(ClientConfig config)
             case "w176_cfg":         // WO-176: mp_arranged_guard (A1), mp_copy_blocks (B3a)
                 Wo176OnEvent(name, arg);
                 return;
+            case "w179_cfg":         // WO-179: mp_scene_bus, mp_scene_video_shared, mp_scene_bring_along, mp_scene_partner_ignored, mp_scene_fight_clear
+            case "w179":             // WO-179: the skip key, the partner's video copy ending, the joiner's clock jump, the ignore window's end
+                Wo179OnEvent(name, arg);
+                return;
             case "w177_load_quiet":  // WO-177 A5: the Lua's answer to "may a load start" (ok | fight | hit)
             case "w177_status":      // WO-177: mp_w177_status
             case "w177_calm_cfg":    // WO-177 B3: mp_tool_swing

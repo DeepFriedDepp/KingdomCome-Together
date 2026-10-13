@@ -1271,6 +1271,23 @@ Evidence: `docs/WO-177-findings.md`. **Type `mark_odd` at every miss.**
 287. **The switches:** `mp_figure_soul`, `mp_corpse_sync`, `mp_tool_swing` (all on). **Report a bug → Collect logs** afterwards (both machines);
      the native logs of the last five launches are in the bundle (`kcdmp-native.1..5.log`).
 
+## WO-179 — watching videos together, being brought along, no long black screens (0.50.7)
+
+288. **A story video together**: when one of you starts a pre-rendered video, both screens play it and it starts and ends together.
+289. **Skip**: one of you presses skip. Say what happened on both screens (the "both must press" rule is not built yet; the press is
+     logged as `WO179-VIDEO skip pressed`).
+290. **The partner is talking, fighting, riding or far away** when a video or a story trip starts: he ends up beside the other player when
+     it is over, on his feet, nobody chasing him (`WO179-BRING ... placed`, `WO179-LADDER cleared=...`).
+291. **The meadow trip** (the feud quest) and **the kidnapping that ends with Henry tied up**: you both end up in the same place, and the
+     captors leave the partner alone (`WO179-IGNORE start`).
+292. **The same with the joiner starting it**: the host is brought along in his own world; if the scene skipped time, the clock moves
+     once for both (`WO179-TIME ... applies it once`).
+293. **No black screen longer than a moment** on either screen. A talk that cannot start ends within about 4 seconds with a message
+     (`WO179-RELEASE`); a stuck scene end lets go within about 2 seconds.
+294. **Type `mark_odd` at every miss.** Switches (all on): `mp_scene_guard`, `mp_scene_bus`, `mp_scene_video_shared`,
+     `mp_scene_bring_along`, `mp_scene_partner_ignored`, `mp_scene_fight_clear`.
+295. **Kill the joiner's agent mid-session** (or close the launcher hard): within about 20 seconds the joiner's game can save again.
+
 ## Logs to send afterwards
 
 Both machines: Report a bug in the launcher. Since 0.48.9 it collects the current launch by default as a small file (or a few numbered

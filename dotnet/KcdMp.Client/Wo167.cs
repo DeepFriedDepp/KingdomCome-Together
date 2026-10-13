@@ -29,12 +29,12 @@ public static class Wo167Rules
     /// progress (a scene end, a new dialogue with this player, a fader that finished); <paramref name="releasedForMs"/>: the dialogue end
     /// a release already ran for (one release per stuck dialogue).
     /// </summary>
-    public static bool SceneStuck(long enqueues, long ends, long dlgEndMs, long progressMs, long releasedForMs, long nowMs)
+    public static bool SceneStuck(long enqueues, long ends, long dlgEndMs, long progressMs, long releasedForMs, long nowMs, long stuckMs = SceneStuckMs)
     {
         if (dlgEndMs <= 0 || enqueues <= ends) return false;           // nothing ended, or no scene is running
         if (releasedForMs == dlgEndMs) return false;                     // released already
         long since = Math.Max(dlgEndMs, progressMs);
-        return nowMs - since >= SceneStuckMs;
+        return nowMs - since >= stuckMs;
     }
 
     /// <summary>T4: the InteractiveSceneManager lines (EnqueueScene / EndScene / CleanupScene / Interrupt) -> a short stage word, or null.</summary>
