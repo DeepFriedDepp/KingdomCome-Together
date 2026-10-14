@@ -1315,6 +1315,24 @@ Evidence: `docs/WO-177-findings.md`. **Type `mark_odd` at every miss.**
 303. **Type `mark_odd` at every miss.** Switches (all on): `mp_scene_bus`, `mp_scene_video_shared`, `mp_scene_bring_along` (videos only now),
      `mp_scene_partner_ignored`, `mp_scene_fight_clear`, `mp_replay_blocked`.
 
+## WO-184 — the joiner's progress is saved, every time (0.60.0)
+
+304. **The items are there after a reload, three times in a row.** The host drops a few items, the joiner picks them up, the host saves
+     (the host sees "Partner saved." a few seconds later), the joiner quits, starts the game and rejoins: every item is in the joiner's inventory.
+     Do it three times, with more items each time. `agent.log` (joiner) has one `PAIRED host save seq=N` per host save.
+305. **The same right after the joiner talked to someone.** The joiner talks to a villager (or the talk does not even start), and the host
+     saves at once, while the talk runs or just after: still `PAIRED` within a few seconds, and the items are there after the rejoin.
+306. **The same right after a fight.** The joiner fights (shouting and getting hit), the host saves during the fight or just after: `PAIRED`
+     within a few seconds. This is the case that lost the joiner's progress on 0.50.8 and 0.50.9.
+307. **`mp_save_status` on both machines.** After a host save: the joiner's line says "Your character was saved with your host's save #N
+     (… ago). Nothing waiting."; the host's says the partner was saved with its save #N.
+308. **The joiner quits right after picking something up.** No host save in between: the joiner picks an item up, opens the menu (Esc),
+     Quit, Yes, as fast as they like. The launcher says "Your character is saved, up to the moment you quit."; after the rejoin the item is
+     there. (Alt+F4 or closing the window skips the menu: then what was picked up since the last save is gone, and the launcher says so.)
+309. **Nothing is lost silently.** If any line says `WO184-SNAP STUCK`, `WO184-HEALTH ... NOT paired`, or the game shows "Your character
+     can't be saved right now", type `mark_odd` and send the logs. Switches (all on): `mp_save_on_leave`, `mp_save_recover`,
+     `mp_partner_saved`.
+
 ## Logs to send afterwards
 
 Both machines: Report a bug in the launcher. Since 0.48.9 it collects the current launch by default as a small file (or a few numbered

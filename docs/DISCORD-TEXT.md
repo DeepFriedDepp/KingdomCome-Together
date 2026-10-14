@@ -248,3 +248,15 @@ Not yet: a figure that holds a station for the NPCs, and enemy animals (a bandit
 - An enemy that turns from one player to the other keeps fighting instead of freezing in a T-pose.
 - Please type mark_odd whenever something looks wrong, and send the logs.
 ```
+
+## Version 0.60.0 -- the joiner's progress is saved, every time (WO-184)
+
+```
+0.60.0 (the joiner's saves):
+- Fixed: on 0.50.8 and 0.50.9 the joiner's progress stopped being saved after the joiner's first shout or hit in a fight, or after a talk that did not start. The joiner's combat shouts were counted as conversations, and the save waited for that "conversation" to end, forever. On a rejoin they got an old inventory back.
+- Now every host save also saves the joiner, at once. It only waits while a save is already running or a world is loading.
+- Quitting keeps your last minute too: when the joiner opens the menu to quit, their character is saved right then. The launcher says exactly how far your character is saved.
+- If a save ever gets stuck, the mod clears it with the game's own cancel and saves again; if it cannot, both players are told.
+- New command: mp_save_status (both players) shows when your character was last saved. The host sees "Partner saved." after each of their saves.
+- Please type mark_odd whenever something looks wrong, and send the logs.
+```
