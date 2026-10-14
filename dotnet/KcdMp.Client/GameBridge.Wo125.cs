@@ -858,7 +858,7 @@ public partial class GameBridge
         {
             var gone = _henry.CleanupStale();
             var worlds = _henry.Worlds();
-            Console.WriteLine($"MP-HENRY store <data>/henry: {worlds.Count} world(s), {worlds.Sum(w => w.Count)} snapshot(s); 90-day rule removed {gone.Count}; keep {HenryStore.KeepPerWorld} per world");
+            Console.WriteLine($"MP-HENRY store <data>/henry: {worlds.Count} world(s), {worlds.Sum(w => w.Count)} snapshot(s); 90-day rule removed {gone.Count}; keep the pairs of the newest {HenryStore.KeepPerWorld} host saves per world, {HenryStore.KeepPerHostSave} each");
             Wo125Sweep("agent start");
         }
         catch (Exception ex) { Console.WriteLine($"MP-HENRY start failed: {ex.Message}"); }
