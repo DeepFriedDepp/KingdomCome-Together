@@ -462,7 +462,7 @@ public partial class GameBridge
         var ws = WorldSaved.TryDecode(payload, down: true, out byte src);
         if (ws is not WorldSaved w) return;
         if (w.IsBranchEntry) { Wo125OnBranchEntry(w); return; }   // WO-125: the host's branch, replayed before an offer
-        _ = Wo125OnHostWorldSavedAsync(w, src);                    // WO-125: a joiner in the world snapshots its Henry
+        Wo184OnHostSaveIn(w, src);                                 // WO-125 / WO-184: a joiner in the world snapshots its Henry (never waits here)
         // WO-129: the host's stamp is on the host's wall clock; remove the
         // measured offset (the first session's joiner ran 8.04 s ahead).
         long age = Wo129.HostStampAgeMs(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), w.SenderUnixMs, _clockOffsetMs, out bool skewRemoved);

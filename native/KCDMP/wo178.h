@@ -28,6 +28,14 @@
 //   27 SaveManual [whyLen:1][why] -> [result:1][text]   (1 requested, 0 refused by the engine, 2 not armed, 3 fault)
 //   28 HeldResult [seq:4] -> [state:1][WO-173 op 18's 33-byte answer]   (C4: a held blow; 0 unknown, 1 still held, 2 done)
 //   29 Trace [secs:2] -> [ok:1]   (the duel trace for secs, 0 = stop; at most 600)
+//
+// WO-184 (0.60.0): the joiner's snapshot reads the engine's own save state and can use the engine's own cancel (Part 0's manager):
+//   34 SaveState -> [armed:1][pending:1][saving:1][canQuick:1]   C_PlayerProfileWHManager::IsAnySaveGamePending / IsSaving / CanSave(Quick);
+//      armed 0 = the exports or the manager were not found (the rest is 0: the agent then reads the engine's own log lines instead)
+//   35 SaveCancel [whyLen:1][why] -> [result:1][pendingBefore:1][pendingAfter:1]   C_PlayerProfileWHManager::CancelPendingSaveGame -- the call the
+//      engine itself makes at the start of every load (LoadSavedGame) and in the editor's game reset; nothing else calls it. Made only when a
+//      save is pending (read first); result 1 cancelled, 0 nothing was pending, 2 not armed, 3 fault, 4 still pending after the call.
+//        WO184-SAVE cancel result=... why=<caller> pending_before=<0|1> pending_after=<0|1>
 #pragma once
 #include <cstddef>
 #include <cstdint>
@@ -35,6 +43,7 @@
 namespace kcdmp::wo178 {
 
 constexpr uint8_t kOpOffer = 24, kOpStatus = 25, kOpConfig = 26, kOpSaveManual = 27, kOpHeldResult = 28, kOpTrace = 29;
+constexpr uint8_t kOpSaveState = 34, kOpSaveCancel = 35;   // WO-184
 
 // The duel trace (research, read-only; op 29 [secs:2]): every frame the local player's combat model and his opponent's are read and each
 // change is logged with its time, with the combat actions entering for either (motion's capture point). WO178-TRACE t=<ms> ...
@@ -60,5 +69,10 @@ bool engine_cap_on();
 
 // Part 0, main thread: the schnapps save. 1 requested, 0 refused by the engine, 2 not armed, 3 fault.
 uint8_t save_manual(const char* why);
+
+// WO-184, main thread: the engine's save state (false = not armed: the out values are false) and its own cancel of a pending save.
+struct SaveState { bool armed, pending, saving, canQuick; };
+SaveState save_state();
+uint8_t save_cancel(const char* why, bool* pendingBefore, bool* pendingAfter);
 
 } // namespace kcdmp::wo178

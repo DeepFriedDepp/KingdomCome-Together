@@ -142,6 +142,11 @@ bool __fastcall pause_gate(void* self, void* a2, void* a3, void* a4) {
     if (n <= 200 || n % 100 == 0)
         logf("WO138-PAUSE #%u source=%u(%s) pause=%d force=%d -> %s", n, source, source_name(source), pause ? 1 : 0,
              force ? 1 : 0, decline ? "DECLINED (a session: the world keeps running)" : "runs");
+    // WO-184: the ESC menu's edge to the agent (a session only) -- the joiner's final snapshot starts as the menu opens
+    if (R::menu_edge(g_leversOn.load(std::memory_order_relaxed), source)) {
+        const uint8_t opened = pause ? 1 : 0;
+        emit(R::kMenuFrame, &opened, 1);
+    }
     return decline;
 }
 

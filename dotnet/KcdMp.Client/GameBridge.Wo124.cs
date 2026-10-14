@@ -914,6 +914,10 @@ public partial class GameBridge
         _leaveInProgress = true;           // WO-125: no join is asked until this leave's own load is in
         _newWorldLeavePending = false;
         _leaveSinceUtc = DateTime.UtcNow;
+        // WO-184 B4: one final snapshot while this game is still in the host's world (paired with the newest host save it follows); a
+        // leave that cannot take it says so plainly
+        string finalWhy = _joinedWorld ? await Wo184FinalSnapshotAsync("leave (" + why + ")") : "-";
+        if (finalWhy is not ("" or "-")) message += $" Your last progress could not be saved ({finalWhy}).";
         // WO-125 Phase 2: the target is recomputed now -- the newest own save whose playthrough is not the
         // host's (a hand-placed copy of the host's world is never "own"). None: the way back to the menu.
         var (src, ownWhy) = await Wo125NewestOwnLoadableAsync();
@@ -1023,12 +1027,11 @@ public partial class GameBridge
         _where = GameWhere.Menu;
         W160WorldGone();
         _gameQuitting = true;
+        var owedAtQuit = wasShared ? Wo184TakeOwedAtQuit() : null;   // WO-184 B4: never dropped silently
         SetJoinedWorld(false);
-        Wo125Sweep("game quit");
-        if (!wasShared) return;
-        // WO-125: true now -- the Henry for this world is the snapshot paired with the host's last save.
-        var last = _joinedTag is string t ? _henry.Snapshots(t).FirstOrDefault() : null;
-        Console.WriteLine($"MP-JOIN joiner: the game is quitting from the host's world -- its Henry for world {_joinedTag ?? "?"} is the last pair ({last?.Short ?? "none"})");
-        SetJoinUi("notice", "Your progress in this world is saved up to your host's last save.");
+        if (!wasShared) { Wo125Sweep("game quit"); return; }
+        // WO-184: the sweep waits for a final snapshot still on its way (the exit dialog's), then the launcher is told the truth -- WO-125
+        // said "saved up to your host's last save" even when that save had never paired (0.50.9: seq 4-8 owed and dropped)
+        _ = Wo184AfterQuitAsync(_joinedTag, owedAtQuit);
     }
 }

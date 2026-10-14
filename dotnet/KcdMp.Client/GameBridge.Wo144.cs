@@ -143,8 +143,10 @@ public partial class GameBridge
         Wo167OnEngineLine(line);              // WO-167: the host's collision barks (T2), tree paths (T3), faders (T4) -- never consumes
         Wo179OnEngineLine(line);              // WO-179 A3: a sign the conversation runs (WO-183 2: the twin lines are forwarded) -- never consumes
         if (line.Contains("DialogTwin_", StringComparison.Ordinal)) return;   // WO-183 2: counted by A3 only (they are many); nothing else reads them
-        Wo183OnEngineLine(line);              // WO-183 3: the engine's own save lines (a pending save) and a punishment dialogue -- never consumes
-        if (line.StartsWith(Wo183Rules.PendingSaves.ObserverPrefix, StringComparison.Ordinal) || line.Contains(Wo183Rules.PendingSaves.RefusedMarker, StringComparison.Ordinal)) return;
+        Wo184OnEngineLine(line);              // WO-184: the conversation clock's lines, the engine's save readiness, the exit dialog -- never consumes
+        Wo183OnEngineLine(line);              // WO-183: a punishment dialogue (the crime process) -- never consumes
+        if (line.StartsWith(Wo184Rules.ObserverPrefix, StringComparison.Ordinal) || line.Contains(Wo184Rules.RefusedMarker, StringComparison.Ordinal)
+            || line.StartsWith(Wo184Rules.ExitDialogLine, StringComparison.Ordinal) || line.StartsWith("OnChatWithFocus: ", StringComparison.Ordinal)) return;
         Wo172OnEngineLine(line);              // WO-172 H1: the trade screen's own UI sounds -- never consumes
         if (Wo166OnEngineLine(line)) return;  // WO-166: the loot screen's close (L1); dialogue states and pause-request timeouts (T3)
         Wo164OnEngineLine(line);              // WO-164: refusal times (the adaptive sweep), dialogues and their commands (the talk line)

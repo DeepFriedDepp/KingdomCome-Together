@@ -9,8 +9,7 @@ namespace KcdMp.Client;
 /// WO-183 (0.50.9, docs/WO-183-findings.md): the pure rules of the playtest patch. GameBridge.Wo183.cs is the bridge.
 ///   1  shared scenes are pre-rendered videos only; the one move left is the partner's landing beside the triggerer after a video
 ///      (public ground only, never during an arrest, a bring-along held behind the partner's own scene waits at most 30 s)
-///   3  the mod never saves to unstick a scene; every save the mod asks for on the joiner is the Henry snapshot, through ONE gate
-///      (<see cref="SaveBlock"/>), owed and retried every 15 s when the game cannot save now
+///   3  the mod never saves to unstick a scene; every save the mod asks for on the joiner is the Henry snapshot (WO-184: Wo184Rules owns it)
 ///   4b a copy is released as "left combat" only after the host's NPC has shown combat=0 for 1.5 s; a change of target is no leave
 /// Wo183Tests pins these.
 /// </summary>
@@ -50,68 +49,7 @@ public static class Wo183Rules
         return (-1, -1);
     }
 
-    // ---- 3: the one save owner on the joiner ----
-    /// <summary>A save that is not done is owed and retried this often.</summary>
-    public const long OwedRetryMs = 15_000;
-    /// <summary>One toast when a snapshot is still owed this long after the host's save (so a real failure is not silent).</summary>
-    public const long OwedToastMs = 120_000;
-    /// <summary>The owed snapshot is given up after this many tries (a quarter hour) -- logged; the next host save starts it again.</summary>
-    public const int OwedMaxTries = 60;
-    /// <summary>A "BeforeGameSave pending" belief with no "ready" line this long is stale: the save is tried (the engine refuses harmlessly).</summary>
-    public const long PendingStaleMs = 30_000;
-
-    /// <summary>What the joiner's game is doing, for the one question "can it save now?".</summary>
-    public readonly record struct SaveGate(bool InWorld, bool Downed, bool SceneRunning, bool Conversation, bool CrimeProcess, bool FaderBlack,
-                                           bool Menu, bool SavePending, bool Joining);
-
-    /// <summary>"" = the game can save now; else the first reason it cannot. A pending save of any kind comes first: the engine refuses or queues a second one.</summary>
-    public static string SaveBlock(SaveGate g)
-    {
-        if (g.SavePending) return "another save is pending";
-        if (g.Joining) return "a join is running";
-        if (!g.InWorld) return "not in the world (loading)";
-        if (g.Menu) return "a menu is open";
-        if (g.Downed) return "downed";
-        if (g.CrimeProcess) return "an arrest, a crime stop or a punishment is running";
-        if (g.SceneRunning) return "a scene is running";
-        if (g.Conversation) return "a conversation is running";
-        if (g.FaderBlack) return "the screen is faded";
-        return "";
-    }
-
-    /// <summary>
-    /// The engine's own save lines, read from kcd.log: "Readiness observer 'BeforeGameSave' ... started async waiting" opens a pending
-    /// save, "... is ready" closes it; the engine's refusal "... is ignored, because there is another savegame pending" means one is.
-    /// </summary>
-    public sealed class PendingSaves
-    {
-        private long _since;   // 0 = none pending
-
-        public const string ObserverPrefix = "Readiness observer 'BeforeGameSave'";
-        public const string RefusedMarker = "because there is another savegame pending";
-
-        /// <summary>Feed one engine line; true when it was a save line.</summary>
-        public bool Feed(string? line, long nowMs)
-        {
-            if (line is null) return false;
-            if (line.StartsWith(ObserverPrefix, StringComparison.Ordinal))
-            {
-                if (line.Contains("started async waiting", StringComparison.Ordinal)) Volatile.Write(ref _since, Math.Max(nowMs, 1));
-                else if (line.Contains("is ready", StringComparison.Ordinal)) Volatile.Write(ref _since, 0);
-                return true;
-            }
-            if (line.Contains(RefusedMarker, StringComparison.Ordinal)) { if (Volatile.Read(ref _since) == 0) Volatile.Write(ref _since, Math.Max(nowMs, 1)); return true; }
-            return false;
-        }
-
-        /// <summary>A pending save the engine has not finished (and not older than <see cref="PendingStaleMs"/>).</summary>
-        public bool IsPending(long nowMs) { long s = Volatile.Read(ref _since); return s != 0 && nowMs - s < PendingStaleMs; }
-
-        /// <summary>A pending save that has stayed pending past the stale bound (the engine's own readiness never came).</summary>
-        public bool IsStuck(long nowMs) { long s = Volatile.Read(ref _since); return s != 0 && nowMs - s >= PendingStaleMs; }
-
-        public void Clear() => Volatile.Write(ref _since, 0);
-    }
+    // ---- 3: the one save owner on the joiner -- WO-184 (0.60.0) replaced it (Wo184Rules): two hard blocks, no mod flags ----
 
     // ---- 4b: a copy is released as "left combat" only after the host's NPC held combat=0 for 1.5 s ----
     public const long LeftCombatDebounceMs = 1_500;

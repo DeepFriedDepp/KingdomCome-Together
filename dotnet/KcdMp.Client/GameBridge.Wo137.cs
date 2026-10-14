@@ -725,7 +725,9 @@ public partial class GameBridge
     private void Wo137OnQuestLine(string line)
     {
         if (!Wo137Rules.TryParseQuestLine(line, out var q)) return;
-        if ((q.Kind is "end" or "attempt") && q.Souls.Contains("Dude")) Wo167OnDudeDialogue(q.Kind == "end");   // WO-167 T4: the scene's clock
+        // WO-184 B2: the conversation clock (WO-167 T4's and WO-179 A3's) starts only on a real conversation of the player's -- WO-167 started
+        // it on every attempt with Henry in it, combat shouts included, and nothing ever ended those (0.50.9: every later snapshot owed)
+        Wo184OnQuestLine(line);
         switch (q.Kind)
         {
             case "player":

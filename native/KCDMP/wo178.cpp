@@ -35,7 +35,12 @@ constexpr char kClinchLabel[] = "wh::combatmodule::C_CombatActorClinch::StartSyn
 constexpr char kManagerClass[] = ".?AVC_PlayerProfileWHManager@framework@wh@@";
 constexpr char kExpInitiateSave[] = "?InitiateSaveGame@C_PlayerProfileWHManager@framework@wh@@QEAA_NW4Type@E_SaveGameType@23@HPEBD@Z";
 constexpr char kExpCanSave[] = "?CanSave@C_PlayerProfileWHManager@framework@wh@@QEBA_NW4Type@E_SaveGameType@23@@Z";
+// WO-184: the engine's own pending-save state and its own cancel (the one LoadSavedGame runs before every load)
+constexpr char kExpIsAnyPending[] = "?IsAnySaveGamePending@C_PlayerProfileWHManager@framework@wh@@QEBA_NXZ";
+constexpr char kExpIsSaving[] = "?IsSaving@C_PlayerProfileWHManager@framework@wh@@QEBA_NXZ";
+constexpr char kExpCancelPending[] = "?CancelPendingSaveGame@C_PlayerProfileWHManager@framework@wh@@QEAAXXZ";
 constexpr uint8_t kSaveTypeManual = 2;        // E_SaveGameType: 0 Permanent, 1 Auto, 2 Manual, 3 Quick, 5 Exit (the enum's own name table)
+constexpr uint8_t kSaveTypeQuick = 3;
 constexpr size_t kSelectorWindow = 0x400;     // the selector's call sits 0x160 bytes in; the window is clipped to .text
 constexpr size_t kManagerScan = 0x400;        // how far into the game interface the manager pointer is looked for
 
@@ -280,8 +285,13 @@ void say_rows(double now) {
 // ---------------------------------------------------------------------------------------------------------------- the schnapps save
 using InitiateFn = bool(__fastcall*)(void* mgr, uint8_t type, int32_t overwrite, const char* quest);
 using CanSaveFn = bool(__fastcall*)(const void* mgr, uint8_t type);
+using MgrBoolFn = bool(__fastcall*)(const void* mgr);
+using MgrVoidFn = void(__fastcall*)(void* mgr);
 InitiateFn g_initiate = nullptr;
 CanSaveFn g_canSave = nullptr;
+MgrBoolFn g_isAnyPending = nullptr, g_isSaving = nullptr;   // WO-184 (optional: missing ones leave save_state not armed)
+MgrVoidFn g_cancelPending = nullptr;
+std::atomic<uint32_t> c_cancels{0};
 void* const* g_vftMgr = nullptr;
 int g_mgrOff = -1;
 bool g_saveResolved = false, g_saveArmed = false;
@@ -295,6 +305,11 @@ bool resolve_save() {
     if (!fw) { g_saveWhy = "Framework not loaded"; return false; }
     g_initiate = reinterpret_cast<InitiateFn>(GetProcAddress(fw, kExpInitiateSave));
     g_canSave = reinterpret_cast<CanSaveFn>(GetProcAddress(fw, kExpCanSave));
+    g_isAnyPending = reinterpret_cast<MgrBoolFn>(GetProcAddress(fw, kExpIsAnyPending));
+    g_isSaving = reinterpret_cast<MgrBoolFn>(GetProcAddress(fw, kExpIsSaving));
+    g_cancelPending = reinterpret_cast<MgrVoidFn>(GetProcAddress(fw, kExpCancelPending));
+    logf("WO184-SAVE exports: IsAnySaveGamePending=%s IsSaving=%s CancelPendingSaveGame=%s (the joiner's snapshot reads the engine's own state)",
+         g_isAnyPending ? "found" : "MISSING", g_isSaving ? "found" : "MISSING", g_cancelPending ? "found" : "MISSING");
     if (!g_initiate || !g_canSave) { g_saveWhy = "InitiateSaveGame / CanSave not exported by Framework"; return false; }
     g_vftMgr = anchor::find_vftable(fw, kManagerClass, 0);
     if (!g_vftMgr) { g_saveWhy = "RTTI C_PlayerProfileWHManager vftable not unique"; return false; }
@@ -607,6 +622,43 @@ uint8_t save_manual(const char* why) {
     return 1;
 }
 
+SaveState save_state() {
+    SaveState s{false, false, false, false};
+    if (!resolve_save() || !g_isAnyPending) return s;
+    void* mgr = manager();
+    if (!mgr) return s;
+    KCDMP_FAULT_CALL(site, "wo184::save_state");
+    bool pending = false, saving = false, can = false;
+    if (!fault::guarded(site, [&] { pending = g_isAnyPending(mgr); })) return s;
+    if (g_isSaving && !fault::guarded(site, [&] { saving = g_isSaving(mgr); })) saving = false;
+    if (!fault::guarded(site, [&] { can = g_canSave(mgr, kSaveTypeQuick); })) can = false;
+    s.armed = true; s.pending = pending; s.saving = saving; s.canQuick = can;
+    return s;
+}
+
+uint8_t save_cancel(const char* why, bool* pendingBefore, bool* pendingAfter) {
+    why = why && *why ? why : "?";
+    *pendingBefore = *pendingAfter = false;
+    if (!resolve_save() || !g_isAnyPending || !g_cancelPending) {
+        logf("WO184-SAVE cancel result=not-armed why=%s -- IsAnySaveGamePending / CancelPendingSaveGame not found", why);
+        return 2;
+    }
+    void* mgr = manager();
+    if (!mgr) { logf("WO184-SAVE cancel result=not-armed why=%s -- no C_PlayerProfileWHManager among the game interface's pointers", why); return 2; }
+    KCDMP_FAULT_CALL(site, "wo184::save_cancel");
+    bool before = false, after = false;
+    if (!fault::guarded(site, [&] { before = g_isAnyPending(mgr); })) { logf("WO184-SAVE cancel result=fault why=%s (IsAnySaveGamePending)", why); return 3; }
+    *pendingBefore = before;
+    if (!before) { logf("WO184-SAVE cancel result=nothing-pending why=%s -- no save is pending: nothing called", why); return 0; }
+    if (!fault::guarded(site, [&] { g_cancelPending(mgr); })) { logf("WO184-SAVE cancel result=fault why=%s (CancelPendingSaveGame)", why); return 3; }
+    if (!fault::guarded(site, [&] { after = g_isAnyPending(mgr); })) after = true;
+    *pendingAfter = after;
+    c_cancels.fetch_add(1);
+    logf("WO184-SAVE cancel result=%s why=%s pending_before=1 pending_after=%d -- the engine's own CancelPendingSaveGame (the call LoadSavedGame makes before "
+         "every load): its BeforeGameSave wait is dropped and E_MMI_SaveGameRequestEnd sent [n=%u]", after ? "STILL-PENDING" : "cancelled", why, after ? 1 : 0, c_cancels.load());
+    return after ? 4 : 1;
+}
+
 void install_clinch() {
     HMODULE cm = GetModuleHandleA("CombatModule.dll");
     int n = 0;
@@ -782,6 +834,22 @@ uint8_t handle(uint8_t op, const uint8_t* body, size_t len, uint8_t* out, size_t
             out[0] = r;
             const int n = std::snprintf(reinterpret_cast<char*>(out + 1), cap - 1, "%s", r == 1 ? "requested" : r == 0 ? "refused" : r == 2 ? g_saveWhy : "fault");
             *outLen = 1 + ((n > 0 && static_cast<size_t>(n) < cap - 1) ? static_cast<size_t>(n) : 0);
+            return wo163::kROk;
+        }
+        case kOpSaveState: {   // WO-184
+            if (len != 1 || cap < 4) return wo163::kRBadRequest;
+            const SaveState s = save_state();
+            out[0] = s.armed ? 1 : 0; out[1] = s.pending ? 1 : 0; out[2] = s.saving ? 1 : 0; out[3] = s.canQuick ? 1 : 0;
+            *outLen = 4;
+            return wo163::kROk;
+        }
+        case kOpSaveCancel: {   // WO-184
+            if (len < 2 || len != static_cast<size_t>(2 + body[1]) || body[1] > 40 || cap < 3) return wo163::kRBadRequest;
+            const std::string why(reinterpret_cast<const char*>(body + 2), body[1]);
+            bool before = false, after = false;
+            out[0] = save_cancel(why.c_str(), &before, &after);
+            out[1] = before ? 1 : 0; out[2] = after ? 1 : 0;
+            *outLen = 3;
             return wo163::kROk;
         }
         default:

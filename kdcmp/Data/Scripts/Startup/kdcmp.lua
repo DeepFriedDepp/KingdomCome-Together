@@ -27731,6 +27731,7 @@ local ok, err = pcall(function()
     System.AddCCommand("mp_henry_reset",         "KCD2MP_Wo125Reset()",                   "WO-125: start over in your current host's world: its stored character is deleted and the next join asks Bring / Start fresh again")
     System.AddCCommand("mp_henry_files",         'KCD2MP_Wo125Files(%line)',              "WO-125: list the host worlds your character is stored for (world, last joined, snapshots, size): mp_henry_files; delete one: mp_henry_files delete <world>")
     mp_log("WO125-BUILD snapshot=QuickSave keep=100 stale_days=90 -- dormant unless the host runs a shared world")
+    mp_log("WO184-BUILD snapshot=every-host-save blocks=pending,not-in-world stuck_s=60 recover=engine-cancel final=on-leave health=60s -- the joiner's progress is saved, every time")
     -- WO-127: the leash recorder (off unless turned on; the tester page says: host, for the session).
     System.AddCCommand("mp_leash_trace",         'KCD2MP_SetLeashTrace(%line)',           "WO-127: record, once a second, every NPC within 200 m of either player and every simulation signal the game exposes cheaply, to a CSV beside agent.log (for WO-128): mp_leash_trace on|off; bare = report")
     -- WO-114: the leash (HOST values decide; default on, 600 m warning, 650 m pull).
@@ -28600,6 +28601,55 @@ System.AddCCommand("mp_scene_partner_ignored", 'KCD2MP_W179SetIgnored(%line)', "
 System.AddCCommand("mp_scene_fight_clear", 'KCD2MP_W179SetFightClear(%line)', "WO-179: a fight the partner is in ends the game's own way before he is brought along (default on): mp_scene_fight_clear on|off")
 System.AddCCommand("mp_scene_skip_both", 'KCD2MP_W179SetSkipBoth(%line)', "WO-179B: one skip ends a shared video for both -- the triggerer's skip ends the partner's copy on the same beat (default on): mp_scene_skip_both on|off")
 System.AddCCommand("mp_scene_watch_safe", 'KCD2MP_W179SetWatchSafe(%line)', "WO-179B: while the partner watches a shared video he leaves what he was doing and the people near him leave him alone (default on): mp_scene_watch_safe on|off")
+
+-- ===== WO-184: the joiner's progress is saved, every time (docs/WO-184-findings.md) ====================================
+-- The agent owns the joiner's character snapshot (GameBridge.Wo184.cs): asked at every host save, two hard blocks only (a save pending
+-- on this machine, not in the world), the engine's own "not now" asked again, a stuck save cleared the engine's own way, a final snapshot
+-- when the joiner leaves, a health check on both machines. The mod's part: three switches, mp_save_status, a line on screen.
+--   mp_save_on_leave on|off  (joiner, default ON) one last snapshot whenever the joiner leaves the host's world (the exit dialog, a leave,
+--                            the host gone), with the host's newest save; off = only when a snapshot is owed
+--   mp_save_recover on|off   (joiner, default ON) a snapshot stuck a minute (the engine never ready) is cleared by the engine's own cancel
+--                            (the call every load makes) and taken again
+--   mp_partner_saved on|off  (host, default ON) "Partner saved." on screen when the joiner's character is saved with the host's save
+--   mp_save_status           (both) the last save the character was saved with, anything waiting or stuck
+KCD2MP.w184 = KCD2MP.w184 or { saveOnLeave = true, recover = true, partnerSaved = true }
+
+function KCD2MP_W184Cfg()
+    local w = KCD2MP.w184
+    KCD2MP_EmitEvent("w184_cfg", string.format("save_on_leave=%s recover=%s partner_saved=%s",
+        w.saveOnLeave and "on" or "off", w.recover and "on" or "off", w.partnerSaved and "on" or "off"))
+    return true
+end
+
+local function w184Switch(key, field, arg, what)
+    local v = KCD2MP_Wo122ParseBool(arg)
+    if v == "bad" then mp_log("mp_" .. key .. ": expected on|off"); return false end
+    if v ~= nil then KCD2MP.w184[field] = v end
+    mp_log(string.format("WO184-TOGGLE mp_%s %s -- %s", key, KCD2MP.w184[field] and "on" or "off", what))
+    KCD2MP_W184Cfg()
+    return true
+end
+function KCD2MP_W184SetSaveOnLeave(arg) return w184Switch("save_on_leave", "saveOnLeave", arg, "one last snapshot of the joiner's character whenever the joiner leaves the host's world") end
+function KCD2MP_W184SetRecover(arg) return w184Switch("save_recover", "recover", arg, "a stuck snapshot is cleared by the engine's own cancel and taken again") end
+function KCD2MP_W184SetPartnerSaved(arg) return w184Switch("partner_saved", "partnerSaved", arg, "the host sees 'Partner saved.' when the joiner's character is saved") end
+
+function KCD2MP_W184Status()
+    mp_log("WO184-CMD mp_save_status -- the agent writes WO184-STATUS to its log and shows a line here")
+    KCD2MP_EmitEvent("w184_status", "")
+    return true
+end
+
+-- A line on screen from the agent (the game's own HUD toast).
+function KCD2MP_W184Say(text)
+    mp_log("WO184-MSG " .. tostring(text))
+    pcall(KCD2MP_ShowNativeToast, tostring(text))
+    return true
+end
+
+System.AddCCommand("mp_save_status", "KCD2MP_W184Status()", "WO-184: (both) is your character saved? The last save it was saved with, and anything waiting or stuck (a line on screen; WO184-STATUS in the agent's log)")
+System.AddCCommand("mp_save_on_leave", 'KCD2MP_W184SetSaveOnLeave(%line)', "WO-184: (joiner) your character is saved one last time whenever you leave your host's world (quit, leave, the host gone), with the host's newest save (default on; off = only when a save is owed): mp_save_on_leave on|off")
+System.AddCCommand("mp_save_recover", 'KCD2MP_W184SetRecover(%line)', "WO-184: (joiner) a save of your character stuck for a minute is cleared the game's own way (as a load does) and taken again (default on): mp_save_recover on|off")
+System.AddCCommand("mp_partner_saved", 'KCD2MP_W184SetPartnerSaved(%line)', "WO-184: (host) 'Partner saved.' on screen when your partner's character is saved with your save (default on): mp_partner_saved on|off")
 
 local function handleAction(action, activation, value)
     if ACTS.AXIS_ACTIONS[action] then return end

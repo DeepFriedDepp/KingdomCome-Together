@@ -213,7 +213,7 @@ public partial class GameBridge
     {
         try { if (!W167Off("stand-in-pulse")) await Wo167StandInTickAsync(); } catch (Exception ex) { Wo167Fault("c1-pulse", "stand-in-pulse", ex); }
         try { await Wo167PushConfigAsync(); } catch (Exception ex) { Wo167Fault("c3-config", "swing-watch", ex); }
-        try { await Wo183TickAsync(); } catch (Exception ex) { Console.WriteLine($"WO183-SNAP tick failed: {ex.GetType().Name}: {ex.Message}"); }   // WO-183: the owed snapshot
+        try { await Wo184TickAsync(); } catch (Exception ex) { Console.WriteLine($"WO184-SNAP tick failed: {ex.GetType().Name}: {ex.Message}"); }   // WO-184: the owed snapshot, the health, the clock
         long now = W167NowMs();
         long held = Volatile.Read(ref _w167FaderHeldMs);
         if (held > 0 && now - held >= Wo167Rules.FaderHoldMaxMs) await Wo167FaderRestoreAsync("60 s after the black was lifted");

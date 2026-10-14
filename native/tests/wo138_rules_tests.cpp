@@ -137,6 +137,16 @@ int wo138_rules_tests(int* passed) {
         RCHECK(!decline_pause(true, true, 40, 0xFFFFFFFFu), "a source past the mask width is never declined");
     }
 
+    // WO-184: the ESC menu's edges to the agent (the joiner's final snapshot starts as the menu opens)
+    {
+        RCHECK(menu_edge(true, kSrcInGameMenu), "a session, the ESC menu: its edge goes to the agent");
+        RCHECK(!menu_edge(false, kSrcInGameMenu), "no session: nothing goes out (solo play untouched)");
+        RCHECK(!menu_edge(true, kSrcVideoMode), "a video's pause is not the menu");
+        RCHECK(!menu_edge(true, kSrcGameOver), "Game Over is not the menu");
+        RCHECK(!menu_edge(true, 12), "photo mode is not the menu");
+        RCHECK(kMenuFrame == 0xAD, "the frame type the agent reads (CombatPipe.MenuOut)");
+    }
+
     if (passed) *passed = g_pass;
     return g_fail;
 }

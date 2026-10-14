@@ -35,7 +35,7 @@ user32 = ctypes.WinDLL('user32', use_last_error=True)
 # DirectInput games read scan codes: KEYEVENTF_SCANCODE.
 SCAN = {'1': 0x02, '2': 0x03, '3': 0x04, '4': 0x05, 'b': 0x30, 'r': 0x13, 'f': 0x21, 'e': 0x12, 'esc': 0x01, 'tab': 0x0F, 'i': 0x17,
         'w': 0x11, 's': 0x1F, 'a': 0x1E, 'd': 0x20, 'space': 0x39, 'enter': 0x1C, 'q': 0x10, 'h': 0x23,
-        'home': 0x47, 'delete': 0x53, 'insert': 0x52, 'end': 0x4F, 'pgup': 0x49, 'pgdn': 0x51}
+        'home': 0x47, 'delete': 0x53, 'insert': 0x52, 'end': 0x4F, 'pgup': 0x49, 'pgdn': 0x51, 'f1': 0x3B}   # WO-184: f1 = photo mode
 EXTENDED = {'home', 'delete', 'insert', 'end', 'pgup', 'pgdn'}   # WO-178: the navigation keys are extended scan codes
 KEYEVENTF_EXTENDEDKEY = 0x0001
 KEYEVENTF_SCANCODE, KEYEVENTF_KEYUP, INPUT_MOUSE, INPUT_KEYBOARD = 0x0008, 0x0002, 0, 1

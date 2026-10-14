@@ -116,6 +116,7 @@ public sealed class CombatPipe : IAsyncDisposable
     private const byte Wo163             = 0x2B;   // WO-163 [op][...] -> 0xAC [ok][seq][op][reason][payload] (native wo163.h)
     private const byte Wo163Reply        = 0xAC;
     private const byte ExtraOut          = 0xA9;   // WO-143, unsolicited: hands, gaits, looks, one-shots, need-item, one-shot done
+    public const byte MenuOut            = 0xAD;   // WO-184, unsolicited: the ESC menu opened (1) / closed (0) in a session (native wo138_rules.h kMenuFrame)
 
     private const int GuidLen = 16;
 
@@ -168,6 +169,12 @@ public sealed class CombatPipe : IAsyncDisposable
 
     /// <summary>WO-138: the 0xA1 world state (on a change, and every 2 s).</summary>
     public Action<Wo138WorldState>? OnWorld { get; set; }
+
+    /// <summary>
+    /// WO-184: 0xAD -- the ESC menu opened (true) or closed (false) in a session. Called ON the reader: it must not make a pipe
+    /// request (the WO-131 trap); the handler only starts its own task.
+    /// </summary>
+    public Action<bool>? OnMenu { get; set; }
 
     /// <summary>
     /// WO-139: 0xA3 kind 1 -- the local player's new trespass level (0 public .. 4 prohibited)
@@ -1062,6 +1069,25 @@ public sealed class CombatPipe : IAsyncDisposable
         return (body[0] == 1, body[3], body.AsSpan(4).ToArray());
     }
 
+    /// <summary>WO-184 op 34: the engine's own save state (IsAnySaveGamePending / IsSaving / CanSave(Quick)); null = no answer or not armed.</summary>
+    public async Task<(bool Pending, bool Saving, bool CanQuick)?> Wo184SaveStateAsync(CancellationToken ct = default)
+    {
+        var r = await Wo163Async(Protocol.Wo184OpSaveState, [], ct);
+        if (r is not { Ok: true, Payload.Length: >= 4 } x || x.Payload[0] == 0) return null;
+        return (x.Payload[1] != 0, x.Payload[2] != 0, x.Payload[3] != 0);
+    }
+
+    /// <summary>WO-184 op 35: the engine's own cancel of a pending save. Result 1 cancelled, 0 nothing pending, 2 not armed, 3 fault, 4 still pending; null = no answer.</summary>
+    public async Task<(byte Result, bool Before, bool After)?> Wo184SaveCancelAsync(string why, CancellationToken ct = default)
+    {
+        byte[] w = System.Text.Encoding.ASCII.GetBytes(why.Length > 40 ? why[..40] : why);
+        var a = new byte[1 + w.Length];
+        a[0] = (byte)w.Length; w.CopyTo(a, 1);
+        var r = await Wo163Async(Protocol.Wo184OpSaveCancel, a, ct);
+        if (r is not { Ok: true, Payload.Length: >= 3 } x) return null;
+        return (x.Payload[0], x.Payload[1] != 0, x.Payload[2] != 0);
+    }
+
     /// <summary>
     /// WO-163 op 1 (A7, read-only): the engine's own skirmish relation test between this machine's player and the NPC of that name --
     /// Hostile = they are hostile opponents in one skirmish. Answered false = the DLL could not make the call (null = no answer at all).
@@ -1861,6 +1887,12 @@ public sealed class CombatPipe : IAsyncDisposable
                 else if (type == WorldOut)
                 {
                     if (Wo138Codec.TryParseWorld(body, out var ws)) { try { OnWorld?.Invoke(ws); } catch { } }
+                }
+                else if (type == MenuOut)
+                {
+                    // WO-184: [opened]
+                    if (body.Length >= 1) { try { OnMenu?.Invoke(body[0] != 0); } catch (Exception ex) { Console.WriteLine($"[wo184] menu edge not handled: {ex.Message}"); } }
+                    else Console.WriteLine($"[wo184] malformed Menu frame ({body.Length} bytes)");
                 }
                 else if (type == ActivityOut)
                 {

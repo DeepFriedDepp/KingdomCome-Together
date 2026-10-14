@@ -86,6 +86,10 @@ public class Wo183Tests
         (".nextnextgenpunishment.", "a refinement of 'New dialogue' lines (forwarded as a prefix): the game's own arrest dialogues"),
         ("started async waiting", "a refinement of the BeforeGameSave readiness prefix (forwarded)"),
         ("is ready", "a refinement of the BeforeGameSave readiness prefix (forwarded)"),
+        // WO-184: the conversation clock's parser
+        ("meta override: COMBAT_", "a refinement of 'Attempting to start new dialogue' (the QuestLine path) and 'New dialogue' (a prefix) lines: a combat shout"),
+        ("monolog", "a refinement of 'New dialogue' lines (forwarded as a prefix): '(ingame monolog - Id: n)'"),
+        ("DoMonologue", "a refinement of 'New dialogue' lines (forwarded as a prefix): '(AI::DoMonologue)'"),
     ];
 
     private static string ClientDir()
@@ -149,7 +153,8 @@ public class Wo183Tests
             ("GameBridge.Wo170.cs", "Wo170OnEngineLine"),
             ("GameBridge.Wo172.cs", "Wo172OnEngineLine"), ("Wo172.cs", "ApseScreen"),
             ("GameBridge.Wo144.cs", "Wo144OnEngineLine"), ("GameBridge.Wo144.cs", "Wo144OnEngineLineMore"),
-            ("GameBridge.Wo183.cs", "Wo183OnEngineLine"), ("Wo183.cs", "Feed"),
+            ("GameBridge.Wo183.cs", "Wo183OnEngineLine"),
+            ("GameBridge.Wo184.cs", "Wo184OnEngineLine"), ("GameBridge.Wo184.cs", "Wo184OnQuestLine"), ("Wo184.cs", "Parse"), ("Wo184.cs", "HasDude"),
         };
         var missing = new List<string>();
         int checkedCount = 0;
@@ -164,7 +169,7 @@ public class Wo183Tests
                 checkedCount++;
                 if (NotForwardedOnPurpose.Any(x => x.Literal == lit)) continue;
                 // a literal tested with StartsWith must pass as the line's start; any other as a part of a line
-                bool passes = LogTailGameTransport.Wo144Passes(lit) || LogTailGameTransport.Wo144Passes("xx" + lit + "yy")
+                bool passes = LogTailGameTransport.Wo144Passes(lit) || LogTailGameTransport.Wo144Passes("xx" + lit + "yy") || LogTailGameTransport.QuestLinePasses(lit)
                               || LogTailGameTransport.Wo144Prefixes.Concat(LogTailGameTransport.Wo144Contains).Any(e => e.Contains(lit, StringComparison.Ordinal));   // a fragment of a forwarded phrase
                 if (!passes) missing.Add($"{file}:{method} matches \"{lit}\" but the forward lists would not pass such a line");
             }
@@ -174,70 +179,8 @@ public class Wo183Tests
     }
 
     // ---------------------------------------------------------------- 3: the pending save and the one gate
-
-    [Fact]
-    public void The_pending_tracker_reads_the_engines_own_save_lines()
-    {
-        var p = new Wo183Rules.PendingSaves();
-        Assert.False(p.IsPending(1000));
-        Assert.True(p.Feed("Readiness observer 'BeforeGameSave' with category bitmask '42' started async waiting", 1000));
-        Assert.True(p.IsPending(1500));
-        Assert.True(p.Feed("Readiness observer 'BeforeGameSave' with category bitmask '42' is ready", 2000));
-        Assert.False(p.IsPending(2100));
-        Assert.False(p.Feed("Readiness observer 'UICharacterFader' with category bitmask '129' started async waiting", 3000));
-        Assert.False(p.IsPending(3100));
-    }
-
-    [Fact]
-    public void A_pending_save_that_never_becomes_ready_goes_stale_after_thirty_seconds()
-    {
-        var p = new Wo183Rules.PendingSaves();
-        p.Feed("Readiness observer 'BeforeGameSave' with category bitmask '42' started async waiting", 1000);
-        Assert.True(p.IsPending(30_999));
-        Assert.False(p.IsPending(31_000));
-        Assert.True(p.IsStuck(31_000));
-    }
-
-    [Fact]
-    public void The_engines_refusal_of_a_second_save_means_one_is_pending()
-    {
-        var p = new Wo183Rules.PendingSaves();
-        Assert.True(p.Feed("[Error] Savegame type QuickSave, quest '' is ignored, because there is another savegame pending: type 3, quest ''", 5000));
-        Assert.True(p.IsPending(6000));
-        Assert.True(LogTailGameTransport.Wo144Passes("[Error] Savegame type QuickSave, quest '' is ignored, because there is another savegame pending: type 3, quest ''"));
-        Assert.True(LogTailGameTransport.Wo144Passes("Readiness observer 'BeforeGameSave' with category bitmask '42' started async waiting"));
-    }
-
-    private static Wo183Rules.SaveGate Free => new(InWorld: true, Downed: false, SceneRunning: false, Conversation: false, CrimeProcess: false, FaderBlack: false, Menu: false, SavePending: false, Joining: false);
-
-    [Fact]
-    public void The_gate_is_open_only_when_nothing_blocks_a_save()
-    {
-        Assert.Equal("", Wo183Rules.SaveBlock(Free));
-        Assert.Contains("pending", Wo183Rules.SaveBlock(Free with { SavePending = true }));
-        Assert.Contains("join", Wo183Rules.SaveBlock(Free with { Joining = true }));
-        Assert.Contains("loading", Wo183Rules.SaveBlock(Free with { InWorld = false }));
-        Assert.Contains("menu", Wo183Rules.SaveBlock(Free with { Menu = true }));
-        Assert.Contains("downed", Wo183Rules.SaveBlock(Free with { Downed = true }));
-        Assert.Contains("arrest", Wo183Rules.SaveBlock(Free with { CrimeProcess = true }));
-        Assert.Contains("scene", Wo183Rules.SaveBlock(Free with { SceneRunning = true }));
-        Assert.Contains("conversation", Wo183Rules.SaveBlock(Free with { Conversation = true }));
-        Assert.Contains("faded", Wo183Rules.SaveBlock(Free with { FaderBlack = true }));
-    }
-
-    [Fact]
-    public void A_pending_save_comes_first_the_engine_refuses_or_queues_a_second()
-    {
-        Assert.Contains("pending", Wo183Rules.SaveBlock(Free with { SavePending = true, SceneRunning = true, CrimeProcess = true }));
-    }
-
-    [Fact]
-    public void The_owed_snapshot_retries_every_fifteen_seconds_toasts_after_two_minutes_and_gives_up_after_a_quarter_hour()
-    {
-        Assert.Equal(15_000, Wo183Rules.OwedRetryMs);
-        Assert.Equal(120_000, Wo183Rules.OwedToastMs);
-        Assert.Equal(15 * 60_000, Wo183Rules.OwedMaxTries * Wo183Rules.OwedRetryMs);
-    }
+    // WO-184 (0.60.0) replaced WO-183's gate (a conversation clock that combat shouts started and nothing ended silently stopped every
+    // later snapshot): Wo184Tests pins the two hard blocks, the engine's own pending state, the clock's ends, stuck, leave and health.
 
     // ---------------------------------------------------------------- 1: the landing
 

@@ -145,4 +145,13 @@ inline bool decline_pause(bool leversOn, bool pause, uint16_t source, uint32_t m
     return leversOn && pause && source < 32 && ((mask >> source) & 1u) != 0;
 }
 
+// WO-184: the ESC menu's edges (opened / closed) go to the agent while the
+// levers are on (a session): the joiner's final snapshot starts when the menu
+// opens, before any quit -- the exit dialog alone left it about 1 s, and a
+// player who confirms faster quit before the save was written. Frame 0xAD [opened].
+constexpr uint8_t kMenuFrame = 0xAD;
+inline bool menu_edge(bool leversOn, uint16_t source) {
+    return leversOn && source == kSrcInGameMenu;
+}
+
 } // namespace kcdmp::wo138rules

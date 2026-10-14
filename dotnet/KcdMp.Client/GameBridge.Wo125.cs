@@ -311,6 +311,13 @@ public partial class GameBridge
     {
         if (!_joinedWorld) { Console.WriteLine("MP-HENRY joiner: the host is reloading (this game is not in its world)"); return; }
         if (_rewinding) return;
+        // WO-184 B4: a snapshot still owed for a host save before this reload is taken now (its last chance: the rejoin restores the pair of
+        // the save the host loads, and nothing done from here on is kept). Off the relay's reader; the world is unchanged meanwhile.
+        _ = Task.Run(async () =>
+        {
+            string r = await Wo184FinalSnapshotAsync("host reload", ignoreRewind: true, onlyIfOwed: true);
+            if (r is not ("" or "-")) Console.WriteLine($"WO184-FINAL host reload: the owed snapshot was not taken ({r})");
+        });
         _rewinding = true;
         _rejoinPending = false;
         const string msg = "Your host is reloading... what you do now won't be kept.";
@@ -721,6 +728,7 @@ public partial class GameBridge
             Console.WriteLine($"MP-HENRY joiner: the host is in another playthrough now ({_peerTag}) -- leaving world {tag} after this join");
             _ = Task.Run(() => LeaveSharedWorldAsync("host-new-world", "Your host loaded a different game."));
         }
+        Wo184OnJoined(offerMd5, seq);   // WO-184: the join save is this world's first pair; a final snapshot pairs with it until the host saves
         if (offerMd5 is null) { Console.WriteLine("MP-HENRY joiner: the offer's md5 is unknown -- the join save is not paired"); return; }
         try
         {
@@ -746,96 +754,8 @@ public partial class GameBridge
     /// <summary>Guard: a playline near the engine's 100-quicksave rotation is never snapshotted into (the rotation could remove the player's oldest).</summary>
     public const int SnapshotQuicksaveGuard = 95;
 
-    /// <summary>A host world save (not a branch entry) while this game is in the host's world.</summary>
-    private async Task Wo125OnHostWorldSavedAsync(WorldSaved w, byte src, long owedSinceMs = 0)
-    {
-        string md5 = Convert.ToHexString(w.Md5).ToLowerInvariant();
-        string skip = !_joinedWorld ? "" : _jj is not null ? "a join is running" : _rewinding ? "the host is reloading (nothing is kept until the rejoin)"
-                    : _joinedTag is null ? "the world is not known" : _resetTag == _joinedTag ? "mp_henry_reset this session (a new choice next join)"
-                    : !_peerHenryWorld ? "the host's player is not Henry" : _where != GameWhere.World ? "not in the world" : "";
-        if (!_joinedWorld) return;   // not in the host's world: nothing to pair
-        if (skip != "") { Console.WriteLine($"MP-HENRY joiner: host save seq={w.Seq} md5={md5[..8]}: no snapshot -- {skip}"); return; }
-        // WO-183 3c: the one gate. A game that cannot save now (a pending save, a scene, an arrest, downed, a menu, loading) is owed the snapshot:
-        // retried every 15 s with the newest host save, never a request into a game that will refuse it or leave it pending
-        string block = W183SaveBlock();
-        if (block == "" && Volatile.Read(ref _snapBusy) != 0) block = "the previous snapshot is still running";
-        if (block != "") { Wo183Owe(w, src, block, owedSinceMs); return; }
-        if (Interlocked.CompareExchange(ref _snapBusy, 1, 0) != 0) { Wo183Owe(w, src, "the previous snapshot is still running", owedSinceMs); return; }
-        var tIn = DateTime.UtcNow;   // WO-183: a snapshot taken late measures its lag from the moment the gate opened (this line), not from the host's save
-        HenryStore.LedgerEntry? led = null;
-        try
-        {
-            string? saves = ResolveSavesDirForJoin();
-            int pl = _lastWorldPlayline;
-            if (saves is null || pl < 0) { Console.WriteLine("MP-HENRY joiner: no snapshot -- the playline of this world is not known"); return; }
-            string dir = Path.Combine(saves, $"playline{pl}");
-            int qs = Directory.Exists(dir) ? Directory.EnumerateFiles(dir, "quicksave*.whs").Count() : 0;
-            if (qs >= SnapshotQuicksaveGuard) { Console.WriteLine($"MP-HENRY joiner: no snapshot -- playline{pl} holds {qs} quicksaves (the engine rotates at 100; a snapshot could push out the player's oldest)"); return; }
-            // Keep the engine's cached list in step with the disk first: a new quicksave is
-            // named max(SaveId in the list)+1 (observed), so a stale list could name an existing file.
-            await _combat.SaveListAsync(1, pl, "-");
-            led = _henry.LedgerAdd(new HenryStore.LedgerEntry { Playline = pl, SinceUtc = DateTime.UtcNow.AddSeconds(-1), WorldTag = _joinedTag!, Kind = "snapshot" });
-            var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
-            lock (_snapGate) _snapWait = (pl, DateTime.UtcNow.AddSeconds(-1), tcs);
-            var tReq = DateTime.UtcNow;
-            string r = await AskModAsync("KCD2MP_Wo125Snapshot", 6000);
-            if (!r.StartsWith("ok=true", StringComparison.Ordinal))
-            {
-                Console.WriteLine($"MP-HENRY joiner: host save seq={w.Seq} md5={md5[..8]}: the engine REFUSED the snapshot ({r}) -- owed (retried every 15 s with the newest host save; its progress is kept up to the previous pair meanwhile: loss, never duplication)");
-                _henry.LedgerSet(led.Id, e => e.State = "done");
-                Wo183Owe(w, src, $"the engine refused the snapshot ({r})", owedSinceMs);
-                return;
-            }
-            var done = await Task.WhenAny(tcs.Task, Task.Delay(20000));
-            if (done != tcs.Task)
-            {
-                Console.WriteLine($"MP-HENRY joiner: host save seq={w.Seq}: no snapshot file within 20 s -- no pair (the ledger keeps it for the next sweep)");
-                return;
-            }
-            string path = tcs.Task.Result;
-            var tFile = DateTime.UtcNow;
-            byte[] bytes = WhsSave.ReadShared(path);
-            var v = WhsSave.Verify(bytes);
-            _henry.LedgerSet(led.Id, e => { e.File = Path.GetFileName(path); e.Md5 = v.Md5; e.State = "written"; });
-            string? storeWhy = null;
-            if (!v.Ok) storeWhy = "the snapshot does not verify: " + v.Reason;
-            WhsSave.HenryParts? parts = null;
-            if (storeWhy is null)
-            {
-                var c = WhsSave.Inflate(bytes);
-                uint? seed = WhsSave.ReadSeed(c.Raw);
-                if (seed is not uint s || Wo157TagFor(s) != _joinedTag) storeWhy = "the snapshot is not of the host's world (seed)";
-                else if (!WhsSave.PlayerOf(c.Raw).IsHenry) storeWhy = "the snapshot's player is not Henry";
-                else parts = WhsSave.PartsFromStream(c.Raw, WhsSave.DescriptionSummary(c.Desc).GetValueOrDefault("BuildInfo") ?? "", WhsSave.HenryParts.OriginSnapshot);
-            }
-            double lagS = (tReq - tIn).TotalSeconds;
-            if (storeWhy is null && lagS > 3.0) storeWhy = $"the snapshot started {lagS:F1} s after the host's save arrived (over 3 s: its Henry is no longer a match for that save)";
-            if (storeWhy is null)
-            {
-                var snap = _henry.Store(_joinedTag!, parts!, md5, HenryStore.SourceSnapshot, $"host {Protocol.SaveKindName(w.Kind)} playline{w.Playline}/{w.FileName} seq={w.Seq}");
-                Wo134OnSnapshotStored(snap);   // WO-134: the chest ledger pairs with it
-                Console.WriteLine(FormattableString.Invariant(
-                    $"MP-HENRY joiner: PAIRED host save seq={w.Seq} md5={md5[..8]} with snapshot {snap.Short}: host-save-in -> request {lagS:F2} s, -> file verified {(tFile - tReq).TotalSeconds:F2} s ({SaveDisplay(path)}, {bytes.Length} B)"));
-                Wo157TellCharacterSaved();   // WO-157 3b.8: "does my inventory save?" -- said on screen
-            }
-            else Console.WriteLine($"MP-HENRY joiner: host save seq={w.Seq} md5={md5[..8]}: snapshot NOT stored -- {storeWhy}");
-            // The QuickSave is a copy of the host's world in this player's playline: out at once.
-            bool gone = _henry.MoveOut(path, "a snapshot's QuickSave (the host's world)");
-            var after = await _combat.SaveListAsync(1, pl, Path.GetFileNameWithoutExtension(path));
-            string expect = OwnSaves(saves, HostSeedForOwn(), null, Wo157HostedSeed).FirstOrDefault(s => s.Save.Playline == pl)?.Save.Base ?? "-";
-            Console.WriteLine($"MP-HENRY joiner: snapshot file {SaveDisplay(path)} moved out={On(gone)}; rescan listed={(after is null ? "?" : On(after.Listed))}; Continue would load playline{after?.ContinuePlayline}/{after?.ContinueName ?? "?"} (own newest there: {expect})");
-            if (gone) _henry.LedgerSet(led.Id, e => e.State = "done");
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"MP-HENRY joiner: snapshot for host save seq={w.Seq} failed: {ex.GetType().Name}: {ex.Message}");
-        }
-        finally
-        {
-            lock (_snapGate) _snapWait = null;
-            Volatile.Write(ref _snapBusy, 0);
-        }
-    }
+    // WO-184: the snapshot itself is GameBridge.Wo184.cs (Wo184OnHostSaveIn -> Wo184TakeAsync): asked at every host save, two hard blocks only,
+    // the engine's own "not now" asked again every 2 s, stuck after 60 s, a final snapshot at every leave (WO-183's gate and its owed list are gone).
 
     /// <summary>
     /// A verified save landed in a playline while this game is joined. The
@@ -854,6 +774,7 @@ public partial class GameBridge
                 return true;
             }
         }
+        if (Wo184TakeLateFile(path)) return true;   // WO-184: a snapshot whose wait ended still pairs (0.50.9 moved it out as a "leak")
         if (!_joinedWorld) return false;
         var led = _henry.LedgerAdd(new HenryStore.LedgerEntry
         {

@@ -9,32 +9,15 @@ namespace KcdMp.Client;
 
 // WO-183 -- 0.50.9: the bridge half (Wo183Rules has the pure rules; docs/WO-183-findings.md has the evidence).
 //
-//   the save owner (item 3)   the joiner's game is asked to save ONLY for the Henry snapshot paired with a host save, through one gate:
-//                             nothing pending, no scene, no arrest / crime stop / punishment, not downed, no menu, not loading. A snapshot
-//                             the game cannot take now is OWED and retried every 15 s with the newest host save it follows; a log line per
-//                             owed snapshot and one toast when it is still owed after 2 minutes. The scene rescue saves (WO-151, WO-167 T4,
-//                             WO-179's positioning lift) are gone: in the field one of them, asked mid-arrest, stayed pending and the engine
-//                             refused every later save of that machine (34 rescues and both of the host's snapshots).
+//   the save owner (item 3)   WO-184 (0.60.0) replaced it: its gate waited on mod flags with no end (a conversation clock that combat shouts
+//                             started and nothing ended) and silently stopped every later snapshot. GameBridge.Wo184.cs. The removal of the
+//                             scene rescue saves (WO-151, WO-167 T4, WO-179's positioning lift) stays.
 //   the crime process         an arrest, a crime stop or a punishment is read from the game's own words (a crime_ scene, a guard's stop,
 //                             a punishment dialogue); nothing of the mod moves a player in it (the landing waits, the leash does not pull).
 //   the landing's area check  KCD2MP_W183AreasAt asks the game's own area labels (WO-157's) for each ring spot.
 public partial class GameBridge
 {
-    private readonly Wo183Rules.PendingSaves _w183Pending = new();
     private long _w183PunishDialogueMs;
-    private long _w183SnapOwed, _w183SnapLate, _w183SnapDropped, _w183SnapToasts, _w183GateRefusals;
-
-    private sealed class W183Owed
-    {
-        public WorldSaved W;
-        public byte Src;
-        public long SinceMs, LastTryMs;
-        public int Tries;
-        public bool Toasted;
-        public string Why = "";
-    }
-    private W183Owed? _w183Owed;
-    private readonly object _w183Lock = new();
 
     // 4b: the "left combat" clock per NPC (a retarget is combat=0 for a moment), the releases waiting on it
     private readonly Wo183Rules.LeftCombat _w183Left = new();
@@ -69,120 +52,14 @@ public partial class GameBridge
         return "";
     }
 
-    // ================================================================ the save gate
+    // ================================================================ the engine's lines
 
-    private Wo183Rules.SaveGate W183Gate()
-    {
-        long now = Environment.TickCount64;
-        byte ps = Wo138PauseState();
-        bool scene = _w179Cur is not null || (ps & Wo138Codec.ReasonCutscene) != 0
-                     || Wo170Rules.ScenesRunning(Interlocked.Read(ref _w167IsmEnq), Interlocked.Read(ref _w167IsmEnd)) > 0
-                     || _w151Scenes.Values.Any(s => s.EndAtMs == 0 && now - s.PlayAtMs < 5 * 60_000);
-        return new Wo183Rules.SaveGate(
-            InWorld: _where is not (GameWhere.Menu or GameWhere.Loading),
-            Downed: _localDowned,
-            SceneRunning: scene,
-            Conversation: _w179DudeStartMs > 0 || (ps & Wo138Codec.ReasonDialogue) != 0,
-            CrimeProcess: W183CrimeProcess() != "",
-            FaderBlack: _w179Faded,
-            Menu: (ps & (Wo138Codec.ReasonMenu | Wo138Codec.ReasonLoad)) != 0,
-            SavePending: _w183Pending.IsPending(now),
-            Joining: _jj is not null || _rewinding);
-    }
-
-    /// <summary>"" = the joiner's game can save now (the one gate every save request goes through); else why not.</summary>
-    private string W183SaveBlock() => Wo183Rules.SaveBlock(W183Gate());
-
-    /// <summary>The engine's own save lines (the log tail forwards them): a pending save, its readiness, the refusal of a second one.</summary>
+    /// <summary>A punishment dialogue starting (the crime process's 20 s window). WO-184: the save lines are GameBridge.Wo184.cs's now.</summary>
     private void Wo183OnEngineLine(string line)
     {
-        long now = Environment.TickCount64;
-        bool wasPending = _w183Pending.IsPending(now);
-        if (_w183Pending.Feed(line, now))
-        {
-            bool pending = _w183Pending.IsPending(now);
-            if (pending != wasPending || line.Contains(Wo183Rules.PendingSaves.RefusedMarker, StringComparison.Ordinal))
-                Console.WriteLine($"WO183-SAVE engine: {(line.Contains(Wo183Rules.PendingSaves.RefusedMarker, StringComparison.Ordinal) ? "a save was REFUSED because another is pending" : pending ? "a save is pending (BeforeGameSave waiting)" : "the pending save is ready")}");
-            return;
-        }
         if (line.StartsWith("New dialogue '", StringComparison.Ordinal) && line.Contains(".nextnextgenpunishment.", StringComparison.Ordinal))
-            Volatile.Write(ref _w183PunishDialogueMs, now);
+            Volatile.Write(ref _w183PunishDialogueMs, Environment.TickCount64);
     }
-
-    // ================================================================ the owed snapshot
-
-    /// <summary>The snapshot cannot be taken now: owed, retried every 15 s with the newest host save it follows.</summary>
-    private void Wo183Owe(WorldSaved w, byte src, string why, long sinceMs = 0)
-    {
-        long now = Environment.TickCount64;
-        lock (_w183Lock)
-        {
-            if (_w183Owed is { } o)
-            {
-                Console.WriteLine($"WO183-SNAP still owed: host save seq={w.Seq} supersedes seq={o.W.Seq} (the snapshot pairs with the newest host save it follows); why={why}");
-                o.W = w; o.Src = src; o.Why = why;
-                return;
-            }
-            _w183Owed = new W183Owed { W = w, Src = src, SinceMs = sinceMs > 0 ? sinceMs : now, LastTryMs = now, Why = why };
-        }
-        Interlocked.Increment(ref _w183SnapOwed);
-        Console.WriteLine($"WO183-SNAP owed: host save seq={w.Seq} -- the game cannot save now ({why}); retried every {Wo183Rules.OwedRetryMs / 1000} s, no save request meanwhile");
-    }
-
-    /// <summary>1 s (the WO-151 loop): retry the owed snapshot every 15 s; one toast when it is still owed after 2 minutes.</summary>
-    private async Task Wo183TickAsync()
-    {
-        W183Owed? o;
-        lock (_w183Lock) o = _w183Owed;
-        if (o is null) return;
-        long now = Environment.TickCount64;
-        if (!_joinedWorld || _where is GameWhere.Menu or GameWhere.Loading)
-        {
-            lock (_w183Lock) _w183Owed = null;
-            Console.WriteLine($"WO183-SNAP owed host save seq={o.W.Seq} dropped: this game left the host's world (the progress kept is up to the previous pair)");
-            return;
-        }
-        if (now - o.LastTryMs < Wo183Rules.OwedRetryMs) return;
-        o.LastTryMs = now;
-        o.Tries++;
-        if (o.Tries > Wo183Rules.OwedMaxTries)
-        {
-            lock (_w183Lock) _w183Owed = null;
-            Interlocked.Increment(ref _w183SnapDropped);
-            Console.WriteLine($"WO183-SNAP owed host save seq={o.W.Seq} given up after {o.Tries - 1} tries ({Wo183Rules.Seconds(now - o.SinceMs)} s): the progress kept is up to the previous pair; the next host save starts again");
-            return;
-        }
-        string block = W183SaveBlock();
-        if (block != "")
-        {
-            Interlocked.Increment(ref _w183GateRefusals);
-            if (block != o.Why) { Console.WriteLine($"WO183-SNAP still owed (try {o.Tries}, {Wo183Rules.Seconds(now - o.SinceMs)} s): {block}"); o.Why = block; }
-            if (!o.Toasted && now - o.SinceMs >= Wo183Rules.OwedToastMs)
-            {
-                o.Toasted = true;
-                Interlocked.Increment(ref _w183SnapToasts);
-                Console.WriteLine($"WO183-SNAP still owed after {Wo183Rules.Seconds(now - o.SinceMs)} s ({block}) -- the player is told once");
-                await W164NoticeAsync("Your character's progress hasn't been saved for a while. It is saved as soon as the game allows.");
-            }
-            return;
-        }
-        lock (_w183Lock) _w183Owed = null;
-        Interlocked.Increment(ref _w183SnapLate);
-        Console.WriteLine($"WO183-SNAP the game can save now: owed host save seq={o.W.Seq} is taken {Wo183Rules.Seconds(now - o.SinceMs)} s late (try {o.Tries})");
-        await Wo125OnHostWorldSavedAsync(o.W, o.Src, o.SinceMs);
-    }
-
-    /// <summary>A load, a rejoin or the session's end: nothing owed survives it.</summary>
-    private void Wo183Reset(string why)
-    {
-        W183Owed? o;
-        lock (_w183Lock) { o = _w183Owed; _w183Owed = null; }
-        _w183Pending.Clear();
-        if (o is not null) Console.WriteLine($"WO183-SNAP owed host save seq={o.W.Seq} dropped ({why})");
-    }
-
-    private string Wo183StatsText() =>
-        $"snap_owed={Interlocked.Read(ref _w183SnapOwed)} snap_late={Interlocked.Read(ref _w183SnapLate)} snap_dropped={Interlocked.Read(ref _w183SnapDropped)} snap_toasts={Interlocked.Read(ref _w183SnapToasts)} gate_refusals={Interlocked.Read(ref _w183GateRefusals)} pending_now={On(_w183Pending.IsPending(Environment.TickCount64))}";
 
     // ================================================================ the landing's area check
 

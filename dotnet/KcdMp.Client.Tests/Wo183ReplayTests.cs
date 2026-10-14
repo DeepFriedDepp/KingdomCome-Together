@@ -94,13 +94,11 @@ public class Wo183ReplayTests
         if (b is null) { _out.WriteLine("SKIPPED: logs/w183/mys_combat is not unpacked here"); return; }
         string kcd = Path.Combine(b, "kcd.log"), agent = Path.Combine(b, "agent.log");
         int requested = 0, refusedByEngine = 0, pendingOpened = 0;
-        var pend = new Wo183Rules.PendingSaves();
-        long pendingForged = 0;
         foreach (string l in File.ReadLines(kcd))
         {
             if (l.StartsWith("[KCD2-MP] WO125-SNAPSHOT quicksave=", StringComparison.Ordinal)) requested++;
-            if (l.Contains("because there is another savegame pending", StringComparison.Ordinal)) refusedByEngine++;
-            if (LogTailGameTransport.Wo144Passes(l) && pend.Feed(l, ++pendingForged) && l.Contains("started async waiting", StringComparison.Ordinal)) pendingOpened++;
+            if (l.Contains(Wo184Rules.RefusedMarker, StringComparison.Ordinal)) refusedByEngine++;
+            if (LogTailGameTransport.Wo144Passes(l) && l.StartsWith(Wo184Rules.ObserverPrefix, StringComparison.Ordinal) && l.Contains("started async waiting", StringComparison.Ordinal)) pendingOpened++;
         }
         int rescuesAsked = File.ReadLines(agent).Count(l => l.Contains("WO167-SCENE stuck", StringComparison.Ordinal)) + File.ReadLines(agent).Count(l => l.Contains("MP-W151 scene") && l.Contains("rescue", StringComparison.Ordinal) && l.Contains("save request", StringComparison.Ordinal));
         int hostSnapshotsRefused = File.ReadLines(agent).Count(l => l.Contains("MP-HENRY joiner: host save seq=", StringComparison.Ordinal) && l.Contains("REFUSED the snapshot", StringComparison.Ordinal));
@@ -120,9 +118,9 @@ public class Wo183ReplayTests
         Assert.DoesNotContain("Wo151SceneRescueSaveAsync", src);
         Assert.DoesNotContain("KCD2MP_Wo125Snapshot", src);
         string snapshotCallers = string.Join(",", Directory.GetFiles(ClientDir(), "*.cs").Where(f => File.ReadAllText(f).Contains("AskModAsync(\"KCD2MP_Wo125Snapshot\"", StringComparison.Ordinal)).Select(Path.GetFileName));
-        Assert.Equal("GameBridge.Wo125.cs", snapshotCallers);
-        // the gate: with nothing pending (no rescue ever opened one) and the player free, both host snapshots are issued
-        Assert.Equal("", Wo183Rules.SaveBlock(new Wo183Rules.SaveGate(true, false, false, false, false, false, false, false, false)));
+        Assert.Equal("GameBridge.Wo184.cs", snapshotCallers);   // WO-184 moved the one snapshot request (Wo184TakeAsync)
+        // the gate (WO-184: two hard blocks): with nothing pending (no rescue ever opened one) and the player in the world, both host snapshots are issued
+        Assert.Equal("", Wo184Rules.SaveBlock(new Wo184Rules.SaveGate(InWorld: true, Joining: false, Rewinding: false, SavePending: false)));
     }
 
     private static string ClientDir()

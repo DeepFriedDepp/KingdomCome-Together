@@ -266,7 +266,7 @@ void send_npc_combat(const uint8_t* body, uint16_t len) { send_unsolicited(kNpcC
 void send_quest_change(const uint8_t* body, uint16_t len) { send_unsolicited(kQuestChange, body, len, "QuestChange"); }
 // WO-138: the native NPC rows (0xA0) and the world state (0xA1), main thread.
 void send_wo138_frame(uint8_t type, const uint8_t* body, uint16_t len) {
-    send_unsolicited(type, body, len, type == kNpcStreamOut ? "NpcStream" : "World");
+    send_unsolicited(type, body, len, type == kNpcStreamOut ? "NpcStream" : type == kMenuOut ? "Menu" : "World");   // Menu: WO-184
 }
 // WO-139: a crime event from this machine (wo139.h), main thread.
 void send_wo139_frame(const uint8_t* body, uint16_t len) { send_unsolicited(kCrimeOut, body, len, "Crime"); }

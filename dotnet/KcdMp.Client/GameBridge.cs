@@ -6027,6 +6027,11 @@ public partial class GameBridge(ClientConfig config)
             case "w179":             // WO-179: the skip key, the partner's video copy ending, the joiner's clock jump, the ignore window's end
                 Wo179OnEvent(name, arg);
                 return;
+            case "w184_cfg":         // WO-184: mp_save_on_leave, mp_save_recover, mp_partner_saved
+            case "w184_status":      // WO-184: mp_save_status
+            case "w184_test":        // WO-184: harness-only (KCDMP_TEST_W184=1)
+                Wo184OnEvent(name, arg);
+                return;
             case "w177_load_quiet":  // WO-177 A5: the Lua's answer to "may a load start" (ok | fight | hit)
             case "w177_status":      // WO-177: mp_w177_status
             case "w177_calm_cfg":    // WO-177 B3: mp_tool_swing

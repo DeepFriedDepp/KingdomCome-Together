@@ -134,6 +134,9 @@ public partial class GameBridge
         if (f.Length < 2 || !Wo137Text.IsNpc(f[1])) return;
         string npc = f[1];
         double now = W164Now();
+        // WO-184 B2: the player's own talk opens the conversation clock, the mod's start binds its dialogue, its end ends it
+        if (f[0] is "ask" or "start" or "end")
+            Wo184OnTalk(f[0], npc, f[0] == "start" && f.Length > 2 && int.TryParse(f[2], NumberStyles.None, CultureInfo.InvariantCulture, out int tid) ? tid : -1);
         switch (f[0])
         {
             case "ask":
@@ -375,6 +378,9 @@ public partial class GameBridge
                 return;
             case Protocol.W164SceneBus:           // WO-179 Part B: the scene bus, either way
                 await Wo179OnBusAsync(src, m.Text);
+                return;
+            case Protocol.W164SaveHealth:         // WO-184 B5: a joiner's word about his own save (the host: "Partner saved.")
+                await Wo184OnHealthInAsync(src, m.Text);
                 return;
             case Protocol.W164QuickSaveAsk:       // WO-178 0.d: a joiner's quicksave (host)
             case Protocol.W164QuickSaveAnswer:    // WO-178 0.d: the host's answer (joiner)

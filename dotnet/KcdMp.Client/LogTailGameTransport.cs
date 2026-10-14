@@ -393,6 +393,10 @@ public sealed class LogTailGameTransport : IGameTransport
         "Interrupting dialog '",
         // WO-183 3: a save waiting for the engine's readiness (pending until "... is ready"): the joiner's one save owner never asks a second
         "Readiness observer 'BeforeGameSave'",
+        // WO-184 B2: the player's own talk press (the conversation clock starts only on a talk he asked for, or a forced dialogue with him)
+        "OnChatWithFocus: Dude->",
+        // WO-184 B4: the game's exit dialog (a quit follows when the player confirms): the joiner's final snapshot is taken here
+        "C_UISaveLoad::HandleExit()",
     ];
 
     public static readonly string[] Wo144Contains =
@@ -420,6 +424,13 @@ public sealed class LogTailGameTransport : IGameTransport
         // WO-183 3: the engine's refusal of a save while another is pending
         "because there is another savegame pending",
     ];
+
+    /// <summary>WO-184: would <see cref="QuestLine"/> receive this raw engine line? (The class test pins the clock's literals against both lists.)</summary>
+    public static bool QuestLinePasses(ReadOnlySpan<char> line) =>
+        line.StartsWith("Soul 'Dude' requested dialog. ", StringComparison.Ordinal)
+        || line.StartsWith("Attempting to start new dialogue (runtime id '", StringComparison.Ordinal)
+        || (line.StartsWith("[ID: ", StringComparison.Ordinal) && line.IndexOf("] Dialog end", StringComparison.Ordinal) > 0)
+        || line.StartsWith("Switching to player ", StringComparison.Ordinal);
 
     /// <summary>WO-183 2: would <see cref="Wo144Line"/> receive this raw engine line? (The class test pins every handler's literals against it.)</summary>
     public static bool Wo144Passes(ReadOnlySpan<char> line)
@@ -785,10 +796,7 @@ public sealed class LogTailGameTransport : IGameTransport
             catch (Exception ex) { Console.WriteLine($"[join] load-failed handler threw: {ex.Message}"); }
         }
 
-        if (QuestLine is not null && (line.StartsWith("Soul 'Dude' requested dialog. ", StringComparison.Ordinal)
-                                      || line.StartsWith("Attempting to start new dialogue (runtime id '", StringComparison.Ordinal)
-                                      || (line.StartsWith("[ID: ", StringComparison.Ordinal) && line.IndexOf("] Dialog end", StringComparison.Ordinal) > 0)
-                                      || line.StartsWith("Switching to player ", StringComparison.Ordinal)))
+        if (QuestLine is not null && QuestLinePasses(line))
         {
             try { QuestLine.Invoke(line.ToString()); }
             catch (Exception ex) { Console.WriteLine($"[wo137] quest-line handler threw: {ex.Message}"); }
