@@ -122,7 +122,8 @@ The two A3 releases left in Mystigan's log are both a haggle with the merchant `
 same two; their cause is WO-181's research, not this WO's). The new clock is never open longer than 5.1 s in any bundle; 0.50.9's
 stayed open for the rest of the session (498 s at the end of Moose's first launch).
 
-**C4 — the live save round trip** of the build: in the installer record below.
+**C4 — the live save round trip** of the build: **PASS** (a throwaway save in playline4: the weapon drawn before, the resting save
+healthy with no stuck quest fight, reloaded, the weapon drawn after). See the installer record below for the run before it.
 
 **C5 — unit tests:** 39 WO-184 tests, the 5 replays among them (the two hard blocks, every flag's end, the clock, stuck at 60 s, the
 final snapshot and the ESC menu's, the health check, the restore choice, the store keeping every host save's pair); the agent's whole
@@ -152,3 +153,21 @@ suite 1664/1664; the native suite 9478/9478
 
 `mp_save_status` (both machines) · `mp_save_on_leave on|off` (default on) · `mp_save_recover on|off` (default on) ·
 `mp_partner_saved on|off` (host, default on).
+
+## The installer
+
+Built from a fresh clone of `1cd640a` with `tools\Build-Installer.ps1 -SoakWaiver "<the standing rule of 2026-10-06>" -Push`. Exit 0.
+Two earlier runs did not ship. The first was stopped by hand before its push, because the Henry store change above came after it. The
+second stopped at the live save round trip: the gate's own request that starts the save came back "connection reset" while the game
+was writing the save, and the save was healthy. The gate now reads a save or a reload whose request the game cut from the game's log;
+every check is unchanged, and the third run passed it. No save round-trip waiver was used.
+
+| | |
+|---|---|
+| file | `release\KingdomComeTogether-Setup-0.60.0.exe` (local only; nothing uploaded) |
+| size | 107,071,427 bytes |
+| sha256 | `9864b9dcc1014a42c5e36c599a88d17235b076133d96cf83700f67245f9651aa` |
+| header version | **0.60.0** (the compile line `KCDMP.iss (version 0.60.0)`, the exe's ProductVersion / FileVersion, the relay smoke `release=0.60.0`) |
+| signed | no (no signing settings on this machine) |
+| gates | the publishing gate (before the build and at the push), the agent suite 1664, relay 63, setup 77, LogPack 14, all 66 Lua synthetic suites (`Test-WO184Synthetic` 21/21), the static checks, the payload coherence and smoke gate, **the live save round trip PASS**; the soak waived under the standing rule (`release\SOAK-WAIVED-0.60.0.txt`) |
+| pushed | `main`; the last commit is the rebuilt `kdcmp.pak` the installer carries and this record |
