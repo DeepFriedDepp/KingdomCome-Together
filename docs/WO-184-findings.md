@@ -66,7 +66,8 @@ attempt (`Attempting to start new dialogue … 'Ex: Dude - meta override: COMBAT
 * **B4** a final snapshot at every leave (`mp_save_on_leave`, default on); for a quit it starts when the ESC menu opens (the DLL's
   PauseGame gate sends the menu's edges to the agent, in a session only), because the game logs its exit dialog only about 1 s before
   it ends; the exit dialog takes one itself if the menu's did not cover it. A snapshot whose file lands late still pairs (it was moved
-  out as a "leak" before). WO-125's 3 s lag rejection is gone (the accepted late rule).
+  out as a "leak" before). WO-125's 3 s lag rejection is gone (the accepted late rule). The Henry store keeps the pairs of the newest
+  100 host saves (the host's autosave rotation), at most 2 of each: the extra late snapshots never push another host save's pair out.
 * **B5** `WO184-HEALTH` lines, the two-in-a-row warning, `mp_save_status`, "Partner saved." on the host (`mp_partner_saved`, default on;
   shown once per host save, a later snapshot of the same save only logged).
 * The quit notice says what is true: "saved, up to the moment you quit", "saved up to your host's save #N (… ago)", "saved as it was
@@ -123,8 +124,9 @@ stayed open for the rest of the session (498 s at the end of Moose's first launc
 
 **C4 — the live save round trip** of the build: in the installer record below.
 
-**C5 — unit tests:** 38 WO-184 tests, the 5 replays among them (the two hard blocks, every flag's end, the clock, stuck at 60 s, the
-final snapshot and the ESC menu's, the health check, the restore choice); the agent's whole suite 1663/1663; the native suite 9478/9478
+**C5 — unit tests:** 39 WO-184 tests, the 5 replays among them (the two hard blocks, every flag's end, the clock, stuck at 60 s, the
+final snapshot and the ESC menu's, the health check, the restore choice, the store keeping every host save's pair); the agent's whole
+suite 1664/1664; the native suite 9478/9478
 (the menu edge included); the Lua synthetic suites (WO-184's own: the switches, `mp_save_status`, the snapshot answer).
 
 ## For the maintainer to confirm

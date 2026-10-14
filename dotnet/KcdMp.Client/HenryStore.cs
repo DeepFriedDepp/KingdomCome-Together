@@ -40,6 +40,13 @@ public sealed class HenryStore
     /// </summary>
     public const int KeepPerWorld = 100;
 
+    /// <summary>
+    /// WO-184: snapshots kept per host save, the newest first. A host save gets later snapshots of its own (the joiner's ESC menu, a
+    /// leave: the late rule); a restore takes the newest of a host save (an older one only when the newest is broken), so the rest must
+    /// not push other host saves' pairs out: <see cref="KeepPerWorld"/> counts host saves, not files.
+    /// </summary>
+    public const int KeepPerHostSave = 2;
+
     /// <summary>A world not joined for this many days is deleted at agent start (logged). The maintainer may change it.</summary>
     public const int StaleDays = 90;
 
@@ -156,7 +163,8 @@ public sealed class HenryStore
     /// <summary>
     /// Store one snapshot, paired with the host save <paramref name="md5"/>
     /// (32 hex). Atomic (.part + rename), read back by hash and a full parse.
-    /// Then the world is pruned to <see cref="KeepPerWorld"/>, oldest first.
+    /// Then the world is pruned to the pairs of its newest <see cref="KeepPerWorld"/>
+    /// host saves, at most <see cref="KeepPerHostSave"/> each, oldest first.
     /// </summary>
     public Snapshot Store(string tag, WhsSave.HenryParts parts, string md5, string source, string detail)
     {
@@ -229,13 +237,25 @@ public sealed class HenryStore
 
     private void Prune(string tag)
     {
-        var all = Snapshots(tag);
-        foreach (var s in all.Skip(KeepPerWorld))
+        // newest first: the pairs of the newest KeepPerWorld host saves, at most KeepPerHostSave of each (WO-184)
+        var kept = new Dictionary<string, int>(StringComparer.Ordinal);   // md5 -> kept so far; -1 = past the newest KeepPerWorld host saves
+        int hostSaves = 0;
+        foreach (var s in Snapshots(tag))
         {
+            string why;
+            if (!kept.TryGetValue(s.Md5, out int n))
+            {
+                if (hostSaves < KeepPerWorld) { kept[s.Md5] = 1; hostSaves++; continue; }
+                kept[s.Md5] = -1;
+                why = $"keeping the pairs of the newest {KeepPerWorld} host saves";
+            }
+            else if (n < 0) why = $"keeping the pairs of the newest {KeepPerWorld} host saves";
+            else if (n >= KeepPerHostSave) why = $"keeping the newest {KeepPerHostSave} of host save {s.Md5[..8]}";
+            else { kept[s.Md5] = n + 1; continue; }
             TryDelete(Path.Combine(WorldDir(tag), s.File));
             TryDelete(ChestLedgerPath(s));
             UpdateWorld(tag, w => w.Pairs.Remove(s.File));
-            _log($"MP-HENRY world {tag}: pruned snapshot {s.Short} (keeping the newest {KeepPerWorld})");
+            _log($"MP-HENRY world {tag}: pruned snapshot {s.Short} ({why})");
         }
     }
 

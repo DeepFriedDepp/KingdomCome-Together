@@ -462,6 +462,26 @@ public class Wo184Tests : IDisposable
         Assert.Equal(fin.File, st.PickFor(tag, branch)!.Snapshot.File);
     }
 
+    [Fact]
+    public void Late_snapshots_of_one_host_save_never_push_other_host_saves_out_of_the_store()
+    {
+        var st = Store();
+        string tag = WhsSave.SeedTag(184);
+        var parts = Parts(1);
+        for (int i = 0; i < HenryStore.KeepPerWorld; i++) { st.Store(tag, parts, M(i), HenryStore.SourceSnapshot, "host save"); _now = _now.AddSeconds(1); }
+        // the joiner opens the ESC menu 30 times before the host saves again: 30 late snapshots of the newest host save
+        for (int k = 0; k < 30; k++) { st.Store(tag, parts, M(HenryStore.KeepPerWorld - 1), HenryStore.SourceSnapshot, "final snapshot (the ESC menu)"); _now = _now.AddSeconds(1); }
+        var all = st.Snapshots(tag);
+        Assert.Equal(HenryStore.KeepPerWorld, all.Select(s => s.Md5).Distinct().Count());               // every host save keeps its pair
+        Assert.Equal(HenryStore.KeepPerHostSave, all.Count(s => s.Md5 == M(HenryStore.KeepPerWorld - 1)));
+        Assert.Equal(HenryStore.KeepPerWorld + 1, all.Count);
+        Assert.Equal(M(0), st.PickFor(tag, [M(0)])!.Snapshot.Md5);                                       // a rewind to the oldest still finds its own Henry
+        var newest = all.First(s => s.Md5 == M(HenryStore.KeepPerWorld - 1));
+        Assert.Equal(newest.File, st.PickFor(tag, [M(HenryStore.KeepPerWorld - 1)])!.Snapshot.File);    // and the newest host save its newest
+        st.Store(tag, parts, M(HenryStore.KeepPerWorld), HenryStore.SourceSnapshot, "host save");        // a 101st host save: the oldest goes
+        Assert.DoesNotContain(st.Snapshots(tag), s => s.Md5 == M(0));
+    }
+
     // ================================================================ the bridge's source guarantees
 
     private static string ClientFile(string f)
