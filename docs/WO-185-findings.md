@@ -153,4 +153,3 @@ like at the animation level (the state traces never showed one; the Mannequin ta
 * The contact model (start + hit) was only exercised on the charged stab; a normal row's blade contact on the copy was not measured (the pass that tried it was blocked).
 * `mp_player_recoil` stays on by default (hit reaction and knock-back on blocks too); off removes both. Not judged again after 0.60.1.
 * The vanilla "instant riposte" the maintainer remembers was not captured as an animation; the traces show the same attacker-recovery wait.
-* README prose line 31 still says "current version is 0.50.0" (not touched; only the `main` badge is kept current).
