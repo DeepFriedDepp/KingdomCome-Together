@@ -71,6 +71,10 @@ int wo166_tests(int* passed) {
         WCHECK(!player_perfect_blocks(0x80, false) && !player_perfect_blocks(0x2, true), "a plain block or guard is no perfect block");
         WCHECK(pb_moment(10.0, 9.5, 10.3) && !pb_moment(9.4, 9.5, 10.3) && !pb_moment(10.4, 9.5, 10.3) && !pb_moment(10.0, 0.0, 10.3),
                "from the copy's wind-up to its window's end");
+        // WO-185: the perfect-blocked sequence from contact (vanilla: 0x10 at contact, 0x20 0.42 s later, back to prior 0.72 s after contact)
+        WCHECK(pb_contact_due(10.0, 10.0) && pb_contact_due(10.1, 10.0) && !pb_contact_due(9.9, 10.0) && !pb_contact_due(10.0, 0.0), "due at the blow's contact, never before");
+        WCHECK(kPbContactStage2S < kPbContactHoldS && kPbContactStage2S > 0.3 && kPbContactStage2S < 0.5 && kPbContactHoldS > 0.6 && kPbContactHoldS < 0.8,
+               "0x20 about 0.42 s after contact, the prior state about 0.7 s after it (the vanilla trace)");
         WCHECK(pb_from_state(4) && pb_from_state(8) && pb_from_state(2) && !pb_from_state(0x40) && !pb_from_state(1), "wind-up, strike or the dropped Guard");
         WCHECK(engine_state_ours(8) && engine_state_ours(4) && engine_state_ours(0x10) && engine_state_ours(0x20) && !engine_state_ours(0x40),
                "the window puts back its own states only (never the engine's Hit)");

@@ -58,6 +58,13 @@ inline bool attack_fields_ok(int32_t type, int32_t zone, float strength, int32_t
 constexpr int32_t kStateWindupEngine = 4, kStatePerfectBlocked = 0x10, kStateAfterPerfectBlocked = 0x20;
 constexpr double kPbStage2S = 0.5;    // 0x10 -> 0x20 after this
 constexpr double kPbHoldS = 1.1;      // the copy is back in its prior state this long after the perfect block met it
+// WO-185 (mp_pb_at_contact, 0.60.1): a real attacker's perfect-blocked sequence starts when its blow is processed (contact), not when the
+// defender's block begins (the vanilla trace: the attacker 0x8 -> 0x10 at +0.78..0.82 s while the defender pressed at +0.34..0.55 s; 0x10 -> 0x20
+// 0.42 s later; back to Guard 0.67..0.76 s after contact; the defender's PerfectBlockState ends about 0.05 s after the attacker enters 0x20).
+// A copy that went 0x10 at the press ran 0x20 at press + 0.5 s and cut the defender's perfect block short of the verdict.
+constexpr double kPbContactStage2S = 0.42;   // 0x10 -> 0x20 after this, from contact
+constexpr double kPbContactHoldS = 0.72;     // the copy is back in its prior state this long after contact
+inline bool pb_contact_due(double now, double hitAt) { return hitAt > 0 && now >= hitAt; }
 inline bool player_perfect_blocks(int32_t state, bool pb) { return pb && (state == kStatePrepParry || state == kStateParryInPlace); }
 // From the copy's wind-up to its window's end (live: the engine drops the attacker to Guard the very frame the player's perfect-block
 // action starts -- a real attack's own action takes it to 0x10 instead -- so the step follows the player's perfect block, not the hit time).

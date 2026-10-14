@@ -31,6 +31,7 @@ public class Wo178Tests
         Assert.True(Wo178Rules.DefaultClinchGuard);
         Assert.True(Wo178Rules.DefaultOwnBlock);
         Assert.True(Wo178Rules.DefaultCopyEngineState);
+        Assert.True(Wo178Rules.DefaultPbAtContact);
         Assert.True(Wo178Rules.DefaultFigureEnemies);
         Assert.True(Wo178Rules.TryParseCfg("figure_enemies=off", out string fe, out bool feOn) && fe == "figure_enemies" && !feOn);
         Assert.Equal("out-of-reach", Wo178Rules.RefusedOutOfReach);   // native wo165.cpp reason_name(kOutOfReach)
@@ -184,6 +185,7 @@ public class Wo178Tests
     [InlineData("clinch_guard=on", "clinch_guard", true, true)]
     [InlineData("own_block=off", "own_block", false, true)]
     [InlineData("copy_engine_state=on", "copy_engine_state", true, true)]
+    [InlineData("pb_at_contact=off", "pb_at_contact", false, true)]
     [InlineData("rm_rf=on", "", false, false)]
     [InlineData("quicksave=1", "", false, false)]
     public void The_cfg_line_names_only_its_switches(string arg, string name, bool on, bool ok)

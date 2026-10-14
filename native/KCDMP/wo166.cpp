@@ -59,6 +59,9 @@ struct Strike {
     int planned = 0;                       // WO-178: the defender's slots this wind-up planned the engine's way (perfect block among them)
     int pbStage = 0;                       // WO-178: 1 = perfect-blocked (0x10, OpponentHit), 2 = 0x20; the window holds to pbAt + kPbHoldS
     double pbAt = 0, windupAt = 0;
+    bool pbPending = false, pbReStruck = false;   // WO-185 (mp_pb_at_contact): the player's perfect block began; the copy's 0x10 step waits for the blow's contact
+    double pbPendingAt = 0;
+    double pbStage2S = wo166rules::kPbStage2S;    // 0x10 -> 0x20 after this (the press-time step 0.5; the contact step 0.42)
     bool oppHitSet = false;
     unsigned n = 0;
 };
@@ -658,7 +661,8 @@ void tick() {
                 }
             }
         }
-        if (s.engine && s.windup && !s.wrote && !s.done && live && s.pbStage == 0 && now >= s.begin && now <= s.end) {
+        // WO-185: a perfect block that began (the contact step is pending) leaves the copy's state to that step
+        if (s.engine && s.windup && !s.wrote && !s.done && live && s.pbStage == 0 && !s.pbPending && now >= s.begin && now <= s.end) {
             void* ca = nullptr; void* model = nullptr;
             int32_t cur = 0;
             if (!motion::combat_parts(s.eid, false, &ca, &model) || !motion::read_state(model, &cur) || cur != kStateWindup) {
@@ -731,24 +735,44 @@ void tick() {
         }
         // WO-178: the player's perfect block met the copy's blow -> the attacker's own perfect-blocked sequence (0x10 with OpponentHit, then
         // 0x20, then its prior state at the window's end): the player's riposte (the blue swords) opens on it as on a real attacker
+        // WO-185 (mp_pb_at_contact, default on): a real attacker goes 0x10 when its blow is processed -- contact -- not when the defender's block
+        // began, so the press only arms the step (the copy is put back to striking if the engine dropped it to Guard) and the contact does it;
+        // off = the 0.60.0 behaviour (the step at the press, 0x20 0.5 s later).
         if (s.engine && s.windup && !s.done && live && s.pbStage == 0 && wo166rules::pb_moment(now, s.windupAt, s.end)) {
+            const bool atContact = wo178::pb_at_contact_on();
+            const bool due = !atContact || (s.pbPending && wo166rules::pb_contact_due(now, s.hitAt));
             motion::ModelRead pm{};
             const uint32_t pe = player_eid();
-            if (pe && motion::read_model(pe, &pm) && (pm.valid & motion::kMvState) && (pm.valid & motion::kMvPerfect) && pm.opponentEid == s.eid &&
-                wo166rules::player_perfect_blocks(pm.state, pm.perfectBlock != 0)) {
-                void* ca = nullptr; void* model = nullptr;
-                int32_t cur = 0;
+            const bool blocking = pe && motion::read_model(pe, &pm) && (pm.valid & motion::kMvState) && (pm.valid & motion::kMvPerfect) &&
+                                  pm.opponentEid == s.eid && wo166rules::player_perfect_blocks(pm.state, pm.perfectBlock != 0);
+            void* ca = nullptr; void* model = nullptr;
+            int32_t cur = 0;
+            if (atContact && !s.pbPending && blocking) {
+                s.pbPending = true; s.pbPendingAt = now;
+                const bool parts = motion::combat_parts(s.eid, false, &ca, &model) && motion::read_state(model, &cur);
+                if (parts && cur == kStateGuard && set_state_engine(model, kStateStriking)) s.pbReStruck = true;
+                logf("WO185-PBARM npc=%s window=%u the player's perfect block began (player state 0x%X) at +%.0f ms of the swing; the copy's 0x10 waits for contact "
+                     "(+%.0f ms)%s", s.name.c_str(), s.n, static_cast<unsigned>(pm.state), (now - s.windupAt) * 1000.0, (s.hitAt - s.windupAt) * 1000.0,
+                     s.pbReStruck ? "; the engine's drop to Guard put back to striking" : "");
+            } else if (due && atContact && s.pbPending && !blocking) {
+                s.pbPending = false;
+                s.pbStage = -1;   // the perfect block ended before contact: the verdict is the engine's on whatever he does then
+                logf("WO185-PBLOST npc=%s window=%u the player's perfect block ended before the blow's contact (player state 0x%X pb=%d)", s.name.c_str(), s.n,
+                     static_cast<unsigned>(pm.state), pm.perfectBlock != 0 ? 1 : 0);
+            } else if (due && blocking) {
                 if (motion::combat_parts(s.eid, false, &ca, &model) && motion::read_state(model, &cur) && wo166rules::pb_from_state(cur)) {
                     s.oppHitSet = set_opponent_hit(model, true);
                     if (set_state_engine(model, wo166rules::kStatePerfectBlocked)) {
                         s.pbStage = 1; s.pbAt = now;
-                        s.end = (std::max)(s.end, now + wo166rules::kPbHoldS);
+                        s.pbStage2S = atContact ? wo166rules::kPbContactStage2S : wo166rules::kPbStage2S;
+                        s.end = (std::max)(s.end, now + (atContact ? wo166rules::kPbContactHoldS : wo166rules::kPbHoldS));
                         c_pbHits.fetch_add(1);
                         logf("WO178-PBHIT npc=%s window=%u the player's perfect block met the blow (player state 0x%X) -> the copy 0x%X -> 0x10%s, 0x20 "
-                             "at +%.0f ms, its prior state at +%.0f ms -- the riposte opens on it", s.name.c_str(), s.n, static_cast<unsigned>(pm.state),
+                             "at +%.0f ms, its prior state at +%.0f ms -- the riposte opens on it%s", s.name.c_str(), s.n, static_cast<unsigned>(pm.state),
                              static_cast<unsigned>(cur),
-                             s.oppHitSet ? " with OpponentHit" : " (OpponentHit NOT set: no riposte)", wo166rules::kPbStage2S * 1000.0,
-                             wo166rules::kPbHoldS * 1000.0);
+                             s.oppHitSet ? " with OpponentHit" : " (OpponentHit NOT set: no riposte)", s.pbStage2S * 1000.0,
+                             (atContact ? wo166rules::kPbContactHoldS : wo166rules::kPbHoldS) * 1000.0,
+                             atContact ? " [at contact]" : " [at the press]");
                     } else {
                         if (s.oppHitSet) { set_opponent_hit(model, false); s.oppHitSet = false; }
                         c_pbHitRefused.fetch_add(1);
@@ -758,7 +782,7 @@ void tick() {
                 }
             }
         }
-        if (s.pbStage == 1 && !s.done && now >= s.pbAt + wo166rules::kPbStage2S) {
+        if (s.pbStage == 1 && !s.done && now >= s.pbAt + s.pbStage2S) {
             void* ca = nullptr; void* model = nullptr;
             int32_t cur = 0;
             if (motion::combat_parts(s.eid, false, &ca, &model) && motion::read_state(model, &cur) && cur == wo166rules::kStatePerfectBlocked)

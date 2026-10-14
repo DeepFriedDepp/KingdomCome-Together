@@ -55,6 +55,7 @@ std::atomic<bool> g_hitReach{true};      // mp_hit_reach (the joiner's replay: o
 std::atomic<bool> g_clinchGuard{true};   // mp_clinch_guard (no clinch between the local player and a listed copy)
 std::atomic<bool> g_ownBlock{true};      // mp_own_block (the local player's held block decides a copy's blow)
 std::atomic<bool> g_copyEngineState{true};   // mp_copy_engine_state (a copy's swing through the engine's state setter)
+std::atomic<bool> g_pbAtContact{true};       // mp_pb_at_contact (the copy's perfect-blocked sequence starts at contact, as a real attacker's does)
 std::atomic<bool> g_isHost{false};       // the last Config's role word (which switch the answer reads)
 std::atomic<bool> g_off{false};          // a fault switched the answer to pass-through for this session
 
@@ -700,6 +701,7 @@ bool hold_on() { return g_hold.load(); }
 bool hit_reach_on() { return g_hitReach.load(); }
 bool own_block_on() { return g_ownBlock.load(); }
 bool copy_engine_state_on() { return g_copyEngineState.load(); }
+bool pb_at_contact_on() { return g_pbAtContact.load(); }
 bool engine_cap_on() { return g_engineCap.load(); }
 
 void offer_local(uint32_t eid) {
@@ -792,7 +794,7 @@ uint8_t handle(uint8_t op, const uint8_t* body, size_t len, uint8_t* out, size_t
             return wo163::kROk;
         }
         case kOpConfig: {
-            if (len < 6 || len > 10 || cap < 9) return wo163::kRBadRequest;
+            if (len < 6 || len > 11 || cap < 10) return wo163::kRBadRequest;
             auto set = [](std::atomic<bool>& a, uint8_t v, const char* nm) {
                 if (v == 255) return;
                 const bool b = v != 0;
@@ -807,8 +809,9 @@ uint8_t handle(uint8_t op, const uint8_t* body, size_t len, uint8_t* out, size_t
             if (len >= 8) set(g_clinchGuard, body[7], "mp_clinch_guard");
             if (len >= 9) set(g_ownBlock, body[8], "mp_own_block");
             if (len >= 10) set(g_copyEngineState, body[9], "mp_copy_engine_state");
+            if (len >= 11) set(g_pbAtContact, body[10], "mp_pb_at_contact");
             out[0] = g_joinerLock.load(); out[1] = g_hostAnswer.load(); out[2] = g_hold.load(); out[3] = g_engineCap.load(); out[4] = g_isHost.load();
-            out[5] = g_hitReach.load(); out[6] = g_clinchGuard.load(); out[7] = g_ownBlock.load(); out[8] = g_copyEngineState.load();
+            out[5] = g_hitReach.load(); out[6] = g_clinchGuard.load(); out[7] = g_ownBlock.load(); out[8] = g_copyEngineState.load(); out[9] = g_pbAtContact.load();
             *outLen = len - 1;
             return wo163::kROk;
         }

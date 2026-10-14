@@ -143,7 +143,8 @@ do
         and KCD2MP_W178SetHitReach("off") == true and countEvt("w178_cfg", "hit_reach=off", mark) == 1 and CCMDS["mp_hit_reach"] ~= nil
         and KCD2MP_W178SetClinchGuard("off") == true and countEvt("w178_cfg", "clinch_guard=off", mark) == 1 and CCMDS["mp_clinch_guard"] ~= nil
         and KCD2MP_W178SetOwnBlock("off") == true and countEvt("w178_cfg", "own_block=off", mark) == 1 and CCMDS["mp_own_block"] ~= nil
-        and KCD2MP_W178SetCopyEngineState("off") == true and countEvt("w178_cfg", "copy_engine_state=off", mark) == 1 and CCMDS["mp_copy_engine_state"] ~= nil)
+        and KCD2MP_W178SetCopyEngineState("off") == true and countEvt("w178_cfg", "copy_engine_state=off", mark) == 1 and CCMDS["mp_copy_engine_state"] ~= nil
+        and KCD2MP_W178SetPbAtContact("off") == true and countEvt("w178_cfg", "pb_at_contact=off", mark) == 1 and CCMDS["mp_pb_at_contact"] ~= nil)
     check("P9: a bad word for a DLL switch is refused", KCD2MP_W178SetJoinerLock("perhaps") == false)
     noErrs("P")
 end

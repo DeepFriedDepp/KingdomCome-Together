@@ -23106,7 +23106,7 @@ do   -- WO-178's do-block
     -- C1 / C4 switches live in the DLL: the agent pushes them (w178_cfg). name: joiner_lock|host_lock_answer|fallback_hold|fallback_engine_cap.
     W178.NATIVE = { joiner_lock = "mp_joiner_lock", host_lock_answer = "mp_host_lock_answer", fallback_hold = "mp_fallback_hold", fallback_engine_cap = "mp_fallback_engine_cap",
                     player_recoil = "mp_player_recoil", hit_reach = "mp_hit_reach", clinch_guard = "mp_clinch_guard",
-                    own_block = "mp_own_block", copy_engine_state = "mp_copy_engine_state" }
+                    own_block = "mp_own_block", copy_engine_state = "mp_copy_engine_state", pb_at_contact = "mp_pb_at_contact" }
     function KCD2MP_W178SetNative(name, arg)
         local label = W178.NATIVE[tostring(name)]
         if not label then mp_log("WO178-TOGGLE unknown switch '" .. tostring(name) .. "'"); return false end
@@ -23130,6 +23130,7 @@ do   -- WO-178's do-block
     function KCD2MP_W178SetClinchGuard(arg) return KCD2MP_W178SetNative("clinch_guard", arg) end
     function KCD2MP_W178SetOwnBlock(arg) return KCD2MP_W178SetNative("own_block", arg) end
     function KCD2MP_W178SetCopyEngineState(arg) return KCD2MP_W178SetNative("copy_engine_state", arg) end
+    function KCD2MP_W178SetPbAtContact(arg) return KCD2MP_W178SetNative("pb_at_contact", arg) end
     -- research: the DLL's duel trace (read-only) for <secs> (0 stops it)
     function KCD2MP_W178Trace(arg)
         local n = tonumber(tostring(arg or ""):match("^%s*(%d+)%s*$") or "")
@@ -27946,6 +27947,7 @@ local ok, err = pcall(function()
     System.AddCCommand("mp_own_block", 'KCD2MP_W178SetOwnBlock(%line)', "WO-178: holding block while facing the enemy copy that swings at you blocks its blow (the engine computes the block) (default on): mp_own_block on|off")
     System.AddCCommand("mp_w178_trace", 'KCD2MP_W178Trace(%line)', "WO-178 research: the player's and his opponent's combat models every frame, and the actions entering, logged for <secs> (read-only): mp_w178_trace <secs>")
     System.AddCCommand("mp_copy_engine_state", 'KCD2MP_W178SetCopyEngineState(%line)', "WO-178: an enemy copy's swing winds up and strikes the engine's own way, so your game shows the block prompt and your block meets it (default on): mp_copy_engine_state on|off")
+    System.AddCCommand("mp_pb_at_contact", 'KCD2MP_W178SetPbAtContact(%line)', "WO-185: an enemy copy's perfect-blocked sequence (and your riposte window) starts when its blow makes contact, as a real attacker's does, so a perfect block pressed ahead of contact holds through the blow (default on): mp_pb_at_contact on|off")
     System.AddCCommand("mp_w178_status", 'KCD2MP_W178Status(%line)', "WO-178: the save switches, the quicksave, the draw probe, and the DLL's hostility answer (through the agent): mp_w178_status")
     System.AddCCommand("mp_repair_combat", 'KCD2MP_W174Repair(%line)', "WO-174: frees stuck weapons -- clears partner-figure fight links, ends a stuck fight, re-equips a melee weapon -- and says so; on a save that was fine it changes nothing: mp_repair_combat")
     System.AddCCommand("mp_weapon_autofix", 'KCD2MP_W174SetAutofix(%line)', "WO-174: after mp_repair_combat freed your weapons, every later load in this game session equips that weapon again, because the lock returns on a reload (default on): mp_weapon_autofix on|off")
