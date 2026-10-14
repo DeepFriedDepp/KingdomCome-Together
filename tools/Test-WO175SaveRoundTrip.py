@@ -15,6 +15,7 @@ The player's own draw key (weapon slot 1) is tested by hand or with tools/dev-in
     python tools/Test-WO175SaveRoundTrip.py [--action "<lua run before the save>"]
 """
 import os
+import http.client
 import re
 import subprocess
 import sys
@@ -36,8 +37,17 @@ def up():
         return False
 
 
-def lua(code):
-    return urllib.request.urlopen(API + '/api/System/Console/ExecuteString?command=' + urllib.parse.quote('#' + code, safe=''), timeout=20).read(4096)
+def lua(code, starts=None):
+    """One console line. starts = what the line starts (a save, a load): the game may cut that request while it saves or loads
+    (WO-184: a ConnectionReset on Game.SaveGameViaResting() while the save was written and healthy) -- then the outcome is read from
+    the game's own log by the caller, as always; any other request must answer."""
+    try:
+        return urllib.request.urlopen(API + '/api/System/Console/ExecuteString?command=' + urllib.parse.quote('#' + code, safe=''), timeout=20).read(4096)
+    except (OSError, http.client.HTTPException) as e:
+        if starts is None:
+            raise
+        print('  (the game cut the request that starts %s: %s -- its outcome is read from the game log)' % (starts, type(e).__name__))
+        return b''
 
 
 def klog():
@@ -86,7 +96,7 @@ def main(argv):
         lua(argv[argv.index('--action') + 1])
         time.sleep(3)
     n = len(klog())
-    lua('Game.SaveGameViaResting()')
+    lua('Game.SaveGameViaResting()', starts='the save')
     s = wait(r"SaveGame: '%USER%/saves/(playline4)/([^']+)\.whs' done", n, 60)
     if not s:
         print('WO175 save round-trip (live): FAIL -- no save was written')
@@ -98,7 +108,7 @@ def main(argv):
     if chk.returncode != 0:
         fails.append('the new save has a stuck quest fight or does not read')
     n = len(klog())
-    lua('System.ExecuteCommand("wh_sys_LoadGame 4 %s")' % s.group(2))
+    lua('System.ExecuteCommand("wh_sys_LoadGame 4 %s")' % s.group(2), starts='the reload')
     if not wait(r'\[CryAction\] LoadGame|LOAD GAME\] LoadGame', n, 120):
         fails.append('the reload did not start')
     time.sleep(25)
