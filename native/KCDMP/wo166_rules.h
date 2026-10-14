@@ -62,8 +62,20 @@ constexpr double kPbHoldS = 1.1;      // the copy is back in its prior state thi
 // defender's block begins (the vanilla trace: the attacker 0x8 -> 0x10 at +0.78..0.82 s while the defender pressed at +0.34..0.55 s; 0x10 -> 0x20
 // 0.42 s later; back to Guard 0.67..0.76 s after contact; the defender's PerfectBlockState ends about 0.05 s after the attacker enters 0x20).
 // A copy that went 0x10 at the press ran 0x20 at press + 0.5 s and cut the defender's perfect block short of the verdict.
-constexpr double kPbContactStage2S = 0.42;   // 0x10 -> 0x20 after this, from contact
-constexpr double kPbContactHoldS = 0.72;     // the copy is back in its prior state this long after contact
+constexpr double kPbContactStage2S = 0.42;   // 0x10 -> 0x20 after this, from contact (the fallback: a swing without a measured value)
+constexpr double kPbContactTailS = 0.30;     // the copy is back in its prior state this long after 0x20 (vanilla: 0x20 -> Guard 0.25-0.35 s later)
+constexpr double kPbContactHoldS = kPbContactStage2S + kPbContactTailS;   // the fallback's total, from contact
+// WO-185 (0.60.3): how long a real attacker stays in 0x10 after its blow was perfect-blocked depends on the swing (vanilla trace, one NPC with a
+// one-handed sword, 46 perfect blocks: the medians below, 0x10 -> 0x20 measured from contact). The player's perfect block, and with it the first
+// frame his riposte attack can start, ends about 0.05 s after the attacker enters 0x20, so a copy that holds 0x10 longer than the real swing does
+// makes the riposte wait. Keyed by the attack's type (0 stab, 1 slash) and zone; anything else keeps the fallback.
+inline double pb_contact_stage2(int type, int zone) {
+    if (type == 0 && zone == 5) return 0.41;    // 0.40-0.42
+    if (type == 1 && zone == 0) return 0.50;    // 0.49-0.51
+    if (type == 1 && zone == 1) return 0.29;    // 0.27-0.29 (often) or 0.36-0.39
+    if (type == 1 && zone == 2) return 0.41;    // 0.38-0.41 or 0.47-0.49
+    return kPbContactStage2S;
+}
 inline bool pb_contact_due(double now, double hitAt) { return hitAt > 0 && now >= hitAt; }
 inline bool player_perfect_blocks(int32_t state, bool pb) { return pb && (state == kStatePrepParry || state == kStateParryInPlace); }
 // From the copy's wind-up to its window's end (live: the engine drops the attacker to Guard the very frame the player's perfect-block

@@ -24,3 +24,12 @@ striking); at the blow's contact (`hitAt`) the copy goes 0x10 with OpponentHit i
 ## Not shown
 Whether a real host's enemy behaves the same (no second game was available: a synthetic host streams no NPCs, so a joiner has none); whether the player's perfect block
 survives to contact with the copy sitting in Guard/striking instead of 0x10 for the 0.6 s between press and contact (to be read from the trace after this build).
+
+## 0.60.3: the riposte after a perfect block
+The riposte slot (the blue swords) opens at contact in vanilla and on the copy alike (46 of 46 vanilla perfect blocks). The wait before the player's own attack can
+start is the attacker's 0x10 phase: his perfect block ends about 0.05 s after the attacker enters 0x20. In vanilla that phase depends on the swing (one NPC with a
+one-handed sword; medians, from contact): stab zone 5 0.41 s, slash zone 0 0.50 s, slash zone 1 0.29 s (0.28 or 0.37), slash zone 2 0.41 s (0.40 or 0.48). The 0.60.2 copy
+held 0x10 for a fixed 0.42 s (right for the stab, up to 0.14 s too long for the fast slash). `pb_contact_stage2(type, zone)` in `wo166_rules.h` now gives the vanilla
+value per swing (0.42 s for any swing not measured) and the copy returns to its prior state 0.30 s after 0x20 (vanilla: 0.25-0.35 s).
+The medians come from one weapon class; other weapons may differ and are still on the fallback.
+The harness gained `W178_LAG` (the synthetic host's verdict delay) and `W178_ROWS` rows other than the charged stab.

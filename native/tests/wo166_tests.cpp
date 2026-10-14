@@ -73,6 +73,9 @@ int wo166_tests(int* passed) {
                "from the copy's wind-up to its window's end");
         // WO-185: the perfect-blocked sequence from contact (vanilla: 0x10 at contact, 0x20 0.42 s later, back to prior 0.72 s after contact)
         WCHECK(pb_contact_due(10.0, 10.0) && pb_contact_due(10.1, 10.0) && !pb_contact_due(9.9, 10.0) && !pb_contact_due(10.0, 0.0), "due at the blow's contact, never before");
+        WCHECK(pb_contact_stage2(0, 5) > 0.39 && pb_contact_stage2(0, 5) < 0.43 && pb_contact_stage2(1, 1) > 0.27 && pb_contact_stage2(1, 1) < 0.31
+               && pb_contact_stage2(1, 0) > 0.48 && pb_contact_stage2(1, 0) < 0.52 && pb_contact_stage2(1, 2) > 0.38 && pb_contact_stage2(1, 2) < 0.43
+               && pb_contact_stage2(7, 3) == kPbContactStage2S && pb_contact_stage2(-1, -1) == kPbContactStage2S, "the 0x10 phase by swing type and zone (the vanilla medians), the fallback otherwise");
         WCHECK(kPbContactStage2S < kPbContactHoldS && kPbContactStage2S > 0.3 && kPbContactStage2S < 0.5 && kPbContactHoldS > 0.6 && kPbContactHoldS < 0.8,
                "0x20 about 0.42 s after contact, the prior state about 0.7 s after it (the vanilla trace)");
         WCHECK(pb_from_state(4) && pb_from_state(8) && pb_from_state(2) && !pb_from_state(0x40) && !pb_from_state(1), "wind-up, strike or the dropped Guard");

@@ -764,14 +764,15 @@ void tick() {
                     s.oppHitSet = set_opponent_hit(model, true);
                     if (set_state_engine(model, wo166rules::kStatePerfectBlocked)) {
                         s.pbStage = 1; s.pbAt = now;
-                        s.pbStage2S = atContact ? wo166rules::kPbContactStage2S : wo166rules::kPbStage2S;
-                        s.end = (std::max)(s.end, now + (atContact ? wo166rules::kPbContactHoldS : wo166rules::kPbHoldS));
+                        s.pbStage2S = atContact ? wo166rules::pb_contact_stage2(s.fields.type, s.fields.zone) : wo166rules::kPbStage2S;
+                        const double holdS = atContact ? s.pbStage2S + wo166rules::kPbContactTailS : wo166rules::kPbHoldS;
+                        s.end = (std::max)(s.end, now + holdS);
                         c_pbHits.fetch_add(1);
                         logf("WO178-PBHIT npc=%s window=%u the player's perfect block met the blow (player state 0x%X) -> the copy 0x%X -> 0x10%s, 0x20 "
                              "at +%.0f ms, its prior state at +%.0f ms -- the riposte opens on it%s", s.name.c_str(), s.n, static_cast<unsigned>(pm.state),
                              static_cast<unsigned>(cur),
                              s.oppHitSet ? " with OpponentHit" : " (OpponentHit NOT set: no riposte)", s.pbStage2S * 1000.0,
-                             (atContact ? wo166rules::kPbContactHoldS : wo166rules::kPbHoldS) * 1000.0,
+                             holdS * 1000.0,
                              atContact ? " [at contact]" : " [at the press]");
                     } else {
                         if (s.oppHitSet) { set_opponent_hit(model, false); s.oppHitSet = false; }

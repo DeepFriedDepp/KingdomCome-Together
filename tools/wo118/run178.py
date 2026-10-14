@@ -47,7 +47,7 @@ def plan(swings, every, t0=28.0, b3=False):
     for k in range(swings):
         v = os.environ.get('W176_VERDICT', 'hit')
         if v == 'alt': v = ('blocked', 'pb')[k % 2]
-        L.append('swingat %.1f %s local %s 1233 %s 10 25' % (t0 + k * every, COPY, rows[k % len(rows)], v))
+        L.append('swingat %.1f %s local %s %d %s 10 25' % (t0 + k * every, COPY, rows[k % len(rows)], int(os.environ.get('W178_LAG', '1233')), v))   # W178_LAG: the synthetic host's verdict delay in ms (the row's own hit time)
         if b3:   # B3a: the host's verdict on the joiner's own blow at this copy, no host reaction (react 0): the copy shows its own block row
             L.append('w164 %.1f 7 %s %s 0 e 0.0 12.0' % (t0 + k * every + 2.4, COPY, ('blocked', 'pb', 'broken')[k % 3]))
     return L, end
