@@ -485,6 +485,30 @@ float prop_float(void* model, size_t off) {
     fault::guarded(site, [&] { f = *reinterpret_cast<const float*>(static_cast<const char*>(model) + off + 8); });
     return f;
 }
+// research (WO-185): named property values read only when the block's name matches (a layout that moved prints nothing for it): the riposte
+// slot's keep-open checks (RiposteState, OpponentHit, CanHitByAttack, the attacker's own flags) and the player's attack request
+// (RequestedInputClass, RequestedAtkZone, ComboState). Bool blocks read one byte, the rest an int. Read-only.
+struct TraceProp { size_t off; const char* name; const char* shortName; bool isByte; };
+std::string trace_props(void* model, const TraceProp* list, size_t count) {
+    std::string out;
+    for (size_t i = 0; i < count; ++i) {
+        char nm[48];
+        if (!prop_name_at(model, list[i].off, nm, sizeof nm) || std::strcmp(nm, list[i].name) != 0) continue;
+        int32_t v = 0; KCDMP_FAULT_READ(site, "wo185::trace_prop");
+        fault::guarded(site, [&] {
+            const char* at = static_cast<const char*>(model) + list[i].off + 8;
+            v = list[i].isByte ? static_cast<int32_t>(*reinterpret_cast<const uint8_t*>(at)) : *reinterpret_cast<const int32_t*>(at);
+        });
+        char b[40]; std::snprintf(b, sizeof b, " %s=%d", list[i].shortName, v);
+        out += b;
+    }
+    return out;
+}
+const TraceProp kMeProps[] = {{0x4C0, "RiposteState", "ri", true}, {0x300, "RequestedInputClass", "rqi", false}, {0x200, "RequestedAtkZone", "rqz", false},
+                              {0x380, "RequestedPreparedToAttack", "rpa", true}, {0x3C0, "PreparedToAttack", "pta", true}, {0x480, "ComboState", "cmb", false},
+                              {0x400, "Preblock", "pre", true}, {0x440, "FreeBlock", "fb", true}};
+const TraceProp kOppProps[] = {{0x600, "OpponentHit", "oh", true}, {0x640, "CanHitByAttack", "ch", true}, {0x4C0, "RiposteState", "ri", true},
+                               {0x3C0, "PreparedToAttack", "pta", true}, {0x400, "Preblock", "pre", true}, {0x440, "FreeBlock", "fb", true}};
 void dump_props(const char* who, void* model) {
     char nm[48];
     for (size_t off = 0; off < 0x1400; off += 8) {
@@ -550,6 +574,7 @@ void trace_tick(double now) {
             char u[96];
             std::snprintf(u, sizeof u, " ui94=%d ui48=%d ui4c=%d cfg11=%u cfg15=%u", st94, ic48, fl4c, c11, c15);
             mt += u;
+            mt += trace_props(pm, kMeProps, sizeof kMeProps / sizeof kMeProps[0]);
         }
     }
     std::string ot = "-";
@@ -562,6 +587,7 @@ void trace_tick(double now) {
             prop_name_at(om, 0x5C0, nm, sizeof nm);
             char x[96]; std::snprintf(x, sizeof x, " p5c0=%s:%.3f", nm, prop_float(om, 0x5C0));
             ot += x;
+            ot += trace_props(om, kOppProps, sizeof kOppProps / sizeof kOppProps[0]);
             if (!g_propsDumped[me.opponentEid]) { g_propsDumped[me.opponentEid] = true; dump_props(name_of(me.opponentEid), om); }
         }
     }
