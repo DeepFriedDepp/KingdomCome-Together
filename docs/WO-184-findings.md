@@ -141,6 +141,8 @@ suite 1664/1664; the native suite 9478/9478
    launcher never sets.
 4. Not run live: the leaves other than the quit (each loads the player's own newest save, which on the test machine is a real save), and
    the host's side of B5 (the test host is synthetic).
+5. The live save round trip gate itself changed (`tools/Test-WO175SaveRoundTrip.py`): the game may cut the two requests that start the
+   save and the reload; their outcome is read from the game's log as before (the installer record below).
 
 ## Seen, not changed (out of scope)
 
