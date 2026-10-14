@@ -123,7 +123,7 @@ def run(agent_dll, case, swings=20, every=4.0, lead_ms=150, tag=None):
                     g.button('right', True)
                     time.sleep(0.25)
                     g.button('right', False)
-                if seen in (2, 8, 14) and os.environ.get('W176_SHOTS') != 'rows':   # the game's own prompts at the striking window's middle (row start + 533 + ~350 ms)
+                if seen in (2, 8, 14) and os.environ.get('W176_SHOTS') == 'mid':   # OFF by default (W176_SHOTS=mid): r_GetScreenShot stalls the game for ~0.3 s   # the game's own prompts at the striking window's middle (row start + 533 + ~350 ms)
                     mid = 0.88 - (time.time() - t_row)
                     if mid > 0: time.sleep(mid)
                     live.cmd('r_GetScreenShot 1')

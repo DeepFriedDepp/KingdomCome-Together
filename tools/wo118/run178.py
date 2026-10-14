@@ -165,7 +165,7 @@ def run(agent_dll, case, swings=20, every=4.0, lead_ms=150, tag=None):
                     if mid > 0: time.sleep(mid)
                     live.cmd('mp_w163_probe model me')
                     lockreads.append(stamp())
-                if os.environ.get('W178_SHOTS', '1') == '1' and os.environ.get('W176_SHOTS') != 'rows':   # the game's own prompts at the striking window's middle, every swing
+                if os.environ.get('W178_SHOTS', '0') == '1' and os.environ.get('W176_SHOTS') != 'rows':   # OFF by default: r_GetScreenShot stalls the game for ~0.3 s (W178_SHOTS=1 for the game's own prompts at the striking window's middle, every swing)
                     mid = float(os.environ.get('W178_SHOT_AT', '0.88')) - (time.time() - t_row)
                     if mid > 0: time.sleep(mid)
                     live.cmd('r_GetScreenShot 1')
