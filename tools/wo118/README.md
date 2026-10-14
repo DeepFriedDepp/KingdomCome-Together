@@ -47,6 +47,10 @@ with `GATE GREEN` or `GATE RED` and restores both toggles on.
 
 ## Traps (each cost a run)
 
+* **Screenshots stall the game.** `r_GetScreenShot 1` hitches the main thread for about 0.3 s: every swing's wind-up stuttered (the game's time scale read 0.25x
+  for 0.3 s, then caught up) and distorted the block verdicts. The harness screenshots are off by default (`W178_SHOTS=1`, `W176_SHOTS=mid|rows` to ask for them);
+  never judge timing or a block from a run that took them.
+
 * **Focus.** KCD2 drops to ~26 fps whenever its window is not in front (its
   background limiter). Every script calls `live.focus()`; `MINIMIZE=1` measures the
   limited case on purpose.
