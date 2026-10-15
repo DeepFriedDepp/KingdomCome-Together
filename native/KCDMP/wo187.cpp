@@ -246,7 +246,9 @@ void* call_get(void* obj, size_t slot) {
 
 struct ScopeRead { bool ok = false; bool empty = true; std::string action; int32_t prio = 0; uint32_t flags = 0, frag = 0; };
 
-ScopeRead read_fullbody(uint32_t eid) {
+// One named scope of the body's controller: scope `index` checked to be a CActionScope whose own name is `name` (FullBody is scope 0; the
+// upper body is found by its name among the first scopes). Read-only.
+ScopeRead read_scope(uint32_t eid, const char* name, int firstIndex, int lastIndex) {
     ScopeRead s;
     if (!resolve_scope()) return s;
     void* actor = motion::actor_of(eid);
@@ -256,22 +258,28 @@ ScopeRead read_fullbody(uint32_t eid) {
     if (!ctrl || !rd(ctrl, 0, &vp) || vp != g_vftCtrl) { c_scopeRefused.fetch_add(1); return s; }
     int32_t count = 0; char* scopes = nullptr;
     if (!rd(ctrl, kCtrlScopeCount, &count) || count < 1 || count > 64 || !rd(ctrl, kCtrlScopes, &scopes) || !scopes) { c_scopeRefused.fetch_add(1); return s; }
-    void* sv = nullptr; const char* nmp = nullptr; char nm[12]{};
-    if (!rd(scopes, 0, &sv) || sv != g_vftScope || !rd(scopes, kScopeName, &nmp) || !nmp) { c_scopeRefused.fetch_add(1); return s; }
-    for (int i = 0; i < 9; ++i) { char ch = 0; if (!rd(nmp, i, &ch)) break; nm[i] = ch; if (!ch) break; }
-    if (std::strcmp(nm, "FullBody") != 0) { c_scopeRefused.fetch_add(1); return s; }
-    void* act = nullptr;
-    if (!rd(scopes, kScopeAction, &act)) { c_scopeRefused.fetch_add(1); return s; }
-    s.ok = true;
-    c_scopeReads.fetch_add(1);
-    if (!act) return s;
-    s.empty = false;
-    s.action = short_name(rtti_name(act));
-    rd(act, kActPriority, &s.prio);
-    rd(act, kActFlags, &s.flags);
-    rd(act, kActFragment, &s.frag);
+    for (int idx = firstIndex; idx <= lastIndex && idx < count; ++idx) {
+        char* sc = scopes + static_cast<ptrdiff_t>(idx) * kScopeStride;
+        void* sv = nullptr; const char* nmp = nullptr; char nm[16]{};
+        if (!rd(sc, 0, &sv) || sv != g_vftScope || !rd(sc, kScopeName, &nmp) || !nmp) { c_scopeRefused.fetch_add(1); return s; }
+        for (int i = 0; i < 15; ++i) { char ch = 0; if (!rd(nmp, i, &ch)) break; nm[i] = ch; if (!ch) break; }
+        if (std::strcmp(nm, name) != 0) continue;
+        void* act = nullptr;
+        if (!rd(sc, kScopeAction, &act)) { c_scopeRefused.fetch_add(1); return s; }
+        s.ok = true;
+        c_scopeReads.fetch_add(1);
+        if (!act) return s;
+        s.empty = false;
+        s.action = short_name(rtti_name(act));
+        rd(act, kActPriority, &s.prio);
+        rd(act, kActFlags, &s.flags);
+        rd(act, kActFragment, &s.frag);
+        return s;
+    }
     return s;
 }
+ScopeRead read_fullbody(uint32_t eid) { return read_scope(eid, "FullBody", 0, 0); }
+ScopeRead read_upperbody(uint32_t eid) { return read_scope(eid, "UpperBody", 1, 8); }
 
 std::string scope_line(const ScopeRead& r) {
     if (!r.ok) return "unreadable";
@@ -293,7 +301,11 @@ void watch_moves(double now) {
         if (now - m.at > kMoveWatchS || !engine::entity_by_id(eid)) { it = g_moves.erase(it); continue; }
         const ScopeRead r = read_fullbody(eid);
         if (!r.ok) { ++it; continue; }
-        const std::string line = scope_line(r);
+        std::string line = scope_line(r);
+        if (g_scopeLog.load()) {   // and the upper body (an arm-only move -- a quick punch -- plays there, not on the full body)
+            const ScopeRead u = read_upperbody(eid);
+            if (u.ok) line += " ub:" + scope_line(u);
+        }
         if (g_scopeLog.load() && line != m.last && m.lines < 40) {
             ++m.lines;
             logf("WO187-SCOPE body=%s t=%.0f %s", name_of(eid), (now - m.at) * 1000.0, line.c_str());

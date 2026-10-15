@@ -938,9 +938,10 @@ int status_text(char* out, int n) {
         c_midStriking.load(), c_midOther.load(), c_playerOpp.load(), c_faults.load(), c_localDropped.load(), c_localDroppedStriking.load(),
         g_strikes.size(), g_autoMode.load(), npcdrive::snap_fix() ? "on" : "off", c_figureWaited.load());
     if (w0 < 0 || w0 >= n) return w0;
-    return w0 + std::snprintf(out + w0, n - w0, " engine_state=%s windups=%u engine_strikes=%u engine_restores=%u opp_player=%u opp_other=%u",
+    // WO-187 A3: the shield windows the copies' wind-ups planned (slot types planned) and the plannings refused
+    return w0 + std::snprintf(out + w0, n - w0, " engine_state=%s windups=%u engine_strikes=%u engine_restores=%u opp_player=%u opp_other=%u planned=%u plan_refused=%u",
         g_setState ? "armed" : (g_setStateResolved ? "not-armed" : "unresolved"), c_engineWindup.load(), c_engineStrike.load(), c_engineRestore.load(),
-        c_engineOppPlayer.load(), c_engineOppOther.load());
+        c_engineOppPlayer.load(), c_engineOppOther.load(), c_planned.load(), c_planRefused.load());
 }
 
 void on_pipe_closed() {
