@@ -1333,6 +1333,24 @@ Evidence: `docs/WO-177-findings.md`. **Type `mark_odd` at every miss.**
      can't be saved right now", type `mark_odd` and send the logs. Switches (all on): `mp_save_on_leave`, `mp_save_recover`,
      `mp_partner_saved`.
 
+## WO-189 — the joiner never stays stuck in the host's quest; his saves never stall (0.60.6)
+
+320. **A whole session without the host saving.** Play 30 minutes or more; the host never presses Home. The joiner quits (Esc, Quit),
+     starts again and rejoins: everything the joiner picked up is still there. The joiner's `agent.log` has
+     `MP-HENRY joiner: PAIRED ... (the joiner's own snapshot)` about every 10 minutes and one at the quit.
+321. **`mp_save_status` stays fresh.** The joiner types `mp_save_status` now and then: the last save is never older than about 10 minutes,
+     and the line says when the next own save comes. Nothing says "pending" for more than a minute.
+322. **The host is reminded.** After 15 minutes in a session without the joiner being saved, the host sees "Your partner hasn't been saved in
+     15 minutes - press Home to save." Once per 15 minutes; a save of the joiner starts the clock again.
+323. **A quest with an arena never leaves the joiner stuck.** The host starts the master-strike tutorial (the fight trainer at the arena),
+     the joiner stands by. The joiner sees the same arena fence as the host (it comes and goes with the host's), and after the duel's last
+     talk nothing hangs: no endless black screen, no frozen scene. Lines on the joiner: `WO189-PROFILE host '+masterstrikeTutorial_arenaBarrier'
+     ... enabled`, and if a scene or the end fade hangs, `WO189-POSITIONING ...` within 20 s or `WO189-CUTSCENE stuck ... released` within 10 s.
+324. **No stuck save, ever.** If any line says `WO189-WATCHDOG`, `WO189-SAVE cancelled` or `WO189-READY not ready`, note what was happening
+     (a talk, a scene, a fight). The joiner is told once if a stuck save was cleared; both of you if it could not be.
+325. **Type `mark_odd` at every miss.** Switches (all on): `mp_joiner_autosnap <minutes>`, `mp_save_reminder <minutes>`, `mp_profile_mirror`,
+     `mp_cutscene_release`, `mp_positioning_bound`.
+
 ## Logs to send afterwards
 
 Both machines: Report a bug in the launcher. Since 0.48.9 it collects the current launch by default as a small file (or a few numbered

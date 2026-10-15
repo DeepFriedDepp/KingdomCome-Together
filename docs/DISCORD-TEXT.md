@@ -25,6 +25,19 @@ How to play together (0.48.2):
 Nobody clicks CONNECT any more, and you don't need anyone's save file. First time ever starting the game? Start it once from Steam and accept its two first-run pages, then use the launcher.
 ```
 
+## Version 0.60.6 — the joiner's progress is kept, quests never hang half-way (WO-189)
+
+```
+Kingdom Come: Together 0.60.6
+- The joiner's character is now saved by itself every 10 minutes (with the host's newest save), so a session where the host never saves loses at most about 10 minutes.
+- The host gets a reminder when the partner hasn't been saved for 15 minutes.
+- A save that the game keeps waiting on is cleared after a minute instead of blocking every later save, and both players are told.
+- The joiner's game no longer gets stuck when it runs only the end of one of the host's quest scenes (the master-strike tutorial's arena): a hanging scene ends within 20 seconds, a frozen fade within 10.
+- The host's quest world changes (an arena fence, a camp) now appear in the joiner's world too.
+Every new piece has its own switch (mp_joiner_autosnap, mp_save_reminder, mp_profile_mirror, mp_cutscene_release, mp_positioning_bound), all on. Please type mark_odd at anything odd.
+Both players and the relay need 0.60.6.
+```
+
 ## Version 0.49.0 — the joiner's blows, enemies that fall over (WO-173)
 
 ```
