@@ -128,6 +128,14 @@ lasted 3,125 ms. A real shop talk needs the talk key (a scripted talk is not a k
 Seen on the way, not from this WO: when a test agent is killed outright, the DLL's `wo137::set_send_callback` faults about 9,000 times
 (guarded, counted, never switched off). WO-189's rig logs show the same; the field logs do not (29 faults in the host's whole session).
 
+**Fixed after 0.60.7 (commit 20d5815, no version bump).** The site name was wrong: it is wo137's guarded read helper `rd`, now
+labelled `wo137::rd`. Cause: `on_disconnect` posts `hud_on(false)`, and with the QuestModule not in the modules registry (never on 1.5.5)
+`hud_on` searched for it first -- a brute-force scan of the game interface 0x400 bytes deep and one level down, every unreadable
+candidate a counted fault. Off only undoes what on did (on found the module or set the vtable flag), so off no longer searches
+(`wo137rules::hud_may_search`, 4 checks in `wo137_rules_tests`). Live (Modding Tools, playline4 quicksave022, relay + run165 agent,
+three `run165.py stop agent` kills): no FAULT line, no `WO137-MODULES` dump, `faults=0 sites=0` on every FRAME line; playline4
+byte-equal afterwards. Rig: release/w137rig. Native tests 9,525 pass.
+
 ## 6. Defaults
 
 | item | switch | default |
