@@ -319,7 +319,7 @@ def keep_up():
              'if player.soul:GetState("health") < 60 then player.soul:SetState("health", 100) end; Script.SetTimer(400, k) end; k()')
 
 
-def vanilla(agent_dll, weapon='mace', secs=150, unblocked=4, lead_ms=250):
+def vanilla(agent_dll, weapon='mace', secs=150, unblocked=4, lead_ms=250, g=None):
     """B3: the engine's own timeline of a mace (or bare-handed) attacker, single player, the duel trace on (read-only): the first
     `unblocked` swings taken (contact), then a perfect block at every wind-up, pressed `lead_ms` before the countdown the trace reads
     at the wind-up (= the row's attack_time_to_hit)."""
@@ -347,8 +347,10 @@ def vanilla(agent_dll, weapon='mace', secs=150, unblocked=4, lead_ms=250):
               'pcall(function() XGenAIModule.SendMessageToEntityData(e.this.id, "crime:attackInitiatedByConcept", t) end) end' % VNPC)
     live.lua(attack)
     live.cmd('mp_w178_trace %d' % min(600, int(secs) + 10))
-    g = gi.Game('wo187-vanilla-%s' % tag)
-    g.front()
+    own = g is None   # a sitting brings the game to the front once for all its cases
+    if own:
+        g = gi.Game('wo187-vanilla-%s' % tag)
+        g.front()
     noff = size(live.NLOG)
     events, seen, last_state, pressed = [], 0, None, 0
     t_end = time.time() + secs
@@ -385,7 +387,7 @@ def vanilla(agent_dll, weapon='mace', secs=150, unblocked=4, lead_ms=250):
     finally:
         g.release_all()
         time.sleep(1.0)
-        g.back()
+        if own: g.back()
         live.lua('W187KEEP = (W187KEEP or 0) + 1; local e = System.GetEntityByName("%s"); if e then pcall(System.RemoveEntity, e.id) end' % VNPC)
         live.cmd('mp_w178_trace 0'); live.cmd('mp_anim_scope_log off')
     res = {'case': 'vanilla', 'weapon': weapon, 'tag': tag, 'windups': seen, 'pressed': pressed, 'events': events[:60]}
@@ -396,7 +398,7 @@ def vanilla(agent_dll, weapon='mace', secs=150, unblocked=4, lead_ms=250):
     return res
 
 
-def echo(agent_dll, secs=90):
+def echo(agent_dll, secs=90, g=None):
     """C3 with the player's own fight: the synthetic partner (the host here) echoes his stream 2 s late, 2.6 m in front of him; the
     player draws, attacks from several directions, blocks, dodges, stands in guard, then holsters and punches. Checked after: every row
     he sent (MP-ACTION section=outbound) came back on the echo figure (MP-SWING hop=recv, the same row), and its full-body scope."""
@@ -412,8 +414,10 @@ def echo(agent_dll, secs=90):
     time.sleep(14)
     live.cmd('mp_leash off'); live.cmd('mp_anim_scope_log on')
     keep_up()
-    g = gi.Game('wo187-echo-%s' % tag)
-    g.front()
+    own = g is None
+    if own:
+        g = gi.Game('wo187-echo-%s' % tag)
+        g.front()
     script = []
     try:
         g.tap('1', 120); time.sleep(2.5); script.append('draw')
@@ -432,7 +436,8 @@ def echo(agent_dll, secs=90):
     except gi.NotFocused as e:
         script.append('stopped: %s' % e)
     finally:
-        g.release_all(); time.sleep(4.0); g.back()
+        g.release_all(); time.sleep(4.0)
+        if own: g.back()
     time.sleep(6)
     live.lua('W187KEEP = (W187KEEP or 0) + 1'); live.cmd('mp_anim_scope_log off')
     nat = native_from(noff)
@@ -496,7 +501,16 @@ def hostpos(agent_dll, secs=25):
 if __name__ == '__main__':
     a = sys.argv
     if len(a) < 3: raise SystemExit(__doc__)
-    if a[1] == 'hostpos':
+    if a[1] == 'sitting':   # one scripted sitting: the game brought to the front once, the mace trace, then the echo, then back
+        gi = need_input()
+        g = gi.Game('wo187-sitting-%s' % time.strftime('%H%M%S'))
+        g.front()
+        try:
+            vanilla(a[2], 'mace', float(a[3]) if len(a) > 3 else 150, g=g)
+            echo(a[2], 90, g=g)
+        finally:
+            g.release_all(); g.back()
+    elif a[1] == 'hostpos':
         hostpos(a[2], float(a[3]) if len(a) > 3 else 25)
     elif a[1] == 'vanilla':
         vanilla(a[2], a[3] if len(a) > 3 else 'mace', float(a[4]) if len(a) > 4 else 150)
