@@ -89,6 +89,9 @@ void on_pipe_closed();
 // it off restarts every stream's silence clock, so the 4 s rule counts from the
 // resume, not from the last sample before the pause. Any thread.
 void set_hold_all(bool on);
+// WO-187 B2 (mp_chase_follow): swings of a running copy that were not held, and holds that ended when the copy's NPC broke into a run.
+uint32_t chase_follows();
+uint32_t chase_hold_ends();
 bool hold_all();
 // WO-166 C4 (mp_snap_fix): a swing hold that chains into the next never holds a copy longer than kHoldChainCapS in one stretch; after
 // a capped stretch the writer catches up (the blend) for kHoldCooldownS before the next hold takes the body.

@@ -732,9 +732,13 @@ public sealed class CombatPipe : IAsyncDisposable
     }
 
     /// <summary>op 2: engage (or release) a bound copy against the local player with the host NPC's combat state.</summary>
-    public async Task<(bool Ok, bool First, bool Skirmish, float DistM, byte Reason)> Wo132EngageAsync(bool on, uint eid, BodyState2 st, CancellationToken ct = default)
+    public async Task<(bool Ok, bool First, bool Skirmish, float DistM, byte Reason)> Wo132EngageAsync(bool on, uint eid, BodyState2 st, CancellationToken ct = default,
+                                                                                                    bool intentInRange = false)
     {
-        var a = new byte[1 + 4 + BodyState2.Len];
+        // WO-187 A1: a trailing byte says the host's own NPC is within range of this player and targets him (the copy may lag): the DLL then
+        // engages a copy farther than its range here; without it the short form (an older DLL takes only that)
+        var a = new byte[1 + 4 + BodyState2.Len + (intentInRange ? 1 : 0)];
+        if (intentInRange) a[^1] = 1;
         a[0] = B(on);
         BinaryPrimitives.WriteUInt32LittleEndian(a.AsSpan(1), eid);
         st.Write(a.AsSpan(5));
@@ -1168,13 +1172,16 @@ public sealed class CombatPipe : IAsyncDisposable
 
     /// <summary>WO-166 C3, op 9: a host swing's striking window on this copy (the DLL writes Striking and the row's attack fields at its start).</summary>
     public async Task<string?> Wo166StrikeAsync(string npc, int startMs, int hitMs, sbyte type, sbyte zone, sbyte hand, float strength, CancellationToken ct = default,
-                                                float hitDistance = 0f, float alignMax = 0f)
+                                                float hitDistance = 0f, float alignMax = 0f, byte weapon = 0)
     {
         var nb = System.Text.Encoding.ASCII.GetBytes(npc);
         if (nb.Length is 0 or > 63 || !float.IsFinite(strength)) return null;
         // WO-178: the row's own reach (hit distance, alignment maximum) as an 8-byte tail after the name; an older DLL takes the short form
-        bool reach = float.IsFinite(hitDistance) && float.IsFinite(alignMax) && (hitDistance > 0f || alignMax > 0f);
-        var a = new byte[2 + 2 + 3 + 4 + 1 + nb.Length + (reach ? 8 : 0)];
+        // WO-187 B3: and the row's weapon class as a ninth tail byte (the reach tail is then always written)
+        bool reach = weapon != 0 || (float.IsFinite(hitDistance) && float.IsFinite(alignMax) && (hitDistance > 0f || alignMax > 0f));
+        if (!float.IsFinite(hitDistance)) hitDistance = 0f;
+        if (!float.IsFinite(alignMax)) alignMax = 0f;
+        var a = new byte[2 + 2 + 3 + 4 + 1 + nb.Length + (reach ? 8 : 0) + (weapon != 0 ? 1 : 0)];
         System.Buffers.Binary.BinaryPrimitives.WriteInt16LittleEndian(a, (short)Math.Clamp(startMs, -1, short.MaxValue));
         System.Buffers.Binary.BinaryPrimitives.WriteInt16LittleEndian(a.AsSpan(2), (short)Math.Clamp(hitMs, -1, short.MaxValue));
         a[4] = unchecked((byte)type); a[5] = unchecked((byte)zone); a[6] = unchecked((byte)hand);
@@ -1185,6 +1192,7 @@ public sealed class CombatPipe : IAsyncDisposable
             System.Buffers.Binary.BinaryPrimitives.WriteSingleLittleEndian(a.AsSpan(12 + nb.Length), hitDistance);
             System.Buffers.Binary.BinaryPrimitives.WriteSingleLittleEndian(a.AsSpan(16 + nb.Length), alignMax);
         }
+        if (weapon != 0) a[20 + nb.Length] = weapon;
         var r = await Wo163Async(9, a, ct);
         if (r is null) return null;
         string text = System.Text.Encoding.ASCII.GetString(r.Value.Payload);

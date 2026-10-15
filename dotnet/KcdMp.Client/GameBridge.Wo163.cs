@@ -214,6 +214,12 @@ public partial class GameBridge
                     Console.WriteLine($"WO163-SYNCGUID both descriptor offsets hit the catalog (+0x7C row={f.Row}, legacy +0x84 row={f.AltRow}) -- the +0x7C read is used; a build whose layout moved?");
             }
         }
+        if ((f.Flags & Wo187Rules.NativeFlagDefence) != 0)
+        {
+            // WO-187 C2: an NPC's own block or dodge -- its copy plays it (mp_anim_defence)
+            if (_w187Defence && known && Wo187Rules.IsDefenceRow(row)) { Interlocked.Increment(ref _w187DefenceOut); return true; }
+            return false;
+        }
         if ((f.Flags & 0x01) != 0)
         {
             // A2: a perfect-block-class action of an NPC. Only the counter is a swing.
@@ -222,6 +228,8 @@ public partial class GameBridge
                 Interlocked.Increment(ref _w163MasterOut);
                 return true;
             }
+            // WO-187 C2: and with mp_anim_defence the perfect block itself goes too: the copy shows the host NPC's own perfect block
+            if (_w187Defence && known && Wo187Rules.IsDefenceRow(row)) { Interlocked.Increment(ref _w187DefenceOut); return true; }
             Interlocked.Increment(ref _w163PerfectDropped);
             return false;
         }

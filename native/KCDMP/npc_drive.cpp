@@ -2,6 +2,8 @@
 // GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 #include "npc_drive.h"
+#include "wo187.h"
+#include "wo187_rules.h"
 #include "wo163_rules.h"
 #include "fault_guard.h"
 #include "npc_scan.h"   // WO-144 2.3: body_kind (a horse or an animal is entity-written)
@@ -262,6 +264,24 @@ struct Stream {
     double      st2At = 0;
 };
 struct SenderClock { double curMin = 1e300, curStart = 0, prevMin = 1e300, lastSeen = 0; bool havePrev = false; bool init = false; };
+
+// WO-187 B2 (mp_chase_follow): the host NPC's planar speed over its newest samples (>= 0.25 s apart), m/s; -1 when the ring cannot say.
+// A swing hold freezes the copy's writer for the swing (WO-166 C4) -- right for a fighter standing its ground, wrong for one that runs:
+// the host's NPC moves on and the copy falls behind by its speed times the hold (the live chase: 0.5-1.6 m at 1.6 m/s, every swing).
+float stream_speed(const Stream& s) {
+    if (s.n < 2) return -1.0f;
+    const RingSample& a = s.ring[s.n - 1];
+    for (int i = s.n - 2; i >= 0; --i) {
+        const RingSample& b = s.ring[i];
+        const double dt = a.at - b.at;
+        if (dt >= 0.25) {
+            const float dx = a.x - b.x, dy = a.y - b.y;
+            return dt < 3.0 ? static_cast<float>(std::sqrt(dx * dx + dy * dy) / dt) : -1.0f;
+        }
+    }
+    return -1.0f;
+}
+std::atomic<uint32_t> c_chaseFollow{0}, c_chaseEnded{0};
 
 struct Puppet {
     std::string key, name;
@@ -831,6 +851,9 @@ uint8_t on_config(const uint8_t* body, size_t len) {
 
 void on_pipe_closed() { g_dropAll = true; g_holdAll = false; }
 
+uint32_t chase_follows() { return c_chaseFollow.load(); }
+uint32_t chase_hold_ends() { return c_chaseEnded.load(); }
+
 void set_hold_all(bool on) {
     const bool was = g_holdAll.exchange(on);
     if (was && !on) g_holdEnded = true;
@@ -1010,6 +1033,18 @@ void tick() {
         if (it != g_bound.end()) {
             Puppet& hp = it->second;
             double until = now + h.ms / 1000.0;
+            // WO-187 B2: a copy whose host NPC runs keeps following its stream through the swing (the swing still plays)
+            if (wo187::chase_follow_on()) {
+                auto cs = g_streams.find(hp.key);
+                const float v = cs != g_streams.end() ? stream_speed(cs->second) : -1.0f;
+                if (v >= wo187rules::kChaseFollowMps) {
+                    const uint32_t n = c_chaseFollow.fetch_add(1, std::memory_order_relaxed) + 1;
+                    if (n <= 20 || n % 100 == 0)
+                        logf("WO187-CHASE npc=%s runs at %.1f m/s: its swing plays while the writer keeps following the host's position (no hold) #%u",
+                             hp.name.c_str(), v, n);
+                    continue;
+                }
+            }
             if (g_snapFix.load(std::memory_order_relaxed)) {
                 // WO-166 C4: the field's large resumes came after holds of up to 4.6 s (swing holds chained while the host's NPC moved on):
                 // one stretch is capped, then the writer catches up before the next hold
@@ -1071,6 +1106,11 @@ void tick() {
         // picked up) has LOCAL coordinates: never written until it is free.
         void* parent = nullptr;
         const bool parented = get_parent(e, &parent) && parent != nullptr;
+        // WO-187 B2: a hold already running ends when the host's NPC breaks into a run (the stream moves on without the copy)
+        if (now < p.holdUntil && wo187::chase_follow_on() && stream_speed(s) >= wo187rules::kChaseFollowMps) {
+            p.holdUntil = now;
+            c_chaseEnded.fetch_add(1, std::memory_order_relaxed);
+        }
         if ((s.flags & (0x01 | 0x02 | 0x10)) != 0 || now < p.holdUntil || parented || activity_held(p.eid)) {
             // Dead / unconscious / carried stay on Lua's own behaviour; a swing
             // one-shot owns the body for its hold. Neither is a pull.

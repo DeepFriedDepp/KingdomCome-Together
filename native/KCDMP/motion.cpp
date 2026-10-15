@@ -28,6 +28,8 @@
 #include "wo166.h"
 #include "wo167_rules.h"
 #include "wo170_rules.h"
+#include "wo187.h"
+#include "wo187_rules.h"
 #include "buffs.h"
 #include "engine.h"
 #include "gait_logic.h"
@@ -256,6 +258,10 @@ struct Body {
     double attachAt = -1;         // WO-155: when this body was first driven (a fresh spawn, a re-bind after a fall)
     bool nudged = false;          // WO-155: its locomotion graph has been started (a walk-class pulse, or it walked)
     bool fresh = false;           // WO-167 C1: a fresh spawn (a stand-in for a host spawn): the avatar's walk pulse too
+    // WO-187 C2: a figure's last fresh state with the combat bit (a quiet stream keeps it wo187rules::kFigureLingerS)
+    State2 lastCombatSt{};
+    double lastCombatBitAt = -1;
+    uint32_t lingers = 0;
 };
 std::unordered_map<uint32_t, Body> g_bodies;
 std::unordered_map<uint32_t, double> g_freshPending;   // WO-167 C1: a fresh-spawn mark that came before its body was bound (main thread)
@@ -270,6 +276,9 @@ struct Engage { State2 st{}; double at = 0; };
 std::unordered_map<uint32_t, Engage> g_engage;
 constexpr double kEngageStaleS = 3.0;   // no fresh host state for this long: the hold lets go
 std::atomic<uint32_t> c_engageHolds{0}, c_engageReleases{0};
+// WO-187 C2: copies whose host NPC fights anyone (not only this player): combat mode held for the fight, no skirmish, no engagement.
+std::unordered_map<uint32_t, Engage> g_guardHold;
+std::atomic<uint32_t> c_guardHolds{0}, c_figureLingers{0}, c_idlePulses{0}, c_idleRequeues{0};
 
 // ---- WO-129: the gait table (main thread writes, any thread reads) --------------
 // UpdateMannequinTags runs on the main thread and on job workers, so the hook
@@ -599,8 +608,14 @@ void capture(uint8_t cls, void* action) {
     }
     // WO-163 (A2): an NPC's perfect-block-class action is read too -- its master strike (the blocker's counter) is a swing; the agent
     // sorts it by the row's table (flags bit 0 marks the class) and drops the block itself.
-    const bool npcKind = cls == kClsAttack || cls == kClsHit || cls == kClsSyncAttack || cls == kClsPerfect;
-    if (isPlayer && (cls == kClsHit || cls == kClsSyncAttack)) return;   // WO-151: NPCs only
+    // WO-187 C2 (mp_anim_defence): an NPC's block and dodge go out as rows too (its own defence on the joiner's copy); the agent sorts them
+    // by the row's table (flags bit 1 marks them).
+    const bool npcDefence = (cls == kClsBlock || cls == kClsDodge) && kcdmp::wo187::defence_on();
+    const bool npcKind = cls == kClsAttack || cls == kClsHit || cls == kClsSyncAttack || cls == kClsPerfect || npcDefence;
+    if (isPlayer && cls == kClsHit) return;   // WO-151: NPCs only
+    // WO-187 C2 (mp_anim_combo): the local player's sync attack -- a combo step, a throw -- goes out as an attack row (its attacker half
+    // plays on his figure); off = WO-151's NPCs only
+    if (isPlayer && cls == kClsSyncAttack && !kcdmp::wo187::combo_on()) return;
     if (!isPlayer && !(npcKind && g_cfgNpcRows.load(std::memory_order_relaxed))) return;
     if (!ca) { note_drop(c_dropNotCa, "owner-not-a-combat-actor", cls, raw); return; }
     if (ca != raw) c_capViaBase8.fetch_add(1);
@@ -623,8 +638,9 @@ void capture(uint8_t cls, void* action) {
             std::memcpy(c.alt, &a0, 8); std::memcpy(c.alt + 8, &a1, 8); c.hasAlt = true;
         }
     }
-    c.kind = cls == kClsAttack || cls == kClsSyncAttack || (cls == kClsPerfect && !isPlayer) ? 1 : cls == kClsHit ? kKindNpcHit : cls == kClsDodge ? 7 : 6;
-    c.flags = cls == kClsPerfect ? 0x01 : 0;
+    c.kind = cls == kClsAttack || cls == kClsSyncAttack || (cls == kClsPerfect && !isPlayer) || (npcDefence && !isPlayer) ? 1
+           : cls == kClsHit ? kKindNpcHit : cls == kClsDodge ? 7 : 6;
+    c.flags = cls == kClsPerfect ? 0x01 : (npcDefence && !isPlayer) ? 0x02 : (isPlayer && cls == kClsSyncAttack) ? 0x04 : 0;
     c.ic = -1; c.zone = -1; c.type = -1;
     void* model = nullptr;
     if (rd(ca, kCaModel, &model) && model) {
@@ -1479,9 +1495,20 @@ void body_frame(const char* key, void* ent, uint32_t eid, float renderSpeedMps, 
         // own brain's: the copy stays suspended and driven).
         auto eg = g_engage.find(eid);
         const bool hold = eg != g_engage.end() && now - eg->second.at < kEngageStaleS && g_combat;
+        // WO-187 C2 (mp_anim_guard): the copy of an NPC fighting anyone else holds combat mode too -- the game's guard idle under its swings
+        auto gh = hold ? g_guardHold.end() : g_guardHold.find(eid);
+        const bool guardHold = gh != g_guardHold.end() && now - gh->second.at < wo187rules::kGuardHoldStaleS && g_combat && wo187::guard_on();
         if (hold) {
             if (!b.combatHeld) c_engageHolds.fetch_add(1);
             apply_combat(b, &eg->second.st, now);
+        } else if (guardHold) {
+            if (!b.combatHeld) {
+                c_guardHolds.fetch_add(1);
+                if (c_guardHolds.load() <= 20 || c_guardHolds.load() % 50 == 0)
+                    logf("WO187-GUARD body=%s eid=0x%X combat mode held for the host NPC's fight (not engaged with this player: no skirmish) #%u", b.key.c_str(), eid,
+                         c_guardHolds.load());
+            }
+            apply_combat(b, &gh->second.st, now);
         } else if (b.automationOff || b.combatHeld) {
             release_body(b, "engagement over");
             c_engageReleases.fetch_add(1);
@@ -1495,7 +1522,21 @@ void body_frame(const char* key, void* ent, uint32_t eid, float renderSpeedMps, 
         if (want != b.crouchApplied) apply_crouch(b, want);
     } else if (b.crouchApplied) apply_crouch(b, false);
     // combat
-    if (g_combat && g_cfgCombat) apply_combat(b, fresh ? st : nullptr, now);
+    if (g_combat && g_cfgCombat) {
+        // WO-187 C2: a quiet stream (no fresh sample) keeps the partner's last fresh combat state for kFigureLingerS -- the guard idle stays
+        // under the figure's swings; a fresh combat=0 releases at once as before
+        if (fresh && (st->bits & kBitCombat)) { b.lastCombatSt = *st; b.lastCombatBitAt = now; }
+        else if (fresh) b.lastCombatBitAt = -1;
+        const double since = b.lastCombatBitAt < 0 ? -1.0 : now - b.lastCombatBitAt;
+        const bool linger = !fresh && wo187rules::figure_combat_wants(false, false, since, wo187::linger_on() && wo187::guard_on());
+        if (linger && b.combatHeld && b.lingers++ == 0) {
+            c_figureLingers.fetch_add(1);
+            logf("WO187-GUARD body=%s the partner's stream is quiet (%.1f s since a fresh combat=1) -- combat mode kept (up to %.1f s)", b.key.c_str(), since,
+                 wo187rules::kFigureLingerS);
+        }
+        if (fresh) b.lingers = 0;
+        apply_combat(b, fresh ? st : (linger ? &b.lastCombatSt : nullptr), now);
+    }
     else if (b.automationOff || b.combatHeld) release_body(b, "toggle off");
 }
 
@@ -1666,7 +1707,7 @@ int status_text_motion(char* out, int n) {
         "cap_dropped=%u buff_adds=%u ctx_set=%u ctx_fail=%u faults=%u tags=%s tags_applied=%u gait_slots=%d "
         "cap_drop_notca=%u cap_drop_nodesc=%u cap_drop_noguid=%u cap_drop_noowner=%u cap_via_base8=%u cap_ours=%u "
         "engaged=%zu engage_holds=%u engage_releases=%u cap_crouch=%u cap_stance=%u crouch_query=%s crouch_fail=%u quiet=0x%X quiet_set=%u quiet_fail=%u "
-        "cap_hit=%u cap_sync=%u cap_drop_rowtype=%u fresh_pulses=%u fresh_pending=%zu",
+        "cap_hit=%u cap_sync=%u cap_drop_rowtype=%u fresh_pulses=%u fresh_pending=%zu guard_holds=%u guard_held=%zu figure_lingers=%u idle_pulses=%u idle_requeues=%u",
         g_gait ? "armed" : "off", g_moves ? "armed" : "off", g_combat ? "armed" : "off", g_capture ? "armed" : "off",
         g_cfgAvatarGait.load(), g_cfgNpcGait.load(), g_cfgMoves.load(), g_cfgCombat.load(), g_cfgNpcRows.load(), g_bodies.size(),
         c_gaitWrites.load(), c_crouch.load(), c_jumps.load(), c_jumpFail.load(), c_combatStarts.load(), c_autoOff.load(),
@@ -1677,7 +1718,8 @@ int status_text_motion(char* out, int n) {
         g_engage.size(), c_engageHolds.load(), c_engageReleases.load(),
         c_capCrouch.load(), c_capStance.load(), g_isCrouchedState == 1 ? "armed" : g_isCrouchedState < 0 ? "refused" : "unread",
         c_crouchApplyFail.load(), g_cfgQuiet.load(), c_quietSet.load(), c_quietFail.load(),
-        c_capHit.load(), c_capSync.load(), c_dropRowType.load(), c_freshPulses.load(), g_freshPending.size());
+        c_capHit.load(), c_capSync.load(), c_dropRowType.load(), c_freshPulses.load(), g_freshPending.size(),
+        c_guardHolds.load(), g_guardHold.size(), c_figureLingers.load(), c_idlePulses.load(), c_idleRequeues.load());
 }
 
 // WO-135 test verb: the player's own crouch setter -- the function the crouch
@@ -1731,6 +1773,53 @@ void set_npc_engage(uint32_t eid, bool on, const State2* st, double now) {
     if (st) e.st = *st;
     e.st.bits |= kBitCombat;
     e.at = now;
+}
+
+void set_npc_guard_hold(uint32_t eid, bool on, const State2* st, double now) {
+    if (!on) { g_guardHold.erase(eid); return; }
+    Engage& e = g_guardHold[eid];
+    if (st) e.st = *st;
+    e.st.bits |= kBitCombat;
+    e.at = now;
+}
+
+void* actor_of(uint32_t eid) { return actor_by_eid(eid); }
+
+bool combat_mode_of(uint32_t eid, bool* on) {
+    void* ca = nullptr; void* model = nullptr;
+    if (!combat_parts(eid, false, &ca, &model) || !prop_named(model, kPropCombatMode)) return false;
+    uint8_t m = 0;
+    if (!rd(model, kPropCombatMode.off + 8, &m)) return false;
+    *on = m != 0;
+    return true;
+}
+
+// WO-187 C2: the guard idle back on a body in combat mode -- its guard zone written away and back (the engine's GuardMovement re-queues
+// CombatIdle on a zone change: UpdateMovementAnim, hooked onto the GuardZone property's change signal).
+bool requeue_guard_idle(uint32_t eid) {
+    auto it = g_bodies.find(eid);
+    void* ca = it != g_bodies.end() ? it->second.ca : nullptr;
+    void* model = nullptr;
+    if (!ca) { if (!combat_parts(eid, false, &ca, &model)) return false; }
+    else if (!rd(ca, kCaModel, &model) || !model) return false;
+    int32_t gz = -1, gs = -1;
+    if (!prop_value(model, kPropGuardZone, &gz) || !prop_value(model, kPropGuardStance, &gs) || gz < 0 || gz > 5) return false;
+    const int other = gz == 1 ? 2 : 1;
+    if (!call_setguardzone(A.fnSetGuardZone, ca, other, gs) || !call_setguardzone(A.fnSetGuardZone, ca, gz, gs)) return false;
+    c_idleRequeues.fetch_add(1);
+    return true;
+}
+
+// WO-187 C2: WO-155's walk-class pulse on any bound body (a copy too): its locomotion graph started again.
+bool request_idle_pulse(uint32_t eid) {
+    auto it = g_bodies.find(eid);
+    if (it == g_bodies.end()) return false;
+    Body& b = it->second;
+    b.fresh = true;
+    b.nudged = false;
+    b.attachAt = npcdrive::now_s() - kNudgeAfterS;
+    c_idlePulses.fetch_add(1);
+    return true;
 }
 
 bool npc_engaged(uint32_t eid) { return g_engage.count(eid) != 0; }

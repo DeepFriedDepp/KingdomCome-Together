@@ -195,8 +195,11 @@ public class Wo166Tests
     [Fact]
     public void A_strike_carries_the_rows_timings_and_attack_fields()
     {
-        var s = Wo166Rules.StrikeFor(Row(1, 3, 0.4f, 0.3f))!.Value;
+        // WO-187 B3: an ordinary row's blow lands attack_time_to_hit after the row starts, so the DLL (which lands it at start + hit) gets
+        // hit - start: start 0.4, hit 0.7 -> 400 + 300 = 700 ms, the row's own hit time
+        var s = Wo166Rules.StrikeFor(Row(1, 3, 0.4f, 0.7f))!.Value;
         Assert.Equal((400, 300, (sbyte)1, (sbyte)3, (sbyte)1, 1.0f), (s.StartMs, s.HitMs, s.Type, s.Zone, s.Hand, s.Strength));
+        Assert.Equal(50, Wo166Rules.StrikeFor(Row(1, 3, 0.4f, 0.3f))!.Value.HitMs);   // a hit before the start: the 50 ms floor
         var d = Wo166Rules.StrikeFor(Row(2, -1, 0f, 0f))!.Value;
         Assert.Equal((-1, -1, (sbyte)2), (d.StartMs, d.HitMs, d.Zone));    // no timings: the DLL's default window; zone 2 by default
         Assert.Null(Wo166Rules.StrikeFor(Row(-1, 2, 0.4f, 0.3f)));         // nothing to strike with

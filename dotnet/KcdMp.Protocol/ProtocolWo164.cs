@@ -55,6 +55,8 @@ public static partial class Protocol
     public const byte Wo179OpStatus = 30, Wo179OpConfig = 31, Wo179OpPoll = 32, Wo179OpFade = 33;
     // ---- WO-184: the DLL's ops in the WO-163 family (native/KCDMP/wo178.h): the engine's own save state and its own cancel ----
     public const byte Wo184OpSaveState = 34, Wo184OpSaveCancel = 35;
+    // ---- WO-187: the DLL's ops in the WO-163 family (native/KCDMP/wo187.h): the copies' opponents, the switches, the guard hold, positions ----
+    public const byte Wo187OpOpponent = 36, Wo187OpStatus = 37, Wo187OpConfig = 38, Wo187OpGuardHold = 39, Wo187OpPositions = 40;
 
     // ---- kinds (APPEND-ONLY) ----
     public const byte W164MarkPing = 1, W164Torch = 2, W164Escort = 3, W164HitOutcome = 4, W164Weather = 5, W164Travel = 6, W164RealHit = 7, W164NpcDown = 8;

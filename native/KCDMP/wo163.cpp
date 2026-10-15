@@ -15,6 +15,7 @@
 #include "wo176.h"
 #include "wo178.h"
 #include "wo179.h"
+#include "wo187.h"
 
 #include <atomic>
 #include <cstdio>
@@ -221,6 +222,12 @@ uint8_t handle(const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t
         case kcdmp::wo179::kOpPoll:
         case kcdmp::wo179::kOpFade:
             return kcdmp::wo179::handle(body[0], body, len, out, cap, outLen);
+        case kcdmp::wo187::kOpOpponent:   // WO-187: the copies' opponents, the switches, the guard hold, positions
+        case kcdmp::wo187::kOpStatus:
+        case kcdmp::wo187::kOpConfig:
+        case kcdmp::wo187::kOpGuardHold:
+        case kcdmp::wo187::kOpPositions:
+            return kcdmp::wo187::handle(body[0], body, len, out, cap, outLen);
         case kcdmp::wo178::kOpHeldResult:   // WO-178 C4: a held blow lives in WO-173's path
             return kcdmp::wo173::handle(body[0], body, len, out, cap, outLen);
         default:

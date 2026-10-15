@@ -160,7 +160,10 @@ public partial class GameBridge
             if (!r.Ok) fr = null;
         }
         _w165Stats.Recoil(fr is not null);
-        Console.WriteLine($"WO165-RECOIL npc={npc} outcome={HitVerdictMsg.VerdictName(outcome)} recoil={(fr is { } x ? $"\"{x.Spec}\"" : "none")} why={why}");
+        // WO-187 B3: a weapon with no recoil row (blunt, unarmed: the game's own recoil is procedural) is said once per fight, not per blow
+        if (why == "no-row-for-this-weapon" && !Wo187RecoilNoRowFirst(npc)) return;
+        Console.WriteLine($"WO165-RECOIL npc={npc} outcome={HitVerdictMsg.VerdictName(outcome)} recoil={(fr is { } x ? $"\"{x.Spec}\"" : "none")} why={why}"
+                          + (why == "no-row-for-this-weapon" ? " (the game has no recoil row for this weapon -- said once per fight)" : ""));
     }
 
     private void Wo165WriteStats()

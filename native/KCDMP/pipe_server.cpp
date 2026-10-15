@@ -21,6 +21,7 @@
 #include "savelist.h"
 #include "leash.h"
 #include "wo131.h"
+#include "wo187.h"
 #include "wo132.h"
 #include "wo166.h"
 #include "wo137.h"
@@ -687,7 +688,10 @@ void serve(HANDLE h) {
 
                 rttr::SwingResult res = rttr::SwingResult::Ok;
                 const bool ran = run_sync_bounded<rttr::SwingResult>(
-                    [entityId, spec](rttr::SwingResult& result) { result = rttr::ghost_swing(entityId, spec.c_str()); },
+                    [entityId, spec](rttr::SwingResult& result) {
+                        result = rttr::ghost_swing(entityId, spec.c_str());
+                        if (result == rttr::SwingResult::Ok) kcdmp::wo187::note_move(entityId);   // WO-187 C2: the move's scope is watched
+                    },
                     "GhostSwing", res);
                 // A task that never ran is NOT the same failure as one that
                 // ran and was refused -- WO-100 Phase 4 item 3. Report it as

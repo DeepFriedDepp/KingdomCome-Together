@@ -52,6 +52,7 @@ std::vector<uint32_t> g_engaged;
 bool is_engaged(uint32_t eid) { for (uint32_t e : g_engaged) if (e == eid) return true; return false; }
 
 constexpr float kEngageRangeM = 15.0f;
+constexpr float kIntentRangeM = 40.0f;   // WO-187 A1: the host's NPC is within kEngageRangeM of this player; its copy here may be this far behind
 std::atomic<uint32_t> c_far{0};
 std::atomic<uint32_t> c_leave{0}, c_leaveFail{0}, c_engageOn{0}, c_engageOff{0}, c_engageSkirmish{0}, c_watchOut{0}, c_fail{0};
 
@@ -118,8 +119,11 @@ uint8_t handle(const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t
         return kROk;
     }
     case kOpEngage: {
-        if (n != 1 + 4 + sizeof(motion::State2)) return kRBadRequest;
+        if (n != 1 + 4 + sizeof(motion::State2) && n != 1 + 4 + sizeof(motion::State2) + 1) return kRBadRequest;
         bool on = a[0] != 0;
+        // WO-187 A1: the agent's word that the HOST's NPC is within range of this player and targets him -- the copy here may lag behind it
+        // (a chase); it is engaged up to kIntentRangeM by its own position
+        const bool intent = n == 1 + 4 + sizeof(motion::State2) + 1 && a[17] == 1;
         const uint32_t eid = get_u32(a + 1);
         motion::State2 st{};
         std::memcpy(&st, a + 5, sizeof st);
@@ -138,7 +142,7 @@ uint8_t handle(const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t
                 dist = std::sqrt(dx * dx + dy * dy + dz * dz);
             }
         }
-        bool tooFar = on && (dist < 0 || dist > kEngageRangeM);
+        bool tooFar = on && (dist < 0 || dist > (intent ? kIntentRangeM : kEngageRangeM));
         if (tooFar) { on = false; c_far.fetch_add(1); }
         if (on && hits::scene_owned_eid(eid, "wo132-engage")) on = false;   // WO-174: a scripted brawl's copy never engages the player through the mod
         if (on) {

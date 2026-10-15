@@ -256,7 +256,10 @@ public partial class GameBridge
             switch ((ActionKind)f.Kind)
             {
                 case ActionKind.Attack:
-                    var ae = new AttackEvent(ms, f.InputClass, Protocol.ZoneFromTableId(f.ZoneTableId), f.AttackType, f.Flags, f.Row);
+                    // WO-187 C2: the DLL marks a player's sync attack (a combo step, a throw) 0x04; on the wire it is the v8 FlagCombo
+                    byte aflags = (f.Flags & Wo187Rules.NativeFlagPlayerSync) != 0 ? AttackEvent.FlagCombo : f.Flags;
+                    if ((f.Flags & Wo187Rules.NativeFlagPlayerSync) != 0 && !_w187Combo) return;
+                    var ae = new AttackEvent(ms, f.InputClass, Protocol.ZoneFromTableId(f.ZoneTableId), f.AttackType, aflags, f.Row);
                     pkt = _actionOut.Build(ActionKind.Attack, ActionPhase.Commit, ae.ToBytes());
                     what = ae.ToString();
                     break;
@@ -434,6 +437,7 @@ public partial class GameBridge
                     Console.WriteLine($"MP-ACTION section=inbound kind=NpcAttack npc={ne.Name} row={ne.Row} dispatch=off (mp_animal_attacks off: an animal's attack is not animated here; its damage still comes through the host)");
                     return true;
                 }
+                if (!animal && Wo187Rules.IsDefenceRow(row)) { await Wo187PlayDefenceAsync(ne.Name, neid, ne.Row, row, ct); return true; }   // WO-187 C2: its own block / dodge
                 if (!animal) row = Wo167RowFor(ne.Name, ne.Row, row, catalog);   // WO-167 C4: a paired row it cannot play is its plain attack
                 _ = _combat.NpcHoldAsync(ne.Name, Wo166Rules.SwingHoldMs(row.HitLagMs, _w166SnapFix), ct);   // WO-166 C4: the hold ends with the swing
                 var r = await _combat.GhostSwingForResultAsync(neid, row.Spec, ct);
@@ -480,7 +484,8 @@ public partial class GameBridge
         // MP-ACTION inbound lines only named the kinds that log a dispatch of their own). Said once, with the swing's id.
         Console.WriteLine($"MP-ACTION section=inbound ghost={gid} kind={a.Kind} seq={a.Seq} dispatch=swing-queued rsid={rsid}");
         _ = _combat.NpcHoldAsync("kcd2mp_" + gid, 900, ct);
-        EnsureSwingInbox(ct).TryEnqueue(new SwingInbox.Entry(gid, a.Seq, rsid, GhostGeneration(gid), row.Spec, DateTime.UtcNow));
+        EnsureSwingInbox(ct).TryEnqueue(new SwingInbox.Entry(gid, a.Seq, rsid, GhostGeneration(gid), row.Spec, DateTime.UtcNow,
+                                                             LuaFallback: a.Kind == ActionKind.Attack || !_w187Defence));
         await ExecLuaAsync($"if KCD2MP_GhostNativeSwingHold then KCD2MP_GhostNativeSwingHold(\"{gid}\") end");
     }
 

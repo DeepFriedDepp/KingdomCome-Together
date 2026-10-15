@@ -229,6 +229,12 @@ public partial class GameBridge(ClientConfig config)
                 // engine refusing -- still gets the old Lua cue, late but
                 // visible, which is what it has always done.
                 if (o.Reason == PipeReason.Expired) return;
+                // WO-187 C2: a block or dodge row that failed is not a swing -- the swing clip was the wrong move; nothing is shown instead
+                if (!o.Entry.LuaFallback)
+                {
+                    Console.WriteLine($"[combatviz] native block/dodge row for ghost {o.Entry.GhostId} did not apply (reason={new PipeResult(false, o.Reason).ReasonTag}) -- no swing-clip fallback for a defence");
+                    return;
+                }
                 Console.WriteLine($"[combatviz] native swing for ghost {o.Entry.GhostId} did not apply " +
                                   $"(reason={new PipeResult(false, o.Reason).ReasonTag}) -- falling back to the Lua cue");
                 _ = ExecLuaAsync($"if KCD2MP_GhostCombat then KCD2MP_GhostCombat(\"{o.Entry.GhostId}\",{Protocol.CombatEventSwing}) end");
@@ -6049,6 +6055,10 @@ public partial class GameBridge(ClientConfig config)
             case "w178_status":      // WO-178: mp_w178_status
             case "w178_trace":       // WO-178 research: mp_w178_trace <secs>
                 Wo178OnEvent(name, arg);
+                return;
+            case "w187_cfg":         // WO-187: mp_opp_logical, mp_opp_pin, mp_engage_intent, mp_anim_*, mp_fight_pos
+            case "w187_status":      // WO-187: mp_w187_status
+                Wo187OnEvent(name, arg);
                 return;
             case "w166_talkstate":   // WO-166 T3: a talk that never started -- the copy's facts
             case "w166_talk":        // WO-166 T4: a talk refused, the host's NPC busy

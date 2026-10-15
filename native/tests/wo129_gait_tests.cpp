@@ -40,6 +40,7 @@ int wo171_tests(int* passed);              // wo171_tests.cpp (WO-171: the marke
 int wo174_tests(int* passed);              // wo174_tests.cpp (WO-174: the scripted-brawl guard's name rules)
 int wo176_tests(int* passed);              // wo176_tests.cpp (WO-176: the arranged-fight guard's rules, the fallback that routes nowhere, B2's referral)
 int wo177_tests(int* passed);              // wo177_tests.cpp (WO-177: the native log rotation)
+int wo187_tests(int* passed);              // wo187_tests.cpp (WO-187: opponent wishes, guard hold, idle restore, per-weapon 0x10)
 int wo178_tests(int* passed);              // wo178_tests.cpp (WO-178: the hostility answer's rules, C4's hold and engine-like cap)
 int wo173_tests(int* passed);              // wo173_tests.cpp (WO-173: the reaction tail's sites, one blow once, the cap, the correction)
 int wo172_tests(int* passed);              // wo172_tests.cpp (WO-172: C1's dead gate)              // wo170_tests.cpp (WO-170: the figure guard's relayed-swing ledger, the put-back, the automation kept off)
@@ -276,6 +277,14 @@ int main() {
     {
         int fp = 0;
         const int ff = wo172_tests(&fp);
+        g_pass += fp;
+        g_fail += ff;
+    }
+
+    // WO-187: the opponent wishes, the guard hold, the figure's linger, the idle restore, the per-weapon perfect-blocked length
+    {
+        int fp = 0;
+        const int ff = wo187_tests(&fp);
         g_pass += fp;
         g_fail += ff;
     }

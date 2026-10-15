@@ -127,6 +127,12 @@ int status_text(char* out, int n);
 // applier the avatars use. It lets go 3 s after the last update, or on `on=false`.
 void set_npc_engage(uint32_t eid, bool on, const State2* st, double now);
 bool npc_engaged(uint32_t eid);
+// WO-187 C2: a copy whose host NPC fights anyone holds combat mode (no skirmish, no engagement); stale after wo187rules::kGuardHoldStaleS.
+void set_npc_guard_hold(uint32_t eid, bool on, const State2* st, double now);
+void* actor_of(uint32_t eid);                    // the C_Actor of an entity id (main thread), null when none
+bool combat_mode_of(uint32_t eid, bool* on);     // its combat model's CombatMode (false = unreadable)
+bool requeue_guard_idle(uint32_t eid);           // the guard zone written away and back: the engine re-queues its guard idle
+bool request_idle_pulse(uint32_t eid);           // WO-155's walk-class pulse on a bound body (false = not one of ours)
 // WO-132 (live checks only): the local player's held block through the engine's
 // own SetBlockMode -- the function the block button calls; no input is made.
 bool player_block(bool on);

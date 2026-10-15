@@ -8,6 +8,8 @@
 #include "wo172.h"
 #include "wo178.h"
 #include "wo178_rules.h"
+#include "wo187.h"
+#include "wo187_rules.h"
 #include <cmath>
 #include "anchors.h"
 #include "fault_guard.h"
@@ -62,6 +64,7 @@ struct Strike {
     bool pbPending = false, pbReStruck = false;   // WO-185 (mp_pb_at_contact): the player's perfect block began; the copy's 0x10 step waits for the blow's contact
     double pbPendingAt = 0;
     double pbStage2S = wo166rules::kPbStage2S;    // 0x10 -> 0x20 after this (the press-time step 0.5; the contact step 0.42)
+    uint8_t weapon = 0;                           // WO-187 B3: the row's weapon class (wo187rules::Weapon; 0 = a 0.60.3 agent: unknown)
     bool oppHitSet = false;
     unsigned n = 0;
 };
@@ -319,6 +322,8 @@ bool ensure_target_player(void* ca, void* model, bool* hadIt) {
         KCDMP_FAULT_CALL(tsite, "wo166::target_entity");
         if (fault::guarded(tsite, [&] { te = (*reinterpret_cast<void* (__fastcall***)(void*)>(tgt))[1](tgt); }) && te == pEnt) { *hadIt = true; return true; }
     }
+    // WO-187 A2 (mp_opp_logical): the engine's own SetLogicalTarget -- the requested target as well, so the opponent manager's update keeps it
+    if (wo187::opp_logical_on()) return wo187::ensure_target(ca, model, pEnt, hadIt);
     if (!resolve_opp_set_target()) return false;
     KCDMP_FAULT_CALL(site, "wo166::set_target");
     if (!fault::guarded(site, [&] { g_oppSetTarget(mgr, pEnt); })) return false;
@@ -514,6 +519,21 @@ void switch_off(const char* site) {
     logf("WO166-STRIKE switched OFF for the session -- a write failed at %s (the copies play their swings as before; the host decides as before)", site);
 }
 
+// WO-187 B3: the 0x10 -> 0x20 length for this swing's weapon -- the measured value where one exists, the fallback (said once per weapon) elsewhere.
+uint32_t g_stage2Said = 0;
+double stage2_for(const Strike& s) {
+    bool measured = false;
+    const auto w = wo187rules::weapon_from_byte(s.weapon);
+    const double v = wo187rules::pb_stage2(w, s.fields.type, s.fields.zone, &measured);
+    const uint32_t bit = 1u << static_cast<unsigned>(w);
+    if (!measured && !(g_stage2Said & bit)) {
+        g_stage2Said |= bit;
+        logf("WO187-TIMING weapon=%s type=%d zone=%d: no measured perfect-blocked length for this weapon -- the copy holds 0x10 for %.2f s "
+             "(the fallback; a vanilla trace of this weapon measures it)", wo187rules::weapon_name(w), s.fields.type, s.fields.zone, v);
+    }
+    return v;
+}
+
 // The prior state and fields back, if the model still reads ours.
 void restore(Strike& s, bool closing) {
     // WO-172 C1: a body that died inside its window keeps what its death left -- no Guard/Idle written over a corpse
@@ -552,6 +572,21 @@ float swing_reach_limit(uint32_t eid) {
     const Strike* best = nullptr;
     for (const auto& s : g_strikes) if (s.eid == eid && (!best || s.begin > best->begin)) best = &s;
     return best ? wo178rules::contact_limit(best->engineReach, best->hitDist) : wo178rules::reach_limit(0);
+}
+
+int weapon_class_id(void* ca) {
+    // the weapon class of the combat actor's right hand (a shield there means the other hand), its id at the class's +8 (0xC = a shield)
+    if (!ca || !resolve_reach() || !g_weapon) return -1;
+    int32_t id = -1;
+    KCDMP_FAULT_CALL(site, "wo166::weapon_class");
+    if (!fault::guarded(site, [&] {
+            void* set = *reinterpret_cast<void**>(static_cast<char*>(ca) + 0x4D8);
+            if (!set) return;
+            void* w = g_weapon(static_cast<char*>(set) + 0x18, 0);
+            if (w && *reinterpret_cast<int32_t*>(static_cast<char*>(w) + 8) == 0xC) w = g_weapon(static_cast<char*>(set) + 0x18, 1);
+            if (w) id = *reinterpret_cast<int32_t*>(static_cast<char*>(w) + 8);
+        })) return -1;
+    return id;
 }
 
 float swing_hit_distance(uint32_t eid) {
@@ -594,6 +629,7 @@ void tick() {
                 motion::AttackFields pf{};
                 motion::read_attack_fields(model, &pf);
                 if (!hits::is_discard_attacker(s.eid)) s.discardAdded = hits::discard_from(s.eid, true);
+                wo187::on_windup(s.eid, s.name.c_str(), ca, model);   // WO-187 A2: the wished opponent checked (and written back) before the planning
                 const bool oppMe = copy_opp_is_player(model);
                 (oppMe ? c_engineOppPlayer : c_engineOppOther).fetch_add(1);
                 s.countdown = write_countdown(model, static_cast<float>((std::max)(0.0, s.hitAt - now)));   // before the state: the window reads it
@@ -617,6 +653,7 @@ void tick() {
                     (s.targetSet ? (hadTarget ? c_targetHad : c_targetSet) : c_targetFailed).fetch_add(1);
                     if (!s.targetSet) s.canHitWrote = set_can_hit(model, s.canHit);   // no target: ours, re-written every frame
                     if (oppMe && s.countdown) s.planned = plan_defender_slots(ca);   // the attack's own planning: the perfect-block window
+                    wo187::note_plan(s.name.c_str(), oppMe, s.planned, oppMe && s.countdown && s.planned == 0);   // WO-187 A3
                     (s.canHit ? c_canHitYes : c_canHitNo).fetch_add(1);
                     float wlen = -1, wcls = -1;
                     weapon_dims(ca, &wlen, &wcls);
@@ -764,7 +801,7 @@ void tick() {
                     s.oppHitSet = set_opponent_hit(model, true);
                     if (set_state_engine(model, wo166rules::kStatePerfectBlocked)) {
                         s.pbStage = 1; s.pbAt = now;
-                        s.pbStage2S = atContact ? wo166rules::pb_contact_stage2(s.fields.type, s.fields.zone) : wo166rules::kPbStage2S;
+                        s.pbStage2S = atContact ? stage2_for(s) : wo166rules::kPbStage2S;
                         const double holdS = atContact ? s.pbStage2S + wo166rules::kPbContactTailS : wo166rules::kPbHoldS;
                         s.end = (std::max)(s.end, now + holdS);
                         c_pbHits.fetch_add(1);
@@ -822,9 +859,10 @@ uint8_t handle(uint8_t op, const uint8_t* body, size_t len, uint8_t* out, size_t
             std::memcpy(&strength, body + 8, 4);
             f.strength = strength;
             const size_t n = body[12];
-            if ((len != 13 + n && len != 13 + n + 8) || !name_ok(reinterpret_cast<const char*>(body + 13), n)) return wo163::kRBadRequest;
+            if ((len != 13 + n && len != 13 + n + 8 && len != 13 + n + 9) || !name_ok(reinterpret_cast<const char*>(body + 13), n)) return wo163::kRBadRequest;
             float hitDist = 0, alignMax = 0;   // WO-178: the row's own reach (an 8-byte tail after the name)
-            if (len == 13 + n + 8) { std::memcpy(&hitDist, body + 13 + n, 4); std::memcpy(&alignMax, body + 17 + n, 4); }
+            if (len >= 13 + n + 8) { std::memcpy(&hitDist, body + 13 + n, 4); std::memcpy(&alignMax, body + 17 + n, 4); }
+            const uint8_t weapon = len == 13 + n + 9 ? body[21 + n] : 0;   // WO-187 B3: the row's weapon class (a ninth tail byte)
             c_requests.fetch_add(1);
             if (!g_on.load()) { text("refused=off"); return wo163::kROk; }
             if (g_faulted.load()) { text("refused=switched-off site=%s", g_faultSite.c_str()); return wo163::kRFailed; }
@@ -851,7 +889,7 @@ uint8_t handle(uint8_t op, const uint8_t* body, size_t len, uint8_t* out, size_t
             }
             if (g_strikes.size() >= kMaxStrikes) { text("refused=full"); return wo163::kROk; }
             Strike s;
-            s.eid = eid; s.name = name; s.fields = f;
+            s.eid = eid; s.name = name; s.fields = f; s.weapon = weapon;
             s.begin = w.begin_ms / 1000.0; s.end = w.end_ms / 1000.0;
             // WO-178: a copy (never a partner's figure: its swing is the partner's, WO-173) winds up the engine's way from the row's start
             s.engine = !motion::is_avatar_eid(eid) && wo178::copy_engine_state_on() && resolve_set_state();

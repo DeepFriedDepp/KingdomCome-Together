@@ -29,7 +29,8 @@ public static class Wo166Rules
     public const byte DefaultAutoMode = 0, MaxAutoMode = 9;
 
     /// <summary>C3: a striking window's request -- the row's own timings (ms; -1 when its table has none) and its attack fields.</summary>
-    public readonly record struct Strike(int StartMs, int HitMs, sbyte Type, sbyte Zone, sbyte Hand, float Strength, float HitDistance = 0f, float AlignMax = 0f);
+    public readonly record struct Strike(int StartMs, int HitMs, sbyte Type, sbyte Zone, sbyte Hand, float Strength, float HitDistance = 0f, float AlignMax = 0f,
+                                         byte Weapon = 0);
 
     /// <summary>
     /// C3: the window for a row played on a copy. Null when the row carries no attack type (a defence, a gesture: nothing to strike with).
@@ -40,9 +41,11 @@ public static class Wo166Rules
     {
         if (row.AttackType < 0 || row.AttackType > 15) return null;
         int start = row.TimeToStart > 0 ? (int)MathF.Round(row.TimeToStart * 1000f) : -1;
-        int hit = row.TimeToHit > 0 ? (int)MathF.Round(row.TimeToHit * 1000f) : -1;
+        // WO-187 B3: the DLL lands the blow at start + hit; an ordinary row's blow lands attack_time_to_hit after it starts (charged: start + hit)
+        int hit = Wo187Rules.StrikeHitMs(row);
         sbyte zone = (sbyte)(row.Zone is >= 0 and <= 5 ? row.Zone : 2);
-        return new Strike(start, hit, (sbyte)row.AttackType, zone, 1, 1.0f, row.HitDistance, row.AlignMax);   // WO-178: the row's own reach
+        return new Strike(start, hit, (sbyte)row.AttackType, zone, 1, 1.0f, row.HitDistance, row.AlignMax,   // WO-178: the row's own reach
+                          (byte)Wo187Rules.WeaponOf(row.Tags));                                         // WO-187 B3: its weapon class
     }
 
     /// <summary>

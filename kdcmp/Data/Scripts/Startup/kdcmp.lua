@@ -23141,6 +23141,44 @@ do   -- WO-178's do-block
     end
 end   -- WO-178's do-block
 
+-- WO-187: every fight move visible to the watcher, the joiner's shield, fight positions. The switches live in the agent and the DLL
+-- (w187_cfg); this block only names them and passes on|off. Each mechanism ships on; mp_anim_scope_log is a research trace (off).
+do
+    W187 = W187 or {}
+    W187.NAMES = { opp_logical = "mp_opp_logical", opp_pin = "mp_opp_pin", engage_intent = "mp_engage_intent", anim_guard = "mp_anim_guard",
+                   anim_idle = "mp_anim_idle", anim_defence = "mp_anim_defence", anim_combo = "mp_anim_combo", anim_scope_log = "mp_anim_scope_log",
+                   fight_pos = "mp_fight_pos", chase_follow = "mp_chase_follow" }
+    function KCD2MP_W187Set(name, arg)
+        local label = W187.NAMES[tostring(name)]
+        if not label then mp_log("WO187-TOGGLE unknown switch '" .. tostring(name) .. "'"); return false end
+        local v = KCD2MP_Wo122ParseBool(arg)
+        if v == "bad" then mp_log(label .. ": expected on|off, got '" .. tostring(arg) .. "'"); return false end
+        if v == nil then
+            mp_log("WO187-TOGGLE " .. label .. " (asking the agent; mp_w187_status shows the values)")
+            KCD2MP_EmitEvent("w187_status", "")
+            return true
+        end
+        mp_log("WO187-TOGGLE " .. label .. " " .. (v and "on" or "off") .. " -- sent to the agent and the DLL")
+        KCD2MP_EmitEvent("w187_cfg", tostring(name) .. "=" .. (v and "on" or "off"))
+        return true
+    end
+    function KCD2MP_W187SetOppLogical(arg) return KCD2MP_W187Set("opp_logical", arg) end
+    function KCD2MP_W187SetOppPin(arg) return KCD2MP_W187Set("opp_pin", arg) end
+    function KCD2MP_W187SetEngageIntent(arg) return KCD2MP_W187Set("engage_intent", arg) end
+    function KCD2MP_W187SetAnimGuard(arg) return KCD2MP_W187Set("anim_guard", arg) end
+    function KCD2MP_W187SetAnimIdle(arg) return KCD2MP_W187Set("anim_idle", arg) end
+    function KCD2MP_W187SetAnimDefence(arg) return KCD2MP_W187Set("anim_defence", arg) end
+    function KCD2MP_W187SetAnimCombo(arg) return KCD2MP_W187Set("anim_combo", arg) end
+    function KCD2MP_W187SetAnimScopeLog(arg) return KCD2MP_W187Set("anim_scope_log", arg) end
+    function KCD2MP_W187SetFightPos(arg) return KCD2MP_W187Set("fight_pos", arg) end
+    function KCD2MP_W187SetChaseFollow(arg) return KCD2MP_W187Set("chase_follow", arg) end
+    function KCD2MP_W187Status()
+        mp_log("WO187-STATUS asked (MP-W187-STATS in agent.log)")
+        KCD2MP_EmitEvent("w187_status", "")
+        return true
+    end
+end   -- WO-187's do-block
+
 function KCD2MP_W166SetTalkResumeFirst(arg)
     local v = KCD2MP_Wo122ParseBool(arg)
     if v == "bad" then mp_log("mp_talk_resume_first: expected on|off"); return false end
@@ -27948,6 +27986,17 @@ local ok, err = pcall(function()
     System.AddCCommand("mp_w178_trace", 'KCD2MP_W178Trace(%line)', "WO-178 research: the player's and his opponent's combat models every frame, and the actions entering, logged for <secs> (read-only): mp_w178_trace <secs>")
     System.AddCCommand("mp_copy_engine_state", 'KCD2MP_W178SetCopyEngineState(%line)', "WO-178: an enemy copy's swing winds up and strikes the engine's own way, so your game shows the block prompt and your block meets it (default on): mp_copy_engine_state on|off")
     System.AddCCommand("mp_pb_at_contact", 'KCD2MP_W178SetPbAtContact(%line)', "WO-185: an enemy copy's perfect-blocked sequence (and your riposte window) starts when its blow makes contact, as a real attacker's does, so a perfect block pressed ahead of contact holds through the blow (default on): mp_pb_at_contact on|off")
+    System.AddCCommand("mp_opp_logical", 'KCD2MP_W187SetOppLogical(%line)', "WO-187: an enemy copy fighting you takes you as its opponent the game's own way (SetLogicalTarget), checked at every wind-up -- your shield window opens on its swings (default on): mp_opp_logical on|off")
+    System.AddCCommand("mp_opp_pin", 'KCD2MP_W187SetOppPin(%line)', "WO-187: a copy whose opponent the game keeps changing is pinned to the right one with the game's own forced-target relation (default on): mp_opp_pin on|off")
+    System.AddCCommand("mp_engage_intent", 'KCD2MP_W187SetEngageIntent(%line)', "WO-187: (joiner) an enemy the host's game sends at you is engaged the moment it targets you, not at its first hit (default on): mp_engage_intent on|off")
+    System.AddCCommand("mp_anim_guard", 'KCD2MP_W187SetAnimGuard(%line)', "WO-187: an enemy copy in any fight, and your partner's figure, stand in their combat guard between moves (default on): mp_anim_guard on|off")
+    System.AddCCommand("mp_anim_idle", 'KCD2MP_W187SetAnimIdle(%line)', "WO-187: a body left with no animation after a move (a T-pose) gets its idle back (default on): mp_anim_idle on|off")
+    System.AddCCommand("mp_anim_defence", 'KCD2MP_W187SetAnimDefence(%line)', "WO-187: the host's NPCs' own blocks, perfect blocks and dodges play on their copies (default on): mp_anim_defence on|off")
+    System.AddCCommand("mp_anim_combo", 'KCD2MP_W187SetAnimCombo(%line)', "WO-187: a player's combo steps and throws play on their figure (default on): mp_anim_combo on|off")
+    System.AddCCommand("mp_anim_scope_log", 'KCD2MP_W187SetAnimScopeLog(%line)', "WO-187 research: the animation each figure and copy shows around every move, logged (default off): mp_anim_scope_log on|off")
+    System.AddCCommand("mp_fight_pos", 'KCD2MP_W187SetFightPos(%line)', "WO-187: once a second during a fight with a player, both machines log the NPC's and the player's positions on the shared clock (default on): mp_fight_pos on|off")
+    System.AddCCommand("mp_chase_follow", 'KCD2MP_W187SetChaseFollow(%line)', "WO-187: an enemy that runs while it swings keeps following on the joiner's screen instead of standing still for the swing (default on): mp_chase_follow on|off")
+    System.AddCCommand("mp_w187_status", 'KCD2MP_W187Status()', "WO-187: the fight switches and counters (MP-W187-STATS in agent.log)")
     System.AddCCommand("mp_w178_status", 'KCD2MP_W178Status(%line)', "WO-178: the save switches, the quicksave, the draw probe, and the DLL's hostility answer (through the agent): mp_w178_status")
     System.AddCCommand("mp_repair_combat", 'KCD2MP_W174Repair(%line)', "WO-174: frees stuck weapons -- clears partner-figure fight links, ends a stuck fight, re-equips a melee weapon -- and says so; on a save that was fine it changes nothing: mp_repair_combat")
     System.AddCCommand("mp_weapon_autofix", 'KCD2MP_W174SetAutofix(%line)', "WO-174: after mp_repair_combat freed your weapons, every later load in this game session equips that weapon again, because the lock returns on a reload (default on): mp_weapon_autofix on|off")

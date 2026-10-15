@@ -272,6 +272,8 @@ static class P
         var lastFight = new Dictionary<int, double>();
         var tports = new Dictionary<string, List<(double T, float Dx, float Dy)>>(StringComparer.OrdinalIgnoreCase);   // WO-165 teleport
         var gcombats = new List<(double T0, double T1, int Gz)>();   // WO-166 C1
+        Wo187Verbs.Echo? echo = null;                                 // WO-187 C3: the echo partner
+        var fmoves = new List<(double T, string What, Guid Row)>();   // WO-187 C3: the figure's block / dodge / attack rows
         uint swingSeq = 0;
         foreach (var raw in File.ReadAllLines(Arg(a, "--plan", "plan.txt")))
         {
@@ -424,6 +426,8 @@ static class P
                                   $"W164->host kind={f[2]} {string.Join(' ', f.Skip(3))}"));
                     break;
                 case "jattack": jattacks.Add((double.Parse(f[1], CultureInfo.InvariantCulture), Guid.Parse(f[2]))); break;   // WO-170
+                case "echo": echo = new Wo187Verbs.Echo { DelayMs = double.Parse(f[1], CultureInfo.InvariantCulture) * 1000.0, Ahead = double.Parse(f[2], CultureInfo.InvariantCulture) }; break;   // WO-187 C3
+                case "fmove": fmoves.Add((double.Parse(f[1], CultureInfo.InvariantCulture), f[2], Guid.Parse(f[3]))); break;   // WO-187 C3
                 case "jhit":   // WO-173: jhit <t> <npc> <row> <lag_ms> <hp> <st> [every_s n]
                 {
                     double t0 = Wo165Verbs.D(f[1]), lag = Wo165Verbs.D(f[4]) / 1000.0;
@@ -457,6 +461,8 @@ static class P
         var (ty, pl) = await ReadPacket(st, CancellationToken.None);
         if (ty != Protocol.Ack) { Console.WriteLine($"SYNTH refused: 0x{ty:X2} {Encoding.UTF8.GetString(pl)}"); return 1; }
         Console.WriteLine($"SYNTH connected id={pl[0]} release={release} npcs={movers.Count} emit={emitMs}ms delay={delayMs} jitter={jitterMs} spike={spikePct}%/{spikeMs}ms");
+        if (echo is not null) { echo.MyId = pl[0]; Console.WriteLine(FormattableString.Invariant($"SYNTH echo partner: every other peer's stream back {echo.DelayMs / 1000.0:F1} s late, {echo.Ahead:F1} m in front of him")); }
+        var echoClock = Stopwatch.StartNew();
 
         using var cts = new CancellationTokenSource();
         long rx = 0;
@@ -467,6 +473,8 @@ static class P
                 while (!cts.IsCancellationRequested)
                 {
                     var (rt, rb2) = await ReadPacket(st, cts.Token); rx++;
+                    if (echo is not null && rt == Protocol.Ghost) Wo187Verbs.OnGhost(echo, rb2, echoClock.Elapsed.TotalMilliseconds);            // WO-187 C3
+                    else if (echo is not null && rt == Protocol.ActionDown) Wo187Verbs.OnAction(echo, s_actions, rb2, echoClock.Elapsed.TotalMilliseconds);
                     // WO-122: the host's world-save announcement, as a joiner receives it.
                     if (rt == Protocol.WorldSavedDown && WorldSaved.TryDecode(rb2, down: true, out byte wsrc) is WorldSaved ws)
                         Console.WriteLine(FormattableString.Invariant(
@@ -515,6 +523,13 @@ static class P
                     await st.WriteAsync(s_actions.Build(ActionKind.Attack, ActionPhase.Commit, ae.ToBytes()));
                     Console.WriteLine(FormattableString.Invariant($"SYNTH t={t:F1}s Attack row={jattacks[ai].Row}"));
                     jattacks.RemoveAt(ai);
+                }
+                for (int mi = fmoves.Count - 1; mi >= 0; mi--)   // WO-187 C3: the figure's rows, stamped now
+                {
+                    if (fmoves[mi].T > t) continue;
+                    await st.WriteAsync(Wo187Verbs.Move(s_actions, fmoves[mi].What, fmoves[mi].Row));
+                    Console.WriteLine(FormattableString.Invariant($"SYNTH t={t:F1}s FMOVE {fmoves[mi].What} row={fmoves[mi].Row}"));
+                    fmoves.RemoveAt(mi);
                 }
                 for (int ji = joinMsgs.Count - 1; ji >= 0; ji--)   // WO-164: activity rows, W164 messages, checkpoints, when due
                 {
@@ -652,6 +667,16 @@ static class P
                 double d = delayMs + rng.NextDouble() * jitterMs + (rng.NextDouble() * 100 < spikePct ? spikeMs : 0);
                 queue.Enqueue(gp, now + d);
             }
+            if (echo is not null)   // WO-187 C3: the echoed packets that are due, re-stamped as they go
+            {
+                double en = echoClock.Elapsed.TotalMilliseconds;
+                while (echo.Out.TryPeek(out var eo) && eo.Due <= en && echo.Out.TryDequeue(out eo))
+                {
+                    await st.WriteAsync(Wo187Verbs.Restamp(eo.Pkt));
+                    sent++;
+                    if (eo.Note.Length > 0) Console.WriteLine(FormattableString.Invariant($"SYNTH t={ts:F1}s {eo.Note}"));
+                }
+            }
             while (queue.TryPeek(out var p, out double at) && at <= now)
             {
                 queue.Dequeue();
@@ -665,7 +690,7 @@ static class P
                 BinaryPrimitives.WriteInt64LittleEndian(ping.AsSpan(3), DateTime.UtcNow.Ticks);
                 await st.WriteAsync(ping);
             }
-            if (now - lastReport > 10000) { lastReport = now; Console.WriteLine($"SYNTH t={ts:F0}s emitted={emitted} sent={sent} rx={rx} queued={queue.Count}"); }
+            if (now - lastReport > 10000) { lastReport = now; Console.WriteLine($"SYNTH t={ts:F0}s emitted={emitted} sent={sent} rx={rx} queued={queue.Count}" + (echo is null ? "" : $" echo_positions={echo.Positions} echo_actions={echo.Actions} echo_dropped={echo.Dropped}")); }
             Thread.Sleep(1);
         }
         Console.WriteLine($"SYNTH done emitted={emitted} sent={sent} rx={rx}");

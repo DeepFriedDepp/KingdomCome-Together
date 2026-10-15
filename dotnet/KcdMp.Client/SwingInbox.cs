@@ -44,7 +44,8 @@ public sealed class SwingInbox : IAsyncDisposable
         long   Rsid,
         int    BodyGeneration,
         string FragSpec,
-        DateTime EnqueuedAt);
+        DateTime EnqueuedAt,
+        bool LuaFallback = true);   // WO-187: false for a block / dodge row -- a failure shows nothing rather than the Lua swing clip
 
     /// <summary>What happened to one entry. Mirrors <see cref="PipeReason"/>'s vocabulary.</summary>
     public readonly record struct Outcome(Entry Entry, bool Ok, PipeReason Reason, double WaitedMs);

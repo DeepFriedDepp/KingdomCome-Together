@@ -2,6 +2,8 @@
 // GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 #include "wo178.h"
+#include "wo187.h"
+#include "wo166.h"
 #include "wo178_rules.h"
 
 #include <windows.h>
@@ -588,6 +590,13 @@ void trace_tick(double now) {
             char x[96]; std::snprintf(x, sizeof x, " p5c0=%s:%.3f", nm, prop_float(om, 0x5C0));
             ot += x;
             ot += trace_props(om, kOppProps, sizeof kOppProps / sizeof kOppProps[0]);
+            // WO-187 B3: the attacker's weapon class and its current action (FailedAttack after a block or perfect block, where its weapon has a
+            // row), and with mp_anim_scope_log its full-body scope's installed action -- all read-only
+            char wx[96];
+            std::snprintf(wx, sizeof wx, " wpn=%d act=%s", wo166::weapon_class_id(oca), wo187::director_action(oca).c_str());
+            ot += wx;
+            const std::string sc = wo187::scope_text(me.opponentEid);
+            if (!sc.empty()) ot += " fb:" + sc;
             if (!g_propsDumped[me.opponentEid]) { g_propsDumped[me.opponentEid] = true; dump_props(name_of(me.opponentEid), om); }
         }
     }

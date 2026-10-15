@@ -31,7 +31,8 @@ public sealed class ActionRowCatalog
     /// </summary>
     public readonly record struct Row(string Table, string Fragment, string Tags, int Zone, int InputClass, int AttackType,
                                       int ActionType = -1, float TimeToStart = 0f, float TimeToHit = 0f, long ActorClass = 0,
-                                      int WeaponR = -1, int WeaponL = -1, float HitDistance = 0f, float AlignMax = 0f)
+                                      int WeaponR = -1, int WeaponL = -1, float HitDistance = 0f, float AlignMax = 0f,
+                                      bool Charged = false, int EndGuardZone = -1)
     {
         public string Spec => $"{Fragment}, {Tags}";
 
@@ -89,7 +90,10 @@ public sealed class ActionRowCatalog
                     Flt((string?)el.Attribute("attack_time_to_hit")), Long((string?)el.Attribute("actor_class_hash")),
                     Int((string?)el.Attribute("r_weapon_class_id")), Int((string?)el.Attribute("l_weapon_class_id")),
                     Flt((string?)el.Attribute("hit_distance")),
-                    MathF.Max(AlignY((string?)el.Attribute("init_align0")), AlignY((string?)el.Attribute("init_align1"))));
+                    MathF.Max(AlignY((string?)el.Attribute("init_align0")), AlignY((string?)el.Attribute("init_align1"))),
+                    // WO-187 B3: a charged row's blow lands at start + hit, every other row's at hit; the move's end guard zone
+                    string.Equals((string?)el.Attribute("charged_attack"), "true", StringComparison.OrdinalIgnoreCase),
+                    Int((string?)el.Attribute("end_guard_zone_id")));
             }
         }
         return new ActionRowCatalog(rows);

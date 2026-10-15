@@ -300,6 +300,7 @@ public partial class GameBridge
         if (!_isDamageAuthority || _wo121Stream is not Stream stream || s.Name.Length == 0) return;
         if (!NpcNamePattern.IsMatch(s.Name) || Protocol.IsNeverSyncedNpcName(s.Name)) return;
         var ev = Wo132Rules.ToEvent(s, SenderMsNow(), GhostOfEid);
+        Wo187NoteHostFight(s, ev);   // WO-187 B1: an NPC fighting someone -- the fight-position line
         bool changed = !_w132LastSent.TryGetValue(s.Name, out var last) || last.State != ev.State || last.Target != ev.Target || last.TargetGhost != ev.TargetGhost;
         _w132LastSent[s.Name] = ev;
         await WritePacketAsync(stream, _actionOut.Build(ActionKind.NpcCombat, ActionPhase.Commit, ev.ToBytes()), _wo121Ct);
@@ -322,12 +323,15 @@ public partial class GameBridge
         bool bound = _nativeBound.ContainsKey(ev.Name);
         uint eid = guarded ? geid : _npcEntityIds.TryGetValue(ev.Name, out uint pe) ? pe : 0;
         bool engaged = _w132Engaged.TryGetValue(ev.Name, out var cur);
-        var v = Wo132Rules.JudgeEngage(ev, Wo131JoinerActive, guarded, bound, engaged, _myGhostId);   // WO-147: my avatar its target
+        var v = Wo132Rules.JudgeEngage(ev, Wo131JoinerActive, guarded, bound, engaged, _myGhostId,   // WO-147: my avatar its target
+                                       leaveOnHostTarget: _w187Guard && _w187OppLogical);            // WO-187 A2: fighting the host = out of my skirmish
         // WO-136 Phase 4: a knockout (or a death) beats the engagement -- never engaged while down.
         if (!Wo136Rules.MayEngage(Wo136HostNpcDown(ev.Name)) && v != Wo132Rules.EngageVerdict.Ignore)
             v = engaged ? Wo132Rules.EngageVerdict.Release : Wo132Rules.EngageVerdict.Ignore;
         // WO-178 C1: the copy is offered to the DLL's hostility answer (the joiner's lock-on) -- engaged with him, or fighting the host
         if (guarded && bound && eid != 0) Wo178OfferFor(ev, eid, !Wo136Rules.MayEngage(Wo136HostNpcDown(ev.Name)));
+        // WO-187: its wished opponent (A2) and its guard hold (C2); A1: the host's own position of the NPC within range of me
+        bool intent = Wo187OnNpcCombatIn(ev, guarded && bound ? eid : 0, guarded && bound && Wo136Rules.MayEngage(Wo136HostNpcDown(ev.Name)), a.SourceGhostId);
         if (v == Wo132Rules.EngageVerdict.Ignore) return;
         bool fightingNow = ev.InCombat || ev.Target != NpcCombatTarget.None;
         if (fightingNow) _w183Left.Report(ev.Name, true, Environment.TickCount64);   // WO-183 4b: a fight with anyone ends any "left combat" clock
@@ -364,11 +368,16 @@ public partial class GameBridge
             _w132Engaged.TryRemove(ev.Name, out _);
             Interlocked.Increment(ref _w132EngageOff);
             var rr = await _combat.Wo132EngageAsync(false, cur.Eid, default, ct);
-            Console.WriteLine($"MP-W132 engage off {ev.Name}: {(ev.InCombat ? "no longer the host's bound copy" : "the host's NPC left combat")} -> released, bound and paused ({(rr.Ok ? "ok" : "reason " + rr.Reason)})");
+            Console.WriteLine($"MP-W132 engage off {ev.Name}: {(ev.Target == NpcCombatTarget.Host && _w187Guard && _w187OppLogical ? "its host NPC fights the host -- it leaves my skirmish, keeps its guard and fights the host's figure (WO-187)" : ev.InCombat ? "no longer the host's bound copy" : "the host's NPC left combat")} -> released, bound and paused ({(rr.Ok ? "ok" : "reason " + rr.Reason)})");
             return;
         }
         if (eid == 0) return;
-        var r = await _combat.Wo132EngageAsync(true, eid, ev.State, ct);
+        var r = await _combat.Wo132EngageAsync(true, eid, ev.State, ct, intent);
+        if (intent && r.Ok && r.First && r.DistM > Wo187Rules.EngageRangeM)
+        {
+            Interlocked.Increment(ref _w187IntentEngages);
+            Console.WriteLine(FormattableString.Invariant($"MP-W187 engage on intent {ev.Name}: the copy is {r.DistM:F1} m away here, the host's NPC is within {Wo187Rules.EngageRangeM:F0} m of me and targets me -- engaged now (A1)"));
+        }
         if (r.Reason == 6)   // kRFar: more than 15 m from this player
         {
             if (_w132Engaged.TryRemove(ev.Name, out _))
