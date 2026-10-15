@@ -146,57 +146,70 @@ def h2(secs=90):
 # ================================================================ J1: a dog copy walks, lies down, and stays when let go (joiner role)
 
 def j1(dog, stance='0', sobj='0', unst='-', uobj='0', walk=8.0):
+    """Plan time (s): the dog holds its spot until 45, walks `walk` m at 1.2 m/s, lies down 4 s after arriving, and its stream ends 15 s
+    after that while the synthetic host stays connected (`window`): the joiner's copy must follow the walk, hold the end spot lying,
+    and when the stream stops be paused where it stands and shown (DOG-SYNC released), not walk off."""
     R.stop('peer'); R.stop('agent'); time.sleep(6)
     R.relay(RELAY)
     live.lua('KCD2MP_DogSyncSet("on")')
     g = S.ent_pos(dog)
     if not g: raise SystemExit('no dog ' + dog)
     hx, hy, hz = henry()
-    # the walk: from the dog's own spot, 8 m away from Henry's side, at 1.2 m/s; then it holds there and lies down
-    ux, uy = g[0] - hx, g[1] - hy
+    ux, uy = g[0] - hx, g[1] - hy   # away from Henry
     n = math.hypot(ux, uy) or 1.0
     ux, uy = ux / n, uy / n
     ex, ey = g[0] + ux * walk, g[1] + uy * walk
     ez = S.ground(ex, ey)
-    t_walk = walk / 1.2
-    t_lie = 10 + t_walk + 4
-    dur = int(t_lie + 30)
+    t_w0 = 45.0                   # after the agent start and the nudge (the REST reads stall until ~30 s)
+    t_w1 = t_w0 + walk / 1.2
+    t_lie = t_w1 + 4
+    t_end = t_lie + 15            # the dog's stream ends here; the host stays
+    dur = int(t_end + 35)
     plan = os.path.join(live.LOGS, 'plan.run191dogs.j1.txt')
-    L = ['# the WO-191 follow-up J1: the host walks %s %.0f m, then it lies down' % (dog, walk), 'start 2',
-         'timed %s %.4f 0 %.2f %.2f %.2f 10 %.2f %.2f %.2f %.1f %.2f %.2f %.2f %d %.2f %.2f %.2f'
-         % (dog, math.atan2(-ux, uy), g[0], g[1], g[2], g[0], g[1], g[2], 10 + t_walk, ex, ey, ez, dur, ex, ey, ez),
+    L = ['# the WO-191 follow-up J1: the host walks %s %.0f m, it lies down, then the host stops streaming it' % (dog, walk), 'start 2',
+         'timed %s %.4f 0 %.2f %.2f %.2f %.1f %.2f %.2f %.2f %.1f %.2f %.2f %.2f %d %.2f %.2f %.2f'
+         % (dog, math.atan2(-ux, uy), g[0], g[1], g[2], t_w0, g[0], g[1], g[2], t_w1, ex, ey, ez, dur, ex, ey, ez),
+         'window %s 0 %.1f' % (dog, t_end),
+         'ghost %.2f %.2f %.2f 0 1 50 0.0005 30' % (hx + 3, hy, hz),
          'act %.1f %s %s %s %s %s' % (t_lie, dog, stance, sobj, unst, uobj)]
     open(plan, 'w').write('\n'.join(L) + '\n')
     koff = os.path.getsize(live.KLOG)
     noff = os.path.getsize(live.NLOG)
+    t0 = time.time() + 2.0        # plan time 0 (the plan's start delay)
     R.peer('w191dogs_j1', plan, ['--duration', str(dur), '--claim-host'])
     time.sleep(2)
     R.agent('w191dogs_j1', AGENT, ['KCDMP_TEST_JOINER_IN_WORLD=1'])
     agentlog = R.load_state()['agentlog']
     nudge()
-    start = time.time() - 9
     samples = []
-    while time.time() - start < dur + 12:
+    while time.time() - t0 < dur - 3:
         p = S.ent_pos(dog)
-        if p: samples.append((round(time.time() - start, 1), round(p[0], 2), round(p[1], 2)))
-        time.sleep(1.0)
-    time.sleep(8)   # the stream has stopped: the release
+        if p: samples.append((round(time.time() - t0, 1), round(p[0], 2), round(p[1], 2)))
+        time.sleep(0.8)
     hidden = S.ask('local e = System.GetEntityByName("%s"); System.LogAlways("@TAG " .. tostring(e and e:IsHidden()))' % dog, 'hid%d' % time.time_ns())
     kl = klines(koff)
     with open(live.NLOG, 'rb') as f:
         f.seek(noff); nl = f.read().decode('utf-8', 'replace').splitlines()
-    ag = lines_from(agentlog, 0)
-    dist_end = [math.hypot(x - ex, y - ey) for t, x, y in samples if 10 + t_walk + 2 <= t <= dur]
-    dist_start = [math.hypot(x - g[0], y - g[1]) for t, x, y in samples if t <= 9]
-    res = {'dog': dog, 'walk_to': [round(ex, 2), round(ey, 2)],
+
+    def on_path(t):   # where the host's stream has the dog at plan time t
+        if t <= t_w0: return g[0], g[1]
+        if t >= t_w1: return ex, ey
+        u = (t - t_w0) / (t_w1 - t_w0)
+        return g[0] + (ex - g[0]) * u, g[1] + (ey - g[1]) * u
+    walk_err = [math.hypot(x - on_path(t - 0.12)[0], y - on_path(t - 0.12)[1]) for t, x, y in samples if t_w0 + 0.5 <= t <= t_w1]
+    lie_err = [math.hypot(x - ex, y - ey) for t, x, y in samples if t_lie <= t <= t_end]
+    after = [math.hypot(x - ex, y - ey) for t, x, y in samples if t >= t_end + 3]
+    res = {'dog': dog, 'from': [round(g[0], 2), round(g[1], 2)], 'walk_to': [round(ex, 2), round(ey, 2)],
            'bind': [l[l.find('MP-NPCBIND'):][:200] for l in nl if ('MP-NPCBIND npc=%s ' % dog) in l][:2],
-           'puppet': any(('puppet %s' % dog) in l for l in ag) or any(('MP-AUTHORITY npc=%s event=acquire' % dog) in l for l in kl),
-           'at_start_max_m': round(max(dist_start), 2) if dist_start else None,
-           'at_end_max_m': round(max(dist_end), 2) if dist_end else None,
-           'apply': [l[l.find('WO141-APPLY'):][:220] for l in nl if ('WO141-APPLY %s' % dog) in l][:4],
+           'walk_samples': len(walk_err), 'walk_err_max_m': round(max(walk_err), 2) if walk_err else None,
+           'lying_err_max_m': round(max(lie_err), 2) if lie_err else None,
+           'after_stream_end_max_m': round(max(after), 2) if after else None, 'after_samples': len(after),
+           'apply': [l[l.find('WO141-APPLY'):][:220] for l in nl if ('WO141-APPLY %s' % dog) in l][:3],
            'released': [l[:200] for l in kl if ('DOG-SYNC released npc=%s' % dog) in l][:2],
-           'hidden_after': hidden, 'samples': samples[::3]}
-    ok = bool(res['bind']) and 'result=ok' in res['bind'][0] and dist_end and max(dist_end) < 1.0 and hidden == 'false'
+           'guard': [l[:140] for l in kl if 'WO131-GUARD state=' in l][:3],
+           'hidden_after': hidden, 'samples': samples[::4]}
+    ok = (bool(res['bind']) and 'result=ok' in res['bind'][0] and walk_err and max(walk_err) < 1.5 and lie_err and max(lie_err) < 1.0
+          and bool(res['apply']) and bool(res['released']) and after and max(after) < 1.0 and hidden == 'false')
     record('j1', ok=bool(ok), **res)
     R.stop('agent'); R.stop('peer')
     return bool(ok)

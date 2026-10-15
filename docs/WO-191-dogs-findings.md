@@ -41,20 +41,22 @@ like a wolf (WO-144 2.3) instead of being refused `not-living`.
 | all mod suites and static checks | 68 synthetic suites and the 4 static checks pass (with the new one) |
 | host role, Troskowitz (real game, synthetic joiner) | **(synthetic)** `ttkc_dog_1`–`5` tracked; each streams with flag 128 (`npc_state ... 128`); the synthetic joiner received all five (`SYNTH got npc ttkc_dog_N ... flags=128`). Mutt was not nearby, so its exclusion is proven by the suite only |
 | a dog's activity on the host | **(observed)** dogs have an NPC-state context and WO-141 captures it: `ttkc_dog_2: stance=lying unstance=animal_dog_sleep2` (lying asleep), `ttkc_dog_3: stance=sitting`, then `none` when it walked. So lying down travels on WO-141's activity rows, like an NPC's bench or bed |
-| frame rate, host, Troskowitz, dogs streamed | **not an A/B.** Six 60 s windows with the five dogs tracked: 71.0–73.8 fps, the DLL's own time `ours_us_mean` 548–692 µs. WO-191's Troskowitz run (no dogs) measured 573–665 µs. The scan pushed 79 candidates, so the dogs are about 6 % more tracked bodies; the native walk itself costs the same (it visits every entity either way) |
-| joiner role: a dog copy walks, lies down, stays when let go (`run191dogs.py j1`) | **not run** |
+| frame rate, host, Troskowitz (`run191dogs.py h2`) | **(synthetic) A/B, pass.** `mp_dog_sync` on / off / on, 90 s each, one game session, the window as it was: tracked 80 (5 dogs) / 76 (0) / 78 (5); fps 72.3 / 71.8, 72.6 / 70.9, 67.1 (60 s `FRAME` windows): on/off **0.971**; the DLL's own time `ours_us_mean` **696 µs on vs 684 µs off** (+12 µs, about 2 %). Only 1–2 windows per phase, so the fps ratio is coarse; the DLL time is the steadier number. The native walk costs the same either way (it visits every entity); the dogs add 5 bodies to about 75 |
+| joiner role, `ttkc_dog_2` (`run191dogs.py j1 ttkc_dog_2 2 0 582 0`) | **(synthetic) pass.** The synthetic host walked the dog 8 m, sent `lying` + `animal_dog_sleep2` (unstance id **582**, from the DLL's research verb `unst`), then stopped streaming it while staying connected. The copy bound (`MP-NPCBIND ... result=ok`, its physics is a living entity), followed the walk (2 samples inside the 6.7 s walk, at most 0.44 m off; REST reads are slow then), and took the activity: `WO141-APPLY ttkc_dog_2 -> ok`, and the copy's own state reads back `stance=lying unstance=animal_dog_sleep2`. It held the spot exactly while lying. When the stream stopped: `DOG-SYNC released npc=ttkc_dog_2 why=silence`, still shown, and it did not move in 11 samples over the next 30 s |
 
-The live session ended early: at 14:49 the game was quit from its own menu (`MenuOpen` → menu focus moves → `C_UISaveLoad::ExitGame`),
-by someone at the machine. The live work was not resumed. The saves folder was backed up byte-equal first (958 files) and is
-958/958 equal afterwards. The two saves the run made in the throwaway `playline4` (the mod's manual host saves) were moved out, and the Mods
-folder was restored from its backup.
+The first live session ended early: at 14:49 the game was quit from its own menu (`MenuOpen` → menu focus moves → `C_UISaveLoad::ExitGame`)
+by someone at the machine. The maintainer then said the machine was free, and h2 and j1 ran in a second session. In both sessions the saves folder
+had been backed up byte-equal first (958 files) and was 958/958 equal afterwards. The three saves the runs made in the throwaway `playline4`
+(the mod's manual host saves) were moved out, and the Mods folder was restored from its backup.
+
+Seen on the way (j1's first try): when the synthetic host's plan ended and it disconnected, the joiner became the host and the guard gave
+every copy back (`WO131-GUARD state=off`); the dog then walked off under its own brain. That is the existing partner-left path, not the
+release. The harness now ends only the dog's stream (`window`) while the host stays.
 
 ## 4. Open
 
-- **The joiner's view, live:** `run191dogs.py j1 ttkc_dog_2 2 0 <animal_dog_sleep2 id> 0` (the id from the DLL's research verb
-  `unst animal_dog_sleep2`) — the copy follows the walk within 1 m, takes the lying activity (`WO141-APPLY ttkc_dog_2`), and stays shown
-  when the stream stops. Whether WO-141's apply puts a dog into `animal_dog_sleep2` with no location object is not proven.
-- **The frame-rate A/B:** `run191dogs.py h2` (on / off / on, 90 s each) in Troskowitz.
+- **On screen:** j1 was checked through the engine's own state (position, the copy's NPC-state). Nobody looked at the copy on screen, so whether
+  it plays a walking gait rather than sliding, and the lying pose, is still to check. Two real players are needed for the end-to-end view.
 - The synthetic peer saw no activity rows at all in the host run (not even humans'), so its new activity log line is unproven. The
   host's capture lines are the evidence above.
 - A dog name the joiner's world lacks and the soul tables do not know still falls back to WO-136's species soul (`dog` → WildDog). Only
