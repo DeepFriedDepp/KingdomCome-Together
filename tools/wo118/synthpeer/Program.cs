@@ -217,6 +217,8 @@ static class P
     }
 
     static readonly KcdMp.Client.ActionOutbox s_actions = new();
+    static readonly System.Collections.Concurrent.ConcurrentDictionary<string, int> s_npcIn = new();             // the WO-191 follow-up
+    static readonly System.Collections.Concurrent.ConcurrentDictionary<string, ActivityState> s_actIn = new();
 
     static async Task<int> Main(string[] a)
     {
@@ -497,6 +499,23 @@ static class P
                         Console.WriteLine($"SYNTH role={(rb2[0] == 1 ? "authority (host)" : "not the authority (joiner)")}");
                     else if (rt == Protocol.W164Down && W164Note(rb2) is string w164Note)
                         Console.WriteLine(w164Note);   // WO-167
+                    // The WO-191 follow-up: which of the host's NPCs reach this joiner, and their activity rows (the first of each name,
+                    // then every 200th sample): SYNTH got npc <name> n=<k> flags=<f> | SYNTH got activity npc <name> <state>
+                    else if (rt == Protocol.NpcStateDown && rb2.Length >= 2 && rb2.Length >= 2 + rb2[1] + 21)
+                    {
+                        string nn = Encoding.UTF8.GetString(rb2, 2, rb2[1]);
+                        int k = s_npcIn.TryGetValue(nn, out int c) ? c + 1 : 1;
+                        s_npcIn[nn] = k;
+                        if (k == 1 || k % 200 == 0)
+                            Console.WriteLine(FormattableString.Invariant($"SYNTH got npc {nn} n={k} flags={rb2[2 + rb2[1] + 20]}"));
+                    }
+                    else if (rt == Protocol.ActivityHostDown && rb2.Length > 1 && ActivityCodec.TryDecode(rb2.AsSpan(1), out byte akind, out var arows)
+                             && akind == Protocol.ActivityKindNpc)
+                    {
+                        foreach (var ar in arows)
+                            if (!s_actIn.TryGetValue(ar.Name, out var prev) || prev != ar.A)
+                            { s_actIn[ar.Name] = ar.A; Console.WriteLine($"SYNTH got activity npc {ar.Name} {ar.A}"); }
+                    }
                 }
             }
             catch { }

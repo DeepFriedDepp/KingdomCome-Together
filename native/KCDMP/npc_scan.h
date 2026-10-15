@@ -112,7 +112,7 @@ bool for_each_in_radius(const Anchor* anchors, int anchorCount, float radius, Vi
                         uint32_t* walked, uint8_t* refuse);
 
 // WO-144 2.3: what kind of body an entity is, by its entity class (the same registry the scan
-// resolves): 0 human (NPC / NPC_Female), 1 horse, 2 an encounter animal (wolf, wild dog, boar),
+// resolves): 0 human (NPC / NPC_Female), 1 horse, 2 an animal (wolf, wild dog, boar; a village dog),
 // -1 anything else or unknown. Main thread, SEH-guarded, read-only.
 int body_kind(void* entity);
 

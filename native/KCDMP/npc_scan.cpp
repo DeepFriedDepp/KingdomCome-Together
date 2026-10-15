@@ -126,7 +126,9 @@ void* g_classNpcFemale = nullptr;
 void* g_classHorse = nullptr;
 // WO-136 Phase 2: the encounter creatures (wolves, wild dogs, boars) travel too,
 // as not-human bodies. Optional: a class this build lacks is simply not scanned.
-void* g_classAnimal[3] = {};
+// The WO-191 follow-up: and the village dogs (class Dog). Reported as candidates
+// always; the mod's mp_dog_sync decides whether they are streamed.
+void* g_classAnimal[4] = {};
 bool  g_classesResolved = false;
 bool  g_announced = false;
 uint8_t g_lastRefuse = 0xFF;
@@ -142,14 +144,14 @@ bool resolve_classes(void* entitySystem) {
     if (!call_vtbl1(kVtblClassRegistryFindClass, registry, npcF, &cNpcF) || !cNpcF) return false;
     if (!call_vtbl1(kVtblClassRegistryFindClass, registry, horse, &cHorse) || !cHorse) return false;
     g_classNpc = cNpc; g_classNpcFemale = cNpcF; g_classHorse = cHorse;
-    static const char* const kAnimals[3] = { "Wolf", "WildDog", "Boar" };
-    for (int i = 0; i < 3; ++i) {
+    static const char* const kAnimals[4] = { "Wolf", "WildDog", "Boar", "Dog" };
+    for (int i = 0; i < 4; ++i) {
         void* c = nullptr;
         if (call_vtbl1(kVtblClassRegistryFindClass, registry, kAnimals[i], &c) && c) g_classAnimal[i] = c;
     }
     g_classesResolved = true;
-    logf("NPCSCAN: class registry resolved NPC=%p NPC_Female=%p Horse=%p Wolf=%p WildDog=%p Boar=%p (WO-136: encounter animals travel as not-human)",
-         cNpc, cNpcF, cHorse, g_classAnimal[0], g_classAnimal[1], g_classAnimal[2]);
+    logf("NPCSCAN: class registry resolved NPC=%p NPC_Female=%p Horse=%p Wolf=%p WildDog=%p Boar=%p Dog=%p (WO-136: animals travel as not-human)",
+         cNpc, cNpcF, cHorse, g_classAnimal[0], g_classAnimal[1], g_classAnimal[2], g_classAnimal[3]);
     return true;
 }
 
