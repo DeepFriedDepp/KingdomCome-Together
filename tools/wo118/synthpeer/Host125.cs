@@ -447,6 +447,13 @@ static class Host125
                                 Say($"TIMESKIP fast-travel start + done t={wt} sent");
                                 break;
                             }
+                            case "w164" when p.Length >= 3 && byte.TryParse(p[1], out byte wk):   // WO-189: w164 <kind> <text> -- one W164 message to every joiner, as a host sends it
+                            {
+                                string wt = string.Join(' ', p.Skip(2));
+                                for (byte g = 1; g < 8; g++) await W(new LootMsg(wk, 0, wt).BuildUp(Protocol.W164Up, g));
+                                Say($"W164 kind {wk} '{wt}' sent");
+                                break;
+                            }
                             case "story":   // WO-133: story objective|fingerprint|approach <text>
                             {
                                 byte sk = p[1] switch { "fingerprint" => Protocol.StoryBeatKindFingerprint, "approach" => Protocol.StoryBeatKindApproach, _ => Protocol.StoryBeatKindObjective };

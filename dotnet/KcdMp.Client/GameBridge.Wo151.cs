@@ -392,6 +392,7 @@ public partial class GameBridge
     private void Wo151OnSceneStage(string stage, string type, string name)
     {
         Wo179OnSceneStage(stage, type, name);   // WO-179: shared scenes (videos, relocations) and the fade log
+        Wo189OnSceneStage(stage, type, name);   // WO-189 C: a cutscene stuck at "initialized", a release's normal sequence
         long now = Environment.TickCount64;
         switch (stage)
         {
@@ -619,6 +620,7 @@ public partial class GameBridge
         Wo151SceneReset("load");   // 3.4: a load interrupts every scene (the field's two never-released ones)
         Wo179Reset("load");        // WO-179: no shared scene survives a load
         Wo184OnLoad();             // WO-184: a load ends every conversation and arrest step and cancels any pending save (LoadSavedGame does)
+        Wo189OnLoad();             // WO-189: the watches start again; the DLL forgets its profile handles (never released into a new world)
         Wo167SceneReset();         // WO-167 T4: the conversation scenes' counts start again
         if (_w151CatchUp && W137Host) _ = Task.Run(async () => { await Task.Delay(2000); await Wo151HostRebaseAsync(); });   // 3.1
         _lastAppliedWeatherProfile = null;

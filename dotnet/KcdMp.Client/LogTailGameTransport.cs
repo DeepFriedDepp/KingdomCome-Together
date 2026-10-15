@@ -397,6 +397,11 @@ public sealed class LogTailGameTransport : IGameTransport
         "OnChatWithFocus: Dude->",
         // WO-184 B4: the game's exit dialog (a quit follows when the player confirms): the joiner's final snapshot is taken here
         "C_UISaveLoad::HandleExit()",
+        // WO-189 B: every game profile switched (the host mirrors the quest ones to the joiner) and the load batch around the save's own set
+        "[Info] C_GameProfileManager: Activating profile '",
+        "[Info] C_GameProfileManager: Deactivating profile '",
+        "GameProfileManager: Starting batch update.",
+        "GameProfileManager: Finished batch update.",
     ];
 
     public static readonly string[] Wo144Contains =
@@ -423,6 +428,8 @@ public sealed class LogTailGameTransport : IGameTransport
         "DialogTwin_",
         // WO-183 3: the engine's refusal of a save while another is pending
         "because there is another savegame pending",
+        // WO-189 C: a cutscene's initialization with its holder (the stage feed drops the holder; a barrier's holder names the wait)
+        "CutscenePlayer::OnCutsceneInitialized called for ",
     ];
 
     /// <summary>WO-184: would <see cref="QuestLine"/> receive this raw engine line? (The class test pins the clock's literals against both lists.)</summary>

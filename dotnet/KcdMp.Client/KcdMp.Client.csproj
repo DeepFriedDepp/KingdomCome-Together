@@ -48,6 +48,7 @@
   <!-- WO-96: the generated main-quest objective registry (tools/Build-MainQuestObjectives.ps1). -->
   <ItemGroup>
     <EmbeddedResource Include="mainquest-objectives.json" LogicalName="KcdMp.Client.mainquest-objectives.json" />
+    <EmbeddedResource Include="quest-profiles.txt" LogicalName="KcdMp.Client.quest-profiles.txt" />
   </ItemGroup>
 
   <!-- WO-148: our dice-key lines only (the game's two Libs/Config files are built on the player's

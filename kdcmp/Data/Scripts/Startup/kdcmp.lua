@@ -28707,6 +28707,55 @@ System.AddCCommand("mp_save_on_leave", 'KCD2MP_W184SetSaveOnLeave(%line)', "WO-1
 System.AddCCommand("mp_save_recover", 'KCD2MP_W184SetRecover(%line)', "WO-184: (joiner) a save of your character stuck for a minute is cleared the game's own way (as a load does) and taken again (default on): mp_save_recover on|off")
 System.AddCCommand("mp_partner_saved", 'KCD2MP_W184SetPartnerSaved(%line)', "WO-184: (host) 'Partner saved.' on screen when your partner's character is saved with your save (default on): mp_partner_saved on|off")
 
+-- ===== WO-189: the joiner never stays stuck in half of the host's quest sequence; its saves never stall silently ==========
+-- The agent's part is GameBridge.Wo189.cs (docs/WO-189-findings.md). The switches:
+--   mp_joiner_autosnap <minutes>|on|off  (joiner, default 10 min) the joiner's own snapshot when none paired in that long
+--   mp_save_reminder <minutes>|on|off    (host, default 15 min) "Your partner hasn't been saved in 15 minutes - press Home to save."
+--   mp_profile_mirror on|off             (joiner, default ON) the host's quest world layers (game profiles) switched here too
+--   mp_cutscene_release on|off           (joiner, default ON) a cutscene stuck at its start 10 s is released the game's own way
+--   mp_positioning_bound on|off          (joiner, default ON) a scene positioning the host's copies 20 s has their fast-forward stopped
+KCD2MP.w189 = KCD2MP.w189 or { autosnap = 10, reminder = 15, mirror = true, release = true, posbound = true }
+
+function KCD2MP_W189Cfg()
+    local w = KCD2MP.w189
+    KCD2MP_EmitEvent("w189_cfg", string.format("autosnap=%s reminder=%s mirror=%s release=%s posbound=%s",
+        tostring(w.autosnap), tostring(w.reminder), w.mirror and "on" or "off", w.release and "on" or "off", w.posbound and "on" or "off"))
+    return true
+end
+
+function KCD2MP_W189Minutes(key, field, arg, default, what)
+    local a = tostring(arg or ""):gsub("^%s+", ""):gsub("%s+$", "")
+    local n = tonumber(a)
+    if a == "" then
+    elseif a == "on" then KCD2MP.w189[field] = default
+    elseif a == "off" then KCD2MP.w189[field] = 0
+    elseif n and n >= 0 and n <= 600 then KCD2MP.w189[field] = n
+    else mp_log("mp_" .. key .. ": expected minutes, on or off"); return false end
+    local v = KCD2MP.w189[field]
+    mp_log(string.format("WO189-TOGGLE mp_%s %s -- %s", key, v > 0 and (tostring(v) .. " min") or "off", what))
+    KCD2MP_W189Cfg()
+    return true
+end
+function KCD2MP_W189Switch(key, field, arg, what)
+    local v = KCD2MP_Wo122ParseBool(arg)
+    if v == "bad" then mp_log("mp_" .. key .. ": expected on|off"); return false end
+    if v ~= nil then KCD2MP.w189[field] = v end
+    mp_log(string.format("WO189-TOGGLE mp_%s %s -- %s", key, KCD2MP.w189[field] and "on" or "off", what))
+    KCD2MP_W189Cfg()
+    return true
+end
+function KCD2MP_W189SetAutoSnap(arg) return KCD2MP_W189Minutes("joiner_autosnap", "autosnap", arg, 10, "the joiner's own snapshot when none paired in that long") end
+function KCD2MP_W189SetReminder(arg) return KCD2MP_W189Minutes("save_reminder", "reminder", arg, 15, "the host is reminded when the partner has not been saved in that long") end
+function KCD2MP_W189SetMirror(arg) return KCD2MP_W189Switch("profile_mirror", "mirror", arg, "the host's quest world layers switched on this joiner too") end
+function KCD2MP_W189SetRelease(arg) return KCD2MP_W189Switch("cutscene_release", "release", arg, "a cutscene stuck at its start on this joiner is released the game's own way") end
+function KCD2MP_W189SetPosBound(arg) return KCD2MP_W189Switch("positioning_bound", "posbound", arg, "a scene positioning the host's copies 20 s has their fast-forward stopped") end
+
+System.AddCCommand("mp_joiner_autosnap", 'KCD2MP_W189SetAutoSnap(%line)', "WO-189: (joiner) your character is saved with your host's newest save when it has not been for this many minutes (default 10): mp_joiner_autosnap <minutes>|on|off")
+System.AddCCommand("mp_save_reminder", 'KCD2MP_W189SetReminder(%line)', "WO-189: (host) a reminder when your partner has not been saved for this many minutes (default 15): mp_save_reminder <minutes>|on|off")
+System.AddCCommand("mp_profile_mirror", 'KCD2MP_W189SetMirror(%line)', "WO-189: (joiner) the host's quest world layers (an arena fence, a camp) are switched in your world too (default on): mp_profile_mirror on|off")
+System.AddCCommand("mp_cutscene_release", 'KCD2MP_W189SetRelease(%line)', "WO-189: (joiner) a cutscene stuck at its start for 10 s is released the game's own way (default on): mp_cutscene_release on|off")
+System.AddCCommand("mp_positioning_bound", 'KCD2MP_W189SetPosBound(%line)', "WO-189: (joiner) a scene waiting 20 s on your host's people has their fast-forward stopped (default on): mp_positioning_bound on|off")
+
 local function handleAction(action, activation, value)
     if ACTS.AXIS_ACTIONS[action] then return end
     if KCD2MP.logActions then

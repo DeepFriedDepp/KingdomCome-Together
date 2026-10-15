@@ -57,6 +57,9 @@ public static partial class Protocol
     public const byte Wo184OpSaveState = 34, Wo184OpSaveCancel = 35;
     // ---- WO-187: the DLL's ops in the WO-163 family (native/KCDMP/wo187.h): the copies' opponents, the switches, the guard hold, positions ----
     public const byte Wo187OpOpponent = 36, Wo187OpStatus = 37, Wo187OpConfig = 38, Wo187OpGuardHold = 39, Wo187OpPositions = 40, Wo187OpMoveShown = 41;
+    // ---- WO-189: the DLL's ops in the WO-163 family (native/KCDMP/wo189.h): save readiness, the cutscene player, copies' FastForward, game profiles ----
+    public const byte Wo189OpStatus = 42, Wo189OpConfig = 43, Wo189OpReady = 44, Wo189OpCutscene = 45, Wo189OpCutsceneRelease = 46, Wo189OpStopFF = 47,
+                      Wo189OpProfile = 48, Wo189OpConcept = 49;
 
     // ---- kinds (APPEND-ONLY) ----
     public const byte W164MarkPing = 1, W164Torch = 2, W164Escort = 3, W164HitOutcome = 4, W164Weather = 5, W164Travel = 6, W164RealHit = 7, W164NpcDown = 8;
@@ -80,6 +83,9 @@ public static partial class Protocol
     /// <summary>WO-184 B5, joiner -> host: "paired &lt;seq&gt; &lt;md5_8&gt;" (the joiner's character was saved with that host save),
     /// "unpaired &lt;n&gt;" (n host saves in a row did not pair), "stuck" (the joiner's save is stuck), "recovered" (Wo184Rules).</summary>
     public const byte W164SaveHealth = 16;
+    /// <summary>WO-189 Part B, host -> joiner: "+&lt;profile&gt;" / "-&lt;profile&gt;" (a quest world layer the host's game switched on / off in play),
+    /// "=&lt;profile&gt;" (one active at the joiner's join: the catch-up); joiner -> host: "?" (asks for the catch-up). Quest profiles only (Wo189Rules).</summary>
+    public const byte W164Profile = 17;
 
     /// <summary>While the torch is out, the side-channel repeats it this often (a lost edge recovers).</summary>
     public const int W164TorchRepeatMs = 10_000;
@@ -89,7 +95,7 @@ public static partial class Protocol
         W164MarkPing => "mark-ping", W164Torch => "torch", W164Escort => "escort", W164HitOutcome => "hit-outcome", W164Weather => "weather",
         W164Travel => "travel", W164RealHit => "real-hit", W164NpcDown => "npc-down", W164StoryFight => "story-fight",
         W164CorpseAsk => "corpse-ask", W164CorpseAnswer => "corpse-answer", W164QuickSaveAsk => "quicksave-ask",
-        W164QuickSaveAnswer => "quicksave-answer", W164QuickSaveSetting => "quicksave-setting", W164SceneBus => "scene-bus", W164SaveHealth => "save-health",
+        W164QuickSaveAnswer => "quicksave-answer", W164QuickSaveSetting => "quicksave-setting", W164SceneBus => "scene-bus", W164SaveHealth => "save-health", W164Profile => "profile",
         _ => $"unknown-{k}",
     };
 }

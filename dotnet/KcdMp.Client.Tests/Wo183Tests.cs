@@ -90,6 +90,10 @@ public class Wo183Tests
         ("meta override: COMBAT_", "a refinement of 'Attempting to start new dialogue' (the QuestLine path) and 'New dialogue' (a prefix) lines: a combat shout"),
         ("monolog", "a refinement of 'New dialogue' lines (forwarded as a prefix): '(ingame monolog - Id: n)'"),
         ("DoMonologue", "a refinement of 'New dialogue' lines (forwarded as a prefix): '(AI::DoMonologue)'"),
+        // WO-189: the profile lines' and the initialized line's parsers
+        ("Ex: ", "a refinement of the souls of a 'New dialogue' line (forwarded as a prefix)"),
+        (" cutscene '", "a refinement of 'CutscenePlayer::OnCutsceneInitialized called for ' lines (forwarded)"),
+        (" with holder '", "a refinement of 'CutscenePlayer::OnCutsceneInitialized called for ' lines (forwarded)"),
     ];
 
     private static string ClientDir()
@@ -155,6 +159,7 @@ public class Wo183Tests
             ("GameBridge.Wo144.cs", "Wo144OnEngineLine"), ("GameBridge.Wo144.cs", "Wo144OnEngineLineMore"),
             ("GameBridge.Wo183.cs", "Wo183OnEngineLine"),
             ("GameBridge.Wo184.cs", "Wo184OnEngineLine"), ("GameBridge.Wo184.cs", "Wo184OnQuestLine"), ("Wo184.cs", "Parse"), ("Wo184.cs", "HasDude"),
+            ("GameBridge.Wo189.cs", "Wo189OnEngineLine"), ("Wo189.cs", "ParseProfileLine"), ("Wo189.cs", "TryParseInitialized"),
         };
         var missing = new List<string>();
         int checkedCount = 0;

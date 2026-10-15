@@ -729,6 +729,7 @@ public partial class GameBridge
             _ = Task.Run(() => LeaveSharedWorldAsync("host-new-world", "Your host loaded a different game."));
         }
         Wo184OnJoined(offerMd5, seq);   // WO-184: the join save is this world's first pair; a final snapshot pairs with it until the host saves
+        Wo189OnJoined();                // WO-189 B3: the host's active quest profiles asked for (mp_profile_mirror)
         if (offerMd5 is null) { Console.WriteLine("MP-HENRY joiner: the offer's md5 is unknown -- the join save is not paired"); return; }
         try
         {

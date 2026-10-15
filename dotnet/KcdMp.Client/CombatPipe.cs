@@ -1092,6 +1092,103 @@ public sealed class CombatPipe : IAsyncDisposable
         return (x.Payload[0], x.Payload[1] != 0, x.Payload[2] != 0);
     }
 
+    /// <summary>WO-189 op 43: the role and the switches (255 = unchanged). Null = no answer.</summary>
+    public async Task<byte[]?> Wo189ConfigAsync(byte role, byte release, byte ffStop, byte mirror, CancellationToken ct = default)
+    {
+        var r = await Wo163Async(Protocol.Wo189OpConfig, [role, release, ffStop, mirror], ct);
+        return r is { Ok: true, Payload.Length: >= 4 } x ? x.Payload : null;
+    }
+
+    /// <summary>WO-189 op 44: the save readiness (IsReady(BeforeGameSave)), the not-ready tasks' names, the scene positioning state. Null = no answer.</summary>
+    public async Task<Wo189Rules.ReadyRead?> Wo189ReadyAsync(CancellationToken ct = default)
+    {
+        var r = await Wo163Async(Protocol.Wo189OpReady, [], ct);
+        if (r is not { Ok: true, Payload.Length: >= 10 } x) return null;
+        var p = x.Payload;
+        int nl = Math.Min(p[9], p.Length - 10);
+        return new Wo189Rules.ReadyRead(p[0] != 0, p[1] != 0, p[2] != 0, p[3], p[4] != 0, BitConverter.ToSingle(p, 5),
+                                        System.Text.Encoding.ASCII.GetString(p, 10, nl));
+    }
+
+    /// <summary>WO-189 op 45: the cutscene player's active configuration (an identity) and "in progress". Null = no answer or not armed.</summary>
+    public async Task<(bool Active, bool InProgress, ulong Cfg)?> Wo189CutsceneAsync(CancellationToken ct = default)
+    {
+        var r = await Wo163Async(Protocol.Wo189OpCutscene, [], ct);
+        if (r is not { Ok: true, Payload.Length: >= 11 } x || x.Payload[0] == 0) return null;
+        return (x.Payload[1] != 0, x.Payload[2] != 0, BitConverter.ToUInt64(x.Payload, 3));
+    }
+
+    /// <summary>WO-189 op 46: release that configuration (mode 1 PlayCutscene, 2 Interrupt). 1 done, 0 refused, 2 not armed, 3 fault, 5 refused here; null = no answer.</summary>
+    public async Task<byte?> Wo189CutsceneReleaseAsync(byte mode, ulong cfg, CancellationToken ct = default)
+    {
+        var a = new byte[9];
+        a[0] = mode; BitConverter.GetBytes(cfg).CopyTo(a, 1);
+        var r = await Wo163Async(Protocol.Wo189OpCutsceneRelease, a, ct);
+        return r is { Ok: true, Payload.Length: >= 1 } x ? x.Payload[0] : null;
+    }
+
+    /// <summary>WO-189 op 47: stop the FastForward of these copies (within maxDist m of the player; 0 = any). Per copy: 1 stopped, 0 no NPC, 2 too far, 3 fault, 5 refused.</summary>
+    public async Task<byte[]?> Wo189StopFastForwardAsync(IReadOnlyList<uint> eids, float maxDist, CancellationToken ct = default)
+    {
+        int n = Math.Min(eids.Count, 60);
+        var a = new byte[5 + 4 * n];
+        BitConverter.GetBytes(maxDist).CopyTo(a, 0);
+        a[4] = (byte)n;
+        for (int i = 0; i < n; i++) BitConverter.GetBytes(eids[i]).CopyTo(a, 5 + 4 * i);
+        var r = await Wo163Async(Protocol.Wo189OpStopFF, a, ct);
+        return r is { Ok: true } x && x.Payload.Length >= 1 + n ? x.Payload[1..(1 + n)] : null;
+    }
+
+    /// <summary>WO-189 op 48 sub 1: the active game profiles of this machine (paged inside). Null = no answer or not armed.</summary>
+    public async Task<List<string>?> Wo189ActiveProfilesAsync(CancellationToken ct = default)
+    {
+        var all = new List<string>();
+        ushort start = 0;
+        for (int page = 0; page < 40; page++)
+        {
+            var r = await Wo163Async(Protocol.Wo189OpProfile, [1, (byte)(start & 0xFF), (byte)(start >> 8)], ct);
+            if (r is not { Ok: true, Payload.Length: >= 4 } x) return null;
+            ushort next = BitConverter.ToUInt16(x.Payload, 2);
+            all.AddRange(System.Text.Encoding.ASCII.GetString(x.Payload, 4, x.Payload.Length - 4).Split('\n', StringSplitOptions.RemoveEmptyEntries));
+            if (next == 0 || next <= start) break;
+            start = next;
+        }
+        return all;
+    }
+
+    /// <summary>WO-189 op 48: sub 2 enable / 3 release this DLL's handle / 4 is active / 5 forget every handle (a load). The result byte, or null.</summary>
+    public async Task<byte?> Wo189ProfileAsync(byte sub, string name, CancellationToken ct = default)
+    {
+        byte[] a;
+        if (sub == 5) a = [5];
+        else
+        {
+            byte[] n = System.Text.Encoding.ASCII.GetBytes(name.Length > 120 ? name[..120] : name);
+            a = new byte[2 + n.Length];
+            a[0] = sub; a[1] = (byte)n.Length; n.CopyTo(a, 2);
+        }
+        var r = await Wo163Async(Protocol.Wo189OpProfile, a, ct);
+        return r is { Ok: true, Payload.Length: >= 1 } x ? x.Payload[0] : null;
+    }
+
+    /// <summary>WO-189 op 49: a quest State read through the WO-97 concept reader (the value is in the native log). Null = no answer.</summary>
+    public async Task<bool?> Wo189ConceptReadAsync(string path, string port, CancellationToken ct = default)
+    {
+        byte[] p = System.Text.Encoding.ASCII.GetBytes(path), q = System.Text.Encoding.ASCII.GetBytes(port);
+        if (p.Length > 200 || q.Length > 60) return null;
+        var a = new byte[2 + p.Length + q.Length];
+        a[0] = (byte)p.Length; p.CopyTo(a, 1); a[1 + p.Length] = (byte)q.Length; q.CopyTo(a, 2 + p.Length);
+        var r = await Wo163Async(Protocol.Wo189OpConcept, a, ct);
+        return r is { Ok: true, Payload.Length: >= 1 } x ? x.Payload[0] != 0 : null;
+    }
+
+    /// <summary>WO-189 op 42: the DLL's WO-189 status text.</summary>
+    public async Task<string?> Wo189StatusAsync(CancellationToken ct = default)
+    {
+        var r = await Wo163Async(Protocol.Wo189OpStatus, [], ct);
+        return r is { Ok: true } x ? System.Text.Encoding.ASCII.GetString(x.Payload) : null;
+    }
+
     /// <summary>
     /// WO-163 op 1 (A7, read-only): the engine's own skirmish relation test between this machine's player and the NPC of that name --
     /// Hostile = they are hostile opponents in one skirmish. Answered false = the DLL could not make the call (null = no answer at all).

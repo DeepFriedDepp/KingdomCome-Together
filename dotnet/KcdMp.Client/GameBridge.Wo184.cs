@@ -151,6 +151,7 @@ public partial class GameBridge
         public byte Src;
         public long SinceMs, NextTryMs;
         public string Why = "";
+        public string Purpose = "host save";   // WO-189 A4: the joiner's own snapshot owes one too
         public int Tries;
         public bool Toasted;
     }
@@ -259,7 +260,7 @@ public partial class GameBridge
                 }
                 lock (_w184Lock) { if (!ReferenceEquals(_w184Want, o)) continue; _w184Want = null; }
                 o.Tries++;
-                var res = await Wo184TakeAsync(o.W, o, "host save", Wo184Rules.StuckMs);
+                var res = await Wo184TakeAsync(o.W, o, o.Purpose, Wo184Rules.StuckMs);
                 if (res is W184Take.Paired or W184Take.Failed) continue;   // a newer host save may be wanting one already
                 lock (_w184Lock)
                 {
@@ -315,6 +316,10 @@ public partial class GameBridge
             var st = await Wo184EngineStateAsync();
             if (st.Known && st.Pending) { NotNow("a save is pending on this machine", Wo184Rules.EngineRetryMs); return W184Take.NotNow; }
             if (st.Known && !st.CanQuick) { Interlocked.Increment(ref _w184EngineNotNow); NotNow("the engine cannot save now (its own CanSave said no: a fight, a cutscene, a dialogue lock...)", Wo184Rules.EngineRetryMs); return W184Take.NotNow; }
+            // WO-189 A3: CanSave(Quick) does not see the readiness wait, nor a scene positioning the host's copies (a request then cancels every NPC's
+            // fast-forward under the save lock -- the field's stuck cutscene); asked only when the engine can take it, else owed (15 s)
+            string notReady = await Wo189AskBlockAsync();
+            if (notReady.Length > 0) { Interlocked.Increment(ref _w184EngineNotNow); NotNow(notReady, Wo189Rules.NotReadyRetryMs); return W184Take.NotNow; }
             // keep the engine's cached list in step with the disk: a new quicksave is named max(SaveId in the list)+1 (observed)
             await _combat.SaveListAsync(1, pl, "-");
             led = _henry.LedgerAdd(new HenryStore.LedgerEntry { Playline = pl, SinceUtc = DateTime.UtcNow.AddSeconds(-1), WorldTag = _joinedTag!, Kind = "snapshot" });
@@ -335,11 +340,13 @@ public partial class GameBridge
             }
             // the file -- or stuck (B3). The engine's readiness may make it wait: that is the game's own "not now".
             string? path = null;
+            bool named = false;
             while (path is null)
             {
                 var done = await Task.WhenAny(tcs.Task, Task.Delay(500));
                 if (done == tcs.Task) { path = tcs.Task.Result; break; }
                 long now = Environment.TickCount64;
+                if (!named && !_w184ReadySeen && now - tReq >= Wo189Rules.PendingNameMs) { named = true; await Wo189NamePendingAsync($"the {purpose}'s save", tReq); }   // WO-189 F
                 if (_w184ReadySeen && now - tReq > 8_000 && Wo184FindSnapshotFile(dir, since) is string found)
                 {
                     path = found;   // the engine wrote it and said ready; the folder watch missed the file
@@ -351,11 +358,13 @@ public partial class GameBridge
                     if (waitMs < Wo184Rules.StuckMs)
                     {
                         Wo184LateWindow(pl, since, w, led, purpose);   // a file that still lands pairs (never a leak)
+                        await Wo189CancelAfterWaitAsync(purpose, tReq);   // WO-189 A1: never left pending (the field: 21 minutes, every later save refused)
                         NotNow("its file had not come when the leave went on", 0);
                         return W184Take.NotNow;
                     }
                     bool landed = await Wo184StuckAsync(w, tReq, tcs.Task, purpose);
                     if (landed) { path = tcs.Task.Result; break; }
+                    Console.WriteLine(Wo189Rules.CancelLine(purpose, Environment.TickCount64 - tReq, "B3's stuck handling made the engine's own cancel (WO184-SNAP lines)"));   // WO-189 A1
                     if (owed is not null) { owed.Why = "the previous snapshot got stuck (cleared: asked again)"; owed.NextTryMs = 0; }
                     Wo184LateWindow(pl, since, w, led, purpose);
                     return W184Take.Stuck;
@@ -814,6 +823,7 @@ public partial class GameBridge
                 bool known = _w184PartnerPairs.TryGetValue(src, out var prev);
                 bool again = !Wo184Rules.PartnerSavedShows(known, prev.Seq, prev.Md5 ?? "", seq, md5);
                 _w184PartnerPairs[src] = (seq, md5, now);
+                Wo189OnPartnerPaired();   // WO-189 A4: the reminder's clock starts again
                 Console.WriteLine($"WO184-PARTNER player {src} saved: its character paired with this host's save seq={seq} md5={md5}{(again ? " (again: a later snapshot of the same save -- not shown again)" : "")}");
                 if (_w184PartnerSaved && !again) Say(Wo184Rules.HostPartnerSavedText);
                 break;
@@ -827,6 +837,7 @@ public partial class GameBridge
                 break;
             case Wo184Rules.RecoveredWord:
                 Console.WriteLine($"WO184-PARTNER player {src}: its stuck save was cleared by the engine's own cancel; a fresh snapshot follows");
+                if (Interlocked.Exchange(ref _w189RecoveredTold, 1) == 0) Say("Your partner's stuck save was cleared; it is taken again.");   // WO-189 A2: both told, once
                 break;
         }
         return Task.CompletedTask;
@@ -861,6 +872,8 @@ public partial class GameBridge
                       : _w184LastPair.AtMs > 0 ? $"Your character was saved with {Wo184PairText(now)}. Nothing waiting."
                       : "Your character is kept as it was when you joined; your host has not saved since.";
         }
+        Console.WriteLine($"WO189-STATUS role={(W137Host ? "host" : "joiner")} {Wo189StatusText(now)}");   // WO-189 A5
+        shortText += Wo189StatusShort(now);
         await ExecLuaAsync($"if KCD2MP_W184Say then KCD2MP_W184Say(\"{EscapeLua(shortText)}\") end");
     }
 

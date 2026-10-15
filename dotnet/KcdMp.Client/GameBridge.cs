@@ -1876,6 +1876,7 @@ public partial class GameBridge(ClientConfig config)
             tailForPause.QuestLine += Wo137OnQuestLine;              // WO-137: dialogue lines (talking), player switches
             tailForPause.Wo144Line += Wo144OnEngineLine;             // WO-144: the engine's own reasons (refusals, dropped talks, scenes)
             tailForPause.LoadStarted += Wo124OnLoadStarted;          // WO-124
+            tailForPause.LoadStarted += Wo189OnLoadStarted;          // WO-189 B1: a profile change while loading is the save's own state
             tailForPause.GameQuit += Wo124OnGameQuit;                // WO-124: quitting from the host's world
             tailForPause.SaveLoadAccepted += Wo124OnSaveLoadAccepted;   // WO-124
             tailForPause.SaveLoadAccepted += Wo175OnSaveLoadAccepted;   // WO-175: the loaded file, for the health check
@@ -6032,6 +6033,10 @@ public partial class GameBridge(ClientConfig config)
             case "w179_cfg":         // WO-179: mp_scene_bus, mp_scene_video_shared, mp_scene_bring_along, mp_scene_partner_ignored, mp_scene_fight_clear
             case "w179":             // WO-179: the skip key, the partner's video copy ending, the joiner's clock jump, the ignore window's end
                 Wo179OnEvent(name, arg);
+                return;
+            case "w189_cfg":         // WO-189: mp_joiner_autosnap, mp_save_reminder, mp_profile_mirror, mp_cutscene_release, mp_positioning_bound
+            case "w189_test":        // WO-189: harness-only (KCDMP_TEST_W189=1)
+                Wo189OnEvent(name, arg);
                 return;
             case "w184_cfg":         // WO-184: mp_save_on_leave, mp_save_recover, mp_partner_saved
             case "w184_status":      // WO-184: mp_save_status

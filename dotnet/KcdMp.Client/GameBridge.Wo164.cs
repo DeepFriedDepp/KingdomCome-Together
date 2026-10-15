@@ -379,6 +379,9 @@ public partial class GameBridge
             case Protocol.W164SceneBus:           // WO-179 Part B: the scene bus, either way
                 await Wo179OnBusAsync(src, m.Text);
                 return;
+            case Protocol.W164Profile:            // WO-189 B: the host's quest world layers; the joiner's catch-up ask
+                await Wo189OnProfileInAsync(src, m.Text);
+                return;
             case Protocol.W164SaveHealth:         // WO-184 B5: a joiner's word about his own save (the host: "Partner saved.")
                 await Wo184OnHealthInAsync(src, m.Text);
                 return;

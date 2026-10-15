@@ -167,6 +167,7 @@ public partial class GameBridge
     /// <summary>The log tail's scene stages (the WO-151 feed) plus the InteractiveSceneManager lines and the faders.</summary>
     private void Wo167OnSceneStage(string stage, string type, string name)
     {
+        Wo189OnIsmStage(stage);   // WO-189 D: the scenes' positioning bound
         long now = W167NowMs();
         switch (stage)
         {
@@ -214,6 +215,7 @@ public partial class GameBridge
         try { if (!W167Off("stand-in-pulse")) await Wo167StandInTickAsync(); } catch (Exception ex) { Wo167Fault("c1-pulse", "stand-in-pulse", ex); }
         try { await Wo167PushConfigAsync(); } catch (Exception ex) { Wo167Fault("c3-config", "swing-watch", ex); }
         try { await Wo184TickAsync(); } catch (Exception ex) { Console.WriteLine($"WO184-SNAP tick failed: {ex.GetType().Name}: {ex.Message}"); }   // WO-184: the owed snapshot, the health, the clock
+        try { await Wo189TickAsync(); } catch (Exception ex) { Console.WriteLine($"WO189 tick failed: {ex.GetType().Name}: {ex.Message}"); }   // WO-189: the watchdog, the own snapshot, the reminder, C, D
         long now = W167NowMs();
         long held = Volatile.Read(ref _w167FaderHeldMs);
         if (held > 0 && now - held >= Wo167Rules.FaderHoldMaxMs) await Wo167FaderRestoreAsync("60 s after the black was lifted");
