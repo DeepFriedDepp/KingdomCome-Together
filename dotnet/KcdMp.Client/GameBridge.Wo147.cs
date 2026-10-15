@@ -444,6 +444,7 @@ public partial class GameBridge
             if (!r.Ok) { if (Interlocked.Increment(ref _w147EngageFail) <= 10) Console.WriteLine($"MP-W147 engage {c.Name} FAILED (reason {r.Reason})"); continue; }
             bool fresh = !_w147Local.ContainsKey(c.Name);
             _w147Local[c.Name] = (eid, now, c.Rel);
+            Wo191NoteFight(c.Name, "engaged-by-me");   // WO-191 2
             if (fresh)
             {
                 Interlocked.Increment(ref _w147EngageOn);

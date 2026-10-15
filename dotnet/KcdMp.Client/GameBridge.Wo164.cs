@@ -199,6 +199,8 @@ public partial class GameBridge
         int hold = f.Length > 2 && int.TryParse(f[2], out int h) ? h : 0;
         double t0 = W164Now();
         _w164SweptAt[npc] = t0;
+        // WO-191 2: never on a copy that fights or fought in the last 10 s (engaged, combat mode, a player targets it / it targets one)
+        if (Wo191SweepRefused(npc, trigger)) return;
         // WO-183 4b: never on a copy that is engaged or in combat (the field: mid-fight on tvez_man_15 and tvez_man_16)
         if (!Wo183Rules.SweepAllowed(_w132Engaged.ContainsKey(npc), _w183Left.Zero(npc, out _)))
         {

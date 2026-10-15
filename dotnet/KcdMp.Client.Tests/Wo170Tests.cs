@@ -111,6 +111,6 @@ public class Wo170Tests
     [Fact]
     public void An_empty_inbox_says_no_kinds()
     {
-        Assert.EndsWith("kinds=-", new ActionInbox().SummaryLine());
+        Assert.Contains(" kinds=- ", new ActionInbox().SummaryLine());   // WO-191: rejected_kinds= and the forget counts follow it
     }
 }

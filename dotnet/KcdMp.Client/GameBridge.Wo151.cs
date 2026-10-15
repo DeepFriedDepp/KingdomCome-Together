@@ -143,6 +143,7 @@ public partial class GameBridge
         if (!_npcEntityIds.TryGetValue(ne.Name, out uint neid))
         {
             Console.WriteLine($"MP-ACTION section=inbound kind=NpcHit npc={ne.Name} dispatch=dropped-no-entity (not a puppet here)");
+            Wo191AskBody(ne.Name, "hit-row-no-body");   // WO-191 3b
             return;
         }
         Wo151NoteFight(ne.Name, "the host's NPC was hit");

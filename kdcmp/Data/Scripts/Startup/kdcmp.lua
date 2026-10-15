@@ -8418,6 +8418,7 @@ local function mp_npc_rescan()
     table.sort(found, function(a, b) return a.rank < b.rank end)
 
     local keep = {}
+    if KCD2MP_W191KeepPinned then KCD2MP_W191KeepPinned(keep) end   -- WO-191 3b: an attacker pinned into the stream stays 60 s
     for i = 1, math.min(#found, cap) do
         local name = found[i].name
         keep[name] = true
@@ -20958,6 +20959,11 @@ function KCD2MP_W160Release(name, why)
     local p = KCD2MP.npcPuppets[name]
     local skip = nil
     if KCD2MP.w137 and KCD2MP.w137.talking and KCD2MP.w137.talking[name] then skip = "talking" end
+    -- WO-191 2: a copy that fights (or fought in the last 10 s) keeps its context -- no reset of any kind mid-fight
+    if not skip and KCD2MP_W191Fighting and not string.find(string.lower(tostring(name)), "^kcd2mp_") then
+        local fw = KCD2MP_W191Fighting(name)
+        if fw then skip = "fighting"; KCD2MP_W191SkipTold(name, "w160-" .. tostring(why or "?"), fw) end
+    end
     if not skip then
         local dead = (p and (p.dead == true or p.deadHint == true)) or false
         if not dead then pcall(function() dead = e.actor ~= nil and e.actor:IsDead() == true end) end
@@ -21335,6 +21341,16 @@ function KCD2MP_W164Sweep(name, trigger)
     if not w.sweep or not string.find(name, "^[%w_]+$") then return false end
     if not KCD2MP.npcPuppets[name] then w.stats.skipped = w.stats.skipped + 1; return false end   -- the host's copies only
     local now = os.clock()
+    -- WO-191 2: never on a copy that fights, whatever the trigger -- engaged, combat mode, the host's NPC in combat or targeting a player, this
+    -- player facing it armed, or any of those in the last 10 s (the field: a focus sweep 0.6 s before the joiner's first swing at the copy)
+    if KCD2MP_W191Fighting and KCD2MP.w191 and KCD2MP.w191.fightGuard then
+        local fw = KCD2MP_W191Fighting(name, trigger == "hostconv")
+        if fw then
+            w.stats.skipped = w.stats.skipped + 1
+            KCD2MP_W191SkipTold(name, trigger, fw)
+            return false
+        end
+    end
     -- WO-183 4b: never on a copy that is in combat (the host's NPC fought in the last 10 s, or the copy itself is in combat mode): the field's
     -- mid-fight sweeps on tvez_man_15 / tvez_man_16 released the body the fight was playing on
     -- (the host-conversation clear -- WO-167 T2, which ends the engagement first -- the talk retry and the console are the ones asked for)
@@ -28755,6 +28771,142 @@ System.AddCCommand("mp_save_reminder", 'KCD2MP_W189SetReminder(%line)', "WO-189:
 System.AddCCommand("mp_profile_mirror", 'KCD2MP_W189SetMirror(%line)', "WO-189: (joiner) the host's quest world layers (an arena fence, a camp) are switched in your world too (default on): mp_profile_mirror on|off")
 System.AddCCommand("mp_cutscene_release", 'KCD2MP_W189SetRelease(%line)', "WO-189: (joiner) a cutscene stuck at its start for 10 s is released the game's own way (default on): mp_cutscene_release on|off")
 System.AddCCommand("mp_positioning_bound", 'KCD2MP_W189SetPosBound(%line)', "WO-189: (joiner) a scene waiting 20 s on your host's people has their fast-forward stopped (default on): mp_positioning_bound on|off")
+
+-- ===== WO-191: a relaunched joiner's moves count, fighting copies are never reset, attackers have a body, no long black ==========
+-- The agent's part is GameBridge.Wo191.cs (docs/WO-191-findings.md). The switches (all default ON):
+--   mp_action_forget on|off      (both) the receiver forgets a partner at every disconnect, re-naming and join (their actions start fresh)
+--   mp_sweep_fight_guard on|off  (joiner) no sweep resets a copy that fights or fought in the last 10 s, whatever the trigger
+--   mp_attacker_bind on|off      (both) an NPC or animal that turns on a partner is streamed at once (the host); a missing one is asked for
+--   mp_fader_bound on|off        (joiner) a black screen that belongs to no scene ends the game's own way after 3 s
+KCD2MP.w191 = KCD2MP.w191 or { forget = true, fightGuard = true, attackerBind = true, faderBound = true,
+    fightAt = {}, fightWhy = {}, fightStart = {}, toldFor = {}, pins = {},
+    stats = { skips = 0, marks = 0, pins = 0, pinRefused = 0 } }
+
+function KCD2MP_W191Cfg()
+    local w = KCD2MP.w191
+    KCD2MP_EmitEvent("w191_cfg", string.format("forget=%s fightguard=%s attackerbind=%s faderbound=%s",
+        w.forget and "on" or "off", w.fightGuard and "on" or "off", w.attackerBind and "on" or "off", w.faderBound and "on" or "off"))
+    return true
+end
+
+function KCD2MP_W191Switch(key, field, arg, what)
+    local v = KCD2MP_Wo122ParseBool(arg)
+    if v == "bad" then mp_log("mp_" .. key .. ": expected on|off"); return false end
+    if v ~= nil then KCD2MP.w191[field] = v end
+    mp_log(string.format("WO191-TOGGLE mp_%s %s -- %s", key, KCD2MP.w191[field] and "on" or "off", what))
+    KCD2MP_W191Cfg()
+    return true
+end
+function KCD2MP_W191SetForget(arg) return KCD2MP_W191Switch("action_forget", "forget", arg, "a partner's actions start a fresh order at every (re)connect") end
+function KCD2MP_W191SetFightGuard(arg) return KCD2MP_W191Switch("sweep_fight_guard", "fightGuard", arg, "a copy that fights is never reset by a sweep") end
+function KCD2MP_W191SetAttackerBind(arg) return KCD2MP_W191Switch("attacker_bind", "attackerBind", arg, "an NPC or animal attacking a partner always has a body there") end
+function KCD2MP_W191SetFaderBound(arg) return KCD2MP_W191Switch("fader_bound", "faderBound", arg, "a black screen with no scene ends after 3 s") end
+
+-- 2: the agent's sign that a copy fights (engaged, the host's NPC in combat or targeting a player, a blow, a swing at it).
+function KCD2MP_W191FightMark(name, why)
+    local w = KCD2MP.w191
+    name = tostring(name or "")
+    local now = os.clock()
+    if (now - (w.fightAt[name] or -1e9)) > 10.0 then w.fightStart[name] = now end
+    w.fightAt[name], w.fightWhy[name] = now, tostring(why or "?")
+    w.stats.marks = w.stats.marks + 1
+    return true
+end
+
+-- 2: why this copy must not be reset now (it fights, or fought in the last 10 s), or nil. A live sign counts as a fight sign of now.
+-- staleOwnCombat: the copy's own combat flag is not a sign (WO-167 T2: after the host's talk with it, that flag is the stale state T2
+-- clears next; every sign of a real fight -- the host's NPC in combat or targeting a player, an engagement, a blow -- still blocks).
+function KCD2MP_W191Fighting(name, staleOwnCombat)
+    local w = KCD2MP.w191
+    if not w.fightGuard then return nil end
+    name = tostring(name or "")
+    local now = os.clock()
+    local why = nil
+    local hc = KCD2MP.w164 and KCD2MP.w164.hostCombat and KCD2MP.w164.hostCombat[name]
+    if hc and (now - hc) <= 10.0 then why = "host-combat" end
+    local e = nil
+    pcall(function() e = System.GetEntityByName(name) end)
+    if not why and not staleOwnCombat and e and e.soul and e.soul.IsInCombatMode then
+        pcall(function() if e.soul:IsInCombatMode() == true then why = "combat-mode" end end)
+    end
+    -- this player faces it within 4 m with a weapon drawn: a player targets it (the field: swept 0.6 s before the first swing)
+    if not why and e and player then
+        local drawn = false
+        if player.human and player.human.IsWeaponDrawn then pcall(function() drawn = player.human:IsWeaponDrawn() == true end) end
+        if drawn then
+            pcall(function()
+                local pp, ep = player:GetWorldPos(), e:GetWorldPos()
+                local dir = player.GetDirectionVector and player:GetDirectionVector() or nil
+                local dx, dy = ep.x - pp.x, ep.y - pp.y
+                local d2 = dx * dx + dy * dy
+                if d2 < 16.0 and (d2 < 0.01 or not dir or (dx * dir.x + dy * dir.y) / math.sqrt(d2) > 0.5) then why = "a-player-faces-it-armed" end
+            end)
+        end
+    end
+    if why then KCD2MP_W191FightMark(name, why); return why end
+    local at = w.fightAt[name]
+    if at and (now - at) <= 10.0 then return string.format("%s-%.1fs-ago", tostring(w.fightWhy[name] or "?"), now - at) end
+    return nil
+end
+
+-- 2: told once per copy per fight (WO191-SWEEP-LUA).
+function KCD2MP_W191SkipTold(name, trigger, why)
+    local w = KCD2MP.w191
+    w.stats.skips = w.stats.skips + 1
+    local fs = w.fightStart[name] or 0
+    if w.toldFor[name] == fs then return end
+    w.toldFor[name] = fs
+    mp_log(string.format("WO191-SWEEP-LUA npc=%s trigger=%s SKIPPED why=%s -- a copy that fights is never reset (once per fight; skips=%d)",
+        tostring(name), tostring(trigger), tostring(why), w.stats.skips))
+end
+
+-- 3b, the host: an NPC or animal that targets a partner (the agent read the engine's "Set target" line, or the partner asked) goes into
+-- the NPC stream now and stays 60 s after the last sign -- its copy exists on the partner's machine before its first blow. Any class the
+-- game uses for a living body (the scan's lists miss the village dogs: class Dog).
+function KCD2MP_W191PinTrack(name, why)
+    local w = KCD2MP.w191
+    name = tostring(name or "")
+    if not w.attackerBind or not (KCD2MP.wo102 and KCD2MP.wo102.authorityHost and KCD2MP.hitSensorOn) then return false end
+    if not string.find(name, "^[%w_]+$") or mp_is_excluded_npc_name(name) then return false end
+    local e = nil
+    pcall(function() e = System.GetEntityByName(name) end)
+    if not e or mp_is_mod_entity(e) then w.stats.pinRefused = w.stats.pinRefused + 1; return false end
+    local cls = tostring(e.class or "")
+    local living = cls == "NPC" or cls == "NPC_Female" or cls == "Horse" or KCD2MP_W136IsAnimalClass(cls)
+        or (KCD2MP.w144 and KCD2MP.w144.beastClasses and KCD2MP.w144.beastClasses[cls] == true)
+    if not living then
+        w.stats.pinRefused = w.stats.pinRefused + 1
+        mp_log(string.format("WO191-BIND pin refused npc=%s class=%s why=%s -- not a body class the stream carries", name, cls, tostring(why)))
+        return false
+    end
+    local fresh = w.pins[name] == nil
+    w.pins[name] = os.clock()
+    if not KCD2MP.npcTracked[name] then
+        KCD2MP.npcTracked[name] = { since = os.clock() }
+        mp_log("NPC-SYNC tracking " .. name)
+        mp_auth_log(name, "acquire", "self", "wo191-pin", 0)
+        w.stats.pins = w.stats.pins + 1
+        mp_log(string.format("WO191-BIND pinned npc=%s class=%s why=%s -- streamed now (it attacks a partner), kept 60 s after the last sign", name, cls, tostring(why)))
+    elseif fresh then
+        mp_log(string.format("WO191-BIND pin npc=%s class=%s why=%s -- already streamed; kept 60 s after the last sign", name, cls, tostring(why)))
+    end
+    return true
+end
+
+-- 3b: the rescan keeps a pinned NPC while its pin is younger than 60 s (called from mp_npc_rescan's keep step).
+function KCD2MP_W191KeepPinned(keep)
+    local w = KCD2MP.w191
+    local now = os.clock()
+    for name, at in pairs(w.pins) do
+        if (now - at) < 60.0 and KCD2MP.npcTracked[name] then keep[name] = true
+        elseif (now - at) >= 60.0 then w.pins[name] = nil end
+    end
+end
+
+System.AddCCommand("mp_action_forget", 'KCD2MP_W191SetForget(%line)', "WO-191: (both) your partner's actions start a fresh order whenever they (re)connect, so none is refused as stale after a restart (default on): mp_action_forget on|off")
+System.AddCCommand("mp_sweep_fight_guard", 'KCD2MP_W191SetFightGuard(%line)', "WO-191: (joiner) a copy that is fighting, or fought in the last 10 s, is never reset (default on): mp_sweep_fight_guard on|off")
+System.AddCCommand("mp_attacker_bind", 'KCD2MP_W191SetAttackerBind(%line)', "WO-191: (both) an NPC or animal attacking a partner is always shown on their screen (default on): mp_attacker_bind on|off")
+System.AddCCommand("mp_fader_bound", 'KCD2MP_W191SetFaderBound(%line)', "WO-191: (joiner) a black screen that belongs to no scene ends after 3 s (default on): mp_fader_bound on|off")
 
 local function handleAction(action, activation, value)
     if ACTS.AXIS_ACTIONS[action] then return end

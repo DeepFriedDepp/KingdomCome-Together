@@ -290,8 +290,9 @@ do
     NOW = NOW + 2
     local mark = #LOG
     KCD2MP_W160Conversation(false, "tbuk_guard_1")
-    check("H7: a copy whose host NPC is fighting keeps its combat state", #ENDCOMBAT == 0 and #MSGS == 0 and countEvt("w167_clear", "", mark) == 0
-        and lastLog("WO167-T2 npc=tbuk_guard_1 swept=true combat=true danger=false host_fighting=true ended=none", mark) ~= nil, lastLog("WO167-T2", mark))
+    -- WO-191 2: and it is not swept either (a copy whose host NPC fights is never reset, whatever the trigger)
+    check("H7: a copy whose host NPC is fighting keeps its combat state (and is not swept: WO-191)", #ENDCOMBAT == 0 and #MSGS == 0 and countEvt("w167_clear", "", mark) == 0
+        and lastLog("WO167-T2 npc=tbuk_guard_1 swept=false combat=true danger=false host_fighting=true ended=none", mark) ~= nil, lastLog("WO167-T2", mark))
     reset(); joiner()
     copy("tzel_man_10", 101, 100)
     KCD2MP_W160Conversation(true, "tzel_man_10")

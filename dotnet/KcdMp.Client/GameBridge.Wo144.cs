@@ -58,6 +58,7 @@ public partial class GameBridge
     private void Wo144OnPeerConnected(byte id, string name)
     {
         bool fresh = _peers.Connected(id, name);
+        Wo191ForgetSender(id, fresh ? "connected" : "named-again");   // WO-191 1a: a (re)launched agent starts a fresh order
         _w144DropTold.TryRemove(id, out _);
         var twins = _peers.SameName(id, name);
         if (fresh)
@@ -74,6 +75,7 @@ public partial class GameBridge
     private void Wo144OnPeerDisconnected(byte id)
     {
         string? name = _peers.Disconnected(id);
+        Wo191ForgetSender(id, "disconnected");   // WO-191 1a
         if (name is not null && _w139Records.TryRemove(id, out var rec) && rec.Count > 0)
             _w144ParkedCrime[name] = (rec, DateTime.UtcNow);
         Console.WriteLine($"MP-PEERS ghost {id} disconnected ({LivePartners().Count} partner(s) now) -- it stays removed until the relay names that id again");
@@ -142,6 +144,7 @@ public partial class GameBridge
     {
         Wo167OnEngineLine(line);              // WO-167: the host's collision barks (T2), tree paths (T3), faders (T4) -- never consumes
         Wo179OnEngineLine(line);              // WO-179 A3: a sign the conversation runs (WO-183 2: the twin lines are forwarded) -- never consumes
+        Wo191OnEngineLineAll(line);           // WO-191: the conversation waiting for its NPC (4), an NPC targeting a partner (3b) -- never consumes
         if (line.Contains("DialogTwin_", StringComparison.Ordinal)) return;   // WO-183 2: counted by A3 only (they are many); nothing else reads them
         Wo184OnEngineLine(line);              // WO-184: the conversation clock's lines, the engine's save readiness, the exit dialog -- never consumes
         Wo189OnEngineLine(line);              // WO-189: the game profiles, a cutscene's initialization (its holder), the conversation's souls -- never consumes

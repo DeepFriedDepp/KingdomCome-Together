@@ -232,6 +232,7 @@ public partial class GameBridge
         _w161Stats.In(applied, m.Verdict, m.Health, m.Stamina, shown || generic, generic ? "generic" : reason);
         Console.WriteLine(FormattableString.Invariant(
             $"WO161-HIT victim=me by={by} sid={m.SwingId} hid={hitId} verdict={HitVerdictMsg.VerdictName(m.Verdict)} dmg={m.Health:F1}/{m.Stamina:F1} dir={Wo161Zone(m.Zone)} shown={(shown ? "yes" : generic ? "generic" : "no")} reason={reason} applied={(byEngine ? "engine" : applied ? "yes" : hasDamage ? "no" : "none")}{(_isDamageAuthority ? " note=this-machine-thinks-it-is-the-host" : "")}{(waitedMs >= 0 ? $" watch_wait_ms={waitedMs}" : "")}"));
+        if (hasDamage) Wo191OnHitOnMe(m.Attacker, applied);   // WO-191 3c: ghost damage counted, its body asked for
     }
 
     /// <summary>Victim: a bare 0.46.0 hit (0x22) -- a peer without the verdict path, or the host's fallback. Counted, never lost.</summary>

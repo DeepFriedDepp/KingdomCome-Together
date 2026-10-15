@@ -261,6 +261,7 @@ public partial class GameBridge
                     if ((f.Flags & Wo187Rules.NativeFlagPlayerSync) != 0 && !_w187Combo) return;
                     var ae = new AttackEvent(ms, f.InputClass, Protocol.ZoneFromTableId(f.ZoneTableId), f.AttackType, aflags, f.Row);
                     pkt = _actionOut.Build(ActionKind.Attack, ActionPhase.Commit, ae.ToBytes());
+                    if (_npcTarget is string w191T) Wo191NoteFight(w191T, "a-player-swings-at-it");   // WO-191 2: the copy this player faces
                     what = ae.ToString();
                     break;
                 case ActionKind.Jump:
@@ -441,6 +442,7 @@ public partial class GameBridge
                     _w121EvNoBody++;
                     Wo161NoteRowRefused(ne.Name, "no-entity");
                     Console.WriteLine($"MP-ACTION section=inbound kind=NpcAttack npc={ne.Name} dispatch=dropped-no-entity (not a puppet here)");
+                    Wo191AskBody(ne.Name, "attack-row-no-body");   // WO-191 3b
                     return true;
                 }
                 bool animal = _w141Animals.ContainsKey(ne.Name);

@@ -319,6 +319,9 @@ public partial class GameBridge
         Interlocked.Increment(ref _w132CombatIn);
         if (ev.InCombat) Wo151NoteFight(ev.Name, "the host's NPC is in combat");   // WO-151 1.1
         if (ev.InCombat) W164NoteHostCombat(ev.Name);   // WO-164: its copy is never holstered while the host's NPC fights
+        bool w191Player = ev.Target is NpcCombatTarget.Host or NpcCombatTarget.Avatar;
+        if (ev.InCombat || w191Player) Wo191NoteFight(ev.Name, ev.InCombat ? "host-combat" : "it-targets-a-player");   // WO-191 2
+        if (ev.Target == NpcCombatTarget.Avatar && ev.TargetGhost == _myGhostId) Wo191AskBody(ev.Name, "it-targets-me");   // WO-191 3b
         bool guarded = _w131Guarded.TryGetValue(ev.Name, out uint geid);
         bool bound = _nativeBound.ContainsKey(ev.Name);
         uint eid = guarded ? geid : _npcEntityIds.TryGetValue(ev.Name, out uint pe) ? pe : 0;
@@ -390,6 +393,7 @@ public partial class GameBridge
         }
         if (!r.Ok) { Console.WriteLine($"MP-W132 engage {ev.Name} eid=0x{eid:X} FAILED (reason {r.Reason})"); return; }
         _w132Engaged[ev.Name] = (DateTime.UtcNow, eid);
+        Wo191NoteFight(ev.Name, "engaged");   // WO-191 2
         if (r.First)
         {
             // WO-157 3b.2: a copy that enters a fight leaves the one-shot it was playing (the field's tkrc_man_2 sat in

@@ -430,6 +430,8 @@ public sealed class LogTailGameTransport : IGameTransport
         "because there is another savegame pending",
         // WO-189 C: a cutscene's initialization with its holder (the stage feed drops the holder; a barrier's holder names the wait)
         "CutscenePlayer::OnCutsceneInitialized called for ",
+        // WO-191 3b: an NPC or animal turning on a partner's figure (the host pins it into the NPC stream: its copy exists before its first blow)
+        "] Set target: kcd2mp_",
     ];
 
     /// <summary>WO-184: would <see cref="QuestLine"/> receive this raw engine line? (The class test pins the clock's literals against both lists.)</summary>

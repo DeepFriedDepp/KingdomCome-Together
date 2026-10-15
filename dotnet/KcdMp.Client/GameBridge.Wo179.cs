@@ -128,6 +128,7 @@ public partial class GameBridge
     {
         _ = ExecLuaAsync("if KCD2MP_W179Cfg then KCD2MP_W179Cfg() end");
         _ = ExecLuaAsync("if KCD2MP_W184Cfg then KCD2MP_W184Cfg() end");   // WO-184: the save switches
+        Wo191OnConnect();   // WO-191: its switches
         _ = Wo179PollLoopAsync(ct);
     }
 
@@ -146,6 +147,7 @@ public partial class GameBridge
                 {
                     lastStats = now;
                     if (_w179Fades + _w179Videos + _w179BusIn + _w179BusOut > 0) Console.WriteLine(Wo179StatsLine());
+                    Console.WriteLine(Wo191StatsLine());   // WO-191
                 }
             }
             catch (Exception ex) { Console.WriteLine($"WO179 tick failed: {ex.GetType().Name}: {ex.Message}"); }
@@ -225,6 +227,7 @@ public partial class GameBridge
 
     private void Wo179OnFade(bool on, long whenMs)
     {
+        Wo191OnFade(on, whenMs);   // WO-191 4b: a fader with no content ends after 3 s (joiner)
         if (on)
         {
             _w179FadeOnAt = whenMs;

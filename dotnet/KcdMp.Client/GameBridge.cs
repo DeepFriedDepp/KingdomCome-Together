@@ -1664,6 +1664,7 @@ public partial class GameBridge(ClientConfig config)
                     NoteRequestResolvedOut(npcName);   // WO-102 Phase 5
                     _stats.DmgOut++; if (died) _stats.DmgOutFatal++;
                     Console.WriteLine(FormattableString.Invariant($"MP-DMG dir=out npc={npcName} hp={health:F1} st={stamina:F1} fatal={(died ? 1 : 0)} authority={(_isDamageAuthority ? 1 : 0)}"));
+                    Wo191NoteFight(npcName, "a-player-hit-it");   // WO-191 2
                     if (died)
                     {
                         // Tell the mod's death observer this death is already
@@ -4741,6 +4742,10 @@ public partial class GameBridge(ClientConfig config)
                         {
                             // WO-121: attack / jump / block / dodge rows, NPC rows, the host lever.
                         }
+                        else if (a.Kind == ActionKind.NpcResync && Wo191OnResyncIn(a))
+                        {
+                            // WO-191 3b: a joiner with no body for its attacker asked for that one NPC (pinned, no burst)
+                        }
                         else if (a.Kind == ActionKind.NpcResync)
                         {
                             // WO-102 Phase 6: a non-owner asks for a burst.
@@ -4765,6 +4770,7 @@ public partial class GameBridge(ClientConfig config)
                     {
                         Console.WriteLine(FormattableString.Invariant(
                             $"MP-ACTION section=inbound reject={reject}"));
+                        Wo191OnActionReject(reject);   // WO-191 1c: per kind, once a minute
                     }
                 }
                 else if (Protocol.IsJoinDown(type, payloadLen))
@@ -6033,6 +6039,10 @@ public partial class GameBridge(ClientConfig config)
             case "w179_cfg":         // WO-179: mp_scene_bus, mp_scene_video_shared, mp_scene_bring_along, mp_scene_partner_ignored, mp_scene_fight_clear
             case "w179":             // WO-179: the skip key, the partner's video copy ending, the joiner's clock jump, the ignore window's end
                 Wo179OnEvent(name, arg);
+                return;
+            case "w191_cfg":         // WO-191: mp_action_forget, mp_sweep_fight_guard, mp_attacker_bind, mp_fader_bound
+            case "w191_test":        // WO-191: harness-only (KCDMP_TEST_W191=1)
+                Wo191OnEvent(name, arg);
                 return;
             case "w189_cfg":         // WO-189: mp_joiner_autosnap, mp_save_reminder, mp_profile_mirror, mp_cutscene_release, mp_positioning_bound
             case "w189_test":        // WO-189: harness-only (KCDMP_TEST_W189=1)

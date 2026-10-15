@@ -286,6 +286,7 @@ public partial class GameBridge
         foreach (byte j in fresh)
         {
             await W164ClearAvatarSeatAsync(j, "rejoin");   // WO-164 S2: a (re)joining player's figure starts neutral
+            Wo191ForgetSender(j, "joined");   // WO-191 1a
             var rows = new List<ActivityRow>();
             if (!_w141Mine.IsNone) rows.Add(new ActivityRow(_myGhostId, "", _w141Mine));
             foreach (var (peer, a) in _w141PeerRows) if (peer != j && !a.IsNone) rows.Add(new ActivityRow(peer, "", a));

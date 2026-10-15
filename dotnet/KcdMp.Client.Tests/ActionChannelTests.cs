@@ -18,6 +18,9 @@ namespace KcdMp.Client.Tests;
 /// </summary>
 public class ActionChannelTests
 {
+    // WO-191 1b: the outboxes of one test are one sender's single agent run (a fresh run gets a new id; Wo191Tests covers that).
+    private const byte Run = 5;
+
     // The relay prefixes the sender id and forwards the rest verbatim, so a
     // test can build an ActionDown from an ActionUp exactly as the relay does.
     private static byte[] Down(byte sender, byte[] up)
@@ -33,7 +36,7 @@ public class ActionChannelTests
     [Fact]
     public void Build_roundtrips_through_the_inbox()
     {
-        var outbox = new ActionOutbox();
+        var outbox = new ActionOutbox(Run);
         var inbox = new ActionInbox();
         var payload = new AttackPayload(1, 2, 1, AttackPayload.FlagPrepared);
 
@@ -57,7 +60,7 @@ public class ActionChannelTests
     [Fact]
     public void A_replayed_packet_is_stale_not_accepted_twice()
     {
-        var outbox = new ActionOutbox();
+        var outbox = new ActionOutbox(Run);
         var inbox = new ActionInbox();
         var up = outbox.Build(ActionKind.Attack, ActionPhase.Press, new byte[] { 0, 0, 0, 0 });
 
@@ -71,8 +74,8 @@ public class ActionChannelTests
     public void Ordering_is_per_sender_and_per_kind()
     {
         var inbox = new ActionInbox();
-        var a = new ActionOutbox();
-        var b = new ActionOutbox();
+        var a = new ActionOutbox(Run);
+        var b = new ActionOutbox(Run);
 
         // Two senders each start at seq 1; neither may shadow the other.
         Assert.NotNull(inbox.Accept(Down(1, a.Build(ActionKind.Attack, ActionPhase.Press, Array.Empty<byte>())), out _));
@@ -101,19 +104,19 @@ public class ActionChannelTests
     public void An_action_from_a_previous_body_is_expired()
     {
         var inbox = new ActionInbox();
-        var outbox = new ActionOutbox();
+        var outbox = new ActionOutbox(Run);
 
         // Learn generation 1.0.0 from the first packet.
         Assert.NotNull(inbox.Accept(Down(1, outbox.Build(ActionKind.Attack, ActionPhase.Press, Array.Empty<byte>())), out _));
 
         // The sender respawns: incarnation moves forward, and seq restarts.
-        var fresh = new ActionOutbox();
+        var fresh = new ActionOutbox(Run);
         fresh.BumpIncarnation();   // 2.0.0
         Assert.NotNull(inbox.Accept(Down(1, fresh.Build(ActionKind.Attack, ActionPhase.Press, Array.Empty<byte>())), out _));
 
         // Now a straggler from the OLD body arrives late. It must be expired,
         // not applied to the body that replaced it.
-        var straggler = new ActionOutbox();
+        var straggler = new ActionOutbox(Run);
         for (int i = 0; i < 5; i++) straggler.Build(ActionKind.Attack, ActionPhase.Press, Array.Empty<byte>());
         var late = straggler.Build(ActionKind.Attack, ActionPhase.Press, Array.Empty<byte>());
         Assert.Null(inbox.Accept(Down(1, late), out var reject));
@@ -128,11 +131,11 @@ public class ActionChannelTests
         // last-seq, every packet from the new body would look stale -- the
         // failure this test exists to prevent.
         var inbox = new ActionInbox();
-        var old = new ActionOutbox();
+        var old = new ActionOutbox(Run);
         for (int i = 0; i < 50; i++)
             inbox.Accept(Down(1, old.Build(ActionKind.Attack, ActionPhase.Press, Array.Empty<byte>())), out _);
 
-        var fresh = new ActionOutbox();
+        var fresh = new ActionOutbox(Run);
         fresh.BumpIncarnation();
         Assert.NotNull(inbox.Accept(Down(1, fresh.Build(ActionKind.Attack, ActionPhase.Press, Array.Empty<byte>())), out var r));
         Assert.Equal(ActionReject.None, r);
@@ -142,7 +145,7 @@ public class ActionChannelTests
     public void A_reconnect_epoch_moves_forward_and_is_accepted()
     {
         var inbox = new ActionInbox();
-        var outbox = new ActionOutbox();
+        var outbox = new ActionOutbox(Run);
         inbox.Accept(Down(1, outbox.Build(ActionKind.Attack, ActionPhase.Press, Array.Empty<byte>())), out _);
 
         outbox.BumpEpoch();
@@ -185,7 +188,7 @@ public class ActionChannelTests
     [Fact]
     public void Payload_over_the_cap_is_refused_at_the_sender()
     {
-        var outbox = new ActionOutbox();
+        var outbox = new ActionOutbox(Run);
         Assert.Throws<ArgumentOutOfRangeException>(() =>
             outbox.Build(ActionKind.Attack, ActionPhase.Press, new byte[Protocol.ActionPayloadMaxLen + 1]));
     }

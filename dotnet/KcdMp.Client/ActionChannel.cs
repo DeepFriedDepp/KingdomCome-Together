@@ -34,10 +34,13 @@ public sealed class ActionOutbox
     /// <summary>
     /// The sender's own validity counter. Incarnation moves when this player's
     /// body is replaced (death, respawn, save load); epoch moves on reconnect.
-    /// Revision is reserved and stays 0 -- the field exists so a future need
-    /// does not cost a protocol bump.
+    /// Revision is this agent run's id (WO-191 1b, Wo191Rules.NewRunId): every
+    /// run starts at 1.0.0 and bumps the epoch on connect, so without it a
+    /// relaunched sender looked like the old run replaying its first packets.
     /// </summary>
-    public ActionGen Gen { get; private set; } = new(1, 0, 0);
+    public ActionGen Gen { get; private set; }
+
+    public ActionOutbox(byte? runId = null) => Gen = new(1, 0, runId ?? Wo191Rules.NewRunId());
 
     public long Sent { get; private set; }
 
@@ -119,6 +122,15 @@ public sealed class ActionInbox
     public long Unknown { get; private set; }
     public long Malformed { get; private set; }
 
+    /// <summary>WO-191 1c: what was refused, per kind (the summary line's rejected_kinds=).</summary>
+    private readonly Dictionary<ActionKind, long> _rejPerKind = new();
+    /// <summary>WO-191 1c: the last refusal's kind (null = not decodable) and its numbers, for the WO191-ACTION line.</summary>
+    public ActionKind? LastRejectKind { get; private set; }
+    public string LastRejectDetail { get; private set; } = "";
+    /// <summary>WO-191 1: senders forgotten (disconnect, re-naming, join) and new runs adopted.</summary>
+    public long Forgotten { get; private set; }
+    public long RunsAdopted { get; private set; }
+
     /// <summary>
     /// A sender's current generation, learned from the first packet we see from
     /// them and updated when it MOVES FORWARD. Learning rather than requiring
@@ -128,12 +140,35 @@ public sealed class ActionInbox
     /// </summary>
     public void NoteGen(byte sender, ActionGen gen) => _gen[sender] = gen;
 
-    /// <summary>Forget a peer entirely -- they disconnected.</summary>
-    public void Forget(byte sender)
+    /// <summary>Forget a peer entirely -- they disconnected, the relay named the id again, or that player joined (WO-191 1a). True when anything was held.</summary>
+    public bool Forget(byte sender)
     {
-        _gen.Remove(sender);
+        bool had = _gen.Remove(sender);
         foreach (var key in _lastSeq.Keys.Where(k => k.Sender == sender).ToList())
+        {
             _lastSeq.Remove(key);
+            had = true;
+        }
+        if (had) Forgotten++;
+        return had;
+    }
+
+    /// <summary>WO-191 1b: an 8-bit counter compared over a half-range window (the epoch wraps after 255 reconnects).</summary>
+    public static bool ByteIsNewer(byte a, byte b) => a != b && (byte)(a - b) < 128;
+
+    private InboundAction? Reject(ActionReject why, ActionKind? kind, string detail)
+    {
+        LastRejectKind = kind;
+        LastRejectDetail = detail;
+        if (kind is ActionKind k) _rejPerKind[k] = _rejPerKind.GetValueOrDefault(k) + 1;
+        switch (why)
+        {
+            case ActionReject.StaleOrDuplicate: Stale++; break;
+            case ActionReject.Expired: Expired++; break;
+            case ActionReject.UnknownKind: Unknown++; break;
+            case ActionReject.Malformed: Malformed++; break;
+        }
+        return null;
     }
 
     /// <summary>
@@ -144,7 +179,7 @@ public sealed class ActionInbox
     {
         reject = ActionReject.None;
         // [sourceGhostId:1][kind:1][seq:2][phase:1][gen:4][len:1][payload:len]
-        if (payload.Length < 1 + Protocol.ActionUpHeaderLen) { Malformed++; reject = ActionReject.Malformed; return null; }
+        if (payload.Length < 1 + Protocol.ActionUpHeaderLen) { reject = ActionReject.Malformed; return Reject(reject, null, $"len={payload.Length}"); }
 
         byte sender = payload[0];
         var kind    = (ActionKind)payload[1];
@@ -152,10 +187,10 @@ public sealed class ActionInbox
         var phase   = (ActionPhase)payload[4];
         var gen     = ActionGen.Unpack(BinaryPrimitives.ReadUInt32LittleEndian(payload.Slice(5)));
         int len     = payload[9];
-        if (payload.Length < 10 + len) { Malformed++; reject = ActionReject.Malformed; return null; }
+        if (payload.Length < 10 + len) { reject = ActionReject.Malformed; return Reject(reject, null, $"len={payload.Length} declared={len}"); }
         var body = payload.Slice(10, len).ToArray();
 
-        if (!Enum.IsDefined(typeof(ActionKind), kind)) { Unknown++; reject = ActionReject.UnknownKind; return null; }
+        if (!Enum.IsDefined(typeof(ActionKind), kind)) { reject = ActionReject.UnknownKind; return Reject(reject, null, $"kind_byte={payload[1]} sender={sender}"); }
 
         // Generation. An event from a body that no longer exists is dropped --
         // this is the cross-machine form of the rule SwingInbox applies
@@ -165,10 +200,16 @@ public sealed class ActionInbox
             if (gen != held)
             {
                 // Forward is a new body: adopt it and drop the old ordering,
-                // because seq restarts with the incarnation.
-                bool forward = gen.Epoch > held.Epoch
+                // because seq restarts with the incarnation. WO-191 1b: a
+                // different run (revision) is always adopted -- a relaunched
+                // agent starts over at 1.1 and its sequence at 0; the epoch
+                // compare is wrap-safe.
+                bool newRun = gen.Revision != held.Revision;
+                bool forward = newRun
+                            || ByteIsNewer(gen.Epoch, held.Epoch)
                             || (gen.Epoch == held.Epoch && Protocol.SeqIsNewer(gen.Incarnation, held.Incarnation));
-                if (!forward) { Expired++; reject = ActionReject.Expired; return null; }
+                if (!forward) { reject = ActionReject.Expired; return Reject(reject, kind, $"sender={sender} gen={gen} held_gen={held}"); }
+                if (newRun) RunsAdopted++;
                 _gen[sender] = gen;
                 foreach (var key in _lastSeq.Keys.Where(k => k.Sender == sender).ToList())
                     _lastSeq.Remove(key);
@@ -180,7 +221,8 @@ public sealed class ActionInbox
         var slot = (sender, kind);
         if (_lastSeq.TryGetValue(slot, out ushort last) && !Protocol.SeqIsNewer(seq, last))
         {
-            Stale++; reject = ActionReject.StaleOrDuplicate; return null;
+            reject = ActionReject.StaleOrDuplicate;
+            return Reject(reject, kind, $"sender={sender} seq={seq} held_seq={last} gen={gen}");
         }
         _lastSeq[slot] = seq;
 
@@ -190,9 +232,9 @@ public sealed class ActionInbox
     }
 
     public string SummaryLine() => FormattableString.Invariant(
-        $"MP-ACTION section=inbound accepted={Accepted} stale={Stale} expired={Expired} unknown_kind={Unknown} malformed={Malformed} kinds={KindsText()}");
+        $"MP-ACTION section=inbound accepted={Accepted} stale={Stale} expired={Expired} unknown_kind={Unknown} malformed={Malformed} kinds={KindsText(_perKind)} rejected_kinds={KindsText(_rejPerKind)} forgotten={Forgotten} runs_adopted={RunsAdopted}");
 
-    private string KindsText() => _perKind.Count == 0 ? "-" : string.Join(',', _perKind.OrderBy(kv => kv.Key.ToString(), StringComparer.Ordinal).Select(kv => $"{kv.Key}:{kv.Value}"));
+    private static string KindsText(Dictionary<ActionKind, long> d) => d.Count == 0 ? "-" : string.Join(',', d.OrderBy(kv => kv.Key.ToString(), StringComparer.Ordinal).Select(kv => $"{kv.Key}:{kv.Value}"));
 }
 
 /// <summary>

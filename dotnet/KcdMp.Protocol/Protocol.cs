@@ -1787,6 +1787,8 @@ public enum ActionPhase : byte
 /// CryEngine entity id, so a single observable covers all three. Across the
 /// wire there is no such shared observable -- the receiver cannot see the
 /// sender's discontinuity -- so the sender must NAME which kind happened.
+/// WO-191 1b: revision = the sender's agent run (a random 1..255 per run; 0 = a sender older than 0.60.7). Every run began at 1.1.x with
+/// its sequence back at 0, and a receiver that never forgot the sender refused everything below the old run's last sequence.
 /// </summary>
 public readonly record struct ActionGen(ushort Incarnation, byte Epoch, byte Revision)
 {
@@ -1814,9 +1816,11 @@ public readonly record struct ActionGen(ushort Incarnation, byte Epoch, byte Rev
 public static class NpcResyncReason
 {
     public const byte Manual = 1, Sleep = 2, FastTravel = 3, Reload = 4, NewPeer = 5;
+    /// <summary>WO-191 3b: the joiner has no body for an NPC or animal attacking it; its name follows the byte (an older host reads the byte only).</summary>
+    public const byte Attacker = 6;
     public static string Name(byte r) => r switch
     {
-        Manual => "manual", Sleep => "sleep", FastTravel => "fast-travel", Reload => "reload", NewPeer => "new-peer",
+        Manual => "manual", Sleep => "sleep", FastTravel => "fast-travel", Reload => "reload", NewPeer => "new-peer", Attacker => "attacker",
         _ => $"unknown-{r}",
     };
 }

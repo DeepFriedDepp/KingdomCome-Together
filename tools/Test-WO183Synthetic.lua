@@ -152,7 +152,7 @@ do
     ENTS["tvez_man_16"] = npc("tvez_man_16", "NPC", 22, 20, "w16", false)
     local mark = #LOG
     check("C1: a copy in combat mode is not swept", KCD2MP_W164Sweep("tvez_man_15", "focus") == false and countEvt("w164_sweep", "tvez_man_15", mark) == 0)
-    check("C2: said in the log", logCount("SKIPPED: the copy is in combat", mark) == 1)
+    check("C2: said in the log (WO-191's line since 0.60.7)", logCount("SKIPPED why=combat-mode", mark) == 1)
     NOW = NOW + 100
     KCD2MP_W164HostCombat("tvez_man_16")
     check("C3: a copy whose host NPC fought in the last 10 s is not swept (the retarget gap)", KCD2MP_W164Sweep("tvez_man_16", "focus") == false and countEvt("w164_sweep", "tvez_man_16", mark) == 0)
