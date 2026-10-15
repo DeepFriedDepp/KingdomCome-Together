@@ -498,6 +498,7 @@ void note_local_crouch(void* actor, void* exp, bool readOk, bool crouched, const
 // NPCs only; the player's own are not captured.
 enum Cls : uint8_t { kClsAttack = 0, kClsDodge = 1, kClsPerfect = 2, kClsBlock = 3, kClsHit = 4, kClsSyncAttack = 5, kClsCount = 6 };
 constexpr uint8_t kKindNpcHit = 15;   // ActionKind.NpcHit (Protocol.cs)
+constexpr uint8_t kKindAvatarHit = 18;   // ActionKind.AvatarHit (Protocol.cs): WO-187 C1, the local player's own hit reaction
 void* g_origEnter[kClsCount]{};
 uint8_t* g_thunks = nullptr;
 
@@ -612,7 +613,8 @@ void capture(uint8_t cls, void* action) {
     // by the row's table (flags bit 1 marks them).
     const bool npcDefence = (cls == kClsBlock || cls == kClsDodge) && kcdmp::wo187::defence_on();
     const bool npcKind = cls == kClsAttack || cls == kClsHit || cls == kClsSyncAttack || cls == kClsPerfect || npcDefence;
-    if (isPlayer && cls == kClsHit) return;   // WO-151: NPCs only
+    // WO-151: an NPC's hit reaction; WO-187 C1 (mp_anim_avatar_hit): the local player's own too -- his figure on the partner's screen plays it
+    if (isPlayer && cls == kClsHit && !kcdmp::wo187::avatar_hit_on()) return;
     // WO-187 C2 (mp_anim_combo): the local player's sync attack -- a combo step, a throw -- goes out as an attack row (its attacker half
     // plays on his figure); off = WO-151's NPCs only
     if (isPlayer && cls == kClsSyncAttack && !kcdmp::wo187::combo_on()) return;
@@ -639,7 +641,7 @@ void capture(uint8_t cls, void* action) {
         }
     }
     c.kind = cls == kClsAttack || cls == kClsSyncAttack || (cls == kClsPerfect && !isPlayer) || (npcDefence && !isPlayer) ? 1
-           : cls == kClsHit ? kKindNpcHit : cls == kClsDodge ? 7 : 6;
+           : cls == kClsHit ? (isPlayer ? kKindAvatarHit : kKindNpcHit) : cls == kClsDodge ? 7 : 6;
     c.flags = cls == kClsPerfect ? 0x01 : (npcDefence && !isPlayer) ? 0x02 : (isPlayer && cls == kClsSyncAttack) ? 0x04 : 0;
     c.ic = -1; c.zone = -1; c.type = -1;
     void* model = nullptr;

@@ -1697,6 +1697,9 @@ public enum ActionKind : byte
     DoorState = 16,
     /// <summary>WO-151 3.9: a joiner used a door (open/close, his key or his lockpick), payload <see cref="DoorEvent"/>: the host applies it in its world and answers with DoorState.</summary>
     DoorAsk = 17,
+    /// <summary>WO-187 C1: a player took a blow -- the hit reaction his own engine committed (its combat_action_hit row), payload <see cref="RowEvent"/>
+    /// with no name: the partner's figure of him plays the same reaction (mp_anim_avatar_hit). Any player sends it; the relay forwards it as is.</summary>
+    AvatarHit = 18,
 }
 
 /// <summary>WO-151 3.5: what an Emote action plays (APPEND-ONLY).</summary>

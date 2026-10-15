@@ -823,8 +823,11 @@ void tick() {
         if (s.pbStage == 1 && !s.done && now >= s.pbAt + s.pbStage2S) {
             void* ca = nullptr; void* model = nullptr;
             int32_t cur = 0;
-            if (motion::combat_parts(s.eid, false, &ca, &model) && motion::read_state(model, &cur) && cur == wo166rules::kStatePerfectBlocked)
-                set_state_engine(model, wo166rules::kStateAfterPerfectBlocked);
+            if (motion::combat_parts(s.eid, false, &ca, &model) && motion::read_state(model, &cur) && cur == wo166rules::kStatePerfectBlocked) {
+                // WO-187 B3: a bare-handed attacker has no withdraw: its prior state (guard) back now, as the vanilla brawler does
+                if (wo187rules::pb_withdraws(wo187rules::weapon_from_byte(s.weapon))) set_state_engine(model, wo166rules::kStateAfterPerfectBlocked);
+                else s.end = (std::min)(s.end, now);
+            }
             s.pbStage = 2;
         }
         if (s.engine && s.windup && !s.wrote && !s.done && (!live || now > s.end)) { restore(s, !live); s.lastEnd = now; s.discardUntil = now + kDiscardTailS; }

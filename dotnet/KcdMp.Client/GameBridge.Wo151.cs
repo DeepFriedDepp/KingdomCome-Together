@@ -150,6 +150,10 @@ public partial class GameBridge
         var r = await _combat.GhostSwingForResultAsync(neid, row.Spec, ct);
         if (r.Ok) Interlocked.Increment(ref _w151HitRowsPlayed);
         Console.WriteLine($"MP-ACTION section=inbound kind=NpcHit npc={ne.Name} row={ne.Row} table={row.Table} spec=\"{row.Spec}\" dispatch=native-row result={r.ReasonTag}");
+        // WO-187 C1 (mp_anim_hit_fallback): the host's reaction row did not play on the copy (another weapon in its hand here, another actor
+        // class's row): the copy's own weapon's reaction row for the blow's zone, or a weaponless one -- a reaction, never none
+        if (!r.Ok && _w187HitFallback) r = await Wo187HitFallbackAsync(ne.Name, neid, ne.Row, row, r.ReasonTag, ct) ?? r;
+        else if (r.Ok && _w187HitFallback) _ = Wo187HitShownAsync(ne.Name, neid, ne.Row, row, ct);   // queued is not shown: looked at in 0.15 s
         if (r.Ok) await ExecLuaAsync($"if KCD2MP_NpcNativeSwingHold then KCD2MP_NpcNativeSwingHold(\"{ne.Name}\") end");
     }
 

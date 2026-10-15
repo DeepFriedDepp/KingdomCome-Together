@@ -249,6 +249,7 @@ static class P
         // WO-121: `row <t_s> <npc> <rowGuid>` -- the host NPC committed that
         // attack row at stream time t: an NpcAttack action event (v8).
         var rows = new List<(double T, string Npc, Guid Row)>();
+        var reacts = new List<(double T, string Npc, Guid Row)>();   // WO-187 C1: react <t> <npc> <rowGuid> -- the host NPC's hit reaction (NpcHit)
         var verdicts = new List<(double T, HitVerdict V, float Hp, float St, string Npc, uint Swing, byte Tgt, uint Id)>();   // WO-163: plan verb `verdict`
         uint verdictId = 0;
         var saves = new List<(double T, byte Kind, byte Playline, ushort Idx)>(); uint wsSeq = 0;
@@ -319,6 +320,7 @@ static class P
                     break;
                 case "start": startDelay = double.Parse(f[1], CultureInfo.InvariantCulture); break;
                 case "row": rows.Add((double.Parse(f[1], CultureInfo.InvariantCulture), f[2], Guid.Parse(f[3]))); break;
+                case "react": reacts.Add((double.Parse(f[1], CultureInfo.InvariantCulture), f[2], Guid.Parse(f[3]))); break;   // WO-187 C1
                 case "verdict":   // verdict <t> <hit|blocked|pb|broken> <hp> <st> <npc|-> [swing=0] [joinerId=1] [hid=N]  (WO-161 0x72; WO-165 values and ids)
                 {
                     if (!Wo165Verbs.TryVerdict(f[2], out var vv)) throw new FormatException($"verdict: unknown value {f[2]}");
@@ -475,6 +477,10 @@ static class P
                     var (rt, rb2) = await ReadPacket(st, cts.Token); rx++;
                     if (echo is not null && rt == Protocol.Ghost) Wo187Verbs.OnGhost(echo, rb2, echoClock.Elapsed.TotalMilliseconds);            // WO-187 C3
                     else if (echo is not null && rt == Protocol.ActionDown) Wo187Verbs.OnAction(echo, s_actions, rb2, echoClock.Elapsed.TotalMilliseconds);
+                    // WO-187 C1: another player's own hit reaction, as his partner receives it ([src][kind][seq:2][phase][gen:4][len][body])
+                    if (rt == Protocol.ActionDown && rb2.Length >= 10 && rb2[1] == (byte)ActionKind.AvatarHit && rb2.Length >= 10 + rb2[9]
+                        && RowEvent.TryFromBytes(rb2.AsSpan(10, rb2[9]).ToArray(), out var ahe))
+                        Console.WriteLine($"SYNTH got AvatarHit from={rb2[0]} row={ahe.Row}");
                     // WO-122: the host's world-save announcement, as a joiner receives it.
                     if (rt == Protocol.WorldSavedDown && WorldSaved.TryDecode(rb2, down: true, out byte wsrc) is WorldSaved ws)
                         Console.WriteLine(FormattableString.Invariant(
@@ -515,6 +521,14 @@ static class P
                     await st.WriteAsync(s_actions.Build(ActionKind.NpcAttack, ActionPhase.Commit, ev.ToBytes()));
                     Console.WriteLine(FormattableString.Invariant($"SYNTH t={t:F1}s NpcAttack npc={rows[ri].Npc} row={rows[ri].Row}"));
                     rows.RemoveAt(ri);
+                }
+                for (int ri = reacts.Count - 1; ri >= 0; ri--)   // WO-187 C1: the host NPC's hit reaction rows
+                {
+                    if (reacts[ri].T > t) continue;
+                    var ev = new RowEvent(unchecked((uint)(Stopwatch.GetTimestamp() * 1000 / Stopwatch.Frequency)), 0, reacts[ri].Row, reacts[ri].Npc);
+                    await st.WriteAsync(s_actions.Build(ActionKind.NpcHit, ActionPhase.Commit, ev.ToBytes()));
+                    Console.WriteLine(FormattableString.Invariant($"SYNTH t={t:F1}s NpcHit npc={reacts[ri].Npc} row={reacts[ri].Row}"));
+                    reacts.RemoveAt(ri);
                 }
                 for (int ai = jattacks.Count - 1; ai >= 0; ai--)   // WO-170: the joiner's swings, stamped now
                 {

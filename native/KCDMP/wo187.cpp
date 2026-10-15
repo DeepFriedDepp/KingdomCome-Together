@@ -37,7 +37,7 @@ constexpr unsigned kLogFirst = 30;
 
 // ---- switches ----------------------------------------------------------------------------------------------------------------
 std::atomic<bool> g_logical{true}, g_pin{true}, g_guard{true}, g_idle{true}, g_defence{true}, g_combo{true}, g_scopeLog{false}, g_linger{true},
-    g_chase{true};
+    g_chase{true}, g_avatarHit{true};
 
 // ---- guarded reads -------------------------------------------------------------------------------------------------------------
 template <class T> bool rd(const void* base, ptrdiff_t off, T* out) {
@@ -290,7 +290,7 @@ std::string scope_line(const ScopeRead& r) {
 }
 
 // Bodies that just played a move: watched for kMoveWatchS (the scope log, the idle restore).
-struct Move { double at = 0, emptySince = -1; bool restored = false, sawAction = false; std::string last; unsigned lines = 0; };
+struct Move { double at = 0, emptySince = -1, actFirst = -1, actLeft = -1; bool restored = false, sawAction = false; std::string last; unsigned lines = 0; };
 std::unordered_map<uint32_t, Move> g_moves;   // main thread
 std::atomic<uint32_t> c_moves{0}, c_emptyAfter{0}, c_restoredCombat{0}, c_restoredPulse{0}, c_restoreFail{0};
 
@@ -311,6 +311,11 @@ void watch_moves(double now) {
             logf("WO187-SCOPE body=%s t=%.0f %s", name_of(eid), (now - m.at) * 1000.0, line.c_str());
         }
         m.last = line;
+        // C1: the move's own action (priority >= 5) on the full body -- or, when the full body has none, the upper body -- seen / gone
+        bool act = !r.empty && r.prio >= 5;
+        if (!act && m.actLeft < 0) { const ScopeRead u = read_upperbody(eid); act = u.ok && !u.empty && u.prio >= 5; }
+        if (act && m.actFirst < 0) m.actFirst = now - m.at;
+        if (!act && m.actFirst >= 0 && m.actLeft < 0) m.actLeft = now - m.at;
         if (!r.empty) { m.sawAction = true; m.emptySince = -1; ++it; continue; }
         if (m.emptySince < 0) m.emptySince = now;
         if (idle_restore_due(true, now - m.emptySince, m.restored, g_idle.load())) {
@@ -343,6 +348,7 @@ bool combo_on() { return g_combo.load(); }
 bool scope_log_on() { return g_scopeLog.load(); }
 bool linger_on() { return g_linger.load(); }
 bool chase_follow_on() { return g_chase.load(); }
+bool avatar_hit_on() { return g_avatarHit.load(); }
 
 bool set_logical_target(void* ca, void* entity) {
     if (!ca || !entity || !resolve_slt()) return false;
@@ -477,17 +483,19 @@ uint8_t handle(uint8_t op, const uint8_t* body, size_t len, uint8_t* out, size_t
             return wo163::kROk;
         }
         case kOpConfig: {
-            if (len < 1 || len > 10 || cap < 9) return wo163::kRBadRequest;
-            std::atomic<bool>* sw[9] = {&g_logical, &g_pin, &g_guard, &g_idle, &g_defence, &g_combo, &g_scopeLog, &g_linger, &g_chase};
-            const char* nm[9] = {"mp_opp_logical", "mp_opp_pin", "mp_anim_guard", "mp_anim_idle", "mp_anim_defence", "mp_anim_combo", "mp_anim_scope_log",
-                                 "mp_anim_guard (figure)", "mp_chase_follow"};
-            for (size_t i = 0; i + 1 < len && i < 9; ++i) {
+            // [op][switch:1]... (255 = leave as is); a 0.60.5 first-build agent sends 9, this one 10 (mp_anim_avatar_hit)
+            constexpr int kN = 10;
+            if (len < 1 || len > 1 + kN || cap < kN) return wo163::kRBadRequest;
+            std::atomic<bool>* sw[kN] = {&g_logical, &g_pin, &g_guard, &g_idle, &g_defence, &g_combo, &g_scopeLog, &g_linger, &g_chase, &g_avatarHit};
+            const char* nm[kN] = {"mp_opp_logical", "mp_opp_pin", "mp_anim_guard", "mp_anim_idle", "mp_anim_defence", "mp_anim_combo", "mp_anim_scope_log",
+                                  "mp_anim_guard (figure)", "mp_chase_follow", "mp_anim_avatar_hit"};
+            for (size_t i = 0; i + 1 < len && i < kN; ++i) {
                 const uint8_t b = body[1 + i];
                 if (b == 255) continue;
                 if (sw[i]->exchange(b != 0) != (b != 0)) logf("WO187-CONFIG %s %s", nm[i], b ? "on" : "off");
             }
-            for (int i = 0; i < 9; ++i) out[i] = sw[i]->load() ? 1 : 0;
-            *outLen = 9;
+            for (int i = 0; i < kN; ++i) out[i] = sw[i]->load() ? 1 : 0;
+            *outLen = kN;
             return wo163::kROk;
         }
         case kOpGuardHold: {
@@ -500,6 +508,24 @@ uint8_t handle(uint8_t op, const uint8_t* body, size_t len, uint8_t* out, size_t
             parse_state2(body + 6, &st);
             motion::set_npc_guard_hold(eid, body[5] != 0, &st, npcdrive::now_s());
             out[0] = 1; *outLen = 1;
+            return wo163::kROk;
+        }
+        case kOpMoveShown: {
+            // [op][eid:4] -> [shown:1 (wo187rules::MoveShown)][ms since the move:4]
+            if (len != 1 + 4 || cap < 5) return wo163::kRBadRequest;
+            uint32_t eid = 0;
+            std::memcpy(&eid, body + 1, 4);
+            auto it = g_moves.find(eid);
+            uint8_t shown = static_cast<uint8_t>(wo187rules::MoveShown::Unknown);
+            uint32_t ms = 0;
+            if (it != g_moves.end()) {
+                const double since = now_s() - it->second.at;
+                shown = static_cast<uint8_t>(wo187rules::move_shown(since, it->second.actFirst, it->second.actLeft));
+                ms = static_cast<uint32_t>(since < 0 ? 0 : since * 1000.0);
+            }
+            out[0] = shown;
+            std::memcpy(out + 1, &ms, 4);
+            *outLen = 5;
             return wo163::kROk;
         }
         case kOpPositions: {
@@ -529,7 +555,7 @@ int status_text(char* out, int n) {
         "wo187 slt=%s logical=%s pin=%s guard=%s idle=%s defence=%s combo=%s scope_log=%s linger=%s chase_follow=%s wishes=%zu wishes_made=%u applied=%u "
         "overwritten=%u pinned=%u apply_fail=%u windup_held=%u windup_overwritten=%u windup_no_wish=%u dropped=%u slt_calls=%u slt_faults=%u "
         "plan_windups=%u plan_planned=%u plan_refused=%u plan_not_me=%u scope=%s scope_reads=%u scope_refused=%u moves=%u empty_after=%u "
-        "restored_combat=%u restored_pulse=%u restore_fail=%u chase_follows=%u chase_hold_ends=%u",
+        "restored_combat=%u restored_pulse=%u restore_fail=%u chase_follows=%u chase_hold_ends=%u avatar_hit=%s",
         g_slt ? "armed" : (g_sltResolved ? "not-armed" : "unresolved"), g_logical.load() ? "on" : "off", g_pin.load() ? "on" : "off",
         g_guard.load() ? "on" : "off", g_idle.load() ? "on" : "off", g_defence.load() ? "on" : "off", g_combo.load() ? "on" : "off",
         g_scopeLog.load() ? "on" : "off", g_linger.load() ? "on" : "off", g_chase.load() ? "on" : "off", g_wishes.size(), c_wishes.load(), c_applied.load(), c_overwritten.load(),
@@ -537,7 +563,7 @@ int status_text(char* out, int n) {
         c_sltFaults.load(), c_planWindups.load(), c_planPlanned.load(), c_planRefused.load(), c_planNotMe.load(),
         g_scopeArmed ? "armed" : (g_scopeResolved ? "not-armed" : "unresolved"), c_scopeReads.load(), c_scopeRefused.load(), c_moves.load(),
         c_emptyAfter.load(), c_restoredCombat.load(), c_restoredPulse.load(), c_restoreFail.load(), npcdrive::chase_follows(),
-        npcdrive::chase_hold_ends());
+        npcdrive::chase_hold_ends(), g_avatarHit.load() ? "on" : "off");
 }
 
 void on_pipe_closed() {

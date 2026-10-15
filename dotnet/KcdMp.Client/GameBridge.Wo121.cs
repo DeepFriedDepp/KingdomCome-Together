@@ -273,6 +273,15 @@ public partial class GameBridge
                     pkt = _actionOut.Build((ActionKind)f.Kind, ActionPhase.Commit, new RowEvent(ms, f.Flags, f.Row, "").ToBytes());
                     what = $"row={f.Row} flags={f.Flags}";
                     break;
+                case ActionKind.AvatarHit:
+                    // WO-187 C1 (mp_anim_avatar_hit): this player's own hit reaction -- his figure on the partner's screen plays it
+                    if (!_w187AvatarHit) return;
+                    pkt = _actionOut.Build(ActionKind.AvatarHit, ActionPhase.Commit, new RowEvent(ms, 0, f.Row, "").ToBytes());
+                    what = $"row={f.Row}";
+                    if (_rowCatalog.IsCompletedSuccessfully && _rowCatalog.Result is { } hcat)
+                        what += hcat.TryGet(f.Row, out var hk) ? $" table={hk.Table} spec=\"{hk.Spec}\"" : " table=UNKNOWN";
+                    Interlocked.Increment(ref _w187AvatarHitOut);
+                    break;
                 default: return;
             }
         }
@@ -364,6 +373,7 @@ public partial class GameBridge
             case ActionKind.Dodge:
             case ActionKind.NpcAttack:
             case ActionKind.NpcHit:
+            case ActionKind.AvatarHit:
                 break;
             default:
                 return false;
@@ -413,6 +423,9 @@ public partial class GameBridge
             }
             case ActionKind.NpcHit:
                 await Wo151OnNpcHitInAsync(a, catalog, ct);   // WO-151 Phase 1.1: the host NPC's own reaction on its copy
+                return true;
+            case ActionKind.AvatarHit:
+                await Wo187OnAvatarHitInAsync(a, catalog, ct);   // WO-187 C1: the partner's own hit reaction on his figure
                 return true;
             case ActionKind.NpcAttack:
             {
@@ -477,6 +490,7 @@ public partial class GameBridge
             Console.WriteLine($"MP-ACTION section=inbound ghost={gid} kind={a.Kind} {detail} dispatch=dropped-no-entity (no entity id for the avatar yet)");
             return;
         }
+        if (Wo165Rules.WeaponTags(row.Tags).Count > 0) _w187FigureRow["kcd2mp_" + gid] = rowGuid;   // WO-187 C1: his figure's weapon, for a reaction's stand-in
         long rsid = ++_stats.SwingsRecv;
         _w121Swings++;
         Console.WriteLine($"MP-SWING hop=recv rsid={rsid} ghost={gid} kind={a.Kind} seq={a.Seq} table={row.Table} spec=\"{row.Spec}\" {detail}");

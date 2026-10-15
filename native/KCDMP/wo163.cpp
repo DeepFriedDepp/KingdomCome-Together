@@ -227,6 +227,7 @@ uint8_t handle(const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t
         case kcdmp::wo187::kOpConfig:
         case kcdmp::wo187::kOpGuardHold:
         case kcdmp::wo187::kOpPositions:
+        case kcdmp::wo187::kOpMoveShown:
             return kcdmp::wo187::handle(body[0], body, len, out, cap, outLen);
         case kcdmp::wo178::kOpHeldResult:   // WO-178 C4: a held blow lives in WO-173's path
             return kcdmp::wo173::handle(body[0], body, len, out, cap, outLen);

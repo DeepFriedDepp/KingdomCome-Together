@@ -61,6 +61,20 @@ inline bool idle_restore_due(bool scopeEmpty, double emptyForS, bool restoredThi
     return idleOn && scopeEmpty && emptyForS >= kIdleEmptyS && !restoredThisMove;
 }
 
+// ---- C1: was a played move shown? -----------------------------------------------------------------------------------------------
+// A move's own action (priority >= 5, on the full body or the upper body) that leaves within kMoveShownS of the move was never animated:
+// live (WO-187, a man's copy given the dog's CombatHit row) the action sat 17-27 ms and the guard idle came back; a real reaction stays
+// ~1 s. One that never appears within kMoveNeverS was never installed. The pipe's "ok" says only that the row was queued.
+constexpr double kMoveShownS = 0.10;
+constexpr double kMoveNeverS = 0.60;
+enum class MoveShown : uint8_t { Unknown = 0, Pending = 1, Shown = 2, Dropped = 3 };
+// sinceMoveS: now - the move; actFirstS / actLeftS: when (after the move) its action was first seen / seen gone, -1 = not (yet).
+inline MoveShown move_shown(double sinceMoveS, double actFirstS, double actLeftS) {
+    if (actFirstS < 0) return sinceMoveS >= kMoveNeverS ? MoveShown::Dropped : MoveShown::Pending;
+    if (actLeftS < 0) return sinceMoveS >= kMoveShownS ? MoveShown::Shown : MoveShown::Pending;
+    return actLeftS < kMoveShownS ? MoveShown::Dropped : MoveShown::Shown;
+}
+
 // ---- B3: the perfect-blocked phase by weapon class --------------------------------------------------------------------------------
 // The weapon classes a row's right-hand tag names (ActionRowCatalog's own classification, mirrored on the agent: Wo187Rules.WeaponOf).
 enum class Weapon : uint8_t { Unknown = 0, Sword = 1, ShortSword = 2, Longsword = 3, Polearm = 4, Blunt = 5, Unarmed = 6, Other = 7 };
@@ -73,20 +87,42 @@ inline const char* weapon_name(Weapon w) {
 }
 inline Weapon weapon_from_byte(uint8_t b) { return b <= static_cast<uint8_t>(Weapon::Other) ? static_cast<Weapon>(b) : Weapon::Unknown; }
 
-// 0x10 -> 0x20 after contact, seconds. Measured (WO-185's vanilla trace, one NPC with a one-handed sword, 46 perfect blocks) for the sword;
-// every other class keeps the fallback until a vanilla trace of that weapon measures it (the attack row's withdraw - hit does not predict it).
-// `measured` says which.
+// The perfect-blocked phase (0x10) after contact, seconds. Measured on vanilla perfect-blocked swings (the player's own perfect block at the
+// blow's contact, real input):
+//   sword (WO-185: a one-handed-sword NPC, 46 perfect blocks): the WO-166 table; then 0x20 (the recoil row's withdraw).
+//   blunt (WO-187 B3: a commoner with a mace, 40 wind-ups, 7 perfect-blocked at contact): slash zone 0 0.59 (2), zone 1 0.44 (the one
+//     perfect-blocked swing 0.41 and the 8 taken ones 0.40-0.64: the length does not follow the defence), zone 2 0.41 (4); any other blunt
+//     move 0.42 (the 7's median); then 0x20, as a sword.
+//   unarmed (WO-187 B3: a bare-handed commoner, 50 wind-ups, 13 perfect-blocked): throw 0.52 (4), kick 0.34 (3), punch 0.33 (4), hook 0.34
+//     (5 swings; the one perfect-blocked 0.28); any other unarmed move 0.34; then back to guard (or 0x400) -- never 0x20: no recoil row.
+// Short sword, longsword, polearm: not traced -- kStage2Fallback (= the blunt median). `measured` says which.
 constexpr double kStage2Fallback = 0.42;
 inline double pb_stage2(Weapon w, int type, int zone, bool* measured) {
+    *measured = true;
     if (w == Weapon::Sword || w == Weapon::Unknown) {   // Unknown = a 0.60.3 agent: the old table, as before
-        if (type == 0 && zone == 5) { *measured = true; return 0.41; }
-        if (type == 1 && zone == 0) { *measured = true; return 0.50; }
-        if (type == 1 && zone == 1) { *measured = true; return 0.29; }
-        if (type == 1 && zone == 2) { *measured = true; return 0.41; }
+        if (type == 0 && zone == 5) return 0.41;
+        if (type == 1 && zone == 0) return 0.50;
+        if (type == 1 && zone == 1) return 0.29;
+        if (type == 1 && zone == 2) return 0.41;
+    }
+    if (w == Weapon::Blunt) {
+        if (type == 1 && zone == 0) return 0.59;
+        if (type == 1 && zone == 1) return 0.44;
+        if (type == 1 && zone == 2) return 0.41;
+        return 0.42;
+    }
+    if (w == Weapon::Unarmed) {
+        if (type == 3) return 0.52;
+        if (type == 4) return 0.34;
+        if (type == 5) return 0.33;
+        return 0.34;   // hook (6) and any other
     }
     *measured = false;
     return kStage2Fallback;
 }
+// Whether the perfect-blocked attacker goes on to 0x20 (the withdraw) after 0x10: every weapon but bare hands (vanilla: a bare-handed
+// attacker's 0x10 ends in guard or 0x400, never 0x20 -- 13 of 13 perfect-blocked swings).
+inline bool pb_withdraws(Weapon w) { return w != Weapon::Unarmed; }
 
 // ---- B2: a chasing copy -----------------------------------------------------------------------------------------------------
 // A host NPC moving at least this fast (its stream's newest samples) is running: its copy is not held for a swing (mp_chase_follow).

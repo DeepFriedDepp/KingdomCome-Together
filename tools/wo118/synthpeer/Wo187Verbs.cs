@@ -7,7 +7,7 @@
 // front of him, and every move he made can be checked on the watcher's side (the figure played the same row; between moves it stood in
 // guard). Plan verbs:
 //   echo <delay_s> <ahead_m>                        echo every other peer's position, state block and fight rows
-//   fmove <t_s> <attack|block|pblock|dodge> <rowGuid>   (the input-free variant) this peer's figure plays that row at stream time t
+//   fmove <t_s> <attack|block|pblock|dodge|hit> <rowGuid>   (the input-free variant) this peer's figure plays that row at stream time t
 //   (the figure's combat bit between moves: gcombat <t0> <t1> [gz]; its attack rows: jattack <t> <row>)
 using System.Buffers.Binary;
 using System.Collections.Concurrent;
@@ -57,7 +57,7 @@ static class Wo187Verbs
         // [src][kind][seq:2][phase][gen:4][len][body]
         if (d.Length < 1 + Protocol.ActionUpHeaderLen || d[0] == e.MyId) return;
         var kind = (ActionKind)d[1];
-        if (kind is not (ActionKind.Attack or ActionKind.BlockImpulse or ActionKind.Dodge or ActionKind.Jump)) { e.Dropped++; return; }
+        if (kind is not (ActionKind.Attack or ActionKind.BlockImpulse or ActionKind.Dodge or ActionKind.Jump or ActionKind.AvatarHit)) { e.Dropped++; return; }
         var phase = (ActionPhase)d[4];
         int blen = d[9];
         if (d.Length < 10 + blen) return;
@@ -82,6 +82,7 @@ static class Wo187Verbs
         "block" => ch.Build(ActionKind.BlockImpulse, ActionPhase.Commit, new RowEvent(Now(), 0, row, "").ToBytes()),
         "pblock" => ch.Build(ActionKind.BlockImpulse, ActionPhase.Commit, new RowEvent(Now(), RowEvent.FlagPerfect, row, "").ToBytes()),
         "dodge" => ch.Build(ActionKind.Dodge, ActionPhase.Commit, new RowEvent(Now(), 0, row, "").ToBytes()),
+        "hit" => ch.Build(ActionKind.AvatarHit, ActionPhase.Commit, new RowEvent(Now(), 0, row, "").ToBytes()),   // C1: his own hit reaction
         _ => throw new ArgumentException($"fmove: unknown move '{what}'"),
     };
 }

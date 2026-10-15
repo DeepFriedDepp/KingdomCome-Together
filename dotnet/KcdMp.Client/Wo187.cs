@@ -36,8 +36,16 @@ public static class Wo187Rules
     /// (the live chase: a held copy fell 0.5-1.6 m behind at 1.6 m/s on every swing; at a run, metres).</summary>
     public const bool DefaultChaseFollow = true;
 
+    /// <summary>mp_anim_hit_fallback (C1): a host NPC's hit reaction row that does not play on its copy (another weapon in the copy's hand here)
+    /// is shown with the copy's own weapon's reaction row for the same zone, or a weaponless one.</summary>
+    public const bool DefaultAnimHitFallback = true;
+    /// <summary>mp_anim_avatar_hit (C1): a player's own hit reaction (the row his engine played when he took a blow) plays on his figure on the
+    /// partner's screen.</summary>
+    public const bool DefaultAnimAvatarHit = true;
+
     public static readonly string[] SwitchNames =
-        { "opp_logical", "opp_pin", "engage_intent", "anim_guard", "anim_idle", "anim_defence", "anim_combo", "anim_scope_log", "fight_pos", "chase_follow" };
+        { "opp_logical", "opp_pin", "engage_intent", "anim_guard", "anim_idle", "anim_defence", "anim_combo", "anim_scope_log", "fight_pos", "chase_follow",
+          "anim_hit_fallback", "anim_avatar_hit" };
 
     /// <summary>"name=on|off" from the Lua (w187_cfg).</summary>
     public static bool TryParseCfg(string? arg, out string name, out bool on)
@@ -155,8 +163,9 @@ public static class Wo187Rules
     /// <summary>B3: the attacker's recoil rows exist (combat_action_failed_attack) only for these weapons; blunt and unarmed recoil is procedural.</summary>
     public static bool HasRecoilRows(Weapon w) => w is Weapon.Sword or Weapon.ShortSword or Weapon.Longsword or Weapon.Polearm;
 
-    /// <summary>B3: the perfect-blocked (0x10) length is measured for these weapons (WO-185's vanilla trace); the rest use the 0.42 s fallback.</summary>
-    public static bool PbStage2Measured(Weapon w) => w is Weapon.Sword;
+    /// <summary>B3: the perfect-blocked (0x10) length is measured for these weapons -- the sword (WO-185's vanilla trace), the mace and bare
+    /// hands (WO-187's vanilla traces with real input); short sword, longsword and polearm use the 0.42 s fallback (native wo187_rules.h pb_stage2).</summary>
+    public static bool PbStage2Measured(Weapon w) => w is Weapon.Sword or Weapon.Blunt or Weapon.Unarmed;
 
     /// <summary>The per-weapon timing table (B3), one row per class: where contact comes from, whether 0x10 is measured, whether recoil rows exist.</summary>
     public static (string Contact, bool PbMeasured, bool Recoil) Timing(Weapon w) =>
@@ -171,6 +180,43 @@ public static class Wo187Rules
 
     /// <summary>The native capture's flag bits on an NPC row (motion.cpp): 0x01 perfect-block class, 0x02 block/dodge class; on a player row 0x04 a sync attack.</summary>
     public const byte NativeFlagPerfect = 0x01, NativeFlagDefence = 0x02, NativeFlagPlayerSync = 0x04;
+
+    // ------------------------------------------------------------------ C1: hit reactions
+
+    /// <summary>
+    /// C1 (mp_anim_hit_fallback): the score of one hit-reaction row <paramref name="candTags"/> (fragment <paramref name="candFragment"/>) as the
+    /// stand-in for a reaction row that was not shown on a body. Live (WO-187): a CombatHitGen row naming another weapon still plays (the game
+    /// animates it with the body's own weapon), a weaponless CombatHitTorso row never shows as a full-body reaction, and another actor class's
+    /// row is dropped at once. So: 16 for the body's own weapon (its last played row's l_* / r_* tags), 8 for a full-body CombatHitGen row,
+    /// 4 for the blow's zone (block_zone_id, dZ), 2 for the guard side (leftGuard / rightGuard), 1 for the hit type (hitTypeNormal / Low).
+    /// </summary>
+    public static int HitFallbackScore(string failedTags, int failedZone, IReadOnlyList<string> bodyWeapon, string candFragment, string candTags, int candZone)
+    {
+        var cw = Wo165Rules.WeaponTags(candTags);
+        int s = 0;
+        if (cw.Count > 0 && bodyWeapon.Count == cw.Count && cw.All(bodyWeapon.Contains)) s += 16;
+        if (candFragment == "CombatHitGen") s += 8;
+        if (failedZone >= 0 && candZone == failedZone) s += 4;
+        static string? Tag(string tags, params string[] any) => tags.Split('+').FirstOrDefault(t => Array.IndexOf(any, t) >= 0);
+        string? side = Tag(failedTags, "leftGuard", "rightGuard");
+        if (side is not null && Tag(candTags, "leftGuard", "rightGuard") == side) s += 2;
+        string? type = Tag(failedTags, "hitTypeNormal", "hitTypeLow");
+        if (type is not null && Tag(candTags, "hitTypeNormal", "hitTypeLow") == type) s += 1;
+        return s;
+    }
+
+    /// <summary>C1: the DLL's answer to "was the last move on this body shown" (op 41; native wo187_rules.h move_shown): a move whose own action
+    /// left the body within 0.1 s, or never appeared within 0.6 s, was not animated -- the pipe's "ok" only says the row was queued.</summary>
+    public const byte MoveUnknown = 0, MovePending = 1, MoveShown = 2, MoveDropped = 3;
+    /// <summary>C1: the weapon a body that played no weapon row yet is first assumed to hold (bare hands: the weapon rows the stand-in may
+    /// name are dropped on a bare-handed body, live).</summary>
+    public const string BareHandsTags = "r_noweapon+l_noShield";
+    /// <summary>C1: the first look after a reaction row was queued, and the second when the first is still pending.</summary>
+    public const int MoveFirstLookMs = 150, MoveSecondLookMs = 650;
+
+    /// <summary>C1 (mp_anim_avatar_hit): a partner's hit reaction (ActionKind.AvatarHit) plays on his figure here only while the figure stands --
+    /// known, not lying dead (WO-155: a dead figure lies until the respawn) and not fallen from a friendly-fire knockdown.</summary>
+    public static bool AvatarHitPlayable(bool figureKnown, bool figureDown) => figureKnown && !figureDown;
 
     // ------------------------------------------------------------------ C1: what syncs (the inventory as code)
 
@@ -192,8 +238,8 @@ public static class Wo187Rules
         ("kicks and stop moves", "N", "attack rows (type kick) / perfect-block rows", "NpcAttack", "the copy: ghost_swing"),
         ("block, parry, perfect block, dodge", "P", "Block / PerfectBlock / Dodge capture", "BlockImpulse / Dodge", "the figure: ghost_swing (no swing-clip fallback)"),
         ("block, parry, perfect block, dodge", "N", "Block / PerfectBlock / Dodge capture (mp_anim_defence)", "NpcAttack (defence row)", "the copy: ghost_swing of its own defence"),
-        ("hit reactions, knockdowns, the attacker's recoil", "P", "the watcher's own engine (the blow lands on the figure there)", "Downed bit", "the figure: the engine's own reaction; falls on a death"),
-        ("hit reactions, knockdowns, the attacker's recoil", "N", "C_CombatActorActionHit capture", "NpcHit", "the copy: ghost_swing; recoil rows where the weapon has them"),
+        ("hit reactions, knockdowns, the attacker's recoil", "P", "C_CombatActorActionHit capture of the player (mp_anim_avatar_hit); Downed bit", "AvatarHit; Downed bit", "the figure: ghost_swing of his reaction (a stand-in when not shown); falls on a death or a friendly-fire knockdown"),
+        ("hit reactions, knockdowns, the attacker's recoil", "N", "C_CombatActorActionHit capture", "NpcHit", "the copy: ghost_swing (a stand-in when not shown: mp_anim_hit_fallback); recoil rows where the weapon has them"),
         ("clinch and sync attacks", "P", "sync attack capture (mp_anim_combo)", "Attack (FlagCombo)", "the figure: the attacker's half"),
         ("clinch and sync attacks", "N", "sync attack capture", "NpcAttack", "the copy: the attacker's half, or the plain fallback"),
         ("the guard stance between moves", "P", "combat mode, guard zone and stance (BodyState2)", "the v8 state block (guard=)", "the figure: combat mode held (a quiet stream lingers 3 s)"),

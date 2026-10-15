@@ -136,8 +136,10 @@ public class Wo187Tests
     [Fact]
     public void Timing_TableByWeapon_UnknownGetsTheDefault()
     {
-        Assert.True(Wo187Rules.Timing(Wo187Rules.Weapon.Sword).PbMeasured);
-        foreach (var w in new[] { Wo187Rules.Weapon.Blunt, Wo187Rules.Weapon.Unarmed, Wo187Rules.Weapon.Longsword, Wo187Rules.Weapon.Polearm, Wo187Rules.Weapon.Unknown })
+        // the sword (WO-185), the mace and bare hands (WO-187's vanilla traces) are measured; the rest keep the fallback
+        foreach (var w in new[] { Wo187Rules.Weapon.Sword, Wo187Rules.Weapon.Blunt, Wo187Rules.Weapon.Unarmed })
+            Assert.True(Wo187Rules.Timing(w).PbMeasured);
+        foreach (var w in new[] { Wo187Rules.Weapon.ShortSword, Wo187Rules.Weapon.Longsword, Wo187Rules.Weapon.Polearm, Wo187Rules.Weapon.Unknown })
             Assert.False(Wo187Rules.Timing(w).PbMeasured);
         Assert.Contains("default", Wo187Rules.Timing(Wo187Rules.Weapon.Unknown).Contact);
         Assert.DoesNotContain("default", Wo187Rules.Timing(Wo187Rules.Weapon.Blunt).Contact);
@@ -215,5 +217,91 @@ public class Wo187Tests
         Assert.Contains("stream_at=none", Wo187Rules.JoinerPosLine("x", "?", 0, 0, null, 0, 0, "host"));
         Assert.Equal("?", Wo187Rules.SharedClock(DateTime.UtcNow, null));
         Assert.Equal("00:00:01.500", Wo187Rules.SharedClock(new DateTime(2026, 10, 15, 0, 0, 1, DateTimeKind.Utc), 500));
+    }
+
+    // ------------------------------------------------------------------ C1: a hit reaction that did not play; the player's own reaction
+
+    private const long Man = 1578932418, Dog = 20967892;   // combat_action_hit.xml actor_class_hash: a man's rows, the 5 dog rows
+
+    private static ActionRowCatalog.Row Hit(string frag, string tags, int zone, long actor = Man) =>
+        new("combat_action_hit", frag, tags, zone, -1, -1, 7, 0f, 0f, actor);
+
+    [Fact]
+    public void HitFallback_TheBodysOwnWeaponForTheZone_ThenAnyFullBodyReaction_NeverADeathRow()
+    {
+        Guid failed = Guid.NewGuid(), swordZ2 = Guid.NewGuid(), swordZ1 = Guid.NewGuid(), torsoZ2 = Guid.NewGuid(), maceZ2 = Guid.NewGuid(),
+             deathZ2 = Guid.NewGuid(), dogZ2 = Guid.NewGuid();
+        var dogRow = Hit("CombatHit", "oppKick+dZ2+hitTypeNormal+oppMale+oppFemale", 2, Dog);
+        var cat = ActionRowCatalog.FromRows(new[]
+        {
+            (failed, dogRow),
+            (maceZ2, Hit("CombatHitGen", "l_noShield+r_bluntWeapon+sZ2+leftGuard+eZ2+dZ2+hitTypeNormal+oppMale", 2)),
+            (swordZ2, Hit("CombatHitGen", "l_shield+r_swords+sZ1+rightGuard+eZ1+dZ2+hitTypeNormal+oppMale", 2)),
+            (swordZ1, Hit("CombatHitGen", "l_shield+r_swords+sZ1+rightGuard+eZ1+dZ1+hitTypeNormal+oppMale", 1)),
+            (torsoZ2, Hit("CombatHitTorso", "dZ2+hitTypeLow", 2)),
+            (deathZ2, Hit("CombatDeathGen", "l_shield+r_swords+dZ2+hitTypeNormal+oppMale", 2)),
+            (dogZ2, Hit("CombatHit", "dZ2+hitTypeNormal+oppMale+oppFemale", 2, Dog)),
+        });
+        // the live case: the dog's row on a man's copy holding sword and shield -> the sword reaction of the zone (a man's row)
+        var swordSwing = new ActionRowCatalog.Row("combat_action_attack", "CombatAttackGen", "r_swords+l_shield+slash", 2, -1, 1, 3, 0.3f, 0.7f, Man);
+        Assert.Equal(swordZ2, cat.HitFallbackRow(failed, dogRow, swordSwing)!.Value.Guid);
+        // a man's body whose weapon is not known: a full-body reaction of the zone (any weapon's row plays with the body's own weapon),
+        // never the torso row (never shown as a reaction), the death row, or a dog's row
+        var unknownMan = cat.HitFallbackRow(failed, dogRow, new ActionRowCatalog.Row("combat_action_attack", "x", "", 2, -1, 1, 3, 0f, 0f, Man))!.Value;
+        Assert.Equal("CombatHitGen", unknownMan.Row.Fragment);
+        Assert.Equal(2, unknownMan.Row.Zone);
+        // the failed row is never its own stand-in
+        Assert.True(cat.TryGet(maceZ2, out var maceRow));
+        Assert.NotEqual(maceZ2, cat.HitFallbackRow(maceZ2, maceRow, new ActionRowCatalog.Row("combat_action_attack", "CombatAttackGen", "r_bluntWeapon+l_noShield+slash", 2, -1, 1, 3, 0.36f, 0.88f, Man))!.Value.Guid);
+    }
+
+    [Fact]
+    public void HitFallback_ADogRowOnAMansCopy_GetsAMansRow()
+    {
+        Guid dogRow = Guid.NewGuid(), torso5 = Guid.NewGuid(), dog5 = Guid.NewGuid(), fist5 = Guid.NewGuid();
+        var dog = Hit("CombatHit", "oppKick+dZ5+hitTypeNormal+oppMale+oppFemale", 5, Dog);
+        var cat = ActionRowCatalog.FromRows(new[] { (dogRow, dog), (dog5, Hit("CombatHit", "dZ5+hitTypeNormal", 5, Dog)), (torso5, Hit("CombatHitTorso", "dZ5+hitTypeLow", 5)),
+                                                    (fist5, Hit("CombatHitGen", "r_noweapon+l_noShield+rightGuard+dZ5+hitTypeNormal+oppMale", 5)) });
+        var manSwing = new ActionRowCatalog.Row("combat_action_attack", "CombatAttackGen", "r_noweapon+l_noShield+hook", 1, -1, 6, 3, 0.3f, 0.6f, Man);
+        Assert.Equal(fist5, cat.HitFallbackRow(dogRow, dog, manSwing)!.Value.Guid);
+    }
+
+    [Fact]
+    public void HitFallbackScore_OwnWeaponThenFullBodyThenZoneThenSideThenType()
+    {
+        var sword = new[] { "l_shield", "r_swords" };
+        string failed = "l_noShield+r_bluntWeapon+rightGuard+dZ1+hitTypeNormal";
+        Assert.Equal(16 + 8 + 4 + 2 + 1, Wo187Rules.HitFallbackScore(failed, 1, sword, "CombatHitGen", "l_shield+r_swords+rightGuard+dZ1+hitTypeNormal", 1));
+        Assert.Equal(8 + 4, Wo187Rules.HitFallbackScore(failed, 1, sword, "CombatHitGen", "l_noShield+r_bluntWeapon+dZ1", 1));   // another weapon: still plays
+        Assert.Equal(4 + 1, Wo187Rules.HitFallbackScore(failed, 1, sword, "CombatHitTorso", "dZ1+hitTypeNormal", 1));
+        Assert.True(Wo187Rules.HitFallbackScore(failed, 1, sword, "CombatHitGen", "l_shield+r_swords+leftGuard+dZ2", 2)
+                    > Wo187Rules.HitFallbackScore(failed, 1, sword, "CombatHitGen", "l_noShield+r_bluntWeapon+rightGuard+dZ1+hitTypeNormal", 1),
+                    "the body's own weapon outweighs everything else");
+    }
+
+    [Fact]
+    public void HitFallback_BareHandsGuess_TheUnarmedReactionOfTheZone()
+    {
+        // the live figure case: a bare-handed figure, the partner's torso reaction not shown; no weapon row of his played here yet
+        Guid failed = Guid.NewGuid(), fist = Guid.NewGuid(), longsword = Guid.NewGuid(), torso0 = Guid.NewGuid();
+        var torso = Hit("CombatHitTorso", "dZ2+hitTypeLow", 2);
+        var cat = ActionRowCatalog.FromRows(new[] { (failed, torso), (torso0, Hit("CombatHitTorso", "dZ0+hitTypeLow", 0)),
+            (longsword, Hit("CombatHitGen", "l_longsword+r_longsword+rightGuard+dZ2+hitTypeNormal+oppMale", 2)),
+            (fist, Hit("CombatHitGen", "r_noweapon+rightGuard+dZ2+hitTypeNormal+l_noShield+oppMale", 2)) });
+        var guess = new ActionRowCatalog.Row("guess", "", Wo187Rules.BareHandsTags, -1, -1, -1);
+        Assert.Equal(fist, cat.HitFallbackRow(failed, torso, guess)!.Value.Guid);
+        Assert.Equal(longsword, cat.HitFallbackRow(failed, torso, null)!.Value.Guid);   // the second try: any full-body reaction of the zone
+    }
+
+    [Fact]
+    public void AvatarHit_OnAStandingFigureOnly_AndTheKindIsNew()
+    {
+        Assert.True(Wo187Rules.AvatarHitPlayable(figureKnown: true, figureDown: false));
+        Assert.False(Wo187Rules.AvatarHitPlayable(figureKnown: true, figureDown: true));
+        Assert.False(Wo187Rules.AvatarHitPlayable(figureKnown: false, figureDown: false));
+        Assert.Equal(18, (int)ActionKind.AvatarHit);
+        Assert.True(Wo187Rules.DefaultAnimAvatarHit && Wo187Rules.DefaultAnimHitFallback);
+        Assert.True(Wo187Rules.TryParseCfg("anim_avatar_hit=off", out var n, out var on) && n == "anim_avatar_hit" && !on);
+        Assert.True(Wo187Rules.TryParseCfg("anim_hit_fallback=on", out n, out on) && n == "anim_hit_fallback" && on);
     }
 }

@@ -29,9 +29,11 @@ public partial class GameBridge
                           _w187EngageIntent = Wo187Rules.DefaultEngageIntent, _w187Guard = Wo187Rules.DefaultAnimGuard,
                           _w187Idle = Wo187Rules.DefaultAnimIdle, _w187Defence = Wo187Rules.DefaultAnimDefence,
                           _w187Combo = Wo187Rules.DefaultAnimCombo, _w187ScopeLog = Wo187Rules.DefaultAnimScopeLog,
-                          _w187FightPos = Wo187Rules.DefaultFightPos, _w187ChaseFollow = Wo187Rules.DefaultChaseFollow;
+                          _w187FightPos = Wo187Rules.DefaultFightPos, _w187ChaseFollow = Wo187Rules.DefaultChaseFollow,
+                          _w187HitFallback = Wo187Rules.DefaultAnimHitFallback, _w187AvatarHit = Wo187Rules.DefaultAnimAvatarHit;
     private long _w187TickN, _w187OppSent, _w187OppApplied, _w187GuardSent, _w187IntentEngages, _w187DefenceOut, _w187DefenceIn,
-                 _w187DefencePlayed, _w187PosLines, _w187RecoilNoRowSaid;
+                 _w187DefencePlayed, _w187PosLines, _w187RecoilNoRowSaid, _w187HitFallbacks, _w187HitFallbackPlayed, _w187HitFallbackNone,
+                 _w187AvatarHitOut, _w187AvatarHitIn, _w187AvatarHitPlayed;
     private readonly ConcurrentDictionary<string, (byte Kind, byte Ghost, long SentMs)> _w187OppLast = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, long> _w187GuardLast = new(StringComparer.Ordinal);
     // the copies in a host fight (joiner) / the NPCs fighting a player (host): name -> (eid, target, target ghost, last report)
@@ -39,6 +41,8 @@ public partial class GameBridge
     // the host's stream as read (joiner): name -> (x, y, z, sender ms, read ms, samples in the current second, last second's count)
     private readonly ConcurrentDictionary<string, (float X, float Y, float Z, uint SenderMs, long ReadMs, int N, int Pps, long SecMs)> _w187Stream = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, long> _w187RecoilSaid = new(StringComparer.Ordinal);
+    // C1: a partner's figure's weapon, as the last weapon row he played on it showed it (kcd2mp_<ghost> -> row)
+    private readonly ConcurrentDictionary<string, Guid> _w187FigureRow = new(StringComparer.Ordinal);
 
     // ---------------------------------------------------------------- switches
 
@@ -60,6 +64,8 @@ public partial class GameBridge
                     case "anim_scope_log": _w187ScopeLog = on; break;
                     case "fight_pos": _w187FightPos = on; break;
                     case "chase_follow": _w187ChaseFollow = on; break;
+                    case "anim_hit_fallback": _w187HitFallback = on; break;
+                    case "anim_avatar_hit": _w187AvatarHit = on; break;
                 }
                 Console.WriteLine($"MP-W187 cfg {cfg}={(on ? "on" : "off")}");
                 _ = Wo187PushConfigAsync();
@@ -76,7 +82,7 @@ public partial class GameBridge
         {
             byte B(bool v) => (byte)(v ? 1 : 0);
             var r = await _combat.Wo163Async(Protocol.Wo187OpConfig, [B(_w187OppLogical), B(_w187OppPin), B(_w187Guard), B(_w187Idle), B(_w187Defence),
-                                                                      B(_w187Combo), B(_w187ScopeLog), B(_w187Guard), B(_w187ChaseFollow)]);
+                                                                      B(_w187Combo), B(_w187ScopeLog), B(_w187Guard), B(_w187ChaseFollow), B(_w187AvatarHit)]);
             if (r is { Ok: true, Payload.Length: >= 8 } x && (x.Payload[0] != B(_w187OppLogical) || x.Payload[2] != B(_w187Guard)))
                 Console.WriteLine($"MP-W187 the DLL holds opp_logical={x.Payload[0]} anim_guard={x.Payload[2]}");
         }
@@ -93,7 +99,7 @@ public partial class GameBridge
         }
         catch { }
         Console.WriteLine(FormattableString.Invariant(
-            $"MP-W187-STATS opp_logical={On(_w187OppLogical)} opp_pin={On(_w187OppPin)} engage_intent={On(_w187EngageIntent)} anim_guard={On(_w187Guard)} anim_idle={On(_w187Idle)} anim_defence={On(_w187Defence)} anim_combo={On(_w187Combo)} anim_scope_log={On(_w187ScopeLog)} fight_pos={On(_w187FightPos)} chase_follow={On(_w187ChaseFollow)} opp_sent={Interlocked.Read(ref _w187OppSent)} opp_applied={Interlocked.Read(ref _w187OppApplied)} guard_sent={Interlocked.Read(ref _w187GuardSent)} intent_engages={Interlocked.Read(ref _w187IntentEngages)} defence_out={Interlocked.Read(ref _w187DefenceOut)} defence_in={Interlocked.Read(ref _w187DefenceIn)} defence_played={Interlocked.Read(ref _w187DefencePlayed)} pos_lines={Interlocked.Read(ref _w187PosLines)} fights={_w187Fights.Count} | native: {n ?? "no answer"}"));
+            $"MP-W187-STATS opp_logical={On(_w187OppLogical)} opp_pin={On(_w187OppPin)} engage_intent={On(_w187EngageIntent)} anim_guard={On(_w187Guard)} anim_idle={On(_w187Idle)} anim_defence={On(_w187Defence)} anim_combo={On(_w187Combo)} anim_scope_log={On(_w187ScopeLog)} fight_pos={On(_w187FightPos)} chase_follow={On(_w187ChaseFollow)} anim_hit_fallback={On(_w187HitFallback)} anim_avatar_hit={On(_w187AvatarHit)} opp_sent={Interlocked.Read(ref _w187OppSent)} opp_applied={Interlocked.Read(ref _w187OppApplied)} guard_sent={Interlocked.Read(ref _w187GuardSent)} intent_engages={Interlocked.Read(ref _w187IntentEngages)} defence_out={Interlocked.Read(ref _w187DefenceOut)} defence_in={Interlocked.Read(ref _w187DefenceIn)} defence_played={Interlocked.Read(ref _w187DefencePlayed)} pos_lines={Interlocked.Read(ref _w187PosLines)} hit_fallbacks={Interlocked.Read(ref _w187HitFallbacks)} hit_fallback_played={Interlocked.Read(ref _w187HitFallbackPlayed)} hit_fallback_none={Interlocked.Read(ref _w187HitFallbackNone)} avatar_hit_out={Interlocked.Read(ref _w187AvatarHitOut)} avatar_hit_in={Interlocked.Read(ref _w187AvatarHitIn)} avatar_hit_played={Interlocked.Read(ref _w187AvatarHitPlayed)} fights={_w187Fights.Count} | native: {n ?? "no answer"}"));
     }
 
     /// <summary>Once a second (the WO-151 loop): the switches every 10 s, the fight positions, the stats every minute.</summary>
@@ -213,6 +219,109 @@ public partial class GameBridge
         var r = await _combat.GhostSwingForResultAsync(eid, row.Spec, ct);
         if (r.Ok) Interlocked.Increment(ref _w187DefencePlayed);
         Console.WriteLine($"MP-ACTION section=inbound kind=NpcAttack npc={npc} row={rowGuid} spec=\"{row.Spec}\" table={row.Table} dispatch=native-defence result={r.ReasonTag}");
+    }
+
+    // ---------------------------------------------------------------- C1: a hit reaction that did not play
+
+    /// <summary>
+    /// Joiner (mp_anim_hit_fallback): the host NPC's reaction row did not play on its copy -- the copy's own weapon's reaction row for the
+    /// blow's zone (its weapon from the last row it played), or a weaponless one. Null = no stand-in row (said, nothing played).
+    ///   WO187-HITFALLBACK npc=&lt;n&gt; row=&lt;failed&gt; why=&lt;its result&gt; fallback=&lt;row&gt; spec="..." result=&lt;tag&gt;
+    /// </summary>
+    private async Task<PipeResult?> Wo187HitFallbackAsync(string npc, uint eid, Guid failedGuid, ActionRowCatalog.Row failed, string why, CancellationToken ct,
+                                                          bool secondTry = false)
+    {
+        ActionRowCatalog? cat = _rowCatalog.IsCompletedSuccessfully ? _rowCatalog.Result : null;
+        if (cat is null) return null;
+        Interlocked.Increment(ref _w187HitFallbacks);
+        ActionRowCatalog.Row? body = (_w165LastRow.TryGetValue(npc, out var lg) || _w187FigureRow.TryGetValue(npc, out lg)) && cat.TryGet(lg, out var sr) ? sr : null;
+        // a body that played no weapon row yet: bare hands first (live: on a bare-handed figure a weapon's reaction row is dropped at once, while
+        // a body holding any weapon plays any weapon's row); not shown either -> the second try takes the best full-body reaction of any weapon
+        bool guessed = body is null && !secondTry;
+        if (guessed) body = new ActionRowCatalog.Row("guess", "", Wo187Rules.BareHandsTags, -1, -1, -1);
+        if (cat.HitFallbackRow(failedGuid, failed, body) is not { } fb)
+        {
+            Interlocked.Increment(ref _w187HitFallbackNone);
+            Console.WriteLine($"WO187-HITFALLBACK npc={npc} row={failedGuid} why={why} fallback=none -- no reaction row of this actor class (nothing played)");
+            return null;
+        }
+        var r = await _combat.GhostSwingForResultAsync(eid, fb.Row.Spec, ct);
+        if (r.Ok) Interlocked.Increment(ref _w187HitFallbackPlayed);
+        string weapon = body is { } b ? (guessed ? "bare-hands(guessed)" : string.Join('+', Wo165Rules.WeaponTags(b.Tags))) : "any(second try)";
+        Console.WriteLine($"WO187-HITFALLBACK npc={npc} row={failedGuid} why={why} fallback={fb.Guid} spec=\"{fb.Row.Spec}\" weapon={weapon} result={r.ReasonTag}");
+        if (r.Ok && guessed)
+        {
+            await Task.Delay(Wo187Rules.MoveFirstLookMs, ct);
+            byte shown = await Wo187MoveShownAsync(eid, ct);
+            if (shown == Wo187Rules.MovePending) { await Task.Delay(Wo187Rules.MoveSecondLookMs - Wo187Rules.MoveFirstLookMs, ct); shown = await Wo187MoveShownAsync(eid, ct); }
+            if (shown == Wo187Rules.MoveDropped) return await Wo187HitFallbackAsync(npc, eid, failedGuid, failed, "the bare-hands stand-in not shown either", ct, secondTry: true) ?? r;
+        }
+        return r;
+    }
+
+    /// <summary>
+    /// Both roles (mp_anim_avatar_hit): the partner took a blow on his screen -- his figure here plays the reaction his engine committed (the
+    /// same combat_action_hit row), unless it lies dead or fell from a knockdown (WO-155). A row that is not shown on the figure gets a stand-in
+    /// (mp_anim_hit_fallback; the figure's weapon from the last weapon row the partner played on it, bare hands first when none yet).
+    ///   MP-ACTION section=inbound ghost=&lt;g&gt; kind=AvatarHit row=&lt;r&gt; spec="..." dispatch=native-hit result=&lt;tag&gt;
+    /// </summary>
+    private async Task Wo187OnAvatarHitInAsync(InboundAction a, ActionRowCatalog? catalog, CancellationToken ct)
+    {
+        if (!RowEvent.TryFromBytes(a.Payload, out var he)) return;
+        Interlocked.Increment(ref _w187AvatarHitIn);
+        string gid = a.SourceGhostId.ToString();
+        if (!_w187AvatarHit) { Console.WriteLine($"MP-ACTION section=inbound ghost={gid} kind=AvatarHit row={he.Row} dispatch=dropped-toggle-off"); return; }
+        if (catalog is null || !catalog.TryGet(he.Row, out var row))
+        {
+            _w121EvNoRow++;
+            Console.WriteLine($"MP-ACTION section=inbound ghost={gid} kind=AvatarHit row={he.Row} dispatch=dropped-unknown-row");
+            return;
+        }
+        bool known = _ghostEntityIds.TryGetValue(gid, out uint feid);
+        byte g = a.SourceGhostId;
+        bool down = _w155Collapsed.ContainsKey(g) || _w155Fell.ContainsKey(g) || (_w154PeerDown.TryGetValue(g, out var de) && de.Down);
+        if (!Wo187Rules.AvatarHitPlayable(known, down))
+        {
+            Console.WriteLine($"MP-ACTION section=inbound ghost={gid} kind=AvatarHit row={he.Row} dispatch=skipped ({(known ? "his figure is down here" : "no figure here yet")})");
+            return;
+        }
+        _ = _combat.NpcHoldAsync("kcd2mp_" + gid, 800, ct);
+        var r = await _combat.GhostSwingForResultAsync(feid, row.Spec, ct);
+        Console.WriteLine($"MP-ACTION section=inbound ghost={gid} kind=AvatarHit row={he.Row} table={row.Table} spec=\"{row.Spec}\" dispatch=native-hit result={r.ReasonTag}");
+        if (!r.Ok && _w187HitFallback) r = await Wo187HitFallbackAsync("kcd2mp_" + gid, feid, he.Row, row, r.ReasonTag, ct) ?? r;
+        else if (r.Ok && _w187HitFallback) _ = Wo187HitShownAsync("kcd2mp_" + gid, feid, he.Row, row, ct);
+        if (r.Ok)
+        {
+            Interlocked.Increment(ref _w187AvatarHitPlayed);
+            await ExecLuaAsync($"if KCD2MP_GhostNativeSwingHold then KCD2MP_GhostNativeSwingHold(\"{gid}\") end");
+        }
+    }
+
+    /// <summary>
+    /// A reaction row the DLL queued: was it animated? (op 41, the move watcher: its action left the body within 0.1 s, or never came -- a
+    /// row of another actor class, a fragment this body's animation set lacks). Not shown: the stand-in plays (mp_anim_hit_fallback).
+    /// An older DLL (no op 41) or a pending answer after the second look: left as it is.
+    /// </summary>
+    private async Task Wo187HitShownAsync(string body, uint eid, Guid rowGuid, ActionRowCatalog.Row row, CancellationToken ct)
+    {
+        try
+        {
+            await Task.Delay(Wo187Rules.MoveFirstLookMs, ct);
+            byte shown = await Wo187MoveShownAsync(eid, ct);
+            if (shown == Wo187Rules.MovePending) { await Task.Delay(Wo187Rules.MoveSecondLookMs - Wo187Rules.MoveFirstLookMs, ct); shown = await Wo187MoveShownAsync(eid, ct); }
+            if (shown != Wo187Rules.MoveDropped) return;
+            await Wo187HitFallbackAsync(body, eid, rowGuid, row, "not-shown(its action left the body at once)", ct);
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) { Console.WriteLine($"WO187-HITFALLBACK npc={body} watch failed ({ex.GetType().Name}: {ex.Message})"); }
+    }
+
+    private async Task<byte> Wo187MoveShownAsync(uint eid, CancellationToken ct)
+    {
+        var a = new byte[4];
+        BinaryPrimitives.WriteUInt32LittleEndian(a, eid);
+        var r = await _combat.Wo163Async(Protocol.Wo187OpMoveShown, a, ct);
+        return r is { Ok: true, Payload.Length: >= 1 } x ? x.Payload[0] : Wo187Rules.MoveUnknown;
     }
 
     // ---------------------------------------------------------------- B3: the recoil that has no row, once per fight

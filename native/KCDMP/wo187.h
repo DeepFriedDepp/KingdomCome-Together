@@ -39,7 +39,7 @@
 
 namespace kcdmp::wo187 {
 
-constexpr uint8_t kOpOpponent = 36, kOpStatus = 37, kOpConfig = 38, kOpGuardHold = 39, kOpPositions = 40;
+constexpr uint8_t kOpOpponent = 36, kOpStatus = 37, kOpConfig = 38, kOpGuardHold = 39, kOpPositions = 40, kOpMoveShown = 41;
 
 // switches (the agent pushes them, op 38)
 bool opp_logical_on();   // mp_opp_logical
@@ -51,6 +51,7 @@ bool combo_on();         // mp_anim_combo (motion's capture: the local player's 
 bool scope_log_on();     // mp_anim_scope_log
 bool linger_on();        // mp_anim_guard's figure half
 bool chase_follow_on();  // mp_chase_follow (npc_drive.cpp: a running copy is not held for its swing)
+bool avatar_hit_on();    // mp_anim_avatar_hit (motion's capture: the local player's own hit reaction goes out as ActionKind.AvatarHit)
 
 // A2, main thread. The engine's own SetLogicalTarget on a combat actor; false when not armed or it faulted.
 bool set_logical_target(void* ca, void* entity);

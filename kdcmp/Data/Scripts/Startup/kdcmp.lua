@@ -23147,7 +23147,8 @@ do
     W187 = W187 or {}
     W187.NAMES = { opp_logical = "mp_opp_logical", opp_pin = "mp_opp_pin", engage_intent = "mp_engage_intent", anim_guard = "mp_anim_guard",
                    anim_idle = "mp_anim_idle", anim_defence = "mp_anim_defence", anim_combo = "mp_anim_combo", anim_scope_log = "mp_anim_scope_log",
-                   fight_pos = "mp_fight_pos", chase_follow = "mp_chase_follow" }
+                   fight_pos = "mp_fight_pos", chase_follow = "mp_chase_follow", anim_hit_fallback = "mp_anim_hit_fallback",
+                   anim_avatar_hit = "mp_anim_avatar_hit" }
     function KCD2MP_W187Set(name, arg)
         local label = W187.NAMES[tostring(name)]
         if not label then mp_log("WO187-TOGGLE unknown switch '" .. tostring(name) .. "'"); return false end
@@ -23172,6 +23173,8 @@ do
     function KCD2MP_W187SetAnimScopeLog(arg) return KCD2MP_W187Set("anim_scope_log", arg) end
     function KCD2MP_W187SetFightPos(arg) return KCD2MP_W187Set("fight_pos", arg) end
     function KCD2MP_W187SetChaseFollow(arg) return KCD2MP_W187Set("chase_follow", arg) end
+    function KCD2MP_W187SetAnimHitFallback(arg) return KCD2MP_W187Set("anim_hit_fallback", arg) end
+    function KCD2MP_W187SetAnimAvatarHit(arg) return KCD2MP_W187Set("anim_avatar_hit", arg) end
     function KCD2MP_W187Status()
         mp_log("WO187-STATUS asked (MP-W187-STATS in agent.log)")
         KCD2MP_EmitEvent("w187_status", "")
@@ -27996,6 +27999,8 @@ local ok, err = pcall(function()
     System.AddCCommand("mp_anim_scope_log", 'KCD2MP_W187SetAnimScopeLog(%line)', "WO-187 research: the animation each figure and copy shows around every move, logged (default off): mp_anim_scope_log on|off")
     System.AddCCommand("mp_fight_pos", 'KCD2MP_W187SetFightPos(%line)', "WO-187: once a second during a fight with a player, both machines log the NPC's and the player's positions on the shared clock (default on): mp_fight_pos on|off")
     System.AddCCommand("mp_chase_follow", 'KCD2MP_W187SetChaseFollow(%line)', "WO-187: an enemy that runs while it swings keeps following on the joiner's screen instead of standing still for the swing (default on): mp_chase_follow on|off")
+    System.AddCCommand("mp_anim_hit_fallback", 'KCD2MP_W187SetAnimHitFallback(%line)', "WO-187: when the host's NPC's own hit reaction cannot play on its copy (another weapon in its hand here), the copy's own weapon's reaction plays instead of none (default on): mp_anim_hit_fallback on|off")
+    System.AddCCommand("mp_anim_avatar_hit", 'KCD2MP_W187SetAnimAvatarHit(%line)', "WO-187: when you take a blow, your figure on your partner's screen plays the same hit reaction (default on): mp_anim_avatar_hit on|off")
     System.AddCCommand("mp_w187_status", 'KCD2MP_W187Status()', "WO-187: the fight switches and counters (MP-W187-STATS in agent.log)")
     System.AddCCommand("mp_w178_status", 'KCD2MP_W178Status(%line)', "WO-178: the save switches, the quicksave, the draw probe, and the DLL's hostility answer (through the agent): mp_w178_status")
     System.AddCCommand("mp_repair_combat", 'KCD2MP_W174Repair(%line)', "WO-174: frees stuck weapons -- clears partner-figure fight links, ends a stuck fight, re-equips a melee weapon -- and says so; on a save that was fine it changes nothing: mp_repair_combat")
