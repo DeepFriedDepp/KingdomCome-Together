@@ -68,4 +68,10 @@ inline bool set_value_type_ok(const char* type, int v) {
     return false;
 }
 
+// Q5's quest HUD pass-through (research): only "on" may search for the QuestModule. "Off" undoes what
+// "on" did, and "on" either found the module first (the proxy) or set the vtable flag, so off with no
+// module known has nothing to search for. The search is a guarded brute-force scan (the game interface
+// 0x400 bytes deep, one level down) -- run on every agent disconnect it raised ~9,000 faults (WO-191's rig).
+inline bool hud_may_search(bool on, bool questModuleKnown) { return on && !questModuleKnown; }
+
 } // namespace kcdmp::wo137rules

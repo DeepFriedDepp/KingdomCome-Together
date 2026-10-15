@@ -47,6 +47,12 @@ int wo137_rules_tests(int* passed) {
     QCHECK(!time_gate_on(true, 2, 0, true), "the agent did not ask: off");
     QCHECK(!time_gate_on(true, 2, 1, false), "the hook not armed: off");
 
+    // Q5's HUD pass-through: only "on" searches for the QuestModule (off on every agent disconnect must not scan)
+    QCHECK(hud_may_search(true, false), "on, module not yet found: search");
+    QCHECK(!hud_may_search(true, true), "on, module known: no second search");
+    QCHECK(!hud_may_search(false, false), "off with no module known (the disconnect teardown): never search");
+    QCHECK(!hud_may_search(false, true), "off with the module known: undo through it, no search");
+
     if (passed) *passed = g_pass;
     return g_fail;
 }

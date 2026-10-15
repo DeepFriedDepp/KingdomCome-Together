@@ -34,7 +34,7 @@ namespace {
 // unwindable object (MSVC's rule, and this DLL's habit).
 // ---------------------------------------------------------------------------
 template <class T> bool rd(const void* base, size_t off, T* out) {
-    KCDMP_FAULT_READ(site, "wo137::set_send_callback");
+    KCDMP_FAULT_READ(site, "wo137::rd");
     return fault::guarded(site, [&] { *out = *reinterpret_cast<const T*>(static_cast<const char*>(base) + off); });
 }
 bool copy_cstr(const char* s, char* out, size_t n) {
@@ -823,9 +823,9 @@ bool hud_vtable(bool on, char* why, size_t whyN);
 
 bool hud_on(bool on, char* why, size_t whyN) {
     if (!A.hud) { strncpy_s(why, whyN, "hud anchors not armed", _TRUNCATE); return false; }
-    if (!g_questModule) g_questModule = find_quest_module();
+    if (wo137rules::hud_may_search(on, g_questModule != nullptr)) g_questModule = find_quest_module();
     if (!g_questModule) {
-        log_modules();
+        if (on) log_modules();
         const bool ok = hud_vtable(on, why, whyN);
         return ok;
     }
