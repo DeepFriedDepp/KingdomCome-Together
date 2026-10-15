@@ -1351,6 +1351,23 @@ Evidence: `docs/WO-177-findings.md`. **Type `mark_odd` at every miss.**
 325. **Type `mark_odd` at every miss.** Switches (all on): `mp_joiner_autosnap <minutes>`, `mp_save_reminder <minutes>`, `mp_profile_mirror`,
      `mp_cutscene_release`, `mp_positioning_bound`.
 
+## WO-191 — a restarted joiner's swings count, fights are never reset, attackers are always visible, no long black screen (0.60.7)
+
+326. **The joiner restarts the game, rejoins, and fights.** Fight a little first. Then the joiner quits the game completely, starts it again,
+     rejoins, and fights an enemy (or a villager, crime off). On the host's screen the joiner's figure swings each time and the enemy reacts
+     normally to their blows: it does not just fall over. Lines on the host: `WO191-ACTION forgot sender=1 why=disconnected` when they left, and
+     no `MP-ACTION section=inbound reject=StaleOrDuplicate` afterwards; if a `WO191-ACTION rejected kind=...` line shows, send the logs.
+327. **An enemy fighting the joiner never freezes or resets.** The joiner draws a weapon, walks up to an enemy, looks at it and fights it a
+     while, then stops and looks at it again. Its fight never stalls and it never snaps back into a villager pose mid-fight. Lines on the
+     joiner: `WO191-SWEEP-LUA npc=<it> ... SKIPPED` (once per fight) instead of a `WO164-SWEEP-LUA npc=<it>` while it fights.
+328. **A dog or wolf attacking the joiner is visible and moves.** Find a village dog (Troskowitz has some) or a wolf pack and let it go
+     for the joiner. On the joiner's screen the animal is there, runs at them and bites: no damage from nothing. Lines: host `WO191-BIND pinned
+     npc=<it> class=Dog` (or `... already streamed`), joiner no `WO191-GHOST by=<it>`. If a `WO191-GHOST` line shows, type `mark_odd`.
+329. **No long black screen after talking to a trader.** The joiner talks to a trader, closes the talk, and talks to them again at once (and
+     opens the trade). The screen is never black for more than about 3 seconds. Line on the joiner if it would have stayed black:
+     `WO191-FADER released after 3.0 s (...)`.
+330. **Type `mark_odd` at every miss.** Switches (all on): `mp_action_forget`, `mp_sweep_fight_guard`, `mp_attacker_bind`, `mp_fader_bound`.
+
 ## Logs to send afterwards
 
 Both machines: Report a bug in the launcher. Since 0.48.9 it collects the current launch by default as a small file (or a few numbered

@@ -25,6 +25,18 @@ How to play together (0.48.2):
 Nobody clicks CONNECT any more, and you don't need anyone's save file. First time ever starting the game? Start it once from Steam and accept its two first-run pages, then use the launcher.
 ```
 
+## Version 0.60.7 — a hotfix: restarts, fights, dogs, black screens (WO-191)
+
+```
+Kingdom Come: Together 0.60.7 (hotfix)
+- After the joiner restarts the game and rejoins, the host sees every one of their swings again. Before, the host ignored them for a while after each restart, so their blows landed without a swing and enemies just fell over.
+- An enemy the joiner is fighting (or just squaring up to with a weapon out) is no longer reset to a villager pose in the middle of the fight.
+- Animals the host's world did not share with the joiner (the village dogs) now appear on the joiner's screen the moment they go for the joiner, so there is no more damage from an invisible attacker.
+- A black screen with nothing behind it (seen after talking to a trader twice in a row) now clears after 3 seconds instead of 20.
+Every fix has its own switch (mp_action_forget, mp_sweep_fight_guard, mp_attacker_bind, mp_fader_bound), all on. Please type mark_odd at anything odd.
+Both players and the relay need 0.60.7.
+```
+
 ## Version 0.60.6 — the joiner's progress is kept, quests never hang half-way (WO-189)
 
 ```
