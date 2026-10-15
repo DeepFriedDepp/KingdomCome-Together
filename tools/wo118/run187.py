@@ -90,6 +90,28 @@ def plan_opp(per, every, copy_z):
     return L, end, {'phase1': [t0, p1], 'phase2_host': [p1, p2], 'phase3': [p2, end]}
 
 
+MACE_ROWS = {'1b72ca44-3633-369e-b547-c3f548c7697b': 733, '392ccba6-569d-3cfa-b8da-2e1e4eeb8d55': 833, '3b42ab7a-b264-3efa-a72a-06c34e9f9f8c': 867}
+FIST_ROWS = {'62a5c4cd-4a54-340f-8346-a9f4dade364f': 633, '9c22a61c-fb64-3ac1-b0b8-1d325a2cced7': 733}
+SWORD_ROWS = {SLASH_Z2: 800, SLASH_Z1: 767}
+
+
+def plan_weapon(weapon, n, every, copy_z):
+    """B3 in the duel harness: the copy targets the joiner with `weapon` in hand and swings its rows; the host's verdict "hit" at each row's
+    own contact (attack_time_to_hit). The copy's blade lands on this machine as WO166-LOCALHIT (discarded: the host decides)."""
+    rows = MACE_ROWS if weapon == 'mace' else FIST_ROWS if weapon == 'fists' else SWORD_ROWS
+    item = MACE if weapon == 'mace' else '-' if weapon == 'fists' else SWORD
+    t0 = 28.0
+    end = t0 + n * every + 6
+    L = plan_base(end, copy_z, dist=float(os.environ.get('W187_DIST', '1.3')))
+    L = [l for l in L if not l.startswith('hands ')] + ['hands 12 %s - %s' % (COPY, item),
+                                                        'ncombat 0 %d %s avatar:1 3 1 0 3' % (int(end + 30), COPY)]
+    keys = list(rows)
+    for k in range(n):
+        g = keys[k % len(keys)]
+        L.append('swingat %.1f %s local %s %d hit 6 15' % (t0 + k * every, COPY, g, rows[g]))
+    return L, end, {'weapon': weapon, 'rows': rows}
+
+
 def plan_moves(copy_z):
     seq = [('stab', STAB_CHARGED), ('slash', SLASH_Z2), ('block', BLOCK), ('slash', SLASH_Z1), ('perfect-block', PBLOCK), ('dodge', DODGE),
            ('stab', STAB_CHARGED), ('block', BLOCK), ('slash', SLASH_Z2), ('dodge', DODGE)]
@@ -180,6 +202,8 @@ def run(case, agent_dll, arg=None):
         L, end, info = plan_moves(copy_z)
     elif case == 'figure':
         L, end, info = plan_figure(copy_z)
+    elif case == 'weapon':
+        L, end, info = plan_weapon(os.environ.get('W187_WEAPON', 'mace'), int(arg or 8), 4.0, copy_z)
     elif case == 'chase':
         L, end, info = plan_chase(float(arg or 30), copy_z, speed=float(os.environ.get('W187_CHASE_MPS', '1.6')))
     else:
@@ -248,6 +272,19 @@ def run(case, agent_dll, arg=None):
     res['w187_stats'] = [l[:1200] for l in ag if l.startswith('MP-W187-STATS')][-1:]
     res['wo166_native'] = [l[:900] for l in ag if 'windups=' in l][-1:]
     res['opp_agent'] = [l[:200] for l in ag if l.startswith('MP-W187 opponent')][:10]
+    if case == 'weapon':   # per swing: the copy's wind-up (WO178-COPYSTATE) to its blade's contact here (WO166-LOCALHIT), and the shield's window
+        wind = [(l[1:13], l) for l in nat if 'WO178-COPYSTATE npc=%s wind-up' % COPY in l]
+        hits_ = [l[1:13] for l in nat if 'WO166-LOCALHIT dropped' in l]
+        def secs(hms): h, m_, rest = hms.split(':'); return int(h) * 3600 + int(m_) * 60 + float(rest)
+        pairs = []
+        for ts, l in wind:
+            t = secs(ts)
+            nxt = [secs(h) - t for h in hits_ if 0 < secs(h) - t < 2.5]
+            cd = re.search(r'countdown=set:([0-9.]+)s', l)
+            pairs.append({'countdown_s': float(cd.group(1)) if cd else None, 'blade_contact_s': round(min(nxt), 3) if nxt else None})
+        res['swings'] = pairs
+        res['pb_windows'] = [l.strip()[:160] for l in kl if 'Perfect' in l and 'Slot started' in l][:12]
+        res['timing_lines'] = [l.strip()[15:260] for l in nat if 'WO187-TIMING' in l][:4]
     res['copy_combat_mode'] = [int(m.group(1)) for l in ag if l.startswith('WO163-MODEL npc=%s ' % COPY) for m in [re.search(r' cm=([0-9]+)', l)] if m]
     res['engage'] = [l[:220] for l in ag if 'MP-W132 engage' in l or 'MP-W187 engage' in l][:6]
     res['faults'] = [l.strip()[15:200] for l in nat if ('FAULT' in l and 'FAULT-SUM' not in l) or 'switched OFF' in l or 'not armed' in l][:10]

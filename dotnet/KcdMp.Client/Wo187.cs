@@ -87,14 +87,19 @@ public static class Wo187Rules
     }
 
     /// <summary>A wish is sent on a change, else refreshed this often (the DLL drops one not refreshed for 4 s).</summary>
-    public const long OppRefreshMs = 1500;
+    public const long OppRefreshMs = 2000;
+
+    /// <summary>Only copies this close to the joiner (by the host's own position) get a wish or a guard hold: each is a pipe call on the game's
+    /// main thread, and a far copy is neither seen fighting nor ever engaged (a battle of twenty would cost ~30 calls a second).</summary>
+    public const float NearM = 35f;
+    public static bool Near(float distM) => distM < 0f || distM <= NearM;   // unknown distance: as near
 
     // ------------------------------------------------------------------ C2: the guard hold
 
     /// <summary>C2: a copy holds its guard while its host NPC is in combat or has any target (the CombatMode bit alone reads 0 against a player).</summary>
     public static bool GuardHoldWants(NpcCombatEvent ev) => ev.InCombat || ev.Target != NpcCombatTarget.None;
     /// <summary>The hold is refreshed this often (the DLL lets it go 3 s after the last word).</summary>
-    public const long GuardRefreshMs = 1000;
+    public const long GuardRefreshMs = 1500;
 
     // ------------------------------------------------------------------ B3: weapons and timing
 

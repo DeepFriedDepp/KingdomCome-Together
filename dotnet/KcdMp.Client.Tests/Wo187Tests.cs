@@ -72,6 +72,9 @@ public class Wo187Tests
         Assert.True(Wo187Rules.GuardHoldWants(Ev(false, NpcCombatTarget.Avatar, 1)));
         Assert.True(Wo187Rules.GuardHoldWants(Ev(true, NpcCombatTarget.None)));
         Assert.False(Wo187Rules.GuardHoldWants(Ev(false, NpcCombatTarget.None)));
+        // only copies near the joiner cost pipe calls; an unknown distance counts as near
+        Assert.True(Wo187Rules.Near(10f) && Wo187Rules.Near(Wo187Rules.NearM) && Wo187Rules.Near(-1f));
+        Assert.False(Wo187Rules.Near(Wo187Rules.NearM + 0.1f));
     }
 
     [Fact]

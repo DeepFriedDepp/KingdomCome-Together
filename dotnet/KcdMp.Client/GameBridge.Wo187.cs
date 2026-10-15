@@ -134,6 +134,8 @@ public partial class GameBridge
         bool fighting = ev.InCombat || ev.Target != NpcCombatTarget.None;
         if (fighting && eid != 0) _w187Fights[ev.Name] = (eid, ev.Target, ev.TargetGhost, now);
         if (!guardedBound || eid == 0 || !Wo131JoinerActive) return false;
+        float dHost = _w187Stream.TryGetValue(ev.Name, out var near) ? Wo187Rules.Dist2D(near.X, near.Y, _lastX, _lastY) : -1f;
+        if (!Wo187Rules.Near(dHost)) return false;   // a far copy: no wish, no guard hold (each is a main-thread pipe call)
         // the host: the sender of this npc-combat event (only the host speaks for its NPCs), else what the leash / host mode named
         byte hostGhost = fromGhost != 0xFF ? fromGhost : _leashHostId != 0xFF ? _leashHostId : _hostModeFrom;
         // A2: the opponent
@@ -149,7 +151,8 @@ public partial class GameBridge
             }
         }
         // C2: the guard hold
-        if (_w187Guard && Wo187Rules.GuardHoldWants(ev) && (!_w187GuardLast.TryGetValue(ev.Name, out long gl) || now - gl >= Wo187Rules.GuardRefreshMs))
+        if (_w187Guard && Wo187Rules.GuardHoldWants(ev) && !_w132Engaged.ContainsKey(ev.Name)   // an engaged copy holds combat already
+            && (!_w187GuardLast.TryGetValue(ev.Name, out long gl) || now - gl >= Wo187Rules.GuardRefreshMs))
         {
             _w187GuardLast[ev.Name] = now;
             _ = Wo187SendGuardAsync(eid, true, ev.State);
