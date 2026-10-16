@@ -281,6 +281,21 @@ ScopeRead read_scope(uint32_t eid, const char* name, int firstIndex, int lastInd
 ScopeRead read_fullbody(uint32_t eid) { return read_scope(eid, "FullBody", 0, 0); }
 ScopeRead read_upperbody(uint32_t eid) { return read_scope(eid, "UpperBody", 1, 8); }
 
+// WO-190 0.1: every scope of the body's controller in one read (the same checks: the controller's vptr, each scope's vptr and name).
+// WO-190 0.1: the controller's tag state (its context +0x10, 20 bytes -- WO-100's read: GetContext = IActionController vtable +0xB0).
+bool read_tag_state(uint32_t eid, uint8_t* out, size_t n) {
+    if (!resolve_scope() || n > 20) return false;
+    void* actor = motion::actor_of(eid);
+    void* anim = actor ? call_get(actor, kVtGetAnimatedActor) : nullptr;
+    void* ctrl = anim ? call_get(anim, kVtGetActionController) : nullptr;
+    void* vp = nullptr;
+    if (!ctrl || !rd(ctrl, 0, &vp) || vp != g_vftCtrl) return false;
+    void* ctx = call_get(ctrl, 0xB0);
+    if (!ctx) return false;
+    for (size_t i = 0; i < n; ++i) if (!rd(ctx, static_cast<ptrdiff_t>(0x10 + i), &out[i])) return false;
+    return true;
+}
+
 std::string scope_line(const ScopeRead& r) {
     if (!r.ok) return "unreadable";
     if (r.empty) return "action=none";
@@ -338,6 +353,44 @@ void watch_moves(double now) {
 bool parse_state2(const uint8_t* p, motion::State2* st) { std::memcpy(st, p, sizeof *st); return true; }
 
 } // namespace
+
+bool tag_state(uint32_t eid, uint8_t* out, size_t n) { return read_tag_state(eid, out, n); }
+
+int read_all_scopes(uint32_t eid, ScopeInfo* out, int max) {
+    if (!resolve_scope() || max <= 0) return -1;
+    void* actor = motion::actor_of(eid);
+    void* anim = actor ? call_get(actor, kVtGetAnimatedActor) : nullptr;
+    void* ctrl = anim ? call_get(anim, kVtGetActionController) : nullptr;
+    void* vp = nullptr;
+    if (!ctrl || !rd(ctrl, 0, &vp) || vp != g_vftCtrl) { c_scopeRefused.fetch_add(1); return -1; }
+    int32_t count = 0; char* scopes = nullptr;
+    if (!rd(ctrl, kCtrlScopeCount, &count) || count < 1 || count > 64 || !rd(ctrl, kCtrlScopes, &scopes) || !scopes) { c_scopeRefused.fetch_add(1); return -1; }
+    int n = 0;
+    for (int idx = 0; idx < count && n < max; ++idx) {
+        char* sc = scopes + static_cast<ptrdiff_t>(idx) * kScopeStride;
+        void* sv = nullptr; const char* nmp = nullptr;
+        ScopeInfo& s = out[n];
+        s = ScopeInfo{};
+        if (!rd(sc, 0, &sv) || sv != g_vftScope || !rd(sc, kScopeName, &nmp) || !nmp) { c_scopeRefused.fetch_add(1); break; }
+        for (int i = 0; i < 23; ++i) { char ch = 0; if (!rd(nmp, i, &ch)) break; s.name[i] = ch; if (!ch) break; }
+        void* act = nullptr;
+        if (!rd(sc, kScopeAction, &act)) { c_scopeRefused.fetch_add(1); break; }
+        s.ok = true;
+        s.index = idx;
+        s.act = act;
+        if (act) {
+            s.empty = false;
+            const std::string a = short_name(rtti_name(act));
+            std::snprintf(s.action, sizeof s.action, "%s", a.empty() ? "?" : a.c_str());
+            rd(act, kActPriority, &s.prio);
+            rd(act, kActFlags, &s.flags);
+            rd(act, kActFragment, &s.frag);
+        }
+        ++n;
+    }
+    c_scopeReads.fetch_add(1);
+    return n;
+}
 
 bool opp_logical_on() { return g_logical.load(); }
 bool opp_pin_on() { return g_pin.load(); }

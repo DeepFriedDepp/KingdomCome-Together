@@ -65,6 +65,8 @@ bool hold_on();
 bool hit_reach_on();   // mp_hit_reach: a copy's blow out of reach of the local player is a miss (wo165.cpp)
 bool own_block_on();   // mp_own_block: the local player's held block decides a copy's blow (wo165.cpp)
 bool pb_at_contact_on();       // mp_pb_at_contact: the copy's perfect-blocked sequence starts at the blow's contact (wo166.cpp), as a real attacker's does
+// WO-190 A8 (any thread): the copies the clinch gate refused within the last `withinMs` (their eid, how long ago); returns the count.
+int clinch_refused_within(uint64_t withinMs, uint32_t* eids, uint32_t* agoMs, int max);
 bool copy_engine_state_on();   // mp_copy_engine_state: a copy's swing winds up and strikes through the engine's state setter (wo166.cpp)
 bool engine_cap_on();
 

@@ -91,8 +91,9 @@ void rearm_nudge(uint32_t eid, const char* why);
 // state block from the stream (null when the stream never carried one) and
 // `stAgeS` its age in seconds (receiver clock: arrival, never the sender's).
 // renderVx/Vy: this frame's rendered planar velocity (world, m/s).
+// gapS (WO-190 A4): how long the render has stood past the stream's newest position sample (-1 while it interpolates toward one).
 void body_frame(const char* key, void* ent, uint32_t eid, float renderSpeedMps, float renderVx, float renderVy,
-                const State2* st, double stAgeS, double now);
+                const State2* st, double stAgeS, double now, double gapS = -1);
 // The writer stopped driving this body (unbind, drop, disarm): give it back. An avatar keeps its identity
 // (WO-154 2: its reaction contexts and speech gate stay through every unbind).
 void body_released(const char* key, uint32_t eid);
@@ -129,6 +130,9 @@ void set_npc_engage(uint32_t eid, bool on, const State2* st, double now);
 bool npc_engaged(uint32_t eid);
 // WO-187 C2: a copy whose host NPC fights anyone holds combat mode (no skirmish, no engagement); stale after wo187rules::kGuardHoldStaleS.
 void set_npc_guard_hold(uint32_t eid, bool on, const State2* st, double now);
+// WO-190 0.4: [figures: frames, glide, in-place, class changes][copies: the same] since the DLL loaded (any thread).
+void loco_counters(uint32_t out[8]);
+bool fight_held(uint32_t eid);                   // WO-190: a copy held in combat mode for a fight (engaged, or WO-187's guard hold), fresh
 void* actor_of(uint32_t eid);                    // the C_Actor of an entity id (main thread), null when none
 bool combat_mode_of(uint32_t eid, bool* on);     // its combat model's CombatMode (false = unreadable)
 bool requeue_guard_idle(uint32_t eid);           // the guard zone written away and back: the engine re-queues its guard idle

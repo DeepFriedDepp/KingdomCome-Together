@@ -656,6 +656,7 @@ public partial class GameBridge
                 await Wo173TickAsync(ct);   // WO-173: mp_real_hits pushed, the down poll of the NPCs in a joiner's fight
                 await Wo178TickAsync();      // WO-178: the hostility answer's and C4's switches, the host's quicksave setting
                 await Wo187TickAsync(ct);    // WO-187: the switches, the fight positions, the stats
+                await Wo190TickAsync(ct);    // WO-190: the animation trace's and the parity fixes' switches, the stats
                 await Wo177TestTickAsync();   // WO-180: the harness-only gate probe (KCDMP_TEST_W177_GATE)
                 long now = Environment.TickCount64;
                 if (now - lastStatus >= 60_000)

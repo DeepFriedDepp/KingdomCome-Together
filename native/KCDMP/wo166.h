@@ -36,6 +36,8 @@ void tick();                       // main thread, every frame (dllmain post_rep
 bool striking_recently(uint32_t eid);
 float swing_hit_distance(uint32_t eid);
 int weapon_class_id(void* ca);   // WO-187 (main thread): the right hand's weapon class id (a shield: the other hand), -1 unreadable
+// WO-190 A1 (main thread): both hands' weapon classes (the game's weapon_class ids; -1 = none); false when the lookup is not armed or faulted.
+bool weapon_classes(void* ca, int* right, int* left);
 float swing_reach_limit(uint32_t eid);    // WO-178 (main thread): the copy's latest swing's reach -- the engine's for its weapon, else the row's   // WO-178 (main thread): the copy's latest swing's row hit_distance (0 = unknown)   // main thread: this copy is (or was within 2 s) in a strike window of ours
 void note_local_hit_dropped(uint32_t eid, float hp, float st);   // hits.cpp's discard watch (main thread)
 uint8_t auto_mode();               // C1 (motion.cpp reads it)

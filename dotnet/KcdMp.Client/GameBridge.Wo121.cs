@@ -453,6 +453,7 @@ public partial class GameBridge
                     return true;
                 }
                 if (!animal && Wo187Rules.IsDefenceRow(row)) { await Wo187PlayDefenceAsync(ne.Name, neid, ne.Row, row, ct); return true; }   // WO-187 C2: its own block / dodge
+                var asSent = row;
                 if (!animal) row = Wo167RowFor(ne.Name, ne.Row, row, catalog);   // WO-167 C4: a paired row it cannot play is its plain attack
                 _ = _combat.NpcHoldAsync(ne.Name, Wo166Rules.SwingHoldMs(row.HitLagMs, _w166SnapFix), ct);   // WO-166 C4: the hold ends with the swing
                 var r = await _combat.GhostSwingForResultAsync(neid, row.Spec, ct);
@@ -463,6 +464,7 @@ public partial class GameBridge
                 if (r.Ok) Wo165NoteRowPlayed(ne.Name, ne.Row);   // WO-165: the replay's attack fields and the recoil's weapon tags
                 if (r.Ok) Wo161NoteRowPlayed(ne.Name, row.HitLagMs >= 0 ? row.HitLagMs : Wo161Rules.LagNone); else Wo161NoteRowRefused(ne.Name, r.ReasonTag);   // WO-161 / WO-163: with the row's own lag
                 if (r.Ok && !animal) { _ = Wo167CheckShownAsync(ne.Name, neid, ne.Row, w167PlayedAt); Wo167RowWeapon(ne.Name, row); }   // WO-167 C3 / C2
+                if (r.Ok && !animal && Wo167Rules.IsSyncFragment(row.Fragment) && row.Equals(asSent)) _ = Wo190ClinchCheckAsync(ne.Name, neid, ne.Row, row, catalog, ct);   // WO-190 A8
                 Console.WriteLine($"MP-ACTION section=inbound kind=NpcAttack npc={ne.Name} row={ne.Row} spec=\"{row.Spec}\" dispatch=native-row result={r.ReasonTag}");
                 if (r.Ok) await ExecLuaAsync($"if KCD2MP_NpcNativeSwingHold then KCD2MP_NpcNativeSwingHold(\"{ne.Name}\") end");
                 return true;

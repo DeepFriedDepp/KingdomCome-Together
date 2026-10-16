@@ -6075,6 +6075,10 @@ public partial class GameBridge(ClientConfig config)
             case "w187_status":      // WO-187: mp_w187_status
                 Wo187OnEvent(name, arg);
                 return;
+            case "w190_cfg":         // WO-190: mp_anim_trace, mp_anim_idle_watch, mp_anim_standin_weapon, mp_copy_weapon_hold, mp_anim_requeue_gate, ...
+            case "w190_status":      // WO-190: mp_w190_status
+                Wo190OnEvent(name, arg);
+                return;
             case "w166_talkstate":   // WO-166 T3: a talk that never started -- the copy's facts
             case "w166_talk":        // WO-166 T4: a talk refused, the host's NPC busy
             case "w166_cfg":         // WO-166: mp_copy_strikes / mp_snap_fix / the C1 lever

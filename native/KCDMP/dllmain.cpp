@@ -15,6 +15,7 @@
 #include "wo178.h"
 #include "wo179.h"
 #include "wo187.h"
+#include "wo190.h"
 #include "combat_swing.h"
 #include "wo135.h"
 #include "wo137.h"
@@ -248,6 +249,7 @@ DWORD WINAPI plugin_main(LPVOID) {
     kcdmp::main_thread::post_repeating("wo179::tick", &kcdmp::wo179::tick);   // WO-179: the fade edges and the relocation watch (read-only)
     kcdmp::main_thread::post_repeating("wo178::tick", &kcdmp::wo178::tick);   // WO-178 C1: the candidate table the hostility answer reads   // WO-176 A1: a figure already in a quest's arranged fight is taken out   // WO-173 C1: the joiner's real hits' measures and corrections
     kcdmp::main_thread::post_repeating("wo187::tick", &kcdmp::wo187::tick);   // WO-187: the copies' opponents, the moves' full-body scope
+    kcdmp::main_thread::post_repeating("wo190::tick", &kcdmp::wo190::tick);   // WO-190: the animation trace, the fighting bodies' idle watch
     kcdmp::main_thread::post_repeating("rttr::swing_watch_tick", &kcdmp::rttr::swing_watch_tick);   // WO-167 C3: shown means rendered
     // WO-124: the joiner's placement gives the fall damage back; the save-list
     // research trigger (kcdmp-savelist-test.txt, opt-in, absent = idle).

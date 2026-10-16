@@ -60,6 +60,8 @@ public static partial class Protocol
     // ---- WO-189: the DLL's ops in the WO-163 family (native/KCDMP/wo189.h): save readiness, the cutscene player, copies' FastForward, game profiles ----
     public const byte Wo189OpStatus = 42, Wo189OpConfig = 43, Wo189OpReady = 44, Wo189OpCutscene = 45, Wo189OpCutsceneRelease = 46, Wo189OpStopFF = 47,
                       Wo189OpProfile = 48, Wo189OpConcept = 49;
+    // ---- WO-190: the DLL's ops in the WO-163 family (native/KCDMP/wo190.h): the animation trace's switches, a body's hands, the clinch refusals ----
+    public const byte Wo190OpStatus = 50, Wo190OpConfig = 51, Wo190OpWeapon = 52, Wo190OpClinchRefused = 53;
 
     // ---- kinds (APPEND-ONLY) ----
     public const byte W164MarkPing = 1, W164Torch = 2, W164Escort = 3, W164HitOutcome = 4, W164Weather = 5, W164Travel = 6, W164RealHit = 7, W164NpcDown = 8;

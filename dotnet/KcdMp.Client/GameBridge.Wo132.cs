@@ -365,9 +365,20 @@ public partial class GameBridge
                 return;
             }
         }
+        if (v == Wo132Rules.EngageVerdict.Release && engaged && Wo190HoldEngagement(ev.Name, ev, engaged))
+        {
+            // WO-190 A7 (mp_engage_hold): its host NPC turned to the host -- it stays engaged (combat held, animating) for 3 s; its opponent is
+            // already the host's figure (the op-36 wish above). Refreshed so the 3 s stale sweep and the native hold keep it.
+            _w132Engaged[ev.Name] = (DateTime.UtcNow, cur.Eid);
+            if (cur.Eid != 0) _ = _combat.Wo132EngageAsync(true, cur.Eid, ev.State, ct);
+            Wo190HoldWeapon(ev.Name, "engage-hold");
+            return;
+        }
         if (v == Wo132Rules.EngageVerdict.Release)
         {
             _w183Left.Forget(ev.Name);
+            Wo190ForgetTurn(ev.Name);
+            if (_w187Guard && cur.Eid != 0 && Wo187Rules.GuardHoldWants(ev)) { _w187GuardLast[ev.Name] = Environment.TickCount64; _ = Wo187SendGuardAsync(cur.Eid, true, ev.State); }   // WO-190 A7: no gap in combat mode
             _w132Engaged.TryRemove(ev.Name, out _);
             Interlocked.Increment(ref _w132EngageOff);
             var rr = await _combat.Wo132EngageAsync(false, cur.Eid, default, ct);
@@ -394,6 +405,8 @@ public partial class GameBridge
         if (!r.Ok) { Console.WriteLine($"MP-W132 engage {ev.Name} eid=0x{eid:X} FAILED (reason {r.Reason})"); return; }
         _w132Engaged[ev.Name] = (DateTime.UtcNow, eid);
         Wo191NoteFight(ev.Name, "engaged");   // WO-191 2
+        Wo190ForgetTurn(ev.Name);              // WO-190 A7: it fights me again
+        Wo190HoldWeapon(ev.Name, "engage");    // WO-190 A2: the host NPC's weapon at every engage, never a light
         if (r.First)
         {
             // WO-157 3b.2: a copy that enters a fight leaves the one-shot it was playing (the field's tkrc_man_2 sat in

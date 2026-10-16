@@ -192,7 +192,7 @@ public sealed class ActionRowCatalog
     /// the failed row. Wo187Rules.HitFallbackScore orders them (the body's own weapon, a full-body CombatHitGen row, the blow's zone, the guard
     /// side, the hit type); then the lowest tags, then the lowest GUID, so every machine picks the same. Null = none fits.
     /// </summary>
-    public (Guid Guid, Row Row)? HitFallbackRow(Guid failedGuid, Row failed, Row? bodyRow)
+    public (Guid Guid, Row Row)? HitFallbackRow(Guid failedGuid, Row failed, Row? bodyRow, Func<string, bool>? allowed = null)
     {
         long actor = bodyRow is { ActorClass: not 0 } br ? br.ActorClass : failed.ActorClass;
         IReadOnlyList<string> weapon = bodyRow is { } sw ? Wo165Rules.WeaponTags(sw.Tags) : Array.Empty<string>();
@@ -201,6 +201,7 @@ public sealed class ActionRowCatalog
         {
             if (g == failedGuid || r.Table != "combat_action_hit" || r.Fragment.Contains("Death", StringComparison.Ordinal)) continue;
             if (actor != 0 && r.ActorClass != 0 && r.ActorClass != actor) continue;
+            if (allowed is not null && !allowed(r.Tags)) continue;   // WO-190 A1: never a bare-handed move on an armed body
             int s = Wo187Rules.HitFallbackScore(failed.Tags, failed.Zone, weapon, r.Fragment, r.Tags, r.Zone);
             if (best is null || s > bestScore || (s == bestScore && (string.CompareOrdinal(r.Tags, best.Value.Row.Tags) < 0
                 || (r.Tags == best.Value.Row.Tags && g.CompareTo(best.Value.Guid) < 0)))) { best = (g, r); bestScore = s; }

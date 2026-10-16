@@ -30,6 +30,8 @@
 #include "wo170_rules.h"
 #include "wo187.h"
 #include "wo187_rules.h"
+#include "wo190.h"
+#include "wo190_rules.h"
 #include "buffs.h"
 #include "engine.h"
 #include "gait_logic.h"
@@ -241,6 +243,11 @@ struct Body {
     bool gaitWritten = false;
     float velX = 0, velY = 0;     // WO-129: smoothed rendered planar velocity (world), the direction tag's input
     float cls = 0;                // WO-129: the logical speed class written (0 still, 1 walk, 2 run, 3 sprint)
+    float lastMovingMps = 0;      // WO-190 A4: the last speed this body was seen moving at (fresh samples), kept through a short stream gap
+    float lastMovingVx = 0, lastMovingVy = 0;
+    bool movingHyst = false;      // WO-190 A3: still / moving with hysteresis (a few millimetres a frame is not a walk)
+    kcdmp::wo190rules::RequeueGate clsGate;   // WO-190 A3: the class written to a copy changes at most 4 times a second, never re-sent unchanged
+    float clsSent = -1;
     int   range = -1;             // WO-129: the body's own class count (engine), -1 unknown
     double rangeAt = -1;
     int   slot = -1;              // WO-129: index into g_gaitTable, -1 none
@@ -790,6 +797,10 @@ void release_gait(Body& b) {
 }
 
 std::atomic<uint32_t> c_crouchApplyFail{0};
+std::atomic<uint32_t> c_gaitHeld{0};   // WO-190 A4: frames a body's gait was held through a stream gap
+// WO-190 0.4: the parity run's locomotion counters, [0] figures [1] copies: frames written, frames rendered moving (>= 0.5 m/s) with the
+// still class (gliding in an idle), frames rendered still (< 0.05 m/s) with a walking class (walking in place), class changes
+std::atomic<uint32_t> c_locoFrames[2]{}, c_locoGlide[2]{}, c_locoInPlace[2]{}, c_locoClsChanges[2]{};
 
 void apply_crouch(Body& b, bool want) {
     if (!b.exp) b.exp = expansion_of(b.actor);
@@ -1409,7 +1420,7 @@ uint8_t on_avatar_event(const uint8_t* body, size_t len) {
 }
 
 void body_frame(const char* key, void* ent, uint32_t eid, float renderSpeedMps, float renderVx, float renderVy,
-                const State2* st, double stAgeS, double now) {
+                const State2* st, double stAgeS, double now, double gapS) {
     Body& b = g_bodies[eid];
     if (b.ent != ent || b.eid != eid) {
         unpublish_gait(b);   // WO-129: never leave a slot naming a body we no longer drive
@@ -1443,14 +1454,40 @@ void body_frame(const char* key, void* ent, uint32_t eid, float renderSpeedMps, 
         // A render step faster than any gait (> 9 m/s) is a snap or a teleport,
         // never a pace: it keeps the previous speed instead of a sprint burst.
         const bool snap = !(renderVx * renderVx + renderVy * renderVy < 81.0f);
-        if (!(b.avatar && fresh) && s > 9.0f) s = b.speedEma;
+        if (!(b.avatar && fresh) && s > 9.0f) s = wo190::gait_hold_on() && b.lastMovingMps > b.speedEma ? b.lastMovingMps : b.speedEma;   // WO-190 A4: a catch-up keeps the walk
+        bool gapHeld = false;
         if (!(b.avatar && fresh)) {
             // The rendered speed is per-frame noisy at 60+ fps: smooth it (tau ~0.15 s).
             b.speedEma += (s - b.speedEma) * 0.2f;
             s = b.speedEma < 0.05f ? 0.0f : b.speedEma;
         }
+        if (wo190::gait_hold_on()) {
+            // WO-190 A4: the body visibly moving never plays its idle -- a figure's state block says 0 the moment its partner stops, while its
+            // position still renders the last 0.1-0.4 s of the path: the rendered speed lifts it to a walk (never further); and through a gap
+            // (the render standing past the newest sample: a figure 0.5 s, a copy 0.25 s -- the host's NPC stream is moved-gated) a body keeps
+            // its last moving speed and direction instead of decaying to idle and gliding through the catch-up.
+            if (b.avatar && fresh && b.speedEma >= 2.0f * wo190rules::kStillMps && s < b.speedEma) s = b.speedEma;
+            if (b.avatar && fresh) b.speedEma += ((renderSpeedMps < 9.0f ? renderSpeedMps : b.speedEma) - b.speedEma) * 0.2f;
+            s = wo190rules::moving_floor(s, renderSpeedMps, snap);
+            if (renderSpeedMps >= 2.0f * wo190rules::kStillMps && !snap && gapS < 0) {
+                b.lastMovingMps = s > renderSpeedMps ? s : renderSpeedMps;
+                b.lastMovingVx = renderVx; b.lastMovingVy = renderVy;
+            }
+            const double limit = b.avatar ? wo190rules::kGaitHoldS : wo190rules::kCopyGaitHoldS;
+            const bool stopped = b.avatar && fresh && st->speedCm == 0;   // the partner's own word: he stopped
+            const float held = wo190rules::gait_speed(s, b.lastMovingMps, gapS, stopped, limit);
+            if (held > s) { s = held; gapHeld = true; c_gaitHeld.fetch_add(1, std::memory_order_relaxed); }
+            if (gapS > limit || stopped) b.lastMovingMps = 0;   // the source stopped (or the gap is a stop): no more holding
+        }
         // WO-129: the direction tag's input, the rendered velocity (tau ~0.12 s).
-        if (!snap) { b.velX += (renderVx - b.velX) * 0.25f; b.velY += (renderVy - b.velY) * 0.25f; }
+        if (gapHeld) { b.velX = b.lastMovingVx; b.velY = b.lastMovingVy; }
+        else if (!snap) { b.velX += (renderVx - b.velX) * 0.25f; b.velY += (renderVy - b.velY) * 0.25f; }
+        if (!b.avatar && wo190::requeue_gate_on() && !wo143::activity_locomotion(eid)) {   // a hoer's creep (WO-143) is a walk
+            // WO-190 A3: a copy standing still (a few millimetres a frame of stream noise, a settle) stands: speed and direction both zero, with
+            // hysteresis -- a tiny flipping move vector picked walk / turn / strafe-back blendspaces every frame (the joiner's queue overflows)
+            b.movingHyst = wo190rules::moving_with_hysteresis(b.movingHyst, s);
+            if (!b.movingHyst) { s = 0.0f; b.velX = 0.0f; b.velY = 0.0f; }
+        }
         // WO-129: pseudo-speed is a logical speed CLASS; clamp it to this body's own range.
         const int range = body_range(b, now);
         // WO-154 5: with hysteresis (a pace on a boundary keeps its class)
@@ -1479,6 +1516,19 @@ void body_frame(const char* key, void* ent, uint32_t eid, float renderSpeedMps, 
                 const float yaw = kcdmp::npcdrive::entity_yaw(b.ent);
                 tvx = -std::sin(yaw) * kNudgeMps; tvy = std::cos(yaw) * kNudgeMps;
             } else if (age >= kNudgeAfterS + kNudgeS) b.nudged = true;
+        }
+        if (!b.avatar && wo190::requeue_gate_on() && b.clsSent >= 0 && cls != b.clsSent) {
+            // WO-190 A3: a copy's class changes at most kRequeueMaxPerS times a second (a flip held back keeps the class already shown)
+            const bool ok = b.clsGate.allow(static_cast<int>(cls), now);
+            if (!ok) { wo190::note_requeue(false, true); cls = b.clsSent; }
+        }
+        if (!b.avatar) b.clsSent = cls;
+        {
+            const int k = b.avatar ? 0 : 1;
+            c_locoFrames[k].fetch_add(1, std::memory_order_relaxed);
+            if (!snap && renderSpeedMps >= 0.5f && cls < 1.0f) c_locoGlide[k].fetch_add(1, std::memory_order_relaxed);
+            if (renderSpeedMps < 0.05f && cls >= 1.0f && !gapHeld) c_locoInPlace[k].fetch_add(1, std::memory_order_relaxed);
+            if (cls != b.cls) c_locoClsChanges[k].fetch_add(1, std::memory_order_relaxed);
         }
         b.cls = cls;
         apply_gait(b, cls);
@@ -1709,7 +1759,7 @@ int status_text_motion(char* out, int n) {
         "cap_dropped=%u buff_adds=%u ctx_set=%u ctx_fail=%u faults=%u tags=%s tags_applied=%u gait_slots=%d "
         "cap_drop_notca=%u cap_drop_nodesc=%u cap_drop_noguid=%u cap_drop_noowner=%u cap_via_base8=%u cap_ours=%u "
         "engaged=%zu engage_holds=%u engage_releases=%u cap_crouch=%u cap_stance=%u crouch_query=%s crouch_fail=%u quiet=0x%X quiet_set=%u quiet_fail=%u "
-        "cap_hit=%u cap_sync=%u cap_drop_rowtype=%u fresh_pulses=%u fresh_pending=%zu guard_holds=%u guard_held=%zu figure_lingers=%u idle_pulses=%u idle_requeues=%u",
+        "cap_hit=%u cap_sync=%u cap_drop_rowtype=%u fresh_pulses=%u fresh_pending=%zu guard_holds=%u guard_held=%zu figure_lingers=%u idle_pulses=%u idle_requeues=%u gait_gap_held=%u loco_fig=%u/%u/%u/%u loco_copy=%u/%u/%u/%u",
         g_gait ? "armed" : "off", g_moves ? "armed" : "off", g_combat ? "armed" : "off", g_capture ? "armed" : "off",
         g_cfgAvatarGait.load(), g_cfgNpcGait.load(), g_cfgMoves.load(), g_cfgCombat.load(), g_cfgNpcRows.load(), g_bodies.size(),
         c_gaitWrites.load(), c_crouch.load(), c_jumps.load(), c_jumpFail.load(), c_combatStarts.load(), c_autoOff.load(),
@@ -1721,7 +1771,9 @@ int status_text_motion(char* out, int n) {
         c_capCrouch.load(), c_capStance.load(), g_isCrouchedState == 1 ? "armed" : g_isCrouchedState < 0 ? "refused" : "unread",
         c_crouchApplyFail.load(), g_cfgQuiet.load(), c_quietSet.load(), c_quietFail.load(),
         c_capHit.load(), c_capSync.load(), c_dropRowType.load(), c_freshPulses.load(), g_freshPending.size(),
-        c_guardHolds.load(), g_guardHold.size(), c_figureLingers.load(), c_idlePulses.load(), c_idleRequeues.load());
+        c_guardHolds.load(), g_guardHold.size(), c_figureLingers.load(), c_idlePulses.load(), c_idleRequeues.load(), c_gaitHeld.load(),
+        c_locoFrames[0].load(), c_locoGlide[0].load(), c_locoInPlace[0].load(), c_locoClsChanges[0].load(),
+        c_locoFrames[1].load(), c_locoGlide[1].load(), c_locoInPlace[1].load(), c_locoClsChanges[1].load());
 }
 
 // WO-135 test verb: the player's own crouch setter -- the function the crouch
@@ -1786,6 +1838,21 @@ void set_npc_guard_hold(uint32_t eid, bool on, const State2* st, double now) {
 }
 
 void* actor_of(uint32_t eid) { return actor_by_eid(eid); }
+
+void loco_counters(uint32_t out[8]) {
+    for (int k = 0; k < 2; ++k) {
+        out[4 * k] = c_locoFrames[k].load(); out[4 * k + 1] = c_locoGlide[k].load(); out[4 * k + 2] = c_locoInPlace[k].load(); out[4 * k + 3] = c_locoClsChanges[k].load();
+    }
+}
+
+bool fight_held(uint32_t eid) {
+    // WO-190: a copy this writer holds in combat mode for a fight (engaged with this player, or WO-187's guard hold), fresh
+    const double now = npcdrive::now_s();
+    auto eg = g_engage.find(eid);
+    if (eg != g_engage.end() && now - eg->second.at < kEngageStaleS) return true;
+    auto gh = g_guardHold.find(eid);
+    return gh != g_guardHold.end() && now - gh->second.at < wo187rules::kGuardHoldStaleS;
+}
 
 bool combat_mode_of(uint32_t eid, bool* on) {
     void* ca = nullptr; void* model = nullptr;

@@ -1177,7 +1177,10 @@ void tick() {
             p.snap.frame(now, {p.curRead[0], p.curRead[1], p.curRead[2]}, {pose[0], pose[1], pose[2]}, wrote, engaged);
         }
         // WO-121: gait / crouch / combat hold for this body, right after its write.
-        motion::body_frame(p.key.c_str(), e, p.eid, p.speedMps, p.velX, p.velY, s.haveSt2 ? &s.st2 : nullptr, s.haveSt2 ? now - s.st2At : 1e9, now);
+        // WO-190 A4: the gap -- how long the render has stood past the newest sample (-1 while it interpolates toward one)
+        const double renderAt = now - p.delay - p.lateApplied;
+        const double gapS = s.n > 0 && renderAt > s.ring[s.n - 1].at ? renderAt - s.ring[s.n - 1].at : -1.0;
+        motion::body_frame(p.key.c_str(), e, p.eid, p.speedMps, p.velX, p.velY, s.haveSt2 ? &s.st2 : nullptr, s.haveSt2 ? now - s.st2At : 1e9, now, gapS);
         if (now - p.winStart >= kPullWindowS) pull_flush(p, now);
         ++it;
     }
@@ -1256,6 +1259,22 @@ bool physics_status(void* e, PhysicsStatus* out) {
         }
     }
     return true;
+}
+
+int bound_bodies(BoundBody* out, int max) {
+    // WO-190 0.1 (main thread): the bodies this writer drives -- the trace's copies and figures
+    int n = 0;
+    const double now = now_s();
+    for (const auto& [key, p] : g_bound) {
+        if (n >= max) break;
+        BoundBody& b = out[n++];
+        b.eid = p.eid;
+        b.speedMps = p.speedMps;
+        auto st = g_streams.find(key);
+        b.streamAgeS = st != g_streams.end() && st->second.lastAcceptedAt > 0 ? now - st->second.lastAcceptedAt : -1.0;
+        b.held = p.holdUntil > now;
+    }
+    return n;
 }
 
 bool stream_info(const char* name, double* ageS, bool* bound) {

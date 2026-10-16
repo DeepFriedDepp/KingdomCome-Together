@@ -51,6 +51,14 @@ public partial class GameBridge
         switch (name)
         {
             case "w187_cfg":
+                if (arg is { } sa && sa.StartsWith("anim_scope_log=", StringComparison.Ordinal) && Wo190Rules.ScopeLogMode(sa[15..]) is { } sm)
+                {
+                    // WO-190 A9: off / auto / on -- auto (the default) traces the bodies in a fight; on also logs WO-187's lines around every move
+                    _w187ScopeLog = sm == Wo190Rules.ScopeLogOn;
+                    Wo190ScopeLogWord(sm);
+                    _ = Wo187PushConfigAsync();
+                    return;
+                }
                 if (!Wo187Rules.TryParseCfg(arg, out string cfg, out bool on)) { Console.WriteLine($"MP-W187 cfg refused: '{arg}'"); return; }
                 switch (cfg)
                 {
@@ -235,11 +243,15 @@ public partial class GameBridge
         if (cat is null) return null;
         Interlocked.Increment(ref _w187HitFallbacks);
         ActionRowCatalog.Row? body = (_w165LastRow.TryGetValue(npc, out var lg) || _w187FigureRow.TryGetValue(npc, out lg)) && cat.TryGet(lg, out var sr) ? sr : null;
+        // WO-190 A1 (mp_anim_standin_weapon): the weapon the body really holds, read from its hands -- the last row it played may be another
+        // weapon's (a figure's _w187FigureRow is never cleared), and a bare-handed move on an armed figure was the field's T-pose
+        var (hands, handTags) = await Wo190HandsAsync(eid);
+        if (Wo190Rules.BodyFromHands(hands, handTags, body?.ActorClass ?? 0) is { } held) body = held;
         // a body that played no weapon row yet: bare hands first (live: on a bare-handed figure a weapon's reaction row is dropped at once, while
         // a body holding any weapon plays any weapon's row); not shown either -> the second try takes the best full-body reaction of any weapon
         bool guessed = body is null && !secondTry;
         if (guessed) body = new ActionRowCatalog.Row("guess", "", Wo187Rules.BareHandsTags, -1, -1, -1);
-        if (cat.HitFallbackRow(failedGuid, failed, body) is not { } fb)
+        if (cat.HitFallbackRow(failedGuid, failed, body, t => { bool ok = Wo190Rules.StandinAllowed(hands, t); if (!ok) Interlocked.Increment(ref _w190StandinFiltered); return ok; }) is not { } fb)
         {
             Interlocked.Increment(ref _w187HitFallbackNone);
             Console.WriteLine($"WO187-HITFALLBACK npc={npc} row={failedGuid} why={why} fallback=none -- no reaction row of this actor class (nothing played)");
@@ -247,7 +259,7 @@ public partial class GameBridge
         }
         var r = await _combat.GhostSwingForResultAsync(eid, fb.Row.Spec, ct);
         if (r.Ok) Interlocked.Increment(ref _w187HitFallbackPlayed);
-        string weapon = body is { } b ? (guessed ? "bare-hands(guessed)" : string.Join('+', Wo165Rules.WeaponTags(b.Tags))) : "any(second try)";
+        string weapon = body is { } b ? (guessed ? "bare-hands(guessed)" : string.Join('+', Wo165Rules.WeaponTags(b.Tags)) + (hands != Wo190Rules.HandsUnknown ? "(its hands)" : "")) : "any(second try)";
         Console.WriteLine($"WO187-HITFALLBACK npc={npc} row={failedGuid} why={why} fallback={fb.Guid} spec=\"{fb.Row.Spec}\" weapon={weapon} result={r.ReasonTag}");
         if (r.Ok && guessed)
         {

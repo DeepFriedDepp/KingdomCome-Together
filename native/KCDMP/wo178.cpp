@@ -134,6 +134,11 @@ bool __fastcall hostile_detour(void* rpg, const void* candidate) {
 std::atomic<bool> g_clinchArmed{false};
 std::atomic<uint32_t> c_clinchAsked{0}, c_clinchRefused{0};
 std::atomic<uint32_t> g_clinchLastEid{0};
+// WO-190 A8: the last refusals (the copy, when) for the agent -- a refused sync row is replayed as its plain attack row
+constexpr int kClinchRing = 16;
+std::atomic<uint32_t> g_clinchRingEid[kClinchRing]{};
+std::atomic<uint64_t> g_clinchRingMs[kClinchRing]{};
+std::atomic<uint32_t> g_clinchRingN{0};
 
 bool listed_eid(const void* ca, uint32_t* eid) {
     const int cur = g_cur.load(std::memory_order_acquire);
@@ -152,6 +157,9 @@ bool clinch_gate(void* /*type*/, void* a, void* b, void* /*r9*/) {
     if (!listed_eid(a == me ? b : a, &eid)) return false;
     c_clinchRefused.fetch_add(1, std::memory_order_relaxed);
     g_clinchLastEid.store(eid, std::memory_order_relaxed);
+    const uint32_t slot = g_clinchRingN.fetch_add(1, std::memory_order_relaxed) % kClinchRing;
+    g_clinchRingEid[slot].store(eid, std::memory_order_relaxed);
+    g_clinchRingMs[slot].store(GetTickCount64(), std::memory_order_relaxed);
     return true;
 }
 
@@ -737,6 +745,18 @@ bool hit_reach_on() { return g_hitReach.load(); }
 bool own_block_on() { return g_ownBlock.load(); }
 bool copy_engine_state_on() { return g_copyEngineState.load(); }
 bool pb_at_contact_on() { return g_pbAtContact.load(); }
+
+int clinch_refused_within(uint64_t withinMs, uint32_t* eids, uint32_t* agoMs, int max) {
+    const uint64_t now = GetTickCount64();
+    int n = 0;
+    for (int i = 0; i < kClinchRing && n < max; ++i) {
+        const uint64_t at = g_clinchRingMs[i].load(std::memory_order_relaxed);
+        const uint32_t e = g_clinchRingEid[i].load(std::memory_order_relaxed);
+        if (!at || !e || now - at > withinMs) continue;
+        eids[n] = e; agoMs[n] = static_cast<uint32_t>(now - at); ++n;
+    }
+    return n;
+}
 bool engine_cap_on() { return g_engineCap.load(); }
 
 void offer_local(uint32_t eid) {

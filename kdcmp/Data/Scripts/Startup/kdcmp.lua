@@ -4323,6 +4323,7 @@ local function mp_wo102_pause(name, p, why)
     mp_pause_log(name, "pause", exec, why or "puppet-start", p and p.owner or "?", 0)
     if not ok then mp_log("WO102-PAUSE ExecuteCommand failed for " .. tostring(name) .. ": " .. tostring(err)) end
     if ok then KCD2MP_NpcDetach(name, p, why or "puppet-start") end   -- WO-118 Phase 3
+    if ok and KCD2MP_W190CopyLook then pcall(KCD2MP_W190CopyLook, name, false, "pause") end   -- WO-190 A3: no look poses on a paused copy
     if KCD2MP_W144ShowCopy then pcall(KCD2MP_W144ShowCopy, name) end   -- WO-144 2.3: a horse the host uses is shown here
 end
 
@@ -4334,6 +4335,7 @@ local function mp_wo102_resume(name, why)
     KCD2MP._npcResumePending[name] = nil
     local ok, err = pcall(System.ExecuteCommand, "wh_ai_ResumeNPC " .. tostring(name))
     local exec = ok and "ok" or ("err:" .. tostring(err))
+    if KCD2MP_W190CopyLook then pcall(KCD2MP_W190CopyLook, name, true, "resume") end   -- WO-190 A3: its own look again
     mp_auth_log(name, "resume", "?", why, os.clock() - at)
     mp_pause_log(name, "resume", exec, why, "?", os.clock() - at)
 end
@@ -23192,7 +23194,15 @@ do
     function KCD2MP_W187SetAnimIdle(arg) return KCD2MP_W187Set("anim_idle", arg) end
     function KCD2MP_W187SetAnimDefence(arg) return KCD2MP_W187Set("anim_defence", arg) end
     function KCD2MP_W187SetAnimCombo(arg) return KCD2MP_W187Set("anim_combo", arg) end
-    function KCD2MP_W187SetAnimScopeLog(arg) return KCD2MP_W187Set("anim_scope_log", arg) end
+    function KCD2MP_W187SetAnimScopeLog(arg)
+        -- WO-190 A9: auto (the default) = the trace of the bodies in a fight only, rate-limited, so a field bundle shows a bad pose's cause
+        if tostring(arg or ""):lower():match("^%s*auto%s*$") then
+            mp_log("WO187-TOGGLE mp_anim_scope_log auto -- sent to the agent and the DLL")
+            KCD2MP_EmitEvent("w187_cfg", "anim_scope_log=auto")
+            return true
+        end
+        return KCD2MP_W187Set("anim_scope_log", arg)
+    end
     function KCD2MP_W187SetFightPos(arg) return KCD2MP_W187Set("fight_pos", arg) end
     function KCD2MP_W187SetChaseFollow(arg) return KCD2MP_W187Set("chase_follow", arg) end
     function KCD2MP_W187SetAnimHitFallback(arg) return KCD2MP_W187Set("anim_hit_fallback", arg) end
@@ -23203,6 +23213,76 @@ do
         return true
     end
 end   -- WO-187's do-block
+
+-- WO-190: animation parity -- both players see the same thing. The switches live in the agent and the DLL (w190_cfg); this block names them,
+-- passes on|off, and holds the Lua halves: A2 the light put away from a fighting copy's hand (KCD2MP_W167Weapon), A3 no look IK on a paused
+-- copy (its own look IK kept asking for look poses the puppet never played: the joiner's queue overflows, as WO-157 found on the figures).
+-- Each mechanism ships on; mp_anim_trace is a research trace (off).
+do
+    W190 = W190 or {}
+    W190.on = W190.on or { copy_weapon_hold = true, anim_requeue_gate = true }
+    W190.NAMES = { anim_trace = "mp_anim_trace", anim_idle_watch = "mp_anim_idle_watch", anim_standin_weapon = "mp_anim_standin_weapon",
+                   copy_weapon_hold = "mp_copy_weapon_hold", anim_requeue_gate = "mp_anim_requeue_gate", anim_gait_hold = "mp_anim_gait_hold",
+                   copy_swing_takeover = "mp_copy_swing_takeover", engage_hold = "mp_engage_hold" }
+    W190.lookOff = W190.lookOff or {}
+    function KCD2MP_W190Set(name, arg)
+        local label = W190.NAMES[tostring(name)]
+        if not label then mp_log("WO190-TOGGLE unknown switch '" .. tostring(name) .. "'"); return false end
+        local v = KCD2MP_Wo122ParseBool(arg)
+        if v == "bad" then mp_log(label .. ": expected on|off, got '" .. tostring(arg) .. "'"); return false end
+        if v == nil then
+            mp_log("WO190-TOGGLE " .. label .. " (asking the agent; mp_w190_status shows the values)")
+            KCD2MP_EmitEvent("w190_status", "")
+            return true
+        end
+        W190.on[tostring(name)] = v
+        if name == "anim_requeue_gate" then   -- the paused copies' look IK follows the switch at once
+            for n, _ in pairs(KCD2MP._npcPaused or {}) do pcall(KCD2MP_W190CopyLook, n, not v, "switch") end
+        end
+        mp_log("WO190-TOGGLE " .. label .. " " .. (v and "on" or "off") .. " -- sent to the agent and the DLL")
+        KCD2MP_EmitEvent("w190_cfg", tostring(name) .. "=" .. (v and "on" or "off"))
+        return true
+    end
+    -- A2: a light (torch, lamp) in either hand of a copy -> its class and hand, else nil
+    function KCD2MP_W190LightInHand(e)
+        if not (e and e.human and type(e.human.GetItemInHand) == "function") then return nil end
+        for _, h in ipairs({ 0, 1 }) do
+            local c = KCD2MP.w136.handClass(e, h)
+            if c and KCD2MP.w144.LIGHTS[c] then return c, h end
+        end
+        return nil
+    end
+    -- A3: a paused copy's look IK and AI look target off (on = given back); only while mp_anim_requeue_gate is on
+    --   WO190-LOOK npc=<n> look=<off|on> why=<pause|resume|switch>
+    function KCD2MP_W190CopyLook(name, on, why)
+        name = tostring(name or "")
+        if not on and not W190.on.anim_requeue_gate then return end
+        if on and not W190.lookOff[name] then return end
+        local e = nil
+        pcall(function() e = System.GetEntityByName(name) end)
+        if not (e and e.actor and type(e.actor.SetLookIK) == "function") then W190.lookOff[name] = nil; return end
+        local ok1 = pcall(function() e.actor:SetLookIK(on) end)
+        local ok2 = AI ~= nil and type(AI.EnableUpdateLookTarget) == "function" and pcall(function() AI.EnableUpdateLookTarget(e.id, on) end)
+        W190.lookOff[name] = (not on) or nil
+        W190.lookN = (W190.lookN or 0) + 1
+        if W190.lookN <= 30 or W190.lookN % 100 == 0 then
+            mp_log(string.format("WO190-LOOK npc=%s look=%s why=%s ok=%s/%s (#%d)", name, on and "on" or "off", tostring(why), tostring(ok1), tostring(ok2), W190.lookN))
+        end
+    end
+    function KCD2MP_W190SetAnimTrace(arg) return KCD2MP_W190Set("anim_trace", arg) end
+    function KCD2MP_W190SetAnimIdleWatch(arg) return KCD2MP_W190Set("anim_idle_watch", arg) end
+    function KCD2MP_W190SetAnimStandinWeapon(arg) return KCD2MP_W190Set("anim_standin_weapon", arg) end
+    function KCD2MP_W190SetCopyWeaponHold(arg) return KCD2MP_W190Set("copy_weapon_hold", arg) end
+    function KCD2MP_W190SetAnimRequeueGate(arg) return KCD2MP_W190Set("anim_requeue_gate", arg) end
+    function KCD2MP_W190SetAnimGaitHold(arg) return KCD2MP_W190Set("anim_gait_hold", arg) end
+    function KCD2MP_W190SetCopySwingTakeover(arg) return KCD2MP_W190Set("copy_swing_takeover", arg) end
+    function KCD2MP_W190SetEngageHold(arg) return KCD2MP_W190Set("engage_hold", arg) end
+    function KCD2MP_W190Status()
+        mp_log("WO190-STATUS asked (MP-W190-STATS in agent.log)")
+        KCD2MP_EmitEvent("w190_status", "")
+        return true
+    end
+end   -- WO-190's do-block
 
 function KCD2MP_W166SetTalkResumeFirst(arg)
     local v = KCD2MP_Wo122ParseBool(arg)
@@ -23784,7 +23864,22 @@ function KCD2MP_W167Weapon(name, cls, why)
         mp_log(string.format("WO167-WEAPON npc=%s hand=- -> holstered why=%s -- the host's NPC holds nothing", name, tostring(why)))
         return true
     end
+    -- WO-190 A2 (mp_copy_weapon_hold): a fighting copy never holds a light. The game's night routine puts a torch in an NPC's hand (the
+    -- harness bandit fought with one and T-posed at night): it goes back into the inventory and the host NPC's weapon is drawn (again); a
+    -- light named as the host's weapon is never drawn.
+    if W190 and W190.on.copy_weapon_hold then
+        if KCD2MP.w144.LIGHTS[cls] then cls = "?" end
+        local light, hand = KCD2MP_W190LightInHand(e)
+        if light then
+            if type(e.human.HolsterToInventory) == "function" then pcall(function() e.human:HolsterToInventory(hand, false) end) end   -- put away, never dropped
+            W190.torchSwaps = (W190.torchSwaps or 0) + 1
+            mp_log(string.format("WO190-TORCH npc=%s held a %s (hand %d) in a fight -- put away, the host NPC's weapon drawn again (why=%s, #%d)",
+                name, tostring(KCD2MP.w144.LIGHTS[light]), hand, tostring(why), W190.torchSwaps))
+            st.drawn = false
+        end
+    end
     local want = (cls ~= "?") and cls or st.cls
+    if want and KCD2MP.w144.LIGHTS[want] and W190 and W190.on.copy_weapon_hold then want = nil end
     if st.drawn == true and (cls == "?" or st.cls == cls) then return true end   -- held already: never asserted again
     local item, owned = nil, "unknown"
     if want and want ~= "?" and want ~= "-" and e.inventory and type(e.inventory.FindItem) == "function" then
@@ -28018,11 +28113,20 @@ local ok, err = pcall(function()
     System.AddCCommand("mp_anim_idle", 'KCD2MP_W187SetAnimIdle(%line)', "WO-187: a body left with no animation after a move (a T-pose) gets its idle back (default on): mp_anim_idle on|off")
     System.AddCCommand("mp_anim_defence", 'KCD2MP_W187SetAnimDefence(%line)', "WO-187: the host's NPCs' own blocks, perfect blocks and dodges play on their copies (default on): mp_anim_defence on|off")
     System.AddCCommand("mp_anim_combo", 'KCD2MP_W187SetAnimCombo(%line)', "WO-187: a player's combo steps and throws play on their figure (default on): mp_anim_combo on|off")
-    System.AddCCommand("mp_anim_scope_log", 'KCD2MP_W187SetAnimScopeLog(%line)', "WO-187 research: the animation each figure and copy shows around every move, logged (default off): mp_anim_scope_log on|off")
+    System.AddCCommand("mp_anim_scope_log", 'KCD2MP_W187SetAnimScopeLog(%line)', "WO-187/WO-190: the animation each figure and copy shows, logged -- auto (the default): only bodies in a fight, rate-limited; on: around every move too: mp_anim_scope_log auto|on|off")
     System.AddCCommand("mp_fight_pos", 'KCD2MP_W187SetFightPos(%line)', "WO-187: once a second during a fight with a player, both machines log the NPC's and the player's positions on the shared clock (default on): mp_fight_pos on|off")
     System.AddCCommand("mp_chase_follow", 'KCD2MP_W187SetChaseFollow(%line)', "WO-187: an enemy that runs while it swings keeps following on the joiner's screen instead of standing still for the swing (default on): mp_chase_follow on|off")
     System.AddCCommand("mp_anim_hit_fallback", 'KCD2MP_W187SetAnimHitFallback(%line)', "WO-187: when the host's NPC's own hit reaction cannot play on its copy (another weapon in its hand here), the copy's own weapon's reaction plays instead of none (default on): mp_anim_hit_fallback on|off")
     System.AddCCommand("mp_anim_avatar_hit", 'KCD2MP_W187SetAnimAvatarHit(%line)', "WO-187: when you take a blow, your figure on your partner's screen plays the same hit reaction (default on): mp_anim_avatar_hit on|off")
+    System.AddCCommand("mp_anim_trace", 'KCD2MP_W190SetAnimTrace(%line)', "WO-190 research: every figure's, copy's and your own animation change logged (WO190-ANIM lines; default off): mp_anim_trace on|off")
+    System.AddCCommand("mp_anim_idle_watch", 'KCD2MP_W190SetAnimIdleWatch(%line)', "WO-190: a fighting figure or enemy copy left with no animation (a T-pose) gets its guard back at once, any time in the fight (default on): mp_anim_idle_watch on|off")
+    System.AddCCommand("mp_anim_standin_weapon", 'KCD2MP_W190SetAnimStandinWeapon(%line)', "WO-190: a hit reaction that cannot play is replaced with one for the weapon the body really holds (default on): mp_anim_standin_weapon on|off")
+    System.AddCCommand("mp_copy_weapon_hold", 'KCD2MP_W190SetCopyWeaponHold(%line)', "WO-190: (joiner) an enemy copy in a fight keeps the host's weapon at every engage and swing, never a torch (default on): mp_copy_weapon_hold on|off")
+    System.AddCCommand("mp_anim_requeue_gate", 'KCD2MP_W190SetAnimRequeueGate(%line)', "WO-190: (joiner) standing and sitting copies stop re-asking for the same animation every frame (default on): mp_anim_requeue_gate on|off")
+    System.AddCCommand("mp_anim_gait_hold", 'KCD2MP_W190SetAnimGaitHold(%line)', "WO-190: a walking figure or copy keeps walking through a short network gap instead of gliding in its idle (default on): mp_anim_gait_hold on|off")
+    System.AddCCommand("mp_copy_swing_takeover", 'KCD2MP_W190SetCopySwingTakeover(%line)', "WO-190: (joiner) an enemy copy still finishing its last swing starts the next one, so every swing shows its wind-up and your shield window (default on): mp_copy_swing_takeover on|off")
+    System.AddCCommand("mp_engage_hold", 'KCD2MP_W190SetEngageHold(%line)', "WO-190: (joiner) an enemy turning between you and the host keeps fighting on your screen instead of freezing for a second (default on): mp_engage_hold on|off")
+    System.AddCCommand("mp_w190_status", 'KCD2MP_W190Status()', "WO-190: the animation-parity switches and counters (MP-W190-STATS in agent.log)")
     System.AddCCommand("mp_w187_status", 'KCD2MP_W187Status()', "WO-187: the fight switches and counters (MP-W187-STATS in agent.log)")
     System.AddCCommand("mp_w178_status", 'KCD2MP_W178Status(%line)', "WO-178: the save switches, the quicksave, the draw probe, and the DLL's hostility answer (through the agent): mp_w178_status")
     System.AddCCommand("mp_repair_combat", 'KCD2MP_W174Repair(%line)', "WO-174: frees stuck weapons -- clears partner-figure fight links, ends a stuck fight, re-equips a melee weapon -- and says so; on a save that was fine it changes nothing: mp_repair_combat")

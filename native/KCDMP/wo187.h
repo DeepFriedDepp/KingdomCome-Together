@@ -66,6 +66,14 @@ void note_plan(const char* name, bool opponentIsPlayer, int planned, bool refuse
 void note_move(uint32_t eid);
 // The duel trace (wo178.cpp): this body's full-body action as text, "" when the reader is not armed.
 std::string scope_text(uint32_t eid);
+// WO-190 0.1 (main thread, read-only): every scope of the body's action controller -- its name and its installed action (RTTI name without
+// the namespace, priority, flags, fragment id; act = the action object, only compared, never dereferenced by the caller). Returns the count
+// read, -1 when the reader is not armed or the body has no checked controller.
+struct ScopeInfo { bool ok = false; bool empty = true; int index = 0; char name[24]{}; char action[48]{}; const void* act = nullptr; int32_t prio = 0;
+                   uint32_t flags = 0, frag = 0; };
+int read_all_scopes(uint32_t eid, ScopeInfo* out, int max);
+// WO-190 0.1 (main thread, read-only): the body's Mannequin tag state (its action controller's context +0x10, WO-100's read), n <= 20 bytes.
+bool tag_state(uint32_t eid, uint8_t* out, size_t n);
 // The duel trace: the combat actor's current director action (its RTTI name without the namespace), "" unreadable.
 std::string director_action(void* ca);
 

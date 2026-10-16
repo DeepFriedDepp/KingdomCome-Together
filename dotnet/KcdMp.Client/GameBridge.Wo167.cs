@@ -343,6 +343,7 @@ public partial class GameBridge
             var idx = await SoulIndexAsync();
             if (idx is null) return;                                   // the tables are not read: nothing is told
             if (!(Guid.TryParse(right, out var g) && idx.TryGetItem(g, out var it) && Wo167Rules.IsWeaponKind(it.Kind))) return;   // a tool: WO-143's
+            if (_w190CopyWeaponHold && Wo190Rules.Lights.Contains(right)) return;   // WO-190 A2: a torch is never a fighting copy's weapon
             w = right;
         }
         string was = _w167HostWeapon.TryGetValue(r.Name, out var pw) ? pw : "";

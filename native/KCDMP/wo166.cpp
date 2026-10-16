@@ -10,6 +10,8 @@
 #include "wo178_rules.h"
 #include "wo187.h"
 #include "wo187_rules.h"
+#include "wo190.h"
+#include "wo190_rules.h"
 #include <cmath>
 #include "anchors.h"
 #include "fault_guard.h"
@@ -534,6 +536,41 @@ double stage2_for(const Strike& s) {
     return v;
 }
 
+// WO-190 A6 (mp_copy_swing_takeover): the host's next swing for a copy still in its last one -- the withdraw (0x20) or 0x40 its previous
+// swing or reaction row left -- ends that leftover through the engine's own state setter (Guard), so the new swing winds up (and with it
+// the joiner's shield window). Never over a real engine reaction to a blow on the copy itself: its director runs a Hit action, or the
+// local player hit it within the last 1.2 s. The 0.60.7 joiner: 15 of the guards' 34 swings refused, 2 shield windows in 30 attacks.
+std::atomic<uint32_t> c_takeovers{0}, c_takeoverKept{0}, c_takeoverFailed{0};
+bool take_over_leftover(const Strike& s, void* ca, void* model, int32_t* cur) {
+    if (*cur != wo190rules::kStateWithdraw && *cur != wo190rules::kStateHitState) return false;
+    if (!wo190::swing_takeover_on()) return false;
+    const std::string dir = wo187::director_action(ca);
+    void* soul = hits::soul_of_eid(s.eid);
+    const bool hitRecently = soul && hits::hit_by_player(soul, wo190rules::kRealHitS);
+    const bool reaction = wo190rules::director_is_reaction(dir.c_str());
+    if (!wo190rules::leftover_endable(true, *cur, reaction, hitRecently)) {
+        if (c_takeoverKept.fetch_add(1) < 20)
+            logf("WO190-TAKEOVER npc=%s kept: the copy reads 0x%X and it is a real reaction (director=%s, hit by the player within %.1f s=%d) -- never cut off",
+                 s.name.c_str(), static_cast<unsigned>(*cur), dir.empty() ? "?" : dir.c_str(), wo190rules::kRealHitS, hitRecently ? 1 : 0);
+        return false;
+    }
+    const int32_t was = *cur;
+    const bool wrote = g_setState ? set_state_engine(model, kStateGuard) : motion::write_state(model, kStateGuard);
+    int32_t now = 0;
+    if (!wrote || !motion::read_state(model, &now) || !strike_state_ok(now)) {
+        if (c_takeoverFailed.fetch_add(1) < 20)
+            logf("WO190-TAKEOVER npc=%s the leftover 0x%X did not end (wrote=%d now=0x%X) -- refused as before", s.name.c_str(), static_cast<unsigned>(was), wrote ? 1 : 0,
+                 static_cast<unsigned>(now));
+        return false;
+    }
+    *cur = now;
+    const uint32_t n = c_takeovers.fetch_add(1) + 1;
+    if (n <= kLogFirst || n % 50 == 0)
+        logf("WO190-TAKEOVER npc=%s the copy still read 0x%X from its last swing (director=%s) -> Guard through the %s; the new swing winds up (#%u)",
+             s.name.c_str(), static_cast<unsigned>(was), dir.empty() ? "?" : dir.c_str(), g_setState ? "engine's state setter" : "raw state (setter not armed)", n);
+    return true;
+}
+
 // The prior state and fields back, if the model still reads ours.
 void restore(Strike& s, bool closing) {
     // WO-172 C1: a body that died inside its window keeps what its death left -- no Guard/Idle written over a corpse
@@ -589,6 +626,21 @@ int weapon_class_id(void* ca) {
     return id;
 }
 
+bool weapon_classes(void* ca, int* right, int* left) {
+    // WO-190 A1: both hand slots' weapon classes through the reach's own lookup (slot 0, slot 1), the class id at +8; -1 = an empty slot
+    *right = -1; *left = -1;
+    if (!ca || !resolve_reach() || !g_weapon) return false;
+    KCDMP_FAULT_CALL(site, "wo166::weapon_classes");
+    return fault::guarded(site, [&] {
+        void* set = *reinterpret_cast<void**>(static_cast<char*>(ca) + 0x4D8);
+        if (!set) return;
+        void* w0 = g_weapon(static_cast<char*>(set) + 0x18, 0);
+        void* w1 = g_weapon(static_cast<char*>(set) + 0x18, 1);
+        if (w0) *right = *reinterpret_cast<int32_t*>(static_cast<char*>(w0) + 8);
+        if (w1) *left = *reinterpret_cast<int32_t*>(static_cast<char*>(w1) + 8);
+    });
+}
+
 float swing_hit_distance(uint32_t eid) {
     float d = 0;
     double latest = -1;
@@ -623,7 +675,9 @@ void tick() {
             s.windup = true;
             void* ca = nullptr; void* model = nullptr;
             int32_t cur = 0;
-            if (wo172::skip_dead(s.eid, "strike") || !motion::combat_parts(s.eid, false, &ca, &model) || !motion::read_state(model, &cur) || !strike_state_ok(cur)) {
+            const bool parts = !wo172::skip_dead(s.eid, "strike") && motion::combat_parts(s.eid, false, &ca, &model) && motion::read_state(model, &cur);
+            if (parts && !strike_state_ok(cur)) take_over_leftover(s, ca, model, &cur);   // WO-190 A6
+            if (!parts || !strike_state_ok(cur)) {
                 s.engine = false;   // the begin branch below decides as before
             } else {
                 motion::AttackFields pf{};
@@ -729,7 +783,7 @@ void tick() {
                     // WO-173: a partner's figure in a reaction of its own (an NPC's blow on it) waits for the reaction to end inside its
                     // window -- never cut off -- and strikes then (the partner's blow that follows needs the window to go through the engine)
                     if (!s.waited) { s.waited = true; c_figureWaited.fetch_add(1); }
-                } else if (!strike_state_ok(cur)) {
+                } else if (!strike_state_ok(cur) && !take_over_leftover(s, ca, model, &cur)) {   // WO-190 A6: a leftover of its last swing ends first
                     c_refusedState.fetch_add(1);
                     if (c_refusedState.load() <= 20) logf("WO166-STRIKE npc=%s refused: the copy's state is 0x%X (an engine reaction of its own: never cut off)", s.name.c_str(), static_cast<unsigned>(cur));
                     s.done = true; s.discardUntil = now;
@@ -942,9 +996,11 @@ int status_text(char* out, int n) {
         g_strikes.size(), g_autoMode.load(), npcdrive::snap_fix() ? "on" : "off", c_figureWaited.load());
     if (w0 < 0 || w0 >= n) return w0;
     // WO-187 A3: the shield windows the copies' wind-ups planned (slot types planned) and the plannings refused
-    return w0 + std::snprintf(out + w0, n - w0, " engine_state=%s windups=%u engine_strikes=%u engine_restores=%u opp_player=%u opp_other=%u planned=%u plan_refused=%u",
+    return w0 + std::snprintf(out + w0, n - w0, " engine_state=%s windups=%u engine_strikes=%u engine_restores=%u opp_player=%u opp_other=%u planned=%u plan_refused=%u"
+        " takeovers=%u takeover_kept=%u takeover_failed=%u",
         g_setState ? "armed" : (g_setStateResolved ? "not-armed" : "unresolved"), c_engineWindup.load(), c_engineStrike.load(), c_engineRestore.load(),
-        c_engineOppPlayer.load(), c_engineOppOther.load(), c_planned.load(), c_planRefused.load());
+        c_engineOppPlayer.load(), c_engineOppOther.load(), c_planned.load(), c_planRefused.load(), c_takeovers.load(), c_takeoverKept.load(),
+        c_takeoverFailed.load());
 }
 
 void on_pipe_closed() {
