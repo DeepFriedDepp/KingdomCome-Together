@@ -1368,6 +1368,36 @@ Evidence: `docs/WO-177-findings.md`. **Type `mark_odd` at every miss.**
      `WO191-FADER released after 3.0 s (...)`.
 330. **Type `mark_odd` at every miss.** Switches (all on): `mp_action_forget`, `mp_sweep_fight_guard`, `mp_attacker_bind`, `mp_fader_bound`.
 
+## WO-190 — both of you see the same thing: walking, fighting, working, riding, standing (0.60.9)
+
+331. **Watch each other move.** Take turns while the other one only watches: walk, run, sprint, stop, turn on the spot, crouch, jump, climb
+     over something, sit on a bench and stand up, open a door and a chest, pick something up, loot a body, drink, eat, light a torch, read,
+     mount a horse, ride at a walk, a trot and a gallop, and get off. The watcher sees the same move at the same moment: never a figure gliding
+     along in its standing pose, never one walking on the spot after it stopped, never a T-pose (arms out, stiff). Type `mark_odd` at anything
+     that looks different from what you did.
+332. **Watch each other work.** Each of you uses a station the other can see: the alchemy table, the grindstone, the smithy, picking herbs,
+     lockpicking, a game of dice. The watcher sees the work animation, not a figure standing still.
+333. **Watch each other fight, at day and at night.** Fight bandits or villagers (crime off) with a sword, with a mace or an axe, and with
+     fists; once in daylight and once after dark. The watcher sees each swing, block, dodge, kick and hit reaction as its own move, and the
+     fighting guard in between. At night an enemy that fights keeps its weapon on the joiner's screen: never a torch in its hand, never a
+     T-pose. Lines on the joiner: `WO190-TORCH npc=<it> held a torch ... put away` (a torch was taken out of a fighting enemy's hand).
+334. **An enemy's every swing shows on the joiner's side, even fast ones.** A guard or a bandit that swings again right after it was hit (or
+     after its last swing) still winds up on the joiner's screen, and the joiner gets the green shield for it. Lines on the joiner:
+     `WO190-TAKEOVER npc=<it> the copy still read 0x20 ... the new swing winds up`, and far fewer `WO166-STRIKE ... refused` than before.
+335. **An enemy switching between you keeps moving.** One enemy, both of you in reach: it turns from the joiner to the host and back. On the
+     joiner's screen it keeps fighting the whole time and its blows on the joiner are always animated. Line on the joiner:
+     `MP-W190 engage hold <it>: its host NPC turned to the host -- it stays engaged and animating 3 s`.
+336. **A clinch or a throw shows as a blow.** When an enemy grabs the joiner (a clinch, a throw), the joiner sees at least its plain attack,
+     never nothing. Lines on the joiner: `WO167-SYNCFALLBACK ... why=it-fights-me(the-clinch-gate-refuses-its-half)` or `WO190-CLINCH`.
+337. **Watch the town.** Stand in a village by day and again in the evening, near people working, sitting, talking and leaning. The joiner sees
+     them do what the host sees them do (the same work, the same seat), standing still where they stand: no twitching on the spot. Line count to
+     send: the `Animation-queue overflow` lines in both `kcd.log`s (fewer on the joiner than before).
+338. **Type `mark_odd` at every miss.** The new lines `WO190-ANIM` (on by itself during fights: what each figure and enemy had on at that
+     moment) and `WO190-IDLE` (a fighting body with no animation got its guard back) are what we look at after a `mark_odd`. Switches (all
+     on): `mp_anim_idle_watch`, `mp_anim_standin_weapon`, `mp_copy_weapon_hold`, `mp_anim_requeue_gate`, `mp_anim_gait_hold`,
+     `mp_copy_swing_takeover`, `mp_engage_hold`; `mp_anim_scope_log auto` (the default); `mp_anim_trace on` logs every animation change
+     (research, off).
+
 ## Logs to send afterwards
 
 Both machines: Report a bug in the launcher. Since 0.48.9 it collects the current launch by default as a small file (or a few numbered

@@ -25,6 +25,23 @@ How to play together (0.48.2):
 Nobody clicks CONNECT any more, and you don't need anyone's save file. First time ever starting the game? Start it once from Steam and accept its two first-run pages, then use the launcher.
 ```
 
+## Version 0.60.9 — both of you see the same moves (WO-190)
+
+```
+Kingdom Come: Together 0.60.9
+- An enemy that was just hit and swings again right away now shows its wind-up on the joiner's screen every time, so the joiner gets the shield (and the perfect block) for every swing. Before, most of those quick follow-up swings had no wind-up at all.
+- An enemy that turns from the joiner to the host and back keeps fighting on the joiner's screen instead of freezing for a second, so its blows on the joiner are always animated.
+- A clinch or a throw from an enemy fighting the joiner now always shows as at least its plain attack, never as nothing.
+- At night an enemy that fights keeps its weapon on the joiner's screen: the torch its evening routine gives it is put away.
+- Your partner's figure, and an enemy fighting your partner, get their fighting guard back at once whenever they are left with no animation in a fight (the T-pose), not only right after a move.
+- A hit reaction that cannot play on a figure is replaced with one for the weapon it really holds, never a bare-handed one on an armed figure.
+- Walking figures and villagers no longer glide along in their standing pose after a short network hiccup, and villagers that stand still stop shuffling on the spot.
+- Standing and sitting villagers on the joiner's side no longer flood the game with animation requests.
+- During fights the game now notes what each figure and enemy is doing, so a "he was in a weird pose" report can be checked from the logs. Type mark_odd at anything odd.
+Every fix has its own switch (mp_copy_swing_takeover, mp_engage_hold, mp_copy_weapon_hold, mp_anim_idle_watch, mp_anim_standin_weapon, mp_anim_gait_hold, mp_anim_requeue_gate), all on.
+Both players and the relay need 0.60.9.
+```
+
 ## Version 0.60.7 — a hotfix: restarts, fights, dogs, black screens (WO-191)
 
 ```
