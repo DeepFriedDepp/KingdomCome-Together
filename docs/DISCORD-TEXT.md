@@ -25,6 +25,20 @@ How to play together (0.48.2):
 Nobody clicks CONNECT any more, and you don't need anyone's save file. First time ever starting the game? Start it once from Steam and accept its two first-run pages, then use the launcher.
 ```
 
+## The next build — saves, simplified (WO-192)
+
+```
+Kingdom Come: Together, the next build: saves, simplified
+- The joiner's character is now saved with every host save, also right after a cutscene. Before, a cutscene could block the joiner's saves for minutes, and a reload then lost that progress.
+- The host's game now saves by itself every 30 minutes of play, the Saviour Schnapps way (no schnapps used). It waits while a fight, a conversation or a cutscene runs. Saving yourself starts the 30 minutes again. Switch: mp_host_autosave (on), mp_host_autosave_min <minutes>.
+- Gone: the joiner's own 10-minute save, the host's "your partner hasn't been saved" reminder, and the save when the joiner opens the menu. The host's autosave replaces them.
+- Your partner's marker on the map and the compass now follows them instead of staying where it first appeared.
+- After sleeping or waiting together, the joiner no longer wakes before the host: the screen stays dark until the host wakes (15 seconds at most).
+- Washing at a trough no longer leaves anyone stuck or unable to save.
+- Mark screenshots are gone: mark_odd no longer takes a picture. Old ones are in Saved Games\kingdomcome2\screenshots (screenshot_<date>_<time>.jpg); delete the ones from your marks if you like.
+Please type mark_odd at anything odd.
+```
+
 ## Version 0.60.9 — both of you see the same moves (WO-190)
 
 ```

@@ -1398,6 +1398,22 @@ Evidence: `docs/WO-177-findings.md`. **Type `mark_odd` at every miss.**
      `mp_copy_swing_takeover`, `mp_engage_hold`; `mp_anim_scope_log auto` (the default); `mp_anim_trace on` logs every animation change
      (research, off).
 
+## WO-192 — saves, simplified (the next build)
+
+339. **The joiner's progress survives a cutscene.** Play past an in-game cutscene together, the joiner picks something up, then the host saves
+     (Home), or both just play on until the host's autosave (every 30 minutes of play; it waits while a fight, a conversation or a cutscene
+     runs). The host reloads. The joiner has the item. Lines on the joiner: `MP-HENRY joiner: PAIRED host save seq=N` after every host save,
+     `WO192-SAVE during a scene` when one was taken while a scene ran; on the host: `WO192-AUTOSAVE done` (or `waiting why=...`).
+340. **The partner's marker moves.** Walk apart. Each of you opens the map and watches the compass: the partner's marker follows them (it no
+     longer stays where it first appeared and only turns). Line on each machine's `kcdmp-native.log`: `WO192-MAPMARK pin ... moved to`.
+341. **After a shared sleep, both wake together.** Sleep (and once, wait) together. If the joiner's screen comes back first, it stays dark
+     until the host wakes (15 seconds at most), so the world never jumps under the joiner's eyes. Line on the joiner: `WO192-WAKE released
+     after N s (the host woke)`.
+342. **Washing at a trough never leaves anyone stuck.** Each of you washes at a trough, once while the other is washing at the same trough.
+     Both can walk away afterwards and the host can save. Line if the game's wash never ended: `WO192-STATION ... ended the game's own way`.
+343. **Type `mark_odd` at every miss.** A mark no longer takes a screenshot. Switches (all on): `mp_host_autosave`, `mp_host_autosave_min`
+     (30), `mp_wake_hold`, `mp_station_release`. Gone: `mp_joiner_autosnap`, `mp_save_reminder`, `mp_mark_shot`.
+
 ## Logs to send afterwards
 
 Both machines: Report a bug in the launcher. Since 0.48.9 it collects the current launch by default as a small file (or a few numbered
