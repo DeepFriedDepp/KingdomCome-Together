@@ -176,6 +176,7 @@ public partial class GameBridge
         if (Interlocked.CompareExchange(ref _w178SaveBusy, 1, 0) != 0)
         {
             Console.WriteLine($"MP-W178 save why={why} result=busy -- a save is already waiting for its file");
+            if (why == Wo192Rules.AutosaveWhy) Wo192OnSaveResult("busy", "");
             await ExecLuaAsync($"if KCD2MP_W178SaveDone then KCD2MP_W178SaveDone(\"busy\", \"\", \"{why}\") end");
             return;
         }
@@ -195,6 +196,7 @@ public partial class GameBridge
             if (res != 1)
             {
                 Interlocked.Increment(ref _w178SaveRefused);
+                if (why == Wo192Rules.AutosaveWhy) Wo192OnSaveResult(word, "");
                 await ExecLuaAsync($"if KCD2MP_W178SaveDone then KCD2MP_W178SaveDone(\"{word}\", \"\", \"{why}\") end");
                 return;
             }
@@ -203,11 +205,13 @@ public partial class GameBridge
             {
                 Interlocked.Increment(ref _w178NoFile);
                 Console.WriteLine($"MP-W178 save why={why} result=no-file -- no new verified save within {Wo178Rules.SaveFileWaitMs / 1000} s");
+                if (why == Wo192Rules.AutosaveWhy) Wo192OnSaveResult("no-file", "");
                 await ExecLuaAsync($"if KCD2MP_W178SaveDone then KCD2MP_W178SaveDone(\"no-file\", \"\", \"{why}\") end");
                 return;
             }
             Interlocked.Increment(ref _w178Saves);
             Console.WriteLine($"MP-W178 save why={why} file={file} verified");
+            if (why == Wo192Rules.AutosaveWhy) Wo192OnSaveResult("saved", file);
             await ExecLuaAsync($"if KCD2MP_W178SaveDone then KCD2MP_W178SaveDone(\"saved\", \"{EscapeLua(file)}\", \"{why}\") end");
         }
         finally { Volatile.Write(ref _w178SaveBusy, 0); }

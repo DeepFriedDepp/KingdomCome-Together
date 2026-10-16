@@ -378,79 +378,9 @@ public static class Wo184Rules
         return "";
     }
 
-    /// <summary>
-    /// B4, the quit: the final snapshot starts when the ESC menu opens (the DLL's 0xAD edge), not only at the exit dialog. Live: the exit
-    /// dialog's line comes about 1 s before the quit (the field: 0.95 s), a snapshot needs ~0.25 s to be asked and ~1.5 s for its file;
-    /// a quit 0.3 s after the dialog line ended the game before the file was written (nothing paired; nothing left behind). The menu
-    /// opens seconds before the dialog. At most one per menu opening; none within MenuMinGapMs of the last pair (the player was in the
-    /// menu or had just been saved: nothing new to keep). "" = start it; "-" = not wanted here; else why not (logged).
-    /// </summary>
-    public static string MenuSnapshotBlock(bool joiner, bool joined, bool saveOnLeave, bool inFlight, long sinceLastPairMs)
-    {
-        if (!joiner || !joined) return "-";
-        if (!saveOnLeave) return "mp_save_on_leave is off";
-        if (inFlight) return "a snapshot is on its way already";
-        if (sinceLastPairMs >= 0 && sinceLastPairMs < MenuMinGapMs) return "paired moments ago";
-        return "";
-    }
-
-    /// <summary>The ESC menu snapshot's purpose (the pair's "How"); the quit's notice reads it back.</summary>
-    public const string MenuPurpose = "the ESC menu";
-
     /// <summary>The host's "Partner saved.": shown for a pair with a host save it has not shown yet -- a later snapshot of the same save
     /// (the joiner's menu or leave) is logged only.</summary>
     public static bool PartnerSavedShows(bool known, uint prevSeq, string prevMd5, uint seq, string md5) => !(known && prevSeq == seq && prevMd5 == md5);
-
-    public const long MenuMinGapMs = 5_000;
-
-    /// <summary>
-    /// The menu's own snapshot is the final one when the player has been in the menu since it paired: the menu was closed for at most
-    /// MenuClosedSlackMs in all since that pair (the exit dialog may close and reopen it; the quit may close it). Then the exit dialog
-    /// starts no second save racing the quit, and the quit's notice may say "up to the moment you quit".
-    /// </summary>
-    public static bool MenuPairCoversQuit(bool lastPairIsMenu, long closedSincePairMs) => lastPairIsMenu && closedSincePairMs <= MenuClosedSlackMs;
-
-    public const long MenuClosedSlackMs = 2_000;
-
-    /// <summary>The time the ESC menu was closed since the last pair (its edges: the DLL's 0xAD). Thread-safe; the bridge feeds it.</summary>
-    public sealed class MenuTime
-    {
-        private readonly object _g = new();
-        private bool _open;
-        private long _closedAt = -1, _accum, _session, _lastCloseAt = -1;
-        public long Session { get { lock (_g) return _session; } }
-        public bool Open { get { lock (_g) return _open; } }
-
-        /// <summary>The player is in the menu now (or left it a moment ago: the quit itself may close it).</summary>
-        public bool InMenu(long now) { lock (_g) return _open || (_session > 0 && _lastCloseAt >= 0 && now - _lastCloseAt <= MenuClosedSlackMs); }
-
-        /// <summary>The ESC menu opened: a new menu session (its number).</summary>
-        public long Opened(long now)
-        {
-            lock (_g)
-            {
-                if (_closedAt >= 0) _accum += Math.Max(0, now - _closedAt);
-                _closedAt = -1;
-                _open = true;
-                return ++_session;
-            }
-        }
-
-        public void Closed(long now) { lock (_g) { if (_open) { _open = false; _closedAt = now; _lastCloseAt = now; } } }
-
-        /// <summary>A pair: the count starts again (the menu's state is kept).</summary>
-        public void Paired(long now) { lock (_g) { _accum = 0; _closedAt = _open ? -1 : now; } }
-
-        /// <summary>The time the menu was closed since the last pair (all of it when no menu edge was ever seen: long.MaxValue).</summary>
-        public long ClosedSincePair(long now)
-        {
-            lock (_g)
-            {
-                if (_session == 0) return long.MaxValue;
-                return _accum + (_closedAt >= 0 ? Math.Max(0, now - _closedAt) : 0);
-            }
-        }
-    }
 
     // ---------------------------------------------------------------- the words
 

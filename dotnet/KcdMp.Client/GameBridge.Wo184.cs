@@ -18,8 +18,8 @@ namespace KcdMp.Client;
 //                call every load makes) clears it and a fresh snapshot is taken; the players are told when it cannot be cleared or sticks
 //                again ("restart your game").
 //   leaving (B4) a final snapshot when the joiner leaves the host's world (the exit dialog before a quit, the mod's leave, the host gone,
-//                the relay lost; the host's reload while one is owed); mp_save_on_leave (default on) takes it at every leave. A quit is
-//                prepared when the ESC menu opens (the DLL's 0xAD edge): the exit dialog alone leaves about 1 s before the game ends.
+//                the relay lost; the host's reload while one is owed); mp_save_on_leave (default on) takes it at every leave. (WO-192
+//                removed the ESC menu's early snapshot: the exit dialog's own snapshot is the quit's.)
 //   health (B5)  every host save ends in a pair or a logged reason within 60 s; two in a row unpaired = both players told; mp_save_status on
 //                both machines; the host shows "Partner saved." on the joiner's pair (W164 kind 16).
 //   the clock    (B2) the conversation clock behind WO-179's guard (A3) and WO-167's scene release: a real conversation of the player's
@@ -316,10 +316,9 @@ public partial class GameBridge
             var st = await Wo184EngineStateAsync();
             if (st.Known && st.Pending) { NotNow("a save is pending on this machine", Wo184Rules.EngineRetryMs); return W184Take.NotNow; }
             if (st.Known && !st.CanQuick) { Interlocked.Increment(ref _w184EngineNotNow); NotNow("the engine cannot save now (its own CanSave said no: a fight, a cutscene, a dialogue lock...)", Wo184Rules.EngineRetryMs); return W184Take.NotNow; }
-            // WO-189 A3: CanSave(Quick) does not see the readiness wait, nor a scene positioning the host's copies (a request then cancels every NPC's
-            // fast-forward under the save lock -- the field's stuck cutscene); asked only when the engine can take it, else owed (15 s)
-            string notReady = await Wo189AskBlockAsync();
-            if (notReady.Length > 0) { Interlocked.Increment(ref _w184EngineNotNow); NotNow(notReady, Wo189Rules.NotReadyRetryMs); return W184Take.NotNow; }
+            // WO-192: no mod gate beyond the two hard blocks and the engine's own "not now". A scene positioning the host's copies, or the readiness
+            // service's "not ready", is a log line only (a request now may cancel the copies' fast-forward: accepted, WO-189 C releases a stuck start)
+            await Wo192SceneNoteAsync(purpose, w.Seq);
             // keep the engine's cached list in step with the disk: a new quicksave is named max(SaveId in the list)+1 (observed)
             await _combat.SaveListAsync(1, pl, "-");
             led = _henry.LedgerAdd(new HenryStore.LedgerEntry { Playline = pl, SinceUtc = DateTime.UtcNow.AddSeconds(-1), WorldTag = _joinedTag!, Kind = "snapshot" });
@@ -459,7 +458,6 @@ public partial class GameBridge
             Interlocked.Increment(ref _w184Paired);
             _w184Health.Paired(w.Seq);
             _w184LastPair = (w.Seq, md5, Environment.TickCount64, snap.Short, purpose);
-            _w184Menu.Paired(Environment.TickCount64);
             _w184StuckRun = 0;
             _w184StuckTold = false;
             _w184LastNotNow = "";   // the next "not now" is logged again
@@ -534,9 +532,8 @@ public partial class GameBridge
     /// A final snapshot before this game leaves the host's world (paired with the newest host save it follows). "" = taken and paired, or
     /// nothing owed with mp_save_on_leave off ("-" is returned then); else why not (said to the player by the caller).
     /// </summary>
-    private async Task<string> Wo184FinalSnapshotAsync(string why, bool ignoreRewind = false, bool onlyIfOwed = false, bool optional = false)
+    private async Task<string> Wo184FinalSnapshotAsync(string why, bool ignoreRewind = false, bool onlyIfOwed = false)
     {
-        // optional: the ESC menu's early snapshot -- not taken, it leaves nothing owed of its own (a host save's owed one stays owed)
         // a snapshot already on its way captures Henry as he is now: it is the final one (waited for, bounded)
         long t0 = Environment.TickCount64;
         if (Volatile.Read(ref _w184ReqAtMs) != 0 || Volatile.Read(ref _snapBusy) != 0)
@@ -557,7 +554,7 @@ public partial class GameBridge
         if (block == "-") { Console.WriteLine($"WO184-FINAL {why}: nothing owed -- the last pair stands (mp_save_on_leave off)"); return "-"; }
         if (block != "")
         {
-            if (!optional) Interlocked.Increment(ref _w184FinalNot);
+            Interlocked.Increment(ref _w184FinalNot);
             Console.WriteLine($"WO184-FINAL {why}: NOT taken -- {block}{(owed ? $" (host save seq={host?.Seq} stays without a pair)" : "")}");
             return block;
         }
@@ -569,44 +566,14 @@ public partial class GameBridge
         var probe = new W184Want { W = hw, SinceMs = Environment.TickCount64 };
         var res = await Wo184TakeAsync(hw, probe, "final snapshot (" + why + ")", Wo184Rules.FinalWaitMs);
         if (res == W184Take.Paired) return "";
-        lock (_w184Lock) _w184Want ??= optional ? was : was ?? probe;   // still owed (a later chance: the tick, the next host save)
-        if (!optional) Interlocked.Increment(ref _w184FinalNot);
+        lock (_w184Lock) _w184Want ??= was ?? probe;   // still owed (a later chance: the tick, the next host save)
+        Interlocked.Increment(ref _w184FinalNot);
         string reason = probe.Why.Length > 0 ? probe.Why : res.ToString().ToLowerInvariant();
         Console.WriteLine($"WO184-FINAL {why}: the final snapshot was NOT paired -- {reason}");
         return reason;
     }
 
-    // ================================================================ B4: the ESC menu (the DLL's 0xAD edge; a session only)
-
-    private readonly Wo184Rules.MenuTime _w184Menu = new();
-    private long _w184MenuSnaps, _w184MenuSkips;
-
-    private bool Wo184LastPairIsMenu => _w184LastPair.How == "final snapshot (" + Wo184Rules.MenuPurpose + ")";
-
-    /// <summary>
-    /// The DLL's 0xAD: the ESC menu opened / closed. ON the pipe reader: nothing here waits (the WO-131 trap). An opening starts the final
-    /// snapshot (Wo184Rules.MenuSnapshotBlock): a quit from the menu then finds it paired, or on its way -- the exit dialog alone left it
-    /// about 1 s, and a player who confirmed faster quit before the file was written (live, 0.3 s: nothing paired).
-    /// </summary>
-    private void Wo184OnMenu(bool opened)
-    {
-        long now = Environment.TickCount64;
-        if (!opened) { _w184Menu.Closed(now); return; }
-        long session = _w184Menu.Opened(now);
-        long since = _w184LastPair.AtMs > 0 ? now - _w184LastPair.AtMs : -1;
-        string block = Wo184Rules.MenuSnapshotBlock(W137Joiner, _joinedWorld && _jj is null, _w184SaveOnLeave,
-                                                    Volatile.Read(ref _w184ReqAtMs) != 0 || Volatile.Read(ref _snapBusy) != 0, since);
-        if (block == "-") return;
-        if (block != "") { Interlocked.Increment(ref _w184MenuSkips); Console.WriteLine($"WO184-FINAL the ESC menu opened (#{session}) -- no snapshot now: {block}"); return; }
-        Interlocked.Increment(ref _w184MenuSnaps);
-        Interlocked.Exchange(ref _w184MenuSnapSession, session);
-        Console.WriteLine($"WO184-FINAL the ESC menu opened (#{session}) in the host's world -- the final snapshot starts now, before any quit");
-        _ = Task.Run(async () =>
-        {
-            string r = await Wo184FinalSnapshotAsync(Wo184Rules.MenuPurpose, optional: true);
-            if (r is not ("" or "-")) Console.WriteLine($"WO184-FINAL the ESC menu's snapshot (#{session}) was not taken: {r} -- the exit dialog tries again");
-        });
-    }
+    // ================================================================ B4: the quit (WO-192: the ESC menu's early snapshot is gone)
 
     /// <summary>"C_UISaveLoad::HandleExit()": the game's exit dialog opened. A quit follows when the player confirms: the final snapshot now.</summary>
     private void Wo184OnExitDialog()
@@ -615,12 +582,6 @@ public partial class GameBridge
         long now = Environment.TickCount64;
         if (now - Interlocked.Read(ref _w184ExitDialogMs) < 30_000) return;   // one per 30 s (a cancelled exit dialog opened again)
         Interlocked.Exchange(ref _w184ExitDialogMs, now);
-        if (Volatile.Read(ref _w184ReqAtMs) == 0 && Volatile.Read(ref _snapBusy) == 0
-            && Wo184Rules.MenuPairCoversQuit(Wo184LastPairIsMenu, _w184Menu.ClosedSincePair(now)))
-        {
-            Console.WriteLine($"WO184-FINAL the game's exit dialog opened -- the ESC menu's own snapshot paired {Wo184Rules.Ago(now - _w184LastPair.AtMs)} and the player has been in the menu since: it is the final one (no second save racing the quit)");
-            return;
-        }
         Console.WriteLine("WO184-FINAL the game's exit dialog opened in the host's world -- one final snapshot now, before the player confirms the quit");
         _ = Task.Run(async () =>
         {
@@ -629,17 +590,9 @@ public partial class GameBridge
         });
     }
 
-    private long _w184MenuSnapSession;                                  // the menu session whose opening started the newest menu snapshot
-    private (long Session, bool InMenu) _w184QuitMenu;                 // the menu at the quit (Wo184TakeOwedAtQuit)
-
-    /// <summary>
-    /// Wo124OnGameQuit's part, synchronous: the owed snapshot (if any) is taken out before the world is marked left, and the menu's state at
-    /// the quit is kept (the menu's snapshot may land after it: Wo184AfterQuitAsync waits for it).
-    /// </summary>
+    /// <summary>Wo124OnGameQuit's part, synchronous: the owed snapshot (if any) is taken out before the world is marked left.</summary>
     private object? Wo184TakeOwedAtQuit()
     {
-        long now = Environment.TickCount64;
-        _w184QuitMenu = (_w184Menu.Session, _w184Menu.InMenu(now));
         lock (_w184Lock) { var o = _w184Want; _w184Want = null; return o; }
     }
 
@@ -653,10 +606,9 @@ public partial class GameBridge
         Wo125Sweep("game quit");
         var o = owedAtQuit as W184Want;
         long now = Environment.TickCount64;
-        // "up to the moment you quit": the exit dialog's own snapshot, or this menu's snapshot with the player in the menu until the quit
-        bool menuFinal = Wo184LastPairIsMenu && _w184QuitMenu.InMenu && Interlocked.Read(ref _w184MenuSnapSession) == _w184QuitMenu.Session;
+        // "up to the moment you quit": the exit dialog's own snapshot
         bool finalPaired = _w184LastPair.AtMs > 0 && now - _w184LastPair.AtMs < 120_000
-                           && (_w184LastPair.How.StartsWith("final snapshot (quit", StringComparison.Ordinal) || menuFinal);
+                           && _w184LastPair.How.StartsWith("final snapshot (quit", StringComparison.Ordinal);
         string text;
         if (o is not null)
         {
@@ -664,7 +616,6 @@ public partial class GameBridge
             text = $"Your character's last progress was NOT saved ({o.Why}). It is kept up to {Wo184PairText(now)}.";
         }
         else if (finalPaired) text = "Your character is saved, up to the moment you quit.";
-        else if (_w184LastPair.AtMs > 0 && Wo184LastPairIsMenu) text = $"Your character is saved as it was when you last opened the menu ({Wo184Rules.Ago(now - _w184LastPair.AtMs)}).";
         else if (_w184LastPair.AtMs > 0) text = $"Your character is saved up to {Wo184PairText(now)}.";
         else text = "Your character is kept as it was when you joined.";
         var last = tag is not null ? _henry.Snapshots(tag).FirstOrDefault() : null;
@@ -823,7 +774,6 @@ public partial class GameBridge
                 bool known = _w184PartnerPairs.TryGetValue(src, out var prev);
                 bool again = !Wo184Rules.PartnerSavedShows(known, prev.Seq, prev.Md5 ?? "", seq, md5);
                 _w184PartnerPairs[src] = (seq, md5, now);
-                Wo189OnPartnerPaired();   // WO-189 A4: the reminder's clock starts again
                 Console.WriteLine($"WO184-PARTNER player {src} saved: its character paired with this host's save seq={seq} md5={md5}{(again ? " (again: a later snapshot of the same save -- not shown again)" : "")}");
                 if (_w184PartnerSaved && !again) Say(Wo184Rules.HostPartnerSavedText);
                 break;
@@ -865,7 +815,7 @@ public partial class GameBridge
             Console.WriteLine($"WO184-STATUS role=joiner joined={On(_joinedWorld)} world={_joinedTag ?? "-"} last_pair={pair} owed={owed} in_flight={On(Volatile.Read(ref _w184ReqAtMs) != 0)} stuck_run={_w184StuckRun} "
                               + $"engine={(st.Known ? $"pending={On(st.Pending)} can_save={On(st.CanQuick)}" : $"unknown (lines: pending={On(Volatile.Read(ref _w184LinePendingSince) != 0)})")} clock={_w184Clock.Describe(now)} "
                               + $"asked={Interlocked.Read(ref _w184Asked)} paired={Interlocked.Read(ref _w184Paired)} not_now={Interlocked.Read(ref _w184EngineNotNow)} stuck={Interlocked.Read(ref _w184Stuck)} cancels={Interlocked.Read(ref _w184Cancels)} "
-                              + $"finals={Interlocked.Read(ref _w184Finals)} final_not={Interlocked.Read(ref _w184FinalNot)} menu_snaps={Interlocked.Read(ref _w184MenuSnaps)} menu_skips={Interlocked.Read(ref _w184MenuSkips)} superseded={Interlocked.Read(ref _w184Superseded)} not_stored={Interlocked.Read(ref _w184NotStored)} "
+                              + $"finals={Interlocked.Read(ref _w184Finals)} final_not={Interlocked.Read(ref _w184FinalNot)} superseded={Interlocked.Read(ref _w184Superseded)} not_stored={Interlocked.Read(ref _w184NotStored)} "
                               + $"health_paired={_w184Health.PairedCount} health_failed={_w184Health.FailedCount} unpaired_run={_w184Health.FailRun} save_on_leave={On(_w184SaveOnLeave)} recover={On(_w184Recover)}");
             shortText = !_joinedWorld ? "Not in your host's world: nothing to save here."
                       : o is not null ? $"Your character: NOT saved with your host's save #{o.W.Seq} yet ({o.Why}). Last saved with {Wo184PairText(now)}."
@@ -878,5 +828,5 @@ public partial class GameBridge
     }
 
     private string Wo184StatsText() =>
-        $"asked={Interlocked.Read(ref _w184Asked)} paired={Interlocked.Read(ref _w184Paired)} not_now={Interlocked.Read(ref _w184EngineNotNow)} stuck={Interlocked.Read(ref _w184Stuck)} cancels={Interlocked.Read(ref _w184Cancels)} finals={Interlocked.Read(ref _w184Finals)} final_not={Interlocked.Read(ref _w184FinalNot)} menu_snaps={Interlocked.Read(ref _w184MenuSnaps)} menu_skips={Interlocked.Read(ref _w184MenuSkips)} superseded={Interlocked.Read(ref _w184Superseded)} skipped={Interlocked.Read(ref _w184Skipped)} clock_starts={Interlocked.Read(ref _w184ClockStarts)} clock_ends={Interlocked.Read(ref _w184ClockEnds)} dll={On(_w184DllArmed)}";
+        $"asked={Interlocked.Read(ref _w184Asked)} paired={Interlocked.Read(ref _w184Paired)} not_now={Interlocked.Read(ref _w184EngineNotNow)} stuck={Interlocked.Read(ref _w184Stuck)} cancels={Interlocked.Read(ref _w184Cancels)} finals={Interlocked.Read(ref _w184Finals)} final_not={Interlocked.Read(ref _w184FinalNot)} superseded={Interlocked.Read(ref _w184Superseded)} skipped={Interlocked.Read(ref _w184Skipped)} clock_starts={Interlocked.Read(ref _w184ClockStarts)} clock_ends={Interlocked.Read(ref _w184ClockEnds)} dll={On(_w184DllArmed)}";
 }

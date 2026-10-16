@@ -436,6 +436,7 @@ public partial class GameBridge
             return;
         }
         _lastWorldSaveUtc = s.AtUtc;
+        Wo192OnHostSaved(s.Display);   // WO-192: any host save starts the next autosave interval
         var ws = new WorldSaved(++_worldSavedSeq, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), s.Kind, s.Playline, s.Idx, s.Md5);
         var body = ws.Encode();
         var pkt = new byte[3 + body.Length];

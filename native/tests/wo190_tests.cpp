@@ -106,6 +106,21 @@ int wo190_tests(int* passed) {
         WCHECK(!director_is_reaction("Attack") && !director_is_reaction("FailedAttack") && !director_is_reaction("Guard") && !director_is_reaction("none")
                && !director_is_reaction("") && !director_is_reaction(nullptr), "an attack's own actions are not reactions");
     }
+    // ---- WO-192 4d: pose evidence outside fights
+    {
+        Evidence e;
+        WCHECK(!e.gait(1.0f, 0.0) && !e.gait(1.0f, 0.1), "the first class and a steady one are no flip");
+        WCHECK(!e.gait(2.0f, 0.2) && !e.gait(1.0f, 0.5), "two flips are not yet evidence");
+        WCHECK(e.gait(2.0f, 0.9), "the third flip within 2 s is");
+        Evidence s;
+        s.gait(1.0f, 0.0); s.gait(2.0f, 1.0); s.gait(1.0f, 2.0);
+        WCHECK(!s.gait(2.0f, 3.5), "three flips spread over 2.5 s are a walk, not a flap");
+        WCHECK(!Evidence::empty_due(-1.0) && !Evidence::empty_due(0.49) && Evidence::empty_due(0.5), "an empty full body for 0.5 s");
+        Evidence w;
+        WCHECK(!w.on(0.0), "not armed: off");
+        w.arm(10.0);
+        WCHECK(w.on(10.0) && w.on(13.9) && !w.on(14.0), "armed: traced for 4 s");
+    }
     *passed = g_pass;
     return g_fail;
 }

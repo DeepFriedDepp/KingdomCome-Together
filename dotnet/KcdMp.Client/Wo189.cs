@@ -9,8 +9,7 @@ namespace KcdMp.Client;
 /// <summary>
 /// WO-189 -- 0.60.6: the pure rules (Wo189Tests pins them; Wo189ReplayTests runs the field's logs through them).
 ///   A  saves never stall silently: a wait that ends without its file cancels the engine's pending save (A1); a watchdog cancels any pending
-///      save older than 60 s (A2); a snapshot is asked only when the engine can take it (A3: the readiness service's IsReady(BeforeGameSave),
-///      no scene positioning on the host's copies, no stuck cutscene); the joiner's own 10-minute snapshot and the host's 15-minute reminder (A4).
+///      save older than 60 s (A2). (A3's ask gate and A4's own snapshot and reminder: removed by WO-192.)
 ///   B  the host's quest world layers (game profiles) mirrored to the joiner: quest profiles only, changes in play only.
 ///   C  a cutscene stuck at "initialized" for 10 s on the joiner is released the game's own way.
 ///   D  a scene's positioning still waiting 20 s after it began has its copies' FastForward stopped (the engine's own per-NPC call).
@@ -30,9 +29,6 @@ public static class Wo189Rules
     public const long WatchdogPeriodMs = 5_000, WatchdogPendingMs = 60_000;
     /// <summary>F: a requested save still pending after this long gets its not-ready tasks named (once).</summary>
     public const long PendingNameMs = 5_000;
-    /// <summary>A3: a snapshot the engine cannot take now is owed and asked again this often.</summary>
-    public const long NotReadyRetryMs = 15_000;
-
     /// <summary>
     /// A2: one pending stretch of the engine's save (its own state, read every 5 s). Due once, when the stretch is older than
     /// <see cref="WatchdogPendingMs"/>; a new stretch (pending -> clear -> pending) is a new one.
@@ -64,62 +60,14 @@ public static class Wo189Rules
         public void Reset() { SinceMs = 0; Acted = false; Named = false; }
     }
 
-    /// <summary>
-    /// A3: why a snapshot must not be asked now ("" = ask). <paramref name="ready"/> null = the readiness service could not be read (then the
-    /// engine's own pending state decides, as in 0.60.5). A scene positioning on the host's copies: a request would make the engine cancel every
-    /// NPC's FastForward under the save lock (the field: that is how the joiner got into the stuck cutscene).
-    /// </summary>
-    public static string AskBlock(bool? ready, string notReadyNames, bool positioningOnCopies, string stuckCutscene)
-    {
-        if (positioningOnCopies) return "a scene is still positioning the host's copies (a save request now would cancel every NPC's fast-forward)";
-        if (stuckCutscene.Length > 0) return $"the cutscene '{stuckCutscene}' is stuck at its start (released first)";
-        if (ready == false) return $"the engine's save readiness is not ready ({(notReadyNames.Length > 0 ? notReadyNames : "?")})";
-        return "";
-    }
+    // A3 (the readiness / positioning / stuck-cutscene gate) and A4 (the joiner's own 10-minute snapshot, the host's 15-minute reminder) were
+    // removed by WO-192: the readiness and positioning reads are log lines only (Wo192Rules.SceneNote), the host's autosave replaces A4.
 
     /// <summary>A1's log line (the replay looks for it).</summary>
     public static string CancelLine(string purpose, long waitedMs, string result) =>
         FormattableString.Invariant($"WO189-SAVE cancelled the pending save of {purpose} after {waitedMs / 1000.0:F1} s (no file) -- {result}");
 
-    /// <summary>A4: the joiner's own snapshot interval and the host's reminder interval (defaults; the switches take minutes).</summary>
-    public const long AutoSnapMs = 10 * 60_000, ReminderMs = 15 * 60_000;
-    /// <summary>A4: the purpose of the joiner's own snapshot (its pair line; no "character saved" toast, which speaks of a host save).</summary>
-    public const string AutoSnapPurpose = "the joiner's own snapshot";
-    public const bool DefaultAutoSnap = true, DefaultReminder = true, DefaultProfileMirror = true, DefaultCutsceneRelease = true, DefaultPositioningBound = true;
-
-    /// <summary>A4: is the joiner's own snapshot due? Not when a snapshot paired (or one was asked) within the interval.</summary>
-    public static bool AutoSnapDue(long lastPairMs, long lastAskMs, long nowMs, long intervalMs) =>
-        intervalMs > 0 && nowMs - Math.Max(lastPairMs, lastAskMs) >= intervalMs;
-
-    /// <summary>
-    /// A4: the host's reminder. Due once per interval after the partner's last save (or the session's start), only in a session with a
-    /// partner, never while one is shown; a pair (the partner saved) restarts the clock.
-    /// </summary>
-    public sealed class Reminder
-    {
-        public long BaseMs { get; private set; } = -1;
-        public long LastShownMs { get; private set; } = -1;
-        public int Shown { get; private set; }
-
-        public void SessionStarted(long nowMs) { if (BaseMs < 0) BaseMs = nowMs; }
-        public void SessionEnded() { BaseMs = -1; LastShownMs = -1; }
-        public void PartnerSaved(long nowMs) { BaseMs = nowMs; LastShownMs = -1; }
-
-        public bool Due(long nowMs, bool inSession, long intervalMs)
-        {
-            if (!inSession || intervalMs <= 0 || BaseMs < 0) return false;
-            long since = LastShownMs >= 0 ? LastShownMs : BaseMs;
-            if (nowMs - since < intervalMs) return false;
-            LastShownMs = nowMs;
-            Shown++;
-            return true;
-        }
-
-        public long NextMs(long intervalMs) => BaseMs < 0 ? -1 : (LastShownMs >= 0 ? LastShownMs : BaseMs) + intervalMs;
-    }
-
-    public static string ReminderText(long minutes) =>
-        FormattableString.Invariant($"Your partner hasn't been saved in {minutes} minutes - press Home to save.");
+    public const bool DefaultProfileMirror = true, DefaultCutsceneRelease = true, DefaultPositioningBound = true;
 
     // ================================================================ B: the quest world layers
 

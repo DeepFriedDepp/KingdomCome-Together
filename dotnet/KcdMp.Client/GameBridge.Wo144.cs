@@ -148,6 +148,7 @@ public partial class GameBridge
         if (line.Contains("DialogTwin_", StringComparison.Ordinal)) return;   // WO-183 2: counted by A3 only (they are many); nothing else reads them
         Wo184OnEngineLine(line);              // WO-184: the conversation clock's lines, the engine's save readiness, the exit dialog -- never consumes
         Wo189OnEngineLine(line);              // WO-189: the game profiles, a cutscene's initialization (its holder), the conversation's souls -- never consumes
+        Wo192OnEngineLine(line);              // WO-192 4c: the game's own save-lock lines (a station's lock never left behind) -- never consumes
         Wo183OnEngineLine(line);              // WO-183: a punishment dialogue (the crime process) -- never consumes
         if (line.StartsWith(Wo184Rules.ObserverPrefix, StringComparison.Ordinal) || line.Contains(Wo184Rules.RefusedMarker, StringComparison.Ordinal)
             || line.StartsWith(Wo184Rules.ExitDialogLine, StringComparison.Ordinal) || line.StartsWith("OnChatWithFocus: ", StringComparison.Ordinal)) return;

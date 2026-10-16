@@ -81,7 +81,7 @@ public partial class GameBridge
             _w138World = w;
             if (edge) { Console.WriteLine($"MP-WO138 world {(w.Frozen ? "FROZEN" : "runs")} (scale {w.ScalePermille / 1000.0:F3}, held 0x{w.HeldMask:X})"); _ = _sendPauseIfChanged?.Invoke(); }
         };
-        _combat.OnMenu = Wo184OnMenu;   // WO-184: the ESC menu's edges (the joiner's final snapshot starts as the menu opens)
+        _combat.OnMenu = Wo192OnMenu;   // WO-192: the ESC menu's edges -- only the host autosave's "a menu" (no snapshot starts here any more)
         _ = Wo138SendLoopAsync(_w138Rows.Reader, ct);
         _ = Wo138LoopAsync(ct);
         // A lever an earlier agent left on (it crashed, or a pipe drop) is put back first.

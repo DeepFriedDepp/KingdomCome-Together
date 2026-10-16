@@ -55,24 +55,10 @@ public class Wo189Tests
     {
         Assert.Equal(5_000, Wo189Rules.WatchdogPeriodMs);
         Assert.Equal(60_000, Wo189Rules.WatchdogPendingMs);
-        Assert.Equal(15_000, Wo189Rules.NotReadyRetryMs);
         Assert.Equal(5_000, Wo189Rules.PendingNameMs);
     }
 
-    // ================================================================ A3: ask only when the engine can take it
-
-    [Fact]
-    public void A_snapshot_is_asked_only_when_nothing_holds_the_engine()
-    {
-        Assert.Equal("", Wo189Rules.AskBlock(true, "", false, ""));
-        Assert.Equal("", Wo189Rules.AskBlock(null, "", false, ""));   // not read: the engine's pending state decides (0.60.5)
-        Assert.Contains("readiness", Wo189Rules.AskBlock(false, "C_XGenAIModule[0x2]", false, ""));
-        Assert.Contains("C_XGenAIModule", Wo189Rules.AskBlock(false, "C_XGenAIModule[0x2]", false, ""));
-        Assert.Contains("fast-forward", Wo189Rules.AskBlock(true, "", true, ""));
-        Assert.Contains("konec", Wo189Rules.AskBlock(true, "", false, "konec"));
-        // the positioning is named first: a request into it is what made the field's chain
-        Assert.Contains("positioning", Wo189Rules.AskBlock(false, "x", true, "konec"));
-    }
+    // ================================================================ A3: removed by WO-192 (Wo192Tests: the only blocks are (a) and (b))
 
     [Fact]
     public void The_readiness_read_knows_the_positioning_managers_wait()
@@ -90,44 +76,11 @@ public class Wo189Tests
         Assert.StartsWith("WO189-SAVE cancelled the pending save of final snapshot (the ESC menu) after 15.5 s (no file)", l);
     }
 
-    // ================================================================ A4: the joiner's own snapshot, the host's reminder
-
-    [Fact]
-    public void The_own_snapshot_is_due_ten_minutes_after_the_last_pair_or_ask()
-    {
-        Assert.Equal(600_000, Wo189Rules.AutoSnapMs);
-        Assert.False(Wo189Rules.AutoSnapDue(1_000, 0, 600_999, Wo189Rules.AutoSnapMs));
-        Assert.True(Wo189Rules.AutoSnapDue(1_000, 0, 601_000, Wo189Rules.AutoSnapMs));
-        Assert.False(Wo189Rules.AutoSnapDue(1_000, 300_000, 601_000, Wo189Rules.AutoSnapMs));   // asked since: not again before 10 min
-        Assert.False(Wo189Rules.AutoSnapDue(0, 0, 5_000_000, 0));                                // off
-    }
-
-    [Fact]
-    public void The_reminder_shows_every_fifteen_minutes_in_a_session_and_a_pair_restarts_it()
-    {
-        Assert.Equal(900_000, Wo189Rules.ReminderMs);
-        var r = new Wo189Rules.Reminder();
-        Assert.False(r.Due(10_000_000, true, Wo189Rules.ReminderMs));   // no session started
-        r.SessionStarted(0);
-        Assert.False(r.Due(899_999, true, Wo189Rules.ReminderMs));
-        Assert.True(r.Due(900_000, true, Wo189Rules.ReminderMs));
-        Assert.False(r.Due(1_000_000, true, Wo189Rules.ReminderMs));    // once per 15 minutes
-        Assert.True(r.Due(1_800_000, true, Wo189Rules.ReminderMs));
-        r.PartnerSaved(1_900_000);
-        Assert.False(r.Due(2_700_000, true, Wo189Rules.ReminderMs));
-        Assert.True(r.Due(2_800_000, true, Wo189Rules.ReminderMs));
-        Assert.False(r.Due(9_000_000, false, Wo189Rules.ReminderMs));   // only in a session
-        r.SessionEnded();
-        Assert.False(r.Due(9_900_000, true, Wo189Rules.ReminderMs));
-        Assert.Equal(2, Wo189Rules.ReminderText(15).Split("15 minutes").Length);
-        Assert.Contains("press Home to save", Wo189Rules.ReminderText(15));
-    }
+    // ================================================================ A4: removed by WO-192 (the host's autosave replaces it)
 
     [Fact]
     public void The_switches_default_as_the_work_order_says()
     {
-        Assert.True(Wo189Rules.DefaultAutoSnap);
-        Assert.True(Wo189Rules.DefaultReminder);
         Assert.True(Wo189Rules.DefaultCutsceneRelease);
         Assert.True(Wo189Rules.DefaultPositioningBound);
         Assert.True(Wo189Rules.DefaultProfileMirror);    // B: the WO said off; its live check passed (the joiner's own log: active, then inactive) -- the ship-on rule
@@ -340,13 +293,14 @@ public class Wo189Tests
     }
 
     [Fact]
-    public void Every_snapshot_wait_that_ends_without_a_file_cancels_and_asks_the_readiness_first()
+    public void Every_snapshot_wait_that_ends_without_a_file_cancels_and_the_readiness_is_a_log_line_only()
     {
         string s = Src("GameBridge.Wo184.cs");
         Assert.Contains("await Wo189CancelAfterWaitAsync(purpose, tReq);", s);
         Assert.Contains("Wo189Rules.CancelLine(purpose", s);
-        int ask = s.IndexOf("await Wo189AskBlockAsync()", StringComparison.Ordinal);
+        Assert.DoesNotContain("Wo189AskBlockAsync", s);   // WO-192: no readiness / positioning gate
+        int note = s.IndexOf("await Wo192SceneNoteAsync(purpose, w.Seq);", StringComparison.Ordinal);
         int req = s.IndexOf("AskModAsync(\"KCD2MP_Wo125Snapshot\"", StringComparison.Ordinal);
-        Assert.True(ask > 0 && req > ask, "A3's readiness check must come before the request");
+        Assert.True(note > 0 && req > note, "WO-192's scene note is written before the request (it never returns a block)");
     }
 }

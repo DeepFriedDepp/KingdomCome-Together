@@ -6044,7 +6044,11 @@ public partial class GameBridge(ClientConfig config)
             case "w191_test":        // WO-191: harness-only (KCDMP_TEST_W191=1)
                 Wo191OnEvent(name, arg);
                 return;
-            case "w189_cfg":         // WO-189: mp_joiner_autosnap, mp_save_reminder, mp_profile_mirror, mp_cutscene_release, mp_positioning_bound
+            case "w192_cfg":         // WO-192: mp_host_autosave, mp_host_autosave_min, mp_wake_hold, mp_station_release
+            case "w192_test":        // WO-192: harness-only (KCDMP_TEST_W192=1)
+                Wo192OnEvent(name, arg);
+                return;
+            case "w189_cfg":         // WO-189: mp_profile_mirror, mp_cutscene_release, mp_positioning_bound
             case "w189_test":        // WO-189: harness-only (KCDMP_TEST_W189=1)
                 Wo189OnEvent(name, arg);
                 return;

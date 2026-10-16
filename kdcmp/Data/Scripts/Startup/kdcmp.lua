@@ -15369,7 +15369,10 @@ function KCD2MP_W177EndStation()
     local aborted, interactive = false, false
     if AI and type(AI.AbortAction) == "function" then aborted = pcall(function() AI.AbortAction(player.id) end) end
     if player.player and type(player.player.OnEndInteractive) == "function" then interactive = pcall(function() player.player:OnEndInteractive() end) end
+    -- WO-192 4c: the trough's own save lock goes with it (its behaviour's exit never ran: the field's 'waterTub' stayed 14 minutes)
+    if Game and type(Game.RemoveSaveLock) == "function" then pcall(Game.RemoveSaveLock, "waterTub") end
     KCD2MP.w177.stationEnds = (KCD2MP.w177.stationEnds or 0) + #ended + ((aborted or interactive) and 1 or 0)
+
     mp_log("WO177-STATION mp_unstuck: AbortUse on " .. tostring(#ended) .. " interactive object(s) within " .. tostring(KCD2MP.w177.stationReachM) .. " m"
         .. (#ended > 0 and (": " .. table.concat(ended, ",")) or "") .. "; AI.AbortAction(player)=" .. tostring(aborted) .. " OnEndInteractive=" .. tostring(interactive))
     if aborted then ended[#ended + 1] = "ai-actions" end
@@ -18512,15 +18515,9 @@ function KCD2MP_Mark(word)
     pcall(function() t = Calendar.GetWorldTime() end)
     mp_log(string.format("MP-MARK %s world_time=%.0f -- the tester's marker", word, t))
     KCD2MP_EmitEvent("mp_mark", word)
-    -- WO-172 W1: the mark keeps what the tester saw -- the game's own screenshot (its screenshots folder; works with the window
-    -- minimised). The field's "no weapons on the host" left no trace in any log: a picture at the mark is the evidence next time.
-    if not (KCD2MP.w172 and KCD2MP.w172.markShot == false) then
-        local ok = pcall(System.ExecuteCommand, "r_GetScreenShot 1")
-        mp_log("MP-MARK screenshot asked ok=" .. tostring(ok) .. " -- the game's own, in its screenshots folder (mp_mark_shot off to stop)")
-    end
+    -- WO-192: a mark never takes a picture (WO-172's mark screenshot is removed: files on a tester's PC they never took)
     KCD2MP_ShowInteractionMsg("Marked: " .. word)
 end
-function KCD2MP_W172SetMarkShot(arg) return KCD2MP_W172Switch("mark_shot", "markShot", arg, "a mark (mark_odd) also takes the game's own screenshot (its screenshots folder)") end
 
 function KCD2MP_W140Status()
     local w = KCD2MP.w140
@@ -24503,7 +24500,7 @@ end
 --      that."). The copy's own list is never rewritten (a living body keeps its clothes).
 --   WO172-DEAD / WO172-RIDE / WO172-FT / WO172-HUD / WO172-TRADE / WO172-PICK ... ; mp_w172_status
 KCD2MP.w172 = KCD2MP.w172 or {
-    deadWins = true, rideRepair = true, tradeHold = true, pickpocket = true, markShot = true,
+    deadWins = true, rideRepair = true, tradeHold = true, pickpocket = true,
     mountSent = nil, mountAt = -1e9, rideAt = -1e9, tickAt = -1e9, ride = {}, faderHold = false, ftRefusedAt = nil,
     screenOpen = nil, screenAt = -1e9,
     stats = { deadMarks = 0, alive = 0, remounts = 0, dismounts = 0, gaveUp = 0, snaps = 0, tradeHolds = 0, tradeReleases = 0, picks = 0,
@@ -28072,7 +28069,6 @@ local ok, err = pcall(function()
     System.AddCCommand("mp_ride_repair", 'KCD2MP_W172SetRideRepair(%line)', "WO-172: riding stays right -- your mount is sent as the game says it, your partner's figure is put back on (or off) its horse every 2 s if it differs, a horse is never under the ground (default on): mp_ride_repair on|off")
     System.AddCCommand("mp_trade_hold", 'KCD2MP_W172SetTradeHold(%line)', "WO-172: (joiner) a trader you talk to stays until your trade screen closes or you walk away, a cancelled haggle included (default on): mp_trade_hold on|off")
     System.AddCCommand("mp_joiner_pickpocket", 'KCD2MP_W172SetPickpocket(%line)', "WO-172: (joiner) you can pickpocket the host's people; every item is asked of the host's NPC and taken back if it no longer has it (default on): mp_joiner_pickpocket on|off")
-    System.AddCCommand("mp_mark_shot", 'KCD2MP_W172SetMarkShot(%line)', "WO-172: a mark (mark_odd, the menu's 'Something's wrong here') also takes the game's own screenshot into its screenshots folder (default on): mp_mark_shot on|off")
     System.AddCCommand("mp_w172_status", 'KCD2MP_W172Status()', "WO-172: the dead-copy gate, riding repair, trade hold, pickpocket, black and HUD counters of this build")
     System.AddCCommand("mp_rider_unit", 'KCD2MP_W164SetRiderUnit(%line)', "WO-164: (joiner) a host rider is mounted on its horse's copy -- one unit, carried by the horse's stream (default on): mp_rider_unit on|off")
     System.AddCCommand("mp_w164_status", "KCD2MP_W164Status()", "WO-164: the sweep, the talk guard, the flee limiter, the random-event switch (WO164-STATUS here; MP-WO164-STATS in agent.log)")
@@ -28835,33 +28831,19 @@ System.AddCCommand("mp_partner_saved", 'KCD2MP_W184SetPartnerSaved(%line)', "WO-
 
 -- ===== WO-189: the joiner never stays stuck in half of the host's quest sequence; its saves never stall silently ==========
 -- The agent's part is GameBridge.Wo189.cs (docs/WO-189-findings.md). The switches:
---   mp_joiner_autosnap <minutes>|on|off  (joiner, default 10 min) the joiner's own snapshot when none paired in that long
---   mp_save_reminder <minutes>|on|off    (host, default 15 min) "Your partner hasn't been saved in 15 minutes - press Home to save."
+--   (mp_joiner_autosnap and mp_save_reminder were removed by WO-192: the host's autosave replaces them)
 --   mp_profile_mirror on|off             (joiner, default ON) the host's quest world layers (game profiles) switched here too
 --   mp_cutscene_release on|off           (joiner, default ON) a cutscene stuck at its start 10 s is released the game's own way
 --   mp_positioning_bound on|off          (joiner, default ON) a scene positioning the host's copies 20 s has their fast-forward stopped
-KCD2MP.w189 = KCD2MP.w189 or { autosnap = 10, reminder = 15, mirror = true, release = true, posbound = true }
+KCD2MP.w189 = KCD2MP.w189 or { mirror = true, release = true, posbound = true }
 
 function KCD2MP_W189Cfg()
     local w = KCD2MP.w189
-    KCD2MP_EmitEvent("w189_cfg", string.format("autosnap=%s reminder=%s mirror=%s release=%s posbound=%s",
-        tostring(w.autosnap), tostring(w.reminder), w.mirror and "on" or "off", w.release and "on" or "off", w.posbound and "on" or "off"))
+    KCD2MP_EmitEvent("w189_cfg", string.format("mirror=%s release=%s posbound=%s",
+        w.mirror and "on" or "off", w.release and "on" or "off", w.posbound and "on" or "off"))
     return true
 end
 
-function KCD2MP_W189Minutes(key, field, arg, default, what)
-    local a = tostring(arg or ""):gsub("^%s+", ""):gsub("%s+$", "")
-    local n = tonumber(a)
-    if a == "" then
-    elseif a == "on" then KCD2MP.w189[field] = default
-    elseif a == "off" then KCD2MP.w189[field] = 0
-    elseif n and n >= 0 and n <= 600 then KCD2MP.w189[field] = n
-    else mp_log("mp_" .. key .. ": expected minutes, on or off"); return false end
-    local v = KCD2MP.w189[field]
-    mp_log(string.format("WO189-TOGGLE mp_%s %s -- %s", key, v > 0 and (tostring(v) .. " min") or "off", what))
-    KCD2MP_W189Cfg()
-    return true
-end
 function KCD2MP_W189Switch(key, field, arg, what)
     local v = KCD2MP_Wo122ParseBool(arg)
     if v == "bad" then mp_log("mp_" .. key .. ": expected on|off"); return false end
@@ -28870,17 +28852,97 @@ function KCD2MP_W189Switch(key, field, arg, what)
     KCD2MP_W189Cfg()
     return true
 end
-function KCD2MP_W189SetAutoSnap(arg) return KCD2MP_W189Minutes("joiner_autosnap", "autosnap", arg, 10, "the joiner's own snapshot when none paired in that long") end
-function KCD2MP_W189SetReminder(arg) return KCD2MP_W189Minutes("save_reminder", "reminder", arg, 15, "the host is reminded when the partner has not been saved in that long") end
 function KCD2MP_W189SetMirror(arg) return KCD2MP_W189Switch("profile_mirror", "mirror", arg, "the host's quest world layers switched on this joiner too") end
 function KCD2MP_W189SetRelease(arg) return KCD2MP_W189Switch("cutscene_release", "release", arg, "a cutscene stuck at its start on this joiner is released the game's own way") end
 function KCD2MP_W189SetPosBound(arg) return KCD2MP_W189Switch("positioning_bound", "posbound", arg, "a scene positioning the host's copies 20 s has their fast-forward stopped") end
 
-System.AddCCommand("mp_joiner_autosnap", 'KCD2MP_W189SetAutoSnap(%line)', "WO-189: (joiner) your character is saved with your host's newest save when it has not been for this many minutes (default 10): mp_joiner_autosnap <minutes>|on|off")
-System.AddCCommand("mp_save_reminder", 'KCD2MP_W189SetReminder(%line)', "WO-189: (host) a reminder when your partner has not been saved for this many minutes (default 15): mp_save_reminder <minutes>|on|off")
 System.AddCCommand("mp_profile_mirror", 'KCD2MP_W189SetMirror(%line)', "WO-189: (joiner) the host's quest world layers (an arena fence, a camp) are switched in your world too (default on): mp_profile_mirror on|off")
 System.AddCCommand("mp_cutscene_release", 'KCD2MP_W189SetRelease(%line)', "WO-189: (joiner) a cutscene stuck at its start for 10 s is released the game's own way (default on): mp_cutscene_release on|off")
 System.AddCCommand("mp_positioning_bound", 'KCD2MP_W189SetPosBound(%line)', "WO-189: (joiner) a scene waiting 20 s on your host's people has their fast-forward stopped (default on): mp_positioning_bound on|off")
+
+-- ===== WO-192: the host's autosave every 30 minutes of play, the schnapps way ==========
+-- The agent's part is GameBridge.Wo192.cs (docs/WO-192-findings.md). The agent keeps the clock (play time in a session since the last host
+-- save, any host save restarts it) and asks here when it is due; the game's own rules decide: no save in a dialogue, a scene, a fight, an
+-- arranged fight or a mod transaction (WO-178's W178.blockReason) -- then the agent asks again in 60 s. The save is WO-178's schnapps save.
+--   mp_host_autosave on|off           (host, default ON)
+--   mp_host_autosave_min <minutes>    (host, default 30)
+--   mp_wake_hold on|off               (joiner, default ON) after a shared sleep or wait, a wake before the host's waits behind the fader (15 s at most)
+--   mp_station_release on|off         (both, default ON) a station's save lock (the trough's 'waterTub') held 15 s: its use is ended the game's
+--                                     own way and the lock released (the wash takes about 5 s; on the joiner it once stayed 14 minutes)
+KCD2MP.w192 = KCD2MP.w192 or { autosave = true, minutes = 30, wakeHold = true, station = true }
+
+function KCD2MP_W192Cfg()
+    local w = KCD2MP.w192
+    KCD2MP_EmitEvent("w192_cfg", string.format("autosave=%s minutes=%s wakehold=%s station=%s", w.autosave and "on" or "off", tostring(w.minutes),
+        w.wakeHold and "on" or "off", w.station and "on" or "off"))
+    return true
+end
+
+-- WO-192 4c: the agent saw the game's own lock of a station (name) held past 15 s -- the game's interaction never ended. Its own ends, as the
+-- trough's behaviour's exit runs them (OnEndInteractive, RemoveSaveLock), and AI.AbortAction(player) as mp_unstuck does. Answers the agent (tok).
+function KCD2MP_W192ReleaseStation(tok, name)
+    name = tostring(name or "")
+    local aborted, interactive, removed = false, false, false
+    if player then
+        if AI and type(AI.AbortAction) == "function" then aborted = pcall(function() AI.AbortAction(player.id) end) end
+        if player.player and type(player.player.OnEndInteractive) == "function" then interactive = pcall(function() player.player:OnEndInteractive() end) end
+    end
+    if Game and type(Game.RemoveSaveLock) == "function" and name ~= "" then removed = pcall(Game.RemoveSaveLock, name) end
+    local a = string.format("abort=%s end_interactive=%s lock_removed=%s", tostring(aborted), tostring(interactive), tostring(removed))
+    mp_log("WO192-STATION released '" .. name .. "': " .. a)
+    KCD2MP_EmitEvent("wo124_reply", tostring(tok) .. " " .. a)
+    return true
+end
+
+-- The agent's ask (tok): "asked" when the save went out, else "wait:<why>".
+function KCD2MP_W192Autosave(tok)
+    local r = nil
+    if not player then r = "no-world"
+    elseif not KCD2MP_W178RequestSave then r = "the schnapps save path is missing"
+    elseif W178 and W178.blockReason then
+        local ok, why = pcall(W178.blockReason)
+        if ok and why then r = tostring(why) elseif not ok then r = "the game's state could not be read" end
+    end
+    local a = "asked"
+    if r then a = "wait:" .. r else KCD2MP_W178RequestSave("autosave") end
+    mp_log("WO192-AUTOSAVE lua answer=" .. a)
+    KCD2MP_EmitEvent("wo124_reply", tostring(tok) .. " " .. a)
+    return a
+end
+
+function KCD2MP_W192SetAutosave(arg)
+    local v = KCD2MP_Wo122ParseBool(arg)
+    if v == "bad" then mp_log("mp_host_autosave: expected on|off"); return false end
+    if v ~= nil then KCD2MP.w192.autosave = v end
+    mp_log("WO192-TOGGLE mp_host_autosave " .. (KCD2MP.w192.autosave and "on" or "off") .. " -- the host's world is saved every " .. tostring(KCD2MP.w192.minutes) .. " minutes of play, the schnapps way")
+    KCD2MP_W192Cfg()
+    return true
+end
+function KCD2MP_W192SetMinutes(arg)
+    local n = tonumber(tostring(arg or ""):match("^%s*(.-)%s*$"))
+    if n == nil then mp_log("mp_host_autosave_min " .. tostring(KCD2MP.w192.minutes)); return true end
+    if n <= 0 or n > 600 then mp_log("mp_host_autosave_min: expected minutes (more than 0, at most 600)"); return false end
+    KCD2MP.w192.minutes = n
+    mp_log("WO192-TOGGLE mp_host_autosave_min " .. tostring(n) .. " -- the host's autosave interval (minutes of play)")
+    KCD2MP_W192Cfg()
+    return true
+end
+
+System.AddCCommand("mp_host_autosave", 'KCD2MP_W192SetAutosave(%line)', "WO-192: (host) the shared world is saved every 30 minutes of play the Saviour Schnapps way, no item used; it waits while the game can't save (default on): mp_host_autosave on|off")
+System.AddCCommand("mp_host_autosave_min", 'KCD2MP_W192SetMinutes(%line)', "WO-192: (host) the autosave's interval in minutes of play (default 30): mp_host_autosave_min <minutes>")
+
+function KCD2MP_W192Switch(key, field, arg, what)
+    local v = KCD2MP_Wo122ParseBool(arg)
+    if v == "bad" then mp_log("mp_" .. key .. ": expected on|off"); return false end
+    if v ~= nil then KCD2MP.w192[field] = v end
+    mp_log(string.format("WO192-TOGGLE mp_%s %s -- %s", key, KCD2MP.w192[field] and "on" or "off", what))
+    KCD2MP_W192Cfg()
+    return true
+end
+function KCD2MP_W192SetWakeHold(arg) return KCD2MP_W192Switch("wake_hold", "wakeHold", arg, "after a shared sleep or wait, a wake before the host's waits behind the fader (15 s at most)") end
+function KCD2MP_W192SetStation(arg) return KCD2MP_W192Switch("station_release", "station", arg, "a station's save lock held 15 s is ended the game's own way") end
+System.AddCCommand("mp_wake_hold", 'KCD2MP_W192SetWakeHold(%line)', "WO-192: (joiner) after a shared sleep or wait, waking before your host waits behind the game's fader until the host wakes, 15 s at most (default on): mp_wake_hold on|off")
+System.AddCCommand("mp_station_release", 'KCD2MP_W192SetStation(%line)', "WO-192: (both) a station's own save lock (the trough's wash) held 15 s is ended the game's own way, so a station never leaves you stuck (default on): mp_station_release on|off")
 
 -- ===== WO-191: a relaunched joiner's moves count, fighting copies are never reset, attackers have a body, no long black ==========
 -- The agent's part is GameBridge.Wo191.cs (docs/WO-191-findings.md). The switches (all default ON):

@@ -15,7 +15,7 @@ namespace KcdMp.Client.Tests;
 ///   B  the host's profile lines -> exactly the quest profiles' changes in play (the tutorial's barrier: 11 pairs), never weather_* / event_*
 ///   C  the joiner's end fader flagged 10 s after "initialized", with its barrier holder
 ///   D  the post-duel scene's positioning bounded at 20 s (it ran 750 s)
-///   A  A1 at the ESC snapshot's wait end, A2 within a minute of the engine's wait, A3 not asking into the positioning, A4 + the quit (a model)
+///   A  A1 at the ESC snapshot's wait end, A2 within a minute of the engine's wait (A3 and A4: removed by WO-192 -- asked at once)
 /// </summary>
 public class Wo189ReplayTests
 {
@@ -219,49 +219,15 @@ public class Wo189ReplayTests
         Assert.InRange(due - since, 60, 65);
         Assert.True(due <= 20 * 3600 + 16 * 60 + 56, "A2 later than 20:16:56");
 
-        // A3: at the ESC snapshot's request the post-duel scene was still positioning the host's copies -> not requested (owed)
+        // A3 and A4 were removed by WO-192 (the joiner's ask has two hard blocks only; the host's autosave replaced the own snapshot): at the
+        // ESC snapshot's moment the scene still positioning the host's copies is a log line, and the snapshot is asked at once
         double escT = escAsk - off;
         bool open = r.OpenAt(escT);
-        string block = Wo189Rules.AskBlock(null, "", open, "");
-        _out.WriteLine(FormattableString.Invariant($"A3 at {Hms(escAsk)} (t={escT:F1}): positioning open={open} -> {(block.Length > 0 ? "NOT requested: " + block : "requested")}"));
+        string block = Wo192Rules.AskBlock(savePending: false, inWorld: true, joining: false, rewinding: false);
+        string note = Wo192Rules.SceneNote(false, open ? 1 : 0, null, "", "");
+        _out.WriteLine(FormattableString.Invariant($"WO-192 at {Hms(escAsk)} (t={escT:F1}): positioning open={open} -> requested at once; {note}"));
         Assert.True(open);
-        Assert.NotEqual("", block);
-
-        // A4 and the quit -- a model (the engine's answers are not in the logs): D ends the positioning it acts on (as the save lock's FF cancel did),
-        // the barrier's end fader initializes when that scene ends and C releases it 10 s later; a request into no block pairs 2.5 s later
-        // (WO-184's measured 2.1-2.6 s); a blocked one is owed and asked again every 15 s.
-        var m = RunJoiner(kcd, modelD: true);
-        foreach (var a in m.PosActs) _out.WriteLine(FormattableString.Invariant($"A model: D acts {Hms(a.T + off)} on the scene enqueued {Hms(a.OldestT + off)}"));
-        double dAct = m.PosActs.First(a => a.T >= 940).T + off;
-        bool Blocked(double wall)
-        {
-            bool posOpen = m.OpenAt(wall - off);                          // every scene gets its own 20 s bound: owed for at most that long
-            bool stuck = wall >= dAct + 10 && wall < dAct + 10.5;        // the end fader flagged and released (C) at once in this model
-            return Wo189Rules.AskBlock(true, "", posOpen, stuck ? "konec" : "").Length > 0;
-        }
-        var pairs = new List<(double At, string Why)>();
-        double lastPair = joinPair, lastAsk = 0, owedSince = -1;
-        string owedWhy = "";
-        for (double s = joinPair; s <= quitMenu; s += 1)
-        {
-            if (owedSince < 0 && Wo189Rules.AutoSnapDue((long)(lastPair * 1000), (long)(lastAsk * 1000), (long)(s * 1000), Wo189Rules.AutoSnapMs))
-            { lastAsk = s; owedSince = s; owedWhy = "own snapshot"; }
-            if (owedSince >= 0 && (s - owedSince) % (Wo189Rules.NotReadyRetryMs / 1000) == 0)
-            {
-                if (!Blocked(s)) { lastPair = s + 2.5; pairs.Add((lastPair, owedWhy + (s > owedSince ? $" (owed {s - owedSince:F0} s)" : ""))); owedSince = -1; }
-            }
-        }
-        // the quit: the ESC menu at 20:37:16 -- nothing pending (A1/A2/A3), nothing stuck in the model: it pairs
-        bool quitBlocked = Blocked(quitMenu);
-        if (!quitBlocked) pairs.Add((quitMenu + 2.5, "the ESC menu's final snapshot at the quit"));
-        foreach (var p in pairs) _out.WriteLine($"A4 model: paired {Hms(p.At)} -- {p.Why}");
-        Assert.False(quitBlocked);
-        Assert.Contains(pairs, p => Hms(p.At).StartsWith("19:59", StringComparison.Ordinal));
-        Assert.Contains(pairs, p => Hms(p.At).StartsWith("20:09", StringComparison.Ordinal));
-        Assert.Contains(pairs, p => Hms(p.At).StartsWith("20:19", StringComparison.Ordinal) || Hms(p.At).StartsWith("20:20", StringComparison.Ordinal));
-        Assert.Contains(pairs, p => p.Why.Contains("quit", StringComparison.Ordinal));
-        // never more than ~10 minutes (plus a bounded owed wait) between pairs
-        var times = new[] { joinPair }.Concat(pairs.Select(p => p.At)).ToList();
-        for (int i = 1; i < times.Count; i++) Assert.True(times[i] - times[i - 1] <= 600 + 60, $"gap {times[i] - times[i - 1]:F0} s before {Hms(times[i])}");
+        Assert.Equal("", block);
+        Assert.NotEqual("", note);
     }
 }

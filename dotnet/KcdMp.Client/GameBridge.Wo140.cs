@@ -485,6 +485,7 @@ public partial class GameBridge
         bool host = _isDamageAuthority;
         if (why == "woke")
         {
+            if (!host) Wo192OnHostWoke();   // WO-192 4b: a wake held for the host ends
             // the host or the asker woke: everyone wakes now
             if (host) foreach (byte g in Wo134Peers()) if (g != src) await Wo140SendAsync(g, Protocol.SleepCancel, id, Wo140Text.Cancel("woke", asker));
             if (_w140LocalSkipping)
@@ -532,6 +533,7 @@ public partial class GameBridge
                 Console.WriteLine($"MP-W140 this game's {Wo140Rules.KindOfSkipId(f.Id)} picker is open");
                 return;
             case Wo140Frame.EdgeBegan:
+                Wo192OnSkipBegan();   // WO-192 4b: the host has not woken in this skip yet
                 _w154SkipBeganKind = Wo140Rules.KindOfSkipId(f.Id);   // WO-154 6.3: the ended edge reads id -1 (live L6)
                 _ = ExecLuaAsync(FormattableString.Invariant($"if KCD2MP_W157RestLine then KCD2MP_W157RestLine('start', {f.Id}, {f.Hours:F2}) end"));   // WO-157: rest measured (WO-164 SL: with the hours)
                 await Wo140OnLocalBeganAsync(f);
@@ -569,6 +571,7 @@ public partial class GameBridge
         if (host) foreach (byte g in Wo134Peers()) await Wo140SendAsync(g, Protocol.SleepCancel, tok, Wo140Text.Cancel("woke", _w140SharedAsker));
         else if (_w140SharedAsker == _myGhostId) await Wo140SendAsync(Protocol.JoinTargetHost, Protocol.SleepCancel, tok, Wo140Text.Cancel("woke", _myGhostId));
         Console.WriteLine($"MP-W140 this player woke ({_w140SharedKind}){(host ? " -- the others wake too; the world's clock is this one" : _w140SharedAsker == _myGhostId ? " -- the others wake too" : "")}");
+        if (!host) await Wo192OnLocalWokeAsync();   // WO-192 4b: before the host's "woke", the wake waits behind the fader (at most 15 s)
         if (host && _w140SaveAfter)
         {
             _w140SaveAfter = false;

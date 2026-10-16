@@ -10,6 +10,7 @@
 #include "wo187.h"
 
 #include "engine.h"
+#include "gait_logic.h"
 #include "log.h"
 #include "motion.h"
 #include "npc_drive.h"
@@ -46,7 +47,7 @@ std::atomic<uint8_t> g_mode{static_cast<uint8_t>(Mode::Auto)};   // mp_anim_trac
 std::atomic<bool> g_idleWatch{true}, g_takeover{true}, g_requeueGate{true}, g_gaitHold{true};
 
 std::atomic<uint32_t> c_lines{0}, c_linesDropped{0}, c_bodyReads{0}, c_readFail{0}, c_idleRequeues{0}, c_idlePulses{0}, c_idleFail{0},
-    c_emptyGaps{0}, c_weaponAsks{0}, c_clinchAsks{0}, c_reqDeduped{0}, c_reqLimited{0};
+    c_emptyGaps{0}, c_weaponAsks{0}, c_clinchAsks{0}, c_reqDeduped{0}, c_reqLimited{0}, c_evidence{0};
 
 const char* name_of(uint32_t eid) {
     void* e = eid ? engine::entity_by_id(eid) : nullptr;
@@ -69,6 +70,11 @@ struct BodyTrace {
     // A1: the full body's empty stretch and the last re-queue
     double fullEmptySince = -1, lastRequeue = -1;
     bool emptyLogged = false;
+    // WO-192 4d: the evidence window outside fights (auto)
+    Evidence ev;
+    double probeAt = 0;
+    float hystCls = -1;
+    bool evEmptyArmed = false;
 };
 std::unordered_map<uint32_t, BodyTrace> g_bodies;   // main thread
 MinuteCap g_minute;
@@ -156,6 +162,30 @@ void idle_watch(const Cand& c, BodyTrace& bt, double now) {
         logf("WO190-IDLE body=%s role=%s empty_ms=%.0f combat=%d -> %s (#%u)", name_of(c.eid), role_name(c.role), emptyFor * 1000.0, combat ? 1 : 0, remedy, k);
 }
 
+// WO-192 4d: in auto, a body that does not fight is still probed (its full body only, 4 Hz); a full body empty 0.5 s, or a gait class that
+// flipped 3 times in 2 s, opens a 4 s window in which the body is traced like a fighting one (the evidence of a T-pose while running).
+void evidence_probe(const Cand& c, BodyTrace& bt, double now) {
+    if (now - bt.probeAt < kEvidenceProbePeriodS) return;
+    bt.probeAt = now;
+    trace_body(c, bt, now, Mode::Auto, false);   // scope 0 only: fullEmptySince
+    const char* why = nullptr;
+    const double emptyFor = bt.fullEmptySince < 0 ? -1.0 : now - bt.fullEmptySince;
+    if (emptyFor < 0) bt.evEmptyArmed = false;
+    else if (!bt.evEmptyArmed && Evidence::empty_due(emptyFor)) { bt.evEmptyArmed = true; why = "its full body stands empty"; }
+    if (c.role != Role::Player) {
+        bt.hystCls = gait::speed_class_hyst(c.speed, bt.hystCls);
+        if (bt.ev.gait(bt.hystCls, now) && !why) why = "its gait class flips";
+    }
+    if (!why) return;
+    const bool was = bt.ev.on(now);
+    bt.ev.arm(now);
+    if (was) return;
+    const uint32_t k = c_evidence.fetch_add(1) + 1;
+    if (k <= kLogFirst || k % 50 == 0)
+        logf("WO190-EVIDENCE body=%s role=%s why=%s empty_ms=%.0f spd=%.2f cls=%.0f -> traced %.0f s (#%u)", name_of(c.eid), role_name(c.role), why,
+             emptyFor < 0 ? -1.0 : emptyFor * 1000.0, c.speed, bt.hystCls, kEvidenceHoldS, k);
+}
+
 void gather(std::vector<Cand>& out, double now) {
     out.clear();
     void* pe = engine::entity_by_id(kPlayerEntity);
@@ -205,7 +235,13 @@ void tick() {
     if (now - s_lastGather >= 0.25) { s_lastGather = now; gather(s_cands, now); }
     const double period = mode == Mode::On ? kReadPeriodS : (mode == Mode::Auto ? kAutoReadPeriodS : kIdleWatchPeriodS);
     for (const Cand& c : s_cands) {
-        const bool traced = mode == Mode::On || (mode == Mode::Auto && c.fight);
+        if (mode == Mode::Auto && !c.fight) {
+            BodyTrace& pb = g_bodies[c.eid];
+            pb.role = c.role;
+            evidence_probe(c, pb, now);
+        }
+        bool traced = mode == Mode::On || (mode == Mode::Auto && c.fight);
+        if (!traced && mode == Mode::Auto) { auto it = g_bodies.find(c.eid); traced = it != g_bodies.end() && it->second.ev.on(now); }
         const bool watched = watch && c.fight && c.role != Role::Player;
         if (!traced && !watched) continue;
         BodyTrace& bt = g_bodies[c.eid];
@@ -295,10 +331,10 @@ int status_text(char* out, int n) {
     motion::loco_counters(lc);
     const int w0 = std::snprintf(out, n,
         "wo190 trace=%s idle_watch=%s swing_takeover=%s requeue_gate=%s gait_hold=%s bodies=%zu lines=%u lines_dropped=%u body_reads=%u read_fail=%u "
-        "empty_gaps=%u idle_requeues=%u idle_pulses=%u idle_fail=%u weapon_asks=%u clinch_asks=%u requeue_deduped=%u requeue_limited=%u",
+        "empty_gaps=%u idle_requeues=%u idle_pulses=%u idle_fail=%u weapon_asks=%u clinch_asks=%u requeue_deduped=%u requeue_limited=%u evidence=%u",
         mode_name(mode_from_byte(g_mode.load())), g_idleWatch.load() ? "on" : "off", g_takeover.load() ? "on" : "off", g_requeueGate.load() ? "on" : "off",
         g_gaitHold.load() ? "on" : "off", g_bodies.size(), c_lines.load(), c_linesDropped.load(), c_bodyReads.load(), c_readFail.load(), c_emptyGaps.load(),
-        c_idleRequeues.load(), c_idlePulses.load(), c_idleFail.load(), c_weaponAsks.load(), c_clinchAsks.load(), c_reqDeduped.load(), c_reqLimited.load());
+        c_idleRequeues.load(), c_idlePulses.load(), c_idleFail.load(), c_weaponAsks.load(), c_clinchAsks.load(), c_reqDeduped.load(), c_reqLimited.load(), c_evidence.load());
     if (w0 < 0 || w0 >= n) return w0;
     return w0 + std::snprintf(out + w0, n - w0, " loco_fig=%u/%u/%u/%u loco_copy=%u/%u/%u/%u (frames/glide/in_place/class_changes)", lc[0], lc[1], lc[2], lc[3],
                               lc[4], lc[5], lc[6], lc[7]);

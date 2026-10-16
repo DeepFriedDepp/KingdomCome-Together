@@ -1527,6 +1527,20 @@ bool partner_pin(uint8_t owner, float x, float y, float z, unsigned pic) {
         mark_remove(&pn->mark);
         logf("WO171-MARK pin owner=%u picture %u -> %u (the mark is made again)", static_cast<unsigned>(owner), pn->pic, pic);
     }
+    // WO-192 4a: a move is a new pin entity at the new place. The map and the compass draw a mark from the entity's AI linkable, which keeps
+    // the place it had when the entity was spawned: moving the entity (0.60.9: 573 moves) never moved the marker, and a mark made again on the
+    // same entity (a new picture) came back at the old place. The mark comes off before its entity (a mark holds a raw pointer: the map
+    // crashes on a gone entity); the add below (or marks_guard's queue, while the new linkable is not there yet) marks the new one.
+    bool moved = false;
+    if (pn->eid) {
+        const float dx = x - pn->x, dy = y - pn->y;
+        if (dx * dx + dy * dy > kPinMoveM * kPinMoveM) {
+            mark_remove(&pn->mark);
+            if (pin_alive(*pn)) engine::remove(pn->eid);
+            pn->eid = 0;
+            moved = true;
+        }
+    }
     if (!pn->eid) {
         char name[64]{};
         _snprintf_s(name, sizeof(name), _TRUNCATE, "%s%u", kPinPrefix, static_cast<unsigned>(owner));
@@ -1534,18 +1548,14 @@ bool partner_pin(uint8_t owner, float x, float y, float z, unsigned pic) {
         if (!e) { logf("WO164-MAPMARK pin owner=%u spawn FAILED", static_cast<unsigned>(owner)); return false; }
         pn->eid = engine::entity_id(e);
         pn->x = x; pn->y = y; pn->z = z;
-        c_pinSpawned.fetch_add(1, std::memory_order_relaxed);
-        logf("WO164-MAPMARK pin owner=%u spawned entity=%u at (%.1f, %.1f) thread=%lu", static_cast<unsigned>(owner), pn->eid, x, y,
-             static_cast<unsigned long>(GetCurrentThreadId()));
-    } else {
-        const float dx = x - pn->x, dy = y - pn->y;
-        if (dx * dx + dy * dy > kPinMoveM * kPinMoveM) {
-            void* e = engine::entity_by_id(pn->eid);
-            if (e && engine::entity_set_pos(e, below)) {
-                pn->x = x; pn->y = y; pn->z = z;
-                if (c_pinMoved.fetch_add(1, std::memory_order_relaxed) % 30 == 0)
-                    logf("WO164-MAPMARK pin owner=%u moved to (%.1f, %.1f) (one line per 30 moves)", static_cast<unsigned>(owner), x, y);
-            }
+        if (moved) {
+            if (c_pinMoved.fetch_add(1, std::memory_order_relaxed) % 30 == 0)
+                logf("WO192-MAPMARK pin owner=%u moved to (%.1f, %.1f): a new pin entity=%u, its mark made on it (one line per 30 moves) thread=%lu",
+                     static_cast<unsigned>(owner), x, y, pn->eid, static_cast<unsigned long>(GetCurrentThreadId()));
+        } else {
+            c_pinSpawned.fetch_add(1, std::memory_order_relaxed);
+            logf("WO164-MAPMARK pin owner=%u spawned entity=%u at (%.1f, %.1f) thread=%lu", static_cast<unsigned>(owner), pn->eid, x, y,
+                 static_cast<unsigned long>(GetCurrentThreadId()));
         }
     }
     if (!pn->mark.ctrl && !g_markOff.load()) {
@@ -1556,7 +1566,8 @@ bool partner_pin(uint8_t owner, float x, float y, float z, unsigned pic) {
             pn->pic = usePic;
             std::memcpy(pn->markLabel, pn->label, sizeof pn->markLabel);
             c_pinMarked.fetch_add(1, std::memory_order_relaxed);
-            logf("WO164-MAPMARK pin owner=%u added (type 0x%X, picture %u, title \"%s\") at (%.1f, %.1f)", static_cast<unsigned>(owner), static_cast<unsigned>(type), usePic, pn->label, x, y);
+            if (!moved)
+                logf("WO164-MAPMARK pin owner=%u added (type 0x%X, picture %u, title \"%s\") at (%.1f, %.1f)", static_cast<unsigned>(owner), static_cast<unsigned>(type), usePic, pn->label, x, y);
         }
     }
     return true;

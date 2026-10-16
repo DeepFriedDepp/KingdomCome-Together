@@ -14,22 +14,18 @@ namespace KcdMp.Client;
 //
 //   A1  a snapshot wait that ends without its file cancels the engine's pending save at once (any purpose)          (mp_save_recover)
 //   A2  the watchdog: a save pending on the joiner's engine for more than 60 s is named, cancelled, told, owed     (mp_save_recover)
-//   A3  a snapshot is asked only when the engine can take it: the readiness service, no positioning on copies, no stuck cutscene
-//   A4  the joiner's own snapshot every 10 min (mp_joiner_autosnap) and the host's reminder after 15 min (mp_save_reminder)
+//   (A3, the ask gate, and A4, the joiner's own snapshot and the host's reminder, were removed by WO-192: GameBridge.Wo192.cs)
 //   A5  mp_save_status: WO189-STATUS beside WO184-STATUS
 //   B   the host's quest world layers mirrored on the joiner (mp_profile_mirror, default on: its live check passed; the WO asked for off)
 //   C   a cutscene stuck at "initialized" 10 s on the joiner: its copies' fast-forward stopped, then released the game's own way (mp_cutscene_release)
 //   D   a scene still positioning 20 s after it began: its copies' fast-forward stopped (mp_positioning_bound); never a save request
 //   F   the waits named: the readiness tasks that hold a save, the barrier's two concept States, what the AI task waits on
-// Log tags: WO189-SAVE, WO189-READY, WO189-WATCHDOG, WO189-AUTOSNAP, WO189-REMINDER, WO189-PROFILE, WO189-CUTSCENE, WO189-POSITIONING,
-//           WO189-BARRIER, WO189-CFG, WO189-STATUS.
+// Log tags: WO189-SAVE, WO189-READY, WO189-WATCHDOG, WO189-PROFILE, WO189-CUTSCENE, WO189-POSITIONING, WO189-BARRIER, WO189-CFG, WO189-STATUS.
 public partial class GameBridge
 {
     // ================================================================ switches (the mod's w189_cfg)
 
-    private volatile bool _w189AutoSnap = Wo189Rules.DefaultAutoSnap, _w189Reminder = Wo189Rules.DefaultReminder, _w189Mirror = Wo189Rules.DefaultProfileMirror,
-                          _w189Release = Wo189Rules.DefaultCutsceneRelease, _w189PosBound = Wo189Rules.DefaultPositioningBound;
-    private long _w189AutoSnapMs = Wo189Rules.AutoSnapMs, _w189ReminderMs = Wo189Rules.ReminderMs;
+    private volatile bool _w189Mirror = Wo189Rules.DefaultProfileMirror, _w189Release = Wo189Rules.DefaultCutsceneRelease, _w189PosBound = Wo189Rules.DefaultPositioningBound;
 
     private void Wo189OnEvent(string name, string? arg)
     {
@@ -93,7 +89,7 @@ public partial class GameBridge
         catch (Exception ex) { Console.WriteLine($"WO189-TEST {verb} failed: {ex.GetType().Name}: {ex.Message}"); }
     }
 
-    /// <summary>"autosnap=&lt;min&gt; reminder=&lt;min&gt; mirror=on|off release=on|off posbound=on|off" (0 minutes = off).</summary>
+    /// <summary>"mirror=on|off release=on|off posbound=on|off".</summary>
     private void Wo189OnCfg(string? arg)
     {
         foreach (var kv in (arg ?? "").Split(' ', StringSplitOptions.RemoveEmptyEntries))
@@ -104,19 +100,13 @@ public partial class GameBridge
             bool on = v == "on";
             switch (k)
             {
-                case "autosnap" when double.TryParse(v, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double am):
-                    _w189AutoSnap = am > 0; if (am > 0) Interlocked.Exchange(ref _w189AutoSnapMs, (long)(am * 60_000)); break;
-                case "reminder" when double.TryParse(v, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double rm):
-                    _w189Reminder = rm > 0; if (rm > 0) Interlocked.Exchange(ref _w189ReminderMs, (long)(rm * 60_000)); break;
                 case "mirror": _w189Mirror = on; break;
                 case "release": _w189Release = on; break;
                 case "posbound": _w189PosBound = on; break;
             }
         }
         _w189CfgPushed = -1;   // the DLL's switches follow at the next tick
-        Console.WriteLine($"WO189-CFG joiner_autosnap={(_w189AutoSnap ? Wo189Rules.Secs(Interlocked.Read(ref _w189AutoSnapMs) / 60) + " min" : "off")} "
-                          + $"save_reminder={(_w189Reminder ? Wo189Rules.Secs(Interlocked.Read(ref _w189ReminderMs) / 60) + " min" : "off")} profile_mirror={On(_w189Mirror)} "
-                          + $"cutscene_release={On(_w189Release)} positioning_bound={On(_w189PosBound)}");
+        Console.WriteLine($"WO189-CFG profile_mirror={On(_w189Mirror)} cutscene_release={On(_w189Release)} positioning_bound={On(_w189PosBound)}");
     }
 
     // the DLL's role and switches (pushed on a change, and every 30 s)
@@ -141,33 +131,13 @@ public partial class GameBridge
     // ================================================================ A3 + F: the engine's readiness
 
     private int _w189RecoveredTold;
-    private long _w189NotReady, _w189AskBlocked, _w189Watchdog, _w189WatchdogCancels, _w189A1Cancels, _w189AutoSnaps, _w189Reminders;
-    private string _w189LastBlock = "";
+    private long _w189Watchdog, _w189WatchdogCancels, _w189A1Cancels;
 
-    /// <summary>The DLL's readiness read (null = no answer: the agent then decides as 0.60.5 did).</summary>
+    /// <summary>The DLL's readiness read (null = no answer). WO-192: read for log lines only, never a gate.</summary>
     private async Task<Wo189Rules.ReadyRead?> Wo189ReadyAsync()
     {
         try { return await _combat.Wo189ReadyAsync(); }
         catch (Exception ex) when (ex is IOException or InvalidOperationException or OperationCanceledException or ObjectDisposedException) { return null; }
-    }
-
-    /// <summary>A3: why a snapshot must not be asked now ("" = ask). Joiner side, before every request (Wo184TakeAsync).</summary>
-    private async Task<string> Wo189AskBlockAsync()
-    {
-        if (!W137Joiner) return "";
-        var r = await Wo189ReadyAsync();
-        long now = Environment.TickCount64;
-        bool posOnCopies = r?.PositioningWaiting == true
-                           || (_w189Pos.Open > 0 && !_w184Clock.Running && now - _w189Pos.OldestMs >= 1_000);
-        string block = Wo189Rules.AskBlock(r is { Armed: true } x ? x.Ready : null, r?.NotReady ?? "", posOnCopies, _w189Cut.StuckName);
-        if (block.Length > 0)
-        {
-            Interlocked.Increment(ref _w189AskBlocked);
-            if (r is { Armed: true, Ready: false }) Interlocked.Increment(ref _w189NotReady);
-            if (block != _w189LastBlock) Console.WriteLine($"WO189-READY not ready: {block} -- the snapshot is owed and asked again in {Wo189Rules.NotReadyRetryMs / 1000} s (never requested into a wait)");
-        }
-        _w189LastBlock = block;
-        return block;
     }
 
     /// <summary>F: a requested save still pending: the readiness tasks that hold it, named once per stretch.</summary>
@@ -268,42 +238,6 @@ public partial class GameBridge
         Console.WriteLine($"WO189-SAVE a snapshot is owed ({why}), paired with host save seq={w.Seq} -- the gate takes it when the engine can");
         _ = Wo184KickAsync();
     }
-
-    // ================================================================ A4: the joiner's own snapshot, the host's reminder
-
-    private long _w189AutoAskMs;
-    private readonly Wo189Rules.Reminder _w189Remind = new();
-
-    private void Wo189AutoSnapTick(long now)
-    {
-        if (!_w189AutoSnap || !W137Joiner || !_joinedWorld || _jj is not null || _rewinding || _where is GameWhere.Menu or GameWhere.Loading) return;
-        long interval = Interlocked.Read(ref _w189AutoSnapMs);
-        if (!Wo189Rules.AutoSnapDue(_w184LastPair.AtMs, _w189AutoAskMs, now, interval)) return;
-        bool owed;
-        lock (_w184Lock) owed = _w184Want is not null;
-        _w189AutoAskMs = now;
-        if (owed) return;   // one already owed: the gate takes it (it is newer than the last pair)
-        Interlocked.Increment(ref _w189AutoSnaps);
-        Console.WriteLine($"WO189-AUTOSNAP no snapshot paired in {Wo189Rules.Secs(interval / 60)} min -- the joiner's own snapshot (paired with the newest host save, the late rule)");
-        Wo189OweNewest($"the joiner's {interval / 60_000}-minute snapshot", Wo189Rules.AutoSnapPurpose);
-    }
-
-    private async Task Wo189ReminderTickAsync(long now)
-    {
-        if (!W137Host) { _w189Remind.SessionEnded(); return; }
-        bool session = Wo134Peers().Any();
-        if (!session) { _w189Remind.SessionEnded(); return; }
-        _w189Remind.SessionStarted(now);
-        long interval = Interlocked.Read(ref _w189ReminderMs);
-        if (!_w189Reminder || !_w189Remind.Due(now, session, interval)) return;
-        Interlocked.Increment(ref _w189Reminders);
-        string text = Wo189Rules.ReminderText(interval / 60_000);
-        Console.WriteLine($"WO189-REMINDER the host is reminded: {text} (#{_w189Remind.Shown})");
-        await ExecLuaAsync($"if KCD2MP_W184Say then KCD2MP_W184Say(\"{EscapeLua(text)}\") end");
-    }
-
-    /// <summary>Wo184OnHealthInAsync's "paired": the partner was saved -- the reminder's clock starts again.</summary>
-    private void Wo189OnPartnerPaired() => _w189Remind.PartnerSaved(Environment.TickCount64);
 
     // ================================================================ B: the quest world layers
 
@@ -574,8 +508,7 @@ public partial class GameBridge
         long now = Environment.TickCount64;
         await Wo189PushCfgAsync(now);
         await Wo189WatchdogAsync(now);
-        Wo189AutoSnapTick(now);
-        await Wo189ReminderTickAsync(now);
+        await Wo192TickAsync(now);
         await Wo189CutsceneTickAsync(now);
         await Wo189PositioningTickAsync(now);
     }
@@ -584,14 +517,10 @@ public partial class GameBridge
 
     private string Wo189StatusText(long now)
     {
-        long interval = Interlocked.Read(ref _w189AutoSnapMs);
-        string auto = !_w189AutoSnap ? "off" : _w184LastPair.AtMs > 0 ? $"next in {Wo189Rules.Secs(Math.Max(0, Math.Max(_w184LastPair.AtMs, _w189AutoAskMs) + interval - now))} s" : "after the first pair";
-        long next = _w189Remind.NextMs(Interlocked.Read(ref _w189ReminderMs));
-        string rem = !_w189Reminder ? "off" : !W137Host ? "host only" : next < 0 ? "no session" : $"next in {Wo189Rules.Secs(Math.Max(0, next - now))} s (shown {_w189Remind.Shown})";
         string pend = _w189Pending.SinceMs > 0 ? $"pending {Wo189Rules.Secs(now - _w189Pending.SinceMs)} s" : "none";
-        return $"autosnap={auto} reminder={rem} engine_pending={pend} a1_cancels={Interlocked.Read(ref _w189A1Cancels)} watchdog={Interlocked.Read(ref _w189Watchdog)} "
-               + $"watchdog_cancels={Interlocked.Read(ref _w189WatchdogCancels)} ask_blocked={Interlocked.Read(ref _w189AskBlocked)} not_ready={Interlocked.Read(ref _w189NotReady)} autosnaps={Interlocked.Read(ref _w189AutoSnaps)} "
-               + $"reminders={Interlocked.Read(ref _w189Reminders)} cutscene_stuck={Interlocked.Read(ref _w189CutStuck)} released={Interlocked.Read(ref _w189CutReleased)} confirmed={Interlocked.Read(ref _w189CutConfirmed)} "
+        return $"engine_pending={pend} a1_cancels={Interlocked.Read(ref _w189A1Cancels)} watchdog={Interlocked.Read(ref _w189Watchdog)} "
+               + $"watchdog_cancels={Interlocked.Read(ref _w189WatchdogCancels)} {Wo192StatusText(now)} "
+               + $"cutscene_stuck={Interlocked.Read(ref _w189CutStuck)} released={Interlocked.Read(ref _w189CutReleased)} confirmed={Interlocked.Read(ref _w189CutConfirmed)} "
                + $"interrupts={Interlocked.Read(ref _w189CutInterrupts)} positioning_bounds={Interlocked.Read(ref _w189PosActs)} ff_stopped={Interlocked.Read(ref _w189FfStopped)} "
                + $"profiles_sent={Interlocked.Read(ref _w189ProfilesSent)} profiles_in={Interlocked.Read(ref _w189ProfilesIn)} profiles_applied={Interlocked.Read(ref _w189ProfilesApplied)} mirrored={_w189Mirrored.Count} "
                + $"mirror={On(_w189Mirror)} release={On(_w189Release)} posbound={On(_w189PosBound)}";
@@ -600,14 +529,7 @@ public partial class GameBridge
     /// <summary>A5: the short line on screen's WO-189 half.</summary>
     private string Wo189StatusShort(long now)
     {
-        string pend = _w189Pending.SinceMs > 0 ? $" A save has been pending {Wo189Rules.Secs(now - _w189Pending.SinceMs)} s." : "";
-        if (W137Host)
-        {
-            long next = _w189Remind.NextMs(Interlocked.Read(ref _w189ReminderMs));
-            return !_w189Reminder ? "" : next < 0 ? "" : $" Reminder in {Math.Max(0, (next - now) / 60_000)} min.";
-        }
-        long interval = Interlocked.Read(ref _w189AutoSnapMs);
-        string auto = !_w189AutoSnap || _w184LastPair.AtMs <= 0 ? "" : $" Next own save in {Math.Max(0, (Math.Max(_w184LastPair.AtMs, _w189AutoAskMs) + interval - now) / 60_000)} min.";
-        return auto + pend;
+        if (W137Host) return Wo192StatusShort(now);
+        return _w189Pending.SinceMs > 0 ? $" A save has been pending {Wo189Rules.Secs(now - _w189Pending.SinceMs)} s." : "";
     }
 }

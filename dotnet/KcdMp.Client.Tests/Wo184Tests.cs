@@ -347,66 +347,6 @@ public class Wo184Tests : IDisposable
     }
 
     [Fact]
-    public void The_esc_menu_starts_the_final_snapshot_before_any_quit_once_per_opening()
-    {
-        // live (b4quit): the exit dialog's line comes ~1 s before the quit; a quit 0.3 s after it ended the game before the file was written
-        Assert.Equal("", Wo184Rules.MenuSnapshotBlock(joiner: true, joined: true, saveOnLeave: true, inFlight: false, sinceLastPairMs: 60_000));
-        Assert.Equal("", Wo184Rules.MenuSnapshotBlock(true, true, true, false, sinceLastPairMs: -1));            // nothing paired yet this join
-        Assert.Equal("-", Wo184Rules.MenuSnapshotBlock(joiner: false, true, true, false, 60_000));                // the host: never
-        Assert.Equal("-", Wo184Rules.MenuSnapshotBlock(true, joined: false, true, false, 60_000));                // not in the host's world
-        Assert.Contains("mp_save_on_leave", Wo184Rules.MenuSnapshotBlock(true, true, saveOnLeave: false, false, 60_000));
-        Assert.Contains("on its way", Wo184Rules.MenuSnapshotBlock(true, true, true, inFlight: true, 60_000));
-        Assert.Contains("moments ago", Wo184Rules.MenuSnapshotBlock(true, true, true, false, Wo184Rules.MenuMinGapMs - 1));
-        Assert.Equal("", Wo184Rules.MenuSnapshotBlock(true, true, true, false, Wo184Rules.MenuMinGapMs));
-    }
-
-    [Fact]
-    public void The_menus_snapshot_covers_the_quit_only_while_the_player_stayed_in_the_menu()
-    {
-        var m = new Wo184Rules.MenuTime();
-        Assert.Equal(long.MaxValue, m.ClosedSincePair(1_000));                       // no menu edge ever (no DLL frame): never covers
-        Assert.False(Wo184Rules.MenuPairCoversQuit(true, m.ClosedSincePair(1_000)));
-        Assert.Equal(1, m.Opened(10_000));                                             // the menu opens; its snapshot pairs 1.6 s later
-        m.Paired(11_600);
-        Assert.Equal(0, m.ClosedSincePair(14_000));
-        Assert.True(Wo184Rules.MenuPairCoversQuit(true, m.ClosedSincePair(14_000)));   // the exit dialog at 14 s: in the menu since -- covered
-        Assert.False(Wo184Rules.MenuPairCoversQuit(false, m.ClosedSincePair(14_000))); // a host-save pair is not the menu's
-        // the exit dialog closing and reopening the menu (if it does) is a gap of a moment: still covered
-        m.Closed(14_100);
-        Assert.Equal(2, m.Opened(14_150));
-        Assert.True(Wo184Rules.MenuPairCoversQuit(true, m.ClosedSincePair(15_000)));
-        // the player closed the menu and played on: not covered any more (the exit dialog takes its own snapshot)
-        m.Closed(16_000);
-        Assert.Equal(3, m.Opened(30_000));
-        Assert.Equal(14_050, m.ClosedSincePair(30_500));
-        Assert.False(Wo184Rules.MenuPairCoversQuit(true, m.ClosedSincePair(30_500)));
-        // a new pair while the menu is open starts the count again
-        m.Paired(31_000);
-        Assert.Equal(0, m.ClosedSincePair(32_000));
-        // a pair while the menu is closed counts from the pair
-        m.Closed(33_000);
-        m.Paired(40_000);
-        Assert.Equal(500, m.ClosedSincePair(40_500));
-        Assert.False(m.Open);
-        Assert.Equal(3, m.Session);
-    }
-
-    [Fact]
-    public void The_quit_notice_says_up_to_the_quit_only_when_the_player_was_in_the_menu_at_the_quit()
-    {
-        var m = new Wo184Rules.MenuTime();
-        Assert.False(m.InMenu(0));                                                   // no menu edge ever
-        m.Opened(1_000);
-        Assert.True(m.InMenu(5_000));
-        m.Closed(6_000);                                                             // the quit may close the menu itself
-        Assert.True(m.InMenu(6_000 + Wo184Rules.MenuClosedSlackMs));
-        Assert.False(m.InMenu(6_000 + Wo184Rules.MenuClosedSlackMs + 1));            // closed and played on (an Alt+F4 later): not "up to the quit"
-        string b = ClientFile("GameBridge.Wo184.cs");
-        Assert.Contains("_w184QuitMenu = (_w184Menu.Session, _w184Menu.InMenu(now));", b);   // read at the quit itself, not after the waits
-        Assert.Contains("Interlocked.Read(ref _w184MenuSnapSession) == _w184QuitMenu.Session", b);
-    }
-
-    [Fact]
     public void The_hosts_partner_saved_line_shows_once_per_host_save()
     {
         Assert.True(Wo184Rules.PartnerSavedShows(known: false, 0, "", 14, "698d1ea7"));
@@ -416,14 +356,16 @@ public class Wo184Tests : IDisposable
     }
 
     [Fact]
-    public void The_menu_frame_reaches_the_bridge_and_its_snapshot_never_becomes_owed()
+    public void The_esc_menu_starts_no_snapshot_any_more_and_the_exit_dialog_takes_the_quits()
     {
+        // WO-192: the ESC menu's early snapshot is gone (it was refused with every other ask while a scene positioned copies); the menu
+        // edge is only the host autosave's "a menu"
         Assert.Equal(0xAD, CombatPipe.MenuOut);   // native wo138_rules.h kMenuFrame (pinned there too)
-        Assert.Contains("type == MenuOut", ClientFile("CombatPipe.cs"));
-        Assert.Contains("_combat.OnMenu = Wo184OnMenu", ClientFile("GameBridge.Wo138.cs"));
+        Assert.Contains("_combat.OnMenu = Wo192OnMenu", ClientFile("GameBridge.Wo138.cs"));
         string b = ClientFile("GameBridge.Wo184.cs");
-        Assert.Contains("_w184Want ??= optional ? was : was ?? probe", b);   // a menu snapshot not taken leaves nothing owed of its own
-        Assert.Contains("Wo184FinalSnapshotAsync(Wo184Rules.MenuPurpose, optional: true)", b);
+        Assert.DoesNotContain("Wo184OnMenu", b);
+        Assert.DoesNotContain("MenuPurpose", b);
+        Assert.Contains("Wo184FinalSnapshotAsync(\"quit (the exit dialog)\")", b);
         // the joiner's "your host's game saved" line is about a host save only
         Assert.Contains("if (purpose.StartsWith(\"host save\", StringComparison.Ordinal)) Wo157TellCharacterSaved();", b);
     }

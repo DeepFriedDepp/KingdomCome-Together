@@ -476,11 +476,9 @@ do
     CMDS = {}
     mark = #LOG
     KCD2MP_Mark("odd")
-    check("W7: a mark takes the game's own screenshot (W1: evidence next time)", cmdCount("r_GetScreenShot 1") == 1 and lastLog("MP-MARK screenshot asked ok=true", mark) ~= nil)
-    KCD2MP_W172SetMarkShot("off"); CMDS = {}
-    KCD2MP_Mark("odd")
-    check("W8: mp_mark_shot off: no screenshot", cmdCount("r_GetScreenShot") == 0 and CCMDS["mp_mark_shot"] ~= nil)
-    KCD2MP_W172SetMarkShot("on")
+    -- WO-192: the mark screenshot is removed (files on a tester's PC they never took): a mark takes none, the switch is gone
+    check("W7: a mark takes no screenshot (WO-192)", cmdCount("r_GetScreenShot") == 0 and lastLog("MP-MARK odd", mark) ~= nil)
+    check("W8: mp_mark_shot is gone (WO-192)", CCMDS["mp_mark_shot"] == nil and KCD2MP_W172SetMarkShot == nil)
     noErrs("W")
 end
 

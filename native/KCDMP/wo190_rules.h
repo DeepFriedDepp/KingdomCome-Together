@@ -70,6 +70,37 @@ inline bool scope_changed(const ScopeSnap& a, const ScopeSnap& b) {
     return a.action != b.action || a.frag != b.frag || a.prio != b.prio;
 }
 
+// ---- WO-192 4d: pose evidence outside fights -------------------------------------------------------------------------------
+// auto traced only fighting bodies; a T-pose while running (0.60.9's field) left no line. In auto every body's full body is also read
+// (at kEvidenceProbePeriodS), and a body is traced for kEvidenceHoldS when its full body has stood empty kEvidenceEmptyS, or its gait
+// class (the hysteresis class of the speed it is driven with) flipped kEvidenceFlips times within kEvidenceFlipWindowS.
+constexpr double kEvidenceProbePeriodS = 0.25;
+constexpr double kEvidenceEmptyS = 0.5;
+constexpr int kEvidenceFlips = 3;
+constexpr double kEvidenceFlipWindowS = 2.0;
+constexpr double kEvidenceHoldS = 4.0;
+
+struct Evidence {
+    double until = -1;
+    float cls = -1;
+    double flips[kEvidenceFlips] = {};
+    int at = 0, n = 0;
+    // a gait class read at `now`: true when it is the kEvidenceFlips-th change within the window
+    bool gait(float c, double now) {
+        if (cls < 0) { cls = c; return false; }
+        if (c == cls) return false;
+        cls = c;
+        flips[at] = now;
+        at = (at + 1) % kEvidenceFlips;
+        if (++n < kEvidenceFlips) return false;
+        return now - flips[at] <= kEvidenceFlipWindowS;   // flips[at] is now the oldest of the last kEvidenceFlips
+    }
+    // the full body has stood empty `emptyForS` (-1 = not empty)
+    static bool empty_due(double emptyForS) { return emptyForS >= kEvidenceEmptyS; }
+    void arm(double now) { until = now + kEvidenceHoldS; }
+    bool on(double now) const { return until >= 0 && now < until; }
+};
+
 // ---- A1: the guard idle through reactions -----------------------------------------------------------------------------------
 // A fighting body (a figure whose partner is in combat, a copy held in its guard) whose full-body scope stays empty this long gets its guard
 // idle re-queued (the engine's own UpdateMovementAnim re-queues CombatIdle on a guard-zone change: WO-187's remedy), at most once per

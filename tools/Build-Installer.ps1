@@ -300,6 +300,12 @@ Write-Host "No-input-tooling gate (WO-175) ..."
 & python (Join-Path $PSScriptRoot "Test-NoInputTooling.py") $payload
 if ($LASTEXITCODE -ne 0) { throw "no-input-tooling gate FAILED: a shipped file contains input injection or capture. Not shipping." }
 
+# WO-192: nothing that ships takes a screenshot (WO-172's mark screenshot left image files on testers' PCs that they never took).
+# Every file of the payload (the staged mod's pak included) is scanned for the game's screenshot commands and the OS capture APIs.
+Write-Host "No-screenshot gate (WO-192) ..."
+& python (Join-Path $PSScriptRoot "Test-NoScreenshots.py") $payload
+if ($LASTEXITCODE -ne 0) { throw "no-screenshot gate FAILED: a shipped file takes a screenshot. Not shipping." }
+
 # WO-32 follow-up, rewritten in WO-74: write a manifest of everything this
 # Setup carries so the installer can prove, after installing, that every file
 # actually landed -- and that nothing ELSE is sitting in the install directory

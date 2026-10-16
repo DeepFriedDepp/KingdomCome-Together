@@ -371,6 +371,9 @@ public sealed class LogTailGameTransport : IGameTransport
     [
         "[Warning] Can't equip armor '",
         "Canceling dialog request id ",
+        // WO-192 4c: the game's own script save locks (a station's 'waterTub' that never ends)
+        "Adding script save lock '",
+        "Removing script save lock '",
         "[Warning] [MinigameActivityComponent]:",
         "Faders are faded out",
         // WO-164: the talk line's dialogue name, kind and preemption; the random events (the mark snapshot)

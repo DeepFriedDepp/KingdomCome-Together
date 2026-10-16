@@ -204,7 +204,8 @@ public partial class GameBridge
             await Task.Delay((int)Wo191Rules.FaderBoundMs);
             if (Interlocked.Read(ref _w191FadeSeq) != seq || _w179FadeOnAt == 0 || !W137Joiner || !_w191FaderBound) return;   // ended, or another edge came
             string label = _w179FadeScene != "-" ? _w179FadeScene : Wo179SceneLabel();   // a scene at the fade's start, or one since
-            string? content = Wo191Rules.FaderContent(label, Wo138PauseState(), _w167FtActive, W179NotInWorld, _sentDeathForThisLife);
+            string? content = _w192WakeHolding ? "the wake waiting for the host (WO-192)"
+                             : Wo191Rules.FaderContent(label, Wo138PauseState(), _w167FtActive, W179NotInWorld, _sentDeathForThisLife);
             long held = Environment.TickCount64 - whenMs;
             if (content is not null)
             {
