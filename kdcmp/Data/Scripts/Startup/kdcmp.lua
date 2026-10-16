@@ -29245,7 +29245,7 @@ end
 function KCD2MP_W195Env(tp)
     local P = KCD2MP.w195.P
     local t = 0
-    pcall(function() t = tonumber(Calendar.GetWorldTime()) or 0 end)
+    if Calendar and Calendar.GetWorldTime then pcall(function() t = tonumber(Calendar.GetWorldTime()) or 0 end) end
     local hour = math.floor(t / 3600) % 24
     local night = hour >= P.nightFrom or hour < P.nightTo
     local indoor = false
