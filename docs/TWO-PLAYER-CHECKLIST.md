@@ -1414,6 +1414,24 @@ Evidence: `docs/WO-177-findings.md`. **Type `mark_odd` at every miss.**
 343. **Type `mark_odd` at every miss.** A mark no longer takes a screenshot. Switches (all on): `mp_host_autosave`, `mp_host_autosave_min`
      (30), `mp_wake_hold`, `mp_station_release`. Gone: `mp_joiner_autosnap`, `mp_save_reminder`, `mp_mark_shot`.
 
+## WO-195 — dead enemies fall, sneaking past sleepers, a body's key (the next build)
+
+344. **An enemy that dies while fighting the joiner falls, and the fight ends.** The host (or the joiner) kills an NPC or a bandit that is
+     fighting the joiner. On the joiner's screen it drops to the ground within about a second (never stays standing or slumped), and the
+     joiner's combat indicator goes away a moment later if no one else is fighting him. Lines on the joiner: `WO195-RELEASE npc=<it>`,
+     `WO195-FALL npc=<it> ... living=no(ragdoll)`, `WO195-PLAYER after npc=<it> combat_mode=false`. A `STILL in combat` line: send the logs.
+345. **An enemy killed far from the joiner lies dead when he gets there.** The host kills someone 100 m or more from the joiner; the joiner
+     walks there: the body lies on the ground (same `WO195-FALL` line, when the host's death reached his game).
+346. **The joiner sneaks into a house at night past people in bed, and nobody raises the alarm.** At night the joiner crouches, no torch,
+     into a house where people sleep, and walks past their beds. No one wakes, no guard comes, no fine for either of you. The host's
+     `kcd.log` has one `WO195-WITNESS ... asleep=1(...) ... ignored=asleep` line per sleeper. Then the joiner stands up with a torch out in
+     daylight in front of someone in the same house: that is seen (`counted=seen`).
+347. **The joiner loots a body's key and opens its chest with it.** Kill an NPC who has a home (a villager); the joiner loots the body: the
+     key is on the loot screen and stays in his pack after he takes it (it is no longer taken away again); he opens that NPC's chest with
+     it. The host then loots the same body: there is no second key. Lines: joiner `WO195-LOOT screen-item`, host `WO195-LOOT host-screen
+     ... -> ok`, later `host-dup` if the host's screen made one.
+348. **Type `mark_odd` at every miss.** Switches (all on): `mp_dead_release`, `mp_stealth_witness`, `mp_body_loot_host`.
+
 ## Logs to send afterwards
 
 Both machines: Report a bug in the launcher. Since 0.48.9 it collects the current launch by default as a small file (or a few numbered
