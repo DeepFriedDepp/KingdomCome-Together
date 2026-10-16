@@ -331,10 +331,17 @@ public partial class GameBridge
         // WO-136 Phase 4: a knockout (or a death) beats the engagement -- never engaged while down.
         if (!Wo136Rules.MayEngage(Wo136HostNpcDown(ev.Name)) && v != Wo132Rules.EngageVerdict.Ignore)
             v = engaged ? Wo132Rules.EngageVerdict.Release : Wo132Rules.EngageVerdict.Ignore;
+        // WO-195 1: a copy whose death was applied here is never engaged, held or wished again (its own release ran at the death)
+        bool w195Dead = Wo195IsDead(ev.Name);
+        if (w195Dead)
+        {
+            if (v == Wo132Rules.EngageVerdict.Engage) Wo195NoteRefused(ev.Name, "engage");
+            if (v != Wo132Rules.EngageVerdict.Ignore) v = engaged ? Wo132Rules.EngageVerdict.Release : Wo132Rules.EngageVerdict.Ignore;
+        }
         // WO-178 C1: the copy is offered to the DLL's hostility answer (the joiner's lock-on) -- engaged with him, or fighting the host
-        if (guarded && bound && eid != 0) Wo178OfferFor(ev, eid, !Wo136Rules.MayEngage(Wo136HostNpcDown(ev.Name)));
+        if (guarded && bound && eid != 0) Wo178OfferFor(ev, eid, w195Dead || !Wo136Rules.MayEngage(Wo136HostNpcDown(ev.Name)));
         // WO-187: its wished opponent (A2) and its guard hold (C2); A1: the host's own position of the NPC within range of me
-        bool intent = Wo187OnNpcCombatIn(ev, guarded && bound ? eid : 0, guarded && bound && Wo136Rules.MayEngage(Wo136HostNpcDown(ev.Name)), a.SourceGhostId);
+        bool intent = !w195Dead && Wo187OnNpcCombatIn(ev, guarded && bound ? eid : 0, guarded && bound && Wo136Rules.MayEngage(Wo136HostNpcDown(ev.Name)), a.SourceGhostId);
         if (v == Wo132Rules.EngageVerdict.Ignore) return;
         bool fightingNow = ev.InCombat || ev.Target != NpcCombatTarget.None;
         if (fightingNow) _w183Left.Report(ev.Name, true, Environment.TickCount64);   // WO-183 4b: a fight with anyone ends any "left combat" clock

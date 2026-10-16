@@ -41,6 +41,7 @@ int wo174_tests(int* passed);              // wo174_tests.cpp (WO-174: the scrip
 int wo176_tests(int* passed);              // wo176_tests.cpp (WO-176: the arranged-fight guard's rules, the fallback that routes nowhere, B2's referral)
 int wo177_tests(int* passed);              // wo177_tests.cpp (WO-177: the native log rotation)
 int wo190_tests(int* passed);              // wo190_tests.cpp (WO-190: trace limits, idle watch, stand-in weapon, re-queue gate, gait hold, swing takeover)
+int wo195_tests(int* passed);              // wo195_tests.cpp (WO-195: the dead copy's gates and its release mask)
 int wo187_tests(int* passed);              // wo187_tests.cpp (WO-187: opponent wishes, guard hold, idle restore, per-weapon 0x10)
 int wo178_tests(int* passed);              // wo178_tests.cpp (WO-178: the hostility answer's rules, C4's hold and engine-like cap)
 int wo173_tests(int* passed);              // wo173_tests.cpp (WO-173: the reaction tail's sites, one blow once, the cap, the correction)
@@ -294,6 +295,14 @@ int main() {
     {
         int fp = 0;
         const int ff = wo190_tests(&fp);
+        g_pass += fp;
+        g_fail += ff;
+    }
+
+    // WO-195: a dead copy is never held, wished or engaged; the release mask
+    {
+        int fp = 0;
+        const int ff = wo195_tests(&fp);
         g_pass += fp;
         g_fail += ff;
     }

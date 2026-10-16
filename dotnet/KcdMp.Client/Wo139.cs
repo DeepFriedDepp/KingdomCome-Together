@@ -63,19 +63,22 @@ public static class Wo139Rules
 
     // ---- the texts (checked field by field on both ends) ----
 
-    public readonly record struct Report(string Crime, float X, float Y, float Z, string Victim, string Item, string Where);
+    /// <summary>WO-195 2b: <paramref name="Stealth"/> is the joiner's stealth at the crime (Wo195Rules.Stealth's text), "" = none (a 0.60.9 joiner).</summary>
+    public readonly record struct Report(string Crime, float X, float Y, float Z, string Victim, string Item, string Where, string Stealth = "");
 
     public static string ReportText(Report r) => FormattableString.Invariant(
-        $"{r.Crime} {r.X:F2} {r.Y:F2} {r.Z:F2} {Dash(r.Victim)} {Dash(r.Item)} {r.Where}");
+        $"{r.Crime} {r.X:F2} {r.Y:F2} {r.Z:F2} {Dash(r.Victim)} {Dash(r.Item)} {r.Where}{(r.Stealth.Length > 0 ? " " + r.Stealth : "")}");
 
     public static bool TryParseReport(string? text, out Report r)
     {
         r = default;
-        var f = Split(text, 7);
+        var f = Split(text, 7) ?? Split(text, 8);   // WO-195 2b: an 8th field, the joiner's stealth
         if (f is null || !Wo139Text.IsReportedCrime(f[0])) return false;
+        string stealth = f.Length == 8 && Wo195Rules.TryParseStealth(f[7], out _) ? f[7] : "";
+        if (f.Length == 8 && stealth.Length == 0) return false;
         if (!Wo139Text.TryCoord(f[1], out float x) || !Wo139Text.TryCoord(f[2], out float y) || !Wo139Text.TryCoord(f[3], out float z)) return false;
         if (!Wo139Text.IsNameOrDash(f[4]) || !Wo139Text.IsItemOrDash(f[5]) || !Wo139Text.IsWhere(f[6])) return false;
-        r = new Report(f[0], x, y, z, f[4] == "-" ? "" : f[4], f[5] == "-" ? "" : f[5], f[6]);
+        r = new Report(f[0], x, y, z, f[4] == "-" ? "" : f[4], f[5] == "-" ? "" : f[5], f[6], stealth);
         return true;
     }
 

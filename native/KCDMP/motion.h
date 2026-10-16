@@ -130,6 +130,9 @@ void set_npc_engage(uint32_t eid, bool on, const State2* st, double now);
 bool npc_engaged(uint32_t eid);
 // WO-187 C2: a copy whose host NPC fights anyone holds combat mode (no skirmish, no engagement); stale after wo187rules::kGuardHoldStaleS.
 void set_npc_guard_hold(uint32_t eid, bool on, const State2* st, double now);
+// WO-195 (main thread): a dead copy -- its engage and guard holds dropped and the writer's combat mode on it released now. Returns
+// wo195rules::kHeldGuard / kHeldCombat for what it had (the engagement's own bit is wo132's).
+uint8_t drop_fight_holds(uint32_t eid, const char* why);
 // WO-190 0.4: [figures: frames, glide, in-place, class changes][copies: the same] since the DLL loaded (any thread).
 void loco_counters(uint32_t out[8]);
 bool fight_held(uint32_t eid);                   // WO-190: a copy held in combat mode for a fight (engaged, or WO-187's guard hold), fresh

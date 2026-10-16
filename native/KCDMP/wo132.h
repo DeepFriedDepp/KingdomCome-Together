@@ -79,5 +79,7 @@ void set_combat_callback(CombatFn fn);
 
 void tick();   // main thread, every frame
 void on_pipe_closed();
+// WO-195 (main thread): a dead copy leaves the local player's skirmish at once (its hold and its discard end too). True = it was engaged.
+bool release_dead(uint32_t eid);
 
 } // namespace kcdmp::wo132

@@ -62,6 +62,8 @@ public static partial class Protocol
                       Wo189OpProfile = 48, Wo189OpConcept = 49;
     // ---- WO-190: the DLL's ops in the WO-163 family (native/KCDMP/wo190.h): the animation trace's switches, a body's hands, the clinch refusals ----
     public const byte Wo190OpStatus = 50, Wo190OpConfig = 51, Wo190OpWeapon = 52, Wo190OpClinchRefused = 53;
+    // ---- WO-195: the DLL's ops in the WO-163 family (native/KCDMP/wo195.h): a dead copy's release, its check, the switch ----
+    public const byte Wo195OpStatus = 54, Wo195OpConfig = 55, Wo195OpRelease = 56, Wo195OpCheck = 57;
 
     // ---- kinds (APPEND-ONLY) ----
     public const byte W164MarkPing = 1, W164Torch = 2, W164Escort = 3, W164HitOutcome = 4, W164Weather = 5, W164Travel = 6, W164RealHit = 7, W164NpcDown = 8;

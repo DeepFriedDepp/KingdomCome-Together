@@ -14,6 +14,8 @@
 #include "motion.h"
 #include "npc_drive.h"
 #include "script_context.h"
+#include "wo195.h"
+#include "wo195_rules.h"
 
 #include <windows.h>
 #include <atomic>
@@ -182,6 +184,7 @@ void unpin(uint32_t copy, Wish& w, const char* why) {
 // One wish against the copy's model: applied, or written back when something else wrote it. Main thread.
 void apply_wish(uint32_t copy, Wish& w, double now, const char* moment) {
     w.checkedAt = now;
+    if (wo195::dead_gate(copy, "wish")) return;   // WO-195: never applied or written back on a dead copy (0.60.5 did, in the death's own frame)
     void* ent = wish_entity(w);
     void* ca = nullptr; void* model = nullptr;
     if (!ent || !motion::combat_parts(copy, false, &ca, &model)) return;
@@ -392,6 +395,17 @@ int read_all_scopes(uint32_t eid, ScopeInfo* out, int max) {
     return n;
 }
 
+uint8_t drop_wish(uint32_t eid, const char* why) {
+    auto it = g_wishes.find(eid);
+    if (it == g_wishes.end()) return 0;
+    const uint8_t held = static_cast<uint8_t>(wo195rules::kHeldWish | (it->second.pinned ? wo195rules::kHeldPin : 0));
+    unpin(eid, it->second, why);
+    g_wishes.erase(it);
+    c_dropped.fetch_add(1);
+    logf("WO187-OPP npc=%s wish dropped (%s)", name_of(eid), why);
+    return held;
+}
+
 bool opp_logical_on() { return g_logical.load(); }
 bool opp_pin_on() { return g_pin.load(); }
 bool guard_on() { return g_guard.load(); }
@@ -426,7 +440,7 @@ bool ensure_target(void* ca, void* model, void* entity, bool* hadIt) {
 
 uint8_t on_windup(uint32_t eid, const char* name, void* ca, void* model) {
     auto it = g_wishes.find(eid);
-    const bool wish = it != g_wishes.end() && opp_wish_live(now_s(), it->second.refreshedAt) && g_logical.load();
+    const bool wish = it != g_wishes.end() && opp_wish_live(now_s(), it->second.refreshedAt) && g_logical.load() && !wo195::dead_gate(eid, "wish");
     bool viaReq = false;
     const uint32_t cur = model ? current_eid(eid, model, &viaReq) : 0;
     uint32_t want = 0;
@@ -482,6 +496,13 @@ void tick() {
     const double now = now_s();
     for (auto it = g_wishes.begin(); it != g_wishes.end();) {
         Wish& w = it->second;
+        if (wo195::dead_gate(it->first, "wish")) {   // WO-195: a dead copy's wish goes at once, with its pin
+            unpin(it->first, w, "the copy is dead (WO-195)");
+            c_dropped.fetch_add(1);
+            logf("WO187-OPP npc=%s wish dropped (the copy is dead -- WO-195)", name_of(it->first));
+            it = g_wishes.erase(it);
+            continue;
+        }
         if (!opp_wish_live(now, w.refreshedAt) || !engine::entity_by_id(it->first)) {
             unpin(it->first, w, "the wish ended");
             c_dropped.fetch_add(1);
@@ -510,6 +531,11 @@ uint8_t handle(uint8_t op, const uint8_t* body, size_t len, uint8_t* out, size_t
             auto it = g_wishes.find(copy);
             if (kind == 0) {
                 if (it != g_wishes.end()) { unpin(copy, it->second, "the agent cleared it"); g_wishes.erase(it); }
+                out[0] = 0; *outLen = 1;
+                return wo163::kROk;
+            }
+            if (wo195::dead_gate(copy, "wish")) {   // WO-195: no wish for a dead copy (an old one goes, with its pin)
+                if (it != g_wishes.end()) { unpin(copy, it->second, "the copy is dead (WO-195)"); g_wishes.erase(it); }
                 out[0] = 0; *outLen = 1;
                 return wo163::kROk;
             }
@@ -559,6 +585,11 @@ uint8_t handle(uint8_t op, const uint8_t* body, size_t len, uint8_t* out, size_t
             if (!eid || !engine::entity_by_id(eid)) return wo163::kRNoActor;
             motion::State2 st{};
             parse_state2(body + 6, &st);
+            if (body[5] != 0 && wo195::dead_gate(eid, "guard-hold")) {   // WO-195: a dead copy's guard is never held
+                motion::set_npc_guard_hold(eid, false, nullptr, npcdrive::now_s());
+                out[0] = 0; *outLen = 1;
+                return wo163::kROk;
+            }
             motion::set_npc_guard_hold(eid, body[5] != 0, &st, npcdrive::now_s());
             out[0] = 1; *outLen = 1;
             return wo163::kROk;

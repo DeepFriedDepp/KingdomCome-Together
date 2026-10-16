@@ -116,12 +116,16 @@ public partial class GameBridge
                 if (f.Length == 1 && Wo134Rules.BodyName.IsMatch(f[0]) && Wo134JoinerRole)
                     _ = Wo134SendAsync(Protocol.LootAskUp, Protocol.JoinTargetHost, Protocol.LootAskBodyOpen, 0, f[0]);
                 return;
-            case "w134_take":      // <tok> <body> <cls> <amt> <hp>
+            case "w134_take":      // <tok> <body> <cls> <amt> <hp> [screen]   (WO-195 3: "screen" = the loot screen's own item, e.g. the home key)
             case "w134_put":
-                if (f.Length == 5 && Wo134Rules.BodyName.IsMatch(f[1]) && Wo134Rules.TryClass(f[2], out _) && Wo134Rules.TryAmount(f[3], out _)
-                    && Wo134Rules.TryHealth(f[4], out _) && Wo134JoinerRole)
+                if ((f.Length == 5 || (f.Length == 6 && name == "w134_take" && Wo195Rules.IsScreenMark(f[5]))) && Wo134Rules.BodyName.IsMatch(f[1])
+                    && Wo134Rules.TryClass(f[2], out _) && Wo134Rules.TryAmount(f[3], out _) && Wo134Rules.TryHealth(f[4], out _) && Wo134JoinerRole)
+                {
+                    bool screen = f.Length == 6 && _w195BodyLootHost;
+                    if (screen) Wo195NoteScreenTake();
                     _ = Wo134SendAsync(Protocol.LootAskUp, Protocol.JoinTargetHost, name == "w134_take" ? Protocol.LootAskBodyTake : Protocol.LootAskBodyPut,
-                                       U(f[0]), $"{f[1]} {f[2]} {f[3]} {f[4]}");
+                                       U(f[0]), $"{f[1]} {f[2]} {f[3]} {f[4]}{(screen ? " screen" : "")}");
+                }
                 return;
             case "w134_item":      // <tok> <cls> <x> <y> <z> <fromBody> [<amount>]   (WO-177 B1: the amount rides as an optional 7th field)
                 if (f.Length is 6 or 7 && Wo134Rules.TryClass(f[1], out _) && Wo134Rules.TryCoord(f[2], out _) && Wo134Rules.TryCoord(f[3], out _)
@@ -213,10 +217,12 @@ public partial class GameBridge
                 case Protocol.LootAskBodyOpen when f.Length == 1 && Wo134Rules.BodyName.IsMatch(f[0]):
                     await ExecLuaAsync($"if KCD2MP_W134HostOpen then KCD2MP_W134HostOpen({src}, {m.Tok}, \"{f[0]}\") end");
                     return;
-                case Protocol.LootAskBodyTake or Protocol.LootAskBodyPut when f.Length == 4 && Wo134Rules.BodyName.IsMatch(f[0])
+                case Protocol.LootAskBodyTake or Protocol.LootAskBodyPut when (f.Length == 4 || (f.Length == 5 && m.Kind == Protocol.LootAskBodyTake && Wo195Rules.IsScreenMark(f[4])))
+                        && Wo134Rules.BodyName.IsMatch(f[0])
                         && Wo134Rules.TryClass(f[1], out var cls) && Wo134Rules.TryAmount(f[2], out int amt) && Wo134Rules.TryHealth(f[3], out float hp):
                     string fn = m.Kind == Protocol.LootAskBodyTake ? "KCD2MP_W134HostTake" : "KCD2MP_W134HostPut";
-                    await ExecLuaAsync($"if {fn} then {fn}({src}, {m.Tok}, \"{f[0]}\", \"{cls:D}\", {amt}, {Wo134Rules.F(hp)}) end");
+                    bool screenTake = f.Length == 5 && _w195BodyLootHost;   // WO-195 3: the joiner's loot screen made this item (the home key)
+                    await ExecLuaAsync($"if {fn} then {fn}({src}, {m.Tok}, \"{f[0]}\", \"{cls:D}\", {amt}, {Wo134Rules.F(hp)}{(screenTake ? ", true" : "")}) end");
                     return;
                 case Protocol.LootAskItemTake when f.Length is 5 or 6 && Wo134Rules.TryClass(f[0], out var icls) && Wo134Rules.TryCoord(f[1], out float x)
                         && Wo134Rules.TryCoord(f[2], out float y) && Wo134Rules.TryCoord(f[3], out float z) && f[4] is "0" or "1"

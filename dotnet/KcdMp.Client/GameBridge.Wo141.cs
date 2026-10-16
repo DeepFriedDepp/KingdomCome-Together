@@ -139,6 +139,7 @@ public partial class GameBridge
             if (r.Kind == Wo141Codec.KindNpc)
             {
                 if (host) npc.Add(new ActivityRow(Protocol.ActivityPeerNone, r.Name, Wo141Rules.Filter(r.A, _w141Kinds)));
+                if (host) Wo195NoteHostActivity(r.Name, r.A);   // WO-195 2a: an NPC lying on its bed is asleep for the witness rule
                 continue;
             }
             if ((_w141Kinds & Wo141Rules.KindPlayer) == 0) continue;

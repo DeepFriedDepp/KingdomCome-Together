@@ -1,4 +1,4 @@
-# Copyright (C) 2026 the Kingdom Come: Together contributors (AUTHORS). SPDX-License-Identifier: GPL-3.0-only
+﻿# Copyright (C) 2026 the Kingdom Come: Together contributors (AUTHORS). SPDX-License-Identifier: GPL-3.0-only
 # GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
 # content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 """WO-191 live harness (never shipped). Unattended: no focus change, no key press; the throwaway playline4 only. Uses run165.py (relay,
@@ -105,7 +105,7 @@ def l1(npc='ttkc_man_3', blows=6, every=2.5):
         ag = lines_from(agentlog, n0)
         accepted = [l for l in ag if 'MP-ACTION section=inbound ghost=1 kind=Attack' in l]
         w173 = [l for l in ag if 'MP-W173 hit npc=' in l]
-        runs.append({'run': run, 'attack_accepted': len(accepted), 'seqs': [re.search(r'seq=(\d+)', l).group(1) for l in accepted],
+        runs.append({'run': run, 'attack_accepted': len(accepted), 'seqs': [m.group(1) for l in accepted for m in [re.search(r'seq=(\d+)', l)] if m],
                      'stale': count(ag, 'reject=StaleOrDuplicate'), 'wo191_action': [l[13:200] for l in ag if 'WO191-ACTION' in l][:6],
                      'w173_hits': len(w173), 'w173_no_swing_row': count(w173, 'fallback=no-swing-row'),
                      'w173_sample': [l[13:220] for l in w173[:2]], 'peers': [l[13:120] for l in ag if 'MP-PEERS ghost 1' in l]})

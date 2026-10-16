@@ -41,6 +41,8 @@
 #include "hits.h"
 #include "pe_exports.h"
 #include "script_context.h"
+#include "wo195.h"
+#include "wo195_rules.h"
 
 namespace kcdmp::motion {
 namespace {
@@ -1550,6 +1552,9 @@ void body_frame(const char* key, void* ent, uint32_t eid, float renderSpeedMps, 
         // WO-187 C2 (mp_anim_guard): the copy of an NPC fighting anyone else holds combat mode too -- the game's guard idle under its swings
         auto gh = hold ? g_guardHold.end() : g_guardHold.find(eid);
         const bool guardHold = gh != g_guardHold.end() && now - gh->second.at < wo187rules::kGuardHoldStaleS && g_combat && wo187::guard_on();
+        // WO-195 (mp_dead_release): a copy that reads dead is never held in a fight -- every hold goes at once, and the game's own death
+        // takes the body (0.60.5: the hold, the wish and its pin ran on a corpse until their own clocks let go)
+        if ((hold || guardHold) && wo195::dead_gate(eid, "combat-hold")) { wo195::release(eid, "frame-gate"); return; }
         if (hold) {
             if (!b.combatHeld) c_engageHolds.fetch_add(1);
             apply_combat(b, &eg->second.st, now);
@@ -1835,6 +1840,18 @@ void set_npc_guard_hold(uint32_t eid, bool on, const State2* st, double now) {
     if (st) e.st = *st;
     e.st.bits |= kBitCombat;
     e.at = now;
+}
+
+uint8_t drop_fight_holds(uint32_t eid, const char* why) {
+    uint8_t held = 0;
+    if (g_guardHold.erase(eid)) held |= wo195rules::kHeldGuard;
+    g_engage.erase(eid);
+    auto it = g_bodies.find(eid);
+    if (it != g_bodies.end() && !it->second.avatar && (it->second.combatHeld || it->second.automationOff)) {
+        if (it->second.combatHeld) held |= wo195rules::kHeldCombat;
+        if (it->second.actor && engine::entity_by_id(eid) == it->second.ent) release_body(it->second, why);
+    }
+    return held;
 }
 
 void* actor_of(uint32_t eid) { return actor_by_eid(eid); }

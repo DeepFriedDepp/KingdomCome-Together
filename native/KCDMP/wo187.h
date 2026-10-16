@@ -59,6 +59,8 @@ bool set_logical_target(void* ca, void* entity);
 bool ensure_target(void* ca, void* model, void* entity, bool* hadIt);
 // Every wind-up of a copy (wo166.cpp, before its slot planning): its wish checked and written back if overwritten.
 uint8_t on_windup(uint32_t eid, const char* name, void* ca, void* model);
+// WO-195 (main thread): this copy's wish dropped (its pin cleared). Returns wo195rules::kHeldWish (| kHeldPin) for what it had, 0 = none.
+uint8_t drop_wish(uint32_t eid, const char* why);
 // A3 (wo166.cpp): one wind-up's planning.
 void note_plan(const char* name, bool opponentIsPlayer, int planned, bool refused);
 

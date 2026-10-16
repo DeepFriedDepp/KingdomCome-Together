@@ -16914,6 +16914,10 @@ function W134.bodyState(name, reason, flags, list)
             end
         end
         for _, p in pairs(sess.puts) do want[#want + 1] = { cls = p.cls, amt = p.amt, hp = p.hp } end
+        -- WO-195 3: the loot screen's own items still in the body stay (the host's list never has them)
+        for cls, k in pairs(sess.screen or {}) do
+            if k > 0 then want[#want + 1] = { cls = cls, amt = k, hp = W134.hpOf(sess.snap or {}, cls) } end
+        end
     end
     local del, made = W134.applyList(e, want)
     W134.log(string.format("WO134-BODY state npc=%s reason=%s host_items=%d -> copy deleted=%d created=%d", name, tostring(reason), #list, del, made))
@@ -17013,8 +17017,12 @@ function W134.diffSession(name, sess, e)
             local hp = W134.hpOf(sess.snap, cls)
             sess.pend[tok] = { cls = cls, amt = n - m, hp = hp, at = os.clock(), pinv = sess.pinv }
             w.stats.takes = w.stats.takes + 1
-            KCD2MP_EmitEvent("w134_take", string.format("%s %s %s %d %.4f", tok, name, cls, n - m, hp))
-            W134.log(string.format("WO134-BODY take npc=%s cls=%s amt=%d tok=%s -- sent to the host", name, cls, n - m, tok))
+            -- WO-195 3: an item the loot screen made goes as "screen" (the host's body never held it: WO-136 took the key back)
+            local scr = (sess.screen and sess.screen[cls]) or 0
+            local screen = scr > 0 and KCD2MP.w195 and KCD2MP.w195.bodyLootHost
+            if scr > 0 then sess.screen[cls] = math.max(0, scr - (n - m)) end
+            KCD2MP_EmitEvent("w134_take", string.format("%s %s %s %d %.4f%s", tok, name, cls, n - m, hp, screen and " screen" or ""))
+            W134.log(string.format("WO134-BODY take npc=%s cls=%s amt=%d tok=%s%s -- sent to the host", name, cls, n - m, tok, screen and " (the loot screen's own item)" or ""))
         end
     end
     -- WO-136 Phase 7: a put is an item that came out of the player's own pack
@@ -17034,6 +17042,11 @@ function W134.diffSession(name, sess, e)
         if m > n and not fromPack[cls] then
             w.stats.phantomPuts = (w.stats.phantomPuts or 0) + 1
             W134.log(string.format("WO134-BODY not-a-put npc=%s cls=%s amt=%d -- it did not come out of the player's pack (the game's own, e.g. the loot screen's key); not sent", name, cls, m - n))
+            -- WO-195 3: remembered -- its take goes to the host marked as the loot screen's own (no inventory of the host's held it)
+            sess.screen = sess.screen or {}
+            sess.screen[cls] = (sess.screen[cls] or 0) + (m - n)
+            if KCD2MP.w195 then KCD2MP.w195.stats.screenItems = KCD2MP.w195.stats.screenItems + 1 end
+            mp_log(string.format("WO195-LOOT screen-item npc=%s cls=%s amt=%d -- the loot screen made it: a take of it asks the host as such", name, cls, m - n))
         end
         if m > n and fromPack[cls] then
             local tok = W134.tok()
@@ -17114,7 +17127,7 @@ end
 
 -- Agent -> host: a joiner took an item out of its copy of this body. The host's
 -- body is the one inventory: the item comes out here, or it was already gone.
-function KCD2MP_W134HostTake(peer, tok, name, cls, amt, hp)
+function KCD2MP_W134HostTake(peer, tok, name, cls, amt, hp, screen)
     local w = KCD2MP.w134
     amt = tonumber(amt) or 1
     local e = nil
@@ -17124,14 +17137,20 @@ function KCD2MP_W134HostTake(peer, tok, name, cls, amt, hp)
         for _, it in ipairs(W134.items(e)) do if it.cls == cls then have = have + it.amt end end
     end
     local verdict = "gone"
+    local decided = false
     if e and have >= amt then
         local n = W134.deleteClass(e, cls, amt, tonumber(hp) or 1, nil)
         if n >= amt then verdict = "ok" end
+    elseif e and screen and KCD2MP_W195ScreenVerdict then
+        -- WO-195 3: the joiner's loot screen made it (the NPC's home key): his once per body and class
+        local v = KCD2MP_W195ScreenVerdict(tostring(peer), tostring(name), tostring(cls), amt)
+        if v then verdict, decided = v, true end
     end
     -- WO-136 Phase 7: a refused take names who got it -- mine (this joiner's own
     -- earlier take), none (this body never held it), else gone (someone else: the
     -- host or another joiner). Only "gone" shows the notice on the joiner.
-    if verdict == "ok" then W134.noteTake(tostring(name), tostring(cls), tostring(peer), amt)
+    if decided then
+    elseif verdict == "ok" then W134.noteTake(tostring(name), tostring(cls), tostring(peer), amt)
     else verdict = W134.goneWhy(tostring(name), tostring(cls), tostring(peer), have) end
     if e then W134.noteCounts(tostring(name), e) end
     w.stats.hostTakes = w.stats.hostTakes + 1
@@ -17170,6 +17189,7 @@ function W134.hostWatch()
             local name = W134.name(e)
             if name and not seen[name] and W134.isDeadBody(e) and not mp_is_mod_entity(e) and not W134.isDrop(name) then
                 seen[name] = true
+                if KCD2MP_W195HostDup then pcall(KCD2MP_W195HostDup, name, e) end   -- WO-195 3: no second loot-screen key
                 local list = W134.items(e)
                 local sig = W134.sig(list)
                 if w.bodySig[name] ~= sig then W134.noteHostLoot(name, list) end   -- WO-136 Phase 7
@@ -18947,6 +18967,7 @@ function KCD2MP_W139Session(host, joiner, on)
     if joiner and on then
         pcall(KCD2MP_W139StashTick)
         pcall(KCD2MP_W139StopTick)
+        if KCD2MP_W195StealthTick then pcall(KCD2MP_W195StealthTick) end   -- WO-195 2b: the stealth every crime report carries
     end
 end
 
@@ -19662,17 +19683,38 @@ function W139.aliveAwake(e)
     return not sleeping
 end
 
-function KCD2MP_W139Witnesses(avatar, tp, victimName)
+-- WO-195 2: with mp_stealth_witness on and the joiner's stealth (ctx, from his report; nil for the host's own checks) the rule is
+-- KCD2MP_W195Witness: the sight radius shrinks for the dark, a crouch, his visibility and his skill, a noise radius hears him, and a
+-- sleeper (IsSleeping, or lying on its bed in the host's own activity read) never sees him. Every judged NPC is logged (WO195-WITNESS).
+function KCD2MP_W139Witnesses(avatar, tp, victimName, ctx, id)
     local w = KCD2MP.w139
     local ents = {}
     pcall(function() ents = System.GetEntitiesInSphere(tp, w.sightM) or {} end)
     local n, guards, gnames, settlement, civ = 0, 0, {}, nil, nil
     local cnames = {}   -- WO-151: the witnesses who are not guards (joint mode plants in them when no guard saw it)
+    local w195 = ctx ~= nil and KCD2MP.w195 and KCD2MP.w195.stealthWitness and KCD2MP_W195Witness ~= nil
+    local env, sight, noise, word = nil, w.sightM, 0, "day"
+    local lines = { n = 0 }
+    if w195 then
+        KCD2MP.w195.stats.judged = KCD2MP.w195.stats.judged + 1
+        env = KCD2MP_W195Env(tp)
+        sight, noise, word = KCD2MP_W195Radii(ctx, env, w.sightM)
+    end
     for _, e in ipairs(ents) do
-        if (e.class == "NPC" or e.class == "NPC_Female") and e ~= avatar and not KCD2MP_W139IsAvatar(e) and W139.aliveAwake(e) then
+        local alive = true
+        if w195 and e.actor then
+            if e.actor.IsDead then pcall(function() alive = not e.actor:IsDead() end) end
+            if alive and e.actor.IsUnconscious then pcall(function() alive = not e.actor:IsUnconscious() end) end
+        end
+        if (e.class == "NPC" or e.class == "NPC_Female") and e ~= avatar and not KCD2MP_W139IsAvatar(e) and (w195 and alive or (not w195 and W139.aliveAwake(e))) then
             local enemy = false
             pcall(function() enemy = e.soul:IsPublicEnemy() == true end)
-            if not enemy and KCD2MP_W139Sees(e, avatar, tp) then
+            local sees = false
+            if not enemy then
+                if w195 then sees = KCD2MP_W195Witness(e, W139.name(e), avatar, tp, ctx, env, sight, noise, word, id, lines)
+                else sees = KCD2MP_W139Sees(e, avatar, tp) end
+            end
+            if sees then
                 n = n + 1
                 local nm = W139.name(e)
                 if W139.isGuard(e) then
@@ -19698,7 +19740,7 @@ function KCD2MP_W139AvatarOf(src)
     return g and g.entity or nil
 end
 
-function KCD2MP_W139HostJudge(src, id, kind, x, y, z, victim, item, where)
+function KCD2MP_W139HostJudge(src, id, kind, x, y, z, victim, item, where, stealth)
     local w = KCD2MP.w139
     w.stats.judged = w.stats.judged + 1
     local av = KCD2MP_W139AvatarOf(src)
@@ -19715,7 +19757,13 @@ function KCD2MP_W139HostJudge(src, id, kind, x, y, z, victim, item, where)
     if ap and ((ap.x - tp.x) ^ 2 + (ap.y - tp.y) ^ 2) < 36 then tp = ap else target = nil end
     local ve = nil
     if victim and victim ~= "-" then pcall(function() ve = System.GetEntityByName(victim) end) end
-    local n, guards, gnames, settlement, civ, cnames = KCD2MP_W139Witnesses(target, tp, victim)
+    -- WO-195 2b: the joiner's stealth from his report (a 0.60.9 joiner sends none: the dark and the sleepers still count)
+    local ctx = nil
+    if KCD2MP.w195 and KCD2MP.w195.stealthWitness and KCD2MP_W195ParseStealth then
+        ctx = KCD2MP_W195ParseStealth(stealth)
+        if not ctx.light and KCD2MP.w136 and KCD2MP.w136.avatarTorch and KCD2MP.w136.avatarTorch[tostring(src)] then ctx.light = true end   -- his figure's torch here
+    end
+    local n, guards, gnames, settlement, civ, cnames = KCD2MP_W139Witnesses(target, tp, victim, ctx, id)
     if not settlement and ve then settlement = W139.settlementOf(ve) end
     -- WO-151 joint: seen here, the joiner's crime is the host's Henry's too
     if n > 0 and KCD2MP.w151 and KCD2MP.w151.crimeJoint and KCD2MP_W151JointRaise then
@@ -29079,6 +29127,278 @@ System.AddCCommand("mp_action_forget", 'KCD2MP_W191SetForget(%line)', "WO-191: (
 System.AddCCommand("mp_sweep_fight_guard", 'KCD2MP_W191SetFightGuard(%line)', "WO-191: (joiner) a copy that is fighting, or fought in the last 10 s, is never reset (default on): mp_sweep_fight_guard on|off")
 System.AddCCommand("mp_attacker_bind", 'KCD2MP_W191SetAttackerBind(%line)', "WO-191: (both) an NPC or animal attacking a partner is always shown on their screen (default on): mp_attacker_bind on|off")
 System.AddCCommand("mp_fader_bound", 'KCD2MP_W191SetFaderBound(%line)', "WO-191: (joiner) a black screen that belongs to no scene ends after 3 s (default on): mp_fader_bound on|off")
+
+-- ===== WO-195: dead copies fall and end the fight, stealth for the joiner, a body's key ==========================================
+-- The agent's part is GameBridge.Wo195.cs, the DLL's wo195.cpp (docs/WO-195-findings.md). The switches (all default ON):
+--   mp_dead_release on|off     (joiner) a copy that dies is released from every fight hold at once and never held again
+--   mp_stealth_witness on|off  (both)   the joiner's crouch, light, visibility, noise and stealth skill go with each crime report; the
+--                                       host's witness rule scales its sight by them and by darkness, and a sleeper never witnesses
+--   mp_body_loot_host on|off   (both)   the item a body's loot screen makes as it opens (the NPC's home key: no inventory holds it,
+--                                       so WO-136 took it back off the joiner as "never in the host's body") is his to take, once
+--   WO195-WITNESS id=<crime> npc=<n> dist=<m> asleep=<0|1> lit=<0|1> dark=<day|night|interior|interior-night> crouch=<0|1>
+--                 sight_m=<r> noise_m=<r> counted=<seen|heard|woken> | ignored=<asleep|far|unseen|enemy>
+--   WO195-LOOT screen-item|screen-take|host-screen|host-dup ...      WO195-PLAYER after npc=<n> combat_mode=<b> ...
+KCD2MP.w195 = KCD2MP.w195 or { deadRelease = true, stealthWitness = true, bodyLootHost = true,
+    asleep = {},          -- host: NPC name -> true while the host's own activity read (WO-141) has it lying on its bed
+    screenTaken = {},     -- host: body name -> { cls -> peer }: a loot-screen item a joiner took (the host's own copy of it is removed)
+    stealthSent = nil, stealthAt = -1e9,
+    stats = { judged = 0, counted = 0, ignored = 0, asleepIgnored = 0, heard = 0, woken = 0, screenItems = 0, screenTakes = 0, screenOk = 0,
+              screenRefused = 0, hostDup = 0, stealthSent = 0, playerChecks = 0 } }
+-- The witness scale. The game's own stealth numbers where it has one (Libs/Tables/rpg/rpg_param.xml), the mod's otherwise; every
+-- number is in docs/WO-195-findings.md. A witness radius = sightM x the light factor x the skill factor:
+--   light factor = clamp(1 + darkness + crouch + visibility, minFactor, maxFactor)
+--     darkness   = nightExterior (VisibilityDecrementNighttimeExterior) / dayInterior (VisibilityDecrementDaytimeInterior) /
+--                  nightInterior, 0 by day outdoors or with a light in hand
+--     crouch     = the mod's -0.5
+--     visibility = (vis - visRef) x visSlope (the joiner's own derived stat "vis", 0 when unread: -99 on the wire)
+--   skill factor = 1 - skillToRadius x skill / skillMax (StealthSkillToViewRadiusDecr)
+-- A noise radius = (crouch and noiseCrouchM or noiseStandM) x clamp(noi / noiRef) x (1 - skillToNoise x skill / skillMax)
+-- (StealthSkillToFootstepSoundMult): an awake NPC within it hears him wherever it looks; a sleeper within it wakes.
+KCD2MP.w195.P = KCD2MP.w195.P or {
+    nightExterior = -0.7, dayInterior = -0.3, nightInterior = -0.7, crouch = -0.5,
+    visRef = 1.0, visSlope = 0.5, noiRef = 1.0,
+    minFactor = 0.12, maxFactor = 1.3,
+    skillToRadius = 0.3, skillToNoise = 0.6, skillMax = 30,
+    noiseStandM = 4.0, noiseCrouchM = 0.6, noiseMin = 0.5, noiseMax = 1.6,
+    nightFrom = 21, nightTo = 5,
+    maxLines = 16,
+}
+
+function KCD2MP_W195Cfg()
+    local w = KCD2MP.w195
+    KCD2MP_EmitEvent("w195_cfg", string.format("dead=%s stealth=%s bodyloot=%s",
+        w.deadRelease and "on" or "off", w.stealthWitness and "on" or "off", w.bodyLootHost and "on" or "off"))
+    return true
+end
+
+function KCD2MP_W195Switch(key, field, arg, what)
+    local v = KCD2MP_Wo122ParseBool(arg)
+    if v == "bad" then mp_log("mp_" .. key .. ": expected on|off"); return false end
+    if v ~= nil then KCD2MP.w195[field] = v end
+    mp_log(string.format("WO195-TOGGLE mp_%s %s -- %s", key, KCD2MP.w195[field] and "on" or "off", what))
+    KCD2MP_W195Cfg()
+    return true
+end
+function KCD2MP_W195SetDeadRelease(arg) return KCD2MP_W195Switch("dead_release", "deadRelease", arg, "a copy that dies leaves every fight hold at once and falls the game's way") end
+function KCD2MP_W195SetStealth(arg) return KCD2MP_W195Switch("stealth_witness", "stealthWitness", arg, "the joiner's stealth and the dark count when the host's world judges his crimes; sleepers never witness") end
+function KCD2MP_W195SetBodyLoot(arg) return KCD2MP_W195Switch("body_loot_host", "bodyLootHost", arg, "a body's loot-screen key is the joiner's to take, once") end
+
+-- ---- 1: the joiner's own combat state after a copy's death (the agent asks 2 s after the release) -------------------------------
+function KCD2MP_W195PlayerCheck(npc, others)
+    local w = KCD2MP.w195
+    w.stats.playerChecks = w.stats.playerChecks + 1
+    local cm, cd = nil, nil
+    if player and player.soul and player.soul.IsInCombatMode then pcall(function() cm = player.soul:IsInCombatMode() end) end
+    if player and player.soul and player.soul.IsInCombatDanger then pcall(function() cd = player.soul:IsInCombatDanger() end) end
+    mp_log(string.format("WO195-PLAYER after npc=%s combat_mode=%s combat_danger=%s other_engaged=%s -- %s", tostring(npc), tostring(cm), tostring(cd),
+        tostring(others), (cm == true and (tonumber(others) or 0) == 0) and "STILL in combat with no copy engaged (the game's own fight state: send the logs)"
+            or "the game's own state"))
+    return true
+end
+
+-- ---- 2: stealth -------------------------------------------------------------------------------------------------------------------
+-- Joiner, once a second (the WO-139 session tick): this player's stealth, sent to the agent on a change (it rides every crime report).
+function KCD2MP_W195Stealth()
+    local crouch = KCD2MP.playerSneaking == true
+    if not crouch then
+        if player.GetStance then pcall(function() local s = player:GetStance(); if s == 2 or s == 3 then crouch = true end end) end
+        if not crouch and player.actor and player.actor.bSneaking then crouch = true end
+    end
+    local light = KCD2MP.w136 and KCD2MP.w136.torchLocal == true
+    local function stat(n)
+        local v = nil
+        if player.soul and player.soul.GetDerivedStat then pcall(function() v = tonumber(player.soul:GetDerivedStat(n)) end) end
+        return v or -99   -- -99 = unread (a real stat may be negative)
+    end
+    local skill = -1
+    if player.soul and player.soul.GetSkillLevel then pcall(function() skill = tonumber(player.soul:GetSkillLevel("stealth")) or -1 end) end
+    local function f(v) return math.max(-98, math.min(999, v)) end
+    local function g(v) return v == -99 and -99 or f(v) end
+    return string.format("c=%d,l=%d,v=%.2f,n=%.2f,s=%.2f,k=%d", crouch and 1 or 0, light and 1 or 0, g(stat("vis")), g(stat("noi")), g(stat("con")),
+        math.max(-1, math.min(99, math.floor(skill))))
+end
+
+function KCD2MP_W195StealthTick()
+    local w = KCD2MP.w195
+    if not w.stealthWitness or not player then return end
+    local t = KCD2MP_W195Stealth()
+    local now = os.clock()
+    if t ~= w.stealthSent or (now - w.stealthAt) > 30.0 then
+        w.stealthSent, w.stealthAt = t, now
+        w.stats.stealthSent = w.stats.stealthSent + 1
+        KCD2MP_EmitEvent("w195_stealth", t)
+    end
+end
+
+-- The agent's 8th field, read back (an unknown or malformed one = nothing known: no crouch, no light, no stats).
+function KCD2MP_W195ParseStealth(text)
+    local c = { known = false, crouch = false, light = false, vis = -99, noi = -99, con = -99, skill = -1 }   -- -99 = unread
+    if type(text) ~= "string" or text == "" then return c end
+    local cc, ll, vv, nn, ss, kk = string.match(text, "^c=([01]),l=([01]),v=(%-?[%d%.]+),n=(%-?[%d%.]+),s=(%-?[%d%.]+),k=(%-?%d+)$")
+    if not cc then return c end
+    c.known, c.crouch, c.light = true, cc == "1", ll == "1"
+    c.vis, c.noi, c.con, c.skill = tonumber(vv) or -99, tonumber(nn) or -99, tonumber(ss) or -99, tonumber(kk) or -1
+    return c
+end
+
+-- Host: the light at the spot (the game's own clock; the engine's indoor test).
+function KCD2MP_W195Env(tp)
+    local P = KCD2MP.w195.P
+    local t = 0
+    pcall(function() t = tonumber(Calendar.GetWorldTime()) or 0 end)
+    local hour = math.floor(t / 3600) % 24
+    local night = hour >= P.nightFrom or hour < P.nightTo
+    local indoor = false
+    if System.IsPointIndoors then pcall(function() indoor = System.IsPointIndoors(tp) == true end) end
+    return { hour = hour, night = night, indoor = indoor }
+end
+
+-- The two radii for this crime (sight, noise) and the darkness word.
+function KCD2MP_W195Radii(ctx, env, base)
+    local P = KCD2MP.w195.P
+    local dark, word = 0, "day"
+    if env.indoor and env.night then dark, word = P.nightInterior, "interior-night"
+    elseif env.indoor then dark, word = P.dayInterior, "interior"
+    elseif env.night then dark, word = P.nightExterior, "night" end
+    if ctx.light then dark = 0 end
+    local vis = ctx.vis > -99 and (ctx.vis - P.visRef) * P.visSlope or 0
+    local f = math.max(P.minFactor, math.min(P.maxFactor, 1 + dark + (ctx.crouch and P.crouch or 0) + vis))
+    local skill = math.max(0, math.min(P.skillMax, ctx.skill >= 0 and ctx.skill or 0))
+    local sight = base * f * (1 - P.skillToRadius * skill / P.skillMax)
+    local nf = ctx.noi > -99 and math.max(P.noiseMin, math.min(P.noiseMax, ctx.noi / P.noiRef)) or 1
+    local noise = (ctx.crouch and P.noiseCrouchM or P.noiseStandM) * nf * (1 - P.skillToNoise * skill / P.skillMax)
+    return sight, noise, word
+end
+
+-- Host: KCD2MP_W195Asleep(name, on) -- the agent, from WO-141's capture of the host's own NPC (lying on its bed), on a change.
+function KCD2MP_W195Asleep(name, on)
+    KCD2MP.w195.asleep[tostring(name)] = (tonumber(on) or 0) ~= 0 or nil
+    return true
+end
+
+-- 2a: asleep = the game says so (IsSleeping) or the host's own activity read has it lying on its bed. Returns asleep, how.
+function KCD2MP_W195IsAsleep(e, name)
+    local s = false
+    if e.human and e.human.IsSleeping then pcall(function() s = e.human:IsSleeping() == true end) end
+    if s then return true, "IsSleeping" end
+    if name and KCD2MP.w195.asleep[name] then return true, "bed" end
+    return false, "-"
+end
+
+-- One NPC against the joiner's figure at tp: counted ("seen" / "heard" / "woken") or ignored (why), and the line.
+function KCD2MP_W195Witness(e, name, avatar, tp, ctx, env, sight, noise, word, id, lines)
+    local w = KCD2MP.w195
+    local np = W139.pos(e)
+    if not np then return false end
+    local d = math.sqrt((tp.x - np.x) ^ 2 + (tp.y - np.y) ^ 2 + (tp.z - np.z) ^ 2)
+    local asleep, how = KCD2MP_W195IsAsleep(e, name)
+    local verdict, counted = nil, false
+    if asleep then
+        if d <= noise then verdict, counted = "counted=woken", true; w.stats.woken = w.stats.woken + 1
+        else verdict = "ignored=asleep"; w.stats.asleepIgnored = w.stats.asleepIgnored + 1 end
+    elseif d <= sight and KCD2MP_W139Sees(e, avatar, tp, sight) then verdict, counted = "counted=seen", true
+    elseif d <= noise then verdict, counted = "counted=heard", true; w.stats.heard = w.stats.heard + 1
+    else verdict = d > sight and "ignored=far" or "ignored=unseen" end
+    if counted then w.stats.counted = w.stats.counted + 1 else w.stats.ignored = w.stats.ignored + 1 end
+    if lines.n < KCD2MP.w195.P.maxLines then
+        lines.n = lines.n + 1
+        mp_log(string.format("WO195-WITNESS id=%s npc=%s dist=%.1f asleep=%d%s lit=%d dark=%s crouch=%d sight_m=%.1f noise_m=%.1f %s",
+            tostring(id), tostring(name), d, asleep and 1 or 0, asleep and ("(" .. how .. ")") or "", ctx.light and 1 or 0, word, ctx.crouch and 1 or 0,
+            sight, noise, verdict))
+    end
+    return counted
+end
+
+-- ---- 3: the loot screen's own item ------------------------------------------------------------------------------------------------
+-- Host: a joiner's take of an item its loot screen made (this body never held it). Granted once per body and class: "ok" (noted in the
+-- body ledger, and the host's own copy of it removed when its loot screen makes one), "mine" (his own earlier take), "gone" (someone
+-- else's -- the host's own looting included). nil = not decided here (the switch is off).
+function KCD2MP_W195ScreenVerdict(peer, name, cls, amt)
+    local w = KCD2MP.w195
+    if not w.bodyLootHost then return nil end
+    w.stats.screenTakes = w.stats.screenTakes + 1
+    local L = W134.bodyLedger
+    local t = (L.takes[name] or {})[cls] or {}
+    local others = 0
+    for who, n in pairs(t) do if who ~= peer then others = others + n end end
+    local verdict = "ok"
+    if others > 0 then verdict = "gone" elseif (t[peer] or 0) > 0 then verdict = "mine" end
+    if verdict == "ok" then
+        W134.noteTake(name, cls, peer, amt)
+        w.screenTaken[name] = w.screenTaken[name] or {}
+        w.screenTaken[name][cls] = peer
+        w.stats.screenOk = w.stats.screenOk + 1
+    else
+        w.stats.screenRefused = w.stats.screenRefused + 1
+    end
+    mp_log(string.format("WO195-LOOT host-screen npc=%s cls=%s amt=%d from=%s -> %s -- the body's loot screen made it (no inventory held it)%s",
+        tostring(name), tostring(cls), amt, tostring(peer), verdict, verdict == "ok" and "; the host's own screen copy of it will be removed" or ""))
+    return verdict
+end
+
+-- Host, every watch pass on a dead body: a loot-screen item a joiner already took, made again by the host's own loot screen, goes.
+function KCD2MP_W195HostDup(name, e)
+    local w = KCD2MP.w195
+    local taken = w.screenTaken[name]
+    if not (taken and w.bodyLootHost) then return 0 end
+    local n = 0
+    for _, it in ipairs(W134.items(e)) do
+        if taken[it.cls] then
+            n = n + W134.deleteClass(e, it.cls, it.amt, it.hp, nil)
+            w.stats.hostDup = w.stats.hostDup + 1
+            mp_log(string.format("WO195-LOOT host-dup npc=%s cls=%s -- joiner %s already took the one its loot screen made: the host's copy removed (no duplicate)",
+                tostring(name), tostring(it.cls), tostring(taken[it.cls])))
+        end
+    end
+    return n
+end
+
+function KCD2MP_W195Status()
+    local w = KCD2MP.w195
+    local s = w.stats
+    local n = 0
+    for _ in pairs(w.asleep) do n = n + 1 end
+    mp_log(string.format("WO195-STATUS dead_release=%s stealth_witness=%s body_loot_host=%s judged=%d counted=%d ignored=%d asleep_ignored=%d heard=%d woken=%d asleep_known=%d stealth_sent=%d last=%s screen_items=%d screen_takes=%d screen_ok=%d screen_refused=%d host_dup=%d player_checks=%d",
+        w.deadRelease and "on" or "off", w.stealthWitness and "on" or "off", w.bodyLootHost and "on" or "off", s.judged, s.counted, s.ignored, s.asleepIgnored,
+        s.heard, s.woken, n, s.stealthSent, tostring(w.stealthSent), s.screenItems, s.screenTakes, s.screenOk, s.screenRefused, s.hostDup, s.playerChecks))
+    KCD2MP_EmitEvent("w195_status", "1")
+    return true
+end
+
+System.AddCCommand("mp_dead_release", 'KCD2MP_W195SetDeadRelease(%line)', "WO-195: (joiner) an enemy that dies leaves the fight at once and falls, and your combat state ends with it (default on): mp_dead_release on|off")
+System.AddCCommand("mp_stealth_witness", 'KCD2MP_W195SetStealth(%line)', "WO-195: (both) sneaking, the dark and your stealth count when the host's world judges your crimes; sleeping people never see you (default on): mp_stealth_witness on|off")
+System.AddCCommand("mp_body_loot_host", 'KCD2MP_W195SetBodyLoot(%line)', "WO-195: (both) the key you find on a body is yours to take, once (default on): mp_body_loot_host on|off")
+System.AddCCommand("mp_w195_status", 'KCD2MP_W195Status()', "WO-195: the dead-copy releases, the witness rule's counts, the loot-screen takes")
+
+-- 1: a copy the host's death left upright (the mod's ApplyDeath kills the soul with no death reaction: it stays frozen in the dead
+-- action's first pose) is laid down by the game's own ragdoll. Only a body that reads dead; the agent asks after its 1 s check.
+function KCD2MP_W195Ragdoll(name)
+    local w = KCD2MP.w195
+    if not w.deadRelease then return false end
+    local e = nil
+    pcall(function() e = System.GetEntityByName(tostring(name)) end)
+    local dead = false
+    if e and e.actor and e.actor.IsDead then pcall(function() dead = e.actor:IsDead() == true end) end
+    if not (e and dead and e.RagDollize) then
+        mp_log(string.format("WO195-RAGDOLL npc=%s refused (%s)", tostring(name), not e and "no body" or not dead and "it is not dead here" or "no RagDollize"))
+        return false
+    end
+    local ok, err = pcall(function() e:RagDollize(0) end)
+    w.stats.ragdolled = (w.stats.ragdolled or 0) + 1
+    mp_log(string.format("WO195-RAGDOLL npc=%s -> %s -- the dead copy stood upright: the game's own ragdoll lays it down", tostring(name), ok and "ok" or ("FAILED " .. tostring(err))))
+    return ok
+end
+
+-- A copy's state as the DLL reads it (dead, combat mode, ragdoll, a fight hold): KCD2MP_W195Check("<npc>") -> the agent's WO195-CHECK line.
+function KCD2MP_W195Check(npc)
+    local e = nil
+    pcall(function() e = System.GetEntityByName(tostring(npc)) end)
+    local dead = nil
+    if e and e.actor and e.actor.IsDead then pcall(function() dead = e.actor:IsDead() end) end
+    mp_log(string.format("WO195-CHECK npc=%s lua_dead=%s -- the DLL's read follows in the agent's log", tostring(npc), tostring(dead)))
+    KCD2MP_EmitEvent("w195_check", tostring(npc))
+    return true
+end
 
 -- ===== The WO-191 follow-up: village dogs travel in the NPC stream (docs/WO-191-dogs-findings.md) ===============================
 -- The host's stream carried NPC, NPC_Female, Horse and the encounter animals (Wolf, WildDog, Boar); a village dog is class Dog, so

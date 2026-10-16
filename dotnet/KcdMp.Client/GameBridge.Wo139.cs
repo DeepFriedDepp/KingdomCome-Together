@@ -202,9 +202,10 @@ public partial class GameBridge
     private async Task Wo139ReportAsync(Wo139Rules.Report r, string why)
     {
         uint tok = Interlocked.Increment(ref _w139Tok);
+        if (r.Stealth.Length == 0 && Wo195StealthForReport() is { Length: > 0 } st) r = r with { Stealth = st };   // WO-195 2b: his stealth goes with it
         await Wo139SendAsync(Protocol.CrimeAskUp, Protocol.JoinTargetHost, Protocol.CrimeAskReport, tok, Wo139Rules.ReportText(r));
         Interlocked.Increment(ref _w139Reports);
-        Console.WriteLine(FormattableString.Invariant($"MP-W139 joiner -> host crime #{tok}: {r.Crime} {r.Where} at ({r.X:F1}, {r.Y:F1}, {r.Z:F1}) victim={(r.Victim.Length > 0 ? r.Victim : "-")} ({why}) -- the host's world judges it"));
+        Console.WriteLine(FormattableString.Invariant($"MP-W139 joiner -> host crime #{tok}: {r.Crime} {r.Where} at ({r.X:F1}, {r.Y:F1}, {r.Z:F1}) victim={(r.Victim.Length > 0 ? r.Victim : "-")} stealth={(r.Stealth.Length > 0 ? r.Stealth : "-")} ({why}) -- the host's world judges it"));
     }
 
     /// <summary>WO-113's respawn (kind 2 = execution) on this machine.</summary>
@@ -451,7 +452,7 @@ public partial class GameBridge
                     Interlocked.Increment(ref _w139ReportsIn);
                     if (!W139On) { Console.WriteLine($"MP-W139 host: ghost {src}'s {r.Crime} not judged (mp_crime_shared off)"); return; }
                     await ExecLuaAsync(FormattableString.Invariant(
-                        $"if KCD2MP_W139HostJudge then KCD2MP_W139HostJudge({src}, {m.Tok}, \"{r.Crime}\", {r.X:F2}, {r.Y:F2}, {r.Z:F2}, \"{(r.Victim.Length > 0 ? r.Victim : "-")}\", \"{(r.Item.Length > 0 ? r.Item : "-")}\", \"{r.Where}\") end"));
+                        $"if KCD2MP_W139HostJudge then KCD2MP_W139HostJudge({src}, {m.Tok}, \"{r.Crime}\", {r.X:F2}, {r.Y:F2}, {r.Z:F2}, \"{(r.Victim.Length > 0 ? r.Victim : "-")}\", \"{(r.Item.Length > 0 ? r.Item : "-")}\", \"{r.Where}\", \"{(_w195StealthWitness ? r.Stealth : "")}\") end"));   // WO-195 2b: the joiner's stealth
                     return;
                 case Protocol.CrimeAskOutcome:
                 {

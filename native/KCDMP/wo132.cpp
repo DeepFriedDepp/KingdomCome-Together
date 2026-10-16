@@ -20,6 +20,7 @@
 #include "npc_drive.h"
 #include "rttr_abi.h"
 #include "wo136.h"
+#include "wo195.h"
 
 namespace kcdmp::wo132 {
 namespace {
@@ -145,6 +146,7 @@ uint8_t handle(const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t
         bool tooFar = on && (dist < 0 || dist > (intent ? kIntentRangeM : kEngageRangeM));
         if (tooFar) { on = false; c_far.fetch_add(1); }
         if (on && hits::scene_owned_eid(eid, "wo132-engage")) on = false;   // WO-174: a scripted brawl's copy never engages the player through the mod
+        if (on && wo195::dead_gate(eid, "engage")) on = false;   // WO-195: a dead copy is never engaged again (an engage on it is an engage off)
         if (on) {
             if (!is_engaged(eid)) {
                 first = 1;
@@ -348,6 +350,19 @@ void tick() {
         }
         ++it;
     }
+}
+
+bool release_dead(uint32_t eid) {
+    motion::set_npc_engage(eid, false, nullptr, now_s());
+    if (!is_engaged(eid)) return false;
+    uint64_t rv = 0;
+    void* soul = hits::soul_of_eid(eid);
+    const bool sk = soul && hits::skirmish_remove(soul, &rv);
+    hits::discard_from(eid, false);
+    for (auto it = g_engaged.begin(); it != g_engaged.end(); ++it) if (*it == eid) { g_engaged.erase(it); break; }
+    c_engageOff.fetch_add(1);
+    logf("WO132-ENGAGE eid=0x%X off: the copy is dead (WO-195) -- combat hold released, skirmish %s", eid, sk ? "left" : "NOT left");
+    return true;
 }
 
 void on_pipe_closed() {

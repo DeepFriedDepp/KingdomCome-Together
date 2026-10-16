@@ -646,6 +646,7 @@ end
 
 do
     reset(); clearLog(); NOW = 2000
+    WORLD_T = 12 * 3600   -- WO-195: noon (the witness rule counts the dark now; 1000 s is a quarter past midnight)
     host()
     local av = avatar(1, 100, 100)
     local guard = mkNpc("tzel_man_7", 110, 100, 10, GUARD_F, { ctx = GUARD_CTX, fwd = { x = -1, y = 0, z = 0 } })

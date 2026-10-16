@@ -129,6 +129,7 @@ public partial class GameBridge
         _ = ExecLuaAsync("if KCD2MP_W179Cfg then KCD2MP_W179Cfg() end");
         _ = ExecLuaAsync("if KCD2MP_W184Cfg then KCD2MP_W184Cfg() end");   // WO-184: the save switches
         Wo191OnConnect();   // WO-191: its switches
+        Wo195OnConnect();   // WO-195: its switches
         Wo192OnConnect();   // WO-192: its switches
         _ = Wo179PollLoopAsync(ct);
     }

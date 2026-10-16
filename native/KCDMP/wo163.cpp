@@ -18,6 +18,7 @@
 #include "wo187.h"
 #include "wo189.h"
 #include "wo190.h"
+#include "wo195.h"
 
 #include <atomic>
 #include <cstdio>
@@ -245,6 +246,11 @@ uint8_t handle(const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t
         case kcdmp::wo190::kOpWeapon:
         case kcdmp::wo190::kOpClinchRefused:
             return kcdmp::wo190::handle(body[0], body, len, out, cap, outLen);
+        case kcdmp::wo195::kOpStatus:   // WO-195: dead copies are released at once and never held again
+        case kcdmp::wo195::kOpConfig:
+        case kcdmp::wo195::kOpRelease:
+        case kcdmp::wo195::kOpCheck:
+            return kcdmp::wo195::handle(body[0], body, len, out, cap, outLen);
         case kcdmp::wo178::kOpHeldResult:   // WO-178 C4: a held blow lives in WO-173's path
             return kcdmp::wo173::handle(body[0], body, len, out, cap, outLen);
         default:

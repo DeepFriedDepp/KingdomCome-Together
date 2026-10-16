@@ -1586,6 +1586,7 @@ public partial class GameBridge(ClientConfig config)
             if (died)
             {
                 Console.WriteLine($"[npcdeath] out: local kill of {soul} (blow -{health:F1}) -- sending FATAL{CatchupTag()}");
+                Wo195OnLocalFatal(soul);   // WO-195 1: this player's own fatal blow on a copy releases it too
             }
             else
             // WO-40 Phase 5: the DLL's hit hook fires per contact frame, and
@@ -3772,6 +3773,7 @@ public partial class GameBridge(ClientConfig config)
             Console.WriteLine($"[npcdeath] in: '{npcName}' via {via} from ghost {sourceGhostId} -- no local soul answers to that name, cannot apply");
             return;
         }
+        await Wo195OnCopyDeathAsync(npcName, via);   // WO-195 1: every fight hold goes first (the engagement, the guard hold, the wish and its pin)
         await Wo131BeforeDeathAsync(npcName);   // WO-131 1c: the copy guard comes off for the host's death
         bool applied = false;
         try { applied = await _combat.ApplyDeathAsync(lg, ct); }
@@ -5192,6 +5194,7 @@ public partial class GameBridge(ClientConfig config)
                             else if (!nDead && nSeen && nWasDead)
                             {
                                 Console.WriteLine($"[npcdeath] in: 0x27 from ghost {nsrc} says '{npcName}' is ALIVE again (hp={nhp:F1}) -- was dead on this stream; a reload on their side?");
+                                Wo195NoteAlive(npcName);   // WO-195: its dead mark goes
                             }
 
                             // WO-118 Phase 1: the native writer already has this sample --
@@ -6039,6 +6042,12 @@ public partial class GameBridge(ClientConfig config)
             case "w179_cfg":         // WO-179: mp_scene_bus, mp_scene_video_shared, mp_scene_bring_along, mp_scene_partner_ignored, mp_scene_fight_clear
             case "w179":             // WO-179: the skip key, the partner's video copy ending, the joiner's clock jump, the ignore window's end
                 Wo179OnEvent(name, arg);
+                return;
+            case "w195_cfg":         // WO-195: mp_dead_release, mp_stealth_witness, mp_body_loot_host
+            case "w195_stealth":     // WO-195 2b: the joiner's stealth snapshot
+            case "w195_status":
+            case "w195_check":       // WO-195: the DLL's read of a copy (WO195-CHECK)
+                Wo195OnEvent(name, arg);
                 return;
             case "w191_cfg":         // WO-191: mp_action_forget, mp_sweep_fight_guard, mp_attacker_bind, mp_fader_bound
             case "w191_test":        // WO-191: harness-only (KCDMP_TEST_W191=1)
