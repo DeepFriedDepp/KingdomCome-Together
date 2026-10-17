@@ -137,5 +137,5 @@ test saves moved out).
 ## 5. Open
 
 - Two-player: the checklist's §WO-195.
-- Item 2's visibility and noise scales against the game's own (the RE item above).
+- Item 2's visibility and noise scales against the game's own (the RE item above): done in WO-195B (`docs/WO-195B-findings.md`).
 - The WO-187 echo test and WO-184's item round were not run here.

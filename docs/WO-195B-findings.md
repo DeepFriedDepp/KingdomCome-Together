@@ -42,7 +42,8 @@ So the sight side rests on one night guard and one visibility level (`vib` about
 ## 2. The calibration table
 
 All 80 scored cases (the full list is `docs/WO-195B-calibration.csv`; rule before = WO-195 as it stood, with the readings an unchanged joiner
-would send; rule after = this build's rule on the same row; the rule after is the real Lua function, scored in the unit test B10):
+would send (for the sound rows, the sound's strength read as his noise stat); rule after = this build's rule on the same row; the rule after is
+the real Lua function, scored in the unit test B10):
 
 | group | cases | rule before | rule after |
 |---|---|---|---|
@@ -136,7 +137,15 @@ minigame still runs on a paused copy.
 | WO-192 host autosave | two host saves, each verified |
 | the other 67 Lua suites, WO-135 / WO-151 re-run | all green (the WO-151 guard now faces the crime spot in its test) |
 
-## 6. Still unlike single player
+## 6. The build
+
+Validation build (local only, not a release; header unchanged, 0.60.9): `tools\Build-Installer.ps1 -SoakWaiver` from a clean clone of `e8360ed`:
+every gate passed (native, agent 1,802, relay 64, setup 77, log pack 14, all Lua suites, the live save round trip PASS);
+`KingdomComeTogether-Setup-0.60.9.exe`, 107,139,325 B, sha256 89389f25..., unsigned. The first attempt stopped at the live save round trip
+(no game was up: a skip fails a build); the second ran with the game up. The saves folder is byte-equal to the backup afterwards (the
+session's test saves, 12 in all, moved out); `Mods\kdcmp` carries this session's pak.
+
+## 7. Still unlike single player
 
 - The sight scale has engine verdicts at one visibility level (a standing Henry at night, `vib` about -0.8) and from one guard. Crouching,
   daylight, a torch and heavy armour are in `vib`, `fsm` and `evi` by construction but have no engine verdict of their own (the torchless-player
