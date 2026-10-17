@@ -482,14 +482,64 @@ std::string scope_text(uint32_t eid) {
     return r.ok ? scope_line(r) : "";
 }
 
-std::string director_action(void* ca) {
-    // the actor's action director (combat actor +0x2E0, a C_ActionDirector) and its first action (+0x50) -- both checked by their RTTI
-    void* dir = nullptr; void* act = nullptr;
-    if (!ca || !rd(ca, 0x2E0, &dir) || !dir) return "";
-    if (rtti_name(dir).find("ActionDirector") == std::string::npos) return "";
-    if (!rd(dir, 0x50, &act) || !act) return "none";
-    const std::string n = short_name(rtti_name(act));
-    return n.rfind("C_CombatActorAction", 0) == 0 ? n.substr(19) : n;
+// WO-197 B0: the combat director (combat actor +0x2E0) is a C_CombatActorDirector (WO-196 s0, READ; its RTTI name has no "ActionDirector"
+// on its own, so 0.60.5..0.60.9's check refused every actor). Its running actions are a vector by scope: [dir+0x50] = begin, [dir+0x58] = end,
+// one action pointer per scope (0 main, 1 guard movement, 4 FailedAttack / pose modifier, 5 guard variation); the old reader took the begin
+// pointer for the action. The director is checked by its RTTI-found vftable (by name when the vftable is not found), the vector's size is
+// sane, and the element's class is read by its RTTI name. Read-only, main thread (the engine reallocates the vector on its own thread).
+constexpr size_t kCaDirector = 0x2E0, kDirBegin = 0x50, kDirEnd = 0x58;
+constexpr ptrdiff_t kDirMaxScopes = 16;
+const void* g_vftDirector = nullptr;
+bool g_dirResolved = false;
+
+bool director_ok(void* dir) {
+    if (!g_dirResolved) {
+        g_dirResolved = true;
+        HMODULE cm = GetModuleHandleA("CombatModule.dll");
+        g_vftDirector = cm ? anchor::find_vftable(cm, ".?AVC_CombatActorDirector@combatmodule@wh@@", 0) : nullptr;
+        logf("WO197-DIRECTOR reader: C_CombatActorDirector's vftable %s (the running actions = [director+0x50..+0x58] by scope)",
+             g_vftDirector ? "found" : "NOT found (checked by its RTTI name instead)");
+    }
+    void* vp = nullptr;
+    if (!rd(dir, 0, &vp) || !vp) return false;
+    if (g_vftDirector) return vp == g_vftDirector;
+    return rtti_name(dir).find("C_CombatActorDirector") != std::string::npos;
+}
+
+DirAction director_scope(void* ca, int scope) {
+    DirAction d;
+    void* dir = nullptr; char* b = nullptr; char* e = nullptr;
+    if (!ca || scope < 0 || !rd(ca, kCaDirector, &dir) || !dir || !director_ok(dir)) return d;
+    if (!rd(dir, kDirBegin, &b) || !rd(dir, kDirEnd, &e)) return d;
+    const ptrdiff_t n = (b && e && e >= b) ? (e - b) / 8 : 0;
+    if (n < 0 || n > kDirMaxScopes) return d;
+    d.ok = true;
+    d.scopes = static_cast<int>(n);
+    if (scope >= n) return d;   // no such scope yet: none running
+    void* act = nullptr;
+    if (!rd(b, static_cast<ptrdiff_t>(scope) * 8, &act) || !act) return d;
+    d.act = act;
+    // the class name by the action's vptr, read once per class (WO-197's polls read three scopes of the player every frame)
+    static std::unordered_map<const void*, std::string> s_names;   // main thread
+    void* vp = nullptr;
+    if (!rd(act, 0, &vp) || !vp) { std::snprintf(d.name, sizeof d.name, "?"); return d; }
+    auto it = s_names.find(vp);
+    if (it == s_names.end()) {
+        std::string nm = short_name(rtti_name(act));
+        if (nm.rfind("C_CombatActorAction", 0) == 0) nm = nm.substr(19);
+        if (s_names.size() > 256) s_names.clear();   // a bound, never a leak
+        it = s_names.emplace(vp, nm.empty() ? "?" : nm).first;
+    }
+    std::snprintf(d.name, sizeof d.name, "%s", it->second.c_str());
+    return d;
+}
+
+std::string director_action(void* ca) { return director_text(ca, 0); }
+
+std::string director_text(void* ca, int scope) {
+    const DirAction d = director_scope(ca, scope);
+    if (!d.ok) return "";
+    return d.act ? d.name : "none";
 }
 
 void tick() {

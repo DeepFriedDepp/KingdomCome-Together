@@ -124,12 +124,19 @@ void trace_body(const Cand& c, BodyTrace& bt, double now, Mode mode, bool logOn)
             const bool okBody = bt.bucket.take(now, mode == Mode::On ? kBodyLinesPerS : kAutoBodyLinesPerS, mode == Mode::On ? kBodyBurst : kAutoBodyBurst);
             if (okBody && g_minute.take(now, cap)) {
                 if (!tagsRead && i == 0) { tag_hex(c.eid, tags, sizeof tags); tagsRead = true; }
+                // WO-197 B0: the combat director's running actions on the full-body line (scope 0 main / 1 movement / 4 recoil)
+                char dirs[120] = "";
+                void* dca = nullptr; void* dmodel = nullptr;
+                if (i == 0 && motion::combat_parts(c.eid, false, &dca, &dmodel)) {
+                    const std::string d0 = wo187::director_text(dca, 0), d1 = wo187::director_text(dca, 1), d4 = wo187::director_text(dca, 4);
+                    std::snprintf(dirs, sizeof dirs, " dir=%s/%s/%s", d0.empty() ? "?" : d0.c_str(), d1.empty() ? "?" : d1.c_str(), d4.empty() ? "?" : d4.c_str());
+                }
                 c_lines.fetch_add(1);
                 logf("WO190-ANIM utc=%llu body=%s role=%s scope=%s action=%s frag=%u prio=%d flags=0x%X was=%s:%u held_ms=%.0f tags=%s spd=%.2f age_ms=%.0f fight=%d%s",
                      static_cast<unsigned long long>(utc_ms()), name_of(c.eid), role_name(c.role), sc[i].name, now_.empty ? "none" : sc[i].action,
                      now_.empty ? 0u : now_.frag, now_.empty ? 0 : now_.prio, now_.empty ? 0u : now_.flags, first ? "-" : (st.snap.empty ? "none" : st.action),
                      first || st.snap.empty ? 0u : st.snap.frag, heldMs, i == 0 ? tags : "-", c.speed, c.age < 0 ? -1.0 : c.age * 1000.0, c.fight ? 1 : 0,
-                     bt.dropped ? "" : "");
+                     dirs);
                 if (bt.dropped) { logf("WO190-ANIM body=%s %u lines not written (the rate limit)", name_of(c.eid), bt.dropped); bt.dropped = 0; }
             } else {
                 ++bt.dropped;

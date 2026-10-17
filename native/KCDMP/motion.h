@@ -203,5 +203,8 @@ bool read_state(void* model, int32_t* out);
 bool write_state(void* model, int32_t v);
 // WO-166 C1: when this NPC last committed an attack-class action (the capture's own clock, QPC seconds; -1 = never seen).
 double last_npc_attack_s(uint32_t eid);
+// WO-197 (main thread): a local-player action found by a poll (not by the EnterImpl capture) -- the recoil, the clinch -- queued with the
+// captured ones (the agent gets it as a LocalAction frame, eid 0). guid / alt may be null.
+void push_local_action(uint8_t kind, uint8_t flags, const uint8_t guid[16], const uint8_t* alt);
 
 } // namespace kcdmp::motion

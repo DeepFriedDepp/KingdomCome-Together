@@ -1302,6 +1302,13 @@ public static partial class Protocol
     public const byte PlayerStateFlagKnockedDown = 0x04;
 
     /// <summary>
+    /// WO-197 B4: the game's own knockout (a brawl: the RPG unconscious buff), set from the player's IsUnconscious while the death guard has
+    /// not downed him -- apart from <see cref="PlayerStateFlagKnockedDown"/>, which the death guard's knockdown sets too. The partner's
+    /// figure falls with the game's own unconsciousness and gets up with its stand-up when the bit clears (mp_anim_knockout).
+    /// </summary>
+    public const byte PlayerStateFlagEngineKnockout = 0x08;
+
+    /// <summary>
     /// How much a player's health or stamina must move before it is worth a
     /// PlayerStateUp. Small enough that a real hit always crosses it, large
     /// enough that ordinary regeneration does not turn this into a second
@@ -1700,6 +1707,15 @@ public enum ActionKind : byte
     /// <summary>WO-187 C1: a player took a blow -- the hit reaction his own engine committed (its combat_action_hit row), payload <see cref="RowEvent"/>
     /// with no name: the partner's figure of him plays the same reaction (mp_anim_avatar_hit). Any player sends it; the relay forwards it as is.</summary>
     AvatarHit = 18,
+    /// <summary>WO-197 B1: a player's recoil -- his blow was blocked or perfect-blocked and his own engine put a FailedAttack in his combat
+    /// director's scope 4. Payload <see cref="RowEvent"/> with no name: Flags bit 0 = perfect block (CombatAttackFailedPB), bit 1 = the kind
+    /// was read, bit 2 = Row is the engine's own failed-attack row (else empty: the receiver picks the row by the figure's weapon). Blunt and
+    /// unarmed blows have no recoil in the game's tables: nothing is sent for them. Any player sends it; the relay forwards it as is.</summary>
+    AvatarRecoil = 19,
+    /// <summary>WO-197 B3: a player's clinch -- payload <see cref="RowEvent"/> with no name: Flags bits 0-1 = the phase (1 enter: the clinch
+    /// guard, 2 a clinch move, 3 leave), bit 2 = this player is the master, bit 3 = Row (the master's row) and the slave's row (the RowEvent's
+    /// name: its 32 hex digits, "N" format) are the engine's own SyncTransition rows. Any player sends it; the relay forwards it as is.</summary>
+    AvatarClinch = 20,
 }
 
 /// <summary>WO-151 3.5: what an Emote action plays (APPEND-ONLY).</summary>

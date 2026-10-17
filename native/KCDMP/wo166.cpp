@@ -12,6 +12,8 @@
 #include "wo187_rules.h"
 #include "wo190.h"
 #include "wo190_rules.h"
+#include "wo197.h"
+#include "wo197_rules.h"
 #include <cmath>
 #include "anchors.h"
 #include "fault_guard.h"
@@ -544,10 +546,11 @@ std::atomic<uint32_t> c_takeovers{0}, c_takeoverKept{0}, c_takeoverFailed{0};
 bool take_over_leftover(const Strike& s, void* ca, void* model, int32_t* cur) {
     if (*cur != wo190rules::kStateWithdraw && *cur != wo190rules::kStateHitState) return false;
     if (!wo190::swing_takeover_on()) return false;
+    // WO-197 B5: the copy's actual main action (B0's reader); a real reaction or a paired move under way is kept
     const std::string dir = wo187::director_action(ca);
     void* soul = hits::soul_of_eid(s.eid);
     const bool hitRecently = soul && hits::hit_by_player(soul, wo190rules::kRealHitS);
-    const bool reaction = wo190rules::director_is_reaction(dir.c_str());
+    const bool reaction = wo190rules::director_is_reaction(dir.c_str()) || (wo197::guard_engine_on() && wo197rules::keep_main_action(dir.c_str()));
     if (!wo190rules::leftover_endable(true, *cur, reaction, hitRecently)) {
         if (c_takeoverKept.fetch_add(1) < 20)
             logf("WO190-TAKEOVER npc=%s kept: the copy reads 0x%X and it is a real reaction (director=%s, hit by the player within %.1f s=%d) -- never cut off",
@@ -555,6 +558,10 @@ bool take_over_leftover(const Strike& s, void* ca, void* model, int32_t* cur) {
         return false;
     }
     const int32_t was = *cur;
+    // WO-197 B5: a main action that is not a plain Guard ends the engine's way first (EnsureGuardAction: scope 0 terminated and a new Guard in
+    // the same call -- never a bare TerminateAction(0), whose empty main scope ends combat mode); the leftover State then goes back to Guard
+    int ens = -2;
+    if (wo197::guard_engine_on() && !dir.empty() && wo197rules::needs_guard(dir.c_str())) ens = wo197::ensure_guard(ca);
     const bool wrote = g_setState ? set_state_engine(model, kStateGuard) : motion::write_state(model, kStateGuard);
     int32_t now = 0;
     if (!wrote || !motion::read_state(model, &now) || !strike_state_ok(now)) {
@@ -566,8 +573,10 @@ bool take_over_leftover(const Strike& s, void* ca, void* model, int32_t* cur) {
     *cur = now;
     const uint32_t n = c_takeovers.fetch_add(1) + 1;
     if (n <= kLogFirst || n % 50 == 0)
-        logf("WO190-TAKEOVER npc=%s the copy still read 0x%X from its last swing (director=%s) -> Guard through the %s; the new swing winds up (#%u)",
-             s.name.c_str(), static_cast<unsigned>(was), dir.empty() ? "?" : dir.c_str(), g_setState ? "engine's state setter" : "raw state (setter not armed)", n);
+        logf("WO190-TAKEOVER npc=%s the copy still read 0x%X from its last swing (director=%s%s) -> Guard through the %s; the new swing winds up (#%u)",
+             s.name.c_str(), static_cast<unsigned>(was), dir.empty() ? "?" : dir.c_str(),
+             ens == -2 ? "" : ens == 1 ? ", EnsureGuardAction: a Guard runs" : ens == 0 ? ", EnsureGuardAction refused" : ", EnsureGuardAction not armed",
+             g_setState ? "engine's state setter" : "raw state (setter not armed)", n);
     return true;
 }
 

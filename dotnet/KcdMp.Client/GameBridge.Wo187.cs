@@ -147,6 +147,7 @@ public partial class GameBridge
         long now = Environment.TickCount64;
         bool fighting = ev.InCombat || ev.Target != NpcCombatTarget.None;
         if (fighting && eid != 0) _w187Fights[ev.Name] = (eid, ev.Target, ev.TargetGhost, now);
+        if (fighting && eid != 0 && fromGhost != 0xFF) _w197FightFrom[ev.Name] = fromGhost;   // WO-197 B3: who "the host" is for this copy
         if (!guardedBound || eid == 0 || !Wo131JoinerActive) return false;
         float dHost = _w187Stream.TryGetValue(ev.Name, out var near) ? Wo187Rules.Dist2D(near.X, near.Y, _lastX, _lastY) : -1f;
         if (!Wo187Rules.Near(dHost)) return false;   // a far copy: no wish, no guard hold (each is a main-thread pipe call)

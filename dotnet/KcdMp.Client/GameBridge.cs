@@ -4198,6 +4198,7 @@ public partial class GameBridge(ClientConfig config)
         // WO-154 2: a knockout or the death guard's knockdown kind -- he wakes where he lies (shown lying, not hidden)
         if ((st.IsUnconscious == true && !_localDowned) || (_localDowned && _localDownedKind == Protocol.RespawnReasonKnockdown))
             flags |= Protocol.PlayerStateFlagKnockedDown;
+        flags |= Wo197KnockoutFlag(st.IsUnconscious);   // WO-197 B4: the game's own knockout, apart from the death guard's knockdown
         // Bleeding has no confirmed read on this build -- it is a buff, and the
         // mod's emitter does not sample the buff list. The bit stays clear
         // rather than being faked from low health, which would be a guess a
@@ -6095,6 +6096,11 @@ public partial class GameBridge(ClientConfig config)
             case "w190_cfg":         // WO-190: mp_anim_trace, mp_anim_idle_watch, mp_anim_standin_weapon, mp_copy_weapon_hold, mp_anim_requeue_gate, ...
             case "w190_status":      // WO-190: mp_w190_status
                 Wo190OnEvent(name, arg);
+                return;
+            case "w197_cfg":         // WO-197: mp_anim_recoil, mp_anim_paired, mp_anim_clinch, mp_anim_knockout, mp_copy_guard_engine, Part C's mp_anim_<category>
+            case "w197_status":      // WO-197: mp_w197_status
+            case "w197_check":       // WO-197: mp_w197_check (live checks)
+                Wo197OnEvent(name, arg);
                 return;
             case "w166_talkstate":   // WO-166 T3: a talk that never started -- the copy's facts
             case "w166_talk":        // WO-166 T4: a talk refused, the host's NPC busy

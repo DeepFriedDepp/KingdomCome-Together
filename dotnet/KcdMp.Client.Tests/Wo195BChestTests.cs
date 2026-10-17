@@ -146,6 +146,6 @@ public class Wo195BChestTests
         Assert.Equal(16, (int)ActionKind.DoorState);
         Assert.Equal(18, (int)ActionKind.AvatarHit);   // the last kind is unchanged
         var top = Enum.GetValues<ActionKind>().Max();
-        Assert.Equal(ActionKind.AvatarHit, top);
+        Assert.Equal(ActionKind.AvatarClinch, top);   // WO-197 appended AvatarRecoil (19) and AvatarClinch (20) after it; the chest still adds none
     }
 }

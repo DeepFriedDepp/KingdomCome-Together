@@ -17,6 +17,7 @@
 #include "wo187.h"
 #include "wo190.h"
 #include "wo194.h"
+#include "wo197.h"
 #include "combat_swing.h"
 #include "wo135.h"
 #include "wo137.h"
@@ -253,7 +254,8 @@ DWORD WINAPI plugin_main(LPVOID) {
     kcdmp::main_thread::post_repeating("wo178::tick", &kcdmp::wo178::tick);   // WO-178 C1: the candidate table the hostility answer reads   // WO-176 A1: a figure already in a quest's arranged fight is taken out   // WO-173 C1: the joiner's real hits' measures and corrections
     kcdmp::main_thread::post_repeating("wo187::tick", &kcdmp::wo187::tick);   // WO-187: the copies' opponents, the moves' full-body scope
     kcdmp::main_thread::post_repeating("wo190::tick", &kcdmp::wo190::tick);   // WO-190: the animation trace, the fighting bodies' idle watch
-    kcdmp::main_thread::post_repeating("wo194::tick", &kcdmp::wo194::tick);   // WO-194: the holds' releases, the scenes' time of day back
+    kcdmp::main_thread::post_repeating("wo194::tick", &kcdmp::wo194::tick);
+    kcdmp::main_thread::post_repeating("wo197::tick", &kcdmp::wo197::tick);   // WO-197: the local player's recoil and clinch polls   // WO-194: the holds' releases, the scenes' time of day back
     kcdmp::main_thread::post_repeating("rttr::swing_watch_tick", &kcdmp::rttr::swing_watch_tick);   // WO-167 C3: shown means rendered
     // WO-124: the joiner's placement gives the fall damage back; the save-list
     // research trigger (kcdmp-savelist-test.txt, opt-in, absent = idle).

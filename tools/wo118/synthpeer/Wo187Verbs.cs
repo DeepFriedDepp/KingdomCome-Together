@@ -57,7 +57,8 @@ static class Wo187Verbs
         // [src][kind][seq:2][phase][gen:4][len][body]
         if (d.Length < 1 + Protocol.ActionUpHeaderLen || d[0] == e.MyId) return;
         var kind = (ActionKind)d[1];
-        if (kind is not (ActionKind.Attack or ActionKind.BlockImpulse or ActionKind.Dodge or ActionKind.Jump or ActionKind.AvatarHit)) { e.Dropped++; return; }
+        if (kind is not (ActionKind.Attack or ActionKind.BlockImpulse or ActionKind.Dodge or ActionKind.Jump or ActionKind.AvatarHit
+                      or ActionKind.AvatarRecoil or ActionKind.AvatarClinch)) { e.Dropped++; return; }   // WO-197: his recoil and clinch echo too
         var phase = (ActionPhase)d[4];
         int blen = d[9];
         if (d.Length < 10 + blen) return;
@@ -83,6 +84,20 @@ static class Wo187Verbs
         "pblock" => ch.Build(ActionKind.BlockImpulse, ActionPhase.Commit, new RowEvent(Now(), RowEvent.FlagPerfect, row, "").ToBytes()),
         "dodge" => ch.Build(ActionKind.Dodge, ActionPhase.Commit, new RowEvent(Now(), 0, row, "").ToBytes()),
         "hit" => ch.Build(ActionKind.AvatarHit, ActionPhase.Commit, new RowEvent(Now(), 0, row, "").ToBytes()),   // C1: his own hit reaction
+        // WO-197 B1: his recoil (row = the engine's failed-attack row, or Guid.Empty: the receiver picks by his last swing's weapon)
+        "recoil" => ch.Build(ActionKind.AvatarRecoil, ActionPhase.Commit, new RowEvent(Now(), (byte)(0x02 | (row != Guid.Empty ? 0x04 : 0)), row, "").ToBytes()),
+        "precoil" => ch.Build(ActionKind.AvatarRecoil, ActionPhase.Commit, new RowEvent(Now(), (byte)(0x03 | (row != Guid.Empty ? 0x04 : 0)), row, "").ToBytes()),
+        // WO-197 B3: his clinch (enter as master; leave)
+        "clinchenter" => ch.Build(ActionKind.AvatarClinch, ActionPhase.Commit, new RowEvent(Now(), 0x01 | 0x04, Guid.Empty, "").ToBytes()),
+        // WO-197 Part C: his whistle (Emote [ms][1])
+        "whistle" => ch.Build(ActionKind.Emote, ActionPhase.Commit, Emote(Now(), EmoteId.Whistle)),
+        "clinchleave" => ch.Build(ActionKind.AvatarClinch, ActionPhase.Commit, new RowEvent(Now(), 0x03 | 0x04, Guid.Empty, "").ToBytes()),
         _ => throw new ArgumentException($"fmove: unknown move '{what}'"),
     };
+
+    private static byte[] Emote(uint ms, byte id) { var b = new byte[EmoteId.PayloadLen]; BinaryPrimitives.WriteUInt32LittleEndian(b, ms); b[4] = id; return b; }
+
+    /// <summary>WO-197 B3: fclinch -- a clinch move with both rows (the master's and the slave's), as master (or slave).</summary>
+    public static byte[] ClinchMove(KcdMp.Client.ActionOutbox ch, Guid masterRow, Guid slaveRow, bool master) =>
+        ch.Build(ActionKind.AvatarClinch, ActionPhase.Commit, new RowEvent(Now(), (byte)(0x02 | 0x08 | (master ? 0x04 : 0)), masterRow, slaveRow.ToString("N")).ToBytes());
 }

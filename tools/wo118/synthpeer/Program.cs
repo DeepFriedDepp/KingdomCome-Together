@@ -432,6 +432,10 @@ static class P
                 case "jattack": jattacks.Add((double.Parse(f[1], CultureInfo.InvariantCulture), Guid.Parse(f[2]))); break;   // WO-170
                 case "echo": echo = new Wo187Verbs.Echo { DelayMs = double.Parse(f[1], CultureInfo.InvariantCulture) * 1000.0, Ahead = double.Parse(f[2], CultureInfo.InvariantCulture) }; break;   // WO-187 C3
                 case "fmove": fmoves.Add((double.Parse(f[1], CultureInfo.InvariantCulture), f[2], Guid.Parse(f[3]))); break;   // WO-187 C3
+                case "fclinch":   // WO-197 B3: fclinch <t> <masterRow> <slaveRow> <master 0|1> -- a clinch move of his, both rows
+                    fmoves.Add((double.Parse(f[1], CultureInfo.InvariantCulture), "fclinch" + f[4] + ":" + Guid.Parse(f[3]).ToString("N"), Guid.Parse(f[2]))); break;
+                case "pvit":   // WO-197 B4: pvit <t> <hp> <st> <flagsHex> -- this peer's PlayerState (0x1F) at t, then every 2 s with the same flags
+                    fmoves.Add((double.Parse(f[1], CultureInfo.InvariantCulture), "pvit:" + f[2] + ":" + f[3] + ":" + f[4], Guid.Empty)); break;
                 case "jhit":   // WO-173: jhit <t> <npc> <row> <lag_ms> <hp> <st> [every_s n]
                 {
                     double t0 = Wo165Verbs.D(f[1]), lag = Wo165Verbs.D(f[4]) / 1000.0;
@@ -560,6 +564,28 @@ static class P
                 for (int mi = fmoves.Count - 1; mi >= 0; mi--)   // WO-187 C3: the figure's rows, stamped now
                 {
                     if (fmoves[mi].T > t) continue;
+                    if (fmoves[mi].What.StartsWith("pvit:", StringComparison.Ordinal))
+                    {
+                        var pv = fmoves[mi].What.Split(':');
+                        var vp = new byte[3 + Protocol.PlayerStateUpPayloadLen]; vp[0] = Protocol.PlayerStateUp;
+                        BinaryPrimitives.WriteUInt16LittleEndian(vp.AsSpan(1), (ushort)Protocol.PlayerStateUpPayloadLen);
+                        BinaryPrimitives.WriteSingleLittleEndian(vp.AsSpan(3), float.Parse(pv[1], CultureInfo.InvariantCulture));
+                        BinaryPrimitives.WriteSingleLittleEndian(vp.AsSpan(7), float.Parse(pv[2], CultureInfo.InvariantCulture));
+                        vp[11] = Convert.ToByte(pv[3], 16);
+                        await st.WriteAsync(vp);
+                        Console.WriteLine(FormattableString.Invariant($"SYNTH t={t:F1}s PVITALS {fmoves[mi].What}"));
+                        string hb = fmoves[mi].What.EndsWith(":hb", StringComparison.Ordinal) ? fmoves[mi].What : fmoves[mi].What + ":hb";
+                        if (!fmoves[mi].What.EndsWith(":hb", StringComparison.Ordinal))   // a new sample ends the older one's heartbeat
+                            for (int hi = fmoves.Count - 1; hi >= 0; hi--) if (hi != mi && fmoves[hi].What.EndsWith(":hb", StringComparison.Ordinal)) { fmoves.RemoveAt(hi); if (hi < mi) mi--; }
+                        fmoves[mi] = (t + 2.0, hb, Guid.Empty);   // the heartbeat
+                        continue;
+                    }
+                    if (fmoves[mi].What.StartsWith("fclinch", StringComparison.Ordinal))
+                    {
+                        var fc = fmoves[mi].What.Split(':');
+                        await st.WriteAsync(Wo187Verbs.ClinchMove(s_actions, fmoves[mi].Row, Guid.ParseExact(fc[1], "N"), fc[0].EndsWith('1')));
+                    }
+                    else
                     await st.WriteAsync(Wo187Verbs.Move(s_actions, fmoves[mi].What, fmoves[mi].Row));
                     Console.WriteLine(FormattableString.Invariant($"SYNTH t={t:F1}s FMOVE {fmoves[mi].What} row={fmoves[mi].Row}"));
                     fmoves.RemoveAt(mi);
@@ -624,7 +650,9 @@ static class P
                     var rp = new byte[3 + body.Length]; rp[0] = r.Type;
                     BinaryPrimitives.WriteUInt16LittleEndian(rp.AsSpan(1), (ushort)body.Length); body.CopyTo(rp, 3);
                     await st.WriteAsync(rp);
-                    if (r.Type == Protocol.ActionUp) Console.WriteLine(FormattableString.Invariant($"SYNTH t={t:F1}s raw action kind={body[0]}"));
+                    if (r.Type == Protocol.ActionUp) Console.WriteLine(FormattableString.Invariant($"SYNTH t={t:F1}s raw action kind={body[0]} at={DateTime.Now:HH:mm:ss.fff}"));
+                    else if (r.Type is 0x6A or 0x6E && body.Length > 6)   // WO-197 Part C: the replayed activity / extra rows, with the wall clock
+                        Console.WriteLine(FormattableString.Invariant($"SYNTH t={t:F1}s raw join type={r.Type:X2} kind={body[5]} n={body[6]} at={DateTime.Now:HH:mm:ss.fff}"));
                     rawSent++; sent++;
                 }
                 for (int si = saves.Count - 1; si >= 0; si--)
@@ -684,7 +712,7 @@ static class P
                 bool riding = rides.Any(r => gt >= r.T0 && gt < r.T1);
                 if (riding) gp[19] |= Protocol.PositionFlagRiding;
                 if (claimHost) gp[19] |= Protocol.PositionFlagHostClaim;
-                if (riding != ghostWasRiding) { Console.WriteLine(FormattableString.Invariant($"SYNTH ghost riding={(riding ? "ON" : "OFF")} at t={gt:F1}s")); ghostWasRiding = riding; }
+                if (riding != ghostWasRiding) { Console.WriteLine(FormattableString.Invariant($"SYNTH ghost riding={(riding ? "ON" : "OFF")} at t={gt:F1}s at={DateTime.Now:HH:mm:ss.fff}")); ghostWasRiding = riding; }
                 int go = 20;
                 if (gInCombat)
                 {

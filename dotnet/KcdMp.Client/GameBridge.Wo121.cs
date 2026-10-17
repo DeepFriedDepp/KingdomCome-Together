@@ -283,6 +283,11 @@ public partial class GameBridge
                         what += hcat.TryGet(f.Row, out var hk) ? $" table={hk.Table} spec=\"{hk.Spec}\"" : " table=UNKNOWN";
                     Interlocked.Increment(ref _w187AvatarHitOut);
                     break;
+                case ActionKind.AvatarRecoil:   // WO-197 B1
+                case ActionKind.AvatarClinch:   // WO-197 B3
+                    pkt = Wo197OutboundPacket(f, ms, out what);
+                    if (pkt is null) return;
+                    break;
                 default: return;
             }
         }
@@ -375,6 +380,8 @@ public partial class GameBridge
             case ActionKind.NpcAttack:
             case ActionKind.NpcHit:
             case ActionKind.AvatarHit:
+            case ActionKind.AvatarRecoil:   // WO-197 B1
+            case ActionKind.AvatarClinch:   // WO-197 B3
                 break;
             default:
                 return false;
@@ -428,6 +435,12 @@ public partial class GameBridge
             case ActionKind.AvatarHit:
                 await Wo187OnAvatarHitInAsync(a, catalog, ct);   // WO-187 C1: the partner's own hit reaction on his figure
                 return true;
+            case ActionKind.AvatarRecoil:
+                await Wo197OnRecoilInAsync(a, catalog, ct);      // WO-197 B1: the partner's recoil on his figure
+                return true;
+            case ActionKind.AvatarClinch:
+                await Wo197OnClinchInAsync(a, catalog, ct);      // WO-197 B3: the partner's clinch on his figure and its opponent
+                return true;
             case ActionKind.NpcAttack:
             {
                 if (!RowEvent.TryFromBytes(a.Payload, out var ne) || ne.Name.Length == 0) return true;
@@ -456,6 +469,7 @@ public partial class GameBridge
                 var asSent = row;
                 if (!animal) row = Wo167RowFor(ne.Name, ne.Row, row, catalog);   // WO-167 C4: a paired row it cannot play is its plain attack
                 _ = _combat.NpcHoldAsync(ne.Name, Wo166Rules.SwingHoldMs(row.HitLagMs, _w166SnapFix), ct);   // WO-166 C4: the hold ends with the swing
+                if (!animal && row.Table == "combat_action_sync_attack") await Wo197VictimHalfAsync(ne.Name, neid, row, catalog, ct);   // WO-197 B2: the victim's half first
                 var r = await _combat.GhostSwingForResultAsync(neid, row.Spec, ct);
                 long w167PlayedAt = Environment.TickCount64;
                 if (r.Ok && !animal) _ = Wo166StrikeAsync(ne.Name, row, ct);   // WO-166 C3: the copy counts as striking for the swing's window
@@ -502,6 +516,8 @@ public partial class GameBridge
         // MP-ACTION inbound lines only named the kinds that log a dispatch of their own). Said once, with the swing's id.
         Console.WriteLine($"MP-ACTION section=inbound ghost={gid} kind={a.Kind} seq={a.Seq} dispatch=swing-queued rsid={rsid}");
         _ = _combat.NpcHoldAsync("kcd2mp_" + gid, 900, ct);
+        if (row.Table == "combat_action_sync_attack" && _ghostEntityIds.TryGetValue(gid, out uint fe197))
+            await Wo197VictimHalfAsync("kcd2mp_" + gid, fe197, row, catalog, ct);   // WO-197 B2: his paired move's victim half first
         EnsureSwingInbox(ct).TryEnqueue(new SwingInbox.Entry(gid, a.Seq, rsid, GhostGeneration(gid), row.Spec, DateTime.UtcNow,
                                                              LuaFallback: a.Kind == ActionKind.Attack || !_w187Defence));
         await ExecLuaAsync($"if KCD2MP_GhostNativeSwingHold then KCD2MP_GhostNativeSwingHold(\"{gid}\") end");

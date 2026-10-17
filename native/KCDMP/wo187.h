@@ -78,6 +78,13 @@ int read_all_scopes(uint32_t eid, ScopeInfo* out, int max);
 bool tag_state(uint32_t eid, uint8_t* out, size_t n);
 // The duel trace: the combat actor's current director action (its RTTI name without the namespace), "" unreadable.
 std::string director_action(void* ca);
+// WO-197 B0 (main thread, read-only): one scope of the combat director (C_CombatActorDirector at combat actor +0x2E0; its actions are a vector
+// by scope: 0 main, 1 guard movement, 4 FailedAttack / pose modifier, 5 guard variation). ok = the director read; act = the scope's action
+// (null = none running), name = its RTTI name without "C_CombatActorAction" (e.g. "Guard", "Hit", "FailedAttack", "SyncTransition").
+struct DirAction { bool ok = false; int scopes = 0; const void* act = nullptr; char name[48]{}; };
+DirAction director_scope(void* ca, int scope);
+// "" unreadable, "none", or the scope's action name.
+std::string director_text(void* ca, int scope);
 
 void tick();   // main thread, every frame
 uint8_t handle(uint8_t op, const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t* outLen);

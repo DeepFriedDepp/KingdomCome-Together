@@ -23391,6 +23391,161 @@ do
     end
 end   -- WO-190's do-block
 
+-- WO-197: the animation-sync release -- combat, the rest, and the everyday categories. The switches live in the agent and the DLL (w197_cfg);
+-- this block names them, passes on|off, and holds B4's Lua half: a partner knocked out in a brawl (the game's own unconsciousness, the
+-- engine-knockout bit of his vitals) -- his figure falls the game's way (the unconscious buff: Unconscious -> Ragdoll, its weapons put away
+-- first, never dropped) and gets up the game's way when he wakes (remove_unconsciousness: the Standup action, fromKnockout); the writer lets go
+-- for the duration and takes the body back once the engine says it is up and idle (WO-155's settle rule).
+--   WO197-KO avatar=<name> down|up ok=<pcall> / WO197-KO-STATE ... / WO197-KO-RISE ...
+-- Each mechanism ships on, each with its own switch.
+do
+    W197 = W197 or {}
+    W197.NAMES = { anim_recoil = "mp_anim_recoil", anim_paired = "mp_anim_paired", anim_clinch = "mp_anim_clinch", anim_knockout = "mp_anim_knockout",
+                   copy_guard_engine = "mp_copy_guard_engine", anim_seats = "mp_anim_seats", anim_work = "mp_anim_work", anim_routines = "mp_anim_routines" }
+    W197.on = W197.on or {}
+    W197.ko = W197.ko or {}   -- ghost id -> { at, up, seen, blend, idleAt, key }
+    W197.UNCONSCIOUS = "c75aa0db-65ca-44d7-9001-e4b6d38c6875"   -- unconscious_permanent (the depth is his own world's: it ends at his wake)
+    W197.WAKE = "bd22f98a-e61f-4d83-b39c-79d1d85b6b91"          -- remove_unconsciousness (WO-195B: it stands an NPC up at once)
+    W197.settleS, W197.giveUpS, W197.downGiveUpS = 1.2, 25.0, 600.0
+
+    function KCD2MP_W197Set(name, arg)
+        local label = W197.NAMES[tostring(name)]
+        if not label then mp_log("WO197-TOGGLE unknown switch '" .. tostring(name) .. "'"); return false end
+        local v = KCD2MP_Wo122ParseBool(arg)
+        if v == "bad" then mp_log(label .. ": expected on|off, got '" .. tostring(arg) .. "'"); return false end
+        if v == nil then
+            mp_log("WO197-TOGGLE " .. label .. " (asking the agent; mp_w197_status shows the values)")
+            KCD2MP_EmitEvent("w197_status", "")
+            return true
+        end
+        W197.on[tostring(name)] = v
+        mp_log("WO197-TOGGLE " .. label .. " " .. (v and "on" or "off") .. " -- sent to the agent and the DLL")
+        KCD2MP_EmitEvent("w197_cfg", tostring(name) .. "=" .. (v and "on" or "off"))
+        return true
+    end
+    function KCD2MP_W197Status()
+        mp_log("WO197-STATUS asked (MP-W197-STATS in agent.log)")
+        KCD2MP_EmitEvent("w197_status", "")
+        return true
+    end
+    function KCD2MP_W197On(name) return W197.on[tostring(name)] ~= false end
+
+    local function body(id)
+        local ghost = KCD2MP.ghosts and KCD2MP.ghosts[tostring(id)]
+        return ghost, ghost and ghost.entity
+    end
+
+    function KCD2MP_W197KoTick(id)
+        id = tostring(id)
+        local k = W197.ko[id]
+        if not k then return end
+        local ghost, e = body(id)
+        local W = KCD2MP.w154
+        if not (e and e.actor) then W197.ko[id] = nil; if W then W.down[id] = nil end; return end
+        if W and W.dead and W.dead[id] then W197.ko[id] = nil; return end   -- a death took over (WO-155's collapse)
+        local now = os.clock()
+        local prof, anim = nil, nil
+        pcall(function() prof = e.actor:GetPhysicalizationProfile() end)
+        pcall(function() anim = e.actor:GetCurrentAnimationState() end)
+        local key = tostring(prof) .. "/" .. tostring(anim)
+        if key ~= k.key then
+            k.key = key
+            mp_log(string.format("WO197-KO-STATE avatar=kcd2mp_%s +%.1f s profile=%s anim=%s%s", id, now - k.at, tostring(prof), tostring(anim), k.up and " (waking)" or ""))
+        end
+        if prof == "sleep" or prof == "ragdoll" then k.seen = true end
+        -- live (WO-197 b4ko): the buff on a figure's soul raised no fall at all (profile alive, MotionIdle). No fall in 1.5 s: the
+        -- engine's own ragdoll lays it down (WO-155's death fall), and his wake stands it up with the engine's own StandUp
+        if not k.up and not k.seen and not k.fallback and now - k.at >= 1.5 then
+            k.fallback = "ragdoll"
+            local ok, err = false, nil
+            if type(e.actor.RagDollize) == "function" then ok, err = pcall(function() e.actor:RagDollize() end) end
+            mp_log(string.format("WO197-KO avatar=kcd2mp_%s the unconsciousness showed no fall -> the engine's ragdoll ok=%s%s", id, tostring(ok), ok and "" or (" err=" .. tostring(err))))
+        end
+        if k.up then
+            if anim == "BlendRagdoll" then k.blend = true end
+            -- live (WO-197 b4ko, rounds 3 and 4): neither the engine's StandUp nor its Fall lifts a ragdolled figure (it lay 25-45 s). 2 s after
+            -- his wake with no get-up blend: a fresh figure stands where he woke (WO-155's respawn way; its walk pulse starts its animation)
+            if k.fallback == "ragdoll" and not k.blend and now - k.up >= 2.0 then
+                W197.ko[id] = nil
+                if W then W.down[id] = nil end
+                mp_log(string.format("WO197-KO-RISE avatar=kcd2mp_%s no get-up from the ragdoll -- a fresh figure stands where he woke (%.1f s after his wake)", id, now - k.up))
+                pcall(KCD2MP_RemoveGhost, id)
+                return
+            end
+            local idle = (k.blend or not k.seen) and prof == "alive" and type(anim) == "string" and anim:find("^MotionIdle") ~= nil
+            if k.fallback == "ragdoll" and not k.blend and now - k.up < 4.0 then idle = false end   -- the get-up blend first
+            if idle then
+                k.idleAt = k.idleAt or now
+                if now - k.idleAt >= W197.settleS then
+                    W197.ko[id] = nil
+                    if W then W.down[id] = nil end
+                    mp_log(string.format("WO197-KO-RISE avatar=kcd2mp_%s got up the game's way (%.1f s after his wake) -- the writer takes it back", id, now - k.up))
+                    return
+                end
+            else
+                k.idleAt = nil
+            end
+            if now - k.up >= W197.giveUpS then
+                W197.ko[id] = nil
+                if W then W.down[id] = nil end
+                mp_log(string.format("WO197-KO-RISE avatar=kcd2mp_%s never settled (profile=%s anim=%s) -- a fresh figure replaces it", id, tostring(prof), tostring(anim)))
+                pcall(KCD2MP_RemoveGhost, id)
+                return
+            end
+        elseif now - k.at >= W197.downGiveUpS then
+            KCD2MP_W197FigureKnockout(id, false)   -- no wake ever came: stand up anyway
+        end
+        Script.SetTimer(400, function() KCD2MP_W197KoTick(id) end)
+    end
+
+    function KCD2MP_W197FigureKnockout(id, down)
+        id = tostring(id)
+        local name = "kcd2mp_" .. id
+        if not KCD2MP_W197On("anim_knockout") then return end
+        local ghost, e = body(id)
+        local W = KCD2MP.w154
+        if down then
+            if W197.ko[id] then return end
+            if W and ((W.dead and W.dead[id]) or (W.fall and W.fall[id])) then mp_log("WO197-KO avatar=" .. name .. " already down (a death or a fall) -- nothing more"); return end
+            if not (e and e.actor and e.soul) then mp_log("WO197-KO avatar=" .. name .. " no body here -- nothing to fall"); return end
+            local hidden = false
+            pcall(function() hidden = e:IsHidden() and true or false end)
+            if hidden then mp_log("WO197-KO avatar=" .. name .. " is hidden -- no fall"); return end
+            if KCD2MP_GhostIsMounted and KCD2MP_GhostIsMounted(ghost) then pcall(KCD2MP_GhostDismount, id, ghost, "knockout") end
+            -- his weapons go into his inventory first: the game's unconsciousness drops what is in the hands (a sword on the ground here)
+            if e.human and type(e.human.HolsterToInventory) == "function" then
+                for _, h in ipairs({ 0, 1 }) do pcall(function() e.human:HolsterToInventory(h, false) end) end
+            end
+            if W then W.down[id] = os.clock() end
+            pcall(KCD2MP_GhostNativeSync, id, ghost, false)   -- the writer lets go first
+            local ok, err = pcall(function() e.soul:AddBuff(W197.UNCONSCIOUS) end)
+            W197.ko[id] = { at = os.clock() }
+            mp_log(string.format("WO197-KO avatar=%s down ok=%s%s -- knocked out in his world: the game's own unconsciousness here", name, tostring(ok), ok and "" or (" err=" .. tostring(err))))
+            Script.SetTimer(400, function() KCD2MP_W197KoTick(id) end)
+        else
+            local k = W197.ko[id]
+            if not k or k.up then return end
+            k.up = os.clock()
+            local ok1, ok2, ok3 = false, false, nil
+            if e and e.soul then
+                ok1 = pcall(function() e.soul:RemoveAllBuffsByGuid(W197.UNCONSCIOUS) end)
+                ok2 = pcall(function() e.soul:AddBuff(W197.WAKE) end)
+            end
+            if k.fallback == "ragdoll" and e and e.actor and type(e.actor.StandUp) == "function" then   -- the engine's own get-up (WO-135)
+                ok3 = pcall(function() e.actor:StandUp() end)
+            end
+            mp_log(string.format("WO197-KO avatar=%s up ok=%s/%s%s -- he woke: the game's own stand-up here", name, tostring(ok1), tostring(ok2),
+                ok3 == nil and "" or (" standup=" .. tostring(ok3))))
+        end
+    end
+
+    function KCD2MP_W197SetRecoil(arg) return KCD2MP_W197Set("anim_recoil", arg) end
+    function KCD2MP_W197SetPaired(arg) return KCD2MP_W197Set("anim_paired", arg) end
+    function KCD2MP_W197SetClinch(arg) return KCD2MP_W197Set("anim_clinch", arg) end
+    function KCD2MP_W197SetKnockout(arg) return KCD2MP_W197Set("anim_knockout", arg) end
+    function KCD2MP_W197SetGuardEngine(arg) return KCD2MP_W197Set("copy_guard_engine", arg) end
+end   -- WO-197's do-block
+
 function KCD2MP_W166SetTalkResumeFirst(arg)
     local v = KCD2MP_Wo122ParseBool(arg)
     if v == "bad" then mp_log("mp_talk_resume_first: expected on|off"); return false end
@@ -26320,7 +26475,18 @@ do
             Script.SetTimer(500, function() KCD2MP_W151DoorApply(name, dir, locked, x, y, z, (tries or 0) + 1) end)
             return
         end
-        if setDoor(door, tonumber(dir) or 0, tonumber(locked) == 1) then W.doorStats.applied = W.doorStats.applied + 1 end
+        local was = doorState(door)
+        local ok = setDoor(door, tonumber(dir) or 0, tonumber(locked) == 1)
+        if ok then W.doorStats.applied = W.doorStats.applied + 1 end
+        -- WO-197 Part C (doors): every host door move's outcome on this screen, rate-limited (the doors' parity evidence)
+        W.doorStats.w197 = (W.doorStats.w197 or 0) + 1
+        local nn = W.doorStats.w197
+        if nn <= 300 or nn % 50 == 0 then
+            local now = doorState(door)
+            local d = tonumber(dir) or 0
+            local res = not ok and "FAILED" or (d ~= 1 and d ~= -1) and "lock-only" or was == d and "already" or now == d and (door.curAnim == "" and not door.bNoAnims and "no-anim" or "moved") or "pending"
+            mp_log(string.format("WO197-DOOR %s dir=%d was=%s -> %s (#%d)", tostring(name), d, tostring(was), res, nn))
+        end
     end
 
     -- Host: a joiner asks for a door (open/close; unlock = his key or his lockpick opened it there).
@@ -28458,6 +28624,16 @@ local ok, err = pcall(function()
     System.AddCCommand("mp_copy_swing_takeover", 'KCD2MP_W190SetCopySwingTakeover(%line)', "WO-190: (joiner) an enemy copy still finishing its last swing starts the next one, so every swing shows its wind-up and your shield window (default on): mp_copy_swing_takeover on|off")
     System.AddCCommand("mp_engage_hold", 'KCD2MP_W190SetEngageHold(%line)', "WO-190: (joiner) an enemy turning between you and the host keeps fighting on your screen instead of freezing for a second (default on): mp_engage_hold on|off")
     System.AddCCommand("mp_w190_status", 'KCD2MP_W190Status()', "WO-190: the animation-parity switches and counters (MP-W190-STATS in agent.log)")
+    System.AddCCommand("mp_anim_recoil", 'KCD2MP_W197SetRecoil(%line)', "WO-197: when your blow is blocked or perfect-blocked, your figure on your partner's screen recoils as you do (default on): mp_anim_recoil on|off")
+    System.AddCCommand("mp_anim_paired", 'KCD2MP_W197SetPaired(%line)', "WO-197: a paired move (a combo, a throw, a stop) plays its victim's half too, on the copy or figure it hits (default on): mp_anim_paired on|off")
+    System.AddCCommand("mp_anim_clinch", 'KCD2MP_W197SetClinch(%line)', "WO-197: your clinches play both halves on your partner's screen -- the clinch guard and each clinch move (default on): mp_anim_clinch on|off")
+    System.AddCCommand("mp_anim_knockout", 'KCD2MP_W197SetKnockout(%line)', "WO-197: knocked out in a brawl, your figure falls on your partner's screen and gets up when you do (default on): mp_anim_knockout on|off")
+    System.AddCCommand("mp_copy_guard_engine", 'KCD2MP_W197SetGuardEngine(%line)', "WO-197: (joiner) an enemy copy's leftover swing ends the game's own way, back to its guard (default on): mp_copy_guard_engine on|off")
+    System.AddCCommand("mp_anim_seats", 'KCD2MP_W197Set("anim_seats", %line)', "WO-197: a partner or a copy sitting, lying in bed or getting up shows the same on your screen (default on): mp_anim_seats on|off")
+    System.AddCCommand("mp_anim_work", 'KCD2MP_W197Set("anim_work", %line)', "WO-197: work stations and minigames (grindstone, alchemy, smithing, digging) play on your partner's figure (default on): mp_anim_work on|off")
+    System.AddCCommand("mp_anim_routines", 'KCD2MP_W197Set("anim_routines", %line)', "WO-197: the host's people at work, sitting and gesturing play the same on your screen (default on): mp_anim_routines on|off")
+    System.AddCCommand("mp_w197_status", 'KCD2MP_W197Status()', "WO-197: the animation-sync release's switches and counters (MP-W197-STATS in agent.log)")
+    System.AddCCommand("mp_w197_check", 'KCD2MP_EmitEvent("w197_check", %line)', "WO-197 live checks: mp_w197_check ensure <copy> | syncguard <type> <master> <slave>")
     System.AddCCommand("mp_w187_status", 'KCD2MP_W187Status()', "WO-187: the fight switches and counters (MP-W187-STATS in agent.log)")
     System.AddCCommand("mp_w178_status", 'KCD2MP_W178Status(%line)', "WO-178: the save switches, the quicksave, the draw probe, and the DLL's hostility answer (through the agent): mp_w178_status")
     System.AddCCommand("mp_repair_combat", 'KCD2MP_W174Repair(%line)', "WO-174: frees stuck weapons -- clears partner-figure fight links, ends a stuck fight, re-equips a melee weapon -- and says so; on a save that was fine it changes nothing: mp_repair_combat")

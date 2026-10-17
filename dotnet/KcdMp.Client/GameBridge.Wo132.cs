@@ -219,6 +219,7 @@ public partial class GameBridge
         bool was = _w132PeerFlags.TryGetValue(ghost, out byte f0) && (f0 & Protocol.PlayerStateFlagUnconscious) != 0;
         _w132PeerFlags[ghost] = flags;
         // WO-154 2: a knockdown is shown lying where he fell (the avatar falls on the Downed bit); only a death hides it
+        Wo197OnPeerVitals(ghost, flags);   // WO-197 B4: the engine-knockout bit's edges (his figure falls and stands up the game's way)
         bool knockedDown = (flags & Protocol.PlayerStateFlagKnockedDown) != 0;
         bool wasKnocked = (f0 & Protocol.PlayerStateFlagKnockedDown) != 0;
         // WO-155: a death lays the figure down where it stands (the lying body is the proof of the death); nothing

@@ -5,6 +5,7 @@
 #include "wo172.h"
 #include "fault_guard.h"
 #include "wo141_rules.h"
+#include "wo197.h"
 #include "wo143_rules.h"
 #include "npcstate.h"
 #include "anchors.h"
@@ -737,6 +738,7 @@ std::unordered_map<std::string, NightRead> g_nightRead;
 R::Activity g_shown;
 double g_shownUntil = -1;
 double g_lastTick = 0;
+bool g_applySoon = false;   // WO-197: a changed activity waits for no tick
 
 double now_s() { return npcdrive::now_s(); }
 
@@ -1183,6 +1185,9 @@ void set_desired(const std::string& name, const R::Activity& a) {
     const bool changed = d.name.empty() || !R::same(d.a, a);
     d.name = name;
     if (changed) { d.a = R::normalised(a); d.pace = {}; d.matched = false; d.handsDropped = false; d.handsTries = 0; d.refusals = 0; d.gaveUpAt = -1e9; }
+    // WO-197 Part C (mp_anim_seats / mp_anim_routines / mp_anim_work): a changed activity is applied on the next frame instead of the next
+    // 250 ms tick (the replayed town: median 210-225 ms, p95 500-700 ms from the row's arrival to its apply)
+    if (changed && kcdmp::wo197::activity_now(d.a.minigame != R::kNoMinigame, d.a.stance != 0, d.a.unstance != R::kNoUnstance)) g_applySoon = true;
 }
 
 } // namespace
@@ -1345,6 +1350,11 @@ void tick() {
     static unsigned n = 0;
     if ((++n % 15) == 0) research_watch();
     const double now = now_s();
+    if (g_applySoon) {   // WO-197: the changed activity now (the capture keeps its own pace)
+        g_applySoon = false;
+        reconcile_tick(now);
+        return;
+    }
     if (now - g_lastTick < g_periodMs.load() / 1000.0) return;
     g_lastTick = now;
     capture_tick(now);

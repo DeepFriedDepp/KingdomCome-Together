@@ -1749,6 +1749,15 @@ void tick() {
 
 void set_action_callback(ActionFn fn) { g_actionFn.store(fn); }
 
+void push_local_action(uint8_t kind, uint8_t flags, const uint8_t guid[16], const uint8_t* alt) {
+    Captured c{};
+    c.kind = kind; c.flags = flags; c.ic = -1; c.zone = -1; c.type = -1; c.eid = 0;
+    if (guid) std::memcpy(c.guid, guid, 16);
+    if (alt) { std::memcpy(c.alt, alt, 16); c.hasAlt = true; }
+    std::lock_guard<std::mutex> lock(g_capMutex);
+    if (g_captured.size() < 256) g_captured.push_back(c); else c_capDropped.fetch_add(1);
+}
+
 int status_text_motion(char* out, int n);
 
 int status_text(char* out, int n) {

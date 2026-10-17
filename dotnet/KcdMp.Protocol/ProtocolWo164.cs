@@ -67,6 +67,9 @@ public static partial class Protocol
     // ---- WO-194: the DLL's ops in the WO-163 family (native/KCDMP/wo194.h): in-game cutscenes -- the enqueue events, the copy's start through its
     //      handler, the joiner's hold, the sequence clock, the copies' FastForward stop ----
     public const byte Wo194OpStatus = 58, Wo194OpConfig = 59, Wo194OpPoll = 60, Wo194OpStart = 61, Wo194OpHold = 62, Wo194OpSeq = 63, Wo194OpStopFF = 64;
+    // ---- WO-197: the DLL's ops in the WO-163 family (native/KCDMP/wo197.h): the switches, a paired move's two halves, StartSyncGuard on a pair,
+    //      EnsureGuardAction on a copy ----
+    public const byte Wo197OpStatus = 65, Wo197OpConfig = 66, Wo197OpPair = 67, Wo197OpSyncGuard = 68, Wo197OpEnsureGuard = 69;
 
     // ---- kinds (APPEND-ONLY) ----
     public const byte W164MarkPing = 1, W164Torch = 2, W164Escort = 3, W164HitOutcome = 4, W164Weather = 5, W164Travel = 6, W164RealHit = 7, W164NpcDown = 8;
