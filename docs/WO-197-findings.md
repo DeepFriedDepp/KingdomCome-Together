@@ -247,3 +247,6 @@ reloaded; the draw was refused before and after alike: no drawable weapon at tha
 gate (0 hits) and the no-screenshot gate (0 hits) passed; the installer and its files carry 0.61.0; unsigned. The first start stopped at
 WO-106's console placeholder check (four new commands, fixed in `bd9fa45`), the second at a dead Henry left by the real-input sitting
 (the save round trip needs a living one), the third at the relay test flake above.
+
+Rebuilt after the B1 follow-up (`6a9af5a`: the player's recoil on a blocked stab), the same version, 0.61.0, from a fresh clone; the
+Discord notes and checklist item 368 now describe the stab recoil.

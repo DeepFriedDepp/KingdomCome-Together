@@ -1516,10 +1516,10 @@ helps, take your own (F12) and send it. Evidence: `docs/WO-197-findings.md`.
 
 **Fights: both of you see the same moves**
 
-368. **A blocked blow (known open).** Each of you, with a sword, longsword, halberd or short sword, fights a bandit that blocks. The
-     recoil of your own blocked blow is not sent yet (in the tests the game never ran it on the player's own body); look only that your
-     figure on the partner's screen does not freeze or jump when your blow is blocked. If your figure does jerk back on the partner's
-     screen, say so: the sender's `agent.log` then has `MP-ACTION section=outbound kind=AvatarRecoil`.
+368. **A blocked stab recoils on both screens.** Each of you, with a longsword, fights a bandit that blocks and stabs into its guard
+     (the attack aimed at the bottom of the combat cursor): when your stab is blocked or perfect-blocked, your figure on the partner's
+     screen jerks back the way yours does. A blocked slash has no recoil in the game: it runs on, on both screens. Lines: sender
+     `MP-ACTION section=outbound kind=AvatarRecoil`, the other `kind=AvatarRecoil ... result=ok`.
 369. **A brawl: paired punches and throws play on both bodies.** One of you fist-fights a villager; the other watches. When a punch combo or
      a throw lands, the villager plays the receiving half (stagger, thrown), not only the attacker its own half. The same when a villager does it to
      the partner. Lines: `MP-W197 pair ... -> played`.

@@ -43,6 +43,7 @@ Enemies, stealth, loot
 - A key looted from a body stays in the joiner's pack. A chest or door the joiner unlocks stays unlocked in the host's world, also after a save and reload.
 - The joiner's takedowns and pickpocketing work as in single player: a knocked-out person wakes on their own later; a theft seen face to face is a crime.
 Both of you see the same moves
+- When your stab is blocked or perfect-blocked, your partner now sees your figure recoil the way yours does. The game recoils only on stabs: a blocked slash just runs on, on both screens.
 - Paired moves -- a combo, a throw, a stop -- now play their receiving half too: the one you throw is thrown on your partner's screen as well.
 - Clinches show both halves on the other screen: locking together and every clinch move.
 - Knocked out in a brawl, you fall on your partner's screen and lie there until you wake; then your figure stands where you woke.
