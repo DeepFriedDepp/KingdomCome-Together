@@ -25,29 +25,32 @@ How to play together (0.48.2):
 Nobody clicks CONNECT any more, and you don't need anyone's save file. First time ever starting the game? Start it once from Steam and accept its two first-run pages, then use the launcher.
 ```
 
-## The next build — story cutscenes together (WO-194)
+## Version 0.61.0 — the animation-sync release (everything since 0.60.9)
 
 ```
-Next build -- story cutscenes together:
-- Story cutscenes played in the game (the ones with "Skip part / Skip all") now play for both of you, at the same moment, the way story videos already do. Each game plays its own copy through its own quest, so both quests move on.
-- One skip skips it for both: a part or the whole scene, either of you.
-- After the scene both of you can move at once and stand where the story continues, next to each other. The joiner is no longer left in the cutscene view while the game waits for the host's people.
-- Nothing about a cutscene blocks a save any more.
-- Each piece has its own switch (mp_scene_ingame_shared, mp_scene_ingame_skip_both, ...), all on. Please type mark_odd at anything odd.
-```
-
-## The next build — saves, simplified (WO-192)
-
-```
-Kingdom Come: Together, the next build: saves, simplified
-- The joiner's character is now saved with every host save, also right after a cutscene. Before, a cutscene could block the joiner's saves for minutes, and a reload then lost that progress.
-- The host's game now saves by itself every 30 minutes of play, the Saviour Schnapps way (no schnapps used). It waits while a fight, a conversation or a cutscene runs. Saving yourself starts the 30 minutes again. Switch: mp_host_autosave (on), mp_host_autosave_min <minutes>.
-- Gone: the joiner's own 10-minute save, the host's "your partner hasn't been saved" reminder, and the save when the joiner opens the menu. The host's autosave replaces them.
-- Your partner's marker on the map and the compass now follows them instead of staying where it first appeared.
-- After sleeping or waiting together, the joiner no longer wakes before the host: the screen stays dark until the host wakes (15 seconds at most).
-- Washing at a trough no longer leaves anyone stuck or unable to save.
-- Mark screenshots are gone: mark_odd no longer takes a picture. Old ones are in Saved Games\kingdomcome2\screenshots (screenshot_<date>_<time>.jpg); delete the ones from your marks if you like.
-Please type mark_odd at anything odd.
+Kingdom Come: Together 0.61.0 -- everything since 0.60.9
+Saves
+- The joiner's character is now saved with every host save, also right after a cutscene (a cutscene used to block the joiner's saves for minutes, and a reload then lost that progress).
+- The host's game saves by itself every 30 minutes of play, the Saviour Schnapps way (no schnapps used), never during a fight, a talk or a scene. Saving yourself starts the 30 minutes again.
+- Gone: the joiner's own 10-minute save, the "your partner hasn't been saved" reminder and the save when the joiner opens the menu.
+- After sleeping or waiting together the joiner no longer wakes before the host. Washing at a trough no longer leaves anyone stuck or unable to save.
+- Your partner's marker on the map and the compass now follows them.
+Story cutscenes
+- Cutscenes played in the game (the ones with "Skip part / Skip all") now play for both of you at the same moment; one skip skips them for both; afterwards you both stand where the story goes on, next to each other.
+Enemies, stealth, loot
+- An enemy that dies while fighting the joiner falls on the joiner's screen within a second, and the fight ends. One killed far away lies dead when the joiner gets there.
+- The joiner's sneaking counts like the host's: crouching in the dark past sleepers wakes nobody, running past people is noticed, a walking joiner can wake a sleeper.
+- A key looted from a body stays in the joiner's pack. A chest or door the joiner unlocks stays unlocked in the host's world, also after a save and reload.
+- The joiner's takedowns and pickpocketing work as in single player: a knocked-out person wakes on their own later; a theft seen face to face is a crime.
+Both of you see the same moves
+- Paired moves -- a combo, a throw, a stop -- now play their receiving half too: the one you throw is thrown on your partner's screen as well.
+- Clinches show both halves on the other screen: locking together and every clinch move.
+- Knocked out in a brawl, you fall on your partner's screen and lie there until you wake; then your figure stands where you woke.
+- An enemy's leftover swing ends the game's own way, back to its guard.
+- Villagers sitting down, getting up, going to bed or starting work now change on the joiner's screen about twice as fast.
+Each new piece has its own switch (mp_anim_recoil, mp_anim_paired, mp_anim_clinch, mp_anim_knockout, mp_copy_guard_engine, mp_anim_seats, mp_anim_work, mp_anim_routines, and the older ones), all on. Please type mark_odd at anything odd.
+Mark screenshots are gone: mark_odd no longer takes a picture. The old ones are in %USERPROFILE%\Saved Games\kingdomcome2\screenshots\ (screenshot_<date>_<time>.jpg). Delete the ones from your marks if you like, and keep any F12 shots you took on purpose: they land in the same folder with the same kind of name.
+Both players and the relay need 0.61.0.
 ```
 
 ## Version 0.60.9 — both of you see the same moves (WO-190)

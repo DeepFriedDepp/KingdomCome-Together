@@ -1479,6 +1479,71 @@ you near it. Evidence: `docs/WO-194-findings.md`.
      standing in the scene's spot). Switches (all on): `mp_scene_ingame_shared`, `mp_scene_ingame_hold`, `mp_scene_ingame_ffstop`,
      `mp_scene_ingame_nudge`, `mp_scene_ingame_figure_hide`, `mp_scene_ingame_skip_both`, `mp_scene_ingame_time_host`.
 
+## 0.61.0 — the animation-sync release: everything since 0.60.9, in one session
+
+One session, both of you on 0.61.0, about an hour: a village by day and the same village at night, a sword fight, a brawl, a story
+cutscene if one is near, a host save and a rejoin. It covers WO-192 (saves), WO-195 / WO-195B (dead enemies, stealth, loot, locks,
+takedowns), WO-194 (cutscenes together) and WO-197 (both of you see the same moves); the sections above hold their details and log lines.
+**Type `mark_odd` at every difference you see**, then tell each other what you saw. The mod takes no screenshots any more: if a picture
+helps, take your own (F12) and send it. Evidence: `docs/WO-197-findings.md`.
+
+**Saves**
+
+359. **The host saves; the joiner rejoins with everything.** Each of you picks something up, the host saves (Home), the joiner quits and
+     rejoins: their things and their place are as at the save (joiner `agent.log`: `PAIRED host save`). Once more with the host saving during a
+     cutscene: it pairs too.
+360. **The host's own 30-minute save.** Play 30 minutes without saving: the host's game saves by itself (no schnapps used), never in the
+     middle of a fight, a talk or a scene, and the joiner's character is saved with it (`PAIRED` on the joiner).
+361. **The partner's marker follows the partner** on the map and the compass, the whole session.
+362. **Sleep or wait together:** the joiner's screen stays dark until the host wakes (15 s at most). A trough or a workbench never leaves
+     anyone stuck or unable to save.
+
+**Story cutscenes** (if one is near)
+
+363. **Both see it from the start, at the same moment; one skip skips it for both; afterwards both of you can move at once, next to each
+     other.** Then the host saves and the joiner rejoins: their progress is there.
+
+**Dead enemies, stealth, loot, locks**
+
+364. **An enemy that dies fighting the joiner falls on the joiner's screen within a second, and the fight ends.** One killed far away lies
+     dead when the joiner gets there.
+365. **At night the joiner sneaks past sleepers and awake people:** crouching and slow, nobody reacts; standing and running, they react as
+     they would for the host. A walking joiner beside a sleeper can wake him; a still one cannot.
+366. **The joiner loots a body's key and opens its chest;** the host then finds no second key. **A chest or a door the joiner unlocks stays
+     unlocked in the host's world,** also after the host saves and reloads.
+367. **The joiner knocks someone out from behind:** the person lies unconscious (not dead) and gets up on their own a few minutes later.
+     **The joiner pickpockets** in the dark: nobody reacts; face to face in the light: a crime.
+
+**Fights: both of you see the same moves**
+
+368. **A blocked blow (known open).** Each of you, with a sword, longsword, halberd or short sword, fights a bandit that blocks. The
+     recoil of your own blocked blow is not sent yet (in the tests the game never ran it on the player's own body); look only that your
+     figure on the partner's screen does not freeze or jump when your blow is blocked. If your figure does jerk back on the partner's
+     screen, say so: the sender's `agent.log` then has `MP-ACTION section=outbound kind=AvatarRecoil`.
+369. **A brawl: paired punches and throws play on both bodies.** One of you fist-fights a villager; the other watches. When a punch combo or
+     a throw lands, the villager plays the receiving half (stagger, thrown), not only the attacker its own half. The same when a villager does it to
+     the partner. Lines: `MP-W197 pair ... -> played`.
+370. **A clinch shows both halves.** Get into a clinch (a brawl, or longswords): both bodies lock together on the other screen too, and
+     each clinch move plays on both. Lines: sender `kind=AvatarClinch`, the other `dispatch=rows` / `dispatch=pair`.
+371. **Knocked out in a brawl:** the one knocked out falls on the partner's screen and lies there as long as they lie; when they get up,
+     their figure stands where they woke (a fresh figure: the game's own get-up animation is not shown yet). Lines: `MP-W197 peer <n> KNOCKED OUT`,
+     then `woke`; `WO197-KO avatar=... down`, `WO197-KO-RISE`.
+372. **Kicks, stop moves, master strikes:** use them; each shows as itself on the other screen, and an enemy swinging again right after its
+     last swing always shows its wind-up.
+
+**Everyday moves** (look at your partner, and at the villagers around you, on the joiner's screen)
+
+373. **Doors:** a door one of you (or a villager) opens or closes moves on the other screen too (joiner `kcd.log`: `WO197-DOOR ... -> moved`).
+374. **Seats and beds:** sitting on a bench, a chair or the ground, lying in a bed, getting up: your partner, and the villagers at their
+     benches and beds, show the same on the joiner's screen, about as soon as on the host's.
+375. **Hand items:** a torch, a drink, food, a potion, a book, the bow: what your partner and the villagers hold shows in their hands.
+376. **Work stations and minigames:** grindstone, alchemy, smithing, digging; villagers chopping, hoeing, at their spindles: the same on both
+     screens.
+377. **Riding:** mounting, dismounting, walk, trot, gallop: your partner on their horse looks the same on both screens.
+378. **Gestures and emotes:** villagers turning to the one they talk to, your partner's whistle.
+379. **Type `mark_odd` at every difference.** Switches (all on): `mp_anim_recoil`, `mp_anim_paired`, `mp_anim_clinch`, `mp_anim_knockout`,
+     `mp_copy_guard_engine`, `mp_anim_seats`, `mp_anim_work`, `mp_anim_routines`, and the ones the sections above name.
+
 ## Logs to send afterwards
 
 Both machines: Report a bug in the launcher. Since 0.48.9 it collects the current launch by default as a small file (or a few numbered
