@@ -38,9 +38,22 @@ inline bool is_failed_attack(const char* n) { return n && std::strcmp(n, "Failed
 inline bool new_recoil(const void* prevAct, const void* curAct, const char* curName) {
     return curAct && curAct != prevAct && is_failed_attack(curName);
 }
-// The UNKNOWN of WO-196 R1: State 0x10 (the failed-attack state) without a FailedAttack in scope 4 within this many reads = no recoil row
-// (blunt, unarmed) or the director refused it (an equal-priority pose modifier running in scope 4).
-constexpr int kState10Reads = 6;
+// The kind from the opponent as read now, else as last read before the contact (by the 0x10 read a blocking opponent often reads 0x20
+// already, his block's own withdraw): the engine's FillPossibleFailedAttackData reads it at the contact itself.
+inline uint8_t recoil_flags_at_contact(bool oppRead, bool oppPerfect, int32_t oppState, bool preRead, bool prePerfect, int32_t preState) {
+    const uint8_t now = recoil_flags(oppRead, oppPerfect, oppState);
+    return now ? now : recoil_flags(preRead, prePerfect, preState);
+}
+// The contact of the player's own blow: State 8 (striking) -> 0x10 (WO-186 R4.3: written at every contact, a hit or a block alike).
+constexpr int32_t kStateStriking = 0x8;
+inline bool contact_edge(int32_t prev, int32_t now) { return prev == kStateStriking && now == kStateFailedAttack; }
+// The game's failed-attack rows (combat_action_failed_attack, all 8) carry attack_zone_id 5 (tag aZ5): the "lower" zone, which in the
+// attack table holds only stabs (and kicks). A blocked slash (zones 0, 1, 2) has no row: the engine runs no FailedAttack and plays no
+// recoil -- the Attack runs on to its Withdraw on every body, the player's too (WO-197 B1 follow-up, docs/WO-197-findings.md section 6).
+constexpr int32_t kRecoilZone = 5;
+inline bool recoil_rows_for_zone(int32_t zone) { return zone == kRecoilZone; }
+// The per-blow probe: how long a window watches after a blocked contact (the recoil rows run 0.5-0.83 s), how many frame lines it logs.
+constexpr int kProbeMs = 2000, kProbeWindows = 2, kProbeLines = 160;
 
 // ---- B3 ----------------------------------------------------------------------------------------------------------------------------
 enum class Clinch : uint8_t { None = 0, Idle = 1, Move = 2 };

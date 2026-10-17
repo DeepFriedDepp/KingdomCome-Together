@@ -5,6 +5,7 @@
 #include "wo197.h"
 #include "wo197_rules.h"
 #include "wo163.h"
+#include "wo166.h"
 #include "wo187.h"
 
 #include "anchors.h"
@@ -33,7 +34,8 @@ constexpr unsigned kLogFirst = 30;
 std::atomic<bool> g_recoil{true}, g_paired{true}, g_clinch{true}, g_guardEngine{true};
 std::atomic<uint8_t> g_cats{0x7F};   // Part C: every category on
 
-std::atomic<uint32_t> c_recoils{0}, c_recoilPb{0}, c_recoilBlock{0}, c_recoilUnknown{0}, c_recoilRow{0}, c_state10{0}, c_state10NoFa{0},
+std::atomic<uint32_t> c_recoils{0}, c_recoilPb{0}, c_recoilBlock{0}, c_recoilUnknown{0}, c_recoilRow{0}, c_contacts{0}, c_blocked{0},
+    c_blockedStab{0}, c_blockedStabNoFa{0}, c_blockedSlash{0},
     c_clinchEnter{0}, c_clinchMove{0}, c_clinchLeave{0}, c_clinchRows{0}, c_pairs{0}, c_pairRefused{0}, c_pairVictimOk{0}, c_pairAttackerOk{0},
     c_syncGuards{0}, c_syncGuardOk{0}, c_ensure{0}, c_ensureOk{0}, c_ensureRefused{0};
 
@@ -169,60 +171,132 @@ bool resolve() {
 const void* g_lastFa = nullptr;
 const void* g_lastSt = nullptr;
 Clinch g_clinchWas = Clinch::None;
-int g_state10Reads = -1;      // reads since State 0x10 appeared with no FailedAttack (-1 = not watching)
 char g_scope4Before[48] = "none";
+// B1: the player's State on the last read, and his opponent as last read while he was striking (State 8) -- the engine reads the
+// opponent's block at the contact itself; by the 0x10 read a blocker often reads his own withdraw (0x20) already
+int32_t g_meWas = 0;
+bool g_preOk = false, g_prePb = false;
+int32_t g_preState = 0;
+// one blocked blow, watched for kProbeMs after its contact: did a FailedAttack run, what did scope 0 do
+struct Blow {
+    bool on = false, fa = false, frames = false;
+    uint64_t t0 = 0;
+    int lines = 0;
+    uint8_t kind = 0;
+    int32_t zone = -1, type = -1, weapon = -1;
+    uint32_t opp = 0;
+    char seq[120] = "";
+    const void* lastS0 = nullptr;
+};
+Blow g_blow;
+unsigned g_probeWindows = 0;
+
+void blow_end() {
+    Blow& b = g_blow;
+    b.on = false;
+    const bool rows = recoil_rows_for_zone(b.zone);
+    if (rows) { c_blockedStab.fetch_add(1); if (!b.fa) c_blockedStabNoFa.fetch_add(1); }
+    else c_blockedSlash.fetch_add(1);
+    const uint32_t k = c_blocked.load();
+    if (k <= kLogFirst || k % 50 == 0 || (rows && !b.fa))
+        logf("WO197-B1BLOW kind=%s zone=%d type=%d weapon=%d failed_attack=%s scope0=%s opponent=%s -- %s (#%u)",
+             (b.kind & kRecoilPerfect) ? "pb" : "block", b.zone, b.type, b.weapon, b.fa ? "ran" : "none", b.seq[0] ? b.seq : "?",
+             b.opp ? name_of(b.opp) : "?",
+             rows ? (b.fa ? "a stab: the engine's recoil ran, sent as AvatarRecoil" : "a stab with no FailedAttack: no row for this weapon, or the director refused it")
+                  : "not a stab: the game has no failed-attack row (rows are stabs only, attack zone 5), the Attack runs on to its withdraw",
+             k);
+}
 
 void poll_player() {
     void* ca = motion::player_combat_actor();
     if (!ca) return;
     const wo187::DirAction s4 = wo187::director_scope(ca, 4);
     if (!s4.ok) return;
+    const wo187::DirAction s0 = wo187::director_scope(ca, 0);
+    // the player and his opponent, read only while a main action runs (a fight)
+    motion::ModelRead me{}, opp{};
+    bool meOk = false, oppOk = false, oppPb = false;
+    if (g_recoil.load() && s0.act) {
+        const uint32_t pe = player_eid();
+        meOk = pe && motion::read_model(pe, &me) && (me.valid & motion::kMvState);
+        oppOk = meOk && me.opponentEid && motion::read_model(me.opponentEid, &opp) && (opp.valid & motion::kMvState);
+        oppPb = oppOk && (opp.valid & motion::kMvPerfect) && opp.perfectBlock;
+    }
+    // B1: the contact of the player's own blow (8 -> 0x10, a hit and a block alike); a blocked one is watched for kProbeMs
+    if (meOk && contact_edge(g_meWas, me.state)) {
+        c_contacts.fetch_add(1);
+        const uint8_t kind = recoil_flags_at_contact(oppOk, oppPb, opp.state, g_preOk, g_prePb, g_preState);
+        if (g_blow.on) blow_end();
+        if (kind & kRecoilKnown) {
+            c_blocked.fetch_add(1);
+            Blow& b = g_blow;
+            b = Blow{};
+            b.on = true;
+            b.t0 = GetTickCount64();
+            b.kind = kind;
+            b.zone = (me.valid & motion::kMvAtkZone) ? me.atkZone : -1;
+            b.type = (me.valid & motion::kMvAtkType) ? me.atkType : -1;
+            b.weapon = wo166::weapon_class_id(ca);
+            b.opp = me.opponentEid;
+            b.frames = g_probeWindows < static_cast<unsigned>(kProbeWindows);
+            if (b.frames) ++g_probeWindows;
+        }
+    }
+    if (meOk) {
+        if (me.state == kStateStriking) { g_preOk = oppOk; g_prePb = oppPb; g_preState = opp.state; }
+        else if (me.state != kStateFailedAttack) g_preOk = false;
+        g_meWas = me.state;
+    }
     // B1: a new FailedAttack in scope 4
     if (g_recoil.load() && new_recoil(g_lastFa, s4.act, s4.name)) {
-        motion::ModelRead me{}, opp{};
-        const uint32_t pe = player_eid();
-        const bool meOk = pe && motion::read_model(pe, &me);
-        const bool oppOk = meOk && me.opponentEid && motion::read_model(me.opponentEid, &opp) && (opp.valid & motion::kMvState);
-        uint8_t flags = recoil_flags(oppOk, oppOk && (opp.valid & motion::kMvPerfect) && opp.perfectBlock, opp.state);
+        if (!meOk) {
+            const uint32_t pe = player_eid();
+            meOk = pe && motion::read_model(pe, &me);
+            oppOk = meOk && me.opponentEid && motion::read_model(me.opponentEid, &opp) && (opp.valid & motion::kMvState);
+            oppPb = oppOk && (opp.valid & motion::kMvPerfect) && opp.perfectBlock;
+        }
+        uint8_t flags = recoil_flags_at_contact(oppOk, oppPb, opp.state, g_preOk, g_prePb, g_preState);
+        if (g_blow.on) g_blow.fa = true;
         uint8_t g[16]{};
         void* row = nullptr;
         if (rd(s4.act, 0x58, &row) && row_guid(row, "FailedAttack", g)) { flags |= kRecoilRow; c_recoilRow.fetch_add(1); }
         motion::push_local_action(kKindAvatarRecoil, flags, (flags & kRecoilRow) ? g : nullptr, nullptr);
         const uint32_t k = c_recoils.fetch_add(1) + 1;
         ((flags & kRecoilPerfect) ? c_recoilPb : (flags & kRecoilKnown) ? c_recoilBlock : c_recoilUnknown).fetch_add(1);
-        g_state10Reads = -1;
         if (k <= kLogFirst || k % 50 == 0) {
             char gt[40] = "-";
             if (flags & kRecoilRow) guid_text(g, gt, sizeof gt);
-            logf("WO197-RECOIL kind=%s row=%s opponent=%s opp_state=0x%X opp_pb=%d scope4_before=%s (#%u)",
+            logf("WO197-RECOIL kind=%s row=%s opponent=%s opp_state=0x%X opp_pb=%d zone=%d weapon=%d scope4_before=%s (#%u)",
                  (flags & kRecoilPerfect) ? "pb" : (flags & kRecoilKnown) ? "block" : "unknown", gt, oppOk ? name_of(me.opponentEid) : "?",
-                 static_cast<unsigned>(opp.state), opp.perfectBlock, g_scope4Before, k);
+                 static_cast<unsigned>(opp.state), opp.perfectBlock, (me.valid & motion::kMvAtkZone) ? me.atkZone : -1, wo166::weapon_class_id(ca),
+                 g_scope4Before, k);
         }
     }
     if (s4.act != g_lastFa) {
         g_lastFa = s4.act;
         std::snprintf(g_scope4Before, sizeof g_scope4Before, "%s", s4.act ? s4.name : "none");
     }
-    // B1's open question: State 0x10 (failed attack) with no FailedAttack in scope 4 -- read only while a main action runs (a fight)
-    const wo187::DirAction s0f = wo187::director_scope(ca, 0);
-    if (g_recoil.load() && s0f.act) {
-        motion::ModelRead me{};
-        const uint32_t pe = player_eid();
-        if (pe && motion::read_model(pe, &me) && (me.valid & motion::kMvState)) {
-            if (me.state == kStateFailedAttack && !is_failed_attack(s4.act ? s4.name : "")) {
-                if (g_state10Reads < 0) { g_state10Reads = 0; c_state10.fetch_add(1); }
-                else if (++g_state10Reads == kState10Reads) {
-                    const uint32_t k = c_state10NoFa.fetch_add(1) + 1;
-                    if (k <= kLogFirst || k % 50 == 0)
-                        logf("WO197-RECOIL state 0x10 without a FailedAttack in scope 4 (scope4=%s; weapon %d) -- no recoil row for this weapon, or the director refused it (#%u)",
-                             s4.act ? s4.name : "none", -1, k);
-                }
-            } else if (me.state != kStateFailedAttack) g_state10Reads = -1;
+    // B1: the blocked blow's window -- a FailedAttack in scope 4 at any read, scope 0's changes; the first windows log every frame
+    if (g_blow.on) {
+        Blow& b = g_blow;
+        const uint64_t dt = GetTickCount64() - b.t0;
+        if (is_failed_attack(s4.act ? s4.name : "")) b.fa = true;
+        if (s0.act != b.lastS0) {
+            b.lastS0 = s0.act;
+            const size_t n = std::strlen(b.seq);
+            if (n + 24 < sizeof b.seq) std::snprintf(b.seq + n, sizeof b.seq - n, "%s%s", n ? ">" : "", s0.act ? s0.name : "none");
         }
+        if (b.frames && b.lines < kProbeLines) {
+            ++b.lines;
+            const wo187::DirAction s1p = wo187::director_scope(ca, 1);
+            logf("WO197-B1PROBE dt=%llums state=0x%X s0=%s s1=%s s4=%s opp_state=0x%X opp_pb=%d", static_cast<unsigned long long>(dt),
+                 meOk ? static_cast<unsigned>(me.state) : 0xFFFFu, s0.act ? s0.name : "none", s1p.act ? s1p.name : "none", s4.act ? s4.name : "none",
+                 oppOk ? static_cast<unsigned>(opp.state) : 0xFFFFu, oppPb ? 1 : 0);
+        }
+        if (dt >= static_cast<uint64_t>(kProbeMs)) blow_end();
     }
     // B3: the clinch
     if (!g_clinch.load()) return;
-    const wo187::DirAction s0 = wo187::director_scope(ca, 0);
     const wo187::DirAction s1 = wo187::director_scope(ca, 1);
     const Clinch now = clinch_of(s0.act ? s0.name : "", s1.act ? s1.name : "");
     const bool newMove = now == Clinch::Move && s0.act != g_lastSt;
@@ -408,12 +482,12 @@ uint8_t handle(uint8_t op, const uint8_t* body, size_t len, uint8_t* out, size_t
 
 int status_text(char* out, int n) {
     return std::snprintf(out, n,
-        "wo197 recoil=%s paired=%s clinch=%s guard_engine=%s guard=%s recoils=%u pb=%u block=%u unknown=%u recoil_rows=%u state10=%u state10_no_fa=%u "
+        "wo197 recoil=%s paired=%s clinch=%s guard_engine=%s guard=%s recoils=%u pb=%u block=%u unknown=%u recoil_rows=%u contacts=%u blocked=%u blocked_stab=%u blocked_stab_no_fa=%u blocked_slash=%u "
         "clinch_enter=%u clinch_move=%u clinch_leave=%u clinch_rows=%u pairs=%u pair_refused=%u pair_victim_ok=%u pair_attacker_ok=%u sync_guards=%u "
         "sync_guard_ok=%u ensure=%u ensure_ok=%u ensure_refused=%u",
         g_recoil.load() ? "on" : "off", g_paired.load() ? "on" : "off", g_clinch.load() ? "on" : "off", g_guardEngine.load() ? "on" : "off",
         g_ensure ? "armed" : (g_resolved ? "not-armed" : "unresolved"), c_recoils.load(), c_recoilPb.load(), c_recoilBlock.load(), c_recoilUnknown.load(),
-        c_recoilRow.load(), c_state10.load(), c_state10NoFa.load(), c_clinchEnter.load(), c_clinchMove.load(), c_clinchLeave.load(), c_clinchRows.load(),
+        c_recoilRow.load(), c_contacts.load(), c_blocked.load(), c_blockedStab.load(), c_blockedStabNoFa.load(), c_blockedSlash.load(), c_clinchEnter.load(), c_clinchMove.load(), c_clinchLeave.load(), c_clinchRows.load(),
         c_pairs.load(), c_pairRefused.load(), c_pairVictimOk.load(), c_pairAttackerOk.load(), c_syncGuards.load(), c_syncGuardOk.load(), c_ensure.load(),
         c_ensureOk.load(), c_ensureRefused.load());
 }

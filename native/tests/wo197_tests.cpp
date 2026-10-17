@@ -20,6 +20,15 @@ int wo197_tests(int* passed) {
     WCHECK(recoil_flags(true, true, 0x100) == (kRecoilPerfect | kRecoilKnown), "a perfect block: PB, known (before the plain block)");
     WCHECK(recoil_flags(true, false, kStateParryInPlace) == kRecoilKnown, "State 0x100: a block, known");
     WCHECK(recoil_flags(true, false, 2) == 0 && recoil_flags(false, true, 0x100) == 0, "the opponent moved on / unread: unknown");
+    WCHECK(recoil_flags_at_contact(true, false, 0x20, true, false, kStateParryInPlace) == kRecoilKnown,
+           "the opponent already in his withdraw (0x20): the block read before the contact counts");
+    WCHECK(recoil_flags_at_contact(true, false, 0x20, true, true, 0x100) == (kRecoilPerfect | kRecoilKnown), "a perfect block read before the contact");
+    WCHECK(recoil_flags_at_contact(true, true, 0x100, true, false, 2) == (kRecoilPerfect | kRecoilKnown), "the read now wins");
+    WCHECK(recoil_flags_at_contact(true, false, 0x40, true, false, 2) == 0 && recoil_flags_at_contact(false, false, 0, false, false, 0) == 0,
+           "a hit (0x40, before: guard) or nothing read: unknown");
+    WCHECK(contact_edge(8, 0x10) && !contact_edge(4, 0x10) && !contact_edge(0x10, 0x10) && !contact_edge(8, 0x20), "the contact is 8 -> 0x10 only");
+    WCHECK(recoil_rows_for_zone(5) && !recoil_rows_for_zone(0) && !recoil_rows_for_zone(1) && !recoil_rows_for_zone(2) && !recoil_rows_for_zone(-1),
+           "failed-attack rows exist for the stab zone (5) only");
     int a = 0, b = 0;
     WCHECK(new_recoil(nullptr, &a, "FailedAttack"), "a FailedAttack appears: one recoil");
     WCHECK(!new_recoil(&a, &a, "FailedAttack"), "the same action again: not a second recoil");

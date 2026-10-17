@@ -20,7 +20,7 @@ The saves folder was backed up first. Nothing here is two-player evidence.
 |---|---|---|
 | Part 0 — the baseline, and after | before (main `365133d`): every combat move shown, 22–40 ms median, p95 over 150 ms only for hit reactions and the clinch fallback, 0 gaps, 0 overflows, every `director=` `?`. After (this build): every move still shown, medians 15–44 ms, p95 within a few ms of before (hit reactions +3 … +15 ms), copywalk 60 → 80 %, `director=Guard` 7 of 7 (§2) | — |
 | B0 the combat action reader | fixed: `act=` and `director=` fill in (a real NPC's duel trace: Attack / Block / Guard on 285 of 285 lines; a copy's takeover: `director=Guard` on 7 of 7, was `?`) | — |
-| B1 a player's recoil | the watcher's side: 8 of 8 shown, 27 / 38 ms; the source: with real input no FailedAttack ever ran on the player's body (9 blocked longsword blows), so nothing goes out yet (§3, open) | `mp_anim_recoil` on |
+| B1 a player's recoil | the watcher's side: 8 of 8 shown, 27 / 38 ms; the source: the game plays a recoil only for a blocked **stab** (its 8 failed-attack rows are all attack zone 5); the 6 real blocks were slashes, so nothing went out, as in vanilla. Live (real input, longsword stabs): 2 of 2 blocked stabs ran the engine's FailedAttack, went out as `AvatarRecoil` with its row and were played on the echo figure (§6) | `mp_anim_recoil` on |
 | B2 the victim's half of a paired move | 10 of 10 victim halves shown, 31 / 37 ms (copy ⇄ figure, both ways) | `mp_anim_paired` on |
 | B3 clinches, both halves | each clinch move: both rows in one step, 6 of 6 shown, 12 / 37 ms; the entry: the game's own clinch-start rows on both (StartSyncGuard on two puppets is refused by the engine); a real clinch's enter / leave went out and came back | `mp_anim_clinch` on |
 | B4 a brawl knockout | the new bit and both its edges; the figure falls and lies as long as the partner lies; the get-up is a fresh figure 2 s after the wake, not the game's get-up animation (§3) | `mp_anim_knockout` on |
@@ -76,9 +76,11 @@ its RTTI name (cached by vtable: the B1/B3 polls read three scopes of the player
 kind (the opponent's perfect-block state, else State 0x100) and, when the row object names a failed-attack row, that row. The watcher plays
 the engine's row, else the failed-attack row for the weapon of the swing his figure last played (WO-165's picker); blunt, unarmed and stick
 blows have none and nothing is played. Live, the watcher: 8 of 8 recoils shown (four picked by weapon, four the engine's own row; block and
-perfect-block kinds), 27 / 38 ms. The source, in the real-input sittings (§5): the player's blows blocked 12 times (9 with the longsword
-drawn, 3 bare-handed); every time the State read 0x10 with nothing in scope 4 -- no FailedAttack ran on the player's own body, so no
-recoil went out (`WO197-RECOIL state 0x10 without a FailedAttack in scope 4`). Where the player's own recoil plays is open (§6).
+perfect-block kinds), 27 / 38 ms. The source, in the real-input sittings (§5): the 12 `WO197-RECOIL state 0x10 without a FailedAttack`
+lines were 6 plain hits (the diagnostic fired on every contact) and 6 real blocks / perfect blocks, all longsword **slashes**; no
+FailedAttack ran on the player's body, so no recoil went out. That is the game's own rule, not a missed capture: its failed-attack rows
+exist for stabs only (§6, "B1's source"). Live, with real-input longsword stabs: 2 of 2 blocked stabs went out as `AvatarRecoil` with the engine's row and
+played on the echo figure.
 
 **B2, the victim's half of a paired move.** A paired row (combat_action_sync_attack) on a copy or a figure: the agent asks the DLL for the
 attacker's opponent (a copy or a figure, never this player), picks the victim's combat_action_sync_hit row with the same combo id, step and
@@ -174,11 +176,49 @@ On the build that ships (the same DLL, agent and Lua), one machine, `playline4` 
 
 ## 6. Open
 
-* **B1's source** — with real input and the longsword drawn, the player's blocked blows never ran a FailedAttack on the player's own body
-  (State 0x10, scope 4 empty, 9 of 9; the poll also read the weapon as -1 with the sword drawn), so no recoil goes out in practice;
-  the watcher side is proven (8 of 8). RE: where the engine plays the player's own recoil (another scope, or a hit-reaction row), then
-  send that. WO-196's question whether the pose modifier refuses a
-  FailedAttack on a puppet stays open too (the figure played every recoil row it was given).
+* **B1's source — where the game plays the player's own recoil (follow-up, 2026-10-17; tables, the logs on disk and one live run, no
+  new disassembly).** It plays one only for a blocked or perfect-blocked **stab**; for a blocked slash it plays none, on the
+  player's body or an NPC's, so there is nothing to send.
+  * *The rows (READ, `combat_action_failed_attack`, all 8 rows).* Every row has `attack_zone_id="5"` and the tag `aZ5`. Zone 5 is
+    `lower` (`combat_zone`, the bottom of the cursor, 225–315°), a real zone and not a wildcard: the attack table uses −1 for "any"
+    (37 rows), and its 33 zone-5 rows are 27 stabs and 6 kicks, never a slash. Everything else on the rows matches the player: the
+    human class (1578932418; 20967892 is the dog), guard type 0, a male opponent, longsword class 4 both hands. `player="false"` is not
+    the filter: the player plays Hit actions from `combat_action_hit`, whose 273 rows are all `player="false"` too.
+  * *The 12 lines re-read (LOG, `release/w197rig/results/real.after3/4.native.log` against `WO176-HOSTHIT` and the WO178 trace).*
+    6 were plain hits (the bandit went to 0x40 / `Hit`): the old diagnostic fired on every contact, because the 8 → 0x10 write
+    happens at any contact (WO-186 R4.3). The other 6 were real: 5 blocks and 1 perfect block, the opponent at State 0x100 /
+    PerfectBlock at the contact, the Opponent set. All 6 were longsword **slashes** (`CombatAttackGen … aZ1/aZ2 slash`; the sitting's
+    19 outbound attacks: UpperLeft 11, UpperRight 7, Head 1, **Lower 0**), so the rig's down-move never selected a stab.
+    Scope 4 read `none` every time, so no pose modifier sat there: WO-196's refusal case was not the cause. The one blocked "Lower"
+    blow on disk (`echosword.after`) was a bare-handed kick; that automated run never drew the sword.
+  * *What the player's body does on a blocked slash (LOG, the perfect block at 10:14:00).* Scope 0 keeps the **Attack**
+    (`dir=Attack/none/none`), the full-body fragment stays 897 (the attack's own), and its priority drops 5 → 3 at the 0x20 Withdraw
+    255 ms after the contact; then Guard. This is the same "the attack runs on" that WO-196 R1 read for blunt and unarmed blows. The
+    blade's bounce is the procedural weapon solver (`wh_cs_WeaponProcSolverRecoil*`), which runs on local physics on each machine.
+    The watcher already shows the attack row, so a blocked slash needs no extra row.
+  * *Code (this follow-up).* The poll's weapon read was a literal −1 in the log line. It is now `wo166::weapon_class_id`. The
+    every-contact diagnostic is replaced by a per-blow one: at the 8 → 0x10 contact the opponent's block is read (now, or as last read
+    while striking, because a blocker often reads 0x20 by then). A blocked blow is watched for 2 s: `WO197-B1BLOW kind zone type weapon
+    failed_attack scope0`, and per-frame `WO197-B1PROBE` lines (State, scopes 0/1/4, the opponent) for the first 2 blocked blows. The
+    status adds `contacts blocked blocked_stab blocked_stab_no_fa blocked_slash`. The recoil's kind uses the same pre-contact read.
+    The send path is unchanged: a FailedAttack in scope 4 goes out as `AvatarRecoil` with the row's GUID.
+  * *Live (2026-10-17 11:12, the Modding Tools game, `playline4/quicksave022`, host role with the echo partner; `run197.py stab after
+    75 60`; results in `release/w197rig/results/stab.after.*`).* First 60 s of the engine fighting for the player with the sword drawn
+    (no input): no blocked blow. Then 75 s of real input with the game in front (the maintainer away): the cursor was stepped down
+    before each click, and 15 of the 16 outbound attacks were stabs (`zone=Lower`, `CombatAttackGen … aZ5+stab`). The bandit blocked
+    2 of them. **Both** ran the engine's FailedAttack on the player's own body (`WO197-B1BLOW kind=block zone=5 type=0 weapon=4
+    failed_attack=ran`). Scope 4 held it from the contact for 0.41–0.45 s, with scope 0 still Attack; State 0x10 → 0x20 came at
+    359 / 422 ms, then Guard with PoseModifier in scope 4. Both went out as `MP-ACTION section=outbound kind=AvatarRecoil recoil=block
+    row=cdaf144b-… spec="CombatAttackFailed, l_longsword+r_longsword+aZ5+oppMale"`. On both the opponent already read 0x20 at the
+    FailedAttack, so the kind came from the pre-contact read (the old poll would have sent "unknown"). The echo figure got both back
+    (`kind=AvatarRecoil … (his engine's row) dispatch=native-row result=ok`), and its body queued fragment 199 `CombatAttackFailed`
+    2.05 s after the source (the echo's 2.0 s delay); the agent's stats read `recoil_out=2 recoil_in=2 recoil_played=2`. The figure's
+    full-body install was not in that trace. Scope 4 was empty before both stabs, so WO-196's equal-priority refusal did not come up.
+    Whether a running PoseModifier ever refuses one is still unseen.
+  * *Done:* B1 works as built; it fires on blocked stabs, the only blows the game gives a recoil. The per-frame probe is kept for the
+    first 2 blocked blows of a session; the `WO197-B1BLOW` summary is logged for the first 30 and every 50th.
+  * WO-196's question whether the pose modifier refuses a FailedAttack on a puppet stays open (the figure played every recoil row it
+    was given).
 * **B3's moves from a real clinch** — the real clinch's enter and leave went out and came back; no clinch move happened in it, so the
   source's move capture is proven only by the synthetic partner (6 of 6).
 * **B3's entry** — `StartSyncGuard(4, master, slave)` is refused by the engine on two puppets; the clinch start is the game's clinch-start

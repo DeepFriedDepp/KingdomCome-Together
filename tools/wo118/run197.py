@@ -353,7 +353,7 @@ def c_replay(mode='after', plan_src=None):
 # HOST role with the echo partner (his stream back 2 s late as a figure). Phase 1: a longsword duel with a commoner that blocks (B1's recoil
 # from his own engine; the echo test's moves; the shield windows when it swings); phase 2: holstered, a brawl (B3's clinches, B2's paired
 # punches, combos). Only when the machine is idle (no user input for W197_IDLE_S, default 1200 s) and the game is already in front.
-def real_sitting(mode='after', secs1=75, secs2=75):
+def real_sitting(mode='after', secs1=75, secs2=75, stab=False, auto_s=0):
     import run187 as P
     import run190 as Q
     sys.path.insert(0, os.path.join(REPO, 'tools', 'dev-input'))
@@ -363,7 +363,7 @@ def real_sitting(mode='after', secs1=75, secs2=75):
     lii = LII(); lii.cbSize = ctypes.sizeof(LII); ctypes.windll.user32.GetLastInputInfo(ctypes.byref(lii))
     idle = (ctypes.windll.kernel32.GetTickCount() - lii.dwTime) / 1000.0
     need = float(os.environ.get('W197_IDLE_S', '1200'))
-    tag = 'real.%s' % mode
+    tag = ('stab.%s' if stab else 'real.%s') % mode
     g = gi.Game('wo197-real-%s' % time.strftime('%H%M%S'))
     if idle < need or not gi.foreground_is_game(g.pids):
         res = {'scenario': 'real', 'skipped': True, 'idle_s': idle, 'game_in_front': gi.foreground_is_game(g.pids)}
@@ -404,8 +404,17 @@ def real_sitting(mode='after', secs1=75, secs2=75):
     time.sleep(2.5)   # the sword drawn the game's own way first (the draw key alone left the first sitting bare-handed)
     live.lua(arm_npc); time.sleep(1)
     live.lua(attack)
-    live.cmd('mp_w178_trace %d' % int(secs1 + secs2 + 30))
+    live.cmd('mp_w178_trace %d' % int(auto_s + secs1 + secs2 + 30))
     script = []
+    if auto_s:   # B1 follow-up: first the engine fights for this player with the sword drawn (WO-154's hostfight lever; no input at all)
+        live.cmd('mp_w154_check hostfight %s %d' % (npc, min(250, auto_s)))
+        t_end, last = time.time() + auto_s, time.time()
+        while time.time() < t_end:
+            time.sleep(1)
+            if time.time() - last > 12: live.lua(attack); last = time.time()
+        live.cmd('mp_w154_check hostfight off')
+        script.append('auto %d s' % auto_s)
+        time.sleep(2)
     try:
         g.front(settle_s=3.0)   # the game's own window restored and in front (it alone is touched), then aimed
         if not gi.foreground_is_game(g.pids): raise gi.NotFocused('the game did not come to the front')
@@ -415,13 +424,24 @@ def real_sitting(mode='after', secs1=75, secs2=75):
         t_end = time.time() + secs1
         k, last = 0, time.time()
         dirs = ((-60, 0), (60, 0), (0, -50), (0, 50), (-40, -40), (40, -40))
+        # B1 follow-up: the game's failed-attack rows are all stabs (attack zone 5, the bottom of the cursor); the down-move above never
+        # selected it, so the stab sitting steps the cursor down in several moves of growing size right before each click
+        downs = (3, 5, 8, 12)
         while time.time() < t_end:   # attack into its guard from six directions; now and then hold the block (the shield window)
+            if stab:
+                n = downs[k % len(downs)]
+                for _ in range(n): g.move(0, 40); time.sleep(0.015)
+                time.sleep(0.08); g.click('left', 90); script.append('stab %d' % n); time.sleep(1.8)
+                k += 1
+                if time.time() - last > 12: live.lua(attack); last = time.time()
+                continue
             dx, dy = dirs[k % len(dirs)]
             g.move(dx, dy); time.sleep(0.12); g.click('left', 90); script.append('attack'); time.sleep(1.6)
             if k % 4 == 3:
                 g.button('right', True); time.sleep(1.4); g.button('right', False); script.append('block'); time.sleep(0.6)
             k += 1
             if time.time() - last > 12: live.lua(attack); last = time.time()
+        if stab: secs2 = 0
         g.tap('1', 120); time.sleep(2.5); script.append('holster')
         live.lua('local e = System.GetEntityByName("%s"); if e then pcall(function() e.human:HolsterToInventory(0, false) end); '
                  'pcall(function() e.human:HolsterToInventory(1, false) end) end' % npc)
@@ -462,9 +482,14 @@ def real_sitting(mode='after', secs1=75, secs2=75):
            'out': len(out_rows), 'out_kinds': {k: sum(1 for l in out_rows if 'kind=%s ' % k in l) for k in ('Attack', 'BlockImpulse', 'Dodge', 'AvatarHit', 'AvatarRecoil', 'AvatarClinch')},
            'back': sum(1 for l in ag if 'MP-SWING hop=recv' in l) + sum(1 for l in ag if 'section=inbound' in l and ('AvatarRecoil' in l or 'AvatarClinch' in l or 'AvatarHit' in l)),
            'recoil_native': [l.strip()[15:260] for l in nat if 'WO197-RECOIL' in l][:20],
+           'blows': [l.strip()[15:330] for l in nat if 'WO197-B1BLOW' in l][:40],
+           'out_zones': {z: sum(1 for l in out_rows if 'kind=Attack ' in l and 'zone=%s ' % z in l) for z in ('Head', 'UpperLeft', 'UpperRight', 'Lower')},
+           'out_recoils': [l[:300] for l in out_rows if 'kind=AvatarRecoil' in l][:20],
+           'hosthit': {o: sum(1 for l in nat if 'WO176-HOSTHIT' in l and 'outcome=%s ' % o in l) for o in ('hit', 'blocked', 'pb')},
            'clinch_native': [l.strip()[15:260] for l in nat if 'WO197-CLINCH' in l][:20],
            'rowdump': [l.strip()[15:420] for l in nat if 'WO197-ROWDUMP' in l][:4],
            'in': [l[:300] for l in ag if 'section=inbound' in l and ('AvatarRecoil' in l or 'AvatarClinch' in l)][:20],
+           'figure_failed_rows': [l.strip()[15:300] for l in nat if 'role=figure' in l and 'scope=FullBody' in l and 'FailedAttack' in l][:10],
            'pb_slots': sum(1 for l in kl if 'Perfect' in l and 'Slot started' in l),
            'faults': [l.strip()[15:200] for l in nat if ('FAULT' in l and 'FAULT-SUM' not in l) or 'switched OFF' in l][:10]}
     json.dump(res, open(os.path.join(Q.OUT, tag + '.json'), 'w'), indent=1)
@@ -505,6 +530,8 @@ if __name__ == '__main__':
     elif v in ('echosword', 'echofists'): echo_run(v[4:], secs=70, mode=sys.argv[2] if len(sys.argv) > 2 else 'after')
     elif v == 'hostauto': hostauto(int(sys.argv[2]) if len(sys.argv) > 2 else 150)
     elif v == 'real': real_sitting(sys.argv[2] if len(sys.argv) > 2 else 'after')
+    elif v == 'stab': real_sitting(sys.argv[2] if len(sys.argv) > 2 else 'after', secs1=int(sys.argv[3]) if len(sys.argv) > 3 else 75, secs2=0,
+                                   stab=True, auto_s=int(sys.argv[4]) if len(sys.argv) > 4 else 60)
     elif v == 'creplay': c_replay(sys.argv[2] if len(sys.argv) > 2 else 'after')
     elif v == 'b5duel':   # B0 / B5: the copy duel with the duel trace on (WO178-TRACE act=, WO190-TAKEOVER director=, WO190-ANIM dir=)
         import run190
