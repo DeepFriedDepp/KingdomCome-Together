@@ -1432,6 +1432,32 @@ Evidence: `docs/WO-177-findings.md`. **Type `mark_odd` at every miss.**
      ... -> ok`, later `host-dup` if the host's screen made one.
 348. **Type `mark_odd` at every miss.** Switches (all on): `mp_dead_release`, `mp_stealth_witness`, `mp_body_loot_host`.
 
+## WO-195B — sneaking, locks, takedowns and thieving the way single player has them (the next build)
+
+Both of you play it at night, one session. The joiner does each of these as he would alone; the host stays out of the way (not in front of
+the people, not noisy), then checks the result. At the end both say, for each item, whether it felt like single player. Evidence:
+`docs/WO-195B-findings.md`.
+
+349. **The joiner sneaks past people at night.** Night, no torch. The joiner crouches and walks slowly into a house where people sleep and
+     where others are awake, and out again; then does the same standing up and running past the same people. Crouching and slow: nobody wakes
+     or reacts, no guard comes. Standing and running: those near him wake or turn and react, as they would for the host's own Henry. Host
+     `kcd.log`, per person near him: `WO195-WITNESS ... vib=<his visibility> noise=<his 2 s footstep peak> ... counted=seen|heard|woken` or
+     `ignored=asleep|far|unseen`; a woken sleeper also has `WO195-WAKE sound=3` and gets up. Still beside a sleeper: `noise=0.00 ... ignored=asleep`.
+350. **The joiner picks a lock and opens a door and a chest with a key.** The joiner picks a locked chest, and a locked door, and opens one more
+     with a key he owns. Afterwards, on the host: the same chest and door are open with no lockpick prompt. The host saves (Home) and
+     reloads: both are still unlocked, and a lock the joiner did not touch is still locked. Lines: host `WO195B-CHEST ask from <n> ...
+     unlocked (match=name)`, `WO151-DOOR ask from <n> ... unlock=true: applied`. Picked in front of someone awake: they react as they would
+     to the host.
+351. **The joiner takes someone down.** From behind and crouching, the joiner knocks out an awake person (the game's takedown). On the host
+     the person drops unconscious (not dead), lies a few minutes, and gets up on his own, as in single player. Seen by someone, a crime is
+     raised against the joiner (and, in joint mode, the host); unseen, none. Lines: host `WO135-TAKEDOWN host ... done`, `WO135-KOWAKE
+     npc=<it> in=<s>`, then `... it gets up`; `WO139-JUDGE ... witnesses=<n>`.
+352. **The joiner pickpockets in the dark.** The joiner pickpockets a villager from behind, crouching, at night: it works and nobody reacts.
+     Then face to face in the light: the villager notices and it is a crime. Lines: host `WO195-PICK src=<n> npc=<it>`, then `WO139-JUDGE ...
+     witnesses=0 ... nobody saw it` or `witnesses=1 ... a crime in this world`.
+353. **Did it feel like single player?** Both: for each of 349 .. 352, say yes or no, and what felt wrong. Type `mark_odd` at every miss.
+     Switches (all on): `mp_stealth_witness`, `mp_wake_engine`, `mp_chest_sync`.
+
 ## Logs to send afterwards
 
 Both machines: Report a bug in the launcher. Since 0.48.9 it collects the current launch by default as a small file (or a few numbered

@@ -228,6 +228,32 @@ do -- (d) the host performs a joiner's takedown with the joiner's avatar
     check("d: no Lua errors", #ERRS == 0, ERRS[1])
 end
 
+do -- (d2) WO-195B 2b: the knockout the fallback applies (the plain buff has no depth) is followed by the game's own wake
+    reset(); clearLog(); NOW = 550; TIMERS = {}
+    local av = mkEntity("kcd2mp_1", 1, 0, 0); ENTS["kcd2mp_1"] = av
+    KCD2MP.ghosts[1] = { entity = av }
+    local g = mkEntity("ttkc_man_10", 2, 0, 0); ENTS["ttkc_man_10"] = g
+    local buffs = {}
+    g.soul.AddBuff = function(_, guid)
+        buffs[#buffs + 1] = guid
+        if guid == "f8d60fe4-e2c1-420a-946a-213e1cd09264" then g.ko = true end
+        if guid == "bd22f98a-e61f-4d83-b39c-79d1d85b6b91" then g.ko = false end
+    end
+    g.soul.GetDerivedStat = function(_, n) return n == "ufo" and 1.6 or nil end
+    av.actor.RequestKnockOut = function() end
+    KCD2MP_W135HostTakedown(1, 14, "ttkc_man_10", "knockout"); fireTimers()
+    check("d2: the avatar's knockout did not take: the buff is applied directly (he is knocked out, not dead)", logCount("applied directly") == 1 and g.ko == true and g.dead == false)
+    do   -- the clock: only what is due within 2 s (the result check), the 17 s wake stays armed
+        local t = TIMERS; TIMERS = {}
+        for _, x in ipairs(t) do if x.ms <= 2000 then pcall(x.f) else TIMERS[#TIMERS + 1] = x end end
+    end
+    check("d2: ...and the joiner is told ok", logCount("w135_tdres 1 14 ok") == 1)
+    check("d2: ...and the wake is armed from the game's own numbers (depth 400 / fade-out 1.6 = 250 game s, 17 s at x15)", logCount("WO135-KOWAKE npc=ttkc_man_10 in=17 s") == 1, logCount("WO135-KOWAKE"))
+    fireTimers()
+    check("d2: when it fires the game's remove_unconsciousness stands him up (not dead)", g.ko == false and g.dead == false and logCount("it gets up") == 1)
+    check("d2: no Lua errors", #ERRS == 0, ERRS[1])
+end
+
 do -- (e) a ragdolled avatar is stood up (host)
     reset(); clearLog(); NOW = 600
     local av = mkEntity("kcd2mp_3", 1, 0, 0); ENTS["kcd2mp_3"] = av

@@ -806,6 +806,7 @@ function KCD2MP_EmitTick()
     pcall(KCD2MP_PollWeaponDrawn)   -- WO-39: throttled internally to 5 Hz
     pcall(KCD2MP_PollBedNear)       -- WO-39 Phase 8: throttled internally to 1 Hz
     if KCD2MP_QuestProximityTick then pcall(KCD2MP_QuestProximityTick) end  -- WO-94: throttled internally to 1 Hz
+    if KCD2MP_W195PollNoise then pcall(KCD2MP_W195PollNoise) end            -- WO-195B: the joiner's noise peak, throttled internally to 5 Hz
 end
 
 -- intervalMs is optional; the agent passes its configured rate.
@@ -6643,6 +6644,31 @@ do
         return w135_down(e) or w135_dead(e)
     end
 
+    -- WO-195B 2b: the game's own knockout (depth StealthKnockOutUnconsciousDepthBase, 400) fades at the NPC's own fade-out speed (its derived stat
+    -- ufo, 1.6 here) and the NPC gets up; the plain `unconscious` buff the fallback applies carries no depth and never ends by itself (live: the
+    -- knocked-out guard lay for 2.5 game hours). So the fallback arms the same wake: after depth / ufo game seconds (in real seconds: / the clock
+    -- ratio) the game's remove_unconsciousness buff, which stood the guard up at once (live).
+    --   WO135-KOWAKE npc=<n> in=<real s> (depth/ufo game s)
+    local W135_WAKE_BUFF = "bd22f98a-e61f-4d83-b39c-79d1d85b6b91"
+    local function w135_wake_later(name)
+        local e = w135_body(name)
+        local ufo, ratio = 1.6, 15
+        pcall(function() ufo = tonumber(e.soul:GetDerivedStat("ufo")) or 1.6 end)
+        pcall(function() ratio = tonumber(Calendar.GetWorldTimeRatio()) or 15 end)
+        if not (ufo and ufo > 0) then ufo = 1.6 end
+        if not (ratio and ratio > 0) then ratio = 15 end
+        local gameS = 400 / ufo
+        local realS = math.max(5, gameS / ratio)
+        mp_log(string.format("WO135-KOWAKE npc=%s in=%.0f s (%.0f game s: depth 400 / fade-out %.2f, clock x%.0f)", tostring(name), realS, gameS, ufo, ratio))
+        Script.SetTimer(math.floor(realS * 1000), function()
+            local e2 = w135_body(name)
+            if e2 and e2.soul and not w135_dead(e2) and w135_down(e2) then
+                pcall(function() e2.soul:AddBuff(W135_WAKE_BUFF) end)
+                mp_log(string.format("WO135-KOWAKE npc=%s -> the game's remove_unconsciousness: it gets up", tostring(name)))
+            end
+        end)
+    end
+
     function KCD2MP_W135HostTakedown(src, tok, name, kind)
         local w = KCD2MP.w135
         w.stats.tdHost = w.stats.tdHost + 1
@@ -6676,6 +6702,7 @@ do
                 -- The engine's result, directly.
                 if kind == "knockout" then
                     pcall(function() e2.soul:AddBuff(W135_UNCONSCIOUS) end)
+                    w135_wake_later(name)
                 else
                     local hp = 100
                     pcall(function() hp = e2.soul:GetState("health") or 100 end)
@@ -17155,6 +17182,9 @@ function KCD2MP_W134HostTake(peer, tok, name, cls, amt, hp, screen)
     else verdict = W134.goneWhy(tostring(name), tostring(cls), tostring(peer), have) end
     if e then W134.noteCounts(tostring(name), e) end
     w.stats.hostTakes = w.stats.hostTakes + 1
+    -- WO-195B 2d: an item out of a LIVING NPC is a pickpocket: the host's own witness rule (the victim's eyes and ears included) says whether it
+    -- was noticed -- the same way it judges every other crime of the joiner, so the odds are the host's world's, not the paused copy's
+    if verdict == "ok" and e and KCD2MP_W195PickJudge then pcall(KCD2MP_W195PickJudge, peer, tostring(name), e) end
     KCD2MP_EmitEvent("w134_tres", string.format("%s %s %s %s %s %d", tostring(peer), tostring(tok), verdict, tostring(name), tostring(cls), amt))
     W134.log(string.format("WO134-BODY host-take npc=%s cls=%s amt=%d from=%s -> %s (had %d)", tostring(name), tostring(cls), amt, tostring(peer), verdict, have))
     if e then w.bodySig[tostring(name)] = nil end   -- the next watch pass sends the new state to every joiner
@@ -19653,21 +19683,25 @@ function W139.onDuty(e)
     return g
 end
 
--- Does npc see the target (an entity, or a point when target is nil)?
-function KCD2MP_W139Sees(npc, target, tp, maxM)
+-- Degrees between the NPC's facing and the direction to the point (horizontal); nil when its facing does not read.
+function KCD2MP_W139AngleTo(npc, tp)
+    local np = W139.pos(npc)
+    if not (np and tp) then return nil end
+    local dx, dy = tp.x - np.x, tp.y - np.y
+    local fwd = nil
+    pcall(function() fwd = npc:GetDirectionVector(1) end)
+    if not fwd then return nil end
+    local fl = math.max(0.01, math.sqrt(fwd.x * fwd.x + fwd.y * fwd.y))
+    local dot = (fwd.x * dx + fwd.y * dy) / (fl * math.max(0.01, math.sqrt(dx * dx + dy * dy)))
+    return math.deg(math.acos(math.max(-1, math.min(1, dot))))
+end
+
+-- Is the line from the NPC's eyes to the target (an entity, or a point when target is nil) free of anything solid?
+function KCD2MP_W139Los(npc, target, tp)
     local np = W139.pos(npc)
     if not (np and tp) then return false end
     local dx, dy, dz = tp.x - np.x, tp.y - np.y, (tp.z + 1.2) - (np.z + 1.6)
     local d = math.sqrt(dx * dx + dy * dy + dz * dz)
-    if d > (maxM or KCD2MP.w139.sightM) then return false end
-    if d > 2.0 then
-        local fwd = nil
-        pcall(function() fwd = npc:GetDirectionVector(1) end)
-        if fwd then
-            local dot = (fwd.x * dx + fwd.y * dy) / math.max(0.01, math.sqrt(dx * dx + dy * dy))
-            if dot < -0.25 then return false end   -- behind it (a wide ~210 degree field)
-        end
-    end
     local hits = nil
     pcall(function() hits = Physics.RayWorldIntersection({ x = np.x, y = np.y, z = np.z + 1.6 }, { x = dx, y = dy, z = dz }, 1, ent_all, npc.id) end)
     if type(hits) ~= "table" or #hits == 0 then return true end
@@ -19676,6 +19710,25 @@ function KCD2MP_W139Sees(npc, target, tp, maxM)
     pcall(function() hitE = h.entity end)
     if target and hitE == target then return true end
     return (tonumber(h.dist) or 0) >= d - 0.5
+end
+
+-- Does npc see the target (an entity, or a point when target is nil)? In its field of view (halfDeg: its own fov stat; nil = the old wide
+-- field), within maxM, with a clear line; anyone within closeM sees him whichever way it looks.
+function KCD2MP_W139Sees(npc, target, tp, maxM, halfDeg, closeM)
+    local np = W139.pos(npc)
+    if not (np and tp) then return false end
+    local dx, dy, dz = tp.x - np.x, tp.y - np.y, (tp.z + 1.2) - (np.z + 1.6)
+    local d = math.sqrt(dx * dx + dy * dy + dz * dz)
+    if d > (maxM or KCD2MP.w139.sightM) then return false end
+    if d > (closeM or 2.0) then
+        local ang = KCD2MP_W139AngleTo(npc, tp)
+        if ang then
+            if halfDeg then
+                if ang > halfDeg then return false end   -- WO-195B: outside the NPC's own field of view
+            elseif ang > 104.4775 then return false end   -- behind it (a wide ~210 degree field; dot < -0.25)
+        end
+    end
+    return KCD2MP_W139Los(npc, target, tp)
 end
 
 function W139.aliveAwake(e)
@@ -19692,17 +19745,18 @@ end
 -- sleeper (IsSleeping, or lying on its bed in the host's own activity read) never sees him. Every judged NPC is logged (WO195-WITNESS).
 function KCD2MP_W139Witnesses(avatar, tp, victimName, ctx, id)
     local w = KCD2MP.w139
+    local w195 = ctx ~= nil and KCD2MP.w195 and KCD2MP.w195.stealthWitness and KCD2MP_W195Witness ~= nil
     local ents = {}
-    pcall(function() ents = System.GetEntitiesInSphere(tp, w.sightM) or {} end)
+    -- WO-195B: the engine's reach is the NPC's own view radius (up to ~29 m for an alerted one), so the rule gathers farther
+    pcall(function() ents = System.GetEntitiesInSphere(tp, w195 and math.max(w.sightM, KCD2MP.w195.P.gatherM) or w.sightM) or {} end)
     local n, guards, gnames, settlement, civ = 0, 0, {}, nil, nil
     local cnames = {}   -- WO-151: the witnesses who are not guards (joint mode plants in them when no guard saw it)
-    local w195 = ctx ~= nil and KCD2MP.w195 and KCD2MP.w195.stealthWitness and KCD2MP_W195Witness ~= nil
     local env, sight, noise, word = nil, w.sightM, 0, "day"
     local lines = { n = 0 }
     if w195 then
         KCD2MP.w195.stats.judged = KCD2MP.w195.stats.judged + 1
         env = KCD2MP_W195Env(tp)
-        sight, noise, word = KCD2MP_W195Radii(ctx, env, w.sightM)
+        sight, noise, word = KCD2MP_W195Radii(ctx, env, KCD2MP.w195.P.baseM)
     end
     for _, e in ipairs(ents) do
         local alive = true
@@ -19765,6 +19819,9 @@ function KCD2MP_W139HostJudge(src, id, kind, x, y, z, victim, item, where, steal
     local ctx = nil
     if KCD2MP.w195 and KCD2MP.w195.stealthWitness and KCD2MP_W195ParseStealth then
         ctx = KCD2MP_W195ParseStealth(stealth)
+        -- WO-195B 2b: no stealth field (a takedown, which carries none; a 0.60.9 joiner): what this world sees of his figure -- its stance,
+        -- its pace and its torch -- is his stealth
+        if not ctx.known and KCD2MP_W195AvatarCtx then ctx = KCD2MP_W195AvatarCtx(src) or ctx end
         if not ctx.light and KCD2MP.w136 and KCD2MP.w136.avatarTorch and KCD2MP.w136.avatarTorch[tostring(src)] then ctx.light = true end   -- his figure's torch here
     end
     local n, guards, gnames, settlement, civ, cnames = KCD2MP_W139Witnesses(target, tp, victim, ctx, id)
@@ -29370,26 +29427,31 @@ System.AddCCommand("mp_fader_bound", 'KCD2MP_W191SetFaderBound(%line)', "WO-191:
 KCD2MP.w195 = KCD2MP.w195 or { deadRelease = true, stealthWitness = true, bodyLootHost = true,
     asleep = {},          -- host: NPC name -> true while the host's own activity read (WO-141) has it lying on its bed
     screenTaken = {},     -- host: body name -> { cls -> peer }: a loot-screen item a joiner took (the host's own copy of it is removed)
-    stealthSent = nil, stealthAt = -1e9,
+    stealthSent = nil, stealthAt = -1e9, peak = {}, noiseAt = -1e9, wakeEngine = true,
     stats = { judged = 0, counted = 0, ignored = 0, asleepIgnored = 0, heard = 0, woken = 0, screenItems = 0, screenTakes = 0, screenOk = 0,
               screenRefused = 0, hostDup = 0, stealthSent = 0, playerChecks = 0 } }
--- The witness scale. The game's own stealth numbers where it has one (Libs/Tables/rpg/rpg_param.xml), the mod's otherwise; every
--- number is in docs/WO-195-findings.md. A witness radius = sightM x the light factor x the skill factor:
---   light factor = clamp(1 + darkness + crouch + visibility, minFactor, maxFactor)
---     darkness   = nightExterior (VisibilityDecrementNighttimeExterior) / dayInterior (VisibilityDecrementDaytimeInterior) /
---                  nightInterior, 0 by day outdoors or with a light in hand
---     crouch     = the mod's -0.5
---     visibility = (vis - visRef) x visSlope (the joiner's own derived stat "vis", 0 when unread: -99 on the wire)
---   skill factor = 1 - skillToRadius x skill / skillMax (StealthSkillToViewRadiusDecr)
--- A noise radius = (crouch and noiseCrouchM or noiseStandM) x clamp(noi / noiRef) x (1 - skillToNoise x skill / skillMax)
--- (StealthSkillToFootstepSoundMult): an awake NPC within it hears him wherever it looks; a sleeper within it wakes.
+-- The witness scale (WO-195B: the engine is the reference; docs/WO-195B-findings.md has the table). What the engine itself says:
+--   * Henry's own visibility is the derived stat "vib" (stance, light, the time of day, equipment and a lit spot are all in it:
+--     standing in daylight 1.19, crouching 0.69, standing at night -0.95; "vis" is no stat of this build, "con" is conspicuousness,
+--     which the game's suspicion formula uses, not its sight);
+--   * his footsteps are "fsm" (0.43 standing, 0.129 crouching); the instant "noi" stays 0 even while he walks;
+--   * an NPC's own view radius is its derived stat "vir" (awake 18.7 .. 21.4 m, 0 asleep) and its field of view "fov" (91 .. 100 deg);
+--   * a sleeper wakes for the engine's own movement sound (XGenAIModule.ProduceSound(3, pos, mult)) only within about 1.5 m at 1.0.
+-- A sight radius = the NPC's vir x clamp(1 + (vib - visRef) x visSlope, minFactor, maxFactor) x the skill factor (StealthSkillToViewRadiusDecr),
+-- inside the NPC's own field of view (anyone within closeM sees him whichever way it looks); a joiner whose vib does not read (a 0.60.9
+-- joiner) falls back to WO-195's darkness / crouch / light terms. A noise radius = noiseK x sqrt(the joiner's PEAK noise level over the last
+-- peakS seconds) (fsm x how fast he moves, walking = 1), 0 when he stands still: an awake NPC within it hears him wherever it looks, a sleeper
+-- within it wakes -- and the host then makes the engine's own sound so the sleeper really gets up (KCD2MP_W195Wake).
 KCD2MP.w195.P = KCD2MP.w195.P or {
-    nightExterior = -0.7, dayInterior = -0.3, nightInterior = -0.7, crouch = -0.5,
-    visRef = 1.0, visSlope = 0.5, noiRef = 1.0,
-    minFactor = 0.12, maxFactor = 1.3,
-    skillToRadius = 0.3, skillToNoise = 0.6, skillMax = 30,
-    noiseStandM = 4.0, noiseCrouchM = 0.6, noiseMin = 0.5, noiseMax = 1.6,
-    nightFrom = 21, nightTo = 5,
+    baseM = 20.0, visRef = 1.19, visSlope = 0.25, minFactor = 0.10, maxFactor = 1.35,
+    fovDeg = 100, fovPadDeg = 5, closeM = 0.6,
+    skillToRadius = 0.3, skillMax = 30,
+    nightExterior = -0.7, dayInterior = -0.3, nightInterior = -0.7, crouch = -0.5, visRefOld = 1.0, visSlopeOld = 0.5,
+    minFactorOld = 0.12, maxFactorOld = 1.3, nightFrom = 21, nightTo = 5,
+    noiseK = 1.5, noiseMaxM = 4.0,
+    peakS = 2.0, sampleS = 0.2, speedWalk = 1.8, speedMaxFactor = 2.5,
+    roofM = 6.0, gatherM = 32.0,
+    wakeSound = 3, wakeCooldownS = 4.0,
     maxLines = 16,
 }
 
@@ -29411,6 +29473,7 @@ end
 function KCD2MP_W195SetDeadRelease(arg) return KCD2MP_W195Switch("dead_release", "deadRelease", arg, "a copy that dies leaves every fight hold at once and falls the game's way") end
 function KCD2MP_W195SetStealth(arg) return KCD2MP_W195Switch("stealth_witness", "stealthWitness", arg, "the joiner's stealth and the dark count when the host's world judges his crimes; sleepers never witness") end
 function KCD2MP_W195SetBodyLoot(arg) return KCD2MP_W195Switch("body_loot_host", "bodyLootHost", arg, "a body's loot-screen key is the joiner's to take, once") end
+function KCD2MP_W195SetWakeEngine(arg) return KCD2MP_W195Switch("wake_engine", "wakeEngine", arg, "(host) a sleeper the witness rule wakes really wakes: the engine's own movement sound at the joiner's spot") end
 
 -- ---- 1: the joiner's own combat state after a copy's death (the agent asks 2 s after the release) -------------------------------
 function KCD2MP_W195PlayerCheck(npc, others)
@@ -29426,24 +29489,83 @@ function KCD2MP_W195PlayerCheck(npc, others)
 end
 
 -- ---- 2: stealth -------------------------------------------------------------------------------------------------------------------
+-- pure: one sample of the joiner's noise level = the game's footstep multiplier (stance and equipment) x how fast he moves (the
+-- walking pace = 1, capped), plus the instant noise stat when it reads. Standing still is 0 whatever he wears.
+function KCD2MP_W195NoiseLevel(fsm, noi, speed)
+    local P = KCD2MP.w195.P
+    local f = tonumber(fsm) or 0
+    if f < 0 then f = 0 end
+    local sp = math.max(0, math.min(P.speedMaxFactor, (tonumber(speed) or 0) / P.speedWalk))
+    return f * sp + math.max(0, tonumber(noi) or 0)
+end
+-- pure: the peak over the last peakS seconds (the instant value reads 0 whenever he stands still and spikes when he moves)
+function KCD2MP_W195PeakPush(pk, now, v)
+    local P = KCD2MP.w195.P
+    pk[#pk + 1] = { now, v }
+    local cut = now - P.peakS
+    while #pk > 0 and pk[1][1] < cut do table.remove(pk, 1) end
+end
+function KCD2MP_W195PeakGet(pk, now)
+    local cut = now - KCD2MP.w195.P.peakS
+    local m = 0
+    for i = 1, #pk do
+        if pk[i][1] >= cut and pk[i][2] > m then m = pk[i][2] end
+    end
+    return m
+end
+
+-- (functions, not top-level locals: the Lua 5.1 200-local cliff)
+function KCD2MP_W195Stat(n)
+    local v = nil
+    if player and player.soul and player.soul.GetDerivedStat then pcall(function() v = tonumber(player.soul:GetDerivedStat(n)) end) end
+    return v
+end
+
+-- Joiner, ~5 Hz from the emit tick: one sample of the noise level (his speed from his own positions) into the peak window.
+function KCD2MP_W195PollNoise()
+    local w = KCD2MP.w195
+    if not w.stealthWitness or not player then return end
+    local now = os.clock()
+    local dt = now - (w.noiseAt or -1e9)
+    if dt < w.P.sampleS then return end
+    w.noiseAt = now
+    local ok, p = pcall(function() return player:GetWorldPos() end)
+    if not (ok and p) then return end
+    local speed = 0
+    if w.lastPos and dt > 0 and dt < 1.0 then
+        speed = math.sqrt((p.x - w.lastPos.x) ^ 2 + (p.y - w.lastPos.y) ^ 2) / dt
+        if speed > 14 then speed = 0 end   -- a teleport or a load, not a step
+    end
+    w.lastPos = { x = p.x, y = p.y }
+    KCD2MP_W195PeakPush(w.peak, now, KCD2MP_W195NoiseLevel(KCD2MP_W195Stat("fsm"), KCD2MP_W195Stat("noi"), speed))
+end
+
 -- Joiner, once a second (the WO-139 session tick): this player's stealth, sent to the agent on a change (it rides every crime report).
+-- v = the game's own visibility (vib; a build that has only the old name "vis" is read too), n = the PEAK noise level of the last 2 s,
+-- s = conspicuousness, k = the stealth skill. The wire text is WO-195's, unchanged (a 0.60.9 peer reads the same fields).
 function KCD2MP_W195Stealth()
+    local w = KCD2MP.w195
     local crouch = KCD2MP.playerSneaking == true
     if not crouch then
         if player.GetStance then pcall(function() local s = player:GetStance(); if s == 2 or s == 3 then crouch = true end end) end
         if not crouch and player.actor and player.actor.bSneaking then crouch = true end
+        if not crouch then local f = KCD2MP_W195Stat("fsm"); if f and f > 0 and f < 0.25 then crouch = true end end   -- the footsteps are the crouch's (0.129)
     end
     local light = KCD2MP.w136 and KCD2MP.w136.torchLocal == true
     local function stat(n)
-        local v = nil
-        if player.soul and player.soul.GetDerivedStat then pcall(function() v = tonumber(player.soul:GetDerivedStat(n)) end) end
+        local v = KCD2MP_W195Stat(n)
         return v or -99   -- -99 = unread (a real stat may be negative)
     end
     local skill = -1
     if player.soul and player.soul.GetSkillLevel then pcall(function() skill = tonumber(player.soul:GetSkillLevel("stealth")) or -1 end) end
     local function f(v) return math.max(-98, math.min(999, v)) end
     local function g(v) return v == -99 and -99 or f(v) end
-    return string.format("c=%d,l=%d,v=%.2f,n=%.2f,s=%.2f,k=%d", crouch and 1 or 0, light and 1 or 0, g(stat("vis")), g(stat("noi")), g(stat("con")),
+    local vis = stat("vib")
+    if vis == -99 then vis = stat("vis") end
+    local noise = -99
+    if w.peak and #w.peak > 0 then noise = KCD2MP_W195PeakGet(w.peak, os.clock()) end
+    if noise == -99 then local n0 = KCD2MP_W195Stat("noi"); noise = n0 or -99 end
+    return string.format("c=%d,l=%d,v=%.2f,n=%.2f,s=%.2f,k=%d", crouch and 1 or 0, light and 1 or 0, g(vis), g(noise), g(stat("con")),
         math.max(-1, math.min(99, math.floor(skill))))
 end
 
@@ -29470,33 +29592,64 @@ function KCD2MP_W195ParseStealth(text)
     return c
 end
 
--- Host: the light at the spot (the game's own clock; the engine's indoor test).
+-- Host: the light at the spot (the game's own clock) and where he stands: the game's own interior state first (the engine's area label
+-- "interior"; System.IsPointIndoors read false beside a bed), then System.IsPointIndoors, then a roof within roofM above him.
 function KCD2MP_W195Env(tp)
     local P = KCD2MP.w195.P
     local t = 0
     if Calendar and Calendar.GetWorldTime then pcall(function() t = tonumber(Calendar.GetWorldTime()) or 0 end) end
     local hour = math.floor(t / 3600) % 24
     local night = hour >= P.nightFrom or hour < P.nightTo
-    local indoor = false
-    if System.IsPointIndoors then pcall(function() indoor = System.IsPointIndoors(tp) == true end) end
-    return { hour = hour, night = night, indoor = indoor }
+    local indoor, src, answered = false, "-", false
+    if XGenAIModule and XGenAIModule.IsPointInAreaWithLabel then
+        local ok, r = pcall(function() return XGenAIModule.IsPointInAreaWithLabel({ x = tp.x, y = tp.y, z = tp.z }, "interior") end)
+        if ok and r == true then indoor, src = true, "area" end
+        if ok and r ~= nil then answered = true end   -- the engine answered (a definite no is an answer: no roof guess over it; eaves and trees are everywhere)
+    end
+    if not indoor and System.IsPointIndoors then
+        local ok, r = pcall(function() return System.IsPointIndoors(tp) end)
+        if ok and r == true then indoor, src = true, "engine" end
+    end
+    if not indoor and not answered and Physics and Physics.RayWorldIntersection then
+        local ok, hits = pcall(function() return Physics.RayWorldIntersection({ x = tp.x, y = tp.y, z = tp.z + 1.7 }, { x = 0, y = 0, z = P.roofM }, 1, ent_all) end)
+        if ok and type(hits) == "table" and #hits > 0 then indoor, src = true, "roof" end
+    end
+    return { hour = hour, night = night, indoor = indoor, indoorSrc = src }
 end
 
--- The two radii for this crime (sight, noise) and the darkness word.
-function KCD2MP_W195Radii(ctx, env, base)
+function KCD2MP_W195Clamp(v, lo, hi) return math.max(lo, math.min(hi, v)) end
+
+-- pure: the factor on an NPC's view radius for this snapshot, and the word the log prints. His own vib when it reads (stance, light,
+-- time of day and equipment are in it); the old terms when it does not.
+function KCD2MP_W195SightFactor(ctx, env)
     local P = KCD2MP.w195.P
+    if ctx.vis > -99 then
+        return KCD2MP_W195Clamp(1 + (ctx.vis - P.visRef) * P.visSlope, P.minFactor, P.maxFactor), "vib"
+    end
     local dark, word = 0, "day"
     if env.indoor and env.night then dark, word = P.nightInterior, "interior-night"
     elseif env.indoor then dark, word = P.dayInterior, "interior"
     elseif env.night then dark, word = P.nightExterior, "night" end
     if ctx.light then dark = 0 end
-    local vis = ctx.vis > -99 and (ctx.vis - P.visRef) * P.visSlope or 0
-    local f = math.max(P.minFactor, math.min(P.maxFactor, 1 + dark + (ctx.crouch and P.crouch or 0) + vis))
-    local skill = math.max(0, math.min(P.skillMax, ctx.skill >= 0 and ctx.skill or 0))
+    return KCD2MP_W195Clamp(1 + dark + (ctx.crouch and P.crouch or 0), P.minFactorOld, P.maxFactorOld), word
+end
+
+-- pure: the two reaches of this joiner (m): sight for an NPC whose own view radius is `vir` (nil = the nominal one), and hearing.
+function KCD2MP_W195Reach(ctx, env, vir)
+    local P = KCD2MP.w195.P
+    local f, word = KCD2MP_W195SightFactor(ctx, env)
+    local skill = KCD2MP_W195Clamp(ctx.skill >= 0 and ctx.skill or 0, 0, P.skillMax)
+    local base = (vir and vir > 0) and vir or P.baseM
     local sight = base * f * (1 - P.skillToRadius * skill / P.skillMax)
-    local nf = ctx.noi > -99 and math.max(P.noiseMin, math.min(P.noiseMax, ctx.noi / P.noiRef)) or 1
-    local noise = (ctx.crouch and P.noiseCrouchM or P.noiseStandM) * nf * (1 - P.skillToNoise * skill / P.skillMax)
+    local lvl = ctx.noi > -99 and ctx.noi or 0
+    local noise = math.min(P.noiseMaxM, P.noiseK * math.sqrt(math.max(0, lvl)))   -- the engine's sound falls with the square of the distance
     return sight, noise, word
+end
+
+-- The two radii for this crime for the nominal NPC (sight, noise) and the darkness word.
+function KCD2MP_W195Radii(ctx, env, base)
+    local sight, noise, word = KCD2MP_W195Reach(ctx, env, nil)
+    return sight * (base or KCD2MP.w195.P.baseM) / KCD2MP.w195.P.baseM, noise, word
 end
 
 -- Host: KCD2MP_W195Asleep(name, on) -- the agent, from WO-141's capture of the host's own NPC (lying on its bed), on a change.
@@ -29505,13 +29658,60 @@ function KCD2MP_W195Asleep(name, on)
     return true
 end
 
--- 2a: asleep = the game says so (IsSleeping) or the host's own activity read has it lying on its bed. Returns asleep, how.
+-- 2a: asleep = the game says so (IsSleeping, the engine's crime_sleeping context) or the host's own activity read has it lying on its bed.
 function KCD2MP_W195IsAsleep(e, name)
     local s = false
     if e.human and e.human.IsSleeping then pcall(function() s = e.human:IsSleeping() == true end) end
     if s then return true, "IsSleeping" end
+    if e.soul and e.soul.HasScriptContext then pcall(function() s = e.soul:HasScriptContext("crime_sleeping") == true end) end
+    if s then return true, "context" end
     if name and KCD2MP.w195.asleep[name] then return true, "bed" end
     return false, "-"
+end
+
+-- Host: the joiner's stealth as this world sees his figure (no field came with the report): crouched when the figure is, its pace into the
+-- noise level (the engine's footstep multiplier of the stance: 0.129 crouched, 0.43 standing). nil without a figure. His visibility is not
+-- known here (-99): the darkness and crouch terms apply.
+function KCD2MP_W195AvatarCtx(src)
+    local g = KCD2MP.ghosts and (KCD2MP.ghosts[tostring(src)] or KCD2MP.ghosts[tonumber(src) or -1])
+    local st = g and g.istate
+    if not st then return nil end
+    local crouch = st.stance == "c"
+    local ctx = KCD2MP_W195ParseStealth("")
+    ctx.known, ctx.crouch = true, crouch
+    ctx.noi = KCD2MP_W195NoiseLevel(crouch and 0.129 or 0.43, 0, st.smoothedSpeed or 0)
+    return ctx
+end
+
+-- the NPC's own view radius and field of view (derived stats vir, fov); nil when they do not read
+function KCD2MP_W195NpcSight(e)
+    local vir, fov = nil, nil
+    if e.soul and e.soul.GetDerivedStat then
+        pcall(function() vir = tonumber(e.soul:GetDerivedStat("vir")) end)
+        pcall(function() fov = tonumber(e.soul:GetDerivedStat("fov")) end)
+    end
+    if vir and vir <= 0 then vir = nil end
+    if fov and (fov < 30 or fov > 360) then fov = nil end
+    return vir, fov
+end
+
+-- pure: one NPC against one snapshot of the joiner. s = { d (m), asleep, ang (deg between its facing and him, nil = unknown), los (a clear line),
+-- vir, fov (the NPC's own stats, nil = unread), ctx (his stealth), env }. Returns "woken" | "asleep" | "seen" | "heard" | "far" | "unseen",
+-- then the sight and noise reach (m) and the darkness word. Sight and noise are the engine's own numbers (see the block above).
+function KCD2MP_W195Verdict(s)
+    local P = KCD2MP.w195.P
+    local sight, noise, word = KCD2MP_W195Reach(s.ctx, s.env, s.vir)
+    local half = ((s.fov or P.fovDeg) / 2) + P.fovPadDeg
+    local v
+    if s.asleep then
+        v = (s.d <= noise) and "woken" or "asleep"
+    else
+        local inView = s.d <= sight and (s.d <= P.closeM or s.ang == nil or s.ang <= half)
+        if inView and s.los ~= false then v = "seen"
+        elseif s.d <= noise then v = "heard"
+        else v = (s.d > sight) and "far" or "unseen" end
+    end
+    return v, sight, noise, word
 end
 
 -- One NPC against the joiner's figure at tp: counted ("seen" / "heard" / "woken") or ignored (why), and the line.
@@ -29521,21 +29721,58 @@ function KCD2MP_W195Witness(e, name, avatar, tp, ctx, env, sight, noise, word, i
     if not np then return false end
     local d = math.sqrt((tp.x - np.x) ^ 2 + (tp.y - np.y) ^ 2 + (tp.z - np.z) ^ 2)
     local asleep, how = KCD2MP_W195IsAsleep(e, name)
-    local verdict, counted = nil, false
-    if asleep then
-        if d <= noise then verdict, counted = "counted=woken", true; w.stats.woken = w.stats.woken + 1
-        else verdict = "ignored=asleep"; w.stats.asleepIgnored = w.stats.asleepIgnored + 1 end
-    elseif d <= sight and KCD2MP_W139Sees(e, avatar, tp, sight) then verdict, counted = "counted=seen", true
-    elseif d <= noise then verdict, counted = "counted=heard", true; w.stats.heard = w.stats.heard + 1
-    else verdict = d > sight and "ignored=far" or "ignored=unseen" end
+    local vir, fov = KCD2MP_W195NpcSight(e)
+    local ang = KCD2MP_W139AngleTo(e, tp)
+    local los = true
+    if not asleep and d <= w.P.gatherM then los = KCD2MP_W139Los(e, avatar, tp) end
+    local v, nsight, nnoise, nword = KCD2MP_W195Verdict({ d = d, asleep = asleep, ang = ang, los = los, vir = vir, fov = fov, ctx = ctx, env = env })
+    local counted = (v == "woken" or v == "seen" or v == "heard")
+    local verdict
+    if v == "woken" then verdict = "counted=woken"; w.stats.woken = w.stats.woken + 1
+    elseif v == "asleep" then verdict = "ignored=asleep"; w.stats.asleepIgnored = w.stats.asleepIgnored + 1
+    elseif v == "seen" then verdict = "counted=seen"
+    elseif v == "heard" then verdict = "counted=heard"; w.stats.heard = w.stats.heard + 1
+    else verdict = "ignored=" .. v end
     if counted then w.stats.counted = w.stats.counted + 1 else w.stats.ignored = w.stats.ignored + 1 end
+    if v == "woken" then pcall(KCD2MP_W195Wake, tp, nnoise) end
     if lines.n < KCD2MP.w195.P.maxLines then
         lines.n = lines.n + 1
-        mp_log(string.format("WO195-WITNESS id=%s npc=%s dist=%.1f asleep=%d%s lit=%d dark=%s crouch=%d sight_m=%.1f noise_m=%.1f %s",
-            tostring(id), tostring(name), d, asleep and 1 or 0, asleep and ("(" .. how .. ")") or "", ctx.light and 1 or 0, word, ctx.crouch and 1 or 0,
-            sight, noise, verdict))
+        mp_log(string.format("WO195-WITNESS id=%s npc=%s dist=%.1f asleep=%d%s lit=%d dark=%s indoor=%s crouch=%d vib=%.2f noise=%.2f vir=%s fov=%s ang=%s los=%d sight_m=%.1f noise_m=%.1f %s",
+            tostring(id), tostring(name), d, asleep and 1 or 0, asleep and ("(" .. how .. ")") or "", ctx.light and 1 or 0, nword, env.indoorSrc or "-",
+            ctx.crouch and 1 or 0, ctx.vis, ctx.noi, tostring(vir), tostring(fov), ang and string.format("%.0f", ang) or "-", los and 1 or 0, nsight, nnoise, verdict))
     end
     return counted
+end
+
+-- 2d: the joiner took something out of a living NPC (a pickpocket). Judged as his theft at the victim's spot by the stealth rule.
+--   WO195-PICK src=<n> npc=<victim> -> judged | skipped (<why>)
+function KCD2MP_W195PickJudge(peer, name, e)
+    local w = KCD2MP.w195
+    if not w.stealthWitness then return false end
+    local alive = true
+    pcall(function() alive = not e.actor:IsDead() end)
+    if not alive then return false end   -- a body: the loot rules, not a pickpocket
+    local p = W139.pos(e)
+    if not p then return false end
+    w.stats.picks = (w.stats.picks or 0) + 1
+    mp_log(string.format("WO195-PICK src=%s npc=%s -> judged at the victim's spot by the witness rule", tostring(peer), tostring(name)))
+    KCD2MP_W139HostJudge(peer, 0, "theft", p.x, p.y, p.z, name, "-", "body", nil)
+    return true
+end
+
+-- 2c: a sleeper the rule says woke really wakes: the engine's own movement sound at the joiner's spot (the game's hearing wakes it and
+-- it gets up, reacts or searches the way it does for the host's own Henry). Rate-limited; every call is logged.
+function KCD2MP_W195Wake(tp, noise)
+    local w = KCD2MP.w195
+    if not (w.wakeEngine and XGenAIModule and XGenAIModule.ProduceSound) then return false end
+    local now = os.clock()
+    if (now - (w.wakeAt or -1e9)) < w.P.wakeCooldownS then return false end
+    w.wakeAt = now
+    local ok, err = pcall(function() return XGenAIModule.ProduceSound(w.P.wakeSound, { x = tp.x, y = tp.y, z = tp.z }, 1.0) end)
+    w.stats.wakeSounds = (w.stats.wakeSounds or 0) + 1
+    mp_log(string.format("WO195-WAKE sound=%d at=(%.1f,%.1f,%.1f) noise_m=%.2f -> %s -- the engine's own hearing wakes the sleeper", w.P.wakeSound, tp.x, tp.y, tp.z,
+        noise or 0, ok and "ok" or ("FAILED " .. tostring(err))))
+    return ok
 end
 
 -- ---- 3: the loot screen's own item ------------------------------------------------------------------------------------------------
@@ -29590,6 +29827,8 @@ function KCD2MP_W195Status()
     mp_log(string.format("WO195-STATUS dead_release=%s stealth_witness=%s body_loot_host=%s judged=%d counted=%d ignored=%d asleep_ignored=%d heard=%d woken=%d asleep_known=%d stealth_sent=%d last=%s screen_items=%d screen_takes=%d screen_ok=%d screen_refused=%d host_dup=%d player_checks=%d",
         w.deadRelease and "on" or "off", w.stealthWitness and "on" or "off", w.bodyLootHost and "on" or "off", s.judged, s.counted, s.ignored, s.asleepIgnored,
         s.heard, s.woken, n, s.stealthSent, tostring(w.stealthSent), s.screenItems, s.screenTakes, s.screenOk, s.screenRefused, s.hostDup, s.playerChecks))
+    mp_log(string.format("WO195B-STATUS wake_engine=%s wake_sounds=%d peak_noise=%.2f peak_samples=%d noise_k=%.2f vis_slope=%.2f", w.wakeEngine and "on" or "off", s.wakeSounds or 0,
+        KCD2MP_W195PeakGet(w.peak, os.clock()), #w.peak, w.P.noiseK, w.P.visSlope))
     KCD2MP_EmitEvent("w195_status", "1")
     return true
 end
@@ -29597,6 +29836,7 @@ end
 System.AddCCommand("mp_dead_release", 'KCD2MP_W195SetDeadRelease(%line)', "WO-195: (joiner) an enemy that dies leaves the fight at once and falls, and your combat state ends with it (default on): mp_dead_release on|off")
 System.AddCCommand("mp_stealth_witness", 'KCD2MP_W195SetStealth(%line)', "WO-195: (both) sneaking, the dark and your stealth count when the host's world judges your crimes; sleeping people never see you (default on): mp_stealth_witness on|off")
 System.AddCCommand("mp_body_loot_host", 'KCD2MP_W195SetBodyLoot(%line)', "WO-195: (both) the key you find on a body is yours to take, once (default on): mp_body_loot_host on|off")
+System.AddCCommand("mp_wake_engine", 'KCD2MP_W195SetWakeEngine(%line)', "WO-195B: (host) a sleeper the stealth rule wakes gets up the game's way -- the engine's own sound at the joiner's spot (default on): mp_wake_engine on|off")
 System.AddCCommand("mp_w195_status", 'KCD2MP_W195Status()', "WO-195: the dead-copy releases, the witness rule's counts, the loot-screen takes")
 
 -- 1: a copy the host's death left upright (the mod's ApplyDeath kills the soul with no death reaction: it stays frozen in the dead

@@ -387,6 +387,7 @@ do
     KCD2MP_W139Session(true, false, true)
     local guard = mkEntity("g_guard", 3, 0, 0)
     guard.ctx["crime_isAuthority"] = true
+    guard.GetDirectionVector = function() return { x = -1, y = 0, z = 0 } end   -- WO-195B: the rule has the NPC's own field of view: it faces the spot
     SPHERE = { guard }
     KCD2MP_W139HostJudge(1, 7, "lockpick", 0, 0, 0, "-", "-", "lock")
     local planted = 0

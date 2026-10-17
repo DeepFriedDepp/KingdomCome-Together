@@ -223,7 +223,7 @@ def j3(npc):
 
 def judge(spot, stealth, tag):
     k0 = S.klen()
-    live.lua('KCD2MP_W139HostJudge(1, %d, "trespass", %.2f, %.2f, %.2f, "-", "-", "area", "%s")' % (tag, spot[0], spot[1], spot[2], stealth))
+    live.lua('KCD2MP_W139HostJudge(1, %d, "theft", %.2f, %.2f, %.2f, "-", "-", "area", "%s")   -- WO-195B: a theft report (a trespass report is refused first where the host calls the spot not private)' % (tag, spot[0], spot[1], spot[2], stealth))
     time.sleep(1.5)
     return S.kcd_lines(r'WO139-JUDGE src=1 id=%d |WO195-WITNESS id=%d ' % (tag, tag), k0)
 
@@ -256,11 +256,16 @@ def h2(hours_wait=150):
     spot = (sx + 1.0, sy, sz)
     live.lua('local g=KCD2MP.ghosts and KCD2MP.ghosts["1"]; if g and g.entity then g.entity:SetWorldPos({x=%f, y=%f, z=%f}) end' % spot)
     time.sleep(1)
-    night = judge(spot, 'c=1,l=0,v=1.00,n=1.00,s=1.00,k=7', 951)
+    night = judge(spot, 'c=1,l=0,v=-1.45,n=0.00,s=0.10,k=7', 951)   # WO-195B: his own readings, crouching and still at night (vib, the 2 s noise peak, con)
     # noon, standing, a torch: the same spot, the same NPC (awake by day or not: the line says)
-    live.lua('local t=Calendar.GetWorldTime(); local d=math.floor(t/86400); Calendar.SetWorldTime(d*86400 + 12*3600)')
-    time.sleep(3)
-    noon = judge(spot, 'c=0,l=1,v=1.00,n=1.00,s=1.00,k=7', 952)
+    live.lua('local t=Calendar.GetWorldTime(); local d=math.floor(t/86400)+1; Calendar.SetWorldTime(d*86400 + 12*3600)')   # WO-195B: forward (the game ignores a set-back)
+    time.sleep(25)
+    # WO-195B: by day the same NPC is awake and up: the figure stands 2.5 m in front of it (its own facing)
+    pz = S.ask('local e=System.GetEntityByName("%s"); local f=e:GetDirectionVector(1); local q=e:GetWorldPos(); System.LogAlways(string.format("@TAG %%.3f %%.3f %%.3f %%.4f %%.4f", q.x,q.y,q.z,f.x,f.y))' % name, 'pz%d' % time.time_ns(), 4)
+    if pz:
+        qx, qy, qz, fx, fy = map(float, pz.split())
+        spot = (qx + fx * 2.5, qy + fy * 2.5, qz)
+    noon = judge(spot, 'c=0,l=1,v=1.19,n=0.00,s=0.60,k=7', 952)   # WO-195B: standing, lit, in daylight (vib 1.19)
     def w(lines, npc): return [l.strip()[:240] for l in lines if 'npc=%s ' % npc in l]
     jn = [l.strip()[:240] for l in night if 'WO139-JUDGE' in l]
     jd = [l.strip()[:240] for l in noon if 'WO139-JUDGE' in l]
