@@ -9,6 +9,7 @@ usage (W195B_SP = the rig; KCD2MP_INSTALL = the Modding Tools folder):
   python live195b.py c2c                sleepers: a walking figure beside one wakes it the game's way; a still one beside another does not
   python live195b.py c2d                pickpocket: from behind, crouching, nothing seen; face to face, a witness
   python live195b.py c2b                takedown: a knockout on a guard from behind: knocked out (not dead), judged, and it wakes later
+  python live195b.py c2w                WO-197: three more walking trials beside sleepers c2c did not use
   python live195b.py c2a                chest: a locked chest unlocked on the joiner's claim; saved; reloaded
 Results: <W195B_SP>/live195b.results.jsonl
 """
@@ -161,9 +162,31 @@ def c2b(npc='ttkc_man_5'):
     rec('c2b-wake', npc=npc, woke_after_real_s=woke)
 
 
+def c2w(skip=3, n=3):
+    """WO-197 Part D: more walking trials (n = 0.43, 0.7 m) beside sleepers c2c did not use; the engine's hearing wakes most, not all
+    (WO-195B: 81 % of its sounds)."""
+    ss = sleepers()[skip:skip + n]
+    say('sleepers:', [(s[0], round(s[5]), round(s[6])) for s in ss])
+    for i, s0 in enumerate(ss):
+        x, y, z = s0[5], s0[6], s0[7]
+        ox = x + 0.7
+        ghost_to(ox, y, z + 0.1)
+        live.lua('W195B_Go(%f,%f,%f,0)' % (x + 3.0, y, z + 0.3)); time.sleep(2.5)
+        before = flags([s0[0]]).get(s0[0])
+        lines, k0 = judge('theft', (ox, y, z), 'c=0,l=0,v=-0.95,n=0.43,s=0.60,k=7', 970 + i)
+        time.sleep(8)
+        after = flags([s0[0]]).get(s0[0])
+        moved = None
+        if before and after: moved = round(math.hypot(after[1] - before[1], after[2] - before[2]) + abs(after[3] - before[3]), 2)
+        wit = [l.strip()[:300] for l in lines if 'WO195-WITNESS' in l and s0[0] in l]
+        wake = [l.strip()[:200] for l in lines if 'WO195-WAKE' in l]
+        rec('c2w', npc=s0[0], was_asleep=before[0] if before else None, asleep_after=after[0] if after else None, moved_m=moved, witness=wit, wake=wake)
+
+
 if __name__ == '__main__':
     v = sys.argv[1]
     if v == 'up': up()
     elif v == 'c2c': c2c()
+    elif v == 'c2w': c2w()
     elif v == 'c2d': c2d(*sys.argv[2:3])
     elif v == 'c2b': c2b(*sys.argv[2:3])

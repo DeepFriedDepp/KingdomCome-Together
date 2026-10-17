@@ -400,7 +400,8 @@ def real_sitting(mode='after', secs1=75, secs2=75):
                'pcall(function() e.human:DrawFromInventory(id, 0, true) end) end end' % (npc, P.SWORD, P.SWORD))
     live.lua(spawn); time.sleep(2)
     live.lua('pcall(function() player.inventory:CreateItem("%s", 1, 1) end); local ok, id = pcall(function() return player.inventory:FindItem("%s") end); '
-             'if ok and id then pcall(function() player.actor:EquipInventoryItem(id) end) end' % (P.SWORD, P.SWORD))
+             'if ok and id then pcall(function() player.actor:EquipInventoryItem(id) end); pcall(function() player.human:DrawFromInventory(id, 0, true) end) end' % (P.SWORD, P.SWORD))
+    time.sleep(2.5)   # the sword drawn the game's own way first (the draw key alone left the first sitting bare-handed)
     live.lua(arm_npc); time.sleep(1)
     live.lua(attack)
     live.cmd('mp_w178_trace %d' % int(secs1 + secs2 + 30))
@@ -410,7 +411,7 @@ def real_sitting(mode='after', secs1=75, secs2=75):
         if not gi.foreground_is_game(g.pids): raise gi.NotFocused('the game did not come to the front')
         g.aim()
         if not P.drawn(): g.tap('1', 120); time.sleep(2.0)
-        script.append('drawn')
+        script.append('drawn' if P.drawn() else 'NOT drawn')
         t_end = time.time() + secs1
         k, last = 0, time.time()
         dirs = ((-60, 0), (60, 0), (0, -50), (0, 50), (-40, -40), (40, -40))

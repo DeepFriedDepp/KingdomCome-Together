@@ -23544,6 +23544,11 @@ do
     function KCD2MP_W197SetClinch(arg) return KCD2MP_W197Set("anim_clinch", arg) end
     function KCD2MP_W197SetKnockout(arg) return KCD2MP_W197Set("anim_knockout", arg) end
     function KCD2MP_W197SetGuardEngine(arg) return KCD2MP_W197Set("copy_guard_engine", arg) end
+    -- one argument each: a bare command expands %line to nothing (WO-106's placeholder rule)
+    function KCD2MP_W197SetSeats(arg) return KCD2MP_W197Set("anim_seats", arg) end
+    function KCD2MP_W197SetWork(arg) return KCD2MP_W197Set("anim_work", arg) end
+    function KCD2MP_W197SetRoutines(arg) return KCD2MP_W197Set("anim_routines", arg) end
+    function KCD2MP_W197Check(arg) return KCD2MP_EmitEvent("w197_check", tostring(arg or "")) end
 end   -- WO-197's do-block
 
 function KCD2MP_W166SetTalkResumeFirst(arg)
@@ -28629,11 +28634,11 @@ local ok, err = pcall(function()
     System.AddCCommand("mp_anim_clinch", 'KCD2MP_W197SetClinch(%line)', "WO-197: your clinches play both halves on your partner's screen -- the clinch guard and each clinch move (default on): mp_anim_clinch on|off")
     System.AddCCommand("mp_anim_knockout", 'KCD2MP_W197SetKnockout(%line)', "WO-197: knocked out in a brawl, your figure falls on your partner's screen and gets up when you do (default on): mp_anim_knockout on|off")
     System.AddCCommand("mp_copy_guard_engine", 'KCD2MP_W197SetGuardEngine(%line)', "WO-197: (joiner) an enemy copy's leftover swing ends the game's own way, back to its guard (default on): mp_copy_guard_engine on|off")
-    System.AddCCommand("mp_anim_seats", 'KCD2MP_W197Set("anim_seats", %line)', "WO-197: a partner or a copy sitting, lying in bed or getting up shows the same on your screen (default on): mp_anim_seats on|off")
-    System.AddCCommand("mp_anim_work", 'KCD2MP_W197Set("anim_work", %line)', "WO-197: work stations and minigames (grindstone, alchemy, smithing, digging) play on your partner's figure (default on): mp_anim_work on|off")
-    System.AddCCommand("mp_anim_routines", 'KCD2MP_W197Set("anim_routines", %line)', "WO-197: the host's people at work, sitting and gesturing play the same on your screen (default on): mp_anim_routines on|off")
+    System.AddCCommand("mp_anim_seats", 'KCD2MP_W197SetSeats(%line)', "WO-197: a partner or a copy sitting, lying in bed or getting up shows the same on your screen (default on): mp_anim_seats on|off")
+    System.AddCCommand("mp_anim_work", 'KCD2MP_W197SetWork(%line)', "WO-197: work stations and minigames (grindstone, alchemy, smithing, digging) play on your partner's figure (default on): mp_anim_work on|off")
+    System.AddCCommand("mp_anim_routines", 'KCD2MP_W197SetRoutines(%line)', "WO-197: the host's people at work, sitting and gesturing play the same on your screen (default on): mp_anim_routines on|off")
     System.AddCCommand("mp_w197_status", 'KCD2MP_W197Status()', "WO-197: the animation-sync release's switches and counters (MP-W197-STATS in agent.log)")
-    System.AddCCommand("mp_w197_check", 'KCD2MP_EmitEvent("w197_check", %line)', "WO-197 live checks: mp_w197_check ensure <copy> | syncguard <type> <master> <slave>")
+    System.AddCCommand("mp_w197_check", 'KCD2MP_W197Check(%line)', "WO-197 live checks: mp_w197_check ensure <copy> | syncguard <type> <master> <slave>")
     System.AddCCommand("mp_w187_status", 'KCD2MP_W187Status()', "WO-187: the fight switches and counters (MP-W187-STATS in agent.log)")
     System.AddCCommand("mp_w178_status", 'KCD2MP_W178Status(%line)', "WO-178: the save switches, the quicksave, the draw probe, and the DLL's hostility answer (through the agent): mp_w178_status")
     System.AddCCommand("mp_repair_combat", 'KCD2MP_W174Repair(%line)', "WO-174: frees stuck weapons -- clears partner-figure fight links, ends a stuck fight, re-equips a melee weapon -- and says so; on a save that was fine it changes nothing: mp_repair_combat")
