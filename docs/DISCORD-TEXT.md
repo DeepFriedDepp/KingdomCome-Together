@@ -25,6 +25,17 @@ How to play together (0.48.2):
 Nobody clicks CONNECT any more, and you don't need anyone's save file. First time ever starting the game? Start it once from Steam and accept its two first-run pages, then use the launcher.
 ```
 
+## The next build — story cutscenes together (WO-194)
+
+```
+Next build -- story cutscenes together:
+- Story cutscenes played in the game (the ones with "Skip part / Skip all") now play for both of you, at the same moment, the way story videos already do. Each game plays its own copy through its own quest, so both quests move on.
+- One skip skips it for both: a part or the whole scene, either of you.
+- After the scene both of you can move at once and stand where the story continues, next to each other. The joiner is no longer left in the cutscene view while the game waits for the host's people.
+- Nothing about a cutscene blocks a save any more.
+- Each piece has its own switch (mp_scene_ingame_shared, mp_scene_ingame_skip_both, ...), all on. Please type mark_odd at anything odd.
+```
+
 ## The next build — saves, simplified (WO-192)
 
 ```

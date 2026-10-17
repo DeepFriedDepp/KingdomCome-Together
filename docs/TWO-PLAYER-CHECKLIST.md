@@ -1458,6 +1458,27 @@ the people, not noisy), then checks the result. At the end both say, for each it
 353. **Did it feel like single player?** Both: for each of 349 .. 352, say yes or no, and what felt wrong. Type `mark_odd` at every miss.
      Switches (all on): `mp_stealth_witness`, `mp_wake_engine`, `mp_chest_sync`.
 
+## WO-194 — story cutscenes together (the next build)
+
+One session at a quest step just before a story cutscene played in the engine (the kind with "Skip part / Skip all", not a video), both of
+you near it. Evidence: `docs/WO-194-findings.md`.
+
+354. **Trigger it standing together: both see it from the start, at the same moment.** Walk into the scene together (or let one of you
+     trigger it). Both screens go black briefly and the same scene starts on both, in step (talk about what you see: the same line at the
+     same time). Joiner `agent.log`: `WO194-SCENE ... runs here`, and either `WO194-START ... started` (the host's started it) or
+     `WO194-HOLD ... released: the host's copy runs` (his own trigger came first); then `WO194-CLOCK ... aligned`.
+355. **One of you skips: it skips for both.** In the scene, one of you skips a part (press skip twice), later the other skips the rest. Each
+     skip jumps both screens to the same next part; the last one ends the scene on both. Lines: `WO194-SKIP this player skipped ...` on the
+     one who pressed, `WO194-SKIP player <n> skipped ...` on the other.
+356. **Afterwards you both stand where the quest continues; nobody is stuck in the cutscene view.** The scene ends and both of you can move
+     at once (no long black, no frozen camera), standing next to each other, not inside each other. Joiner `agent.log`: `WO194-END ...
+     positioned 0.x s after its content` (well under 2 s) and `WO194-NUDGE`. If the joiner's screen stays black or frozen, type `mark_odd`.
+357. **The host saves right after and the joiner reloads: his things are there.** The host saves (Home) right after the scene; the joiner
+     quits and rejoins. His inventory and his place in the story are as at the save. Joiner `agent.log`: `PAIRED host save ...`.
+358. **Type `mark_odd` at any difference** (the scene on one screen only, out of step, a skip that skipped one screen only, someone left
+     standing in the scene's spot). Switches (all on): `mp_scene_ingame_shared`, `mp_scene_ingame_hold`, `mp_scene_ingame_ffstop`,
+     `mp_scene_ingame_nudge`, `mp_scene_ingame_figure_hide`, `mp_scene_ingame_skip_both`, `mp_scene_ingame_time_host`.
+
 ## Logs to send afterwards
 
 Both machines: Report a bug in the launcher. Since 0.48.9 it collects the current launch by default as a small file (or a few numbered
