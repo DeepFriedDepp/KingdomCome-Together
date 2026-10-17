@@ -82,6 +82,14 @@ their first bytes; the NPC manager and `C_NPC` by RTTI; the handler's state at +
 argument is `&handler+0x340`), AutoPlay at configuration +0x20, the "has a time" flag at `C_IngameCutscene` +0xC0. A build whose bytes
 differ arms nothing of it and says why.
 
+## The validation build
+
+`tools\Build-Installer.ps1 -SoakWaiver` (the standing rule of 2026-10-06, restated), header unchanged (0.60.9), from a clean clone at
+50189fc: every gate passed -- the agent, relay, setup and log-pack suites, every Lua suite, the payload smoke, the no-input and the
+no-screenshot gates (1,036 files, 0 hits), the publishing gate, and the live save round trip (PASS on a `playline4` throwaway).
+`KingdomComeTogether-Setup-0.60.9.exe`, 107,198,989 B, sha256 `2a6b213c...4e920235`, unsigned. Local only, not a release; the committed
+`kdcmp.pak` is the one it carries.
+
 ## Open
 
 - Two players: the checklist §WO-194. Here the host was synthetic; a real host's copy and the joiner's ran side by side only in replay.
