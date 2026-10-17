@@ -64,6 +64,9 @@ public static partial class Protocol
     public const byte Wo190OpStatus = 50, Wo190OpConfig = 51, Wo190OpWeapon = 52, Wo190OpClinchRefused = 53;
     // ---- WO-195: the DLL's ops in the WO-163 family (native/KCDMP/wo195.h): a dead copy's release, its check, the switch ----
     public const byte Wo195OpStatus = 54, Wo195OpConfig = 55, Wo195OpRelease = 56, Wo195OpCheck = 57;
+    // ---- WO-194: the DLL's ops in the WO-163 family (native/KCDMP/wo194.h): in-game cutscenes -- the enqueue events, the copy's start through its
+    //      handler, the joiner's hold, the sequence clock, the copies' FastForward stop ----
+    public const byte Wo194OpStatus = 58, Wo194OpConfig = 59, Wo194OpPoll = 60, Wo194OpStart = 61, Wo194OpHold = 62, Wo194OpSeq = 63, Wo194OpStopFF = 64;
 
     // ---- kinds (APPEND-ONLY) ----
     public const byte W164MarkPing = 1, W164Torch = 2, W164Escort = 3, W164HitOutcome = 4, W164Weather = 5, W164Travel = 6, W164RealHit = 7, W164NpcDown = 8;
@@ -82,7 +85,9 @@ public static partial class Protocol
     /// <summary>WO-178 0.d, host -> joiners: "quicksave=on|off" -- the host's mp_quicksave (on a change and every 10 s).</summary>
     public const byte W164QuickSaveSetting = 14;
     /// <summary>WO-179 Part B, either way: the scene bus -- "S|R|E|K|L|T|H &lt;seq&gt; ..." (Wo179Rules: start, destination, end, skip key,
-    /// landed, clock jump, held). A shared scene is a pre-rendered video or a scene that moves Henry; the sender is the triggerer.</summary>
+    /// landed, clock jump, held). A shared scene is a pre-rendered video or a scene that moves Henry; the sender is the triggerer.
+    /// WO-194 appends the in-game cutscene's letters "C|Q|A|G|P|J|X &lt;seq&gt; ..." (Wo194Rules: started by this quest, its handler, the
+    /// answer, the sequence runs, its clock, a skip's jump, stopped).</summary>
     public const byte W164SceneBus = 15;
     /// <summary>WO-184 B5, joiner -> host: "paired &lt;seq&gt; &lt;md5_8&gt;" (the joiner's character was saved with that host save),
     /// "unpaired &lt;n&gt;" (n host saves in a row did not pair), "stuck" (the joiner's save is stuck), "recovered" (Wo184Rules).</summary>

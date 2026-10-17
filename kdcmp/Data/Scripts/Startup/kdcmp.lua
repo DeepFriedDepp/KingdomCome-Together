@@ -11909,8 +11909,9 @@ function KCD2MP_LabelTick()
     -- WO-154: the name badges and the ping line are the player's to hide (mp_name_badges, mp_ping_line, mp_clean_screen)
     local mm = KCD2MP.w154menu
     local badges = not (mm and (mm.clean or mm.nameBadges == false))
+    local w194hid = KCD2MP.w194 and KCD2MP.w194.hidden   -- WO-194: a figure hidden for a cutscene shows no name over the scene either
     for id, lbl in pairs(KCD2MP.labelCache) do
-        if badges and lbl.size > 0 then
+        if badges and lbl.size > 0 and not (w194hid and w194hid[id]) then
             pcall(function()
                 local lx, ly, lz, lvl = lbl.x, lbl.y, lbl.z, "stream"
                 if lbl.ent then lx, ly, lz, lvl = KCD2MP_W158BadgeAnchor(lbl.ent, lbl.x, lbl.y, lbl.z) end
@@ -29277,6 +29278,75 @@ function KCD2MP_W192SetWakeHold(arg) return KCD2MP_W192Switch("wake_hold", "wake
 function KCD2MP_W192SetStation(arg) return KCD2MP_W192Switch("station_release", "station", arg, "a station's save lock held 15 s is ended the game's own way") end
 System.AddCCommand("mp_wake_hold", 'KCD2MP_W192SetWakeHold(%line)', "WO-192: (joiner) after a shared sleep or wait, waking before your host waits behind the game's fader until the host wakes, 15 s at most (default on): mp_wake_hold on|off")
 System.AddCCommand("mp_station_release", 'KCD2MP_W192SetStation(%line)', "WO-192: (both) a station's own save lock (the trough's wash) held 15 s is ended the game's own way, so a station never leaves you stuck (default on): mp_station_release on|off")
+
+-- ===== WO-194: shared in-game cutscenes ==========
+-- The agent's part is GameBridge.Wo194.cs, the DLL's native/KCDMP/wo194.* (docs/WO-194-findings.md). In-game cutscenes (the common kind, played
+-- in the engine with "Skip part / Skip all") play for both players: each machine's own quest copy, started together, one skip for both, the
+-- end positioning never stalling on the host's copies. The switches (all default ON):
+--   mp_scene_ingame_shared on|off       (both) the scene goes on the scene bus; the partner's own quest starts its copy when it is at that step
+--   mp_scene_ingame_hold on|off         (joiner) your own trigger firing first waits at most 3 s for the host's copy
+--   mp_scene_ingame_ffstop on|off       (joiner) at a scene's end the host's copies' fast-forward is stopped so your game positions at once
+--   mp_scene_ingame_time_host on|off    (joiner) a scene's own time of day comes from the host's clock, not a second jump here
+--   mp_scene_ingame_nudge on|off        (joiner) after a shared scene you are moved about 1 m off the spot both Henrys were placed on
+--   mp_scene_ingame_figure_hide on|off  (both) the partner's figure is hidden while a cutscene plays here
+--   mp_scene_ingame_skip_both on|off    (both) a skip (part or all) skips the partner's copy too
+KCD2MP.w194 = KCD2MP.w194 or { shared = true, hold = true, ffstop = true, timegate = true, nudge = true, figure = true, skip = true, hidden = {} }
+
+function KCD2MP_W194Cfg()
+    local w = KCD2MP.w194
+    local function o(b) return b and "on" or "off" end
+    KCD2MP_EmitEvent("w194_cfg", string.format("shared=%s hold=%s ffstop=%s timegate=%s nudge=%s figure=%s skip=%s", o(w.shared), o(w.hold), o(w.ffstop),
+        o(w.timegate), o(w.nudge), o(w.figure), o(w.skip)))
+    return true
+end
+
+-- B4: the partner's figure is hidden while an in-game cutscene plays on this machine (the game hides actors inside the scene's area only when
+-- the scene starts; the figure is not part of the scene). Only the figures this function hid are shown again.
+function KCD2MP_W194FigureHide(on)
+    local w = KCD2MP.w194
+    local n = 0
+    if on then
+        for id, g in pairs(KCD2MP.ghosts or {}) do
+            local e = g and g.entity
+            if e and not w.hidden[id] then
+                local was = false
+                pcall(function() was = e:IsHidden() end)
+                if not was then pcall(function() e:Hide(1) end); w.hidden[id] = e; n = n + 1 end
+            end
+        end
+    else
+        for id, e in pairs(w.hidden) do
+            pcall(function() e:Hide(0) end)
+            w.hidden[id] = nil
+            n = n + 1
+        end
+    end
+    mp_log(string.format("WO194-FIGURE %s %d partner figure(s) -- %s", on and "hid" or "showed", n, on and "an in-game cutscene plays here" or "the cutscene ended"))
+    return n
+end
+
+function KCD2MP_W194Switch(key, field, arg, what)
+    local v = KCD2MP_Wo122ParseBool(arg)
+    if v == "bad" then mp_log("mp_scene_ingame_" .. key .. ": expected on|off"); return false end
+    if v ~= nil then KCD2MP.w194[field] = v end
+    mp_log(string.format("WO194-TOGGLE mp_scene_ingame_%s %s -- %s", key, KCD2MP.w194[field] and "on" or "off", what))
+    KCD2MP_W194Cfg()
+    return true
+end
+function KCD2MP_W194SetShared(arg) return KCD2MP_W194Switch("shared", "shared", arg, "in-game cutscenes are shared: the partner's quest starts its own copy when it is at that step") end
+function KCD2MP_W194SetHold(arg) return KCD2MP_W194Switch("hold", "hold", arg, "the joiner's own trigger firing first waits at most 3 s for the host's copy") end
+function KCD2MP_W194SetFfStop(arg) return KCD2MP_W194Switch("ffstop", "ffstop", arg, "at a scene's end the host's copies' fast-forward is stopped (the joiner positions at once)") end
+function KCD2MP_W194SetTime(arg) return KCD2MP_W194Switch("time_host", "timegate", arg, "a scene's own time of day comes from the host's clock on the joiner") end
+function KCD2MP_W194SetNudge(arg) return KCD2MP_W194Switch("nudge", "nudge", arg, "after a shared scene the joiner is moved about 1 m off the shared spot") end
+function KCD2MP_W194SetFigure(arg) return KCD2MP_W194Switch("figure_hide", "figure", arg, "the partner's figure is hidden while a cutscene plays here") end
+function KCD2MP_W194SetSkip(arg) return KCD2MP_W194Switch("skip_both", "skip", arg, "a skip (part or all) skips the partner's copy too") end
+System.AddCCommand("mp_scene_ingame_shared", 'KCD2MP_W194SetShared(%line)', "WO-194: (both) story cutscenes in the engine are watched together: your partner's game starts its own copy when its quest is at that step (default on): mp_scene_ingame_shared on|off")
+System.AddCCommand("mp_scene_ingame_hold", 'KCD2MP_W194SetHold(%line)', "WO-194: (joiner) when your own trigger fires first, your cutscene waits at most 3 s for the host's (default on): mp_scene_ingame_hold on|off")
+System.AddCCommand("mp_scene_ingame_ffstop", 'KCD2MP_W194SetFfStop(%line)', "WO-194: (joiner) at a cutscene's end the host's people never keep your game in the cutscene view (default on): mp_scene_ingame_ffstop on|off")
+System.AddCCommand("mp_scene_ingame_time_host", 'KCD2MP_W194SetTime(%line)', "WO-194: (joiner) a cutscene's own time of day comes from the host's clock (default on): mp_scene_ingame_time_host on|off")
+System.AddCCommand("mp_scene_ingame_nudge", 'KCD2MP_W194SetNudge(%line)', "WO-194: (joiner) after a shared cutscene you are moved about 1 m off the spot both of you were placed on (default on): mp_scene_ingame_nudge on|off")
+System.AddCCommand("mp_scene_ingame_figure_hide", 'KCD2MP_W194SetFigure(%line)', "WO-194: (both) your partner's figure is hidden while a cutscene plays in your game (default on): mp_scene_ingame_figure_hide on|off")
+System.AddCCommand("mp_scene_ingame_skip_both", 'KCD2MP_W194SetSkip(%line)', "WO-194: (both) skipping part or all of a story cutscene skips it for your partner too (default on): mp_scene_ingame_skip_both on|off")
 
 -- ===== WO-191: a relaunched joiner's moves count, fighting copies are never reset, attackers have a body, no long black ==========
 -- The agent's part is GameBridge.Wo191.cs (docs/WO-191-findings.md). The switches (all default ON):

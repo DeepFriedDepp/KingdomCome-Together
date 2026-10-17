@@ -41,6 +41,12 @@ namespace kcdmp::wo189 {
 constexpr uint8_t kOpStatus = 42, kOpConfig = 43, kOpReady = 44, kOpCutscene = 45, kOpCutsceneRelease = 46, kOpStopFF = 47, kOpProfile = 48,
                   kOpConcept = 49;
 
+// WO-194: the cutscene player (RTTI C_CutscenePlayer, a pointer of C_GUIModule) or null. Main thread.
+void* cutscene_player_obj();
+// WO-194: C_CutscenePlayer::PlayCutscene(player, &active) -- only when `cfg` is the player's active configuration and not in progress
+// (the caller decides role and switches). 1 done, 0 refused (another configuration / in progress / none), 2 not armed, 3 fault.
+uint8_t play_active(void* cfg);
+
 uint8_t handle(uint8_t op, const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t* outLen);
 int status_text(char* out, int n);
 

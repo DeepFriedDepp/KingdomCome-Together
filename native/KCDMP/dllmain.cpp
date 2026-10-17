@@ -16,6 +16,7 @@
 #include "wo179.h"
 #include "wo187.h"
 #include "wo190.h"
+#include "wo194.h"
 #include "combat_swing.h"
 #include "wo135.h"
 #include "wo137.h"
@@ -202,6 +203,8 @@ DWORD WINAPI plugin_main(LPVOID) {
     // WO-178 C1: the hostility answer for the local player's own fight (the combat RPG's test, a detour through the prologue registry).
     // Fails closed (WO178-HOOK not armed); off the main thread for the same reason as the gates above.
     kcdmp::wo178::install();
+    // WO-194: the EnqueueCutscene detour (every in-game cutscene a quest enqueues; the joiner's hold). Fails closed (WO194-HOOK not armed).
+    kcdmp::wo194::install();
 
     if (kcdmp::dice::install_pause_hook()) {
         kcdmp::main_thread::post_repeating("dice::sample_instance_if_changed", &kcdmp::dice::sample_instance_if_changed);
@@ -250,6 +253,7 @@ DWORD WINAPI plugin_main(LPVOID) {
     kcdmp::main_thread::post_repeating("wo178::tick", &kcdmp::wo178::tick);   // WO-178 C1: the candidate table the hostility answer reads   // WO-176 A1: a figure already in a quest's arranged fight is taken out   // WO-173 C1: the joiner's real hits' measures and corrections
     kcdmp::main_thread::post_repeating("wo187::tick", &kcdmp::wo187::tick);   // WO-187: the copies' opponents, the moves' full-body scope
     kcdmp::main_thread::post_repeating("wo190::tick", &kcdmp::wo190::tick);   // WO-190: the animation trace, the fighting bodies' idle watch
+    kcdmp::main_thread::post_repeating("wo194::tick", &kcdmp::wo194::tick);   // WO-194: the holds' releases, the scenes' time of day back
     kcdmp::main_thread::post_repeating("rttr::swing_watch_tick", &kcdmp::rttr::swing_watch_tick);   // WO-167 C3: shown means rendered
     // WO-124: the joiner's placement gives the fall damage back; the save-list
     // research trigger (kcdmp-savelist-test.txt, opt-in, absent = idle).

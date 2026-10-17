@@ -642,6 +642,36 @@ Applied set_value(const char* path, int v, Val* before, Val* after) {
     return res;
 }
 
+// ---------------------------------------------------------------------------
+// WO-194: one pulse on an In trigger port of a quest node of any class (a CutsceneHandler's EnqueueCutscene / PlayCutscene): the same
+// engine entry as apply(), with the caller's own class and state test instead of the State rules. A hibernated node is refused.
+// ---------------------------------------------------------------------------
+Applied pulse_node_impl(const char* path, const char* portNm, NodeAccept accept, void* ctx) {
+    if (!A.apply) return Applied::Unarmed;
+    void* node = find_node(path);
+    if (!node) return Applied::NoNode;
+    Applied res = Applied::Fault;
+    void* port = nullptr;
+    do {
+        if (accept && !accept(node, ctx)) { res = Applied::NotAState; break; }   // the caller's refusal (its own class / state test)
+        if (node_runtime(node) == 1) { res = Applied::Asleep; break; }
+        port = find_port(node, portNm);
+        if (!port) { res = Applied::NoPort; break; }
+        const void* pv = nullptr; void* trig = nullptr;
+        if (!rd(port, 0, &pv) || !pv || !rd(pv, kSlotPortTrigger * 8, &trig)) { res = Applied::Fault; break; }
+        if ((pv != A.inTrigVft && pv != A.autoTrigVft) || trig != A.inTrigTrigger) { res = Applied::PortRefused; break; }
+        int dir = -1;
+        if (A.portDirection && (!call_int(A.portDirection, port, &dir) || dir != 1)) { res = Applied::PortRefused; break; }
+        ++t_applyDepth;   // a mirror: any State change this pulse causes is not this player's own step
+        const bool ran = call_void(trig, port);
+        --t_applyDepth;
+        res = ran ? Applied::Changed : Applied::Fault;
+    } while (false);
+    call_release(port);
+    call_release(node);
+    return res;
+}
+
 const char* applied_text(Applied a) {
     switch (a) {
         case Applied::Changed: return "changed";
@@ -1023,6 +1053,42 @@ void put_u16(uint8_t* p, uint16_t v) { std::memcpy(p, &v, 2); }
 uint16_t get_u16(const uint8_t* p) { uint16_t v; std::memcpy(&v, p, 2); return v; }
 
 } // namespace
+
+// WO-194 (wo137.h)
+bool path_of(const void* node, char* out, size_t cap) {
+    if (!out || cap < 2) return false;
+    char buf[kMaxPath + 64];
+    if (!node_path(node, buf, sizeof buf)) { out[0] = 0; return false; }
+    const char* c = canonical(buf);
+    const size_t n = std::strlen(c);
+    if (n + 1 > cap) { out[0] = 0; return false; }
+    std::memcpy(out, c, n + 1);
+    return true;
+}
+Applied pulse_node(const char* path, const char* port, NodeAccept accept, void* ctx) { return pulse_node_impl(path, port, accept, ctx); }
+const char* applied_name(Applied a) { return applied_text(a); }
+int runtime_chain(const void* node, int* out, int max) {
+    if (!A.nodeParent || !A.release || !node || max <= 0) return 0;
+    void* held[16]; int nh = 0, n = 0;
+    const void* cur = node;
+    while (cur && n < max && n < 16) {
+        out[n++] = node_runtime(cur);
+        void* par = nullptr;
+        if (!call_parent(cur, &par) || !par) break;
+        held[nh++] = par;
+        cur = par;
+    }
+    for (int i = 0; i < nh; ++i) call_release(held[i]);
+    return n;
+}
+bool visit_node(const char* path, NodeAccept fn, void* ctx) {
+    if (!A.apply || !path || !fn) return false;
+    void* node = find_node(path);
+    if (!node) return false;
+    fn(node, ctx);
+    call_release(node);
+    return true;
+}
 
 // ===========================================================================
 void install() {

@@ -104,6 +104,7 @@ public partial class GameBridge
         {
             case "skip-key":
                 Wo179OnSkipKey();
+                Wo194OnSkipKey();   // WO-194: an in-game cutscene's skip is sent as its jump or its stop
                 break;
             case "video-end" when f.Length >= 3:
                 // WO-179B item 4: movement inside the copy ends it HERE only -- never sent as a skip (only the skip key is)
@@ -131,6 +132,7 @@ public partial class GameBridge
         Wo191OnConnect();   // WO-191: its switches
         Wo195OnConnect();   // WO-195: its switches
         Wo192OnConnect();   // WO-192: its switches
+        Wo194OnConnect(ct); // WO-194: its switches and the DLL's enqueue events
         _ = Wo179PollLoopAsync(ct);
     }
 
@@ -485,6 +487,7 @@ public partial class GameBridge
 
     private async Task Wo179OnBusAsync(byte src, string text)
     {
+        if (Wo194Rules.IsIngameOp(text)) { await Wo194OnBusAsync(src, text); return; }   // WO-194: the in-game cutscene's letters
         if (!Wo179Rules.TryParse(text, out var m)) { Interlocked.Increment(ref _w164Malformed); return; }
         Interlocked.Increment(ref _w179BusIn);
         Console.WriteLine($"WO179-BUS in from player {src}: '{text}'");

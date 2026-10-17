@@ -106,6 +106,12 @@ inline constexpr uint8_t kSlotEnd[15] = {
     0x48, 0x89, 0x74, 0x24, 0x10, 0x57, 0x48, 0x83, 0xEC, 0x40, 0x48, 0x8B, 0xF9, 0x8B, 0xF2,
 };
 
+// wo194.cpp: C_CutscenePlayer::EnqueueCutscene (GUIModule's export) -- every enqueued cutscene, a detour (WO-194).
+// mov [rsp+18h],rbx; push rdi; sub rsp,20h; mov rbx,rcx; mov rdi,rdx
+inline constexpr uint8_t kEnqueueCutscene[16] = {
+    0x48, 0x89, 0x5C, 0x24, 0x18, 0x57, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0xD9, 0x48, 0x8B, 0xFA,
+};
+
 struct Entry { const char* name; const uint8_t* bytes; size_t len; };
 inline constexpr Entry kAll[] = {
     {"motion UpdateMannequinTags", kMotionTags, sizeof kMotionTags},
@@ -122,6 +128,7 @@ inline constexpr Entry kAll[] = {
     {"wo178 state handler (research)", kStateHandler, sizeof kStateHandler},
     {"wo178 slot start (research)", kSlotStart, sizeof kSlotStart},
     {"wo178 slot end (research)", kSlotEnd, sizeof kSlotEnd},
+    {"wo194 EnqueueCutscene", kEnqueueCutscene, sizeof kEnqueueCutscene},
 };
 
 } // namespace kcdmp::hookpro

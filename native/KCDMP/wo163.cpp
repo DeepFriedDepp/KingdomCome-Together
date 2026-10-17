@@ -18,6 +18,7 @@
 #include "wo187.h"
 #include "wo189.h"
 #include "wo190.h"
+#include "wo194.h"
 #include "wo195.h"
 
 #include <atomic>
@@ -251,6 +252,14 @@ uint8_t handle(const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t
         case kcdmp::wo195::kOpRelease:
         case kcdmp::wo195::kOpCheck:
             return kcdmp::wo195::handle(body[0], body, len, out, cap, outLen);
+        case kcdmp::wo194::kOpStatus:   // WO-194: shared in-game cutscenes (the enqueue events, the copy's start, the hold, the clock, the end)
+        case kcdmp::wo194::kOpConfig:
+        case kcdmp::wo194::kOpPoll:
+        case kcdmp::wo194::kOpStart:
+        case kcdmp::wo194::kOpHold:
+        case kcdmp::wo194::kOpSeq:
+        case kcdmp::wo194::kOpStopFF:
+            return kcdmp::wo194::handle(body[0], body, len, out, cap, outLen);
         case kcdmp::wo178::kOpHeldResult:   // WO-178 C4: a held blow lives in WO-173's path
             return kcdmp::wo173::handle(body[0], body, len, out, cap, outLen);
         default:

@@ -124,6 +124,20 @@ void set_send_callback(void (*fn)(const uint8_t* body, uint16_t len));
 // runs nothing -- OnExec still fires, the punishment goes on, the clock does
 // not move. Independent of the quest sync. False when the hook is not armed.
 bool set_punish_gate(bool on);
+
+// WO-194: a concept node's dotted path in FindNode's canonical form ("Barbora.trosecko...."); false when the reader is not armed or
+// the names are unreadable. Any thread the graph runs on (the detector's own walk).
+bool path_of(const void* node, char* out, size_t cap);
+// WO-194: one pulse on an In trigger port of a quest node of ANY class -- FindNode(path), then `accept(node, ctx)` (the caller's class and
+// state test; false = refused, reported as NotAState), then the port's C_InputTriggerPort::Trigger: the engine's own entry, the same
+// C_Node::Execute an edge into it makes. A hibernated node is refused (Asleep). Main thread. Changed = fired.
+using NodeAccept = bool (*)(void* node, void* ctx);
+Applied pulse_node(const char* path, const char* port, NodeAccept accept, void* ctx);
+const char* applied_name(Applied a);
+// WO-194: FindNode(path) and `fn(node, ctx)` with the node's reference held for the call (false: not armed or no such node). Main thread.
+bool visit_node(const char* path, NodeAccept fn, void* ctx);
+// WO-194: C_Node's runtime state of the node and each parent up the tree (0 awake, 1 hibernating; -1 unread), at most `max`; the count.
+int runtime_chain(const void* node, int* out, int max);
 bool punish_gate_armed();
 uint32_t punish_skipped();
 

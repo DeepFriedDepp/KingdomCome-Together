@@ -423,6 +423,8 @@ public sealed class LogTailGameTransport : IGameTransport
         "of minigame entity",
         // WO-166 T3: a conversation's NPC never stopped its behaviour for it (the haggle's death)
         "PlayerDialogController::NPCPauseRequests timed out",
+        // WO-194: an in-game cutscene's start readiness (its black): the live check of the sequence clock under it
+        "' with category bitmask '15255'",
         // WO-167 T3: an NPC's behaviour-tree path in the engine's own lines (the timeout line names the last one); T4: a fader's end
         "/(BT)",
         "Last fader took ",

@@ -1139,6 +1139,107 @@ public sealed class CombatPipe : IAsyncDisposable
         return r is { Ok: true } x && x.Payload.Length >= 1 + n ? x.Payload[1..(1 + n)] : null;
     }
 
+    // ---- WO-194 (native/KCDMP/wo194.h) ----
+
+    /// <summary>WO-194 op 59: the role and the switches (255 / 0xFFFF = unchanged). Null = no answer.</summary>
+    public async Task<byte[]?> Wo194ConfigAsync(byte role, byte hold, byte ffStop, byte timeGate, ushort holdMs, CancellationToken ct = default)
+    {
+        var r = await Wo163Async(Protocol.Wo194OpConfig, [role, hold, ffStop, timeGate, (byte)(holdMs & 0xFF), (byte)(holdMs >> 8)], ct);
+        return r is { Ok: true, Payload.Length: >= 6 } x ? x.Payload : null;
+    }
+
+    public readonly record struct Wo194Event(uint Seq, byte Kind, uint AgeMs, string Name, string Path, string Detail);
+
+    /// <summary>WO-194 op 60: the enqueue events newer than <paramref name="since"/>. Null = no answer.</summary>
+    public async Task<(uint Last, List<Wo194Event> Events)?> Wo194PollAsync(uint since, CancellationToken ct = default)
+    {
+        var r = await Wo163Async(Protocol.Wo194OpPoll, BitConverter.GetBytes(since), ct);
+        if (r is not { Ok: true, Payload.Length: >= 5 } x) return null;
+        return (BitConverter.ToUInt32(x.Payload, 0), Wo194Rules.ParsePollEvents(x.Payload));
+    }
+
+    private static byte[] Wo194Str(string s, int max = 250)
+    {
+        var b = System.Text.Encoding.ASCII.GetBytes(s.Length > max ? s[..max] : s);
+        var a = new byte[1 + b.Length];
+        a[0] = (byte)b.Length; b.CopyTo(a, 1);
+        return a;
+    }
+
+    /// <summary>WO-194 op 61: start this machine's own copy through its CutsceneHandler's EnqueueCutscene input. (result, handler state); null = no answer.</summary>
+    public async Task<(byte Result, byte State)?> Wo194StartAsync(string handlerPath, string name, bool asOwn = false, CancellationToken ct = default)
+    {
+        byte[] a = [.. Wo194Str(handlerPath), .. Wo194Str(name, 80)];
+        if (asOwn) a = [.. a, 1];
+        var r = await Wo163Async(Protocol.Wo194OpStart, a, ct);
+        return r is { Ok: true, Payload.Length: >= 2 } x ? (x.Payload[0], x.Payload[1]) : null;
+    }
+
+    /// <summary>WO-194 op 62 sub 1: the partner plays (on) / no longer plays (off) this scene -- the joiner's own enqueue of it is then never held.</summary>
+    public async Task<byte?> Wo194PartnerPlayingAsync(string name, bool on, CancellationToken ct = default)
+    {
+        var r = await Wo163Async(Protocol.Wo194OpHold, [1, (byte)(on ? 1 : 0), .. Wo194Str(name, 80)], ct);
+        return r is { Ok: true, Payload.Length: >= 1 } x ? x.Payload[0] : null;
+    }
+
+    /// <summary>WO-194 op 62 sub 2: release the held copy of that scene ("" = every hold); why = 1 the host's copy runs, 4 the agent. Count; null = no answer.</summary>
+    public async Task<byte?> Wo194ReleaseAsync(string name, byte why, CancellationToken ct = default)
+    {
+        var r = await Wo163Async(Protocol.Wo194OpHold, [2, why, .. Wo194Str(name, 80)], ct);
+        return r is { Ok: true, Payload.Length: >= 1 } x ? x.Payload[0] : null;
+    }
+
+    /// <summary>WO-194 op 62 sub 3: a CutsceneHandler's state, read only. (found, handler, state); null = no answer.</summary>
+    public async Task<(bool Found, bool Handler, byte State, string Runtime)?> Wo194HandlerStateAsync(string path, CancellationToken ct = default)
+    {
+        var r = await Wo163Async(Protocol.Wo194OpHold, [3, .. Wo194Str(path)], ct);
+        if (r is not { Ok: true, Payload.Length: >= 3 } x) return null;
+        string rt = x.Payload.Length >= 4 ? string.Join(",", x.Payload.Skip(4).Take(x.Payload[3]).Select(b => b == 255 ? "?" : b.ToString(System.Globalization.CultureInfo.InvariantCulture))) : "";
+        return (x.Payload[0] != 0, x.Payload[1] != 0, x.Payload[2], rt);
+    }
+
+    /// <summary>WO-194 op 63 sub 1: the active in-game sequence's time (s). (res, t): res 1 ok, 0 not that scene / not playing, 2 not armed, 3 fault.</summary>
+    public async Task<(byte Res, float T)?> Wo194SeqGetAsync(string name, CancellationToken ct = default)
+    {
+        var r = await Wo163Async(Protocol.Wo194OpSeq, [1, .. Wo194Str(name, 80)], ct);
+        return r is { Ok: true, Payload.Length: >= 5 } x ? (x.Payload[0], BitConverter.ToSingle(x.Payload, 1)) : null;
+    }
+
+    /// <summary>WO-194 op 63 sub 2: set the active in-game sequence's time (s). (res, before, after); res 4 = refused by the movie system.</summary>
+    public async Task<(byte Res, float Before, float After)?> Wo194SeqSetAsync(string name, float t, CancellationToken ct = default)
+    {
+        var r = await Wo163Async(Protocol.Wo194OpSeq, [2, .. Wo194Str(name, 80), .. BitConverter.GetBytes(t)], ct);
+        return r is { Ok: true, Payload.Length: >= 9 } x ? (x.Payload[0], BitConverter.ToSingle(x.Payload, 1), BitConverter.ToSingle(x.Payload, 5)) : null;
+    }
+
+    /// <summary>WO-194 op 63 sub 3: stop the active in-game sequence (the normal end follows). res as op 63.</summary>
+    public async Task<byte?> Wo194SeqStopAsync(string name, CancellationToken ct = default)
+    {
+        var r = await Wo163Async(Protocol.Wo194OpSeq, [3, .. Wo194Str(name, 80)], ct);
+        return r is { Ok: true, Payload.Length: >= 1 } x ? x.Payload[0] : null;
+    }
+
+    /// <summary>WO-194 op 64: stop the FastForward of every listed copy that is in one. (stopped, inFF, noNpc, countBefore, countAfter); null = no answer.</summary>
+    public async Task<(int Stopped, int InFF, int NoNpc, int Before, int After)?> Wo194StopFFAsync(IReadOnlyList<uint>? eids, CancellationToken ct = default)
+    {
+        int n = eids is null ? 0 : Math.Min(eids.Count, 120);
+        var a = new byte[2 + 4 * n];
+        if (eids is null) { a[0] = 0xFF; a[1] = 0xFF; }   // every NPC of the world
+        else { a[0] = (byte)(n & 0xFF); a[1] = (byte)(n >> 8); }
+        for (int i = 0; i < n; i++) BitConverter.GetBytes(eids![i]).CopyTo(a, 2 + 4 * i);
+        var r = await Wo163Async(Protocol.Wo194OpStopFF, a, ct);
+        if (r is not { Ok: true, Payload.Length: >= 14 } x) return null;
+        var p = x.Payload;
+        return (BitConverter.ToUInt16(p, 0), BitConverter.ToUInt16(p, 2), BitConverter.ToUInt16(p, 4), BitConverter.ToInt32(p, 6), BitConverter.ToInt32(p, 10));
+    }
+
+    /// <summary>WO-194 op 58: the DLL's status line.</summary>
+    public async Task<string?> Wo194StatusAsync(CancellationToken ct = default)
+    {
+        var r = await Wo163Async(Protocol.Wo194OpStatus, [], ct);
+        return r is { Ok: true } x ? System.Text.Encoding.ASCII.GetString(x.Payload) : null;
+    }
+
     /// <summary>WO-189 op 48 sub 1: the active game profiles of this machine (paged inside). Null = no answer or not armed.</summary>
     public async Task<List<string>?> Wo189ActiveProfilesAsync(CancellationToken ct = default)
     {

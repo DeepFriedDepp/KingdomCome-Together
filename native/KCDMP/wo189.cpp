@@ -393,6 +393,22 @@ void put_f(uint8_t* p, float v) { std::memcpy(p, &v, 4); }
 
 } // namespace
 
+// WO-194 (wo189.h)
+void* cutscene_player_obj() { return cutscene_player(); }
+
+uint8_t play_active(void* cfgWant) {
+    void* pl = cutscene_player();
+    if (!pl) return 2;
+    void* cfg = nullptr; uint8_t prog = 0;
+    if (!rd(pl, kPlayerActive, &cfg) || !rd(pl, kPlayerInProgress, &prog)) return 3;
+    if (!cfg || cfg != cfgWant || prog) return 0;
+    const void* ref = static_cast<char*>(pl) + kPlayerActive;
+    KCDMP_FAULT_CALL(site, "wo189::PlayCutscene(wo194)");
+    if (!fault::guarded(site, [&] { g_play(pl, ref); })) return 3;
+    c_releases.fetch_add(1);
+    return 1;
+}
+
 int status_text(char* out, int n) {
     return std::snprintf(out, n, "role=%u release=%d ff_stop=%d mirror=%d ready_reads=%u not_ready=%u releases=%u interrupts=%u ff_stops=%u "
                          "profiles_enabled=%u profiles_released=%u handles=%zu concept_reads=%u readiness=%s cutscene=%s profiles=%s",
