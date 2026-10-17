@@ -544,9 +544,11 @@ public partial class GameBridge
         if (!DoorEvent.TryFromBytes(a.Payload, out var e)) { Interlocked.Increment(ref _w151DoorDropped); Console.WriteLine($"MP-W151 door in: dropped-malformed len={a.Payload.Length}"); return; }
         var inv = System.Globalization.CultureInfo.InvariantCulture;
         string pos = string.Format(inv, "{0:F2}, {1:F2}, {2:F2}", e.X, e.Y, e.Z);
-        int flag = (e.Flags & DoorEvent.FlagLocked) != 0 ? 1 : 0;
+        int flag = e.IsLocked ? 1 : 0;
         if (a.Kind == ActionKind.DoorState)
         {
+            // a chest is never a host state (only a joiner's unlock claim crosses, as a DoorAsk): nothing to apply
+            if (e.IsStash) { Interlocked.Increment(ref _w151DoorDropped); Console.WriteLine($"MP-W151 door in: dropped-chest-state {e}"); return; }
             if (_isDamageAuthority || !W137Joiner) { Interlocked.Increment(ref _w151DoorDropped); return; }   // a host's door is its own; not in the host's world yet
             long n = Interlocked.Increment(ref _w151DoorIn);
             if (n <= 20 || n % 100 == 0) Console.WriteLine($"MP-W151 door state in {e} [n={n}]");
@@ -557,6 +559,11 @@ public partial class GameBridge
             if (!W137Host) { Interlocked.Increment(ref _w151DoorDropped); return; }
             Interlocked.Increment(ref _w151DoorAsksIn);
             Console.WriteLine($"MP-W151 door ask in from ghost {a.SourceGhostId}: {e}");
+            if (e.IsStash)   // WO-195B 2a: a joiner's unlocked chest -- the host looks for a Stash at the pivot, never a door
+            {
+                await ExecLuaAsync($"if KCD2MP_W195BChestAsked then KCD2MP_W195BChestAsked({a.SourceGhostId}, \"{e.Name}\", {flag}, {pos}) end");
+                return;
+            }
             await ExecLuaAsync($"if KCD2MP_W151DoorAsked then KCD2MP_W151DoorAsked({a.SourceGhostId}, \"{e.Name}\", {e.Dir.ToString(inv)}, {flag}, {pos}) end");
         }
     }

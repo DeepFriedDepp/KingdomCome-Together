@@ -1714,7 +1714,10 @@ public static class EmoteId
 /// <summary>
 /// WO-151 3.9: a door on the action channel --
 /// <c>[senderMs:4][dir:1 sbyte][flags:1][x:4f][y:4f][z:4f][nameLen:1][name]</c>.
-/// dir: 1 open, -1 closed (0: no move). flags bit 0: locked (DoorState) / unlock (DoorAsk).
+/// dir: 1 open, -1 closed (0: no move). flags bit 0: locked (DoorState) / unlock (DoorAsk);
+/// bit 1 (<see cref="FlagStash"/>, DoorAsk only): the event is about a chest (class Stash), not a door -- a joiner's
+/// unlock claim, the host looks for a Stash at the pivot instead of an AnimDoor. A frame without that bit is a door,
+/// exactly as before; a peer that does not know the bit reads it as a door ask, finds no door there and refuses.
 /// The name is the door's authored level name (<c>[A-Za-z0-9_.-]</c>); the pivot tells two
 /// doors of one name apart (the receiver takes the AnimDoor within 1 m of it).
 /// </summary>
@@ -1723,6 +1726,13 @@ public readonly record struct DoorEvent(uint SenderMs, sbyte Dir, byte Flags, fl
     public const int FixedLen = 4 + 1 + 1 + 12 + 1;
     public const int MaxNameLen = Protocol.ActionPayloadMaxLen - FixedLen;   // 45
     public const byte FlagLocked = 0x01;
+    /// <summary>WO-195B 2a: the event names a chest (Stash), not a door.</summary>
+    public const byte FlagStash = 0x02;
+
+    /// <summary>Bit 0: locked (DoorState) / unlock claimed (DoorAsk).</summary>
+    public bool IsLocked => (Flags & FlagLocked) != 0;
+    /// <summary>Bit 1: a chest (Stash), not a door.</summary>
+    public bool IsStash => (Flags & FlagStash) != 0;
 
     public static bool IsDoorName(string? n)
     {
@@ -1766,7 +1776,7 @@ public readonly record struct DoorEvent(uint SenderMs, sbyte Dir, byte Flags, fl
         return true;
     }
 
-    public override string ToString() => FormattableString.Invariant($"door={Name} dir={Dir} flags={Flags} at=({X:F2},{Y:F2},{Z:F2})");
+    public override string ToString() => FormattableString.Invariant($"{(IsStash ? "chest" : "door")}={Name} dir={Dir} flags={Flags} at=({X:F2},{Y:F2},{Z:F2})");
 }
 
 /// <summary>

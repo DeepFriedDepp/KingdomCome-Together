@@ -63,18 +63,29 @@ public static class Wo151Rules
     /// <summary>
     /// 3.9: a w151_door event's body as Lua formats it -- <c>state|ask name dir flag x y z</c> -- or null
     /// for anything else (the name goes back into a Lua string on the far side: door names only).
+    /// flag: 0 / 1 = the lock bit; an ask may also carry the chest bit (WO-195B 2a: 2 = chest, 3 = chest + unlock),
+    /// a state never does (the host's chests are not sent).
     /// </summary>
     public static (bool Ask, DoorEvent Ev)? ParseDoorEvent(string? arg, uint senderMs)
     {
         var f = (arg ?? "").Split(' ', StringSplitOptions.RemoveEmptyEntries);
         if (f.Length != 7 || f[0] is not ("state" or "ask")) return null;
+        bool ask = f[0] == "ask";
+        byte flags;
+        switch (f[3])
+        {
+            case "0": flags = 0; break;
+            case "1": flags = DoorEvent.FlagLocked; break;
+            case "2" when ask: flags = DoorEvent.FlagStash; break;
+            case "3" when ask: flags = DoorEvent.FlagStash | DoorEvent.FlagLocked; break;
+            default: return null;
+        }
         var inv = System.Globalization.CultureInfo.InvariantCulture;
         if (!DoorEvent.IsDoorName(f[1]) || !sbyte.TryParse(f[2], System.Globalization.NumberStyles.AllowLeadingSign, inv, out sbyte dir) || dir is < -1 or > 1
-            || f[3] is not ("0" or "1")
             || !float.TryParse(f[4], System.Globalization.NumberStyles.Float, inv, out float x) || !float.IsFinite(x)
             || !float.TryParse(f[5], System.Globalization.NumberStyles.Float, inv, out float y) || !float.IsFinite(y)
             || !float.TryParse(f[6], System.Globalization.NumberStyles.Float, inv, out float z) || !float.IsFinite(z))
             return null;
-        return (f[0] == "ask", new DoorEvent(senderMs, dir, f[3] == "1" ? DoorEvent.FlagLocked : (byte)0, x, y, z, f[1]));
+        return (ask, new DoorEvent(senderMs, dir, flags, x, y, z, f[1]));
     }
 }

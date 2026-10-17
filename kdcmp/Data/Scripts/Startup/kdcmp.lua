@@ -7291,6 +7291,7 @@ function KCD2MP_W137Session(host, joiner, active)
     w.host, w.joiner, w.active = host, joiner, active
     pcall(KCD2MP_W137InstallTalk)
     if KCD2MP_W151DoorInstall then pcall(KCD2MP_W151DoorInstall) end   -- WO-151 3.9: the door wraps
+    if KCD2MP_W195BChestInstall then pcall(KCD2MP_W195BChestInstall) end   -- WO-195B 2a: the chest wraps
     if wasJoiner and not joiner then KCD2MP_W137TalkEndAll("no-longer-joiner") end
     if wasHost and not host then KCD2MP_W137HoldReleaseAll("no-longer-host") end
     if (wasJoiner and not joiner) or (wasHost and not host) then pcall(KCD2MP_W160ConvReleaseAll, "no longer in the session") end   -- WO-160 3
@@ -19221,7 +19222,10 @@ function KCD2MP_W139Install()
         w.stashWrap = function(self, user, slot)
             local opening = false
             pcall(function() opening = self.bOpened ~= 1 and self.bLocked ~= true end)
+            -- WO-195B 2a: a key's unlock inside this use is the joiner's claim on the host's chest; the host's Henry at it is read too
+            if KCD2MP_W195BStashUseBegin then pcall(KCD2MP_W195BStashUseBegin, self, user) end
             local r = orig(self, user, slot)
+            if KCD2MP_W195BStashUseEnd then pcall(KCD2MP_W195BStashUseEnd, self, user) end
             if opening and user == player then pcall(KCD2MP_W139StashOpened, self) end
             return r
         end
@@ -25757,6 +25761,11 @@ KCD2MP.w151.joinHold = (KCD2MP.w151.joinHold == nil) and true or KCD2MP.w151.joi
 --   in single player, and follows the host's answer). AnimDoor.DoPlayAnimation is the one choke point
 --   (Scripts/Entities/Doors/AnimDoor.lua): it and Lock/Unlock are wrapped in the class table.
 KCD2MP.w151.doorSync = (KCD2MP.w151.doorSync == nil) and true or KCD2MP.w151.doorSync
+-- WO-195B 2a (both): mp_chest_sync on|off (default on) -- a chest (class Stash) the joiner unlocks with his own lockpick
+--   or key is unlocked in the host's world too, as the game's own Stash:Unlock there (so the game's lock record keeps
+--   it through a save and a load). It rides the door channel (DoorAsk, flags bit 1 = a chest, bit 0 = the unlock claim);
+--   the host only ever unlocks, and only on that claim.
+KCD2MP.w151.chestSync = (KCD2MP.w151.chestSync == nil) and true or KCD2MP.w151.chestSync
 -- Phase 3.4 (joiner): mp_scene_guard on|off (default on) -- a scene's end positioning that waits on the host's
 --   paused copies gets them resumed (the agent, 5 s after the content), a save request if that is not enough
 --   (20 s), and is given up at 90 s; a dialogue the game forces on a paused copy resumes it for its length.
@@ -25783,6 +25792,7 @@ KCD2MP.w151.sceneHeld = KCD2MP.w151.sceneHeld or {}
 KCD2MP.w151.sceneStats = KCD2MP.w151.sceneStats or { resumes = 0, copies = 0, releases = 0, expired = 0 }
 KCD2MP.w151.doorStats = KCD2MP.w151.doorStats or { sent = 0, asks = 0, applied = 0, askApplied = 0, unnamed = 0, notFound = 0, deferred = 0,
     ownUnlocks = 0, privacySkipped = 0 }
+KCD2MP.w151.chestStats = KCD2MP.w151.chestStats or { asks = 0, unlocked = 0, already = 0, noMatch = 0, refused = 0, deferred = 0, ownUnlocks = 0, unnamed = 0 }
 -- a joiner's unlock counts as his lockpick only this long after he started picking that lock (the minigame)
 KCD2MP_W151_PICK_WINDOW_S = 300
 KCD2MP.w151.crimeStats = KCD2MP.w151.crimeStats or { raised = 0, own = 0, forgets = 0, forgetNpcs = 0, resolved = 0 }
@@ -26189,12 +26199,13 @@ do
         KCD2MP_EmitEvent("w151_door", string.format("ask %s %d %d %.2f %.2f %.2f", n, dir, unlocked and 1 or 0, p.x, p.y, p.z))
     end
 
-    -- The door a message names: the AnimDoor at that pivot (within 1 m) whose name hashes to the key; the only
-    -- one there if no name matches (never a guess between two).
-    local function findDoor(key, x, y, z)
+    -- The entity of a class a message names: the one at that pivot (within 1 m) whose name hashes to the key; the
+    -- only one there if no name matches (never a guess between two). Second result: "name", "only", or why not
+    -- ("none" / "ambiguous"). The doors (AnimDoor) and the chests (Stash) share it.
+    local function findNear(cls, key, x, y, z)
         local near = {}
         pcall(function()
-            for _, d in ipairs(System.GetEntitiesInSphereByClass({ x = x, y = y, z = z }, 1.0, "AnimDoor") or {}) do
+            for _, d in ipairs(System.GetEntitiesInSphereByClass({ x = x, y = y, z = z }, 1.0, cls) or {}) do
                 local p = nil
                 pcall(function() p = d:GetWorldPos() end)
                 if p and ((p.x - x) ^ 2 + (p.y - y) ^ 2 + (p.z - z) ^ 2) < 1.0 then near[#near + 1] = d end
@@ -26203,10 +26214,15 @@ do
         for _, d in ipairs(near) do
             local n = nil
             pcall(function() n = d:GetName() end)
-            if n and nameHash(n) == key then return d end
+            if n and nameHash(n) == key then return d, "name" end
         end
-        if #near == 1 then return near[1] end
-        return nil
+        if #near == 1 then return near[1], "only" end
+        return nil, (#near > 1) and "ambiguous" or "none"
+    end
+
+    -- The door a message names (AnimDoor).
+    local function findDoor(key, x, y, z)
+        return (findNear("AnimDoor", key, x, y, z))
     end
     W.findDoor = findDoor
 
@@ -26384,6 +26400,218 @@ do
         mp_log(string.format("WO151-TOGGLE mp_door_sync door_sync=%s role=%s sent=%d asks=%d applied=%d ask_applied=%d unnamed=%d not_found=%d deferred=%d own_unlocks=%d privacy_skipped=%d",
             W.doorSync and "on" or "off", tostring(doorRole()), st.sent, st.asks, st.applied, st.askApplied, st.unnamed, st.notFound, st.deferred,
             st.ownUnlocks or 0, st.privacySkipped or 0))
+        return true
+    end
+
+    -- ---- WO-195B 2a: a joiner's unlocked chest unlocks the host's ----------------------------------------
+    -- A chest is the game's Stash. Nothing about a chest is broadcast; the one thing that crosses is the joiner's
+    -- own unlock -- his lockpick (Stash:OnLockpicked, or the engine's Unlock inside his pick) or his key
+    -- (Stash:OnUsed) -- as a DoorAsk whose flags carry the chest bit (2) and the unlock claim (1). The host finds the
+    -- chest the doors' way (pivot within 1 m, name hash, class Stash) and calls the game's own Stash:Unlock on it:
+    -- that is what writes the game's lock record (lockBase:ReportUnlocked), which a save keeps and a load's
+    -- Stash:Reset respects -- a bare write of bLocked would be undone by the next load. The host never locks a chest,
+    -- never unlocks one without the claim, and waits while its own Henry is at that chest. A host that does not
+    -- know the bit looks for a door at that pivot, finds none and refuses.
+    local CHEST_PICK_BUSY_S = 15     -- the host's own pick of that chest began this recently: it may still be at it
+    local CHEST_DEFER_MS, CHEST_DEFER_TRIES = 1500, 8
+
+    local function chestRole()
+        local w = KCD2MP.w137
+        if not (W.chestSync and w and w.aliveAt and (os.clock() - w.aliveAt) < (w.aliveTimeoutS or 10)) then return nil end
+        if w.host then return "host" elseif w.joiner then return "joiner" end
+        return nil
+    end
+    W.chestRole = chestRole
+
+    local function isPlayer(user)
+        return player ~= nil and user ~= nil and (user == player or (user.id ~= nil and user.id == player.id))
+    end
+
+    local function stashLocked(stash)
+        local locked = false
+        pcall(function() locked = stash.bLocked == true end)
+        return locked
+    end
+
+    -- A chest on the wire: class Stash only (a cart, a nest, a destructible stash is not one), the same key and
+    -- pivot a door sends.
+    local function stashKey(stash)
+        local cls, n, p = nil, nil, nil
+        pcall(function() cls = stash.class end)
+        if cls ~= "Stash" then return nil end
+        pcall(function() n = stash:GetName() end)
+        pcall(function() p = stash:GetWorldPos() end)
+        if not (n and p) or n == "" then W.chestStats.unnamed = W.chestStats.unnamed + 1; return nil end
+        return nameHash(n), p
+    end
+
+    -- Joiner: this player unlocked a chest here with his own lockpick or key -- the host is asked.
+    function KCD2MP_W195BChestAskLocal(stash, why)
+        if W.chestApplying or chestRole() ~= "joiner" then return end
+        local n, p = stashKey(stash)
+        if not n then return end
+        local now = os.clock()
+        if stash.w195bAskAt and (now - stash.w195bAskAt) < 2.0 then return end   -- the lockpick and the unlock both report one pick
+        stash.w195bAskAt = now
+        W.chestStats.asks = W.chestStats.asks + 1
+        mp_log(string.format("WO195B-CHEST asked %s (%s) -> the host (unlock)", n, tostring(why)))
+        KCD2MP_EmitEvent("w151_door", string.format("ask %s 0 3 %.2f %.2f %.2f", n, p.x, p.y, p.z))
+    end
+
+    -- Joiner: a locked chest of this copy just came unlocked. His claim only if he picked it or used it with a key
+    -- (a quest's or the engine's own unlock of this copy is not his, and never reaches the host's chest).
+    local function chestUnlockSeen(stash)
+        local n = stashKey(stash)
+        if not n then return end
+        local now, why = os.clock(), nil
+        local u = W.stashUse
+        if W.chestInPicked == stash then why = "lockpicked here"
+        elseif u and u.ent == stash and (now - u.at) < 2.0 then why = "key"
+        elseif stash.w195bPickAt and (now - stash.w195bPickAt) < KCD2MP_W151_PICK_WINDOW_S then why = "lockpicked here" end
+        if not why then
+            W.chestStats.ownUnlocks = W.chestStats.ownUnlocks + 1
+            if W.chestStats.ownUnlocks <= 5 then
+                mp_log(string.format("WO195B-CHEST own unlock of %s here (no pick of his, no key): not asked", n))
+            end
+            return
+        end
+        stash.w195bPickAt = nil
+        KCD2MP_W195BChestAskLocal(stash, why)
+    end
+
+    -- The host's own Henry is at this chest right now (it is open, he is using it, or his pick began a moment ago).
+    local function hostAtStash(stash)
+        local busy = false
+        pcall(function()
+            if stash.bOpened == 1 then busy = true end
+            local u = W.stashUse
+            if u and u.ent == stash and (os.clock() - u.at) < 2.0 then busy = true end
+            if stash.w195bPickAt and (os.clock() - stash.w195bPickAt) < CHEST_PICK_BUSY_S then busy = true end
+        end)
+        return busy
+    end
+
+    -- Host: a joiner asks for a chest (unlock = his lockpick or his key opened it there). The host only ever
+    -- unlocks, and only on that claim.
+    function KCD2MP_W195BChestAsked(src, name, unlock, x, y, z, tries)
+        local st = W.chestStats
+        name = tostring(name)
+        local role = chestRole()
+        if role ~= "host" then
+            st.refused = st.refused + 1
+            mp_log(string.format("WO195B-CHEST ask from %s for %s refused: %s", tostring(src), name,
+                W.chestSync and ("not the host here (role=" .. tostring(role) .. ")") or "mp_chest_sync is off"))
+            return
+        end
+        x, y, z = tonumber(x) or 0, tonumber(y) or 0, tonumber(z) or 0
+        local stash, how = findNear("Stash", name, x, y, z)
+        if not stash then
+            st.noMatch = st.noMatch + 1
+            mp_log(string.format("WO195B-CHEST ask from %s for %s no-match: no chest (%s) within 1 m of (%.2f, %.2f, %.2f)", tostring(src), name, tostring(how), x, y, z))
+            return
+        end
+        if tonumber(unlock) ~= 1 then
+            st.refused = st.refused + 1
+            mp_log(string.format("WO195B-CHEST ask from %s for %s refused: no unlock claim -- the host's chests are the host's own", tostring(src), name))
+            return
+        end
+        if not stashLocked(stash) then
+            st.already = st.already + 1
+            mp_log(string.format("WO195B-CHEST ask from %s for %s already: not locked in the host's world", tostring(src), name))
+            return
+        end
+        if hostAtStash(stash) then
+            if (tries or 0) < CHEST_DEFER_TRIES then
+                st.deferred = st.deferred + 1
+                mp_log(string.format("WO195B-CHEST ask from %s for %s deferred: the host's own Henry is at it (try %d)", tostring(src), name, (tries or 0) + 1))
+                Script.SetTimer(CHEST_DEFER_MS, function() KCD2MP_W195BChestAsked(src, name, unlock, x, y, z, (tries or 0) + 1) end)
+            else
+                st.refused = st.refused + 1
+                mp_log(string.format("WO195B-CHEST ask from %s for %s refused: the host's own Henry was at it the whole time", tostring(src), name))
+            end
+            return
+        end
+        W.chestApplying = true
+        local ok = pcall(function() stash:Unlock() end)
+        W.chestApplying = false
+        if ok and not stashLocked(stash) then
+            st.unlocked = st.unlocked + 1
+            mp_log(string.format("WO195B-CHEST ask from %s for %s unlocked (match=%s): the game's own Stash:Unlock in the host's world", tostring(src), name, tostring(how)))
+        else
+            st.refused = st.refused + 1
+            mp_log(string.format("WO195B-CHEST ask from %s for %s refused: Stash:Unlock %s", tostring(src), name, ok and "left it locked" or "failed"))
+        end
+    end
+
+    -- From the Stash.OnUsed wrap (WO-139's install): this player starts / ends using a chest. A key's unlock is
+    -- inside it; the host also reads it as "his Henry is at this chest".
+    function KCD2MP_W195BStashUseBegin(stash, user)
+        if not isPlayer(user) then return end
+        W.stashUse = { ent = stash, at = os.clock(), locked0 = stashLocked(stash) }
+    end
+
+    function KCD2MP_W195BStashUseEnd(stash, user)
+        local u = W.stashUse
+        if not (u and u.ent == stash) then return end
+        W.stashUse = nil
+        -- the key's unlock may be a plain write of the lock flag, never through Stash:Unlock
+        if u.locked0 and not stashLocked(stash) and chestRole() == "joiner" and not W.chestApplying then
+            pcall(KCD2MP_W195BChestAskLocal, stash, "key")
+        end
+    end
+
+    -- The class-table wraps (one covers every chest: instances resolve methods through the class).
+    function KCD2MP_W195BChestInstall()
+        if type(Stash) ~= "table" then return end
+        local wrapped = false
+        if type(Stash.Unlock) == "function" and Stash.Unlock ~= W.chestUnlockWrap then
+            local orig = Stash.Unlock
+            W.chestUnlockWrap = function(self, ...)
+                local l0 = stashLocked(self)
+                local r = orig(self, ...)
+                if l0 and not W.chestApplying and chestRole() == "joiner" and not stashLocked(self) then pcall(chestUnlockSeen, self) end
+                return r
+            end
+            Stash.Unlock = W.chestUnlockWrap
+            wrapped = true
+        end
+        -- the lockpick's success callback: whatever it does inside (the game's Unlock or a write of the flag), a locked
+        -- chest that is unlocked after it is this player's pick
+        if type(Stash.OnLockpicked) == "function" and Stash.OnLockpicked ~= W.chestPickedWrap then
+            local orig = Stash.OnLockpicked
+            W.chestPickedWrap = function(self, ...)
+                if chestRole() ~= "joiner" then return orig(self, ...) end
+                local l0, prev = stashLocked(self), W.chestInPicked
+                W.chestInPicked = self
+                local ok, r = pcall(orig, self, ...)
+                W.chestInPicked = prev
+                if l0 and not stashLocked(self) then pcall(KCD2MP_W195BChestAskLocal, self, "lockpicked here") end
+                if not ok then error(r, 0) end
+                return r
+            end
+            Stash.OnLockpicked = W.chestPickedWrap
+            wrapped = true
+        end
+        -- this player's pick begins here (when the class has the use action's Lockpick, like AnimDoor): a pick window
+        if type(Stash.Lockpick) == "function" and Stash.Lockpick ~= W.chestPickStartWrap then
+            local orig = Stash.Lockpick
+            W.chestPickStartWrap = function(self, user, ...)
+                if isPlayer(user) then self.w195bPickAt = os.clock() end
+                return orig(self, user, ...)
+            end
+            Stash.Lockpick = W.chestPickStartWrap
+            wrapped = true
+        end
+        if wrapped then mp_log("WO195B-CHEST wrapped Stash.Unlock/OnLockpicked/Lockpick (the use is read at WO-139's Stash.OnUsed wrap)") end
+    end
+
+    function KCD2MP_W195BSetChestSync(arg)
+        local v = KCD2MP_Wo122ParseBool(arg)
+        if v == "bad" then mp_log("mp_chest_sync: expected on|off, got '" .. tostring(arg) .. "'"); return false end
+        if v ~= nil then W.chestSync = v end
+        local st = W.chestStats
+        mp_log(string.format("WO195B-CHEST toggle mp_chest_sync chest_sync=%s role=%s asks=%d unlocked=%d already=%d no_match=%d refused=%d deferred=%d own_unlocks=%d unnamed=%d",
+            W.chestSync and "on" or "off", tostring(chestRole()), st.asks, st.unlocked, st.already, st.noMatch, st.refused, st.deferred, st.ownUnlocks, st.unnamed))
         return true
     end
 
@@ -27990,6 +28218,7 @@ local ok, err = pcall(function()
     System.AddCCommand("mp_whistle",             'KCD2MP_W151SetWhistle(%line)',          "WO-151: this player's whistle (call) is heard at his avatar on the partner's machine (default on): mp_whistle on|off; bare = report")
     System.AddCCommand("mp_scene_guard",         'KCD2MP_W151SetSceneGuard(%line)',       "WO-151: the scene guard -- a scene's end positioning that waits on paused copies resumes them, then a save request, given up at 90 s; a dialogue the game forces on a paused copy resumes it (default on): mp_scene_guard on|off; bare = report")
     System.AddCCommand("mp_door_sync",           'KCD2MP_W151SetDoorSync(%line)',         "WO-151: the host's world owns every door -- its doors' states go to the joiner, the joiner's door use asks the host (default on): mp_door_sync on|off; bare = report")
+    System.AddCCommand("mp_chest_sync",          'KCD2MP_W195BSetChestSync(%line)',       "WO-195B: a chest the joiner unlocks (his lockpick or his key) is unlocked in the host's world too -- the game's own Stash:Unlock on the host's chest at that pivot, so a save keeps it; the host only ever unlocks, and only on that claim (default on): mp_chest_sync on|off; bare = report")
     System.AddCCommand("mp_unstuck",             'KCD2MP_W151Unstuck(%line)',             "WO-151: a way out of any stuck player state through the game's own exits (the picker's Back, the mod's holds let go, the actor's StandUp; a fight you are in ends -- WO-154: the game's StopFight, and a joiner's host ends every fight against his figure; hard = also the game's own hit reaction, no damage): mp_unstuck [hard] [fight]")
     System.AddCCommand("mp_join_engine_hold",    'KCD2MP_W151SetJoinHold(%line)',         "WO-151 (host): the world is truly held for a whole join -- the engine's own pause from the join save to its end (at most the join's timeout + 60 s) (default on): mp_join_hold on|off; bare = report")
     System.AddCCommand("mp_crime_mode",          'KCD2MP_W151SetCrimeMode(%line)',        "WO-151: joint = a crime by either player counts for both (raised in the host's world too, a fine or punishment by either clears both); individual = each answers for his own (WO-139) (default joint): mp_crime_mode joint|individual; bare = report")
@@ -28002,7 +28231,7 @@ local ok, err = pcall(function()
         .. " copy_fight=" .. (KCD2MP.w151.copyFight and "on" or "off") .. " npc_reactions=" .. (KCD2MP.w151.npcReactions and "on" or "off")
         .. " hold_freeze=" .. (KCD2MP.w151.holdFreeze and "on" or "off") .. " ride_owner=" .. (KCD2MP.w151.rideOwner and "on" or "off")
         .. " crime_mode=" .. (KCD2MP.w151.crimeJoint and "joint" or "individual") .. " join_hold=" .. (KCD2MP.w151.joinHold and "on" or "off")
-        .. " door_sync=" .. (KCD2MP.w151.doorSync and "on" or "off") .. " scene_guard=" .. (KCD2MP.w151.sceneGuard and "on" or "off")
+        .. " door_sync=" .. (KCD2MP.w151.doorSync and "on" or "off") .. " chest_sync=" .. (KCD2MP.w151.chestSync and "on" or "off") .. " scene_guard=" .. (KCD2MP.w151.sceneGuard and "on" or "off")
         .. " whistle=" .. (KCD2MP.w151.whistle and "on" or "off") .. " carry_living=" .. (KCD2MP.w151.carryLiving and "on" or "off")
         .. " minigame_align=" .. (KCD2MP.w151.minigameAlign and "on" or "off") .. " quest_catchup=" .. (KCD2MP.w151.questCatchUp and "on" or "off")
         .. " frame_line_s=60 -- every native fault guard logs and counts; a game-code site is switched off after 8 faults")

@@ -554,6 +554,23 @@ public class RelayRoundTripTests : IClassFixture<RelayFixture>
     }
 
     [Fact]
+    public async Task A_chest_ask_rides_the_door_ask_through_the_relay_untouched()
+    {
+        // WO-195B 2a: a joiner's unlocked chest is a DoorAsk with the chest bit; the relay adds no kind and no rule for it.
+        var (a, b) = await TwoPeersAsync();
+        await using var _a = a; await using var _b = b;
+        var ev = new DoorEvent(2000u, 0, DoorEvent.FlagStash | DoorEvent.FlagLocked, 10.5f, -20.25f, 30f, "d16f3d13b");
+
+        await b.SendRawAsync(new ActionOutbox().Build(ActionKind.DoorAsk, ActionPhase.Commit, ev.ToBytes()));
+        var asked = new ActionInbox().Accept(await a.ReadUntilAsync(Protocol.ActionDown, Wait), out _);
+        Assert.NotNull(asked);
+        Assert.Equal(ActionKind.DoorAsk, asked!.Value.Kind);
+        Assert.True(DoorEvent.TryFromBytes(asked.Value.Payload, out var back));
+        Assert.Equal(ev, back);
+        Assert.True(back.IsStash);
+    }
+
+    [Fact]
     public async Task V8_attack_event_carries_its_row_guid_through_the_relay()
     {
         var (a, b) = await TwoPeersAsync();
