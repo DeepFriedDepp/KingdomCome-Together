@@ -193,6 +193,13 @@ static class P
         return $"SYNTH got W164 from={src} kind={Protocol.W164KindName(m.Kind)} {m.Text}";
     }
 
+    /// <summary>WO-200: a QuestHost message this peer received (a replay's ack, an item count), as one line.</summary>
+    static string? QuestHostNote(byte[] payload)
+    {
+        if (!Protocol.TrySplitJoinDown(payload, out byte src, out _, out _, out var body) || !LootMsg.TryDecode(body, out var m)) return null;
+        return $"SYNTH got QuestHost from={src} kind={Protocol.QuestHostName(m.Kind)} {m.Text}";
+    }
+
     static async Task<(byte, byte[])> ReadPacket(NetworkStream s, CancellationToken ct)
     {
         var h = new byte[3]; await ReadExact(s, h, ct);
@@ -429,6 +436,30 @@ static class P
                                   new LootMsg(byte.Parse(f[2], CultureInfo.InvariantCulture), ++joinTok, string.Join(' ', f.Skip(3))).BuildUp(Protocol.W164Up, Protocol.JoinTargetHost),
                                   $"W164->host kind={f[2]} {string.Join(' ', f.Skip(3))}"));
                     break;
+                case "mount":   // WO-200 II.2: mount <t> <npc> <horse|-> -- the host's NPC is on that horse (or on foot)
+                {
+                    var er = new ExtraRow { Name = f[2], Target = f[3] == "-" ? "" : f[3] };
+                    joinMsgs.Add((double.Parse(f[1], CultureInfo.InvariantCulture), ExtraCodec.BuildUp(1, Protocol.ExtraKindMount, new List<ExtraRow> { er }),
+                                  $"MOUNT {f[2]} {f[3]}"));
+                    break;
+                }
+                case "vitals":  // WO-200 II.1: vitals <t> <npc> <hp> <st> -- the host's own health and stamina of its NPC
+                {
+                    var er = new ExtraRow { Name = f[2], Health = F(f[3]), Stamina = F(f[4]) };
+                    joinMsgs.Add((double.Parse(f[1], CultureInfo.InvariantCulture), ExtraCodec.BuildUp(1, Protocol.ExtraKindVitals, new List<ExtraRow> { er }),
+                                  $"VITALS {f[2]} hp={f[3]} st={f[4]}"));
+                    break;
+                }
+                case "qask":    // WO-200: qask <t> <kind> <text...> -- a joiner's QuestAsk to the host (1 request, 5 out-port replay)
+                    joinMsgs.Add((double.Parse(f[1], CultureInfo.InvariantCulture),
+                                  new LootMsg(byte.Parse(f[2], CultureInfo.InvariantCulture), ++joinTok, string.Join(' ', f.Skip(3))).BuildUp(Protocol.QuestAskUp, Protocol.JoinTargetHost),
+                                  $"QASK->host kind={f[2]} {string.Join(' ', f.Skip(3))}"));
+                    break;
+                case "qhost":   // WO-200: qhost <t> <kind> <text...> -- the host's QuestHost to the joiner (1 change, 7 replay ack, 8 item count)
+                    joinMsgs.Add((double.Parse(f[1], CultureInfo.InvariantCulture),
+                                  new LootMsg(byte.Parse(f[2], CultureInfo.InvariantCulture), ++joinTok, string.Join(' ', f.Skip(3))).BuildUp(Protocol.QuestHostUp, 1),
+                                  $"QHOST kind={f[2]} {string.Join(' ', f.Skip(3))}"));
+                    break;
                 case "jattack": jattacks.Add((double.Parse(f[1], CultureInfo.InvariantCulture), Guid.Parse(f[2]))); break;   // WO-170
                 case "echo": echo = new Wo187Verbs.Echo { DelayMs = double.Parse(f[1], CultureInfo.InvariantCulture) * 1000.0, Ahead = double.Parse(f[2], CultureInfo.InvariantCulture) }; break;   // WO-187 C3
                 case "fmove": fmoves.Add((double.Parse(f[1], CultureInfo.InvariantCulture), f[2], Guid.Parse(f[3]))); break;   // WO-187 C3
@@ -503,6 +534,8 @@ static class P
                         Console.WriteLine($"SYNTH role={(rb2[0] == 1 ? "authority (host)" : "not the authority (joiner)")}");
                     else if (rt == Protocol.W164Down && W164Note(rb2) is string w164Note)
                         Console.WriteLine(w164Note);   // WO-167
+                    else if (rt == Protocol.QuestHostDown && QuestHostNote(rb2) is string qhNote)
+                        Console.WriteLine(qhNote);   // WO-200: acks, item counts
                     // The WO-191 follow-up: which of the host's NPCs reach this joiner, and their activity rows (the first of each name,
                     // then every 200th sample): SYNTH got npc <name> n=<k> flags=<f> | SYNTH got activity npc <name> <state>
                     else if (rt == Protocol.NpcStateDown && rb2.Length >= 2 && rb2.Length >= 2 + rb2[1] + 21)

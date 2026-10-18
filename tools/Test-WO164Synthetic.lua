@@ -76,6 +76,10 @@ end
 
 -- @@KDCMP@@
 
+-- WO-200 Act III: the sweeps and the geometric rider rule these scenarios pin stand down while WO-200's copy_neutral_always and
+-- rider_from_host are on (the default); they are tested here with those off (Test-WO200Synthetic.lua covers the replacements).
+if KCD2MP_W200Set then KCD2MP_W200Set("copy_neutral_always", "off"); KCD2MP_W200Set("rider_from_host", "off") end
+
 local RESULTS = {}
 local function check(name, ok, detail)
     RESULTS[#RESULTS + 1] = (ok and "PASS  " or "FAIL  ") .. name .. (detail and ("  [" .. tostring(detail) .. "]") or "")

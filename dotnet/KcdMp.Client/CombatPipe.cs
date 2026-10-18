@@ -660,12 +660,14 @@ public sealed class CombatPipe : IAsyncDisposable
     }
 
     /// <summary>op 3: set a copy's health to the host's (credited, never below 1); (ok, before, after).</summary>
-    public async Task<(bool Ok, float Before, float After, byte Reason)> Wo131FollowHpAsync(Guid soul, uint eid, float hp, CancellationToken ct = default)
+    public async Task<(bool Ok, float Before, float After, byte Reason)> Wo131FollowHpAsync(Guid soul, uint eid, float hp, CancellationToken ct = default, float stamina = -1f)
     {
-        var a = new byte[24];
+        // WO-200 II.1: [stamina:4f] after the health -- the host's own stamina of its NPC (the DLL sets it too)
+        var a = new byte[stamina >= 0 && float.IsFinite(stamina) ? 28 : 24];
         WriteSoulGuid(soul, a);
         BinaryPrimitives.WriteUInt32LittleEndian(a.AsSpan(16), eid);
         BinaryPrimitives.WriteSingleLittleEndian(a.AsSpan(20), hp);
+        if (a.Length == 28) BinaryPrimitives.WriteSingleLittleEndian(a.AsSpan(24), stamina);
         var r = await Wo131Async(3, a, ct);
         if (r is not { } v) return (false, -1, -1, 255);
         if (!v.Ok || v.Payload.Length < 8) return (false, -1, -1, v.Reason);
@@ -1816,11 +1818,13 @@ public sealed class CombatPipe : IAsyncDisposable
     public readonly record struct QuestApplied(byte Result, bool OldOk, int Old, bool NewOk, int New, string Type);
 
     /// <summary>op 2: one Set&lt;Value&gt; pulse on a quest State (null = the DLL did not answer).</summary>
-    public async Task<QuestApplied?> Wo137ApplyAsync(uint tag, string path, string port, CancellationToken ct = default)
+    public async Task<QuestApplied?> Wo137ApplyAsync(uint tag, string path, string port, CancellationToken ct = default, bool mirrorTalker = false)
     {
         byte[] pb = Encoding.ASCII.GetBytes(path), qb = Encoding.ASCII.GetBytes(port);
         if (pb.Length == 0 || pb.Length > 400 || qb.Length == 0 || qb.Length > 100) return null;
-        var a = new byte[4 + 2 + pb.Length + 1 + qb.Length];
+        // WO-200: [flags:1] after the port -- 1 = the host's own conversation made this change (wo137.h kApplyMirrorTalker)
+        var a = new byte[4 + 2 + pb.Length + 1 + qb.Length + (mirrorTalker ? 1 : 0)];
+        if (mirrorTalker) a[^1] = 1;
         BinaryPrimitives.WriteUInt32LittleEndian(a, tag);
         BinaryPrimitives.WriteUInt16LittleEndian(a.AsSpan(4), (ushort)pb.Length);
         pb.CopyTo(a, 6);

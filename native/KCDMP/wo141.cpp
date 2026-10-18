@@ -6,6 +6,7 @@
 #include "fault_guard.h"
 #include "wo141_rules.h"
 #include "wo197.h"
+#include "wo200.h"
 #include "wo143_rules.h"
 #include "npcstate.h"
 #include "anchors.h"
@@ -818,10 +819,31 @@ void neutralise_loaded(uint32_t eid, const char* name) {
     }
 }
 
+std::unordered_map<std::string, double> g_neutralAt;   // WO-200 II.4: copy -> when its loaded state was last made what it is
+std::atomic<uint32_t> c_neutralAlways{0};
+
 void reconcile_tick(double now) {
     if (!g_applyOn.load() || !g_applyArmed) return;
+    const bool neutral = wo200::copy_neutral_always();
     for (auto it = g_desired.begin(); it != g_desired.end();) {
         Desired& d = it->second;
+        // WO-200 II.4: a host copy (not a partner's figure) never asks the planner for anything here: its activity shows through the
+        // host's rows (WO-197) and its values; its loaded state is kept equal to what the body is, so nothing is left to demand.
+        if (neutral && !R::is_avatar_name(d.name.c_str())) {
+            if (d.held && d.eid) { npcdrive::set_activity_hold(d.eid, false); d.held = false; }
+            if (!d.eid) {
+                void* e = now - d.resolveAt >= 2.0 ? entity_by_name(d.name.c_str()) : nullptr;
+                if (e) d.eid = engine::entity_id(e); else if (now - d.resolveAt >= 2.0) d.resolveAt = now;
+            }
+            double& at = g_neutralAt[it->first];
+            if (d.eid && now - at >= 0.5) {
+                at = now;
+                R::Activity cur;
+                if (read_activity(d.eid, &cur)) { void* ctx = nullptr; build_loaded(d.eid, cur, nullptr, d.name.c_str(), nullptr, &ctx, true); c_neutralAlways.fetch_add(1, std::memory_order_relaxed); }
+            }
+            ++it;
+            continue;
+        }
         void* ent = d.eid ? engine::entity_by_id(d.eid) : nullptr;
         if (d.eid && (!ent || lower(engine::entity_name(ent)) != it->first)) { if (d.held) npcdrive::set_activity_hold(d.eid, false); d.eid = 0; d.held = false; }
         if (!d.eid) {

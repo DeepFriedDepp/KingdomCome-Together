@@ -42,6 +42,7 @@ int wo176_tests(int* passed);              // wo176_tests.cpp (WO-176: the arran
 int wo177_tests(int* passed);              // wo177_tests.cpp (WO-177: the native log rotation)
 int wo190_tests(int* passed);              // wo190_tests.cpp (WO-190: trace limits, idle watch, stand-in weapon, re-queue gate, gait hold, swing takeover)
 int wo195_tests(int* passed);              // wo195_tests.cpp (WO-195: the dead copy's gates and its release mask)
+int wo200_tests(int* passed);              // wo200_tests.cpp (WO-200: the two gates' rules, the node gate's prologue)
 int wo197_tests(int* passed);              // wo197_tests.cpp (WO-197: the recoil and clinch polls, the kept main actions, the pair request)
 int wo194_tests(int* passed);              // wo194_tests.cpp (WO-194: the hold, its release, the time gate, the FastForward stop)
 int wo187_tests(int* passed);              // wo187_tests.cpp (WO-187: opponent wishes, guard hold, idle restore, per-weapon 0x10)
@@ -313,6 +314,14 @@ int main() {
     {
         int fp = 0;
         const int ff = wo195_tests(&fp);
+        g_pass += fp;
+        g_fail += ff;
+    }
+
+    // WO-200: the out-port tap and the node gate -- quiet clocks, captures, puppets, the host's closure rules, talker-only routing
+    {
+        int fp = 0;
+        const int ff = wo200_tests(&fp);
         g_pass += fp;
         g_fail += ff;
     }

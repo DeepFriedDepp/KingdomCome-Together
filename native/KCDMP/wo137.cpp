@@ -21,6 +21,7 @@
 #include "pipe_server.h"
 #include "port_gate.h"
 #include "respawn.h"
+#include "wo200.h"
 
 namespace kcdmp::wo137 {
 
@@ -411,6 +412,7 @@ struct Rec {
     int32_t oldI, newI;
     uint16_t questLen;   // the quest root's prefix of `path` ("Barbora.trosecko.hledaniPsa")
     uint32_t tid;        // WO-154: the thread the change was made on (logs)
+    uint32_t closure;    // WO-200: the closure the change was made in (0 = none)
     char port[64];
     char type[48];
     char path[kMaxPath + 1];
@@ -438,9 +440,10 @@ void record(void* self, const void* oldV, const void* newV, bool notify, bool ca
     r.oldI = o.i; r.newI = nv.i;
     r.tid = GetCurrentThreadId();
     const bool worker = g_mainTid != 0 && r.tid != g_mainTid;
+    r.closure = wo200::closure_now();   // WO-200: a change inside a conversation's (or a replay's) closure carries its id
     r.flags = static_cast<uint8_t>((notify ? kFNotify : 0) | (t_applyDepth > 0 ? kFMirror : 0) |
                                    (o.ok ? kFOldOk : 0) | (nv.ok ? kFNewOk : 0) | (cascade ? kFCascade : 0) |
-                                   (worker ? kFWorker : 0));
+                                   (worker ? kFWorker : 0) | (r.closure ? kFClosure : 0));
     strncpy_s(r.type, nv.type[0] ? nv.type : o.type, _TRUNCATE);
     if (t_execNode == self && t_execPort)
         port_name(t_execPort, r.port, sizeof r.port);
@@ -1005,13 +1008,15 @@ void research_watch() {
 // ---------------------------------------------------------------------------
 void emit(const Rec& r) {
     if (g_logAll.load() || g_send_on.load()) {
-        logf("WO137-CHANGE seq=%u %s %s -> %d%s (from %d) type=%s%s%s%s%s tid=%u", r.seq, r.path, r.port[0] ? r.port : "-",
+        char cl[24] = "";
+        if (r.flags & kFClosure) _snprintf_s(cl, sizeof cl, _TRUNCATE, " closure=%08X", r.closure);
+        logf("WO137-CHANGE seq=%u %s %s -> %d%s (from %d) type=%s%s%s%s%s%s tid=%u", r.seq, r.path, r.port[0] ? r.port : "-",
              r.newI, (r.flags & kFNewOk) ? "" : "?", r.oldI, r.type, (r.flags & kFMirror) ? " MIRROR" : "",
              (r.flags & kFCascade) ? " cascade" : " root", (r.flags & kFNotify) ? "" : " silent",
-             (r.flags & kFWorker) ? " worker" : "", r.tid);
+             (r.flags & kFWorker) ? " worker" : "", cl, r.tid);
     }
     if (!g_send_on.load() || !g_send) return;
-    uint8_t b[1 + 4 + 4 + 4 + 1 + 64 + 1 + 48 + 2 + kMaxPath + 8];
+    uint8_t b[1 + 4 + 4 + 4 + 1 + 64 + 1 + 48 + 2 + kMaxPath + 8 + 4];
     size_t o = 0;
     std::memcpy(b + o, &r.seq, 4); o += 4;
     b[o++] = r.flags;
@@ -1022,6 +1027,7 @@ void emit(const Rec& r) {
     const uint16_t ph = static_cast<uint16_t>(std::strlen(r.path));
     std::memcpy(b + o, &ph, 2); o += 2; std::memcpy(b + o, r.path, ph); o += ph;
     std::memcpy(b + o, &r.questLen, 2); o += 2;
+    if (r.flags & kFClosure) { std::memcpy(b + o, &r.closure, 4); o += 4; }   // WO-200: the closure's id (the agent reads it when flag 128 is set)
     g_send(b, static_cast<uint16_t>(o));
     c_sent.fetch_add(1);
 }
@@ -1087,6 +1093,23 @@ bool visit_node(const char* path, NodeAccept fn, void* ctx) {
     if (!node) return false;
     fn(node, ctx);
     call_release(node);
+    return true;
+}
+// WO-200 (wo137.h)
+void* find_port_ref(void* node, const char* name) { return A.getPort ? find_port(node, name) : nullptr; }
+void release_ref(const void* res) { call_release(res); }
+bool function_method(const void* node, char* out, size_t n) {
+    out[0] = 0;
+    if (!A.timeGate) return false;   // the +0x68 read is verified only with the time gate's slot
+    const char* s = nullptr;
+    return rd(node, kOffFnMethodName, &s) && s && copy_cstr(s, out, n);
+}
+bool state_int(const void* node, int* out) {
+    if (!is_state(node)) return false;
+    Val v{};
+    decode(static_cast<const char*>(node) + kOffStateValue, &v);
+    if (!v.ok) return false;
+    *out = v.i;
     return true;
 }
 
@@ -1280,8 +1303,12 @@ uint8_t handle(const uint8_t* req, size_t n, uint8_t* out, size_t cap, size_t* o
         if (portLen == 0 || portLen > 100 || n < 8u + pl + portLen) return kRBadRequest;
         char port[128]{}; std::memcpy(port, req + 8 + pl, portLen);
         if (std::strncmp(path, "Barbora.", 8) != 0) return kRBadRequest;   // quests only
+        // WO-200: [flags:1] after the port -- the host's own conversation made this change: its talker-only rules hold while it applies
+        const uint8_t aflags = n > 8u + pl + portLen ? req[8 + pl + portLen] : 0;
         Val b{}, a{};
+        if (aflags & kApplyMirrorTalker) wo200::set_mirror_talker(true);
         const Applied r = apply(path, port, &b, &a);
+        if (aflags & kApplyMirrorTalker) wo200::set_mirror_talker(false);
         logf("WO137-APPLY tag=%u %s :: %s -> %s (from %d to %d, %s)", tag, path, port, applied_text(r), b.i, a.i, a.type);
         if (cap < 12 + 48) return kRFailed;
         size_t o = 0;

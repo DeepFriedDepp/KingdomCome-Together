@@ -18,9 +18,12 @@ namespace KcdMp.Client;
 /// worker thread, not the frame thread). questLen: the quest root's prefix of Path
 /// (only States under a C_Quest are recorded). 32 is a request's own flag (Wo147Rules.FlagConversation).
 /// </summary>
-public readonly record struct QuestChange(uint Seq, byte Flags, int Old, int New, string Port, string Type, string Path, int QuestLen)
+public readonly record struct QuestChange(uint Seq, byte Flags, int Old, int New, string Port, string Type, string Path, int QuestLen, uint Closure = 0)
 {
     public const byte FNotify = 1, FMirror = 2, FOldOk = 4, FNewOk = 8, FCascade = 16, FWorker = 64;
+    /// <summary>WO-200: made inside a closure (a conversation's out-port, or a replay of the joiner's on the host); <see cref="Closure"/> is its id.</summary>
+    public const byte FClosure = 128;
+    public bool InClosure => (Flags & FClosure) != 0;
     public bool Notify => (Flags & FNotify) != 0;
     public bool Mirror => (Flags & FMirror) != 0;
     public bool Cascade => (Flags & FCascade) != 0;
@@ -47,10 +50,13 @@ public readonly record struct QuestChange(uint Seq, byte Flags, int Old, int New
         if (o + tl + 2 > b.Length) return false;
         string type = Encoding.ASCII.GetString(b.Slice(o, tl)); o += tl;
         int ph = BinaryPrimitives.ReadUInt16LittleEndian(b[o..]); o += 2;
-        if (ph == 0 || o + ph + 2 != b.Length) return false;
+        // WO-200: flag 128 (a closure) ends the frame with [closure:4]
+        int tail = (flags & FClosure) != 0 ? 4 : 0;
+        if (ph == 0 || o + ph + 2 + tail != b.Length) return false;
         string path = Encoding.ASCII.GetString(b.Slice(o, ph)); o += ph;
-        int ql = BinaryPrimitives.ReadUInt16LittleEndian(b[o..]);
-        c = new QuestChange(seq, flags, old, nw, port, type, path, ql);
+        int ql = BinaryPrimitives.ReadUInt16LittleEndian(b[o..]); o += 2;
+        uint closure = tail == 4 ? BinaryPrimitives.ReadUInt32LittleEndian(b[o..]) : 0u;
+        c = new QuestChange(seq, flags, old, nw, port, type, path, ql, closure);
         return true;
     }
 }

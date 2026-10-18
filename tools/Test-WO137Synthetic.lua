@@ -346,6 +346,8 @@ do -- (c) talking (joiner)
     -- mp_scene_guard resumes the copy for it instead: Test-WO151Synthetic.lua (i))
     local sceneGuardWas = KCD2MP.w151 and KCD2MP.w151.sceneGuard
     if KCD2MP.w151 then KCD2MP.w151.sceneGuard = false end
+    -- (WO-200 I.6 wakes every participant of this player's conversation; its own suite covers that: Test-WO200Synthetic.lua (b))
+    if KCD2MP_W200Set then KCD2MP_W200Set("joiner_scoped_twins", "off") end
     mark = #LOG; CMDS = {}
     KCD2MP_W137TalkAttempt(500, "Dude tzel_olbram")
     PLAYER_IN_DIALOG = true; KCD2MP_W137Session(false, true, true); PLAYER_IN_DIALOG = false   -- WO-144 1.3: told once the player is in it
@@ -356,6 +358,7 @@ do -- (c) talking (joiner)
     NOW = NOW + 3; KCD2MP_W137Session(false, true, true)   -- WO-144: past the deferred end
     check("c: ...its end: nothing to pause again (it stayed paused)", cmdCount("wh_ai_PauseNPC") == 0 and countEvt("w137_talk", "off tzel_olbram", mark) == 1)
     if KCD2MP.w151 then KCD2MP.w151.sceneGuard = sceneGuardWas end
+    if KCD2MP_W200Set then KCD2MP_W200Set("joiner_scoped_twins", "on") end
 
     -- the host's stream stops mid-conversation: never parked until it ends
     NOW = NOW + 3.5   -- WO-164 T2: past the one-attempt-at-a-time window after the last talk with this copy

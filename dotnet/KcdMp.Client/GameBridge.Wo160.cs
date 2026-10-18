@@ -116,7 +116,8 @@ public partial class GameBridge
         bool avatar = name.StartsWith("kcd2mp_", StringComparison.Ordinal);
         bool had = _w160Given.TryGetValue(name, out var prev);
         bool changed = force || !had || prev != a;   // force: a time skip changed every copy's state under its activity
-        bool release = _w160ReleaseOn && Wo160Rules.ReleaseBeforeApply(avatar, had && !prev.IsNone, changed);
+        // WO-200 Act III (ledger row 9): a copy kept neutral every tick (II.4) holds no stance or unstance of its own to release
+        bool release = _w160ReleaseOn && !(W200("copy_neutral_always") && !avatar) && Wo160Rules.ReleaseBeforeApply(avatar, had && !prev.IsNone, changed);
         int before = W160ErrorsOf(name);
         if (release)
         {
@@ -148,6 +149,8 @@ public partial class GameBridge
     private async Task W160SettleAfterSkipAsync(string why)
     {
         if (!W141Joiner || !W141Active) return;
+        // WO-200 Act III (ledger row 9): with copy_neutral_always on a copy demands nothing after a skip either -- the settle stands down
+        if (W200("copy_neutral_always")) { Console.WriteLine($"WO160-CTX settle after {why}: none (WO-200 II.4: copies demand nothing)"); return; }
         long now = Environment.TickCount64;
         if (now - Interlocked.Exchange(ref _w160SettleMs, now) < 5_000) return;
         if (_w164On)

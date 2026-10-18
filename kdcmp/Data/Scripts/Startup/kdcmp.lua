@@ -221,7 +221,7 @@ end
 -- (see the Phase 5 section of docs/WO-106-findings.md) and the periodic
 -- reconciliation sweep (WO-84) stays as the mitigation for it.
 local function mp_set_no_save(e)
-    if not e then return false end
+    if not (e and e.SetFlags) then return false end
     local ok = false
     pcall(function() e:SetFlags(ENTITY_FLAG_NO_SAVE, 3); ok = true end)
     return ok
@@ -4415,6 +4415,7 @@ function KCD2MP_OnChainDeadRestart(key)
     end
     KCD2MP._pauseStats.forgot = (KCD2MP._pauseStats.forgot or 0) + dwells
     if KCD2MP.w131 then KCD2MP.w131.reassert = true end   -- WO-131: re-park on the next sweep
+    if KCD2MP_W131ForgetStandIns then pcall(KCD2MP_W131ForgetStandIns, "load:" .. tostring(key)) end   -- WO-200 II.5
     local puppets = 0
     for pname, p in pairs(KCD2MP.npcPuppets or {}) do
         puppets = puppets + 1
@@ -6159,6 +6160,7 @@ function KCD2MP_W131Tick(joiner, shared)
         KCD2MP_W131UnparkAll("inactive")
     end
     if w.active then pcall(w131_sweep); pcall(KCD2MP_W135KoTick) end   -- WO-135: knockouts follow the host's
+    if w.active and KCD2MP_W131StandInSweep then pcall(KCD2MP_W131StandInSweep) end   -- WO-200 II.5: a stand-in whose world NPC is back
 end
 
 -- Liveness backstop from the 8 ms draw loop: the agent went away without a
@@ -6258,7 +6260,12 @@ function KCD2MP_W131StandIn(name, x, y, z, rot, flags)
     end)
     local e = w131_body(name)
     if e then
-        w.standins[name] = { at = now, soul = soul }
+        -- WO-200 II.5: the body carries a token (its script table is the stand-in's own: a load gives the world's NPC of this name a new
+        -- one) and never goes into a save -- a stand-in never outlives the world it was made in
+        local token = string.format("%s@%.3f", name, now)
+        pcall(function() e.kcdmpStandIn = token end)
+        mp_set_no_save(e)
+        w.standins[name] = { at = now, soul = soul, token = token, id = e.id, cls = cls }
         pcall(function() e:SetWorldAngles({ x = 0, y = 0, z = tonumber(rot) or 0 }) end)
         mp_log(string.format("WO131-STANDIN spawn npc=%s soul=%s class=%s kind=%s at=(%.1f,%.1f,%.1f) -- the host spawned it, this world never did",
             name, string.sub(soul, 1, 8), tostring(cls), kind, x, y, z))
@@ -6272,15 +6279,85 @@ end
 
 function KCD2MP_W131RemoveStandIn(name, why)
     local w = KCD2MP.w131
-    if not w.standins[name] then return false end
+    local entry = w.standins[name]
+    if not entry then return false end
     w.standins[name] = nil
     w.parked[name] = nil
+    -- WO-200 II.5: by identity, never by name. The field (0.61.0): the rejoin's load left this table behind (Lua outlives a load), and
+    -- the backstop "removed" Semine's and Suk's stand-ins by name -- the new world's own lords, deleted, and gone after the next save.
     local e = w131_body(name)
-    if e then pcall(function() System.RemoveEntity(e.id) end) end
+    local mine = false
+    pcall(function() mine = e ~= nil and entry.token ~= nil and e.kcdmpStandIn == entry.token end)
+    if mine then
+        pcall(function() System.RemoveEntity(e.id) end)
+    elseif e then
+        mp_log(string.format("WO200-STANDIN kept npc=%s why=%s -- the body answering to that name is not the stand-in (the world's own NPC): nothing removed",
+            tostring(name), tostring(why)))
+    end
     local p = KCD2MP.npcPuppets[name]
     if p and p.idHex then p.idHex = "?" end   -- WO-147: its next body is a new one, whatever its id
     mp_log(string.format("WO131-STANDIN remove npc=%s why=%s", name, tostring(why)))
     return true
+end
+
+-- WO-200 II.5: a load (the chain-dead restart, Lua's own detector) destroyed every stand-in -- they are never saved. The table forgets them:
+-- nothing is removed by name. Each streamed NPC then resolves to the new world's body of its name; a missing one gets exactly one stand-in.
+--   WO200-STANDIN forget n=<n> why=<w>
+function KCD2MP_W131ForgetStandIns(why)
+    local w = KCD2MP.w131
+    local n = 0
+    for name in pairs(w.standins or {}) do
+        n = n + 1
+        w.parked[name] = nil
+        local p = KCD2MP.npcPuppets[name]
+        if p and p.idHex then p.idHex = "?" end   -- WO-147: its next body is a new one
+    end
+    w.standins = {}
+    if n > 0 then
+        KCD2MP.w131.standinForgot = (KCD2MP.w131.standinForgot or 0) + n
+        mp_log(string.format("WO200-STANDIN forget n=%d why=%s -- a load destroyed every stand-in (never saved); nothing is removed by name", n, tostring(why)))
+    end
+    return n
+end
+
+-- WO-200 II.5: a stand-in whose world NPC is back (its layer loaded again) is retired: the stream binds the world's own body. Every 5 s.
+--   WO200-STANDIN retired npc=<name> -- its world NPC is back
+function KCD2MP_W131StandInSweep()
+    local w = KCD2MP.w131
+    if next(w.standins or {}) == nil then return 0 end
+    local now = os.clock()
+    if now - (w.standinSweepAt or -1e9) < 5.0 then return 0 end
+    w.standinSweepAt = now
+    local byClass, retired = {}, 0
+    for name, entry in pairs(w.standins) do
+        local cls = entry.cls or "NPC"
+        if not byClass[cls] then
+            local list = {}
+            pcall(function() list = System.GetEntitiesByClass(cls) or {} end)
+            byClass[cls] = list
+        end
+        local other = nil
+        for _, ent in ipairs(byClass[cls]) do
+            local nm, tok = nil, nil
+            pcall(function() nm = ent:GetName(); tok = ent.kcdmpStandIn end)
+            if nm == name and tok ~= entry.token then other = ent; break end
+        end
+        if other then
+            local own = nil
+            pcall(function() own = entry.id and System.GetEntity(entry.id) end)
+            local ok = false
+            pcall(function() ok = own ~= nil and own.kcdmpStandIn == entry.token end)
+            if ok then pcall(function() System.RemoveEntity(own.id) end) end
+            w.standins[name] = nil
+            w.parked[name] = nil
+            local p = KCD2MP.npcPuppets[name]
+            if p and p.idHex then p.idHex = "?" end
+            retired = retired + 1
+            KCD2MP.w131.standinRetired = (KCD2MP.w131.standinRetired or 0) + 1
+            mp_log(string.format("WO200-STANDIN retired npc=%s removed_own=%s -- its world NPC is back: the stream binds that body", name, tostring(ok)))
+        end
+    end
+    return retired
 end
 
 function KCD2MP_SetNpcStandIn(arg)
@@ -7565,14 +7642,21 @@ function KCD2MP_W137TalkAttempt(id, souls)
                 -- holds its NPC and the end is seen. WO-151 3.4 (mp_scene_guard): the copy runs its own brain for
                 -- it, like this player's own talk -- on a paused copy the engine's dialogue waited 20 s for its
                 -- twins and gave up (4 of 4 field cases, WO-149 4.3); WO-137's Q6 ran it on the suspended copy.
-                local resume = KCD2MP.w151 and KCD2MP.w151.sceneGuard and KCD2MP._npcPaused[name] ~= nil
+                -- WO-200 I.6 (joiner_scoped_twins): every participant of this player's conversation is woken for exactly its
+                -- lifetime (the trialog's second speaker is a copy too), whatever the scene guard says; its end pauses it again.
+                local twins = KCD2MP_W200On and KCD2MP_W200On("joiner_scoped_twins")
+                local resume = (twins or (KCD2MP.w151 and KCD2MP.w151.sceneGuard)) and KCD2MP._npcPaused[name] ~= nil
                 local ft
                 if resume then
-                    ft = KCD2MP_W137TalkResume(name, "forced")
+                    ft = KCD2MP_W137TalkResume(name, twins and "scoped-twin" or "forced")
                     ft.started, ft.id, ft.forced = true, id, true
                 else
                     ft = { since = os.clock(), via = "forced", id = id, started = true, resumed = false, forced = true }
                     w.talking[name] = ft
+                end
+                if twins then
+                    ft.twin = true
+                    if KCD2MP_W200TwinWoken then KCD2MP_W200TwinWoken(name, id, souls, resume) end
                 end
                 w.stats.forced = w.stats.forced + 1
                 KCD2MP_EmitEvent("w164_talk", "start " .. name .. " " .. tostring(id))   -- WO-166: a forced conversation has started (no open request)
@@ -7636,6 +7720,7 @@ function KCD2MP_W137TalkEnd(name, why, keep)   -- keep (WO-167 T1): the copy is 
     mp_log(string.format("WO137-TALK end npc=%s id=%s why=%s held_s=%.1f started=%s via=%s -- %s%s",
         name, tostring(t.id), tostring(why), os.clock() - t.since, tostring(t.started == true or t.startedWas == true), tostring(t.via), how,
         t.holdSent and "" or "; the host's NPC was never held"))
+    if t.twin then mp_log(string.format("WO200-TWINS end npc=%s id=%s reason=%s after_s=%.1f -- the conversation's participant: %s", name, tostring(t.id), tostring(why), os.clock() - t.since, how)) end
     -- WO-144 1.3: an off only for a hold that went out (a conversation that never started held nothing)
     if t.holdSent then KCD2MP_EmitEvent("w137_talk", "off " .. name) end
     if t.freed and not keep then KCD2MP_EmitEvent("w157_talkfree", "off " .. name) end   -- WO-157 3b.4: the host's activity again
@@ -8656,6 +8741,7 @@ function KCD2MP_NpcSyncTick()
         pcall(mp_wo1025_colocation_tick)
         pcall(mp_npc_rescan)
         if isAuthority and KCD2MP_W138PushTrack then pcall(KCD2MP_W138PushTrack) end   -- WO-138: the set the DLL samples
+        if isAuthority and KCD2MP_W200HostValuesTick then pcall(KCD2MP_W200HostValuesTick) end   -- WO-200 II.1/II.2: mount and stamina values
     end
 
     -- WO-40 Phase 6: an NPC's real swings are invisible to Lua, but the one
@@ -19268,6 +19354,7 @@ function KCD2MP_W139Install()
         w.lpOrig = orig
         w.lpWrap = function(id, ...)
             pcall(KCD2MP_W139Lockpick, id)
+            if KCD2MP_W200JoinerNoise and KCD2MP.w137 and KCD2MP.w137.joiner then pcall(KCD2MP_W200JoinerNoise, "lockpick", id) end   -- WO-200 Act IV
             return orig(id, ...)
         end
         Minigame.StartLockPicking = w.lpWrap
@@ -21454,6 +21541,13 @@ function KCD2MP_W164Sweep(name, trigger)
     local w = KCD2MP.w164
     name, trigger = tostring(name or ""), tostring(trigger or "console")
     if not w.sweep or not string.find(name, "^[%w_]+$") then return false end
+    -- WO-200 Act III (ledger row 9): a copy whose loaded state is its current one on every tick (II.4, copy_neutral_always) has nothing torn
+    -- to sweep; the context sweeps (focus, after a skip) stand down while that is on (marked for removal; mp_copy_neutral_always off brings
+    -- them back). The talk's own steps (its retry, the host's conversation end) keep theirs: they free the copy for a conversation.
+    if (trigger == "focus" or trigger == "skip") and KCD2MP_W200On and KCD2MP_W200On("copy_neutral_always") then
+        w.stats.retired = (w.stats.retired or 0) + 1
+        return false
+    end
     if not KCD2MP.npcPuppets[name] then w.stats.skipped = w.stats.skipped + 1; return false end   -- the host's copies only
     local now = os.clock()
     -- WO-191 2: never on a copy that fights, whatever the trigger -- engaged, combat mode, the host's NPC in combat or targeting a player, this
@@ -22187,7 +22281,10 @@ function KCD2MP_W176Tick(gen)
         pcall(function() e = System.GetEntityByName(nm) end)
         if e and e.id then
             live[nm] = true
-            local story = w.arrangedGuard and KCD2MP_W176StoryNear(e) or nil
+            -- WO-200 Act III (ledger row 5): on a joiner whose copies run no quest behaviours (I.5) no arranged fight forms here; the guard's
+            -- joiner half stands down while that is on (the host's half stays: its own story fights are real). Marked for removal.
+            local retired = KCD2MP.w137 and KCD2MP.w137.joiner and KCD2MP_W200On and KCD2MP_W200On("joiner_no_puppet_quests")
+            local story = (w.arrangedGuard and not retired) and KCD2MP_W176StoryNear(e) or nil
             if story then w.nearAt[nm] = now; w.storySeenAt = now end
             if story then KCD2MP_W176Pause(nm, true, "story=" .. story)
             elseif w.paused[nm] and (not w.arrangedGuard or now - (w.nearAt[nm] or 0) >= w.offAfterS) then KCD2MP_W176Pause(nm, false, "story=-") end
@@ -22654,6 +22751,12 @@ do   -- WO-175's do-block
         local talking = false
         local h = player and player.human
         if h and h.IsInDialog then pcall(function() talking = h:IsInDialog() == true end) end
+        -- WO-200 Act IV: the player's own monologue or a bark is no conversation (the field's only save wait was Henry's stomach growl):
+        -- the agent reads the engine's dialogue lines and says when every open dialogue of his is one of those
+        if talking and KCD2MP_W200OnlyMonologue and KCD2MP_W200OnlyMonologue() then
+            talking = false
+            if KCD2MP_W200NoteMonologueSave then KCD2MP_W200NoteMonologueSave() end
+        end
         if talking then return "dialogue", false end
         local w170 = KCD2MP.w170
         if w170 and (tonumber(w170.sceneRunning) or 0) > 0 then return "scene", false end
@@ -22667,10 +22770,12 @@ do   -- WO-175's do-block
         local w = KCD2MP.w175
         if not w.guard then return true end
         local r = W175.busyReason()
-        if not r then return true end
+        if not r then w.waitSince = nil; return true end
         w.deferN = w.deferN + 1
         w.stats.deferred = w.stats.deferred + 1
+        w.waitSince = w.waitSince or os.clock()
         mp_log(string.format("WO175-SAVE deferred reason=%s kind=%s n=%d -- the mod's save waits; asked again in 5 s", r, tostring(kind or "mod-save"), w.deferN))
+        mp_log(string.format("WO200-SAVEWAIT reason=%s kind=%s waited_s=%.0f", r, tostring(kind or "mod-save"), os.clock() - w.waitSince))   -- WO-200 Act IV
         return false
     end
 
@@ -22684,7 +22789,11 @@ do   -- WO-175's do-block
             w.stats.locks = w.stats.locks + 1
             mp_log(string.format("WO175-SAVE deferred reason=%s kind=game-save lock=%s -- autosave and manual saves wait (max %.0f s)",
                 tostring(reason), ok and "on" or "refused", w.maxLockS))
-            if (os.clock() - w.toldAt) > 30 then w.toldAt = os.clock(); pcall(KCD2MP_ShowInteractionMsg, w.lockText) end
+            if (os.clock() - w.toldAt) > 30 then
+                w.toldAt = os.clock()
+                pcall(KCD2MP_ShowInteractionMsg, KCD2MP_W200SaveWaitText and KCD2MP_W200SaveWaitText(reason) or w.lockText)   -- WO-200: names its reason
+            end
+            w.waitLogAt = os.clock()
         elseif not on and w.lockHeld then
             pcall(Game.RemoveSaveLock, w.lockName)
             mp_log(string.format("WO175-SAVE resumed reason=%s after_s=%.1f -- saving allowed again", tostring(w.lockReason), os.clock() - (w.lockSince or os.clock())))
@@ -22703,6 +22812,10 @@ do   -- WO-175's do-block
         if now - w.tickAt < 0.2 then return end   -- one chain (a load restarts it)
         w.tickAt = now
         local r = w.guard and W175.txnReason() or nil
+        if r and w.lockHeld and (now - (w.waitLogAt or 0)) >= 5 then   -- WO-200 Act IV: a waiting save says why, every 5 s
+            w.waitLogAt = now
+            mp_log(string.format("WO200-SAVEWAIT reason=%s kind=game-save waited_s=%.0f", tostring(r), now - (w.lockSince or now)))
+        end
         if r and not w.lockHeld then
             w175_lock(true, r)
         elseif r and w.lockHeld and (now - (w.lockSince or now)) > w.maxLockS then
@@ -23551,6 +23664,305 @@ do
     function KCD2MP_W197Check(arg) return KCD2MP_EmitEvent("w197_check", tostring(arg or "")) end
 end   -- WO-197's do-block
 
+-- WO-200: one world, one story -- actions, not results. The standing rule: actions go to the authority; values come back. The host's world
+-- decides; the joiner's game shows, and asks. The switches live in the agent and the DLL (w200_cfg); this block names them and passes
+-- on|off. Each mechanism ships on, each with its own switch (V.1-V.3 ship off: see docs/WO-200-findings.md).
+do
+    W200 = W200 or {}
+    W200.NAMES = {
+        s1_replay = "mp_s1_replay", s1_route = "mp_s1_route", qitem_mirror = "mp_qitem_mirror", joiner_quiet_clocks = "mp_joiner_quiet_clocks",
+        joiner_no_puppet_quests = "mp_joiner_no_puppet_quests", joiner_scoped_twins = "mp_joiner_scoped_twins",
+        copy_health_from_host = "mp_copy_health_from_host", rider_from_host = "mp_rider_from_host", copy_hands_from_host = "mp_copy_hands_from_host",
+        copy_neutral_always = "mp_copy_neutral_always", world_clock_from_host = "mp_world_clock_from_host", stream_dogs = "mp_stream_dogs",
+        joiner_receive_only = "mp_joiner_receive_only", figure_is_player = "mp_figure_is_player", nearest_player_triggers = "mp_nearest_player_triggers",
+    }
+    W200.OFF = { joiner_receive_only = true, figure_is_player = true, nearest_player_triggers = true }   -- shipped off (the findings say why)
+    W200.on = W200.on or {}
+
+    function KCD2MP_W200On(name)
+        local v = W200.on[tostring(name)]
+        if v == nil then return not W200.OFF[tostring(name)] end
+        return v
+    end
+    function KCD2MP_W200Set(name, arg)
+        local label = W200.NAMES[tostring(name)]
+        if not label then mp_log("WO200-TOGGLE unknown switch '" .. tostring(name) .. "'"); return false end
+        local v = KCD2MP_Wo122ParseBool(arg)
+        if v == "bad" then mp_log(label .. ": expected on|off, got '" .. tostring(arg) .. "'"); return false end
+        if v == nil then
+            mp_log("WO200-TOGGLE " .. label .. " is " .. (KCD2MP_W200On(name) and "on" or "off") .. " (mp_w200_status shows every value)")
+            return true
+        end
+        W200.on[tostring(name)] = v
+        mp_log("WO200-TOGGLE " .. label .. " " .. (v and "on" or "off") .. " -- sent to the agent and the DLL")
+        KCD2MP_EmitEvent("w200_cfg", tostring(name) .. "=" .. (v and "on" or "off"))
+        return true
+    end
+    function KCD2MP_W200Status()
+        local tw, q = W200.twins, W200.q
+        mp_log(string.format("WO200-STATUS asked (MP-W200-STATS in agent.log); twins: conversations=%d woken=%d running=%d max_souls=%d; quest items: classes=%d reported=%d agreed=%d differs=%d pending=%d",
+            tw and tw.conversations or 0, tw and tw.woken or 0, tw and tw.running or 0, tw and tw.maxSouls or 0,
+            q and q.n or 0, q and q.stats.reported or 0, q and q.stats.agreed or 0, q and q.stats.differs or 0, q and q.stats.pending or 0))
+        KCD2MP_EmitEvent("w200_status", "")
+        return true
+    end
+    -- one-argument setters (WO-106's placeholder rule: a bare command expands to a Lua syntax error otherwise)
+    function KCD2MP_W200SetS1Replay(arg) return KCD2MP_W200Set("s1_replay", arg) end
+    function KCD2MP_W200SetS1Route(arg) return KCD2MP_W200Set("s1_route", arg) end
+    function KCD2MP_W200SetQitemMirror(arg) return KCD2MP_W200Set("qitem_mirror", arg) end
+    function KCD2MP_W200SetQuietClocks(arg) return KCD2MP_W200Set("joiner_quiet_clocks", arg) end
+    function KCD2MP_W200SetNoPuppetQuests(arg) return KCD2MP_W200Set("joiner_no_puppet_quests", arg) end
+    function KCD2MP_W200SetScopedTwins(arg) return KCD2MP_W200Set("joiner_scoped_twins", arg) end
+    function KCD2MP_W200SetCopyHealth(arg) return KCD2MP_W200Set("copy_health_from_host", arg) end
+    function KCD2MP_W200SetRider(arg) return KCD2MP_W200Set("rider_from_host", arg) end
+    function KCD2MP_W200SetCopyHands(arg) return KCD2MP_W200Set("copy_hands_from_host", arg) end
+    function KCD2MP_W200SetCopyNeutral(arg) return KCD2MP_W200Set("copy_neutral_always", arg) end
+    function KCD2MP_W200SetWorldClock(arg) return KCD2MP_W200Set("world_clock_from_host", arg) end
+    function KCD2MP_W200SetStreamDogs(arg)
+        local ok = KCD2MP_W200Set("stream_dogs", arg)
+        local v = KCD2MP_Wo122ParseBool(arg)
+        if ok and v ~= nil and v ~= "bad" and KCD2MP.dogSync then KCD2MP.dogSync.on = v end   -- II.8: WO-191's dog stream (mp_dog_sync) is this switch
+        return ok
+    end
+
+    -- Act IV: which of this player's open dialogues are only his own monologue or a bark (the agent reads the engine's start / end lines:
+    -- "New dialogue ... (ingame monolog ...)", combat shouts). Unknown (no agent) = the game's own IsInDialog alone decides, as before.
+    W200.dlg = W200.dlg or { conv = 0, mono = 0, known = false, exemptN = 0, exemptAt = -1e9 }
+    function KCD2MP_W200DialogKinds(conv, mono)
+        local d = W200.dlg
+        d.conv, d.mono, d.known = tonumber(conv) or 0, tonumber(mono) or 0, true
+    end
+    function KCD2MP_W200OnlyMonologue()
+        local d = W200.dlg
+        return d.known and d.conv == 0 and d.mono > 0
+    end
+    function KCD2MP_W200NoteMonologueSave()
+        local d = W200.dlg
+        d.exemptN = d.exemptN + 1
+        if os.clock() - d.exemptAt >= 30 then
+            d.exemptAt = os.clock()
+            mp_log(string.format("WO200-SAVEWAIT none: this player's own monologue or a bark is no conversation -- a save goes ahead (n=%d)", d.exemptN))
+        end
+    end
+    local W200_SAVE_WHY = {
+        ["sleep-hold"] = "a shared bed is being settled", ["weapon-repair"] = "your weapon is being put right",
+        ["loot-take"] = "an item is changing hands", ["item-take"] = "an item is changing hands", ["loot-open"] = "a container is opening",
+        dialogue = "you are in a conversation", scene = "a scene is playing", combat = "you are in a fight", ["arranged-fight"] = "an arranged fight is on",
+    }
+    function KCD2MP_W200SaveWaitText(reason)
+        local why = W200_SAVE_WHY[tostring(reason)] or tostring(reason or "the co-op mod is finishing a change")
+        return "Saving waits a moment: " .. why .. "."
+    end
+
+    -- Act IV: noise the host's world can hear. WO-195B made the joiner's footsteps wake sleepers; his lockpicking, his fights and the
+    -- doors he works were still silent there. The host makes the engine's own perception sounds (the game's rpg_sound ids: 1 combat,
+    -- 2 lockpick, 7 door) at the spot, so sleepers and guards react the way they do to the host's own Henry. mp_joiner_noise on|off.
+    --   WO200-NOISE kind=<k> sound=<id> at=(x,y,z) from=<peer> -> ok | FAILED
+    W200.noiseOn = (W200.noiseOn == nil) and true or W200.noiseOn
+    W200.NOISE = { combat = 1, lockpick = 2, door = 7 }
+    W200.noiseAt = W200.noiseAt or {}
+    W200.noiseStats = W200.noiseStats or { made = 0, failed = 0 }
+    function KCD2MP_W200NoiseSound(kind, x, y, z, from)
+        if not W200.noiseOn then return false end
+        local id = W200.NOISE[tostring(kind)]
+        if not (id and XGenAIModule and XGenAIModule.ProduceSound) then return false end
+        local ok, err = pcall(function() return XGenAIModule.ProduceSound(id, { x = tonumber(x) or 0, y = tonumber(y) or 0, z = tonumber(z) or 0 }, 1.0) end)
+        if ok then W200.noiseStats.made = W200.noiseStats.made + 1 else W200.noiseStats.failed = W200.noiseStats.failed + 1 end
+        if W200.noiseStats.made + W200.noiseStats.failed <= 40 or not ok then
+            mp_log(string.format("WO200-NOISE kind=%s sound=%d at=(%.1f,%.1f,%.1f) from=%s -> %s -- the host's world hears the joiner", tostring(kind), id,
+                tonumber(x) or 0, tonumber(y) or 0, tonumber(z) or 0, tostring(from or "-"), ok and "ok" or ("FAILED " .. tostring(err))))
+        end
+        return ok
+    end
+    -- the host: a joiner's noise; a lockpick is a sound that lasts (the game's intensity_per_second): four pulses over the picking
+    function KCD2MP_W200NoisePulses(kind, x, y, z, from)
+        kind = tostring(kind)
+        local now = os.clock()
+        if now - (W200.noiseAt[kind .. tostring(from)] or -1e9) < 1.0 then return false end
+        W200.noiseAt[kind .. tostring(from)] = now
+        KCD2MP_W200NoiseSound(kind, x, y, z, from)
+        if kind == "lockpick" then
+            for i = 1, 3 do Script.SetTimer(2000 * i, function() KCD2MP_W200NoiseSound(kind, x, y, z, from) end) end
+        end
+        return true
+    end
+    -- the host: a fight of the joiner's (his swing played on his figure here), the combat sound at the figure; one per 1.5 s
+    function KCD2MP_W200NoiseAtBody(kind, name)
+        local now = os.clock()
+        if now - (W200.noiseAt[tostring(kind) .. tostring(name)] or -1e9) < 1.5 then return false end
+        local e = System.GetEntityByName(tostring(name))
+        local p = nil
+        if e then pcall(function() p = e:GetWorldPos() end) end
+        if not p then return false end
+        W200.noiseAt[tostring(kind) .. tostring(name)] = now
+        return KCD2MP_W200NoiseSound(kind, p.x, p.y, p.z, name)
+    end
+    -- the joiner: a noise of his, to the host (as an action)
+    function KCD2MP_W200JoinerNoise(kind, ent)
+        if not W200.noiseOn then return false end
+        local e = ent
+        if type(ent) ~= "table" then pcall(function() e = System.GetEntity(ent) end) end
+        local p = nil
+        if e then pcall(function() p = e:GetWorldPos() end) end
+        if not p and player then pcall(function() p = player:GetWorldPos() end) end
+        if not p then return false end
+        KCD2MP_EmitEvent("w200_noise", string.format("%s %.2f %.2f %.2f", tostring(kind), p.x, p.y, p.z))
+        return true
+    end
+    function KCD2MP_W200SetNoise(arg)
+        local v = KCD2MP_Wo122ParseBool(arg)
+        if v == "bad" then mp_log("mp_joiner_noise: expected on|off, got '" .. tostring(arg) .. "'"); return false end
+        if v ~= nil then W200.noiseOn = v end
+        mp_log("WO200-TOGGLE mp_joiner_noise " .. (W200.noiseOn and "on" or "off") .. " -- the joiner's lockpicking, fights and doors as noise in the host's world")
+        return true
+    end
+
+    -- I.6 (joiner): a participant of this player's own conversation (the engine's start attempt names it) was woken for it. The host holds
+    -- its NPC once this player is in the conversation (WO-137's tick, as for the talk target); the conversation's end pauses the copy again.
+    W200.twins = W200.twins or { conversations = 0, woken = 0, running = 0, maxSouls = 0, lastId = -1 }
+    function KCD2MP_W200TwinWoken(name, id, souls, resumed)
+        local s = W200.twins
+        if s.lastId ~= id then
+            s.lastId, s.conversations = id, s.conversations + 1
+            local n = 0
+            for _ in string.gmatch(tostring(souls or ""), "[%w_]+") do n = n + 1 end
+            if n > s.maxSouls then s.maxSouls = n end
+        end
+        if resumed then s.woken = s.woken + 1 else s.running = s.running + 1 end
+        mp_log(string.format("WO200-TWINS wake npc=%s id=%s souls=[%s] was_paused=%s -- a participant of this player's own conversation runs for exactly its lifetime; the host holds its NPC",
+            tostring(name), tostring(id), tostring(souls), tostring(resumed)))
+    end
+
+    -- I.3 (qitem_mirror): quest items go to both players; the host's counts decide. In this game a quest item exists exactly while its
+    -- quest's AddQuestItem effect is active, and every such effect takes IsActive from a quest value (all 433 in the game's data): the
+    -- engine refuses to create, delete or move one any other way ("cannot be created manually", "cannot be deleted, they disappear
+    -- when their effect is deactivated"). So the item follows the host through the quest-state mirror, on the game's own path, and this
+    -- part MEASURES it: the host streams its Henry's count of every quest-item class (the game's IsQuestItem rows, handed over by the
+    -- agent), the joiner compares his own -- agreed / differs, and "pending" while his own replay may still be confirmed (5 min).
+    -- Only the player's inventory is counted (a quest item at its backup location -- the stash -- is the host's alone).
+    --   WO200-QITEM differs class=<guid> host=<n> here=<m> | pending class=<guid> ... | agreed again class=<guid>
+    W200.q = W200.q or { set = {}, n = 0, last = {}, localAt = {}, fullAt = -1000, primed = false, differs = {},
+                         stats = { reported = 0, agreed = 0, differs = 0, pending = 0 } }
+    function KCD2MP_W200QClassReset() W200.q.set, W200.q.n, W200.q.last, W200.q.primed = {}, 0, {}, false end
+    function KCD2MP_W200QClassAdd(list)
+        local q = W200.q
+        for g in string.gmatch(tostring(list or ""), "[%x%-]+") do
+            if #g == 36 and not q.set[g] then q.set[g] = true; q.n = q.n + 1 end
+        end
+    end
+    local function w200QCount(g)
+        local c = 0
+        pcall(function() c = tonumber(player.inventory:GetCountOfClass(g)) or 0 end)
+        return c
+    end
+    -- every 3 s (the agent's loop): the host reports the classes whose count changed (and all it holds every 60 s, for a late joiner);
+    -- the joiner notes when his own count changed (a change his own conversation made is "pending" while its replay may be confirmed)
+    function KCD2MP_W200QItemsTick(isHost)
+        local q = W200.q
+        if q.n == 0 or not KCD2MP_W200On("qitem_mirror") or not (player and player.inventory) then return end
+        local now = os.clock()
+        local full = isHost and (now - q.fullAt) >= 60
+        if full then q.fullAt = now end
+        local out = {}
+        for g in pairs(q.set) do
+            local c = w200QCount(g)
+            local was = q.last[g] or 0
+            if c ~= was then
+                q.last[g] = c
+                if isHost then out[#out + 1] = g .. ":" .. c elseif q.primed then q.localAt[g] = now end
+            elseif full and c > 0 then
+                out[#out + 1] = g .. ":" .. c
+            end
+        end
+        q.primed = true
+        for i = 1, #out, 12 do
+            local j = math.min(#out, i + 11)
+            KCD2MP_EmitEvent("w200_qitems", table.concat(out, " ", i, j))
+            q.stats.reported = q.stats.reported + (j - i + 1)
+        end
+    end
+    -- the joiner: the host's count of one class, compared with this Henry's. pend = 1 while his own replay may still be confirmed.
+    function KCD2MP_W200QItemHost(g, count, pend)
+        local q = W200.q
+        if not KCD2MP_W200On("qitem_mirror") or not (player and player.inventory) then return end
+        count = tonumber(count) or 0
+        local have = w200QCount(g)
+        q.last[g] = have
+        if have == count then
+            q.stats.agreed = q.stats.agreed + 1
+            if q.differs[g] then
+                q.differs[g] = nil
+                mp_log(string.format("WO200-QITEM agreed again class=%s count=%d", g, count))
+            end
+            return
+        end
+        local la = q.localAt[g]
+        if pend == 1 and la and (os.clock() - la) < 300 then
+            q.stats.pending = q.stats.pending + 1
+            mp_log(string.format("WO200-QITEM pending class=%s host=%d here=%d changed_here_s=%.0f -- this player's own conversation changed it; its replay may still be confirmed",
+                g, count, have, os.clock() - la))
+            return
+        end
+        q.stats.differs = q.stats.differs + 1
+        if not q.differs[g] then
+            q.differs[g] = os.clock()
+            mp_log(string.format("WO200-QITEM differs class=%s host=%d here=%d -- the quest value behind its AddQuestItem effect differs here (the game allows no other change)",
+                g, count, have))
+        end
+    end
+
+    -- II.1 / II.2 (host): the streamed NPCs' mount ("on <horse>" or on foot) and stamina, reported when they change -- the joiner's copies
+    -- take these values instead of guessing them (a rider from two streams' geometry, a stamina drained by blows applied there).
+    W200.hv = W200.hv or {}
+    function KCD2MP_W200HostValuesTick()
+        if not (KCD2MP_W200On("rider_from_host") or KCD2MP_W200On("copy_health_from_host")) then return end
+        local now = os.clock()
+        local out, n = {}, 0
+        for name, _ in pairs(KCD2MP.npcTracked or {}) do
+            local e = System.GetEntityByName(name)
+            if e and e.soul then
+                local horse = "-"
+                pcall(function()
+                    if e.human and e.human.IsMounted and e.human:IsMounted() and e.human.GetHorse then
+                        local hid = e.human:GetHorse()
+                        local he = hid and System.GetEntity(hid)
+                        if he and he.GetName then horse = he:GetName() end
+                    end
+                end)
+                local st, hp = -1, -1
+                if e.soul.GetState then
+                    pcall(function() st = e.soul:GetState("stamina") end)
+                    pcall(function() hp = e.soul:GetState("health") end)
+                end
+                local last = W200.hv[name]
+                if not last or last.horse ~= horse or math.abs((last.st or -1) - st) >= 5 or now - (last.at or 0) >= 10 then
+                    W200.hv[name] = { horse = horse, st = st, at = now }
+                    n = n + 1
+                    out[n] = string.format("%s|%s|%.1f|%.1f", name, horse, st, hp)
+                    if n >= 10 then KCD2MP_EmitEvent("w200_hostvals", table.concat(out, ";")); out, n = {}, 0 end
+                end
+            end
+        end
+        if n > 0 then KCD2MP_EmitEvent("w200_hostvals", table.concat(out, ";")) end
+    end
+
+    -- II.2 (joiner): the host's word on each rider. The copy is mounted on that horse (WO-170's gates) and gets off only when the host says
+    -- "on foot"; while mounted the horse's stream carries him (his position comes from the saddle, never written here).
+    W200.mount = W200.mount or {}
+    function KCD2MP_W200Mount(npc, horse)
+        npc = tostring(npc or "")
+        if npc == "" then return end
+        W200.mount[npc] = (horse and horse ~= "") and tostring(horse) or false
+    end
+    function KCD2MP_W200HostMount(name)
+        if not KCD2MP_W200On("rider_from_host") then return nil end
+        return W200.mount[name]
+    end
+    function KCD2MP_W200SetReceiveOnly(arg) return KCD2MP_W200Set("joiner_receive_only", arg) end
+    function KCD2MP_W200SetFigurePlayer(arg) return KCD2MP_W200Set("figure_is_player", arg) end
+    function KCD2MP_W200SetNearestPlayer(arg) return KCD2MP_W200Set("nearest_player_triggers", arg) end
+end   -- WO-200's do-block
+
 function KCD2MP_W166SetTalkResumeFirst(arg)
     local v = KCD2MP_Wo122ParseBool(arg)
     if v == "bad" then mp_log("mp_talk_resume_first: expected on|off"); return false end
@@ -24053,7 +24465,7 @@ function KCD2MP_W167SceneReleased(ended, why)
         stood = (ok1 and ok2) and "asked" or "err"
         S.stats.stood = S.stats.stood + 1
     end
-    KCD2MP_ShowNativeToast("That scene couldn't play here \226\128\148 your partner's world runs it.")
+    KCD2MP_ShowNativeToast("Your partner's game is playing this scene \226\128\148 carry on.")   -- WO-200 Act IV (the maintainer may change it)
     mp_log(string.format("WO167-SCENE released ended=%s fader=%s stood=%s why=%s -- the player was told", tostring(ended == true), fader, stood, tostring(why)))
     if KCD2MP_W172HudRestore then pcall(KCD2MP_W172HudRestore, "scene-release") end   -- WO-172 UI1
     return true
@@ -25121,6 +25533,12 @@ local function w164_horse_under(name, p)
 end
 function KCD2MP_W164RiderHeld(name, p, e)
     local w = KCD2MP.w164
+    -- WO-200 II.2: the host says whether this NPC rides (and which horse); no geometry decides it any more
+    local hostSays = KCD2MP_W200HostMount and KCD2MP_W200HostMount(name)
+    if hostSays ~= nil and KCD2MP_W200RiderHeld then return KCD2MP_W200RiderHeld(name, p, e, hostSays) end
+    -- WO-200 Act III (ledger row 7): the geometric rule below is retired while rider_from_host is on -- until the host's word on this NPC
+    -- arrives (its first values come within seconds of its stream) the copy is no rider here (marked for removal)
+    if KCD2MP_W200On and KCD2MP_W200On("rider_from_host") then return false end
     if not w.riderUnit or not p.tx then return false end
     local cls = tostring(e.class)
     if cls ~= "NPC" and cls ~= "NPC_Female" then return false end
@@ -25185,6 +25603,63 @@ function KCD2MP_W164RiderHeld(name, p, e)
     return ok
 end
 function KCD2MP_W164SetRiderUnit(arg) return w164_toggle("riderUnit", "mp_rider_unit", arg, "a host rider is mounted on its horse's copy (one unit)") end
+
+-- WO-200 II.2: the host's word on a rider. horse = the host's horse name, or false (on foot).
+function KCD2MP_W200RiderHeld(name, p, e, horse)
+    local w = KCD2MP.w164
+    local cls = tostring(e.class)
+    if cls ~= "NPC" and cls ~= "NPC_Female" then return false end
+    local r = w.riders[name]
+    if p.dead or p.ko or not horse then
+        if r and r.mounted then
+            local ok = pcall(function() e.human:ForceDismount() end)
+            mp_log(string.format("WO200-RIDER dismount rider=%s horse=%s ok=%s -- the host says %s", name, tostring(r.horse), tostring(ok), (p.dead or p.ko) and "down" or "on foot"))
+        end
+        w.riders[name] = nil
+        return false
+    end
+    if r and r.mounted and r.horse == horse then return true end   -- the horse's writer carries him
+    if r and r.mounted and r.horse ~= horse then
+        pcall(function() e.human:ForceDismount() end)
+        mp_log(string.format("WO200-RIDER change rider=%s from=%s to=%s -- the host's rider changed horses", name, tostring(r.horse), horse))
+        r = nil
+    end
+    if not r then r = { horse = horse, n = 3 }; w.riders[name] = r end
+    if r.gaveUp then return false end
+    local he = nil
+    pcall(function() he = System.GetEntityByName(horse) end)
+    local hp, ep = nil, nil
+    if he then pcall(function() hp = he:GetWorldPos(); ep = e:GetWorldPos() end) end
+    local pp = w164_ppos()
+    if not (hp and ep and pp) or w164_dist2(hp, pp) > 80 * 80 then
+        if not r.farLogged then r.farLogged = true; mp_log(string.format("WO200-RIDER mount=wait npc=%s horse=%s why=%s", name, horse, he and "horse-far" or "no-horse")) end
+        return false
+    end
+    local ready, why = KCD2MP_W170RiderReady(name, p, e, horse, he, hp, ep)
+    if not ready then
+        local now = os.clock()
+        r.waitSince = r.waitSince or now
+        if now < (r.nextTry or 0) then return false end
+        if now - r.waitSince >= KCD2MP.w170.riderGiveUpS then
+            r.gaveUp = true
+            mp_log(string.format("WO200-RIDER mount=gave-up npc=%s horse=%s why=%s -- he stays on foot", name, horse, tostring(why)))
+            return false
+        end
+        r.nextTry = now + KCD2MP.w170.riderRetryS
+        mp_log(string.format("WO200-RIDER mount=wait npc=%s horse=%s why=%s waited_s=%.0f", name, horse, tostring(why), now - r.waitSince))
+        return false
+    end
+    KCD2MP_NpcNativeSync(name, p, e, false, "rider")
+    pcall(function() e:SetWorldPos({ x = hp.x, y = hp.y, z = hp.z }) end)
+    local ok = pcall(function() e.human:ForceMount(he.id) end)
+    local now = false
+    pcall(function() now = e.human:IsMounted() == true end)
+    r.mounted = ok
+    w.stats.riders = (w.stats.riders or 0) + 1
+    mp_log(string.format("WO200-RIDER mount rider=%s horse=%s ok=%s mounted=%s -- the host says he rides it", name, horse, tostring(ok), tostring(now)))
+    if not ok then w.riders[name] = nil end
+    return ok
+end
 
 function KCD2MP_W164SweepCmd(arg)   -- %line arrives already quoted (WO-106/109)
     local nm = tostring(arg or ""):match("([%w_]+)")
@@ -26515,6 +26990,11 @@ do
         local ok = setDoor(door, dir, (not unlocking) and curLocked or false)
         W.doorAsking = false
         W.doorStats.askApplied = W.doorStats.askApplied + 1
+        if ok and KCD2MP_W200NoisePulses then   -- WO-200 Act IV: the joiner's door is a sound the host's world hears
+            local dp = nil
+            pcall(function() dp = door:GetWorldPos() end)
+            if dp then pcall(KCD2MP_W200NoisePulses, "door", dp.x, dp.y, dp.z, src) end
+        end
         mp_log(string.format("WO151-DOOR ask from %s for %s dir=%d unlock=%s: %s in the host's world (the game's own engine move)", tostring(src), tostring(name), dir,
             tostring(unlocking), ok and "applied" or "FAILED"))
         KCD2MP_W151DoorChanged(door, "asked")   -- every joiner (the asker too) gets the host's result
@@ -28639,6 +29119,23 @@ local ok, err = pcall(function()
     System.AddCCommand("mp_anim_routines", 'KCD2MP_W197SetRoutines(%line)', "WO-197: the host's people at work, sitting and gesturing play the same on your screen (default on): mp_anim_routines on|off")
     System.AddCCommand("mp_w197_status", 'KCD2MP_W197Status()', "WO-197: the animation-sync release's switches and counters (MP-W197-STATS in agent.log)")
     System.AddCCommand("mp_w197_check", 'KCD2MP_W197Check(%line)', "WO-197 live checks: mp_w197_check ensure <copy> | syncguard <type> <master> <slave>")
+    System.AddCCommand("mp_s1_replay", 'KCD2MP_W200SetS1Replay(%line)', "WO-200: (joiner) your conversations' consequences run in the host's world too -- the host replays what you said on its own node (default on): mp_s1_replay on|off")
+    System.AddCCommand("mp_s1_route", 'KCD2MP_W200SetS1Route(%line)', "WO-200: rewards, money and body effects of a conversation reach the one who talked, not the partner (default on): mp_s1_route on|off")
+    System.AddCCommand("mp_qitem_mirror", 'KCD2MP_W200SetQitemMirror(%line)', "WO-200: (joiner) your quest items are compared with the host's (they follow the host's quest state; the game allows no other way) (default on): mp_qitem_mirror on|off")
+    System.AddCCommand("mp_joiner_quiet_clocks", 'KCD2MP_W200SetQuietClocks(%line)', "WO-200: (joiner) the quests' own timers and time-of-day checks fire only in the host's world (default on): mp_joiner_quiet_clocks on|off")
+    System.AddCCommand("mp_joiner_no_puppet_quests", 'KCD2MP_W200SetNoPuppetQuests(%line)', "WO-200: (joiner) your quests never drive the host's people on your screen (duels, tours, teleports, contexts) -- the host's world does (default on): mp_joiner_no_puppet_quests on|off")
+    System.AddCCommand("mp_joiner_noise", 'KCD2MP_W200SetNoise(%line)', "WO-200: (host) a joiner's lockpicking, fights and doors are noise your world hears -- sleepers wake, guards come (default on): mp_joiner_noise on|off")
+    System.AddCCommand("mp_joiner_scoped_twins", 'KCD2MP_W200SetScopedTwins(%line)', "WO-200: (joiner) every person in your own conversation is woken for it, not only the one you talk to (default on): mp_joiner_scoped_twins on|off")
+    System.AddCCommand("mp_copy_health_from_host", 'KCD2MP_W200SetCopyHealth(%line)', "WO-200: (joiner) the host's people show the host's own health and stamina; your screen never applies a blow to them itself (default on): mp_copy_health_from_host on|off")
+    System.AddCCommand("mp_rider_from_host", 'KCD2MP_W200SetRider(%line)', "WO-200: (joiner) a rider is on his horse exactly when the host says so (default on): mp_rider_from_host on|off")
+    System.AddCCommand("mp_copy_hands_from_host", 'KCD2MP_W200SetCopyHands(%line)', "WO-200: (joiner) what the host's people hold is put straight into their hands (default on): mp_copy_hands_from_host on|off")
+    System.AddCCommand("mp_copy_neutral_always", 'KCD2MP_W200SetCopyNeutral(%line)', "WO-200: (joiner) the host's people on your screen never ask for anything themselves (default on): mp_copy_neutral_always on|off")
+    System.AddCCommand("mp_world_clock_from_host", 'KCD2MP_W200SetWorldClock(%line)', "WO-200: (joiner) your clock and weather follow the host's, gently (default on): mp_world_clock_from_host on|off")
+    System.AddCCommand("mp_stream_dogs", 'KCD2MP_W200SetStreamDogs(%line)', "WO-200: village dogs travel with the host's people (default on): mp_stream_dogs on|off")
+    System.AddCCommand("mp_joiner_receive_only", 'KCD2MP_W200SetReceiveOnly(%line)', "WO-200: (joiner, experimental) your quest graph stops deciding; the host's values arrive as they are (default off): mp_joiner_receive_only on|off")
+    System.AddCCommand("mp_figure_is_player", 'KCD2MP_W200SetFigurePlayer(%line)', "WO-200: (host, experimental) the partner's figure counts as a player for the world's people (default off): mp_figure_is_player on|off")
+    System.AddCCommand("mp_nearest_player_triggers", 'KCD2MP_W200SetNearestPlayer(%line)', "WO-200: (host, experimental) distance and area checks use the nearer of the two players (default off): mp_nearest_player_triggers on|off")
+    System.AddCCommand("mp_w200_status", 'KCD2MP_W200Status()', "WO-200: the switches and counters of actions-not-results (MP-W200-STATS in agent.log)")
     System.AddCCommand("mp_w187_status", 'KCD2MP_W187Status()', "WO-187: the fight switches and counters (MP-W187-STATS in agent.log)")
     System.AddCCommand("mp_w178_status", 'KCD2MP_W178Status(%line)', "WO-178: the save switches, the quicksave, the draw probe, and the DLL's hostility answer (through the agent): mp_w178_status")
     System.AddCCommand("mp_repair_combat", 'KCD2MP_W174Repair(%line)', "WO-174: frees stuck weapons -- clears partner-figure fight links, ends a stuck fight, re-equips a melee weapon -- and says so; on a save that was fine it changes nothing: mp_repair_combat")

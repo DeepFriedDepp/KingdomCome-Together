@@ -58,6 +58,9 @@ public sealed record ExtraRow
     public ulong AlignGuid { get; init; }
     public byte Flags { get; init; }
     public byte TargetKind { get; init; }
+    /// <summary>WO-200 kind 5 (Vitals): the host's own health and stamina of its NPC.</summary>
+    public float Health { get; init; }
+    public float Stamina { get; init; }
     public string Target { get; init; } = "";
 
     public bool HandsEmpty => Left.All(b => b == 0) && Right.All(b => b == 0);
@@ -110,6 +113,13 @@ public static class ExtraCodec
                     ms.WriteByte(r.TargetKind);
                     PutText(ms, r.Target, Protocol.MaxNpcNameLen);
                     break;
+                case Protocol.ExtraKindVitals:   // WO-200 II.1: [health:4f][stamina:4f]
+                    if (!float.IsFinite(r.Health) || !float.IsFinite(r.Stamina)) throw new ArgumentException("vitals must be finite");
+                    ms.Write(BitConverter.GetBytes(r.Health)); ms.Write(BitConverter.GetBytes(r.Stamina));
+                    break;
+                case Protocol.ExtraKindMount:    // WO-200 II.2: [horseLen][horse] -- empty = on foot
+                    PutText(ms, r.Target, Protocol.MaxNpcNameLen);
+                    break;
                 default: throw new ArgumentException($"extra kind {kind}");
             }
         }
@@ -137,7 +147,7 @@ public static class ExtraCodec
         if (body.Length < Protocol.ExtraBodyMin || body.Length > Protocol.ExtraBodyMax) return false;
         kind = body[0];
         int count = body[1];
-        if (kind is < Protocol.ExtraKindHands or > Protocol.ExtraKindLooks || count < 1 || count > Protocol.ExtraMaxRows) return false;
+        if (kind is < Protocol.ExtraKindHands or > Protocol.ExtraKindMount || count < 1 || count > Protocol.ExtraMaxRows) return false;
         if (kind == Protocol.ExtraKindOneShot && count != 1) return false;
         int o = 2;
         for (int i = 0; i < count; i++)
@@ -174,6 +184,22 @@ public static class ExtraCodec
                     rows.Add(new ExtraRow { Name = name, TargetKind = tk, Target = target });
                     break;
                 }
+                case Protocol.ExtraKindVitals:
+                {
+                    if (o + 8 > body.Length) return false;
+                    float hp = BitConverter.ToSingle(body.Slice(o, 4)), st = BitConverter.ToSingle(body.Slice(o + 4, 4));
+                    if (!float.IsFinite(hp) || !float.IsFinite(st) || hp < -1 || hp > 10000 || st < -1 || st > 10000) return false;
+                    rows.Add(new ExtraRow { Name = name, Health = hp, Stamina = st });
+                    o += 8;
+                    break;
+                }
+                case Protocol.ExtraKindMount:
+                {
+                    if (!GetText(body, ref o, Protocol.MaxNpcNameLen, true, out var horse)) return false;
+                    rows.Add(new ExtraRow { Name = name, Target = horse });
+                    break;
+                }
+                default: return false;
             }
         }
         return o == body.Length;

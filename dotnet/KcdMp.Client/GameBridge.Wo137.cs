@@ -261,6 +261,7 @@ public partial class GameBridge
                 Console.WriteLine(FormattableString.Invariant($"MP-W154 joiner: {c.Path} is CONTESTED -- {jwhy}; this copy keeps its own value from now on (a per-player trigger): not applied, asked or corrected"));
             }
             if (_w154Contest.IsContested(c.Path)) { Wo137Veto("joiner-contested"); return; }
+            if (Wo200HoldLocal(c)) { Wo137Veto("joiner-in-replay"); return; }   // WO-200 I.1: inside a conversation the host replays (or parked a moment)
             if (Wo137Rules.JoinerAskVeto(c) is { } veto)
             {
                 Interlocked.Increment(ref _w137Vetoed); Wo137Veto("joiner-" + veto);
@@ -287,6 +288,7 @@ public partial class GameBridge
         Wo147LearnPortValue(c.Path, c.Port, c.New, c.Type);   // WO-147: what this port produced here
         bool conv = Wo147InOwnConversation();                  // WO-147: a conversation's outcome is this player's
         var sent = conv ? c with { Flags = (byte)(c.Flags | Wo147Rules.FlagConversation) } : c;
+        sent = sent with { Flags = (byte)(sent.Flags & ~QuestChange.FClosure) };   // WO-200: the closure bit is this machine's own
         await Wo137SendAsync(Protocol.QuestAskUp, Protocol.JoinTargetHost, Protocol.QuestAskRequest, tok, Wo137Rules.RequestText(sent));
         Interlocked.Increment(ref _w137AsksOut);
         W164JoinerStepSent(c.Path, c.Port);   // WO-164 ESC: a follow step: which NPC follows this player here (the host walks its own)
@@ -342,6 +344,14 @@ public partial class GameBridge
                     }
                     _w137LastHostSeq = c.Seq;
                     _w137Queue.Enqueue(c);
+                    Wo200NoteHostChange(c);   // WO-200 I.4: a dropped clock fire's comparison
+                    return;
+                case Protocol.QuestHostReplayAck:   // WO-200 I.1: the host ran (or refused) this player's replay
+                    if (!W137Joiner) { Wo137Veto("replay-ack-not-joined"); return; }
+                    _ = Wo200OnAckAsync(m.Text);
+                    return;
+                case Protocol.QuestHostItemCount:   // WO-200 I.3: the host's count of one quest-item class
+                    Wo200OnHostItemCount(m.Text);
                     return;
                 case Protocol.QuestHostResult when Wo137Rules.TryParseResultText(m.Text, out var verdict, out int hv, out string hp, out string path):
                     Wo137Post(() => Wo137OnResultAsync(m.Tok, verdict, hv, hp, path));
@@ -378,6 +388,9 @@ public partial class GameBridge
             if (!W137Host) { Wo137Veto("ask-not-host"); return; }
             switch (m.Kind)
             {
+                case Protocol.QuestAskOutPortReplay:   // WO-200 I.2: the joiner's conversation's out-port, run on this world's own node
+                    Wo200OnReplayAsk(src, m.Tok, m.Text);
+                    return;
                 case Protocol.QuestAskRequest when Wo137Rules.TryParseRequestText(m.Text, out var req):
                     Interlocked.Increment(ref _w137AsksIn);
                     Wo137Post(() => Wo137HostRequestAsync(src, m.Tok, req));
@@ -462,7 +475,8 @@ public partial class GameBridge
             Console.WriteLine(FormattableString.Invariant($"MP-W137 joiner: host change #{c.Seq} {c.Path} {c.Old}->{c.New} came through no port -- not applicable here (the checkpoint compares it)"));
             return true;
         }
-        var r = await _combat.Wo137ApplyAsync(c.Seq, c.Path, c.Port);
+        // WO-200 I.3: a change the host's own conversation made reaches the host's Henry only (the talker-only rules hold while it applies)
+        var r = await _combat.Wo137ApplyAsync(c.Seq, c.Path, c.Port, mirrorTalker: c.InClosure && W200("s1_route"));
         if (r is not { } a)
         {
             int n = _w137Retries.AddOrUpdate(c.Path, 1, (_, k) => k + 1);
@@ -746,7 +760,10 @@ public partial class GameBridge
             case "attempt":
                 if (q.Bark) { Wo137Veto("attempt-bark"); return; }   // WO-147: a combat shout or a bark is no conversation
                 if (W137Joiner && q.Souls.Contains("Dude"))
+                {
+                    Wo200OnDudeAttempt(q.Souls.Length);   // WO-200 I.6: A3's bound starts here
                     _ = ExecLuaAsync(FormattableString.Invariant($"if KCD2MP_W137TalkAttempt then KCD2MP_W137TalkAttempt({q.Id}, \"{string.Join(' ', q.Souls)}\") end"));
+                }
                 return;
             case "end":
                 if (W137JoinerSession && q.Souls.Length > 0)

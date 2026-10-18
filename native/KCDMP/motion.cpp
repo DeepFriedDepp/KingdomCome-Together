@@ -122,6 +122,9 @@ inline bool plausible_addr(uintptr_t a) { return fault::plausible_address(a); }
 template <class T> bool rd(const void* base, size_t off, T* out) {
     KCDMP_FAULT_READ(site, "motion::rd");
     if (!plausible_addr(reinterpret_cast<uintptr_t>(base) + off)) return false;
+    // WO-200: an object's base is 8-aligned; a float or an id read out of a pointer slot is not (0.61.x: every motion::rd fault had a
+    // base like 0x429d809e). Byte reads (names) and odd offsets on an aligned base (the sync GUID at +0x7C) are untouched.
+    if (sizeof(T) >= 4 && (reinterpret_cast<uintptr_t>(base) & 7) != 0 && (off & 7) == 0) return false;
     return fault::guarded(site, [&] { *out = *reinterpret_cast<const T*>(static_cast<const char*>(base) + off); });
 }
 void* vslot(void* obj, size_t off) {

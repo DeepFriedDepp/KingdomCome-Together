@@ -56,6 +56,23 @@ template <class T> bool rd(const void* base, ptrdiff_t off, T* out) {
     return fault::guarded(site, [&] { std::memcpy(out, reinterpret_cast<const void*>(a), sizeof(T)); });
 }
 
+// Committed, readable memory at p (a VirtualQuery, the last region kept): the .data scan below reads every qword as a pointer, and
+// most are not (floats, ids) -- each was a counted fault (0.61.0/0.61.5 field and rig: wo189::read 269 a session)
+bool readable(const void* p) {
+    static uintptr_t lo = 0, hi = 0;
+    const auto a = reinterpret_cast<uintptr_t>(p);
+    if (!fault::plausible_address(a) || (a & 7) != 0) return false;
+    if (a >= lo && a + 8 <= hi) return true;
+    MEMORY_BASIC_INFORMATION mbi{};
+    if (VirtualQuery(p, &mbi, sizeof mbi) != sizeof mbi || mbi.State != MEM_COMMIT) return false;
+    const DWORD prot = mbi.Protect & 0xFF;
+    if ((mbi.Protect & (PAGE_GUARD | PAGE_NOACCESS)) || !(prot & (PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE)))
+        return false;
+    lo = reinterpret_cast<uintptr_t>(mbi.BaseAddress);
+    hi = lo + mbi.RegionSize;
+    return a + 8 <= hi;
+}
+
 bool is_a(const void* obj, void* const* vft) {
     void* vp = nullptr;
     return obj && vft && rd(obj, 0, &vp) && vp == static_cast<const void*>(vft);
@@ -87,7 +104,7 @@ void* pointer_to(const void* holder, void* const* vft, size_t span, int* cachedO
     if (!holder || !vft) return nullptr;
     auto at = [&](int off) -> void* {
         void* p = nullptr;
-        return rd(holder, off, &p) && p && is_a(p, vft) ? p : nullptr;
+        return rd(holder, off, &p) && p && readable(p) && is_a(p, vft) ? p : nullptr;   // WO-200: a field that is not a pointer is skipped, not read
     };
     if (*cachedOff >= 0) if (void* p = at(*cachedOff)) return p;
     for (int off = 0; off < static_cast<int>(span); off += 8)
@@ -220,7 +237,7 @@ void* positioning() {
     const uintptr_t b = reinterpret_cast<uintptr_t>(data.begin), e = reinterpret_cast<uintptr_t>(data.end);
     for (uintptr_t a = (b + 7) & ~uintptr_t(7); a + 8 <= e; a += 8) {
         void* p = nullptr;
-        if (!rd(reinterpret_cast<void*>(a), 0, &p) || !p || !fault::plausible_address(reinterpret_cast<uintptr_t>(p))) continue;
+        if (!rd(reinterpret_cast<void*>(a), 0, &p) || !p || !readable(p)) continue;
         if (is_a(p, g_vftPos)) {
             g_posSlot = reinterpret_cast<void*>(a);
             logf("WO189-POS the scene positioning manager is held by XGenAIModule's .data at +0x%llX (by its vftable)",
@@ -332,7 +349,7 @@ void* profile_manager() {
     // (two levels, found once by the manager's own vftable, re-checked every call)
     auto at = [&](int o1, int o2) -> void* {
         void* p = nullptr; void* m = nullptr;
-        return rd(gi, o1, &p) && p && rd(p, o2, &m) && m && is_a(m, g_vftMgr) ? m : nullptr;
+        return rd(gi, o1, &p) && p && readable(p) && rd(p, o2, &m) && m && readable(m) && is_a(m, g_vftMgr) ? m : nullptr;   // WO-200: pointers only
     };
     if (g_mgrO1 >= 0) if (void* m = at(g_mgrO1, g_mgrO2)) return m;
     if (g_mgrScanned) return nullptr;

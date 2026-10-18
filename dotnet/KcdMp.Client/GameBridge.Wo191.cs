@@ -217,7 +217,7 @@ public partial class GameBridge
             Console.WriteLine(FormattableString.Invariant($"WO191-FADER released after {held / 1000.0:F1} s ({Wo191Rules.HolderText(waiting)})"));
             if (waiting >= 0)
             {
-                _w179TwinReleasedFor = _w179DudeStartMs;   // WO-179 A3 would end the same conversation at 3.5 s
+                _w179TwinReleasedFor = W200("joiner_scoped_twins") ? Volatile.Read(ref _w200AttemptMs) : _w179DudeStartMs;   // WO-179 A3 would end the same conversation at 3.5 s (WO-200 I.6: its bound's start)
                 await ExecLuaAsync("if KCD2MP_W179ReleaseDialog then KCD2MP_W179ReleaseDialog(\"wo191-fader-3s\") end");
             }
             else

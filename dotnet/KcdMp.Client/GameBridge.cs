@@ -4936,6 +4936,8 @@ public partial class GameBridge(ClientConfig config)
                                     $"MP-DMG dir=in ghost={ndSource} npc={ndName} hp={ndHealth:F1} st={ndStamina:F1} fatal={(ndFatal ? 1 : 0)} result=refused reason={NpcDamageGuard.Reason(ndVerdict)} authority={(_isDamageAuthority ? 1 : 0)}"));
                                 continue;
                             }
+                            // WO-200 II.1: on the joiner a copy's health and stamina are the host's values, never a blow applied here
+                            if (localGuid is not null && Wo200SkipLocalHit(ndName, ndHealth, ndStamina, ndFatal)) { _stats.DmgIn++; continue; }
                             // WO-86: a FATAL packet may carry no delta at all
                             // (the Lua observer saw the death, not the blow);
                             // there is nothing to apply then, only the death.
@@ -6096,6 +6098,12 @@ public partial class GameBridge(ClientConfig config)
             case "w190_cfg":         // WO-190: mp_anim_trace, mp_anim_idle_watch, mp_anim_standin_weapon, mp_copy_weapon_hold, mp_anim_requeue_gate, ...
             case "w190_status":      // WO-190: mp_w190_status
                 Wo190OnEvent(name, arg);
+                return;
+            case "w200_hostvals":    // WO-200 II.1/II.2 (host): its streamed NPCs' mount and stamina, what changed
+            case "w200_cfg":         // WO-200: mp_s1_replay, mp_s1_route, mp_joiner_quiet_clocks, mp_joiner_no_puppet_quests, ... (Wo200Rules.SwitchNames)
+            case "w200_status":      // WO-200: mp_w200_status
+            case "w200_test":        // WO-200: the harness's reads and research verbs (read is always allowed)
+                Wo200OnEvent(name, arg);
                 return;
             case "w197_cfg":         // WO-197: mp_anim_recoil, mp_anim_paired, mp_anim_clinch, mp_anim_knockout, mp_copy_guard_engine, Part C's mp_anim_<category>
             case "w197_status":      // WO-197: mp_w197_status

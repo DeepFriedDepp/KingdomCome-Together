@@ -138,6 +138,20 @@ const char* applied_name(Applied a);
 bool visit_node(const char* path, NodeAccept fn, void* ctx);
 // WO-194: C_Node's runtime state of the node and each parent up the tree (0 awake, 1 hibernating; -1 unread), at most `max`; the count.
 int runtime_chain(const void* node, int* out, int max);
+// WO-200: the node's port by name with one reference held (release it with release_ref), or null. Main thread.
+void* find_port_ref(void* node, const char* name);
+void release_ref(const void* res);
+// WO-200: a quest Function node's MethodName (C_FunctionBase's own field, verified with the time gate's slot); false when not verified.
+// Any thread.
+bool function_method(const void* node, char* out, size_t n);
+// WO-200: a C_StateVariable's int value (false for any other class or an unreadable value). Main thread.
+bool state_int(const void* node, int* out);
+// WO-200: flag 128 on 0x9E -- the change was made inside a closure (a captured conversation's out-port on this machine, or a replay of
+// the joiner's on the host); the frame then ends with [closure:4]. Kept apart from 64 (worker) and 32 (the agent's own request flag).
+constexpr uint8_t kFClosure = 128;
+// WO-200: op 2 Apply may end with [flags:1]: 1 = the host's change was made in the host's own conversation (the joiner's talker-only rules
+// hold while it applies: wo200::set_mirror_talker).
+constexpr uint8_t kApplyMirrorTalker = 1;
 bool punish_gate_armed();
 uint32_t punish_skipped();
 

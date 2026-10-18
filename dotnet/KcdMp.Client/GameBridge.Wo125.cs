@@ -395,7 +395,13 @@ public partial class GameBridge
             return false;
         }
         if (!Wo180SlotAvailableOrTell()) { why = "no save slot for the host's world"; return false; }   // WO-180: before the first-join question and before any request
-        if (_henry.HasWorld(_peerTag!)) return true;
+        if (_henry.HasWorld(_peerTag!))
+        {
+            // WO-200 Act IV: a rejoin -- the launcher says which character comes back, by the per-world Henry file's time
+            var newest = _henry.Snapshots(_peerTag!).FirstOrDefault();
+            if (newest is not null) SetJoinUi("rejoin", Wo200Rules.RejoinText(DateTime.UtcNow - newest.TakenUtc));   // the request follows at once
+            return true;
+        }
         // WO-135: a first join's Henry comes from a save of the host world's game build only
         // (the splice's rule, WO-115). The host announces it; until it has (15 s at most),
         // nothing is asked. What this machine can offer is decided before any request, so

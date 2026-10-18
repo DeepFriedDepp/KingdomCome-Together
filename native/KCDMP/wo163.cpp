@@ -4,6 +4,7 @@
 // WO-163: the native half's pipe ops (wo163.h).
 #include "wo163.h"
 #include "wo197.h"
+#include "wo200.h"
 #include "engine.h"
 #include "hits.h"
 #include "log.h"
@@ -267,6 +268,13 @@ uint8_t handle(const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t
         case kcdmp::wo197::kOpSyncGuard:
         case kcdmp::wo197::kOpEnsureGuard:
             return kcdmp::wo197::handle(body[0], body, len, out, cap, outLen);
+        case kcdmp::wo200::kOpStatus:   // WO-200: the two gates (the out-port tap, the node gate), the host's replay, the clock read, research
+        case kcdmp::wo200::kOpConfig:
+        case kcdmp::wo200::kOpPoll:
+        case kcdmp::wo200::kOpReplay:
+        case kcdmp::wo200::kOpReadNode:
+        case kcdmp::wo200::kOpResearch:
+            return kcdmp::wo200::handle(body[0], body + 1, len - 1, out, cap, outLen) == 0 ? kROk : kRBadRequest;
         case kcdmp::wo178::kOpHeldResult:   // WO-178 C4: a held blow lives in WO-173's path
             return kcdmp::wo173::handle(body[0], body, len, out, cap, outLen);
         default:

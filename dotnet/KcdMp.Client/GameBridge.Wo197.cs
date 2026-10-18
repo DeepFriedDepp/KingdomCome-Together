@@ -290,21 +290,22 @@ public partial class GameBridge
             if (ok) Interlocked.Increment(ref _w197ClinchPlayed);
             Console.WriteLine($"{head} master=0x{mEid:X} slave=0x{sEid:X} dispatch=StartSyncGuard type={type} result={(r is null ? "no answer" : ok ? "started" : $"refused ({(r.Value.Ok && r.Value.Payload.Length > 0 ? r.Value.Payload[0] : r.Value.Reason)})")}");
             if (ok) return;
-            // live (b3clinch): the engine refuses StartSyncGuard on two puppets -> its own clinch-guard rows, both halves in one step: the entry,
-            // then the loop (it holds until the next move replaces it)
-            IReadOnlyList<string>? weapon = hands == Wo190Rules.HandsBare ? new[] { "r_noweapon" } : null;
-            foreach (var fam in new[] { "CombatClinchStartGuard", "CombatClinchGuard" })
-            {
-                if (catalog.ClinchGuardRows(fam, type, weapon) is not { } gr) { Console.WriteLine($"{head} dispatch=rows {fam} -- no rows for guard type {type}"); continue; }
-                var pr0 = await Wo197PairOpAsync(mEid, sEid, Wo197PairVictimFirst, gr.Master.Spec, gr.Slave.Spec, ct);
-                bool both0 = pr0 is { Ok: true, Payload.Length: >= 7 } q0 && q0.Payload[4] == 0 && q0.Payload[5] == 0;
-                if (both0) Interlocked.Increment(ref _w197ClinchPlayed);
-                Console.WriteLine($"{head} dispatch=rows {fam} master_row=\"{gr.Master.Spec}\" slave_row=\"{gr.Slave.Spec}\" result={(pr0 is null ? "no answer" : pr0.Value.Ok ? $"slave={pr0.Value.Payload[4]} master={pr0.Value.Payload[5]}" : $"refused ({pr0.Value.Reason})")}");
-                if (fam == "CombatClinchStartGuard") await Task.Delay(Wo197Rules.ClinchEntryMs, ct);
-            }
+            // WO-200 II.6: the engine refuses StartSyncGuard on two puppets (WO-197 b3clinch). WO-197 then played its own clinch-guard rows
+            // (entry, then the loop); with no engine sync to end them they held the figure -- the field's second bout: every later swing of
+            // the host's queued "ok" and none started (17 of 17). Live (c6, armed): rows -> 0 of 4 swings, no rows -> 4 of 4. No rows now: the
+            // figure keeps fighting; the engine's own guard is asserted again at the clinch's end or its next swing.
+            Console.WriteLine($"{head} dispatch=none (StartSyncGuard refused: no clinch rows -- they would hold the figure; it keeps fighting)");
+            _w200ClinchRows[feid] = (opp, Environment.TickCount64);   // WO-200 II.6: no sync link holds this clinch -- its end is ours
             return;
         }
-        if (phase != Wo197Rules.ClinchMove) { Console.WriteLine($"{head} dispatch=none (the clinch ends with the bodies' next moves)"); return; }
+        if (phase != Wo197Rules.ClinchMove)
+        {
+            // WO-200 II.6: a clinch entered by rows (StartSyncGuard refused) has no engine sync to end it, and the figure's next moves cannot
+            // start inside its clinch guard (the field: 17 of the host's swings queued "ok" after one, none started) -- the engine's own guard ends it
+            if (_w200ClinchRows.TryRemove(feid, out var cr)) { await Wo200EndClinchAsync(feid, cr.Opp, "leave", ct); return; }
+            Console.WriteLine($"{head} dispatch=none (the clinch ends with the bodies' next moves)");
+            return;
+        }
         if ((re.Flags & Wo197Rules.ClinchRows) == 0 || !catalog.TryGet(re.Row, out var mrow) || !catalog.TryGet(Wo197Rules.ClinchSlaveRow(re), out var srow))
         { Console.WriteLine($"{head} dispatch=skipped (the move came without both rows)"); return; }
         var pr = await Wo197PairOpAsync(mEid, sEid, Wo197PairVictimFirst, mrow.Spec, srow.Spec, ct);

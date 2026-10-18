@@ -81,7 +81,7 @@ const KoGuids* ko_guids() {
     return g_ko.ok ? &g_ko : nullptr;
 }
 
-std::atomic<uint32_t> c_checks{0}, c_guardOn{0}, c_guardOff{0}, c_follow{0}, c_followCredit{0},
+std::atomic<uint32_t> c_checks{0}, c_guardOn{0}, c_guardOff{0}, c_follow{0}, c_followCredit{0}, c_followStamina{0},
                       c_stopFight{0}, c_restore{0}, c_faction{0}, c_fail{0}, c_knockouts{0}, c_wakes{0};
 
 void put_f(uint8_t* p, float v) { std::memcpy(p, &v, 4); }
@@ -186,10 +186,11 @@ uint8_t handle(const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t
     }
     case kOpFollowHp: {
         // [guid:16][eid:4][hp:4f]: the soul by entity id (cheap); the GUID only
-        // keys the sampler's credit.
-        if (n != 24) return kRBadRequest;
+        // keys the sampler's credit. WO-200 II.1: [stamina:4f] after it -- the host's own stamina of its NPC (n == 28).
+        if (n != 24 && n != 28) return kRBadRequest;
         const uint32_t eid = get_u32(a + 16);
         const float want = get_f(a + 20);
+        const float wantSt = n == 28 ? get_f(a + 24) : -1.0f;
         if (!std::isfinite(want) || want < 0) return kRBadRequest;
         void* s0 = soul_of_eid(eid);
         void* soul = s0 && buffs::as_c_soul(s0) ? buffs::as_c_soul(s0) : s0;
@@ -199,6 +200,12 @@ uint8_t handle(const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t
         // Never below 1: the host's death comes as its own order (op 2 off, then
         // ApplyDeath); a follow is never the thing that kills a copy.
         const float target = want < 1.0f ? 1.0f : want;
+        if (std::isfinite(wantSt) && wantSt >= 0.0f) {   // WO-200 II.1: the host's stamina of its NPC (never set from anything local)
+            float st = -1;
+            if (rttr::soul_state(soul, "stamina", &st) && std::fabs(st - wantSt) >= 1.0f) {
+                if (rttr::soul_set_state(soul, "stamina", wantSt)) c_followStamina.fetch_add(1);
+            }
+        }
         if (std::fabs(target - before) < 0.5f) { put_f(out, before); put_f(out + 4, before); *outLen = 8; return kROk; }
         if (target < before) { rttr::note_remote_damage(a, before - target); c_followCredit.fetch_add(1); }
         if (!rttr::soul_set_state(soul, "health", target)) { c_fail.fetch_add(1); return kRFailed; }

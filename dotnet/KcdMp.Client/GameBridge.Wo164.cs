@@ -366,6 +366,14 @@ public partial class GameBridge
                 if (W137Host) { Interlocked.Increment(ref _w164Malformed); return; }
                 await Wo176OnStoryFightInAsync(m.Text);
                 return;
+            case Protocol.W164Noise:   // WO-200 Act IV: a joiner's noise the host's world must hear (lockpicking, a door)
+                if (!W137Host) { Interlocked.Increment(ref _w164Malformed); return; }
+                await Wo200OnJoinerNoiseAsync(src, m.Text);
+                return;
+            case Protocol.W164Clock:   // WO-200 II.7: the host's clock (the joiner slews to it)
+                if (W137Host) { Interlocked.Increment(ref _w164Malformed); return; }
+                await Wo200OnHostClockAsync(m.Text);
+                return;
             case Protocol.W164Weather when W164Text.TryParseWeather(m.Text, out float wrain, out string? wprof):   // WO-166 W1
                 if (W137Host) { Interlocked.Increment(ref _w164Malformed); return; }   // only the host's weather is the session's
                 await Wo166OnHostWeatherAsync(wrain, wprof);

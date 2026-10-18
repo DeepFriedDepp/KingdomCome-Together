@@ -515,6 +515,10 @@ public partial class GameBridge
         // WO-170 F2: an inbound Attack is dispatched here, as an MP-SWING (the field's 4 swings of the joiner were all received and queued; the
         // MP-ACTION inbound lines only named the kinds that log a dispatch of their own). Said once, with the swing's id.
         Console.WriteLine($"MP-ACTION section=inbound ghost={gid} kind={a.Kind} seq={a.Seq} dispatch=swing-queued rsid={rsid}");
+        if (row.Table is "combat_action_attack" or "combat_action_sync_attack") Wo200FigureSwingNoise(gid);   // WO-200 Act IV: a fight the host's world hears
+        // WO-200 II.6: a clinch entered by rows whose "leave" never came (the field dropped two as stale) ends before this swing
+        if (_ghostEntityIds.TryGetValue(gid, out uint fe200) && row.Table != "combat_action_sync_attack" && _w200ClinchRows.TryRemove(fe200, out var cr200))
+            await Wo200EndClinchAsync(fe200, cr200.Opp, "next-swing", ct);
         _ = _combat.NpcHoldAsync("kcd2mp_" + gid, 900, ct);
         if (row.Table == "combat_action_sync_attack" && _ghostEntityIds.TryGetValue(gid, out uint fe197))
             await Wo197VictimHalfAsync("kcd2mp_" + gid, fe197, row, catalog, ct);   // WO-197 B2: his paired move's victim half first

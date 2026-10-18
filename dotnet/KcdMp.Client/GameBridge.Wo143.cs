@@ -233,6 +233,10 @@ public partial class GameBridge
                 case Protocol.ExtraKindLooks:
                     if (W141Active && _w143Idles) await Wo143ApplyLookAsync(r.Name, Wo143Rules.LookTargetHere(r.TargetKind, r.Target, src, _myGhostId));
                     break;
+                case Protocol.ExtraKindVitals:   // WO-200 II.1: the host's own health and stamina of its NPC
+                case Protocol.ExtraKindMount:    // WO-200 II.2: the host's NPC is on that horse, or on foot
+                    await Wo200OnExtraAsync(kind, r);
+                    break;
                 case Protocol.ExtraKindOneShot:
                     Interlocked.Increment(ref _w143ShotsIn);
                     if (!W141Active || !_w143Shots) { W164IdleRefused(!W141Active ? "not-active" : "oneshots-off"); break; }

@@ -393,7 +393,7 @@ do
     KCD2MP_W167SceneReleased(true, "stuck-20s")
     check("S1: the engine ended the scene: the faders back to normal (the player's suspend undone)", tonumber(CVARS["wh_ui_FaderSuspend"]) == 0)
     check("S2: ... the player stood up (the unstuck step 1)", cmdCount("wh_ai_NPCStateResetElement Dude Unstance") == 1 and cmdCount("wh_ai_NPCStateResetElement Dude Stance") == 1)
-    check("S3: ... and told", TOASTS[#TOASTS] == "That scene couldn't play here \226\128\148 your partner's world runs it."
+    check("S3: ... and told", TOASTS[#TOASTS] == "Your partner's game is playing this scene \226\128\148 carry on."
         and lastLog("WO167-SCENE released ended=true fader=restored stood=asked why=stuck-20s", mark) ~= nil, TOASTS[#TOASTS])
     reset(); joiner()
     mark = #LOG

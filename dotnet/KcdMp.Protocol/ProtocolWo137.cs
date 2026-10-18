@@ -70,12 +70,14 @@ public static partial class Protocol
     public static string QuestHostName(byte k) => k switch
     {
         QuestHostChange => "change", QuestHostResult => "result", QuestHostCheckpoint => "checkpoint",
-        QuestHostHold => "hold", QuestHostMode => "mode", QuestHostConverse => "converse", _ => $"unknown-{k}",
+        QuestHostHold => "hold", QuestHostMode => "mode", QuestHostConverse => "converse",
+        QuestHostReplayAck => "replay-ack", QuestHostItemCount => "item-count", _ => $"unknown-{k}",
     };
 
     public static string QuestAskName(byte k) => k switch
     {
-        QuestAskRequest => "request", QuestAskTalk => "talk", QuestAskResync => "resync", QuestAskOwnHorse => "ownhorse", _ => $"unknown-{k}",
+        QuestAskRequest => "request", QuestAskTalk => "talk", QuestAskResync => "resync", QuestAskOwnHorse => "ownhorse",
+        QuestAskOutPortReplay => "outport-replay", _ => $"unknown-{k}",
     };
 }
 

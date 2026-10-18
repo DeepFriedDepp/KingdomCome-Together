@@ -112,6 +112,12 @@ inline constexpr uint8_t kEnqueueCutscene[16] = {
     0x48, 0x89, 0x5C, 0x24, 0x18, 0x57, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0xD9, 0x48, 0x8B, 0xFA,
 };
 
+// wo200.cpp: C_Node::Execute (ConceptModule's export; no node class overrides its slot) -- WO-200's node gate, an entry gate.
+// push rbx; push rsi; push rdi; sub rsp,80h; mov rbx,rcx; mov rsi,rdx
+inline constexpr uint8_t kNodeExecute[17] = {
+    0x40, 0x53, 0x56, 0x57, 0x48, 0x81, 0xEC, 0x80, 0x00, 0x00, 0x00, 0x48, 0x8B, 0xD9, 0x48, 0x8B, 0xF2,
+};
+
 struct Entry { const char* name; const uint8_t* bytes; size_t len; };
 inline constexpr Entry kAll[] = {
     {"motion UpdateMannequinTags", kMotionTags, sizeof kMotionTags},
@@ -129,6 +135,7 @@ inline constexpr Entry kAll[] = {
     {"wo178 slot start (research)", kSlotStart, sizeof kSlotStart},
     {"wo178 slot end (research)", kSlotEnd, sizeof kSlotEnd},
     {"wo194 EnqueueCutscene", kEnqueueCutscene, sizeof kEnqueueCutscene},
+    {"wo200 C_Node::Execute", kNodeExecute, sizeof kNodeExecute},
 };
 
 } // namespace kcdmp::hookpro

@@ -275,6 +275,7 @@ public partial class GameBridge
     {
         // WO-183: a conversation is no scene (it moves nobody); only A3's guard clock runs
         _w179DudeStartMs = ended ? 0 : Environment.TickCount64;
+        if (ended) Volatile.Write(ref _w200AttemptMs, 0);
     }
 
     /// <summary>
@@ -312,7 +313,10 @@ public partial class GameBridge
             await ExecLuaAsync("if KCD2MP_W167SceneReleased then KCD2MP_W167SceneReleased(false, \"wo179-positioning-2s\") end");
         }
         // A3: a conversation with this player that made no twin (the field: WAITING_FOR_TWINS for 20 s on a host copy, 6 of 6)
-        long ds = _w179DudeStartMs;
+        // WO-200 I.6: with every participant woken (joiner_scoped_twins) the bound counts from the engine's start attempt, the only point
+        // after which a dialogue waits for its twins -- the field's "stall" (J 14:12:01) was a talk request cut at 4.1 s with no attempt
+        // made yet; the request phase has the engine's own timeout and WO-137's talk window
+        long ds = W200("joiner_scoped_twins") ? Volatile.Read(ref _w200AttemptMs) : _w179DudeStartMs;
         if (ds > 0 && _w179TwinSeenMs < ds - Wo179Rules.SignLeadMs && now - ds >= Wo179Rules.TwinsBoundMs && _w179TwinReleasedFor != ds)
         {
             _w179TwinReleasedFor = ds;

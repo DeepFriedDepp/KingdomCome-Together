@@ -645,6 +645,7 @@ public partial class GameBridge
         _w151CfgKey = -1;
         _ = Wo151LoopAsync(ct);
         Wo179OnConnect(ct);   // WO-179: the scene watch (10 Hz) and the bus
+        Wo200OnConnect(ct);   // WO-200: the gates' config, their events (4 Hz), the host's replay queue
     }
 
     private async Task Wo151LoopAsync(CancellationToken ct)
@@ -683,6 +684,7 @@ public partial class GameBridge
             catch (Exception ex) { Console.WriteLine($"MP-W151 tick failed: {ex.GetType().Name}: {ex.Message}"); }
         }
         _w151Connected = false;
+        Wo200OnDisconnect();   // WO-200: captures, parked steps and quiet comparisons of this session go
         Wo151SceneReset("disconnect");
         Wo184Reset("disconnect");
         Wo167SceneReset();
