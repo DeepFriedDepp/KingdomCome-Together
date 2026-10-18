@@ -3,6 +3,16 @@
 Supersedes the parallel-worlds design in the engineering brief §4 for everything
 except quest content. Decided 2026-07-27.
 
+## The standing rule (WO-200, 2026-10-18)
+
+> **Actions go to the authority; values come back.** The host's world decides. The joiner's game shows, and asks; it
+> never decides. What the host must simulate is sent as an *action*. What the joiner only displays is sent as a
+> *value*. Never the other way round.
+
+Everything below this section predates the rule and is kept as the record of how the shared world began. Where it
+describes the joiner's own systems deciding (its quest graph, its NPCs' brains), the rule wins: see
+`docs/WO-200-findings.md` for what it changed.
+
 ## The decision
 
 **Shared:** ambient and hostile NPCs — wildlife, townsfolk, guards, bandits,

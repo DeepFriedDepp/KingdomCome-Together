@@ -1544,6 +1544,64 @@ helps, take your own (F12) and send it. Evidence: `docs/WO-197-findings.md`.
 379. **Type `mark_odd` at every difference.** Switches (all on): `mp_anim_recoil`, `mp_anim_paired`, `mp_anim_clinch`, `mp_anim_knockout`,
      `mp_copy_guard_engine`, `mp_anim_seats`, `mp_anim_work`, `mp_anim_routines`, and the ones the sections above name.
 
+## 0.61.5 — one world, one story (WO-200)
+
+The host's world decides; the joiner's game shows it. The joiner's conversations now run in the host's world too, his quest clocks no
+longer fire on his own, the host's people show the host's health, stamina and horses, and the clock follows the host's. Evidence:
+`docs/WO-200-findings.md`. **Type `mark_odd` at every difference, and say out loud what you saw.**
+
+**Tester script** (one session, about an hour; start from a save before Sir Semine's departure in "The Jaunt", the host near Semine's yard
+in the morning; both of you on 0.61.5; the joiner joins there)
+
+1. *Joiner:* talk to Semine and pick the answer that starts the ride. *Both:* watch the yard. Mark if the lords do not set off on both
+   screens within a minute of the conversation's end.
+2. *Both:* ride with the lords to Troskowitz (do not skip time). Mark at every moment a lord is off his horse on one screen and on it on the
+   other, or slides along the ground.
+3. *Host:* let the clock pass 13:00 on the way (it will). Mark if either of you sees "they gave up on you" lines, or the lords turn back.
+4. *Host:* do the training bout with Semine; *Joiner:* watch from close by. Mark if Semine falls on the joiner's screen while standing on
+   the host's, or looks exhausted on one screen only.
+5. *Joiner:* walk up to Semine and Suk in Troskowitz and start the conversation with both (the trialog). Mark if it does not start within
+   a few seconds, or the screen goes black.
+6. *Each of you:* one conversation that gives a reward (money or a reward line), and one quest-item handover. Mark if the reward reaches
+   the one who did not talk, or the quest item is in one inventory and not the other after a minute.
+7. *Host:* save (Home), then load that save. *Joiner:* rejoin when asked ("Continue with your character (saved … ago)"). Mark if Semine or
+   Suk is missing on the joiner's screen after the rejoin.
+8. *Host:* start a fight right after the rejoin (a sparring match, or a bandit). *Joiner:* watch the host's figure. Mark if the host's
+   swings stop showing after a clinch.
+9. *Both:* walk through the village by day and talk to five villagers holding something (a broom, a scoop, firewood). Mark any talk that
+   does not start within a second or two.
+
+**Checklist**
+
+380. **The departure runs once, in the host's world.** After the joiner's departure conversation the lords set off on both screens; the
+     host's `agent.log` has `MP-W200 host: replay ... -> ran` and its `kcdmp-native.log` `WO137-CHANGE ... closure=`; the joiner's has
+     `MP-W200 joiner: the host RAN replay`, never `the host REFUSED replay`.
+381. **No ride 1 or ride 2.** Past 13:00 no `hrac_se_na_to_vykaslal` change on either machine; the joiner's `kcdmp-native.log` has
+     `WO200-QUIET joiner: ... SaS_docekali :: OnTimeOfDay not run`, never `WO137-CHANGE ... CekaniNaNavratSeminaSuka`.
+382. **Riders follow the host.** On the joiner: `WO200-RIDER mount rider=tsem_seminsr ...` and no `WO200-RIDER dismount` while the host's
+     lords ride; no "the streams parted" lines.
+383. **The bout shows the host's health and stamina.** On the joiner: `[npcdmg] in: the host's blow ... not applied here`, never a copy
+     falling between the host's blows.
+384. **The joiner's own conversations with two people start.** On the joiner: `WO200-TWINS wake npc=<second speaker>` at the trialog's start,
+     and no `WO179-RELEASE conversation made no dialogue twin` line.
+385. **Rewards to the talker, quest items to both.** A reward of the joiner's conversation appears only in the joiner's inventory (host:
+     `WO200-GATE host: ... (talker-only-host ...)` lines); a quest item reaches both, and the joiner's `kcd.log` shows no `WO200-QITEM differs` that
+     lasts past a minute.
+386. **The lords stay after a rejoin.** After the host's reload and the joiner's rejoin both lords are there on the joiner's screen; the
+     joiner's `kcd.log` may say `WO200-STANDIN forget` or `kept`, never a lord missing.
+387. **The figure keeps fighting after a clinch.** The host's swings after a clinch all show on the joiner's screen; the joiner's
+     `agent.log` has `dispatch=none (StartSyncGuard refused: no clinch rows ...)` and `WO200-CLINCH end`.
+388. **Village talks start at once.** Talks with villagers holding tools start within a second or two, with no "This person can't talk to
+     you right now"; their hands may show empty on the joiner's screen (a known gap: `mp_copy_neutral_always off` brings the old hands back).
+389. **Saves wait only for real reasons.** A save during Henry's stomach growl is not delayed; a delayed save names its reason on screen
+     and logs `WO200-SAVEWAIT reason=...` every 5 s.
+390. **Noise:** the joiner picking a lock near a sleeper on the host's side wakes the sleeper there too (host `kcd.log`:
+     `WO200-NOISE kind=lockpick ... ok`).
+391. **One clock.** The joiner's clock stays within a game-minute of the host's (joiner `agent.log`: `WO200-CLOCK joiner: this clock's ratio`
+     lines, the error shrinking). Switches (all on): `mp_s1_replay`, `mp_s1_route`, `mp_qitem_mirror`, `mp_joiner_quiet_clocks`,
+     `mp_joiner_no_puppet_quests`, `mp_joiner_scoped_twins`, `mp_copy_health_from_host`, `mp_rider_from_host`, `mp_copy_neutral_always`,
+     `mp_world_clock_from_host`, `mp_stream_dogs`, `mp_joiner_noise`; `mp_w200_status` prints them all.
+
 ## Logs to send afterwards
 
 Both machines: Report a bug in the launcher. Since 0.48.9 it collects the current launch by default as a small file (or a few numbered

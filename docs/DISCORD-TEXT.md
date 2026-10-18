@@ -25,6 +25,31 @@ How to play together (0.48.2):
 Nobody clicks CONNECT any more, and you don't need anyone's save file. First time ever starting the game? Start it once from Steam and accept its two first-run pages, then use the launcher.
 ```
 
+## Version 0.61.5 — one world, one story (WO-200)
+
+```
+Kingdom Come: Together 0.61.5 -- one world, one story
+The host's world decides; the joiner's game shows it.
+Quests
+- The joiner's conversations now play out in the host's world too: when the joiner talks Sir Semine into setting off, the lords set off in both worlds (the Jaunt used to fail at 13:00 on the host).
+- The joiner's game no longer runs its own quest clocks or its own quest duels and tours on the host's people.
+- Rewards and money from a conversation go to the one who talked; quest items follow the story in both worlds.
+- A conversation of the joiner's with two people at once (Semine and Suk) wakes both of them.
+The host's people on the joiner's screen
+- Their health and stamina are the host's: a sparring partner no longer falls down on the joiner's screen while standing on the host's.
+- Riders sit on their horses exactly when the host's do: no more lords hopping off and on during a ride.
+- The joiner's clock follows the host's, gently.
+- After a reload and a rejoin the lords are still there on the joiner's screen.
+- Known gap: villagers' tools (brooms, scoops) may show empty-handed on the joiner's screen for now; talks with them start at once. mp_copy_neutral_always off brings the old hands back.
+Fights and the rest
+- A clinch no longer freezes your partner's figure for the rest of the fight (the locking-together pose is not shown on the other screen any more; the clinch moves still are).
+- The joiner's lockpicking, fights and doors are heard in the host's world: sleepers wake, guards come.
+- A save never waits for Henry's stomach growl, and a waiting save says why.
+- On a rejoin the Join banner says "Continue with your character (saved N min ago)".
+Each new piece has its own switch (mp_s1_replay, mp_s1_route, mp_qitem_mirror, mp_joiner_quiet_clocks, mp_joiner_no_puppet_quests, mp_joiner_scoped_twins, mp_copy_health_from_host, mp_rider_from_host, mp_copy_neutral_always, mp_world_clock_from_host, mp_stream_dogs, mp_joiner_noise), all on; mp_w200_status shows them. Please type mark_odd at anything odd.
+Both players and the relay need 0.61.5.
+```
+
 ## Version 0.61.0 — the animation-sync release (everything since 0.60.9)
 
 ```

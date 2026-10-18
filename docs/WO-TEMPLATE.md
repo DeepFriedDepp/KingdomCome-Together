@@ -6,6 +6,10 @@
 <what is built, and what stays exactly as it is>
 
 ## Standing rules (short form, all mandatory)
+> **Actions go to the authority; values come back.** The host's world decides. The joiner's game shows, and asks; it
+> never decides. What the host must simulate is sent as an *action*. What the joiner only displays is sent as a
+> *value*. Never the other way round.
+
 - Modding Tools build only; never launch, test on, inject into or change anything for retail.
 - Port-aware native code: RTTI-name lookups, fields by what they point at, no fixed addresses/exports/vtable slots in code,
   the hook-prologue registry, one resolver with a build-identity check, a thread id on every native log line.
