@@ -1073,6 +1073,16 @@ unsigned char g_avatarGuard[16]{};
 bool g_avatarGuardOk = false;
 std::atomic<uint32_t> c_buffAdds{0};
 
+// WO-201 V.4: a figure the engine is knocking out (its player is down in his world): the full guard is not put back while the hold is
+// on -- its upr=1 kills the game's own unconsciousness on its first update (the reason a figure never fell, WO-197 B4).
+std::mutex g_koHoldLock;
+std::vector<uint32_t> g_koHold;   // under g_koHoldLock
+bool ko_held(uint32_t eid) {
+    std::lock_guard<std::mutex> lk(g_koHoldLock);
+    for (uint32_t e : g_koHold) if (e == eid) return true;
+    return false;
+}
+
 void ensure_avatar_guard(Body& b, double now) {
     if (now - b.lastBuffCheck < 5.0) return;
     b.lastBuffCheck = now;
@@ -1082,6 +1092,7 @@ void ensure_avatar_guard(Body& b, double now) {
     const uint8_t wantQuiet = g_cfgQuiet.load();   // WO-135: mp_avatar_quiet's groups
     if (wantQuiet != b.quietApplied) set_quiet(b, wantQuiet);
     if (!g_avatarGuardOk) return;
+    if (ko_held(b.eid)) return;   // WO-201 V.4: down the engine's way; the guard comes back at the wake (wo131's op)
     void* soul = nullptr;
     void* fn = vslot(b.actor, kActorGetSoul);
     if (!fn || !call_p0(fn, b.actor, &soul) || !soul) return;
@@ -2069,6 +2080,13 @@ bool write_attack_fields(void* model, const AttackFields& f) {
         return false;
     return wr(model, kPropAttackType.off + 8, f.type) && wr(model, kPropAtkZone.off + 8, f.zone) && wr(model, kPropAtkHand.off + 8, f.hand) &&
            wr(model, kPropAtkStrength.off + 8, f.strength);
+}
+
+// WO-201 V.4 (wo131's knockout / wake of a figure): hold or release the avatar guard's re-add for this body.
+void set_ko_hold(uint32_t eid, bool on) {
+    std::lock_guard<std::mutex> lk(g_koHoldLock);
+    for (size_t i = 0; i < g_koHold.size(); ++i) if (g_koHold[i] == eid) { if (!on) g_koHold.erase(g_koHold.begin() + static_cast<ptrdiff_t>(i)); return; }
+    if (on && g_koHold.size() < 16) g_koHold.push_back(eid);
 }
 
 } // namespace kcdmp::motion

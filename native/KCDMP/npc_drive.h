@@ -97,6 +97,10 @@ bool hold_all();
 // a capped stretch the writer catches up (the blend) for kHoldCooldownS before the next hold takes the body.
 void set_snap_fix(bool on);
 bool snap_fix();
+// WO-201 B10 (mp_walk_from_host, joiner): a moving copy keeps walking on the host's last speed and heading through a gap under 2 s
+// (never held, then slid), is never dropped for silence while it moves, and its gait is the host's own speed.
+void set_walk_from_host(bool on);
+bool walk_from_host();
 // WO-141: an activity owns this body's position (a bed, a seat, a kneeler, a cart
 // slot, an aligned unstance): the writer neither writes nor drives its gait while
 // set, and blends back from wherever the activity leaves the body when cleared.

@@ -31,6 +31,7 @@ public partial class GameBridge
         {
             if (Wo170Rules.AggroAgainstFigure(line) is { } a)
             {
+                Wo201OnCopyShout(a.Npc);   // WO-201 B4: a copy never starts a fight by itself
                 long now = Environment.TickCount64;
                 // one line per NPC per 10 s (a fight's shouts repeat every few seconds)
                 if (_w170AggroAt.TryGetValue(a.Npc, out long at) && now - at < 10_000) return;

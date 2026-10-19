@@ -684,7 +684,10 @@ do
     check("i: ...logged", logCount("(WO151: resumed for it)") == 1, lastLog("WO137-TALK forced"))
     CMDS = {}
     KCD2MP_W137TalkEndNow("tvid_hunter", "dialog-ended")
-    check("i: ...and paused again at its end", cmdCount("wh_ai_PauseNPC tvid_hunter") == 1, table.concat(CMDS, " | "))
+    -- WO-201 B8: a twin is paused again at its end, or kept 2 s for a follow-on conversation of this player (logged; the per-tick pause
+    -- takes it after the grace)
+    check("i: ...and paused again at its end (or kept for WO-201 B8's 2 s grace)", cmdCount("wh_ai_PauseNPC tvid_hunter") == 1
+        or logCount("WO201-TWINS kept npc=tvid_hunter") == 1, table.concat(CMDS, " | ") .. " || " .. tostring(lastLog("WO201-TWINS")))
     check("i: no Lua errors", #ERRS == 0, ERRS[1])
 end
 

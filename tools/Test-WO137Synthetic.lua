@@ -333,6 +333,9 @@ do -- (c) talking (joiner)
 
     -- the request fallback (a conversation asked another way) -- WO-167 T1: off by default (mp_talk_fallback); this is it switched on
     NOW = NOW + 3   -- WO-164: not right after a talk to this game's own NPC (that request is that NPC's)
+    -- WO-201 B8: the talk's end no longer re-pauses its twin at once (a 2 s grace for a follow-on conversation); the game's per-tick
+    -- pause does it after the grace -- that pause, here
+    if not KCD2MP._npcPaused["tzel_olbram"] then KCD2MP._npcPaused["tzel_olbram"] = NOW end
     CMDS = {}
     if KCD2MP.w167 then KCD2MP.w167.talkFallback = true; KCD2MP.w167.talk.lastNpc = {} end
     KCD2MP_W137TalkRequest(400)

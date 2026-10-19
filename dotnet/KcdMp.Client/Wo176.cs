@@ -20,7 +20,7 @@ public static class Wo176Rules
     public const bool DefaultArrangedGuard = true, DefaultCopyBlocks = true;
 
     /// <summary>What the joiner is told, once per story fight.</summary>
-    public const string StoryFightText = "This fight belongs to the story — your partner fights it.";
+    public const string StoryFightText = "This fight belongs to the story - your partner fights it.";
 
     /// <summary>The DLL's answers that mean "kept out of an arranged fight": op 18's fallback 11, WO-121's apply_attributed reason 9.</summary>
     public const byte FallbackArranged = 11, AttribReasonKept = 9;

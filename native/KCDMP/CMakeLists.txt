@@ -62,6 +62,11 @@ add_library(KCDMP SHARED
     wo195.cpp
     wo197.cpp
     wo200.cpp
+    wo201.cpp
+    wo201_near.cpp
+    wo201_speech.cpp
+    wo201_vote.cpp
+    wo201_ranged.cpp
     weather.cpp
 )
 

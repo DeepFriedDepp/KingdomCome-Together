@@ -820,7 +820,22 @@ void neutralise_loaded(uint32_t eid, const char* name) {
 }
 
 std::unordered_map<std::string, double> g_neutralAt;   // WO-200 II.4: copy -> when its loaded state was last made what it is
-std::atomic<uint32_t> c_neutralAlways{0};
+std::atomic<uint32_t> c_neutralAlways{0}, c_neutralSame{0};
+// WO-201 B9: what the neutral write last left in a copy's loaded state. Rebuilding that state out of new elements every 0.5 s (the
+// same stance, new objects) made the planner see a changed demand each time and re-plan: the look pose was queued again on every
+// copy, ~20,000 queue overflows in 10 minutes ("Agent is stuck"). Written again only when the body's activity changed or the
+// loaded state no longer holds these elements (a load, the game's own placement).
+struct NeutralMark { R::Activity a; void* s0 = nullptr; void* s3 = nullptr; };
+std::unordered_map<std::string, NeutralMark> g_neutralMark;
+bool loaded_slots(void* ctx, void** s0, void** s3) {
+    *s0 = *s3 = nullptr;
+    void* st = static_cast<char*>(ctx) + kCtxLoaded;
+    void* b = nullptr; void* e = nullptr;
+    if (!rd(st, kStateElemsB, &b) || !rd(st, kStateElemsE, &e) || !b) return false;
+    const size_t n = static_cast<size_t>(static_cast<char*>(e) - static_cast<char*>(b)) / 16;
+    if (n < 4 || n > 256) return false;
+    return rd(b, 0 * 16, s0) && rd(b, 3 * 16, s3);
+}
 
 void reconcile_tick(double now) {
     if (!g_applyOn.load() || !g_applyArmed) return;
@@ -830,16 +845,54 @@ void reconcile_tick(double now) {
         // WO-200 II.4: a host copy (not a partner's figure) never asks the planner for anything here: its activity shows through the
         // host's rows (WO-197) and its values; its loaded state is kept equal to what the body is, so nothing is left to demand.
         if (neutral && !R::is_avatar_name(d.name.c_str())) {
-            if (d.held && d.eid) { npcdrive::set_activity_hold(d.eid, false); d.held = false; }
             if (!d.eid) {
                 void* e = now - d.resolveAt >= 2.0 ? entity_by_name(d.name.c_str()) : nullptr;
                 if (e) d.eid = engine::entity_id(e); else if (now - d.resolveAt >= 2.0) d.resolveAt = now;
             }
+            // WO-201 B9: an activity of the host's that owns its body's place (a workstation, a seat, a bed) keeps the writer off the
+            // copy, as without the neutral rule: written every row, a woodcutter's copy turned in place with every swing of the host's
+            // body (about 100 degrees a second) and queued its look pose again at each turn -- ~12 overflows a second on that one copy
+            const bool ownsHere = R::owns_position(d.a);
+            if (d.eid && ownsHere != d.held) { npcdrive::set_activity_hold(d.eid, ownsHere); d.held = ownsHere; }
             double& at = g_neutralAt[it->first];
             if (d.eid && now - at >= 0.5) {
                 at = now;
                 R::Activity cur;
-                if (read_activity(d.eid, &cur)) { void* ctx = nullptr; build_loaded(d.eid, cur, nullptr, d.name.c_str(), nullptr, &ctx, true); c_neutralAlways.fetch_add(1, std::memory_order_relaxed); }
+                if (read_activity(d.eid, &cur)) {
+                    void* ctx = ctx_of_eid(d.eid);
+                    void* s0 = nullptr; void* s3 = nullptr;
+                    auto mk = g_neutralMark.find(it->first);
+                    const bool same = ctx && mk != g_neutralMark.end() && R::same_body(cur, mk->second.a) && loaded_slots(ctx, &s0, &s3) &&
+                                      s0 == mk->second.s0 && s3 == mk->second.s3;
+                    if (same) c_neutralSame.fetch_add(1, std::memory_order_relaxed);
+                    else if (build_loaded(d.eid, cur, nullptr, d.name.c_str(), nullptr, &ctx, true) == kApOk && ctx) {
+                        c_neutralAlways.fetch_add(1, std::memory_order_relaxed);
+                        NeutralMark m; m.a = cur;
+                        loaded_slots(ctx, &m.s0, &m.s3);
+                        g_neutralMark[it->first] = m;
+                    }
+                    // WO-201 B23: the night/day dress is the host's value (WO-164 N's row flag) -- the neutral rule asked for nothing, so a
+                    // copy that undressed for bed stayed undressed all day. The host's body dressed and this copy still in its night
+                    // undress: dressed from what the body is now (paced 20 s, re-read after).
+                    if (g_wakeDress.load() && !d.hostNight && cur.stance != R::kLying && now - d.dressCheckAt >= 5.0) {
+                        d.dressCheckAt = now;
+                        void* wc = ctx_of_eid(d.eid);
+                        void* el = wc ? equipment_element(wc) : nullptr;
+                        if (!el) { d.copyNight = false; d.dressElem = nullptr; }
+                        else if (el != d.dressElem) { d.dressElem = el; d.copyNight = in_sleep_outfit(wc); }
+                    }
+                    if (g_wakeDress.load() && !d.hostNight && cur.stance != R::kLying && d.copyNight && now >= d.dressNextAt) {
+                        d.dressNextAt = now + 20.0;
+                        uint8_t dres = 0;
+                        const uint8_t dr = apply_now(d.eid, cur, &dres, nullptr, d.name.c_str());
+                        c_outfitDressed.fetch_add(1, std::memory_order_relaxed);
+                        d.dressElem = nullptr;
+                        g_neutralMark.erase(it->first);   // the loaded state was written: the next neutral pass reads it afresh
+                        logf("WO201-LOOK npc=%s dressed (%s, exec %u) -- the host's body is dressed (its row's value), this copy was still in its "
+                             "night undress; the neutral rule never asks for it thread=%lu",
+                             d.name.c_str(), applied_name(dr), dres, static_cast<unsigned long>(GetCurrentThreadId()));
+                    }
+                }
             }
             ++it;
             continue;
@@ -1183,9 +1236,9 @@ void research_watch() {
 }
 
 std::string status_text() {
-    char b[640];
+    char b[768];
     _snprintf_s(b, sizeof b, _TRUNCATE,
-                "read %s apply %s | capture npcs=%d player=%d period=%ums | apply %s desired=%zu | rows %llu reads %llu applies %llu (ok %llu fail %llu) leaves %llu shows %llu equip_kept %llu woke_dressed %llu neutral %llu sweeps %llu sweep_missing %llu sit_failed %llu sit_fallback %llu outfit_sent %llu outfit_dressed %llu",
+                "read %s apply %s | capture npcs=%d player=%d period=%ums | apply %s desired=%zu | rows %llu reads %llu applies %llu (ok %llu fail %llu) leaves %llu shows %llu equip_kept %llu woke_dressed %llu neutral %llu neutral_writes %u neutral_same %u sweeps %llu sweep_missing %llu sit_failed %llu sit_fallback %llu outfit_sent %llu outfit_dressed %llu",
                 g_readArmed ? "armed" : "NOT ARMED", g_applyArmed ? "armed" : "NOT ARMED", g_captureNpcs.load() ? 1 : 0,
                 g_capturePlayer.load() ? 1 : 0, g_periodMs.load(), g_applyOn.load() ? "on" : "off", g_desired.size(),
                 static_cast<unsigned long long>(c_rowsSent.load()), static_cast<unsigned long long>(c_reads.load()),
@@ -1193,7 +1246,7 @@ std::string status_text() {
                 static_cast<unsigned long long>(c_applyFail.load()), static_cast<unsigned long long>(c_leaves.load()),
                 static_cast<unsigned long long>(c_shows.load()), static_cast<unsigned long long>(c_equipKept.load()),
                 static_cast<unsigned long long>(c_wakeDressed.load()), static_cast<unsigned long long>(c_neutral.load()),
-                static_cast<unsigned long long>(c_sweeps.load()), static_cast<unsigned long long>(c_sweepMissing.load()),
+                c_neutralAlways.load(), c_neutralSame.load(), static_cast<unsigned long long>(c_sweeps.load()), static_cast<unsigned long long>(c_sweepMissing.load()),
                 static_cast<unsigned long long>(c_sitFailed.load()), static_cast<unsigned long long>(c_sitFallback.load()),
                 static_cast<unsigned long long>(c_outfitSent.load()), static_cast<unsigned long long>(c_outfitDressed.load()));
     return b;

@@ -190,7 +190,8 @@ public partial class GameBridge
     /// <summary>4: the engine lines (Wo144OnEngineLine): this player's conversation waiting for its NPC; the host's target lines (3b).</summary>
     private void Wo191OnEngineLineAll(string line)
     {
-        _w191Conv.OnLine(line, Environment.TickCount64);
+        if (!(W201("monologue_rescue_exempt") && Wo201Rules.IsSoloDudeDialogue(line)))   // WO-201 B6: a monologue never waits as a conversation
+            _w191Conv.OnLine(line, Environment.TickCount64);
         Wo191OnEngineLine(line);
     }
 
@@ -218,12 +219,12 @@ public partial class GameBridge
             if (waiting >= 0)
             {
                 _w179TwinReleasedFor = W200("joiner_scoped_twins") ? Volatile.Read(ref _w200AttemptMs) : _w179DudeStartMs;   // WO-179 A3 would end the same conversation at 3.5 s (WO-200 I.6: its bound's start)
-                await ExecLuaAsync("if KCD2MP_W179ReleaseDialog then KCD2MP_W179ReleaseDialog(\"wo191-fader-3s\") end");
+                await ExecLuaAsync($"if KCD2MP_W179ReleaseDialog then KCD2MP_W179ReleaseDialog(\"wo191-fader-3s\", {(Wo201OwnTalk() ? 1 : 0)}) end");   // WO-201 B6
             }
             else
             {
                 Volatile.Write(ref _w167FaderHeldMs, W167NowMs());
-                await ExecLuaAsync("if KCD2MP_W167SceneReleased then KCD2MP_W167SceneReleased(false, \"wo191-fader-3s\") end");
+                await ExecLuaAsync("if KCD2MP_W167SceneReleased then KCD2MP_W167SceneReleased(false, \"wo191-fader-3s\", 0) end");   // WO-201 B19: no scene of the partner's
             }
         });
     }

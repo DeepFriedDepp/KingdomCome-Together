@@ -50,6 +50,7 @@ void on_pipe_closed();
 
 using FrameFn = void (*)(const uint8_t* body, uint16_t len);
 void set_frame_callback(FrameFn fn);
+void set_tick_hz(int hz);   // WO-201 B9: a paused copy's one-shot NPC-state ticks per second (0 = every frame)
 
 // Main thread (the gait writer, motion.cpp): the host shows this copy hoeing --
 // its creep along the row is the walking class, not standing.

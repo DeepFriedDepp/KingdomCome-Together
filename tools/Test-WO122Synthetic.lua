@@ -280,7 +280,8 @@ do
     check("g: steady state: the engine is not asked every tick (each refused add logs an engine error)", LOCKCALLS == calls0, tostring(LOCKCALLS - calls0))
     NOW = NOW + 30
     KCD2MP_HostOnlyLock(true, "tick")
-    check("g: ...but re-checked every 30 s with ONE add (refused = still held)", LOCKCALLS == calls0 + 1 and w.lockHeld, tostring(LOCKCALLS - calls0))
+    -- WO-201 B21: a lock added since the last load is still held -- never re-added to find out (each refused add was one engine error)
+    check("g: ...and not re-added every 30 s either (WO-201 B21: one add per load)", LOCKCALLS == calls0 and w.lockHeld, tostring(LOCKCALLS - calls0))
     LOCKS = {}   -- a load
     KCD2MP_HostOnlyLock(true, "after-load")
     check("g: a load's wipe is noticed and re-asserted", countLog("readback=held -- it was gone (a load wipes every lock; wiped 1x)", m2) == 1,
@@ -288,8 +289,9 @@ do
     check("g: held again", LOCKS["kcdmp_host_only"] ~= nil and w.lockHeld)
     LOCK_BROKEN = true
     local m3 = #LOG
-    NOW = NOW + 31   -- the next steady-state check
-    KCD2MP_HostOnlyLock(true, "tick")
+    LOCKS = {}   -- the next load (WO-201 B21: the one moment the lock is added again)
+    for _, f in ipairs(W201.afterLoad or {}) do f() end
+    KCD2MP_HostOnlyLock(true, "after-load")
     check("g: a read-back that does not hold is loud", countLog("MP-SAVELOCK READBACK FAILED", m3) == 1 and w.lockHeld == false)
     LOCK_BROKEN = false; LOCKS = {}
     KCD2MP_HostOnlyLock(true, "tick")

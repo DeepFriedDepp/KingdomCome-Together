@@ -43,6 +43,7 @@ int wo177_tests(int* passed);              // wo177_tests.cpp (WO-177: the nativ
 int wo190_tests(int* passed);              // wo190_tests.cpp (WO-190: trace limits, idle watch, stand-in weapon, re-queue gate, gait hold, swing takeover)
 int wo195_tests(int* passed);              // wo195_tests.cpp (WO-195: the dead copy's gates and its release mask)
 int wo200_tests(int* passed);              // wo200_tests.cpp (WO-200: the two gates' rules, the node gate's prologue)
+int wo201_tests(int* passed);              // wo201_tests.cpp (WO-201: B1's save-path cancel read out of its code, the per-frame rule)
 int wo197_tests(int* passed);              // wo197_tests.cpp (WO-197: the recoil and clinch polls, the kept main actions, the pair request)
 int wo194_tests(int* passed);              // wo194_tests.cpp (WO-194: the hold, its release, the time gate, the FastForward stop)
 int wo187_tests(int* passed);              // wo187_tests.cpp (WO-187: opponent wishes, guard hold, idle restore, per-weapon 0x10)
@@ -322,6 +323,14 @@ int main() {
     {
         int fp = 0;
         const int ff = wo200_tests(&fp);
+        g_pass += fp;
+        g_fail += ff;
+    }
+
+    // WO-201: the native half's rules
+    {
+        int fp = 0;
+        const int ff = wo201_tests(&fp);
         g_pass += fp;
         g_fail += ff;
     }

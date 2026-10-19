@@ -142,8 +142,8 @@ end
 do
     local names = { "s1_replay", "s1_route", "qitem_mirror", "joiner_quiet_clocks", "joiner_no_puppet_quests", "joiner_scoped_twins",
                     "copy_health_from_host", "rider_from_host", "copy_hands_from_host", "copy_neutral_always", "world_clock_from_host",
-                    "stream_dogs", "joiner_receive_only", "figure_is_player", "nearest_player_triggers" }
-    local off = { joiner_receive_only = true, figure_is_player = true, nearest_player_triggers = true }
+                    "stream_dogs" }   -- WO-201: Act V's three placeholders are WO-201's switches now
+    local off = {}
     for _, n in ipairs(names) do
         check("a: " .. n .. " defaults " .. (off[n] and "off" or "on"), KCD2MP_W200On(n) == not off[n])
         check("a: mp_" .. n .. " is registered", CCMDS["mp_" .. n] ~= nil)
@@ -187,7 +187,9 @@ do
     check("b: ...the talk target keeps its own talk record", KCD2MP.w137.talking["b_semin"] ~= nil and KCD2MP.w137.talking["b_semin"].twin == nil)
     CMDS = {}
     KCD2MP_W137TalkEndNow("b_suk", "dialog-ended")
-    check("b: at its end the twin is paused again", cmdCount("wh_ai_PauseNPC b_suk") == 1 and KCD2MP.w137.talking["b_suk"] == nil, table.concat(CMDS, " | "))
+    -- WO-201 B8: paused again at its end, or kept 2 s for a follow-on conversation of this player (logged; the per-tick pause takes it)
+    check("b: at its end the twin is paused again (or kept for WO-201 B8's 2 s grace)", (cmdCount("wh_ai_PauseNPC b_suk") == 1
+        or logCount("WO201-TWINS kept npc=b_suk") == 1) and KCD2MP.w137.talking["b_suk"] == nil, table.concat(CMDS, " | "))
     check("b: ...logged", logCount("WO200-TWINS end npc=b_suk") == 1, lastLog("WO200-TWINS end"))
 
     -- the switch off and the scene guard off: the second speaker stays paused (WO-151's behaviour with its guard off)

@@ -116,8 +116,9 @@ public partial class GameBridge
         bool avatar = name.StartsWith("kcd2mp_", StringComparison.Ordinal);
         bool had = _w160Given.TryGetValue(name, out var prev);
         bool changed = force || !had || prev != a;   // force: a time skip changed every copy's state under its activity
-        // WO-200 Act III (ledger row 9): a copy kept neutral every tick (II.4) holds no stance or unstance of its own to release
-        bool release = _w160ReleaseOn && !(W200("copy_neutral_always") && !avatar) && Wo160Rules.ReleaseBeforeApply(avatar, had && !prev.IsNone, changed);
+        // WO-201 Act VI (WO-200 ledger row 9, retired): a host copy is never released before an apply -- it is kept neutral every tick
+        // (II.4); only a partner's figure (its own player's activity) still is
+        bool release = _w160ReleaseOn && avatar && Wo160Rules.ReleaseBeforeApply(avatar, had && !prev.IsNone, changed);
         int before = W160ErrorsOf(name);
         if (release)
         {
@@ -137,43 +138,6 @@ public partial class GameBridge
         return known;
     }
 
-    private long _w160SettleMs;
-
-    /// <summary>
-    /// After a time skip (this player's own sleep or wait ended, or the host's announced skip was applied) every copy this joiner
-    /// holds is brought into agreement with its host row again: its stance and unstance released, the host's activity placed -- the
-    /// schedule has changed outfits and workstations under every paused copy (field: the "ChangeEquipment ... stash[Chest]" spikes
-    /// right after the joiner's time skips at 16:58 and 17:12). One settle in five seconds at most; the game's own skip sim is given
-    /// three seconds first; at most 80 copies.
-    /// </summary>
-    private async Task W160SettleAfterSkipAsync(string why)
-    {
-        if (!W141Joiner || !W141Active) return;
-        // WO-200 Act III (ledger row 9): with copy_neutral_always on a copy demands nothing after a skip either -- the settle stands down
-        if (W200("copy_neutral_always")) { Console.WriteLine($"WO160-CTX settle after {why}: none (WO-200 II.4: copies demand nothing)"); return; }
-        long now = Environment.TickCount64;
-        if (now - Interlocked.Exchange(ref _w160SettleMs, now) < 5_000) return;
-        if (_w164On)
-        {
-            // WO-164 T1: the field showed the re-placement below refused again and again after a skip (the error storm 60-100 s
-            // later); every copy within 300 m is swept instead (released, its loaded state := its body), paced by the Lua, and the
-            // reconcile places it again at its own pace
-            try { await Task.Delay(3_000); } catch { return; }
-            await ExecLuaAsync($"if KCD2MP_W164AfterSkip then KCD2MP_W164AfterSkip(\"{EscapeLua(why)}\") end");
-            Console.WriteLine($"WO164-SWEEP after {why}: every copy within 300 m is swept (the Lua paces it, 4 per tick)");
-            return;
-        }
-        try { await Task.Delay(3_000); } catch { return; }
-        int n = 0;
-        foreach (var (name, a) in _w141HostRows)
-        {
-            if (a.IsNone || _w141Blocked.ContainsKey(name)) continue;
-            if (n >= 80) break;
-            await W160ApplyAsync(name, a, force: true);
-            n++;
-        }
-        Console.WriteLine($"WO160-CTX settle after {why}: {n} cop{(n == 1 ? "y" : "ies")} released and placed again");
-    }
 
     private async Task W160ReportAsync(string name, ActivityState a, bool released, int before)
     {

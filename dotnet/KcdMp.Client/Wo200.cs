@@ -20,17 +20,12 @@ public static class Wo200Rules
     {
         "s1_replay", "s1_route", "qitem_mirror", "joiner_quiet_clocks", "joiner_no_puppet_quests", "joiner_scoped_twins",
         "copy_health_from_host", "rider_from_host", "copy_hands_from_host", "copy_neutral_always", "world_clock_from_host", "stream_dogs",
-        "joiner_receive_only", "figure_is_player", "nearest_player_triggers",
+        // WO-201: joiner_receive_only, figure_is_player and nearest_player_triggers were placeholders here (nothing built); they are
+        // WO-201's switches now (Wo201Rules.SwitchNames), under the same console names
     };
 
     /// <summary>The ship-on rule, with its one exception: V.2's player bit reaches a save, so it ships on only after its decode test passed.</summary>
-    public static bool DefaultOn(string name) => name switch
-    {
-        "joiner_receive_only" => false,       // V.1: its probes did not pass in WO-200 (see the findings); off until they do
-        "figure_is_player" => false,          // V.2: the save-decode gate (on only if the decode test passes)
-        "nearest_player_triggers" => false,   // V.3: no hook built (P8 open)
-        _ => true,
-    };
+    public static bool DefaultOn(string name) => true;
 
     public static bool TryParseCfg(string? arg, out string name, out bool on)
     {

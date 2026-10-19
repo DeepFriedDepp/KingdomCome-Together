@@ -13,16 +13,15 @@ namespace KcdMp.Client.Tests;
 public class Wo200Tests
 {
     [Fact]
-    public void Switches_FifteenNames_ShipOnExceptActV()
+    public void Switches_TwelveNames_AllOn()
     {
-        Assert.Equal(15, Wo200Rules.SwitchNames.Length);
+        Assert.Equal(12, Wo200Rules.SwitchNames.Length);   // WO-201: Act V's three placeholders are WO-201's switches now
         foreach (var n in Wo200Rules.SwitchNames)
         {
             Assert.True(Wo200Rules.TryParseCfg(n + "=off", out var name, out bool on));
             Assert.Equal(n, name);
             Assert.False(on);
-            bool actV = n is "joiner_receive_only" or "figure_is_player" or "nearest_player_triggers";
-            Assert.Equal(!actV, Wo200Rules.DefaultOn(n));
+            Assert.True(Wo200Rules.DefaultOn(n));
         }
         Assert.False(Wo200Rules.TryParseCfg("s1_replay=maybe", out _, out _));
         Assert.False(Wo200Rules.TryParseCfg("no_such_switch=on", out _, out _));

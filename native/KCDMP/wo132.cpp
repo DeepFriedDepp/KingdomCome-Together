@@ -352,7 +352,7 @@ void tick() {
     }
 }
 
-bool release_dead(uint32_t eid) {
+bool release_copy(uint32_t eid, const char* why) {
     motion::set_npc_engage(eid, false, nullptr, now_s());
     if (!is_engaged(eid)) return false;
     uint64_t rv = 0;
@@ -361,9 +361,11 @@ bool release_dead(uint32_t eid) {
     hits::discard_from(eid, false);
     for (auto it = g_engaged.begin(); it != g_engaged.end(); ++it) if (*it == eid) { g_engaged.erase(it); break; }
     c_engageOff.fetch_add(1);
-    logf("WO132-ENGAGE eid=0x%X off: the copy is dead (WO-195) -- combat hold released, skirmish %s", eid, sk ? "left" : "NOT left");
+    logf("WO132-ENGAGE eid=0x%X off: %s -- combat hold released, skirmish %s", eid, why ? why : "-", sk ? "left" : "NOT left");
     return true;
 }
+
+bool release_dead(uint32_t eid) { return release_copy(eid, "the copy is dead (WO-195)"); }
 
 void on_pipe_closed() {
     // Nothing drives the engaged copies any more: let them go (the Lua copy

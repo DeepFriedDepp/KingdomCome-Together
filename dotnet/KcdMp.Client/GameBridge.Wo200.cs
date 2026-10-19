@@ -103,7 +103,7 @@ public partial class GameBridge
             bool s1 = W200("s1_replay");
             byte role = Wo200Role();
             byte tap = Wo200Rules.TapBits(s1, W200("joiner_quiet_clocks"));
-            byte gate = Wo200Rules.GateBits(W200("joiner_no_puppet_quests"), s1, W200("s1_route"));
+            byte gate = (byte)(Wo200Rules.GateBits(W200("joiner_no_puppet_quests"), s1, W200("s1_route")) | (W201("joiner_no_story_barks") ? 8 : 0));   // WO-201 B7: bit 8
             await _combat.Wo163Async(Protocol.Wo200OpConfig, [role, (byte)(W137Joiner ? 1 : 0), tap, gate, 1, Wo200ValueBits()]);
         }
         catch (Exception ex) { Console.WriteLine($"MP-W200 config not pushed ({ex.GetType().Name})"); }
@@ -453,6 +453,8 @@ public partial class GameBridge
 
     // ---------------------------------------------------------------- I.4 quiet clocks: the comparison
 
+    private long _w201QuietNoState;   // WO-201 B12
+
     private void Wo200OnQuietDrop(string clock, string port)
     {
         var q = new W200Quiet { Clock = clock, Port = port, AtMs = W200Now() };
@@ -480,6 +482,14 @@ public partial class GameBridge
         }
         foreach (var q in due)
         {
+            // WO-201 B12: a pulse whose closure holds no State (a timer's OnRunning / OnStopped / OnExec) has nothing to compare: it is
+            // reported as such, never as a difference (the field: 18 of its 22 host-differs)
+            if (q.States.Count == 0)
+            {
+                Interlocked.Increment(ref _w201QuietNoState);
+                Console.WriteLine($"WO200-QUIET no-state: {q.Clock} :: {q.Port} dropped here; its closure holds no State -- nothing to compare");
+                continue;
+            }
             if (q.HostDid.Count > 0)
             {
                 Interlocked.Increment(ref _w200QuietAgreed);
@@ -507,7 +517,7 @@ public partial class GameBridge
         string sw = string.Join(' ', Wo200Rules.SwitchNames.Select(s => $"{s}={On(W200(s))}"));
         string refusals = string.Join(",", _w200Refusals.OrderBy(k => k.Key, StringComparer.Ordinal).Select(k => $"{k.Key.Replace(' ', ':')}={k.Value}"));
         Console.WriteLine(FormattableString.Invariant(
-            $"MP-W200-STATS role={Wo200Role()} joined={On(W137Joiner)} {sw} captured={_w200Captured} own={_w200CapturedOwn} replays_sent={_w200ReplaysSent} ack_ran={_w200AckRan} ack_refused={_w200AckRefused} suppressed={_w200Suppressed} fell_back={_w200FellBack} parks={_w200Parks} quiet_drops={_w200QuietDrops} quiet_agreed={_w200QuietAgreed} quiet_differs={_w200QuietDiffers} replays_in={_w200ReplaysIn} replays_ran={_w200ReplaysRan} replays_refused={_w200ReplaysRefused} attempts={_w200Attempts} attempts_multi={_w200AttemptsMulti} twin_releases={Interlocked.Read(ref _w179TwinReleases)} refusals={refusals} closure_classes={_w200ClosureClasses.Count} {Wo200ValuesStats()} {Wo200ItemsStats()} | native: {n ?? "no answer"}"));
+            $"MP-W200-STATS role={Wo200Role()} joined={On(W137Joiner)} {sw} captured={_w200Captured} own={_w200CapturedOwn} replays_sent={_w200ReplaysSent} ack_ran={_w200AckRan} ack_refused={_w200AckRefused} suppressed={_w200Suppressed} fell_back={_w200FellBack} parks={_w200Parks} quiet_drops={_w200QuietDrops} quiet_agreed={_w200QuietAgreed} quiet_differs={_w200QuietDiffers} quiet_no_state={Interlocked.Read(ref _w201QuietNoState)} replays_in={_w200ReplaysIn} replays_ran={_w200ReplaysRan} replays_refused={_w200ReplaysRefused} attempts={_w200Attempts} attempts_multi={_w200AttemptsMulti} twin_releases={Interlocked.Read(ref _w179TwinReleases)} refusals={refusals} closure_classes={_w200ClosureClasses.Count} {Wo200ValuesStats()} {Wo200ItemsStats()} | native: {n ?? "no answer"}"));
     }
 
     private async Task Wo200TestAsync(string arg)

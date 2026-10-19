@@ -659,6 +659,17 @@ public sealed class CombatPipe : IAsyncDisposable
         return (v.Ok, v.Payload.Length > 0 && v.Payload[0] == 1, v.Reason);
     }
 
+    /// <summary>op 2 with a mode (WO-201 V.4): 2 = knocked out the engine's way (the imm-only guard swapped in, the game's own
+    /// unconsciousness, a figure's guard re-add held), 3 = woken (the unconsciousness off, the guard back); (ok, present-after).</summary>
+    public async Task<(bool Ok, bool Present, byte Reason)> Wo131CopyGuardModeAsync(byte mode, uint eid, CancellationToken ct = default)
+    {
+        var a = new byte[5];
+        a[0] = mode; BinaryPrimitives.WriteUInt32LittleEndian(a.AsSpan(1), eid);
+        var r = await Wo131Async(2, a, ct);
+        if (r is not { } v) return (false, false, 255);
+        return (v.Ok, v.Payload.Length > 0 && v.Payload[0] == 1, v.Reason);
+    }
+
     /// <summary>op 3: set a copy's health to the host's (credited, never below 1); (ok, before, after).</summary>
     public async Task<(bool Ok, float Before, float After, byte Reason)> Wo131FollowHpAsync(Guid soul, uint eid, float hp, CancellationToken ct = default, float stamina = -1f)
     {

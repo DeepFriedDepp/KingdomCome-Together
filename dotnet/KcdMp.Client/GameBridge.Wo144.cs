@@ -142,6 +142,7 @@ public partial class GameBridge
     /// <summary>The engine lines LogTailGameTransport.Wo144Line routes here.</summary>
     private void Wo144OnEngineLine(string line)
     {
+        Wo201OnEngineLine(line);              // WO-201: inventory screens (B5), scenes, conversations, loads -- never consumes
         Wo167OnEngineLine(line);              // WO-167: the host's collision barks (T2), tree paths (T3), faders (T4) -- never consumes
         Wo179OnEngineLine(line);              // WO-179 A3: a sign the conversation runs (WO-183 2: the twin lines are forwarded) -- never consumes
         Wo191OnEngineLineAll(line);           // WO-191: the conversation waiting for its NPC (4), an NPC targeting a partner (3b) -- never consumes

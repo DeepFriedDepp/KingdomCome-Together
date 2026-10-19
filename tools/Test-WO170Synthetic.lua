@@ -72,7 +72,8 @@ end
 
 -- WO-200 Act III: the sweeps and the geometric rider rule these scenarios pin stand down while WO-200's copy_neutral_always and
 -- rider_from_host are on (the default); they are tested here with those off (Test-WO200Synthetic.lua covers the replacements).
-if KCD2MP_W200Set then KCD2MP_W200Set("copy_neutral_always", "off"); KCD2MP_W200Set("rider_from_host", "off") end
+-- WO-201 Act VI: the geometric rider rule is gone (row 7); the riders here are the host's word, so rider_from_host stays on
+if KCD2MP_W200Set then KCD2MP_W200Set("copy_neutral_always", "off") end
 
 local RESULTS = {}
 local function check(name, ok, detail)
@@ -172,7 +173,7 @@ end
 
 
 -- (R) F3 ----------------------------------------------------------------------------------------------------------------------------
--- a rider copy on a horse copy's stream, as KCD2MP_W164RiderHeld sees them
+-- a rider copy the host says rides that horse, as KCD2MP_W164RiderHeld (WO-200's host word) sees them
 local function riderPair(tag, opts)
     opts = opts or {}
     for n in pairs(KCD2MP.npcPuppets) do if n:sub(1, 3) == "dw_" then KCD2MP.npcPuppets[n] = nil; ENTS[n] = nil end end   -- one pair at a time
@@ -201,6 +202,8 @@ local function riderPair(tag, opts)
 end
 local function tick(r, n)
     local last
+    -- WO-201 Act VI (WO-200 ledger row 7): no geometry makes a rider any more -- the host says this one rides his horse
+    if KCD2MP_W200Mount and not r.onFoot then KCD2MP_W200Mount(r.rn, r.hn) end
     for _ = 1, n or 1 do last = KCD2MP_W164RiderHeld(r.rn, r.rp, r.rider) end
     return last
 end
@@ -213,22 +216,22 @@ do
     local mark = #LOG
     tick(r, 6)
     check("R1: the horse copy has physics=none-yet: no mount call, he stays on foot, the wait is said",
-        r.mounted.n == 0 and lastLog("WO170-RIDER mount=wait npc=dw_rider_a horse=dw_horse_a why=horse-physics=none-yet", mark) ~= nil and countLog("WO170-RIDER mount=wait", mark) == 1,
-        lastLog("WO170-RIDER", mark))
+        r.mounted.n == 0 and lastLog("WO200-RIDER mount=wait npc=dw_rider_a horse=dw_horse_a why=horse-physics=none-yet", mark) ~= nil and countLog("WO200-RIDER mount=wait", mark) == 1,
+        lastLog("WO200-RIDER", mark))
     check("R1b: nothing of WO-164's mount line either", countLog("WO164-RIDER mount", mark) == 0)
     -- R2: asked again only every 2 s
     mark = #LOG
     NOW = NOW + 1.0; tick(r, 3)
-    check("R2: inside 2 s: not asked again", countLog("WO170-RIDER mount=wait", mark) == 0 and r.mounted.n == 0)
+    check("R2: inside 2 s: not asked again", countLog("WO200-RIDER mount=wait", mark) == 0 and r.mounted.n == 0)
     NOW = NOW + 1.2; tick(r, 2)
-    check("R2b: 2 s later: asked again (still waiting)", countLog("WO170-RIDER mount=wait", mark) == 1 and r.mounted.n == 0)
+    check("R2b: 2 s later: asked again (still waiting)", countLog("WO200-RIDER mount=wait", mark) == 1 and r.mounted.n == 0)
     -- R3: the horse's physics arrives -> the next ask mounts
     r.horse.PHYS = true
     mark = #LOG
     NOW = NOW + 2.1; local held = tick(r, 1)
     check("R3: physics there, bound, within 3 m: mounts, the writer lets him go", r.mounted.n == 1 and r.mounted.id == r.horse.id and held == true
-        and lastLog("WO170-RIDER mount=ok npc=dw_rider_a horse=dw_horse_a", mark) ~= nil and lastLog("WO164-RIDER mount rider=dw_rider_a horse=dw_horse_a ok=true", mark) ~= nil,
-        lastLog("WO170-RIDER", mark))
+        and lastLog("WO200-RIDER mount rider=dw_rider_a horse=dw_horse_a ok=true", mark) ~= nil and lastLog("WO200-RIDER mount rider=dw_rider_a horse=dw_horse_a ok=true", mark) ~= nil,
+        lastLog("WO200-RIDER", mark))
     KCD2MP.w164.riders = {}
 
     -- R4: given up after 20 s
@@ -236,12 +239,12 @@ do
     r = riderPair("b", { horsePhys = false })
     mark = #LOG
     for _ = 1, 14 do tick(r, 2); NOW = NOW + 2.0; KCD2MP_NpcNativeAlive(1, 1, 2, 2) end
-    check("R4: 20 s without physics: given up (said once), never a mount call", r.mounted.n == 0 and countLog("WO170-RIDER mount=gave-up", mark) == 1
-        and lastLog("WO170-RIDER mount=gave-up npc=dw_rider_b horse=dw_horse_b why=horse-physics=none-yet", mark) ~= nil, lastLog("WO170-RIDER mount=gave-up", mark))
+    check("R4: 20 s without physics: given up (said once), never a mount call", r.mounted.n == 0 and countLog("WO200-RIDER mount=gave-up", mark) == 1
+        and lastLog("WO200-RIDER mount=gave-up npc=dw_rider_b horse=dw_horse_b why=horse-physics=none-yet", mark) ~= nil, lastLog("WO200-RIDER mount=gave-up", mark))
     r.horse.PHYS = true
     mark = #LOG
     NOW = NOW + 3; tick(r, 3)
-    check("R4b: given up stays given up while his stream stays on that horse", r.mounted.n == 0 and countLog("WO170-RIDER", mark) == 0)
+    check("R4b: given up stays given up while his stream stays on that horse", r.mounted.n == 0 and countLog("WO200-RIDER mount", mark) == 0)
     KCD2MP.w164.riders = {}
 
     -- R5: far apart -> waits (the stand-in spawned where the horse is not); within 3 m -> mounts at the next ask
@@ -249,10 +252,10 @@ do
     r = riderPair("c", { apart = 10 })
     mark = #LOG
     tick(r, 4)
-    check("R5: 10 m apart: no mount call, why names the distance", r.mounted.n == 0 and lastLog("WO170-RIDER mount=wait npc=dw_rider_c horse=dw_horse_c why=apart-10m", mark) ~= nil, lastLog("WO170-RIDER", mark))
+    check("R5: 10 m apart: no mount call, why names the distance", r.mounted.n == 0 and lastLog("WO200-RIDER mount=wait npc=dw_rider_c horse=dw_horse_c why=apart-10m", mark) ~= nil, lastLog("WO200-RIDER", mark))
     r.hpp({ x = 11.5, y = 0, z = 0 })
     NOW = NOW + 2.1; tick(r, 1)
-    check("R5b: brought within 3 m: mounts", r.mounted.n == 1 and lastLog("WO170-RIDER mount=ok npc=dw_rider_c", mark) ~= nil)
+    check("R5b: brought within 3 m: mounts", r.mounted.n == 1 and lastLog("WO200-RIDER mount rider=dw_rider_c", mark) ~= nil)
     KCD2MP.w164.riders = {}
 
     -- R6: the rider's physics, a body not bound to the DLL's writer, a WO-138 hold, a dead horse

@@ -195,6 +195,7 @@ public partial class GameBridge
             if (m.Success) Wo125HostIdentify(Path.Combine(saves, $"playline{m.Groups[1].Value}", m.Groups[2].Value), loaded: true, "loaded");
         }
         _hostLoadAnnounced = true;
+        Wo201HostLoadStart();   // WO-201 B15
         var peers = LivePartners();   // WO-144: the relay's connections, never a stale name
         foreach (byte g in peers)
             _ = WriteJoinAsync(JoinStatusCodec.Build(g, 0, Protocol.JoinStateReloading, Protocol.JoinReasonId("reloading"), 0)).ContinueWith(_ => { });
@@ -205,6 +206,7 @@ public partial class GameBridge
     {
         if (!_hostLoadAnnounced) return;
         _hostLoadAnnounced = false;
+        Wo201HostLoadDone();   // WO-201 B15
         _modeTold.Clear();   // announce the (possibly new) world at the next tick: a joiner in it rejoins
     }
 
@@ -320,6 +322,7 @@ public partial class GameBridge
         });
         _rewinding = true;
         _rejoinPending = false;
+        _ = Wo201OnHostBusyAsync("load 1");   // WO-201 B15: its pings stall while it loads -- no "connection" toast
         const string msg = "Your host is reloading... what you do now won't be kept.";
         _ = W164NoticeAsync(Wo164Rules.ReloadStartText);   // WO-164 RL: the game's own HUD line, queued if a menu holds the timers
         Console.WriteLine($"MP-HENRY joiner: the host started a load -- this game's progress from here on is NOT kept; it rewinds with the host");

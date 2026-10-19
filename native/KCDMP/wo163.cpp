@@ -5,6 +5,7 @@
 #include "wo163.h"
 #include "wo197.h"
 #include "wo200.h"
+#include "wo201.h"
 #include "engine.h"
 #include "hits.h"
 #include "log.h"
@@ -275,6 +276,18 @@ uint8_t handle(const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t
         case kcdmp::wo200::kOpReadNode:
         case kcdmp::wo200::kOpResearch:
             return kcdmp::wo200::handle(body[0], body + 1, len - 1, out, cap, outLen) == 0 ? kROk : kRBadRequest;
+        case kcdmp::wo201::kOpStatus:   // WO-201: B1's scene no-position (the save path's own FastForward cancel on the joiner's copies)
+        case kcdmp::wo201::kOpConfig:
+        case kcdmp::wo201::kOpCombatEnd:
+        case kcdmp::wo201::kOpDude2:
+        case kcdmp::wo201::kOpDude2Check:
+        case kcdmp::wo201::kOpDude2Census:
+        case kcdmp::wo201::kOpNear:
+        case kcdmp::wo201::kOpSpeechPoll:
+        case kcdmp::wo201::kOpSpeechPlay:
+        case kcdmp::wo201::kOpVotePoll:
+        case kcdmp::wo201::kOpRangedPoll:
+            return kcdmp::wo201::handle(body[0], body, len, out, cap, outLen);
         case kcdmp::wo178::kOpHeldResult:   // WO-178 C4: a held blow lives in WO-173's path
             return kcdmp::wo173::handle(body[0], body, len, out, cap, outLen);
         default:

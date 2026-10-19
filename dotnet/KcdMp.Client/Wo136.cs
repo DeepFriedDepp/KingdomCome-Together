@@ -22,7 +22,7 @@ public static class Wo136Rules
     /// never held it: the joiner's copy's own item). Both of the last two are
     /// taken back off the joiner's Henry quietly.
     /// </summary>
-    public static bool IsTakeVerdict(string v) => v is "ok" or "gone" or "mine" or "none";
+    public static bool IsTakeVerdict(string v) => v is "ok" or "gone" or "mine" or "none" or "busy";   // WO-201 B5: busy = the host's loot screen is open on that body
 
     /// <summary>A world item's answer: ok, gone (someone else), unknown (per machine), mine (this joiner's own earlier take).</summary>
     public static bool IsItemVerdict(string v) => v is "ok" or "gone" or "unknown" or "mine";

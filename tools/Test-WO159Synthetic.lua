@@ -97,7 +97,9 @@ do
     local mine = 0
     for _, c in ipairs(UI) do if c.el == "Menu" then mine = mine + 1 end end
     check("N1: loading the mod calls no function of the game's menu", mine == 0, mine)
-    check("N2: ...and registers no menu listener", #LISTEN == 0, #LISTEN)
+    local menuL = 0
+    for _, l in ipairs(LISTEN) do if l.el == "Menu" then menuL = menuL + 1 end end   -- (WO-201 B5 listens to ItemTransfer, never the menu)
+    check("N2: ...and registers no menu listener", menuL == 0, menuL)
     check("N3: the menu state starts unarmed", KCD2MP.w159.armed == false)
     local before = #LOG
     press("MP_StartGame")

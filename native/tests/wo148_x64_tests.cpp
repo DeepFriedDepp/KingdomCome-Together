@@ -107,7 +107,7 @@ int wo148_x64_tests(int* passed) {
         x64::describe(r, h.len, text, sizeof text);
         XCHECK(r.verdict == x64::Boundary::Ok, "%s: %s", h.name, text);
     }
-    XCHECK(sizeof hookpro::kAll / sizeof hookpro::kAll[0] == 16, "sixteen inline hooks in the shipped DLL (WO-151: + BlendToProfile; after 0.45.8: + SetTrespassState; WO-178: + the hostility test, the clinch start, the research state handler and slot start/end; WO-194: + EnqueueCutscene; WO-200: + C_Node::Execute)");
+    XCHECK(sizeof hookpro::kAll / sizeof hookpro::kAll[0] == 20, "twenty inline hooks in the shipped DLL (WO-151: + BlendToProfile; after 0.45.8: + SetTrespassState; WO-178: + the hostility test, the clinch start, the research state handler and slot start/end; WO-194: + EnqueueCutscene; WO-200: + C_Node::Execute; WO-201: + the per-soul save, C_DistanceTrigger::Evaluate, C_ActorSpeakMan::Speak, SetDialogSequences)");
 
     // ---- the refusals ------------------------------------------------------------
     // mov [rsp+8],rbx; mov [rsp+18h],rsi; mov [rsp+20h],rdi = ends 5/10/15

@@ -118,6 +118,33 @@ inline constexpr uint8_t kNodeExecute[17] = {
     0x40, 0x53, 0x56, 0x57, 0x48, 0x81, 0xEC, 0x80, 0x00, 0x00, 0x00, 0x48, 0x8B, 0xD9, 0x48, 0x8B, 0xF2,
 };
 
+// wo201.cpp: the per-soul save step (RPGModule; the one function that logs "Saving soul '%s' ... IsPlayer: %d, IsLocalPlayer: %d") --
+// WO-201 V.3's save gate, a detour (Dude2 is written with IsPlayer 0 on every save path).
+// mov [rsp+18h],rbx; push rbp; push rsi; push rdi; push r14; push r15; sub rsp,0C0h   (the next instruction is RIP-relative: 19 bytes)
+inline constexpr uint8_t kSaveSoul[19] = {
+    0x48, 0x89, 0x5C, 0x24, 0x18, 0x55, 0x56, 0x57, 0x41, 0x56, 0x41, 0x57, 0x48, 0x81, 0xEC, 0xC0, 0x00, 0x00, 0x00,
+};
+
+// wo201_near.cpp: C_DistanceTrigger's Evaluate (XGenAIModule; the tail jmp of the function that traces "no origin or target on input")
+// -- WO-201 V.2's nearest player, a detour. mov [rsp+8],rbx; push rdi; sub rsp,40h; mov rdi,rcx; movaps [rsp+30h],xmm6
+// (the next instruction is RIP-relative: 18 bytes)
+inline constexpr uint8_t kDistEvaluate[18] = {
+    0x48, 0x89, 0x5C, 0x24, 0x08, 0x57, 0x48, 0x83, 0xEC, 0x40, 0x48, 0x8B, 0xF9, 0x0F, 0x29, 0x74, 0x24, 0x30,
+};
+
+// wo201_speech.cpp: C_ActorSpeakMan::Speak (EntityModule; its own trace name) -- WO-201 F1's speech share, a detour.
+// mov [rsp+18h],rsi; push r14; sub rsp,60h; mov rsi,rcx; mov r14,rdx   (the next instruction is RIP-relative: 17 bytes)
+inline constexpr uint8_t kActorSpeak[17] = {
+    0x48, 0x89, 0x74, 0x24, 0x18, 0x41, 0x56, 0x48, 0x83, 0xEC, 0x60, 0x48, 0x8B, 0xF1, 0x4C, 0x8B, 0xF2,
+};
+
+// wo201_vote.cpp: C_UIHudInteractiveDialog::SetDialogSequences (GUIModule; the function that references "ClearDialogSequences") --
+// WO-201 F2's dialogue vote, a detour. mov [rsp+10h],dl; push rbp; push rbx; push rsi; push rdi; lea rbp,[rsp-48h];
+// sub rsp,148h; mov rsi,rcx   (the next instruction is RIP-relative: 23 bytes)
+inline constexpr uint8_t kSetDialogSequences[23] = {
+    0x88, 0x54, 0x24, 0x10, 0x55, 0x53, 0x56, 0x57, 0x48, 0x8D, 0x6C, 0x24, 0xB8, 0x48, 0x81, 0xEC, 0x48, 0x01, 0x00, 0x00, 0x48, 0x8B, 0xF1,
+};
+
 struct Entry { const char* name; const uint8_t* bytes; size_t len; };
 inline constexpr Entry kAll[] = {
     {"motion UpdateMannequinTags", kMotionTags, sizeof kMotionTags},
@@ -136,6 +163,10 @@ inline constexpr Entry kAll[] = {
     {"wo178 slot end (research)", kSlotEnd, sizeof kSlotEnd},
     {"wo194 EnqueueCutscene", kEnqueueCutscene, sizeof kEnqueueCutscene},
     {"wo200 C_Node::Execute", kNodeExecute, sizeof kNodeExecute},
+    {"wo201 per-soul save", kSaveSoul, sizeof kSaveSoul},
+    {"wo201 C_DistanceTrigger::Evaluate", kDistEvaluate, sizeof kDistEvaluate},
+    {"wo201 C_ActorSpeakMan::Speak", kActorSpeak, sizeof kActorSpeak},
+    {"wo201 C_UIHudInteractiveDialog::SetDialogSequences", kSetDialogSequences, sizeof kSetDialogSequences},
 };
 
 } // namespace kcdmp::hookpro

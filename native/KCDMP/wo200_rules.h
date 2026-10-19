@@ -75,6 +75,7 @@ enum class Verdict : uint8_t {
     HostView,             // I.2: in a replay's closure the host shows no focus camera, tutorial or track view
     TalkerOnlyHost,       // I.3: in a replay's closure the host's Henry gets no reward, money or body effect (the talker got it)
     TalkerOnlyJoiner,     // I.3: in a mirror of the host's own conversation the joiner's Henry gets none of these, nor its view
+    JoinerStoryBark,      // WO-201 B7: the joiner's own quest logic starts no player monologue, dialogue, urged dialogue or focus camera
     Count
 };
 
@@ -85,6 +86,7 @@ struct Cfg {
     bool puppets = true;       // joiner_no_puppet_quests
     bool hostClosure = true;   // s1_replay (the host's I.2 rules inside a replay's closure)
     bool route = true;         // s1_route (talker-only, both machines)
+    bool storyBarks = true;    // WO-201 B7 joiner_no_story_barks (gate bit 8)
 };
 
 // Does the decision for this node need its soul inputs read? (Only then does the caller read them: a read runs the node's data inputs.)
@@ -175,6 +177,27 @@ inline bool icontains(const char* s, const char* sub) {
     return false;
 }
 inline bool is_urge_parent(const char* parentName) { return icontains(parentName, "urgeadialog"); }
+// WO-201 B7: the player's own interaction monologues (the coal-sack and cart searches: interactiontrigger_monologonplayer_*) stay his.
+inline bool is_interaction_parent(const char* parentName) {
+    return icontains(parentName, "interactiontrigger") || icontains(parentName, "monologonplayer");
+}
+
+// WO-201 B7: does this node start something the story says to the player -- a monologue, a forced / fader dialogue, an NPC urging a
+// dialogue, a focus camera? (Needs the parent's name only for a Behaviour.)
+inline bool story_starter(Kind k, Method m) {
+    return k == Kind::DialogueStarter || k == Kind::View || k == Kind::Behaviour || (k == Kind::Function && m == Method::Monologue);
+}
+
+// WO-201 B7, on the joiner in the host's world, after decide() said Run: the host's world decides whether the party strays, who is
+// greeted, who is urged to talk -- his own logic starts none of it. Kept: a chain that began in his own conversation (a local closure:
+// the tap marked it from his dialogue node's pulse), and his own interaction monologues.
+inline bool joiner_story_bark(uint8_t role, Kind k, Method m, bool urgeParent, bool ownChain, bool interactionParent, const Cfg& c) {
+    if (role != kRoleJoiner || !c.joined || !c.storyBarks) return false;
+    if (!story_starter(k, m)) return false;
+    if (k == Kind::Behaviour && !urgeParent) return false;   // other behaviours are I.5's (puppets) or his own
+    if (ownChain || interactionParent) return false;
+    return true;
+}
 inline bool is_money_parent(const char* parentName) { return icontains(parentName, "money"); }
 
 // A soul-typed port, by its rttr type name ("wh::rpgmodule::I_Soul*", "wh::rpgmodule::Souls", ...).
@@ -207,6 +230,7 @@ inline const char* verdict_name(Verdict v) {
         case Verdict::HostView: return "host-view";
         case Verdict::TalkerOnlyHost: return "talker-only-host";
         case Verdict::TalkerOnlyJoiner: return "talker-only-joiner";
+        case Verdict::JoinerStoryBark: return "joiner-story";
         default: return "run";
     }
 }

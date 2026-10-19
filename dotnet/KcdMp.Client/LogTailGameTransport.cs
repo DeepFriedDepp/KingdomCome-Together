@@ -382,6 +382,15 @@ public sealed class LogTailGameTransport : IGameTransport
         "<RandomEvent>",
         // WO-166 L1: the loot screen closing (the joiner applies a host update it held back while the screen was open)
         "PlayAudio: ui_inv_screen_out",
+        // WO-201 B5: the loot screen opening, and the body it opens on (no mod path changes an inventory a screen shows)
+        "PlayAudio: ui_inv_screen_in",
+        "OnLoot: Dude->",
+        // WO-201 B3: the engine's own mount and dismount of an actor (the host sends its NPC's mount the moment it starts)
+        "Actor '",
+        // WO-201 B15: the host's own save, begun and done (its pings stall meanwhile: the joiner is told, not the connection blamed)
+        "[SAVE GAME] Quick-saving to",
+        "[SAVE GAME] Saving",
+        "SaveGame: '",
         // WO-167 FT3: the engine stopped a fast travel midway: its interrupt call, or a road event's answer ("... stopping FastTravel: 'Y'")
         "Interrupting FastTravel",
         "FastTravel: random event variant ",

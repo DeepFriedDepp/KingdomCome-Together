@@ -286,6 +286,7 @@ public partial class GameBridge
     private void Wo179OnEngineLine(string line)
     {
         int id = Wo179Rules.DudeDialogId(line);
+        if (id >= 0 && W201("monologue_rescue_exempt") && Wo201Rules.IsSoloDudeDialogue(line)) id = -1;   // WO-201 B6: his own monologue is no conversation
         if (id >= 0) _w179DudeDialogId = id;
         if (Wo179Rules.ConversationRunning(line, _w179DudeDialogId)) _w179TwinSeenMs = Environment.TickCount64;
     }
@@ -310,7 +311,9 @@ public partial class GameBridge
                 $"WO179-RELEASE scene {s.Type} '{s.Name}' end positioning not done {(now - s.EndAtMs) / 1000.0:F1} s after its content -- bounded at 2 s: the copies stay where the host's stream puts them, the black is lifted, the player stood up"));
             // WO-183 3a: no save request to unstick a scene (the field: it left a save pending for the rest of the session)
             Volatile.Write(ref _w167FaderHeldMs, W167NowMs());
-            await ExecLuaAsync("if KCD2MP_W167SceneReleased then KCD2MP_W167SceneReleased(false, \"wo179-positioning-2s\") end");
+            // WO-201 B19: the scene is the partner's only when the host's scene bus named it (else it is this player's own)
+            int partner = _w179Remote.Values.Any(r => r.Name == s.Name) ? 1 : 0;
+            await ExecLuaAsync($"if KCD2MP_W167SceneReleased then KCD2MP_W167SceneReleased(false, \"wo179-positioning-2s\", {partner}) end");
         }
         // A3: a conversation with this player that made no twin (the field: WAITING_FOR_TWINS for 20 s on a host copy, 6 of 6)
         // WO-200 I.6: with every participant woken (joiner_scoped_twins) the bound counts from the engine's start attempt, the only point
@@ -323,7 +326,7 @@ public partial class GameBridge
             Interlocked.Increment(ref _w179TwinReleases);
             Console.WriteLine(FormattableString.Invariant(
                 $"WO179-RELEASE conversation made no dialogue twin in {(now - ds) / 1000.0:F1} s (WAITING_FOR_TWINS on a host copy; no twin line, no command of its dialogue, no state past WAITING_FOR_TWINS) -- ended the game's own way (InterruptDialogs) instead of a 20 s black"));
-            await ExecLuaAsync("if KCD2MP_W179ReleaseDialog then KCD2MP_W179ReleaseDialog(\"no-twins\") end");
+            await ExecLuaAsync($"if KCD2MP_W179ReleaseDialog then KCD2MP_W179ReleaseDialog(\"no-twins\", {(Wo201OwnTalk() ? 1 : 0)}) end");   // WO-201 B6: the toast only for his own talk
         }
     }
 

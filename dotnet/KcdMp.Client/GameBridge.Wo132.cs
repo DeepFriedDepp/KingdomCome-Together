@@ -318,6 +318,7 @@ public partial class GameBridge
     {
         if (!NpcCombatEvent.TryFromBytes(a.Payload, out var ev)) { Console.WriteLine($"MP-W132 npc-combat in malformed len={a.Payload.Length}"); return; }
         Interlocked.Increment(ref _w132CombatIn);
+        Wo201NoteHostCombat(ev);   // WO-201 B4: the host's word on who fights
         if (ev.InCombat) Wo151NoteFight(ev.Name, "the host's NPC is in combat");   // WO-151 1.1
         if (ev.InCombat) W164NoteHostCombat(ev.Name);   // WO-164: its copy is never holstered while the host's NPC fights
         bool w191Player = ev.Target is NpcCombatTarget.Host or NpcCombatTarget.Avatar;

@@ -2816,6 +2816,7 @@ public partial class GameBridge(ClientConfig config)
         // What the peer wears (the swing catalog resolves its weapon from this).
         lock (applied) { applied.Clear(); applied.UnionWith(targetSet); }
 
+        await Wo201FigurePropCheckAsync(ghostId, targetSet);   // WO-201 B11: a shown weapon prop goes when the partner no longer has it
         await Wo144EnsureLiveSoulAsync(ghostId);   // WO-144 2.1: reads and writes go to the live avatar's own soul
         var actual = await ReadGhostSetAsync(soulName, ct);
         if (actual is not null) actual = Wo144WithoutLights(actual);
@@ -2954,6 +2955,7 @@ public partial class GameBridge(ClientConfig config)
             string? reason = idx144 is not null && idx144.TryGetItem(cls, out var itm) ? Wo144EquipReason(itm.Name) : null;
             if (marks <= 3 || marks % 6 == 0)
                 Console.WriteLine($"[appearance] ghost {ghostId}: {desc} was not worn after {AppearanceRetryDelaysMs.Sum()} ms of retries -- the game says: {reason ?? "nothing (no \"Can't equip\" line)"}; tried again in {Wo144Rules.RefusalBackoffMs(marks) / 1000} s (refusal {marks}); the rest of the outfit is worn.");
+            await Wo201FigurePropAsync(ghostId, cls);   // WO-201 B11: a weapon the engine will not put on the figure (a quest item) is shown as a prop
         }
     }
 
@@ -4056,7 +4058,6 @@ public partial class GameBridge(ClientConfig config)
             if (!quiet)
             {
                 await RequestNpcResyncAsync(kind == Protocol.TimeSkipKindFastTravel ? NpcResyncReason.FastTravel : NpcResyncReason.Sleep, _resyncStream, ct);
-                _ = W160SettleAfterSkipAsync("the host's announced skip was applied");   // WO-160 1
             }
         }
         catch { /* game might have unloaded */ }
@@ -6099,10 +6100,15 @@ public partial class GameBridge(ClientConfig config)
             case "w190_status":      // WO-190: mp_w190_status
                 Wo190OnEvent(name, arg);
                 return;
+            case string w201 when w201.StartsWith("w201_", StringComparison.Ordinal):   // WO-201: every event of its parts (Wo201OnEvent)
+                Wo201OnEvent(name, arg);
+                return;
             case "w200_hostvals":    // WO-200 II.1/II.2 (host): its streamed NPCs' mount and stamina, what changed
             case "w200_cfg":         // WO-200: mp_s1_replay, mp_s1_route, mp_joiner_quiet_clocks, mp_joiner_no_puppet_quests, ... (Wo200Rules.SwitchNames)
             case "w200_status":      // WO-200: mp_w200_status
             case "w200_test":        // WO-200: the harness's reads and research verbs (read is always allowed)
+            case "w200_qitems":      // WO-201 B16 (host): its Henry's quest-item counts -- never routed in 0.61.5 ("unknown game event": qitems_sent=0)
+            case "w200_noise":       // WO-201 B17 (joiner): his noise the host's world must hear -- never routed in 0.61.5 either
                 Wo200OnEvent(name, arg);
                 return;
             case "w197_cfg":         // WO-197: mp_anim_recoil, mp_anim_paired, mp_anim_clinch, mp_anim_knockout, mp_copy_guard_engine, Part C's mp_anim_<category>

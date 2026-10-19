@@ -150,12 +150,14 @@ uint8_t handle(const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t
             present = buffs::has(cs, guard_guid()) > 0;
             break;
         case kGuardOff:
+            motion::set_ko_hold(eid, false);
             buffs::remove_all(cs, guard_guid());
             if (k) buffs::remove_all(cs, k->ko);
             c_guardOff.fetch_add(1);
             present = buffs::has(cs, guard_guid()) <= 0;
             break;
         case kGuardKnockout:
+            motion::set_ko_hold(eid, true);   // WO-201 V.4: a figure's own 5 s guard check would put upr=1 back and kill the unconsciousness
             // Order: the imm-only guard first (never a moment without imm), then
             // the full guard off (its upr=1 blocks unconsciousness), then the
             // game's own unconsciousness.
@@ -169,6 +171,7 @@ uint8_t handle(const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t
                  buffs::has(cs, k->unc), buffs::has(cs, k->ko));
             break;
         case kGuardWake:
+            motion::set_ko_hold(eid, false);
             buffs::remove_all(cs, k->inf);
             buffs::remove_all(cs, k->unc);
             buffs::add(cs, k->rem);

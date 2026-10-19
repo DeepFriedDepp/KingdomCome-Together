@@ -276,6 +276,7 @@ public partial class GameBridge
                 Console.WriteLine(FormattableString.Invariant($"MP-W151 catch-up: local step {c.Path} {c.Port} {c.Old}->{c.New} waits (the host's checkpoint is not compared yet)"));
                 return;
             }
+            if (Wo201ReceiveOnlyKeeps(c)) { Wo137Veto("joiner-receive-only"); return; }   // WO-201 V.1: the host's world decides
             await Wo137SendRequestAsync(c);
         }
     }
@@ -742,6 +743,7 @@ public partial class GameBridge
         // WO-184 B2: the conversation clock (WO-167 T4's and WO-179 A3's) starts only on a real conversation of the player's -- WO-167 started
         // it on every attempt with Henry in it, combat shouts included, and nothing ever ended those (0.50.9: every later snapshot owed)
         Wo184OnQuestLine(line);
+        Wo201OnQuestLine(q);   // WO-201 B8: this player's pending dialogue requests (their twins are never paused meanwhile)
         switch (q.Kind)
         {
             case "player":
@@ -761,7 +763,8 @@ public partial class GameBridge
                 if (q.Bark) { Wo137Veto("attempt-bark"); return; }   // WO-147: a combat shout or a bark is no conversation
                 if (W137Joiner && q.Souls.Contains("Dude"))
                 {
-                    Wo200OnDudeAttempt(q.Souls.Length);   // WO-200 I.6: A3's bound starts here
+                    // WO-200 I.6: A3's bound starts here -- WO-201 B6: never for his own monologue (the only participant is the player)
+                    if (!(W201("monologue_rescue_exempt") && q.Souls.Length < 2)) Wo200OnDudeAttempt(q.Souls.Length);
                     _ = ExecLuaAsync(FormattableString.Invariant($"if KCD2MP_W137TalkAttempt then KCD2MP_W137TalkAttempt({q.Id}, \"{string.Join(' ', q.Souls)}\") end"));
                 }
                 return;

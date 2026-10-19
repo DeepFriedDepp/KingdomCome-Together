@@ -152,42 +152,18 @@ do
     noErrs("S")
 end
 
--- (K) after a skip ---------------------------------------------------------------------------------------------------------------
+-- (K) / (F) WO-201 Act VI (WO-200 ledger row 9, retired): the after-skip sweep and the focus pre-warm are gone -- a host copy is kept
+-- neutral every tick (II.4) and has nothing torn to sweep; the talk's own steps (its retry, the host's conversation end) keep theirs
 do
     ERRS = {}
-    for i = 1, 9 do copy("tk_" .. i, 10 * i, 0) end
-    copy("tk_far", 400, 0)
-    NOW = NOW + 30
-    local mark = #LOG
-    local n = KCD2MP_W164AfterSkip("the host's announced skip was applied")
-    check("K1: every copy within 300 m queued (the far one not)", n >= 10 and countLog("tk_far", mark) == 0, n)
-    frame(0.3)
-    check("K2: 4 per tick", countEvt("w164_sweep", nil, mark) == 4, countEvt("w164_sweep", nil, mark))
-    check("K3: nearest first", countEvt("w164_sweep", "tk_1 skip 0", mark) == 1)
-    frame(0.3); frame(0.3)
-    check("K4: the queue drains", #KCD2MP.w164.queue == 0 and lastLog("WO164-SWEEP after-skip: the queue is done", mark) ~= nil)
-    check("K5: a hitch tick waits (a long frame gap)", (function()
-        KCD2MP_W164AfterSkip("x"); local m2 = #LOG; frame(2.0); return countEvt("w164_sweep", nil, m2) == 0 end)())
-    KCD2MP.w164.queue = {}
-    for i = 1, 9 do ENTS["tk_" .. i] = nil; KCD2MP.npcPuppets["tk_" .. i] = nil end
-    ENTS["tk_far"] = nil; KCD2MP.npcPuppets["tk_far"] = nil
-    noErrs("K")
-end
-
--- (F) the focus pre-warm -----------------------------------------------------------------------------------------------------------
-do
-    ERRS = {}
+    check("K1: no after-skip sweep any more", KCD2MP_W164AfterSkip == nil)
     copy("tf_front", 3, 0)
-    copy("tf_behind", -2, 0)
     NOW = NOW + 30
     local mark = #LOG
     frame(0.6)
-    CMDS = {}
-    check("F1: the copy faced within 4 m is swept (focus, 20 s hold)", countEvt("w164_sweep", "tf_front focus 20", mark) == 1 and cmdCount("wh_ai_NPCStateResetElement tf_front") == 0)
-    check("F2: not the one behind", countEvt("w164_sweep", "tf_behind", mark) == 0)
-    check("F3: a faced copy is not stood up (no stance reset, only the DLL's half)", lastLog("WO164-SWEEP-LUA npc=tf_front trigger=focus released=no-focus", mark) ~= nil)
-    ENTS["tf_front"] = nil; KCD2MP.npcPuppets["tf_front"] = nil; ENTS["tf_behind"] = nil; KCD2MP.npcPuppets["tf_behind"] = nil
-    noErrs("F")
+    check("F1: a faced copy is not swept before the key press any more", countEvt("w164_sweep", nil, mark) == 0)
+    ENTS["tf_front"] = nil; KCD2MP.npcPuppets["tf_front"] = nil
+    noErrs("K")
 end
 
 -- (D) one attempt at a time, (P) the copy's own requests, (R) the retry ------------------------------------------------------------
@@ -333,7 +309,7 @@ do
     noErrs("M")
 end
 
--- (H) R2: a host rider and its horse as one unit ------------------------------------------------------------------------------------
+-- (H) R2, retired (WO-201 Act VI, WO-200 ledger row 7): no geometry makes a rider any more -- only the host's word ------------------
 do
     ERRS = {}
     joiner(true)
@@ -343,28 +319,12 @@ do
     rider.human.ForceMount = function(self, id) mounted = id end
     rider.human.IsMounted = function() return mounted ~= nil end
     rider.human.ForceDismount = function() mounted = nil end
-    rider.SetWorldPos = function() end
-    horse.GetPhysicalStats = function() return { mass = 500 } end    -- WO-170 F3: a mount needs both bodies physicalized
-    rider.GetPhysicalStats = function() return { mass = 80 } end
     local hp, rp = KCD2MP.npcPuppets["dw_horse_8"], KCD2MP.npcPuppets["dw_rider_3"]
     hp.tx, hp.ty, hp.tz = 10, 0, 0
     rp.tx, rp.ty, rp.tz = 10.3, 0.2, 1.2
-    local mark = #LOG
-    local held1 = KCD2MP_W164RiderHeld("dw_rider_3", rp, rider)
-    KCD2MP_W164RiderHeld("dw_rider_3", rp, rider)
-    local held3 = KCD2MP_W164RiderHeld("dw_rider_3", rp, rider)
-    check("H1: three ticks on the horse's stream: mounted on its copy, the writer lets it go", held1 == false and held3 == true and mounted == horse.id
-        and lastLog("WO164-RIDER mount rider=dw_rider_3 horse=dw_horse_8 ok=true", mark) ~= nil, lastLog("WO164-RIDER", mark))
-    check("H2: the horse itself is never a rider", KCD2MP_W164RiderHeld("dw_horse_8", hp, horse) == false)
-    rp.tx = 20
-    KCD2MP_W164RiderHeld("dw_rider_3", rp, rider); KCD2MP_W164RiderHeld("dw_rider_3", rp, rider)
-    local after = KCD2MP_W164RiderHeld("dw_rider_3", rp, rider)
-    check("H3: the streams part for 3 ticks: off the horse, written again", after == false and mounted == nil and lastLog("WO164-RIDER dismount rider=dw_rider_3", mark) ~= nil)
-    rp.tx = 10.3
-    KCD2MP_W164SetRiderUnit("off")
     for _ = 1, 4 do KCD2MP_W164RiderHeld("dw_rider_3", rp, rider) end
-    check("H4: mp_rider_unit off: never mounted", mounted == nil)
-    KCD2MP_W164SetRiderUnit("on")
+    check("H1: a stream sitting on a horse's makes no rider by itself (the host's word decides)", mounted == nil)
+    check("H2: the switch is gone", CCMDS["mp_rider_unit"] == nil)
     for _, n in ipairs({ "dw_horse_8", "dw_rider_3" }) do ENTS[n] = nil; KCD2MP.npcPuppets[n] = nil end
     noErrs("H")
 end

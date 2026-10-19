@@ -201,7 +201,9 @@ do
     KCD2MP_W134BodyState("tbuk_man_1", "open", 1, 1, 1, { { COAT, 1, 1, false }, { SWORD, 1, 1, false } })
     check("L1: the loot screen opens on the host's items", #LOOTS == 1 and classes(b) == table.concat({ COAT, SWORD }, ","), classes(b))
     check("L2: the mod knows the screen is open on that body", KCD2MP_W166LootOpenOn("tbuk_man_1") == true and KCD2MP_W166LootOpenOn("other") == false)
-    check("L3: the close listener was armed on ItemTransfer", #LISTENERS >= 1 and LISTENERS[1].el == "ItemTransfer" and LISTENERS[1].ev == "OnClosed")
+    local closeL = false
+    for _, l in ipairs(LISTENERS) do if l.el == "ItemTransfer" and l.ev == "OnClosed" then closeL = true end end   -- (WO-201 B5 listens too)
+    check("L3: the close listener was armed on ItemTransfer", closeL)
     local mark = #LOG
     KCD2MP_W134BodyState("tbuk_man_1", "update", 1, 1, 1, { { COAT, 1, 1, false } })   -- the host took the sword meanwhile
     check("L4: a host update under the open screen waits: the copy is NOT rewritten", classes(b) == table.concat({ COAT, SWORD }, ",")

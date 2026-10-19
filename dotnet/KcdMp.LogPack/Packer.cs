@@ -41,6 +41,8 @@ public sealed class PackResult
     public long OriginalBytes, PartBytes;
     public CollapseStats Totals = new();
     public int OddMarks;
+    /// <summary>WO-201 B24: every mark the agents' logs hold: "&lt;entry&gt; &lt;time&gt; &lt;word&gt; [note]".</summary>
+    public List<string> Marks = new();
     public string Manifest = "";
 }
 
@@ -69,7 +71,9 @@ public static class Packer
                     byte[]? b = Read(s);
                     if (b is null) continue;
                     using var r = new StreamReader(new MemoryStream(b, false), Encoding.Latin1, false, 1 << 16);
-                    windows.Scan(Lines(r));
+                    var lines = Lines(r).ToList();
+                    windows.Scan(lines);
+                    if (s.EntryName.StartsWith("agent", StringComparison.OrdinalIgnoreCase)) MarkList.Collect(s.EntryName, lines, res.Marks);
                 }
         res.OddMarks = windows.Count;
 
@@ -167,6 +171,11 @@ public static class Packer
         sb.Append("Compression: zstd level ").Append(opt.Level).Append(", the logs' repeated lines collapsed (see below), identical files stored once\r\n");
         sb.Append("Original size: ").Append(res.OriginalBytes.ToString(CultureInfo.InvariantCulture)).Append(" bytes in ").Append(res.Files.Count).Append(" files\r\n");
         sb.Append("Marks (mark_odd) found: ").Append(res.OddMarks).Append(" -- every line within 5 minutes of one is kept in full\r\n");
+        if (res.Marks.Count > 0)
+        {
+            sb.Append("Marks typed on these machines (entry, time, word, the player's note):\r\n");
+            foreach (var m in res.Marks.Take(200)) sb.Append("  ").Append(m).Append("\r\n");
+        }
         sb.Append("Kept in full everywhere: MP-MARK, FAULT, STATS / summary lines; a collapsed run keeps its first and last line and is replaced in between by a line starting \"")
           .Append(Collapser.SummaryPrefix.Trim()).Append("\" with the count\r\n\r\n");
         sb.Append("part | entry | original bytes | stored bytes | sha256 of the original | note\r\n");

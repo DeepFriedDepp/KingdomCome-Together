@@ -211,8 +211,19 @@ do -- (b) the rescan set to the DLL
     check("b: the set goes out once", #t == 1, t[1])
     check("b: gen part parts names, sorted, the horse flagged not human", t[1] ~= nil and t[1]:match("^%d+ 0 1 horse_tzel_1:1,tzel_maid:0$") ~= nil, t[1])
     local c = emitted("w138_cfg")
-    check("b: the sender's settings ride with it (100 ms, 2 s, 5 cm, cull on 60 m, far band 150 in a shared world, 12 m)",
-        c[1] == "100 2000 50 1 60 150 12", c[1])
+    -- WO-201 B10 (mp_walk_from_host, default on): a moving NPC goes out every emit tick -- the move threshold is 1.5 cm, not 5 cm
+    check("b: the sender's settings ride with it (100 ms, 2 s, 1.5 cm (WO-201 B10), cull on 60 m, far band 150 in a shared world, 12 m)",
+        c[1] == "100 2000 15 1 60 150 12", c[1])
+    if KCD2MP_W201Set then
+        KCD2MP_W201Set("walk_from_host", "off")
+        KCD2MP.w138.trackKey = ""; KCD2MP.w138.trackAt = -1e9
+        KCD2MP_W138PushTrack()
+        local c2 = emitted("w138_cfg")
+        check("b: ...5 cm with mp_walk_from_host off (the old sender)", c2[#c2] == "100 2000 50 1 60 150 12", c2[#c2])
+        KCD2MP_W201Set("walk_from_host", "on")
+        KCD2MP.w138.trackKey = ""; KCD2MP.w138.trackAt = -1e9
+        KCD2MP_W138PushTrack()
+    end
     local mark = #LOG
     NOW = NOW + 2; KCD2MP_W138PushTrack()
     check("b: unchanged within 10 s: nothing again", #emitted("npc_track", mark) == 0)

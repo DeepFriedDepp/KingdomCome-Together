@@ -20,6 +20,7 @@ public partial class GameBridge
     private long _w200HitsNotApplied, _w200VitalsOut, _w200VitalsIn, _w200StaminaSet, _w200MountOut, _w200MountIn, _w200ClockOut, _w200ClockIn, _w200Slews;
     private readonly ConcurrentDictionary<string, (string Horse, float St, float Hp)> _w200HostVals = new(StringComparer.Ordinal);
     private double _w200Ratio = 15.0;       // the ratio this joiner last set (15 = the game's own)
+    private bool _w201CatchingUp;           // WO-201 B13: a lag over 30 game s is being caught up
     private bool _w200Slewing;
     private long _w200ClockTick;
 
@@ -88,10 +89,12 @@ public partial class GameBridge
         }
     }
 
-    /// <summary>II.1: a host blow on a copy is not applied here -- the copy shows the host's own values (true = skipped).</summary>
+    /// <summary>II.1: a host blow on a copy is not applied here -- the copy shows the host's own values (true = skipped).
+    /// WO-201 Act VI (WO-200 ledger row 6, retired): never applied, switch or not -- the field's duel showed right both ways; the
+    /// switch keeps only the health and stamina mirror.</summary>
     private bool Wo200SkipLocalHit(string npc, float hp, float st, bool fatal)
     {
-        if (fatal || !Wo131JoinerActive || !W200("copy_health_from_host")) return false;
+        if (fatal || !Wo131JoinerActive) return false;
         long n = Interlocked.Increment(ref _w200HitsNotApplied);
         if (n <= 20 || n % 50 == 0)
             Console.WriteLine(FormattableString.Invariant($"[npcdmg] in: the host's blow on '{npc}' (hp -{hp:F1} st -{st:F1}) not applied here -- the copy shows the host's own health and stamina (copy_health_from_host; #{n})"));
@@ -125,7 +128,7 @@ public partial class GameBridge
         double hostRatio = ratio1000 / 1000.0;
         double myNow = mine + (DateTime.UtcNow - _lastPollUtc).TotalSeconds * _w200Ratio;
         double err = myNow - host;   // game seconds this clock is ahead of the host's
-        double want = Wo200Rules.SlewRatio(hostRatio, err);
+        double want = W201("clock_catchup") ? Wo201Rules.CatchUpRatio(hostRatio, err, ref _w201CatchingUp) : Wo200Rules.SlewRatio(hostRatio, err);   // WO-201 B13
         await Wo200RatioAsync(want, FormattableString.Invariant($"{err:+0;-0} game s from the host's"));
     }
 

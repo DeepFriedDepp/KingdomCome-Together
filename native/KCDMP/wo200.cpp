@@ -531,6 +531,7 @@ bool gate(void* node, void* /*ctx*/) {
     c.puppets = (gb & 1) != 0;
     c.hostClosure = (gb & 2) != 0;
     c.route = (gb & 4) != 0;
+    c.storyBarks = (gb & 8) != 0;   // WO-201 B7
     const bool inClosure = cid != 0 && !closure_is_local(cid);
     const bool mirror = t_mirrorTalker;
     Method m = Method::Other;
@@ -550,7 +551,16 @@ bool gate(void* node, void* /*ctx*/) {
         --t_inGate;
         if (ok) { urge = is_urge_parent(pn); money = is_money_parent(pn); }
     }
-    const Verdict v = decide(role, k, m, t, inClosure, mirror, urge, money, c);
+    Verdict v = decide(role, k, m, t, inClosure, mirror, urge, money, c);
+    // WO-201 B7: the joiner's own quest logic starts no story bark (his own conversation's chain and interactions stay his)
+    if (v == Verdict::Run && role == kRoleJoiner && c.joined && c.storyBarks && story_starter(k, m)) {
+        char pn[128] = "";
+        ++t_inGate;
+        const bool ok = parent_name(node, pn, sizeof pn);
+        --t_inGate;
+        const bool ownChain = cid != 0 && closure_is_local(cid);
+        if (joiner_story_bark(role, k, m, ok && is_urge_parent(pn), ownChain, ok && is_interaction_parent(pn), c)) v = Verdict::JoinerStoryBark;
+    }
     if (v == Verdict::Run) return false;
     const int row = class_row(vt);
     if (row >= 0 && g_isEffect[row] && g_offEffectActive) {
@@ -834,11 +844,11 @@ void tick() {
 int status_text(char* out, int n) {
     return _snprintf_s(out, static_cast<size_t>(n), _TRUNCATE,
         "wo200 tap=%d gate=%d ports=%d classes=%d/%d role=%u joined=%d tapBits=%u gateBits=%u taps=%u captured=%u quiet=%u continued=%u "
-        "gates=%u classified=%u reads=%u puppet=%u host_dialogue=%u host_view=%u talker_host=%u talker_joiner=%u replays=%u replay_refused=%u "
+        "gates=%u classified=%u reads=%u puppet=%u host_dialogue=%u host_view=%u talker_host=%u talker_joiner=%u joiner_story=%u replays=%u replay_refused=%u "
         "marks=%zu player=%d",
         A.tap, A.gate, A.ports, g_found, kNClasses, g_role.load(), g_joined.load(), g_tapBits.load(), g_gateBits.load(), c_tapCalls.load(),
         c_captured.load(), c_quiet.load(), c_continued.load(), c_gateCalls.load(), c_gateClassified.load(), c_targetReads.load(),
-        c_verdict[1].load(), c_verdict[2].load(), c_verdict[3].load(), c_verdict[4].load(), c_verdict[5].load(), c_replays.load(),
+        c_verdict[1].load(), c_verdict[2].load(), c_verdict[3].load(), c_verdict[4].load(), c_verdict[5].load(), c_verdict[6].load(), c_replays.load(),
         c_replayRefused.load(), g_marks.size(), g_playerFull.load() != nullptr);
 }
 

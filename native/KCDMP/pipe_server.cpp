@@ -34,6 +34,7 @@
 #include "wo147.h"
 #include "wo151.h"
 #include "wo163.h"
+#include "wo201.h"
 #include "buffs.h"
 #include "log.h"
 
@@ -1432,6 +1433,7 @@ void serve(HANDLE h) {
     npcdrive::on_pipe_closed();
     main_thread::post([] { kcdmp::wo132::on_pipe_closed(); });   // WO-132: engaged copies let go (main-thread state)
     main_thread::post([] { kcdmp::motion::on_pipe_closed(); });  // WO-154 2: the avatars' identities go with the session
+    main_thread::post([] { kcdmp::wo201::on_pipe_closed(); });   // WO-201: its session parts stand down
     kcdmp::wo137::on_disconnect();   // WO-137: no agent -- no quest frames, no HUD proxy
     kcdmp::wo138::on_pipe_closed();  // WO-138: no agent -- the native sender, the pause gate and the hold go off
     kcdmp::wo166::on_pipe_closed();  // WO-166 C3: no agent -- the striking windows end (restored at the next tick)

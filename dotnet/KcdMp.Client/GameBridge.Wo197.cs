@@ -331,6 +331,22 @@ public partial class GameBridge
         bool down = edge == Wo197Rules.KnockEdge.Down;
         if (down) Interlocked.Increment(ref _w197KnockDown); else Interlocked.Increment(ref _w197KnockUp);
         Console.WriteLine($"MP-W197 peer {ghost} {(down ? "KNOCKED OUT in his world -> his figure falls with the game's own unconsciousness" : "woke -> his figure stands up the game's way")}");
-        _ = ExecLuaAsync($"if KCD2MP_W197FigureKnockout then KCD2MP_W197FigureKnockout(\"{ghost}\", {(down ? "true" : "false")}) end");
+        _ = Wo201FigureKnockoutAsync(ghost, down);
+    }
+
+    /// <summary>WO-201 V.4: the figure goes down and gets up the engine's own way -- the guard swapped by the DLL (its upr=1 killed the
+    /// game's unconsciousness on its first update, WO-197 B4), never the physics-only ragdoll (nothing could stand that up).</summary>
+    private async Task Wo201FigureKnockoutAsync(byte ghost, bool down)
+    {
+        bool native = W201("knockout_engine") && _ghostEntityIds.TryGetValue(ghost.ToString(System.Globalization.CultureInfo.InvariantCulture), out uint eid) && eid != 0;
+        uint feid = native ? _ghostEntityIds[ghost.ToString(System.Globalization.CultureInfo.InvariantCulture)] : 0;
+        if (down) await ExecLuaAsync($"if KCD2MP_W197FigureKnockout then KCD2MP_W197FigureKnockout(\"{ghost}\", true, {(native ? "true" : "false")}) end");
+        if (native)
+        {
+            var (ok, present, reason) = await _combat.Wo131CopyGuardModeAsync(down ? (byte)2 : (byte)3, feid);
+            Console.WriteLine($"WO201-KO figure kcd2mp_{ghost} eid=0x{feid:X} {(down ? "down" : "up")} -> {(ok ? (present ? "ok" : "ok (not confirmed)") : $"refused ({reason})")} -- the engine's own unconsciousness and stand-up");
+            if (!ok && down) { await ExecLuaAsync($"if KCD2MP_W197FigureKnockout then KCD2MP_W197FigureKnockout(\"{ghost}\", false, true) end"); return; }
+        }
+        if (!down) await ExecLuaAsync($"if KCD2MP_W197FigureKnockout then KCD2MP_W197FigureKnockout(\"{ghost}\", false, {(native ? "true" : "false")}) end");
     }
 }

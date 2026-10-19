@@ -245,7 +245,8 @@ public partial class GameBridge
             if (ended) Interlocked.Increment(ref _w167SceneEnded);
             else { Interlocked.Increment(ref _w167SceneNotEnded); Volatile.Write(ref _w167FaderHeldMs, W167NowMs()); }
             Console.WriteLine($"WO167-SCENE {(ended ? "ended" : "not-ended")} -- {(ended ? "the engine ended the scene; the faders back, the player stood up and told" : "the engine did not end it: the black is lifted (wh_ui_FaderSuspend 1, given back when it ends or in 60 s), the player stood up and told")}");
-            await ExecLuaAsync($"if KCD2MP_W167SceneReleased then KCD2MP_W167SceneReleased({(ended ? "true" : "false")}, \"stuck-20s\") end");
+            // WO-201 B19: this is this player's own conversation's scene: no "your partner's scene" toast
+            await ExecLuaAsync($"if KCD2MP_W167SceneReleased then KCD2MP_W167SceneReleased({(ended ? "true" : "false")}, \"stuck-20s\", 0) end");
         }
         catch (Exception ex) { Wo167Fault("t4-release", "scene-release", ex); }
         finally { Volatile.Write(ref _w167ReleaseBusy, 0); }

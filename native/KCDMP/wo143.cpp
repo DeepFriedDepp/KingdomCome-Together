@@ -16,6 +16,7 @@
 #include "respawn_actions.h"
 #include "script_context.h"
 #include "wo138.h"
+#include "wo187.h"
 
 #include <windows.h>
 #include <array>
@@ -206,6 +207,8 @@ const uint64_t* g_invalidAlign = nullptr;   // XGenAI+0x2E416B0: "no align objec
 const uint64_t* g_invalidTrigger = nullptr; // XGenAI+0x2E3BCA0: the params' default trigger id
 uint32_t g_lookDisp = 0;                 // the look-target component's offset in the NPC object (its getter's lea)
 bool g_handArmed = false, g_animArmed = false, g_tickArmed = false, g_hookArmed = false, g_lookArmed = false;
+std::atomic<int> g_tickHz{10};           // WO-201 B9 (mp_oneshot_tick_cap): a paused copy's one-shot ticks per second; 0 = every frame
+std::atomic<uint32_t> c_neverPlayed{0};  // WO-201 B9: one-shots dropped because nothing of them started on the body
 
 constexpr size_t kRvaRequestStateChange = 0x1881090;
 constexpr size_t kRvaMakeAnimAction     = 0x18CABA0;
@@ -562,11 +565,20 @@ struct InFlight {
     uint32_t eid = 0; uint32_t seq = 0; int reqId = -1;
     std::string name; std::string frag;
     double started = 0; bool done = false; uint8_t result = 0xFF;
-    bool heldByUs = false; bool ticked = false; uint32_t ticks = 0;
+    bool heldByUs = false; bool ticked = false; uint32_t ticks = 0; double lastTick = -1e9;
+    bool playCheck = false; const void* startActs[8]{};   // WO-201 B9: each scope's action when it was asked for
     bool guard = false; float from[3]{};   // an avatar's aligned entry: undone if it carries the body away
     std::string kept;                      // what its search state held (the seat, the object, the tools)
 };
 constexpr uint8_t kResultMovedAway = 0xFD;   // the guard stopped it
+constexpr uint8_t kResultNeverPlayed = 0xFC;  // WO-201 B9: nothing of it ever started on the body
+constexpr double kPlayCheckS = 3.0;
+// WO-201 B9: a scope whose churn says nothing about a one-shot playing (the look, the hands, the face) or a movement action (the
+// writer's gait on a copy)
+bool churn_scope(const wo187::ScopeInfo& s) {
+    return std::strstr(s.name, "TorsoDetail") || std::strstr(s.name, "HoldItem") || std::strstr(s.name, "Facial") ||
+           std::strstr(s.action, "Movement") || std::strstr(s.action, "Motion");
+}
 constexpr float   kGuardM = 2.5f;
 std::unordered_set<uint32_t> g_minigameHolds;   // bodies op 9 holds (only these are released by op 9)
 std::vector<InFlight> g_flight;
@@ -687,6 +699,12 @@ int start_shot(const std::string& name, const char* frag, const char* tags, uint
     if (id < 0) { g_flight.pop_back(); return id; }
     me.reqId = id; me.kept = kept;
     me.ticked = body_paused(eid) && g_tickArmed;
+    if (me.ticked) {   // WO-201 B9: what each scope runs now; a one-shot that plays starts an action of its own somewhere
+        wo187::ScopeInfo sc[8];
+        const int n = wo187::read_all_scopes(eid, sc, 8);
+        for (int i = 0; i < n && i < 8; ++i) me.startActs[i] = sc[i].act;
+        me.playCheck = n > 0;
+    }
     if (guard) { me.guard = engine::entity_world_pos(e, me.from); }
     if (holdBody && !npcdrive::activity_held(eid)) { npcdrive::set_activity_hold(eid, true); me.heldByUs = true; }
     return id;
@@ -709,7 +727,23 @@ void flight_tick(double now) {
         // the limit bounds this DLL's own ticking of a paused copy; a body the game ticks (an avatar) keeps
         // its request until the game ends it (a minigame loop runs until the next request stops it)
         const bool expired = f.ticked ? now - f.started > K::kOneShotTickLimitS : now - f.started > K::kOneShotKeepS;
-        if (!f.done && !expired && f.ticked && engine::entity_by_id(f.eid)) { tick_body(f.eid); ++f.ticks; c_ticks.fetch_add(1); }
+        // WO-201 B9: a paused copy's NPC state is ticked at most g_tickHz a second (every frame was ~65 Hz: each tick re-planned the body
+        // and queued its look action again -- the field's look-pose flood); 0 = every frame (the old rule)
+        const double minGap = g_tickHz.load() > 0 ? 1.0 / g_tickHz.load() : 0.0;
+        if (!f.done && !expired && f.ticked && now - f.lastTick >= minGap && engine::entity_by_id(f.eid)) {
+            f.lastTick = now; tick_body(f.eid); ++f.ticks; c_ticks.fetch_add(1);
+        }
+        // WO-201 B9: a paused copy's one-shot that never started anything of its own in kPlayCheckS (the field: 734 of 1,363 gave up
+        // only after 15 s, each tick re-planning the body -- a lumberjack's copy shown without its woodchopping can never play its chop)
+        if (!f.done && f.ticked && f.playCheck && now - f.started >= kPlayCheckS) {
+            f.playCheck = false;
+            wo187::ScopeInfo sc[8];
+            const int n = wo187::read_all_scopes(f.eid, sc, 8);
+            bool started = n <= 0;   // unreadable: never cut short
+            for (int i = 0; i < n && i < 8 && !started; ++i)
+                if (sc[i].act && sc[i].act != f.startActs[i] && !churn_scope(sc[i])) started = true;
+            if (!started && g_tickHz.load() > 0) { f.done = true; f.result = kResultNeverPlayed; c_neverPlayed.fetch_add(1); }
+        }
         if (!f.done && f.guard) {
             float p[3];
             void* e = engine::entity_by_id(f.eid);
@@ -729,8 +763,9 @@ void flight_tick(double now) {
             if (f.heldByUs) npcdrive::set_activity_hold(f.eid, false);
             if (f.done) { (f.result == 2 ? c_shotsDone : c_shotsFailed).fetch_add(1); }
             else c_shotsFailed.fetch_add(1);
+            const char* how = f.result == kResultNeverPlayed ? "never played (nothing of it started on the body in 3 s: dropped)" : nullptr;
             logf("WO143-SHOT %s '%s' %s (request %d, result %u, %.1f s%s%s%s)", f.name.c_str(), f.frag.empty() ? "(stop)" : f.frag.c_str(),
-                 f.done ? "finished" : "gave up", f.reqId, f.result, now - f.started,
+                 how ? how : f.done ? "finished" : "gave up", f.reqId, f.result, now - f.started,
                  f.ticked ? (", on a paused body, ticked " + std::to_string(f.ticks) + "x").c_str() : "",
                  f.kept.empty() ? "" : ", keeping ", f.kept.c_str());
             if (g_frame) {
@@ -1248,5 +1283,8 @@ uint8_t handle(const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t
     }
     return kRBadRequest;
 }
+
+// WO-201 B9: the one-shot tick cap (wo201's config bit 4)
+void set_tick_hz(int hz) { g_tickHz = hz < 0 ? 0 : hz > 120 ? 120 : hz; }
 
 } // namespace kcdmp::wo143

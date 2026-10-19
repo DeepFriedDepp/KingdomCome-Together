@@ -225,6 +225,7 @@ public partial class GameBridge
                     _w143HostHands[r.Name] = r;
                     if (W141Active && _w143Hands) await Wo143ApplyHandsAsync(r);
                     await Wo167OnHostHandsAsync(r);   // WO-167 C2: the weapon in the host NPC's hand
+                    await Wo201OnHostHandsAsync(r);   // WO-201 B23: the tool in the host NPC's hand, as a value
                     break;
                 case Protocol.ExtraKindGaits:
                     _w143HostGaits[r.Name] = r.Gaits;

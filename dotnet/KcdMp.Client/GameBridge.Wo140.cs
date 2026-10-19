@@ -561,7 +561,6 @@ public partial class GameBridge
 
     private async Task Wo140OnLocalEndedAsync()
     {
-        _ = W160SettleAfterSkipAsync("this player's own skip ended");   // WO-160 1: every copy's context agrees with its row again
         ApplyPendingTimeSkipIfAny();   // the host's clock that arrived during this game's own skip (held, see ApplyTimeSkipAsync)
         if (!W140SharedSkip) return;
         Interlocked.Exchange(ref _w140SharedUntilMs, Environment.TickCount64 + 15_000);   // the host's report and the pin still to come

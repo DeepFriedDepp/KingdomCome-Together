@@ -370,6 +370,25 @@ public partial class GameBridge
                 if (!W137Host) { Interlocked.Increment(ref _w164Malformed); return; }
                 await Wo200OnJoinerNoiseAsync(src, m.Text);
                 return;
+            case Protocol.W164HostBusy:   // WO-201 B15: the host's game is loading or saving (its pings stall: no "connection" toast)
+                if (W137Host) { Interlocked.Increment(ref _w164Malformed); return; }
+                await Wo201OnHostBusyAsync(m.Text);
+                return;
+            case Protocol.W164SpeechLine:   // WO-201 Act V F1: a line the partner's engine voiced near this player (both ways)
+                await Wo201OnSpeechLineAsync(src, m.Text);
+                return;
+            case Protocol.W164VoteOptions:   // WO-201 Act V F2: the partner's decision, to vote on (both ways)
+                await Wo201OnVoteOptionsAsync(src, m.Text);
+                return;
+            case Protocol.W164VoteCast:
+                await Wo201OnVoteCastAsync(src, m.Text);
+                return;
+            case Protocol.W164VoteClose:
+                await Wo201OnVoteCloseAsync(src, m.Text);
+                return;
+            case Protocol.W164RangedStep:   // WO-201 B11: the partner's crossbow / bow step, on his figure here
+                await Wo201OnRangedStepAsync(src, m.Text);
+                return;
             case Protocol.W164Clock:   // WO-200 II.7: the host's clock (the joiner slews to it)
                 if (W137Host) { Interlocked.Increment(ref _w164Malformed); return; }
                 await Wo200OnHostClockAsync(m.Text);

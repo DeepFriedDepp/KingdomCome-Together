@@ -124,6 +124,11 @@ std::atomic<uint32_t> c_bindNoPhys{0}, c_bindParented{0};
 std::atomic<bool> g_dropAll{false};
 std::atomic<bool> g_holdAll{false};      // WO-138: the host is paused, hold every copy
 std::atomic<bool> g_snapFix{true};       // WO-166 C4: mp_snap_fix
+std::atomic<bool> g_walkFromHost{true};   // WO-201 B10: mp_walk_from_host
+std::atomic<uint32_t> c_extrapFrames{0}, c_extrapEnds{0}, c_silenceKept{0};
+constexpr double kExtrapMaxS = 2.0;        // WO-201 B10: a gap shorter than this is walked through on the host's last speed
+constexpr double kSilenceMovingS = 10.0;   // WO-201 B10: a copy that was moving is not dropped for silence before this
+constexpr float  kExtrapMinMps = 0.3f, kExtrapMaxMps = 8.0f;
 constexpr double kHoldChainCapS = 1.2, kHoldCooldownS = 0.35;
 std::atomic<uint32_t> c_holdCapped{0}, c_holdCooldown{0};
 std::atomic<bool> g_holdEnded{false};    // WO-138: the hold just ended (restart the silence clocks)
@@ -305,6 +310,7 @@ struct Puppet {
     float    prev[3]{};
     float    lastRot = 0;
     float    speedMps = 0;          // WO-121: the rendered planar speed of the last written frame (gait for NPC copies)
+    bool     extrapolating = false; // WO-201 B10: the last frame walked on past the newest sample
     float    velX = 0, velY = 0;    // WO-129: the same frame's planar velocity (the engine's direction tag input)
     uint64_t writes = 0;
     uint32_t frameNo = 0;
@@ -470,10 +476,30 @@ float lerp_angle(float a, float b, float t) {
 }
 
 // kdcmp.lua mp_npc_smooth_render, position/yaw half (the anim speed stays in Lua).
-bool render(const Stream& s, double renderAt, double delay, float out[4]) {
+// WO-201 B10: `extrap` (in: allowed; out: this frame was extrapolated) and `segMps` (the host's own speed on the segment rendered).
+bool render(const Stream& s, double renderAt, double delay, float out[4], bool* extrap = nullptr, float* segMps = nullptr) {
     const int n = s.n;
     if (n == 0) return false;
+    const bool mayExtrap = extrap && *extrap;
+    if (extrap) *extrap = false;
+    if (segMps) *segMps = 0.0f;
     const RingSample* a = nullptr; const RingSample* b = nullptr;
+    if (renderAt >= s.ring[n - 1].at && mayExtrap && n >= 2) {
+        // WO-201 B10: past the newest sample, a moving stream walks on at its last speed and heading for up to kExtrapMaxS
+        const RingSample& z = s.ring[n - 1]; const RingSample& y = s.ring[n - 2];
+        const double seg = z.at - y.at, past = renderAt - z.at;
+        if (seg > 0.02 && seg <= 1.0 && past > 0 && past <= kExtrapMaxS) {
+            const double vx = (z.x - y.x) / seg, vy = (z.y - y.y) / seg, vz = (z.z - y.z) / seg;
+            const double sp = std::sqrt(vx * vx + vy * vy);
+            if (sp >= kExtrapMinMps && sp <= kExtrapMaxMps) {
+                out[0] = static_cast<float>(z.x + vx * past); out[1] = static_cast<float>(z.y + vy * past);
+                out[2] = static_cast<float>(z.z + vz * past); out[3] = z.rot;
+                *extrap = true;
+                if (segMps) *segMps = static_cast<float>(sp);
+                return true;
+            }
+        }
+    }
     if (renderAt >= s.ring[n - 1].at) { a = b = &s.ring[n - 1]; }          // past the newest: hold, never extrapolate
     else if (renderAt <= s.ring[0].at) { a = b = &s.ring[0]; }             // before the oldest: hold at oldest
     else {
@@ -493,6 +519,11 @@ bool render(const Stream& s, double renderAt, double delay, float out[4]) {
     out[1] = a->y + (b->y - a->y) * tf;
     out[2] = a->z + (b->z - a->z) * tf;                                    // WO-110 R14: Z on the same segment
     out[3] = lerp_angle(a->rot, b->rot, tf);
+    if (segMps) {
+        const float sx = b->x - a->x, sy = b->y - a->y;
+        const double d = std::sqrt(static_cast<double>(sx) * sx + static_cast<double>(sy) * sy);
+        *segMps = static_cast<float>(d / segDur);
+    }
     return true;
 }
 
@@ -861,6 +892,11 @@ void set_hold_all(bool on) {
 }
 bool hold_all() { return g_holdAll.load(std::memory_order_relaxed); }
 
+void set_walk_from_host(bool on) {
+    if (g_walkFromHost.exchange(on) != on) logf("MP-NPCWRITE walk_from_host %s (WO-201 B10)", on ? "on" : "off");
+}
+bool walk_from_host() { return g_walkFromHost.load(std::memory_order_relaxed); }
+
 void set_snap_fix(bool on) {
     if (g_snapFix.exchange(on) != on)
         logf("MP-NPCWRITE snap_fix=%s (a stretch of chained swing holds is capped at %.1f s, then %.2f s of catch-up) capped=%u cooldown_skips=%u",
@@ -1089,7 +1125,11 @@ void tick() {
     for (auto it = g_bound.begin(); it != g_bound.end();) {
         Puppet& p = it->second;
         auto sIt = g_streams.find(p.key);
-        if (sIt == g_streams.end() || (!holdAll && now - sIt->second.lastSampleAt > kSilenceS)) {
+        // WO-201 B10: a copy that was moving when its stream fell silent is not handed to the slower path before kSilenceMovingS
+        const bool keepMoving = sIt != g_streams.end() && g_walkFromHost.load(std::memory_order_relaxed) &&
+                                now - sIt->second.lastSampleAt <= kSilenceMovingS && stream_speed(sIt->second) >= kExtrapMinMps;
+        if (keepMoving && now - sIt->second.lastSampleAt > kSilenceS) c_silenceKept.fetch_add(1, std::memory_order_relaxed);
+        if (sIt == g_streams.end() || (!holdAll && !keepMoving && now - sIt->second.lastSampleAt > kSilenceS)) {
             auto cur = it++;
             pull_flush(cur->second, now);
             drop(cur, kSilence, true);
@@ -1152,7 +1192,12 @@ void tick() {
         else if (target < p.lateApplied - maxStep) p.lateApplied -= maxStep;
         else p.lateApplied = target;
         float pose[4];
-        if (!render(s, now - p.delay - p.lateApplied, p.delay + p.lateApplied, pose)) { ++it; continue; }
+        bool ex = g_walkFromHost.load(std::memory_order_relaxed) && !p.beast;   // WO-201 B10: in = allowed, out = extrapolated
+        float segMps = 0.0f;
+        if (!render(s, now - p.delay - p.lateApplied, p.delay + p.lateApplied, pose, &ex, &segMps)) { ++it; continue; }
+        if (ex) c_extrapFrames.fetch_add(1, std::memory_order_relaxed);
+        if (p.extrapolating && !ex) { p.blendPending = true; c_extrapEnds.fetch_add(1, std::memory_order_relaxed); }   // back onto the stream, from the body
+        p.extrapolating = ex;
         if (p.blendPending) blend_start(p, e, pose);
         if (p.blending) blend_apply(p, pose, dt);
         bool wrote = false;
@@ -1165,6 +1210,12 @@ void tick() {
                 p.velX = ddx / static_cast<float>(dt); p.velY = ddy / static_cast<float>(dt);
             }
         } else if (!p.haveLast) { p.speedMps = 0; p.velX = p.velY = 0; }
+        // WO-201 B10: the walk is a value -- the gait follows the host's own speed on the segment, not a catch-up's
+        if (g_walkFromHost.load(std::memory_order_relaxed) && !p.beast && std::isfinite(segMps) && segMps < 20.0f) {
+            const float sp = p.speedMps;
+            if (sp > 0.001f && segMps > 0.001f) { p.velX *= segMps / sp; p.velY *= segMps / sp; }
+            p.speedMps = segMps;
+        }
         if (!write_one(p, e, pose, &wrote)) {
             if (!g_announcedFault) { g_announcedFault = true; logf("MP-NPCWRITE npc=%s engine call FAULTED", p.name.c_str()); }
             disarm("an engine call faulted inside the per-frame write");
@@ -1198,10 +1249,11 @@ void tick() {
         if (us > g_cost.maxUs) g_cost.maxUs = us;
         if (now - g_cost.start >= kPullWindowS) {
             const double n = static_cast<double>(g_cost.frames);
-            logf("MP-NPCWRITE-COST window_s=%.1f frames=%llu bound_mean=%.1f writing_mean=%.1f tick_us_mean=%.1f tick_us_max=%.1f blends=%llu blend_max_cm=%.1f",
+            logf("MP-NPCWRITE-COST window_s=%.1f frames=%llu bound_mean=%.1f writing_mean=%.1f tick_us_mean=%.1f tick_us_max=%.1f blends=%llu blend_max_cm=%.1f "
+                 "extrap_frames=%u extrap_ends=%u silence_kept=%u",
                  now - g_cost.start, static_cast<unsigned long long>(g_cost.frames), g_cost.boundSum / n,
                  g_cost.writingSum / n, g_cost.sumUs / n, g_cost.maxUs, static_cast<unsigned long long>(g_cost.blends),
-                 g_cost.blendMaxCm);
+                 g_cost.blendMaxCm, c_extrapFrames.load(), c_extrapEnds.load(), c_silenceKept.load());
             g_cost = CostWindow{};
         }
     }
