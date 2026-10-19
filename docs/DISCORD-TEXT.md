@@ -25,6 +25,29 @@ How to play together (0.48.2):
 Nobody clicks CONNECT any more, and you don't need anyone's save file. First time ever starting the game? Start it once from Steam and accept its two first-run pages, then use the launcher.
 ```
 
+## Version 0.61.9 — every bug from the first 0.61.5 session, at its root (WO-201)
+
+```
+Kingdom Come: Together 0.61.9 -- every bug from the first 0.61.5 session, at its root
+Fixes
+- No more crash when you both loot the same body: nothing in the mod changes an inventory while someone has its screen open.
+- A scene no longer waits minutes for the host's people to walk into place on the joiner's screen; a conversation that waited too long is cancelled ("talk again"), never started far away.
+- A conversation that leads straight into the next one keeps its people.
+- Escort lines and camera lines no longer show "That conversation couldn't start here"; the joiner's game no longer starts story lines by itself.
+- Riders are riders on both screens; a duel ends on both screens (no more Semine attacking the host on the joiner's screen).
+- Far fewer animation errors in the market; people hold what they hold and are dressed in the morning (sliding feet on the joiner's screen are a known open problem).
+- Your partner's quest crossbow shows on their figure, and their shots and reloads too.
+- "Your host is loading - please wait" instead of the connection warning while the host loads.
+- The joiner's clock catches up after a long pause; the save lock no longer floods the log.
+New
+- Hear each other: within 20 m you hear your partner's conversations from the right people, with subtitles inside 8 m (mp_speech_radius, mp_speech_subtitles_m).
+- Vote on your partner's choices: while they choose, a small panel shows their options; press F2 / F4 / F5 / F6 to vote. They still decide, and you both see what they chose.
+- The escort waits for the nearer of you; the joiner's game asks the host for nothing on its own.
+- mark <what you saw> puts a note with the mark into the logs.
+Each new piece has its own switch, all on except mp_figure_is_player (still being made safe); mp_w201_status shows them. Please type mark <what you saw> at anything odd.
+Both players and the relay need 0.61.9.
+```
+
 ## Version 0.61.5 — one world, one story (WO-200)
 
 ```

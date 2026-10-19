@@ -1602,6 +1602,86 @@ in the morning; both of you on 0.61.5; the joiner joins there)
      `mp_joiner_no_puppet_quests`, `mp_joiner_scoped_twins`, `mp_copy_health_from_host`, `mp_rider_from_host`, `mp_copy_neutral_always`,
      `mp_world_clock_from_host`, `mp_stream_dogs`, `mp_joiner_noise`; `mp_w200_status` prints them all.
 
+## 0.61.9 — every bug from the first 0.61.5 session, at its root (WO-201)
+
+The first two-player session on 0.61.5 found two dozen problems; this version fixes them where they start, and adds two things to
+try: you hear each other's conversations when you stand close, and you can vote on your partner's choices. Evidence:
+`docs/WO-201-findings.md`. **At every difference, type `mark` and a few words of what you saw (for example `mark Semine attacked me`)** —
+the note goes into the logs and the bundle's list.
+
+**Tester script** (one session, about an hour and a half; the same route as the first 0.61.5 session: start from a save before Sir
+Semine's departure in "The Jaunt", the host near Semine's yard in the morning; both of you on 0.61.9; the joiner joins there)
+
+1. *Joiner:* talk to Semine and pick the answer that starts the ride. *Host:* stand within a few metres and listen. *Both:* the
+   conversation's voices are heard on the host's screen too (the subtitles too, closer than 8 m); the lords set off on both screens
+   within 5 s of its end, with no long wait. Mark if the joiner's screen waits, or the host hears nothing.
+2. *Both:* ride behind the lords to Troskowitz (no time skip). Mark at every moment a lord stands on his horse's back or beside it on one
+   screen while riding on the other.
+3. *Joiner:* on the ride, fall far behind once (100 m or more) and come back; *Host:* stay with the lords. Mark if the joiner hears "you
+   are falling behind" lines, or the screen shows "That conversation couldn't start here".
+4. *Host:* do the training duel with Semine; *Joiner:* watch from close by. After it ends, *Host:* talk to Semine three times. Mark if
+   Semine raises his weapon at the host on the joiner's screen after the duel, or attacks him while they talk.
+5. *Both:* walk through Troskowitz market for five minutes. Mark if people stand stiff, turn on the spot, or hold nothing in their hands
+   on one screen while holding a tool on the other (sliding feet are known: mark only the worst one).
+6. *Joiner:* go to the bailiff, then start the trialog with Semine and Suk yourself (`zpet_u_semina`). Mark if it waits longer than a few
+   seconds, starts late somewhere else, or moves you far away at its end.
+7. *Host:* one conversation of your own with someone; *Joiner:* stand close (under 8 m), then far (over 25 m) for the next one. Mark if the
+   joiner hears the far one, or not the close one.
+8. *Joiner:* stand next to a villager who greets the host. Mark if you do not hear the greeting from that villager.
+9. *Vote:* during a conversation with choices, the one who is not talking presses F2 / F4 / F5 / F6 to vote (a panel on the left
+   lists the options). Do it both ways; once the talker follows the vote, once not. Mark if the panel shows other options than the
+   talker sees, the talker's screen does not show the vote, or "… chose: …" is not shown on both screens.
+10. *Host:* save, then load that save. *Joiner:* watch. Mark if the joiner's screen says "Your connection to the other player is
+    struggling" instead of "Your host is loading - please wait".
+11. *Both:* go on to the crossroads and the patrol fight. *Joiner:* fight with the crossbow you are given. *Host:* watch the joiner's
+    figure. Mark if the figure has no crossbow in hand.
+12. *Both:* loot one dead bandit at the same time: both open his loot screen, each moves an item, both close. Do it three times. Mark if
+    the game freezes or closes, an item is doubled, or one disappears.
+
+**Checklist**
+
+392. **No crash when you both loot one body.** The game stays up through step 12; the host's `kcd.log` has `WO201-INV deferred path=...`
+     and `WO201-INV applied` lines (a change waited for your screen to close), never a change to an open screen.
+393. **No scene waits for the host's people.** On the joiner, `kcd.log` never has `NPC positioning took longer than expected`; the native
+     log has `WO201-FF positioning freed after ... s` (under 3 s) when a scene starts.
+394. **A late conversation is cancelled, never started far away.** If a talk waited behind something, the joiner sees "That conversation
+     was cancelled - talk again." and nothing moves him (joiner `kcd.log`: `WO201-SCENE stale`).
+395. **A chained conversation keeps its people.** After the trialog, the next conversation with the same people starts at once (joiner
+     `kcd.log`: `WO201-TWINS kept npc=... why=...`, never `WAITING_FOR_TWINS` until the fader).
+396. **No toast for lines you did not start.** Escort or camera lines say nothing on screen; only a conversation you started yourself
+     can show "That conversation couldn't start here".
+397. **The joiner's game starts no story lines by itself.** Falling behind the lords plays no "falling behind" line on the joiner (native
+     log: `WO200-GATE ... joiner-story`); his own searches (the coal sack, the cart) still speak.
+398. **Riders are riders.** On the joiner, `WO200-RIDER mount rider=tsem_*` when the lords mount, and a `WO201-RIDE disagree` line only
+     when a lord stands beside his horse.
+399. **The duel ends on both screens.** On the joiner, `agent.log` has `WO201-COMBAT end npc=tsem_seminsr why=host-left-combat` after
+     the duel; no attack on the host's figure after it.
+400. **Few animation errors in the market.** The joiner's `kcd.log` has far fewer `Animation-queue overflow` and `Agent is stuck` lines
+     than in 0.61.5. People's feet may still slide when they walk on the joiner's screen (a known open problem): `mark sliding` at the
+     worst one you see.
+401. **Held things and morning clothes.** A villager holding a broom, a basket or a tool on the host's screen holds it on the joiner's
+     (`WO201-HANDS ... shown`); after a night everyone is dressed in the morning (`WO201-LOOK ... dressed`).
+402. **A knocked-out partner falls and gets up.** When one of you is knocked out, the other sees his figure fall and, at his wake, stand
+     up the game's own way (`WO201-KO ... down` / `conscious again -> the engine's StandUp`), never a figure replaced.
+403. **The crossbow shows.** The joiner's quest crossbow is in his figure's hand on the host's screen (`WO201-RANGED ... shown`); his
+     shots, reloads and let-downs play on it (`WO201-RANGED in ... 'Fire'`), the draw and the aim hold not yet (the findings say why).
+404. **Hearing each other.** Within 20 m each of you hears the other's conversations from the right people (`WO201-SPEECH in ... played`);
+     subtitles inside 8 m, marked "(overheard)"; nothing beyond 20 m.
+405. **The vote.** The partner's panel lists the talker's options in order; the talker sees "<> <partner> votes N: ..." beside his options
+     and decides; both see "<talker> chose: ..." afterwards (`WO201-VOTE out`, `WO201-VOTE cast`, `WO201-VOTE close`).
+406. **The host's load.** The joiner sees "Your host is loading - please wait", never the connection toast (`WO201-BUSY ...`).
+407. **One clock.** The joiner's clock catches up within a minute after a long pause (`WO200-CLOCK` lines, the error shrinking).
+408. **The joiner's game asks for nothing by itself.** The joiner's `agent.log` has `WO201-RECV kept ...` for steps his own quest logic
+     made, and `joiner -> host request` lines only from his own conversations and searches.
+409. **Escort by the nearer of you.** The host's native log has `WO201-NEAR a distance trigger on the player measured from the partner's
+     figure` when the joiner is the one with the lords.
+410. **Type `mark <note>` at every difference.** Switches (all on but one): `mp_inv_screen_guard`, `mp_joiner_scene_noposition`,
+     `mp_scene_queue_stale`, `mp_twins_grace`, `mp_monologue_rescue_exempt`, `mp_joiner_no_story_barks`, `mp_scene_toast_truth`,
+     `mp_copy_combat_from_host`, `mp_copy_look_from_host`, `mp_walk_from_host`, `mp_figure_ranged`, `mp_clock_catchup`,
+     `mp_host_load_toast`, `mp_mark_note`, `mp_speech_share`, `mp_dialogue_vote`, `mp_both_are_henry`, `mp_nearest_player_triggers`,
+     `mp_joiner_receive_only`, `mp_knockout_engine`, `mp_oneshot_tick_cap`; `mp_figure_is_player` is **off** (see the findings);
+     `mp_w201_status` prints them all.
+
 ## Logs to send afterwards
 
 Both machines: Report a bug in the launcher. Since 0.48.9 it collects the current launch by default as a small file (or a few numbered
