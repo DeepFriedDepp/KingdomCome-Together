@@ -15,7 +15,9 @@
 // Pipe ops in the WO-163 family (0x2B -> 0xAC), main thread:
 //   76 Status -> text
 //   77 Config [role:1][joined:1][bits:1] (255 = unchanged) -> the same 3 bytes; bits 1 joiner_scene_noposition, 2 walk_from_host (B10:
-//        npc_drive's writer walks a moving copy through a gap on the host's last speed, keeps it through silence, gaits it on the host's speed)
+//        npc_drive's writer walks a moving copy through a gap on the host's last speed, keeps it through silence, gaits it on the host's speed),
+//        4 oneshot_tick_cap (B9), 8 copy_no_idle_turn (the B9 follow-up: motion.cpp clears a standing copy's stale TurnAngle before its
+//        AI-movement action picks idle / turn)
 //   78 CombatEnd [eid:4] -> [held:1][stopFight:1]   B4 copy_combat_from_host (joiner): the host's NPC left combat (or the copy started one
 //        by itself) -- every fight hold of the mod on the copy released (WO-132's skirmish and hold, WO-187's wish and pin, the writer's
 //        combat hold; WO-195's mask in `held`), then the engine's own end of its fight: wh::rpgmodule::StopFight on its soul. WO201-COMBAT.

@@ -87,8 +87,10 @@ Every new mechanism has its own switch, all on except `mp_figure_is_player` (§3
 
 * **B10, the gliding** is not fixed (§2): the writer's new path runs (thousands of extrapolated frames, copies kept through silences)
   but the feet slide as before, so the stepping animation a copy plays while it is moved is the open question, not the stream.
+  The follow-up (§9) found where the slide comes from; it is still open.
 * **B9's remainder:** 302 of the 310 overflows left are one woodcutter's copy (its look pose re-queued about every 50 ms while the
   writer moves it); holding the writer off it for 3 s after each swing did not help (399), so that change was not kept.
+  Fixed in the follow-up (§9, `mp_copy_no_idle_turn`).
 * **B5 in the harness:** the field crash did not reproduce on one machine (the base run's "crash" was a harness false alarm: the game
   kept logging). The fix is shown live once: the duplicate removal came due under the open loot screen, waited (`WO201-INV deferred`)
   and was applied 14.8 s later at the close, with no crash in 10 runs. Runs 2-10 do not count: the console-opened loot screen stopped
@@ -138,3 +140,53 @@ Every new mechanism has its own switch, all on except `mp_figure_is_player` (§3
 | WO-136 take-backs | the verdict carries "busy"; applied through the deferred Lua path |
 | WO-148 carry, WO-200's quest-item comparer | change no inventory |
 | Shops and trades | the engine's own; an open trade screen guards Henry like a loot screen |
+
+## 9. Follow-up: B9's remainder and B10's slide
+
+Measured with the market replay (F7r, `quicksave022`, playline4, Modding Tools build, 150 s from a fresh game per run). The harness
+and its raw results stay in the WO's private research notes.
+
+**B9's remainder -- fixed (`mp_copy_no_idle_turn`, default on).** The woodcutter's copy (`ttkc_man_30`, and `ttkc_woman_6` in other
+runs) flipped between `MotionIdle` and `MotionTurnBig` every 40-90 ms while it stood; every flip re-queued its TorsoDetail look pose.
+EntityModule's `CAnimActionAIMovement` picks idle / turn / big turn from the animated character's desired TurnAngle (motion parameter
+4). A paused copy's own movement controller fills it from the request the NPC had when it was paused (1.85 rad read on the woodcutter;
+the same stale request is the "Agent is stuck" line). The host's facing is the writer's to show, so the DLL wraps the action's Update
+(its vftable slot, found by RTTI, checked by its bytes) and clears a *standing* copy's TurnAngle through the animated character's own
+parameter get / set just before the state pick. Walking copies, figures and the game's own NPCs are untouched.
+`AI.RequestToStopMovement` every 3 s did nothing (405 overflows).
+
+| F7r, 150 s, the final build | overflows | "Agent is stuck" |
+|---|---:|---:|
+| `mp_copy_no_idle_turn` on | 0 | 7 |
+| off (switched ~25 s in) | 204 (man_30 145, woman_6 59: look poses, idle big turns) | 9 |
+| on again | 0 | 7 |
+
+(Before this fix the same build gave 310-760 per run; WO-201's 310 was one sample.)
+
+**B10 -- not fixed; where the slide comes from.**
+
+* WO-201's slide number was mostly the measure: its first slide measure scored the game's *own* walkers 1.35 m/s at the median, the same as the
+  copies. A skeleton the engine does not update (out of view, animation LOD) carries its feet rigidly with the entity, and its window
+  was ten timer ticks, not a second. Measured per real second with every skeleton updated (`ca_ForceUpdateSkeletons 1`,
+  the WO's second slide measure): the game's own walkers 0.16 m/s at the median (foot speed / body speed 0.12), the near copies 0.6-0.8 m/s
+  (ratio ~0.6).
+* The market recording was made on 0.61.5 before WO-201's host fix: 59 % of the moving distance streamed at 2 s
+  gaps (the far walkers). F7r cannot show the host half of B10; a re-recording with a 0.61.9 host is needed.
+* The near copies (10 Hz streams) are on the right fragment (`MotionMovement`), the right walk class and direction, and the right
+  asset (`3d_relaxed_walk_turn_strafe`, the guard's `3d_hlbrd_walk_turn_strafe` for `ttkc_man_3`), but their steps run at about
+  half rate: left-foot period 1.82-1.86 s against the game's own 0.96-1.07 s, the same stride. The layer-0 animation's cycle is
+  locked at 1.904 s (its slowest example) whatever its TravelSpeed parameter says (1.40 read back); the same animation on the game's
+  own NPC follows the parameter (1.07-1.27 s). Copies enter the walk through Mannequin's `MotionMovement -> MotionMovement` blend
+  (0.6 s TimeWarping, the animation's transition flags +0x4C bit 3), the game's own walkers through `IdleToMove`.
+* Ruled out, each by a live run: the TravelSpeed parameter itself (written at the frame hook and at the tag update: the parameter
+  reads 1.40, the cycle stays 1.904), the physics velocity (`pe_action_set_velocity`: the body then reads 1.2 m/s, no change), the
+  old Lua walk clip (no clip at all: no change), the time-warping flag cleared, the requested velocity written before the movement
+  controller's Update, the pace class (1.0 on both), the layer playback scale (1.0 on both), `mp_npc_detach` and
+  `mp_copy_neutral_always`. None of those experiments is kept in the code.
+* What is kept: read-only research reads for the next attempt, only with `mp_anim_trace on`: `WO190-LOCO` (once a second per traced
+  body: full-body action, ground speed, the animated character's parameter block, the skeleton's desired parameters, its layer
+  playback scale and pseudo-speed) and `WO190-FIFO` (the layer-0 animation queue by name, with the parametric sampler; environment
+  `KCDMP_FIFO_NAMES`). `mp_anim_trace on` also lists the game's own NPCs near the player (role `npc`) as the reference;
+  `KCDMP_ANIM_TRACE=on` in the game's environment starts the full trace without an agent.
+* Next: find why the copy's parametric sampler keeps its first blend (CryAnimation's per-cycle parameter update for an animation
+  started through the TimeWarping blend), or start a copy's walk through the engine's own `IdleToMove` transition.

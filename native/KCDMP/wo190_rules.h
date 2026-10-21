@@ -24,8 +24,8 @@ enum class Mode : uint8_t { Off = 0, Auto = 1, On = 2 };
 inline const char* mode_name(Mode m) { return m == Mode::On ? "on" : m == Mode::Auto ? "auto" : "off"; }
 inline Mode mode_from_byte(uint8_t b) { return b == 2 ? Mode::On : b == 1 ? Mode::Auto : Mode::Off; }
 
-enum class Role : uint8_t { Player = 0, Figure = 1, Copy = 2 };
-inline const char* role_name(Role r) { return r == Role::Player ? "player" : r == Role::Figure ? "figure" : "copy"; }
+enum class Role : uint8_t { Player = 0, Figure = 1, Copy = 2, Npc = 3 };   // Npc: the game's own NPC (mp_anim_trace on only, the reference)
+inline const char* role_name(Role r) { return r == Role::Player ? "player" : r == Role::Figure ? "figure" : r == Role::Npc ? "npc" : "copy"; }
 
 constexpr int kMaxBodies = 24;          // bodies read per pass (the nearest first)
 constexpr float kNearM = 40.0f;         // copies farther than this from the local player are not traced

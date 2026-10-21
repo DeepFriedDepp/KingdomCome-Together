@@ -395,6 +395,24 @@ int read_all_scopes(uint32_t eid, ScopeInfo* out, int max) {
     return n;
 }
 
+// WO-201 follow-up (research, read-only): the animated character's desired motion parameters -- what CAnimActionAIMovement's state
+// pick reads (EntityModule: GetAnimatedActor (actor vt +0x2D0), then its vt +0x168: { float value[6]; uint8 id[6]; uint8 count; }),
+// and the actor's requested velocity (+0x574) the same pick tests for "moving".
+bool motion_params(uint32_t eid, MotionParams* out) {
+    *out = MotionParams{};
+    void* actor = motion::actor_of(eid);
+    void* anim = actor ? call_get(actor, kVtGetAnimatedActor) : nullptr;
+    if (!anim) return false;
+    rd(actor, 0x574, &out->reqVel[0]); rd(actor, 0x578, &out->reqVel[1]);
+    const char* p = static_cast<const char*>(call_get(anim, 0x168));
+    if (!p) return false;
+    uint8_t n = 0;
+    if (!rd(p, 0x1E, &n) || n > 6) return false;
+    for (int i = 0; i < n; ++i) { if (!rd(p, i * 4, &out->value[i]) || !rd(p, 0x18 + i, &out->id[i])) return false; }
+    out->count = n;
+    return true;
+}
+
 uint8_t drop_wish(uint32_t eid, const char* why) {
     auto it = g_wishes.find(eid);
     if (it == g_wishes.end()) return 0;

@@ -137,7 +137,14 @@ uint8_t drop_fight_holds(uint32_t eid, const char* why);
 void loco_counters(uint32_t out[8]);
 bool fight_held(uint32_t eid);                   // WO-190: a copy held in combat mode for a fight (engaged, or WO-187's guard hold), fresh
 void* actor_of(uint32_t eid);                    // the C_Actor of an entity id (main thread), null when none
-void set_ko_hold(uint32_t eid, bool on);         // WO-201 V.4: the avatar guard is not put back on this figure while the engine knocks it out
+void set_ko_hold(uint32_t eid, bool on);
+// WO-201 follow-up B9: a standing copy's stale TurnAngle is cleared before its AI-movement action picks idle / turn (mp_copy_no_idle_turn, bit 16)
+void set_copy_no_idle_turn(bool on);
+int noturn_status(char* out, int n);
+bool skel_desired_param(void* ent, uint32_t id, float* out);   // research read (WO190-LOCO)
+bool skel_layer_scale(void* ent, int layer, float* out);        // research read (WO190-LOCO)
+int skel_fifo_text(void* ent, int layer, char* out, int n);       // research read (WO190-FIFO)
+bool pseudo_speed(uint32_t eid, float* ps, int* kind, int* count); // research read (WO190-LOCO)         // WO-201 V.4: the avatar guard is not put back on this figure while the engine knocks it out
 bool combat_mode_of(uint32_t eid, bool* on);     // its combat model's CombatMode (false = unreadable)
 bool requeue_guard_idle(uint32_t eid);           // the guard zone written away and back: the engine re-queues its guard idle
 bool request_idle_pulse(uint32_t eid);           // WO-155's walk-class pulse on a bound body (false = not one of ours)

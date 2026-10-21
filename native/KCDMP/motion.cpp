@@ -43,6 +43,7 @@
 #include "script_context.h"
 #include "wo195.h"
 #include "wo195_rules.h"
+#include "wo201_rules.h"
 
 namespace kcdmp::motion {
 namespace {
@@ -256,6 +257,7 @@ struct Body {
     int   range = -1;             // WO-129: the body's own class count (engine), -1 unknown
     double rangeAt = -1;
     int   slot = -1;              // WO-129: index into g_gaitTable, -1 none
+    int   copySlot = -1;          // WO-201 follow-up B9: index into g_copyTable, -1 none
     // moves
     bool crouchApplied = false;
     uint8_t autoMode = 255;       // WO-166 C1: the automation pattern applied while held in combat (255 = none)
@@ -298,6 +300,7 @@ std::atomic<uint32_t> c_guardHolds{0}, c_figureLingers{0}, c_idlePulses{0}, c_id
 // inserts and removes. A slot older than kGaitStaleTicks frames is ignored.
 constexpr uint32_t kGaitStaleTicks = 30;
 gait::Table<256> g_gaitTable;
+gait::Table<256> g_copyTable;   // WO-201 follow-up B9: the copies (not the figures) this writer drives, with their gait class
 std::atomic<uint32_t> g_gaitTick{0};
 std::atomic<bool> g_tags{false};
 std::string g_whyTags = "not installed";
@@ -1187,7 +1190,72 @@ void publish_gait(Body& b, float cls) { publish_gait(b, cls, b.velX, b.velY); }
 void unpublish_gait(Body& b) {
     if (g_gaitTable.holds(b.slot, b.actor)) g_gaitTable.remove(b.slot);
     b.slot = -1;
+    if (g_copyTable.holds(b.copySlot, b.actor)) g_copyTable.remove(b.copySlot);   // WO-201 follow-up B9
+    b.copySlot = -1;
 }
+
+// ---- WO-201 follow-up (research, read-only): the copy's skeleton -----------------------------------------------------------
+// The walk of a written copy plays its blendspace at the slowest example (docs/WO-201-findings.md s9): these reads (WO190-LOCO,
+// WO190-FIFO with mp_anim_trace on) show it. Path: CEntity vt +0x328 GetCharacter(0) -> CCharInstance vt +0x28 GetISkeletonAnim
+// (this + 0x118) -> CSkeletonAnim; every object checked by its RTTI vftable (each call goes through that vftable's own slot), the
+// entity's and the character's getters by their bytes too.
+constexpr size_t kEntGetCharacter = 0x328, kCharGetSkelAnim = 0x28;
+bool g_skelReads = false;
+std::string g_whySkelReads = "not installed";
+void* const* g_vftCharInst = nullptr;
+void* const* g_vftSkelAnim = nullptr;
+const void* g_fnEntGetChar = nullptr;
+
+// ---- WO-201 follow-up B9 (mp_copy_no_idle_turn): a standing copy never turns in place on its own --------------------
+// The woodcutter's copy (and woman_6's) flipped between MotionIdle and MotionTurnBig every 40-90 ms; each flip re-queued its
+// TorsoDetail look pose -- 302 of WO-201's 310 remaining queue overflows. EntityModule's CAnimActionAIMovement picks idle / turn /
+// big turn from the animated character's desired TurnAngle (motion parameter 4), which the copy's own movement controller fills
+// from the paused NPC's stale movement request (the turn toward the target it had when it was paused; "Agent is stuck" is the same
+// request): 1.85 rad read on the woodcutter while the writer holds the host's facing. The host's facing is the writer's to show, so
+// a still copy's TurnAngle is cleared right before the action picks its state (its Update, vftable slot +0x30); the pick stays Idle.
+// Moving copies, the figures and the game's own NPCs are untouched. The class is RTTI-found, Update and its state pick are checked
+// by their bytes; the clear uses the animated character's own get / set of its parameter block (vt +0x168 / +0x170).
+constexpr size_t kAimUpdateSlot = 0x30, kAimActorField = 0x98, kActorGetAnimChar = 0x2D0, kAnimGetParams = 0x168, kAnimSetParams = 0x170;
+constexpr uint8_t kParamTurnAngle = 4;
+std::atomic<bool> g_cfgNoTurn{true};
+bool g_noTurn = false;
+std::string g_whyNoTurn = "not installed";
+using AimUpdateFn = int (__fastcall*)(void*, float);
+AimUpdateFn g_origAimUpdate = nullptr;
+std::atomic<uint32_t> c_turnCleared{0}, c_turnSeen{0};
+bool call_setparams(void* fn, void* anim, const void* block) {
+    KCDMP_FAULT_CALL(site, "motion::anim_set_params");
+    return fault::guarded(site, [&] { reinterpret_cast<void (*)(void*, const void*)>(fn)(anim, block); });
+}
+void clear_turn(void* actor) {
+    void* fa = vslot(actor, kActorGetAnimChar);
+    void* anim = nullptr;
+    if (!fa || !call_p0(fa, actor, &anim) || !anim) return;
+    void* fg = vslot(anim, kAnimGetParams);
+    void* fs = vslot(anim, kAnimSetParams);
+    void* blk = nullptr;
+    if (!fg || !fs || !call_p0(fg, anim, &blk) || !blk) return;
+    uint8_t b[0x20]{};
+    for (int i = 0; i < 0x20; ++i) if (!rd(blk, static_cast<size_t>(i), &b[i])) return;
+    int at = -1;
+    if (!wo201rules::turn_param_at(b, sizeof b, kParamTurnAngle, &at)) return;
+    c_turnSeen.fetch_add(1, std::memory_order_relaxed);
+    float v = 0; std::memcpy(&v, b + at * 4, 4);
+    if (v == 0.0f) return;
+    v = 0.0f; std::memcpy(b + at * 4, &v, 4);
+    if (call_setparams(fs, anim, b)) c_turnCleared.fetch_add(1, std::memory_order_relaxed);
+}
+int __fastcall hk_aim_update(void* self, float dt) {
+    if (g_cfgNoTurn.load(std::memory_order_relaxed) && g_copyTable.live() > 0) {
+        void* actor = nullptr;
+        float cls = 0, vx = 0, vy = 0;
+        if (rd(self, kAimActorField, &actor) && actor && g_copyTable.read(actor, g_gaitTick.load(std::memory_order_relaxed), kGaitStaleTicks, &cls, &vx, &vy) &&
+            wo201rules::turn_clear_wanted(cls))
+            clear_turn(actor);
+    }
+    return g_origAimUpdate(self, dt);
+}
+
 
 } // namespace
 
@@ -1270,6 +1338,48 @@ void install() {
     }
     if (why.empty()) { g_combat = true; g_whyCombat.clear(); } else g_whyCombat = why;
     if (!A.actorLookup) { g_gait = false; if (g_whyGait.empty()) g_whyGait = "actor lookup did not verify"; g_moves = false; if (g_whyMoves.empty()) g_whyMoves = "actor lookup did not verify"; }
+
+    // ---- WO-201 follow-up (research, read-only): the copies' skeleton reads (WO190-LOCO / WO190-FIFO) ---------
+    {
+        HMODULE an = GetModuleHandleA("CryAnimation.dll");
+        HMODULE es = GetModuleHandleA("CryEntitySystem.dll");
+        void* const* vEnt = es ? anchor::find_vftable(es, ".?AVCEntity@@", 0) : nullptr;
+        g_vftCharInst = an ? anchor::find_vftable(an, ".?AVCCharInstance@@", 0) : nullptr;
+        g_vftSkelAnim = an ? anchor::find_vftable(an, ".?AVCSkeletonAnim@@", 0) : nullptr;
+        g_fnEntGetChar = vEnt ? vEnt[kEntGetCharacter / 8] : nullptr;
+        if (!an || !es) g_whySkelReads = "CryAnimation.dll / CryEntitySystem.dll not loaded";
+        else if (!vEnt || !g_vftCharInst || !g_vftSkelAnim) g_whySkelReads = "RTTI CEntity / CCharInstance / CSkeletonAnim vftable not unique";
+        else if (!has(es, g_fnEntGetChar, {0x48, 0x8D, 0x48, 0xA0}))                                  // lea rcx,[rax-60h] (the character slot)
+            g_whySkelReads = "CEntity slot 0x328 is not GetCharacter";
+        else if (!has(an, g_vftCharInst[kCharGetSkelAnim / 8], {0x48, 0x8D, 0x83, 0x18, 0x01, 0x00, 0x00}))   // lea rax,[rbx+118h]
+            g_whySkelReads = "CCharInstance slot 0x28 is not GetISkeletonAnim";
+        else { g_skelReads = true; g_whySkelReads.clear(); }
+        logf("WO201-SKEL research reads %s%s%s", g_skelReads ? "armed" : "NOT armed", g_whySkelReads.empty() ? "" : " -- ", g_whySkelReads.c_str());
+    }
+
+    // ---- WO-201 follow-up B9: CAnimActionAIMovement::Update (mp_copy_no_idle_turn) ----------
+    {
+        void* const* vAim = anchor::find_vftable(em, ".?AVCAnimActionAIMovement@entitymodule@wh@@", 0);
+        const void* upd = vAim ? vAim[kAimUpdateSlot / 8] : nullptr;
+        const uint8_t* calls[16]{};
+        const int nc = upd ? anchor::function_call_targets(em, upd, calls, 16) : 0;
+        const uint8_t* pick = nullptr;   // the state pick: reads the actor's requested velocity (+0x574) and motion parameter 4's slot
+        for (int i = 0; i < nc && !pick; ++i)
+            if (has(em, calls[i], {0xF3, 0x0F, 0x10, 0x83, 0x74, 0x05, 0x00, 0x00}) && has(em, calls[i], {0x80, 0x7C, 0x0E, 0x18, 0x04})) pick = calls[i];
+        if (!vAim) g_whyNoTurn = "RTTI CAnimActionAIMovement vftable not unique";
+        else if (!has(em, upd, {0xF3, 0x0F, 0x58, 0x77, 0x10}))        // addss xmm6,[rdi+10h] (the action's own clock)
+            g_whyNoTurn = "CAnimActionAIMovement slot 0x30 is not Update";
+        else if (!pick) g_whyNoTurn = "Update calls no state pick that reads TurnAngle (parameter 4)";
+        else if (!has(em, pick, {0x48, 0x8B, 0x9F, 0x98, 0x00, 0x00, 0x00}))   // mov rbx,[rdi+98h] (the action's actor)
+            g_whyNoTurn = "the state pick does not read the action's actor at +0x98";
+        else {
+            void* orig = nullptr;
+            if (patch_slot(vAim, kAimUpdateSlot, reinterpret_cast<void*>(&hk_aim_update), &orig) && orig) { g_origAimUpdate = reinterpret_cast<AimUpdateFn>(orig); g_noTurn = true; g_whyNoTurn.clear(); }
+            else g_whyNoTurn = "the vftable slot could not be patched";
+        }
+        char du[64]{}; anchor::describe(upd, du, sizeof du);
+        logf("WO201-NOTURN copy idle-turn clear %s at %s%s%s", g_noTurn ? "armed" : "NOT armed", du, g_whyNoTurn.empty() ? "" : " -- ", g_whyNoTurn.c_str());
+    }
 
     // ---- WO-129: the tag-update hook (C_Actor vftable slot 0xC98) --------------
     // Without it a written body slides whatever SetPseudoSpeed we call (observed),
@@ -1549,6 +1659,11 @@ void body_frame(const char* key, void* ent, uint32_t eid, float renderSpeedMps, 
         b.cls = cls;
         apply_gait(b, cls);
         publish_gait(b, cls, tvx, tvy);
+        if (!b.avatar) {   // WO-201 follow-up B9: the copies the AI-movement wrapper may clear a stale turn on
+            if (!g_copyTable.holds(b.copySlot, b.actor)) b.copySlot = g_copyTable.insert(b.actor, g_gaitTick.load(std::memory_order_relaxed));
+            if (b.copySlot >= 0) g_copyTable.publish(b.copySlot, cls, 0.0f, 0.0f, g_gaitTick.load(std::memory_order_relaxed));
+        }
+
         if (b.avatar && now - b.lastGaitLog >= 2.0) {
             b.lastGaitLog = now;
             void* comp = nullptr; float back = -1.0f;
@@ -2080,6 +2195,128 @@ bool write_attack_fields(void* model, const AttackFields& f) {
         return false;
     return wr(model, kPropAttackType.off + 8, f.type) && wr(model, kPropAtkZone.off + 8, f.zone) && wr(model, kPropAtkHand.off + 8, f.hand) &&
            wr(model, kPropAtkStrength.off + 8, f.strength);
+}
+
+// WO-201 follow-up (research, read-only, main thread): the skeleton's own desired motion parameter `id` (CSkeletonAnim vt +0xD0,
+// GetDesiredMotionParam -- what its blendspaces were given), through the checked skeleton path above.
+bool skel_desired_param(void* ent, uint32_t id, float* out) {
+    if (!g_skelReads || !ent) return false;
+    void* fnChar = vslot(ent, kEntGetCharacter);
+    void* ch = nullptr; void* sk = nullptr;
+    if (!fnChar || fnChar != g_fnEntGetChar || !call_p1u(fnChar, ent, 0, &ch) || !is_a(ch, g_vftCharInst)) return false;
+    void* fnSkel = vslot(ch, kCharGetSkelAnim);
+    if (!fnSkel || !call_p0(fnSkel, ch, &sk) || !is_a(sk, g_vftSkelAnim)) return false;
+    void* fnGet = vslot(sk, 0xD0);
+    if (fnGet != g_vftSkelAnim[0xD0 / 8]) return false;
+    bool got = false; float v = 0;
+    KCDMP_FAULT_CALL(site, "motion::get_desired_motion_param");
+    if (!fault::guarded(site, [&] { got = reinterpret_cast<bool (*)(void*, uint32_t, float*)>(fnGet)(sk, id, &v); })) return false;
+    if (got) *out = v;
+    return got;
+}
+
+// WO-201 follow-up (research, read-only): the actor's pseudo-speed (the logical speed class the tags read: comp +0x18) and its
+// logical-speed table kind (+0x860) and count (body_range's read).
+bool pseudo_speed(uint32_t eid, float* ps, int* kind, int* count) {
+    void* actor = actor_by_eid(eid);
+    if (!actor) return false;
+    void* comp = nullptr;
+    *ps = -1; *kind = -1; *count = -1;
+    if (rd(actor, kActorPseudoComp, &comp) && comp) rd(comp, 0x18, ps);
+    rd(actor, kActorSpeedType, kind);
+    Body tmp; tmp.actor = actor; tmp.eid = eid;
+    *count = body_range(tmp, 1e9);
+    return true;
+}
+
+// WO-201 follow-up (research, read-only): layer `layer`'s animation FIFO -- the count, and each animation's first 0x50 bytes as text.
+int skel_fifo_text(void* ent, int layer, char* out, int n) {
+    if (!g_skelReads || !ent || layer < 0 || layer > 15 || n < 64) return -1;
+    void* fnChar = vslot(ent, kEntGetCharacter);
+    void* ch = nullptr; void* sk = nullptr;
+    if (!fnChar || fnChar != g_fnEntGetChar || !call_p1u(fnChar, ent, 0, &ch) || !is_a(ch, g_vftCharInst)) return -1;
+    void* fnSkel = vslot(ch, kCharGetSkelAnim);
+    if (!fnSkel || !call_p0(fnSkel, ch, &sk) || !is_a(sk, g_vftSkelAnim)) return -1;
+    void* fnNum = vslot(sk, 0x78); void* fnGet = vslot(sk, 0x88);
+    if (fnNum != g_vftSkelAnim[0x78 / 8] || fnGet != g_vftSkelAnim[0x88 / 8]) return -1;
+    int cnt = 0;
+    KCDMP_FAULT_CALL(site, "motion::skel_fifo");
+    if (!fault::guarded(site, [&] { cnt = reinterpret_cast<int (*)(void*, int)>(fnNum)(sk, layer); })) return -1;
+    // the animation set: [[[skeleton anim +0x4E8] +0xA80] +0x230], checked by its RTTI vftable; GetNameByAnimID = its vt +0x38
+    static void* const* s_vftAnimSet = nullptr; static bool s_vs = false;
+    if (!s_vs) { s_vs = true; HMODULE an = GetModuleHandleA("CryAnimation.dll"); s_vftAnimSet = an ? anchor::find_vftable(an, ".?AVCAnimationSet@@", 0) : nullptr; }
+    void* ci = nullptr; void* mdl = nullptr; void* aset = nullptr;
+    const bool haveSet = s_vftAnimSet && rd(sk, 0x4E8, &ci) && ci && rd(ci, 0xA80, &mdl) && mdl && rd(mdl, 0x230, &aset) && is_a(aset, s_vftAnimSet);
+    int o = std::snprintf(out, n, "n=%d", cnt);
+    for (int i = 0; i < cnt && i < 3 && o + 400 < n; ++i) {
+        const uint8_t* a = nullptr;
+        if (!fault::guarded(site, [&] { a = reinterpret_cast<const uint8_t* (*)(void*, int, int)>(fnGet)(sk, layer, i); }) || !a) break;
+        o += std::snprintf(out + o, n - o, " [%d]", i);
+        int32_t aid = -1;
+        if (haveSet && rd(a, 0x10, &aid) && aid >= 0 && aid < 0x100000) {
+            const char* nm = nullptr;
+            void* fnName = vslot(aset, 0x38);
+            if (fnName == s_vftAnimSet[0x38 / 8] && fault::guarded(site, [&] { nm = reinterpret_cast<const char* (*)(void*, int)>(fnName)(aset, aid); }) && nm) {
+                char b[72]{}; copy_cstr(nm, b, sizeof b);
+                o += std::snprintf(out + o, n - o, " name=%s", b);
+            }
+        }
+        for (int k = 0; k < 0x50; k += 4) {
+            uint32_t w = 0; float f = 0;
+            if (!rd(a, static_cast<size_t>(k), &w)) break;
+            std::memcpy(&f, &w, 4);
+            if (std::isfinite(f) && std::fabs(f) > 1e-4f && std::fabs(f) < 1e5f) o += std::snprintf(out + o, n - o, " %x:%.4g", k, f);
+            else o += std::snprintf(out + o, n - o, " %x:#%x", k, w);
+        }
+        // its parametric sampler (+8): +9 the dimension count, +0xC the values, +0x1C the parameter ids, +0x20 the flags (1 set, 2 locked)
+        const uint8_t* ps = nullptr;
+        if (rd(a, 8, &ps) && ps && o + 160 < n) {
+            uint8_t dims = 0; rd(ps, 9, &dims);
+            o += std::snprintf(out + o, n - o, " ps{dims=%u", dims);
+            for (int d = 0; d < 4 && d < dims; ++d) {
+                float v = 0; uint8_t id = 0, fl = 0;
+                rd(ps, static_cast<size_t>(0xC + d * 4), &v); rd(ps, static_cast<size_t>(0x1C + d), &id); rd(ps, static_cast<size_t>(0x20 + d), &fl);
+                o += std::snprintf(out + o, n - o, " %u=%.3f/f%x", id, v, fl);
+            }
+            if (i == 0) for (int k = 0x24; k < 0xC0 && o + 24 < n; k += 4) {
+                uint32_t w = 0; float f = 0;
+                if (!rd(ps, static_cast<size_t>(k), &w)) break;
+                std::memcpy(&f, &w, 4);
+                if (w == 0) continue;
+                if (std::isfinite(f) && std::fabs(f) > 1e-4f && std::fabs(f) < 1e5f) o += std::snprintf(out + o, n - o, " %x:%.4g", k, f);
+                else o += std::snprintf(out + o, n - o, " %x:#%x", k, w);
+            }
+            o += std::snprintf(out + o, n - o, "}");
+        }
+    }
+    return o;
+}
+
+// WO-201 follow-up (research, read-only): the skeleton's layer playback scale (CSkeletonAnim vt +0xC0, GetLayerPlaybackScale(layer)).
+bool skel_layer_scale(void* ent, int layer, float* out) {
+    if (!g_skelReads || !ent || layer < 0 || layer > 15) return false;
+    void* fnChar = vslot(ent, kEntGetCharacter);
+    void* ch = nullptr; void* sk = nullptr;
+    if (!fnChar || fnChar != g_fnEntGetChar || !call_p1u(fnChar, ent, 0, &ch) || !is_a(ch, g_vftCharInst)) return false;
+    void* fnSkel = vslot(ch, kCharGetSkelAnim);
+    if (!fnSkel || !call_p0(fnSkel, ch, &sk) || !is_a(sk, g_vftSkelAnim)) return false;
+    void* fnGet = vslot(sk, 0xC0);
+    if (fnGet != g_vftSkelAnim[0xC0 / 8]) return false;
+    float v = -1;
+    KCDMP_FAULT_CALL(site, "motion::get_layer_playback_scale");
+    if (!fault::guarded(site, [&] { v = reinterpret_cast<float (*)(void*, int)>(fnGet)(sk, layer); })) return false;
+    *out = v;
+    return true;
+}
+
+// WO-201 follow-up B9 (wo201's config bit 16): mp_copy_no_idle_turn.
+void set_copy_no_idle_turn(bool on) {
+    if (g_cfgNoTurn.exchange(on) != on)
+        logf("WO201-NOTURN mp_copy_no_idle_turn %s (armed=%d cleared=%u seen=%u)", on ? "on" : "off", g_noTurn ? 1 : 0, c_turnCleared.load(), c_turnSeen.load());
+}
+int noturn_status(char* out, int n) {
+    return std::snprintf(out, n, "copy_no_idle_turn=%s%s turn_cleared=%u turn_seen=%u", g_cfgNoTurn.load() ? "on" : "off", g_noTurn ? "" : " (NOT armed)",
+                         c_turnCleared.load(), c_turnSeen.load());
 }
 
 // WO-201 V.4 (wo131's knockout / wake of a figure): hold or release the avatar guard's re-add for this body.

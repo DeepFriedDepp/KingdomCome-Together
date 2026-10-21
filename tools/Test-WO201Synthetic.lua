@@ -147,7 +147,9 @@ do
         end
         check("a: " .. label .. " is registered", CCMDS[label] ~= nil, label)
     end
-    check("a: 22 switches", n == 22, n)
+    check("a: 23 switches", n == 23, n)
+    check("a: the B9 follow-up has its switch (default on, registered with its help)", W201.NAMES.copy_no_idle_turn == "mp_copy_no_idle_turn"
+        and KCD2MP_W201On("copy_no_idle_turn") and W201.HELP.copy_no_idle_turn ~= nil and CCMDS["mp_copy_no_idle_turn"] ~= nil)
     check("a: mp_w201_status and mark are registered", CCMDS["mp_w201_status"] ~= nil and CCMDS["mark"] ~= nil)
     clearLog()
     KCD2MP_W201Set_copy_combat_from_host("off")

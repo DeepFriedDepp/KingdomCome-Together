@@ -21,7 +21,7 @@ public partial class GameBridge
 
     private void Wo201OnCfg(string name, bool on)
     {
-        if (name is "joiner_scene_noposition" or "walk_from_host" or "oneshot_tick_cap") _ = Wo201PushConfigAsync();
+        if (name is "joiner_scene_noposition" or "walk_from_host" or "oneshot_tick_cap" or "copy_no_idle_turn") _ = Wo201PushConfigAsync();
         if (name == "joiner_no_story_barks") _ = Wo200PushConfigAsync();   // B7 rides WO-200's gate byte (bit 8)
     }
 

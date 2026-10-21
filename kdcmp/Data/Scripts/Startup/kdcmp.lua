@@ -32005,6 +32005,7 @@ do
         speech_share = "mp_speech_share", dialogue_vote = "mp_dialogue_vote", both_are_henry = "mp_both_are_henry",
         figure_is_player = "mp_figure_is_player", nearest_player_triggers = "mp_nearest_player_triggers",
         joiner_receive_only = "mp_joiner_receive_only", knockout_engine = "mp_knockout_engine", oneshot_tick_cap = "mp_oneshot_tick_cap",
+        copy_no_idle_turn = "mp_copy_no_idle_turn",
     }
     -- a switch the findings ship off is listed here. V.3 reaches a save: off until its save-decode check has passed (the agent's
     -- Wo201Rules.Dude2DecodePassed says the same)
@@ -32651,6 +32652,7 @@ do
         both_are_henry = "V.5: (host) the joiner is Henry to the host's world: quests count him, people come to talk to him",
         figure_is_player = "V.3: (host) your partner's figure is a player to the game's own rules (never saved as one)",
         oneshot_tick_cap = "B9: (joiner) a host copy's one-shot animation is stepped 10 times a second (not every frame), and dropped when nothing of it starts in 3 s (the look-pose flood)",
+        copy_no_idle_turn = "B9: (joiner) a standing host copy never turns on the spot by itself -- it faces where the host's NPC faces (the look-pose flood)",
         knockout_engine = "V.4: (both) your partner's figure falls and gets up the game's own way when he is knocked out",
         joiner_receive_only = "V.1: (joiner) your game's own quest logic asks the host for nothing -- only your conversations and your own interactions do; the host's world decides the rest",
         nearest_player_triggers = "V.2: (host) a quest's distance to 'the player' is the nearer of you and your partner (the escort fails only when both stray)",

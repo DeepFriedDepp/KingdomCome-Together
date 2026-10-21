@@ -146,4 +146,20 @@ constexpr int64_t kKnownOriginOff = 0x268, kKnownTargetOff = 0x270, kKnownActive
 // The figure counts when it is nearer to the other end than the host's Henry (by more than a centimetre: a tie stays Henry's).
 inline bool figure_nearer(float dHenry, float dFigure) { return dFigure + 0.01f < dHenry; }
 
+// ---- B9 follow-up (mp_copy_no_idle_turn): a standing copy never turns in place on its own ----
+// The animated character's desired motion parameters (EntityModule, its vt +0x168): { float value[6]; uint8 id[6]; uint8 count; } --
+// 0x20 bytes. The index of parameter `id` in that block, false when the block holds none (or reads malformed).
+constexpr size_t kParamBlockBytes = 0x20, kParamIds = 0x18, kParamCount = 0x1E;
+constexpr int kParamMax = 6;
+inline bool turn_param_at(const uint8_t* block, size_t n, uint8_t id, int* index) {
+    if (!block || n < kParamBlockBytes) return false;
+    const int count = block[kParamCount];
+    if (count > kParamMax) return false;
+    for (int i = 0; i < count; ++i)
+        if (block[kParamIds + i] == id) { *index = i; return true; }
+    return false;
+}
+// Only a copy the writer shows standing (gait class 0): a walking copy's turn parameter belongs to its walk.
+inline bool turn_clear_wanted(float gaitClass) { return gaitClass < 0.5f; }
+
 } // namespace kcdmp::wo201rules

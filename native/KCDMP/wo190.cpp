@@ -14,6 +14,7 @@
 #include "log.h"
 #include "motion.h"
 #include "npc_drive.h"
+#include "npc_scan.h"
 
 #include <windows.h>
 #include <algorithm>
@@ -45,6 +46,7 @@ constexpr unsigned kLogFirst = 30;
 // ---- switches (the agent pushes them, op 51) ----------------------------------------------------------------------------------
 std::atomic<uint8_t> g_mode{static_cast<uint8_t>(Mode::Auto)};   // mp_anim_trace on -> On; mp_anim_scope_log auto (default) -> Auto; off -> Off
 std::atomic<bool> g_idleWatch{true}, g_takeover{true}, g_requeueGate{true}, g_gaitHold{true};
+bool g_envTrace = false;   // WO-201 follow-up (research): KCDMP_ANIM_TRACE=on keeps the full trace on whatever the agent says
 
 std::atomic<uint32_t> c_lines{0}, c_linesDropped{0}, c_bodyReads{0}, c_readFail{0}, c_idleRequeues{0}, c_idlePulses{0}, c_idleFail{0},
     c_emptyGaps{0}, c_weaponAsks{0}, c_clinchAsks{0}, c_reqDeduped{0}, c_reqLimited{0}, c_evidence{0};
@@ -75,6 +77,8 @@ struct BodyTrace {
     double probeAt = 0;
     float hystCls = -1;
     bool evEmptyArmed = false;
+    // WO-201 follow-up (mp_anim_trace on): the per-second locomotion snapshot
+    double locoAt = 0; float locoPos[3]{}; bool locoHave = false;
 };
 std::unordered_map<uint32_t, BodyTrace> g_bodies;   // main thread
 MinuteCap g_minute;
@@ -193,6 +197,63 @@ void evidence_probe(const Cand& c, BodyTrace& bt, double now) {
              emptyFor < 0 ? -1.0 : emptyFor * 1000.0, c.speed, bt.hystCls, kEvidenceHoldS, k);
 }
 
+// WO-201 follow-up (mp_anim_trace on, read-only): once a second per traced body -- its full-body action, its ground speed over that
+// second, the animated character's desired motion parameters and the requested velocity (WO190-LOCO)
+void loco_line(const Cand& c, BodyTrace& bt, double now) {
+    if (now - bt.locoAt < 1.0) return;
+    void* e = engine::entity_by_id(c.eid);
+    float p[3]{};
+    if (!e || !engine::entity_world_pos(e, p)) return;
+    const double dt = now - bt.locoAt;
+    const float sp = bt.locoHave && dt < 2.0 ? static_cast<float>(std::sqrt((p[0] - bt.locoPos[0]) * (p[0] - bt.locoPos[0]) + (p[1] - bt.locoPos[1]) * (p[1] - bt.locoPos[1])) / dt) : -1.0f;
+    bt.locoAt = now; bt.locoHave = true;
+    std::memcpy(bt.locoPos, p, sizeof p);
+    wo187::ScopeInfo sc[1];
+    const int n = wo187::read_all_scopes(c.eid, sc, 1);
+    wo187::MotionParams mp;
+    const bool ok = wo187::motion_params(c.eid, &mp);
+    char m[160] = "-";
+    if (ok) {
+        size_t o = 0;
+        for (int i = 0; i < mp.count && o + 16 < sizeof m; ++i) o += std::snprintf(m + o, sizeof m - o, "%s%u:%.2f", i ? "," : "", mp.id[i], mp.value[i]);
+        if (!mp.count) std::snprintf(m, sizeof m, "none");
+    }
+    char sp4[96] = "";   // the skeleton's own desired parameters: travel speed, turn speed, travel angle, turn angle
+    {
+        size_t o = 0;
+        const uint32_t ids[4] = {0, 1, 2, 4};
+        for (uint32_t id : ids) { float v = 0; if (motion::skel_desired_param(e, id, &v) && o + 14 < sizeof sp4) o += std::snprintf(sp4 + o, sizeof sp4 - o, "%s%u:%.2f", o ? "," : "", id, v); }
+        if (!o) o = std::snprintf(sp4, sizeof sp4, "none");
+        float ps = -1;
+        if (motion::skel_layer_scale(e, 0, &ps) && o + 12 < sizeof sp4) std::snprintf(sp4 + o, sizeof sp4 - o, " ps0=%.2f", ps);
+        float pseudo = -1; int kind = -1, cnt = -1;
+        const size_t o2 = std::strlen(sp4);
+        if (motion::pseudo_speed(c.eid, &pseudo, &kind, &cnt) && o2 + 32 < sizeof sp4) std::snprintf(sp4 + o2, sizeof sp4 - o2, " pseudo=%.2f kind=%d n=%d", pseudo, kind, cnt);
+    }
+    if (!g_minute.take(now, kTraceLinesPerMin)) return;
+    logf("WO190-LOCO body=%s role=%s full=%s:%u ground=%.2f wspd=%.2f mp=%s sk=%s rv=%.2f,%.2f dist=%.0f", name_of(c.eid), role_name(c.role),
+         n > 0 && !sc[0].empty ? sc[0].action : "none", n > 0 && !sc[0].empty ? sc[0].frag : 0u, sp, c.speed, m, sp4, ok ? mp.reqVel[0] : 0.0f,
+         ok ? mp.reqVel[1] : 0.0f, c.dist);
+}
+
+// WO-201 follow-up (research): KCDMP_FIFO_NAMES=a,b in the game's environment -- those bodies' layer-0 animation FIFO, every read for
+// 2 s out of every 15 (WO190-FIFO)
+void fifo_lines(const Cand& c, double now) {
+    static std::string s_names; static bool s_read = false;
+    if (!s_read) { s_read = true; char v[256]{}; size_t got = 0; if (getenv_s(&got, v, sizeof v, "KCDMP_FIFO_NAMES") == 0 && got) s_names = std::string(",") + v + ","; }
+    static int s_all = -1;
+    if (s_all < 0) { char v[4]{}; size_t got = 0; s_all = (getenv_s(&got, v, sizeof v, "KCDMP_FIFO_ALL") == 0 && got && v[0] == '1') ? 1 : 0; }
+    if (s_names.empty() || (!s_all && std::fmod(now, 15.0) > 2.0)) return;
+    const std::string key = std::string(",") + name_of(c.eid) + ",";
+    if (s_names.find(key) == std::string::npos) return;
+    void* e = engine::entity_by_id(c.eid);
+    float p[3]{};
+    if (!e || !engine::entity_world_pos(e, p)) return;
+    char t[1800];
+    if (motion::skel_fifo_text(e, 0, t, sizeof t) < 0) return;
+    logf("WO190-FIFO body=%s role=%s t=%.4f pos=%.3f,%.3f %s", name_of(c.eid), role_name(c.role), now, p[0], p[1], t);
+}
+
 void gather(std::vector<Cand>& out, double now) {
     out.clear();
     void* pe = engine::entity_by_id(kPlayerEntity);
@@ -211,6 +272,21 @@ void gather(std::vector<Cand>& out, double now) {
         const Role r = motion::is_avatar_eid(bb[i].eid) ? Role::Figure : Role::Copy;
         if (r == Role::Copy && d > kNearM) continue;
         out.push_back({bb[i].eid, r, d < 0 ? 999.0f : d, bb[i].speedMps, bb[i].streamAgeS, body_fighting(bb[i].eid, r)});
+    }
+    // WO-201 follow-up: with the full trace on, the game's own NPCs near the player too (role npc) -- the reference a copy is compared with
+    if (havePp && mode_from_byte(g_mode.load()) == Mode::On) {
+        struct Ctx { std::vector<Cand>* out; const float* pp; };
+        Ctx cx{&out, pp};
+        const npcscan::Anchor a{pp[0], pp[1], pp[2]};
+        uint32_t walked = 0; uint8_t refuse = 0;
+        npcscan::for_each_in_radius(&a, 1, kNearM, [](void* e, const char*, float x, float y, float z, bool isHorse, void* c) {
+            if (isHorse) return;
+            auto* k = static_cast<Ctx*>(c);
+            const uint32_t eid = engine::entity_id(e);
+            for (const Cand& q : *k->out) if (q.eid == eid) return;
+            const float d = std::sqrt((x - k->pp[0]) * (x - k->pp[0]) + (y - k->pp[1]) * (y - k->pp[1]) + (z - k->pp[2]) * (z - k->pp[2]));
+            k->out->push_back({eid, Role::Npc, d, 0.0f, -1.0, false});
+        }, &cx, &walked, &refuse);
     }
     std::sort(out.begin() + (out.empty() ? 0 : 1), out.end(), [](const Cand& a, const Cand& b) {
         if (a.role != b.role) return a.role == Role::Figure;   // figures first
@@ -233,6 +309,16 @@ void note_requeue(bool deduped, bool limited) {
 }
 
 void tick() {
+    static bool s_env = false;   // WO-201 follow-up (research): KCDMP_ANIM_TRACE=on in the game's environment starts the full trace (no agent needed)
+    if (!s_env) {
+        s_env = true;
+        char v[8]{}; size_t got = 0;
+        if (getenv_s(&got, v, sizeof v, "KCDMP_ANIM_TRACE") == 0 && got && std::strcmp(v, "on") == 0) {
+            g_mode = static_cast<uint8_t>(Mode::On);
+            g_envTrace = true;
+            logf("WO190-CONFIG trace on (KCDMP_ANIM_TRACE in the environment)");
+        }
+    }
     const Mode mode = mode_from_byte(g_mode.load());
     const bool watch = g_idleWatch.load();
     if (mode == Mode::Off && !watch) return;
@@ -256,6 +342,8 @@ void tick() {
         if (now - bt.readAt < period) continue;
         bt.readAt = now;
         trace_body(c, bt, now, mode, traced);
+        if (mode == Mode::On) loco_line(c, bt, now);
+        if (mode == Mode::On) fifo_lines(c, now);
         if (watched) idle_watch(c, bt, now);
     }
     if (now - g_lastPrune > 5.0) {
@@ -278,7 +366,7 @@ uint8_t handle(uint8_t op, const uint8_t* body, size_t len, uint8_t* out, size_t
             // [op][mode][idleWatch][takeover][requeueGate][gaitHold] (255 = leave as is)
             constexpr int kN = 5;
             if (len < 1 || len > 1 + kN || cap < kN) return wo163::kRBadRequest;
-            if (len >= 2 && body[1] != 255) {
+            if (len >= 2 && body[1] != 255 && !g_envTrace) {
                 const Mode m = mode_from_byte(body[1]);
                 if (g_mode.exchange(static_cast<uint8_t>(m)) != static_cast<uint8_t>(m)) logf("WO190-CONFIG trace %s", mode_name(m));
             }

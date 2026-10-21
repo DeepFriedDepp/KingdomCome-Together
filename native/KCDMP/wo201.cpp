@@ -307,6 +307,11 @@ uint8_t handle(uint8_t op, const uint8_t* body, size_t len, uint8_t* out, size_t
         case kOpStatus: {
             char t[1400];
             int n = status_text(t, sizeof t);
+            if (n > 0 && static_cast<size_t>(n) + 2 < sizeof t) {   // the B10 / B9 follow-ups
+                t[n++] = ' ';
+                const int m6 = motion::noturn_status(t + n, static_cast<int>(sizeof t) - n);
+                if (m6 > 0) n += m6 < static_cast<int>(sizeof t) - n ? m6 : static_cast<int>(sizeof t) - n - 1;
+            }
             if (n > 0 && static_cast<size_t>(n) + 2 < sizeof t) {
                 t[n++] = ' ';
                 const int m2 = wo201near::status_text(t + n, static_cast<int>(sizeof t) - n);
@@ -339,6 +344,7 @@ uint8_t handle(uint8_t op, const uint8_t* body, size_t len, uint8_t* out, size_t
             if (body[3] != 255) g_bits = body[3];
             npcdrive::set_walk_from_host((g_bits.load() & 2) != 0);   // B10
             wo143::set_tick_hz((g_bits.load() & 4) != 0 ? 10 : 0);   // B9: the one-shot tick cap
+            motion::set_copy_no_idle_turn((g_bits.load() & 8) != 0);   // B9 follow-up: no idle turn of a standing copy
             static int last = -1;
             const int key = (g_role.load() << 16) | (g_joined.load() << 8) | g_bits.load();
             if (key != last) {

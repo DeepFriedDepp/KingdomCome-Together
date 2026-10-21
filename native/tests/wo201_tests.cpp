@@ -113,6 +113,24 @@ int wo201_tests(int* passed) {
         WCHECK(is_interaction_parent("interactiontrigger_monologonplayer_uhli") && is_interaction_parent("InteractionTrigger_X") && !is_interaction_parent("tour_barks"), "the interaction names");
         WCHECK(std::strcmp(verdict_name(Verdict::JoinerStoryBark), "joiner-story") == 0, "its verdict word");
     }
+    // ---- B9 follow-up: a standing copy never turns in place by itself ----
+    {
+        // the woodcutter's block as read live: TurnAngle (4) 1.85 rad alone
+        uint8_t blk[kParamBlockBytes]{};
+        const float ta = 1.85f; std::memcpy(blk, &ta, 4); blk[kParamIds] = 4; blk[kParamCount] = 1;
+        int at = -1;
+        WCHECK(turn_param_at(blk, sizeof blk, 4, &at) && at == 0, "TurnAngle found at index 0");
+        // a transition's block: 4, 0 (TravelSpeed), 2 (TravelAngle)
+        uint8_t blk3[kParamBlockBytes]{};
+        blk3[kParamIds] = 0; blk3[kParamIds + 1] = 2; blk3[kParamIds + 2] = 4; blk3[kParamCount] = 3;
+        WCHECK(turn_param_at(blk3, sizeof blk3, 4, &at) && at == 2, "TurnAngle third of three: index 2");
+        uint8_t none[kParamBlockBytes]{};
+        WCHECK(!turn_param_at(none, sizeof none, 4, &at), "an empty block: nothing to clear");
+        uint8_t bad[kParamBlockBytes]{}; bad[kParamCount] = 7; bad[kParamIds] = 4;
+        WCHECK(!turn_param_at(bad, sizeof bad, 4, &at), "a count over six reads malformed: refused");
+        WCHECK(!turn_param_at(blk, 0x1F, 4, &at) && !turn_param_at(nullptr, 0x20, 4, &at), "a short or missing block: refused");
+        WCHECK(turn_clear_wanted(0.0f) && !turn_clear_wanted(1.0f) && !turn_clear_wanted(2.0f), "only a standing copy (class 0)");
+    }
     *passed = g_pass;
     return g_fail;
 }

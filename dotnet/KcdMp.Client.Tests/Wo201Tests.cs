@@ -15,7 +15,7 @@ public class Wo201Tests
     [Fact]
     public void Switches_EighteenNames_AllOnButTheSaveTouchingOne()
     {
-        Assert.Equal(22, Wo201Rules.SwitchNames.Length);
+        Assert.Equal(23, Wo201Rules.SwitchNames.Length);
         foreach (var n in Wo201Rules.SwitchNames)
         {
             Assert.Equal(n != "figure_is_player" || Wo201Rules.Dude2DecodePassed, Wo201Rules.DefaultOn(n));
@@ -25,6 +25,17 @@ public class Wo201Tests
         }
         Assert.False(Wo201Rules.TryParseCfg("inv_screen_guard=maybe", out _, out _));
         Assert.False(Wo201Rules.TryParseCfg("nope=on", out _, out _));
+    }
+
+    [Fact]
+    public void B9FollowUp_ItsSwitchShipsOn_AndReachesTheDll()
+    {
+        Assert.Contains("copy_no_idle_turn", Wo201Rules.SwitchNames);
+        Assert.True(Wo201Rules.DefaultOn("copy_no_idle_turn"));
+        Assert.Equal(15, Wo201Rules.ConfigBits(_ => true));
+        Assert.Equal(0, Wo201Rules.ConfigBits(_ => false));
+        Assert.Equal(15 & ~8, Wo201Rules.ConfigBits(n => n != "copy_no_idle_turn"));
+        Assert.Equal(7, Wo201Rules.ConfigBits(n => n is "joiner_scene_noposition" or "walk_from_host" or "oneshot_tick_cap"));
     }
 
     [Fact]

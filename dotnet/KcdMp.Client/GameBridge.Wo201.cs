@@ -91,13 +91,13 @@ public partial class GameBridge
         }
     }
 
-    /// <summary>The DLL's op 77: [role][joined][bits] -- bits 1 joiner_scene_noposition.</summary>
+    /// <summary>The DLL's op 77: [role][joined][bits] -- bits 1 joiner_scene_noposition, 2 walk_from_host, 4 oneshot_tick_cap, 8 copy_no_idle_turn.</summary>
     private async Task Wo201PushConfigAsync()
     {
         try
         {
             byte role = _w201Connected ? Wo200Role() : Wo200Rules.RoleNone;
-            byte bits = (byte)((W201("joiner_scene_noposition") ? 1 : 0) | (W201("walk_from_host") ? 2 : 0) | (W201("oneshot_tick_cap") ? 4 : 0));
+            byte bits = Wo201Rules.ConfigBits(W201);
             await _combat.Wo163Async(KcdMp.Wire.Protocol.Wo201OpConfig, [role, (byte)(W137Joiner ? 1 : 0), bits]);
         }
         catch (Exception ex) { Console.WriteLine($"MP-W201 config not pushed ({ex.GetType().Name})"); }

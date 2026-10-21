@@ -76,6 +76,10 @@ struct ScopeInfo { bool ok = false; bool empty = true; int index = 0; char name[
 int read_all_scopes(uint32_t eid, ScopeInfo* out, int max);
 // WO-190 0.1 (main thread, read-only): the body's Mannequin tag state (its action controller's context +0x10, WO-100's read), n <= 20 bytes.
 bool tag_state(uint32_t eid, uint8_t* out, size_t n);
+// WO-201 follow-up (research, main thread, read-only): the animated character's desired motion parameters (id 0 travel speed, 2 travel
+// angle, 4 turn angle, 6 stop leg: CryAnimation's EMotionParamID) and the actor's requested velocity.
+struct MotionParams { int count = 0; uint8_t id[6]{}; float value[6]{}; float reqVel[2]{}; };
+bool motion_params(uint32_t eid, MotionParams* out);
 // The duel trace: the combat actor's current director action (its RTTI name without the namespace), "" unreadable.
 std::string director_action(void* ca);
 // WO-197 B0 (main thread, read-only): one scope of the combat director (C_CombatActorDirector at combat actor +0x2E0; its actions are a vector

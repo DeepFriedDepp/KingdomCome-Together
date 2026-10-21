@@ -17,13 +17,18 @@ public static class Wo201Rules
         "inv_screen_guard", "joiner_scene_noposition", "scene_queue_stale", "twins_grace", "monologue_rescue_exempt", "joiner_no_story_barks",
         "scene_toast_truth", "copy_combat_from_host", "copy_look_from_host", "walk_from_host", "figure_ranged", "clock_catchup",
         "host_load_toast", "mark_note", "speech_share", "dialogue_vote", "both_are_henry", "figure_is_player",
-        "nearest_player_triggers", "joiner_receive_only", "knockout_engine", "oneshot_tick_cap",
+        "nearest_player_triggers", "joiner_receive_only", "knockout_engine", "oneshot_tick_cap", "copy_no_idle_turn",
     };
 
     /// <summary>Every mechanism ships on. V.3 figure_is_player reaches a save: on only while its save-decode check has passed
     /// (Dude2DecodePassed, set from the release's own check -- docs/WO-201-findings.md).</summary>
     public static bool DefaultOn(string name) => name != "figure_is_player" || Dude2DecodePassed;
     public const bool Dude2DecodePassed = false;
+
+    /// <summary>The DLL's op 77 bits byte: 1 joiner_scene_noposition, 2 walk_from_host, 4 oneshot_tick_cap, 8 copy_no_idle_turn (the B9
+    /// follow-up: a standing copy never turns in place by itself).</summary>
+    public static byte ConfigBits(Func<string, bool> on) => (byte)((on("joiner_scene_noposition") ? 1 : 0) | (on("walk_from_host") ? 2 : 0)
+        | (on("oneshot_tick_cap") ? 4 : 0) | (on("copy_no_idle_turn") ? 8 : 0));
 
     // ---- B11: the crossbow and bow steps shown on the figure ----
     public static string RangedPhaseName(byte p) => p switch
