@@ -1682,7 +1682,7 @@ Semine's departure in "The Jaunt", the host near Semine's yard in the morning; b
      `mp_joiner_receive_only`, `mp_knockout_engine`, `mp_oneshot_tick_cap`; `mp_figure_is_player` is **off** (see the findings);
      `mp_w201_status` prints them all.
 
-## WO-202 — crashes, quests that fail on their own, desync (the next build)
+## 0.62.0 — crashes, quests that fail on their own, desync (WO-202)
 
 This build answers the two sessions on 0.61.9: the crashes, the hired hand's quest, the "dead but walking away" bandits, the fights the
 joiner saw without swings, and the rest. Evidence: `docs/WO-202-findings.md`. **At every difference press `.` (the period key) — it
