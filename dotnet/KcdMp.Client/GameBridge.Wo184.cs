@@ -476,6 +476,7 @@ public partial class GameBridge
             res = W184Take.Failed;
         }
         // The QuickSave is a copy of the host's world in this player's playline: out at once.
+        Wo202NoteMovedOut(path);   // WO-202 VI: the save check must not read a file this pipeline moves
         bool gone = _henry.MoveOut(path, "a snapshot's QuickSave (the host's world)");
         _ = Task.Run(async () =>
         {
@@ -716,8 +717,19 @@ public partial class GameBridge
         else if (now - _w184RewindSinceMs > 10 * 60_000 && _joinedWorld && _jj is null)
         {
             _w184RewindSinceMs = 0;
-            Console.WriteLine("WO184-FLAG the host's reload never came back in 10 min -- this game leaves the host's world");
-            _ = LeaveSharedWorldAsync("host-reload-timeout", "Your host's reload never finished.");
+            if (W202("rejoin_recover"))
+            {
+                // WO-202 III.3: never home without a word -- the rejoin is tried (and, after three failures, the player asked)
+                Console.WriteLine("WO184-FLAG the host's reload never came back in 10 min -- asking the host for its world again (WO-202 rejoin_recover)");
+                _rewinding = false;
+                if (!_rejoinPending) { _rejoinPending = true; _rejoinSinceUtc = DateTime.UtcNow; }
+                _autoNextUtc = DateTime.UtcNow;
+            }
+            else
+            {
+                Console.WriteLine("WO184-FLAG the host's reload never came back in 10 min -- this game leaves the host's world");
+                _ = LeaveSharedWorldAsync("host-reload-timeout", "Your host's reload never finished.");
+            }
         }
     }
 

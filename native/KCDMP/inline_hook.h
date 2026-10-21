@@ -64,4 +64,18 @@ bool install_gate4(void* target, const uint8_t* expect, size_t len, GateCallback
 // *original is written before the patch goes in, so the detour never sees it unset.
 bool install_detour(void* target, const uint8_t* expect, size_t len, void* detour, void** original, const char** why);
 
+// WO-202 I.1: every hook this file placed, for the crash report ("which mod hooks were on the stack"): the patched function, the
+// page holding its trampoline (at +0) and thunk (at +kThunkAt), and the callback or detour it runs. Lock-free reads.
+constexpr size_t kHookPageBytes = 4096, kThunkAt = 128;
+struct HookRec {
+    uintptr_t target = 0;   // the engine function whose first bytes jump to us
+    uintptr_t page = 0;     // trampoline at page+0, thunk at page+kThunkAt (a detour has no thunk)
+    uintptr_t fn = 0;       // the callback (thunk hooks) or the detour
+    bool detour = false;
+};
+int hook_count();
+bool hook_at(int i, HookRec* out);
+// The hook whose page holds `addr` (its trampoline or thunk), or -1.
+int hook_of_page(uintptr_t addr);
+
 } // namespace kcdmp::inlinehook

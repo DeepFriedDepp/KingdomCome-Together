@@ -59,6 +59,8 @@
 #include "pe_exports.h"
 #include "log.h"
 #include "wo167_rules.h"
+#include "wo202.h"
+#include "wo202_rules.h"
 
 #include <windows.h>
 #include <psapi.h>
@@ -943,6 +945,7 @@ SwingResult ghost_swing(uint32_t entityId, const char* fragSpec) {
     InterlockedIncrement(reinterpret_cast<volatile LONG*>(reinterpret_cast<char*>(anim) + 0x58));
     InterlockedIncrement(reinterpret_cast<volatile LONG*>(reinterpret_cast<char*>(anim) + 0x58));
     void* sp = anim;
+    swing_lower_previous(entityId);   // WO-202 IV.1: the copy's own last swing steps down the way the engine's Withdraw does
     if (!call_queue_action(reinterpret_cast<QueueActionFn>(queueFn), manager, &sp, -1.0f)) {
         logf("SWING: entity=%u -- QueueAction FAULTED", entityId);
         call_release(anim);   // still drop our ref; the object outlives the fault path
@@ -954,6 +957,7 @@ SwingResult ghost_swing(uint32_t entityId, const char* fragSpec) {
     // WO-167 C3: our reference goes to the swing watch (dropped there once the action was installed, or never was); with the watch
     // off it is dropped here as before. refc includes it, so the controller's view is refc-1.
     const bool watched = swing_watch_take(entityId, anim);
+    swing_keep_last(entityId, anim);   // WO-202 IV.1: one reference of ours until the next swing (or kLastSwingKeepS)
     if (!watched) call_release(anim);
     logf("SWING: entity=%u queued fragment %d status=%u ref(controller)=%u%s spec=\"%s\"",
          entityId, out.fragmentID, status, refc ? refc - 1 : 0, watched ? " watched" : "", fragSpec);
@@ -1028,7 +1032,68 @@ bool swing_watch_take(uint32_t eid, void* anim) {
     return true;
 }
 
+// ---- WO-202 IV.1 anim_shown: each copy's last swing, one reference of ours, so the next swing can step it down ----
+namespace {
+struct LastSwing { void* anim = nullptr; double at = 0; };
+std::unordered_map<uint32_t, LastSwing> g_lastSwing;   // main thread
+std::atomic<uint32_t> c_lowered{0}, c_lowerSkipped{0}, c_lowerFault{0};
+
+// A copy that is gone (a load, a despawn) may have taken its animation controller with it: our reference is dropped without the
+// action's own release then -- a few hundred bytes left behind, never a destroy path run against a controller that no longer exists.
+bool swing_owner_alive(uint32_t eid) { return eid && engine::entity_by_id(eid) != nullptr; }
+
+bool act_write_i32(void* anim, size_t off, int32_t v) {
+    KCDMP_FAULT_READ(site, "wo202::swing_priority_write");   // our own write of game memory (Kind::Read covers both)
+    return fault::guarded(site, [&] { *reinterpret_cast<int32_t*>(reinterpret_cast<char*>(anim) + off) = v; });
+}
+} // namespace
+
+void swing_keep_last(uint32_t eid, void* anim) {
+    if (!anim || !kcdmp::wo202::on(kcdmp::wo202rules::kBitAnimShown)) return;
+    InterlockedIncrement(reinterpret_cast<volatile LONG*>(reinterpret_cast<char*>(anim) + 0x58));
+    LastSwing& l = g_lastSwing[eid];
+    if (l.anim && swing_owner_alive(eid)) call_release(l.anim);
+    l.anim = anim;
+    l.at = w_now();
+}
+
+void swing_lower_previous(uint32_t eid) {
+    auto it = g_lastSwing.find(eid);
+    if (it == g_lastSwing.end()) return;
+    void* prev = it->second.anim;
+    g_lastSwing.erase(it);
+    if (!prev) return;
+    if (!swing_owner_alive(eid)) { c_lowerSkipped.fetch_add(1); return; }
+    uint32_t st = 0, pr = 0;
+    const bool on = kcdmp::wo202::on(kcdmp::wo202rules::kBitAnimShown);
+    if (read_u32(prev, kcdmp::wo202rules::kActStatusOff, &st) && read_u32(prev, kcdmp::wo202rules::kActPriorityOff, &pr) &&
+        kcdmp::wo202rules::lower_previous(on, st, static_cast<int32_t>(pr))) {
+        if (act_write_i32(prev, kcdmp::wo202rules::kActPriorityOff, kcdmp::wo202rules::kWithdrawPriority)) {
+            const uint32_t n = c_lowered.fetch_add(1) + 1;
+            if (n <= 20 || n % 50 == 0)
+                logf("WO202-ANIM entity=%u the copy's previous swing (status %u) stepped down %d -> %d -- the next swing installs now, as the "
+                     "host's NPC chains its attacks [n=%u]", eid, st, kcdmp::wo202rules::kSwingPriority, kcdmp::wo202rules::kWithdrawPriority, n);
+        } else c_lowerFault.fetch_add(1);
+    } else c_lowerSkipped.fetch_add(1);
+    call_release(prev);
+}
+
+int anim_shown_status(char* out, int n) {
+    return std::snprintf(out, static_cast<size_t>(n), "anim_shown lowered=%u skipped=%u faults=%u held=%zu", c_lowered.load(), c_lowerSkipped.load(),
+                         c_lowerFault.load(), g_lastSwing.size());
+}
+
 void swing_watch_tick() {
+    if (!g_lastSwing.empty()) {   // WO-202 IV.1: a last swing is kept kLastSwingKeepS at most
+        const double t = w_now();
+        for (auto it = g_lastSwing.begin(); it != g_lastSwing.end();) {
+            if (t - it->second.at > kcdmp::wo202rules::kLastSwingKeepS) {
+                if (it->second.anim && swing_owner_alive(it->first)) call_release(it->second.anim);
+                it = g_lastSwing.erase(it);
+            }
+            else ++it;
+        }
+    }
     if (g_watches.empty()) return;
     const double now = w_now();
     for (size_t i = 0; i < g_watches.size();) {

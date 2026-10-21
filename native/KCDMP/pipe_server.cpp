@@ -1,6 +1,7 @@
 ﻿// Copyright (C) 2026 the Kingdom Come: Together contributors (AUTHORS). SPDX-License-Identifier: GPL-3.0-only
 // GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
+#include "crash_capture.h"
 #include "pipe_server.h"
 #include "mannequin_read.h"
 #include "local_state.h"
@@ -582,6 +583,7 @@ void serve(HANDLE h) {
         if (len && !read_all(h, body, len)) break;
 
         const uint8_t seq = g_seq++;
+        kcdmp::crash::note_pipe(type, len ? body[0] : 0, len);   // WO-202 I.1: the crash report's last requests
 
         switch (type) {
             case kPing:

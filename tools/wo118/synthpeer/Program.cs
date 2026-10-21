@@ -75,6 +75,7 @@ static class P
         public double LastSent = -1e9, LastSentX, LastSentY, LastSentZ;
         public bool SentDead; public float SentHp = 100f;   // WO-131
         public bool SentKo;   // WO-173
+        public bool SentDrawn;   // WO-202 IV.2
         public double T0 = double.NegativeInfinity, T1 = double.PositiveInfinity;   // WO-167: `window` -- streamed only inside [T0, T1)
         public abstract (float x, float y, float z, float yaw) At(double t);
     }
@@ -276,6 +277,7 @@ static class P
         uint joinTok = 0;
         var ncombats = new List<NCombat>();   // WO-132
         var dies = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);   // WO-131
+        var drawAts = new Dictionary<string, List<(double T, bool Drawn)>>(StringComparer.OrdinalIgnoreCase);   // WO-202 IV.2
         var kos = new Dictionary<string, List<(double T0, double T1)>>(StringComparer.OrdinalIgnoreCase);   // WO-173
         var hps = new Dictionary<string, List<(double T, float Hp)>>(StringComparer.OrdinalIgnoreCase);   // WO-131
         var fights = new List<(double T0, double T1, string Npc, double Every, float Hp, float St)>();       // WO-165 avatarfight
@@ -372,6 +374,10 @@ static class P
                     break;
                 case "saved": saves.Add((double.Parse(f[1], CultureInfo.InvariantCulture), byte.Parse(f[2]), byte.Parse(f[3]), ushort.Parse(f[4]))); break;
                 case "die": dies[f[2]] = double.Parse(f[1], CultureInfo.InvariantCulture); break;
+                case "drawat":   // WO-202 IV.2: drawat <t> <npc> <0|1> -- from t that mover streams its weapon drawn (1) or sheathed (0)
+                    if (!drawAts.TryGetValue(f[2], out var dl)) drawAts[f[2]] = dl = new();
+                    dl.Add((double.Parse(f[1], CultureInfo.InvariantCulture), f[3] == "1"));
+                    break;
                 case "ko":   // WO-173: ko <t0> <t1> <npc> -- that mover streams the knocked-out bit (0x02) between t0 and t1
                     if (!kos.TryGetValue(f[3], out var kl)) kos[f[3]] = kl = new();
                     kl.Add((double.Parse(f[1], CultureInfo.InvariantCulture), double.Parse(f[2], CultureInfo.InvariantCulture)));
@@ -410,6 +416,11 @@ static class P
                     joinMsgs.Add((double.Parse(f[1], CultureInfo.InvariantCulture),
                                   new LootMsg(byte.Parse(f[2], CultureInfo.InvariantCulture), ++joinTok, string.Join(' ', f.Skip(3))).BuildUp(Protocol.W164Up, 1),
                                   $"W164 kind={f[2]} {string.Join(' ', f.Skip(3))}"));
+                    break;
+                case "body":   // WO-202 C3/C4: body <t> <npc> <items|-> -- the host's body list (a WO-134 BodyState "update", the host looted it)
+                    joinMsgs.Add((double.Parse(f[1], CultureInfo.InvariantCulture),
+                                  new LootMsg(Protocol.LootHostBodyState, 0, $"{f[2]} update 1 1 1 {(f.Length > 3 ? f[3] : "-")}").BuildUp(Protocol.LootHostUp, 1),
+                                  $"BODY {f[2]} {(f.Length > 3 ? f[3] : "-")}"));
                     break;
                 case "window":   // WO-167: a mover streamed only inside [t0, t1)
                     foreach (var mw in movers.Where(mv => mv.Name == f[1])) { mw.T0 = double.Parse(f[2], CultureInfo.InvariantCulture); mw.T1 = double.Parse(f[3], CultureInfo.InvariantCulture); }
@@ -712,12 +723,16 @@ static class P
                     float hpNow = 100f;
                     if (hps.TryGetValue(m.Name, out var hpl)) foreach (var (ht, hv) in hpl) if (t >= ht) hpNow = hv;
                     bool koNow = kos.TryGetValue(m.Name, out var kwin) && kwin.Any(w => t >= w.T0 && t < w.T1);   // WO-173
-                    bool lifeChanged = deadNow != m.SentDead || Math.Abs(hpNow - m.SentHp) > 0.5f || koNow != m.SentKo;
+                    bool? drawnAt = null;   // WO-202 IV.2
+                    if (drawAts.TryGetValue(m.Name, out var dal)) foreach (var (dt, dv) in dal) if (t >= dt) drawnAt = dv;
+                    bool lifeChanged = deadNow != m.SentDead || Math.Abs(hpNow - m.SentHp) > 0.5f || koNow != m.SentKo || (drawnAt is { } dn0 && dn0 != m.SentDrawn);
                     if (!moved && !lifeChanged && now - m.LastSent < 2000) continue;
                     m.SentDead = deadNow; m.SentHp = hpNow; m.SentKo = koNow;
+                    if (drawnAt is { } dn1) m.SentDrawn = dn1;
                     m.LastSent = now; m.LastSentX = x; m.LastSentY = y; m.LastSentZ = z;
                     m.Seq++;
                     byte fl = m is Fight fm ? fm.FlagsAt(t) : m is Hold { Dead: true } ? Protocol.NpcStateFlagDead : m is Hold { Drawn: true } ? (byte)0x04 : (byte)0;
+                    if (drawnAt is { } dn2) fl = (byte)(dn2 ? (fl | 0x04) : (fl & ~0x04));   // WO-202 IV.2
                     if (deadNow) fl = Protocol.NpcStateFlagDead;
                     else if (koNow) fl |= 0x02;   // WO-173: the knocked-out bit
                     uint sms = senderClock == "tick" ? unchecked((uint)Environment.TickCount64)

@@ -12,6 +12,7 @@
 // audio-proxy getter (mov edx,3; call [rax+slot]) and PlayFile's slot (mov r8,[rcx+slot]; call r8); Speak's prologue is checked
 // against the hook-prologue registry before its detour goes in (lazily: the first poll with the switch on).   WO201-SPEECH.
 #include "wo201.h"
+#include "wo202_rules.h"
 #include "wo163.h"
 #include "anchors.h"
 #include "engine.h"
@@ -79,18 +80,16 @@ void* vslot(const void* obj, size_t off) {
     void* vt = nullptr; void* fn = nullptr;
     return obj && rd(obj, 0, &vt) && vt && rd(vt, static_cast<ptrdiff_t>(off), &fn) ? fn : nullptr;
 }
-bool ends_ogg(const char* s) {
-    const size_t n = std::strlen(s);
-    return n > 4 && (s[n - 4] == '.') && (s[n - 3] == 'o' || s[n - 3] == 'O') && (s[n - 2] == 'g' || s[n - 2] == 'G') && (s[n - 1] == 'g' || s[n - 1] == 'G');
-}
+// WO-202 V.2: the engine's own path form (no extension) -- wo202rules::is_voice_path
+bool voice_path(const char* s) { return wo202rules::is_voice_path(s); }
 
 // S_SpeakParams (DialogInstance's and wh_snd_playfile's builders agree): +0 the voice file, +8 the text, +0x20 the dialogue instance
-// (null for anything else), +0x2C the duration. A line whose +0 is not an .ogg path is not taken (a different layout fails closed).
+// (null for anything else), +0x2C the duration. A line whose +0 is not a voice path is not taken (a different layout fails closed).
 void speak_detour(void* self, void* params) {
     if (g_on.load()) {
         Line l{};
         const char* path = nullptr; const char* text = nullptr; void* dlg = nullptr; float dur = 0; void* actor = nullptr;
-        if (rd(params, 0, &path) && rd_str(path, l.path, sizeof l.path) && ends_ogg(l.path) && rd(self, g_actorOff, &actor) && actor &&
+        if (rd(params, 0, &path) && rd_str(path, l.path, sizeof l.path) && voice_path(l.path) && rd(self, g_actorOff, &actor) && actor &&
             rd(actor, g_actorEidOff, &l.eid) && l.eid) {
             if (rd(params, 8, &text)) rd_str(text, l.text, sizeof l.text);
             rd(params, 0x20, &dlg);
@@ -219,7 +218,7 @@ uint8_t handle(uint8_t op, const uint8_t* body, size_t len, uint8_t* out, size_t
             void* ne = wo141::x::entity_named(nm);
             eid = ne ? engine::entity_id(ne) : 0;
         }
-        if (!ends_ogg(path) || std::strstr(path, "..")) return wo163::kRBadRequest;   // a dialog voice file, nothing else
+        if (!voice_path(path)) return wo163::kRBadRequest;   // a dialog voice file, nothing else (WO-202: the engine's own path form)
         if (!g_proxySlot || !g_playSlot) return wo163::kRFailed;
         void* e = eid && eid != kPlayerEntity ? engine::entity_by_id(eid) : nullptr;
         if (!e) return wo163::kRNoActor;

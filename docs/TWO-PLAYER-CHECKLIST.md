@@ -1682,6 +1682,55 @@ Semine's departure in "The Jaunt", the host near Semine's yard in the morning; b
      `mp_joiner_receive_only`, `mp_knockout_engine`, `mp_oneshot_tick_cap`; `mp_figure_is_player` is **off** (see the findings);
      `mp_w201_status` prints them all.
 
+## WO-202 — crashes, quests that fail on their own, desync (the next build)
+
+This build answers the two sessions on 0.61.9: the crashes, the hired hand's quest, the "dead but walking away" bandits, the fights the
+joiner saw without swings, and the rest. Evidence: `docs/WO-202-findings.md`. **At every difference press `.` (the period key) — it
+marks the moment on both machines (a "Marked" toast on each) — or type `mark` and a few words in the console.**
+
+**Two things that are not bugs (please do not mark them):**
+* **"Teleported 7k meters"** (or 8.7k) when you close the inventory or the map is the game's own warning: the camera jumps to the
+  preview stage several kilometres away and back.
+* **Flying in (the Modding Tools' fly mode) is not a fair test of combat.** Fights you fly into break worst (T-poses, people out of
+  place). Walk or ride into fights you want to judge; if you did fly in, say so in the mark's note.
+
+**If the game crashes:** the next log bundle carries the crash on its own (a `kcdmp-crashes` folder beside the game, with a minidump and
+the mod's last steps; the bundle's `BRIEFING.md` lists it first). Just send the bundle.
+
+**Tester script** (one session, about an hour and a half: from Sir Semine's camp before the camp fight, the host near the camp;
+both of you on this build; the joiner joins there)
+
+411. **The camp fight.** *Both:* fight the camp together. Mark at every enemy swing the joiner sees without its swing animation (a blow
+     that "comes from nowhere"), and at every enemy whose weapon pops into its hand instead of being drawn.
+412. **The hired hand, with a rejoin in the middle.** *Host:* talk to Semine until he sends you after the hired hand. *Joiner:* leave the
+     game and join again while the hand runs (the host's world is held only a second or two now). *Both:* chase him at once and catch
+     him. Mark if he stops and never moves again, or the quest fails while you chase him. (Waiting more than about six minutes fails
+     it in the game itself.)
+413. **A cutscene.** *Both:* watch the next story cutscene together. Mark at every jump back, or a line cut off; one or two small jumps
+     forward are allowed.
+414. **A conversation close by, then far, and a vote.** *Host:* talk to someone; *Joiner:* stand within 8 m (you hear it and see its
+     subtitles), then over 20 m for the next one (you hear nothing). Then, in a conversation with choices, the one not talking votes
+     (F2 / F4 / F5 / F6). Mark if the joiner hears nothing close by, or something far away.
+415. **A key and its chest.** *Host:* take a key from a body or a chest (or the joiner does). *Both:* the other player has that key too
+     ("Your partner found a key -- you have it too."). *Joiner:* open the chest it belongs to with it. *Both:* the chest is unlocked
+     on both screens; what is inside is shared (one of you takes it). Then the host opens another locked chest: it is unlocked on the
+     joiner's screen too. Mark if a key or a lock differs between the screens.
+416. **A bandit camp, the joiner landing the killing blows, then looting together.** *Joiner:* finish every bandit yourself; *Host:*
+     watch. *Both:* every bandit the joiner kills falls on both screens within a second and can be looted on both; none walks away or
+     stands in a dying pose. Then the host kills one: it drops on the joiner's screen at once and never stands up again. Mark at every
+     body that walks, stands, or cannot be looted.
+417. **A quicksave with 40 s of play, five times.** *Host:* quicksave (Home), keep playing for 40 s near the camp; five times. Mark if the
+     game stops, or the joiner sees "the game encountered an error the mod could not repair".
+418. **The joiner dying.** *Joiner:* let an enemy kill you; respawn. Mark if the game crashes or you are sent to the main menu.
+419. **The joiner straying to the leash.** *Joiner:* walk away from the host until the leash counts down; let it run out once. Mark if
+     the game crashes or you do not come back beside the host.
+420. **Changing clothes.** *Joiner:* change a piece of clothing in the inventory. *Host:* watch the joiner's figure. Mark if the figure
+     stands bare, even for a moment.
+421. **Switches (all on):** `mp_crash_capture`, `mp_near_safe`, `mp_join_no_npc_suspend`, `mp_join_short_hold`, `mp_death_engine_only`,
+     `mp_quest_fail_trace`, `mp_net_game_queue`, `mp_ping_network`, `mp_rejoin_recover`, `mp_anim_shown`, `mp_recoil_clinch`,
+     `mp_fight_pos_fresh`, `mp_desync_score`, `mp_cutscene_clock_v2`, `mp_keys_per_player`, `mp_outfit_atomic`, `mp_mark_key`;
+     `mp_w202_status` prints them all.
+
 ## Logs to send afterwards
 
 Both machines: Report a bug in the launcher. Since 0.48.9 it collects the current launch by default as a small file (or a few numbered

@@ -17,12 +17,11 @@
 > **New here? [Quick start](docs/QUICKSTART.md):** install, open the launcher, follow its
 > checklist, then Host or Join.
 
-Two or more people play the same open world together at once: you see each
-other as ghost NPCs (position, animation, nameplates, and each other's
-actual equipped armor *and* weapons — not one fixed costume), hear each
-other over proximity voice chat, can land shared damage on each other and on
-the world's NPCs, and can play a full relay-authoritative game of Farkle dice
-against each other from inside the game itself.
+**Kingdom Come: Together** takes the campaign, side quests, NPCs, combat and everything else that makes *Kingdom Come: Deliverance II* great, and lets you experience it all with your friends in **co-op**.
+
+Travel through Bohemia, fight bandits, play as a thief or a hero, push through side quests or the main campaign, and share the loot — **together**.
+
+A one-click installer, a launcher that sets everything up for you, and seamless Steam connection.
 
 > **Not affiliated with, endorsed by, or supported by Warhorse Studios or PLAION.**
 > Kingdom Come: Deliverance II, its assets and its content belong to Warhorse

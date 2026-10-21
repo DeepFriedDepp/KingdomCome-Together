@@ -302,8 +302,11 @@ end
 -- ===== Ping Display =====
 -- Called by C# every ~2s after Pong. Stored for render loop to draw via DrawLabel.
 -- Game.ShowNotification adds unwanted "@" decorators so we use DrawLabel instead.
-function KCD2MP_ShowPing(ms)
+function KCD2MP_ShowPing(ms, queueLagMs, inFront)
     KCD2MP.ping = ms
+    -- WO-202 III.2: an agent that takes the pong where it arrives says so with the queue's own lag and whether the game is in front
+    local wc = KCD2MP.w157 and KCD2MP.w157.conn
+    if wc then wc.agentLag = tonumber(queueLagMs); wc.inFront = tonumber(inFront) end
     if KCD2MP_W157ConnSample then pcall(KCD2MP_W157ConnSample, ms) end   -- WO-157 3.2
     local off = KCD2MP.clockOffsetMs
     KCD2MP.pingText = string.format("Ping: %d ms", ms)
@@ -4425,6 +4428,15 @@ function KCD2MP_OnChainDeadRestart(key)
     local deaths = 0
     for _ in pairs(KCD2MP._npcDeathSeen or {}) do deaths = deaths + 1 end
     KCD2MP._npcDeathSeen = {}
+    -- WO-202 II.3: the load put every body back as the save had it -- the deaths announced before it go too. Only "seen" was cleared, so
+    -- a body was first seen anew (alive, never "alive again") with its old announced mark: the same NPC killed again after a reload was
+    -- "already announced by lua" and its death never went out (the harness: the second kill of a villager after a load).
+    local marks = 0
+    for _ in pairs(KCD2MP._npcDeathAnnounced or {}) do marks = marks + 1 end
+    if marks > 0 then mp_log(string.format("NPC-DEATH reload: %d announced death mark(s) cleared with the load", marks)) end
+    KCD2MP._npcDeathAnnounced, KCD2MP._npcDeathRemote, KCD2MP._npcDeathDiverged = {}, {}, {}
+    -- WO-202 V.3: the keys the loaded save holds are not keys this player just took: the next read primes the counts again
+    if W202 and W202.keys then W202.keys.primed = false end
     local dwells = 0
     for name in pairs(KCD2MP._npcResumePending) do
         dwells = dwells + 1
@@ -5163,16 +5175,21 @@ function KCD2MP_JoinTry(joinId, partner, timeoutS)
     local clock0 = nil
     pcall(function() clock0 = Calendar.GetWorldTime() end)
     w.clockAtPause = clock0
-    -- the NPCs
-    KCD2MP_JoinScanNpcs(true)
+    -- the NPCs. WO-202 II.1 join_no_npc_suspend: none is suspended -- the field's hired hand (session B, the camp) never ran again
+    -- after one join's wh_ai_PauseNPC / wh_ai_ResumeNPC ("Node status inconsistency. Can't update suspended node!") and his quest
+    -- timer failed the quest 5 minutes later. The world is held by the clock (ratio 0, here) and the engine's own whole-world pause
+    -- (the agent's WO-151 join hold, the one a menu uses), which every NPC resumes from the game's own way.
+    w.noSuspend = KCD2MP_W202On and KCD2MP_W202On("join_no_npc_suspend") or false
+    if not w.noSuspend then KCD2MP_JoinScanNpcs(true) end
     -- the host's own Henry
     local holdOk, holdHow = KCD2MP_JoinHold(true)
     local names, k = {}, 0
     for n in pairs(w.npcs) do k = k + 1; if k <= 12 then names[#names + 1] = n end end
     table.sort(names)
-    mp_log(string.format("MP-JOIN pause join=%s partner=%s ratio_was=%s ratio_now=%s clock=%s npcs_paused=%d skipped=%d hold=%s(%s) ms=%.1f names=%s%s",
+    mp_log(string.format("MP-JOIN pause join=%s partner=%s ratio_was=%s ratio_now=%s clock=%s npcs_paused=%d skipped=%d hold=%s(%s) ms=%.1f names=%s%s%s",
         joinId, w.partner, tostring(w.ratioWas), tostring(ratioNow), tostring(clock0), w.npcN, w.npcSkipped,
-        tostring(holdHow), holdOk and "ok" or "FAILED", (os.clock() - t0) * 1000, table.concat(names, ","), k > 12 and ",..." or ""))
+        tostring(holdHow), holdOk and "ok" or "FAILED", (os.clock() - t0) * 1000, table.concat(names, ","), k > 12 and ",..." or "",
+        w.noSuspend and " -- no NPC suspended (mp_join_no_npc_suspend): the clock and the engine's own hold keep the world still" or ""))
     -- the safety timer, independent of the agent
     w.safetyGen = w.safetyGen + 1
     local gen, id = w.safetyGen, joinId
@@ -5184,6 +5201,7 @@ function KCD2MP_JoinTry(joinId, partner, timeoutS)
     local sg = w.scanGen
     local function rescan()
         if not (w.paused and w.scanGen == sg) then return end
+        if w.noSuspend then return end   -- WO-202 II.1: nothing to add
         local n = KCD2MP_JoinScanNpcs(true)
         if n > 0 then mp_log(string.format("MP-JOIN pause join=%s added=%d npcs_paused=%d (streamed in while paused)", id, n, w.npcN)) end
         Script.SetTimer(2000, rescan)
@@ -5225,7 +5243,9 @@ function KCD2MP_JoinResume(joinId, reason)
         joinId, reason, held, tostring(ratioBack), tostring(w.ratioWas), tostring(w.clockAtPause), tostring(clock1),
         resumed, left, holdOk and "ok" or "FAILED", tostring(holdHow)))
     w.npcs, w.npcN, w.joinId, w.phase = {}, 0, nil, ""
-    if reason ~= "ready" then
+    if reason == "sent" then   -- WO-202 II.2: the partner has the world; they load while this world runs
+        pcall(KCD2MP_ShowInteractionMsg, string.format("%s has your world and is loading it -- your world runs again", w.partner))
+    elseif reason ~= "ready" then
         pcall(KCD2MP_ShowInteractionMsg, string.format("Join ended (%s) -- the world runs again", reason))
     end
     KCD2MP_EmitEvent("join_resumed", joinId .. " " .. reason)
@@ -25726,7 +25746,10 @@ function KCD2MP_W157ConnSample(ms)
     local now = os.clock()
     local ns = KCD2MP.npcSilence
     local lag = (ns and (now - (ns.agentAt or -1e9)) < 10) and (ns.lagMs or 0) or 0
-    local bad = (tonumber(ms) or 0) >= KCD2MP.W157_CONN_PING_MS or lag >= KCD2MP.W157_CONN_LAG_MS
+    if c.agentLag then lag = c.agentLag end   -- WO-202 III.2: the agent's queue, measured where the frames wait
+    local netBad = (tonumber(ms) or 0) >= KCD2MP.W157_CONN_PING_MS
+    local bad = netBad or lag >= KCD2MP.W157_CONN_LAG_MS
+    c.netBadN = (c.netBadN or 0) + (netBad and 1 or 0)
     table.insert(c.samples, { t = now, bad = bad })
     while #c.samples > 0 and now - c.samples[1].t > 30 do table.remove(c.samples, 1) end
     local nb10, n10, nb30 = 0, 0, 0
@@ -25746,6 +25769,14 @@ function KCD2MP_W157ConnSample(ms)
         mp_log(string.format("WO157-CONN told: struggling for %.0f s (ping %d ms, %d ms behind)", now - c.badSince, c.lastPing, lag))
         if KCD2MP_W201HostBusyNow and KCD2MP_W201HostBusyNow() then   -- WO-201 B15: the host is loading or saving: its pings stall, the link is fine
             mp_log(string.format("WO201-BUSY connection toast held: ping %d ms while the host loads or saves", c.lastPing))
+        elseif c.agentLag and c.lastPing < KCD2MP.W157_CONN_PING_MS then
+            -- WO-202 III.2: the network is fine; this game takes its partner's moves late (in the background, or busy)
+            if c.inFront == 0 then
+                pcall(KCD2MP_ShowNativeToast, string.format("Your game is in the background, so your partner's moves reach it late (%.0f s behind). The connection is fine (ping %d ms).", lag / 1000, c.lastPing))
+            else
+                pcall(KCD2MP_ShowNativeToast, string.format("Your game is busy, so your partner's moves reach it late (%.0f s behind). The connection is fine (ping %d ms).", lag / 1000, c.lastPing))
+            end
+            mp_log(string.format("WO202-CONN told: the game, not the network (ping %d ms, %d ms behind, in front=%s)", c.lastPing, lag, tostring(c.inFront)))
         else
             pcall(KCD2MP_ShowNativeToast, string.format("Your connection to the other player is struggling (ping %d ms): movement can lag or jump. It's the connection, not the game.", c.lastPing))
         end
@@ -27205,6 +27236,28 @@ do
         end
     end
 
+    -- WO-202 V.3 keys_per_player: a chest the host's own Henry unlocks (his key, his pick, the game's Unlock in his use) is unlocked in
+    -- every joiner's world too, as the game's own Stash:Unlock there (WO-195B's other half: the joiner's unlock reaches the host).
+    function KCD2MP_W202ChestHostUnlocked(stash, why)
+        if not (KCD2MP_W202On and KCD2MP_W202On("keys_per_player")) then return end
+        local n, p = stashKey(stash)
+        if not n then return end
+        mp_log(string.format("WO202-CHEST the host unlocked %s (%s) -> the joiners", n, tostring(why)))
+        KCD2MP_EmitEvent("w202_chest", string.format("%s %.2f %.2f %.2f", n, p.x, p.y, p.z))
+    end
+    function KCD2MP_W202ChestIn(name, x, y, z)
+        if not (KCD2MP_W202On and KCD2MP_W202On("keys_per_player")) or chestRole() ~= "joiner" then return false end
+        name = tostring(name)
+        local stash, how = findNear("Stash", name, tonumber(x) or 0, tonumber(y) or 0, tonumber(z) or 0)
+        if not stash then mp_log(string.format("WO202-CHEST the host unlocked %s: no chest (%s) here", name, tostring(how))); return false end
+        if not stashLocked(stash) then mp_log(string.format("WO202-CHEST the host unlocked %s: not locked here already", name)); return true end
+        W.chestApplying = true
+        local ok = pcall(function() stash:Unlock() end)
+        W.chestApplying = false
+        mp_log(string.format("WO202-CHEST the host unlocked %s -> %s here (the game's own Stash:Unlock)", name, (ok and not stashLocked(stash)) and "unlocked" or "STILL LOCKED"))
+        return ok
+    end
+
     -- From the Stash.OnUsed wrap (WO-139's install): this player starts / ends using a chest. A key's unlock is
     -- inside it; the host also reads it as "his Henry is at this chest".
     function KCD2MP_W195BStashUseBegin(stash, user)
@@ -27220,6 +27273,9 @@ do
         if u.locked0 and not stashLocked(stash) and chestRole() == "joiner" and not W.chestApplying then
             pcall(KCD2MP_W195BChestAskLocal, stash, "key")
         end
+        if u.locked0 and not stashLocked(stash) and chestRole() == "host" and not W.chestApplying then
+            pcall(KCD2MP_W202ChestHostUnlocked, stash, "key")   -- WO-202 V.3
+        end
     end
 
     -- The class-table wraps (one covers every chest: instances resolve methods through the class).
@@ -27232,6 +27288,7 @@ do
                 local l0 = stashLocked(self)
                 local r = orig(self, ...)
                 if l0 and not W.chestApplying and chestRole() == "joiner" and not stashLocked(self) then pcall(chestUnlockSeen, self) end
+                if l0 and not W.chestApplying and chestRole() == "host" and not stashLocked(self) then pcall(KCD2MP_W202ChestHostUnlocked, self, "unlock") end   -- WO-202 V.3
                 return r
             end
             Stash.Unlock = W.chestUnlockWrap
@@ -27242,6 +27299,13 @@ do
         if type(Stash.OnLockpicked) == "function" and Stash.OnLockpicked ~= W.chestPickedWrap then
             local orig = Stash.OnLockpicked
             W.chestPickedWrap = function(self, ...)
+                if chestRole() == "host" then   -- WO-202 V.3: the host's own pick opens the joiner's copy too
+                    local hl0 = stashLocked(self)
+                    local okh, rh = pcall(orig, self, ...)
+                    if hl0 and not stashLocked(self) and not W.chestApplying then pcall(KCD2MP_W202ChestHostUnlocked, self, "lockpicked") end
+                    if not okh then error(rh, 0) end
+                    return rh
+                end
                 if chestRole() ~= "joiner" then return orig(self, ...) end
                 local l0, prev = stashLocked(self), W.chestInPicked
                 W.chestInPicked = self
@@ -30667,6 +30731,11 @@ local function handleAction(action, activation, value)
         local okr, used = pcall(KCD2MP_W159OnAction, action, activation)   -- WO-159: hold E between the prologue's cutscenes skips the rest
         if okr and used then return end
     end
+    -- WO-202 VI: the mark key (its own action only)
+    if KCD2MP_W202OnAction then
+        local okm, usedm = pcall(KCD2MP_W202OnAction, action, activation)
+        if okm and usedm then return end
+    end
     -- WO-178 0.d: the quicksave key (its own action only)
     if KCD2MP_W178OnAction then
         local okq, used = pcall(KCD2MP_W178OnAction, action, activation)
@@ -32667,6 +32736,187 @@ do
         end
     end
     System.AddCCommand("mp_inv_screen_guard", 'KCD2MP_W201SetInvGuard(%line)', "WO-201 B5: (both) no mod path changes an inventory whose transfer/loot screen is open; the change waits for the close (default on): mp_inv_screen_guard on|off")
+end
+
+-- ===== WO-202: crashes, quests that fail on their own, desync (docs/WO-202-findings.md) ======================================
+-- Each WO-202 mechanism ships on with its own switch (W202.NAMES); the agent and the DLL get every change through the w202_cfg event.
+-- mp_w202_status shows them all.
+do
+    W202 = W202 or {}
+    W202.NAMES = {
+        crash_capture = "mp_crash_capture", join_no_npc_suspend = "mp_join_no_npc_suspend", join_short_hold = "mp_join_short_hold",
+        death_engine_only = "mp_death_engine_only", quest_fail_trace = "mp_quest_fail_trace",
+        net_game_queue = "mp_net_game_queue", ping_network = "mp_ping_network", rejoin_recover = "mp_rejoin_recover", anim_shown = "mp_anim_shown",
+        recoil_clinch = "mp_recoil_clinch", fight_pos_fresh = "mp_fight_pos_fresh",
+        desync_score = "mp_desync_score", cutscene_clock_v2 = "mp_cutscene_clock_v2", keys_per_player = "mp_keys_per_player",
+        outfit_atomic = "mp_outfit_atomic", mark_key = "mp_mark_key", near_safe = "mp_near_safe",
+    }
+    W202.HELP = {
+        crash_capture = "I.1: (both) a crash writes its evidence (a minidump, the faulting code, the mod's last steps) into the game folder's kcdmp-crashes, then the game's own crash handler runs as before",
+        join_no_npc_suspend = "II.1: (host) a join holds the world without suspending any NPC's brain (the hired hand froze for good after one)",
+        join_short_hold = "II.2: (host) a join holds your world only while the save is written and sent -- your partner loads while your world runs, and catches up",
+        death_engine_only = "II.3: (both) a death goes out only when the game's own soul is dead (never on a health reading), and a body the joiner's blow killed without its death reaction is laid down by the game's own ragdoll (it no longer walks away)",
+        quest_fail_trace = "II.4: (host) every quest step that fails or is cancelled is logged with what caused it (WO202-QUESTFAIL)",
+        net_game_queue = "III.1: (both) the network never waits on the game: what goes to a game that is busy or in the background waits in its own queue, a newer state replacing an older one",
+        ping_network = "III.2: (both) the ping measures the network only; the connection toast says when your game is in the background",
+        rejoin_recover = "III.3: (both) a join waits while your partner shows progress, and a failed rejoin clears its states and tries again by itself",
+        anim_shown = "IV.1: (joiner) every attack of the host's enemies plays on its copy: its previous swing steps down the way the game's own Withdraw does, so the next one starts at once",
+        recoil_clinch = "IV.3: (both) a clinch names the body its player clinched, so the partner's screen plays it on that copy",
+        fight_pos_fresh = "IV.4: (both) a fighting NPC near a player is sent 10 times a second, never behind the quiet ones; its copy runs on for at most 0.3 s",
+        desync_score = "Desync scorecard: (joiner) each host swing's delay to its copy's swing is logged (WO202-SWING) for the bundle's scorecard",
+        cutscene_clock_v2 = "V.1: (joiner) a shared cutscene follows the host's clock smoothly: small drift by speed, a jump only forward and only between lines",
+        keys_per_player = "V.3: (both) a key one of you takes is the other's too; a chest the host unlocks is unlocked on the joiner's screen too (the joiner's unlock reaches the host as before)",
+        outfit_atomic = "VI: (both) your partner's new clothes go on in one frame before the old ones come off, and a figure that lost its clothes is dressed again within 2 s after a change",
+        mark_key = "VI: (both) the period key marks the moment on both machines, a Marked toast on each (the menu and the console marks stay)",
+        near_safe = "I.2: (host) the partner's figure counted for 'the player' distance checks only through the engine's own, current figure",
+    }
+    W202.OFF = W202.OFF or {}
+    W202.on = W202.on or {}
+
+    function KCD2MP_W202On(name)
+        local v = W202.on[tostring(name)]
+        if v == nil then return not W202.OFF[tostring(name)] end
+        return v
+    end
+    function KCD2MP_W202Set(name, arg)
+        local label = W202.NAMES[tostring(name)]
+        if not label then mp_log("WO202-TOGGLE unknown switch '" .. tostring(name) .. "'"); return false end
+        local v = KCD2MP_Wo122ParseBool(arg)
+        if v == "bad" then mp_log(label .. ": expected on|off, got '" .. tostring(arg) .. "'"); return false end
+        if v == nil then
+            mp_log("WO202-TOGGLE " .. label .. " is " .. (KCD2MP_W202On(name) and "on" or "off") .. " (mp_w202_status shows every value)")
+            return true
+        end
+        W202.on[tostring(name)] = v
+        mp_log("WO202-TOGGLE " .. label .. " " .. (v and "on" or "off") .. " -- sent to the agent and the DLL")
+        KCD2MP_EmitEvent("w202_cfg", tostring(name) .. "=" .. (v and "on" or "off"))
+        return true
+    end
+    function KCD2MP_W202Status()
+        local t = {}
+        for k, label in pairs(W202.NAMES) do t[#t + 1] = label .. "=" .. (KCD2MP_W202On(k) and "on" or "off") end
+        table.sort(t)
+        mp_log("WO202-STATUS " .. table.concat(t, " "))
+        KCD2MP_EmitEvent("w202_status", "")
+        return true
+    end
+    -- II.3 (host): a joiner's killing blow the engine took without its death reaction leaves the dead body upright with living physics
+    -- (the field: it walked on, "dead but walking away", unlootable). The agent reads the body (dead + upright) and asks for this: the
+    -- game's own ragdoll lays it down, as WO-195 does for the joiner's copies. Only a body the engine already reads dead.
+    function KCD2MP_W202DeathFall(name)
+        if not KCD2MP_W202On("death_engine_only") then return false end
+        local e = nil
+        pcall(function() e = System.GetEntityByName(tostring(name)) end)
+        local dead = false
+        if e and e.actor and e.actor.IsDead then pcall(function() dead = e.actor:IsDead() == true end) end
+        if not (e and dead and e.RagDollize) then
+            mp_log(string.format("WO202-DEATHFALL npc=%s refused (%s)", tostring(name), not e and "no body" or not dead and "it is not dead here" or "no RagDollize"))
+            return false
+        end
+        local ok, err = pcall(function() e:RagDollize(0) end)
+        mp_log(string.format("WO202-DEATHFALL npc=%s -> %s -- dead without the death reaction: the game's own ragdoll lays it down", tostring(name),
+            ok and "ok" or ("FAILED " .. tostring(err))))
+        return ok
+    end
+    -- VI mark_key: one key (kcd2mp_mark, the period key: keybindSuperactions.append.xml) marks the moment on both machines -- this
+    -- machine's mark ("Marked" here), the agent's ping makes the partner's ("Marked" there). Press only; one press once.
+    W202.KEY = "period"
+    W202.lastMarkAt = W202.lastMarkAt or -10
+    function KCD2MP_W202OnAction(action, activation)
+        if action ~= "kcd2mp_mark" then return false end
+        if activation ~= "press" and activation ~= 1 then return true end
+        if not KCD2MP_W202On("mark_key") then return true end
+        local now = os.clock()
+        if now - W202.lastMarkAt < 1.0 then return true end
+        W202.lastMarkAt = now
+        mp_log("WO202-MARKKEY pressed (" .. W202.KEY .. ")")
+        KCD2MP_Mark("odd")
+        return true
+    end
+    -- the partner's mark reached this machine (the agent's ping): the same word here
+    function KCD2MP_W202PartnerMarked(who)
+        if not KCD2MP_W202On("mark_key") then return false end
+        mp_log("WO202-MARKKEY the partner marked this moment (" .. tostring(who) .. ")")
+        KCD2MP_ShowInteractionMsg("Marked (by " .. tostring(who) .. ")")
+        return true
+    end
+
+    -- V.3 keys_per_player: a key this player takes -- from a body, a chest, an NPC, anywhere -- the partner gets too: each player his own.
+    -- The classes are the game's keys (MiscItem Type 4 with a key icon, not a quest item: those follow the quest mirror), handed over
+    -- by the agent. Every 3 s this player's count of each is read; a rise after the first read goes out (w202_key); a key that came in
+    -- from the partner is never sent back.
+    W202.keys = W202.keys or { set = {}, n = 0, last = {}, primed = false, came = {}, stats = { out = 0, made = 0, had = 0 } }
+    function KCD2MP_W202KeyClassReset() W202.keys.set, W202.keys.n, W202.keys.last, W202.keys.primed = {}, 0, {}, false end
+    function KCD2MP_W202KeyClassAdd(list)
+        local k = W202.keys
+        for g in string.gmatch(tostring(list or ""), "[%x%-]+") do
+            if #g == 36 and not k.set[g] then k.set[g] = true; k.n = k.n + 1 end
+        end
+    end
+    local function w202KeyCount(g)
+        local c = 0
+        pcall(function() c = tonumber(player.inventory:GetCountOfClass(g)) or 0 end)
+        return c
+    end
+    function KCD2MP_W202KeysTick()
+        local k = W202.keys
+        if k.n == 0 or not KCD2MP_W202On("keys_per_player") or not (player and player.inventory) then return end
+        for g in pairs(k.set) do
+            local c = w202KeyCount(g)
+            local was = k.last[g]
+            k.last[g] = c
+            if k.primed and was ~= nil and c > was then
+                if k.came[g] then k.came[g] = nil
+                else
+                    k.stats.out = k.stats.out + 1
+                    mp_log("WO202-KEY this player took key " .. g .. " -> the partner gets it too")
+                    KCD2MP_EmitEvent("w202_key", g)
+                end
+            end
+        end
+        k.primed = true
+    end
+    function KCD2MP_W202KeyIn(g, who)
+        local k = W202.keys
+        g = tostring(g)
+        if not KCD2MP_W202On("keys_per_player") or not k.set[g] or not (player and player.inventory) then return false end
+        if w202KeyCount(g) > 0 then
+            k.stats.had = k.stats.had + 1
+            mp_log("WO202-KEY " .. tostring(who) .. " took key " .. g .. " -- this player has it already")
+            return true
+        end
+        k.came[g] = true
+        local ok = pcall(function() player.inventory:CreateItem(g, 1, 1) end)
+        local now = w202KeyCount(g)
+        k.last[g] = now
+        if now > 0 then
+            k.stats.made = k.stats.made + 1
+            mp_log("WO202-KEY " .. tostring(who) .. " took key " .. g .. " -> this player has one too")
+            KCD2MP_ShowInteractionMsg("Your partner found a key -- you have it too.")
+        else
+            k.came[g] = nil
+            mp_log("WO202-KEY " .. tostring(who) .. " took key " .. g .. " -> NOT made here (CreateItem " .. (ok and "made nothing" or "failed") .. ")")
+        end
+        return now > 0
+    end
+
+    -- VI outfit_atomic: the partner's new pieces all go on in this one call (one frame), each through WO-144's own inventory equip;
+    -- the agent takes off what is left over only after it. "cls1,cls2,..." in layer order (under-layers first).
+    function KCD2MP_W202EquipAll(name, list)
+        local n, ok = 0, 0
+        for cls in string.gmatch(tostring(list or ""), "[^,]+") do
+            n = n + 1
+            if KCD2MP_W144Equip(name, cls) then ok = ok + 1 end
+        end
+        mp_log(string.format("WO202-OUTFIT %s: %d of %d piece(s) on in one frame (the old ones come off after)", tostring(name), ok, n))
+        return ok
+    end
+    System.AddCCommand("mp_w202_status", 'KCD2MP_W202Status()', "WO-202: every WO-202 switch and its counts")
+    for k, label in pairs(W202.NAMES) do
+        local fname = "KCD2MP_W202Set_" .. k
+        _G[fname] = function(arg) return KCD2MP_W202Set(k, arg) end
+        System.AddCCommand(label, fname .. "(%line)", "WO-202 " .. (W202.HELP[k] or k) .. " (default " .. (W202.OFF[k] and "off" or "on") .. "): " .. label .. " on|off")
+    end
 end
 
 -- ===== Player hook =====

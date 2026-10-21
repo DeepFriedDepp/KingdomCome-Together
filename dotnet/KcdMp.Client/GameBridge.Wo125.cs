@@ -322,6 +322,7 @@ public partial class GameBridge
         });
         _rewinding = true;
         _rejoinPending = false;
+        Wo202RejoinReset("the host reloads");   // WO-202 III.3: a new reload, a new count
         _ = Wo201OnHostBusyAsync("load 1");   // WO-201 B15: its pings stall while it loads -- no "connection" toast
         const string msg = "Your host is reloading... what you do now won't be kept.";
         _ = W164NoticeAsync(Wo164Rules.ReloadStartText);   // WO-164 RL: the game's own HUD line, queued if a menu holds the timers
@@ -727,6 +728,7 @@ public partial class GameBridge
         _joinedTag = tag;
         _rewinding = false;
         _rejoinPending = false;
+        Wo202RejoinReset("joined");   // WO-202 III.3
         if (_resetTag == tag) _resetTag = null;
         if (_newWorldLeavePending || (_peerSeedKnown && _peerTag != tag))
         {

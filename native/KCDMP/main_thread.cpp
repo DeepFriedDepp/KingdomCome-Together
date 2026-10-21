@@ -1,6 +1,7 @@
-// Copyright (C) 2026 the Kingdom Come: Together contributors (AUTHORS). SPDX-License-Identifier: GPL-3.0-only
+﻿// Copyright (C) 2026 the Kingdom Come: Together contributors (AUTHORS). SPDX-License-Identifier: GPL-3.0-only
 // GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
+#include "crash_capture.h"
 #include "main_thread.h"
 #include "fault_guard.h"
 #include "frame_meter.h"
@@ -141,6 +142,9 @@ void hooked_update(void* self, float dt) {
     ++g_frames;
     g_lastDt.store(dt, std::memory_order_relaxed);   // WO-138: the frame meter
     if (g_main_thread_id == 0) g_main_thread_id = GetCurrentThreadId();
+    // WO-202 I.1 (research only, KCDMP_TEST_CRASH): a deliberate main-thread fault outside every guard, so the crash capture is
+    // proven on the path a real engine crash takes.
+    if (crash::test_main_fault_due()) *reinterpret_cast<volatile int*>(0x10) = 1;
 
     // Swap under the lock and run outside it: queued work may post more work,
     // and holding the lock across a call into the game invites a deadlock.
@@ -309,6 +313,7 @@ bool run_sync(std::function<void()> work, unsigned timeout_ms, bool* faulted) {
 
 unsigned long long frame_count() { return g_frames.load(std::memory_order_relaxed); }
 float last_dt() { return g_lastDt.load(std::memory_order_relaxed); }
+unsigned long main_thread_id() { return static_cast<unsigned long>(g_main_thread_id); }
 
 void set_cost_meter(bool on) {
     const bool was = g_costOn.exchange(on);

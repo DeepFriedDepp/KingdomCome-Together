@@ -25,7 +25,7 @@ public class Wo164Tests
         Assert.Equal(10, Protocol.Version);   // append-only: no bump
         Assert.Equal("mark-ping", Protocol.W164KindName(Protocol.W164MarkPing));
         Assert.Equal("torch", Protocol.W164KindName(Protocol.W164Torch));
-        Assert.Equal("unknown-26", Protocol.W164KindName(26));   // WO-176: 9 is story-fight; WO-177: 10 and 11 are the corpse question and answer; WO-178: 12-14 the quicksave; WO-179: 15 the scene bus; WO-184: 16 the save health; WO-189: 17 the profiles; WO-200: 18 the clock, 19 the noise; WO-201: 20 the host busy, 21 the speech line, 22-24 the vote, 25 the ranged step
+        Assert.Equal("unknown-27", Protocol.W164KindName(27));   // WO-176: 9 is story-fight; WO-177: 10 and 11 are the corpse question and answer; WO-178: 12-14 the quicksave; WO-179: 15 the scene bus; WO-184: 16 the save health; WO-189: 17 the profiles; WO-200: 18 the clock, 19 the noise; WO-201: 20 the host busy, 21 the speech line, 22-24 the vote, 25 the ranged step; WO-202: 26 the key share
         Assert.Equal("clock", Protocol.W164KindName(Protocol.W164Clock));
         Assert.Equal("noise", Protocol.W164KindName(Protocol.W164Noise));
         Assert.Equal("scene-bus", Protocol.W164KindName(15));
@@ -45,9 +45,9 @@ public class Wo164Tests
         Assert.True(LootMsg.TryDecode(body, out var m));
         Assert.Equal(Protocol.W164MarkPing, m.Kind);
         Assert.True(W164Text.IsMarkId(m.Text));
-        var odd = new LootMsg(26, 5, "whatever").BuildUp(Protocol.W164Up, Protocol.JoinTargetHost);
+        var odd = new LootMsg(27, 5, "whatever").BuildUp(Protocol.W164Up, Protocol.JoinTargetHost);
         Assert.True(LootMsg.TryDecode(odd.AsSpan(3 + Protocol.JoinHeaderLen).ToArray(), out var m2));
-        Assert.Equal("unknown-26", Protocol.W164KindName(m2.Kind));   // GameBridge counts it as malformed and does nothing
+        Assert.Equal("unknown-27", Protocol.W164KindName(m2.Kind));   // GameBridge counts it as malformed and does nothing
     }
 
     [Theory]

@@ -1225,6 +1225,14 @@ public sealed class CombatPipe : IAsyncDisposable
         return r is { Ok: true, Payload.Length: >= 9 } x ? (x.Payload[0], BitConverter.ToSingle(x.Payload, 1), BitConverter.ToSingle(x.Payload, 5)) : null;
     }
 
+    /// <summary>WO-202 V.1 op 63 sub 4: the active in-game sequence's playing speed (0.5..1.5). (res, before, after); res 5 = the speed
+    /// slots are not armed on this build (the clock then follows by seeks only), 4 = refused.</summary>
+    public async Task<(byte Res, float Before, float After)?> Wo194SeqSpeedAsync(string name, float speed, CancellationToken ct = default)
+    {
+        var r = await Wo163Async(Protocol.Wo194OpSeq, [4, .. Wo194Str(name, 80), .. BitConverter.GetBytes(speed)], ct);
+        return r is { Ok: true, Payload.Length: >= 9 } x ? (x.Payload[0], BitConverter.ToSingle(x.Payload, 1), BitConverter.ToSingle(x.Payload, 5)) : null;
+    }
+
     /// <summary>WO-194 op 63 sub 3: stop the active in-game sequence (the normal end follows). res as op 63.</summary>
     public async Task<byte?> Wo194SeqStopAsync(string name, CancellationToken ct = default)
     {

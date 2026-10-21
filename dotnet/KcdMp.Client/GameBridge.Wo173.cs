@@ -161,6 +161,7 @@ public partial class GameBridge
         if ((int)verdict is > 0 and < 7) Interlocked.Increment(ref _w173Verdicts[(int)verdict]);
         Console.WriteLine(FormattableString.Invariant(
             $"MP-W173 hit npc={npc} by_ghost={source} applied={(x.ByEngine ? "engine" : x.AppliedAny ? "raw" : "none")} verdict={(verdict == HitVerdict.None ? "-" : HitVerdictMsg.VerdictName(verdict))} reaction={Wo173Rules.ReactName(x.React)} joiner_said=st{stamina:F1}/hp{health:F1} raw_applied=st{x.StApplied:F1}/hp{x.HpApplied:F1} row={(f is null ? "none" : $"type{f.Value.Type}/zone{f.Value.Zone}")} fallback={Wo173Rules.FallbackName(x.Fallback)} seq={x.Seq}"));
+        Wo202NoteJoinerBlow(npc, x.AppliedAny, x.React);   // WO-202 II.3: a killing blow without the death reaction leaves the body upright
         // C2: the outcome goes to the joiner whose blow it was
         if (W164Text.IsNpcName(npc))
         {

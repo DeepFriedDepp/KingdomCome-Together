@@ -69,6 +69,11 @@ SwingResult ghost_swing(uint32_t entityId, const char* fragSpec);
 // watch reads the action's status until it was installed or never will be (wo167_rules.h), then drops the reference. Main thread only.
 bool swing_watch_take(uint32_t eid, void* action);
 void swing_watch_tick();                                                        // every frame (dllmain post_repeating)
+// WO-202 IV.1 anim_shown: each copy's last swing keeps one reference of ours until its next swing, which steps it down 5 -> 3 (the
+// engine's own Withdraw value) so the new one installs at once (wo202_rules.h lower_previous). Main thread only.
+void swing_keep_last(uint32_t eid, void* action);
+void swing_lower_previous(uint32_t eid);
+int anim_shown_status(char* out, int n);
 wo167rules::Seen swing_watch_last(uint32_t eid, uint32_t* ageMs, uint32_t* waitMs);   // the last swing on this body
 void swing_watch_set(bool on);                                                  // mp_swing_watch (the agent)
 bool swing_watch_faulted();

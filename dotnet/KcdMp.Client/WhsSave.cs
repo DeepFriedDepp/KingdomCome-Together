@@ -540,6 +540,41 @@ public static partial class WhsSave
         return Convert.ToHexString(h.GetHashAndReset()).ToLowerInvariant() + "/" + tot;
     }
 
+    // ------------------------------------------------------------------ key classes (WO-202 V.3)
+
+    /// <summary>Item class GUID (lower) -> name, for every key under libs/tables/item/ in Tables.pak: a MiscItem of Type 4 whose icon is a key
+    /// (key_general, key_unique; Type 4 also holds the shovel and the lockpick), quest keys left out (IsQuestItem: the quest mirror's).</summary>
+    public static Dictionary<string, string> KeyClasses(string tablesPak)
+    {
+        var o = new Dictionary<string, string>(StringComparer.Ordinal);
+        var rx = new Regex(@"<MiscItem\s([^>]*)>", RegexOptions.CultureInvariant);
+        var gid = new Regex(@"\bId=""([0-9a-fA-F-]{36})""", RegexOptions.CultureInvariant);
+        var gnm = new Regex(@"\bName=""([^""]*)""", RegexOptions.CultureInvariant);
+        using var z = ZipFile.OpenRead(tablesPak);
+        foreach (var e in z.Entries)
+        {
+            string low = e.FullName.ToLowerInvariant();
+            if (!low.EndsWith(".xml", StringComparison.Ordinal) || !low.StartsWith("libs/tables/item/", StringComparison.Ordinal)) continue;
+            string text;
+            using (var s = e.Open()) using (var ms = new MemoryStream()) { s.CopyTo(ms); text = Encoding.Latin1.GetString(ms.ToArray()); }
+            foreach (Match m in rx.Matches(text))
+            {
+                string a = m.Groups[1].Value;
+                if (!IsKeyRow(a)) continue;
+                var g = gid.Match(a);
+                if (!g.Success) continue;
+                var nm = gnm.Match(a);
+                o[g.Groups[1].Value.ToLowerInvariant()] = nm.Success ? nm.Groups[1].Value : "?";
+            }
+        }
+        if (o.Count == 0) throw new InvalidDataException("no key classes found in " + Path.GetFileName(tablesPak));
+        return o;
+    }
+
+    /// <summary>A MiscItem row's attributes: a key (Type 4, a key icon), not a quest item.</summary>
+    public static bool IsKeyRow(string attrs) =>
+        Regex.IsMatch(attrs, @"\bType=""4""") && Regex.IsMatch(attrs, @"\bIconId=""key_") && !Regex.IsMatch(attrs, @"\bIsQuestItem=""true""");
+
     // ------------------------------------------------------------------ quest-item classes
 
     /// <summary>Item class GUID (lower) -> name, for every IsQuestItem="true" row under libs/tables/item/ in Tables.pak.</summary>

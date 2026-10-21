@@ -1137,6 +1137,8 @@ public partial class GameBridge(ClientConfig config)
             AgentConnectionStatus.Json);
         _versionIpcServer.Start();
         AgentConnectionStatus.Set("waiting-for-game", string.IsNullOrWhiteSpace(config.SteamCode) ? "direct" : "steam", "Waiting for the game...");
+        // WO-202 I.1: the game process watch -- a game that ends without its quit line gets the agent's part of its crash report
+        Wo202CrashWatch.Start(() => KcdLogLocator.Find() is string klog ? Path.GetDirectoryName(klog) : null, ct);
 
         try
         {
@@ -2834,17 +2836,35 @@ public partial class GameBridge(ClientConfig config)
             toAdd = Wo135Rules.AppearanceAdditions(actual, targetSet).Where(c => !unwearable.Skips(c, nowMs)).ToList();   // WO-144: a refusal backs off, then is tried again
         }
         toAdd = await Wo144InLayerOrderAsync(toAdd);   // WO-144 2.1: under-layers first
-        foreach (var cls in toRemove)
+        _w202OutfitChangedMs[ghostId] = Environment.TickCount64;   // WO-202 VI: the strip check watches closely for a while
+        if (Wo202Rules.OutfitAtomic(W202("outfit_atomic"), _w144Dress, toAdd.Count))
         {
-            try { await _transport.UnequipItemOnGhostAsync(soulName, cls, ct); }
-            catch (Exception ex) { Console.WriteLine($"[appearance] unequip {cls} on {soulName} failed: {ex.Message}"); }
+            // WO-202 VI outfit_atomic: the new pieces go on first, all in one call (one frame), and only then does anything come off -- a piece
+            // in a taken slot is swapped by the engine itself. 0.61.9 took the old pieces off first and put the new ones on one call each
+            // (a frame and a round trip apiece): the partner stood half dressed or bare between them (session B's host's mark).
+            lock (known) foreach (var c in toAdd) known.Add(c);
+            try { await Wo202EquipAllOnGhostAsync(soulName, toAdd, ct); }
+            catch (Exception ex) { Console.WriteLine($"[appearance] equip of {toAdd.Count} piece(s) on {soulName} failed: {ex.Message}"); lock (known) foreach (var c in toAdd) known.Remove(c); }
+            foreach (var cls in toRemove)
+            {
+                try { await _transport.UnequipItemOnGhostAsync(soulName, cls, ct); }
+                catch (Exception ex) { Console.WriteLine($"[appearance] unequip {cls} on {soulName} failed: {ex.Message}"); }
+            }
         }
-        foreach (var cls in toAdd)
+        else
         {
-            bool createIfMissing;
-            lock (known) createIfMissing = known.Add(cls);
-            try { await Wo144EquipOnGhostAsync(soulName, cls, createIfMissing, ct); }
-            catch (Exception ex) { Console.WriteLine($"[appearance] equip {cls} on {soulName} failed: {ex.Message}"); lock (known) known.Remove(cls); }
+            foreach (var cls in toRemove)
+            {
+                try { await _transport.UnequipItemOnGhostAsync(soulName, cls, ct); }
+                catch (Exception ex) { Console.WriteLine($"[appearance] unequip {cls} on {soulName} failed: {ex.Message}"); }
+            }
+            foreach (var cls in toAdd)
+            {
+                bool createIfMissing;
+                lock (known) createIfMissing = known.Add(cls);
+                try { await Wo144EquipOnGhostAsync(soulName, cls, createIfMissing, ct); }
+                catch (Exception ex) { Console.WriteLine($"[appearance] equip {cls} on {soulName} failed: {ex.Message}"); lock (known) known.Remove(cls); }
+            }
         }
         if (toRemove.Count > 0 || toAdd.Count > 0)
             Console.WriteLine($"[appearance] ghost {ghostId}: +{toAdd.Count} -{toRemove.Count} (against its real equipped set of {actual.Count})");
@@ -4535,8 +4555,11 @@ public partial class GameBridge(ClientConfig config)
                 Wo138NoteArrival(type, payload);   // WO-138: the source's link is alive (the joiner's hold)
                 Wo147NotePositionAtRead(type, payload, arrival);   // WO-147: the leash's positions, stamped as they arrive
                 Wo147NoteNpcAtRead(type, payload, arrival);        // the backlog fix: the newest sample of each NPC/avatar, as read
+                Volatile.Write(ref _w202LastReadMs, W147StampMs(arrival));   // WO-202 III.2: the queue's lag is measured against this
+                if (W202("ping_network") && Wo202TakeAtRead(type, payload)) continue;   // WO-202 III.2: the network's answers, never behind the queue
                 if (Wo147IsLeashFrame(type)) { leashLane.Writer.TryWrite(new InFrame(type, payload, arrival)); continue; }
                 FeedNativeAtRead(type, payload, arrival);
+                if (W202("net_game_queue") && Wo202Coalesce(frames.Writer, type, payload, arrival)) continue;   // WO-202 III.1: a waiting state is replaced
                 frames.Writer.TryWrite(new InFrame(type, payload, arrival));
             }
         }
@@ -4619,8 +4642,9 @@ public partial class GameBridge(ClientConfig config)
         _npcLua.Clear();   // nothing pending from a previous connection
         try
         {
-            await foreach (var frame in frames.ReadAllAsync(ct))
+            await foreach (var frameRaw in frames.ReadAllAsync(ct))
             {
+                if (Wo202Resolve(frameRaw) is not { } frame) continue;   // WO-202 III.1: a coalesced slot is its body's newest state
                 if (frame.Type == FlushTickType) { Wo136ReplayIfReleased(); await FlushDueNpcLuaPushesAsync(); continue; }
                 Wo147NoteProcessing(frame.Arrival);   // the backlog fix: how far behind the reader this processor is
                 Wo136ReplayIfReleased();          // WO-136: the moment the hold ends, what it kept goes first
@@ -6103,6 +6127,9 @@ public partial class GameBridge(ClientConfig config)
             case string w201 when w201.StartsWith("w201_", StringComparison.Ordinal):   // WO-201: every event of its parts (Wo201OnEvent)
                 Wo201OnEvent(name, arg);
                 return;
+            case string w202 when w202.StartsWith("w202_", StringComparison.Ordinal):   // WO-202: every event of its parts (Wo202OnEvent)
+                Wo202OnEvent(name, arg);
+                return;
             case "w200_hostvals":    // WO-200 II.1/II.2 (host): its streamed NPCs' mount and stamina, what changed
             case "w200_cfg":         // WO-200: mp_s1_replay, mp_s1_route, mp_joiner_quiet_clocks, mp_joiner_no_puppet_quests, ... (Wo200Rules.SwitchNames)
             case "w200_status":      // WO-200: mp_w200_status
@@ -6232,6 +6259,7 @@ public partial class GameBridge(ClientConfig config)
                 if (Wo131BlockLocalDeath(deadName)) break;   // WO-131 1c: the host decides deaths
                 var sendDeath = _sendNpcDeath;
                 if (sendDeath is null) break;
+                if (W202("death_engine_only")) { _ = Wo202AnnounceDeathAsync(deadName, deadHp, deadSrc, sendDeath); break; }   // WO-202 II.3
                 Console.WriteLine($"[npcdeath] out: mod observed '{deadName}' die locally (hp={deadHp}, seen by {deadSrc}) -- sending FATAL{CatchupTag()}");
                 _ = sendDeath(deadName)
                     .ContinueWith(t =>

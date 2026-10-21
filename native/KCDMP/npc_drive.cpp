@@ -1,6 +1,8 @@
 // Copyright (C) 2026 the Kingdom Come: Together contributors (AUTHORS). SPDX-License-Identifier: GPL-3.0-only
 // GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
+#include "wo202.h"
+#include "wo202_rules.h"
 #include "npc_drive.h"
 #include "wo187.h"
 #include "wo187_rules.h"
@@ -488,7 +490,10 @@ bool render(const Stream& s, double renderAt, double delay, float out[4], bool* 
         // WO-201 B10: past the newest sample, a moving stream walks on at its last speed and heading for up to kExtrapMaxS
         const RingSample& z = s.ring[n - 1]; const RingSample& y = s.ring[n - 2];
         const double seg = z.at - y.at, past = renderAt - z.at;
-        if (seg > 0.02 && seg <= 1.0 && past > 0 && past <= kExtrapMaxS) {
+        // WO-202 IV.4 fight_pos_fresh: a fighting copy (its stream's drawn bit) runs on for at most 0.3 s, then holds -- a fighter turns
+        // and stops, and 2 s of a straight line put it where the host's never was
+        const double maxPast = wo202rules::extrap_max_s((s.flags & 0x04) != 0, wo202::on(wo202rules::kBitFightPosFresh), kExtrapMaxS);
+        if (seg > 0.02 && seg <= 1.0 && past > 0 && past <= maxPast) {
             const double vx = (z.x - y.x) / seg, vy = (z.y - y.y) / seg, vz = (z.z - y.z) / seg;
             const double sp = std::sqrt(vx * vx + vy * vy);
             if (sp >= kExtrapMinMps && sp <= kExtrapMaxMps) {

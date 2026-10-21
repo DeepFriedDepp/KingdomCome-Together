@@ -210,6 +210,20 @@ do
 end
 
 -- (d) the pause ---------------------------------------------------------------
+-- WO-202 II.1: mp_join_no_npc_suspend (on by default) pauses no NPC at a join -- the clock stands and the engine holds the world; the
+-- per-NPC pause tested from here on is its "off"
+do
+    reset()
+    local w = KCD2MP.w123
+    local mark, cm = #LOG, #CMDS
+    check("d0: (WO-202 on) JoinTry pauses the world", KCD2MP_JoinTry("0000d0a1", "Bob", 180) == true and RATIO == 0)
+    check("d0: (WO-202 on) no NPC paused", countCmd("wh_ai_PauseNPC", cm) == 0 and (w.npcN or 0) == 0, tostring(countCmd("wh_ai_PauseNPC", cm)))
+    check("d0: (WO-202 on) the pause line says why", (lastLog("MP-JOIN pause join=0000d0a1", mark) or ""):find("no NPC suspended", 1, true) ~= nil)
+    KCD2MP_JoinResume("0000d0a1", "ready")
+    check("d0: (WO-202 on) resumed: the clock runs again", RATIO == 15 and w.paused == false)
+    noErrs("d0")
+end
+if KCD2MP_W202Set then KCD2MP_W202Set("join_no_npc_suspend", "off") end
 local PAUSED_SET = { "ttkc_man_2", "ttkc_man_22", "ttkc_woman_4", "horse_bohuta", "hare_1" }
 do
     reset()

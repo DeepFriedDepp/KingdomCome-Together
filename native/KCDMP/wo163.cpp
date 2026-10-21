@@ -6,6 +6,7 @@
 #include "wo197.h"
 #include "wo200.h"
 #include "wo201.h"
+#include "wo202.h"
 #include "engine.h"
 #include "hits.h"
 #include "log.h"
@@ -288,6 +289,10 @@ uint8_t handle(const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t
         case kcdmp::wo201::kOpVotePoll:
         case kcdmp::wo201::kOpRangedPoll:
             return kcdmp::wo201::handle(body[0], body, len, out, cap, outLen);
+        case kcdmp::wo202::kOpStatus:   // WO-202: the switch word, the quest-fail tracer's poll
+        case kcdmp::wo202::kOpConfig:
+        case kcdmp::wo202::kOpFailPoll:
+            return kcdmp::wo202::handle(body[0], body, len, out, cap, outLen);
         case kcdmp::wo178::kOpHeldResult:   // WO-178 C4: a held blow lives in WO-173's path
             return kcdmp::wo173::handle(body[0], body, len, out, cap, outLen);
         default:

@@ -48,6 +48,9 @@ constexpr size_t kMgrNpcOf = 0x20;            // C_NPCManager vtable: the C_NPC 
 constexpr ptrdiff_t kMgrFFCount = 0xF0;       // C_NPCManager: NPCs in a FastForward (the positioning gate waits for 0)
 constexpr size_t kNpcInFF = 0x4A0, kNpcStopFF = 0x4B8;   // C_NPC vtable: IsInFastForward(id), StopFastForward(id) (id 0 = any)
 constexpr size_t kMovieStop = 0x100, kMovieGetTime = 0x1F0, kMovieSetTime = 0x200;   // CMovieSystem vtable (CryMovie)
+// WO-202 V.1: GetPlayingSpeed / SetPlayingSpeed, the slots between and after the time pair (read this WO: the playing entry's +0x10 is the
+// time, +0x14 the speed; SetPlayingSpeed is SetPlayingTime's shape without the IsPlaying test, as CryEngine's own source has it)
+constexpr size_t kMovieGetSpeed = 0x1F8, kMovieSetSpeed = 0x208;
 
 constexpr char kExpEnqueue[] = "?EnqueueCutscene@C_CutscenePlayer@guimodule@wh@@UEAAXAEAV?$shared_ptr@VC_CutsceneConfiguration@guimodule@wh@@@std@@@Z";
 
@@ -63,7 +66,7 @@ std::atomic<uint8_t> g_role{0};
 std::atomic<bool> g_hold{true}, g_ffStop{true}, g_timeGate{true};
 std::atomic<uint32_t> g_holdMs{static_cast<uint32_t>(kHoldBoundMs)};
 std::atomic<uint32_t> c_events{0}, c_own{0}, c_mod{0}, c_held{0}, c_released{0}, c_pulses{0}, c_directs{0}, c_starts{0}, c_ffStops{0},
-                      c_timeOff{0}, c_timeBack{0}, c_seqSets{0}, c_seqStops{0};
+                      c_timeOff{0}, c_timeBack{0}, c_seqSets{0}, c_seqStops{0}, c_seqSpeeds{0};   // c_seqSpeeds: WO-202 V.1
 std::atomic<bool> g_armed{false};
 const char* g_why = "not installed";
 
@@ -121,7 +124,7 @@ void* const* g_vftNpc = nullptr; void* const* g_vftNpcMgr = nullptr;
 void* g_enqueue = nullptr;
 using EnqueueFn = void (*)(void* player, void* spRef);
 EnqueueFn g_origEnqueue = nullptr;
-bool g_movieChecked = false, g_movieOk = false;
+bool g_movieChecked = false, g_movieOk = false, g_speedOk = false;   // g_speedOk: WO-202 V.1's two slots, checked on their own
 int g_movieOff = -1;
 const char* g_movieWhy = "not resolved";
 
@@ -160,6 +163,11 @@ bool movie_slots_ok() {
     const bool g = same(kMovieGetTime, kGetTimePro, sizeof kGetTimePro), s = same(kMovieSetTime, kSetTimePro, sizeof kSetTimePro),
                t = same(kMovieStop, kStopPro, sizeof kStopPro);
     g_movieOk = g && s && t;
+    // WO-202 V.1: the speed pair has the time pair's first bytes; its own test, so a build where it differs keeps the time ops
+    const bool gs = same(kMovieGetSpeed, kGetTimePro, sizeof kGetTimePro), ss = same(kMovieSetSpeed, kSetTimePro, sizeof kSetTimePro);
+    g_speedOk = g_movieOk && gs && ss;
+    logf("WO194-SEQ speed slots: GetPlayingSpeed %s, SetPlayingSpeed %s -> %s", gs ? "ok" : "DIFFERS", ss ? "ok" : "DIFFERS",
+         g_speedOk ? "armed (WO-202 cutscene_clock_v2 corrects small drift by speed)" : "NOT armed (the clock follows by seeks only)");
     g_movieWhy = g_movieOk ? "armed" : "a CMovieSystem slot's first bytes differ from the build WO-193 read";
     logf("WO194-SEQ resolver: %s (GetPlayingTime %s, SetPlayingTime %s, StopSequence %s)", g_movieWhy, g ? "ok" : "DIFFERS", s ? "ok" : "DIFFERS", t ? "ok" : "DIFFERS");
     return g_movieOk;
@@ -453,10 +461,10 @@ int status_text(char* out, int n) {
     size_t holds = 0, gates = 0, partner = 0;
     { std::lock_guard<std::mutex> lk(g_mx); holds = g_holds.size(); gates = g_gates.size(); partner = g_partner.size(); }
     return std::snprintf(out, n, "hook=%s role=%u hold=%d ff_stop=%d time_gate=%d hold_ms=%u own=%u mod=%u held=%u released=%u pulses=%u directs=%u starts=%u "
-                         "ff_stops=%u time_off=%u time_back=%u seq_sets=%u seq_stops=%u open_holds=%zu time_gates=%zu partner_scenes=%zu seq=%s",
+                         "ff_stops=%u time_off=%u time_back=%u seq_sets=%u seq_stops=%u seq_speeds=%u speed_slots=%d open_holds=%zu time_gates=%zu partner_scenes=%zu seq=%s",
                          g_why, g_role.load(), g_hold.load() ? 1 : 0, g_ffStop.load() ? 1 : 0, g_timeGate.load() ? 1 : 0, g_holdMs.load(), c_own.load(),
                          c_mod.load(), c_held.load(), c_released.load(), c_pulses.load(), c_directs.load(), c_starts.load(), c_ffStops.load(), c_timeOff.load(),
-                         c_timeBack.load(), c_seqSets.load(), c_seqStops.load(), holds, gates, partner, g_movieWhy);
+                         c_timeBack.load(), c_seqSets.load(), c_seqStops.load(), c_seqSpeeds.load(), g_speedOk ? 1 : 0, holds, gates, partner, g_movieWhy);
 }
 
 uint8_t handle(uint8_t op, const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t* outLen) {
@@ -613,6 +621,26 @@ uint8_t handle(uint8_t op, const uint8_t* body, size_t len, uint8_t* out, size_t
                 if (!ok) { res(4); return wo163::kROk; }
                 c_seqSets.fetch_add(1);
                 logf("WO194-SEQ '%s' time %.3f -> %.3f s (SetPlayingTime, asked %.3f) [n=%u]", a.name.c_str(), before, after, want, c_seqSets.load());
+                return wo163::kROk;
+            }
+            if (sub == 4) {   // WO-202 V.1: [speed:4] -> [res][before:4][after:4]; res 5 = the speed slots are not armed on this build
+                if (len != at + 4 || cap < 9) return wo163::kRBadRequest;
+                float want = 0; std::memcpy(&want, body + at, 4);
+                *outLen = 9; res(!mv ? 2 : have ? 1 : 0); put_f(out + 1, -1.0f); put_f(out + 5, -1.0f);
+                if (!have) return wo163::kROk;
+                if (!g_speedOk) { res(5); return wo163::kROk; }
+                if (!std::isfinite(want) || want < 0.5f || want > 1.5f) { res(4); return wo163::kROk; }
+                void* fg = vslot(mv, kMovieGetSpeed); void* fs = vslot(mv, kMovieSetSpeed);
+                float before = -1, after = -1; bool ok = false;
+                KCDMP_FAULT_CALL(site, "wo194::SetPlayingSpeed");
+                if (!fg || !fs || !fault::guarded(site, [&] {
+                        before = reinterpret_cast<float (*)(void*, void*)>(fg)(mv, a.seq);
+                        ok = reinterpret_cast<bool (*)(void*, void*, float)>(fs)(mv, a.seq, want);
+                        after = reinterpret_cast<float (*)(void*, void*)>(fg)(mv, a.seq);
+                    })) { res(3); return wo163::kROk; }
+                put_f(out + 1, before); put_f(out + 5, after);
+                if (!ok) { res(4); return wo163::kROk; }
+                c_seqSpeeds.fetch_add(1);
                 return wo163::kROk;
             }
             if (sub == 3) {

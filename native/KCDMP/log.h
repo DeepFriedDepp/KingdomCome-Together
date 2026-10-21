@@ -98,6 +98,22 @@ inline int format_log_prefix(char* out, size_t cap, int hour, int minute, int se
     return std::snprintf(out, cap, "[%02d:%02d:%02d.%03d] t%06lu ", hour, minute, second, ms, tid);
 }
 
+// WO-202 I.1: the last kCrashRingLines lines this DLL logged, kept in memory for the crash report. crash_capture.cpp reads it
+// without the log's lock (the crashing thread may hold it). Each slot holds the line's prefix and text, cut at kCrashRingWidth.
+constexpr int kCrashRingLines = 200;
+constexpr int kCrashRingWidth = 480;
+struct CrashRing {
+    char line[kCrashRingLines][kCrashRingWidth];
+    volatile long next;   // the slot the next line goes to (mod kCrashRingLines); the lines written so far
+};
+inline CrashRing& crash_ring() { static CrashRing r{}; return r; }
+inline void crash_ring_note(const char* prefix, const char* text) {   // under the log's lock
+    CrashRing& r = crash_ring();
+    char* slot = r.line[static_cast<unsigned long>(r.next) % kCrashRingLines];
+    std::snprintf(slot, kCrashRingWidth, "%s%s", prefix, text);
+    r.next = r.next + 1;
+}
+
 inline void logf(const char* fmt, ...) {
     std::lock_guard<std::mutex> lock(log_mutex());
     static FILE* f = nullptr;
@@ -137,13 +153,24 @@ inline void logf(const char* fmt, ...) {
             fflush(dst);
         }
     }
+    // WO-202 I.1: the line is formatted once, written to both files and kept in the crash ring (the last lines a crash report
+    // carries). A line longer than the buffer is written whole the old way; the ring keeps its start.
+    static char text[4096];
     va_list args;
+    va_start(args, fmt);
+    const int n = std::vsnprintf(text, sizeof text, fmt, args);
+    va_end(args);
+    crash_ring_note(prefix, text);
     for (FILE* dst : { f, mirror }) {
         if (!dst) continue;
         fputs(prefix, dst);
-        va_start(args, fmt);
-        vfprintf(dst, fmt, args);
-        va_end(args);
+        if (n >= 0 && n < static_cast<int>(sizeof text)) {
+            fputs(text, dst);
+        } else {
+            va_start(args, fmt);
+            vfprintf(dst, fmt, args);
+            va_end(args);
+        }
         fputc('\n', dst);
         fflush(dst);
     }

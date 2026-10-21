@@ -44,6 +44,8 @@ public sealed class PackResult
     /// <summary>WO-201 B24: every mark the agents' logs hold: "&lt;entry&gt; &lt;time&gt; &lt;word&gt; [note]".</summary>
     public List<string> Marks = new();
     public string Manifest = "";
+    /// <summary>WO-202: BRIEFING.md, the bundle's first file (Briefing.cs).</summary>
+    public string Briefing = "";
 }
 
 /// <summary>
@@ -76,6 +78,9 @@ public static class Packer
                     if (s.EntryName.StartsWith("agent", StringComparison.OrdinalIgnoreCase)) MarkList.Collect(s.EntryName, lines, res.Marks);
                 }
         res.OddMarks = windows.Count;
+        // WO-202: the briefing, read off the sources before anything is collapsed (never fatal)
+        try { res.Briefing = Briefing.Build(Briefing.Read(sources)); }
+        catch (Exception ex) { res.Briefing = "# Kingdom Come: Together -- briefing\n\nThe briefing could not be written: " + ex.GetType().Name + ": " + ex.Message + "\n"; }
 
         // pass 2: dedupe, collapse, compress one frame per entry
         var seen = new Dictionary<string, string>(StringComparer.Ordinal);   // sha256 -> first entry
@@ -126,6 +131,7 @@ public static class Packer
             r.Part = res.Files.First(x => x.Entry == r.SameAs).Part;
         res.Manifest = BuildManifest(res, n, baseName, opt);
         byte[] manFrame = comp.Wrap(Tar.Entry("MANIFEST.txt", Encoding.UTF8.GetBytes(res.Manifest), DateTime.UtcNow)).ToArray();
+        byte[] briefFrame = comp.Wrap(Tar.Entry("BRIEFING.md", Encoding.UTF8.GetBytes(res.Briefing), DateTime.UtcNow)).ToArray();
 
         for (int p = 0; p < n; p++)
         {
@@ -133,7 +139,7 @@ public static class Packer
             string path = System.IO.Path.Combine(outDir, name);
             using (var fs = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None))
             {
-                if (p == 0) fs.Write(manFrame);
+                if (p == 0) { fs.Write(briefFrame); fs.Write(manFrame); }   // WO-202: the briefing first
                 foreach (var f in bins[p].OrderBy(f => f.Name, StringComparer.Ordinal)) fs.Write(f.Frame);
                 fs.Write(comp.Wrap(Tar.End()));
             }

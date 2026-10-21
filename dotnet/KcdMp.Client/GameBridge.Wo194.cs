@@ -32,6 +32,9 @@ public partial class GameBridge
         public bool Mod, Held, Sent, FirstAligned, HostPlayedIt, FigureHidden;
         public double LastT = -1; public long LastTAtMs;
         public byte Partner = 255;   // the partner it is shared with (a C we answered, or a G/A for our C)
+        // WO-202 V.1 cutscene_clock_v2: the partner's last samples, how long this copy has been far behind, its speed now (-1 speeds: none here)
+        public readonly List<Wo202Rules.ClockSample> V2 = new();
+        public long V2BehindSinceMs; public double V2Speed = 1.0; public int V2Seeks, V2Speeds, V2BackRefused;
     }
 
     private sealed class W194Remote
@@ -448,6 +451,7 @@ public partial class GameBridge
     private async Task Wo194AlignAsync(W194Own o, byte src, double partnerS, long arrivedMs)
     {
         if (o.PlayMs == 0 || o.EndMs != 0) return;
+        if (W202("cutscene_clock_v2")) { await Wo202ClockV2Async(o, src, partnerS, arrivedMs); return; }   // WO-202 V.1
         long runsAt = _w194Remote.TryGetValue(src, out var rr) && rr.Name == o.Name ? rr.RunsAtMs : 0;
         if (!Wo194Rules.IsFollower(o.PlayMs, runsAt)) return;   // this copy ran first: the partner follows it
         var g = await _combat.Wo194SeqGetAsync(o.Name);

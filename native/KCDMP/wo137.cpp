@@ -3,6 +3,7 @@
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 // WO-137 -- see wo137.h.
 #include "wo137.h"
+#include "wo202.h"
 #include "fault_guard.h"
 #include "wo137_rules.h"
 
@@ -450,6 +451,7 @@ void record(void* self, const void* oldV, const void* newV, bool notify, bool ca
     if (worker) { c_worker.fetch_add(1); if (r.port[0]) c_workerPort.fetch_add(1); }
     r.seq = g_seq.fetch_add(1) + 1;
     c_recorded.fetch_add(1);
+    wo202::note_change(r.path, r.port, r.oldI, r.newI, r.tid, cascade);   // WO-202 II.4: a failure is traced to its source, here, inside the pulse
     std::lock_guard<std::mutex> lk(g_qm);
     if (g_queue.size() >= kMaxQueue) { c_dropped.fetch_add(1); return; }
     g_queue.push_back(r);
@@ -472,6 +474,7 @@ void hooked_execute(void* self, const void* ctx) {
     const void* port = nullptr;
     rd(ctx, 8, &port);   // S_NodeExecuteContext: +8 the triggering port (C_Node::Execute reads it there)
     t_execNode = self; t_execPort = port;   // WO-154: per thread (a worker's execution keeps its own port)
+    wo202::note_exec(self);                 // WO-202 II.4: when each node last started (a timer's "ran for")
     g_origExecute(self, ctx);
     t_execNode = prevNode; t_execPort = prevPort;
 }

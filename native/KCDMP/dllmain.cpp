@@ -20,6 +20,7 @@
 #include "wo197.h"
 #include "wo200.h"
 #include "wo201.h"
+#include "wo202.h"
 #include "combat_swing.h"
 #include "wo135.h"
 #include "wo137.h"
@@ -41,6 +42,7 @@
 #include "script_context.h"
 #include "join_native.h"
 #include "savelist.h"
+#include "crash_capture.h"
 
 #include <windows.h>
 
@@ -65,6 +67,8 @@ namespace {
 DWORD WINAPI plugin_main(LPVOID) {
     // DllMain runs under the loader lock, so all real work happens here.
     kcdmp::logf("KCDMP.dll attached, pid=%lu", GetCurrentProcessId());
+    // WO-202 I.1: before anything else -- a crash from here on leaves its evidence (crash_capture.h).
+    kcdmp::crash::install();
 
     char exe[MAX_PATH]{};
     GetModuleFileNameA(nullptr, exe, MAX_PATH);
@@ -210,6 +214,7 @@ DWORD WINAPI plugin_main(LPVOID) {
     kcdmp::wo194::install();
     kcdmp::wo200::install();   // WO-200: the out-port tap and the node gate (each off until the agent's Config)
     kcdmp::wo201::install();   // WO-201: B1's resolver (the save path's own FastForward cancel)
+    kcdmp::wo202::install();   // WO-202: the switch word (op 88), the quest-fail tracer
 
     if (kcdmp::dice::install_pause_hook()) {
         kcdmp::main_thread::post_repeating("dice::sample_instance_if_changed", &kcdmp::dice::sample_instance_if_changed);
@@ -246,6 +251,7 @@ DWORD WINAPI plugin_main(LPVOID) {
     // is a hook, not a probe. Idle until kcdmp-combatwrite.txt names a command.
     kcdmp::main_thread::post_repeating("combatwrite::write_watch", &kcdmp::combatwrite::write_watch);
     // WO-113: the death guard's per-frame tick (rate-limits itself).
+    kcdmp::main_thread::post_repeating("crash::tick", &kcdmp::crash::tick);   // WO-202 I.1: the filter kept first, the module table
     kcdmp::main_thread::post_repeating("respawn::tick", &kcdmp::respawn::tick);
     // WO-121: drain the capture / friendly-fire queues, avatar jumps.
     kcdmp::main_thread::post_repeating("motion::tick", &kcdmp::motion::tick);

@@ -58,4 +58,7 @@ unsigned long long frame_count();
 // game timer, divided while the Apse inventory slows it). Main thread.
 float last_dt();
 
+// WO-202 I.1: the game's main thread (the one the frame hook runs on), 0 before the first frame. The crash capture names it.
+unsigned long main_thread_id();
+
 } // namespace kcdmp::main_thread

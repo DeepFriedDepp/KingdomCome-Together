@@ -28,6 +28,9 @@
 #include "rttr_abi.h"
 #include "inline_hook.h"
 #include "hook_prologues.h"
+#include "main_thread.h"
+#include "wo202.h"
+#include "wo202_rules.h"
 #include <windows.h>
 #include <atomic>
 #include <cmath>
@@ -59,7 +62,11 @@ bool g_hooked = false;
 std::atomic<bool> g_on{false};
 std::atomic<uint32_t> g_figEid{0};
 std::atomic<void*> g_P{nullptr}, g_B{nullptr};
-std::atomic<uint32_t> c_evals{0}, c_bound{0}, c_swaps{0}, c_wakes{0}, c_wakeSkipped{0};
+std::atomic<uint32_t> c_evals{0}, c_bound{0}, c_swaps{0}, c_wakes{0}, c_wakeSkipped{0}, c_offMain{0}, c_unsettled{0};
+// WO-202 I.2 near_safe: the figure's C_NPC as last seen on the main thread and since when it has been the same object
+void* g_figStable = nullptr;
+uint64_t g_figStableSince = 0;
+bool g_safeSaid = false;
 std::recursive_mutex g_lock;
 struct Seen { void* node; uint64_t at; };
 std::vector<Seen> g_seen;   // under g_lock
@@ -113,9 +120,30 @@ void note_seen(void* node, uint64_t t) {
     if (g_seen.size() < 256) g_seen.push_back({node, t});
 }
 
+void* npc_of(void* mgr, void* get, uint32_t eid);
+
+// WO-202 I.2 near_safe: the two C_NPCs looked up in this very call on the main thread (never a pointer cached from another frame), the
+// figure's only once it has been the same object for kFigureSettleMs.
+bool safe_pair(void** P, void** B) {
+    void* mgr = wo141::x::npc_manager();
+    void* get = is_a(mgr, g_vftNpcMgr) ? vslot(mgr, kMgrNpcOf) : nullptr;
+    const uint32_t fe = g_figEid.load();
+    if (!get || !fe || !engine::entity_by_id(fe)) return false;
+    *P = npc_of(mgr, get, kPlayerEntity);
+    *B = npc_of(mgr, get, fe);
+    if (!wo202rules::figure_usable(*B, g_figStable, g_figStableSince, GetTickCount64())) { c_unsettled.fetch_add(1, std::memory_order_relaxed); return false; }
+    return *P && *P != *B;
+}
+
 void eval_detour(void* node) {
     c_evals.fetch_add(1, std::memory_order_relaxed);
     void* P = g_P.load(); void* B = g_B.load();
+    if (g_on.load() && wo202::on(wo202rules::kBitNearSafe)) {
+        // the engine evaluates distance triggers on its job workers too: a figure (or a node) another thread is changing is never read
+        // there -- that evaluation runs exactly as without the mod
+        if (GetCurrentThreadId() != main_thread::main_thread_id()) { c_offMain.fetch_add(1, std::memory_order_relaxed); g_evalOrig(node); return; }
+        if (!safe_pair(&P, &B)) { g_evalOrig(node); return; }
+    }
     if (!g_on.load() || !P || !B || P == B) { g_evalOrig(node); return; }
     std::lock_guard<std::recursive_mutex> lk(g_lock);
     void* o = nullptr; void* t = nullptr;
@@ -222,13 +250,25 @@ void tick() {
         return;
     }
     if (now < g_settleUntil) return;
-    if (now - g_lastResolve >= 1000) {
+    const bool safe = wo202::on(wo202rules::kBitNearSafe);
+    if (safe || now - g_lastResolve >= 1000) {   // WO-202 near_safe: every frame -- the settle clock sees a new figure NPC at once
         g_lastResolve = now;
         void* mgr = wo141::x::npc_manager();
         void* get = is_a(mgr, g_vftNpcMgr) ? vslot(mgr, kMgrNpcOf) : nullptr;
         const uint32_t fe = g_figEid.load();
         g_P = get ? npc_of(mgr, get, kPlayerEntity) : nullptr;
         g_B = get && fe && engine::entity_by_id(fe) ? npc_of(mgr, get, fe) : nullptr;
+        if (g_B.load() != g_figStable) { g_figStable = g_B.load(); g_figStableSince = now; }
+    }
+    if (safe) {
+        // WO-202 I.2: no node pointer is kept from one frame to the next -- the engine frees quest nodes on its own schedule (a module's
+        // hibernation removed 3605 nodes of Zelejov's tavern area in each field session that crashed, and the wake re-evaluated nodes
+        // remembered up to 5 s). A trigger is substituted only inside the engine's own evaluation of it.
+        if (!g_safeSaid) { g_safeSaid = true; logf("WO202-NEAR near_safe on: main thread only, the figure looked up per call and settled %llu ms, no wake of remembered nodes",
+                                                   static_cast<unsigned long long>(wo202rules::kFigureSettleMs)); }
+        std::lock_guard<std::recursive_mutex> lk(g_lock);
+        g_seen.clear();
+        return;
     }
     if (now - g_lastWake < 200 || !g_B.load()) return;
     g_lastWake = now;
@@ -267,7 +307,8 @@ uint8_t handle(const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t
 }
 
 int status_text(char* out, int n) {
-    return std::snprintf(out, static_cast<size_t>(n), "near=%s on=%d fig=0x%X evals=%u bound=%u swaps=%u wakes=%u wake_dropped=%u", g_why,
+    return std::snprintf(out, static_cast<size_t>(n), "near=%s on=%d safe=%d off_main=%u unsettled=%u fig=0x%X evals=%u bound=%u swaps=%u wakes=%u wake_dropped=%u", g_why,
+                         wo202::on(wo202rules::kBitNearSafe) ? 1 : 0, c_offMain.load(), c_unsettled.load(),
                          g_on.load() ? 1 : 0, g_figEid.load(), c_evals.load(), c_bound.load(), c_swaps.load(), c_wakes.load(), c_wakeSkipped.load());
 }
 

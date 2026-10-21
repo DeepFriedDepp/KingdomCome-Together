@@ -133,4 +133,14 @@
 		<action name="kcd2mp_quicksave" map="interaction" />
 		<control input="home" controller="keyboard" />
 	</superaction>
+
+	<!-- KCD2MP (WO-202 VI): the mark key. One press marks the moment on both machines (a "Marked" toast on each; the menu's and the
+	     console's marks stay). Every letter is a key of the game's own "haste" action map (defaultProfile.xml haste_keya..z, U and Y
+	     too), the F keys are the game's or the mod's, and H, F1, F3, F10 and the numpad are the Modding Tools build's debug traps; the
+	     period key is named in neither of the game's two files (every input= and keyboard= value of the 1.5.5 files checked). Its live
+	     press (the WO-6 rule above): docs/WO-202-findings.md. -->
+	<superaction name="kcd2mp_mark" ui_group="" keyboard="hidden">
+		<action name="kcd2mp_mark" map="interaction" />
+		<control input="period" controller="keyboard" />
+	</superaction>
 </kdcmp_patch>

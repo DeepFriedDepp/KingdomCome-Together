@@ -638,7 +638,10 @@ public partial class GameBridge
                 return;
             case "w140_answer":     // <voteId> <yes|no>
                 if (f.Length >= 2 && uint.TryParse(f[0], NumberStyles.None, CultureInfo.InvariantCulture, out uint vid) && f[1] is "yes" or "no")
+                {
+                    if (vid == Wo202Rules.RejoinPromptId) { _ = Wo202RejoinAnsweredAsync(f[1] == "yes"); return; }   // WO-202 III.3
                     _ = Wo140AnswerLocalAsync(vid, f[1], "this player's key");
+                }
                 return;
             case "w140_cfg":        // vote=on|off (mp_sleep_vote)
                 if (f.Length >= 1 && f[0].StartsWith("vote=", StringComparison.Ordinal))

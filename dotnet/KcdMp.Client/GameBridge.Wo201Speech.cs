@@ -51,6 +51,7 @@ public partial class GameBridge
         }
         foreach (var l in Wo201Rules.ParseSpeechPoll(rr.Payload))
         {
+            Wo202NoteVoice(l.AgeMs, l.Dur);   // WO-202 V.1: a shared cutscene never jumps through a line that is playing
             bool isMe = l.Eid == 0x7777;
             if (isMe && l.FromDialogue) Wo201VoteNoteOwnLine(l.Text);   // F2: what this player chose, as he says it
             if (!Wo201Rules.SpeechSendable(W137Host, isMe, l.FromDialogue, l.Dist, _w201SpeechRadius)) continue;

@@ -323,6 +323,7 @@ public partial class GameBridge
     private void Wo124OnGameplayStarted()
     {
         _where = GameWhere.World;
+        Wo202NoteEvent("a load (Gameplay started)");   // WO-202 II.4
         W160WorldConfirmed();   // WO-160 2: a world just loaded in this game process
         Wo136OnGameplayStarted();   // WO-136: the settle, then the held frames
         Wo151OnGameplayStarted();   // WO-151 3.7: the weather applied memory goes; a joiner re-applies the host's
@@ -350,13 +351,20 @@ public partial class GameBridge
         {
             // WO-125 Phase 6: the host reloaded this world -- rejoin from inside it (the host defers while it loads).
             if (!_rejoinPending || DateTime.UtcNow < _autoNextUtc) return;
-            if ((DateTime.UtcNow - _rejoinSinceUtc).TotalMinutes > 5)
+            if (W202("rejoin_recover"))
+            {
+                // WO-202 III.3: a rejoin that failed is tried again by itself (3 times, the gaps growing); after that the player is
+                // asked, never sent to the main menu without a word
+                if (_w202RejoinAsked) return;
+                if (Wo202Rules.RejoinShouldAsk(_w202RejoinFails)) { await Wo202AskRejoinAsync(); return; }
+            }
+            else if ((DateTime.UtcNow - _rejoinSinceUtc).TotalMinutes > 5)
             {
                 _rejoinPending = false;
                 await LeaveSharedWorldAsync("rejoin-timeout", "Could not rejoin your host after its reload.");
                 return;
             }
-            _autoNextUtc = DateTime.UtcNow.AddSeconds(20);
+            _autoNextUtc = DateTime.UtcNow.AddSeconds(W202("rejoin_recover") ? Wo202Rules.RejoinGapS(_w202RejoinFails) : 20);
             Console.WriteLine("MP-HENRY joiner: asking the host for its reloaded world (an in-world rejoin)");
             await SendJoinRequestAsync();
             return;
@@ -1027,6 +1035,7 @@ public partial class GameBridge
         _where = GameWhere.Menu;
         W160WorldGone();
         _gameQuitting = true;
+        Wo202CrashWatch.NoteQuit();   // WO-202 I.1: the process that ends next ends on purpose
         var owedAtQuit = wasShared ? Wo184TakeOwedAtQuit() : null;   // WO-184 B4: never dropped silently
         SetJoinedWorld(false);
         if (!wasShared) { Wo125Sweep("game quit"); return; }

@@ -45,6 +45,7 @@ public static class KeybindPak
         "kcd2mp_dice_yield", "kcd2mp_dice_cancel",
         "kcd2mp_menu_toggle", "kcd2mp_menu_up", "kcd2mp_menu_down", "kcd2mp_menu_change",
         "kcd2mp_quicksave",
+        "kcd2mp_mark",   // WO-202 VI
     };
 
     /// <summary>WO-178 0.d: the quicksave key's action (its key is the player's choice: settings.json QuickSaveKey, Wo178Rules).</summary>

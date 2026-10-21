@@ -157,8 +157,9 @@ public partial class GameBridge
                 Guid master = f.Row, slave = f.AltRow;
                 if ((cflags & Wo197Rules.ClinchRows) != 0 && !(_rowCatalog.IsCompletedSuccessfully && _rowCatalog.Result is { } cc && cc.TryGet(master, out _)))
                 { cflags = (byte)(cflags & ~Wo197Rules.ClinchRows); master = Guid.Empty; slave = Guid.Empty; }
-                what = $"clinch={Wo197Rules.ClinchPhaseName(cflags)} role={((cflags & Wo197Rules.ClinchMaster) != 0 ? "master" : "slave")} row={(master == Guid.Empty ? "-" : master.ToString())} slave_row={(slave == Guid.Empty ? "-" : slave.ToString())}";
-                return _actionOut.Build(ActionKind.AvatarClinch, ActionPhase.Commit, Wo197Rules.ClinchEvent(ms, cflags, master, slave).ToBytes());
+                string? opp = W202("recoil_clinch") ? _w202OwnOpponent : null;   // WO-202 IV.3: the body this player clinched (the DLL's read)
+                what = $"clinch={Wo197Rules.ClinchPhaseName(cflags)} role={((cflags & Wo197Rules.ClinchMaster) != 0 ? "master" : "slave")} row={(master == Guid.Empty ? "-" : master.ToString())} slave_row={(slave == Guid.Empty ? "-" : slave.ToString())} opponent={opp ?? "-"}";
+                return _actionOut.Build(ActionKind.AvatarClinch, ActionPhase.Commit, Wo197Rules.ClinchEvent(ms, cflags, master, slave, opp).ToBytes());
             default:
                 return null;
         }
@@ -274,6 +275,12 @@ public partial class GameBridge
         // his figure's opponent here (the DLL's read; a copy -- never this player, whose body is his own input's)
         var q = await Wo197PairOpAsync(feid, 0, 0, "", "", ct);
         if (q is not { Ok: true } && Wo197CopyFighting(a.SourceGhostId) is uint cf) q = await Wo197PairOpAsync(feid, cf, 0, "", "", ct);
+        // WO-202 IV.3: the clinch names the body his player clinched (his engine's value): that copy here
+        if (q is not { Ok: true } && W202("recoil_clinch") && Wo197Rules.ClinchOpponent(re) is string on && _npcEntityIds.TryGetValue(on, out uint oe) && oe != 0)
+        {
+            q = await Wo197PairOpAsync(feid, oe, 0, "", "", ct);
+            if (q is { Ok: true }) Console.WriteLine($"{head} opponent={on} (named by the clinch: the copy of the body his player clinched)");
+        }
         if (q is not { Ok: true, Payload.Length: >= 4 } qa) { Console.WriteLine($"{head} dispatch=skipped (his figure has no opponent body here)"); return; }
         uint opp = BinaryPrimitives.ReadUInt32LittleEndian(qa.Payload);
         uint mEid = master ? feid : opp, sEid = master ? opp : feid;

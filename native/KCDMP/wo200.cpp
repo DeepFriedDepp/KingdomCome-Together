@@ -3,6 +3,8 @@
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 // WO-200 -- see wo200.h.
 #include "wo200.h"
+#include "wo202.h"
+#include "wo202_rules.h"
 #include "wo200_rules.h"
 
 #include <windows.h>
@@ -198,6 +200,8 @@ void recompute() {
 thread_local uint32_t t_closure = 0;
 thread_local int t_inGate = 0;            // our own reads inside the gate run nodes' data inputs: no gate for them
 thread_local bool t_mirrorTalker = false;
+thread_local const void* t_srcNode = nullptr;   // WO-202 II.4: the out-port pulse running on this thread
+thread_local const void* t_srcPort = nullptr;
 
 // --- counters --------------------------------------------------------------------
 std::atomic<uint32_t> c_tapCalls{0}, c_captured{0}, c_quiet{0}, c_continued{0}, c_gateCalls{0}, c_gateClassified{0}, c_targetReads{0};
@@ -399,7 +403,16 @@ bool parent_name(const void* node, char* out, size_t n) {
 // ---------------------------------------------------------------------------
 void hooked_out_trigger(void* port) {
     // The engine's own pulse always runs unguarded (a fault deep in the graph is the game's, never ours to swallow).
-    if (!g_tapOn.load(std::memory_order_relaxed) && !g_researchDrop.load(std::memory_order_relaxed)) { g_origOut(port); return; }
+    if (!g_tapOn.load(std::memory_order_relaxed) && !g_researchDrop.load(std::memory_order_relaxed)) {
+        if (wo202::on(wo202rules::kBitQuestFail)) {   // WO-202 II.4: the pulse's port is the source of what it changes (the owner, below, only when asked)
+            const void* ps = t_srcPort; const void* ns = t_srcNode;
+            t_srcPort = port; t_srcNode = nullptr;
+            g_origOut(port);
+            t_srcPort = ps; t_srcNode = ns;
+            return;
+        }
+        g_origOut(port); return;
+    }
     c_tapCalls.fetch_add(1, std::memory_order_relaxed);
     void* owner = port_owner(port);
     if (!owner) { g_origOut(port); return; }
@@ -485,7 +498,10 @@ void hooked_out_trigger(void* port) {
             break;
     }
     call_release(owner);
+    const void* ps = t_srcPort; const void* ns = t_srcNode;   // WO-202 II.4: the source of what this pulse changes
+    t_srcPort = port; t_srcNode = owner;
     g_origOut(port);
+    t_srcPort = ps; t_srcNode = ns;
 }
 
 // ---------------------------------------------------------------------------
@@ -705,6 +721,20 @@ bool fire_on(void* node, void* p) {
 
 // ===========================================================================
 uint32_t closure_now() { return t_closure; }
+void source_now(const void** node, const void** port) { *node = t_srcNode; *port = t_srcPort; }
+void describe_source(const void* node, const void* port, char* cls, size_t ncls, char* path, size_t npath, char* pname, size_t npname) {
+    if (ncls) cls[0] = 0;
+    if (npath) path[0] = 0;
+    if (npname) pname[0] = 0;
+    if (!port) return;
+    void* owner = node ? const_cast<void*>(node) : port_owner(port);   // the tap-off path keeps only the port: its owner is asked here
+    if (owner) {
+        rtti_name(owner, cls, ncls);
+        wo137::path_of(owner, path, npath);
+    }
+    port_name(port, pname, npname);
+    if (owner && !node) call_release(owner);
+}
 bool copy_neutral_always() { return g_role.load() == kRoleJoiner && g_joined.load() && (g_valueBits.load() & 1) != 0; }
 void set_mirror_talker(bool on) { t_mirrorTalker = on; }
 

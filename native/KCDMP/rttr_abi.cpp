@@ -5,6 +5,8 @@
 #include "fault_guard.h"
 #include "pe_exports.h"
 #include "log.h"
+#include "wo202.h"
+#include "wo202_rules.h"
 
 #include <atomic>
 #include <cmath>
@@ -1686,7 +1688,7 @@ struct Tracked {
 // offset is learned once and re-proved on every soul that is tracked). Both are plain guarded reads.
 int    g_soulGuidOff = -1;      // -1 unknown, -2 no consistent offset found (then the vptr check alone)
 int    g_soulGuidMisses = 0;
-uint32_t c_soulGone = 0, c_soulGuidLearned = 0;
+uint32_t c_soulGone = 0, c_soulGuidLearned = 0, c_zeroAlive = 0;   // c_zeroAlive: WO-202 II.3
 
 bool read_soul_bytes(const void* soul, size_t off, void* out, size_t n) {
     KCDMP_FAULT_READ(site, "rttr::sample_health/soul_alive");
@@ -2057,7 +2059,17 @@ void sample_health(void (*on_hit)(const unsigned char[16], void*, float, float, 
         if (reportable <= kMinReportable) reportable = 0.0f;
         if (reportable <= 0.0f && st_drop <= 0.0f) continue;
 
-        const bool died = reportable > 0.0f && (hp <= 0.0f) && !t.dead;
+        bool died = reportable > 0.0f && (hp <= 0.0f) && !t.dead;
+        if (died) {
+            // WO-202 II.3 death_engine_only: health 0 is a death only when the engine's soul reads dead too
+            bool soulDead = false;
+            const bool gate = kcdmp::wo202::on(kcdmp::wo202rules::kBitDeathEngineOnly);
+            const bool readOk = gate && soul_bool(t.soul, "IsDead", &soulDead);
+            died = kcdmp::wo202rules::fatal_is_death(true, readOk, soulDead, gate);
+            if (!died && ++c_zeroAlive <= 40)
+                logf("WO202-DEATH health 0 on soul %p, the engine's IsDead %s at this sample: a hit, not a death -- no FATAL (a death the engine "
+                     "makes later goes out through the dead-state observer)", t.soul, readOk ? "false" : "unread");
+        }
         if (died) t.dead = true;
         if (on_hit) on_hit(t.guid, t.soul, reportable, st_drop, died);
     }

@@ -179,6 +179,13 @@ public partial class GameBridge
             Interlocked.Increment(ref _w175Checks);
             var res = await Task.Run(() => Wo175RepairInto(path));
             if (res.Kind == "ok") { Console.WriteLine($"MP-W175 save {disp}: healthy"); return; }
+            if (res.Kind == "failed" && Wo202MovedByUs(path))
+            {
+                // WO-202 VI: the joiner's Henry pipeline moved this QuickSave out of the playline (a snapshot of the host's world) while it
+                // was checked -- 0.61.9 then showed "a problem the mod could not repair" for a file the mod itself had moved
+                Console.WriteLine($"MP-W175 save {disp}: not checked -- the mod moved it out of the playline (a snapshot's QuickSave), no toast");
+                return;
+            }
             if (res.Kind == "failed")
             {
                 Interlocked.Increment(ref _w175Failed);

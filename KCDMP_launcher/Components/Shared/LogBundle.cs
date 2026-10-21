@@ -235,6 +235,9 @@ namespace KCDMP_launcher.Components.Shared
             }
             catch { }
 
+            // WO-202 I.1: every crash's evidence from the last 24 h -- the mod's own reports, the game's crash reporter, Windows'.
+            if (kcdLog is not null) GatherCrashes(Path.GetDirectoryName(kcdLog) ?? "", list, AddIfPresent);
+
             // The launcher's real settings file (written by Home.SaveSettings
             // as a working-directory-relative "settings.json").
             AddIfPresent(Path.GetFullPath("settings.json"), "settings.json");
@@ -243,6 +246,89 @@ namespace KCDMP_launcher.Components.Shared
             AddIfPresent(Globals.ConfigFilePath, "config.json");
 
             return list;
+        }
+
+        /// <summary>WO-202 I.1: how far back a crash's evidence is collected.</summary>
+        internal static readonly TimeSpan CrashWindow = TimeSpan.FromHours(24);
+
+        /// <summary>
+        /// WO-202 I.1: not one crash of the 2026-10-20 sessions left evidence in a bundle. Collected now, each part never fatal:
+        ///   * crashes/   the DLL's reports (kcdmp-crashes\crash-*: crash.txt, crash.dmp, the agent's agent-statements.txt);
+        ///   * game-crash/ the game's own crash reporter (BugSplat on the Modding Tools build): its %TEMP%\bugsplat_*.log lines
+        ///     (the faulting module and offset; the machine and account lines left out), its minidump while it is still there,
+        ///     and its BugSplatAttachments (small files only);
+        ///   * windows/   Windows Error Reporting's reports for KingdomCome.exe and the Application event log's crash entries
+        ///     (the only trace a fast-fail leaves).
+        /// </summary>
+        internal static void GatherCrashes(string gameDir, List<KcdMp.LogPack.SourceFile> list, Action<string?, string> add)
+        {
+            DateTime since = DateTime.Now - CrashWindow;
+            try
+            {
+                var root = new DirectoryInfo(Path.Combine(gameDir, "kcdmp-crashes"));
+                if (root.Exists)
+                    foreach (var d in root.GetDirectories("crash-*").Where(d => d.LastWriteTime >= since).OrderByDescending(d => d.LastWriteTime).Take(4))
+                        foreach (var f in d.GetFiles())
+                            add(f.FullName, $"crashes/{d.Name}/{f.Name}");
+            }
+            catch { }
+            try
+            {
+                var tmp = new DirectoryInfo(Path.GetTempPath());
+                foreach (var f in tmp.GetFiles("bugsplat_*.log").Where(f => f.LastWriteTime >= since && f.Length > 3).OrderByDescending(f => f.LastWriteTime).Take(6))
+                {
+                    var keep = File.ReadAllLines(f.FullName).Where(l => !l.Contains("Attributes:") && !l.Contains("setUser") && !l.Contains("setMail"));
+                    list.Add(new KcdMp.LogPack.SourceFile($"game-crash/{f.Name}", Bytes: System.Text.Encoding.UTF8.GetBytes(string.Join("\n", keep))));
+                }
+                foreach (var f in tmp.GetFiles("Kingdom Come*.dmp").Where(f => f.LastWriteTime >= since && f.Length < 64L << 20).OrderByDescending(f => f.LastWriteTime).Take(2))
+                    add(f.FullName, $"game-crash/{f.Name.Replace(':', '_')}");
+            }
+            catch { }
+            try
+            {
+                var att = new DirectoryInfo(Path.Combine(gameDir, "BugSplatAttachments"));
+                if (att.Exists)
+                    foreach (var f in att.GetFiles().Where(f => f.LastWriteTime >= since && f.Length < 2L << 20).OrderByDescending(f => f.LastWriteTime).Take(8))
+                        add(f.FullName, $"game-crash/attachments/{f.Name}");
+            }
+            catch { }
+            try
+            {
+                string wer = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "Microsoft", "Windows", "WER");
+                foreach (var kind in new[] { "ReportArchive", "ReportQueue" })
+                {
+                    var d = new DirectoryInfo(Path.Combine(wer, kind));
+                    if (!d.Exists) continue;
+                    foreach (var r in d.GetDirectories("App*_KingdomCome.exe_*").Where(r => r.LastWriteTime >= since).OrderByDescending(r => r.LastWriteTime).Take(4))
+                        add(Path.Combine(r.FullName, "Report.wer"), $"windows/{kind}/{r.Name}/Report.wer");
+                }
+            }
+            catch { }
+            try
+            {
+                string events = CrashEvents(since);
+                if (events.Length > 0) list.Add(new KcdMp.LogPack.SourceFile("windows/application-events.txt", Bytes: System.Text.Encoding.UTF8.GetBytes(events)));
+            }
+            catch { }
+        }
+
+        /// <summary>The Application event log's crash entries (1000 application error, 1001 its report, 1026 .NET) that name
+        /// KingdomCome.exe, newest first.</summary>
+        internal static string CrashEvents(DateTime since)
+        {
+            long ms = (long)Math.Max(1, (DateTime.Now - since).TotalMilliseconds);
+            var psi = new System.Diagnostics.ProcessStartInfo("wevtutil.exe",
+                $"qe Application /q:\"*[System[(EventID=1000 or EventID=1001 or EventID=1026) and TimeCreated[timediff(@SystemTime) <= {ms}]]]\" /f:text /rd:true /c:200")
+            { RedirectStandardOutput = true, UseShellExecute = false, CreateNoWindow = true };
+            using var p = System.Diagnostics.Process.Start(psi);
+            if (p is null) return "";
+            string text = p.StandardOutput.ReadToEnd();
+            p.WaitForExit(15000);
+            var blocks = text.Split("Event[", StringSplitOptions.RemoveEmptyEntries)
+                .Where(b => b.Contains("KingdomCome", StringComparison.OrdinalIgnoreCase))
+                .Select(b => "Event[" + string.Join("\n", b.TrimEnd().Split('\n')
+                    .Where(l => !l.TrimStart().StartsWith("Computer:", StringComparison.Ordinal) && !l.TrimStart().StartsWith("User:", StringComparison.Ordinal))));   // no machine or account name
+            return string.Join("\n\n", blocks);
         }
 
         /// <summary>WO-177 A4: how many earlier native logs the DLL keeps (native/KCDMP/log.h kLogKeep).</summary>

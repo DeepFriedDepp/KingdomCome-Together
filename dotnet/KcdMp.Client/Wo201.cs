@@ -114,7 +114,7 @@ public static class Wo201Rules
         if (!int.TryParse(f[2], NumberStyles.Integer, CultureInfo.InvariantCulture, out int d) || d <= 0 || d > 60000) return false;
         if (!int.TryParse(f[3], NumberStyles.Integer, CultureInfo.InvariantCulture, out int a) || a < 0) return false;
         string p = f[4];
-        if (p.Length < 5 || p.Length > 190 || p.Contains("..") || !p.EndsWith(".ogg", StringComparison.OrdinalIgnoreCase)) return false;
+        if (!Wo202Rules.IsVoicePath(p)) return false;   // WO-202 V.2: the engine's own path form (no extension), not only ".ogg"
         if (f[1] != "@me" && !IsEntityName(f[1])) return false;
         w = new SpeechWireLine(f[1], d, a, p, f[5]);
         return true;

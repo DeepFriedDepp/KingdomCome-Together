@@ -8,6 +8,14 @@ using ZstdSharp;
 
 // usage: KcdMp.LogPack.Tool <folder holding a bundle's files> <out folder> [--earlier] [--max-part-bytes N] [--no-verify]
 // The folder is a bundle as the launcher collects it (kcd.log, agent.log, history/..., leash/...). Prints sizes and checks the promises.
+if (args.Length >= 2 && args[0] == "brief")
+{
+    // WO-202: the briefing alone, for a folder of a bundle's files (the field analysis)
+    var bf = Directory.EnumerateFiles(args[1], "*", SearchOption.AllDirectories)
+        .Select(f => new SourceFile(Path.GetRelativePath(args[1], f).Replace('\\', '/'), f)).ToList();
+    Console.Write(Briefing.Build(Briefing.Read(bf)));
+    return;
+}
 string src = args[0], outDir = args[1];
 bool earlier = args.Contains("--earlier"), verify = !args.Contains("--no-verify");
 var opt = new PackOptions();

@@ -321,7 +321,14 @@ public partial class GameBridge
             if (s is { Seen: Wo167Rules.SeenPending }) { await Task.Delay(Wo167Rules.ShownSecondLookMs - Wo167Rules.ShownFirstLookMs); s = await _combat.Wo167SwingSeenAsync(eid); }
             if (s is { Seen: Wo167Rules.SeenPending }) { await Task.Delay(250); s = await _combat.Wo167SwingSeenAsync(eid); }
             byte seen = s?.Seen ?? Wo167Rules.SeenOff;
-            if (seen == Wo167Rules.SeenInstalled) { Interlocked.Increment(ref _w167Shown); return; }
+            if (seen == Wo167Rules.SeenInstalled)
+            {
+                Interlocked.Increment(ref _w167Shown);
+                // WO-202 desync scorecard: the host's swing to this copy's: the one-way delay plus the wait for the copy's animation
+                if (W202("desync_score") && s is { } si)
+                    Console.WriteLine(FormattableString.Invariant($"WO202-SWING npc={npc} row={rowGuid} delay_ms={Wo161Rules.OneWayMs(_clockRttMedianMs) + si.WaitMs} wait_ms={si.WaitMs}"));
+                return;
+            }
             if (seen != Wo167Rules.SeenNoAnim) { Interlocked.Increment(ref _w167ShownUnknown); return; }   // off / none / still pending: as 0.48.2
             long n = Interlocked.Increment(ref _w167NoAnim);
             bool taken = _w161Played.TryGetValue(npc, out var pl) && pl.Retract(playedAt);

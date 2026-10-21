@@ -8,6 +8,7 @@
 #include <windows.h>
 #include <tlhelp32.h>
 #include <cstring>
+#include <atomic>
 #include <initializer_list>
 
 namespace kcdmp::inlinehook {
@@ -91,7 +92,34 @@ size_t emit_thunk(uint8_t* p, Callback cb, void* tramp, bool gate = false) {
 
 Suspended g_sus;   // static: kMaxThreads handles do not belong on a stack
 
+// WO-202 I.1: the placed hooks (append-only; a slot is complete before the count covers it)
+constexpr int kMaxHooks = 128;
+HookRec g_hooks[kMaxHooks];
+std::atomic<int> g_hookCount{0};
+
+void note_hook(void* target, void* page, void* fn, bool detour) {
+    const int i = g_hookCount.load();
+    if (i >= kMaxHooks) return;
+    g_hooks[i] = HookRec{reinterpret_cast<uintptr_t>(target), reinterpret_cast<uintptr_t>(page), reinterpret_cast<uintptr_t>(fn), detour};
+    g_hookCount.store(i + 1);
+}
+
 } // namespace
+
+int hook_count() { return g_hookCount.load(); }
+
+bool hook_at(int i, HookRec* out) {
+    if (i < 0 || i >= g_hookCount.load() || !out) return false;
+    *out = g_hooks[i];
+    return true;
+}
+
+int hook_of_page(uintptr_t addr) {
+    const int n = g_hookCount.load();
+    for (int i = 0; i < n; ++i)
+        if (addr >= g_hooks[i].page && addr < g_hooks[i].page + kHookPageBytes) return i;
+    return -1;
+}
 
 bool install_impl(void* target, const uint8_t* expect, size_t len, Callback cb, const char** why, bool gate, void* detour = nullptr,
                   void** original = nullptr);
@@ -154,7 +182,7 @@ bool install_impl(void* target, const uint8_t* expect, size_t len, Callback cb, 
     q[0] = 0xFF; q[1] = 0x25; std::memset(q + 2, 0, 4);
     const uint64_t back = reinterpret_cast<uint64_t>(tgt + len);
     std::memcpy(q + 6, &back, 8);
-    uint8_t* thunk = mem + 128;
+    uint8_t* thunk = mem + kThunkAt;
     if (!detour) emit_thunk(thunk, cb, mem, gate);
     FlushInstructionCache(GetCurrentProcess(), mem, 4096);
     // WO-178: a detour replaces the function -- the patch jumps straight to it and the trampoline (the copied prologue + the jump back)
@@ -177,6 +205,7 @@ bool install_impl(void* target, const uint8_t* expect, size_t len, Callback cb, 
         VirtualProtect(tgt, len, old, &ignored);
         FlushInstructionCache(GetCurrentProcess(), tgt, len);
         resume_all(&g_sus);
+        note_hook(tgt, mem, detour ? detour : reinterpret_cast<void*>(cb), detour != nullptr);
         *why = "ok";
         return true;
     }

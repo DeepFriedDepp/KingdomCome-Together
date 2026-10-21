@@ -53,4 +53,10 @@ void set_mirror_talker(bool on);
 // on every reconcile tick, and the planner is never asked to place it (wo141's reconcile).
 bool copy_neutral_always();
 
+// WO-202 II.4: the node whose out-port pulse runs on this thread right now (its port), or nulls -- the source of a State change made
+// inside that pulse (a timer's OnFinished, a watch, a trigger, a conversation's consequence).
+void source_now(const void** node, const void** port);
+// Its class (RTTI), its path in the quest graph and the port's name, read on this thread while the pulse holds the node.
+void describe_source(const void* node, const void* port, char* cls, size_t ncls, char* path, size_t npath, char* pname, size_t npname);
+
 } // namespace kcdmp::wo200

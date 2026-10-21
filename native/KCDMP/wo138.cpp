@@ -2,6 +2,8 @@
 // GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 // WO-138: no pausing, and the host's NPC stream in the DLL. See wo138.h.
+#include "wo202.h"
+#include "wo202_rules.h"
 #include "wo138.h"
 #include "fault_guard.h"
 #include "wo138_rules.h"
@@ -431,7 +433,10 @@ void sender_tick(double now) {
                                   t.s.ko != t.sent.ko);
         if (c == R::Cull::Culled) { t.culled = true; continue; }
         t.culled = false;
-        if (!R::should_send(t.s, t.sent, eng, swing, now, g_cfg)) continue;
+        // WO-202 IV.4 fight_pos_fresh: a fighting NPC near ANY player (the partner's fights too, not only the host's 12 m) goes out every
+        // tick -- standing in guard it moved less than the send threshold and waited for the 2 s heartbeat (the field: p90 1.0 s old)
+        const bool fresh = wo202::on(wo202rules::kBitFightPosFresh) && wo202rules::fight_fresh(t.s.drawn, t.s.dead, t.s.ko, dMin, g_cfg.engageRange);
+        if (!R::should_send(t.s, t.sent, eng || fresh, swing, now, g_cfg) && !fresh) continue;
 
         if (t.s.dead && !t.sent.dead)
             logf("WO138-SEND %s: the dead bit goes out (hp=%.1f)", t.name.c_str(), t.s.hp);

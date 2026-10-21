@@ -347,6 +347,22 @@ uint8_t pair(const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t* 
     if (!pair_request_ok(len, lenA, lenV)) return wo163::kRBadRequest;
     const std::string specA(reinterpret_cast<const char*>(body + 11), lenA);
     const std::string specV(reinterpret_cast<const char*>(body + 12 + lenA), lenV);
+    // WO-202 IV.3: a = 0xFFFFFFFF, a query: this machine's own player's combat opponent -- [eid:4][255][255][0][nameLen:1][name] -- so the
+    // player's clinch can name the body it clinched (the joiner's copy of it is found by that name; the field: 4 of the host's clinches
+    // reached the joiner and none played, "his figure has no opponent body here")
+    if (a == 0xFFFFFFFFu && pair_is_query(lenA, lenV)) {
+        motion::ModelRead pm{};
+        const uint32_t pe = player_eid();
+        const uint32_t opp = (pe && motion::read_model(pe, &pm)) ? pm.opponentEid : 0;
+        if (!body_ok(opp)) return wo163::kRNoActor;
+        const char* nm = name_of(opp);
+        const size_t nl = std::strlen(nm) < 63 ? std::strlen(nm) : 63;
+        if (cap < 8 + nl) return wo163::kRBadRequest;
+        std::memcpy(out, &opp, 4); out[4] = out[5] = 255; out[6] = 0; out[7] = static_cast<uint8_t>(nl);
+        std::memcpy(out + 8, nm, nl);
+        *outLen = 8 + nl;
+        return wo163::kROk;
+    }
     if (!pair_is_query(lenA, lenV)) c_pairs.fetch_add(1);
     if (!(g_paired.load() || g_clinch.load()) || !body_ok(a)) { c_pairRefused.fetch_add(1); return wo163::kRNoActor; }
     if (!v) { motion::ModelRead m{}; if (motion::read_model(a, &m)) v = m.opponentEid; }

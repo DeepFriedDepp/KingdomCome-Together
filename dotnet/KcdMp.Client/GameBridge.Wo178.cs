@@ -323,6 +323,7 @@ public partial class GameBridge
                 if ((int)verdict is > 0 and < 7) Interlocked.Increment(ref _w173Verdicts[(int)verdict]);
                 Console.WriteLine(FormattableString.Invariant(
                     $"MP-W173 hit npc={npc} by_ghost={source} applied={(hit.ByEngine ? "engine" : hit.AppliedAny ? "raw" : "none")} verdict={(verdict == HitVerdict.None ? "-" : HitVerdictMsg.VerdictName(verdict))} reaction={Wo173Rules.ReactName(hit.React)} joiner_said=st{stamina:F1}/hp{health:F1} raw_applied=st{hit.StApplied:F1}/hp{hit.HpApplied:F1} row={(f is null ? "none" : $"type{f.Value.Type}/zone{f.Value.Zone}")} fallback={Wo173Rules.FallbackName(hit.Fallback)} seq={hit.Seq} held=yes"));
+                Wo202NoteJoinerBlow(npc, hit.AppliedAny, hit.React);   // WO-202 II.3
                 if (W164Text.IsNpcName(npc))
                 {
                     Interlocked.Increment(ref _w173OutSent);

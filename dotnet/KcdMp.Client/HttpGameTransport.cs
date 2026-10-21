@@ -291,6 +291,7 @@ public sealed partial class HttpGameTransport(string gameApiBase, int timeoutMs 
         if (!BatchingEnabled)
         {
             await SendNowAsync(lua, ct);
+            Wo202CrashWatch.NoteApplied(lua);
             return;
         }
 
@@ -369,6 +370,7 @@ public sealed partial class HttpGameTransport(string gameApiBase, int timeoutMs 
         {
             await SendNowAsync(sb.ToString(), ct);
             _consecutiveFailures = 0;
+            foreach (var e in batch) Wo202CrashWatch.NoteApplied(e.Lua);   // WO-202 I.1: a crash report names the last ones
             return true;
         }
         catch (Exception ex)

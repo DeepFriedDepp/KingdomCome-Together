@@ -647,6 +647,7 @@ public partial class GameBridge
         Wo179OnConnect(ct);   // WO-179: the scene watch (10 Hz) and the bus
         Wo200OnConnect(ct);   // WO-200: the gates' config, their events (4 Hz), the host's replay queue
         Wo201OnConnect(ct);   // WO-201: the DLL's config (B1), the stale scene queue (B2), the parts' ticks
+        Wo202OnConnect(ct);   // WO-202: the DLL's switches
     }
 
     private async Task Wo151LoopAsync(CancellationToken ct)
@@ -687,6 +688,7 @@ public partial class GameBridge
         _w151Connected = false;
         Wo200OnDisconnect();   // WO-200: captures, parked steps and quiet comparisons of this session go
         Wo201OnDisconnect();   // WO-201: its parts' session state goes
+        Wo202OnDisconnect();
         Wo151SceneReset("disconnect");
         Wo184Reset("disconnect");
         Wo167SceneReset();

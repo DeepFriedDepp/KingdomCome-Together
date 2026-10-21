@@ -272,7 +272,9 @@ public partial class GameBridge
     {
         while (!ct.IsCancellationRequested)
         {
-            try { await Task.Delay(Wo144Rules.OutfitCheckMs, ct); } catch (OperationCanceledException) { return; }
+            // WO-202 VI: every 2 s while a partner's outfit changed in the last 30 s (the field's strips came 7-20 s after a change)
+            int waitMs = Wo202Rules.OutfitCheckMs(W202("outfit_atomic"), _w202OutfitChangedMs.Values.DefaultIfEmpty(0).Max(), Environment.TickCount64, Wo144Rules.OutfitCheckMs);
+            try { await Task.Delay(waitMs, ct); } catch (OperationCanceledException) { return; }
             if (!_w144Dress || _where is GameWhere.Menu or GameWhere.Loading) continue;
             foreach (var g in LivePartners())
             {

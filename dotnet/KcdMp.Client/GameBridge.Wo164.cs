@@ -332,6 +332,7 @@ public partial class GameBridge
             case Protocol.W164MarkPing when W164Text.IsMarkId(m.Text):
                 Interlocked.Increment(ref _w164MarkPingsIn);
                 Console.WriteLine($"MP-MARK ping from player {src}: mark={m.Text} -- this machine's block follows");
+                if (W202("mark_key")) await ExecLuaAsync($"if KCD2MP_W202PartnerMarked then KCD2MP_W202PartnerMarked(\"{(src == 0 ? "your host" : "your partner")}\") end");   // WO-202 VI
                 await W164MarkAsync(m.Text, $"peer{src}");
                 // the host passes a joiner's ping on to the other joiners
                 if (W137Host) foreach (byte j in Wo134Peers()) if (j != src) await W164SendAsync(j, Protocol.W164MarkPing, m.Text);
@@ -385,6 +386,9 @@ public partial class GameBridge
                 return;
             case Protocol.W164VoteClose:
                 await Wo201OnVoteCloseAsync(src, m.Text);
+                return;
+            case Protocol.W164KeyShare:   // WO-202 V.3: the partner's key, or the host's chest unlock
+                await Wo202OnKeyShareAsync(src, m.Text);
                 return;
             case Protocol.W164RangedStep:   // WO-201 B11: the partner's crossbow / bow step, on his figure here
                 await Wo201OnRangedStepAsync(src, m.Text);

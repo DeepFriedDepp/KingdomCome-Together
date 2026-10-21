@@ -107,7 +107,7 @@ public static partial class Protocol
         W164MarkPing => "mark-ping", W164Torch => "torch", W164Escort => "escort", W164HitOutcome => "hit-outcome", W164Weather => "weather",
         W164Travel => "travel", W164RealHit => "real-hit", W164NpcDown => "npc-down", W164StoryFight => "story-fight",
         W164CorpseAsk => "corpse-ask", W164CorpseAnswer => "corpse-answer", W164QuickSaveAsk => "quicksave-ask",
-        W164QuickSaveAnswer => "quicksave-answer", W164QuickSaveSetting => "quicksave-setting", W164SceneBus => "scene-bus", W164SaveHealth => "save-health", W164Profile => "profile", W164Clock => "clock", W164Noise => "noise", W164HostBusy => "host-busy", W164SpeechLine => "speech-line", W164VoteOptions => "vote-options", W164VoteCast => "vote-cast", W164VoteClose => "vote-close", W164RangedStep => "ranged-step",
+        W164QuickSaveAnswer => "quicksave-answer", W164QuickSaveSetting => "quicksave-setting", W164SceneBus => "scene-bus", W164SaveHealth => "save-health", W164Profile => "profile", W164Clock => "clock", W164Noise => "noise", W164HostBusy => "host-busy", W164SpeechLine => "speech-line", W164VoteOptions => "vote-options", W164VoteCast => "vote-cast", W164VoteClose => "vote-close", W164RangedStep => "ranged-step", W164KeyShare => "key-share",
         _ => $"unknown-{k}",
     };
 }

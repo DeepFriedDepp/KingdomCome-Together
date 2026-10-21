@@ -118,10 +118,29 @@ public static class Wo197Rules
     public static string ClinchPhaseName(byte flags) => (flags & ClinchPhaseMask) switch { ClinchEnter => "enter", ClinchMove => "move", ClinchLeave => "leave", _ => "?" };
 
     /// <summary>The clinch event's payload: the master row as the RowEvent's row, the slave row as its name (32 hex digits).</summary>
-    public static RowEvent ClinchEvent(uint ms, byte flags, Guid masterRow, Guid slaveRow) =>
-        new(ms, flags, masterRow, slaveRow == Guid.Empty ? "" : slaveRow.ToString("N"));
+    public static RowEvent ClinchEvent(uint ms, byte flags, Guid masterRow, Guid slaveRow, string? opponent = null) =>
+        new(ms, flags, masterRow, (slaveRow == Guid.Empty ? "" : slaveRow.ToString("N")) + (ClinchOpponentOk(opponent) ? "|" + opponent : ""));
 
-    public static Guid ClinchSlaveRow(RowEvent e) => e.Name.Length == 32 && Guid.TryParseExact(e.Name, "N", out var g) ? g : Guid.Empty;
+    /// <summary>The slave row: the name's first 32 characters (WO-202: a "|opponent" may follow).</summary>
+    public static Guid ClinchSlaveRow(RowEvent e)
+    {
+        string s = e.Name;
+        int bar = s.IndexOf('|');
+        if (bar >= 0) s = s[..bar];
+        return s.Length == 32 && Guid.TryParseExact(s, "N", out var g) ? g : Guid.Empty;
+    }
+
+    /// <summary>WO-202 IV.3: the body the sender's player clinched (his engine's own opponent), or null.</summary>
+    public static string? ClinchOpponent(RowEvent e)
+    {
+        int bar = e.Name.IndexOf('|');
+        if (bar < 0) return null;
+        string n = e.Name[(bar + 1)..];
+        return ClinchOpponentOk(n) ? n : null;
+    }
+
+    private static bool ClinchOpponentOk(string? n) =>
+        n is { Length: > 0 and <= 63 } && n.All(c => char.IsAsciiLetterOrDigit(c) || c is '_' or '-' or '.');
 
     /// <summary>The clinch guard type for StartSyncGuard on a pair: the move's own row says it (guard 4 unarmed, 24 / 25 the longsword
     /// clinches); else bare hands -> 4, anything else -> 24.</summary>

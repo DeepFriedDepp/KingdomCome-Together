@@ -112,6 +112,19 @@ R guarded_or(Site& s, R fallback, F&& f) {
     return r;
 }
 
+// WO-202 I.1: the crash writer's own guard. It runs while another thread is inside the
+// unhandled-exception filter (that thread may hold the log's lock), so it counts nothing
+// and logs nothing: f()'s fault just returns false.
+template <class F>
+bool guarded_silent(F&& f) noexcept {
+    __try {
+        f();
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
 // Once a frame from the main-thread hook: the 60 s FAULT-SUM line while any count is
 // non-zero.
 void tick(double nowS) noexcept;
