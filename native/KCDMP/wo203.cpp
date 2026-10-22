@@ -60,6 +60,19 @@ bool reg_status(const char* area, StatusFn fn) {
     return true;
 }
 
+OffMainFn* off_main() { static OffMainFn t[256] = {}; return t; }
+
+bool reg_op_off_main(uint8_t op, OffMainFn fn) {
+    if (!fn || off_main()[op]) return false;
+    off_main()[op] = fn;
+    return true;
+}
+
+bool handle_off_main(uint8_t op, const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t* outLen, uint8_t* reason) {
+    OffMainFn fn = off_main()[op];
+    return fn && fn(op, body, len, out, cap, outLen, reason);
+}
+
 bool has_op(uint8_t op) { return op == kOpStatus || ops()[op] != nullptr; }
 
 int status_text(char* out, int n) {

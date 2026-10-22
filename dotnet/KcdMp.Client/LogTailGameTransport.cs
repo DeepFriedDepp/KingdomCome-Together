@@ -409,6 +409,8 @@ public sealed class LogTailGameTransport : IGameTransport
         "OnChatWithFocus: Dude->",
         // WO-184 B4: the game's exit dialog (a quit follows when the player confirms): the joiner's final snapshot is taken here
         "C_UISaveLoad::HandleExit()",
+        // WO-203B: the engine's dialogue camera took this player's view (the starter's sampler starts with it)
+        "Dialog camera activated.",
         // WO-189 B: every game profile switched (the host mirrors the quest ones to the joiner) and the load batch around the save's own set
         "[Info] C_GameProfileManager: Activating profile '",
         "[Info] C_GameProfileManager: Deactivating profile '",

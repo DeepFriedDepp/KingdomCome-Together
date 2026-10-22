@@ -25,6 +25,7 @@ public partial class GameBridge
 
     partial void Wo203ConvOnEngineLine(string line)
     {
+        Wo203CamOnEngineLine(line);   // WO-203B: the minimal session and the camera (GameBridge.Wo203Cam.cs)
         if (line.StartsWith("New dialogue '", StringComparison.Ordinal))
         {
             if (Wo203ConvRules.ParseOwnConversation(line) is { } c) _w203OwnTalks[c.Cid] = c.Others;
@@ -45,7 +46,7 @@ public partial class GameBridge
 
     partial void Wo203ConvOnFrame(byte src, LootMsg m)
     {
-        if (m.Kind != Protocol.ConvAnim) return;
+        if (m.Kind != Protocol.ConvAnim) { Wo203CamOnFrame(src, m); return; }   // WO-203B: every other kind
         if (!Wo203ConvRules.TryParseAnim(m.Text, out int cid, out byte starter, out string body, out string frag, out string face)
             || (starter != src && W137Host))   // a joiner sends only its own; only the host passes others' on (unchanged)
         { Interlocked.Increment(ref _w203AnimBad); return; }
@@ -87,10 +88,17 @@ public partial class GameBridge
         catch (Exception ex) { Console.WriteLine($"WO203-GESTURES database not read: {ex.Message} -- the partner's conversations show no gestures here"); }
     }
 
-    partial void Wo203ConvOnDisconnect() { _w203OwnTalks.Clear(); _w203GestureN.Clear(); }
+    partial void Wo203ConvOnDisconnect() { _w203OwnTalks.Clear(); _w203GestureN.Clear(); Wo203CamOnDisconnect(); }
 
-    partial void Wo203ConvStats(ref string line) =>
+    partial void Wo203ConvOnEvent(string name, string? arg) => Wo203CamOnEvent(name, arg);   // WO-203B: w203_join / w203_leave / w203_cfg
+
+    partial void Wo203ConvOnConnect(CancellationToken ct) => Wo203CamOnConnect();   // WO-203B: the mod's switches said to this agent
+
+    partial void Wo203ConvStats(ref string line)
+    {
         line += $" | conv anim out={Interlocked.Read(ref _w203AnimOut)} unplaced={Interlocked.Read(ref _w203AnimUnplaced)} in={Interlocked.Read(ref _w203AnimIn)}"
               + $" played={Interlocked.Read(ref _w203AnimPlayed)} no_clip={Interlocked.Read(ref _w203AnimNoClip)} bad={Interlocked.Read(ref _w203AnimBad)}"
               + $" forwarded={Interlocked.Read(ref _w203AnimFwd)} own_talks={_w203OwnTalks.Count}";
+        Wo203CamStats(ref line);   // WO-203B
+    }
 }

@@ -76,6 +76,7 @@ public partial class GameBridge
     {
         string? name = _peers.Disconnected(id);
         Wo191ForgetSender(id, "disconnected");   // WO-191 1a
+        Wo203CamOnPeerGone(id);                  // WO-203B: his conversation's view ends here; he no longer listens to ours
         if (name is not null && _w139Records.TryRemove(id, out var rec) && rec.Count > 0)
             _w144ParkedCrime[name] = (rec, DateTime.UtcNow);
         Console.WriteLine($"MP-PEERS ghost {id} disconnected ({LivePartners().Count} partner(s) now) -- it stays removed until the relay names that id again");

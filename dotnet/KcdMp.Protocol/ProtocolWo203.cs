@@ -68,6 +68,10 @@ public static partial class Protocol
     public const byte ConvAnnounce = 1, ConvJoin = 2, ConvSnapshot = 3, ConvLine = 4, ConvCam = 5, ConvAnim = 6, ConvOptions = 7,
                       ConvVote = 8, ConvChosen = 9, ConvSkill = 10, ConvLeave = 11, ConvEnd = 12, ConvTimer = 13;
 
+    // ---- WO-203B: the conversation camera's native ops (WO-163 family, wo203.h conv range; native wo203_cam.cpp) ----
+    public const byte Wo203OpConvView = 94;      // the listener's view: enter / samples / leave / status / readback
+    public const byte Wo203OpConvCamPoll = 95;   // the starter's sampler: arm / disarm / poll / status
+
     public static string ConvKindName(byte k) => k switch
     {
         ConvAnnounce => "announce", ConvJoin => "join", ConvSnapshot => "snapshot", ConvLine => "line", ConvCam => "cam",

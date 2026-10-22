@@ -35,6 +35,7 @@
 #include "wo147.h"
 #include "wo151.h"
 #include "wo163.h"
+#include "wo203.h"
 #include "wo201.h"
 #include "buffs.h"
 #include "log.h"
@@ -1368,6 +1369,19 @@ void serve(HANDLE h) {
             }
 
             case kWo163: {   // WO-163: shared combat (the skirmish relation read; the probes' and the build's switches)
+                {   // WO-203B: an op that runs here, on the reader thread (the conversation camera's samples: no engine call, its own lock)
+                    BYTE ob[4 + 512]{};
+                    size_t on = 0;
+                    uint8_t oreason = kcdmp::wo163::kRFailed;
+                    if (len >= 1 && kcdmp::wo203::handle_off_main(body[0], body, len, ob + 4, 512, &on, &oreason)) {
+                        if (on > 512) on = 0;
+                        ob[0] = oreason == kcdmp::wo163::kROk ? 1 : 0; ob[1] = seq; ob[2] = body[0]; ob[3] = oreason;
+                        EnterCriticalSection(&g_write_lock);
+                        send_frame(h, kWo163Reply, ob, static_cast<uint16_t>(4 + on));
+                        LeaveCriticalSection(&g_write_lock);
+                        break;
+                    }
+                }
                 std::vector<uint8_t> copy(body, body + len);
                 struct R { uint8_t reason = kcdmp::wo163::kRFailed; uint8_t op = 0; uint8_t buf[512]{}; size_t n = 0; };   // WO-166: wo166's status (~330 chars) was cut at 200
                 R r{};

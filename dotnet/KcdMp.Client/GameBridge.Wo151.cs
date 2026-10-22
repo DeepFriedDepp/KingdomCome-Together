@@ -631,6 +631,7 @@ public partial class GameBridge
         Wo184OnLoad();             // WO-184: a load ends every conversation and arrest step and cancels any pending save (LoadSavedGame does)
         Wo189OnLoad();             // WO-189: the watches start again; the DLL forgets its profile handles (never released into a new world)
         Wo194OnLoad();             // WO-194: no in-game scene survives a load; a held copy is released
+        Wo203CamOnGameplayStarted(); // WO-203B: no listening state survives a load
         Wo192OnLoad();             // WO-192 4c: a load wipes every script save lock
         Wo167SceneReset();         // WO-167 T4: the conversation scenes' counts start again
         if (_w151CatchUp && W137Host) _ = Task.Run(async () => { await Task.Delay(2000); await Wo151HostRebaseAsync(); });   // 3.1

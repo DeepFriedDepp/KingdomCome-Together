@@ -56,6 +56,8 @@
   <ItemGroup>
     <EmbeddedResource Include="..\..\kdcmp\ConfigPatch\defaultProfile.interaction.xml" LogicalName="KcdMp.Client.ConfigPatch.defaultProfile.interaction.xml" />
     <EmbeddedResource Include="..\..\kdcmp\ConfigPatch\keybindSuperactions.append.xml" LogicalName="KcdMp.Client.ConfigPatch.keybindSuperactions.append.xml" />
+    <EmbeddedResource Include="..\..\kdcmp\ConfigPatch\defaultProfile.dialog.xml" LogicalName="KcdMp.Client.ConfigPatch.defaultProfile.dialog.xml" />
+    <EmbeddedResource Include="..\..\kdcmp\ConfigPatch\keybindSuperactions.back.xml" LogicalName="KcdMp.Client.ConfigPatch.keybindSuperactions.back.xml" />
   </ItemGroup>
 
   <ItemGroup>

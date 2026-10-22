@@ -33006,6 +33006,242 @@ System.AddCCommand("mp_conv_gestures", 'KCD2MP_W203SetGestures(%line)', "WO-203:
 
 -- ----- end of WO-203 area "conv" -----
 
+-- ----- WO-203B area "cam": the listener sees the starter's conversation camera (docs/WO-203B-findings.md) -----
+-- The minimal Act I session the camera needs. The STARTER's agent announces a conversation of its player's (the engine's own
+-- "New dialogue" line); here (the LISTENER) the partner's figure and the conversation's NPC offer the game's own talk prompt
+-- "Join conversation" (a GetActions wrapper; the game's interactor calls its func on the player's own talk key -- nothing here
+-- reads input). The agent turns the view on natively (wo203_cam.cpp: the starter's camera, played 100 ms behind) and calls
+-- KCD2MP_W203Enter: the game's own dialogue lock (the exclusive "dialog" action map: Henry neither moves nor turns), the HUD's
+-- compass / crosshair / prompts hidden (only the ones that were shown, given back on the way out), a watch for combat and hits.
+-- Every way out restores: the listen cancel action (kcd2mp_listen_cancel, the game's own "back" superaction's keys, live only
+-- while the dialog map is), the conversation's end, combat, a hit, and the agent's (silence, a menu, a load, a scene, the starter
+-- gone, a fault).
+do   -- the area's locals end with it (the main chunk's locals stay under the WO-110 limit)
+    KCD2MP.W203.cam = KCD2MP.W203.cam or { join = true, camera = true, offers = {}, listening = nil, gen = 0,
+        stats = { offers = 0, prompts = 0, joins = 0, enters = 0, leaves = 0, cancels = 0, combat = 0, hits = 0, ends = 0 } }
+    local W3C = KCD2MP.W203.cam
+    -- the clips the game's own dialogue keeps off (its frame shows none of them), and the one it shows: the cinematic bars (live-compared
+    -- with the starter's own dialogue frame, 2026-10-22)
+    local W3C_HUD = { "Compass", "Cursor", "CursorCross", "CursorOutline", "Hints", "Stats", "Buffs", "QAMWeapon", "QAMFood" }
+    local W3C_HUD_ON = { "RatioStrips" }
+    local W3C_RANGE = 6.0
+
+    local function w3c_figure(starter)
+        local g = KCD2MP.ghosts and (KCD2MP.ghosts[tostring(starter)] or KCD2MP.ghosts[tonumber(starter) or -1])
+        return g and g.entity
+end
+    local function w3c_near(e, range)
+        if not (e and player) then return false end
+        local ok, d = pcall(function() local a, b = e:GetWorldPos(), player:GetWorldPos(); return math.sqrt((a.x - b.x) ^ 2 + (a.y - b.y) ^ 2 + (a.z - b.z) ^ 2) end)
+        return ok and d <= range
+end
+
+    -- The agent: the prompt's text file (written at connect). The engine refuses a key it already has with a modal error: once per game run.
+    function KCD2MP_W203LoadLoc(path)
+        path = tostring(path or "")
+        if path ~= "Mods/kdcmp/Localization/kct_conv.xml" then mp_log("WO203B-PROMPT refused a path: " .. path); return false end
+        if W3C.locLoaded then return true end
+        local ok, err = pcall(System.LoadLocalizationXml, path)
+        W3C.locLoaded = ok
+        mp_log("WO203B-PROMPT text loaded ok=" .. tostring(ok) .. (ok and "" or (" " .. tostring(err))))
+        return ok
+end
+
+    -- The agent: a partner's conversation exists (joinable 1/0) or is gone.
+    function KCD2MP_W203Offer(starter, cid, joinable, anchor)
+        KCD2MP_W203InstallPrompt()   -- the entity classes may have loaded after this file
+        starter = tostring(starter)
+        if tonumber(joinable) == 1 then
+            W3C.offers[starter] = { cid = tostring(cid), anchor = tostring(anchor or "") }
+            W3C.stats.offers = W3C.stats.offers + 1
+            mp_log(string.format("WO203B-OFFER partner=%s cid=%s anchor=%s -- 'Join conversation' on the partner and the NPC within %d m", starter, tostring(cid), tostring(anchor), W3C_RANGE))
+        else
+            W3C.offers[starter] = nil
+        end
+end
+    function KCD2MP_W203Gone(starter, cid)
+        local o = W3C.offers[tostring(starter)]
+        if o and o.cid == tostring(cid) then W3C.offers[tostring(starter)] = nil end
+end
+
+    -- The offer a body shows the prompt for: the starter's figure or the conversation's NPC, near, while not listening already.
+    local function w3c_offer_on(e)
+        if not (W3C.join and e) or W3C.listening then return nil end
+        for starter, o in pairs(W3C.offers) do
+            local fig = w3c_figure(starter)
+            local isFig = fig ~= nil and fig.id == e.id
+            local isAnchor = false
+            if not isFig and o.anchor ~= "" then pcall(function() isAnchor = e:GetName() == o.anchor end) end
+            if (isFig or isAnchor) and w3c_near(e, W3C_RANGE) then return starter, o end
+        end
+        return nil
+end
+    function KCD2MP_W203JoinPrompt(self, user)
+        local starter, o = w3c_offer_on(self)
+        if not starter then return end
+        W3C.stats.joins = W3C.stats.joins + 1
+        mp_log(string.format("WO203B-JOIN asked partner=%s cid=%s", starter, o.cid))
+        KCD2MP_EmitEvent("w203_join", starter .. " " .. o.cid)
+end
+    -- The harness's stand-in for the prompt (research): the same event.
+    function KCD2MP_W203Join(starter, cid) KCD2MP_EmitEvent("w203_join", tostring(starter) .. " " .. tostring(cid)) end
+
+    function KCD2MP_W203InstallPrompt()
+        if type(AddInteractorAction) ~= "function" or type(Action) ~= "function" then return false end
+        local n = 0
+        for _, cname in ipairs({ "NPC", "NPC_Female", "NPC_NAI" }) do
+            local cls = _G[cname]
+            if type(cls) == "table" and type(cls.GetActions) == "function" and cls.GetActions ~= W3C["wrap_" .. cname] then   -- a reloaded class: again
+                local orig = cls.GetActions
+                W3C["orig_" .. cname] = orig
+                W3C["wrap_" .. cname] = function(self, user, firstFast)
+                    if user and user == player then
+                        local ok, starter = pcall(w3c_offer_on, self)
+                        if ok and starter then
+                            W3C.stats.prompts = W3C.stats.prompts + 1
+                            local out = {}
+                            -- the conversation's own bodies offer only this while it runs (talking to the NPC would start a second one)
+                            AddInteractorAction(out, firstFast, Action():hint(W3C.locLoaded and "@ui_hud_kct_join_conversation" or "@ui_hud_talk"):action("talk"):uiOrder(0)
+                                :func(KCD2MP_W203JoinPrompt):interaction(inr_talk):enabled(true))
+                            return out
+                        end
+                    end
+                    return orig(self, user, firstFast)
+                end
+                cls.GetActions = W3C["wrap_" .. cname]
+                n = n + 1
+            end
+        end
+        if n > 0 then mp_log("WO203B-PROMPT wrapped GetActions of " .. n .. " class(es)") end
+        return n > 0
+end
+
+    local function w3c_hud(hide)
+        local L = W3C.listening
+        if not L then return end
+        if hide then
+            L.hidden, L.shown = {}, {}
+            for _, clip in ipairs(W3C_HUD) do
+                local ok, vis = pcall(UIAction.IsVisible, "hud", 0, clip)
+                if ok and vis then
+                    pcall(UIAction.SetVisible, "hud", 0, clip, false)
+                    L.hidden[#L.hidden + 1] = clip
+                end
+            end
+            for _, clip in ipairs(W3C_HUD_ON) do
+                local ok, vis = pcall(UIAction.IsVisible, "hud", 0, clip)
+                if ok and not vis then
+                    pcall(UIAction.SetVisible, "hud", 0, clip, true)
+                    L.shown[#L.shown + 1] = clip
+                end
+            end
+        else
+            for _, clip in ipairs(L.hidden or {}) do pcall(UIAction.SetVisible, "hud", 0, clip, true) end
+            for _, clip in ipairs(L.shown or {}) do pcall(UIAction.SetVisible, "hud", 0, clip, false) end
+            L.hidden, L.shown = {}, {}
+        end
+end
+
+    local function w3c_restore(reason)
+        local L = W3C.listening
+        if not L then return false end
+        w3c_hud(false)
+        pcall(ActionMapManager.EnableActionMap, "dialog", false)
+        W3C.listening = nil
+        W3C.gen = W3C.gen + 1   -- the watch chain stops
+        W3C.stats.leaves = W3C.stats.leaves + 1
+        mp_log(string.format("WO203B-LISTEN off partner=%s cid=%s why=%s -- the dialog lock off, the HUD given back", L.starter, L.cid, tostring(reason)))
+        return true
+end
+
+    -- Our own way out (the cancel action, combat, a hit): restore, then tell the agent (the view and the starter).
+    local function w3c_leave(why)
+        local L = W3C.listening
+        if not L then return end
+        w3c_restore(why)
+        KCD2MP_EmitEvent("w203_leave", L.starter .. " " .. L.cid .. " " .. why)
+        KCD2MP_ShowNativeToast("You left the conversation.")
+end
+
+    local function w3c_watch(gen)
+        if gen ~= W3C.gen or not W3C.listening then return end
+        local L = W3C.listening
+        local danger, hp = false, nil
+        pcall(function() danger = player.soul:IsInCombatDanger() == true end)
+        pcall(function() hp = player.soul:GetState("health") end)
+        if danger then W3C.stats.combat = W3C.stats.combat + 1; w3c_leave("combat"); return end
+        if hp and L.hp and hp < L.hp - 0.5 then W3C.stats.hits = W3C.stats.hits + 1; w3c_leave("hit"); return end
+        if hp then L.hp = hp end
+        Script.SetTimer(200, function() w3c_watch(gen) end)
+end
+
+    -- The agent: the view is on (the snapshot arrived) -- the listening state here.
+    function KCD2MP_W203Enter(starter, cid, anchor)
+        if W3C.listening then w3c_restore("reenter") end
+        W3C.listening = { starter = tostring(starter), cid = tostring(cid), anchor = tostring(anchor or ""), hidden = {} }
+        W3C.offers[tostring(starter)] = nil
+        W3C.stats.enters = W3C.stats.enters + 1
+        pcall(ActionMapManager.EnableActionMap, "dialog", true)
+        w3c_hud(true)
+        pcall(function() W3C.listening.hp = player.soul:GetState("health") end)
+        W3C.gen = W3C.gen + 1
+        local gen = W3C.gen
+        Script.SetTimer(200, function() w3c_watch(gen) end)
+        mp_log(string.format("WO203B-LISTEN on partner=%s cid=%s anchor=%s hud_hidden=%d", W3C.listening.starter, W3C.listening.cid, W3C.listening.anchor, #W3C.listening.hidden))
+        KCD2MP_ShowNativeToast("Listening in - press Back to leave.")
+end
+
+    -- The agent: the conversation ended, or the view ended for a reason of the agent's (silence, menu, load, scene, starter gone, fault).
+    function KCD2MP_W203End(starter, cid, reason)
+        local L = W3C.listening
+        if not L or L.starter ~= tostring(starter) then return end
+        if tostring(reason) == "ended" or tostring(reason) == "end" then W3C.stats.ends = W3C.stats.ends + 1 end
+        w3c_restore(reason)
+        if tostring(reason) ~= "load" then KCD2MP_ShowNativeToast(tostring(reason) == "ended" and "The conversation ended." or "You left the conversation.") end
+end
+
+    -- The agent after a load: nothing of the listening state survives one (the view went with the load; the lock and the HUD come back).
+    function KCD2MP_W203AfterLoad()
+        if W3C.listening then w3c_restore("load") end
+end
+
+    -- The listen cancel action (the mod's own entry in the game's dialog action map, on the player's own Back keys).
+    function KCD2MP_W203OnAction(action, activation)
+        if action ~= "kcd2mp_listen_cancel" then return false end
+        if not W3C.listening then return false end
+        if activation ~= "press" and activation ~= 1 then return true end
+        W3C.stats.cancels = W3C.stats.cancels + 1
+        w3c_leave("cancel")
+        return true
+end
+
+    KCD2MP_W203Status("cam", function()
+        local s = W3C.stats
+        local L = W3C.listening
+        local offers = 0
+        for _ in pairs(W3C.offers) do offers = offers + 1 end
+        return string.format("join=%s camera=%s listening=%s offers_now=%d offers=%d prompts=%d joins=%d enters=%d leaves=%d cancels=%d combat=%d hits=%d ends=%d",
+            W3C.join and "on" or "off", W3C.camera and "on" or "off", L and (L.starter .. ":" .. L.cid) or "-", offers, s.offers, s.prompts, s.joins,
+            s.enters, s.leaves, s.cancels, s.combat, s.hits, s.ends)
+    end)
+    local function w3c_switch(key, cmd, arg, what)
+        local v = KCD2MP_Wo122ParseBool(arg)
+        if v == "bad" then mp_log(cmd .. ": expected on|off"); return end
+        if v ~= nil then W3C[key] = v end
+        mp_log("WO203B-TOGGLE " .. cmd .. " " .. (W3C[key] and "on" or "off") .. " -- " .. what)
+        KCD2MP_EmitEvent("w203_cfg", key .. " " .. (W3C[key] and "1" or "0"))
+        if not W3C[key] and W3C.listening then w3c_leave("off") end
+end
+    function KCD2MP_W203SetJoin(arg) w3c_switch("join", "mp_join_conversation", arg, "your partner's conversations can be joined (Join conversation on them)") end
+    function KCD2MP_W203SetCamera(arg) w3c_switch("camera", "mp_conv_camera", arg, "a joined conversation is seen through your partner's own dialogue camera") end
+    function KCD2MP_W203CamEmit() KCD2MP_EmitEvent("w203_cfg", "join " .. (W3C.join and "1" or "0")); KCD2MP_EmitEvent("w203_cfg", "camera " .. (W3C.camera and "1" or "0")) end
+    System.AddCCommand("mp_join_conversation", 'KCD2MP_W203SetJoin(%line)', "WO-203B: join your partner's conversations by talking to them (default on): mp_join_conversation on|off")
+    System.AddCCommand("mp_conv_camera", 'KCD2MP_W203SetCamera(%line)', "WO-203B: a joined conversation shows your partner's own dialogue camera (default on): mp_conv_camera on|off")
+    KCD2MP_W203InstallPrompt()
+end
+
+-- ----- end of WO-203B area "cam" -----
+
 -- ----- WO-203 area "defence": II.2: the joiner blocks, parries and perfect-blocks with his own engine -----
 
 -- ----- end of WO-203 area "defence" -----

@@ -39,6 +39,12 @@ bool reg_install(const char* area, VoidFn fn);
 bool reg_tick(const char* area, VoidFn fn);
 bool reg_status(const char* area, StatusFn fn);
 
+// WO-203B: an op that may run on the pipe's reader thread (no engine call in it, its own lock); returns false to leave the request
+// to the main-thread path (handle()). reason = a wo163 reply code.
+using OffMainFn = bool (*)(uint8_t op, const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t* outLen, uint8_t* reason);
+bool reg_op_off_main(uint8_t op, OffMainFn fn);
+bool handle_off_main(uint8_t op, const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t* outLen, uint8_t* reason);
+
 bool has_op(uint8_t op);
 uint8_t handle(uint8_t op, const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t* outLen);
 

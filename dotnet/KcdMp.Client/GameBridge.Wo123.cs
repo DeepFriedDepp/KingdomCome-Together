@@ -147,6 +147,7 @@ public partial class GameBridge
     private void Wo123OnLoadStarted()
     {
         _wo123LoadStartedUtc = DateTime.UtcNow;
+        Wo203CamOnLoad();   // WO-203B: a load ends listening (the view first) and this player's own conversation
         if (_hostJoin is { PausedUtc: not null } j)
         {
             Console.WriteLine($"MP-JOIN host: a save load started under join 0x{j.JoinId:x8} -- resuming now (host-reload)");

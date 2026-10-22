@@ -9,10 +9,11 @@ int wo203_stream_tests(int* passed);
 int wo203_appear_tests(int* passed);
 int wo203_quest_tests(int* passed);
 int wo203_join_tests(int* passed);
+int wo203_cam_tests(int* passed);    // WO-203B: the conversation camera (wo203_cam_tests.cpp)
 
 int wo203_tests(int* passed) {
     int (*const areas[])(int*) = {&wo203_gate_tests, &wo203_conv_tests, &wo203_defence_tests, &wo203_stream_tests, &wo203_appear_tests,
-                                  &wo203_quest_tests, &wo203_join_tests};
+                                  &wo203_quest_tests, &wo203_join_tests, &wo203_cam_tests};
     int fail = 0, pass = 0;
     for (auto fn : areas) {
         int p = 0;

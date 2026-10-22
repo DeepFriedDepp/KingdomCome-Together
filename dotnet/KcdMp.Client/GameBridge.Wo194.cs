@@ -213,6 +213,7 @@ public partial class GameBridge
             case "PlayCutscene":
             {
                 o.PlayMs = now; o.Held = false;
+                Wo203CamOnScene(true);   // WO-203B: the cutscene owns the camera; a listening view yields
                 var rem = _w194Remote.Values.FirstOrDefault(r => r.Name == name && r.EndedMs == 0);
                 if (rem is not null) { o.Partner = rem.Src; if (!W137Host) o.HostPlayedIt = true; }
                 Console.WriteLine($"WO194-SCENE '{name}' runs here (role={W194Role}){(rem is not null ? FormattableString.Invariant($", {(now - rem.AtMs) / 1000.0:F2} s after the partner's start") : "")}");
@@ -224,6 +225,7 @@ public partial class GameBridge
             }
             case "OnCutsceneEnd":
                 o.EndMs = now;
+                Wo203CamOnScene(false);   // WO-203B: the listening view comes back if the conversation still runs
                 if (o.FigureHidden) { o.FigureHidden = false; _ = ExecLuaAsync("if KCD2MP_W194FigureHide then KCD2MP_W194FigureHide(false) end"); }
                 if (o.Partner != 255 && _w194Shared) _ = Wo179SendAsync(Wo194Rules.Ended(o.Seq, name));
                 if (W137Joiner && _w194FfStop) _ = Wo194EndWindowAsync(o);
@@ -242,6 +244,7 @@ public partial class GameBridge
             case "ReleaseScene":
             case "Interrupt":
                 if (o.PlayMs > 0) _w194Played[name] = now;
+                Wo203CamOnScene(false);   // WO-203B
                 if (o.FigureHidden) { o.FigureHidden = false; _ = ExecLuaAsync("if KCD2MP_W194FigureHide then KCD2MP_W194FigureHide(false) end"); }
                 lock (_w194Lock) if (ReferenceEquals(_w194Own, o)) _w194Own = null;
                 break;

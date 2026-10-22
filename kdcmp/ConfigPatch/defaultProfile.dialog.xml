@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="us-ascii"?>
+<!-- Copyright (C) 2026 the Kingdom Come: Together contributors (AUTHORS). SPDX-License-Identifier: GPL-3.0-only
+     GPLv3 section 7 additional terms: NOTICE. This project's own material only; Kingdom Come: Deliverance II and
+     its content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
+
+     WO-203B: only OUR addition to the game's Libs/Config/defaultProfile.xml, inserted just before the end of its actionmap
+     named "dialog" (the game's own dialogue lock: exclusive, live only while a conversation is shown) by the agent's keys-pak
+     verb (dotnet/KcdMp.Client/KeybindPak.cs MergeDialog), into Mods\kdcmp\Data\kdcmp_keys.pak. The game's file is never shipped. -->
+<kdcmp_patch target="Libs/Config/defaultProfile.xml" insert="end-of-actionmap:dialog">
+		<!-- KCD2MP (WO-203B): leave the partner's conversation you are listening to. Its keys are the game's own Back superaction's
+		     (keybindSuperactions.back.xml lists it there). Press only. -->
+		<action name="kcd2mp_listen_cancel" onPress="1" keyboard="_keybinds_ref_" />
+</kdcmp_patch>

@@ -195,6 +195,13 @@ static class P
     }
 
     /// <summary>WO-203: a Conv message this peer received, as one line.</summary>
+    /// <summary>WO-203B: a Conv message this peer received and its source.</summary>
+    static (byte Src, LootMsg Msg)? ConvMsg(byte[] payload)
+    {
+        if (!Protocol.TrySplitJoinDown(payload, out byte src, out _, out _, out var body) || !LootMsg.TryDecode(body, out var m)) return null;
+        return (src, m);
+    }
+
     static string? ConvNote(byte[] payload)
     {
         if (!Protocol.TrySplitJoinDown(payload, out byte src, out _, out _, out var body) || !LootMsg.TryDecode(body, out var m)) return null;
@@ -233,6 +240,11 @@ static class P
 
     static readonly KcdMp.Client.ActionOutbox s_actions = new();
     static readonly System.Collections.Concurrent.ConcurrentDictionary<string, int> s_npcIn = new();             // the WO-191 follow-up
+    static long s_camSent;   // WO-203B: convnow camera messages sent (every 30th logged)
+    // WO-203B --conv-autojoin: an Announce received is answered with a Join (the receiver queues it; the send loop sends it)
+    static readonly System.Collections.Concurrent.ConcurrentQueue<(byte Target, byte Kind, string Text)> s_convReply = new();
+    static long s_camIn, s_camSamplesIn;
+    static StreamWriter? s_convRecord;
     static readonly System.Collections.Concurrent.ConcurrentDictionary<string, ActivityState> s_actIn = new();
 
     static async Task<int> Main(string[] a)
@@ -253,6 +265,10 @@ static class P
         // WO-131: the ghost's Position carries the host-claim bit (0x40): against a real agent that
         // claims host in its own world, the relay's tie-break (lowest id) keeps this peer the authority.
         bool claimHost = a.Contains("--claim-host");
+        bool convAutoJoin = a.Contains("--conv-autojoin");   // WO-203B
+        // WO-203B --conv-record <file>: every Conv cam message received, one line each: <unix ms received> <text>
+        int crIdx = Array.IndexOf(a, "--conv-record");
+        if (crIdx >= 0 && crIdx + 1 < a.Length) s_convRecord = new StreamWriter(a[crIdx + 1], append: false) { AutoFlush = true };
         if (a.Contains("--selftest-wo165")) return Wo165Verbs.SelfTest() == 0 ? 0 : 1;
         string versionFile = Arg(a, "--version-file", FindUp("VERSION"));
         string release = File.ReadAllText(versionFile).Trim();
@@ -280,6 +296,7 @@ static class P
         //         `window <npc> <t0> <t1>` -- a mover declared earlier is streamed only between t0 and t1 (a spawn that appears, then leaves)
         // WO-203: `conv <t> <target> <kind> <text>` -- a Conv message (0x76) to that player
         var joinMsgs = new List<(double T, byte[] Pkt, string Note)>();
+        var nowMsgs = new List<(double T, byte Target, byte Kind, string Text)>();   // WO-203B: convnow (texts stamped when sent, in order)
         var jattacks = new List<(double T, Guid Row)>();   // WO-170
         var jhits = new List<(double T, string Npc, float Hp, float St)>();   // WO-173: the swing's attributed hit
         uint joinTok = 0;
@@ -455,6 +472,11 @@ static class P
                                   new LootMsg(byte.Parse(f[3], CultureInfo.InvariantCulture), ++joinTok, f[4]).BuildUp(Protocol.ConvUp, byte.Parse(f[2], CultureInfo.InvariantCulture)),
                                   $"CONV->{f[2]} kind={f[3]} {f[4]}"));
                     break;
+                case "convnow":   // WO-203B: convnow <t> <target> <kind> <text> -- a Conv message whose {now}/{now-N}/{now+N} are this
+                                  // machine's Unix ms when it is sent (the starter's camera samples on a live clock); sent in plan order
+                    nowMsgs.Add((double.Parse(f[1], CultureInfo.InvariantCulture), byte.Parse(f[2], CultureInfo.InvariantCulture),
+                                 byte.Parse(f[3], CultureInfo.InvariantCulture), f[4]));
+                    break;
                 case "w164h":   // WO-167: a joiner's W164 message to the host
                     joinMsgs.Add((double.Parse(f[1], CultureInfo.InvariantCulture),
                                   new LootMsg(byte.Parse(f[2], CultureInfo.InvariantCulture), ++joinTok, string.Join(' ', f.Skip(3))).BuildUp(Protocol.W164Up, Protocol.JoinTargetHost),
@@ -560,8 +582,21 @@ static class P
                         Console.WriteLine(w164Note);   // WO-167
                     else if (rt == Protocol.QuestHostDown && QuestHostNote(rb2) is string qhNote)
                         Console.WriteLine(qhNote);   // WO-200: acks, item counts
+                    else if (rt == Protocol.ConvDown && ConvMsg(rb2) is var (csrc, cm) && cm.Kind == Protocol.ConvCam)
+                    {
+                        // WO-203B: the starter's camera -- counted; every 30th printed whole (the recording reads them all from the agent log)
+                        long n = ++s_camIn;
+                        s_convRecord?.WriteLine($"{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()} {cm.Text}");
+                        s_camSamplesIn += cm.Text.Count(ch => ch == ';') + 1;
+                        if (n % 30 == 1) Console.WriteLine($"SYNTH got Conv from={csrc} kind=cam n={n} samples={s_camSamplesIn} {cm.Text}");
+                    }
                     else if (rt == Protocol.ConvDown && ConvNote(rb2) is string convNote)
+                    {
                         Console.WriteLine(convNote);   // WO-203: the starter's conversation (its gestures)
+                        // WO-203B: answer an Announce with a Join (v1|cid|kind|joinable|...)
+                        if (convAutoJoin && ConvMsg(rb2) is var (asrc, am) && am.Kind == Protocol.ConvAnnounce && am.Text.Split('|') is { Length: >= 4 } af && af[3] == "1")
+                            s_convReply.Enqueue((claimHost ? asrc : Protocol.JoinTargetHost, Protocol.ConvJoin, $"v1|{af[1]}|1"));
+                    }
                     // The WO-191 follow-up: which of the host's NPCs reach this joiner, and their activity rows (the first of each name,
                     // then every 200th sample): SYNTH got npc <name> n=<k> flags=<f> | SYNTH got activity npc <name> <state>
                     else if (rt == Protocol.NpcStateDown && rb2.Length >= 2 && rb2.Length >= 2 + rb2[1] + 21)
@@ -648,6 +683,22 @@ static class P
                     await st.WriteAsync(Wo187Verbs.Move(s_actions, fmoves[mi].What, fmoves[mi].Row));
                     Console.WriteLine(FormattableString.Invariant($"SYNTH t={t:F1}s FMOVE {fmoves[mi].What} row={fmoves[mi].Row}"));
                     fmoves.RemoveAt(mi);
+                }
+                while (s_convReply.TryDequeue(out var cr))   // WO-203B --conv-autojoin
+                {
+                    await st.WriteAsync(new LootMsg(cr.Kind, ++joinTok, cr.Text).BuildUp(Protocol.ConvUp, cr.Target));
+                    Console.WriteLine(FormattableString.Invariant($"SYNTH t={t:F1}s CONV->{cr.Target} kind={Protocol.ConvKindName(cr.Kind)} {cr.Text} (auto-join)"));
+                }
+                while (nowMsgs.Count > 0 && nowMsgs[0].T <= t)   // WO-203B: convnow, oldest first
+                {
+                    var nm = nowMsgs[0];
+                    nowMsgs.RemoveAt(0);
+                    long unix = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                    string text = System.Text.RegularExpressions.Regex.Replace(nm.Text, @"\{now([+-]\d+)?\}",
+                        mm => (unix + (mm.Groups[1].Success ? long.Parse(mm.Groups[1].Value, CultureInfo.InvariantCulture) : 0)).ToString(CultureInfo.InvariantCulture));
+                    await st.WriteAsync(new LootMsg(nm.Kind, ++joinTok, text).BuildUp(Protocol.ConvUp, nm.Target));
+                    if (nm.Kind != Protocol.ConvCam || (++s_camSent % 30) == 1)
+                        Console.WriteLine(FormattableString.Invariant($"SYNTH t={t:F1}s CONVNOW->{nm.Target} kind={Protocol.ConvKindName(nm.Kind)} {(text.Length > 160 ? text[..160] + "..." : text)}"));
                 }
                 for (int ji = joinMsgs.Count - 1; ji >= 0; ji--)   // WO-164: activity rows, W164 messages, checkpoints, when due
                 {

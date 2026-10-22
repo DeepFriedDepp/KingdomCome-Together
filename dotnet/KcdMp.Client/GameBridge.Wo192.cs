@@ -98,7 +98,11 @@ public partial class GameBridge
     private (string File, long AtMs) _w192LastFile = ("", 0);
 
     /// <summary>The DLL's 0xAD (the ESC menu's edges): only a flag for the autosave's "a menu" (no snapshot starts here any more).</summary>
-    private void Wo192OnMenu(bool opened) => _w192MenuOpen = opened;
+    private void Wo192OnMenu(bool opened)
+    {
+        _w192MenuOpen = opened;
+        Wo203CamOnMenu(opened);   // WO-203B: the ESC menu ends listening (the view first)
+    }
 
     private async Task Wo192TickAsync(long now)
     {

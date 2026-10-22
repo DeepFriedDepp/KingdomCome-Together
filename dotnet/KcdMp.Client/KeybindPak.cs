@@ -48,6 +48,14 @@ public static class KeybindPak
         "kcd2mp_mark",   // WO-202 VI
     };
 
+    /// <summary>
+    /// WO-203B: the listener's own action (leave the partner's conversation), live only while the game's dialogue lock is: declared at
+    /// the end of the game's "dialog" actionmap and listed inside the game's own "back" superaction, so the player's own Back keys (and
+    /// his rebinds of them) drive it and no key of its own exists. Not in <see cref="Actions"/> (those two files' other places).
+    /// </summary>
+    public static readonly string[] DialogActions = { "kcd2mp_listen_cancel" };
+    public const string ListenCancelAction = "kcd2mp_listen_cancel";
+
     /// <summary>WO-178 0.d: the quicksave key's action (its key is the player's choice: settings.json QuickSaveKey, Wo178Rules).</summary>
     public const string QuickSaveAction = "kcd2mp_quicksave";
 
@@ -79,6 +87,9 @@ public static class KeybindPak
 
     public sealed record Outcome(bool Ok, string Action, string Detail, string? SourcePak = null)
     {
+        /// <summary>WO-203B: a part left out with every key still in place (the listen cancel on a game file of another shape).</summary>
+        public string? Note { get; init; }
+
         /// <summary>One machine-read line for Setup and the launcher; file names only, never a path.</summary>
         public string ToJson() => JsonSerializer.Serialize(new
         {
@@ -86,6 +97,7 @@ public static class KeybindPak
             action = Action,
             detail = Detail,
             source = SourcePak is null ? null : Path.GetFileName(SourcePak),
+            note = Note,
         });
     }
 
@@ -131,13 +143,54 @@ public static class KeybindPak
         return InsertAtLineStart(vanilla, close, body, SuperactionsEntry, out why);
     }
 
-    private static string? InsertAtLineStart(string vanilla, int at, string body, string entry, out string why)
+    private static readonly Regex DialogOpen = new(@"<actionmap\s+name\s*=\s*""dialog""", RegexOptions.CultureInvariant);
+    // the definition only: the file's <conflict> groups name "back" again as self-closing references
+    private static readonly Regex BackOpen = new(@"<superaction\s+name\s*=\s*""back""(?=[^>]*[^/>]>|>)", RegexOptions.CultureInvariant);
+
+    /// <summary>WO-203B: the game's defaultProfile.xml (ours merged in already) with the listener's action as the last lines of its
+    /// "dialog" actionmap; null (and why) when the file does not have that shape.</summary>
+    public static string? MergeDialog(string profile, string body, out string why)
+    {
+        if (!Wellformed(profile, out why)) { why = "defaultProfile.xml does not parse: " + why; return null; }
+        if (profile.Contains(ListenCancelAction, StringComparison.Ordinal)) { why = "defaultProfile.xml already names " + ListenCancelAction; return null; }
+        MatchCollection open = DialogOpen.Matches(profile);
+        if (open.Count != 1) { why = $"{open.Count} actionmaps named \"dialog\" (expected 1)"; return null; }
+        int start = open[0].Index;
+        int close = profile.IndexOf("</actionmap>", start, StringComparison.Ordinal);
+        if (close < 0) { why = "the \"dialog\" actionmap never closes"; return null; }
+        int nested = profile.IndexOf("<actionmap", start + 1, StringComparison.Ordinal);
+        if (nested >= 0 && nested < close) { why = "an actionmap inside \"dialog\""; return null; }
+        return InsertChecked(profile, close, body, ProfileEntry, DialogActions, out why);
+    }
+
+    /// <summary>WO-203B: the game's keybindSuperactions.xml (ours merged in already) with the listener's action listed inside the
+    /// game's own "back" superaction, before its first control (the keys stay the game's); null (and why) otherwise.</summary>
+    public static string? MergeBack(string superactions, string body, out string why)
+    {
+        if (!Wellformed(superactions, out why)) { why = "keybindSuperactions.xml does not parse: " + why; return null; }
+        if (superactions.Contains(ListenCancelAction, StringComparison.Ordinal)) { why = "keybindSuperactions.xml already names " + ListenCancelAction; return null; }
+        MatchCollection open = BackOpen.Matches(superactions);
+        if (open.Count != 1) { why = $"{open.Count} superactions named \"back\" (expected 1)"; return null; }
+        int start = open[0].Index;
+        int close = superactions.IndexOf("</superaction>", start, StringComparison.Ordinal);
+        if (close < 0) { why = "the \"back\" superaction never closes"; return null; }
+        int nested = superactions.IndexOf("<superaction", start + 1, StringComparison.Ordinal);
+        if (nested >= 0 && nested < close) { why = "a superaction inside \"back\""; return null; }
+        int control = superactions.IndexOf("<control", start, StringComparison.Ordinal);
+        int at = control >= 0 && control < close ? control : close;
+        return InsertChecked(superactions, at, body, SuperactionsEntry, DialogActions, out why);
+    }
+
+    private static string? InsertAtLineStart(string vanilla, int at, string body, string entry, out string why) =>
+        InsertChecked(vanilla, at, body, entry, Actions, out why);
+
+    private static string? InsertChecked(string vanilla, int at, string body, string entry, IEnumerable<string> actions, out string why)
     {
         int lineStart = vanilla.LastIndexOf('\n', Math.Max(0, at - 1)) + 1;
         if (!vanilla.Contains("\r\n")) body = body.Replace("\r\n", "\n");   // keep the file's own line endings
         string merged = vanilla.Insert(lineStart, body);
         if (!Wellformed(merged, out why)) { why = entry + " no longer parses with our lines: " + why; return null; }
-        foreach (string a in Actions)
+        foreach (string a in actions)
         {
             // exactly what our lines add: the game's file named none of them (checked above)
             string named = "name=\"" + a + "\"";
@@ -381,6 +434,13 @@ public static class KeybindPak
             if (s is null) return new Outcome(false, "none", why, source);
             if (BoundKey(s, MenuToggleAction) != menuKey) return new Outcome(false, "none", "the menu key did not land in " + SuperactionsEntry, source);
             if (BoundKey(s, QuickSaveAction) != qsKey) return new Outcome(false, "none", "the quicksave key did not land in " + SuperactionsEntry, source);
+            // WO-203B: the listener's cancel, in the game's own dialog actionmap and Back superaction -- both or neither; a game file
+            // without that shape keeps every other key (the listener then leaves through the ESC menu) and the outcome says so
+            string? listenNote = null;
+            string? pd = MergeDialog(p, PatchBody(EmbeddedPatch("defaultProfile.dialog.xml")), out string whyD);
+            string? sb = pd is null ? null : MergeBack(s, PatchBody(EmbeddedPatch("keybindSuperactions.back.xml")), out whyD);
+            if (pd is not null && sb is not null) { p = pd; s = sb; }
+            else listenNote = "the listen cancel is not bound: " + whyD;
             if (qsNote.Length > 0) keyNote = keyNote.Length > 0 ? keyNote + "; " + qsNote : qsNote;
             string data = Path.Combine(modDir, "Data");
             Directory.CreateDirectory(data);
@@ -391,7 +451,7 @@ public static class KeybindPak
                 (ProfileEntry, enc.GetBytes(p)),
                 (SuperactionsEntry, enc.GetBytes(s)),
             });
-            return new Outcome(true, action, $"{Actions.Length} actions in both files; menu key {menuKey}; quicksave key {qsKey}{(keyNote.Length > 0 ? " (" + keyNote + ")" : "")}", source);
+            return new Outcome(true, action, $"{Actions.Length} actions in both files; menu key {menuKey}; quicksave key {qsKey}{(keyNote.Length > 0 ? " (" + keyNote + ")" : "")}", source) { Note = listenNote };
         }
         catch (Exception ex)
         {
