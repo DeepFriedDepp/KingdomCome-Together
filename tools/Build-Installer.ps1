@@ -316,6 +316,15 @@ Write-Host "No-screenshot gate (WO-192) ..."
 & python (Join-Path $PSScriptRoot "Test-NoScreenshots.py") $payload
 if ($LASTEXITCODE -ne 0) { throw "no-screenshot gate FAILED: a shipped file takes a screenshot. Not shipping." }
 
+# WO-203 (the keylogger rule): nothing that ships can record, read or report what a person types or clicks. Every binary's import
+# and delay-load tables and every script (the staged mod's pak entries included) of the payload; the self-test first proves the
+# gate still catches what it must. Any hit, or a failed self-test, stops the build.
+Write-Host "No-input-capture gate (WO-203) ..."
+$nicOut = & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Check-NoInputCapture.ps1") -SelfTest -Scripts $payload   # -Scripts walks a folder for binaries too
+$nicExit = $LASTEXITCODE
+$nicOut | Where-Object { $_ -match '^(HIT|EXEMPT|SELFTEST|checked:|RESULT:)|^\s+- ' } | ForEach-Object { Write-Host $_ }
+if ($nicExit -ne 0) { throw "no-input-capture gate FAILED: a shipped file can read what a person types or clicks (or the gate's self-test failed). Not shipping." }
+
 # WO-32 follow-up, rewritten in WO-74: write a manifest of everything this
 # Setup carries so the installer can prove, after installing, that every file
 # actually landed -- and that nothing ELSE is sitting in the install directory
