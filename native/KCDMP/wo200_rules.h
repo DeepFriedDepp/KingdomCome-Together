@@ -29,6 +29,8 @@ enum class Kind : uint8_t {
     View,             // C_FocusCameraNode, C_DisplayTutorial, C_PlayTrackView: one player's own view
     RewardPlayer,     // C_AddReward, C_PlayerOutfitOverride: always the player
     BodyEffect,       // C_BuffEffect, C_ClothingPresetOverride, C_WeaponPresetOverride: whose body is the soul input's
+    SceneStarter,     // WO-203 I.5: C_CutsceneHandler -- a scene (a fader, an in-game cutscene) a consequence starts; its AfterPlay starts the
+                      // next conversation frames later, outside the pulse that queued it (the closure is carried there: Tap::ContinueLocal)
     Count
 };
 
@@ -76,10 +78,24 @@ enum class Verdict : uint8_t {
     TalkerOnlyHost,       // I.3: in a replay's closure the host's Henry gets no reward, money or body effect (the talker got it)
     TalkerOnlyJoiner,     // I.3: in a mirror of the host's own conversation the joiner's Henry gets none of these, nor its view
     JoinerStoryBark,      // WO-201 B7: the joiner's own quest logic starts no player monologue, dialogue, urged dialogue or focus camera
+    HostScene,            // WO-203 I.5: in a replay's closure the host starts no fader or in-game scene (session C: its AfterPlay started the
+                          // forced trialog for the host's Henry)
     Count
 };
 
 const char* verdict_name(Verdict v);
+
+// WO-203 I.5: what a C_CutsceneHandler's Execute would start, read from the handler (wo200.cpp read_handler): its state (WO-193: 0 idle,
+// 1 queued, 2 ready, 3 playing, 4 ended, 5 finishing -- an enqueue is accepted at 0 only) and its configuration's cutscene class.
+enum class Scene : uint8_t {
+    Unknown = 0,   // a start whose scene is not read (no configuration yet: the first enqueue builds it; a class not resolved by RTTI)
+    Player,        // a fader or an in-game cutscene: the player's own view, and its AfterPlay starts the next conversation
+    Other,         // a rendered video (WO-179's own path), a track view, a text, skip-time, fast-travel or credits scene
+    NoStart,       // the handler is busy: this input plays or finishes a scene already queued, or is an enqueue the engine refuses itself
+};
+constexpr int kHandlerStateMax = 5;
+// May this Execute start a scene? Idle, or a state not read (-1) or not one the build has (fail closed: treated as a start).
+inline bool handler_may_start(int state) { return state <= 0 || state > kHandlerStateMax; }
 
 struct Cfg {
     bool joined = false;       // the joiner is in the host's world (role joiner only)
@@ -104,9 +120,9 @@ inline bool needs_target(uint8_t role, Kind k, Method m, bool inClosure, bool mi
 }
 
 // The decision. `urgeParent`: a Behaviour node inside an UrgeADialog library (an NPC walks up and starts a dialogue with the player);
-// `moneyParent`: an Items function inside a money library (MoveMoney_*, createmoney*).
+// `moneyParent`: an Items function inside a money library (MoveMoney_*, createmoney*); `scene`: a SceneStarter's read (WO-203 I.5).
 inline Verdict decide(uint8_t role, Kind k, Method m, Target t, bool inClosure, bool mirrorTalker, bool urgeParent, bool moneyParent,
-                      const Cfg& c) {
+                      const Cfg& c, Scene scene = Scene::Unknown) {
     if (k == Kind::None) return Verdict::Run;
     const bool playerBody = (k == Kind::BodyEffect || k == Kind::Interrupt ||
                              (k == Kind::Function && (m == Method::AddBuff || m == Method::SetState || m == Method::Damage))) && t == Target::Player;
@@ -132,8 +148,13 @@ inline Verdict decide(uint8_t role, Kind k, Method m, Target t, bool inClosure, 
     }
     if (role == kRoleHost && inClosure) {
         if (c.hostClosure) {
-            if (k == Kind::DialogueStarter || (k == Kind::Function && m == Method::Monologue) || (k == Kind::Behaviour && urgeParent))
+            // WO-203 I.5: a dialogue or dialogue-wrapper node executed in the closure starts a follow-on conversation for the host's Henry
+            // (the replay's own source node is not executed: its out-port is fired directly, so the replay itself runs)
+            if (k == Kind::DialogueStarter || k == Kind::Dialogue || (k == Kind::Function && m == Method::Monologue) || (k == Kind::Behaviour && urgeParent))
                 return Verdict::HostDialogue;
+            // WO-203 I.5 (session C's hijack): a fader or in-game scene the replay would start for the host's Henry; a scene not read is
+            // refused too (fail closed). A rendered video stays WO-179's; a busy handler's input is the host's own scene's.
+            if (k == Kind::SceneStarter && (scene == Scene::Player || scene == Scene::Unknown)) return Verdict::HostScene;
             if (k == Kind::View) return Verdict::HostView;
         }
         if (c.route && (alwaysPlayer || playerBody)) return Verdict::TalkerOnlyHost;
@@ -142,12 +163,15 @@ inline Verdict decide(uint8_t role, Kind k, Method m, Target t, bool inClosure, 
 }
 
 // Gate 1 (the tap) on the joiner: a clock's out-port fire is dropped (I.4); a dialogue node's is recorded (I.1) and runs here too.
-enum class Tap : uint8_t { Pass = 0, QuietDrop, Capture, Continue };
-inline Tap tap(uint8_t role, Kind ownerKind, bool joined, bool quietClocks, bool capture, bool waiterInClosure, bool inClosure) {
+// ContinueLocal (WO-203 I.5): a scene handler a closure started pulses its out-ports (OnQueued, BeforePlay, AfterPlay, OnFinished) frames
+// later; the pulse re-enters that closure for the node gate only -- nothing is captured, nothing goes to the host, no State change is marked.
+enum class Tap : uint8_t { Pass = 0, QuietDrop, Capture, Continue, ContinueLocal };
+inline Tap tap(uint8_t role, Kind ownerKind, bool joined, bool quietClocks, bool capture, bool markedInClosure, bool inClosure) {
     if (role == kRoleJoiner && joined && quietClocks && ownerKind == Kind::Clock) return Tap::QuietDrop;
     // a conversation's node (a forced or fader dialogue is one too): the host marks its own talks as well (I.3's mirror rule)
     if ((ownerKind == Kind::Dialogue || ownerKind == Kind::DialogueStarter) && capture && !inClosure) return Tap::Capture;
-    if (ownerKind == Kind::Waiter && waiterInClosure && !inClosure) return Tap::Continue;
+    if (ownerKind == Kind::Waiter && markedInClosure && !inClosure) return Tap::Continue;
+    if (ownerKind == Kind::SceneStarter && markedInClosure && !inClosure) return Tap::ContinueLocal;
     return Tap::Pass;
 }
 
@@ -159,6 +183,31 @@ constexpr uint64_t kQuietLogEveryMs = 60ull * 1000;
 // Closure ids: the host's replays carry the joiner's id (< 2^31); local captures are marked with the high bit.
 constexpr uint32_t kLocalClosureBit = 0x80000000u;
 inline bool closure_is_local(uint32_t id) { return (id & kLocalClosureBit) != 0; }
+
+// WO-203 I.5: the closure the node gate sees -- the thread's own (a capture, a replay, a waiter's continuation), else the one a scene's
+// out-port carries (Tap::ContinueLocal). Only the gate sees a carry: wo137's State marks and the tap's own decisions keep the thread's own.
+inline uint32_t gate_closure(uint32_t closure, uint32_t sceneCarry) { return closure ? closure : sceneCarry; }
+inline bool own_chain(uint32_t cid) { return cid != 0 && closure_is_local(cid); }            // WO-201 B7: his own conversation's chain
+inline bool in_replay_closure(uint32_t cid) { return cid != 0 && !closure_is_local(cid); }   // the host's I.2 rules apply
+
+// WO-203 I.5: a C_CutsceneHandler's closure mark after the gate's decision. A scene started inside a closure carries it to the scene's
+// out-ports; a start outside any closure, or a refused one, leaves none (the handler's next scene is not that closure's); a busy handler's
+// input keeps the mark of the scene it belongs to.
+enum class SceneMark : uint8_t { Keep = 0, Mark, Forget };
+inline SceneMark scene_mark(uint32_t cid, Scene s, Verdict v) {
+    if (s == Scene::NoStart) return SceneMark::Keep;
+    if (v != Verdict::Run || cid == 0) return SceneMark::Forget;
+    return SceneMark::Mark;
+}
+
+// WO-203 I.5: the refusals logged past the 4,096-entry cap (it hid session C's five): a conversation or a scene kept from starting on this
+// machine, at most once per node per kStoryLogEveryMs. Routine refusals (barks, puppets, views, rewards) keep the cap.
+constexpr uint64_t kStoryLogEveryMs = 10ull * 1000;
+inline bool always_logged(Verdict v, Kind k) {
+    return (v == Verdict::JoinerStoryBark || v == Verdict::HostDialogue || v == Verdict::HostScene) &&
+           (k == Kind::DialogueStarter || k == Kind::SceneStarter || k == Kind::Dialogue);
+}
+inline bool log_due(uint64_t last, uint64_t now, uint64_t every) { return last == 0 || now - last >= every; }
 
 // Name tests on a parent module's instance name (library instances keep their library's name, lower- or mixed-case).
 inline bool icontains(const char* s, const char* sub) {
@@ -219,7 +268,17 @@ inline const char* kind_name(Kind k) {
         case Kind::View: return "View";
         case Kind::RewardPlayer: return "RewardPlayer";
         case Kind::BodyEffect: return "BodyEffect";
+        case Kind::SceneStarter: return "SceneStarter";
         default: return "None";
+    }
+}
+
+inline const char* scene_name(Scene s) {
+    switch (s) {
+        case Scene::Player: return "fader-or-ingame";
+        case Scene::Other: return "other";
+        case Scene::NoStart: return "busy";
+        default: return "unknown";
     }
 }
 
@@ -231,6 +290,7 @@ inline const char* verdict_name(Verdict v) {
         case Verdict::TalkerOnlyHost: return "talker-only-host";
         case Verdict::TalkerOnlyJoiner: return "talker-only-joiner";
         case Verdict::JoinerStoryBark: return "joiner-story";
+        case Verdict::HostScene: return "host-scene";
         default: return "run";
     }
 }

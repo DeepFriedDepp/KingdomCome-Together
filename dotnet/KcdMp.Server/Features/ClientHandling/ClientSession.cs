@@ -277,6 +277,17 @@ public class ClientSession
                 int type = header[0];
                 int payloadLen = BinaryPrimitives.ReadUInt16LittleEndian(header.AsSpan(1));
 
+                // WO-203 II.5: one gate for every frame, from the one table (Protocol.RelayUp + Protocol.JoinWire). An unknown
+                // type and a known type of a wrong length are counted apart -- the old catch-all said "unknown-or-wrong-length"
+                // for both, and session C's 463 dropped W164 frames (a known type, too long) read like a type the relay did not
+                // know. A join row's drop names its limit, a side channel's its kind ("0x74/k21:wrong-length:1411>max1410").
+                // The per-type gates below keep their own field checks; past this point the length is one the type allows.
+                if (type == Protocol.Handshake || !Protocol.IsUpLenOk(type, payloadLen))
+                {
+                    await DropFrameAsync(type, payloadLen, GateReason(type, payloadLen));
+                    continue;
+                }
+
                 if (type == Protocol.Ping && payloadLen == 8)
                 {
                     // Ping → echo back as Pong with same 8-byte timestamp
@@ -358,6 +369,8 @@ public class ClientSession
                     int itemCount = body[0];
                     if (payloadLen == 1 + itemCount * Protocol.ItemClassLen)
                         _broadcastService.BroadcastAppearance(this, body);
+                    else
+                        _clientHandler.CountDrop(Protocol.AppearanceUp, "count-mismatch");   // WO-203 II.5: counted, not silent
                     continue;
                 }
 
@@ -395,6 +408,7 @@ public class ClientSession
                     {
                         _logger.Warning("[!] '{Name}' (id={Id}) sent PlayerHitUp without holding damage authority -- dropped.",
                             Name, Id);
+                        _clientHandler.CountDrop(Protocol.PlayerHitUp, "not-host");   // WO-203 II.5: counted, not only a line
                         continue;
                     }
                     _broadcastService.RoutePlayerHit(this, body);
@@ -612,6 +626,8 @@ public class ClientSession
                         }
                         _broadcastService.BroadcastAction(this, body);
                     }
+                    else
+                        _clientHandler.CountDrop(Protocol.ActionUp, "len-mismatch");   // WO-203 II.5: the len byte lies; counted, not silent
                     continue;
                 }
 
@@ -656,6 +672,8 @@ public class ClientSession
                         }
                         _broadcastService.BroadcastNpcDamage(this, body);
                     }
+                    else
+                        _clientHandler.CountDrop(Protocol.NpcDamageUp, "namelen-mismatch");   // WO-203 II.5: counted, not silent
                     continue;
                 }
 
@@ -672,6 +690,8 @@ public class ClientSession
                     await ReadExactAsync(body);
                     if (body[0] == payloadLen - 3)
                         _broadcastService.BroadcastWeather(this, body);
+                    else
+                        _clientHandler.CountDrop(Protocol.WeatherUp, "namelen-mismatch");   // WO-203 II.5: counted, not silent
                     continue;
                 }
 
@@ -688,6 +708,8 @@ public class ClientSession
                     await ReadExactAsync(body);
                     if (body[1] == payloadLen - 2)
                         _broadcastService.BroadcastStoryBeat(this, body);
+                    else
+                        _clientHandler.CountDrop(Protocol.StoryBeatUp, "len-mismatch");   // WO-203 II.5: counted, not silent
                     continue;
                 }
 
@@ -766,12 +788,15 @@ public class ClientSession
                     var dest = _broadcastService.RouteJoin(this, jw.Down, jw.From, body, out string why);
                     if (dest is null)
                     {
-                        _clientHandler.CountDrop((byte)type, why);
+                        _clientHandler.CountDrop((byte)type, why, Protocol.DropKeyHasKind(type) ? Protocol.JoinBodyKind(body) : -1);
                         _logger.Warning("[join] {Kind} from '{Name}' (id={Id}) to {Target} dropped: {Why}.", jw.Name, Name, Id, body[0], why);
                         continue;
                     }
                     bool carryHeld = type == Protocol.CarryUp && body.Length > Protocol.JoinHeaderLen && body[Protocol.JoinHeaderLen] == Protocol.CarryHeld;   // WO-148: every 2 s while carrying
-                    if (type != Protocol.WorldChunkUp && type != Protocol.WorldAckUp && type != Protocol.ActivityHostUp && type != Protocol.ActivityPeerUp && type != Protocol.HitVerdictUp && !carryHeld)   // WO-141: rows every few seconds, counted not logged; WO-161: a verdict per hit in a fight, the agents log each (WO161-HIT)
+                    // WO-203: a conversation's camera runs at up to 30 Hz and the Act II side channel per swing / per pose, so
+                    // neither gets a line per frame either (the agents log their own)
+                    bool quiet = type is Protocol.ConvUp or Protocol.W203Up;
+                    if (type != Protocol.WorldChunkUp && type != Protocol.WorldAckUp && type != Protocol.ActivityHostUp && type != Protocol.ActivityPeerUp && type != Protocol.HitVerdictUp && !carryHeld && !quiet)   // WO-141: rows every few seconds, counted not logged; WO-161: a verdict per hit in a fight, the agents log each (WO161-HIT)
                         _logger.Information("[join] {Kind} '{Name}' (id={Id}) -> id={Dest} join=0x{Join:X8} ({Len} B).",
                             jw.Name, Name, Id, dest.Id, BinaryPrimitives.ReadUInt32LittleEndian(body.AsSpan(1)), payloadLen);
                     continue;
@@ -788,6 +813,7 @@ public class ClientSession
                     if (!_clientHandler.IsDamageAuthority(this))
                     {
                         _logger.Warning("[!] '{Name}' (id={Id}) sent WorldSaved without holding damage authority -- dropped.", Name, Id);
+                        _clientHandler.CountDrop(Protocol.WorldSavedUp, "not-host");   // WO-203 II.5: counted, not only a line
                         continue;
                     }
                     _logger.Information("[worldsave] '{Name}' (id={Id}) saved the world: seq {Seq} playline{Playline}/{File}.",
@@ -806,16 +832,14 @@ public class ClientSession
 
                 if (type != Protocol.Position || !Protocol.IsPositionPayloadLen(payloadLen))
                 {
-                    // Skip unknown/malformed packet. WO-110 R9: counted by type
-                    // -- a known type landing here failed one of the exact-
-                    // length gates above (the 0.23.1 shape), an unknown type
-                    // is a newer peer; either way MP-RELAY-DROPS says so.
-                    _clientHandler.CountDrop((byte)type, type == Protocol.Position ? "wrong-length" : "unknown-or-wrong-length");
-                    if (payloadLen > 0)
-                    {
-                        var skip = new byte[payloadLen];
-                        await ReadExactAsync(skip);
-                    }
+                    // Skip it. WO-110 R9: counted by type. WO-203 II.5: the gate
+                    // at the top already counted every unknown type and every
+                    // wrong length (as such), so a frame that lands here has a
+                    // length its row allows and no gate above took it -- the
+                    // table and the gates disagree. Counted under its own name;
+                    // RelayTableGateTests puts every row through the relay and
+                    // fails on it.
+                    await DropFrameAsync(type, payloadLen, $"no-gate:{payloadLen}");
                     continue;
                 }
 
@@ -1226,8 +1250,47 @@ public class ClientSession
             default:
                 _logger.Warning("[!] '{Name}' sent malformed interaction packet 0x{Type:X2} ({Len} bytes)",
                     Name, type, body.Length);
+                // WO-203 II.5: counted, not only a line. The gate at the top
+                // already refuses a body under its type's minimum (RelayUp),
+                // so what lands here is a dice intent the protocol does not
+                // define (or a short body, should the two ever disagree).
+                _clientHandler.CountDrop((byte)type,
+                    type == Protocol.DiceIntent && body.Length >= 3 ? $"bad-intent:{body[2]}" : $"short-body:{body.Length}");
                 break;
         }
+    }
+
+    /// <summary>
+    /// WO-203 II.5: reads past a frame the relay does not take -- so the
+    /// framing survives it -- and counts it under <paramref name="reason"/>;
+    /// a side channel's drop key names the body's kind too ("0x74/k21:...").
+    /// </summary>
+    private async Task DropFrameAsync(int type, int payloadLen, string reason)
+    {
+        int kind = -1;
+        if (payloadLen > 0)
+        {
+            var skip = new byte[payloadLen];
+            await ReadExactAsync(skip);
+            if (Protocol.DropKeyHasKind(type)) kind = Protocol.JoinBodyKind(skip);
+        }
+        _clientHandler.CountDrop((byte)type, reason, kind);
+    }
+
+    /// <summary>
+    /// WO-203 II.5: why the gate at the top of the receive loop refuses a
+    /// frame -- "unknown-type" (no row: a newer peer, or garbage),
+    /// "handshake-again" (the Handshake is the first frame only), or
+    /// "wrong-length:&lt;len&gt;", for a join row with the limit it broke
+    /// ("wrong-length:1411&gt;max1410", "wrong-length:5&lt;min11").
+    /// </summary>
+    internal static string GateReason(int type, int payloadLen)
+    {
+        if (!Protocol.IsKnownUp(type)) return "unknown-type";
+        if (type == Protocol.Handshake) return "handshake-again";
+        if (Protocol.JoinWireFor(type) is { } jw)
+            return payloadLen > jw.Max ? $"wrong-length:{payloadLen}>max{jw.Max}" : $"wrong-length:{payloadLen}<min{jw.Min}";
+        return $"wrong-length:{payloadLen}";
     }
 
     /// <summary>

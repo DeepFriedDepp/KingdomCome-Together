@@ -10,7 +10,7 @@ namespace KcdMp.Wire;
 // goes to the host (target 0xFF), the host's to one joiner by id -- the relay needs no code of its own):
 //
 //   type up/down  name   up body (after [target:1][joinId:4])
-//   0x74 / 0x75   W164   [kind:1][tok:4][text:1..W164TextMax]     (the LootMsg shape)
+//   0x74 / 0x75   W164   [kind:1][tok:4][text:1..W164WireTextMax] (the LootMsg shape; WO-203 II.5: was W164TextMax, 80)
 //
 // Kinds (APPEND-ONLY):
 //   1 MarkPing  "<markId>"       a tester pressed "Something's wrong here" (mark_odd) on the sender: the receiver writes its
@@ -47,7 +47,17 @@ public static partial class Protocol
 {
     public const byte W164Up = 0x74, W164Down = 0x75;   // WO-164
 
+    /// <summary>The per-kind text budget the WO-164..WO-189 kinds were written to (the scene bus, the profiles and the corpse
+    /// question still cut themselves at it). It is NOT the wire's limit any more: see W164WireTextMax.</summary>
     public const int W164TextMax = 80;
+
+    /// <summary>
+    /// WO-203 II.5: the wire's text limit for one W164 message -- the relay's JoinWire row and the agent's IsJoinDown read it.
+    /// Until WO-203 the row used W164TextMax (80) while WO-201's speech line (up to 196 bytes plus its header), vote options
+    /// (6 x 80) and vote close/cast (~90) went out longer: the relay dropped every one of them (session C: 463 drops of 0x74 as
+    /// "unknown-or-wrong-length", 411 of them speech lines). LootMsg.BuildUp now refuses a text over the row before it is sent.
+    /// </summary>
+    public const int W164WireTextMax = 1400;
 
     // ---- WO-178: the DLL's ops in the WO-163 family (native/KCDMP/wo178.h) ----
     public const byte Wo178OpOffer = 24, Wo178OpStatus = 25, Wo178OpConfig = 26, Wo178OpSaveManual = 27, Wo178OpHeldResult = 28, Wo178OpTrace = 29;

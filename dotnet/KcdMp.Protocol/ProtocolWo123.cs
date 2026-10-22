@@ -101,8 +101,13 @@ public static partial class Protocol
         (CarryUp,       CarryDown,       "carry",        JoinHeaderLen + LootFixedLen + 1, JoinHeaderLen + LootFixedLen + CarryTextMax, JoinFrom.Either),
         // WO-161: the hit verdict (ProtocolWo161.cs) -- the host's verdict of an NPC's hit on one joiner's avatar; the host only
         (HitVerdictUp,  HitVerdictDown,  "hit-verdict",  JoinHeaderLen + HitVerdictFixedLen, JoinHeaderLen + HitVerdictBodyMax, JoinFrom.Host),
-        // WO-164: the mark snapshot ping and the torch side-channel (ProtocolWo164.cs) -- the LootMsg shape, either way
-        (W164Up,        W164Down,        "w164",         JoinHeaderLen + LootFixedLen + 1, JoinHeaderLen + LootFixedLen + W164TextMax, JoinFrom.Either),
+        // WO-164: the mark snapshot ping and the torch side-channel (ProtocolWo164.cs) -- the LootMsg shape, either way.
+        // WO-203 II.5: the wire's limit (W164WireTextMax), not the old per-kind budget the WO-201 texts outgrew.
+        (W164Up,        W164Down,        "w164",         JoinHeaderLen + LootFixedLen + 1, JoinHeaderLen + LootFixedLen + W164WireTextMax, JoinFrom.Either),
+        // WO-203 Act I: one shared conversation, starter <-> listener (ProtocolWo203.cs) -- the LootMsg shape, either way (either player can start one)
+        (ConvUp,        ConvDown,        "conv",         JoinHeaderLen + LootFixedLen + 1, JoinHeaderLen + LootFixedLen + ConvTextMax, JoinFrom.Either),
+        // WO-203 Act II: the side channel (defence, early engage, worn sets, poses, join progress, focus, travel) -- the LootMsg shape, either way
+        (W203Up,        W203Down,        "w203",         JoinHeaderLen + LootFixedLen + 1, JoinHeaderLen + LootFixedLen + W203TextMax, JoinFrom.Either),
     };
 
     /// <summary>The JoinWire row for an up type, or null.</summary>

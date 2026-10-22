@@ -11,9 +11,15 @@
 //                                * a dialogue node's pulse is recorded (I.1) and runs as before; what it runs, synchronously, is that
 //                                  pulse's closure (a thread mark), and a C_SceneFinishedWaiter enqueued in it continues it when it
 //                                  finishes (the departure's OnFinished, 48 s later), for 5 minutes
+//                                * WO-203 I.5: a C_CutsceneHandler whose scene a closure started carries that closure to its out-ports
+//                                  (OnQueued, BeforePlay, AfterPlay, OnFinished -- frames later) for the node gate only: the forced
+//                                  dialogue a fader's AfterPlay starts is then the joiner's own chain (B7 runs it) or, on the host, the
+//                                  replay's (refused). Nothing is captured or sent for it; closure_now() does not see it.
 //   Gate 2, the node gate      C_Node::Execute's entry (the export every node class uses: no class overrides that slot; prologue in
 //                              hook_prologues.h): each node about to execute, decided by its RTTI class, a Function node's method, the
 //                              souls its inputs name (the local player or not) and the closure it runs in. WO200-GATE.
+//                              WO-203 I.5: in a replay's closure the host also starts no C_DialogueNode / C_DialogueWrapper and no
+//                              C_CutsceneHandler scene that is a fader or an in-game cutscene (or not readable: fail closed) -- HostScene.
 //   Replay (op 73, host)       the joiner's dialogue out-port, pulsed on the host's own node: the same port's own Trigger, inside a
 //                              closure mark carrying the joiner's id (I.2); refused when the node is not loaded, hibernated or not a
 //                              dialogue node.
@@ -21,7 +27,8 @@
 // Pipe ops in the WO-163 family (0x2B -> 0xAC), main thread:
 //   70 Status -> text
 //   71 Config [role:1][joined:1][tap:1][gate:1][log:1] (255 = unchanged) -> the same 5 bytes
-//        tap bits 1 capture, 2 quiet clocks, 4 waiters continue a closure; gate bits 1 puppets (I.5), 2 the host's closure rules (I.2),
+//        tap bits 1 capture, 2 quiet clocks, 4 waiters (and scene handlers, WO-203) continue a closure; gate bits 1 puppets (I.5), 2 the
+//        host's closure rules (I.2; WO-203 I.5's dialogue and scene starts too),
 //        4 talker-only routing (I.3); log bits 1 every closure class the first time it is met, 2 research port dumps
 //   72 Poll [sinceSeq:4] -> [lastSeq:4][more:1][n:1] n x [seq:4][kind:1][closure:4][ageMs:4][aLen:1][a][bLen:2][b]
 //        kind 1 capture (a port, b node path), 2 quiet drop (a port, b clock path), 3 refused (a "verdict kind method", b path),
@@ -46,6 +53,7 @@ uint8_t handle(uint8_t op, const uint8_t* body, size_t len, uint8_t* out, size_t
 int status_text(char* out, int n);
 
 // The closure the calling thread runs in (0 = none). wo137's detector marks a State change made inside one (flag 128) and sends its id.
+// A scene's carry (WO-203 I.5) is not one: what a scene's out-port changes goes out as it did before the carry.
 uint32_t closure_now();
 // The joiner's apply of a host change the host's own conversation made: the talker-only rules hold while it runs (wo137's apply).
 void set_mirror_talker(bool on);

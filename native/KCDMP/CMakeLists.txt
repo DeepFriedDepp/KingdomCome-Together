@@ -70,6 +70,13 @@ add_library(KCDMP SHARED
     weather.cpp
     crash_capture.cpp
     wo202.cpp
+    wo203.cpp
+    wo203_conv.cpp
+    wo203_defence.cpp
+    wo203_stream.cpp
+    wo203_appear.cpp
+    wo203_quest.cpp
+    wo203_join.cpp
 )
 
 target_include_directories(KCDMP PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

@@ -7,6 +7,7 @@
 #include "wo200.h"
 #include "wo201.h"
 #include "wo202.h"
+#include "wo203.h"
 #include "engine.h"
 #include "hits.h"
 #include "log.h"
@@ -296,6 +297,8 @@ uint8_t handle(const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t
         case kcdmp::wo178::kOpHeldResult:   // WO-178 C4: a held blow lives in WO-173's path
             return kcdmp::wo173::handle(body[0], body, len, out, cap, outLen);
         default:
+            if (kcdmp::wo203::has_op(body[0]))   // WO-203: every area's ops (wo203.h owns the numbers 90..114)
+                return kcdmp::wo203::handle(body[0], body, len, out, cap, outLen);
             return kRBadRequest;
     }
 }

@@ -160,6 +160,16 @@ if (-not $SkipPublish) {
         $env:DOTNET_ROOT = "$env:USERPROFILE\.dotnet-sdk8"
         $env:PATH = "$env:DOTNET_ROOT;$env:PATH"
     }
+    # WO-203 II.5: the relay message table gate. 0.62.0 lost 463 W164 frames at
+    # the relay: the type had a row, but the row's limit was older than the
+    # senders, and the drop reason could not tell "unknown" from "too long".
+    # Every message type the protocol defines must have a relay rule, every
+    # rule must cross the real relay at its limits, and every W164 builder's
+    # worst case must fit its row. Named here so the build log says so.
+    Write-Host "Relay message table gate (WO-203 II.5, tools\Test-RelayTable.ps1) ..."
+    & powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Test-RelayTable.ps1")
+    if ($LASTEXITCODE -ne 0) { throw "the relay message table gate FAILED -- a message type has no relay rule, a rule does not cross the real relay, or a W164 text does not fit its row (tools\Test-RelayTable.ps1). Not shipping." }
+
     Write-Host "Relay round-trip gate (dotnet\KcdMp.Relay.Tests) ..."
     & dotnet test (Join-Path $root "dotnet\KcdMp.Relay.Tests\KcdMp.Relay.Tests.csproj") -c Release --nologo -v q
     if ($LASTEXITCODE -ne 0) { throw "relay round-trip gate FAILED -- a packet does not cross the real relay. Not shipping." }

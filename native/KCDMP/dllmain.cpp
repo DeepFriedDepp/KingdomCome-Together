@@ -21,6 +21,7 @@
 #include "wo200.h"
 #include "wo201.h"
 #include "wo202.h"
+#include "wo203.h"
 #include "combat_swing.h"
 #include "wo135.h"
 #include "wo137.h"
@@ -215,6 +216,7 @@ DWORD WINAPI plugin_main(LPVOID) {
     kcdmp::wo200::install();   // WO-200: the out-port tap and the node gate (each off until the agent's Config)
     kcdmp::wo201::install();   // WO-201: B1's resolver (the save path's own FastForward cancel)
     kcdmp::wo202::install();   // WO-202: the switch word (op 88), the quest-fail tracer
+    kcdmp::wo203::install();   // WO-203: every area that registered with wo203.h (join the conversation, session C's fixes)
 
     if (kcdmp::dice::install_pause_hook()) {
         kcdmp::main_thread::post_repeating("dice::sample_instance_if_changed", &kcdmp::dice::sample_instance_if_changed);
@@ -268,6 +270,7 @@ DWORD WINAPI plugin_main(LPVOID) {
     kcdmp::main_thread::post_repeating("wo197::tick", &kcdmp::wo197::tick);   // WO-197: the local player's recoil and clinch polls   // WO-194: the holds' releases, the scenes' time of day back
     kcdmp::main_thread::post_repeating("wo200::tick", &kcdmp::wo200::tick);
     kcdmp::main_thread::post_repeating("wo201::tick", &kcdmp::wo201::tick);   // WO-201 B1: no joiner scene waits for the host's copies   // WO-200: the player soul the gate compares with, the closures' expiry
+    kcdmp::main_thread::post_repeating("wo203::tick", &kcdmp::wo203::tick);   // WO-203: every registered area's per-frame work
     kcdmp::main_thread::post_repeating("rttr::swing_watch_tick", &kcdmp::rttr::swing_watch_tick);   // WO-167 C3: shown means rendered
     // WO-124: the joiner's placement gives the fall damage back; the save-list
     // research trigger (kcdmp-savelist-test.txt, opt-in, absent = idle).

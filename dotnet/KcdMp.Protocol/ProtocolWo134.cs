@@ -75,12 +75,25 @@ public static partial class Protocol
 /// <summary>WO-134: one LootAsk or LootHost message (the body after the join header).</summary>
 public readonly record struct LootMsg(byte Kind, uint Tok, string Text)
 {
+    /// <summary>
+    /// The framed up packet. Throws (ArgumentOutOfRangeException) when the type has no relay row or the text is longer than its
+    /// row allows -- WO-203 II.5: until then a text the row did not allow left the agent and the relay dropped it, counted on the
+    /// relay only (session C: 463 W164 frames). Every sender's catch logs the refusal ("... not sent ...").
+    /// </summary>
     public byte[] BuildUp(byte type, byte target)
     {
         var tb = Encoding.ASCII.GetBytes(Text ?? "");
         if (tb.Length == 0 || tb.Length > Protocol.LootTextMax) throw new ArgumentOutOfRangeException(nameof(Text), $"loot text length {tb.Length}");
         foreach (byte c in tb) if (c < 0x20 || c > 0x7E) throw new ArgumentException("loot text must be printable ASCII", nameof(Text));
         int len = Protocol.JoinHeaderLen + Protocol.LootFixedLen + tb.Length;
+        if (Protocol.JoinWireFor(type) is not { } row)
+            throw new ArgumentOutOfRangeException(nameof(type), $"type 0x{type:X2} has no row in the relay's join table -- the relay would drop it");
+        if (len > row.Max)
+            throw new ArgumentOutOfRangeException(nameof(Text),
+                $"{row.Name} text is {tb.Length} bytes, over the relay row's {row.Max - Protocol.JoinHeaderLen - Protocol.LootFixedLen}-byte limit (0x{type:X2}) -- the relay would drop it");
+        if (len < row.Min)
+            throw new ArgumentOutOfRangeException(nameof(Text),
+                $"{row.Name} body is {len - Protocol.JoinHeaderLen} bytes, under the relay row's {row.Min - Protocol.JoinHeaderLen}-byte minimum (0x{type:X2}) -- the relay would drop it");
         var p = new byte[3 + len];
         p[0] = type;
         BinaryPrimitives.WriteUInt16LittleEndian(p.AsSpan(1), (ushort)len);

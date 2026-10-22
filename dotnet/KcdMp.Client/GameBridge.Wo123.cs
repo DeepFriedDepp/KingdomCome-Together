@@ -299,6 +299,12 @@ public partial class GameBridge
             case Protocol.W164Down:         // WO-164: the mark ping, the torch side-channel
                 await Wo164OnFrameAsync(src, body);
                 return;
+            case Protocol.ConvDown:         // WO-203 Act I: join the conversation
+                await Wo203OnConvFrameAsync(src, body);
+                return;
+            case Protocol.W203Down:         // WO-203 Act II: the areas' side channel
+                await Wo203OnSideFrameAsync(src, body);
+                return;
             case Protocol.WorldOfferDown:
                 await OnWorldOfferInAsync(src, joinId, body, ct);
                 return;

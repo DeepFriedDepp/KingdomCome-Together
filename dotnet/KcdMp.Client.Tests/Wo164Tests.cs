@@ -19,7 +19,10 @@ public class Wo164Tests
         var row = Protocol.JoinWireFor(Protocol.W164Up)!.Value;
         Assert.Equal(Protocol.W164Down, row.Down);
         Assert.Equal(Protocol.JoinFrom.Either, row.From);
-        Assert.Equal(Protocol.JoinHeaderLen + Protocol.LootFixedLen + Protocol.W164TextMax, row.Max);
+        // WO-203 II.5: the row takes the wire's limit; 80 stays the per-kind budget the older kinds cut themselves at
+        Assert.Equal(Protocol.JoinHeaderLen + Protocol.LootFixedLen + Protocol.W164WireTextMax, row.Max);
+        Assert.Equal(1400, Protocol.W164WireTextMax);
+        Assert.Equal(80, Protocol.W164TextMax);
         Assert.Single(Protocol.JoinWire, x => x.Up == Protocol.W164Up);
         Assert.DoesNotContain(Protocol.JoinWire, x => x.Up != Protocol.W164Up && (x.Up is 0x74 || x.Down is 0x75));
         Assert.Equal(10, Protocol.Version);   // append-only: no bump

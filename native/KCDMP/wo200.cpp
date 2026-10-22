@@ -161,12 +161,27 @@ const ClassRow kClasses[] = {
     {"RPGModule.dll", ".?AVC_BuffEffect@rpgmodule@wh@@", Kind::BodyEffect},
     {"RPGModule.dll", ".?AVC_ClothingPresetOverride@rpgmodule@wh@@", Kind::BodyEffect},
     {"RPGModule.dll", ".?AVC_WeaponPresetOverride@rpgmodule@wh@@", Kind::BodyEffect},
+    {"GUIModule.dll", ".?AVC_CutsceneHandler@guimodule@wh@@", Kind::SceneStarter},   // WO-203 I.5
 };
 constexpr int kNClasses = static_cast<int>(sizeof kClasses / sizeof kClasses[0]);
 const void* g_vft[kNClasses]{};
 bool g_isEffect[kNClasses]{};
 int g_found = 0;
 size_t g_offEffectActive = 0;   // C_Effect's own "is active" byte, read out of C_Effect::ExecuteNode (0 = not found)
+
+// WO-203 I.5: what a scene handler's Execute starts (WO-193's reads, as wo194 makes them; each object's class is checked by RTTI before
+// any field of it is used, and the handler's state only when the field after it is what it should be)
+constexpr size_t kOffHandlerState = 0x338;   // C_CutsceneHandler: its state (0 idle, 1 queued, 2 ready, 3 playing, 4 ended, 5 finishing)
+constexpr size_t kOffHandlerCfg = 0x340;     // C_CutsceneHandler: its configuration (shared_ptr; the enqueue builds it -- empty before the first)
+constexpr size_t kOffCfgCutscene = 0x30;     // C_CutsceneConfiguration: the I_Cutscene from the cutscene database
+constexpr size_t kOffCutsceneName = 0x08;    // I_Cutscene: its name (char*)
+constexpr char kRttiHandler[] = ".?AVC_CutsceneHandler@guimodule@wh@@";
+constexpr char kRttiSceneCfg[] = ".?AVC_CutsceneConfiguration@guimodule@wh@@";
+constexpr char kRttiFader[] = ".?AVC_FaderCutscene@guimodule@wh@@";     // E_CutsceneType Fader (WO-149's census)
+constexpr char kRttiIngame[] = ".?AVC_IngameCutscene@guimodule@wh@@";   // E_CutsceneType Ingame
+const void* g_vftSceneCfg = nullptr;
+const void* g_vftFader = nullptr;
+const void* g_vftIngame = nullptr;
 
 int class_row(const void* vt) {
     if (!vt) return -1;
@@ -198,6 +213,7 @@ void recompute() {
 
 // --- thread marks ---------------------------------------------------------------
 thread_local uint32_t t_closure = 0;
+thread_local uint32_t t_sceneCarry = 0;   // WO-203 I.5: the closure a scene's out-port carries (Tap::ContinueLocal) -- the node gate's only
 thread_local int t_inGate = 0;            // our own reads inside the gate run nodes' data inputs: no gate for them
 thread_local bool t_mirrorTalker = false;
 thread_local const void* t_srcNode = nullptr;   // WO-202 II.4: the out-port pulse running on this thread
@@ -207,6 +223,7 @@ thread_local const void* t_srcPort = nullptr;
 std::atomic<uint32_t> c_tapCalls{0}, c_captured{0}, c_quiet{0}, c_continued{0}, c_gateCalls{0}, c_gateClassified{0}, c_targetReads{0};
 std::atomic<uint32_t> c_verdict[static_cast<int>(Verdict::Count)]{};
 std::atomic<uint32_t> c_replays{0}, c_replayRefused{0}, c_researchDrops{0};
+std::atomic<uint32_t> c_sceneContinued{0};   // WO-203 I.5: scene out-ports that carried their closure to the node gate
 
 // --- events ----------------------------------------------------------------------
 struct Ev { uint32_t seq; uint8_t kind; uint32_t closure; uint64_t atMs; std::string a, b; };
@@ -221,18 +238,29 @@ void push_event(uint8_t kind, uint32_t closure, const char* a, const char* b) {
     g_ev.push_back(Ev{g_evSeq.fetch_add(1) + 1, kind, closure, now_ms(), a ? a : "", b ? b : ""});
 }
 
-// --- closure marks (waiters) -------------------------------------------------------
+// --- closure marks (waiters, scene handlers) ------------------------------------------
 struct Mark { uint32_t id; uint64_t until; };
 std::mutex g_markMx;
-std::unordered_map<const void*, Mark> g_marks;          // waiter node -> the closure that enqueued it
+std::unordered_map<const void*, Mark> g_marks;          // waiter / scene handler node -> the closure that enqueued it
 std::unordered_set<const void*> g_closureClassSeen;     // vftables already reported as met in a closure
+std::unordered_set<uint64_t> g_sceneMeetSeen;           // WO-203 I.5: (closure, handler) meets already logged -- each closure's own
 std::unordered_set<std::string> g_refusedSeen;          // "verdict|path" already logged
+std::unordered_map<std::string, uint64_t> g_storyLogLast;   // WO-203 I.5: path -> when its always-logged refusal was last logged
 std::unordered_map<const void*, uint64_t> g_quietLast;  // clock node -> when its drop was last logged
 std::atomic<const void*> g_researchDrop{nullptr};        // O4-narrow: this node's next out-port fire is dropped (research)
 
 std::unordered_set<const void*> g_waiterDropOnce;   // host: a waiter whose OnFinished a replay fired -- its own late one is dropped
 
-bool waiter_mark(const void* node, uint32_t* id) {
+// g_markMx held: `node` carries closure `cid` for the closure's life.
+void mark_locked(const void* node, uint32_t cid) {
+    g_marks[node] = Mark{cid, now_ms() + kClosureTtlMs};
+    if (g_marks.size() > 4096) {
+        const uint64_t t = now_ms();
+        for (auto it = g_marks.begin(); it != g_marks.end();) it = t > it->second.until ? g_marks.erase(it) : std::next(it);
+    }
+}
+
+bool marked_closure(const void* node, uint32_t* id) {
     std::lock_guard<std::mutex> lk(g_markMx);
     auto it = g_marks.find(node);
     if (it == g_marks.end()) return false;
@@ -399,6 +427,48 @@ bool parent_name(const void* node, char* out, size_t n) {
 }
 
 // ---------------------------------------------------------------------------
+// WO-203 I.5: what a C_CutsceneHandler's Execute would start. Its state is trusted only when the configuration field after it is what it
+// should be (empty, or a C_CutsceneConfiguration by RTTI); the scene's class is read only when the decision needs it (the host inside a
+// replay closure). A scene not read says why, once per reason.
+// ---------------------------------------------------------------------------
+struct HandlerRead { int state = -1; Scene scene = Scene::Unknown; char cls[96]; char name[96]; };
+std::atomic<uint32_t> g_sceneWhySaid{0};
+
+void scene_not_read(uint32_t bit, const char* why) {
+    if (g_sceneWhySaid.fetch_or(bit) & bit) return;
+    logf("WO200-SCENE a scene handler's scene is not read (%s) -- inside a host replay closure its start is refused anyway (fail closed); "
+         "said once", why);
+}
+
+void read_handler(const void* node, bool wantClass, HandlerRead* h) {
+    h->state = -1; h->scene = Scene::Unknown; h->cls[0] = 0; h->name[0] = 0;
+    const void* cfg = nullptr; const void* cvt = nullptr;
+    const bool cfgRead = rd(node, kOffHandlerCfg, &cfg);
+    const bool cfgOk = cfgRead && plausible_ptr(cfg) && g_vftSceneCfg && rd(cfg, 0, &cvt) && cvt == g_vftSceneCfg;
+    int32_t st = -1;
+    if (cfgRead && (!cfg || cfgOk) && rd(node, kOffHandlerState, &st)) h->state = st;
+    if (!handler_may_start(h->state)) { h->scene = Scene::NoStart; return; }
+    if (!wantClass) return;
+    if (!g_vftSceneCfg || (!g_vftFader && !g_vftIngame)) {
+        scene_not_read(1, "C_CutsceneConfiguration, C_FaderCutscene or C_IngameCutscene not resolved by RTTI");
+        return;
+    }
+    if (!cfgRead || !cfg) { scene_not_read(2, "the handler has no configuration yet: its first enqueue builds it"); return; }
+    if (!cfgOk) { scene_not_read(4, "the handler's configuration field is not a C_CutsceneConfiguration: another layout?"); return; }
+    const void* cs = nullptr; const void* svt = nullptr;
+    if (!rd(cfg, kOffCfgCutscene, &cs) || !plausible_ptr(cs) || !rd(cs, 0, &svt) || !image_ptr(svt)) {
+        scene_not_read(8, "the configuration holds no readable cutscene");
+        return;
+    }
+    rtti_name(cs, h->cls, sizeof h->cls);
+    const char* np = nullptr;
+    if (rd(cs, kOffCutsceneName, &np) && np && fault::plausible_address(reinterpret_cast<uintptr_t>(np)) && copy_cstr(np, h->name, sizeof h->name))
+        for (char* q = h->name; *q; ++q) if (*q < 0x20 || *q > 0x7E) *q = '?';
+    const bool player = svt == g_vftFader || svt == g_vftIngame || derives_from(svt, kRttiFader) || derives_from(svt, kRttiIngame);
+    h->scene = player ? Scene::Player : Scene::Other;
+}
+
+// ---------------------------------------------------------------------------
 // Gate 1: the tap.
 // ---------------------------------------------------------------------------
 void hooked_out_trigger(void* port) {
@@ -447,8 +517,8 @@ void hooked_out_trigger(void* port) {
         }
     }
     uint32_t markId = 0;
-    const bool waiterMarked = k == Kind::Waiter && (g_tapBits.load() & 4) && cur == 0 && waiter_mark(owner, &markId);
-    const Tap act = tap(g_role.load(), k, g_joined.load(), (g_tapBits.load() & 2) != 0, (g_tapBits.load() & 1) != 0, waiterMarked, cur != 0);
+    const bool marked = (k == Kind::Waiter || k == Kind::SceneStarter) && (g_tapBits.load() & 4) && cur == 0 && marked_closure(owner, &markId);
+    const Tap act = tap(g_role.load(), k, g_joined.load(), (g_tapBits.load() & 2) != 0, (g_tapBits.load() & 1) != 0, marked, cur != 0);
     switch (act) {
         case Tap::QuietDrop: {
             c_quiet.fetch_add(1, std::memory_order_relaxed);
@@ -494,6 +564,26 @@ void hooked_out_trigger(void* port) {
             call_release(owner);
             return;
         }
+        case Tap::ContinueLocal: {
+            // WO-203 I.5: a scene a closure started (the fader's AfterPlay, frames later): the closure goes on for the node gate only. The
+            // joiner's forced dialogue it starts is then his own chain (B7 runs it); on the host it is the replay's (the skip list refuses
+            // it). Nothing is captured or sent, and the thread's own closure stays 0: the State changes it makes go out as before.
+            c_sceneContinued.fetch_add(1, std::memory_order_relaxed);
+            char path[480] = "?", pn[96] = "?";
+            wo137::path_of(owner, path, sizeof path); port_name(port, pn, sizeof pn);
+            logf("WO200-TAP %s scene %s :: %s continues closure %08X for the node gate (its scene began inside it; nothing is captured or sent)",
+                 g_role.load() == kRoleHost ? "host" : "joiner", path, pn, markId);
+            if (!_stricmp(pn, "OnFinished")) { std::lock_guard<std::mutex> lk(g_markMx); g_marks.erase(owner); }   // the scene's last port
+            const uint32_t pc = t_sceneCarry;
+            const void* ps = t_srcPort; const void* ns = t_srcNode;   // WO-202 II.4: the source of what this pulse changes, as for any pulse
+            t_srcPort = port; t_srcNode = owner;
+            t_sceneCarry = markId;
+            g_origOut(port);
+            t_sceneCarry = pc;
+            t_srcPort = ps; t_srcNode = ns;
+            call_release(owner);
+            return;
+        }
         default:
             break;
     }
@@ -507,15 +597,12 @@ void hooked_out_trigger(void* port) {
 // ---------------------------------------------------------------------------
 // Gate 2: the node gate (C_Node::Execute's entry; any thread the graph runs on).
 // ---------------------------------------------------------------------------
-void note_closure_class(const void* node, const void* vt, Kind k, uint32_t cid) {
-    if (k == Kind::Waiter) {
+void note_closure_class(const void* node, const void* vt, Kind k, uint32_t cid, bool carried) {
+    if (k == Kind::Waiter && !carried) {   // a scene's carry marks no waiter: its continuation would go to the agent as the talk's
         std::lock_guard<std::mutex> lk(g_markMx);
-        g_marks[node] = Mark{cid, now_ms() + kClosureTtlMs};
-        if (g_marks.size() > 4096) {
-            const uint64_t t = now_ms();
-            for (auto it = g_marks.begin(); it != g_marks.end();) it = t > it->second.until ? g_marks.erase(it) : std::next(it);
-        }
+        mark_locked(node, cid);
     }
+    if (k == Kind::SceneStarter) return;   // WO-203 I.5: marked and logged per closure after the decision (scene_note)
     if (!(g_logBits.load() & 1)) return;
     {
         std::lock_guard<std::mutex> lk(g_markMx);
@@ -530,14 +617,41 @@ void note_closure_class(const void* node, const void* vt, Kind k, uint32_t cid) 
     push_event(kEvClosureClass, cid, kind_name(k), b);
 }
 
+// WO-203 I.5: a scene handler after the gate's decision -- its closure mark (a scene started inside a closure carries it to the scene's
+// out-ports), and its first meet in each closure, logged with what it would start (session C's "unclassified, runs" was logged once per
+// process and never again).
+void scene_note(const void* node, uint32_t cid, const HandlerRead& h, Verdict v) {
+    const SceneMark sm = scene_mark(cid, h.scene, v);
+    bool first = false;
+    {
+        std::lock_guard<std::mutex> lk(g_markMx);
+        if (sm == SceneMark::Mark) mark_locked(node, cid);
+        else if (sm == SceneMark::Forget) g_marks.erase(node);
+        if (cid && (g_logBits.load() & 1)) {
+            if (g_sceneMeetSeen.size() > 4096) g_sceneMeetSeen.clear();
+            first = g_sceneMeetSeen.insert((static_cast<uint64_t>(cid) << 32) ^ (reinterpret_cast<uintptr_t>(node) >> 3)).second;
+        }
+    }
+    if (!first) return;
+    char path[480] = "?";
+    ++t_inGate;
+    wo137::path_of(node, path, sizeof path);
+    --t_inGate;
+    logf("WO200-GATE closure %08X meets class %s (SceneStarter) %s: scene %s%s%s%s%s, handler state %d -> %s%s", cid, kRttiHandler, path,
+         scene_name(h.scene), h.cls[0] ? " " : "", h.cls, h.name[0] ? " " : "", h.name, h.state, v == Verdict::Run ? "runs" : verdict_name(v),
+         sm == SceneMark::Mark ? " -- its out-ports continue this closure for the node gate" : "");
+    push_event(kEvClosureClass, cid, kind_name(Kind::SceneStarter), kRttiHandler);
+}
+
 bool gate(void* node, void* /*ctx*/) {
     if (!g_gateOn.load(std::memory_order_relaxed) || t_inGate) return false;
     c_gateCalls.fetch_add(1, std::memory_order_relaxed);
     const void* vt = nullptr;
     if (!rd(node, 0, &vt) || !vt) return false;
-    const uint32_t cid = t_closure;
+    const uint32_t cid = gate_closure(t_closure, t_sceneCarry);   // WO-203 I.5: a scene's out-port carries the closure that started it
+    const bool carried = t_closure == 0 && cid != 0;
     const Kind k = classify(vt);
-    if (cid) note_closure_class(node, vt, k, cid);
+    if (cid) note_closure_class(node, vt, k, cid, carried);
     if (k == Kind::None) return false;
     c_gateClassified.fetch_add(1, std::memory_order_relaxed);
     const uint8_t role = g_role.load();
@@ -548,7 +662,7 @@ bool gate(void* node, void* /*ctx*/) {
     c.hostClosure = (gb & 2) != 0;
     c.route = (gb & 4) != 0;
     c.storyBarks = (gb & 8) != 0;   // WO-201 B7
-    const bool inClosure = cid != 0 && !closure_is_local(cid);
+    const bool inClosure = in_replay_closure(cid);
     const bool mirror = t_mirrorTalker;
     Method m = Method::Other;
     char mname[128] = "";
@@ -567,22 +681,30 @@ bool gate(void* node, void* /*ctx*/) {
         --t_inGate;
         if (ok) { urge = is_urge_parent(pn); money = is_money_parent(pn); }
     }
-    Verdict v = decide(role, k, m, t, inClosure, mirror, urge, money, c);
-    // WO-201 B7: the joiner's own quest logic starts no story bark (his own conversation's chain and interactions stay his)
+    // WO-203 I.5: a scene handler -- may its Execute start a scene, and (the host inside a replay closure) is that scene the player's?
+    HandlerRead hr;
+    if (k == Kind::SceneStarter) read_handler(node, role == kRoleHost && inClosure && c.hostClosure, &hr);
+    Verdict v = decide(role, k, m, t, inClosure, mirror, urge, money, c, hr.scene);
+    // WO-201 B7: the joiner's own quest logic starts no story bark (his own conversation's chain and interactions stay his; WO-203 I.5: a
+    // chain carried across a scene his conversation started is his own too)
     if (v == Verdict::Run && role == kRoleJoiner && c.joined && c.storyBarks && story_starter(k, m)) {
         char pn[128] = "";
         ++t_inGate;
         const bool ok = parent_name(node, pn, sizeof pn);
         --t_inGate;
-        const bool ownChain = cid != 0 && closure_is_local(cid);
-        if (joiner_story_bark(role, k, m, ok && is_urge_parent(pn), ownChain, ok && is_interaction_parent(pn), c)) v = Verdict::JoinerStoryBark;
+        if (joiner_story_bark(role, k, m, ok && is_urge_parent(pn), own_chain(cid), ok && is_interaction_parent(pn), c)) v = Verdict::JoinerStoryBark;
     }
+    // (a scene handler's own state already says whether this Execute starts anything: a busy one ran above, an idle one starts a scene
+    // whatever its effect byte says)
+    if (v != Verdict::Run && k != Kind::SceneStarter) {
+        const int row = class_row(vt);
+        if (row >= 0 && g_isEffect[row] && g_offEffectActive) {
+            uint8_t active = 0;
+            if (rd(node, g_offEffectActive, &active) && active) v = Verdict::Run;   // a switch-off (or a re-read): the gate only keeps things from starting
+        }
+    }
+    if (k == Kind::SceneStarter) scene_note(node, cid, hr, v);
     if (v == Verdict::Run) return false;
-    const int row = class_row(vt);
-    if (row >= 0 && g_isEffect[row] && g_offEffectActive) {
-        uint8_t active = 0;
-        if (rd(node, g_offEffectActive, &active) && active) return false;   // a switch-off (or a re-read): the gate only keeps things from starting
-    }
     c_verdict[static_cast<int>(v)].fetch_add(1, std::memory_order_relaxed);
     char path[480] = "?";
     ++t_inGate;
@@ -594,11 +716,23 @@ bool gate(void* node, void* /*ctx*/) {
     bool first = false;
     {
         std::lock_guard<std::mutex> lk(g_markMx);
-        if (g_refusedSeen.size() < 4096) first = g_refusedSeen.insert(std::string(verdict_name(v)) + "|" + path).second;
+        if (always_logged(v, k)) {
+            // WO-203 I.5: a conversation or a scene kept from starting is always logged, at most once per node per 10 s (the cap below hid
+            // session C's five joiner refusals: it was full 6 minutes before them)
+            const uint64_t now = now_ms();
+            if (g_storyLogLast.size() > 2048)
+                for (auto it = g_storyLogLast.begin(); it != g_storyLogLast.end();)
+                    it = now - it->second >= kStoryLogEveryMs ? g_storyLogLast.erase(it) : std::next(it);
+            if (g_storyLogLast.size() > 4096) g_storyLogLast.clear();
+            auto it = g_storyLogLast.find(path);
+            if (log_due(it == g_storyLogLast.end() ? 0 : it->second, now, kStoryLogEveryMs)) { g_storyLogLast[path] = now; first = true; }
+        } else if (g_refusedSeen.size() < 4096) {
+            first = g_refusedSeen.insert(std::string(verdict_name(v)) + "|" + path).second;
+        }
     }
     if (first) {
         logf("WO200-GATE %s: %s not run (%s)%s", role == kRoleHost ? "host" : "joiner", path, a,
-             cid ? " in a closure" : mirror ? " in a mirror of the host's conversation" : "");
+             carried ? " in a closure its scene carried" : cid ? " in a closure" : mirror ? " in a mirror of the host's conversation" : "");
         push_event(kEvRefused, cid, a, path);
     }
     return true;
@@ -614,7 +748,7 @@ bool replay_on(void* node, void* p) {
     bool waiter = false;
     if (k == Kind::Waiter) {   // a continuation: only the waiter this replay enqueued here (the joiner's scene ended)
         uint32_t mid = 0;
-        if (!waiter_mark(node, &mid) || mid != r->closure) { r->result = 2; return true; }
+        if (!marked_closure(node, &mid) || mid != r->closure) { r->result = 2; return true; }
         waiter = true;
     } else if (k != Kind::Dialogue && k != Kind::DialogueStarter) { r->result = 2; return true; }
     int rts[16]{};
@@ -775,6 +909,16 @@ void install() {
         if (g_vft[i]) { ++g_found; g_isEffect[i] = derives_from(g_vft[i], ".?AVC_Effect@conceptmodule@wh@@"); }
         else logf("WO200-BUILD class %s (%s) not found -- that row of the gate stays off", kClasses[i].rtti, kClasses[i].module);
     }
+    // WO-203 I.5: what a scene handler starts, by RTTI in GUIModule -- its configuration, and the two scene classes that are the player's
+    if (HMODULE gui = GetModuleHandleA("GUIModule.dll")) {
+        g_vftSceneCfg = anchor::find_vftable(gui, kRttiSceneCfg, 0);
+        g_vftFader = anchor::find_vftable(gui, kRttiFader, 0);
+        g_vftIngame = anchor::find_vftable(gui, kRttiIngame, 0);
+    }
+    logf("WO200-BUILD scenes: C_CutsceneConfiguration %s, C_FaderCutscene %s, C_IngameCutscene %s -- %s", g_vftSceneCfg ? "found" : "NOT found",
+         g_vftFader ? "found" : "NOT found", g_vftIngame ? "found" : "NOT found",
+         g_vftSceneCfg && (g_vftFader || g_vftIngame) ? "a scene handler's scene is read inside a host replay closure"
+                                                      : "a scene handler's scene is not read: inside a host replay closure every start is refused (fail closed)");
     if (void* effExec = find_export(ce, "?ExecuteNode@C_Effect@conceptmodule@wh@@")) {
         uint8_t code[256]{};
         KCDMP_FAULT_READ(esite, "wo200::effect_code");
@@ -874,19 +1018,21 @@ void tick() {
 int status_text(char* out, int n) {
     return _snprintf_s(out, static_cast<size_t>(n), _TRUNCATE,
         "wo200 tap=%d gate=%d ports=%d classes=%d/%d role=%u joined=%d tapBits=%u gateBits=%u taps=%u captured=%u quiet=%u continued=%u "
-        "gates=%u classified=%u reads=%u puppet=%u host_dialogue=%u host_view=%u talker_host=%u talker_joiner=%u joiner_story=%u replays=%u replay_refused=%u "
-        "marks=%zu player=%d",
+        "scene_continues=%u gates=%u classified=%u reads=%u puppet=%u host_dialogue=%u host_view=%u talker_host=%u talker_joiner=%u joiner_story=%u "
+        "host_scene=%u replays=%u replay_refused=%u marks=%zu player=%d",
         A.tap, A.gate, A.ports, g_found, kNClasses, g_role.load(), g_joined.load(), g_tapBits.load(), g_gateBits.load(), c_tapCalls.load(),
-        c_captured.load(), c_quiet.load(), c_continued.load(), c_gateCalls.load(), c_gateClassified.load(), c_targetReads.load(),
-        c_verdict[1].load(), c_verdict[2].load(), c_verdict[3].load(), c_verdict[4].load(), c_verdict[5].load(), c_verdict[6].load(), c_replays.load(),
-        c_replayRefused.load(), g_marks.size(), g_playerFull.load() != nullptr);
+        c_captured.load(), c_quiet.load(), c_continued.load(), c_sceneContinued.load(), c_gateCalls.load(), c_gateClassified.load(), c_targetReads.load(),
+        c_verdict[static_cast<int>(Verdict::PuppetRefused)].load(), c_verdict[static_cast<int>(Verdict::HostDialogue)].load(),
+        c_verdict[static_cast<int>(Verdict::HostView)].load(), c_verdict[static_cast<int>(Verdict::TalkerOnlyHost)].load(),
+        c_verdict[static_cast<int>(Verdict::TalkerOnlyJoiner)].load(), c_verdict[static_cast<int>(Verdict::JoinerStoryBark)].load(),
+        c_verdict[static_cast<int>(Verdict::HostScene)].load(), c_replays.load(), c_replayRefused.load(), g_marks.size(), g_playerFull.load() != nullptr);
 }
 
 uint8_t handle(uint8_t op, const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t* outLen) {
     *outLen = 0;
     switch (op) {
         case kOpStatus: {
-            char t[600];
+            char t[800];
             const int n = status_text(t, sizeof t);
             const size_t m = n > 0 ? (static_cast<size_t>(n) < cap ? static_cast<size_t>(n) : cap) : 0;
             std::memcpy(out, t, m);
@@ -914,7 +1060,7 @@ uint8_t handle(uint8_t op, const uint8_t* body, size_t len, uint8_t* out, size_t
             }
             if (prevRole != g_role.load()) {   // a new session: nothing of the last one's closures carries over
                 std::lock_guard<std::mutex> lk(g_markMx);
-                g_marks.clear(); g_quietLast.clear(); g_waiterDropOnce.clear();
+                g_marks.clear(); g_quietLast.clear(); g_waiterDropOnce.clear(); g_sceneMeetSeen.clear();
             }
             out[0] = g_role.load(); out[1] = g_joined.load(); out[2] = g_tapBits.load(); out[3] = g_gateBits.load(); out[4] = g_logBits.load();
             *outLen = 5;

@@ -5521,8 +5521,11 @@ public partial class GameBridge(ClientConfig config)
                 {
                     // WO-110 R9: a known type that failed its exact-length gate
                     // above, or a type this build does not know. Counted, not
-                    // silent -- MP-RELAY-DROPS side=client every 60 s.
-                    CountDrop(type, "unknown-or-wrong-length");
+                    // silent -- MP-RELAY-DROPS side=client every 60 s. WO-203
+                    // II.5: the two apart (the relay's own catch-all said
+                    // "unknown-or-wrong-length" for both and hid session C's
+                    // too-long W164 frames), a wrong length with its length.
+                    CountDrop(type, Protocol.IsKnownDown(type) ? $"wrong-length:{payloadLen}" : "unknown-type");
                 }
             }
         }
@@ -6129,6 +6132,9 @@ public partial class GameBridge(ClientConfig config)
                 return;
             case string w202 when w202.StartsWith("w202_", StringComparison.Ordinal):   // WO-202: every event of its parts (Wo202OnEvent)
                 Wo202OnEvent(name, arg);
+                return;
+            case string w203 when w203.StartsWith("w203", StringComparison.Ordinal):   // WO-203: every area's events (Wo203OnEvent)
+                Wo203OnEvent(name, arg);
                 return;
             case "w200_hostvals":    // WO-200 II.1/II.2 (host): its streamed NPCs' mount and stamina, what changed
             case "w200_cfg":         // WO-200: mp_s1_replay, mp_s1_route, mp_joiner_quiet_clocks, mp_joiner_no_puppet_quests, ... (Wo200Rules.SwitchNames)

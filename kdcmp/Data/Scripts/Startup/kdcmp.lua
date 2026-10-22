@@ -30720,6 +30720,11 @@ end
 System.AddCCommand("mp_dog_sync", 'KCD2MP_DogSyncSet(%line)', "WO-191 follow-up: (both) village dogs walk, lie and follow on your partner's screen as on the host's; the players' own dogs stay their own (default on): mp_dog_sync on|off")
 
 local function handleAction(action, activation, value)
+    -- WO-203: an area's own actions (the listening view's controls); true = consumed
+    if KCD2MP_W203OnAction then
+        local okw, usedw = pcall(KCD2MP_W203OnAction, action, activation)
+        if okw and usedw then return end
+    end
     if ACTS.AXIS_ACTIONS[action] then return end
     if KCD2MP.logActions then
         mp_log(string.format("ACT '%s' a=%s", tostring(action), tostring(activation)))
@@ -32918,6 +32923,54 @@ do
         System.AddCCommand(label, fname .. "(%line)", "WO-202 " .. (W202.HELP[k] or k) .. " (default " .. (W202.OFF[k] and "off" or "on") .. "): " .. label .. " on|off")
     end
 end
+
+-- ===== WO-203: join the conversation, and every fix from session C (docs/WO-203-findings.md) =====================
+-- One section per area below (each owned by one part of the work order). KCD2MP.W203 is the shared table; an area registers
+-- a status line with KCD2MP_W203Status(area, fn) and mp_w203_status prints them all.
+KCD2MP.W203 = KCD2MP.W203 or { status = {}, order = {} }
+function KCD2MP_W203Status(area, fn)
+    local W = KCD2MP.W203
+    if not W.status[area] then W.order[#W.order + 1] = area end
+    W.status[area] = fn
+end
+function KCD2MP_W203StatusPrint()
+    local W = KCD2MP.W203
+    for _, area in ipairs(W.order) do
+        local ok, line = pcall(W.status[area])
+        mp_log(string.format("MP-W203-STATUS %s: %s", area, ok and tostring(line) or ("error " .. tostring(line))))
+    end
+    if #W.order == 0 then mp_log("MP-W203-STATUS no area registered") end
+end
+System.AddCCommand("mp_w203_status", "KCD2MP_W203StatusPrint()", "WO-203: every switch of the work order and its counts, one line per area: mp_w203_status")
+
+-- ----- WO-203 area "conv": Act I: join the conversation (the starter and the listener) -----
+
+-- ----- end of WO-203 area "conv" -----
+
+-- ----- WO-203 area "defence": II.2: the joiner blocks, parries and perfect-blocks with his own engine -----
+
+-- ----- end of WO-203 area "defence" -----
+
+-- ----- WO-203 area "stream": II.6 / II.7 / II.11: fresh fighting positions, recoils and clinches, the frame report -----
+
+-- ----- end of WO-203 area "stream" -----
+
+-- ----- WO-203 area "appear": II.8 / II.9 / II.10: worn sets, poses and the T-pose detector, Henry dressed -----
+
+-- ----- end of WO-203 area "appear" -----
+
+-- ----- WO-203 area "quest": II.3 / II.4: the joiner's journal follows the host's resets; his focus counts -----
+
+-- ----- end of WO-203 area "quest" -----
+
+-- ----- WO-203 area "join": II.1 / II.12 / II.13: every join pauses the world, the journey, the briefing -----
+
+-- ----- end of WO-203 area "join" -----
+
+-- ----- WO-203 area "input": the keylogger rule: the mod reacts only to its own actions -----
+
+-- ----- end of WO-203 area "input" -----
+
 
 -- ===== Player hook =====
 

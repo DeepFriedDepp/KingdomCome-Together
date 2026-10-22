@@ -105,14 +105,49 @@ public class ClientHandler
 	// counters and lines; these are the FRAMING drops.
 	private readonly Dictionary<string, long> _drops = new();
 	private long _dropsTotal;
+	// WO-203 II.5: the same keys since the relay started, never cleared by DrainDropsLine -- the tests (and anything else that
+	// wants "has this type ever been dropped") read it through DropCount.
+	private readonly Dictionary<string, long> _dropsSinceStart = new();
 
-	public void CountDrop(byte type, string reason)
+	public void CountDrop(byte type, string reason) => CountDrop(type, reason, -1);
+
+	/// <summary>
+	/// WO-203 II.5: with <paramref name="kind"/> >= 0 the key names the body's kind as well, "0x74/k21:&lt;reason&gt;" -- the
+	/// side channels many features share (Protocol.DropKeyHasKind), where the type alone does not say whose message it was.
+	/// </summary>
+	public void CountDrop(byte type, string reason, int kind)
 	{
 		lock (_drops)
 		{
-			string key = $"0x{type:X2}:{reason}";
-			_drops[key] = _drops.TryGetValue(key, out var n) ? n + 1 : 1;
+			string key = kind >= 0 ? $"0x{type:X2}/k{kind}:{reason}" : $"0x{type:X2}:{reason}";
+			Bump(_drops, key, type);
+			Bump(_dropsSinceStart, key, type);
 			_dropsTotal++;
+		}
+	}
+
+	// A reason can carry a length ("wrong-length:<len>"), so a peer sending garbage could make the keys many: past
+	// DropKeysMax distinct keys a new one is folded into "0x<type>:other" (still counted, still by type).
+	private const int DropKeysMax = 1024;
+
+	private static void Bump(Dictionary<string, long> d, string key, byte type)
+	{
+		if (!d.ContainsKey(key) && d.Count >= DropKeysMax) key = $"0x{type:X2}:other";
+		d[key] = d.TryGetValue(key, out var n) ? n + 1 : 1;
+	}
+
+	/// <summary>
+	/// WO-203 II.5: how many drops since the relay started have a key starting with <paramref name="keyPrefix"/> ("0x74" = every
+	/// W164 drop, "0x74/k21:" = the speech lines, "0x01:wrong-length" = ...). Not cleared by DrainDropsLine.
+	/// </summary>
+	public long DropCount(string keyPrefix)
+	{
+		lock (_drops)
+		{
+			long n = 0;
+			foreach (var kv in _dropsSinceStart)
+				if (kv.Key.StartsWith(keyPrefix, StringComparison.Ordinal)) n += kv.Value;
+			return n;
 		}
 	}
 
