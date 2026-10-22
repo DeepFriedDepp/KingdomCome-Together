@@ -32944,6 +32944,65 @@ end
 System.AddCCommand("mp_w203_status", "KCD2MP_W203StatusPrint()", "WO-203: every switch of the work order and its counts, one line per area: mp_w203_status")
 
 -- ----- WO-203 area "conv": Act I: join the conversation (the starter and the listener) -----
+-- I.3b the bodies act it out (the LISTENER): one gesture of the starter's conversation on the body that made it there. The starter's
+-- engine names it ("DialogCommand-Anim: who=<ROLE>, anim=<ADLG_x>"); the agent picks the same fragment's clip out of the game's own
+-- gesture database (Animations/Mannequin/ADB/<male|female>_adlg.adb) and calls this. Live-proven (2026-10-22, with the maintainer
+-- watching): a body's Mannequin knows no ADLG_ fragment, but the clip itself plays on the base layer and the body goes back to its pose
+-- after; a paused body turns with SetWorldAngles. The dialogue's own twins stand where the bodies stand and only face each other, so
+-- the body is turned toward the one it speaks to (faceName) and moved only when the starter's twin stood elsewhere (x, y, z given).
+-- A name "#<id>" is that partner's figure here (the starter's Henry); femaleClip, when given, is the pick for a female body.
+KCD2MP.W203.conv = KCD2MP.W203.conv or { on = true, gestures = 0, refused = 0, turned = 0 }
+local function w203_body(name)
+    if not name or name == "" then return nil end
+    if string.sub(name, 1, 1) == "#" then
+        local g = KCD2MP.ghosts and KCD2MP.ghosts[string.sub(name, 2)]
+        return g and g.entity
+    end
+    return System.GetEntityByName(name)
+end
+function KCD2MP_W203Anim(cid, bodyName, clip, faceName, x, y, z, femaleClip)
+    local C = KCD2MP.W203.conv
+    if not C.on then return end
+    local e = w203_body(bodyName)
+    if e and femaleClip and femaleClip ~= "" and string.find(tostring(e.class), "Female", 1, true) then clip = femaleClip end
+    if not e or not clip or clip == "" then C.refused = C.refused + 1; return end
+    if x and y and z then pcall(function() e:SetWorldPos({ x = x, y = y, z = z }) end) end
+    local f = w203_body(faceName)
+    if f then
+        local b, p = e:GetWorldPos(), f:GetWorldPos()
+        if (p.x - b.x) ^ 2 + (p.y - b.y) ^ 2 > 0.01 then
+            pcall(function() e:SetWorldAngles({ x = 0, y = 0, z = math.atan2(-(p.x - b.x), p.y - b.y) }) end)
+            C.turned = C.turned + 1
+        end
+    end
+    local ok, played = pcall(function() return e:StartAnimation(0, clip, 0, 0.25, 1.0, false) end)
+    if ok and played then
+        C.gestures = C.gestures + 1
+        -- a partner's figure restarts its idle loop every second (mp_anim_loop's keep-alive): hold it off for the gesture, as a swing
+        -- does (live 2026-10-22: without the hold the figure showed none of its gestures, Barbora all of hers)
+        local g = string.sub(bodyName, 1, 1) == "#" and KCD2MP.ghosts and KCD2MP.ghosts[string.sub(bodyName, 2)]
+        if g and g.istate then
+            local len = 0
+            pcall(function() len = e:GetAnimationLength(0, clip) or 0 end)
+            g.istate.oneShotUntil = os.clock() + math.min(len > 0 and len or 2.0, 6.0)
+            C.held = (C.held or 0) + 1
+        end
+    else
+        C.refused = C.refused + 1
+        if C.refused <= 5 then mp_log(string.format("WO203-GESTURE refused cid=%s body=%s clip=%s", tostring(cid), tostring(bodyName), tostring(clip))) end
+    end
+end
+KCD2MP_W203Status("conv", function()
+    local C = KCD2MP.W203.conv
+    return string.format("gestures=%s turned=%s refused=%s", C.on and "on" or "off", C.turned, C.refused) .. " played=" .. C.gestures .. " figure_held=" .. (C.held or 0)
+end)
+function KCD2MP_W203SetGestures(arg)
+    local v = KCD2MP_Wo122ParseBool(arg)
+    if v == "bad" then mp_log("mp_conv_gestures: expected on|off"); return end
+    if v ~= nil then KCD2MP.W203.conv.on = v end
+    mp_log("WO203-TOGGLE mp_conv_gestures " .. (KCD2MP.W203.conv.on and "on" or "off") .. " -- the bodies here act out the partner's conversations")
+end
+System.AddCCommand("mp_conv_gestures", 'KCD2MP_W203SetGestures(%line)', "WO-203: the bodies here act out the partner's conversations (default on): mp_conv_gestures on|off")
 
 -- ----- end of WO-203 area "conv" -----
 

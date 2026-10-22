@@ -27,6 +27,7 @@ public partial class GameBridge
     partial void Wo203JoinOnDisconnect();
 
     partial void Wo203ConvOnFrame(byte src, LootMsg m);         // a Conv frame (Act I)
+    partial void Wo203ConvOnEngineLine(string line);            // every forwarded engine line (Act I: this player's conversations)
     partial void Wo203DefenceOnFrame(byte src, LootMsg m);      // W203 kinds 1-4
     partial void Wo203AppearOnFrame(byte src, LootMsg m);       // W203 kinds 5-6
     partial void Wo203JoinOnFrame(byte src, LootMsg m);         // W203 kinds 7, 9
@@ -63,6 +64,8 @@ public partial class GameBridge
         Wo203DefenceOnDisconnect();
         Wo203JoinOnDisconnect();
     }
+
+    private void Wo203OnEngineLine(string line) => Wo203ConvOnEngineLine(line);
 
     private void Wo203OnEvent(string name, string? arg)
     {

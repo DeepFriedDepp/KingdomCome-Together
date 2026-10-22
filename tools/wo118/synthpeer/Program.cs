@@ -194,6 +194,13 @@ static class P
         return $"SYNTH got W164 from={src} kind={Protocol.W164KindName(m.Kind)} {m.Text}";
     }
 
+    /// <summary>WO-203: a Conv message this peer received, as one line.</summary>
+    static string? ConvNote(byte[] payload)
+    {
+        if (!Protocol.TrySplitJoinDown(payload, out byte src, out _, out _, out var body) || !LootMsg.TryDecode(body, out var m)) return null;
+        return $"SYNTH got Conv from={src} kind={Protocol.ConvKindName(m.Kind)} {m.Text}";
+    }
+
     /// <summary>WO-200: a QuestHost message this peer received (a replay's ack, an item count), as one line.</summary>
     static string? QuestHostNote(byte[] payload)
     {
@@ -271,6 +278,7 @@ static class P
         //         `hands <t> <npc> <left|-> <right|->` -- the host NPC's hand rows (WO-143 ExtraKindHands: item classes);
         //         `qmode <t> on|off` -- the host's quest-sync mode (QuestHostMode, WO-137), as a real host announces it;
         //         `window <npc> <t0> <t1>` -- a mover declared earlier is streamed only between t0 and t1 (a spawn that appears, then leaves)
+        // WO-203: `conv <t> <target> <kind> <text>` -- a Conv message (0x76) to that player
         var joinMsgs = new List<(double T, byte[] Pkt, string Note)>();
         var jattacks = new List<(double T, Guid Row)>();   // WO-170
         var jhits = new List<(double T, string Npc, float Hp, float St)>();   // WO-173: the swing's attributed hit
@@ -442,6 +450,11 @@ static class P
                                   new LootMsg(Protocol.QuestHostConverse, ++joinTok, $"{f[2]} {f[3]}").BuildUp(Protocol.QuestHostUp, 1),
                                   $"QCONV {f[2]} {f[3]}"));
                     break;
+                case "conv":   // WO-203 I.3b: conv <t> <target> <kind> <text> -- a Conv message (the starter's gesture: kind 6)
+                    joinMsgs.Add((double.Parse(f[1], CultureInfo.InvariantCulture),
+                                  new LootMsg(byte.Parse(f[3], CultureInfo.InvariantCulture), ++joinTok, f[4]).BuildUp(Protocol.ConvUp, byte.Parse(f[2], CultureInfo.InvariantCulture)),
+                                  $"CONV->{f[2]} kind={f[3]} {f[4]}"));
+                    break;
                 case "w164h":   // WO-167: a joiner's W164 message to the host
                     joinMsgs.Add((double.Parse(f[1], CultureInfo.InvariantCulture),
                                   new LootMsg(byte.Parse(f[2], CultureInfo.InvariantCulture), ++joinTok, string.Join(' ', f.Skip(3))).BuildUp(Protocol.W164Up, Protocol.JoinTargetHost),
@@ -547,6 +560,8 @@ static class P
                         Console.WriteLine(w164Note);   // WO-167
                     else if (rt == Protocol.QuestHostDown && QuestHostNote(rb2) is string qhNote)
                         Console.WriteLine(qhNote);   // WO-200: acks, item counts
+                    else if (rt == Protocol.ConvDown && ConvNote(rb2) is string convNote)
+                        Console.WriteLine(convNote);   // WO-203: the starter's conversation (its gestures)
                     // The WO-191 follow-up: which of the host's NPCs reach this joiner, and their activity rows (the first of each name,
                     // then every 200th sample): SYNTH got npc <name> n=<k> flags=<f> | SYNTH got activity npc <name> <state>
                     else if (rt == Protocol.NpcStateDown && rb2.Length >= 2 && rb2.Length >= 2 + rb2[1] + 21)
