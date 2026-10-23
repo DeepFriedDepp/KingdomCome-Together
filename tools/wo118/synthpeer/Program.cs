@@ -243,6 +243,11 @@ static class P
     static long s_camSent;   // WO-203B: convnow camera messages sent (every 30th logged)
     // WO-203B --conv-autojoin: an Announce received is answered with a Join (the receiver queues it; the send loop sends it)
     static readonly System.Collections.Concurrent.ConcurrentQueue<(byte Target, byte Kind, string Text)> s_convReply = new();
+    // WO-204 S1: sleepask <t> <sleep|wait> <hours> -- this joiner asks the host for a shared sleep / wait; on the host's yes it sends the
+    // Begin (as a real asker does once its picker confirms). A host's own ask is answered yes.
+    static byte s_myId;
+    static readonly System.Collections.Concurrent.ConcurrentDictionary<uint, (string Kind, float Hours)> s_sleepAsked = new();
+    static readonly System.Collections.Concurrent.ConcurrentQueue<(byte Kind, uint Tok, string Text)> s_sleepReply = new();
     static long s_camIn, s_camSamplesIn;
     static StreamWriter? s_convRecord;
     static readonly System.Collections.Concurrent.ConcurrentDictionary<string, ActivityState> s_actIn = new();
@@ -266,6 +271,7 @@ static class P
         // claims host in its own world, the relay's tie-break (lowest id) keeps this peer the authority.
         bool claimHost = a.Contains("--claim-host");
         bool convAutoJoin = a.Contains("--conv-autojoin");   // WO-203B
+        int convAutoVote = int.Parse(Arg(a, "--conv-autovote", "-1"), CultureInfo.InvariantCulture);   // WO-204 V1: vote that row on every ConvOptions
         // WO-203B --conv-record <file>: every Conv cam message received, one line each: <unix ms received> <text>
         int crIdx = Array.IndexOf(a, "--conv-record");
         if (crIdx >= 0 && crIdx + 1 < a.Length) s_convRecord = new StreamWriter(a[crIdx + 1], append: false) { AutoFlush = true };
@@ -311,6 +317,7 @@ static class P
         var gcombats = new List<(double T0, double T1, int Gz)>();   // WO-166 C1
         Wo187Verbs.Echo? echo = null;                                 // WO-187 C3: the echo partner
         var fmoves = new List<(double T, string What, Guid Row)>();   // WO-187 C3: the figure's block / dodge / attack rows
+        var sleepAsks = new List<(double T, string Kind, float Hours)>();   // WO-204 S1
         uint swingSeq = 0;
         foreach (var raw in File.ReadAllLines(Arg(a, "--plan", "plan.txt")))
         {
@@ -437,6 +444,9 @@ static class P
                                   $"ACT {f[2]} {actSt}"));
                     break;
                 }
+                case "sleepask":   // WO-204 S1: sleepask <t> <sleep|wait> <hours>
+                    sleepAsks.Add((double.Parse(f[1], CultureInfo.InvariantCulture), f[2], F(f[3])));
+                    break;
                 case "w164":
                     joinMsgs.Add((double.Parse(f[1], CultureInfo.InvariantCulture),
                                   new LootMsg(byte.Parse(f[2], CultureInfo.InvariantCulture), ++joinTok, string.Join(' ', f.Skip(3))).BuildUp(Protocol.W164Up, 1),
@@ -545,6 +555,7 @@ static class P
         await st.WriteAsync(hs);
         var (ty, pl) = await ReadPacket(st, CancellationToken.None);
         if (ty != Protocol.Ack) { Console.WriteLine($"SYNTH refused: 0x{ty:X2} {Encoding.UTF8.GetString(pl)}"); return 1; }
+        s_myId = pl[0];
         Console.WriteLine($"SYNTH connected id={pl[0]} release={release} npcs={movers.Count} emit={emitMs}ms delay={delayMs} jitter={jitterMs} spike={spikePct}%/{spikeMs}ms");
         if (echo is not null) { echo.MyId = pl[0]; Console.WriteLine(FormattableString.Invariant($"SYNTH echo partner: every other peer's stream back {echo.DelayMs / 1000.0:F1} s late, {echo.Ahead:F1} m in front of him")); }
         var echoClock = Stopwatch.StartNew();
@@ -580,6 +591,15 @@ static class P
                         Console.WriteLine($"SYNTH role={(rb2[0] == 1 ? "authority (host)" : "not the authority (joiner)")}");
                     else if (rt == Protocol.W164Down && W164Note(rb2) is string w164Note)
                         Console.WriteLine(w164Note);   // WO-167
+                    else if (rt == Protocol.SleepVoteDown && ConvMsg(rb2) is var (slSrc, sl))
+                    {
+                        // WO-204 S1: the host's answer to this peer's ask -> the Begin; the host's own ask -> yes
+                        Console.WriteLine($"SYNTH got Sleep from={slSrc} kind={Protocol.SleepVoteName(sl.Kind)} tok=0x{sl.Tok:X8} {sl.Text}");
+                        if (sl.Kind == Protocol.SleepAnswer && sl.Text.StartsWith("yes", StringComparison.Ordinal) && s_sleepAsked.TryRemove(sl.Tok, out var asked))
+                            s_sleepReply.Enqueue((Protocol.SleepBegin, sl.Tok, Wo140Text.Begin(asked.Kind, s_myId, asked.Hours, false)));
+                        else if (sl.Kind == Protocol.SleepAsk && Wo140Text.TryAsk(sl.Text, out _, out byte slAsker, out _))
+                            s_sleepReply.Enqueue((Protocol.SleepAnswer, sl.Tok, Wo140Text.Answer("yes", slAsker)));
+                    }
                     else if (rt == Protocol.QuestHostDown && QuestHostNote(rb2) is string qhNote)
                         Console.WriteLine(qhNote);   // WO-200: acks, item counts
                     else if (rt == Protocol.ConvDown && ConvMsg(rb2) is var (csrc, cm) && cm.Kind == Protocol.ConvCam)
@@ -596,6 +616,9 @@ static class P
                         // WO-203B: answer an Announce with a Join (v1|cid|kind|joinable|...)
                         if (convAutoJoin && ConvMsg(rb2) is var (asrc, am) && am.Kind == Protocol.ConvAnnounce && am.Text.Split('|') is { Length: >= 4 } af && af[3] == "1")
                             s_convReply.Enqueue((claimHost ? asrc : Protocol.JoinTargetHost, Protocol.ConvJoin, $"v1|{af[1]}|1"));
+                        // WO-204 V1: a vote for row N on each decision the starter shows (v1|cid|decId|timerS|rows)
+                        if (convAutoVote >= 0 && ConvMsg(rb2) is var (osrc, om) && om.Kind == Protocol.ConvOptions && om.Text.Split('|') is { Length: >= 3 } of)
+                            s_convReply.Enqueue((claimHost ? osrc : Protocol.JoinTargetHost, Protocol.ConvVote, $"v1|{of[1]}|{of[2]}|{convAutoVote}"));
                     }
                     // The WO-191 follow-up: which of the host's NPCs reach this joiner, and their activity rows (the first of each name,
                     // then every 200th sample): SYNTH got npc <name> n=<k> flags=<f> | SYNTH got activity npc <name> <state>
@@ -683,6 +706,20 @@ static class P
                     await st.WriteAsync(Wo187Verbs.Move(s_actions, fmoves[mi].What, fmoves[mi].Row));
                     Console.WriteLine(FormattableString.Invariant($"SYNTH t={t:F1}s FMOVE {fmoves[mi].What} row={fmoves[mi].Row}"));
                     fmoves.RemoveAt(mi);
+                }
+                for (int si = sleepAsks.Count - 1; si >= 0; si--)   // WO-204 S1
+                {
+                    if (sleepAsks[si].T > t) continue;
+                    uint stok = ((uint)s_myId << 16) | (uint)(si + 1 + (int)(t * 10) % 0x7FFF & 0xFFFF);
+                    s_sleepAsked[stok] = (sleepAsks[si].Kind, sleepAsks[si].Hours);
+                    await st.WriteAsync(new LootMsg(Protocol.SleepAsk, stok, Wo140Text.Ask(sleepAsks[si].Kind, s_myId, false)).BuildUp(Protocol.SleepVoteUp, Protocol.JoinTargetHost));
+                    Console.WriteLine(FormattableString.Invariant($"SYNTH t={t:F1}s SLEEPASK {sleepAsks[si].Kind} {sleepAsks[si].Hours} h tok=0x{stok:X8}"));
+                    sleepAsks.RemoveAt(si);
+                }
+                while (s_sleepReply.TryDequeue(out var sr))
+                {
+                    await st.WriteAsync(new LootMsg(sr.Kind, sr.Tok, sr.Text).BuildUp(Protocol.SleepVoteUp, Protocol.JoinTargetHost));
+                    Console.WriteLine(FormattableString.Invariant($"SYNTH t={t:F1}s SLEEP {Protocol.SleepVoteName(sr.Kind)} tok=0x{sr.Tok:X8} {sr.Text}"));
                 }
                 while (s_convReply.TryDequeue(out var cr))   // WO-203B --conv-autojoin
                 {

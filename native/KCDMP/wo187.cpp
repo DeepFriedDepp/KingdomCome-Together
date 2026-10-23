@@ -359,6 +359,32 @@ bool parse_state2(const uint8_t* p, motion::State2* st) { std::memcpy(st, p, siz
 
 bool tag_state(uint32_t eid, uint8_t* out, size_t n) { return read_tag_state(eid, out, n); }
 
+QueueInfo queue_info(uint32_t eid) {
+    constexpr size_t kCtrlQueueBegin = 0x50, kCtrlQueueEnd = 0x58;
+    QueueInfo q;
+    if (!resolve_scope()) return q;
+    void* actor = motion::actor_of(eid);
+    void* anim = actor ? call_get(actor, kVtGetAnimatedActor) : nullptr;
+    void* ctrl = anim ? call_get(anim, kVtGetActionController) : nullptr;
+    void* vp = nullptr;
+    if (!ctrl || !rd(ctrl, 0, &vp) || vp != g_vftCtrl) return q;
+    char* b = nullptr; char* e = nullptr;
+    if (!rd(ctrl, kCtrlQueueBegin, &b) || !rd(ctrl, kCtrlQueueEnd, &e) || (b == nullptr) != (e == nullptr) || e < b || (e - b) % 8 != 0 || (e - b) / 8 > 64) return q;
+    q.n = static_cast<int>((e - b) / 8);
+    for (int i = 0; i < q.n; ++i) {
+        void* act = nullptr;
+        if (!rd(b, static_cast<ptrdiff_t>(i) * 8, &act) || !act) continue;
+        uint32_t fl = 0;
+        if (rd(act, kActFlags, &fl) && (fl & 4u)) ++q.kept;
+        if (i == 0) {
+            const std::string a = short_name(rtti_name(act));
+            std::snprintf(q.first, sizeof q.first, "%s", a.empty() ? "?" : a.c_str());
+            rd(act, kActPriority, &q.firstPrio);
+        }
+    }
+    return q;
+}
+
 int read_all_scopes(uint32_t eid, ScopeInfo* out, int max) {
     if (!resolve_scope() || max <= 0) return -1;
     void* actor = motion::actor_of(eid);

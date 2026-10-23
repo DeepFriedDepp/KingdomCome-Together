@@ -46,6 +46,10 @@ std::mutex g_lock;
 uint32_t g_seq = 0;                        // under g_lock
 std::vector<std::pair<bool, std::string>> g_rows;   // under g_lock: (used, text)
 
+std::atomic<BeforeFlush> g_beforeFlush{nullptr};   // WO-203 I.4: the conv area's vote icon
+std::atomic<void*> g_lastSelf{nullptr};
+std::atomic<uint64_t> g_lastOnRight{0};
+
 template <class T> bool rd(const void* base, ptrdiff_t off, T* out) {
     if (!base) return false;
     KCDMP_FAULT_READ(site, "wo201vote::read");
@@ -72,6 +76,9 @@ bool rd_str(const char* p, char* out, size_t n) {
 }
 
 void set_detour(void* self, uint64_t isOnRight) {
+    g_lastSelf = self;
+    g_lastOnRight = isOnRight;
+    if (BeforeFlush bf = g_beforeFlush.load()) bf(self);   // WO-203 I.4: the rows as they go to Flash (the vote icon)
     if (g_on.load()) {
         char* b = nullptr; char* e = nullptr;
         std::vector<std::pair<bool, std::string>> rows;
@@ -160,6 +167,17 @@ uint8_t handle(const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t
 
 int status_text(char* out, int n) {
     return std::snprintf(out, static_cast<size_t>(n), "vote=%s on=%d flushes=%u seq=%u", g_why, g_on.load() ? 1 : 0, c_flushes.load(), g_seq);
+}
+
+void set_before_flush(BeforeFlush fn) { g_beforeFlush = fn; }
+bool arm_now(const char** why) { return arm(why); }
+void* entry() { return g_fn; }
+void* last_self() { return g_lastSelf.load(); }
+uint64_t last_on_right() { return g_lastOnRight.load(); }
+bool rows_offsets(int* begin, int* end) {
+    if (g_offB < 0 || g_offE < 0) return false;
+    *begin = g_offB; *end = g_offE;
+    return true;
 }
 
 } // namespace kcdmp::wo201vote

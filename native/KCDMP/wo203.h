@@ -14,6 +14,7 @@
 //   105 .. 108 appear   (II.8 worn sets, II.9 poses and the T-pose detector, II.10 Henry dressed)
 //   109 .. 111 quest    (II.3 resets on the joiner, II.4 focus / observe)
 //   112 .. 114 join     (II.1 the full hold, II.12 the journey)
+//   115 .. 119 WO-204   (wo204.cpp: its switch word and status; WO-204 registers here too)
 #pragma once
 #include <cstddef>
 #include <cstdint>

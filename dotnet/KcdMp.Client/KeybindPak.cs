@@ -53,8 +53,16 @@ public static class KeybindPak
     /// the end of the game's "dialog" actionmap and listed inside the game's own "back" superaction, so the player's own Back keys (and
     /// his rebinds of them) drive it and no key of its own exists. Not in <see cref="Actions"/> (those two files' other places).
     /// </summary>
-    public static readonly string[] DialogActions = { "kcd2mp_listen_cancel" };
+    public static readonly string[] DialogActions = { "kcd2mp_listen_cancel", "kcd2mp_listen_up", "kcd2mp_listen_down", "kcd2mp_listen_confirm" };
     public const string ListenCancelAction = "kcd2mp_listen_cancel";
+    /// <summary>WO-204 III.3: the listener's own options actions, each listed inside the game's own superaction(s) whose keys move or
+    /// confirm a dialogue's choice (keybindSuperactions.xml 1.5.5: up / down hold the dialog's navigation, primary_action dialog_confirm,
+    /// confirm_dialog_extra dialog_confirm_mouse) -- the player's own keys and rebinds, no new key.</summary>
+    public static readonly (string Superaction, string Action)[] ListenOptionActions =
+    {
+        ("up", "kcd2mp_listen_up"), ("down", "kcd2mp_listen_down"), ("primary_action", "kcd2mp_listen_confirm"),
+        ("confirm_dialog_extra", "kcd2mp_listen_confirm"),
+    };
 
     /// <summary>WO-178 0.d: the quicksave key's action (its key is the player's choice: settings.json QuickSaveKey, Wo178Rules).</summary>
     public const string QuickSaveAction = "kcd2mp_quicksave";
@@ -169,17 +177,42 @@ public static class KeybindPak
     {
         if (!Wellformed(superactions, out why)) { why = "keybindSuperactions.xml does not parse: " + why; return null; }
         if (superactions.Contains(ListenCancelAction, StringComparison.Ordinal)) { why = "keybindSuperactions.xml already names " + ListenCancelAction; return null; }
-        MatchCollection open = BackOpen.Matches(superactions);
-        if (open.Count != 1) { why = $"{open.Count} superactions named \"back\" (expected 1)"; return null; }
+        return MergeIntoSuperaction(superactions, "back", body, [ListenCancelAction], out why);
+    }
+
+    /// <summary>WO-204 III.3: <paramref name="body"/> listed inside the game's own superaction <paramref name="name"/> (its definition, never
+    /// the conflict groups' self-closing references), before its first control; null (and why) when the file has no such one superaction or
+    /// that superaction already lists one of <paramref name="actions"/>.</summary>
+    public static string? MergeIntoSuperaction(string superactions, string name, string body, string[] actions, out string why)
+    {
+        if (!Wellformed(superactions, out why)) { why = "keybindSuperactions.xml does not parse: " + why; return null; }
+        var openRx = new Regex(@"<superaction\s+name\s*=\s*""" + Regex.Escape(name) + @"""(?=[^>]*[^/>]>|>)", RegexOptions.CultureInvariant);
+        MatchCollection open = openRx.Matches(superactions);
+        if (open.Count != 1) { why = $"{open.Count} superactions named \"{name}\" (expected 1)"; return null; }
         int start = open[0].Index;
         int close = superactions.IndexOf("</superaction>", start, StringComparison.Ordinal);
-        if (close < 0) { why = "the \"back\" superaction never closes"; return null; }
+        if (close < 0) { why = $"the \"{name}\" superaction never closes"; return null; }
         int nested = superactions.IndexOf("<superaction", start + 1, StringComparison.Ordinal);
-        if (nested >= 0 && nested < close) { why = "a superaction inside \"back\""; return null; }
+        if (nested >= 0 && nested < close) { why = $"a superaction inside \"{name}\""; return null; }
+        string block = superactions[start..close];
+        foreach (string a in actions)
+            if (block.Contains("\"" + a + "\"", StringComparison.Ordinal)) { why = $"the \"{name}\" superaction already lists {a}"; return null; }
         int control = superactions.IndexOf("<control", start, StringComparison.Ordinal);
         int at = control >= 0 && control < close ? control : close;
-        return InsertChecked(superactions, at, body, SuperactionsEntry, DialogActions, out why);
+        string? merged = InsertChecked(superactions, at, body, SuperactionsEntry, [], out why);
+        if (merged is null) return null;
+        foreach (string a in actions)
+        {
+            string named = "name=\"" + a + "\"";
+            if (Regex.Matches(merged, named).Count != Regex.Matches(superactions, named).Count + Regex.Matches(body, named).Count)
+            { why = $"{SuperactionsEntry}: {a} not listed once more after the merge"; return null; }
+        }
+        return merged;
     }
+
+    /// <summary>WO-204 III.3: one superaction line of ours.</summary>
+    public static string ListenLine(string action, string superaction) =>
+        $"\t\t<action name=\"{action}\" map=\"dialog\" /><!-- KCD2MP (WO-204 III.3): the partner's options, on the game's own {superaction} keys -->\r\n";
 
     private static string? InsertAtLineStart(string vanilla, int at, string body, string entry, out string why) =>
         InsertChecked(vanilla, at, body, entry, Actions, out why);
@@ -439,7 +472,21 @@ public static class KeybindPak
             string? listenNote = null;
             string? pd = MergeDialog(p, PatchBody(EmbeddedPatch("defaultProfile.dialog.xml")), out string whyD);
             string? sb = pd is null ? null : MergeBack(s, PatchBody(EmbeddedPatch("keybindSuperactions.back.xml")), out whyD);
-            if (pd is not null && sb is not null) { p = pd; s = sb; }
+            if (pd is not null && sb is not null)
+            {
+                p = pd; s = sb;
+                // WO-204 III.3: the options actions, each inside its superaction -- every one or none (a game file without one of the
+                // four superactions keeps the cancel; the listener then sees the options and cannot vote, and the outcome says so)
+                string? so = s;
+                string whyO = "ok";
+                foreach (var (sup, act) in ListenOptionActions)
+                {
+                    so = so is null ? null : MergeIntoSuperaction(so, sup, ListenLine(act, sup), [act], out whyO);
+                    if (so is null) { whyO = sup + ": " + whyO; break; }
+                }
+                if (so is not null) s = so;
+                else listenNote = "the listener's options keys are not bound: " + whyO;
+            }
             else listenNote = "the listen cancel is not bound: " + whyD;
             if (qsNote.Length > 0) keyNote = keyNote.Length > 0 ? keyNote + "; " + qsNote : qsNote;
             string data = Path.Combine(modDir, "Data");

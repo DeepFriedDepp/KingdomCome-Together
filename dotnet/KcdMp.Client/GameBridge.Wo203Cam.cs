@@ -66,6 +66,7 @@ public partial class GameBridge
             var to = W137Host ? Wo134Peers() : [Protocol.JoinTargetHost];
             lock (_w3cLock) foreach (byte p in to) talk.Told.Add(p);
             Interlocked.Increment(ref _w3cAnnounced);
+            Interlocked.Increment(ref _w204TalksAnnounced);
             Console.WriteLine($"WO203B-TALK this player's conversation {t.Cid} ({t.Kind}) with {string.Join(',', t.Others)} -- announced to {to.Count} partner(s)");
             string text = Wo203CamRules.AnnounceText(t.Cid, t.Kind, true, talk.Anchor, t.Others);
             _ = Task.Run(async () => { foreach (byte p in to) await Wo203SendConvAsync(p, Protocol.ConvAnnounce, text); });
@@ -176,6 +177,7 @@ public partial class GameBridge
                 Console.WriteLine($"WO203B-JOIN partner {src} listens to conversation {jcid} -- snapshot sent{(talk.CamUp ? ", sampler arming" : "; the camera starts with the dialogue's")}");
                 _ = Wo203SendConvAsync(W3cPeerOf(src), Protocol.ConvSnapshot, Wo203CamRules.SnapshotText(talk.Cid, talk.Kind, talk.Anchor, talk.Others));
                 W3cArmIfListened(talk);
+                Wo204OnConvJoined(talk, src);   // WO-204 III.4: the lines so far and the open options
                 break;
             }
             case Protocol.ConvLeave:
@@ -185,6 +187,7 @@ public partial class GameBridge
                 bool none = false;
                 lock (_w3cLock) { talk = _w3cTalk; if (talk is not null && talk.Cid == lcid) { talk.Listeners.Remove(src); none = talk.Listeners.Count == 0; } else talk = null; }
                 Console.WriteLine($"WO203B-JOIN partner {src} left conversation {lcid} ({why})");
+                if (talk is not null && none) Wo204ConvOnListenersGone(lcid);
                 if (talk is not null && none && talk.Armed)
                 {
                     talk.Armed = false;
@@ -207,6 +210,9 @@ public partial class GameBridge
                 lock (_w3cLock) if (_w3cOffers.TryGetValue(src, out var o) && o.Cid == ecid) _w3cOffers.Remove(src);
                 _ = ExecLuaAsync($"if KCD2MP_W203Gone then KCD2MP_W203Gone({src}, {ecid}) end");
                 _ = W3cOutAsync(src, ecid, reason == "ended" ? "end" : reason, tellStarter: false, luaReason: reason);
+                break;
+            default:
+                Wo204OnConvFrame(src, m);   // WO-204 III.3 / III.4: lines, options, votes, the chosen row
                 break;
         }
     }
@@ -399,6 +405,7 @@ public partial class GameBridge
         W203Talk? talk;
         bool none = false;
         lock (_w3cLock) { talk = _w3cTalk; if (talk is not null) { talk.Listeners.Remove(id); talk.Told.Remove(id); none = talk.Listeners.Count == 0; } }
+        if (talk is not null && none) Wo204ConvOnListenersGone(talk.Cid);
         if (talk is not null && none && talk.Armed) { talk.Armed = false; talk.Pump?.Cancel(); _ = W3cNativeAsync(Protocol.Wo203OpConvCamPoll, [0]); }
     }
 
@@ -408,6 +415,7 @@ public partial class GameBridge
         W203Talk? talk;
         lock (_w3cLock) { talk = _w3cTalk; _w3cTalk = null; _w3cOffers.Clear(); }
         if (talk is not null) { talk.Pump?.Cancel(); if (talk.Armed) _ = W3cNativeAsync(Protocol.Wo203OpConvCamPoll, [0]); }
+        if (talk is not null) Wo204ConvOnListenersGone(talk.Cid);
     }
 
     /// <summary>A load finished: the mod's listening state is put back if anything of it survived the load (belt and braces).</summary>

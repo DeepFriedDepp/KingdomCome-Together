@@ -12,7 +12,7 @@ public static class Wo202Rules
     // ---- the switches (each mechanism ships on, each with its own switch) ----
     public static readonly string[] SwitchNames =
     {
-        "crash_capture", "join_no_npc_suspend", "join_short_hold", "death_engine_only", "quest_fail_trace",
+        "crash_capture", "join_no_npc_suspend", "death_engine_only", "quest_fail_trace",
         "net_game_queue", "ping_network", "rejoin_recover", "anim_shown", "recoil_clinch", "fight_pos_fresh",
         "desync_score", "cutscene_clock_v2", "keys_per_player", "outfit_atomic", "mark_key",
         "near_safe",
@@ -40,13 +40,7 @@ public static class Wo202Rules
         return false;
     }
 
-    // ---- II.2 join_short_hold ----
-    /// <summary>The host's world is held only while the join save is written and sent: released once the joiner reports the file
-    /// whole (its hash and verify passed), never kept through the joiner's load.</summary>
-    public static bool ReleaseAtTransferDone(bool shortHold) => shortHold;
-
-    /// <summary>The mod's "join_resumed" for the agent's own early release ("sent") is no cancel: the join waits on for the joiner's ready.</summary>
-    public static bool IsOwnEarlyRelease(string reason) => reason == "sent";
+    // ---- II.2 join_short_hold: deleted by WO-204 IV.1 (every join pauses the world until the joiner is ready) ----
 
     // ---- II.4 quest_fail_trace ----
     public readonly record struct QuestFail(uint Seq, int AgeMs, int Old, int New, bool Cascade, int RanMs, string Path, string Port, string Class,

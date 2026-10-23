@@ -70,7 +70,8 @@ public partial class GameBridge
         public readonly Channel<(byte Type, byte[] Body)> Inbox = Channel.CreateUnbounded<(byte, byte[])>();
         public WorldSender? Sender;
         public volatile bool EngineHeld;   // WO-151 3.8: the engine's own hold is on for this join
-        public double? ReleasedEarlyS;     // WO-202 II.2: the world ran again when the joiner had the file (seconds it was held)
+        public CancellationTokenSource? DeadlineCts;   // WO-204 IV.1: the paused join's deadline, renewed by the joiner's progress
+        public long LastJoinerMsgMs = Environment.TickCount64;   // WO-204 IV.1: the joiner's last message of this join (progress, ack, ready)
         public volatile int SentPct;       // WO-154 4.1: the transfer's acknowledged share, for the hold's panel
         public TaskCompletionSource<(string Kind, string Arg)>? LuaReply;
         public void Cancel(string reason) { CancelReason ??= reason; try { Cts.Cancel(); } catch (ObjectDisposedException) { } }
@@ -204,9 +205,7 @@ public partial class GameBridge
                     j.LuaReply?.TrySetResult((p[1], p.Length > 2 ? string.Join(' ', p.Skip(2)) : ""));   // WO-159: "prologue <min>"
                 return;
             case "join_resumed":    // "<joinId> <reason>": the mod resumed on its own (mp_join_cancel, its safety timer)
-                // WO-202 II.2: "sent" is this agent's own early release (the joiner has the world and loads) -- the join goes on to the
-                // joiner's ready; cancelling it here sent the joiner a host-cancel abort mid-load (the first Q2 run)
-                if (_hostJoin is { } j2 && j2.JoinId == id && !Wo202Rules.IsOwnEarlyRelease(p.Length > 1 ? p[1] : "")) j2.Cancel(p.Length > 1 ? p[1] : "mod");
+                if (_hostJoin is { } j2 && j2.JoinId == id) j2.Cancel(p.Length > 1 ? p[1] : "mod");
                 return;
             case "join_cancel":     // mp_join_cancel, on either machine
                 if (_hostJoin is { } j3) { Console.WriteLine("MP-JOIN host: mp_join_cancel"); j3.Cancel("cancel"); }
@@ -453,6 +452,7 @@ public partial class GameBridge
             await TrySendStatusAsync(j, Protocol.JoinStateSaving, "none");
             using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
             deadline.CancelAfter(j.Deadline - DateTime.UtcNow);
+            j.DeadlineCts = deadline;
             var dct = deadline.Token;
 
             // ---- 2. the world save (WO-122 Phase 4), with the world frozen
@@ -559,23 +559,11 @@ public partial class GameBridge
                 }
             }
 
-            // ---- WO-202 II.2 join_short_hold: the world was held while the save was written and sent; the joiner has it whole now, so
-            // the host's world runs again while the joiner loads (the field held it 98 s per join, through the joiner's whole load). The
-            // joiner arrives in a moving world and catches up the existing ways: the quest checkpoint it asks for on arrival (WO-137/151),
-            // the NPC stream and its resync, the clock announce.
-            if (Wo202Rules.ReleaseAtTransferDone(W202("join_short_hold")))
-            {
-                double heldS = j.PausedUtc is { } p0 ? (DateTime.UtcNow - p0).TotalSeconds : 0;
-                await Wo151JoinHoldAsync(j, false);
-                Wo154HostJoinPanelHide("join sent");
-                try { await ExecLuaAsync($"if KCD2MP_JoinResume then KCD2MP_JoinResume(\"{j.JoinId:x8}\", \"sent\") end"); }
-                catch (Exception ex) { Console.WriteLine($"MP-JOIN host: early resume could not reach the mod: {ex.Message} (the mod's own timer resumes)"); }
-                j.ReleasedEarlyS = heldS;
-                j.PausedUtc = null;   // released: the end of the join resumes nothing more
-                Interlocked.Increment(ref _w202JoinEarlyReleases);
-                Console.WriteLine(FormattableString.Invariant(
-                    $"MP-JOIN host: join 0x{j.JoinId:x8}: {j.Partner} has the world -- the host's world runs again after {heldS:F1} s held (WO-202 join_short_hold); the joiner loads and catches up"));
-            }
+            // ---- WO-204 IV.1: the world stays paused through the joiner's whole load, until he says ready (the maintainer's decision;
+            // WO-202's short hold, which let the host's world run while the joiner loaded, is deleted). The joiner's agent reports its
+            // load every 5 s (W203 JoinProgress); 60 s with no message at all from the joiner aborts the join and the world runs again.
+            j.LastJoinerMsgMs = Environment.TickCount64;
+            deadline.CancelAfter(TimeSpan.FromSeconds(Wo204Rules.JoinLoadSilenceS + 5));   // the deadline is now the joiner's silence
 
             // ---- 4. the joiner loads (the next WO) and says ready
             j.Phase = "waiting-ready";
@@ -583,7 +571,26 @@ public partial class GameBridge
             _ = ExecLuaAsync($"if KCD2MP_JoinProgress then KCD2MP_JoinProgress(\"{j.JoinId:x8}\", 100, \"loading\") end");
             while (true)
             {
-                var msg = await j.Inbox.Reader.ReadAsync(dct);
+                (byte Type, byte[] Body) msg;
+                using (var tick = CancellationTokenSource.CreateLinkedTokenSource(dct))
+                {
+                    tick.CancelAfter(1000);
+                    try { msg = await j.Inbox.Reader.ReadAsync(tick.Token); }
+                    catch (OperationCanceledException) when (!dct.IsCancellationRequested)
+                    {
+                        long quietMs = Environment.TickCount64 - Interlocked.Read(ref j.LastJoinerMsgMs);
+                        if (Wo204Rules.JoinLoadSilent(quietMs))
+                        {
+                            abortReason = Protocol.JoinAbortTimeout; resumeReason = "timeout";
+                            Interlocked.Increment(ref _w204JoinSilenceAborts);
+                            Console.WriteLine(FormattableString.Invariant(
+                                $"MP-JOIN host: join 0x{j.JoinId:x8}: nothing from {j.Partner} for {quietMs / 1000.0:F0} s while they load -- abort (WO-204 IV.1), the world runs again"));
+                            return;
+                        }
+                        continue;
+                    }
+                }
+                j.LastJoinerMsgMs = Environment.TickCount64;
                 if (msg.Type == Protocol.JoinerReadyDown)
                 {
                     uint seq = msg.Body.Length == 4 ? BinaryPrimitives.ReadUInt32LittleEndian(msg.Body) : 0;
@@ -635,7 +642,7 @@ public partial class GameBridge
 
     private async Task FinishHostJoinAsync(HostJoin j, string reason, byte abortReason)
     {
-        double pausedS = j.PausedUtc is { } p ? (DateTime.UtcNow - p).TotalSeconds : j.ReleasedEarlyS ?? 0;
+        double pausedS = j.PausedUtc is { } p ? (DateTime.UtcNow - p).TotalSeconds : 0;
         // Resume first: nothing below may keep the host frozen. WO-151: the engine's own hold first of all
         // (through the pipe -- while the engine holds the world the mod's timer chains do not run; console-called Lua
         // does, which is how WO-154's join panel updates during the hold).

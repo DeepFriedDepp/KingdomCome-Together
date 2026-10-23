@@ -2,6 +2,8 @@
 // GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 #include "wo141.h"
+#include "wo204.h"
+#include "wo204_rules.h"
 #include "wo172.h"
 #include "fault_guard.h"
 #include "wo141_rules.h"
@@ -714,6 +716,8 @@ struct Desired {
     int sitRefusals = 0;         // WO-164 S1: an avatar's seat / bed refused by the planner (exec 0, body not in step)
     R::Activity refusedSit;      // ... the seat it fell back from (stands beside it while the same seat is asked again)
     double refusedSitAt = -1e9;
+    float seatPos[3]{};          // WO-204 II.3: where the copy sat down (its moves while seated are measured: WO204-SEATMOVE)
+    bool seatPosHave = false;
 };
 std::unordered_set<std::string> g_seatedHandsNoted;   // bodies told once: seated, their hands stay as they are
 std::unordered_set<uint64_t> g_bedSitNoted;          // WO-144 5: beds told once (a player's bed-edge sit shown lying)
@@ -916,6 +920,30 @@ void reconcile_tick(double now) {
         auto hold_to = [&](bool want) { if (want != d.held) { npcdrive::set_activity_hold(d.eid, want); d.held = want; } };
         R::Activity cur;
         if (!read_activity(d.eid, &cur)) { hold_to(R::hold_wanted(owns, d.matched, d.pace.misses, true, d.a.stance)); ++it; continue; }
+        // WO-204 II.3: a host copy that is itself seated / aligned at an object is never moved by the stream (one authority: the seat)
+        const bool copySeated = !R::is_avatar_name(d.name.c_str()) && R::owns_position(R::normalised(cur));
+        if (copySeated) {
+            float p[3]{};
+            void* se = engine::entity_by_id(d.eid);
+            if (se && engine::entity_world_pos(se, p)) {
+                if (!d.seatPosHave) { std::memcpy(d.seatPos, p, sizeof p); d.seatPosHave = true; }
+                else {
+                    const float dx = p[0] - d.seatPos[0], dy = p[1] - d.seatPos[1], dz = p[2] - d.seatPos[2];
+                    const float dcm = std::sqrt(dx * dx + dy * dy + dz * dz) * 100.0f;
+                    if (dcm > wo204rules::kSeatMoveCm) {
+                        const uint32_t k = wo204::note_seat_move();
+                        if (k <= 40 || k % 50 == 0)
+                            logf("WO204-SEATMOVE npc=%s moved_cm=%.0f while seated (%s) held=%d (#%u)", d.name.c_str(), dcm, describe(R::normalised(cur)).c_str(), d.held ? 1 : 0, k);
+                        std::memcpy(d.seatPos, p, sizeof p);
+                    }
+                }
+            }
+        } else d.seatPosHave = false;
+        auto hold_to_seat = [&](bool want) {
+            const bool h = wo204rules::seat_hold(want, copySeated, wo204::on(wo204rules::kBitSeatHold));
+            if (h && !want && !d.held) wo204::note_seat_hold(true);
+            hold_to(h);
+        };
         if (R::is_avatar_name(d.name.c_str())) {
             cur = R::without_crouch(cur); d.a = R::without_crouch(d.a);   // WO-144 2.2
             if (d.a.stance == R::kSitting && d.a.stanceObj) {             // WO-144 5: a bed's edge -> lying on it
@@ -948,7 +976,7 @@ void reconcile_tick(double now) {
             wakePending = d.wakeWanted;
         }
         if (R::same_body(cur, d.a) && handsOk && !wakePending) {
-            hold_to(owns);
+            hold_to_seat(owns);
             if (!d.matched) logf("WO141-APPLY %s in step: %s%s", d.name.c_str(), describe(d.a).c_str(), useHands ? hands_text(d.hands).c_str() : "");
             d.matched = true; d.pace.misses = 0; KH::log_reset(d.logPace); d.handsTries = 0; d.refusals = 0;
             if (R::none(d.a) && (!d.handsSet || d.hands.empty())) { if (d.held) npcdrive::set_activity_hold(d.eid, false); it = g_desired.erase(it); continue; }
@@ -978,10 +1006,10 @@ void reconcile_tick(double now) {
         }
         // WO-160: the planner has refused this activity kMissesBeforeGiveUp times: the body is shown by the writer alone until the
         // host's activity changes (or kGiveUpRetryS passes), not asked again every minute
-        if (R::gave_up(d.refusals, now - d.gaveUpAt)) { hold_to(false); ++it; continue; }
+        if (R::gave_up(d.refusals, now - d.gaveUpAt)) { hold_to_seat(false); ++it; continue; }
         if (d.refusals >= R::kMissesBeforeGiveUp) d.refusals = R::kMissesBeforeGiveUp - 2;   // the retry window opened: two more tries
         const bool waiting = now < d.pace.nextAt;
-        hold_to(R::hold_wanted(owns, false, d.pace.misses, waiting, d.a.stance));   // (J3: a cart stance stays held)
+        hold_to_seat(R::hold_wanted(owns, false, d.pace.misses, waiting, d.a.stance));   // (J3: a cart stance stays held)
         if (waiting) { ++it; continue; }
         uint8_t res = 0;
         KH::Hands missing;

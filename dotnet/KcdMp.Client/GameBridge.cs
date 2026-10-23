@@ -6011,7 +6011,7 @@ public partial class GameBridge(ClientConfig config)
             case "mp_mark":          // WO-140: the checklist's markers (mark_<word>)
                 Console.WriteLine($"MP-MARK {(arg ?? "").Trim()} -- the tester's marker (typed on this machine)");
                 // WO-164 M: "Something's wrong here" (mark_odd) -- a state snapshot here and on the partner's machine, joined by mark=
-                if ((arg ?? "").Trim().StartsWith("odd", StringComparison.Ordinal)) _ = W164MarkAsync(Wo164Rules.NewMarkId(_w164Rnd), "local");
+                if ((arg ?? "").Trim().StartsWith("odd", StringComparison.Ordinal)) _ = W164MarkAsync(Wo164Rules.NewMarkId(_w164Rnd), "local", Wo204Rules.MarkNoteOf(arg));
                 return;
             case "w164_talk":        // WO-164: the talk line (T0), the sweep (T1), unstuck step 2 (S3), the agent half's switch
             case "w164_sweep":
@@ -6132,6 +6132,9 @@ public partial class GameBridge(ClientConfig config)
                 return;
             case string w202 when w202.StartsWith("w202_", StringComparison.Ordinal):   // WO-202: every event of its parts (Wo202OnEvent)
                 Wo202OnEvent(name, arg);
+                return;
+            case string w204 when w204.StartsWith("w204_", StringComparison.Ordinal):   // WO-204: the switches and the status (Wo204OnEvent)
+                Wo204OnEvent(name, arg);
                 return;
             case string w203 when w203.StartsWith("w203", StringComparison.Ordinal):   // WO-203: every area's events (Wo203OnEvent)
                 Wo203OnEvent(name, arg);

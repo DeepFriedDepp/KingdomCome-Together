@@ -92,4 +92,7 @@ void set_frame_callback(FrameFn fn);   // 0xA5 goes out through it
 
 void on_pipe_closed();   // any thread: the gate off, nothing kept
 
+// WO-204 I.3: C_SkipTime's state now (0 idle, 1 the picker, 2/3 the skip), -1 when the instance is not trusted. Main thread.
+int skip_state_now();
+
 } // namespace kcdmp::wo140

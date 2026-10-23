@@ -211,6 +211,12 @@ void install() {
 
 void set_frame_callback(FrameFn fn) { g_frame = fn; }
 
+int skip_state_now() {
+    void* inst = instance();
+    uint32_t stt = 0; int id = 0; float hours = 0;
+    return inst && read_state(inst, &stt, &id, &hours) ? static_cast<int>(stt) : -1;
+}
+
 void on_pipe_closed() {
     g_on = false;
     g_approveUntil = 0;

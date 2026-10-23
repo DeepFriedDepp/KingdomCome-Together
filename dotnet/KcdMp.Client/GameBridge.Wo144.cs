@@ -160,6 +160,7 @@ public partial class GameBridge
         Wo172OnEngineLine(line);              // WO-172 H1: the trade screen's own UI sounds -- never consumes
         if (Wo166OnEngineLine(line)) return;  // WO-166: the loot screen's close (L1); dialogue states and pause-request timeouts (T3)
         Wo164OnEngineLine(line);              // WO-164: refusal times (the adaptive sweep), dialogues and their commands (the talk line)
+        Wo204OnEngineLine(line);              // WO-204 IV.5: a copy the engine's state search keeps failing on is released -- never consumes
         if (W160OnEngineLine(line)) return;   // WO-160: a planner failure, counted per NPC
         if (Wo144Rules.ParseCantEquip(line) is { } ce) { _w144EquipReasons[ce.Item] = (ce.Reason, DateTime.UtcNow); return; }
         Wo144OnEngineLineMore(line);

@@ -379,6 +379,8 @@ public sealed class LogTailGameTransport : IGameTransport
         // WO-164: the talk line's dialogue name, kind and preemption; the random events (the mark snapshot)
         "Running dialogue '",
         "New dialogue '",
+        // WO-204 III.3: the starter's choice in his own dialogue (the listeners' options close with it)
+        "Topic index '",
         "<RandomEvent>",
         // WO-166 L1: the loot screen closing (the joiner applies a host update it held back while the screen was open)
         "PlayAudio: ui_inv_screen_out",
@@ -428,6 +430,8 @@ public sealed class LogTailGameTransport : IGameTransport
         "] Dialog ending",
         // WO-160: the game's planner failing a placement this mod asked for (counted per NPC, GameBridge.Wo160)
         "[NPCContext]:Couldn't find actions to get NPC into game loaded state",
+        // WO-204 IV.5: a copy stuck in a state the engine cannot leave (2,577 of these for one joiner copy in session D)
+        "[NPCContext]:NPC state search has failed!",
         "counldn't reach the loaded state in",
         // WO-164: a dialogue's commands (the talk line's count: a haggle that played nothing) and the minigame entities (dice)
         "] DialogCommand-",

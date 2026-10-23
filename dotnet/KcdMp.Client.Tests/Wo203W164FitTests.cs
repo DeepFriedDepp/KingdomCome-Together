@@ -72,17 +72,18 @@ public class Wo203W164FitTests
         yield return (Protocol.W164Noise, "noise", Wo200Rules.NoiseText("lockpick", -100000f, -100000f, -10000f));
         // WO-201: the host busy, the speech line, the vote, the ranged step
         yield return (Protocol.W164HostBusy, "host busy", "load 1");
-        yield return (Protocol.W164SpeechLine, "speech line (long text)",
-            Wo201Rules.SpeechWire(N(63, 's'), 60000, int.MaxValue, "Localization/dialog/" + N(170, 'v'), N(400, 'w')));
-        yield return (Protocol.W164SpeechLine, "speech line (session C shape)",
-            Wo201Rules.SpeechWire("@me", 4200, 120, "Localization/dialog/zbranePanaSemina/semine_line_0042", N(300, 'w')));
-        yield return (Protocol.W164VoteOptions, "vote options (6 x 80)", Wo201Rules.VoteOptionsWire(uint.MaxValue, Enumerable.Range(0, 8).Select(i => N(120, 'o')).ToList()));
-        yield return (Protocol.W164VoteCast, "vote cast", Wo201Rules.VoteCastWire(uint.MaxValue, 6, N(120, 'v')));
-        yield return (Protocol.W164VoteClose, "vote close", Wo201Rules.VoteCloseWire(uint.MaxValue, N(120, 'c')));
+        // (the speech line and the vote's three kinds are retired by WO-204 III.2 -- an older partner may still send them, at their old
+        // worst cases: the speech line capped at 196 bytes, six 80-character options, an 80-character voter / choice)
+        yield return (Protocol.W164SpeechLine, "speech line (retired, its old cap)", ("v1|" + N(63, 's') + "|60000|65535|Localization/dialog/" + N(170, 'v') + "|")[..196]);
+        yield return (Protocol.W164VoteOptions, "vote options (retired, 6 x 80)", $"v1|{uint.MaxValue}|" + string.Join("|", Enumerable.Range(0, 6).Select(i => N(80, 'o'))));
+        yield return (Protocol.W164VoteCast, "vote cast (retired)", $"v1|{uint.MaxValue}|6|" + N(80, 'v'));
+        yield return (Protocol.W164VoteClose, "vote close (retired)", $"v1|{uint.MaxValue}|" + N(80, 'c'));
         yield return (Protocol.W164RangedStep, "ranged step", "v1|5");
         // WO-202: the key share
         yield return (Protocol.W164KeyShare, "key", Wo202Rules.KeyText("4a6fa310-067a-404d-9813-bd1761d1c70d")!);
         yield return (Protocol.W164KeyShare, "chest", Wo202Rules.ChestText($"{N(80, 'k')} -99999.99 -99999.99 -99999.99")!);
+        // WO-204 Act V: a mark's note (16-character id, 120-character note)
+        yield return (Protocol.W164MarkNote, "mark note", Wo204Rules.MarkNoteText(N(16, 'm'), N(200, 'n')));
     }
 
     [Fact]
@@ -107,18 +108,6 @@ public class Wo203W164FitTests
         for (byte k = 1; k < 64; k++)
             if (!Protocol.W164KindName(k).StartsWith("unknown-", StringComparison.Ordinal))
                 Assert.True(kindsSeen.Contains(k), $"W164 kind {k} ({Protocol.W164KindName(k)}) has no worst case in this test");
-    }
-
-    [Fact]
-    public void The_wo201_texts_that_session_c_lost_are_longer_than_the_old_row_and_fit_the_new_one()
-    {
-        string speech = Wo201Rules.SpeechWire("@me", 4200, 120, "Localization/dialog/zbranePanaSemina/semine_line_0042", N(300, 'w'));
-        string options = Wo201Rules.VoteOptionsWire(1, Enumerable.Range(0, 6).Select(i => N(80, 'o')).ToList());
-        foreach (var t in new[] { speech, options })
-        {
-            Assert.True(t.Length > Protocol.W164TextMax, "the regression case must exceed the old 80-byte row");
-            Assert.True(t.Length <= Protocol.W164WireTextMax);
-        }
     }
 
     [Fact]

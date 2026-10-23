@@ -246,4 +246,6 @@ int status_text(char* out, int n) {
                          g_on.load() ? 1 : 0, c_captured.load(), c_dropped.load(), c_played.load(), c_playFailed.load(), c_noProxy.load());
 }
 
+void* speak_fn() { return g_hooked ? reinterpret_cast<void*>(g_speakOrig) : g_speak; }
+
 } // namespace kcdmp::wo201speech

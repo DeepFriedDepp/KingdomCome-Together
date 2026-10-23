@@ -63,6 +63,7 @@ public partial class GameBridge
     private void Wo147NotePositionAtRead(int type, byte[] payload, long arrival)
     {
         if (type != Protocol.Ghost || !PositionCodec.TryDecodeGhost(payload, out var gs)) return;
+        Wo204NotePosition(gs.GhostId);   // WO-204 IV.3: a blow that waited out a stall of this link is told apart
         long at = W147StampMs(arrival);
         var pos = _w147PeerPos.GetOrAdd(gs.GhostId, _ => new Wo147Rules.PeerPositions());
         lock (pos) pos.Feed(gs.X, gs.Y, gs.SenderMs, at);

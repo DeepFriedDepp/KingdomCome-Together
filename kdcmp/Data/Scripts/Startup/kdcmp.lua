@@ -1172,7 +1172,6 @@ function KCD2MP_DrawInteractionUI()
 
     -- WO-94: the readiness prompt and the catch-up window, rows 160/184/208.
     if KCD2MP_QuestDrawUI then pcall(KCD2MP_QuestDrawUI) end
-    if KCD2MP_W201DrawUI then pcall(KCD2MP_W201DrawUI) end   -- WO-201 Act V F2: the vote panel
     if KCD2MP_JoinDrawUI then pcall(KCD2MP_JoinDrawUI) end   -- WO-123: "<partner> is joining..."
     if KCD2MP_Wo114DrawUI then pcall(KCD2MP_Wo114DrawUI) end -- WO-114: "Bringing you back to your host in N..."
     if KCD2MP_W140DrawUI then pcall(KCD2MP_W140DrawUI) end   -- WO-140: "Waiting for other players...", the sleep prompt, the own-world line
@@ -5275,6 +5274,15 @@ function KCD2MP_JoinProgress(joinId, pct, phase)
     local ph = tostring(phase or "")
     if ph ~= w.phase then w.phaseAt = os.clock() end   -- WO-129: a new stage starts its own clock
     w.pct, w.phase = tonumber(pct) or 0, ph
+    -- WO-204 IV.1: the world stays paused through the joiner's whole load; each of his progress reports renews the safety timer
+    -- (60 s of his silence + 15), the agent's own watch aborts first
+    if ph == "loading" and w.paused then
+        w.safetyGen = w.safetyGen + 1
+        local gen, id = w.safetyGen, w.joinId
+        Script.SetTimer(75 * 1000, function()
+            if w.paused and w.joinId == id and w.safetyGen == gen then KCD2MP_JoinResume(id, "mod-safety-timeout") end
+        end)
+    end
 end
 
 -- WO-129: the host's join bar, one pure function (Test-WO129Synthetic). The
@@ -9583,6 +9591,7 @@ function KCD2MP_ApplyNpcState(name, x, y, z, rot, hp, flags, src, seq, senderMs)
     end
     p.deadHint = nil                            -- WO-137: p.dead is the reading from here on
     p.ko    = (math.floor(f / 2) % 2) == 1      -- bit 1 (WO-38 Phase 6: knocked out in the authority's world)
+    local wasDrawn = p.drawn                    -- WO-204 II.3: the draw-delay measure below
     p.drawn = (math.floor(f / 4) % 2) == 1      -- bit 2 (WO-40 Phase 6: weapon out in the authority's world)
     local swingCue = (math.floor(f / 8) % 2) == 1  -- bit 3 (WO-40 Phase 6: it just landed a hit there)
     p.carried = (math.floor(f / 16) % 2) == 1   -- bit 4 (WO-40 Phase 7: a player is carrying this body)
@@ -9617,6 +9626,8 @@ function KCD2MP_ApplyNpcState(name, x, y, z, rot, hp, flags, src, seq, senderMs)
     end
     if seq and seqOk then p.lastSeq = seq end
     local stampAt = mp_sender_stamp(src, tonumber(senderMs), nowPkt)
+    -- WO-204 II.3: when the authority's weapon state flipped, on this world's clock (the sender's stamp); the tick's apply logs the delay
+    if wasDrawn ~= nil and (p.drawn or false) ~= (wasDrawn or false) then p.drawnFlipAt = stampAt end
     if seqOk and senderMs and p.lastSenderMs and pktMoved and p.lastPacketMoved then
         local sdt = (tonumber(senderMs) - p.lastSenderMs)
         if sdt > 0 and sdt < 5000 then
@@ -9981,6 +9992,10 @@ function KCD2MP_NpcPuppetTick(arg, gen)
                 end
                 p.drawnCheckAt = now   -- give the draw/holster time before the re-assert below judges it
                 mp_log("NPC-SYNC " .. name .. (p.drawn and " drew weapon" or " sheathed weapon"))
+                if p.drawnFlipAt then
+                    mp_log(string.format("WO204-DRAW %s %s delay_ms=%d", name, p.drawn and "drawn" or "sheathed", math.floor(math.max(0, now - p.drawnFlipAt) * 1000)))
+                    p.drawnFlipAt = nil
+                end
             end
 
             -- WO-151 3.2: a living copy carried (a quest's carry, by this player or a partner's avatar here)
@@ -30720,6 +30735,11 @@ end
 System.AddCCommand("mp_dog_sync", 'KCD2MP_DogSyncSet(%line)', "WO-191 follow-up: (both) village dogs walk, lie and follow on your partner's screen as on the host's; the players' own dogs stay their own (default on): mp_dog_sync on|off")
 
 local function handleAction(action, activation, value)
+    -- WO-204 III.3: the listener's options (his own listen actions); true = consumed
+    if KCD2MP_W204OnAction then
+        local okc, usedc = pcall(KCD2MP_W204OnAction, action, activation)
+        if okc and usedc then return end
+    end
     -- WO-203: an area's own actions (the listening view's controls); true = consumed
     if KCD2MP_W203OnAction then
         local okw, usedw = pcall(KCD2MP_W203OnAction, action, activation)
@@ -30745,11 +30765,6 @@ local function handleAction(action, activation, value)
     if KCD2MP_W178OnAction then
         local okq, used = pcall(KCD2MP_W178OnAction, action, activation)
         if okq and used then return end
-    end
-    -- WO-201 Act V F2: the vote keys, only while the vote panel is shown (and no dice board is open)
-    if KCD2MP_W201VoteOnAction then
-        local okv, usedv = pcall(KCD2MP_W201VoteOnAction, action, activation)
-        if okv and usedv then return end
     end
     -- WO-154: the mod menu's keys (its own actions only; a game menu's action closes it and goes on)
     if KCD2MP_W154MenuOnAction then
@@ -32076,13 +32091,14 @@ do
         joiner_no_story_barks = "mp_joiner_no_story_barks", scene_toast_truth = "mp_scene_toast_truth",
         copy_combat_from_host = "mp_copy_combat_from_host", copy_look_from_host = "mp_copy_look_from_host", walk_from_host = "mp_walk_from_host",
         figure_ranged = "mp_figure_ranged", clock_catchup = "mp_clock_catchup", host_load_toast = "mp_host_load_toast", mark_note = "mp_mark_note",
-        speech_share = "mp_speech_share", dialogue_vote = "mp_dialogue_vote", both_are_henry = "mp_both_are_henry",
+        both_are_henry = "mp_both_are_henry",
         figure_is_player = "mp_figure_is_player", nearest_player_triggers = "mp_nearest_player_triggers",
         joiner_receive_only = "mp_joiner_receive_only", knockout_engine = "mp_knockout_engine", oneshot_tick_cap = "mp_oneshot_tick_cap",
         copy_no_idle_turn = "mp_copy_no_idle_turn",
     }
     -- a switch the findings ship off is listed here. V.3 reaches a save: off until its save-decode check has passed (the agent's
-    -- Wo201Rules.Dude2DecodePassed says the same)
+    -- Wo201Rules.Dude2DecodePassed says the same). WO-204 I.5: nearest_player_triggers (rebuilt, nearest_player_v2) was off until its
+    -- time-skip soak passed (S1, 2026-10-22: 60 shared sleeps and waits with it on, 0 crashes -- Wo201Rules.NearestPlayerV2SoakPassed)
     W201.OFF = W201.OFF or { figure_is_player = true }
     W201.on = W201.on or {}
 
@@ -32597,121 +32613,9 @@ do
         KCD2MP_EmitEvent("w201_status", "")
         return true
     end
-    -- ---- Act V F1: a partner's line, heard here (the agent plays the file on the body; this half sets its range and the subtitle) ----
-    -- KCD2MP_W201SpeechPrep(body): the body's standalone_file_purpose is the game's own 20 m bark range (an overheard line, not the
-    -- listener's own conversation). KCD2MP_W201Subtitle(text, fromPartner, secs): inside the subtitle radius, through the game's own
-    -- subtitle row, marked overheard -- never while this player is in his own conversation.
-    W201.speech = W201.speech or { prepped = 0, subs = 0, subsSkipped = 0, clearAt = nil }
-    function KCD2MP_W201SpeechPrep(body)
-        local e = System.GetEntityByName(tostring(body))
-        if not e then return false end
-        local ok = pcall(function()
-            local sw = Sound.GetAudioSwitchID("standalone_file_purpose")
-            local st = Sound.GetAudioSwitchStateID(sw, "20")
-            e:SetAudioSwitchState(sw, st, e:GetDefaultAuxAudioProxyID())
-        end)
-        if ok then W201.speech.prepped = W201.speech.prepped + 1 end
-        return ok
-    end
-    function KCD2MP_W201Subtitle(text, fromPartner, secs)
-        local inTalk = false
-        pcall(function() inTalk = player and player.human and player.human:IsInDialog() == true end)
-        if inTalk then W201.speech.subsSkipped = W201.speech.subsSkipped + 1; return false end
-        local t = KCD2MP_W201ToastAscii and KCD2MP_W201ToastAscii(tostring(text)) or tostring(text)   -- the console path carries ASCII safely (B19)
-        local who = fromPartner and "Your partner (overheard)" or "Overheard"
-        local ok = pcall(function() UIAction.CallFunction("hud", -1, "SetSubtitles", t, who, false) end)
-        if not ok then return false end
-        W201.speech.subs = W201.speech.subs + 1
-        local stamp = (W201.speech.stamp or 0) + 1
-        W201.speech.stamp = stamp
-        pcall(function()
-            Script.SetTimer(math.floor((tonumber(secs) or 4) * 1000 + 500), function()
-                if W201.speech.stamp == stamp then pcall(function() UIAction.CallFunction("hud", -1, "ClearSubtitles") end) end
-            end)
-        end)
-        return true
-    end
-    function KCD2MP_W201SpeechRadius(arg)
-        local v = tonumber(arg)
-        if not v or v < 0 or v > 200 then mp_log("mp_speech_radius: metres 0-200, got '" .. tostring(arg) .. "'"); return false end
-        KCD2MP_EmitEvent("w201_speech_radius", tostring(v)); mp_log("WO201-SPEECH radius " .. tostring(v) .. " m"); return true
-    end
-    function KCD2MP_W201SubtitleRadius(arg)
-        local v = tonumber(arg)
-        if not v or v < 0 or v > 200 then mp_log("mp_speech_subtitles_m: metres 0-200, got '" .. tostring(arg) .. "'"); return false end
-        KCD2MP_EmitEvent("w201_speech_subs", tostring(v)); mp_log("WO201-SPEECH subtitles within " .. tostring(v) .. " m"); return true
-    end
-    -- ---- Act V F2: the dialogue vote (the agent carries the options and the votes; this half draws and takes the keys) ----
-    -- The partner's panel: who is choosing, the options numbered as the speaker sees them; F2 / F4 / F5 / F6 (the mod's own dice-mark
-    -- keys in the interaction map) vote while the panel is shown and no dice board is open -- never while this player is fighting
-    -- or in his own conversation. The speaker's screen: the partner's pick beside his options. Both: "<name> chose: ..." for 6 s.
-    W201.vote = W201.vote or { open = nil, who = "", opts = {}, mine = nil, mark = nil, chosen = nil, chosenAt = -1e9, keys = 0, ignored = 0 }
-    W201.VOTE_KEYS = { kcd2mp_dice_mark_1 = 1, kcd2mp_dice_mark_2 = 2, kcd2mp_dice_mark_3 = 3, kcd2mp_dice_mark_4 = 4 }
-    W201.VOTE_KEY_NAMES = { "F2", "F4", "F5", "F6" }
-    local function w201Busy()
-        local busy = false
-        pcall(function() busy = player and player.human and player.human:IsInDialog() == true end)
-        if not busy then pcall(function() busy = player and player.soul and player.soul:IsInCombatDanger() == true end) end
-        return busy
-    end
-    function KCD2MP_W201VoteShow(seq, who, opts)
-        local V = W201.vote
-        V.open = tonumber(seq); V.who = tostring(who); V.opts = {}; V.mine = nil
-        for i, o in ipairs(opts or {}) do if i <= 4 then V.opts[i] = KCD2MP_W201ToastAscii and KCD2MP_W201ToastAscii(tostring(o)) or tostring(o) end end
-        mp_log("WO201-VOTE panel decision=" .. tostring(V.open) .. " options=" .. tostring(#V.opts))
-        return true
-    end
-    function KCD2MP_W201VoteSpeakerOpen() W201.vote.mark = nil; return true end
-    function KCD2MP_W201VoteMark(idx, voter, text)
-        local t = KCD2MP_W201ToastAscii and KCD2MP_W201ToastAscii(tostring(text)) or tostring(text)
-        W201.vote.mark = tostring(voter) .. " votes " .. tostring(idx) .. ": " .. t
-        mp_log("WO201-VOTE mark " .. W201.vote.mark)
-        return true
-    end
-    function KCD2MP_W201VoteChosen(who, chosen, partnerSide)
-        local V = W201.vote
-        local c = KCD2MP_W201ToastAscii and KCD2MP_W201ToastAscii(tostring(chosen)) or tostring(chosen)
-        V.chosen = (c ~= "") and (tostring(who) .. " chose: " .. c) or (partnerSide and (tostring(who) .. " has chosen.") or nil)
-        V.chosenAt = KCD2MP_W201Now and KCD2MP_W201Now() or os.clock()
-        if partnerSide then V.open = nil; V.mine = nil else V.mark = nil end
-        if V.chosen then mp_log("WO201-VOTE " .. V.chosen) end
-        return true
-    end
-    function KCD2MP_W201VoteOnAction(action, activation)
-        local V = W201.vote
-        if not V.open or activation ~= "press" then return false end
-        if KCD2MP.dice and KCD2MP.dice.open then return false end
-        local i = W201.VOTE_KEYS[tostring(action)]
-        if not i or i > #V.opts then return false end
-        if w201Busy() then V.ignored = V.ignored + 1; return false end   -- a vote key does nothing while he fights or talks
-        V.mine = i; V.keys = V.keys + 1
-        KCD2MP_EmitEvent("w201_vote", tostring(V.open) .. " " .. tostring(i))
-        mp_log("WO201-VOTE key option=" .. tostring(i) .. " decision=" .. tostring(V.open))
-        return true
-    end
-    function KCD2MP_W201DrawUI()
-        local V = W201.vote
-        local now = KCD2MP_W201Now and KCD2MP_W201Now() or os.clock()
-        local y = 300
-        if V.open and #V.opts > 0 and not w201Busy() then
-            mp_draw_row("w201_vote_head", 10, y, V.who .. " is choosing -- your vote (" .. table.concat(W201.VOTE_KEY_NAMES, " ", 1, #V.opts) .. "):", 1.3)
-            for i, o in ipairs(V.opts) do
-                y = y + 20
-                mp_draw_row("w201_vote_" .. i, 10, y, (V.mine == i and "> " or "  ") .. W201.VOTE_KEY_NAMES[i] .. "  " .. o, 1.2)
-            end
-        elseif V.mark then
-            mp_draw_row("w201_vote_mark", 10, y, "<> " .. V.mark, 1.3)
-        end
-        if V.chosen and now - V.chosenAt < 6 then mp_draw_row("w201_vote_chosen", 10, y + 24, V.chosen, 1.3) end
-    end
-    function KCD2MP_W201VoteRadius(arg)
-        local v = tonumber(arg)
-        if not v or v < 0 or v > 500 then mp_log("mp_vote_radius: metres 0-500 (0 = anywhere), got '" .. tostring(arg) .. "'"); return false end
-        KCD2MP_EmitEvent("w201_vote_radius", tostring(v)); mp_log("WO201-VOTE radius " .. (v == 0 and "anywhere" or (tostring(v) .. " m"))); return true
-    end
-    System.AddCCommand("mp_vote_radius", 'KCD2MP_W201VoteRadius(%line)', "WO-201 F2: how near your partner must be to vote on your conversation's choices (default 30 m; 0 = anywhere): mp_vote_radius <m>")
-    System.AddCCommand("mp_speech_radius", 'KCD2MP_W201SpeechRadius(%line)', "WO-201 F1: how far your partner's conversations are heard (default 20 m): mp_speech_radius <m>")
-    System.AddCCommand("mp_speech_subtitles_m", 'KCD2MP_W201SubtitleRadius(%line)', "WO-201 F1: within how many metres an overheard line shows its subtitle (default 8 m): mp_speech_subtitles_m <m>")
+    -- ---- Act V F1 / F2: the overheard broadcast's subtitles and the F2 vote panel (with its F-keys) are retired by WO-204 III.2: they
+    -- showed raw line keys under every character and offered a vote outside the game's own dialogue HUD. A joined conversation's lines,
+    -- options and votes are the Conv channel's (WO-203 Act I, WO-204 III.3 / III.4).
     System.AddCCommand("mp_w201_status", 'KCD2MP_W201Status()', "WO-201: every WO-201 switch and its counts")
     -- every other switch gets its own command (a one-argument setter each: WO-106's placeholder rule)
     W201.HELP = {
@@ -32721,8 +32625,6 @@ do
         walk_from_host = "B10: (both) a walking NPC is sent 10 times a second; its copy walks on through a short gap on the host's own speed, never steps and slides",
         figure_ranged = "B11: (both) your partner's bow or crossbow shows on their figure, even a quest weapon the game will not put on it",
         clock_catchup = "B13: (joiner) a clock more than 30 game seconds behind the host's catches up faster (up to +50 %), never a jump",
-        speech_share = "F1: (both) you hear the conversations your partner holds near you, from the right people",
-        dialogue_vote = "F2: (both) while your partner chooses in a story conversation near you, you can vote; they still decide",
         both_are_henry = "V.5: (host) the joiner is Henry to the host's world: quests count him, people come to talk to him",
         figure_is_player = "V.3: (host) your partner's figure is a player to the game's own rules (never saved as one)",
         oneshot_tick_cap = "B9: (joiner) a host copy's one-shot animation is stepped 10 times a second (not every frame), and dropped when nothing of it starts in 3 s (the look-pose flood)",
@@ -32749,7 +32651,7 @@ end
 do
     W202 = W202 or {}
     W202.NAMES = {
-        crash_capture = "mp_crash_capture", join_no_npc_suspend = "mp_join_no_npc_suspend", join_short_hold = "mp_join_short_hold",
+        crash_capture = "mp_crash_capture", join_no_npc_suspend = "mp_join_no_npc_suspend",
         death_engine_only = "mp_death_engine_only", quest_fail_trace = "mp_quest_fail_trace",
         net_game_queue = "mp_net_game_queue", ping_network = "mp_ping_network", rejoin_recover = "mp_rejoin_recover", anim_shown = "mp_anim_shown",
         recoil_clinch = "mp_recoil_clinch", fight_pos_fresh = "mp_fight_pos_fresh",
@@ -32759,7 +32661,6 @@ do
     W202.HELP = {
         crash_capture = "I.1: (both) a crash writes its evidence (a minidump, the faulting code, the mod's last steps) into the game folder's kcdmp-crashes, then the game's own crash handler runs as before",
         join_no_npc_suspend = "II.1: (host) a join holds the world without suspending any NPC's brain (the hired hand froze for good after one)",
-        join_short_hold = "II.2: (host) a join holds your world only while the save is written and sent -- your partner loads while your world runs, and catches up",
         death_engine_only = "II.3: (both) a death goes out only when the game's own soul is dead (never on a health reading), and a body the joiner's blow killed without its death reaction is laid down by the game's own ragdoll (it no longer walks away)",
         quest_fail_trace = "II.4: (host) every quest step that fails or is cancelled is logged with what caused it (WO202-QUESTFAIL)",
         net_game_queue = "III.1: (both) the network never waits on the game: what goes to a game that is busy or in the background waits in its own queue, a newer state replacing an older one",
@@ -33145,6 +33046,7 @@ end
     local function w3c_restore(reason)
         local L = W3C.listening
         if not L then return false end
+        if KCD2MP_W204ConvClear then pcall(KCD2MP_W204ConvClear) end   -- WO-204: the partner's rows and lines go with the view
         w3c_hud(false)
         pcall(ActionMapManager.EnableActionMap, "dialog", false)
         W3C.listening = nil
@@ -33266,6 +33168,210 @@ end
 
 -- ----- end of WO-203 area "input" -----
 
+
+-- ===== WO-204: sleep and wait stop crashing, every copy's body gets one owner, the conversation feature finished (docs/WO-204-findings.md) =====
+-- Each WO-204 mechanism ships on with its own switch (W204.NAMES); the agent gets every change through the w204_cfg event (the DLL's
+-- halves through the agent). mp_w204_status shows them all. Act I's switch is WO-201's mp_nearest_player_triggers (rebuilt).
+do
+    W204 = W204 or {}
+    W204.NAMES = {
+        conv_no_barks = "mp_conv_no_barks", copy_unstick = "mp_copy_unstick", copy_seat_hold = "mp_copy_seat_hold", copy_tpose_watch = "mp_copy_tpose_watch",
+        conv_lines = "mp_conv_lines", conv_voice = "mp_conv_voice", conv_options = "mp_conv_options", conv_trialog_roles = "mp_conv_trialog_roles",
+        blow_joiner_values = "mp_blow_joiner_values",
+    }
+    W204.HELP = {
+        conv_no_barks = "III.1: (both) a combat bark, a war cry, a hit or surrender line is never a conversation: no announce, no 'Join conversation', no gestures (the engine's own kind and family decide)",
+        copy_seat_hold = "II.3: (joiner) a host NPC's copy that sits, lies, kneels or works at an object is never moved by the position stream; it leaves the seat the game's own way when the host's NPC stands",
+        conv_lines = "III.4: (both) a joined conversation's lines reach the listener: the subtitle in his own language, the earlier ones on joining",
+        conv_voice = "III.4: (both) a joined conversation's lines are voiced on the speaker's own body on the listener's screen",
+        conv_options = "III.3: (both) a joined conversation's choices show on the listener's screen; he votes with his own dialogue keys and the starter sees the vote (the starter decides)",
+        conv_trialog_roles = "III.5: (both) in a conversation of three or more, each speaker's gestures go to the right body (the roles from the dialogue's own file)",
+        copy_tpose_watch = "II.2: (both) a copy or a partner's figure whose full body stands empty over 0.3 s (its bind pose) is logged (WO204-TPOSE) and its idle or guard put back",
+        blow_joiner_values = "IV.3: (host) a joiner's blow their own game judged blocked (stamina only) is applied as judged, never re-judged into a hit here",
+        copy_unstick = "IV.5: (joiner) a host NPC's copy the game's own state search keeps failing on (5 times in a minute) has its stance and unstance released the game's own way, at most every 2 minutes",
+    }
+    W204.OFF = W204.OFF or {}
+    W204.on = W204.on or {}
+    function KCD2MP_W204On(name)
+        local v = W204.on[tostring(name)]
+        if v == nil then return not W204.OFF[tostring(name)] end
+        return v
+    end
+    function KCD2MP_W204Set(name, arg)
+        local label = W204.NAMES[tostring(name)]
+        if not label then mp_log("WO204-TOGGLE unknown switch '" .. tostring(name) .. "'"); return false end
+        local v = KCD2MP_Wo122ParseBool(arg)
+        if v == "bad" then mp_log(label .. ": expected on|off, got '" .. tostring(arg) .. "'"); return false end
+        if v == nil then
+            mp_log("WO204-TOGGLE " .. label .. " is " .. (KCD2MP_W204On(name) and "on" or "off") .. " (mp_w204_status shows every value)")
+            return true
+        end
+        W204.on[tostring(name)] = v
+        mp_log("WO204-TOGGLE " .. label .. " " .. (v and "on" or "off") .. " -- sent to the agent")
+        KCD2MP_EmitEvent("w204_cfg", tostring(name) .. "=" .. (v and "on" or "off"))
+        return true
+    end
+    function KCD2MP_W204Status()
+        local parts = {}
+        for k, label in pairs(W204.NAMES) do parts[#parts + 1] = label .. "=" .. (KCD2MP_W204On(k) and "on" or "off") end
+        table.sort(parts)
+        mp_log("WO204-STATUS " .. table.concat(parts, " "))
+        for _, f in ipairs(W204.statusMore or {}) do pcall(f) end
+        KCD2MP_EmitEvent("w204_status", "")
+        return true
+    end
+    System.AddCCommand("mp_w204_status", "KCD2MP_W204Status()", "WO-204: every WO-204 switch and its counts")
+
+    -- ---- III.3 / III.4: a joined conversation's lines, options and vote (the LISTENER), and the vote on the STARTER's own HUD ----
+    -- The agent carries the starter's lines (ConvLine), his HUD's rows (ConvOptions, copied by his DLL as they went to his screen) and
+    -- the chosen row (ConvChosen). Here, while listening (WO-203B's KCD2MP.W203.cam.listening): the subtitle through the HUD's own
+    -- SetSubtitles with "@<StringName>" (localized by the HUD in this player's language), the rows through the HUD's own dialogue list
+    -- (DialogRight / SequenceList / SetDialogSequences: live-proven with no dialogue running, WO-203 section 0), moved and voted with the
+    -- mod's own listen actions (kcd2mp_listen_up / _down / _confirm / _cancel, in the game's dialog map on the player's own dialogue
+    -- keys). The vote shows in the voted row (the mod's icon "kct_vote"); voting again moves it, the cancel clears it. On the starter the
+    -- copied rows are re-sent with the icon and the highlight put back (never the HUD's live rows: writing them crashed, WO-203).
+    W204.conv = W204.conv or { rows = nil, starter = nil, cid = nil, dec = nil, sel = 0, vote = nil, subGen = 0, earlierAt = 0,
+        stats = { lines = 0, earlier = 0, options = 0, moves = 0, votes = 0, clears = 0, chosen = 0, icons = 0 } }
+    local C4 = W204.conv
+    local function c4_listening(starter, cid)
+        local L = KCD2MP.W203 and KCD2MP.W203.cam and KCD2MP.W203.cam.listening
+        return L ~= nil and L.starter == tostring(starter) and L.cid == tostring(cid)
+    end
+    local function c4_rows(csv)   -- "index~prompt~used~icon~difficulty~value;..." (prompt: a loc key, or "=" and the starter's shown text)
+        local out = {}
+        for r in string.gmatch(tostring(csv or ""), "[^;]+") do
+            local f = {}
+            for x in string.gmatch(r, "[^~]+") do f[#f + 1] = x end
+            if #f == 6 then
+                local p = f[2]
+                out[#out + 1] = { index = tonumber(f[1]) or #out, text = (string.sub(p, 1, 1) == "=") and string.sub(p, 2) or ("@" .. p),
+                                  used = f[3] == "1", icon = (f[4] == "-") and "" or f[4], diff = tonumber(f[5]) or 0, val = tonumber(f[6]) or 0 }
+            end
+        end
+        return out
+    end
+    local function c4_send(rows, voteIdx, right)
+        local flat = {}
+        for _, r in ipairs(rows) do
+            local icon = r.icon
+            if voteIdx ~= nil and r.index == voteIdx and icon == "" then icon = "kct_vote" end   -- a row with an icon of its own keeps it
+            flat[#flat + 1] = r.text; flat[#flat + 1] = r.used; flat[#flat + 1] = icon; flat[#flat + 1] = r.diff; flat[#flat + 1] = r.val
+        end
+        pcall(UIAction.SetArray, "hud", 0, "SequenceList", flat)
+        pcall(UIAction.CallFunction, "hud", 0, "SetDialogSequences", right ~= false)
+    end
+    local function c4_highlight(i) pcall(UIAction.CallFunction, "hud", 0, "SetActiveSequenceChanged", i, 0) end
+    function KCD2MP_W204ConvClear()
+        if C4.rows then
+            pcall(UIAction.CallFunction, "hud", 0, "ClearDialogSequences")
+            pcall(UIAction.SetVisible, "hud", 0, "DialogRight", false)
+        end
+        C4.rows, C4.dec, C4.vote, C4.sel = nil, nil, nil, 0
+        C4.subGen = C4.subGen + 1
+        pcall(UIAction.CallFunction, "hud", 0, "ClearSubtitles")
+    end
+    -- the listener: a line of the starter's conversation (earlier = a catch-up line: 0.8 s each, marked)
+    function KCD2MP_W204Line(starter, cid, speaker, isPlayer, stringName, durMs, earlier)
+        if not c4_listening(starter, cid) or not string.find(tostring(stringName), "^[%w_]+$") then return false end
+        local text, who = "@" .. tostring(stringName), earlier and "(earlier)" or tostring(speaker or "")
+        local function show(secs)
+            C4.subGen = C4.subGen + 1
+            local gen = C4.subGen
+            pcall(UIAction.CallFunction, "hud", 0, "SetSubtitles", text, who, isPlayer == true)
+            Script.SetTimer(math.floor(secs * 1000), function() if C4.subGen == gen then pcall(UIAction.CallFunction, "hud", 0, "ClearSubtitles") end end)
+        end
+        if earlier then
+            C4.stats.earlier = C4.stats.earlier + 1
+            local now = os.clock()
+            C4.earlierAt = math.max(now, C4.earlierAt) + 0.8
+            Script.SetTimer(math.floor((C4.earlierAt - 0.8 - now) * 1000), function() if c4_listening(starter, cid) then show(0.8) end end)
+        else
+            C4.stats.lines = C4.stats.lines + 1
+            show(math.max(1.0, (tonumber(durMs) or 2000) / 1000 + 0.3))
+        end
+        return true
+    end
+    -- the listener: the starter's options, in the same order and with the same marks
+    function KCD2MP_W204Options(starter, cid, decId, csv)
+        if not c4_listening(starter, cid) then return false end
+        local rows = c4_rows(csv)
+        if #rows == 0 then return false end
+        C4.rows, C4.starter, C4.cid, C4.dec, C4.sel, C4.vote = rows, tostring(starter), tostring(cid), tonumber(decId), 0, nil
+        C4.stats.options = C4.stats.options + 1
+        pcall(UIAction.SetVisible, "hud", 0, "DialogRight", true)
+        c4_send(rows, nil, true)
+        c4_highlight(0)
+        mp_log(string.format("WO204-CONV options decision=%s rows=%d (the listener)", tostring(decId), #rows))
+        return true
+    end
+    -- the listener: the starter chose -- the row 1 s, then the list goes
+    function KCD2MP_W204Chosen(starter, cid, decId, index)
+        if not C4.rows or C4.cid ~= tostring(cid) or C4.dec ~= tonumber(decId) then return false end
+        C4.stats.chosen = C4.stats.chosen + 1
+        c4_highlight(tonumber(index) or 0)
+        KCD2MP_ShowNativeToast(C4.vote ~= nil and C4.vote == tonumber(index) and "Your pick" or "Their pick")
+        local dec = C4.dec
+        Script.SetTimer(1000, function()
+            if C4.rows and C4.dec == dec then
+                pcall(UIAction.CallFunction, "hud", 0, "ClearDialogSequences")
+                pcall(UIAction.SetVisible, "hud", 0, "DialogRight", false)
+                C4.rows, C4.dec, C4.vote = nil, nil, nil
+            end
+        end)
+        return true
+    end
+    -- the listener's own listen actions (the game's dialog map, his own dialogue keys); true = consumed
+    function KCD2MP_W204OnAction(action, activation)
+        if not C4.rows or not (KCD2MP.W203 and KCD2MP.W203.cam and KCD2MP.W203.cam.listening) then return false end
+        local a = tostring(action)
+        if a ~= "kcd2mp_listen_up" and a ~= "kcd2mp_listen_down" and a ~= "kcd2mp_listen_confirm" and a ~= "kcd2mp_listen_cancel" then return false end
+        if activation ~= "press" and activation ~= 1 then return a ~= "kcd2mp_listen_cancel" end
+        local n = #C4.rows
+        if a == "kcd2mp_listen_up" or a == "kcd2mp_listen_down" then
+            C4.sel = (C4.sel + (a == "kcd2mp_listen_up" and -1 or 1)) % n
+            C4.stats.moves = C4.stats.moves + 1
+            c4_highlight(C4.sel)
+            return true
+        end
+        if a == "kcd2mp_listen_confirm" then
+            C4.vote = C4.rows[C4.sel + 1].index
+            C4.stats.votes = C4.stats.votes + 1
+            c4_send(C4.rows, C4.vote, true)
+            c4_highlight(C4.sel)
+            KCD2MP_EmitEvent("w204_vote", C4.starter .. " " .. C4.cid .. " " .. tostring(C4.dec) .. " " .. tostring(C4.vote))
+            return true
+        end
+        -- the cancel: clears a vote while the options are up (a second one, with no vote, leaves -- WO-203B's)
+        if C4.vote == nil then return false end
+        C4.vote = nil
+        C4.stats.clears = C4.stats.clears + 1
+        c4_send(C4.rows, nil, true)
+        c4_highlight(C4.sel)
+        KCD2MP_EmitEvent("w204_vote", C4.starter .. " " .. C4.cid .. " " .. tostring(C4.dec) .. " clear")
+        return true
+    end
+    -- the starter: the listener's vote in his own options -- the copied rows again with the icon, the highlight where it was
+    function KCD2MP_W204VoteIcon(csv, voteIdx, current, onRight)
+        local rows = c4_rows(csv)
+        if #rows == 0 then return false end
+        local v = tonumber(voteIdx)
+        c4_send(rows, (v ~= nil and v >= 0) and v or nil, onRight == true)
+        if tonumber(current) and tonumber(current) >= 0 then c4_highlight(tonumber(current)) end
+        C4.stats.icons = C4.stats.icons + 1
+        return true
+    end
+    W204.statusMore = W204.statusMore or {}
+    W204.statusMore[#W204.statusMore + 1] = function()
+        local s = C4.stats
+        mp_log(string.format("WO204-STATUS conv: rows=%s lines=%d earlier=%d options=%d moves=%d votes=%d clears=%d chosen=%d icons=%d",
+            C4.rows and tostring(#C4.rows) or "-", s.lines, s.earlier, s.options, s.moves, s.votes, s.clears, s.chosen, s.icons))
+    end
+    for k, label in pairs(W204.NAMES) do
+        local fname = "KCD2MP_W204Set_" .. k
+        _G[fname] = function(arg) return KCD2MP_W204Set(k, arg) end
+        System.AddCCommand(label, fname .. "(%line)", "WO-204 " .. (W204.HELP[k] or k) .. " (default " .. (W204.OFF[k] and "off" or "on") .. "): " .. label .. " on|off")
+    end
+end
 
 -- ===== Player hook =====
 

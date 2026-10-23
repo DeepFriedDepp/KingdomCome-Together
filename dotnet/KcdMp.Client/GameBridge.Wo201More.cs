@@ -32,17 +32,14 @@ public partial class GameBridge
         Wo201CombatTick();                                // B4: 4 Hz
         Wo201Dude2Tick(n);                                // V.3: 1 Hz set, 1 Hz watchdog
         Wo201NearTick(n);                                 // V.2: 1 Hz
-        Wo201SpeechTick();                                // Act V F1: 4 Hz
-        Wo201VoteTick();                                  // Act V F2: 4 Hz
+        Wo201SpeechTick();                                // Act V F1's capture: 4 Hz
         Wo201RangedTick();                                // B11: 4 Hz (the DLL queues every step)
+        Wo204Tick(n);                                     // WO-204: 4 Hz
     }
 
     private void Wo201OnEventMore(string name, string? arg)
     {
         if (name == "w201_dude2_census") _ = Wo201Dude2CensusAsync();
-        if (name is "w201_speech_radius" or "w201_speech_subs") Wo201SpeechCfg(name, arg);
-        if (name == "w201_vote_radius") Wo201VoteCfg(arg);
-        if (name == "w201_vote") _ = Wo201OnVoteKeyAsync(arg);
     }
 
     private void Wo201OnEngineLineMore(string line)
@@ -53,5 +50,5 @@ public partial class GameBridge
         Wo201LockOnEngineLine(line);
     }
 
-    private string Wo201StatsMore() => Wo201ScenesStats() + " " + Wo201ValuesStats() + " " + Wo201CombatStats() + " " + Wo201BusyStats() + " " + Wo201HandsStats() + " " + Wo201Dude2Stats() + " " + Wo201SpeechStats() + " " + Wo201VoteStats() + " " + Wo201RangedStats() + $" recv_kept={Interlocked.Read(ref _w201RecvKept)}";
+    private string Wo201StatsMore() => Wo201ScenesStats() + " " + Wo201ValuesStats() + " " + Wo201CombatStats() + " " + Wo201BusyStats() + " " + Wo201HandsStats() + " " + Wo201Dude2Stats() + " " + Wo201SpeechStats() + " " + Wo201RangedStats() + $" recv_kept={Interlocked.Read(ref _w201RecvKept)}";
 }

@@ -15,7 +15,7 @@ public class Wo202Tests
     [Fact]
     public void Switches_AllShipOn_AndTheDllBitsMatchTheNativeRules()
     {
-        Assert.Equal(17, Wo202Rules.SwitchNames.Length);   // the four with no mechanism (draw, walk start, areas, dead copy items) went
+        Assert.Equal(16, Wo202Rules.SwitchNames.Length);   // the four with no mechanism (draw, walk start, areas, dead copy items) went; WO-204 IV.1 deleted join_short_hold
         Assert.Equal(Wo202Rules.SwitchNames.Length, Wo202Rules.SwitchNames.Distinct().Count());
         foreach (var n in Wo202Rules.SwitchNames)
         {
@@ -37,11 +37,9 @@ public class Wo202Tests
     }
 
     [Fact]
-    public void Join_TheWorldRunsAgainWhenTheJoinerHasTheFile_AndOnlySilenceAborts()
+    public void Join_OnlySilenceAborts()
     {
-        // II.2: the hold ends with the transfer, not with the joiner's load (the field held 98 s per join)
-        Assert.True(Wo202Rules.ReleaseAtTransferDone(true));
-        Assert.False(Wo202Rules.ReleaseAtTransferDone(false));
+        // (II.2's short hold is deleted by WO-204 IV.1: the world stays paused until the joiner is ready -- Wo204Tests)
         // III.3: session A's joiner's acks came 43 s late; 0.61.9 aborted after 20 s
         Assert.Equal(60, Wo202Rules.JoinSilenceAbortS(true));
         Assert.Equal(20, Wo202Rules.JoinSilenceAbortS(false));
@@ -116,8 +114,6 @@ public class Wo202Tests
         Assert.False(Wo202Rules.IsVoicePath("Localization/dialog/../x"));
         Assert.False(Wo202Rules.IsVoicePath("Sounds/dialog/a/b"));
         Assert.False(Wo202Rules.IsVoicePath(""));
-        Assert.True(Wo201Rules.TryParseSpeechWire("v1|ttkc_man_3|2000|10|Localization/dialog/trosecko/x/line_O8Jj|Hello", out var w));
-        Assert.Equal("Localization/dialog/trosecko/x/line_O8Jj", w.Path);
     }
 
     [Fact]
@@ -262,17 +258,6 @@ public class Wo202Tests
         System.Text.Encoding.ASCII.GetBytes("tvez_man_18").CopyTo(p, 8);
         Assert.Equal("tvez_man_18", Wo202Rules.OwnOpponentName(p));
         Assert.Null(Wo202Rules.OwnOpponentName(new byte[7]));
-    }
-
-    [Fact]
-    public void ShortHold_TheEarlyReleaseIsNoCancel()
-    {
-        // the first Q2 run: the early release's own "join_resumed <id> sent" cancelled the join -> the joiner got host-cancel mid-load
-        Assert.True(Wo202Rules.ReleaseAtTransferDone(true));
-        Assert.True(Wo202Rules.IsOwnEarlyRelease("sent"));
-        Assert.False(Wo202Rules.IsOwnEarlyRelease("timeout"));
-        Assert.False(Wo202Rules.IsOwnEarlyRelease("cancel"));
-        Assert.False(Wo202Rules.IsOwnEarlyRelease("mod"));
     }
 
     [Fact]

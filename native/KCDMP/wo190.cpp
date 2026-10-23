@@ -8,6 +8,8 @@
 #include "wo166.h"
 #include "wo178.h"
 #include "wo187.h"
+#include "wo204.h"
+#include "wo204_rules.h"
 
 #include "engine.h"
 #include "gait_logic.h"
@@ -79,6 +81,8 @@ struct BodyTrace {
     bool evEmptyArmed = false;
     // WO-201 follow-up (mp_anim_trace on): the per-second locomotion snapshot
     double locoAt = 0; float locoPos[3]{}; bool locoHave = false;
+    // WO-204 II.2 the T-pose detector: the full body's last installed action, and whether this empty stretch was told
+    char lastFull[48] = "-"; uint32_t lastFullFrag = 0; bool tposeTold = false; double tposeRemedyAt = -1;
 };
 std::unordered_map<uint32_t, BodyTrace> g_bodies;   // main thread
 MinuteCap g_minute;
@@ -111,7 +115,8 @@ void trace_body(const Cand& c, BodyTrace& bt, double now, Mode mode, bool logOn)
     if (fullEmpty) { if (bt.fullEmptySince < 0) bt.fullEmptySince = now; }
     else if (sc[0].ok) {
         if (bt.fullEmptySince >= 0 && now - bt.fullEmptySince > kIdleWatchEmptyS) c_emptyGaps.fetch_add(1);
-        bt.fullEmptySince = -1; bt.emptyLogged = false;
+        bt.fullEmptySince = -1; bt.emptyLogged = false; bt.tposeTold = false;
+        std::snprintf(bt.lastFull, sizeof bt.lastFull, "%s", sc[0].action); bt.lastFullFrag = sc[0].frag;   // WO-204: what it last ran
     }
     if (!logOn) return;
     bool tagsRead = false;
@@ -171,6 +176,33 @@ void idle_watch(const Cand& c, BodyTrace& bt, double now) {
     const uint32_t k = c_idleRequeues.load() + c_idlePulses.load() + c_idleFail.load();
     if (k <= kLogFirst || k % 50 == 0)
         logf("WO190-IDLE body=%s role=%s empty_ms=%.0f combat=%d -> %s (#%u)", name_of(c.eid), role_name(c.role), emptyFor * 1000.0, combat ? 1 : 0, remedy, k);
+}
+
+// WO-204 II.2: the T-pose detector -- a copy or a figure whose full-body scope has stood empty longer than kTposeEmptyS is told once per
+// stretch (what it last ran, its queue) and counted; the base state is reseated: a fighting body gets its guard idle (A1's remedy), any
+// other its locomotion graph again (WO-155's walk-class pulse), at most once a second.
+std::atomic<uint32_t> c_tposes{0}, c_tposeRemedied{0};
+void tpose_check(const Cand& c, BodyTrace& bt, double now) {
+    if (c.role == Role::Player || c.role == Role::Npc || bt.fullEmptySince < 0 || !wo204::on(wo204rules::kBitTposeWatch)) return;
+    const double emptyFor = now - bt.fullEmptySince;
+    if (!wo204rules::tpose_due(emptyFor)) return;
+    const char* remedy = "none";
+    if (now - bt.tposeRemedyAt >= 1.0) {
+        bt.tposeRemedyAt = now;
+        bool combat = false;
+        motion::combat_mode_of(c.eid, &combat);
+        if (combat && motion::requeue_guard_idle(c.eid)) remedy = "guard-idle";
+        else if (motion::request_idle_pulse(c.eid)) remedy = "locomotion-pulse";
+        if (std::strcmp(remedy, "none") != 0) c_tposeRemedied.fetch_add(1);
+    }
+    if (bt.tposeTold) return;
+    bt.tposeTold = true;
+    const uint32_t k = c_tposes.fetch_add(1) + 1;
+    const wo187::QueueInfo q = wo187::queue_info(c.eid);
+    if (k <= 60 || k % 50 == 0)
+        logf("WO204-TPOSE body=%s role=%s empty_ms=%.0f last=%s:%u queue=%d kept=%d first=%s:%d fight=%d spd=%.2f -> %s (#%u)", name_of(c.eid),
+             role_name(c.role), emptyFor * 1000.0, bt.lastFull, bt.lastFullFrag, q.n, q.kept, q.n > 0 ? q.first : "-", q.firstPrio, c.fight ? 1 : 0,
+             c.speed, remedy, k);
 }
 
 // WO-192 4d: in auto, a body that does not fight is still probed (its full body only, 4 Hz); a full body empty 0.5 s, or a gait class that
@@ -332,6 +364,7 @@ void tick() {
             BodyTrace& pb = g_bodies[c.eid];
             pb.role = c.role;
             evidence_probe(c, pb, now);
+            tpose_check(c, pb, now);   // WO-204 II.2
         }
         bool traced = mode == Mode::On || (mode == Mode::Auto && c.fight);
         if (!traced && mode == Mode::Auto) { auto it = g_bodies.find(c.eid); traced = it != g_bodies.end() && it->second.ev.on(now); }
@@ -345,6 +378,7 @@ void tick() {
         if (mode == Mode::On) loco_line(c, bt, now);
         if (mode == Mode::On) fifo_lines(c, now);
         if (watched) idle_watch(c, bt, now);
+        tpose_check(c, bt, now);   // WO-204 II.2
     }
     if (now - g_lastPrune > 5.0) {
         g_lastPrune = now;
@@ -431,8 +465,8 @@ int status_text(char* out, int n) {
         g_gaitHold.load() ? "on" : "off", g_bodies.size(), c_lines.load(), c_linesDropped.load(), c_bodyReads.load(), c_readFail.load(), c_emptyGaps.load(),
         c_idleRequeues.load(), c_idlePulses.load(), c_idleFail.load(), c_weaponAsks.load(), c_clinchAsks.load(), c_reqDeduped.load(), c_reqLimited.load(), c_evidence.load());
     if (w0 < 0 || w0 >= n) return w0;
-    return w0 + std::snprintf(out + w0, n - w0, " loco_fig=%u/%u/%u/%u loco_copy=%u/%u/%u/%u (frames/glide/in_place/class_changes)", lc[0], lc[1], lc[2], lc[3],
-                              lc[4], lc[5], lc[6], lc[7]);
+    return w0 + std::snprintf(out + w0, n - w0, " loco_fig=%u/%u/%u/%u loco_copy=%u/%u/%u/%u (frames/glide/in_place/class_changes) wo204_tposes=%u tpose_remedied=%u", lc[0], lc[1], lc[2], lc[3],
+                              lc[4], lc[5], lc[6], lc[7], c_tposes.load(), c_tposeRemedied.load());
 }
 
 } // namespace kcdmp::wo190

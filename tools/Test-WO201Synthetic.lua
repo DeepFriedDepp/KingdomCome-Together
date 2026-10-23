@@ -147,7 +147,7 @@ do
         end
         check("a: " .. label .. " is registered", CCMDS[label] ~= nil, label)
     end
-    check("a: 23 switches", n == 23, n)
+    check("a: 21 switches (WO-204 III.2 retired speech_share and dialogue_vote)", n == 21, n)
     check("a: the B9 follow-up has its switch (default on, registered with its help)", W201.NAMES.copy_no_idle_turn == "mp_copy_no_idle_turn"
         and KCD2MP_W201On("copy_no_idle_turn") and W201.HELP.copy_no_idle_turn ~= nil and CCMDS["mp_copy_no_idle_turn"] ~= nil)
     check("a: mp_w201_status and mark are registered", CCMDS["mp_w201_status"] ~= nil and CCMDS["mark"] ~= nil)
@@ -403,43 +403,12 @@ do
     check("k: no Lua errors", #ERRS == 0, ERRS[1])
 end
 
--- (l) Act V F2: the vote panel, its keys, the speaker's mark, the choice; F1's subtitle
+-- (l) WO-204 III.2: the F2 vote panel (its keys) and the overheard subtitles are retired
 do
     ERRS = {}; clearLog()
-    local drawn = {}
-    System.DrawText = function(x, y, t) drawn[#drawn + 1] = tostring(t) end
-    player.human = player.human or {}
-    player.human.IsInDialog = function() return false end
-    KCD2MP_W201VoteShow(7, "Your partner", { "Ask about the bandits", "Leave" })
-    KCD2MP_W201DrawUI()
-    check("l: the panel lists the options in order, numbered by their keys", #drawn == 3 and drawn[2]:find("F2", 1, true) and drawn[2]:find("Ask about the bandits", 1, true) and drawn[3]:find("F4", 1, true), table.concat(drawn, " || "))
-    check("l: a vote key votes", KCD2MP_W201VoteOnAction("kcd2mp_dice_mark_2", "press") == true and evts("w201_vote")[1] == "7 2", evts("w201_vote")[1])
-    check("l: an option that is not there: nothing", KCD2MP_W201VoteOnAction("kcd2mp_dice_mark_3", "press") == false)
-    KCD2MP.dice = KCD2MP.dice or {}
-    KCD2MP.dice.open = true
-    check("l: a dice board open: the key is the dice's", KCD2MP_W201VoteOnAction("kcd2mp_dice_mark_1", "press") == false)
-    KCD2MP.dice.open = false
-    player.human.IsInDialog = function() return true end
-    check("l: in his own conversation: no vote, no panel", KCD2MP_W201VoteOnAction("kcd2mp_dice_mark_1", "press") == false)
-    player.human.IsInDialog = function() return false end
-    KCD2MP_W201VoteChosen("Your partner", "I will go.", true)
-    check("l: the choice closes the panel and is told", W201.vote.open == nil and W201.vote.chosen == "Your partner chose: I will go.", W201.vote.chosen)
-    check("l: no key does anything once the panel is gone", KCD2MP_W201VoteOnAction("kcd2mp_dice_mark_1", "press") == false)
-    drawn = {}
-    KCD2MP_W201VoteMark(2, "Partner", "Leave")
-    KCD2MP_W201DrawUI()
-    check("l: the speaker sees the partner's pick", (drawn[1] or ""):find("Partner votes 2: Leave", 1, true) ~= nil, drawn[1])
-    System.DrawText = function() end
-    local subs = {}
-    UIAction = UIAction or {}
-    UIAction.CallFunction = function(el, inst, fn, a, b) subs[#subs + 1] = tostring(fn) .. ":" .. tostring(a) .. ":" .. tostring(b) end
-    KCD2MP_W201Subtitle("Henry, wait " .. string.char(226, 128, 148) .. " there.", true, 3)
-    check("l: an overheard line shows its subtitle, marked overheard, ASCII", (subs[1] or "") == "SetSubtitles:Henry, wait  -  there.:Your partner (overheard)" or (subs[1] or ""):find("SetSubtitles:Henry, wait", 1, true) ~= nil, subs[1])
-    player.human.IsInDialog = function() return true end
-    subs = {}
-    KCD2MP_W201Subtitle("x", false, 3)
-    check("l: never while he is in his own conversation", #subs == 0)
-    player.human.IsInDialog = function() return false end
+    check("l: no vote panel, no vote keys, no overheard subtitle", KCD2MP_W201VoteShow == nil and KCD2MP_W201VoteOnAction == nil
+          and KCD2MP_W201DrawUI == nil and KCD2MP_W201Subtitle == nil and KCD2MP_W201SpeechPrep == nil)
+    check("l: their switches are gone", W201.NAMES.speech_share == nil and W201.NAMES.dialogue_vote == nil)
     check("l: no Lua errors", #ERRS == 0, ERRS[1])
 end
 

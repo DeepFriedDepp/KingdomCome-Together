@@ -74,6 +74,11 @@ std::string scope_text(uint32_t eid);
 struct ScopeInfo { bool ok = false; bool empty = true; int index = 0; char name[24]{}; char action[48]{}; const void* act = nullptr; int32_t prio = 0;
                    uint32_t flags = 0, frag = 0; };
 int read_all_scopes(uint32_t eid, ScopeInfo* out, int max);
+// WO-204 II.2 (main thread, read-only): the body's queued (not yet installed) Mannequin actions -- the CActionController's queue vector
+// at +0x50 / +0x58 (CryAction's own over-full trim reads it there: "attempting to queue too many actions ... up to 10 allowed"), the
+// first one's class and priority, and how many carry flag 4 at +0x2C (the ones that trim keeps: "Can't remove anything"). -1 unreadable.
+struct QueueInfo { int n = -1; int kept = 0; char first[48]{}; int32_t firstPrio = 0; };
+QueueInfo queue_info(uint32_t eid);
 // WO-190 0.1 (main thread, read-only): the body's Mannequin tag state (its action controller's context +0x10, WO-100's read), n <= 20 bytes.
 bool tag_state(uint32_t eid, uint8_t* out, size_t n);
 // WO-201 follow-up (research, main thread, read-only): the animated character's desired motion parameters (id 0 travel speed, 2 travel

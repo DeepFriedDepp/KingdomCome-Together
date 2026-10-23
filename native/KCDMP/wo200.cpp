@@ -3,6 +3,7 @@
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 // WO-200 -- see wo200.h.
 #include "wo200.h"
+#include "wo204_rules.h"
 #include "wo202.h"
 #include "wo202_rules.h"
 #include "wo200_rules.h"
@@ -692,7 +693,15 @@ bool gate(void* node, void* /*ctx*/) {
         ++t_inGate;
         const bool ok = parent_name(node, pn, sizeof pn);
         --t_inGate;
-        if (joiner_story_bark(role, k, m, ok && is_urge_parent(pn), own_chain(cid), ok && is_interaction_parent(pn), c)) v = Verdict::JoinerStoryBark;
+        if (joiner_story_bark(role, k, m, ok && is_urge_parent(pn), own_chain(cid), ok && is_interaction_parent(pn), c)) {
+            // WO-204: a tutorial is the player's own (session D: the joiner's "encumbered", "broken armour", "several opponents" pop-ups
+            // were refused as story)
+            char tp[480] = "";
+            ++t_inGate;
+            wo137::path_of(node, tp, sizeof tp);
+            --t_inGate;
+            if (!wo204rules::is_tutorial_path(k == Kind::View, tp)) v = Verdict::JoinerStoryBark;
+        }
     }
     // (a scene handler's own state already says whether this Execute starts anything: a busy one ran above, an idle one starts a scene
     // whatever its effect byte says)

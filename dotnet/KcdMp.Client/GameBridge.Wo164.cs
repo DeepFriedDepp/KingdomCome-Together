@@ -279,7 +279,7 @@ public partial class GameBridge
     private readonly Random _w164Rnd = new();
     private long _w164Marks, _w164MarkPingsIn;
 
-    private async Task W164MarkAsync(string markId, string origin)
+    private async Task W164MarkAsync(string markId, string origin, string note = "")
     {
         Interlocked.Increment(ref _w164Marks);
         var lines = new List<string>();
@@ -313,6 +313,13 @@ public partial class GameBridge
         {
             if (W137Host) foreach (byte j in Wo134Peers()) await W164SendAsync(j, Protocol.W164MarkPing, markId);
             else if (W137JoinerSession) await W164SendAsync(Protocol.JoinTargetHost, Protocol.W164MarkPing, markId);
+            // WO-204 Act V: the note goes with it -- the partner's briefing shows both players' notes
+            if (note.Length > 0)
+            {
+                string nt = Wo204Rules.MarkNoteText(markId, note);
+                if (W137Host) foreach (byte j in Wo134Peers()) await W164SendAsync(j, Protocol.W164MarkNote, nt);
+                else if (W137JoinerSession) await W164SendAsync(Protocol.JoinTargetHost, Protocol.W164MarkNote, nt);
+            }
         }
     }
 
@@ -336,6 +343,10 @@ public partial class GameBridge
                 await W164MarkAsync(m.Text, $"peer{src}");
                 // the host passes a joiner's ping on to the other joiners
                 if (W137Host) foreach (byte j in Wo134Peers()) if (j != src) await W164SendAsync(j, Protocol.W164MarkPing, m.Text);
+                return;
+            case Protocol.W164MarkNote when Wo204Rules.TryParseMarkNote(m.Text, out string nid, out string nnote):   // WO-204 Act V
+                Console.WriteLine($"MP-MARK note from player {src}: mark={nid} note={nnote}");
+                if (W137Host) foreach (byte j in Wo134Peers()) if (j != src) await W164SendAsync(j, Protocol.W164MarkNote, m.Text);
                 return;
             case Protocol.W164Escort when W164Text.TryParseEscort(m.Text, out string enpc, out bool eon):
                 if (!W137Host) { Interlocked.Increment(ref _w164Malformed); return; }
@@ -375,17 +386,13 @@ public partial class GameBridge
                 if (W137Host) { Interlocked.Increment(ref _w164Malformed); return; }
                 await Wo201OnHostBusyAsync(m.Text);
                 return;
-            case Protocol.W164SpeechLine:   // WO-201 Act V F1: a line the partner's engine voiced near this player (both ways)
+            case Protocol.W164SpeechLine:   // WO-201 Act V F1's broadcast, retired by WO-204 III.2: an older partner's line, dropped
                 await Wo201OnSpeechLineAsync(src, m.Text);
                 return;
-            case Protocol.W164VoteOptions:   // WO-201 Act V F2: the partner's decision, to vote on (both ways)
-                await Wo201OnVoteOptionsAsync(src, m.Text);
-                return;
+            case Protocol.W164VoteOptions:   // WO-201 Act V F2's vote panel, retired by WO-204 III.2 (the vote is the Conv channel's)
             case Protocol.W164VoteCast:
-                await Wo201OnVoteCastAsync(src, m.Text);
-                return;
             case Protocol.W164VoteClose:
-                await Wo201OnVoteCloseAsync(src, m.Text);
+                Interlocked.Increment(ref _w204RetiredVoteIn);
                 return;
             case Protocol.W164KeyShare:   // WO-202 V.3: the partner's key, or the host's chest unlock
                 await Wo202OnKeyShareAsync(src, m.Text);

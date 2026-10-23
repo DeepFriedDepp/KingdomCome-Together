@@ -283,3 +283,75 @@ public class PackerTests
         finally { Directory.Delete(dir, true); }
     }
 }
+
+/// <summary>WO-204 Act V: the briefing is this launch's session, carries both players' notes, and scores the new measures.</summary>
+public class BriefingWo204Tests
+{
+    private static Briefing.Input Inp(params (string Key, string[] Lines, DateTime? Mtime)[] files)
+    {
+        var inp = new Briefing.Input();
+        foreach (var (k, l, mt) in files) { inp.Logs[k] = l; if (mt is DateTime t) inp.Mtimes[k] = t; }
+        return inp;
+    }
+
+    [Fact]
+    public void Only_this_launchs_session_counts()
+    {
+        var now = new DateTime(2026, 10, 22, 15, 45, 30);
+        var old = Inp(("agent.log", new[] { "15:07:33.812 m=6 off=? start", "15:12:41.545 m=1 off=-+0 MP-MARK ping from player 1: mark=ytf887y2wp -- this machine's block follows" }, now),
+                      ("agent.prev2.log", new[] { "20:13:17.166 m=7 off=? start", "20:25:01.113 m=1 off=-+0 MP-MARK odd note=walking away after dying -- the tester's marker (typed on this machine)" }, new DateTime(2026, 10, 20, 20, 27, 0)));
+        Assert.Equal(new[] { "agent.log" }, Briefing.SessionAgentKeys(old));
+        var md = Briefing.Build(old);
+        Assert.DoesNotContain("walking away after dying", md);   // session D's host list was headed by a mark from two days before
+        Assert.Contains("15:12:41.545 the partner (player 1)", md);
+        // an agent restarted inside the session: its earlier log ended 10 minutes before this one began -- it counts
+        var restarted = Inp(("agent.log", new[] { "15:07:33.812 m=6 off=? start" }, now),
+                            ("agent.prev.log", new[] { "14:30:00.000 m=6 off=? start" }, new DateTime(2026, 10, 22, 14, 57, 0)));
+        Assert.Equal(new[] { "agent.prev.log", "agent.log" }, Briefing.SessionAgentKeys(restarted));
+        // without the files' times: this launch's log alone
+        var noTimes = Inp(("agent.log", new[] { "15:07:33.812 m=6 off=? start" }, null), ("agent.prev.log", new[] { "14:30:00.000 x" }, null));
+        Assert.Equal(new[] { "agent.log" }, Briefing.SessionAgentKeys(noTimes));
+        // a log that ran past midnight began the day before its last write
+        Assert.Equal(new DateTime(2026, 10, 21, 23, 50, 0), Briefing.LogStart(Inp(("agent.log", new[] { "23:50:00.000 x" }, new DateTime(2026, 10, 22, 0, 20, 0))), "agent.log", new[] { "23:50:00.000 x" }));
+    }
+
+    [Fact]
+    public void The_partners_note_is_on_his_mark()
+    {
+        var inp = Inp(("agent.log", new[]
+        {
+            "15:13:02.832 m=1 off=-+0 MP-MARK odd note=no weapon on bandit -- the tester's marker (typed on this machine)",
+            "15:21:16.271 m=2 off=-+0 MP-MARK ping from player 1: mark=sxxoj9ncqg -- this machine's block follows",
+            "15:21:16.290 m=3 off=-+0 MP-MARK-SNAP mark=sxxoj9ncqg agent avatar peer=1",
+            "15:21:16.301 m=4 off=-+0 MP-MARK note from player 1: mark=sxxoj9ncqg note=character moving while sitting",
+        }, null));
+        var md = Briefing.Build(inp);
+        Assert.Contains("this player -- \"no weapon on bandit\"", md);
+        Assert.Contains("the partner (player 1) -- \"character moving while sitting\"", md);
+    }
+
+    [Fact]
+    public void The_scorecard_has_the_new_measures()
+    {
+        var inp = Inp(("agent.log", new[]
+        {
+            "14:09:41.667 m=1 off=-2215 [ping] 85 ms (network) -- the game's queue is 601 ms behind, the game is in the background",
+            "14:09:42.667 m=2 off=-2215 [ping] 80 ms (network) -- the game's queue is 120 ms behind",
+            "14:10:00.000 m=3 off=0 WO203B-TALK this player's conversation 233 (normal) with ttkc_barbora -- announced to 1 partner(s)",
+            "14:11:00.000 m=4 off=0 MP-W204-STATS conv_no_barks=on barks_kept_out=415 talks_announced=1",
+        }, null), ("kcd.log", new[]
+        {
+            "[Warning] Validator: --- Mannequin Error, attempting to queue too many actions on entity 'ttkc_man_7' (queue size = 11, but only up to 10 allowed) ---",
+            "[Warning] Validator: --- Mannequin Error, attempting to queue too many actions on entity 'ttkc_man_7' (queue size = 11, but only up to 10 allowed) ---",
+            "[KCD2MP] WO204-DRAW ttkc_man_7 drawn delay_ms=140",
+        }, null));
+        var s = Briefing.Measure(inp).ToDictionary(x => x.Measure, x => x.Value);
+        Assert.Equal("p99 85 ms", s["message latency (the network ping)"]);
+        Assert.Equal("p99 120 ms (1)", s["the game's queue behind (game in front)"]);
+        Assert.Equal("p99 601 ms (1)", s["the game's queue behind (game in the background)"]);
+        Assert.Equal("2: ttkc_man_7 2", s["action-queue overflows on bodies (kcd.log)"]);
+        Assert.Equal("0", s["T-poses on copies (WO204-TPOSE)"]);
+        Assert.Equal("p90 140 ms (1)", s["weapon-draw delay on copies"]);
+        Assert.Equal("1 (415)", s["conversations announced (barks kept out)"]);
+    }
+}

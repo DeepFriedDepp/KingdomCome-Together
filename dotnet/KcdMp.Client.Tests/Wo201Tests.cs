@@ -15,10 +15,12 @@ public class Wo201Tests
     [Fact]
     public void Switches_EighteenNames_AllOnButTheSaveTouchingOne()
     {
-        Assert.Equal(23, Wo201Rules.SwitchNames.Length);
+        Assert.Equal(21, Wo201Rules.SwitchNames.Length);   // WO-204 III.2 retired speech_share and dialogue_vote
         foreach (var n in Wo201Rules.SwitchNames)
         {
-            Assert.Equal(n != "figure_is_player" || Wo201Rules.Dude2DecodePassed, Wo201Rules.DefaultOn(n));
+            // WO-204 I.5: nearest_player_triggers (rebuilt) is on only once its time-skip soak has passed
+            bool expect = n switch { "figure_is_player" => Wo201Rules.Dude2DecodePassed, "nearest_player_triggers" => Wo201Rules.NearestPlayerV2SoakPassed, _ => true };
+            Assert.Equal(expect, Wo201Rules.DefaultOn(n));
             Assert.True(Wo201Rules.TryParseCfg(n + "=off", out var name, out bool on));
             Assert.Equal(n, name);
             Assert.False(on);

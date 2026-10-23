@@ -16,14 +16,21 @@ public static class Wo201Rules
     {
         "inv_screen_guard", "joiner_scene_noposition", "scene_queue_stale", "twins_grace", "monologue_rescue_exempt", "joiner_no_story_barks",
         "scene_toast_truth", "copy_combat_from_host", "copy_look_from_host", "walk_from_host", "figure_ranged", "clock_catchup",
-        "host_load_toast", "mark_note", "speech_share", "dialogue_vote", "both_are_henry", "figure_is_player",
+        "host_load_toast", "mark_note", "both_are_henry", "figure_is_player",
         "nearest_player_triggers", "joiner_receive_only", "knockout_engine", "oneshot_tick_cap", "copy_no_idle_turn",
     };
 
     /// <summary>Every mechanism ships on. V.3 figure_is_player reaches a save: on only while its save-decode check has passed
-    /// (Dude2DecodePassed, set from the release's own check -- docs/WO-201-findings.md).</summary>
-    public static bool DefaultOn(string name) => name != "figure_is_player" || Dude2DecodePassed;
+    /// (Dude2DecodePassed, set from the release's own check -- docs/WO-201-findings.md). WO-204 I.5: nearest_player_triggers (rebuilt as
+    /// nearest_player_v2) is on only once its time-skip soak (S1) has passed (NearestPlayerV2SoakPassed).</summary>
+    public static bool DefaultOn(string name) => name switch
+    {
+        "figure_is_player" => Dude2DecodePassed,
+        "nearest_player_triggers" => NearestPlayerV2SoakPassed,
+        _ => true,
+    };
     public const bool Dude2DecodePassed = false;
+    public const bool NearestPlayerV2SoakPassed = true;   // WO-204 S1 (2026-10-22): 60 time skips, the override on, 0 crashes
 
     /// <summary>The DLL's op 77 bits byte: 1 joiner_scene_noposition, 2 walk_from_host, 4 oneshot_tick_cap, 8 copy_no_idle_turn (the B9
     /// follow-up: a standing copy never turns in place by itself).</summary>
@@ -50,7 +57,7 @@ public static class Wo201Rules
     public static bool ReceiveOnlyAsks(bool fromOwnConversation, string path) =>
         fromOwnConversation || path.Contains(".interactiontrigger_", StringComparison.OrdinalIgnoreCase);
 
-    // ---- Act V F1 speech_share ----
+    // ---- Act V F1: the line capture (the DLL's op 83) ----
     public readonly record struct SpeechCaptured(uint Eid, float Dur, bool FromDialogue, float Dist, int AgeMs, string Path, string Text, string Name);
 
     /// <summary>The DLL's op 83 reply: [n] then per line [eid:4][dur:f32][flags:1][dist:f32][age:2][pl:1][path][tl:1][text][nl:1][name].</summary>
@@ -82,109 +89,8 @@ public static class Wo201Rules
         return o;
     }
 
-    /// <summary>Does this machine send that line to its partner? Within the hearing radius only (an unknown distance never). The host
-    /// speaks for its world (its own conversations and its NPCs' chatter); the joiner only for his own conversation (his Henry, or a
-    /// line a dialogue said) -- a copy's chatter is the host's to say.</summary>
-    public static bool SpeechSendable(bool host, bool speakerIsMe, bool fromDialogue, float dist, float radius)
-    {
-        if (dist < 0 || dist > radius) return false;
-        return host || speakerIsMe || fromDialogue;
-    }
-
-    public const int SpeechMaxBytes = 196;
-
-    /// <summary>The wire: "v1|speaker|durMs|ageMs|path|text" -- the text cut so the whole line stays under 200 bytes.</summary>
-    public static string SpeechWire(string speaker, int durMs, int ageMs, string path, string text)
-    {
-        string head = FormattableString.Invariant($"v1|{speaker.Replace("|", "")}|{durMs}|{ageMs}|{path.Replace("|", "")}|");
-        string t = text.Replace("|", "/").Replace('\n', ' ').Replace('\r', ' ');
-        int room = SpeechMaxBytes - System.Text.Encoding.UTF8.GetByteCount(head);
-        if (room <= 0) return head;
-        while (t.Length > 0 && System.Text.Encoding.UTF8.GetByteCount(t) > room) t = t[..^1];
-        return head + t;
-    }
-
-    public readonly record struct SpeechWireLine(string Speaker, int DurMs, int AgeMs, string Path, string Text);
-
-    public static bool TryParseSpeechWire(string s, out SpeechWireLine w)
-    {
-        w = default;
-        var f = s.Split('|', 6);
-        if (f.Length != 6 || f[0] != "v1" || f[1].Length is 0 or > 63) return false;
-        if (!int.TryParse(f[2], NumberStyles.Integer, CultureInfo.InvariantCulture, out int d) || d <= 0 || d > 60000) return false;
-        if (!int.TryParse(f[3], NumberStyles.Integer, CultureInfo.InvariantCulture, out int a) || a < 0) return false;
-        string p = f[4];
-        if (!Wo202Rules.IsVoicePath(p)) return false;   // WO-202 V.2: the engine's own path form (no extension), not only ".ogg"
-        if (f[1] != "@me" && !IsEntityName(f[1])) return false;
-        w = new SpeechWireLine(f[1], d, a, p, f[5]);
-        return true;
-    }
-
-    // ---- Act V F2 dialogue_vote ----
-    /// <summary>Within the vote radius (0 = anywhere; an unknown distance only when anywhere).</summary>
-    public static bool VoteInRange(float dist, float radius) => radius <= 0 || (dist >= 0 && dist <= radius);
-
-    /// <summary>The op 85 rows from offset o: [used:1][len:1][text] each; the shown text without its HTML markup.</summary>
-    public static List<string> ParseVoteRows(byte[] p, int o)
-    {
-        var rows = new List<string>();
-        if (p.Length <= o - 1) return rows;
-        int n = p[o - 1];
-        if (n == 255) return rows;
-        int i = o;
-        for (int k = 0; k < n && i + 2 <= p.Length; k++)
-        {
-            int tl = p[i + 1];
-            if (i + 2 + tl > p.Length) break;
-            rows.Add(PlainOption(System.Text.Encoding.UTF8.GetString(p, i + 2, tl)));
-            i += 2 + tl;
-        }
-        return rows;
-    }
-
-    public static string PlainOption(string html)
-    {
-        var sb = new System.Text.StringBuilder();
-        bool tag = false;
-        foreach (char c in html) { if (c == '<') tag = true; else if (c == '>') tag = false; else if (!tag && c != '|') sb.Append(c); }
-        string s = sb.ToString().Trim();
-        return s.Length > 80 ? s[..80] : s;
-    }
-
-    public static string VoteOptionsWire(uint seq, IReadOnlyList<string> opts) =>
-        FormattableString.Invariant($"v1|{seq}|") + string.Join("|", opts.Take(6).Select(PlainOption));
-
-    public static bool TryParseVoteOptions(string s, out uint seq, out List<string> opts)
-    {
-        opts = new List<string>(); seq = 0;
-        var f = s.Split('|');
-        if (f.Length < 3 || f[0] != "v1" || !uint.TryParse(f[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out seq) || seq == 0) return false;
-        opts.AddRange(f.Skip(2).Take(6));
-        return opts.Count > 0;
-    }
-
-    public static string VoteCastWire(uint seq, int idx, string voter) => FormattableString.Invariant($"v1|{seq}|{idx}|{PlainOption(voter)}");
-
-    public static bool TryParseVoteCast(string s, out uint seq, out int idx, out string voter)
-    {
-        seq = 0; idx = 0; voter = "";
-        var f = s.Split('|');
-        if (f.Length != 4 || f[0] != "v1" || !uint.TryParse(f[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out seq)) return false;
-        if (!int.TryParse(f[2], NumberStyles.Integer, CultureInfo.InvariantCulture, out idx) || idx < 1 || idx > 6) return false;
-        voter = f[3];
-        return voter.Length is > 0 and <= 80;
-    }
-
-    public static string VoteCloseWire(uint seq, string chosen) => FormattableString.Invariant($"v1|{seq}|{PlainOption(chosen)}");
-
-    public static bool TryParseVoteClose(string s, out uint seq, out string chosen)
-    {
-        seq = 0; chosen = "";
-        var f = s.Split('|');
-        if (f.Length != 3 || f[0] != "v1" || !uint.TryParse(f[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out seq)) return false;
-        chosen = f[2];
-        return true;
-    }
+    // WO-204 III.2: the overheard broadcast (SpeechSendable / SpeechWire) and the F2 vote panel (the Vote* wires) are retired; the
+    // capture above stays.
 
     // ---- V.3 Dude2: the watchdog and the save-decode check ----
     /// <summary>Does the watchdog's read trip V.3? (The save gate not armed while the bit is held, the player's own soul not the

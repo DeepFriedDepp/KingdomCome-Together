@@ -25,16 +25,22 @@ public partial class GameBridge
 
     partial void Wo203ConvOnEngineLine(string line)
     {
+        // WO-204 III.1: a combat bark, a war cry, a greeting is never a conversation -- no announce, no offer, no gestures
+        if (line.StartsWith("New dialogue '", StringComparison.Ordinal) && !Wo204ConversationAllowed(line)) return;
         Wo203CamOnEngineLine(line);   // WO-203B: the minimal session and the camera (GameBridge.Wo203Cam.cs)
         if (line.StartsWith("New dialogue '", StringComparison.Ordinal))
         {
-            if (Wo203ConvRules.ParseOwnConversation(line) is { } c) _w203OwnTalks[c.Cid] = c.Others;
+            if (Wo203ConvRules.ParseOwnConversation(line) is { } c)
+            {
+                _w203OwnTalks[c.Cid] = c.Others;
+                if (c.Others.Length > 1) Wo204LoadRoles(c.Cid, line, c.Others);   // WO-204 III.5: a trialog's roles from its own file
+            }
             return;
         }
         int end = Wo203ConvRules.ParseEnd(line);
         if (end >= 0) { _w203OwnTalks.TryRemove(end, out _); return; }
         if (Wo203ConvRules.ParseAnim(line) is not { } a || !_w203OwnTalks.TryGetValue(a.Cid, out var others) || !W203Partnered) return;
-        if (Wo203ConvRules.Place(a.Who, others) is not { } p) { Interlocked.Increment(ref _w203AnimUnplaced); return; }
+        if ((Wo203ConvRules.Place(a.Who, others) ?? Wo204PlaceByRole(a.Cid, a.Who)) is not { } p) { Interlocked.Increment(ref _w203AnimUnplaced); return; }
         string text = Wo203ConvRules.AnimText(a.Cid, _myGhostId, p.Body, a.Fragment, p.Face);
         Interlocked.Increment(ref _w203AnimOut);
         _ = Task.Run(async () =>

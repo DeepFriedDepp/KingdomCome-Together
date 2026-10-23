@@ -52,6 +52,7 @@ namespace kcdmp::wo201speech {
 void install();
 uint8_t handle(uint8_t op, const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t* outLen);
 int status_text(char* out, int n);
+void* speak_fn();   // WO-203 I.3c: C_ActorSpeakMan::Speak as the engine runs it (the original past the capture once that is armed)
 } // namespace kcdmp::wo201speech
 
 namespace kcdmp::wo201ranged {
@@ -66,6 +67,14 @@ namespace kcdmp::wo201vote {
 void install();
 uint8_t handle(const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t* outLen);
 int status_text(char* out, int n);
+// WO-203 I.4 (wo203_conv.cpp): the flush the detour sees, and a hook that runs on the HUD's rows just before each flush
+using BeforeFlush = void (*)(void* self);
+void set_before_flush(BeforeFlush fn);
+bool arm_now(const char** why);        // arm the detour now (the conv area's starter side needs it whatever op 85's switch says)
+void* entry();                          // SetDialogSequences' own entry (detoured once armed): a call here is the game's own flush
+void* last_self();                      // the HUD interface the last flush was made on (main thread)
+uint64_t last_on_right();
+bool rows_offsets(int* begin, int* end);   // the rows' vector, [self+begin, self+end), 0x28 bytes a row
 } // namespace kcdmp::wo201vote
 
 namespace kcdmp::wo201near {

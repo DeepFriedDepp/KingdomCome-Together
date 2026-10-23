@@ -111,6 +111,15 @@ public partial class GameBridge
     private async Task<(bool Ok, byte Steps, ulong AttackerWuid, ulong VictimWuid, byte Reason)?> Wo173AttributedAsync(
         byte source, string npc, Guid soul, float stamina, float health, byte flags, uint avatarEid, CancellationToken ct)
     {
+        // WO-204 IV.3: a blow the joiner's own engine judged blocked (stamina only) is applied as he judged it -- WO-121's attributed damage
+        // with his values (the caller's path on null); the host's engine never re-judges it into a hit
+        if (W204("blow_joiner_values") && Wo204Rules.JoinerJudgedBlocked(health, stamina))
+        {
+            Interlocked.Increment(ref _w204BlowsJoinerValues);
+            Wo204NoteBlow(source, npc, health, stamina, "joiner-values(blocked)");
+            return null;
+        }
+        Wo204NoteBlow(source, npc, health, stamina, _w173NativeMissing ? "wo121" : "engine");
         if (_w173NativeMissing) return null;
         string gid = source.ToString(CultureInfo.InvariantCulture);
         long now = Environment.TickCount64;
