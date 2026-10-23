@@ -1227,6 +1227,18 @@ public partial class GameBridge(ClientConfig config)
                 await Task.Delay(50, ct);
         }
 
+        // The 0.62.7 field fix: the mod is loaded (its init line is in this launch's kcd.log) but its timers have not ticked yet
+        // -- a save still settling (the field: the first frame 2.5 s after the agent gave up), a menu open. The tail is kept,
+        // as at the main menu, and the emitter start is sent again until frames come; the debug API alone starved the game's
+        // queue for the whole session (99 s behind) and the join's world save never ran.
+        if (tail.FramesReceived == 0 && !ct.IsCancellationRequested && LogTailGameTransport.ModInitInLog(tail.LogPath))
+        {
+            tail.GameEvent += OnGameEvent;
+            Console.WriteLine($"[transport] {tail.Name} -- the mod is loaded (its init line is in this launch's {Path.GetFileName(tail.LogPath)}) but its emitter has not ticked yet: kept, the emitter start sent again every {EmitterRetryEveryMs / 1000} s until frames come");
+            _ = EmitterRetryAsync(tail, ct);
+            return tail;
+        }
+
         if (tail.FramesReceived == 0)
         {
             Console.WriteLine($"[transport] emitter produced no frames; falling back to {http.Name}");
@@ -1244,6 +1256,34 @@ public partial class GameBridge(ClientConfig config)
 
         Console.WriteLine($"[transport] {tail.Name} — 0 round trips per state read");
         return tail;
+    }
+
+    private const int EmitterRetryEveryMs = 3000, EmitterRetryForMs = 10 * 60 * 1000;
+
+    /// <summary>The kept tail of a loaded mod whose emitter has not ticked: its start again every 3 s until the first frame
+    /// (bounded: 10 minutes, then said once). A load restarts the chains on its own; this covers the settle and a menu.</summary>
+    private async Task EmitterRetryAsync(LogTailGameTransport tail, CancellationToken ct)
+    {
+        long t0 = Environment.TickCount64;
+        int sends = 0;
+        try
+        {
+            while (!ct.IsCancellationRequested && tail.FramesReceived == 0)
+            {
+                if (Environment.TickCount64 - t0 > EmitterRetryForMs)
+                {
+                    Console.WriteLine($"[transport] the emitter still produced no frame after {EmitterRetryForMs / 60000} min ({sends} start(s) sent) -- the game's state is not read until it does (a load starts it)");
+                    return;
+                }
+                await Task.Delay(EmitterRetryEveryMs, ct);
+                if (tail.FramesReceived > 0) break;
+                tail.ResetEmitterStart();
+                try { await tail.StartAsync(ct); ++sends; } catch (OperationCanceledException) { return; } catch { }
+            }
+            if (tail.FramesReceived > 0)
+                Console.WriteLine($"[transport] {tail.Name} -- the emitter's first frame {(Environment.TickCount64 - t0) / 1000.0:F1} s after the tail was kept ({sends} start(s) sent again)");
+        }
+        catch (OperationCanceledException) { }
     }
 
     private async Task RunLoopAsync(HttpGameTransport http, CancellationToken ct)

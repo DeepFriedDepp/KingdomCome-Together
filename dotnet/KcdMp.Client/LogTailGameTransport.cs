@@ -168,6 +168,36 @@ public sealed class LogTailGameTransport : IGameTransport
     /// </summary>
     public void ResetEmitterStart() => _emitterStarted = false;
 
+    /// <summary>The mod's init line (the second of its two; see <see cref="ModInitDetected"/>).</summary>
+    public const string ModInitMarker = "[KCD2-MP] MOD INIT";
+
+    /// <summary>
+    /// The 0.62.7 field fix: did the mod's Lua initialise in this launch? The game writes kcd.log afresh at every launch, so
+    /// its init line anywhere in the file means the mod is loaded. The agent that started while a save was still settling
+    /// saw no emitter frame in its 6 s, took that for a missing mod and ran the whole session over the debug API (the
+    /// game's queue 99 s behind, the join's world save never ran): a loaded mod whose timers have not ticked yet is not a
+    /// missing mod. Read shared (the game holds the file open); false when it cannot be read.
+    /// </summary>
+    public static bool ModInitInLog(string path)
+    {
+        try
+        {
+            using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            using var r = new StreamReader(fs, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+            return ModInitIn(r);
+        }
+        catch (IOException) { return false; }
+        catch (UnauthorizedAccessException) { return false; }
+    }
+
+    /// <summary><see cref="ModInitInLog"/>'s scan: the init line at the start of a line (a quoted copy does not count).</summary>
+    public static bool ModInitIn(TextReader r)
+    {
+        for (string? line = r.ReadLine(); line is not null; line = r.ReadLine())
+            if (line.StartsWith(ModInitMarker, StringComparison.Ordinal)) return true;
+        return false;
+    }
+
     public Task<bool> IsGameReadyAsync(CancellationToken ct = default) =>
         _http.IsGameReadyAsync(ct);
 

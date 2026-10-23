@@ -239,4 +239,27 @@ public class Wo204Tests
         Assert.Null(KeybindPak.MergeIntoSuperaction(m!, "nope", KeybindPak.ListenLine("kcd2mp_listen_up", "nope"), ["kcd2mp_listen_up"], out _));
         Assert.DoesNotContain("--", KeybindPak.ListenLine("kcd2mp_listen_up", "up").Replace("<!--", "").Replace("-->", ""));
     }
+
+    [Fact]
+    public void The_mod_is_loaded_when_its_init_line_is_in_this_launchs_log()
+    {
+        // the 0.62.7 field bundle's own lines: the first init line alone does not count, a quoted copy does not count
+        Assert.True(LogTailGameTransport.ModInitIn(new StringReader("Loading and executing script file 'Scripts/Startup/kdcmp.lua'...\n[KCD2-MP] === MOD INIT ===\n[KCD2-MP] MOD INIT t=21.356\n")));
+        Assert.False(LogTailGameTransport.ModInitIn(new StringReader("[KCD2-MP] === MOD INIT ===\n")));
+        Assert.False(LogTailGameTransport.ModInitIn(new StringReader("[transport] (is the mod installed and loaded? look for '[KCD2-MP] MOD INIT' in kcd.log)\n")));
+        Assert.False(LogTailGameTransport.ModInitIn(new StringReader("")));
+        // read while the game holds the file open for writing; a missing file is not a loaded mod
+        string path = Path.Combine(Path.GetTempPath(), "w204-modinit-" + Guid.NewGuid().ToString("N") + ".log");
+        try
+        {
+            using (var w = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.ReadWrite))
+            {
+                var b = System.Text.Encoding.UTF8.GetBytes("Gameplay started\n[KCD2-MP] MOD INIT t=21.356\n");
+                w.Write(b, 0, b.Length); w.Flush();
+                Assert.True(LogTailGameTransport.ModInitInLog(path));
+            }
+            Assert.False(LogTailGameTransport.ModInitInLog(path + ".missing"));
+        }
+        finally { File.Delete(path); }
+    }
 }
