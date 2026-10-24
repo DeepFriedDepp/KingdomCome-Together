@@ -1,4 +1,4 @@
-// Copyright (C) 2026 the Kingdom Come: Together contributors (AUTHORS). SPDX-License-Identifier: GPL-3.0-only
+﻿// Copyright (C) 2026 the Kingdom Come: Together contributors (AUTHORS). SPDX-License-Identifier: GPL-3.0-only
 // GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 namespace KcdMp.Wire;
@@ -43,6 +43,9 @@ namespace KcdMp.Wire;
 //   7 JoinProgress    joiner -> host   II.1: the joiner's load progress (percent)
 //   8 FocusEdge       joiner -> host   II.4: a focus / observe trigger's edge
 //   9 TravelRoute     host -> joiner   II.12: a fast travel's route and state
+//  10 DigestCheckpoint host -> joiner  WO-206 C: take this checkpoint's digest (ProtocolWo206.cs)
+//  11 Epoch           either           WO-206 E: "v1|world|join|why" -- the host's world and join epochs (to every partner on each
+//                                      bump and every 10 s); a joiner answers each with why = "ack" (the world epoch it now knows)
 //
 // II.5 -- the relay passes every message type. RelayUp is THE list of the client -> relay types that are NOT join rows, each with
 // the payload lengths the relay takes; JoinWire is the rest. IsKnownUp / IsUpLenOk answer for both (plus the Handshake, the first
@@ -82,13 +85,15 @@ public static partial class Protocol
 
     // ---- W203 kinds (APPEND-ONLY) ----
     public const byte W203DefenceSwing = 1, W203DefenceOutcome = 2, W203GuardState = 3, W203EngageEarly = 4, W203NpcWorn = 5,
-                      W203NpcPose = 6, W203JoinProgress = 7, W203FocusEdge = 8, W203TravelRoute = 9;
+                      W203NpcPose = 6, W203JoinProgress = 7, W203FocusEdge = 8, W203TravelRoute = 9,
+                      W203DigestCheckpoint = 10,   // WO-206 C (ProtocolWo206.cs)
+                      W203Epoch = 11;   // WO-206 E
 
     public static string W203KindName(byte k) => k switch
     {
         W203DefenceSwing => "defence-swing", W203DefenceOutcome => "defence-outcome", W203GuardState => "guard-state",
         W203EngageEarly => "engage-early", W203NpcWorn => "npc-worn", W203NpcPose => "npc-pose", W203JoinProgress => "join-progress",
-        W203FocusEdge => "focus-edge", W203TravelRoute => "travel-route",
+        W203FocusEdge => "focus-edge", W203TravelRoute => "travel-route", W203DigestCheckpoint => "digest-checkpoint", W203Epoch => "epoch",
         _ => $"unknown-{k}",
     };
 

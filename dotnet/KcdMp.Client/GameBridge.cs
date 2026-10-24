@@ -1231,7 +1231,9 @@ public partial class GameBridge(ClientConfig config)
         // -- a save still settling (the field: the first frame 2.5 s after the agent gave up), a menu open. The tail is kept,
         // as at the main menu, and the emitter start is sent again until frames come; the debug API alone starved the game's
         // queue for the whole session (99 s behind) and the join's world save never ran.
-        if (tail.FramesReceived == 0 && !ct.IsCancellationRequested && LogTailGameTransport.ModInitInLog(tail.LogPath))
+        // WO-206 A.6: the join's mutation twin switches this fix off (a test-only variable; the bench's twin copy, never a player's)
+        if (tail.FramesReceived == 0 && !ct.IsCancellationRequested && LogTailGameTransport.ModInitInLog(tail.LogPath)
+            && Environment.GetEnvironmentVariable("KCDMP_TEST_W206_NO_TAIL_KEEP") != "1")
         {
             tail.GameEvent += OnGameEvent;
             Console.WriteLine($"[transport] {tail.Name} -- the mod is loaded (its init line is in this launch's {Path.GetFileName(tail.LogPath)}) but its emitter has not ticked yet: kept, the emitter start sent again every {EmitterRetryEveryMs / 1000} s until frames come");
@@ -1916,6 +1918,8 @@ public partial class GameBridge(ClientConfig config)
             tailForPause.AutoSaveRefused += Wo122OnAutoSaveRefused;  // WO-122
             tailForPause.GameplayStarted += Wo123OnGameplayStarted;  // WO-123: a host load ends a join
             tailForPause.LoadStarted += Wo123OnLoadStarted;          // WO-123: joins defer through a load
+            tailForPause.LoadStarted += Wo206OnLoadStarted;          // WO-206 C: the digest sweep stops through a load
+            tailForPause.GameplayStarted += Wo206OnGameplayStarted;  // WO-206 C: a new world epoch, the keyspace again
             tailForPause.GameplayStarted += Wo124OnGameplayStarted;  // WO-124: the joiner's load finished
             tailForPause.QuestLine += Wo137OnQuestLine;              // WO-137: dialogue lines (talking), player switches
             tailForPause.Wo144Line += Wo144OnEngineLine;             // WO-144: the engine's own reasons (refusals, dropped talks, scenes)
@@ -3841,6 +3845,7 @@ public partial class GameBridge(ClientConfig config)
         try { applied = await _combat.ApplyDeathAsync(lg, ct); }
         catch (Exception ex) { Console.WriteLine($"[npcdeath] ApplyDeath threw for '{npcName}': {ex.Message}"); }
         if (applied) _npcDeathAppliedUtc[npcName] = DateTime.UtcNow;   // WO-110 Phase 6: dedupe only a death that landed
+        if (applied) Wo206NoteApplied("dead", npcName, Wo206DeathCause(via), null, "dead");   // WO-206 Part C (ApplyDeath does not say what it was before)
         else _copySoulGuid.TryRemove(npcName, out _);   // WO-147: the next try reads the body's soul anew
         // WO-99 Phase 0: the lethal apply's own drop will surface as a
         // LocalHit(fatal) from the DLL (ApplyDeath books no credit); the
@@ -4541,8 +4546,9 @@ public partial class GameBridge(ClientConfig config)
     // Receive loop – server pushes Ghost and Name packets to us
     // -------------------------------------------------------------------------
 
-    /// <summary>One relay frame, stamped the moment its last byte was read.</summary>
-    private readonly record struct InFrame(int Type, byte[] Payload, long Arrival);
+    /// <summary>One relay frame, stamped the moment its last byte was read. WO-206 E: <paramref name="Stamp"/> is the world epoch known
+    /// at that moment (Wo206StampAtRead); 0 = none.</summary>
+    private readonly record struct InFrame(int Type, byte[] Payload, long Arrival, uint Stamp);
 
     /// <summary>
     /// WO-118 follow-up: the relay reader. It only reads, stamps and feeds:
@@ -4576,7 +4582,7 @@ public partial class GameBridge(ClientConfig config)
                 while (!ct.IsCancellationRequested)
                 {
                     await Task.Delay(NativeLuaFlushTick, ct);
-                    if (!frames.Writer.TryWrite(new InFrame(FlushTickType, Array.Empty<byte>(), 0))) break;
+                    if (!frames.Writer.TryWrite(new InFrame(FlushTickType, Array.Empty<byte>(), 0, 0))) break;
                 }
             }
             catch (OperationCanceledException) { }
@@ -4597,10 +4603,12 @@ public partial class GameBridge(ClientConfig config)
                 Wo147NoteNpcAtRead(type, payload, arrival);        // the backlog fix: the newest sample of each NPC/avatar, as read
                 Volatile.Write(ref _w202LastReadMs, W147StampMs(arrival));   // WO-202 III.2: the queue's lag is measured against this
                 if (W202("ping_network") && Wo202TakeAtRead(type, payload)) continue;   // WO-202 III.2: the network's answers, never behind the queue
-                if (Wo147IsLeashFrame(type)) { leashLane.Writer.TryWrite(new InFrame(type, payload, arrival)); continue; }
+                if (Wo206TakeAtRead(type, payload)) continue;   // WO-206 E: an epoch is known from the frame it arrives in, never behind the queue
+                uint stamp = Wo206StampAtRead(payload);         // WO-206 E: the world epoch this frame was sent under
+                if (Wo147IsLeashFrame(type)) { leashLane.Writer.TryWrite(new InFrame(type, payload, arrival, stamp)); continue; }
                 FeedNativeAtRead(type, payload, arrival);
-                if (W202("net_game_queue") && Wo202Coalesce(frames.Writer, type, payload, arrival)) continue;   // WO-202 III.1: a waiting state is replaced
-                frames.Writer.TryWrite(new InFrame(type, payload, arrival));
+                if (W202("net_game_queue") && Wo202Coalesce(frames.Writer, type, payload, arrival, stamp)) continue;   // WO-202 III.1: a waiting state is replaced
+                frames.Writer.TryWrite(new InFrame(type, payload, arrival, stamp));
             }
         }
         catch (OperationCanceledException) { }
@@ -4685,11 +4693,13 @@ public partial class GameBridge(ClientConfig config)
             await foreach (var frameRaw in frames.ReadAllAsync(ct))
             {
                 if (Wo202Resolve(frameRaw) is not { } frame) continue;   // WO-202 III.1: a coalesced slot is its body's newest state
+                Wo206NoteProcessorOn(frame.Type);   // WO-206: a frame (or a flush) that holds the processor is named (the bench's stall watch)
                 if (frame.Type == FlushTickType) { Wo136ReplayIfReleased(); await FlushDueNpcLuaPushesAsync(); continue; }
                 Wo147NoteProcessing(frame.Arrival);   // the backlog fix: how far behind the reader this processor is
                 Wo136ReplayIfReleased();          // WO-136: the moment the hold ends, what it kept goes first
                 if (Wo136Defer(frame)) continue;   // WO-136: the host's NPCs and avatars wait for the world to load
                 if (Wo140DropSeparate(frame.Type)) continue;   // WO-140: nothing of the host's world reaches a joiner in its own
+                if (Wo206DropStale(frame)) continue;   // WO-206 E: a world write from an older world epoch (a load since it was sent)
                 int type       = frame.Type;
                 var payload    = frame.Payload;
                 int payloadLen = payload.Length;
@@ -4864,6 +4874,7 @@ public partial class GameBridge(ClientConfig config)
                     string gname = Encoding.UTF8.GetString(payload, 1, payloadLen - 1);
                     _ghostNames[ghostId] = gname;
                     Wo144OnPeerConnected(ghostId, gname);   // WO-144: the relay's connection set, the only source of partners
+                    Wo206OnPeerConnected(ghostId);          // WO-206 E: it hears the host's epochs at once
                     await SetGhostNameAsync(ghostId.ToString(), gname);
                 }
                 else if (type == Protocol.ReleaseVersion && payloadLen >= 2)
@@ -4882,6 +4893,7 @@ public partial class GameBridge(ClientConfig config)
                     Wo144OnPeerDisconnected(ghostId);   // WO-144: out of every partner loop at once
                     Wo148OnPeerGone(ghostId);           // WO-148: its avatar sets down what it carried
                     Wo154ForgetPeer(ghostId);           // WO-154 2: a rejoin starts from up
+                    _w206.ForgetPeer(ghostId); _w206.ForgetJoiner(ghostId);   // WO-206 E: its acknowledged epoch and the host's view of it go
                     _peerLastSeenUtc.TryRemove(ghostId, out _);
                     _peerCutscene.TryRemove(ghostId, out _);   // WO-98 Phase 5
                     RefreshDiscordPeerCount();
@@ -6176,6 +6188,16 @@ public partial class GameBridge(ClientConfig config)
             case string w204 when w204.StartsWith("w204_", StringComparison.Ordinal):   // WO-204: the switches and the status (Wo204OnEvent)
                 Wo204OnEvent(name, arg);
                 return;
+            case "w206_cfg":         // WO-206 E: mp_epoch_check, mp_research_death_from_health
+            case "w206_status":      // WO-206 E: mp_w206_status
+                Wo206OnEvent(name, arg);
+                return;
+            case "w206_dead":        // WO-206 C/D: the digest's dead scan, mp_digest, mp_anim_probe (GameBridge.Wo206Digest.cs)
+            case "w206_digest":
+            case "w206_probe":
+            case "w206_test":
+                Wo206DigestOnEvent(name, arg);
+                return;
             case string w203 when w203.StartsWith("w203", StringComparison.Ordinal):   // WO-203: every area's events (Wo203OnEvent)
                 Wo203OnEvent(name, arg);
                 return;
@@ -6308,6 +6330,14 @@ public partial class GameBridge(ClientConfig config)
                 if (Wo131BlockLocalDeath(deadName)) break;   // WO-131 1c: the host decides deaths
                 var sendDeath = _sendNpcDeath;
                 if (sendDeath is null) break;
+                if (W206ResearchDeathFromHealth)
+                {
+                    // WO-206 (the C3 twin, KCDMP_TEST_W206=1 only): the pre-WO-202 path -- the observer's health reading decides, no soul read
+                    if (!Wo206Rules.DeathAnnounced(true, null, deadHp)) { Console.WriteLine($"WO206-RESEARCH npc={deadName} NOT announced: hp={deadHp} is not a death by health"); break; }
+                    Console.WriteLine($"WO206-RESEARCH npc={deadName} announced from health (hp={deadHp}, seen by {deadSrc}) -- the soul is not asked (research switch)");
+                    _ = sendDeath(deadName);
+                    break;
+                }
                 if (W202("death_engine_only")) { _ = Wo202AnnounceDeathAsync(deadName, deadHp, deadSrc, sendDeath); break; }   // WO-202 II.3
                 Console.WriteLine($"[npcdeath] out: mod observed '{deadName}' die locally (hp={deadHp}, seen by {deadSrc}) -- sending FATAL{CatchupTag()}");
                 _ = sendDeath(deadName)

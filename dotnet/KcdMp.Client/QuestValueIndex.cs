@@ -35,6 +35,28 @@ public sealed class QuestValueIndex
     private static readonly Regex StateRx = new(@"<State Name=""([^""]+)""([^>]*)>", RegexOptions.CultureInvariant);
     private static readonly Regex TypeTRx = new(@"TypeT=""([^""]+)""", RegexOptions.CultureInvariant);
 
+    // WO-206 C: the clocks (Timer, TimeOfDayWatch nodes) -- the digest's keyspace beyond the State mirror (the Jaunt's 13:00 watch was one).
+    private readonly SortedSet<string> _clockPaths = new(StringComparer.Ordinal);
+    private static readonly Regex ClockRx = new(@"<(Timer|TimeOfDayWatch) Name=""([^""]+)""", RegexOptions.CultureInvariant);
+
+    /// <summary>WO-206 C: every State path with a declared type, in path order.</summary>
+    public IReadOnlyList<string> StatePaths => _stateTypes.Keys.OrderBy(k => k, StringComparer.Ordinal).ToList();
+    /// <summary>WO-206 C: every Timer and TimeOfDayWatch node path, in path order.</summary>
+    public IReadOnlyCollection<string> ClockPaths => _clockPaths;
+
+    /// <summary>WO-206 C: the clocks of one quest file (the same path rule as <see cref="AddStates"/>). Returns the clocks added.</summary>
+    public int AddClocks(string entry, string xml)
+    {
+        string e = entry.Replace('\\', '/');
+        const string root = "Quests/Final/";
+        if (!e.StartsWith(root, StringComparison.OrdinalIgnoreCase) || !e.EndsWith(".xml", StringComparison.OrdinalIgnoreCase)) return 0;
+        string module = e[root.Length..^4].Replace('/', '.');
+        int n = 0;
+        foreach (Match m in ClockRx.Matches(xml))
+            if (_clockPaths.Add(module + "." + m.Groups[2].Value)) n++;
+        return n;
+    }
+
     /// <summary>WO-166 T2: the State's own declared type (the quest file's TypeT), or null when no file declares it.</summary>
     public string? StateType(string path) => _stateTypes.TryGetValue(path, out var t) ? t : null;
 
@@ -110,6 +132,7 @@ public sealed class QuestValueIndex
         using var zip = ZipFile.OpenRead(scriptsPak);
         byte[] marker = Encoding.ASCII.GetBytes("<StateTypeEnumeration ");
         byte[] stateMarker = Encoding.ASCII.GetBytes("<State ");   // WO-166 T2
+        byte[] timerMarker = Encoding.ASCII.GetBytes("<Timer "), watchMarker = Encoding.ASCII.GetBytes("<TimeOfDayWatch ");   // WO-206 C
         foreach (var e in zip.Entries)
         {
             if (!e.FullName.StartsWith("Quests/", StringComparison.OrdinalIgnoreCase) || !e.FullName.EndsWith(".xml", StringComparison.OrdinalIgnoreCase)) continue;
@@ -117,9 +140,11 @@ public sealed class QuestValueIndex
             byte[] bytes;
             using (var s = e.Open()) using (var ms = new MemoryStream()) { s.CopyTo(ms); bytes = ms.ToArray(); }
             bool types = bytes.AsSpan().IndexOf(marker) >= 0, states = bytes.AsSpan().IndexOf(stateMarker) >= 0;
-            if (!types && !states) continue;
+            bool clocks = bytes.AsSpan().IndexOf(timerMarker) >= 0 || bytes.AsSpan().IndexOf(watchMarker) >= 0;
+            if (!types && !states && !clocks) continue;
             string text = Encoding.UTF8.GetString(bytes);
             if (states) idx.AddStates(e.FullName, text);
+            if (clocks) idx.AddClocks(e.FullName, text);
             if (types && idx.AddXml(text) > 0) idx.FileCount++;
         }
         return idx;

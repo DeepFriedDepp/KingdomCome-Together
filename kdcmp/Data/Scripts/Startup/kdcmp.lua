@@ -33373,6 +33373,74 @@ do
     end
 end
 
+-- ===== WO-206 E: epochs -- a statement older than the current one never wins (WO-205's findings 5.2) =====
+-- mp_epoch_check (default on, both): a join message or a joiner's reported state of an older join epoch, a host world write (an NPC row,
+-- a quest State write, the chest ledger, a death) of an older world epoch, and a cutscene sample of an older play of the same scene are
+-- dropped and counted; off: applied as before and counted applied_old. mp_research_death_from_health (default off): the C3 twin's
+-- research path -- a death is announced from the observer's health reading again (WO-202 II.3's old path); the agent takes it only
+-- with KCDMP_TEST_W206=1 on its machine (never a shipped config). The agent gets every change through the w206_cfg event;
+-- mp_w206_status prints the counts (MP-W206-EPOCH).
+do
+    W206 = W206 or {}
+    W206.NAMES = { epoch_check = "mp_epoch_check", research_death_from_health = "mp_research_death_from_health" }
+    W206.HELP = {
+        epoch_check = "E: (both) nothing from an older join attempt, an older load of the host's world or an older play of a cutscene is applied (dropped and counted)",
+        research_death_from_health = "research: (both) a death is announced from the health reading again, not the soul's own state -- only with KCDMP_TEST_W206=1 on the agent's machine",
+    }
+    W206.OFF = W206.OFF or { research_death_from_health = true }
+    W206.on = W206.on or {}
+    function KCD2MP_W206On(name)
+        local v = W206.on[tostring(name)]
+        if v == nil then return not W206.OFF[tostring(name)] end
+        return v
+    end
+    function KCD2MP_W206Set(name, arg)
+        local label = W206.NAMES[tostring(name)]
+        if not label then mp_log("WO206-TOGGLE unknown switch '" .. tostring(name) .. "'"); return false end
+        local v = KCD2MP_Wo122ParseBool(arg)
+        if v == "bad" then mp_log(label .. ": expected on|off, got '" .. tostring(arg) .. "'"); return false end
+        if v == nil then
+            mp_log("WO206-TOGGLE " .. label .. " is " .. (KCD2MP_W206On(name) and "on" or "off") .. " (mp_w206_status shows every value)")
+            return true
+        end
+        W206.on[tostring(name)] = v
+        mp_log("WO206-TOGGLE " .. label .. " " .. (v and "on" or "off") .. " -- sent to the agent")
+        KCD2MP_EmitEvent("w206_cfg", tostring(name) .. "=" .. (v and "on" or "off"))
+        return true
+    end
+    function KCD2MP_W206Status()
+        local parts = {}
+        for k, label in pairs(W206.NAMES) do parts[#parts + 1] = label .. "=" .. (KCD2MP_W206On(k) and "on" or "off") end
+        table.sort(parts)
+        mp_log("WO206-STATUS " .. table.concat(parts, " "))
+        KCD2MP_EmitEvent("w206_status", "")
+        return true
+    end
+    System.AddCCommand("mp_w206_status", "KCD2MP_W206Status()", "WO-206: the epoch switches and their counts (the agent prints MP-W206-EPOCH)")
+    for k, label in pairs(W206.NAMES) do
+        local fname = "KCD2MP_W206Set_" .. k
+        _G[fname] = function(arg) return KCD2MP_W206Set(k, arg) end
+        System.AddCCommand(label, fname .. "(%line)", "WO-206 " .. (W206.HELP[k] or k) .. " (default " .. (W206.OFF[k] and "off" or "on") .. "): " .. label .. " on|off")
+    end
+end
+
+-- ===== WO-206 C/D: the test bench's two in-game halves (docs/WO-206-findings.md) =====
+-- mp_digest: the cross-machine checkpoint digests (the agent; the DLL's quest sweep). mp_anim_probe: the per-body animation probe the
+-- bundle's detectors read (the DLL, written to kcdmp-anim.jsonl). Both ship on; mp_w206_status shows their counts with the epochs'.
+do
+    local function w206_cd_set(event, label, arg)
+        local v = KCD2MP_Wo122ParseBool(arg)
+        if v == "bad" or v == nil then mp_log(label .. ": expected on|off, got '" .. tostring(arg) .. "'"); return false end
+        mp_log("WO206-TOGGLE " .. label .. " " .. (v and "on" or "off") .. " -- sent to the agent")
+        KCD2MP_EmitEvent(event, v and "on" or "off")
+        return true
+    end
+    function KCD2MP_W206Digest(arg) return w206_cd_set("w206_digest", "mp_digest", arg) end
+    function KCD2MP_W206Probe(arg) return w206_cd_set("w206_probe", "mp_anim_probe", arg) end
+    System.AddCCommand("mp_digest", "KCD2MP_W206Digest(%line)", "WO-206 C: checkpoint digests of the shared world, compared across both machines (default on): mp_digest on|off")
+    System.AddCCommand("mp_anim_probe", "KCD2MP_W206Probe(%line)", "WO-206 D: the animation probe every bundle's checks read (default on): mp_anim_probe on|off")
+end
+
 -- ===== Player hook =====
 
 local ok2, err2 = pcall(function()

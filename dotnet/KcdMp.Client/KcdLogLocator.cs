@@ -20,6 +20,8 @@ public static partial class KcdLogLocator
     /// <summary>Full path to the most recently written kcd.log, or null.</summary>
     public static string? Find()
     {
+        // WO-206 A.2: a test-bench copy's agent reads its own root only (two roots' logs would otherwise compete).
+        if (BenchInstance.GameRoot is string pinned) return BenchInstance.NewestLog(pinned);
         try
         {
             var logs = new List<FileInfo>();

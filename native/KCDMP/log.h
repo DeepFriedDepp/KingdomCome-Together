@@ -14,6 +14,8 @@
 #include <string>
 #include <cstdint>
 
+#include "instance.h"
+
 namespace kcdmp {
 
 inline std::mutex& log_mutex() { static std::mutex m; return m; }
@@ -65,7 +67,7 @@ inline std::string log_path() {
     std::string p(buf);
     const size_t slash = p.find_last_of("\\/");
     if (slash != std::string::npos) p.resize(slash + 1);
-    return p + "kcdmp-native.log";
+    return p + instance::log_name_for(instance::id());   // WO-206 A.2: a bench copy's own name
 }
 
 // WO-45: a second copy of every line, written into the game process's working

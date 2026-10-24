@@ -46,6 +46,7 @@ int wo200_tests(int* passed);              // wo200_tests.cpp (WO-200: the two g
 int wo201_tests(int* passed);              // wo201_tests.cpp (WO-201: B1's save-path cancel read out of its code, the per-frame rule)
 int wo202_tests(int* passed);              // wo202_tests.cpp (WO-202: the crash capture's rules, the field fixes' rules)
 int wo204_tests(int* passed);              // wo204_tests.cpp (WO-204: nearest_player_v2's Evaluate shape and compares, the quiet windows)
+int wo206_tests(int* passed);              // wo206_tests.cpp (WO-206: the per-copy pipe and log names)
 int wo203_tests(int* passed);              // wo203_tests.cpp (WO-203: every area's rules, one file per area)
 int wo197_tests(int* passed);              // wo197_tests.cpp (WO-197: the recoil and clinch polls, the kept main actions, the pair request)
 int wo194_tests(int* passed);              // wo194_tests.cpp (WO-194: the hold, its release, the time gate, the FastForward stop)
@@ -342,6 +343,14 @@ int main() {
     {
         int fp = 0;
         const int ff = wo202_tests(&fp);
+        g_pass += fp;
+        g_fail += ff;
+    }
+
+    // WO-206: the per-copy pipe and log names (the test bench)
+    {
+        int fp = 0;
+        const int ff = wo206_tests(&fp);
         g_pass += fp;
         g_fail += ff;
     }

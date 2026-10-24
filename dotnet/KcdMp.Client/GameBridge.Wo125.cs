@@ -321,6 +321,7 @@ public partial class GameBridge
             if (r is not ("" or "-")) Console.WriteLine($"WO184-FINAL host reload: the owed snapshot was not taken ({r})");
         });
         _rewinding = true;
+        _w206RewindJoinEpoch = _w206.Join;   // WO-206 E: this "reloading" belongs to the join epoch it began under
         _rejoinPending = false;
         Wo202RejoinReset("the host reloads");   // WO-202 III.3: a new reload, a new count
         _ = Wo201OnHostBusyAsync("load 1");   // WO-201 B15: its pings stall while it loads -- no "connection" toast

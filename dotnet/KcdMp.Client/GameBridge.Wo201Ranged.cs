@@ -13,12 +13,13 @@ namespace KcdMp.Client;
 // need tags only the game's own shooting sets: not shown (listed in the findings).   WO201-RANGED out|in ...
 public partial class GameBridge
 {
-    private bool _w201RangedRefused;
+    private int _w201RangedRefusals;          // refused polls in a row (WO-206: tried again, as the speech poll)
+    private long _w201RangedRetryAtMs;
     private long _w201RangedOut, _w201RangedIn, _w201RangedShown;
 
     private void Wo201RangedTick()
     {
-        if (!_w201Connected || _w201RangedRefused || !W201("figure_ranged") || !(W137Host || W137Joiner)) return;
+        if (!_w201Connected || Environment.TickCount64 < _w201RangedRetryAtMs || !W201("figure_ranged") || !(W137Host || W137Joiner)) return;
         _ = Wo201RangedPollAsync();
     }
 
@@ -27,10 +28,14 @@ public partial class GameBridge
         var r = await _combat.Wo163Async(Protocol.Wo201OpRangedPoll, new byte[] { 1 });
         if (r is not { Ok: true } rr || rr.Payload.Length < 1)
         {
-            _w201RangedRefused = true;
-            Console.WriteLine($"WO201-RANGED poll refused by the DLL ({(r is { } x ? x.Reason : 255)}) -- this player's shots are not shown on the partner's screen");
+            int k = ++_w201RangedRefusals;
+            long wait = Wo206Rules.PollRetryDelayMs(k, Environment.GetEnvironmentVariable("KCDMP_TEST_W206_POLL_ONCE"));
+            _w201RangedRetryAtMs = wait == long.MaxValue ? long.MaxValue : Environment.TickCount64 + wait;
+            if (Wo206Rules.LogPollRefusal(k))
+                Console.WriteLine($"WO201-RANGED poll refused by the DLL ({(r is { } x ? x.Reason : 255)}, {k} in a row) -- {(wait == long.MaxValue ? "this player's shots are not shown on the partner's screen" : $"tried again in {wait / 1000} s")}");
             return;
         }
+        _w201RangedRefusals = 0;
         int n = rr.Payload[0];
         for (int i = 0; i < n && 1 + i < rr.Payload.Length; i++)
         {

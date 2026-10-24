@@ -374,12 +374,14 @@ public partial class GameBridge
         Console.WriteLine($"MP-WO134 chests: host ledger sent to ghost {joiner}: {l.Entries.Count} entries in {parts.Count} part(s)");
     }
 
+    private uint _w134RxStamp;   // WO-206 E: the world epoch the host's ledger parts were stamped with (one ledger, one epoch)
+
     private void Wo134OnLedgerPart(int part, int n, List<Wo134Rules.Entry> rows)
     {
         lock (_w134Gate)
         {
-            if (part == 1) { _w134RxParts.Clear(); _w134RxN = n; }
-            if (n != _w134RxN) return;
+            if (part == 1) { _w134RxParts.Clear(); _w134RxN = n; _w134RxStamp = _w206FrameStamp; }
+            if (n != _w134RxN || _w206FrameStamp != _w134RxStamp) return;   // WO-206 E: a part of another world's ledger is not this one's
             _w134RxParts[part] = rows;
             if (_w134RxParts.Count == _w134RxN)
             {
@@ -431,6 +433,8 @@ public partial class GameBridge
         List<Wo134Rules.Entry> rows;
         string tag;
         bool hostIn;
+        Wo134Rules.Ledger hostLedger, ownLedger;
+        uint stamp;
         lock (_w134Gate)
         {
             if (_w134ApplyTag is not string t) return;
@@ -439,11 +443,19 @@ public partial class GameBridge
             if (!hostIn && !late && !timeout) return;
             tag = t;
             _w134ApplyTag = null;
-            rows = Wo134Rules.JoinRows(_w134RxLedger ?? new Wo134Rules.Ledger(), _w134JoinerLedger);
+            stamp = _w134RxStamp;
+            // WO-206 E: a host ledger of a world the host has since left (it loaded after sending it) is not applied
+            if (hostIn && !Wo206Admit(Wo206Cat.Loot, stamp, $"the host's chest ledger ({_w134RxLedger!.Entries.Count} entries)")) { _w134RxLedger = null; hostIn = false; }
+            hostLedger = _w134RxLedger ?? new Wo134Rules.Ledger();
+            ownLedger = _w134JoinerLedger.Clone();
+            rows = Wo134Rules.JoinRows(hostLedger, ownLedger);
         }
         if (!hostIn) Console.WriteLine("MP-WO134 chests: the host's ledger did not arrive within 15 s -- only this joiner's own takes are applied");
         var calls = Wo134Rules.ApplyCalls(rows);
         foreach (var c in calls) await ExecLuaAsync(c);
+        // WO-206 Part C: one APPLIED record per ledger entry (key = container/class, the ledger's own word for what was done)
+        foreach (var e in hostLedger.Entries) Wo206NoteApplied("loot", $"{e.C}/{e.Cls}", "host-ledger", null, e.N > 0 ? "took" : "put", stamp);
+        foreach (var e in ownLedger.Entries) Wo206NoteApplied("loot", $"{e.C}/{e.Cls}", "own-ledger", null, e.N > 0 ? "took" : "put", stamp);
         Console.WriteLine($"MP-WO134 chests: world {tag}: {rows.Count} ledger row(s) sent to the mod in {calls.Count} call(s) (host's takes put back, this joiner's own taken out)");
     }
 }

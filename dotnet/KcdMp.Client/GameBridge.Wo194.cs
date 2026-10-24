@@ -322,6 +322,14 @@ public partial class GameBridge
         long now = Environment.TickCount64;
         var own = _w194Own;
         bool mine = own is not null && own.Name == m.Name;
+        // WO-206 E: the scene instance. C and G name the partner's play by its seq, Z ends it; a clock sample, a skip's jump or its stop
+        // from an older play of the same scene (or from one already ended) never reaches this copy
+        if (m.Op is 'C' or 'G') _w206.Scenes.Begin(src, m.Name, m.Seq);
+        else if (m.Op is 'P' or 'J' or 'X' && !_w206.AdmitScene(_w206.Scenes.Stale(src, m.Name, m.Seq)))
+        {
+            Wo206LogDrop($"scene '{m.Name}' {m.Op} of play {m.Seq} from player {src} -- an older (or ended) play of that scene");
+            return;
+        }
         switch (m.Op)
         {
             case 'Q': _w194Paths.AddOrUpdate((src, m.Seq), m.Path, (_, have) => have.Length + m.Path.Length <= 200 ? have + m.Path : have); break;
@@ -389,6 +397,7 @@ public partial class GameBridge
                 }
                 break;
             case 'Z':
+                _w206.Scenes.End(src, m.Name, m.Seq);   // WO-206 E
                 if (_w194Remote.TryGetValue(src, out var rz) && rz.Name == m.Name) rz.EndedMs = now;
                 await _combat.Wo194PartnerPlayingAsync(m.Name, false);
                 break;

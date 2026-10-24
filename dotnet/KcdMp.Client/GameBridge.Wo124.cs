@@ -258,6 +258,7 @@ public partial class GameBridge
         _where = GameWhere.Loading;
         W160WorldGone();
         Wo136OnLoadSeen("load");   // WO-136: nothing touches an NPC until the world has loaded
+        if (_combatRoleApplied && _isDamageAuthority) Wo206HostWorldLoad("LoadGame");   // WO-206 E: (once per load) the host's world changes
         if (_jj is { LoadStarted: not null } j) { if (j.LoadGameUtc == default) j.LoadGameUtc = DateTime.UtcNow; }
     }
 
@@ -267,6 +268,7 @@ public partial class GameBridge
         _where = GameWhere.Loading;
         W160WorldGone();
         Wo136OnLoadSeen("accepted");   // WO-136
+        if (_combatRoleApplied && _isDamageAuthority) Wo206HostWorldLoad("Loading saved game");   // WO-206 E: a new world epoch, before anything is told
         if (_combatRoleApplied && _isDamageAuthority) { Wo125HostOnLoadAccepted(display); return; }   // WO-125: the host's world changes
         if (_jj is { LoadStarted: { } t } j && display.Equals($"playline{j.Playline}/{j.Name}.whs", StringComparison.OrdinalIgnoreCase))
         {
@@ -292,6 +294,7 @@ public partial class GameBridge
         _where = GameWhere.Menu;
         W160WorldGone();
         _leaveInProgress = false;
+        Wo206LoadSettled();   // WO-206 E: that load is over (failed); the next one bumps again
         Console.WriteLine("MP-JOIN joiner: the engine reports a failed load and is back at the MAIN MENU");
         if (_jj is { LoadFailed: { } f }) f.TrySetResult(true);
         if (_joinedWorld) { SetJoinedWorld(false); _ = Wo122SetLockAsync(false, "load-failed"); }
@@ -301,6 +304,7 @@ public partial class GameBridge
     {
         if (_where != GameWhere.Menu) Console.WriteLine("MP-JOIN joiner: the main menu is up");
         _where = GameWhere.Menu;
+        Wo206LoadSettled();   // WO-206 E
         W160WorldGone();
         _autoNextUtc = DateTime.UtcNow.AddSeconds(3);
         if (_gameQuitting)
@@ -326,6 +330,7 @@ public partial class GameBridge
         Wo202NoteEvent("a load (Gameplay started)");   // WO-202 II.4
         W160WorldConfirmed();   // WO-160 2: a world just loaded in this game process
         Wo136OnGameplayStarted();   // WO-136: the settle, then the held frames
+        Wo206LoadSettled();         // WO-206 E: the next load bumps the world epoch again
         Wo151OnGameplayStarted();   // WO-151 3.7: the weather applied memory goes; a joiner re-applies the host's
         Wo125HostOnGameplayStarted();
         if (_ownLoadExpected) { _ownLoadExpected = false; _leaveInProgress = false; Console.WriteLine("MP-JOIN joiner: back in this player's own world (Gameplay started)"); }
@@ -530,6 +535,7 @@ public partial class GameBridge
             Console.WriteLine(FormattableString.Invariant(
                 $"MP-JOIN joiner: join 0x{j.JoinId:x8} spliced world={hostBytes.Length} B + henry={choice.Detail} ({choice.Mode}) -> {res.File.Length} B in {spliceMs:F0} ms; check PASS, verify ok; quest items stripped={rp.QuestItemsRemoved.Count}, keys host_kept={rp.KeysHostKept} joiner_added={rp.KeysJoinerAdded}"));
             try { File.Delete(stagedPath); } catch { }
+            if (Wo206JoinGone(j, "before placing")) return;   // WO-206 B2: an abort while the splice ran (the relay lost mid-join)
 
             // ---- Phase 3: place, read back, rescan, listed. WO-175 S1 / WO-180 (mp_coop_playline, on by default): in the playline
             // that already holds the host's world, else the lowest free one, never one holding this player's own saves. Off: in the playline of this
@@ -588,6 +594,11 @@ public partial class GameBridge
             if (!await Wo177WaitQuietAsync("join"))
             {
                 await AbortJoinerJoinAsync(j, Protocol.JoinAbortLoadFailed, "load-fight", Wo177Rules.GaveUpText);
+                return;
+            }
+            if (Wo206JoinGone(j, "before the load"))   // WO-206 B2: never load a join that was aborted while it was placed
+            {
+                if (j.PlacedPath is string gone) { try { File.Delete(gone); } catch { } j.PlacedPath = null; }
                 return;
             }
             j.Phase = "loading";

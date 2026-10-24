@@ -55,6 +55,7 @@ public partial class GameBridge
     partial void Wo203JoinOnFrame(byte src, LootMsg m)
     {
         if (m.Kind != Protocol.W203JoinProgress || !Wo204Rules.TryParseJoinProgress(m.Text, out uint jid, out string where, out int secs)) return;
+        if (!Wo206JoinMessageAdmitted(Protocol.W203Down, jid, src, "progress")) return;   // WO-206 E: a late "loading" of a closed attempt is never shown
         if (_hostJoin is not { } j || j.JoinId != jid || j.Joiner != src) return;
         Interlocked.Increment(ref _w204JoinProgressIn);
         j.LastJoinerMsgMs = Environment.TickCount64;

@@ -123,6 +123,14 @@ public partial class GameBridge
             SetJoinUi("aborted", "Lost the connection -- the world transfer stopped.");
             Console.WriteLine($"MP-JOIN joiner: relay connection lost -- staged transfer 0x{rx.JoinId:x8} deleted");
         }
+        // WO-206 B2 (a 5 s cut while the host held its world for this request): the host ended the attempt (joiner-gone), but the
+        // request id stayed and every later automatic try waited for it -- the joiner never asked again (7 min). Gone with the link.
+        if (Wo206Rules.ForgetRequestOnRelayLoss(_joinOutId, Environment.GetEnvironmentVariable("KCDMP_TEST_W206_KEEP_REQUEST")))
+        {
+            Console.WriteLine($"MP-JOIN joiner: relay connection lost while join 0x{_joinOutId:x8} waited for the host's world -- the host ended it; the next connection asks again");
+            _joinOutId = 0;
+            SetJoinUi("aborted", "Lost the connection to your host -- asking again when it is back.");
+        }
         await Task.CompletedTask;
     }
 
@@ -234,11 +242,12 @@ public partial class GameBridge
             case Protocol.WorldAckDown:
             case Protocol.WorldDoneDown:
             case Protocol.JoinerReadyDown:
+                if (!Wo206JoinMessageAdmitted(type, joinId, src)) return;   // WO-206 E: an attempt the host closed (or a new epoch began since)
                 if (_hostJoin is { } j && j.JoinId == joinId && j.Joiner == src) j.Inbox.Writer.TryWrite(((byte)type, body));
                 else Console.WriteLine($"MP-JOIN host: 0x{type:X2} for join 0x{joinId:x8} from ghost {src} -- no such join here, ignored");
                 return;
             case Protocol.JoinAbortDown:
-                if (_hostJoin is { } ja && ja.JoinId == joinId && ja.Joiner == src)
+                if (_hostJoin is { } ja && ja.JoinId == joinId && ja.Joiner == src && Wo206JoinMessageAdmitted(type, joinId, src))
                 {
                     ja.Inbox.Writer.TryWrite(((byte)type, body));
                     return;
@@ -266,7 +275,7 @@ public partial class GameBridge
                 Wo114OnLeashIn(src, body);
                 return;
             case Protocol.LeashStateDown:   // WO-114
-                Wo114OnLeashStateIn(src, body);
+                Wo114OnLeashStateIn(src, joinId, body);   // WO-206 E: the joinId slot is the join epoch the joiner's state belongs to
                 return;
             case Protocol.LootAskDown:      // WO-134
             case Protocol.LootHostDown:
@@ -335,6 +344,7 @@ public partial class GameBridge
 
     private async Task OnJoinRequestAsync(byte joiner, uint joinId)
     {
+        if (!Wo206JoinMessageAdmitted(Protocol.JoinRequestDown, joinId, joiner)) return;   // WO-206 E: a late repeat never reopens a closed attempt
         string who = _ghostNames.TryGetValue(joiner, out var n) ? n : $"player {joiner}";
         string refuse = !_sharedWorld ? "shared-world-off"
                       : !(_combatRoleApplied && _isDamageAuthority) ? "not-host"
@@ -364,6 +374,7 @@ public partial class GameBridge
             return;
         }
         Console.WriteLine($"MP-JOIN host: join 0x{joinId:x8} requested by {who} (ghost {joiner}) -- timeout {_joinTimeoutS} s once paused");
+        Wo206HostJoinStarted(joinId);   // WO-206 E: a new join epoch
         _ = RunHostJoinAsync(j);
     }
 
@@ -642,6 +653,7 @@ public partial class GameBridge
 
     private async Task FinishHostJoinAsync(HostJoin j, string reason, byte abortReason)
     {
+        Wo206HostJoinEnded(j.JoinId, reason);   // WO-206 E: first of all -- an abort is a new join epoch, nothing of this attempt counts from here
         double pausedS = j.PausedUtc is { } p ? (DateTime.UtcNow - p).TotalSeconds : 0;
         // Resume first: nothing below may keep the host frozen. WO-151: the engine's own hold first of all
         // (through the pipe -- while the engine holds the world the mod's timer chains do not run; console-called Lua
@@ -656,6 +668,10 @@ public partial class GameBridge
         else
         {
             try { await ExecLuaAsync($"if KCD2MP_JoinDeferEnd then KCD2MP_JoinDeferEnd(\"{j.JoinId:x8}\", \"{EscapeLua(reason)}\") end"); } catch { }
+            // WO-206 B2 (a 5 s cut right after the request): the JoinTry was still waiting in the game's queue when the joiner went;
+            // it ran after this end and paused the world for a join nobody resumed (195 s, the mod's own safety timer). The resume is
+            // the mod's own, keyed by the join and a no-op when that join never paused -- sent after the JoinTry, it ends it.
+            try { await ExecLuaAsync($"if KCD2MP_JoinResume then KCD2MP_JoinResume(\"{j.JoinId:x8}\", \"{EscapeLua(reason)}\") end"); } catch { }
         }
         if (abortReason != 0 && reason != "joiner-gone" && reason != "relay-lost")
             try { await WriteJoinAsync(WorldReceiver.BuildAbort(j.Joiner, j.JoinId, abortReason)); } catch { }
@@ -678,6 +694,7 @@ public partial class GameBridge
         if (_joinRx is not null) { Console.WriteLine("MP-JOIN mp_join_request: a transfer is already running"); return; }
         if (!Wo180SlotAvailableOrTell()) return;   // WO-180: no save slot for the host's world -- nothing is sent, the host is not paused
         _joinOutId = (uint)Random.Shared.Next(1, int.MaxValue);
+        Wo206NoteOwnAttempt(_joinOutId);   // WO-206 E: the host's statuses of this attempt are this joiner's
         WorldReceiver.SweepStaging(WorldReceiver.DefaultStagingDir());
         SetJoinUi("requested", "Asking your host for the world...");
         try
@@ -721,6 +738,7 @@ public partial class GameBridge
         if (state == Protocol.JoinStateSession) { Wo124OnSessionMode(src, reason, joinId, arg); return; }   // WO-124: the host's session mode (WO-125: + its world)
         if (state == Protocol.JoinStateReloading) { Wo125OnHostReloading(); return; }                   // WO-125: the host started a load
         if (state == Protocol.JoinStateHostKey) { Wo157OnHostKey(joinId); return; }                       // WO-157: the host's install key
+        if (!Wo206JoinerStatusAdmitted(joinId, state)) return;   // WO-206 E: a status of an attempt not live here never reaches the UI
         string st = Protocol.JoinStateName(state), rs = Protocol.JoinReasonName(reason);
         Console.WriteLine($"MP-JOIN joiner: host status join=0x{joinId:x8} state={st} reason={rs} arg={arg}");
         switch (state)

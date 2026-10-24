@@ -46,6 +46,8 @@ public sealed class PackResult
     public string Manifest = "";
     /// <summary>WO-202: BRIEFING.md, the bundle's first file (Briefing.cs).</summary>
     public string Briefing = "";
+    /// <summary>WO-206 D: the animation detectors' results, when the bundle holds the probe's file.</summary>
+    public AnimAnalysis? Anim;
 }
 
 /// <summary>
@@ -61,6 +63,7 @@ public static class Packer
     {
         opt ??= new PackOptions();
         Directory.CreateDirectory(outDir);
+        sources = ArrangeAnim(sources);
         var res = new PackResult();
         void Say(string s) => progress?.Invoke(s);
 
@@ -79,8 +82,12 @@ public static class Packer
                 }
         res.OddMarks = windows.Count;
         // WO-202: the briefing, read off the sources before anything is collapsed (never fatal)
-        try { res.Briefing = Briefing.Build(Briefing.Read(sources)); }
+        try { var inp = Briefing.Read(sources); res.Anim = inp.Anim; res.Briefing = Briefing.Build(inp); }
         catch (Exception ex) { res.Briefing = "# Kingdom Come: Together -- briefing\n\nThe briefing could not be written: " + ex.GetType().Name + ": " + ex.Message + "\n"; }
+        // WO-206 D: the animation report beside the probe's file (never fatal)
+        if (res.Anim is { } an)
+            try { sources = sources.Append(new SourceFile(AnimStream.ReportEntry, Bytes: Encoding.UTF8.GetBytes(AnimReport.Html(an)))).ToList(); }
+            catch (Exception ex) { Say("anim-report.html not written: " + ex.Message); }
 
         // pass 2: dedupe, collapse, compress one frame per entry
         var seen = new Dictionary<string, string>(StringComparer.Ordinal);   // sha256 -> first entry
@@ -197,9 +204,30 @@ public static class Packer
         return sb.ToString();
     }
 
+    /// <summary>
+    /// WO-206 D: the animation probe's file goes into the bundle's anim folder. The probe writes it into the game folder, beside
+    /// kcd.log: a caller that lists it (as kcdmp-anim.jsonl) has it moved there; one that does not has it found beside kcd.log.
+    /// Without it the list is returned unchanged.
+    /// </summary>
+    internal static IReadOnlyList<SourceFile> ArrangeAnim(IReadOnlyList<SourceFile> sources)
+    {
+        if (sources.Any(s => s.EntryName == AnimStream.BundleEntry || s.EntryName.StartsWith(AnimStream.BundleEntry + ".piece", StringComparison.Ordinal))) return sources;
+        if (sources.FirstOrDefault(s => s.EntryName == AnimStream.FileName) is { } top)
+            return sources.Select(s => ReferenceEquals(s, top) ? s with { EntryName = AnimStream.BundleEntry } : s).ToList();
+        try
+        {
+            var kcd = sources.FirstOrDefault(s => s.EntryName == "kcd.log" && s.Path is not null);
+            string? dir = kcd is null ? null : System.IO.Path.GetDirectoryName(kcd.Path);
+            if (dir is not null && File.Exists(System.IO.Path.Combine(dir, AnimStream.FileName)))
+                return sources.Append(new SourceFile(AnimStream.BundleEntry, System.IO.Path.Combine(dir, AnimStream.FileName))).ToList();
+        }
+        catch { }
+        return sources;
+    }
+
     private static bool IsLog(string entry) => entry.EndsWith(".log", StringComparison.OrdinalIgnoreCase);
 
-    private static byte[]? Read(SourceFile s)
+    internal static byte[]? Read(SourceFile s)
     {
         if (s.Bytes is not null) return s.Bytes;
         try

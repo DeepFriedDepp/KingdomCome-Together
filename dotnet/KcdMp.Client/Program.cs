@@ -290,6 +290,8 @@ using var cts = new CancellationTokenSource();
 Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
 AppDomain.CurrentDomain.ProcessExit += (_, _) => { cts.Cancel(); Thread.Sleep(500); };
 
+// WO-206 Part C: applied.jsonl beside the exe -- one session per file, so it starts empty (nothing else is touched)
+Wo206Applied.StartSession();
 var bridge = new GameBridge(config);
 // WO-179 0.3: an agent that exits gives the joiner's host-only save lock back first (the mod's lease covers a kill)
 AppDomain.CurrentDomain.ProcessExit += (_, _) => bridge.ReleaseSaveLockOnExit("agent-exit");

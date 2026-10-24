@@ -74,6 +74,7 @@ add_library(KCDMP SHARED
     wo203_conv.cpp
     wo203_cam.cpp
     wo204.cpp
+    wo206.cpp
     wo203_defence.cpp
     wo203_stream.cpp
     wo203_appear.cpp

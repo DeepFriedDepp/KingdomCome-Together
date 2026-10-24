@@ -68,7 +68,12 @@ public class TcpSocketService : BackgroundService
 				// WO-110 R6: no Nagle coalescing on 40-byte NPC frames; the
 				// agent sets the same on its side.
 				tcpListener.NoDelay = true;
-				var client = new ClientSession(_logger, tcpListener, _broadcastService, _sessions, _clientHandler, _idleTimeout);
+				// WO-206 B: the test-only fault layer wraps the connection when (and
+				// only when) both halves of its switch were given; otherwise this is
+				// the same session on the same socket as ever.
+				var client = _runner.Faults is null
+					? new ClientSession(_logger, tcpListener, _broadcastService, _sessions, _clientHandler, _idleTimeout)
+					: _runner.Create(RelayConnection.FromTcp(tcpListener));
 				_runner.Start(client);   // WO-127: the same lifecycle for Steam sessions (SteamRelayService)
 			}
 		}

@@ -1,4 +1,4 @@
-// Copyright (C) 2026 the Kingdom Come: Together contributors (AUTHORS). SPDX-License-Identifier: GPL-3.0-only
+﻿// Copyright (C) 2026 the Kingdom Come: Together contributors (AUTHORS). SPDX-License-Identifier: GPL-3.0-only
 // GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 using System.Buffers.Binary;
@@ -144,7 +144,7 @@ public class Wo203W164FitTests
         Assert.Equal((byte)13, Protocol.ConvTimer);
         string[] w203 = { "defence-swing", "defence-outcome", "guard-state", "engage-early", "npc-worn", "npc-pose", "join-progress", "focus-edge", "travel-route" };
         for (int i = 0; i < w203.Length; i++) Assert.Equal(w203[i], Protocol.W203KindName((byte)(i + 1)));
-        Assert.Equal("unknown-10", Protocol.W203KindName(10));
+        Assert.Equal("unknown-12", Protocol.W203KindName(12));   // WO-206: 10 the digest checkpoint, 11 the epochs
         Assert.Equal(10, Protocol.Version);   // no bump: new types on the join channel
     }
 }

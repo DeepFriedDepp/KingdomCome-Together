@@ -38,6 +38,8 @@
 #include "wo203.h"
 #include "wo201.h"
 #include "buffs.h"
+#include "instance.h"
+#include "wo206.h"
 #include "log.h"
 
 #include <windows.h>
@@ -56,7 +58,8 @@ namespace kcdmp::pipe {
 
 namespace {
 
-constexpr const char* kPipeName = R"(\\.\pipe\kcdmp)";
+// WO-206 A.2: \\.\pipe\kcdmp for players; \\.\pipe\kcdmp-<id> for a test-bench copy (instance.h).
+const char* pipe_name() { return instance::pipe_name().c_str(); }
 
 std::atomic<bool>   g_running{false};
 std::atomic<bool>   g_connected{false};
@@ -1450,6 +1453,7 @@ void serve(HANDLE h) {
     main_thread::post([] { kcdmp::wo132::on_pipe_closed(); });   // WO-132: engaged copies let go (main-thread state)
     main_thread::post([] { kcdmp::motion::on_pipe_closed(); });  // WO-154 2: the avatars' identities go with the session
     main_thread::post([] { kcdmp::wo201::on_pipe_closed(); });   // WO-201: its session parts stand down
+    main_thread::post([] { kcdmp::wo206::on_pipe_closed(); });   // WO-206: the digest sweep disarms, the probe stops
     kcdmp::wo137::on_disconnect();   // WO-137: no agent -- no quest frames, no HUD proxy
     kcdmp::wo138::on_pipe_closed();  // WO-138: no agent -- the native sender, the pause gate and the hold go off
     kcdmp::wo166::on_pipe_closed();  // WO-166 C3: no agent -- the striking windows end (restored at the next tick)
@@ -1467,7 +1471,7 @@ void serve(HANDLE h) {
 void listen_loop() {
     while (g_running) {
         HANDLE h = CreateNamedPipeA(
-            kPipeName,
+            pipe_name(),
             PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
             PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
             1,               // one agent per game
@@ -1554,14 +1558,14 @@ bool start() {
     // The injected plugin has process lifetime. Detaching keeps DLL teardown
     // free of a blocking join under the Windows loader lock.
     std::thread(listen_loop).detach();
-    logf("PIPE: listening on %s", kPipeName);
+    logf("PIPE: listening on %s", pipe_name());
     return true;
 }
 
 void stop() {
     if (!g_running.exchange(false)) return;
     // Unblock ConnectNamedPipe by connecting to it once.
-    HANDLE poke = CreateFileA(kPipeName, GENERIC_READ | GENERIC_WRITE, 0, nullptr,
+    HANDLE poke = CreateFileA(pipe_name(), GENERIC_READ | GENERIC_WRITE, 0, nullptr,
                               OPEN_EXISTING, 0, nullptr);
     if (poke != INVALID_HANDLE_VALUE) CloseHandle(poke);
 }

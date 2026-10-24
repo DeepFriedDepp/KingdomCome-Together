@@ -142,7 +142,10 @@ public readonly record struct LeashCommand(byte Kind, byte Seq, ushort Arg, floa
 /// <summary>WO-114: the joiner's leash state for the host (body after [target][joinId]).</summary>
 public readonly record struct LeashState(ushort Flags, byte PullSeq, byte Result, ushort FromM, ushort ToM, ushort ResidualCm)
 {
-    public byte[] Build()
+    public byte[] Build() => Build(0);
+
+    /// <summary>WO-206 E: the joinId slot (unused by WO-114, always 0) carries the join epoch this joiner's state belongs to; 0 = none.</summary>
+    public byte[] Build(uint joinEpoch)
     {
         var b = new byte[Protocol.LeashStateBodyLen];
         BinaryPrimitives.WriteUInt16LittleEndian(b, Flags);
@@ -150,7 +153,7 @@ public readonly record struct LeashState(ushort Flags, byte PullSeq, byte Result
         BinaryPrimitives.WriteUInt16LittleEndian(b.AsSpan(4), FromM);
         BinaryPrimitives.WriteUInt16LittleEndian(b.AsSpan(6), ToM);
         BinaryPrimitives.WriteUInt16LittleEndian(b.AsSpan(8), ResidualCm);
-        return Protocol.BuildJoinUp(Protocol.LeashStateUp, Protocol.JoinTargetHost, 0, b);
+        return Protocol.BuildJoinUp(Protocol.LeashStateUp, Protocol.JoinTargetHost, joinEpoch, b);
     }
 
     public static bool TryDecode(ReadOnlySpan<byte> body, out LeashState s)

@@ -31,6 +31,8 @@ public readonly record struct QuestChange(uint Seq, byte Flags, int Old, int New
     public bool Worker => (Flags & FWorker) != 0;
     public bool NewOk => (Flags & FNewOk) != 0;
     public bool OldOk => (Flags & FOldOk) != 0;
+    /// <summary>WO-206 E: the world epoch the frame that brought it was stamped with (0 = none): a queued change of an older one never lands.</summary>
+    public uint WorldEpoch { get; init; }
     /// <summary>"Barbora.trosecko.hledaniPsa" for "Barbora.trosecko.hledaniPsa.h.findVorech".</summary>
     public string Quest => QuestLen > 0 && QuestLen <= Path.Length ? Path[..QuestLen] : Path;
 

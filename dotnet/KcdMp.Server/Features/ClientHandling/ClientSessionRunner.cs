@@ -1,6 +1,7 @@
 // Copyright (C) 2026 the Kingdom Come: Together contributors (AUTHORS). SPDX-License-Identifier: GPL-3.0-only
 // GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
+using KcdMp.Server.Features.Faults;
 using KcdMp.Server.Features.Interactions;
 using KcdMp.Server.Features.Tcp;
 using ILogger = Serilog.ILogger;
@@ -26,9 +27,16 @@ public sealed class ClientSessionRunner
 	/// </summary>
 	public TimeSpan IdleTimeout { get; }
 
+	/// <summary>
+	/// WO-206 B: the test-only fault layer, or null -- always null unless BOTH
+	/// halves of its switch were given (RelayFaultSwitch); it is registered only then.
+	/// </summary>
+	public RelayFaults? Faults { get; }
+
 	public ClientSessionRunner(ILogger logger, IConfiguration configuration, ClientHandler clientHandler,
-		TcpBroadcastService broadcastService, SessionManager sessions)
+		TcpBroadcastService broadcastService, SessionManager sessions, RelayFaults? faults = null)
 	{
+		Faults = faults;
 		_logger = logger;
 		_clientHandler = clientHandler;
 		_broadcastService = broadcastService;
@@ -36,8 +44,18 @@ public sealed class ClientSessionRunner
 		IdleTimeout = TimeSpan.FromMilliseconds(int.Parse(configuration.GetSection("Tcp")["IdleTimeoutMs"] ?? "30000"));
 	}
 
-	public ClientSession Create(RelayConnection conn) =>
-		new(_logger, conn, _broadcastService, _sessions, _clientHandler, IdleTimeout);
+	public ClientSession Create(RelayConnection conn)
+	{
+		if (Faults is null)
+			return new(_logger, conn, _broadcastService, _sessions, _clientHandler, IdleTimeout);
+
+		// WO-206 B: the session runs on the fault layer's stream; the layer needs
+		// the session back for the client's role and name.
+		var faulted = Faults.Attach(conn);
+		var client = new ClientSession(_logger, faulted.Connection, _broadcastService, _sessions, _clientHandler, IdleTimeout);
+		faulted.Bind(client);
+		return client;
+	}
 
 	public void Start(ClientSession client)
 	{

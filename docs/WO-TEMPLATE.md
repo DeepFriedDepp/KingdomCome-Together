@@ -24,6 +24,16 @@
   `tools/Build-Installer.ps1 -Push` pushes only through it.
 - Input policy: real input only to the game, with the game in focus; nothing that could work as a keylogger is ever shipped.
 - New mechanisms ship on, each with its own switch.
+- **Mutation twins (WO-206):** every fix and every check ships with a twin -- the same build with that fix or rule switched
+  off -- and its test must FAIL on the twin. A test that passes on both proves nothing. Show the twin's failure in the findings.
+- **Test co-op with co-op (WO-206):** a change that touches sync, joining, quests, conversations, combat or copies gets a pair
+  run on the two-copy bench (`tools/rig/`) before an installer is built. A synthetic-partner pass is a development step, not
+  a proof.
+- **Start the way players start (WO-206):** the bench starts the agent the launcher's way (the host: load, "Gameplay started",
+  10 s, inject, verify, agent; the joiner: its main menu, the host in, inject, verify, agent, the Join answer). A harness
+  that starts things in another order says so in its findings.
+- **The release gate (WO-206):** an installer is built only after the pair smoke test passes on that exact build -- join,
+  walk, a sleep, a wait, a fight, a joined conversation, a loot take -- and its result is printed in the findings.
 
 ## Parts
 <Part 0 gates, then the boxed items, each with its acceptance check>

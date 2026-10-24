@@ -320,6 +320,12 @@ public partial class GameBridge
     /// <summary>&lt;Saved Games&gt;\KingdomCome2\saves (the engine's "User folder" + saves), or null.</summary>
     internal static string? ResolveSavesDir()
     {
+        // WO-206 A.2: a test-bench copy uses the folder its own engine names (its user folder, "(1)" and all)
+        if (BenchInstance.Id is not null)
+        {
+            string? bench = Environment.GetEnvironmentVariable("KCDMP_SAVES_DIR") is { Length: > 0 } e ? e : BenchInstance.SavesDirFromLog(KcdLogLocator.Find());
+            return bench is not null && Directory.Exists(bench) ? bench : null;
+        }
         string? root = null;
         try
         {

@@ -1,4 +1,4 @@
-// Copyright (C) 2026 the Kingdom Come: Together contributors (AUTHORS). SPDX-License-Identifier: GPL-3.0-only
+﻿// Copyright (C) 2026 the Kingdom Come: Together contributors (AUTHORS). SPDX-License-Identifier: GPL-3.0-only
 // GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 namespace KcdMp.Client;
@@ -35,6 +35,8 @@ public partial class GameBridge
         Wo201SpeechTick();                                // Act V F1's capture: 4 Hz
         Wo201RangedTick();                                // B11: 4 Hz (the DLL queues every step)
         Wo204Tick(n);                                     // WO-204: 4 Hz
+        Wo206Tick(n);                                     // WO-206 E: the host's epochs every 10 s, the stats line every minute
+        Wo206DigestTick(n);                               // WO-206 C/D: the checkpoint digests and the probe, 4 Hz
     }
 
     private void Wo201OnEventMore(string name, string? arg)

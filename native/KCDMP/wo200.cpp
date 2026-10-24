@@ -803,6 +803,22 @@ bool read_on(void* node, void* p) {
     return true;
 }
 
+// WO-206 C: the digest's read -- read_on without the class name (it runs ~10,000 times a sweep). Kind and value only.
+struct ValueCtx { uint8_t kind = 0; int32_t value = -1; };
+bool value_on(void* node, void* p) {
+    auto* r = static_cast<ValueCtx*>(p);
+    const Kind k = classify_node(node);
+    r->kind = static_cast<uint8_t>(k);
+    if (k == Kind::Clock) {
+        uint8_t b = 0xFF;
+        if (rd(node, kOffClockState, &b)) r->value = b;
+    } else {
+        int v = 0;
+        if (wo137::state_int(node, &v)) r->value = v;
+    }
+    return true;
+}
+
 // Research (V.1 probe O4, the harness only): a clock's state byte written directly (no port, no pulse) -- the receive-only joiner's way of
 // taking the host's clock values. Clock nodes only; the byte the setter itself reads (kOffClockState).
 struct ClockWriteCtx { uint8_t value; bool clock = false, ok = false; int before = -1; };
@@ -864,6 +880,14 @@ bool fire_on(void* node, void* p) {
 
 // ===========================================================================
 uint32_t closure_now() { return t_closure; }
+
+bool read_value(const char* path, uint8_t* kind, int32_t* value) {
+    ValueCtx r{};
+    if (!wo137::visit_node(path, &value_on, &r)) return false;
+    *kind = r.kind;
+    *value = r.value;
+    return true;
+}
 void source_now(const void** node, const void** port) { *node = t_srcNode; *port = t_srcPort; }
 void describe_source(const void* node, const void* port, char* cls, size_t ncls, char* path, size_t npath, char* pname, size_t npname) {
     if (ncls) cls[0] = 0;

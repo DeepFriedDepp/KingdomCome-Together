@@ -16,12 +16,13 @@ namespace KcdMp.Client;
 // counted and dropped. A joined conversation's lines travel on the Conv channel (WO-204 III.4).   WO201-SPEECH ...
 public partial class GameBridge
 {
-    private bool _w201SpeechRefused;
+    private int _w201SpeechRefusals;          // refused polls in a row (WO-206: a refusal is tried again, it no longer ends the session)
+    private long _w201SpeechRetryAtMs;
     private long _w201SpeechCaptured, _w201SpeechRetiredIn;
 
     private void Wo201SpeechTick()
     {
-        if (!_w201Connected || _w201SpeechRefused) return;
+        if (!_w201Connected || Environment.TickCount64 < _w201SpeechRetryAtMs) return;
         if (!(W137Host || W137Joiner)) return;
         uint fig = 0;
         // the figure only gives each line its distance; WO-204 III.4's conversation lines need none (0 = no figure: the DLL reports none)
@@ -37,10 +38,14 @@ public partial class GameBridge
         var r = await _combat.Wo163Async(Protocol.Wo201OpSpeechPoll, a);
         if (r is not { Ok: true } rr)
         {
-            _w201SpeechRefused = true;
-            Console.WriteLine($"WO201-SPEECH poll refused by the DLL ({(r is { } x ? x.Reason : 255)}) -- the partner hears nothing of this machine's conversations this session");
+            int n = ++_w201SpeechRefusals;
+            long wait = Wo206Rules.PollRetryDelayMs(n, Environment.GetEnvironmentVariable("KCDMP_TEST_W206_POLL_ONCE"));
+            _w201SpeechRetryAtMs = wait == long.MaxValue ? long.MaxValue : Environment.TickCount64 + wait;
+            if (Wo206Rules.LogPollRefusal(n))
+                Console.WriteLine($"WO201-SPEECH poll refused by the DLL ({(r is { } x ? x.Reason : 255)}, {n} in a row) -- {(wait == long.MaxValue ? "the partner hears nothing of this machine's conversations this session" : $"tried again in {wait / 1000} s")}");
             return;
         }
+        if (_w201SpeechRefusals > 0) { Console.WriteLine($"WO201-SPEECH poll answers again after {_w201SpeechRefusals} refusal(s)"); _w201SpeechRefusals = 0; }
         foreach (var l in Wo201Rules.ParseSpeechPoll(rr.Payload))
         {
             Wo202NoteVoice(l.AgeMs, l.Dur);   // WO-202 V.1: a shared cutscene never jumps through a line that is playing

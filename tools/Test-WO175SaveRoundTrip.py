@@ -25,7 +25,8 @@ import urllib.request
 
 API = os.environ.get('KCD2MP_API', 'http://localhost:1403')
 GAME = os.environ.get('KCD2MP_INSTALL', r'D:\SteamLibrary\steamapps\common\KCD2Mod')
-SAVES = os.path.join(os.environ.get('USERPROFILE', ''), 'Saved Games', 'kingdomcome2', 'saves')
+# KCD2MP_SAVES: the saves folder of the game that answers (the WO-206 bench's copy runs with its own user folder); default the game's own
+SAVES = os.environ.get('KCD2MP_SAVES') or os.path.join(os.environ.get('USERPROFILE', ''), 'Saved Games', 'kingdomcome2', 'saves')
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 

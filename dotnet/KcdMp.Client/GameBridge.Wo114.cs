@@ -390,10 +390,17 @@ public partial class GameBridge
         ExecLuaAsync($"if KCD2MP_Wo114Msg then KCD2MP_Wo114Msg(\"{EscapeLua(text)}\") end");
 
     /// <summary>LeashState from a joiner: its hold reasons, and a pull's result.</summary>
-    private void Wo114OnLeashStateIn(byte src, byte[] body)
+    private void Wo114OnLeashStateIn(byte src, uint joinEpoch, byte[] body)
     {
         if (!(_combatRoleApplied && _isDamageAuthority)) return;
         if (!LeashState.TryDecode(body, out var s)) return;
+        // WO-206 E: a state of an older join epoch (sent before the joiner heard of a join's start or abort, or "loading" only because
+        // of a reload whose rejoin was since aborted) is dropped -- the kept one is not replaced by it
+        if (!_w206.NoteJoinerState(src, joinEpoch, (s.Flags & Protocol.LeashFlagLoading) != 0))
+        {
+            Wo206LogDrop($"joiner {src}'s state {Protocol.LeashFlagsText(s.Flags)} of join epoch {joinEpoch} (now {_w206.Join})");
+            return;
+        }
         bool first = !_leashJoinerState.ContainsKey(src);
         var prev = first ? default : _leashJoinerState[src].S;
         _leashJoinerState[src] = (s, DateTime.UtcNow);
@@ -464,7 +471,7 @@ public partial class GameBridge
         if (_wo122Stream is null) return;
         _leashStateSent = flags;
         _leashStateSentUtc = DateTime.UtcNow;
-        try { await WriteJoinAsync(new LeashState(flags, _leashLastPullSeq, _leashLastResult, _leashFromM, _leashToM, _leashResidualCm).Build()); }
+        try { await WriteJoinAsync(new LeashState(flags, _leashLastPullSeq, _leashLastResult, _leashFromM, _leashToM, _leashResidualCm).Build(Wo206JoinerStateStamp())); }
         catch (Exception ex) { Console.WriteLine($"MP-LEASH joiner: state not sent: {ex.Message}"); }
     }
 

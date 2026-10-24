@@ -55,6 +55,9 @@ int status_text(char* out, int n);
 // The closure the calling thread runs in (0 = none). wo137's detector marks a State change made inside one (flag 128) and sends its id.
 // A scene's carry (WO-203 I.5) is not one: what a scene's out-port changes goes out as it did before the carry.
 uint32_t closure_now();
+// WO-206 C (main thread, read-only): a quest node's value for the cross-machine digest -- a clock's (C_Timer, C_TimeOfDayWatch) state
+// byte or a State's int (-1 = not readable as either); kind = the gate's Kind. False = no node at that path.
+bool read_value(const char* path, uint8_t* kind, int32_t* value);
 // The joiner's apply of a host change the host's own conversation made: the talker-only rules hold while it runs (wo137's apply).
 void set_mirror_talker(bool on);
 // II.4 copy_neutral_always (config byte 6 bit 1, joiner in the host's world): a host copy's loaded state is kept equal to what it is

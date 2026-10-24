@@ -3,6 +3,7 @@
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 // Portions from the original project, marczukmichal/kcd2-multiplayer; its author keeps their copyright (AUTHORS).
 using KcdMp.Server.Features.ClientHandling;
+using KcdMp.Server.Features.Faults;
 using KcdMp.Server.Features.Interactions;
 using KcdMp.Server.Features.ServerInformation;
 using KcdMp.Server.Features.Steam;
@@ -48,6 +49,14 @@ public class Program
 	/// </summary>
 	public static WebApplication CreateApp(string[] args)
 	{
+		// WO-206 B: the test bench's fault mode (Features/Faults/RelayFaultPlan.cs).
+		// Both the environment variable and the option, or nothing. The option
+		// leaves the argument list here, before any configuration source sees
+		// it, and the fault layer reads no configuration -- so no settings file
+		// can turn it on.
+		string? faultPlanPath = RelayFaultSwitch.Resolve(ref args,
+			Environment.GetEnvironmentVariable(RelayFaultSwitch.EnvVar), out string? faultNote);
+
 		args = NormaliseArgs(args);
 
 		var builder = WebApplication.CreateBuilder(args);
@@ -81,7 +90,19 @@ public class Program
 		builder.Services.AddSingleton<SteamRelayStatus>();
 		builder.Services.AddHostedService<SteamRelayService>();
 
+		// WO-206 B: registered only with the switch on; a bad plan stops the
+		// relay here -- a faulted test run without its faults is no run at all.
+		if (faultPlanPath is not null)
+		{
+			builder.Services.AddSingleton(RelayFaultPlan.Load(faultPlanPath));
+			builder.Services.AddSingleton<RelayFaults>();
+			builder.Services.AddHostedService<RelayFaultsService>();
+		}
+
 		var app = builder.Build();
+
+		if (faultNote is not null)
+			app.Services.GetRequiredService<Serilog.ILogger>().Warning("{Line:l}", faultNote);
 
 		// Map controller routs
 		app.MapControllers();

@@ -24,10 +24,10 @@ namespace KcdMp.Client;
 /// </summary>
 public sealed class CombatPipe : IAsyncDisposable
 {
-    private const string DefaultPipeName = "kcdmp";
     private readonly string _pipeName;
 
-    public CombatPipe() : this(DefaultPipeName) { }
+    /// <summary>The game's pipe: "kcdmp", or WO-206's per-copy "kcdmp-&lt;id&gt;" on the test bench (BenchInstance).</summary>
+    public CombatPipe() : this(BenchInstance.PipeName) { }
 
     /// <summary>WO-154 6.6: another pipe name, for tests only (a test server must never take the game's "kcdmp").</summary>
     public CombatPipe(string pipeName) => _pipeName = pipeName;

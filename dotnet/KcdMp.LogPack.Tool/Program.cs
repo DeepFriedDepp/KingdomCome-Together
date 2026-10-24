@@ -16,6 +16,29 @@ if (args.Length >= 2 && args[0] == "brief")
     Console.Write(Briefing.Build(Briefing.Read(bf)));
     return;
 }
+if (args.Length >= 1 && args[0] == "anim-compare")
+{
+    // WO-206 D: usage: anim-compare <hostBundleOrDir> <joinerBundleOrDir> [--no-write]
+    // Each argument: a bundle (.tzst, or any part of a split one) or a folder (an unpacked bundle, or a game folder holding
+    // kcdmp-anim.jsonl). Prints the "## Animation, host vs joiner" section and writes it into both bundles' BRIEFING.md.
+    if (args.Length < 3) { Console.Error.WriteLine("usage: anim-compare <hostBundleOrDir> <joinerBundleOrDir> [--no-write]"); Environment.ExitCode = 2; return; }
+    var hb = AnimBundle.Open(args[1]);
+    var jb = AnimBundle.Open(args[2]);
+    if (hb.AnimBytes is null || jb.AnimBytes is null)
+    {
+        Console.Error.WriteLine($"no probe data ({AnimStream.BundleEntry} or {AnimStream.FileName}) in the {(hb.AnimBytes is null ? "host's" : "joiner's")} bundle");
+        Environment.ExitCode = 2;
+        return;
+    }
+    var cmp = AnimCompare.Compare(AnimStream.Parse(hb.AnimBytes), AnimStream.Parse(jb.AnimBytes));
+    Console.Write(cmp.Section);
+    if (!args.Contains("--no-write"))
+        foreach (var (b, role) in new[] { (hb, "host"), (jb, "joiner") })
+            Console.WriteLine(b.WriteSection(AnimCompare.Heading, cmp.Section)
+                ? $"written into the {role}'s BRIEFING.md ({b.Source})"
+                : $"the {role}'s bundle has no BRIEFING.md: printed only ({b.Source})");
+    return;
+}
 string src = args[0], outDir = args[1];
 bool earlier = args.Contains("--earlier"), verify = !args.Contains("--no-verify");
 var opt = new PackOptions();

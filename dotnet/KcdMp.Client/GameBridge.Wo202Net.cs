@@ -66,7 +66,7 @@ public partial class GameBridge
     private long _w202LastReadMs;
 
     /// <summary>The reader: a state frame of a body that already waits is replaced in place. True = consumed (queued or merged).</summary>
-    private bool Wo202Coalesce(ChannelWriter<InFrame> writer, int type, byte[] payload, long arrival)
+    private bool Wo202Coalesce(ChannelWriter<InFrame> writer, int type, byte[] payload, long arrival, uint stamp)
     {
         Volatile.Write(ref _w202LastReadMs, W147StampMs(arrival));
         string? key = Wo202Rules.StateKey(type, payload);
@@ -75,13 +75,13 @@ public partial class GameBridge
         {
             if (_w202Latest.ContainsKey(key))
             {
-                _w202Latest[key] = new InFrame(type, payload, arrival);
+                _w202Latest[key] = new InFrame(type, payload, arrival, stamp);
                 _w202Coalesced++;
                 return true;
             }
-            _w202Latest[key] = new InFrame(type, payload, arrival);
+            _w202Latest[key] = new InFrame(type, payload, arrival, stamp);
         }
-        writer.TryWrite(new InFrame(Wo202CoalescedType, Encoding.UTF8.GetBytes(key), arrival));
+        writer.TryWrite(new InFrame(Wo202CoalescedType, Encoding.UTF8.GetBytes(key), arrival, 0));
         return true;
     }
 

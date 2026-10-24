@@ -344,7 +344,7 @@ public partial class GameBridge
                         Console.WriteLine($"MP-W137 joiner: the host's change numbers started again ({_w137LastHostSeq} -> {c.Seq}) -- a new host game; {n} queued change(s) of the old one dropped");
                     }
                     _w137LastHostSeq = c.Seq;
-                    _w137Queue.Enqueue(c);
+                    _w137Queue.Enqueue(c with { WorldEpoch = _w206FrameStamp });   // WO-206 E: the drain drops it if the host loaded since
                     Wo200NoteHostChange(c);   // WO-200 I.4: a dropped clock fire's comparison
                     return;
                 case Protocol.QuestHostReplayAck:   // WO-200 I.1: the host ran (or refused) this player's replay
@@ -355,11 +355,17 @@ public partial class GameBridge
                     Wo200OnHostItemCount(m.Text);
                     return;
                 case Protocol.QuestHostResult when Wo137Rules.TryParseResultText(m.Text, out var verdict, out int hv, out string hp, out string path):
-                    Wo137Post(() => Wo137OnResultAsync(m.Tok, verdict, hv, hp, path));
+                {
+                    uint st = _w206FrameStamp;   // WO-206 E: judged again when the work loop gets to it
+                    Wo137Post(() => Wo137OnResultAsync(m.Tok, verdict, hv, hp, path, st));
                     return;
+                }
                 case Protocol.QuestHostCheckpoint when Wo137Rules.TryParseCheckpointText(m.Text, out int part, out int nparts, out var entries):
-                    Wo137Post(() => Wo137OnCheckpointAsync(part, nparts, entries));
+                {
+                    uint st = _w206FrameStamp;
+                    Wo137Post(() => Wo137OnCheckpointAsync(part, nparts, entries, st));
                     return;
+                }
                 case Protocol.QuestHostMode when Wo137Rules.TryParseModeText(m.Text, out bool on, out string why):
                     if (!_w137HostModeKnown || on != _w137HostModeOn)
                         Console.WriteLine($"MP-W137 joiner: the host's quest sync is {(on ? "ON" : "OFF")} ({why})");
@@ -393,9 +399,12 @@ public partial class GameBridge
                     Wo200OnReplayAsk(src, m.Tok, m.Text);
                     return;
                 case Protocol.QuestAskRequest when Wo137Rules.TryParseRequestText(m.Text, out var req):
+                {
                     Interlocked.Increment(ref _w137AsksIn);
-                    Wo137Post(() => Wo137HostRequestAsync(src, m.Tok, req));
+                    var sreq = req with { WorldEpoch = _w206FrameStamp };   // WO-206 E: the world this joiner knew when it asked
+                    Wo137Post(() => Wo137HostRequestAsync(src, m.Tok, sreq));
                     return;
+                }
                 case Protocol.QuestAskTalk when Wo137Rules.TryParseTalkText(m.Text, out bool on, out string npc):
                     Interlocked.Increment(ref _w137TalksIn);
                     Wo137Post(() => Wo137HostTalkAsync(src, m.Tok, on, npc));
@@ -465,6 +474,7 @@ public partial class GameBridge
     /// <summary>One host change onto this copy. False = keep it (try again next tick).</summary>
     private async Task<bool> Wo137ApplyOneAsync(QuestChange c)
     {
+        if (!Wo206Admit(Wo206Cat.Quest, c.WorldEpoch, $"queued host change #{c.Seq} {c.Path}")) return true;   // WO-206 E: the host loaded since
         if (Wo137Rules.PerMachine(c)) { Wo137Veto("apply-per-machine"); return true; }
         if (_w154Contest.IsContested(c.Path)) { Wo137Veto("apply-contested"); return true; }   // WO-154 1: each world's own
         // WO-147: a correction fires only while this copy still differs from the host's value (the field's
@@ -502,6 +512,7 @@ public partial class GameBridge
         {
             case 0:
                 Interlocked.Increment(ref _w137Applied);
+                Wo206NoteApplied("quest", c.Path, c.Seq != 0 ? "host-change" : "correction", Wo206Applied.Sv(a.Old), Wo206Applied.Sv(a.New), c.WorldEpoch);   // WO-206 Part C
                 _w154Contest.NoteImposed(c.Path, a.Old, a.New, Environment.TickCount64);   // WO-154 1
                 Wo147LearnPortValue(c.Path, c.Port, a.New, a.Type);   // WO-147
                 Console.WriteLine(FormattableString.Invariant(
@@ -524,8 +535,9 @@ public partial class GameBridge
 
     // ---------------------------------------------------------------- joiner: results, checkpoints
 
-    private async Task Wo137OnResultAsync(uint tok, string verdict, int hostVal, string hostPort, string path)
+    private async Task Wo137OnResultAsync(uint tok, string verdict, int hostVal, string hostPort, string path, uint stamp = 0)
     {
+        if (!Wo206Admit(Wo206Cat.Quest, stamp, $"result #{tok} {path}")) return;   // WO-206 E
         _w137Asked.TryRemove(tok, out var asked);
         if (verdict == Wo154Rules.VerdictContested)
         {
@@ -542,15 +554,16 @@ public partial class GameBridge
             // field showed landing elsewhere).
             string? port = await Wo147CorrectionPortAsync(path, hostVal, asked.Req.Type);
             if (port is null) { Console.WriteLine($"MP-W137 joiner: {path} cannot be put back to the host's value {hostVal} (no port known to produce it) -- the next join loads it exactly"); return; }
-            _w137Queue.EnqueueFront(new QuestChange(0, QuestChange.FNotify, asked.Req.New, hostVal, port, "", path, asked.Req.QuestLen));
+            _w137Queue.EnqueueFront(new QuestChange(0, QuestChange.FNotify, asked.Req.New, hostVal, port, "", path, asked.Req.QuestLen) { WorldEpoch = stamp });
             Interlocked.Increment(ref _w137Corrected);
             Console.WriteLine(FormattableString.Invariant($"MP-W137 joiner: {path} goes back toward the host's value {hostVal} ({port}) -- this copy never keeps a step the host's world refused"));
         }
         await Task.CompletedTask;
     }
 
-    private async Task Wo137OnCheckpointAsync(int part, int nparts, List<Wo137Rules.CheckpointEntry> entries)
+    private async Task Wo137OnCheckpointAsync(int part, int nparts, List<Wo137Rules.CheckpointEntry> entries, uint stamp = 0)
     {
+        if (!Wo206Admit(Wo206Cat.Quest, stamp, $"checkpoint part {part}/{nparts}")) return;   // WO-206 E: the host loaded since it was sent
         if (!W137Joiner || !Wo137Active(W151MirrorHolding)) return;
         if (_w137Queue.Count > 0 || !_w137Asked.IsEmpty)
         {
@@ -558,10 +571,10 @@ public partial class GameBridge
             if (_w151CatchUp) { _w151CpStash[part] = (nparts, entries, Environment.TickCount64); Interlocked.Increment(ref _w151StashedParts); }
             return;
         }
-        await Wo137CompareCheckpointAsync(part, nparts, entries);
+        await Wo137CompareCheckpointAsync(part, nparts, entries, stamp);
     }
 
-    private async Task Wo137CompareCheckpointAsync(int part, int nparts, List<Wo137Rules.CheckpointEntry> entries)
+    private async Task Wo137CompareCheckpointAsync(int part, int nparts, List<Wo137Rules.CheckpointEntry> entries, uint stamp = 0)
     {
         var local = await _combat.Wo137ReadStatesAsync(entries.Select(e => e.Path).ToList());
         if (local is null || local.Count != entries.Count) return;
@@ -583,7 +596,7 @@ public partial class GameBridge
             if (port is not null && Wo144CorrectionSkipped(e.Path, port, e.Val)) continue;
             Console.WriteLine(FormattableString.Invariant($"MP-W137 MISMATCH {e.Path}: this copy {l.Val}, the host {e.Val}{(port is null ? " -- no port to correct it (WO-164: written directly once it stands 10 s, an int or bool State only)" : $" -- corrected toward the host ({port})")}"));
             if (port is null) { W164NoteMismatch(e.Path, e.Val, l.Val); continue; }
-            _w137Queue.EnqueueFront(new QuestChange(0, QuestChange.FNotify, l.Val, e.Val, port, "", e.Path, 0));
+            _w137Queue.EnqueueFront(new QuestChange(0, QuestChange.FNotify, l.Val, e.Val, port, "", e.Path, 0) { WorldEpoch = stamp });
             fixedN++;
             Interlocked.Increment(ref _w137Corrected);
         }
@@ -596,6 +609,8 @@ public partial class GameBridge
 
     private async Task Wo137HostRequestAsync(byte src, uint tok, QuestChange req)
     {
+        // WO-206 E: asked of a world this host has since left (a load: also one that waited out the load in _w137HeldRequests)
+        if (!Wo206Admit(Wo206Cat.Quest, req.WorldEpoch, $"request #{tok} from ghost {src} {req.Path}")) return;
         string head = FormattableString.Invariant($"MP-W137 host: request #{tok} from ghost {src}: {req.Path} {req.Port} {req.Old}->{req.New}");
         if (!_w137SyncOn) { await Wo137ReplyAsync(src, tok, "off", 0, "", req.Path); Console.WriteLine($"{head}: refused (mp_quest_sync off)"); return; }
         if (_w137HostPlayer != 0) { await Wo137ReplyAsync(src, tok, "held", 0, "", req.Path); Console.WriteLine($"{head}: held (this game plays player {_w137HostPlayer}, not Henry)"); return; }
@@ -664,6 +679,7 @@ public partial class GameBridge
         if (a is { Result: 0 })
         {
             Interlocked.Increment(ref _w137VerdictApplied);
+            Wo206NoteApplied("quest", req.Path, "joiner-request", Wo206Applied.Sv(a.Value.Old), Wo206Applied.Sv(a.Value.New), req.WorldEpoch);   // WO-206 Part C
             _w154Contest.NoteImposed(req.Path, a.Value.Old, a.Value.New, Environment.TickCount64);   // WO-154 1
             await Wo137ReplyAsync(src, tok, "applied", a.Value.New, req.Port, req.Path);
             Console.WriteLine(FormattableString.Invariant($"{head}: APPLIED to the host's world ({a.Value.Old}->{a.Value.New}); its consequences reach every joiner as changes"));

@@ -98,6 +98,8 @@ public partial class GameBridge
                 Wo203JoinOnFrame(src, m); break;
             case Protocol.W203FocusEdge:
                 Wo203QuestOnFrame(src, m); break;
+            case Protocol.W203DigestCheckpoint:   // WO-206 C
+                Wo206OnMarker(m); break;
             default:
                 Interlocked.Increment(ref _w203SideUnknown); break;
         }

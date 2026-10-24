@@ -19,6 +19,9 @@ public static class Briefing
     {
         public Dictionary<string, string[]> Logs = new(StringComparer.Ordinal);   // entry -> lines
         public Dictionary<string, DateTime> Mtimes = new(StringComparer.Ordinal);  // entry -> the file's last write (this machine's clock), when known
+        /// <summary>WO-206 D: the animation probe's file, analysed; null when the bundle has none (or it could not be read: <see cref="AnimError"/>).</summary>
+        public AnimAnalysis? Anim;
+        public string? AnimError;
     }
 
     public static Input Read(IReadOnlyList<SourceFile> sources)
@@ -43,7 +46,25 @@ public static class Briefing
             }
             catch { }
         }
+        ReadAnim(sources, inp);
         return inp;
+    }
+
+    /// <summary>WO-206 D: the probe file (anim/kcdmp-anim.jsonl, its pieces, or kcdmp-anim.jsonl as a folder holds it), run
+    /// through the detectors. Never fatal: an unreadable file is said in the section.</summary>
+    private static void ReadAnim(IReadOnlyList<SourceFile> sources, Input inp)
+    {
+        var whole = sources.FirstOrDefault(s => s.EntryName == AnimStream.BundleEntry) ?? sources.FirstOrDefault(s => s.EntryName == AnimStream.FileName);
+        var pieces = whole is null ? sources.Where(s => s.EntryName.StartsWith(AnimStream.BundleEntry + ".piece", StringComparison.Ordinal)).ToList() : new List<SourceFile>();
+        if (whole is null && pieces.Count == 0) return;
+        try
+        {
+            byte[]? bytes = whole is not null ? Packer.Read(whole)
+                          : AnimBundle.Join(pieces.Select(p => (p.EntryName, Packer.Read(p) ?? Array.Empty<byte>())), AnimStream.BundleEntry);
+            if (bytes is null) { inp.AnimError = "the file could not be opened"; return; }
+            inp.Anim = AnimDetect.Analyse(AnimStream.Parse(bytes));
+        }
+        catch (Exception ex) { inp.AnimError = ex.GetType().Name + ": " + ex.Message; }
     }
 
     private static readonly Regex AgentTime = new(@"^(\d\d:\d\d:\d\d\.\d+) ", RegexOptions.Compiled);
@@ -64,6 +85,8 @@ public static class Briefing
         QuestFails(inp, sb);
         Scorecard(inp, sb);
         StoodOut(inp, sb);
+        // WO-206 D: the animation detectors' counts and the worst bodies (one line when the bundle has no probe file)
+        sb.Append('\n').Append(AnimReport.Section(inp.Anim, inp.AnimError));
         return sb.ToString();
     }
 

@@ -110,18 +110,20 @@ public partial class GameBridge
             _w136NpcHeld.Clear(); _w136GhostHeld.Clear(); _w136DoorHeld.Clear(); _w136OrderedHeld.Clear();
         }
         var w = _frameWriter;
-        int n = 0;
+        int n = 0, stale = 0;
         foreach (var f in replay)
         {
             // WO-144: a peer who left while the world loaded is not brought back by its held frame.
             if (f.Type == Protocol.Ghost && f.Payload.Length > 0 && Wo144DropFromRemoved(f.Payload[0])) continue;
+            // WO-206 E: a frame held across a load of the host's world is that old world's -- never fed or replayed into the new one
+            if (Wo206Rules.WorldCategory(f.Type, f.Payload) is Wo206Cat cat && !Wo206Admit(cat, f.Stamp, $"held frame 0x{f.Type:X2}")) { stale++; continue; }
             long now = Stopwatch.GetTimestamp();
             FeedNativeAtRead(f.Type, f.Payload, now, replay: true);
-            if (w is not null && w.TryWrite(new InFrame(f.Type, f.Payload, now))) n++;
+            if (w is not null && w.TryWrite(new InFrame(f.Type, f.Payload, now, f.Stamp))) n++;
         }
         Interlocked.Add(ref _w136Replayed, n);
         Console.WriteLine(FormattableString.Invariant(
-            $"MP-W136 load hold released after {heldFor.TotalSeconds:F1} s: {n} held frame(s) replayed (the newest per NPC and per peer, then in order) -- the host's NPCs are applied now, never while the world loaded"));
+            $"MP-W136 load hold released after {heldFor.TotalSeconds:F1} s: {n} held frame(s) replayed (the newest per NPC and per peer, then in order){(stale > 0 ? $", {stale} of an older world epoch dropped (WO-206 E)" : "")} -- the host's NPCs are applied now, never while the world loaded"));
     }
 
     /// <summary>"Loading saved game" / "[CryAction] LoadGame": the mod's hold, best effort (the join's own load call already set it).</summary>

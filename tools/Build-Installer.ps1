@@ -325,6 +325,10 @@ $nicExit = $LASTEXITCODE
 $nicOut | Where-Object { $_ -match '^(HIT|EXEMPT|SELFTEST|checked:|RESULT:)|^\s+- ' } | ForEach-Object { Write-Host $_ }
 if ($nicExit -ne 0) { throw "no-input-capture gate FAILED: a shipped file can read what a person types or clicks (or the gate's self-test failed). Not shipping." }
 
+# WO-206 B: the relay's fault mode is a test bench tool; nothing shipped may turn it on (config, payload, launcher).
+& powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Test-RelayFaultsGate.ps1") -Payload $payload
+if ($LASTEXITCODE -ne 0) { throw "the relay fault-mode gate FAILED -- a shipped file can turn the test-only fault mode on, or its tests failed (tools\Test-RelayFaultsGate.ps1). Not shipping." }
+
 # WO-32 follow-up, rewritten in WO-74: write a manifest of everything this
 # Setup carries so the installer can prove, after installing, that every file
 # actually landed -- and that nothing ELSE is sitting in the install directory
