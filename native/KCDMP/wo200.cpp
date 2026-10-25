@@ -224,7 +224,15 @@ thread_local const void* t_srcPort = nullptr;
 std::atomic<uint32_t> c_tapCalls{0}, c_captured{0}, c_quiet{0}, c_continued{0}, c_gateCalls{0}, c_gateClassified{0}, c_targetReads{0};
 std::atomic<uint32_t> c_verdict[static_cast<int>(Verdict::Count)]{};
 std::atomic<uint32_t> c_replays{0}, c_replayRefused{0}, c_researchDrops{0};
-std::atomic<uint32_t> c_sceneContinued{0};   // WO-203 I.5: scene out-ports that carried their closure to the node gate
+std::atomic<uint32_t> c_sceneContinued{0};
+// WO-207 D.2: the joiner's NPC triggers (an AreaTrigger whose souls are a named NPC: the blacksmith in his smithy, Henik at the maypole).
+// On the joiner those NPCs are copies moving on the host's stream, so the trigger fired at its own moments and wrote the joiner's
+// States (WO-206 C1's KovarJeVKovarne and state27). Its out-port fires are dropped like a clock's: the host's world decides, its State
+// arrives as a mirror. The agent names the nodes (the game's own quest files); a node object is only compared here, never dereferenced.
+SRWLOCK g_npcTrigLock = SRWLOCK_INIT;
+std::unordered_set<const void*> g_npcTrig;
+std::atomic<bool> g_npcTrigAny{false};
+std::atomic<uint32_t> c_npcTrigQuiet{0}, c_npcTrigResolved{0}, c_npcTrigMissing{0};   // WO-203 I.5: scene out-ports that carried their closure to the node gate
 
 // --- events ----------------------------------------------------------------------
 struct Ev { uint32_t seq; uint8_t kind; uint32_t closure; uint64_t atMs; std::string a, b; };
@@ -496,6 +504,29 @@ void hooked_out_trigger(void* port) {
         push_event(kEvQuietDrop, 0, pn, path);
         call_release(owner);
         return;
+    }
+    if (g_npcTrigAny.load(std::memory_order_relaxed) && g_role.load() == kRoleJoiner && g_joined.load()) {   // WO-207 D.2
+        AcquireSRWLockShared(&g_npcTrigLock);
+        const bool npcTrig = g_npcTrig.count(owner) != 0;
+        ReleaseSRWLockShared(&g_npcTrigLock);
+        if (npcTrig) {
+            c_npcTrigQuiet.fetch_add(1, std::memory_order_relaxed);
+            bool log = false;
+            {
+                std::lock_guard<std::mutex> lk(g_markMx);
+                uint64_t& last = g_quietLast[owner];
+                const uint64_t t = now_ms();
+                if (last == 0 || t - last >= kQuietLogEveryMs) { last = t; log = true; }
+            }
+            if (log) {
+                char path[480] = "?", pn[96] = "?";
+                wo137::path_of(owner, path, sizeof path); port_name(port, pn, sizeof pn);
+                logf("WO207-QUIET joiner: %s :: %s not run -- an NPC's own trigger: the host's world decides (its State arrives as a mirror)", path, pn);
+                push_event(kEvQuietDrop, 0, pn, path);
+            }
+            call_release(owner);
+            return;
+        }
     }
     const Kind k = classify_node(owner);
     const uint32_t cur = t_closure;
@@ -833,6 +864,8 @@ bool clock_write_on(void* node, void* p) {
     return true;
 }
 
+bool npc_trig_on(void* node, void* p) { static_cast<std::vector<const void*>*>(p)->push_back(node); return true; }   // WO-207 D.2
+
 bool dump_on(void* node, void*) {
     char cls[160] = "?";
     rtti_name(node, cls, sizeof cls);
@@ -1052,13 +1085,14 @@ int status_text(char* out, int n) {
     return _snprintf_s(out, static_cast<size_t>(n), _TRUNCATE,
         "wo200 tap=%d gate=%d ports=%d classes=%d/%d role=%u joined=%d tapBits=%u gateBits=%u taps=%u captured=%u quiet=%u continued=%u "
         "scene_continues=%u gates=%u classified=%u reads=%u puppet=%u host_dialogue=%u host_view=%u talker_host=%u talker_joiner=%u joiner_story=%u "
-        "host_scene=%u replays=%u replay_refused=%u marks=%zu player=%d",
+        "host_scene=%u replays=%u replay_refused=%u marks=%zu player=%d npc_triggers=%zu npc_trigger_quiet=%u npc_trigger_resolved=%u npc_trigger_missing=%u",
         A.tap, A.gate, A.ports, g_found, kNClasses, g_role.load(), g_joined.load(), g_tapBits.load(), g_gateBits.load(), c_tapCalls.load(),
         c_captured.load(), c_quiet.load(), c_continued.load(), c_sceneContinued.load(), c_gateCalls.load(), c_gateClassified.load(), c_targetReads.load(),
         c_verdict[static_cast<int>(Verdict::PuppetRefused)].load(), c_verdict[static_cast<int>(Verdict::HostDialogue)].load(),
         c_verdict[static_cast<int>(Verdict::HostView)].load(), c_verdict[static_cast<int>(Verdict::TalkerOnlyHost)].load(),
         c_verdict[static_cast<int>(Verdict::TalkerOnlyJoiner)].load(), c_verdict[static_cast<int>(Verdict::JoinerStoryBark)].load(),
-        c_verdict[static_cast<int>(Verdict::HostScene)].load(), c_replays.load(), c_replayRefused.load(), g_marks.size(), g_playerFull.load() != nullptr);
+        c_verdict[static_cast<int>(Verdict::HostScene)].load(), c_replays.load(), c_replayRefused.load(), g_marks.size(), g_playerFull.load() != nullptr,
+        g_npcTrig.size(), c_npcTrigQuiet.load(), c_npcTrigResolved.load(), c_npcTrigMissing.load());
 }
 
 uint8_t handle(uint8_t op, const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t* outLen) {
@@ -1156,6 +1190,41 @@ uint8_t handle(uint8_t op, const uint8_t* body, size_t len, uint8_t* out, size_t
             const size_t cl = std::strlen(r.cls);
             out[7] = static_cast<uint8_t>(cl); std::memcpy(out + 8, r.cls, cl);
             *outLen = 8 + cl;
+            return 0;
+        }
+        case kOpQuietNodes: {   // WO-207 D.2
+            if (len < 1 || cap < 2) return 1;
+            if (body[0] == 0) {
+                AcquireSRWLockExclusive(&g_npcTrigLock);
+                const size_t had = g_npcTrig.size();
+                g_npcTrig.clear();
+                ReleaseSRWLockExclusive(&g_npcTrigLock);
+                g_npcTrigAny = false;
+                if (had) logf("WO207-QUIET the joiner's NPC triggers forgotten (%zu)", had);
+                out[0] = 0; out[1] = 0; *outLen = 2;
+                return 0;
+            }
+            if (body[0] != 1 || len < 2) return 1;
+            const uint8_t n = body[1];
+            size_t o = 2;
+            std::vector<const void*> found;
+            uint8_t resolved = 0, missing = 0;
+            for (uint8_t i = 0; i < n; ++i) {
+                if (o + 2 > len) return 1;
+                const uint16_t pl = get_u16(body + o);
+                if (pl == 0 || pl > 400 || o + 2 + pl > len) return 1;
+                std::string path(reinterpret_cast<const char*>(body + o + 2), pl);
+                o += 2u + pl;
+                const size_t before = found.size();
+                if (wo137::visit_node(path.c_str(), &npc_trig_on, &found) && found.size() > before) ++resolved; else ++missing;
+            }
+            AcquireSRWLockExclusive(&g_npcTrigLock);
+            for (const void* f : found) g_npcTrig.insert(f);
+            const size_t total = g_npcTrig.size();
+            ReleaseSRWLockExclusive(&g_npcTrigLock);
+            g_npcTrigAny = total > 0;
+            c_npcTrigResolved.fetch_add(resolved); c_npcTrigMissing.fetch_add(missing);
+            out[0] = resolved; out[1] = missing; *outLen = 2;
             return 0;
         }
         case kOpResearch: {

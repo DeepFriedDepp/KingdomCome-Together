@@ -32,7 +32,10 @@ RIG = os.environ.get('KCDMP_RIG_DIR', os.path.join(REPO, 'release', 'w206rig'))
 # The mod a copy runs: the WO's backup of the install's Mods\kdcmp (manifest, keys pak, localization) with the rig's own
 # freshly built kdcmp.pak (release\w206rig\deploy.ps1 puts it in run\mod).
 MOD_TEMPLATE = os.path.join(RIG, 'mods-backup-kdcmp')
-MOD_PAK = os.path.join(RIG, 'run', 'mod', 'kdcmp.pak')
+# WO-207: KCDMP_RIG_BUILD names a build folder of its own (dll\, agent\, relay\, logpack\, mod\kdcmp.pak): a run on another build
+# while the rig's own run\ stays the one it was
+BUILD = os.environ.get('KCDMP_RIG_BUILD') or os.path.join(RIG, 'run')
+MOD_PAK = os.path.join(BUILD, 'mod', 'kdcmp.pak')
 
 
 def _cvars(user_folder, tex_level, pool_mb, w, h, x, y):
@@ -51,7 +54,8 @@ def _cvars(user_folder, tex_level, pool_mb, w, h, x, y):
         ('wh_snd_muteall', '1'),
         # the game sleeps while its window is inactive (default 1): the copy behind ran at 20-34 fps and its agent's queue fell
         # 18-90 s behind -- every "host lag" of the bench's first night. 0: both copies at full rate, no focus taken (34 -> 173 fps).
-        ('sys_SleepIfInactiveWH', '0'),
+        # WO-207 C.1: KCDMP_RIG_SLEEP_INACTIVE=1 runs the copies as a player's game runs (the engine's default 1: asleep behind)
+        ('sys_SleepIfInactiveWH', os.environ.get('KCDMP_RIG_SLEEP_INACTIVE', '0')),
     ]
 
 

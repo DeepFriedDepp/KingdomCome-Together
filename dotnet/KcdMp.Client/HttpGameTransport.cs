@@ -271,6 +271,15 @@ public sealed partial class HttpGameTransport(string gameApiBase, int timeoutMs 
     public bool Held => _held;
     /// <summary>Statements waiting in the queue (tests, status).</summary>
     public int Queued { get { lock (_queueLock) return _queue.Count; } }
+
+    /// <summary>WO-207 B.5: how long the oldest frame-driven entry and the oldest background entry have waited in the queue now (ms; 0 none).</summary>
+    public (long FrameMs, long BackgroundMs) OldestWaitMs()
+    {
+        (long f, long b) o;
+        lock (_queueLock) o = _queue.OldestEnqueuedMs();
+        long now = NowMs();
+        return (o.f < 0 ? 0 : Math.Max(0, now - o.f), o.b < 0 ? 0 : Math.Max(0, now - o.b));
+    }
     private readonly object _queueLock = new();
 
     /// <summary>WO-153 3: batches that got no answer and were kept.</summary>
@@ -330,13 +339,72 @@ public sealed partial class HttpGameTransport(string gameApiBase, int timeoutMs 
         {
             lock (_queueLock)
             {
-                _queue.Add(new BatchQueue.Entry { Lua = lua, Text = text, Kind = kind, Key = key, OnceId = onceId, Encoded = enc, EnqueuedMs = NowMs() });
+                _queue.Add(new BatchQueue.Entry { Lua = lua, Text = text, Kind = kind, Key = key, OnceId = onceId, Encoded = enc, EnqueuedMs = NowMs(), Kind207 = Wo207Trace.Kind.Value });
                 full = _queue.QueuedEncoded >= MaxBatchChars - 200;   // full enough: do not wait for the loop
             }
         }
         finally { _batchLock.Release(); }
 
-        if (full) await FlushAsync(ct);
+        // WO-207 B.3: a full queue no longer makes the caller (the frame processor, a loop) wait for the game's console: the flusher
+        // sends it at the game's pace, a newer state still replaces an older one while it waits. Decoupled off: the 0.63.0 wait.
+        if (full) { if (Decoupled) RequestFlush(); else await FlushAsync(ct); }
+    }
+
+    /// <summary>WO-207 B.3 (mp_queue_decouple): callers never wait for a full queue's flush; the flusher drains it.</summary>
+    public bool Decoupled { get; set; } = true;
+    private readonly SemaphoreSlim _kick = new(0, 1);
+    private Task? _flusher;
+    private readonly object _flusherStart = new();
+    private readonly CancellationTokenSource _flusherCts = new();   // ends with the transport (DisposeAsync)
+    /// <summary>WO-207 B.3: batches the flusher sent, and its longest burst (statements).</summary>
+    public long FlusherBatches { get; private set; }
+    public int FlusherMaxBurst { get; private set; }
+
+    public void RequestFlush()
+    {
+        if (!Decoupled) { _ = FlushAsync(); return; }
+        EnsureFlusher();
+        if (_kick.CurrentCount == 0) { try { _kick.Release(); } catch (SemaphoreFullException) { } }
+    }
+
+    private void EnsureFlusher()
+    {
+        if (_flusher is not null) return;
+        lock (_flusherStart) _flusher ??= Task.Run(() => FlusherLoopAsync(_flusherCts.Token), CancellationToken.None);
+    }
+
+    /// <summary>
+    /// WO-207 B.3: the flusher. Kicked (or every 50 ms) it sends batch after batch while statements wait -- the rate is the game's own
+    /// answer time, not a fixed count a call -- and stops at a hold (the recovery owns sending then).
+    /// </summary>
+    private async Task FlusherLoopAsync(CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested)
+        {
+            try { await _kick.WaitAsync(50, ct); } catch (OperationCanceledException) { break; }
+            if (_held) continue;
+            try
+            {
+                await _sendLock.WaitAsync(ct);
+                try
+                {
+                    int burst = 0;
+                    while (!_held && !ct.IsCancellationRequested)
+                    {
+                        List<BatchQueue.Entry> batch;
+                        lock (_queueLock) batch = _queue.TakeBatch(MaxBatchChars, NowMs());
+                        if (batch.Count == 0) break;
+                        burst += batch.Count;
+                        FlusherBatches++;
+                        if (!await SendEntriesAsync(batch, ct)) break;
+                    }
+                    if (burst > FlusherMaxBurst) FlusherMaxBurst = burst;
+                }
+                finally { _sendLock.Release(); }
+            }
+            catch (OperationCanceledException) { break; }
+            catch (Exception ex) { Console.WriteLine($"MP-W207 flusher: {ex.GetType().Name}: {ex.Message}"); }
+        }
     }
 
     /// <summary>WO-110: statements that could never fit one ExecuteString and were dropped (see LuaCommandBudget).</summary>
@@ -366,11 +434,17 @@ public sealed partial class HttpGameTransport(string gameApiBase, int timeoutMs 
     {
         var sb = new StringBuilder();
         foreach (var e in batch) sb.Append(e.Text);
+        long sentMs = NowMs();
         try
         {
             await SendNowAsync(sb.ToString(), ct);
             _consecutiveFailures = 0;
-            foreach (var e in batch) Wo202CrashWatch.NoteApplied(e.Lua);   // WO-202 I.1: a crash report names the last ones
+            long answeredMs = NowMs();
+            foreach (var e in batch)
+            {
+                Wo202CrashWatch.NoteApplied(e.Lua);   // WO-202 I.1: a crash report names the last ones
+                Wo207Trace.Lua(e.Kind207, sentMs - e.EnqueuedMs, answeredMs - sentMs);   // WO-207 B.1: queued -> sent -> answered, per kind
+            }
             return true;
         }
         catch (Exception ex)
@@ -731,6 +805,8 @@ public sealed partial class HttpGameTransport(string gameApiBase, int timeoutMs 
 
     public async ValueTask DisposeAsync()
     {
+        _flusherCts.Cancel();   // WO-207 B.3: the flusher stops before the locks it uses go
+        if (_flusher is not null) { try { await _flusher; } catch { } }
         try { await FlushAsync(); } catch { }
 
         _recoveryCts?.Cancel();

@@ -23,6 +23,9 @@ public class Wo206AnimTests
         public long T; public double X, Y, Z; public double? Gz;
         public string? Fb = "CAnimActionAIMovement"; public int Fr = 4;
         public bool Dead, Rag, W, Bones, ArmsOut; public int Q;
+        public int? Qa;                        // WO-207 G.1: the oldest queued action's wait (ms); null = an older probe's line
+        public bool OldQa;                     // the first WO-207 probe: qa without the queue detail (never judged)
+        public int QPrio = 9;                  // the queued action's priority (the fixture's FullBody runs at 2)
         public (double X, double Y)? FeetAt;   // the feet pinned here (the bone slide)
     }
 
@@ -59,7 +62,11 @@ public class Wo206AnimTests
             foreach (var s in b.S)
             {
                 var a = new StringBuilder();
-                a.Append($"{{\"n\":\"{b.Name}\",\"k\":\"{b.Kind}\",\"p\":{V(s.X, s.Y, s.Z)},\"r\":[0,0,1.57],\"dead\":{(s.Dead ? 1 : 0)},\"rag\":{(s.Rag ? 1 : 0)},\"q\":{s.Q},\"sc\":[");
+                a.Append($"{{\"n\":\"{b.Name}\",\"k\":\"{b.Kind}\",\"p\":{V(s.X, s.Y, s.Z)},\"r\":[0,0,1.57],\"dead\":{(s.Dead ? 1 : 0)},\"rag\":{(s.Rag ? 1 : 0)},\"q\":{s.Q},");
+                // WO-207 G.1: the queue detail [flags, waited ms, priority]; the queued action outranks the FullBody's (its "pr" is 2) -- an old probe
+                // wrote qa alone (never judged)
+                if (s.Qa is int qa) a.Append($"\"qa\":{qa},").Append(s.OldQa ? "" : $"\"qd\":[[0,{qa},{s.QPrio}]],");
+                a.Append("\"sc\":[");
                 if (s.Fb is not null) a.Append($"{{\"s\":\"FullBody\",\"c\":\"{s.Fb}\",\"fr\":{s.Fr},\"pr\":2,\"h\":-1}},");
                 a.Append("{\"s\":\"HoldItem\",\"c\":\"C_HoldItemAction\",\"fr\":0,\"pr\":1,\"h\":-1}]");
                 a.Append($",\"gz\":{(s.Gz is double g ? I(g) : "null")},\"w\":{(s.W ? 1 : 0)}");
@@ -231,12 +238,98 @@ public class Wo206AnimTests
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
-    public void A_queue_that_rises_while_the_action_stands_still_is_found_as_stuck(bool on)
+    public void A_queued_action_that_never_starts_is_found_as_stuck(bool on)
     {
+        // WO-207 G.1 (G.3's twin for stuck): the stander (fragment 1: not its standing idle) holds one action that waits 4.5 s
         var scene = Clean();
-        foreach (var s in B(scene, Stander).Between(14, 18.5)) s.Q = 1 + (int)((s.T - T0 - 14000) / 1000);   // 1 .. 5
+        foreach (var s in B(scene, Stander).S) s.Qa = 0;
+        foreach (var s in B(scene, Stander).Between(14, 18.5)) { s.Q = 1; s.Qa = (int)(s.T - T0 - 14000); }
         var f = Check(scene, "stuck", on, Stander);
-        if (on) { var x = Assert.Single(f); Assert.Equal(5, x.Worst); Assert.True(x.Seconds >= 4, $"{x.Seconds}"); }
+        if (on) { var x = Assert.Single(f); Assert.Equal(4.4, x.Worst, 1); Assert.True(x.Seconds >= 2, $"{x.Seconds}"); }
+    }
+
+    [Fact]
+    public void WO207_an_action_queued_below_the_running_one_waits_and_is_not_stuck()
+    {
+        // host NPCs in a fight hold low-priority actions queued for minutes behind their combat action: never stuck
+        var scene = Clean();
+        foreach (var s in B(scene, Stander).S) { s.Qa = 0; s.QPrio = 1; }
+        foreach (var s in B(scene, Stander).Between(14, 18.5)) { s.Q = 1; s.Qa = (int)(s.T - T0 - 14000); }
+        var an = Run(scene, "stuck", true);
+        Assert.DoesNotContain(an.Findings, x => x.Detector == "stuck");
+    }
+
+    [Fact]
+    public void WO207_the_first_probes_queue_age_is_never_judged()
+    {
+        // the same 4.5 s wait from a probe whose qa still counted actions waiting to resume (no queue detail): not judged at all
+        var scene = Clean();
+        foreach (var s in B(scene, Stander).S) { s.Qa = 0; s.OldQa = true; }
+        foreach (var s in B(scene, Stander).Between(14, 18.5)) { s.Q = 1; s.Qa = (int)(s.T - T0 - 14000); }
+        var an = Run(scene, "stuck", true);
+        Assert.DoesNotContain(an.Findings, x => x.Detector == "stuck");
+    }
+
+    [Fact]
+    public void WO207_the_calibration_spares_what_is_normal()
+    {
+        // a queue of three that waits on a body standing in its normal idle (the host's own NPCs, WO-206: most samples), a dead body's
+        // queue, a long queue that keeps starting (its oldest action is always young), and an older probe's line: nothing is stuck
+        var scene = Clean();
+        foreach (var s in B(scene, Stander).S) { s.Fr = 5; s.Fb = "CAnimActionAIMovement"; s.Q = 3; s.Qa = (int)(s.T - T0); }
+        foreach (var s in B(scene, Corpse).S) { s.Q = 2; s.Qa = (int)(s.T - T0); }
+        foreach (var s in B(scene, Walker).S) { s.Q = 4; s.Qa = 300; }
+        Assert.DoesNotContain(Run(scene, "stuck", true).Findings, f => f.Detector == "stuck");
+        var old = Clean();
+        foreach (var s in B(old, Stander).Between(14, 18.5)) s.Q = 1 + (int)((s.T - T0 - 14000) / 1000);   // WO-206's planted fault, no age
+        Assert.DoesNotContain(Run(old, "stuck", true).Findings, f => f.Detector == "stuck");
+    }
+
+    [Fact]
+    public void WO207_a_body_that_streams_in_or_teleports_has_its_grace_but_not_after_it()
+    {
+        // FullBody empty for its first 1.5 s (streaming in): not a T-pose; the same after the body's own 30 m teleport; and after the
+        // observing player's 50 m jump. A bind pose 4 s after the teleport is one (G.3's twin: the grace ends).
+        var scene = Clean();
+        var st = B(scene, Stander);
+        foreach (var s in st.Between(0, 1.5)) s.Fb = null;
+        foreach (var s in st.Between(8, 20)) s.X = 35;                       // its own teleport at 8 s
+        foreach (var s in st.Between(8, 9.5)) s.Fb = null;
+        var player = new Body { Name = "Dude", Kind = "player" };
+        for (int i = 0; i < 200; i++) player.S.Add(new Smp { T = T0 + i * 100, X = i < 150 ? 0 : 50, Y = 50, Z = 10, Gz = 10 });
+        scene.Add(player);
+        foreach (var s in B(scene, Walker).Between(15, 16.5)) s.Fb = null;    // 0..1.5 s after the player's jump at 15 s
+        Assert.DoesNotContain(Run(scene, "tpose", true).Findings, f => f.Detector == "tpose");
+        foreach (var s in st.Between(12, 12.6)) s.Fb = null;                  // 4 s after its teleport
+        var f = Run(scene, "tpose", true).Findings.Where(x => x.Detector == "tpose").ToList();
+        Assert.Single(f);
+        Assert.Equal(Stander, f[0].Body);
+    }
+
+    [Fact]
+    public void WO207_one_deathpose_finding_per_body_per_stretch()
+    {
+        // a corpse that flips into a living action and back five times in one stretch: one finding (WO-206's corpse made 93)
+        var scene = Clean();
+        var c = B(scene, Corpse);
+        for (int k = 0; k < 5; k++) foreach (var s in c.Between(2 + 3 * k, 4 + 3 * k)) { s.Fb = "C_AnimActionIdleState"; s.Rag = false; }
+        var d = Run(scene, "deathpose", true).Findings.Where(f => f.Detector == "deathpose" && f.Body == Corpse).ToList();
+        var one = Assert.Single(d);
+        Assert.Contains("(5 runs in this stretch)", one.Note);
+        foreach (var s in c.Between(16.0, 16.5)) s.T += 2000;   // a gap: a second stretch
+        Assert.True(Run(scene, "deathpose", true).Findings.Count(f => f.Detector == "deathpose" && f.Body == Corpse) >= 1);
+    }
+
+    [Fact]
+    public void WO207_a_corpse_that_lies_with_its_last_idle_is_not_standing_dead()
+    {
+        // the host's own corpse (WO-206's long1: ttkc_man_7) keeps the AI movement's standing idle in its controller while its physics lies:
+        // not a finding; the same body upright (its physics a living entity) is one
+        var scene = Clean();
+        foreach (var s in B(scene, Corpse).S) { s.Fb = "CAnimActionAIMovement"; s.Fr = 5; s.Rag = true; }
+        Assert.DoesNotContain(Run(scene, "deathpose", true).Findings, f => f.Detector == "deathpose");
+        foreach (var s in B(scene, Corpse).Between(5, 7)) s.Rag = false;
+        Assert.Contains(Run(scene, "deathpose", true).Findings, f => f.Detector == "deathpose" && f.Body == Corpse);
     }
 
     // ------------------------------------------------------------------ the parser
@@ -381,8 +474,8 @@ public class Wo206AnimTests
     {
         var r = Cmp(Pair(400, true), new AnimCompareOptions { ComparePose = comparePose });
         Assert.Equal(comparePose, r.PoseMismatch is double pm && pm > 0.25 && pm < 0.35);
-        Assert.Equal(comparePose, r.Section.Contains("| full-body action or fragment differs | 3", StringComparison.Ordinal));
-        Assert.Equal(!comparePose, r.Section.Contains("| full-body action or fragment differs | off |", StringComparison.Ordinal));
+        Assert.Equal(comparePose, r.Section.Contains("| full-body action or fragment differs at the delay, exactly (WO-206) | 3", StringComparison.Ordinal));
+        Assert.Equal(!comparePose, r.Section.Contains("| full-body action or fragment differs at the delay, exactly (WO-206) | off |", StringComparison.Ordinal));
         // without the fault the same comparison finds none
         if (comparePose) Assert.True(Cmp(Pair(400, false)).PoseMismatch < 0.01);
     }

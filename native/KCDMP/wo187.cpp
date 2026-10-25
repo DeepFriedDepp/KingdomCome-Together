@@ -375,7 +375,13 @@ QueueInfo queue_info(uint32_t eid) {
         void* act = nullptr;
         if (!rd(b, static_cast<ptrdiff_t>(i) * 8, &act) || !act) continue;
         uint32_t fl = 0;
-        if (rd(act, kActFlags, &fl) && (fl & 4u)) ++q.kept;
+        const bool flr = rd(act, kActFlags, &fl);
+        if (q.nacts < 16) {
+            int32_t pr = -1;
+            rd(act, kActPriority, &pr);
+            q.acts[q.nacts] = act; q.flags[q.nacts] = flr ? fl : 0xFFFFFFFFu; q.prio[q.nacts] = pr; ++q.nacts;
+        }
+        if (flr && (fl & 4u)) ++q.kept;
         if (i == 0) {
             const std::string a = short_name(rtti_name(act));
             std::snprintf(q.first, sizeof q.first, "%s", a.empty() ? "?" : a.c_str());

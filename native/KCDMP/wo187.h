@@ -77,7 +77,9 @@ int read_all_scopes(uint32_t eid, ScopeInfo* out, int max);
 // WO-204 II.2 (main thread, read-only): the body's queued (not yet installed) Mannequin actions -- the CActionController's queue vector
 // at +0x50 / +0x58 (CryAction's own over-full trim reads it there: "attempting to queue too many actions ... up to 10 allowed"), the
 // first one's class and priority, and how many carry flag 4 at +0x2C (the ones that trim keeps: "Can't remove anything"). -1 unreadable.
-struct QueueInfo { int n = -1; int kept = 0; char first[48]{}; int32_t firstPrio = 0; };
+// WO-207 G.1: acts = the queued action objects (the first 16), only ever compared (the probe ages them), never dereferenced by a caller.
+// WO-207 G.1: flags = each queued action's flags (+0x2C) beside it (the probe tells a never-started action from one waiting to resume).
+struct QueueInfo { int n = -1; int kept = 0; char first[48]{}; int32_t firstPrio = 0; const void* acts[16]{}; uint32_t flags[16]{}; int32_t prio[16]{}; int nacts = 0; };
 QueueInfo queue_info(uint32_t eid);
 // WO-190 0.1 (main thread, read-only): the body's Mannequin tag state (its action controller's context +0x10, WO-100's read), n <= 20 bytes.
 bool tag_state(uint32_t eid, uint8_t* out, size_t n);

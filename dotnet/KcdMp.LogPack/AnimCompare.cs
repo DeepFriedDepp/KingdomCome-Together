@@ -21,7 +21,7 @@ public sealed class AnimCompareOptions
     public int StepMs { get; set; } = 10;
 }
 
-public sealed record AnimBodyCompare(string Name, int Pairs, double P50, double P95, double? PoseMismatch, double WeaponMismatch);
+public sealed record AnimBodyCompare(string Name, int Pairs, double P50, double P95, double? PoseMismatch, double WeaponMismatch, double? ActionMismatch = null);
 
 public sealed class AnimCompareResult
 {
@@ -30,6 +30,10 @@ public sealed class AnimCompareResult
     public bool OffsetEstimated, OffsetAtEdge;
     public double P50, P95, WeaponMismatch;
     public double? PoseMismatch;
+    /// <summary>WO-207 G.2: the copy runs a different full-body action (<see cref="AnimCompare.SameAction"/>), and the share where both
+    /// machines read tags and they differ; the most frequent (host, joiner) pairs of a mismatch.</summary>
+    public double? ActionMismatch, TagMismatch;
+    public List<(string Host, string Joiner, int N)> TopMismatches = new();
     public List<AnimBodyCompare> Bodies = new();
     public string Section = "";
 }
@@ -43,6 +47,49 @@ public sealed class AnimCompareResult
 public static class AnimCompare
 {
     public const string Heading = "## Animation, host vs joiner";
+    /// <summary>WO-207 G.2: a joiner's sample matches when any of the host's samples within this of (its time minus the stream delay)
+    /// runs the same action: a transition near the edge of the delay is the stream, not a different action.</summary>
+    public const long PoseWindowMs = 300;
+
+    /// <summary>
+    /// WO-207 G.2: the action family a full-body action belongs to. Standing idle in any of its forms is one family ("idle": the idle state,
+    /// an idle variation, the AI movement action standing, fragment 5 -- each machine picks its own variation, the stream does not carry
+    /// it); moving in any of the locomotion actions is another ("locomotion": the AI movement action moving, its start/stop transitions,
+    /// combat footwork -- compared by speed band, below); every other action is its class and fragment.
+    /// </summary>
+    public static string Family(string? cls, int frag) => cls switch
+    {
+        null => "empty",
+        "C_AnimActionIdleState" or "C_VariationAction" => "idle",
+        "CAnimActionAIMovement" when frag == 5 => "idle",
+        "CAnimActionAIMovement" or "CAnimActionMovementTransition" or "C_CombatAnimActionMovement" or "C_PlayerMovementAction" => "locomotion",
+        _ => cls + "#" + frag.ToString(CultureInfo.InvariantCulture),
+    };
+
+    /// <summary>WO-207 G.2: standing (under 0.3 m/s), walking (to 2.2), running (to 4.5), sprinting.</summary>
+    public static int SpeedBand(double mps) => mps < 0.3 ? 0 : mps < 2.2 ? 1 : mps < 4.5 ? 2 : 3;
+
+    /// <summary>WO-207 G.2: the same action: idle and locomotion compare by gait (the speed band the positions give), everything else by
+    /// its family (class and fragment).</summary>
+    public static bool SameAction(string? hc, int hf, double hv, string? jc, int jf, double jv)
+    {
+        string a = Family(hc, hf), b = Family(jc, jf);
+        bool am = a is "idle" or "locomotion", bm = b is "idle" or "locomotion";
+        if (am && bm) return SpeedBand(hv) == SpeedBand(jv);
+        return a == b;
+    }
+
+    /// <summary>The equivalences the stream cannot carry (named in the report).</summary>
+    public const string Equivalences = "an idle state, an idle variation and the AI movement action standing (fragment 5) are one family: each machine picks its own idle variation; " +
+        "the locomotion actions (moving, its start/stop transitions, combat footwork) compare by speed band, not by class or fragment: the transition clips are chosen on each machine";
+
+    /// <summary>A body's horizontal speed at sample i (its neighbours within the probe's own gaps), m/s.</summary>
+    private static double SpeedAt(List<AnimSample> S, int i)
+    {
+        int a = i > 0 && S[i].T - S[i - 1].T <= AnimLimits.MaxGapMs ? i - 1 : i, b = i + 1 < S.Count && S[i + 1].T - S[i].T <= AnimLimits.MaxGapMs ? i + 1 : i;
+        if (a == b || S[b].T == S[a].T) return 0;
+        return AnimDetect.HDist(S[a].X, S[a].Y, S[b].X, S[b].Y) * 1000.0 / (S[b].T - S[a].T);
+    }
     /// <summary>One position error counts at most this much in the delay search (a load's teleport must not steer it).</summary>
     private const double ClipM = 5.0;
     /// <summary>The delay search uses at most this many joiner samples (spread evenly): seconds, not minutes, on a long session.</summary>
@@ -86,30 +133,55 @@ public static class AnimCompare
         }
 
         var all = new List<double>();
-        int poseN = 0, poseBad = 0, wBad = 0;
+        int poseN = 0, poseBad = 0, wBad = 0, actBad = 0, tagN = 0, tagBad = 0;
+        var mism = new Dictionary<(string, string), int>();
         foreach (var (name, h, j) in pairs)
         {
             var errs = new List<double>();
-            int bp = 0, bpBad = 0, bw = 0;
-            foreach (var x in j.S)
+            int bp = 0, bpBad = 0, bw = 0, ba = 0;
+            for (int ji = 0; ji < j.S.Count; ji++)
             {
+                var x = j.S[ji];
                 if (!At(h.S, x.T - res.OffsetMs, out var hx, out var hy, out var hz, out int idx)) continue;
                 errs.Add(Dist(hx, hy, hz, x));
                 var hsm = h.S[idx];   // the host's sample in effect at that moment
-                if (opt.ComparePose) { bp++; if (!string.Equals(hsm.Fb, x.Fb, StringComparison.Ordinal) || hsm.FbFrag != x.FbFrag) bpBad++; }
+                if (opt.ComparePose)
+                {
+                    bp++;
+                    if (!string.Equals(hsm.Fb, x.Fb, StringComparison.Ordinal) || hsm.FbFrag != x.FbFrag) bpBad++;
+                    // WO-207 G.2: any of the host's samples within the window, by family and gait
+                    double jv = SpeedAt(j.S, ji);
+                    bool same = false;
+                    long t0 = x.T - res.OffsetMs - PoseWindowMs, t1 = x.T - res.OffsetMs + PoseWindowMs;
+                    int k = idx;
+                    while (k > 0 && h.S[k - 1].T >= t0) k--;
+                    for (; k < h.S.Count && h.S[k].T <= t1 && !same; k++)
+                        same = h.S[k].T >= t0 && SameAction(h.S[k].Fb, h.S[k].FbFrag, SpeedAt(h.S, k), x.Fb, x.FbFrag, jv);
+                    if (!same)
+                    {
+                        ba++;
+                        var key = (Family(hsm.Fb, hsm.FbFrag), Family(x.Fb, x.FbFrag));
+                        mism[key] = mism.TryGetValue(key, out int c) ? c + 1 : 1;
+                    }
+                    if (hsm.Tg is not null && x.Tg is not null) { tagN++; if (!string.Equals(hsm.Tg, x.Tg, StringComparison.Ordinal)) tagBad++; }
+                }
                 if (hsm.Weapon != x.Weapon) bw++;
             }
             if (errs.Count == 0) continue;
             all.AddRange(errs);
-            poseN += bp; poseBad += bpBad; wBad += bw;
-            res.Bodies.Add(new AnimBodyCompare(name, errs.Count, Pct(errs, 50), Pct(errs, 95), opt.ComparePose ? (double)bpBad / bp : null, (double)bw / errs.Count));
+            poseN += bp; poseBad += bpBad; wBad += bw; actBad += ba;
+            res.Bodies.Add(new AnimBodyCompare(name, errs.Count, Pct(errs, 50), Pct(errs, 95), opt.ComparePose ? (double)bpBad / bp : null, (double)bw / errs.Count,
+                                               opt.ComparePose && bp > 0 ? (double)ba / bp : null));
         }
         res.Pairs = all.Count;
         if (all.Count > 0)
         {
             res.P50 = Pct(all, 50); res.P95 = Pct(all, 95);
             res.PoseMismatch = opt.ComparePose && poseN > 0 ? (double)poseBad / poseN : null;
+            res.ActionMismatch = opt.ComparePose && poseN > 0 ? (double)actBad / poseN : null;
+            res.TagMismatch = tagN > 0 ? (double)tagBad / tagN : null;
             res.WeaponMismatch = (double)wBad / all.Count;
+            res.TopMismatches = mism.OrderByDescending(kv => kv.Value).Take(8).Select(kv => (kv.Key.Item1, kv.Key.Item2, kv.Value)).ToList();
         }
         res.Section = Section(res, opt);
         return res;
@@ -171,11 +243,23 @@ public static class AnimCompare
         sb.Append("| measure | joiner's copies against the host's NPCs |\n|---|---|\n");
         sb.Append($"| stream delay | {(r.OffsetEstimated ? r.OffsetMs + " ms" : "not estimated")} |\n");
         sb.Append($"| position error, p50 | {M(r.P50)} |\n| position error, p95 | {M(r.P95)} |\n");
-        sb.Append($"| full-body action or fragment differs | {(r.PoseMismatch is double pm ? P(pm) : "off")} |\n");
+        sb.Append($"| the copy runs a different full-body action (WO-207: the same family within {PoseWindowMs} ms of the delay; idle and locomotion by speed band) | {(r.ActionMismatch is double am ? P(am) : "off")} |\n");
+        sb.Append($"| full-body action or fragment differs at the delay, exactly (WO-206) | {(r.PoseMismatch is double pm ? P(pm) : "off")} |\n");
+        if (r.TagMismatch is double tm) sb.Append($"| Mannequin tags differ (both read) | {P(tm)} |\n");
         sb.Append($"| weapon drawn differs | {P(r.WeaponMismatch)} |\n\n");
-        sb.Append("| NPC | pairs | position p50 | position p95 | action differs | weapon differs |\n|---|---|---|---|---|---|\n");
+        if (r.ActionMismatch is not null)
+        {
+            sb.Append($"Equivalences the stream cannot carry: {Equivalences}.\n\n");
+            if (r.TopMismatches.Count > 0)
+            {
+                sb.Append("| host's action family | the copy's | samples |\n|---|---|---|\n");
+                foreach (var (hf, jf, n) in r.TopMismatches) sb.Append($"| {hf} | {jf} | {n} |\n");
+                sb.Append('\n');
+            }
+        }
+        sb.Append("| NPC | pairs | position p50 | position p95 | different action | exact differs | weapon differs |\n|---|---|---|---|---|---|---|\n");
         foreach (var b in r.Bodies.OrderByDescending(b => b.P95).ThenBy(b => b.Name, StringComparer.Ordinal).Take(20))
-            sb.Append($"| {b.Name} | {b.Pairs} | {M(b.P50)} | {M(b.P95)} | {(b.PoseMismatch is double x ? P(x) : "off")} | {P(b.WeaponMismatch)} |\n");
+            sb.Append($"| {b.Name} | {b.Pairs} | {M(b.P50)} | {M(b.P95)} | {(b.ActionMismatch is double a ? P(a) : "off")} | {(b.PoseMismatch is double x ? P(x) : "off")} | {P(b.WeaponMismatch)} |\n");
         if (r.Bodies.Count > 20) sb.Append($"\nAnd {r.Bodies.Count - 20} more NPCs.\n");
         sb.Append('\n');
         return sb.ToString();

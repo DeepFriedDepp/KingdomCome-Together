@@ -15,6 +15,15 @@ public static class AnimLimits
 
     /// <summary>tpose: the FullBody scope empty for longer than this on a living, non-ragdoll body (the bind pose shows).</summary>
     public const long TposeEmptyMs = 300;
+    /// <summary>WO-207 G.1: tpose waits this long after a body appears (it streams in, or comes back after a load or a gap), after its own
+    /// teleport and after the observing player's: a body that streams in shows no action for its first second or two on BOTH machines
+    /// (WO-206's baseline: 17 of the host's own T-poses, all within 1.8 s of the body appearing).</summary>
+    public const long TposeGraceMs = 3000;
+    /// <summary>WO-207 G.1: a jump of a body longer than this between two samples is a teleport (its own grace starts).</summary>
+    public const double TeleportM = 5.0;
+    /// <summary>WO-207 G.1: the observing player's jump longer than this (the rig's teleports, a fast travel) gives every body on that
+    /// machine the grace.</summary>
+    public const double PlayerTeleportM = 20.0;
     /// <summary>tpose, bones: the two hands further apart than this (arms held straight out; a relaxed stance is ~0.5 m).</summary>
     public const double TposeHandSpanM = 1.4;
     /// <summary>tpose, bones: each hand within this of shoulder height (the arms are level, not swinging a weapon overhead).</summary>
@@ -58,11 +67,10 @@ public static class AnimLimits
     /// <summary>deathpose: a dead body in a living action (or a living one in a death action) for longer than this.</summary>
     public const long DeathPoseMs = 1000;
 
-    /// <summary>stuck: the queue rising (or at least <see cref="StuckQueue"/>) for this long while FullBody's action and fragment
-    /// do not change (actions are queued and never played).</summary>
-    public const long StuckMs = 3000;
-    /// <summary>stuck: a queue this long is stuck on its own (a healthy body runs 0-2).</summary>
-    public const int StuckQueue = 4;
+    /// <summary>WO-207 G.1 stuck: a queued action that has waited this long without starting (the probe's "qa": the same action object
+    /// still in the queue), on a living body that is not in its normal idle. The queue's length alone is not it: the host's own NPCs hold
+    /// 2-4 queued actions in most samples (WO-206's long1: 127 "stuck" findings on bodies the game's own brain runs).</summary>
+    public const long StuckAgeMs = 2000;
 }
 
 /// <summary>WO-206 D: one finding: a detector's run on one body on one machine.</summary>
@@ -121,7 +129,7 @@ public static class AnimDetect
         "jitter" => "the position flips back and forth (two writers)",
         "rubberband" => "a jump away and straight back",
         "deathpose" => "a dead body in a living action, or a living body in a death action",
-        "stuck" => "actions queue up and none plays",
+        "stuck" => "a queued action waits and never starts, on a body that is not idling",
         _ => "",
     };
 
@@ -131,7 +139,7 @@ public static class AnimDetect
         "sliding" => "m/s",
         "floating" or "sinking" or "rubberband" => "m",
         "jitter" => "reversals/s",
-        "stuck" => "queued",
+        "stuck" => "s waited",
         _ => "",
     };
 
@@ -143,7 +151,7 @@ public static class AnimDetect
         "jitter" => AnimLimits.JitterReversals,
         "rubberband" => AnimLimits.RubberJumpM,
         "deathpose" => AnimLimits.DeathPoseMs / 1000.0,
-        "stuck" => AnimLimits.StuckQueue,
+        "stuck" => AnimLimits.StuckAgeMs / 1000.0,
         _ => 1,
     };
 
@@ -158,17 +166,21 @@ public static class AnimDetect
     internal static bool IsDeath(string? c) => c is not null && (c.Contains("Death", StringComparison.OrdinalIgnoreCase)
         || c.Contains("Dead", StringComparison.OrdinalIgnoreCase) || c.Contains("Ragdoll", StringComparison.OrdinalIgnoreCase));
     internal static bool IsLiving(string? c) => !IsDeath(c) && (IsLocomotion(c) || (c is not null && c.Contains("Idle", StringComparison.OrdinalIgnoreCase)));
+    /// <summary>WO-207 G.1: a body standing in its normal idle (an idle state, an idle variation, the AI movement action standing: its
+    /// fragment 5) -- actions queued behind it wait by design.</summary>
+    internal static bool IsNormalIdle(string? c, int frag) => c is "C_AnimActionIdleState" or "C_VariationAction" || (c == "CAnimActionAIMovement" && frag == 5);
 
     public static AnimAnalysis Analyse(AnimStream s, ISet<string>? enabled = null)
     {
         var en = new HashSet<string>(enabled ?? Enabled, StringComparer.Ordinal);
         var an = new AnimAnalysis { Stream = s, Enabled = en };
+        var playerJumps = PlayerTeleports(s);
         foreach (var ser in s.Bodies.Values.OrderBy(x => x.Machine, StringComparer.Ordinal).ThenBy(x => x.Name, StringComparer.Ordinal))
         {
             if (ser.S.Count == 0) continue;
             an.Bodies.Add(Info(ser));
             var o = an.Findings;
-            if (en.Contains("tpose")) Tpose(ser, o);
+            if (en.Contains("tpose")) Tpose(ser, o, Grace(ser, playerJumps.TryGetValue(ser.Machine, out var pj) ? pj : new List<long>()));
             if (en.Contains("sliding")) Sliding(ser, o);
             if (en.Contains("floating")) Ground(ser, o, +1);
             if (en.Contains("sinking")) Ground(ser, o, -1);
@@ -232,14 +244,46 @@ public static class AnimDetect
 
     private static bool Living(in AnimSample x) => !x.Dead && !x.Rag;
 
-    private static void Tpose(AnimSeries ser, List<AnimFinding> o)
+    /// <summary>WO-207 G.1: per machine, when its observing player jumped further than <see cref="AnimLimits.PlayerTeleportM"/>.</summary>
+    private static Dictionary<string, List<long>> PlayerTeleports(AnimStream s)
+    {
+        var d = new Dictionary<string, List<long>>(StringComparer.Ordinal);
+        foreach (var ser in s.Bodies.Values.Where(x => x.Kind == "player"))
+        {
+            if (!d.TryGetValue(ser.Machine, out var l)) d[ser.Machine] = l = new List<long>();
+            for (int i = 1; i < ser.S.Count; i++)
+                if (Dist3(ser.S[i], ser.S[i - 1]) > AnimLimits.PlayerTeleportM) l.Add(ser.S[i].T);
+        }
+        foreach (var l in d.Values) l.Sort();
+        return d;
+    }
+
+    /// <summary>WO-207 G.1: per sample, true while the body is inside its grace: <see cref="AnimLimits.TposeGraceMs"/> after it appeared
+    /// (its first sample, or the first after a gap: a stream-in, a load), after its own teleport, after the observing player's.</summary>
+    internal static bool[] Grace(AnimSeries ser, List<long> playerJumps)
     {
         var S = ser.S;
-        Runs(ser, "tpose", i => Living(S[i]) && S[i].Fb is null, null, AnimLimits.TposeEmptyMs, true, null, "FullBody empty", o);
+        var g = new bool[S.Count];
+        long since = long.MinValue;
+        int pj = 0;
+        for (int i = 0; i < S.Count; i++)
+        {
+            if (i == 0 || S[i].T - S[i - 1].T > AnimLimits.MaxGapMs || Dist3(S[i], S[i - 1]) > AnimLimits.TeleportM) since = S[i].T;
+            while (pj < playerJumps.Count && playerJumps[pj] <= S[i].T) { since = Math.Max(since, playerJumps[pj]); pj++; }
+            g[i] = S[i].T - since < AnimLimits.TposeGraceMs;
+        }
+        return g;
+    }
+
+    private static void Tpose(AnimSeries ser, List<AnimFinding> o, bool[] grace)
+    {
+        var S = ser.S;
+        Runs(ser, "tpose", i => grace[i] ? null : Living(S[i]) && S[i].Fb is null, null, AnimLimits.TposeEmptyMs, true, null, "FullBody empty", o);
         Runs(ser, "tpose", i =>
         {
             var b = S[i].Bones;
             if (b?.LHand is null || b.RHand is null || b.Head is null) return null;
+            if (grace[i]) return null;
             if (!Living(S[i])) return false;
             return ArmsOut(b);
         }, null, AnimLimits.TposeBonesMs, false, null, "arms straight out", o);
@@ -376,37 +420,42 @@ public static class AnimDetect
     private static void DeathPose(AnimSeries ser, List<AnimFinding> o)
     {
         var S = ser.S;
-        Runs(ser, "deathpose", i => S[i].Dead && IsLiving(S[i].Fb), null, AnimLimits.DeathPoseMs, true, null, "dead in a living action", o);
+        var runs = new List<AnimFinding>();
+        // WO-207 G.1: a dead body that lies (its physics a ragdoll: a corpse keeps its last idle in the controller) is not standing dead
+        Runs(ser, "deathpose", i => S[i].Dead && !S[i].Rag && IsLiving(S[i].Fb), null, AnimLimits.DeathPoseMs, true, null, "dead in a living action", runs);
         // a knocked-out body lies in a ragdoll alive: only an upright (non-ragdoll) living body in a death action is wrong
-        Runs(ser, "deathpose", i => !S[i].Dead && !S[i].Rag && IsDeath(S[i].Fb), null, AnimLimits.DeathPoseMs, true, null, "alive in a death action", o);
+        Runs(ser, "deathpose", i => !S[i].Dead && !S[i].Rag && IsDeath(S[i].Fb), null, AnimLimits.DeathPoseMs, true, null, "alive in a death action", runs);
+        // WO-207 G.1: one finding per body per stretch it was seen (WO-206's baseline: one corpse made 93): from the stretch's first run to
+        // its last, the longest run as its worst, the runs counted in its note
+        foreach (var (from, to) in Info(ser).Present)
+        {
+            var inIt = runs.Where(f => f.TStart >= from && f.TStart <= to).OrderBy(f => f.TStart).ToList();
+            if (inIt.Count == 0) continue;
+            var first = inIt[0];
+            o.Add(first with { TEnd = inIt.Max(f => f.TEnd), Worst = inIt.Max(f => f.Worst), Samples = inIt.Sum(f => f.Samples),
+                               Note = inIt.Count == 1 ? first.Note : $"{first.Note} ({inIt.Count} runs in this stretch)" });
+        }
     }
 
+    /// <summary>WO-207 G.1: a queued action that waits longer than <see cref="AnimLimits.StuckAgeMs"/> without starting, on a living body that is
+    /// not in its normal idle (the probe's queue age with its queue detail; a probe file without them is not judged: its queue length alone
+    /// flagged healthy NPCs, and the first queue age counted actions waiting to resume).</summary>
     private static void Stuck(AnimSeries ser, List<AnimFinding> o)
     {
         var S = ser.S;
-        int start = -1, maxQ = 0;
-        void Close(int endIdx, long end)
+        if (!S.Any(x => x.QOutrank >= 0)) return;
+        var runs = new List<AnimFinding>();
+        Runs(ser, "stuck", i =>
         {
-            if (start < 0) return;
-            long dur = end - S[start].T;
-            if (dur >= AnimLimits.StuckMs && (maxQ >= AnimLimits.StuckQueue || S[endIdx].Q > S[start].Q))
-                o.Add(new AnimFinding("stuck", ser.Name, ser.Kind, ser.Machine, S[start].T, end, maxQ, endIdx - start + 1, $"{S[start].Fb ?? "empty"} fragment {S[start].FbFrag}"));
-            start = -1; maxQ = 0;
-        }
-        for (int i = 0; i < S.Count; i++)
+            if (S[i].QOutrank < 0) return null;
+            if (S[i].Dead || S[i].Rag || IsNormalIdle(S[i].Fb, S[i].FbFrag)) return false;
+            return S[i].QOutrank > AnimLimits.StuckAgeMs;
+        }, i => S[i].QOutrank / 1000.0, 0, false, null, "", runs);
+        foreach (var f in runs)   // the note names what the body was doing when it began
         {
-            bool same = start >= 0 && S[i].T - S[i - 1].T <= AnimLimits.MaxGapMs
-                        && ReferenceEquals(S[i].Fb, S[start].Fb) && S[i].FbFrag == S[start].FbFrag;
-            bool holds = S[i].Q >= AnimLimits.StuckQueue || (S[i].Q > 0 && (!same || S[i].Q >= S[i - 1].Q));
-            if (start >= 0 && (!same || !holds))
-            {
-                bool gap = S[i].T - S[i - 1].T > AnimLimits.MaxGapMs;
-                Close(i - 1, gap ? S[i - 1].T : S[i].T);
-            }
-            if (holds && start < 0) start = i;
-            if (start >= 0) maxQ = Math.Max(maxQ, S[i].Q);
+            var st = S.First(x => x.T >= f.TStart);
+            o.Add(f with { Note = $"a queued action never started behind {st.Fb ?? "empty"} fragment {st.FbFrag}" });
         }
-        if (start >= 0) Close(S.Count - 1, S[^1].T);
     }
 
     internal static double HDist(double x1, double y1, double x2, double y2) => Math.Sqrt((x1 - x2) * (x1 - x2) + (y1 - y2) * (y1 - y2));

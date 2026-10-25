@@ -244,6 +244,10 @@ namespace KCDMP_launcher.Models
         // A failed backup is logged and shown, and the game starts anyway. false = no backup (logged).
         public bool BackupSavesBeforeSession { get; set; } = true;
 
+        // WO-207 C.2: the game keeps running while its window isn't in front, during a session (the mod's mp_keep_awake: the engine's
+        // inactive-window sleep off while the session runs, the player's own value back after it). On by default; the agent's flag.
+        public bool KeepGameRunningInBackground { get; set; } = true;
+
         // WO-175 S6 / WO-177 A3: the first-run notice is gone; the field stays so an older settings file still reads.
         public bool Wo175NoticeShown { get; set; }
 

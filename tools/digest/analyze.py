@@ -35,6 +35,14 @@ CLOCK_EDGE_RULE = True     # the clock one 15-minute step apart for one checkpoi
 CLOCK_STEP_MIN = 15        # the agent's Wo206Digest.ClockValue step
 CLOCK_EDGE_MAX = 2         # checkpoints an edge may last: the game clock runs 15x (a step = 60 real s), the joiner's follower a few
                            # real seconds off spans two 5 s checkpoints (c1r: six edges of exactly two)
+KNOWN_LOCAL_RULE = True    # WO-207 D.1: the named clocks below run on the host alone by design, and what they drive is mirrored
+# (key prefix, why). A clock is one of these only when its digest value is a clock's ("clk:"); a State under the same prefix is not.
+KNOWN_LOCAL = (
+    ("Barbora.trosecko.fogControl.",
+     "known-local: the morning-fog clocks run on the host only (the joiner's clock pulses are quiet by design, WO-200); the fog they "
+     "drive -- the fogControl_* game profiles -- reaches the joiner through the profile mirror (WO-189): on 0.6-2.5 s after the "
+     "host's 05:00 and off after its 07:00 on the bench (WO-207, d4-dread)"),
+)
 MAX_LISTED = 20
 SECTION = "## First divergence"
 WIN_TAR = r"C:\WINDOWS\system32\tar.exe"
@@ -255,6 +263,16 @@ def clock_edge(ep):
         return False
 
 
+def known_local(ep):
+    """WO-207 D.1: why this quest clock is known to run on one machine only (KNOWN_LOCAL), or None."""
+    if ep["cat"] != "quest":
+        return None
+    vals = [v for v in (ep["host_value"], ep["joiner_value"]) if isinstance(v, str)]
+    if not vals or not all(v.startswith("clk:") for v in vals):
+        return None
+    return next((why for prefix, why in KNOWN_LOCAL if ep["key"].startswith(prefix)), None)
+
+
 def in_flight(ep, cur, nxt, h, j):
     """Explained when every lagging side has an applied row for the key within one checkpoint interval."""
     maps = [c["map"] for c in (nxt[1], nxt[2]) if c["map"] is not None]
@@ -314,6 +332,10 @@ def compare(h, j):
                                "count": 1, "last_seq": seq, "cleared_seq": None, "explained": False,
                                "applied": None, "side": None}
                     episodes.append(live[k])
+    if KNOWN_LOCAL_RULE:
+        for ep in episodes:
+            why = None if ep["explained"] else known_local(ep)
+            if why: ep["explained"], ep["why"] = True, why
     return stats, episodes, (median(deltas) if deltas else 0)
 
 
@@ -473,13 +495,14 @@ def render(res):
             out.append(f"\n... and {len(rest) - MAX_LISTED} more.")
     else:
         out.append("None.")
-    out += ["", f"## Explained (in flight, or the clock's step edge; up to {MAX_LISTED})", ""]
+    out += ["", f"## Explained (in flight, the clock's step edge, or known-local; up to {MAX_LISTED})", ""]
     if res["explained"]:
         out += ["| kind | cat | key | host | joiner | epoch | seq | cleared at | applied on the lagging side |",
                 "|---|---|---|---|---|---:|---:|---:|---|"]
         for f in res["explained"][:MAX_LISTED]:
             hv, jv = values(f)
             ap = ("the clock's 15-minute step edge (no applied row needed)" if f.get("why") == "clock-edge"
+                  else f["why"] if str(f.get("why") or "").startswith("known-local")
                   else "; ".join(f"{a['side']} `{a['cause']}` at {iso(a['t'])}" for a in f["applied"] or []))
             out.append(f"| {f['kind']} | {f['cat']} | `{cell(f['key'])}` | {cell(hv)} | {cell(jv)} | {f['epoch']} | "
                        f"{f['seq']} | {f['cleared_seq']} | {cell(ap)} |")

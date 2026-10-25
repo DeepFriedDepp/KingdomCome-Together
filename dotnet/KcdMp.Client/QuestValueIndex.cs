@@ -57,6 +57,49 @@ public sealed class QuestValueIndex
         return n;
     }
 
+    // WO-207 D.2: the AreaTriggers whose souls are a named NPC (a SoulAsset of the trigger's module or one of the modules above it), never one
+    // that names the player (an alias with "player" in it, a soul list fed by an edge, an alias no module defines): on a joiner those NPCs are
+    // copies, so their own triggers must not write the joiner's States (the host's world decides).
+    private readonly Dictionary<string, HashSet<string>> _soulAssets = new(StringComparer.OrdinalIgnoreCase);   // module path -> its SoulAsset names
+    private readonly List<(string Module, string Node, string Alias)> _areaTriggers = new();
+    private static readonly Regex SoulAssetRx = new(@"<SoulAsset Name=""([^""]+)""", RegexOptions.CultureInvariant);
+    private static readonly Regex AreaTriggerRx = new(@"<AreaTrigger Name=""([^""]+)""[^>]*>(.*?)</AreaTrigger>", RegexOptions.Singleline | RegexOptions.CultureInvariant);
+    private static readonly Regex SoulsAliasRx = new(@"<Asset Name=""Souls"" Alias=""([^""]+)""", RegexOptions.CultureInvariant);
+
+    /// <summary>WO-207 D.2: one quest file's soul assets and AreaTriggers (resolved together in <see cref="NpcTriggerPaths"/>).</summary>
+    public void AddTriggers(string entry, string xml)
+    {
+        string e = entry.Replace('\\', '/');
+        const string root = "Quests/Final/";
+        if (!e.StartsWith(root, StringComparison.OrdinalIgnoreCase) || !e.EndsWith(".xml", StringComparison.OrdinalIgnoreCase)) return;
+        string module = e[root.Length..^4].Replace('/', '.');
+        foreach (Match m in SoulAssetRx.Matches(xml))
+        {
+            if (!_soulAssets.TryGetValue(module, out var set)) _soulAssets[module] = set = new HashSet<string>(StringComparer.Ordinal);
+            set.Add(m.Groups[1].Value);
+        }
+        foreach (Match m in AreaTriggerRx.Matches(xml))
+            if (SoulsAliasRx.Match(m.Groups[2].Value) is { Success: true } a) _areaTriggers.Add((module, m.Groups[1].Value, a.Groups[1].Value));
+    }
+
+    /// <summary>WO-207 D.2: the NPC triggers' node paths, in path order.</summary>
+    public IReadOnlyList<string> NpcTriggerPaths()
+    {
+        var o = new SortedSet<string>(StringComparer.Ordinal);
+        foreach (var (module, node, alias) in _areaTriggers)
+        {
+            if (alias.Contains("player", StringComparison.OrdinalIgnoreCase)) continue;
+            for (string m = module; ; )
+            {
+                if (_soulAssets.TryGetValue(m, out var set) && set.Contains(alias)) { o.Add(module + "." + node); break; }
+                int dot = m.LastIndexOf('.');
+                if (dot <= 0) break;
+                m = m[..dot];
+            }
+        }
+        return o.ToList();
+    }
+
     /// <summary>WO-166 T2: the State's own declared type (the quest file's TypeT), or null when no file declares it.</summary>
     public string? StateType(string path) => _stateTypes.TryGetValue(path, out var t) ? t : null;
 
@@ -133,6 +176,7 @@ public sealed class QuestValueIndex
         byte[] marker = Encoding.ASCII.GetBytes("<StateTypeEnumeration ");
         byte[] stateMarker = Encoding.ASCII.GetBytes("<State ");   // WO-166 T2
         byte[] timerMarker = Encoding.ASCII.GetBytes("<Timer "), watchMarker = Encoding.ASCII.GetBytes("<TimeOfDayWatch ");   // WO-206 C
+        byte[] areaMarker = Encoding.ASCII.GetBytes("<AreaTrigger "), soulMarker = Encoding.ASCII.GetBytes("<SoulAsset ");   // WO-207 D.2
         foreach (var e in zip.Entries)
         {
             if (!e.FullName.StartsWith("Quests/", StringComparison.OrdinalIgnoreCase) || !e.FullName.EndsWith(".xml", StringComparison.OrdinalIgnoreCase)) continue;
@@ -141,8 +185,10 @@ public sealed class QuestValueIndex
             using (var s = e.Open()) using (var ms = new MemoryStream()) { s.CopyTo(ms); bytes = ms.ToArray(); }
             bool types = bytes.AsSpan().IndexOf(marker) >= 0, states = bytes.AsSpan().IndexOf(stateMarker) >= 0;
             bool clocks = bytes.AsSpan().IndexOf(timerMarker) >= 0 || bytes.AsSpan().IndexOf(watchMarker) >= 0;
-            if (!types && !states && !clocks) continue;
+            bool triggers = bytes.AsSpan().IndexOf(areaMarker) >= 0 || bytes.AsSpan().IndexOf(soulMarker) >= 0;
+            if (!types && !states && !clocks && !triggers) continue;
             string text = Encoding.UTF8.GetString(bytes);
+            if (triggers) idx.AddTriggers(e.FullName, text);
             if (states) idx.AddStates(e.FullName, text);
             if (clocks) idx.AddClocks(e.FullName, text);
             if (types && idx.AddXml(text) > 0) idx.FileCount++;

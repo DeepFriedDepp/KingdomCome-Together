@@ -156,6 +156,7 @@ public partial class GameBridge
         _hostModeKnown = false;
         if (_jj is { } jj && jj.Phase is "loading" or "post-load")
             Console.WriteLine($"MP-JOIN joiner: the relay connection dropped while join 0x{jj.JoinId:x8} was {jj.Phase}");
+        if ((_jj is not null || _rejoinPending) && W202("rejoin_recover")) Wo207ArmLinkRejoin(_jj?.JoinId ?? 0);   // WO-207 C.4
         if (_joinedWorld) await LeaveSharedWorldAsync("relay-lost", "Lost the connection to your host.");
         else if (_jj is { Phase: "preparing" or "loading" } j2) await AbortJoinerJoinAsync(j2, Protocol.JoinAbortIo, "relay-lost", "Lost the connection to your host.", sendAbort: false);
     }
@@ -328,6 +329,7 @@ public partial class GameBridge
     {
         _where = GameWhere.World;
         Wo202NoteEvent("a load (Gameplay started)");   // WO-202 II.4
+        Wo207OnGameplayStarted();                      // WO-207 D.2: the joiner's NPC triggers named again for this load
         W160WorldConfirmed();   // WO-160 2: a world just loaded in this game process
         Wo136OnGameplayStarted();   // WO-136: the settle, then the held frames
         Wo206LoadSettled();         // WO-206 E: the next load bumps the world epoch again
@@ -341,6 +343,7 @@ public partial class GameBridge
 
     private async Task Wo124JoinerTickAsync()
     {
+        if (_w207LinkRejoin) Wo207LinkRejoinTrace();   // WO-207 C.4: which gate holds a link-cut rejoin (every 20 s)
         if (!_hostModeKnown || !_hostSharedWorld) return;
         if (_jj is not null || _joinRx is not null || _joinOutId != 0 || _gameQuitting) return;
         // WO-125: nothing is asked while this game is leaving a world (its own load not yet in). Observed
@@ -348,8 +351,13 @@ public partial class GameBridge
         // own load landed last -- the agent believed the joiner was in the host's world.
         if (_leaveInProgress)
         {
-            if ((DateTime.UtcNow - _leaveSinceUtc).TotalMinutes < 5) return;
-            Console.WriteLine("MP-HENRY joiner: the leave's own load never reported in (5 min) -- the join gate opens again");
+            // WO-207 C.4: a leave the link cut short may have loaded while the agent was reconnecting (its "Gameplay started" never seen);
+            // the mod's last-loaded save says whether it is in
+            if (!(_w207LinkRejoin && await Wo207LeaveLandedAsync()))
+            {
+                if ((DateTime.UtcNow - _leaveSinceUtc).TotalMinutes < 5) return;
+                Console.WriteLine("MP-HENRY joiner: the leave's own load never reported in (5 min) -- the join gate opens again");
+            }
             _leaveInProgress = false;
         }
         if (_joinedWorld)
@@ -391,8 +399,11 @@ public partial class GameBridge
             await ExecLuaAsync($"if KCD2MP_Wo124Msg then KCD2MP_Wo124Msg(\"{EscapeLua(msg)}\") end");
             return;
         }
+        // WO-207 C.4: a link-cut rejoin whose own world's "Gameplay started" went by unseen: the mod says where the game is
+        if (_w207LinkRejoin && _joinFromWorldOnce && _where != GameWhere.World && _where != GameWhere.Menu) await W160AskWhereIfDueAsync();
         if ((_where != GameWhere.Menu && !fromWorld) || DateTime.UtcNow < _autoNextUtc) return;
         if (_autoRequests >= 5) return;   // five automatic tries per connection; mp_join_request always works
+        if (fromWorld && _w207LinkRejoin) { _w207LinkRejoin = false; Console.WriteLine("MP-W202 rejoin: the relay is back -- asking for the host's world again from this game's own world (WO-207 C.4)"); }
         // WO-125: the host's world must be known and a Henry world; a first join needs the player's choice
         // and a usable source BEFORE the request, so the host is never paused while someone decides.
         if (!Wo125ReadyToRequest(out string why))
@@ -698,6 +709,9 @@ public partial class GameBridge
         // 1. the save lock, read back
         await Wo122SetLockAsync(true, "join");
         string lockR = await AskModAsync("KCD2MP_Wo124Lock", 6000);
+        // WO-207: a game in its first seconds after a load can sit on a console batch past the ask (the bench: the lock held, the answer's
+        // batch timed out and was retried, the join aborted) -- one more ask before giving up
+        if (lockR == "timeout") { Console.WriteLine($"MP-JOIN joiner: join 0x{j.JoinId:x8} step 1 save lock: no answer in 6 s (the load's console backlog) -- asked once more"); lockR = await AskModAsync("KCD2MP_Wo124Lock", 20000); }
         Console.WriteLine($"MP-JOIN joiner: join 0x{j.JoinId:x8} step 1 save lock: {lockR}");
         if (!lockR.StartsWith("lock=held", StringComparison.Ordinal))
         {
@@ -918,7 +932,7 @@ public partial class GameBridge
         Console.WriteLine($"MP-JOIN joiner: join 0x{j.JoinId:x8} ABORTED after the load ({why}) -- JoinAbort {Protocol.JoinAbortName(reason)} sent (the host resumes)");
         _joinReceivedId = 0;
         if (ReferenceEquals(_jj, j)) _jj = null;
-        _autoRequests = 99;   // no automatic retry into the same failure
+        if (!_w207LinkRejoin) _autoRequests = 99;   // no automatic retry into the same failure (a join the link cut is not one: WO-207 C.4)
         await LeaveSharedWorldAsync(why, message);
     }
 
@@ -959,6 +973,7 @@ public partial class GameBridge
         if (!await Wo177WaitQuietAsync("leave")) { _leaveInProgress = false; SetJoinUi("left", full + " " + Wo177Rules.GaveUpText); return; }   // WO-177 A5
         await Task.Delay(4000);
         _ownLoadExpected = true;
+        _w207LeaveTarget = src.Base;   // WO-207 C.4: what the mod's last-loaded save reads once this leave is in
         await ExecLuaAsync($"if KCD2MP_Wo124LoadGame then KCD2MP_Wo124LoadGame({src.Playline}, \"{src.Base}\", \"leave\") end");
     }
 
@@ -1046,6 +1061,7 @@ public partial class GameBridge
         _where = GameWhere.Menu;
         W160WorldGone();
         _gameQuitting = true;
+        _ = Wo207OnQuitAsync();       // WO-207 C.2: the player's own background setting back before the process ends
         Wo202CrashWatch.NoteQuit();   // WO-202 I.1: the process that ends next ends on purpose
         var owedAtQuit = wasShared ? Wo184TakeOwedAtQuit() : null;   // WO-184 B4: never dropped silently
         SetJoinedWorld(false);

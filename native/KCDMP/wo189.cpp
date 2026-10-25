@@ -17,6 +17,7 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <thread>
 #include <unordered_map>
 
 namespace kcdmp::wo189 {
@@ -71,6 +72,23 @@ bool readable(const void* p) {
     lo = reinterpret_cast<uintptr_t>(mbi.BaseAddress);
     hi = lo + mbi.RegionSize;
     return a + 8 <= hi;
+}
+
+// WO-207 (w189_fast): the first readiness read of a session froze the game's main thread 6-13 s on the pair (the CSystem pointer
+// search and the .data scan below: one VirtualQuery per pointer-looking qword). The slots the research read are tried first, each
+// verified by its object's vftable; a scan, when needed (another build), runs on a thread of its own (reads only). The twin
+// (KCDMP_TEST_W207_OFF names w189_fast in the game's own environment, the bench only): the old scans on the main thread.
+constexpr int kSvcPtrOffRead = 0x4A68;              // CSystem's pointer to its C_ReadinessService (the build the research read)
+constexpr uintptr_t kPosSlotRvaRead = 0x2E55CD0;    // XGenAIModule's .data global holding the scene positioning manager (same)
+bool fast_off() {
+    static int v = -1;
+    if (v < 0) {
+        char b[256]{};
+        const DWORD n = GetEnvironmentVariableA("KCDMP_TEST_W207_OFF", b, sizeof b);
+        v = (n > 0 && n < sizeof b && std::strstr(b, "w189_fast")) ? 1 : 0;
+        if (v) logf("WO207-W189 the twin: the readiness and positioning scans run on the main thread (w189_fast off)");
+    }
+    return v == 1;
 }
 
 bool is_a(const void* obj, void* const* vft) {
@@ -131,6 +149,17 @@ void* readiness_service() {
     if (!g_vftSystem || !g_vftSvc) return nullptr;
     void* sys = pointer_to(engine::genv(), g_vftSystem, 0x400, &g_sysOff);
     if (!sys) { g_svcWhy = "no CSystem among gEnv's pointers"; return nullptr; }
+    // WO-207: the pointer found before (or the research's) first, verified by the service's vftable
+    if (!fast_off()) {
+        const int off = g_svcPtrOff >= 0 ? g_svcPtrOff : kSvcPtrOffRead;
+        void* p = nullptr;
+        if (rd(sys, off, &p) && p && is_a(p, g_vftSvc)) {
+            if (g_svcPtrOff < 0) logf("WO189-READY the readiness service is CSystem's pointer at +0x%X (the research's slot, verified by its vftable); gEnv+0x%X is CSystem", off, g_sysOff);
+            g_svcPtrOff = off;
+            g_svcWhy = "armed";
+            return p;
+        }
+    }
     // the service is embedded in CSystem: the qword that is its own vftable (found once, re-checked)
     auto at = [&](int off) -> void* { void* v = nullptr; return rd(sys, off, &v) && v == static_cast<const void*>(g_vftSvc) ? static_cast<char*>(sys) + off : nullptr; };
     if (g_svcOff >= 0) if (void* p = at(g_svcOff)) return p;
@@ -210,6 +239,44 @@ void* const* g_vftPos = nullptr; void* const* g_vftXg = nullptr;
 int g_posOffMgr = -1, g_posOffXg = -1, g_xgOff = -1;
 void* g_posSlot = nullptr;
 bool g_posResolved = false;
+bool g_posTriedRead = false;                 // WO-207: the research's slot tried
+std::atomic<void*> g_posSlotBg{nullptr};     // WO-207: the background scan's find
+std::atomic<int> g_posScan{0};               // 0 not started, 1 started
+
+// WO-207: XGenAIModule's .data scanned for the global that points to the scene positioning manager, on this thread (not the game's
+// main thread): reads only, each guarded; its own region cache (readable() keeps the main thread's)
+void scan_data_bg() {
+    const uint64_t t0 = GetTickCount64();
+    HMODULE xg = GetModuleHandleA("XGenAIModule.dll");
+    anchor::Range data{};
+    if (!xg || !g_vftPos || !anchor::section(xg, ".data", &data)) { logf("WO189-POS the background scan has no .data to read"); return; }
+    uintptr_t lo = 0, hi = 0;
+    auto readable_here = [&](const void* p) {
+        const auto a = reinterpret_cast<uintptr_t>(p);
+        if (!fault::plausible_address(a) || (a & 7) != 0) return false;
+        if (a >= lo && a + 8 <= hi) return true;
+        MEMORY_BASIC_INFORMATION mbi{};
+        if (VirtualQuery(p, &mbi, sizeof mbi) != sizeof mbi || mbi.State != MEM_COMMIT) return false;
+        const DWORD prot = mbi.Protect & 0xFF;
+        if ((mbi.Protect & (PAGE_GUARD | PAGE_NOACCESS)) || !(prot & (PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE)))
+            return false;
+        lo = reinterpret_cast<uintptr_t>(mbi.BaseAddress); hi = lo + mbi.RegionSize;
+        return a + 8 <= hi;
+    };
+    const uintptr_t b = reinterpret_cast<uintptr_t>(data.begin), e = reinterpret_cast<uintptr_t>(data.end);
+    for (uintptr_t a = (b + 7) & ~uintptr_t(7); a + 8 <= e; a += 8) {
+        void* p = nullptr;
+        if (!rd(reinterpret_cast<void*>(a), 0, &p) || !p || !readable_here(p)) continue;
+        if (is_a(p, g_vftPos)) {
+            g_posSlotBg.store(reinterpret_cast<void*>(a));
+            logf("WO189-POS the scene positioning manager is held by XGenAIModule's .data at +0x%llX (by its vftable; a background scan, %llu ms)",
+                 static_cast<unsigned long long>(a - reinterpret_cast<uintptr_t>(xg)), static_cast<unsigned long long>(GetTickCount64() - t0));
+            return;
+        }
+    }
+    logf("WO189-POS the background scan found no scene positioning manager in XGenAIModule's .data (%llu ms): the agent's lines decide",
+         static_cast<unsigned long long>(GetTickCount64() - t0));
+}
 
 void* positioning() {
     if (!g_posResolved) {
@@ -220,10 +287,29 @@ void* positioning() {
         logf("WO189-POS resolver: C_ScenePositioningManager %s, C_XGenAIModule %s", g_vftPos ? "found" : "MISSING", g_vftXg ? "found" : "MISSING");
     }
     if (!g_vftPos) return nullptr;
+    if (!g_posSlot) if (void* s = g_posSlotBg.load()) g_posSlot = s;   // WO-207: the background scan's find
     if (g_posSlot) { void* p = nullptr; if (rd(g_posSlot, 0, &p) && is_a(p, g_vftPos)) return p; }
+    HMODULE xgMod = GetModuleHandleA("XGenAIModule.dll");
+    if (!fast_off() && xgMod && !g_posTriedRead) {   // WO-207: the research's slot, verified by the manager's vftable (once)
+        g_posTriedRead = true;
+        anchor::Range dr{};
+        void* slot = reinterpret_cast<char*>(xgMod) + kPosSlotRvaRead;
+        void* p = nullptr;
+        if (anchor::section(xgMod, ".data", &dr) && static_cast<const uint8_t*>(slot) >= dr.begin && static_cast<const uint8_t*>(slot) + 8 <= dr.end && rd(slot, 0, &p) && p && is_a(p, g_vftPos)) {
+            g_posSlot = slot;
+            logf("WO189-POS the scene positioning manager is held by XGenAIModule's .data at +0x%llX (the research's slot, verified by its vftable)",
+                 static_cast<unsigned long long>(kPosSlotRvaRead));
+            return p;
+        }
+    }
     if (void* p = pointer_to(wo141::x::npc_manager(), g_vftPos, 0x1000, &g_posOffMgr)) return p;
     void* xgm = pointer_to(engine::game_iface(), g_vftXg, 0x400, &g_xgOff);
     if (void* p = pointer_to(xgm, g_vftPos, 0x2000, &g_posOffXg)) return p;
+    // WO-207: the scan below cost the main thread 5.5-6.7 s on the pair -- it runs on a thread of its own (once; reads only)
+    if (!fast_off()) {
+        if (g_posScan.exchange(1) == 0) std::thread(&scan_data_bg).detach();
+        return nullptr;
+    }
     // a global of XGenAIModule's .data that points to it (scanned at most three times a session, a minute apart: one frame's cost each)
     static uint64_t nextScan = 0;
     static int scans = 0;

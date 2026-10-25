@@ -223,6 +223,31 @@ def test_clock_edge(tmp):
           f"code={code3}")
 
 
+def test_known_local(tmp):
+    # WO-207 D.1: the fog machine's clock running on the host only (c1r: 89 checkpoints, never cleared) is known-local
+    fog = "Barbora.trosecko.fogControl.fogUnstreaming"
+    h, j = write_bundles(tmp, "fog", scenario(overrides=[("host", "quest", fog, "clk:1", 30, None)]))
+    code, res = run(h, j)
+    check("D.1 a fog clock on the host only is known-local (explained, named)", code == 0 and res and not res["unexplained"]
+          and any(str(f.get("why", "")).startswith("known-local") and f["key"] == fog for f in res["explained"]), f"code={code}")
+    analyze.KNOWN_LOCAL_RULE = False
+    try:
+        code2, res2 = run(h, j)
+    finally:
+        analyze.KNOWN_LOCAL_RULE = True
+    twin("D.1 the known-local rule off", code2 == 0 and res2 and not res2["unexplained"], f"code={code2}")
+    # the rule is narrow: a fog State (not a clock) and another module's clock stay unexplained
+    st = "Barbora.trosecko.fogControl.FogStreaming.streamedFog"
+    h3, j3 = write_bundles(tmp, "fogstate", scenario(overrides=[("host", "quest", st, "sv:1", 30, None)]))
+    code3, res3 = run(h3, j3)
+    check("D.1 a fog State differing stays unexplained", code3 == 1 and res3 and res3["unexplained"][0]["key"] == st, f"code={code3}")
+    other = "Barbora.trosecko.jaunt.watch_1300"
+    h4, j4 = write_bundles(tmp, "otherclock", scenario(overrides=[("host", "quest", other, "clk:1", 30, None)]))
+    code4, res4 = run(h4, j4)
+    check("D.1 another module's host-only clock stays unexplained (the Jaunt shape)", code4 == 1 and res4
+          and res4["unexplained"][0]["key"] == other, f"code={code4}")
+
+
 def test_c2(tmp):
     key = "jaunt/watch_1300"
     h, j = write_bundles(tmp, "c2", scenario(overrides=[("host", "quest", key, "timer:armed:13:00", 40, None)]))
@@ -354,7 +379,7 @@ def main():
     tmp = tempfile.mkdtemp(prefix="kcdmp-digest-test-")
     try:
         test_digest()
-        for t in (test_c1, test_clock_edge, test_c2, test_c3, test_applied, test_bad_input, test_briefings):
+        for t in (test_c1, test_clock_edge, test_known_local, test_c2, test_c3, test_applied, test_bad_input, test_briefings):
             t(tmp)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)

@@ -293,6 +293,7 @@ namespace KCDMP_launcher.Pages
             if (taken.Count > 0) Log.Information("settings: changed outside the launcher since it read them: {Keys}", string.Join(", ", taken));
             var agentArgs = target +
                 " " + VoiceSetting.AgentFlag(settings.VoiceChatOn) +
+                " " + KeepAwakeSetting.AgentFlag(settings.KeepGameRunningInBackground) +   // WO-207 C.2
                 (isHosting ? " --hosting" : "");
 
             var agentStartInfo = new ProcessStartInfo

@@ -90,6 +90,14 @@
                     </label>
                 </div>
 
+                <div class="kcd-input-group">
+                    <label class="kcd-label" style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                        @* WO-207 C.2: on by default (the game sleeps behind another window otherwise, and the partner falls behind) *@
+                        <input type="checkbox" @bind="Settings.KeepGameRunningInBackground" />
+                        @KcdMp.Wire.KeepAwakeSetting.Label
+                    </label>
+                </div>
+
                 @* WO-127: advanced. Both players must pick the same one. *@
                 <div class="kcd-input-group">
                     <label class="kcd-label">Advanced: Steam app for Steam connections</label>

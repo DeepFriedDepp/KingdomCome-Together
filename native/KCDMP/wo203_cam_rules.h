@@ -24,6 +24,7 @@ constexpr float kCutDegrees = 25.0f;
 constexpr int64_t kDelayMs = 100;      // B.2: the play-out runs this far behind the starter's clock
 constexpr int64_t kExtrapMs = 150;     // B.2: at most this far past the newest sample
 constexpr int64_t kSilenceMs = 3000;   // B.5: no sample for this long -> the player's own camera comes back
+constexpr int64_t kFirstSampleMs = 10000;   // WO-207 A.6: before the first sample: a talk's first dialogue shot can come later than 3 s
 
 struct Quat { float x = 0, y = 0, z = 0, w = 1; };
 

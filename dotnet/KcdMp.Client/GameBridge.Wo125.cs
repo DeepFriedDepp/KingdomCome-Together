@@ -730,6 +730,7 @@ public partial class GameBridge
         _rewinding = false;
         _rejoinPending = false;
         Wo202RejoinReset("joined");   // WO-202 III.3
+        _w207LinkRejoin = false;      // WO-207 C.4: back in
         if (_resetTag == tag) _resetTag = null;
         if (_newWorldLeavePending || (_peerSeedKnown && _peerTag != tag))
         {

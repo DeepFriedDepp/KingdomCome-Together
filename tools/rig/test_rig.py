@@ -96,5 +96,44 @@ check(procs.matches(me), 'this process matches its own record')
 fake = dict(me); fake['created'] = me['created'] + 1
 check(not procs.matches(fake) and procs.stop(fake) == 'not ours', 'twin: another creation time is never stopped')
 
+# WO-207 0.1: the instance box is matched by class and owner, its Yes by control id -- never by title
+import dialogs
+kids = [(101, dialogs.IDYES, 'Button', '&Yes'), (102, dialogs.IDNO, 'Button', '&No'), (103, 0xFFFF, 'Static', 'start another instance ?')]
+check(dialogs.match_box(True, '#32770', kids) == 101, 'the Yes button of the copy\'s own Yes/No dialog')
+check(dialogs.match_box(False, '#32770', kids) is None, 'twin: another process\'s dialog is never answered')
+check(dialogs.match_box(True, 'KingdomComeWnd', kids) is None, 'twin: a window of another class is never answered')
+check(dialogs.match_box(True, '#32770', [(101, 1, 'Button', 'OK'), (103, 0xFFFF, 'Static', 'already running')]) is None,
+      'twin: an OK-only box (the game refusing a second copy) is not a Yes/No box')
+check(dialogs.match_box(True, '#32770', [(101, dialogs.IDYES, 'Button', 'Nein'), (102, dialogs.IDNO, 'Button', 'Ja')]) == 101,
+      'the button is found by its control id, whatever its text')
+
+# WO-207 0.2: a copy whose user folder resolves to the real saves folder is never started
+sg = tempfile.mkdtemp()
+os.makedirs(os.path.join(sg, 'KingdomCome2', 'saves', 'playline4'))
+ref = lambda uf: pair.real_saves_refusal(uf, sg, 'KingdomCome2')
+check(ref('KingdomCome2_B') is None and ref('KingdomCome2_A') is None, 'the copies\' own folders are allowed')
+check(ref('KingdomCome2') is not None, 'twin: the real user folder is refused')
+check(ref('kingdomcome2') is not None, 'twin: the real one in another case is refused')
+check(ref(os.path.join('KingdomCome2', 'saves', 'playline4')) is not None, 'twin: a playline inside it is refused')
+check(ref(os.path.join(sg, 'KingdomCome2')) is not None, 'twin: the real one as an absolute path is refused')
+check(ref('KingdomCome2(1)') is not None, 'twin: the real one with a second instance\'s suffix is refused')
+check(ref('') is not None and ref(None) is not None, 'twin: no folder (the game\'s default, the real one) is refused')
+check(ref('.') is not None, 'twin: a folder that contains the real one is refused')
+cfgd = tempfile.mkdtemp()
+open(os.path.join(cfgd, 'system.cfg'), 'w').write('sys_user_folder = KingdomCome2\n-- x\nsys_user_folder = KingdomCome2_B\n')
+check(pair.cfg_user_folder(cfgd) == 'KingdomCome2_B', 'the copy\'s system.cfg: the last line wins')
+
+# WO-207: the main thread's stall after the first readiness read
+import scenarios as _sc
+_log = ['[16:42:28.951] t013704 WO206-PROBE cost',
+        '[16:42:29.056] t013704 WO189-READY resolver: CSystem found, C_ReadinessService found',
+        '[16:42:42.530] t013704 MP-NPCWRITE tick gap 13.5 s (a stall) -- no silence of the streams',
+        '[16:42:42.556] t013704 WO138-WORLD FROZEN (game/real 0.015 over 13.68 s, 13 frames, held=0x0)',
+        '[16:43:30.000] t013704 MP-NPCWRITE tick gap 40.0 s (a stall)']
+check(_sc.w189_stall(_log) == 13.68, 'the stall after the first readiness read is measured (the worst within 20 s)')
+check(_sc.w189_stall(_log[:2]) == 0.0, 'no stall after the read: 0')
+check(_sc.w189_stall(_log[2:]) is None, 'no readiness read in the log: None')
+check(_sc.w189_stall([_log[2], _log[1]]) == 0.0, 'a stall before the read is not the one it caused')
+
 print('RESULT: %d passed, %d failed' % (passed, failed))
 sys.exit(1 if failed else 0)

@@ -81,6 +81,12 @@ public interface IGameTransport : IAsyncDisposable
     Task FlushAsync(CancellationToken ct = default);
 
     /// <summary>
+    /// WO-207 B.3: ask for a flush without waiting for it (the batching transport's own flusher sends at the game's pace). A caller
+    /// that needs its statements sent before it goes on awaits <see cref="FlushAsync"/> instead.
+    /// </summary>
+    void RequestFlush() => _ = FlushAsync();
+
+    /// <summary>
     /// The local player's currently-equipped item classes: armor (WO-9) and
     /// weapons (WO-10) merged into one set, read via the reflection debug
     /// API's <c>EquipmentManager.EquippedArmorsByClassId</c> and

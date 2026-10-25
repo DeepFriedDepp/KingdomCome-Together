@@ -277,6 +277,7 @@ uint8_t handle(const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t
         case kcdmp::wo200::kOpReplay:
         case kcdmp::wo200::kOpReadNode:
         case kcdmp::wo200::kOpResearch:
+        case kcdmp::wo200::kOpQuietNodes:   // WO-207 D.2: the joiner's NPC triggers, quiet like its clocks
             return kcdmp::wo200::handle(body[0], body + 1, len - 1, out, cap, outLen) == 0 ? kROk : kRBadRequest;
         case kcdmp::wo201::kOpStatus:   // WO-201: B1's scene no-position (the save path's own FastForward cancel on the joiner's copies)
         case kcdmp::wo201::kOpConfig:

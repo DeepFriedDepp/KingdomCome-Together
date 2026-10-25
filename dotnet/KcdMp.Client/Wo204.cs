@@ -172,9 +172,13 @@ public static class Wo204Rules
 
     /// <summary>The DLL's op 91 reply: [armed][current][voteRow][n] per row [used][iconLen][icon][diff:4][val:4][flag][textLen][text],
     /// then [snapSeq:4][onRight:1] (WO-204). Null when unreadable.</summary>
-    public static List<OptRow>? ParseOptionsPoll(byte[] p, out int current, out uint seq, out bool onRight)
+    public static List<OptRow>? ParseOptionsPoll(byte[] p, out int current, out uint seq, out bool onRight) =>
+        ParseOptionsPoll(p, out current, out seq, out onRight, out _);
+
+    /// <summary>The same, and where the reply goes on after the snapshot's tail (WO-207 A.3: the timer; -1 = no tail).</summary>
+    public static List<OptRow>? ParseOptionsPoll(byte[] p, out int current, out uint seq, out bool onRight, out int tailAt)
     {
-        current = -1; seq = 0; onRight = false;
+        current = -1; seq = 0; onRight = false; tailAt = -1;
         if (p.Length < 4) return null;
         current = p[1] == 255 ? -1 : p[1];
         int n = p[3], o = 4;
@@ -192,7 +196,7 @@ public static class Wo204Rules
             string prompt = text.StartsWith('@') && text.Length > 1 && text[1..].All(c => char.IsAsciiLetterOrDigit(c) || c == '_') ? text[1..] : "=" + PlainText(text);
             rows.Add(new OptRow(i, used, Field(icon, 40), diff, val, Field(prompt, 100)));
         }
-        if (o + 5 <= p.Length) { seq = BitConverter.ToUInt32(p, o); onRight = p[o + 4] != 0; }
+        if (o + 5 <= p.Length) { seq = BitConverter.ToUInt32(p, o); onRight = p[o + 4] != 0; tailAt = o + 5; }
         return rows;
     }
 

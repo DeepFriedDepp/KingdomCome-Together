@@ -146,6 +146,37 @@ void gather(std::vector<Body>& out, double now) {
     }
 }
 
+// WO-207 G.1: when the probe first saw each queued action of a body (the action object compared, never dereferenced); the oldest wait in
+// ms among the actions the engine's own queue trim does not keep (flag 4: the bench's fights hold movement actions requeued behind a
+// combat action for minutes), -1 = the queue unreadable; ages[] = every queued action's wait (the "qd" field, with its flags). A body
+// not seen for 10 s is forgotten.
+struct QueueAge { const void* act; double first; };
+std::unordered_map<uint32_t, std::vector<QueueAge>> g_qages;
+std::unordered_map<uint32_t, double> g_qagesSeen;
+
+int queue_age_ms(uint32_t eid, const wo187::QueueInfo& q, double now, int* ages = nullptr) {
+    if (q.n < 0) return -1;
+    std::vector<QueueAge>& v = g_qages[eid];
+    g_qagesSeen[eid] = now;
+    std::vector<QueueAge> next;
+    next.reserve(static_cast<size_t>(q.nacts));
+    double oldest = now;
+    for (int i = 0; i < q.nacts; ++i) {
+        double first = now;
+        for (const QueueAge& a : v) if (a.act == q.acts[i]) { first = a.first; break; }
+        next.push_back({q.acts[i], first});
+        if (ages) ages[i] = static_cast<int>((now - first) * 1000.0);
+        if (first < oldest && (q.flags[i] == 0xFFFFFFFFu || !(q.flags[i] & 4u))) oldest = first;
+    }
+    v.swap(next);
+    if (g_qagesSeen.size() > 256) {
+        for (auto it = g_qagesSeen.begin(); it != g_qagesSeen.end();) {
+            if (now - it->second > 10.0) { g_qages.erase(it->first); it = g_qagesSeen.erase(it); } else ++it;
+        }
+    }
+    return static_cast<int>((now - oldest) * 1000.0);
+}
+
 void probe_tick(double now) {
     if (!g_probe.load(std::memory_order_relaxed)) return;
     if (now - g_lastSample < 1.0 / g_hz) return;
@@ -167,12 +198,18 @@ void probe_tick(double now) {
         if (n > 0) { c.n = n; c.at = now; }
     }
     g_rr = (g_rr + static_cast<size_t>(g_scopeReads)) % bodies.size();
+    // WO-207 E.1: a body the probe has not read for a minute leaves the cache (every body ever seen used to stay for the session)
+    static double s_lastPrune = 0;
+    if (now - s_lastPrune > 30.0) {
+        s_lastPrune = now;
+        for (auto it = g_scopes.begin(); it != g_scopes.end();) it = (it->second.at >= 0 && now - it->second.at > 60.0) ? g_scopes.erase(it) : std::next(it);
+    }
     const double t2 = now_s();
     c_tScopes += t2 - t1;
 
     std::string line;
     line.reserve(4096);
-    char buf[512];
+    char buf[768];   // WO-207: a body's line with its tags and queue detail (qd) runs past 512
     std::snprintf(buf, sizeof buf, "{\"t\":%llu,\"m\":\"%s\",\"f\":%llu,\"a\":[", static_cast<unsigned long long>(utc_ms()), machine_name(g_machine),
                   main_thread::frame_count());
     line += buf;
@@ -190,9 +227,22 @@ void probe_tick(double now) {
         const char* fb = nullptr;
         for (int i = 0; i < c.n; ++i) if (c.sc[i].ok && !c.sc[i].empty && std::strcmp(c.sc[i].name, "FullBody") == 0) fb = c.sc[i].action;
         const wo187::QueueInfo q = wo187::queue_info(b.eid);
-        std::snprintf(buf, sizeof buf, "%s{\"n\":\"%s\",\"k\":\"%s\",\"p\":[%.3f,%.3f,%.3f],\"r\":[0,0,%.4f],\"dead\":%d,\"rag\":%d,\"q\":%d,\"sa\":%.0f,\"sc\":[",
+        // WO-207 G.1: how long the oldest queued action has waited without starting (the same action object still in the queue); G.2: the
+        // body's Mannequin tags (the fragment family a comparison needs)
+        int ages[16]{};
+        const int qa = queue_age_ms(b.eid, q, now, ages);
+        char qd[240] = "";   // [[flags,age_ms,priority],...] the first 6 queued actions
+        for (int i = 0, o = 0; i < q.nacts && i < 6 && o < static_cast<int>(sizeof qd) - 40; ++i)
+            o += std::snprintf(qd + o, sizeof qd - static_cast<size_t>(o), "%s[%u,%d,%d]", i ? "," : "", q.flags[i], ages[i], q.prio[i]);
+        // WO-207 G.1: a body whose physics is no living entity lies (a corpse, a knockdown's ragdoll), whatever its FullBody still holds
+        npcdrive::PhysicsStatus ps{};
+        const bool lying = npcdrive::physics_status(e, &ps) && ps.present && !ps.living;
+        uint8_t tg[20]{};
+        char tgh[41] = "";
+        if (wo187::tag_state(b.eid, tg, sizeof tg)) for (int i = 0; i < 20; ++i) std::snprintf(tgh + 2 * i, 3, "%02x", tg[i]);
+        std::snprintf(buf, sizeof buf, "%s{\"n\":\"%s\",\"k\":\"%s\",\"p\":[%.3f,%.3f,%.3f],\"r\":[0,0,%.4f],\"dead\":%d,\"rag\":%d,\"q\":%d,\"qa\":%d,\"qd\":[%s],\"tg\":\"%s\",\"sa\":%.0f,\"sc\":[",
                       firstBody ? "" : ",", name, b.kind, p[0], p[1], p[2], npcdrive::entity_yaw(e), wo172::copy_dead(b.eid) ? 1 : 0,
-                      ragdoll_class(fb) ? 1 : 0, q.n < 0 ? 0 : q.n, (now - c.at) * 1000.0);
+                      (ragdoll_class(fb) || lying) ? 1 : 0, q.n < 0 ? 0 : q.n, qa, qd, tgh, (now - c.at) * 1000.0);
         line += buf;
         bool firstScope = true;
         for (int i = 0; i < c.n; ++i) {
@@ -328,10 +378,12 @@ uint8_t handle(uint8_t op, const uint8_t* body, size_t len, uint8_t* out, size_t
 int status_text(char* out, int n) {
     if (!out || n <= 0) return 0;
     const int k = std::snprintf(out, static_cast<size_t>(n),
-        "wo206 digest armed=%d paths=%zu passes=%u reads=%llu found=%llu faults=%llu | probe on=%d machine=%s lines=%llu bodies=%llu scope_reads=%llu skipped=%llu",
+        "wo206 digest armed=%d paths=%zu passes=%u reads=%llu found=%llu faults=%llu | probe on=%d machine=%s lines=%llu bodies=%llu scope_reads=%llu skipped=%llu"
+        " | memory scope_cache=%zu queue_ages=%zu",   // WO-207 E.1: the probe's own long-lived containers (entries)
         g_armed ? 1 : 0, g_paths.size(), g_sweep.passes, static_cast<unsigned long long>(c_reads), static_cast<unsigned long long>(c_found),
         static_cast<unsigned long long>(c_faults), g_probe.load() ? 1 : 0, machine_name(g_machine), static_cast<unsigned long long>(c_lines),
-        static_cast<unsigned long long>(c_bodies), static_cast<unsigned long long>(c_scopeReads), static_cast<unsigned long long>(c_skipped));
+        static_cast<unsigned long long>(c_bodies), static_cast<unsigned long long>(c_scopeReads), static_cast<unsigned long long>(c_skipped),
+        g_scopes.size(), g_qages.size());
     return k < 0 ? 0 : (k >= n ? n - 1 : k);
 }
 

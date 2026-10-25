@@ -129,6 +129,12 @@ class Game:
             log(self.test, 'back: the game window minimised')
 
     def _check(self, what):
+        # WO-207: right after a button's down Windows reports NO foreground window for a moment (pid 0; the baseline's button-ups were
+        # all refused for it and the left button stayed down). Only that case waits, up to 0.5 s, for the game to be in front again;
+        # another program's window in front still stops everything at once, and nothing is sent until the game is in front.
+        t0 = time.time()
+        while not foreground_is_game(self.pids) and not user32.GetForegroundWindow() and time.time() - t0 < 0.5:
+            time.sleep(0.025)
         if not foreground_is_game(self.pids):
             fpid = wt.DWORD()
             user32.GetWindowThreadProcessId(user32.GetForegroundWindow(), ctypes.byref(fpid))   # the id only: nothing of that window is read

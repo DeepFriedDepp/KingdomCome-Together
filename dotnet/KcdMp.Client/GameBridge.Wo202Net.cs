@@ -61,9 +61,26 @@ public partial class GameBridge
     {
         long at = Volatile.Read(ref _w147ProcAtMs);   // the arrival stamp of the frame the processor handles now
         if (at <= 0) return 0;
-        return Math.Max(0, Volatile.Read(ref _w202LastReadMs) - at);   // how far it trails the newest frame read (0 when it keeps up)
+        // WO-207 B.4: nothing waits for the processor -> it keeps up. Measured against every frame read, an idle processor "trailed"
+        // the pings and leash frames of a joiner's load: the host's queue read 34 s behind through a join hold while nothing waited.
+        // Off (the twin, KCDMP_TEST_W207_OFF=queue_measure): measured against every frame read, as before.
+        bool own = W207("queue_measure");
+        if (own && Wo207Trace.WaitingTotal == 0) return 0;
+        long newest = own ? Volatile.Read(ref _w207LastQueuedMs) : Volatile.Read(ref _w202LastReadMs);
+        return Math.Max(0, newest - at);   // how far it trails the newest frame it was handed (0 when it keeps up)
     }
     private long _w202LastReadMs;
+    private long _w207LastQueuedMs;   // WO-207 B.4: the newest frame handed to the processor's own queue
+
+    /// <summary>The reader hands the processor a frame: counted first (the processor may take it at once), uncounted if refused.</summary>
+    private bool Wo207Queue(ChannelWriter<InFrame> writer, InFrame f, int kind)
+    {
+        Wo207Trace.Enqueued(kind);
+        if (f.Arrival > 0) Volatile.Write(ref _w207LastQueuedMs, W147StampMs(f.Arrival));
+        if (writer.TryWrite(f)) return true;
+        Wo207Trace.Dequeued(kind);
+        return false;
+    }
 
     /// <summary>The reader: a state frame of a body that already waits is replaced in place. True = consumed (queued or merged).</summary>
     private bool Wo202Coalesce(ChannelWriter<InFrame> writer, int type, byte[] payload, long arrival, uint stamp)
@@ -77,11 +94,12 @@ public partial class GameBridge
             {
                 _w202Latest[key] = new InFrame(type, payload, arrival, stamp);
                 _w202Coalesced++;
+                Volatile.Write(ref _w207LastQueuedMs, W147StampMs(arrival));   // WO-207 B.4: the waiting slot is this frame now
                 return true;
             }
             _w202Latest[key] = new InFrame(type, payload, arrival, stamp);
         }
-        writer.TryWrite(new InFrame(Wo202CoalescedType, Encoding.UTF8.GetBytes(key), arrival, 0));
+        Wo207Queue(writer, new InFrame(Wo202CoalescedType, Encoding.UTF8.GetBytes(key), arrival, 0), type);   // WO-207 B.1
         return true;
     }
 
@@ -122,6 +140,50 @@ public partial class GameBridge
 {
     private volatile int _w202RejoinFails;
     private volatile bool _w202RejoinAsked;
+
+    // WO-207 C.4: the link dropped while a join or an in-world rejoin ran (the bench: the relay cut it at the host's world transfer). The
+    // game leaves for its own world as before; once the relay is back it asks for the host's world again from there (WO-125's join from
+    // a world), and that leave's failed join is not "the same failure" that stops automatic tries. Off (the twin): it stayed in its own
+    // world with "quit and wait at the main menu".
+    private volatile bool _w207LinkRejoin;
+
+    private void Wo207ArmLinkRejoin(uint joinId)
+    {
+        _w207LinkRejoin = true;
+        _joinFromWorldOnce = true;
+        Console.WriteLine($"MP-W202 rejoin: the relay dropped while {(joinId != 0 ? $"join 0x{joinId:x8}" : "an in-world rejoin")} ran -- once it is back this game asks for the host's world again (WO-207 C.4)");
+    }
+
+    private long _w207TraceMs;
+
+    private void Wo207LinkRejoinTrace()
+    {
+        long now = Environment.TickCount64;
+        if (now - _w207TraceMs < 20_000) return;
+        _w207TraceMs = now;
+        Console.WriteLine($"MP-W202 rejoin gates: host_mode={(_hostModeKnown ? (_hostSharedWorld ? "shared" : "separate") : "unknown")} jj={(_jj is null ? "-" : _jj.Phase)} rx={(_joinRx is null ? "-" : "on")} " +
+                          $"out=0x{_joinOutId:x8} leaving={_leaveInProgress} own_load_expected={_ownLoadExpected} where={_where} from_world={_joinFromWorldOnce} joined={_joinedWorld} " +
+                          $"rejoin_pending={_rejoinPending} auto={_autoRequests} next_in_s={(int)Math.Max(0, (_autoNextUtc - DateTime.UtcNow).TotalSeconds)} target={_w207LeaveTarget ?? "-"}");
+    }
+
+    private string? _w207LeaveTarget;
+    private long _w207LeaveAskedMs;
+
+    /// <summary>The leave's own save is the mod's last load (asked at most every 5 s, 10 s after the leave began): it is in.</summary>
+    private async Task<bool> Wo207LeaveLandedAsync()
+    {
+        if (_w207LeaveTarget is not { } target || (DateTime.UtcNow - _leaveSinceUtc).TotalSeconds < 10) return false;
+        long now = Environment.TickCount64;
+        if (now - _w207LeaveAskedMs < 5000) return false;
+        _w207LeaveAskedMs = now;
+        string last = await AskModAsync("KCD2MP_Wo125LastLoaded", 4000);
+        string got = last.StartsWith("last=", StringComparison.Ordinal) ? last[5..] : "";
+        if (!string.Equals(got, target, StringComparison.OrdinalIgnoreCase)) return false;
+        _ownLoadExpected = false;
+        Console.WriteLine($"MP-W202 rejoin: the leave's own load is in ('{got}', its Gameplay started was not seen while the link was down) -- the join gate opens (WO-207 C.4)");
+        try { await ExecLuaAsync("if KCD2MP_Wo124Where then KCD2MP_Wo124Where() end"); } catch { }   // the mod's own word on where it is
+        return true;
+    }
 
     private void Wo202RejoinReset(string why)
     {

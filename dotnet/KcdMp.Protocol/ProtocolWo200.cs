@@ -27,6 +27,8 @@ namespace KcdMp.Wire;
 public static partial class Protocol
 {
     public const byte Wo200OpStatus = 70, Wo200OpConfig = 71, Wo200OpPoll = 72, Wo200OpReplay = 73, Wo200OpReadNode = 74, Wo200OpResearch = 75;
+    /// <summary>WO-207 D.2: the joiner's NPC triggers, quiet like its clocks ([cmd:1] 0 forget all, 1 add [n:1] n x [len:2][path]).</summary>
+    public const byte Wo200OpQuietNodes = 125;
 
     // ---- QuestAsk / QuestHost kinds (APPEND-ONLY) ----
     public const byte QuestAskOutPortReplay = 5;

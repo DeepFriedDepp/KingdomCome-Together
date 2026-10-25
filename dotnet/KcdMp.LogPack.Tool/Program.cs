@@ -39,6 +39,21 @@ if (args.Length >= 1 && args[0] == "anim-compare")
                 : $"the {role}'s bundle has no BRIEFING.md: printed only ({b.Source})");
     return;
 }
+if (args.Length >= 2 && args[0] == "anim-detect")
+{
+    // WO-207 G: usage: anim-detect <bundleOrDir> -- every detector's findings and bodies, by machine and body kind (npc = the game's own
+    // brain on the host, copy = the joiner's copies, figure = a partner's figure, player = the machine's own player)
+    var ab = AnimBundle.Open(args[1]);
+    if (ab.AnimBytes is null) { Console.Error.WriteLine($"no probe data in {args[1]}"); Environment.ExitCode = 2; return; }
+    var an = AnimDetect.Analyse(AnimStream.Parse(ab.AnimBytes));
+    Console.WriteLine($"bodies {an.Bodies.Count}, samples {an.Stream.Samples:N0}, queued priorities in the probe: {(an.Stream.Bodies.Values.Any(x => x.S.Any(y => y.QOutrank >= 0)) ? "yes" : "no (stuck not judged)")}");
+    Console.WriteLine("detector     machine  kind      findings  bodies");
+    foreach (var g in an.Findings.GroupBy(f => (f.Detector, f.Machine, f.Kind)).OrderBy(g => g.Key.Detector).ThenBy(g => g.Key.Machine).ThenBy(g => g.Key.Kind))
+        Console.WriteLine($"{g.Key.Detector,-12} {g.Key.Machine,-8} {g.Key.Kind,-9} {g.Count(),8}  {g.Select(f => f.Body).Distinct().Count(),6}");
+    foreach (var f in an.Findings.Where(f => args.Contains("--list")).OrderBy(f => f.TStart))
+        Console.WriteLine($"  {f.Detector} {f.Machine} {f.Kind} {f.Body} {f.Seconds:F1} s worst {f.Worst:F2} {f.Note}");
+    return;
+}
 string src = args[0], outDir = args[1];
 bool earlier = args.Contains("--earlier"), verify = !args.Contains("--no-verify");
 var opt = new PackOptions();

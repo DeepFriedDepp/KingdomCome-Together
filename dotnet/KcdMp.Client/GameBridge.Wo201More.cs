@@ -37,6 +37,7 @@ public partial class GameBridge
         Wo204Tick(n);                                     // WO-204: 4 Hz
         Wo206Tick(n);                                     // WO-206 E: the host's epochs every 10 s, the stats line every minute
         Wo206DigestTick(n);                               // WO-206 C/D: the checkpoint digests and the probe, 4 Hz
+        Wo207Tick(n);                                     // WO-207 B.1: the inbound queue, every second
     }
 
     private void Wo201OnEventMore(string name, string? arg)

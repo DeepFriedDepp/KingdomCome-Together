@@ -18,6 +18,11 @@ public struct AnimSample
     public float Gz;            // the terrain's z under the body; NaN = unknown (the probe wrote null or nothing)
     public bool Dead, Rag, Weapon, Mounted;
     public int Q;               // queued actions
+    public int Qa;              // WO-207 G.1: ms the oldest queued action has waited without starting; -1 = not in the line (an older probe)
+    public bool Qd;             // WO-207 G.1: the line carried the queue detail ("qd")
+    public int QOutrank;        // WO-207 G.1: ms the oldest queued action that outranks the running FullBody action (or faces an empty one) has
+                                // waited; -1 = no priorities in the line (a queued action waiting behind a higher one is the engine's normal)
+    public string? Tg;          // WO-207 G.2: the body's Mannequin tag state (hex), null = not in the line
     public string? Fb;          // the FullBody scope's action class; null = the scope is empty
     public int FbFrag;          // its fragment; -1 = unknown
     public int Scopes;          // installed scopes holding an action
@@ -94,6 +99,7 @@ public sealed class AnimStream
         string? name = Str(a, "n");
         float[]? p = Vec(a, "p");
         if (name is null || p is null) { BadActors++; return; }
+        long fbPrio = long.MinValue;
         var smp = new AnimSample
         {
             T = t, F = f, X = p[0], Y = p[1], Z = p[2],
@@ -101,6 +107,10 @@ public sealed class AnimStream
             Dead = Flag(a, "dead"), Rag = Flag(a, "rag"), Weapon = Flag(a, "w"),
             Mounted = Flag(a, "mnt") || Flag(a, "mounted"),   // not in the line format yet; read if a later probe adds it
             Q = Long(a, "q", out long q) ? (int)q : 0,
+            Qa = Long(a, "qa", out long qa) ? (int)qa : -1,
+            Qd = a.TryGetProperty("qd", out var qdEl) && qdEl.ValueKind == JsonValueKind.Array,
+            QOutrank = -1,
+            Tg = Str(a, "tg") is { Length: > 0 } tg ? Intern(tg) : null,
             FbFrag = -1,
         };
         if (a.TryGetProperty("sc", out var sc) && sc.ValueKind == JsonValueKind.Array)
@@ -118,7 +128,18 @@ public sealed class AnimStream
                 {
                     smp.Fb = c;
                     smp.FbFrag = Long(e, "fr", out long fr) ? (int)fr : -1;
+                    fbPrio = Long(e, "pr", out long pr) ? pr : long.MinValue;
                 }
+            }
+        // WO-207 G.1: [flags, waited ms, priority] per queued action; only a probe that writes the priority is judged
+        if (smp.Qd)
+            foreach (var qe in qdEl.EnumerateArray())
+            {
+                if (qe.ValueKind != JsonValueKind.Array || qe.GetArrayLength() < 3) continue;
+                long age = qe[1].TryGetInt64(out long ag) ? ag : -1, prio = qe[2].TryGetInt64(out long pq) ? pq : long.MinValue;
+                if (age < 0 || prio == long.MinValue) continue;
+                if (smp.QOutrank < 0) smp.QOutrank = 0;
+                if ((smp.Fb is null || prio > fbPrio) && age > smp.QOutrank) smp.QOutrank = (int)Math.Min(age, int.MaxValue);
             }
         if (a.TryGetProperty("b", out var b) && b.ValueKind == JsonValueKind.Object)
         {

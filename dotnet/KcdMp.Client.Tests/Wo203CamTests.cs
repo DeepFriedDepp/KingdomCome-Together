@@ -207,5 +207,34 @@ public class Wo203CamTests
         Assert.True(s!.IndexOf("kcd2mp_listen_cancel", StringComparison.Ordinal) < s.IndexOf("<control", StringComparison.Ordinal));
         Assert.Null(KeybindPak.MergeBack("<keybinds><superaction name=\"backward\"></superaction></keybinds>", "<action name=\"kcd2mp_listen_cancel\" map=\"dialog\" />", out _));
         Assert.DoesNotContain("kcd2mp_listen_cancel", KeybindPak.Actions);   // not one of the interaction map's
+        Assert.NotNull(doc.SelectSingleNode("//superaction[@name='back']/action[@name='kcd2mp_listen_cancel'][@map='kcd2mp_listen']"));
+    }
+
+    // WO-207 A.4: the listener's own map -- after the game's dialog map, exclusive, the four listen actions and nothing that opens a menu
+    [Fact]
+    public void WO207_the_listeners_own_map_follows_the_dialog_map_and_opens_no_menu()
+    {
+        string? p = KeybindPak.MergeDialog(Profile, KeybindPak.PatchBody(KeybindPak.EmbeddedPatch("defaultProfile.dialog.xml")), out string why);
+        Assert.True(p is not null, why);
+        string? l = KeybindPak.MergeListenMap(p!, KeybindPak.PatchBody(KeybindPak.EmbeddedPatch("defaultProfile.listen.xml")), out why);
+        Assert.True(l is not null, why);
+        var doc = new XmlDocument();
+        doc.LoadXml(l!);
+        var map = doc.SelectSingleNode("//actionmap[@name='kcd2mp_listen']");
+        Assert.NotNull(map);
+        Assert.Equal("1", map!.Attributes!["exclusivity"]!.Value);
+        Assert.Equal("minigames", map.Attributes!["priority"]!.Value);
+        Assert.Equal("dialog", map.SelectSingleNode("preceding-sibling::actionmap[1]")!.Attributes!["name"]!.Value);
+        Assert.Equal("dialog_crime_list_open", map.SelectSingleNode("following-sibling::actionmap[1]")!.Attributes!["name"]!.Value);
+        foreach (string a in KeybindPak.DialogActions)
+        {
+            Assert.NotNull(map.SelectSingleNode("action[@name='" + a + "']"));
+            Assert.NotNull(doc.SelectSingleNode("//actionmap[@name='dialog']/action[@name='" + a + "']"));   // the twin's map keeps them
+        }
+        Assert.Equal(KeybindPak.DialogActions.Length, map.SelectNodes("action")!.Count);
+        Assert.Null(map.SelectSingleNode("include"));   // the dialog map includes open_pause_menu; ours includes nothing
+        Assert.Equal(1, doc.SelectNodes("//actionmap[@name='dialog']")!.Count);
+        Assert.Null(KeybindPak.MergeListenMap(l!, KeybindPak.PatchBody(KeybindPak.EmbeddedPatch("defaultProfile.listen.xml")), out _));   // never twice
+        Assert.Null(KeybindPak.MergeListenMap("<profile>\r\n</profile>\r\n", KeybindPak.PatchBody(KeybindPak.EmbeddedPatch("defaultProfile.listen.xml")), out _));
     }
 }

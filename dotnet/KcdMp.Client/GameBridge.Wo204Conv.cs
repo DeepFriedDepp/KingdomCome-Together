@@ -24,6 +24,8 @@ public partial class GameBridge
         public uint SnapSeq;
         public bool Open, OnRight;
         public int Current = -1;
+        public uint TimerSeq;              // WO-207 A.3: the last timer sequence sent, and when
+        public long TimerSentMs;
         public List<Wo204Rules.OptRow> Rows = [];
         public readonly List<Wo204Rules.ConvLineMsg> Lines = [];
     }
@@ -48,17 +50,20 @@ public partial class GameBridge
 
     partial void Wo204ConvLineCaptured(Wo201Rules.SpeechCaptured l)
     {
-        if (!l.FromDialogue || !W204("conv_lines")) return;
+        if (!W204("conv_lines")) return;
         W203Talk? talk;
         byte[] to;
         lock (_w3cLock) { talk = _w3cTalk; to = talk is null ? [] : [.. talk.Listeners]; }
-        if (talk is null || W204ConvOf(talk.Cid) is not { } c) return;
+        if (talk is null) return;
+        if (!l.FromDialogue) { Wo207LineDropped(l, "not from a dialogue"); return; }
+        if (W204ConvOf(talk.Cid) is not { } c) { Wo207LineDropped(l, "no state for the talk"); return; }
         // the conversation's dialogue twins speak for their souls (DialogTwin_<soul>; the player's own twin is Dude's)
         string speaker = l.Name.StartsWith("DialogTwin_", StringComparison.Ordinal) ? l.Name["DialogTwin_".Length..] : l.Name;
         bool me = l.Eid == 0x7777 || speaker == "Dude";
-        if (!me && !talk.Others.Contains(speaker, StringComparer.OrdinalIgnoreCase)) return;   // a line of the conversation's own speakers only
+        if (!me && !talk.Others.Contains(speaker, StringComparer.OrdinalIgnoreCase))   // a line of the conversation's own speakers only
+        { Wo207LineDropped(l, $"'{speaker}' is not one of the talk's ({string.Join(",", talk.Others)})"); return; }
         string sn = Wo204Rules.StringNameOf(l.Path);
-        if (sn.Length == 0) return;
+        if (sn.Length == 0) { Wo207LineDropped(l, "no string name in the voice path"); return; }
         Wo204Rules.ConvLineMsg msg;
         lock (c)
         {
@@ -92,8 +97,28 @@ public partial class GameBridge
     }
 
     /// <summary>4 Hz (Wo204Tick): while someone listens, the HUD's rows as the DLL copied them -- a new set is a new decision.</summary>
+    // WO-207 A.1 (mp_conv_options_early): the DLL's copy of the HUD's rows is armed once a partner is here, not at the first listener's
+    // join: a talk that opens straight at a decision (the bench's bailiff, 2.3 s before the join) had set its rows before the copy was
+    // armed, the listener never saw them and the talk stood there. Off (the twin): armed by the first poll after a join, as before.
+    private volatile bool _w207OptionsArmed;
+    private int _w207OptionsArming;
+
     private void Wo204ConvPollTick()
     {
+        if (!_w207OptionsArmed && W207("conv_options_early") && W203Partnered && W204("conv_options") && Interlocked.CompareExchange(ref _w207OptionsArming, 1, 0) == 0)
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    var r = await W3cNativeAsync(91, Wo207Rules.ConvArgs(91, [1], W207("conv_op_frame")));
+                    if (r is { Ok: true } x && x.Payload.Length > 0 && x.Payload[0] == 1)
+                    {
+                        _w207OptionsArmed = true;
+                        Console.WriteLine("WO207-OPTIONS the HUD's rows are copied from now (armed with a partner here, before any talk)");
+                    }
+                }
+                finally { Interlocked.Exchange(ref _w207OptionsArming, 0); }
+            });
         W203Talk? talk;
         lock (_w3cLock) talk = _w3cTalk is { } t && t.Listeners.Count > 0 ? t : null;
         if (talk is null || !W204("conv_options") || Interlocked.CompareExchange(ref _w204OptPolling, 1, 0) != 0) return;
@@ -101,8 +126,9 @@ public partial class GameBridge
         {
             try
             {
-                var r = await W3cNativeAsync(91, [91, 1]);
-                if (r is not { Ok: true } x || Wo204Rules.ParseOptionsPoll(x.Payload, out int cur, out uint seq, out bool right) is not { } rows) return;
+                if (W207("conv_pipe_first")) Wo207Trace.Kind.Value = Wo207Trace.ConvKind;   // WO-207 A.1: never behind the background polls
+                var r = await W3cNativeAsync(91, Wo207Rules.ConvArgs(91, [1], W207("conv_op_frame")));
+                if (r is not { Ok: true } x || Wo204Rules.ParseOptionsPoll(x.Payload, out int cur, out uint seq, out bool right, out int tailAt) is not { } rows) return;
                 if (W204ConvOf(talk.Cid) is not { } c) return;
                 string? text = null;
                 byte[] to;
@@ -116,10 +142,13 @@ public partial class GameBridge
                     }
                 }
                 lock (_w3cLock) to = [.. talk.Listeners];
-                if (text is null || to.Length == 0) return;
-                Interlocked.Increment(ref _w204OptionsOut);
-                Console.WriteLine($"WO204-CONV options of conversation {talk.Cid} (decision {c.DecId}, {rows.Count} rows) -> {to.Length} listener(s)");
-                foreach (byte p in to) await Wo203SendConvAsync(p, Protocol.ConvOptions, text);
+                if (text is not null && to.Length > 0)
+                {
+                    Interlocked.Increment(ref _w204OptionsOut);
+                    Console.WriteLine($"WO204-CONV options of conversation {talk.Cid} (decision {c.DecId}, {rows.Count} rows) -> {to.Length} listener(s)");
+                    foreach (byte p in to) await Wo203SendConvAsync(p, Protocol.ConvOptions, text);
+                }
+                await Wo207TimerOutAsync(c, Wo207Rules.ParseTimerTail(x.Payload, tailAt), to);   // WO-207 A.3: after the options it belongs to
             }
             finally { Interlocked.Exchange(ref _w204OptPolling, 0); }
         });
@@ -165,8 +194,7 @@ public partial class GameBridge
         Console.WriteLine($"WO204-CONV partner {src} votes {(index < 0 ? "clear" : $"row {index}")} on decision {decId} of conversation {cid} -- shown in this player's own options (this player decides)");
         _ = Task.Run(async () =>
         {
-            byte[] mark = [92, (byte)(index < 0 ? 255 : index), 0];
-            await W3cNativeAsync(92, mark);
+            await W3cNativeAsync(92, Wo207Rules.ConvArgs(92, [(byte)(index < 0 ? 255 : index), 0], W207("conv_op_frame")));
             await ExecLuaAsync($"if KCD2MP_W204VoteIcon then KCD2MP_W204VoteIcon(\"{EscapeLua(rows)}\", {index}, {cur}, {(right ? "true" : "false")}) end");
             Interlocked.Increment(ref _w204VoteIcons);
         });
@@ -188,7 +216,7 @@ public partial class GameBridge
         Console.WriteLine($"WO204-CONV conversation {cid}: no listener left -- the vote icon cleared");
         _ = Task.Run(async () =>
         {
-            await W3cNativeAsync(92, [92, 255, 0]);
+            await W3cNativeAsync(92, Wo207Rules.ConvArgs(92, [255, 0], W207("conv_op_frame")));
             await ExecLuaAsync($"if KCD2MP_W204VoteIcon then KCD2MP_W204VoteIcon(\"{EscapeLua(rows)}\", -1, {cur}, {(right ? "true" : "false")}) end");
         });
     }
@@ -225,6 +253,12 @@ public partial class GameBridge
             case Protocol.ConvVote when Wo204Rules.TryParseVote(m.Text, out int vcid, out int vdec, out int vidx):
                 Wo204ConvOnVote(src, vcid, vdec, vidx);
                 return;
+            case Protocol.ConvTimer when Wo207Rules.TryParseTimer(m.Text, out int tcid, out int tdec, out bool ton, out float tleft, out float trate):
+                Interlocked.Increment(ref _w207TimersIn);
+                if (!mine || l!.Cid != tcid) return;
+                _ = ExecLuaAsync(string.Create(System.Globalization.CultureInfo.InvariantCulture,
+                    $"if KCD2MP_W207Timer then KCD2MP_W207Timer({src}, {tcid}, {tdec}, {(ton ? 1 : 0)}, {tleft:F3}, {trate:F4}) end"));
+                return;
             default:
                 Interlocked.Increment(ref _w204ConvBad);
                 return;
@@ -238,16 +272,37 @@ public partial class GameBridge
         uint eid = 0;
         if (line.Speaker == "@") _ghostEntityIds.TryGetValue(starter.ToString(System.Globalization.CultureInfo.InvariantCulture), out eid);
         else _npcEntityIds.TryGetValue(line.Speaker, out eid);
-        var pb = System.Text.Encoding.UTF8.GetBytes(line.Path);
-        if (eid == 0 || pb.Length is 0 or > 200) { Interlocked.Increment(ref _w204LinesNoBody); return; }
-        var a = new byte[10 + pb.Length];
-        a[0] = 93;
-        BitConverter.GetBytes(eid).CopyTo(a, 1);
-        BitConverter.GetBytes((uint)line.DurMs).CopyTo(a, 5);
-        a[9] = (byte)pb.Length; pb.CopyTo(a, 10);
-        var r = await W3cNativeAsync(93, a);
-        if (r is { Ok: true } x && x.Payload.Length > 0 && x.Payload[0] == 0) Interlocked.Increment(ref _w204LinesVoiced);
-        else Interlocked.Increment(ref _w204LinesNoBody);
+        // WO-207 A.4: a body that never spoke here gets its speak manager the engine's way (conv_voice_make); the host listening voices
+        // its own NPC, found by name in the DLL (conv_voice_by_name: the copy map holds only the host's NPCs on a joiner)
+        bool byName = eid == 0 && line.Speaker != "@" && W207("conv_voice_by_name");
+        byte flags = (byte)((W207("conv_voice_make") ? Wo207Rules.SpeakMake : 0) | (byName ? Wo207Rules.SpeakByName : 0));
+        byte[]? a = Wo207Rules.ConvSpeakArgs(eid, (uint)line.DurMs, line.Path, flags, byName ? line.Speaker : null);
+        if ((eid == 0 && !byName) || a is null) { Wo207VoiceRefused(line.Speaker, eid, eid == 0 ? "no body known here" : "no voice file"); return; }
+        var r = await W3cNativeAsync(93, Wo207Rules.ConvArgs(93, a, W207("conv_op_frame")));
+        if (r is { Ok: true } x && x.Payload.Length > 0 && x.Payload[0] == 0)
+        {
+            if (Interlocked.Increment(ref _w204LinesVoiced) <= 3) Console.WriteLine($"WO207-VOICE a line of '{line.Speaker}' voiced on its body here{(byName ? " (found by name)" : $" (0x{eid:X})")}");
+        }
+        else Wo207VoiceRefused(line.Speaker, eid, r is { Ok: true } y && y.Payload.Length > 0
+            ? y.Payload[0] switch { 1 => byName ? "no entity of that name here" : "no actor for the body", 2 => "no speak manager", 3 => "the speak call not resolved", 4 => "the speak call faulted", _ => $"result {y.Payload[0]}" }
+            : r is { } z ? $"the DLL refused the request (reason {z.Reason})" : "no answer from the pipe");
+    }
+
+    // WO-207 A.4: why a line this starter's engine voiced during a joined talk did not go to its listener (the first ten)
+    private long _w207LinesDropped;
+    private void Wo207LineDropped(Wo201Rules.SpeechCaptured l, string why)
+    {
+        if (Interlocked.Increment(ref _w207LinesDropped) <= 10)
+            Console.WriteLine($"WO207-LINE a line of '{l.Name}' (body 0x{l.Eid:X}) not sent to the listener: {why}");
+    }
+
+    // WO-207 A.4: why a line reached this listener but no body voiced it (the first ten, then counted only)
+    private long _w207VoiceRefusedLogged;
+    private void Wo207VoiceRefused(string speaker, uint eid, string why)
+    {
+        Interlocked.Increment(ref _w204LinesNoBody);
+        if (Interlocked.Increment(ref _w207VoiceRefusedLogged) <= 10)
+            Console.WriteLine($"WO207-VOICE a line of '{speaker}' not voiced here (body 0x{eid:X}): {why}");
     }
 
     /// <summary>The Lua's w204_vote: "&lt;starter&gt; &lt;cid&gt; &lt;decId&gt; &lt;index|clear&gt;" -- this player's vote on the decision their HUD shows.</summary>
@@ -308,5 +363,5 @@ public partial class GameBridge
         $"conv lines_out={Interlocked.Read(ref _w204LinesOut)} lines_in={Interlocked.Read(ref _w204LinesIn)} voiced={Interlocked.Read(ref _w204LinesVoiced)} voice_no_body={Interlocked.Read(ref _w204LinesNoBody)}"
         + $" options_out={Interlocked.Read(ref _w204OptionsOut)} options_in={Interlocked.Read(ref _w204OptionsIn)} votes_out={Interlocked.Read(ref _w204VotesOut)} votes_in={Interlocked.Read(ref _w204VotesIn)}"
         + $" vote_icons={Interlocked.Read(ref _w204VoteIcons)} chosen_out={Interlocked.Read(ref _w204ChosenOut)} chosen_in={Interlocked.Read(ref _w204ChosenIn)} bad={Interlocked.Read(ref _w204ConvBad)}"
-        + $" role_maps={Interlocked.Read(ref _w204RoleMaps)} role_maps_missing={Interlocked.Read(ref _w204RoleMapsMissing)} role_placed={Interlocked.Read(ref _w204RolePlaced)}";
+        + $" role_maps={Interlocked.Read(ref _w204RoleMaps)} role_maps_missing={Interlocked.Read(ref _w204RoleMapsMissing)} role_placed={Interlocked.Read(ref _w204RolePlaced)} " + Wo207TimerStats();
 }

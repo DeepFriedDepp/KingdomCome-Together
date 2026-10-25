@@ -38,7 +38,8 @@ namespace KcdMp.Server.Features.Faults;
 //       "kind": "lag" | "jitter-hold" | "throttle" | "stall" | "cut",
 //       "role": "host" | "joiner" | "any",            default "any"
 //       "dir":  "up" | "down" | "both",               default "both" (ignored by cut)
-//       "at":   "t:+<seconds>" | "step:<name>",       default "t:+0"
+//       "at":   "t:+<seconds>" | "step:<name>" | "step:<name>#<n>",  default "t:+0" (#n: the step's n-th time, WO-207 C.4's
+//               cut during the rejoin after a host reload = the join's second "world-sent"; plain "step:<name>" = #1)
 //       "for_s": <seconds>,                           default 0 = until the relay exits (cut: one-shot, no refusal)
 //       lag:         "ms" (> 0), "jitter_ms" (>= 0, default 0; a seeded uniform extra per frame)
 //       jitter-hold: "hold_ms" (> 0), "every_ms" (> hold_ms)
@@ -67,10 +68,10 @@ public enum FaultDir { Up = 1, Down = 2, Both = Up | Down }
 public sealed record FaultRule(
 	int Index, string Name, FaultKind Kind, FaultRole Role, FaultDir Dir,
 	string? AtStep, long AtMs, long ForMs,
-	int LagMs, int JitterMs, int HoldMs, int EveryMs, long BytesPerS)
+	int LagMs, int JitterMs, int HoldMs, int EveryMs, long BytesPerS, int AtStepNth = 1)
 {
 	/// <summary>The rule's "at" as the plan wrote it, for the log lines.</summary>
-	public string At => AtStep is { } s ? "step:" + s : "t:+" + (AtMs / 1000.0).ToString("0.###", CultureInfo.InvariantCulture);
+	public string At => AtStep is { } s ? "step:" + s + (AtStepNth > 1 ? "#" + AtStepNth.ToString(CultureInfo.InvariantCulture) : "") : "t:+" + (AtMs / 1000.0).ToString("0.###", CultureInfo.InvariantCulture);
 
 	public static string KindName(FaultKind k) => k switch
 	{
@@ -178,9 +179,17 @@ public sealed class RelayFaultPlan
 		string at = Str(r, "at", where) ?? "t:+0";
 		string? atStep = null;
 		long atMs = 0;
+		int nth = 1;
 		if (at.StartsWith("step:", StringComparison.Ordinal))
 		{
 			atStep = at[5..];
+			int hash = atStep.IndexOf('#');
+			if (hash >= 0)
+			{
+				if (!int.TryParse(atStep[(hash + 1)..], NumberStyles.None, CultureInfo.InvariantCulture, out nth) || nth < 1 || nth > 99)
+					throw new FormatException($"{where}: '{at}': the step's occurrence must be #1..#99");
+				atStep = atStep[..hash];
+			}
 			if (Array.IndexOf(RelayFaults.Steps, atStep) < 0)
 				throw new FormatException($"{where}: unknown step '{atStep}' ({string.Join(", ", RelayFaults.Steps)})");
 		}
@@ -223,7 +232,7 @@ public sealed class RelayFaultPlan
 			if (r.TryGetProperty(key, out _) && Array.IndexOf(kinds, kind) < 0)
 				throw new FormatException($"{where}: '{key}' does not apply to {FaultRule.KindName(kind)}");
 
-		return new FaultRule(index, name, kind, role, dir, atStep, atMs, forMs, lagMs, jitterMs, holdMs, everyMs, bps);
+		return new FaultRule(index, name, kind, role, dir, atStep, atMs, forMs, lagMs, jitterMs, holdMs, everyMs, bps, nth);
 	}
 
 	private static readonly (string Key, FaultKind[] Kinds)[] KindKeys =

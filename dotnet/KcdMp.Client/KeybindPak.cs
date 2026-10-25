@@ -171,6 +171,28 @@ public static class KeybindPak
         return InsertChecked(profile, close, body, ProfileEntry, DialogActions, out why);
     }
 
+    /// <summary>WO-207 A.4: the listener's own actionmap ("kcd2mp_listen", defaultProfile.listen.xml) inserted just after the game's
+    /// "dialog" actionmap (ours merged in already); null (and why) when the file does not have that shape or already names it.</summary>
+    public const string ListenMap = "kcd2mp_listen";
+    public static string? MergeListenMap(string profile, string body, out string why)
+    {
+        if (!Wellformed(profile, out why)) { why = "defaultProfile.xml does not parse: " + why; return null; }
+        if (profile.Contains("\"" + ListenMap + "\"", StringComparison.Ordinal)) { why = "defaultProfile.xml already names " + ListenMap; return null; }
+        MatchCollection open = DialogOpen.Matches(profile);
+        if (open.Count != 1) { why = $"{open.Count} actionmaps named \"dialog\" (expected 1)"; return null; }
+        int close = profile.IndexOf("</actionmap>", open[0].Index, StringComparison.Ordinal);
+        if (close < 0) { why = "the \"dialog\" actionmap never closes"; return null; }
+        int next = profile.IndexOf('\n', close);
+        if (next < 0) { why = "nothing after the \"dialog\" actionmap"; return null; }
+        string? merged = InsertChecked(profile, next + 1, body, ProfileEntry, [], out why);
+        if (merged is null) return null;
+        if (Regex.Matches(merged, "<actionmap\\s+name\\s*=\\s*\"" + ListenMap + "\"").Count != 1) { why = ProfileEntry + ": the listen map not there once after the merge"; return null; }
+        foreach (string a in DialogActions)
+            if (Regex.Matches(merged, "name=\"" + a + "\"").Count != Regex.Matches(profile, "name=\"" + a + "\"").Count + 1)
+            { why = $"{ProfileEntry}: {a} not declared once more in the listen map"; return null; }
+        return merged;
+    }
+
     /// <summary>WO-203B: the game's keybindSuperactions.xml (ours merged in already) with the listener's action listed inside the
     /// game's own "back" superaction, before its first control (the keys stay the game's); null (and why) otherwise.</summary>
     public static string? MergeBack(string superactions, string body, out string why)
@@ -212,7 +234,8 @@ public static class KeybindPak
 
     /// <summary>WO-204 III.3: one superaction line of ours.</summary>
     public static string ListenLine(string action, string superaction) =>
-        $"\t\t<action name=\"{action}\" map=\"dialog\" /><!-- KCD2MP (WO-204 III.3): the partner's options, on the game's own {superaction} keys -->\r\n";
+        $"\t\t<action name=\"{action}\" map=\"dialog\" /><!-- KCD2MP (WO-204 III.3): the partner's options, on the game's own {superaction} keys -->\r\n" +
+        $"\t\t<action name=\"{action}\" map=\"{ListenMap}\" /><!-- KCD2MP (WO-207): the same, in the listener's own map -->\r\n";
 
     private static string? InsertAtLineStart(string vanilla, int at, string body, string entry, out string why) =>
         InsertChecked(vanilla, at, body, entry, Actions, out why);
@@ -471,6 +494,8 @@ public static class KeybindPak
             // without that shape keeps every other key (the listener then leaves through the ESC menu) and the outcome says so
             string? listenNote = null;
             string? pd = MergeDialog(p, PatchBody(EmbeddedPatch("defaultProfile.dialog.xml")), out string whyD);
+            // WO-207 A.4: the listener's own map beside it (both or neither, with the dialog map's lines)
+            if (pd is not null) pd = MergeListenMap(pd, PatchBody(EmbeddedPatch("defaultProfile.listen.xml")), out whyD);
             string? sb = pd is null ? null : MergeBack(s, PatchBody(EmbeddedPatch("keybindSuperactions.back.xml")), out whyD);
             if (pd is not null && sb is not null)
             {

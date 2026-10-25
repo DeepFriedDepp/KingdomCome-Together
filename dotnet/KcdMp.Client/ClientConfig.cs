@@ -56,6 +56,8 @@ public sealed class ClientConfig
     /// started by hand without either flag and without a config file saying so.
     /// </summary>
     public bool VoiceChatEnabled { get; set; } = false;
+    /// <summary>WO-207 C.2: the game keeps running behind another window during the session (KeepAwakeSetting; the launcher's choice).</summary>
+    public bool KeepAwake { get; set; } = true;
 
     /// <summary>
     /// WO-40 Phase 3: whether this agent participates in session weather
@@ -364,6 +366,12 @@ public sealed class ClientConfig
                         break;
                     case "--no-voice":
                         VoiceChatEnabled = false;
+                        break;
+                    case "--keep-awake":       // WO-207 C.2
+                        KeepAwake = true;
+                        break;
+                    case "--no-keep-awake":
+                        KeepAwake = false;
                         break;
                     case "--guid-damage-fallback":
                         GuidDamageFallbackEnabled = true;

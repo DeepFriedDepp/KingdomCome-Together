@@ -321,9 +321,9 @@ public sealed class RelayFaults
 	private void Step(string step, FaultSession from, string via)
 	{
 		int i = Array.IndexOf(Steps, step);
-		Interlocked.Increment(ref _stepCounts[i]);
-		foreach (var rs in Rules)
-			if (rs.Rule.AtStep == step && Volatile.Read(ref rs.State) == 0) Fire(rs, via, from);
+		long n = Interlocked.Increment(ref _stepCounts[i]);
+		foreach (var rs in Rules)   // WO-207 C.4: a rule with #n fires at the step's n-th time
+			if (rs.Rule.AtStep == step && n == rs.Rule.AtStepNth && Volatile.Read(ref rs.State) == 0) Fire(rs, via, from);
 	}
 
 	public long StepCount(string step) => Interlocked.Read(ref _stepCounts[Array.IndexOf(Steps, step)]);

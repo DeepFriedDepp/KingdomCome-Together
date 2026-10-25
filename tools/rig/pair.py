@@ -15,7 +15,8 @@ the tick is live (the launcher's VerifyInjectionAsync); then the agent starts wi
 
     python tools/rig/pair.py prepare                     per-copy agent + DLL folders from the rig's newest build
     python tools/rig/pair.py relay [plan.json]           the relay on the test port (a fault plan: test-only switch)
-    python tools/rig/pair.py up <A|B>                    a copy to its main menu (B: the A.3 checks first)
+    python tools/rig/pair.py up <A|B>                    a copy to its main menu (B: the A.3 checks first; its instance box answered)
+    python tools/rig/pair.py guard <A|B> [--user-folder X]   dry run: refused when the user folder resolves to the real saves
     python tools/rig/pair.py host A <playline> <save> [--agent-delay S | --at-load S] [--hitch S] [--settle-freeze] [--twin]
     python tools/rig/pair.py join B                      the launcher's joiner, from its menu
     python tools/rig/pair.py collect <tag>               both bundles (LogPack) into the run folder
@@ -25,7 +26,7 @@ import glob, json, os, re, shutil, subprocess, sys, time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-import mirror, procs, rig
+import dialogs, mirror, procs, rig
 
 COPIES = os.path.join(rig.RIG, 'copies')
 RELAY_PORT = int(os.environ.get('KCDMP_RIG_RELAY_PORT', '7790'))
@@ -61,9 +62,10 @@ def state(): return rig.load_state()
 
 def prepare():
     """Fresh per-copy agent and DLL folders from the rig's build (release\\w206rig\\run\\agent, dll\\KCDMP_w206_*.dll)."""
-    dlls = sorted(glob.glob(os.path.join(rig.RIG, 'dll', 'KCDMP_w206_*.dll')), key=os.path.getmtime)
+    ddir = os.path.join(mirror.BUILD, 'dll') if os.environ.get('KCDMP_RIG_BUILD') else os.path.join(rig.RIG, 'dll')
+    dlls = sorted(glob.glob(os.path.join(ddir, 'KCDMP_w20*.dll')), key=os.path.getmtime)
     if not dlls: raise SystemExit('no DLL in the rig (run deploy.ps1)')
-    src_agent = os.environ.get('KCDMP_RIG_AGENT_SRC', os.path.join(rig.RIG, 'run', 'agent'))
+    src_agent = os.environ.get('KCDMP_RIG_AGENT_SRC', os.path.join(mirror.BUILD, 'agent'))
     for cid in ('A', 'B'):
         p = plan(cid)
         for d in ('agent_dir', 'dll_dir'):
@@ -78,8 +80,25 @@ def prepare():
     # the mod's pak in root B is root A's (deploy.ps1 installs root A's)
     for cid in ('A', 'B'):
         mirror.create(cid)
+        keys_pak(cid)
         mirror.seed_profile(cid)
     seed_saves()
+
+
+def keys_pak(cid):
+    """WO-207 A.4: the launcher's order -- the agent builds Mods\\kdcmp\\Data\\kdcmp_keys.pak from the copy's game files before the
+    game starts (the mod template's pak is an older build's key map). Into the copy's mirror root only."""
+    p = plan(cid)
+    exe = os.path.join(p['agent_dir'], 'KcdMpClient.exe')
+    mod = os.path.join(p['root'], 'Mods', 'kdcmp')
+    env = rig.clean_env({'KCDMP_INSTANCE': cid})
+    env['DOTNET_ROOT'] = os.environ.get('DOTNET_ROOT', os.path.expandvars(r'%USERPROFILE%\.dotnet-sdk8'))
+    r = subprocess.run([exe, '--keys-pak', '--game-root', p['root'], '--mod-dir', mod], cwd=p['agent_dir'], env=env,
+                       capture_output=True, text=True, timeout=120)
+    line = next((l for l in r.stdout.splitlines() if l.startswith('KEYS-PAK ')), r.stdout.strip()[-300:])
+    rig.note('keys-pak', copy=cid, rc=r.returncode, out=line)
+    rig.say('copy', cid, 'keys pak:', line)
+    if r.returncode != 0: raise SystemExit('copy %s: the keys pak was not built (%s)' % (cid, line))
 
 
 # The saves a pair plays: copy A (the host) the WO's throwaway save440, copy B (the joiner) a save of ANOTHER playthrough as
@@ -104,8 +123,21 @@ def seed_saves():
             os.makedirs(os.path.dirname(aside), exist_ok=True)
             shutil.move(hp, aside)
             rig.say('joiner copy %s: %s moved aside -> %s' % (JOIN_CID, hp, aside))
+    # WO-207: the host copy starts every run with its seed only -- each join writes a manual save of the host's world, and at the game's
+    # own limit (100) it deleted the oldest, the seed save440 itself (d16-c4: its reload found nothing). Moved aside, never deleted.
+    for name in mirror.user_folders(HOST_CID):
+        if real_saves_refusal(name, mirror.SAVED_GAMES, mirror.USER_FOLDER_REAL): continue   # never the real saves (refused below)
+        hp = os.path.join(mirror.SAVED_GAMES, name, 'saves', SEED_TO[HOST_CID])
+        if os.path.isdir(hp) and len(os.listdir(hp)) > len(SEED[HOST_CID]) + 1:
+            aside = os.path.join(mirror.SAVED_GAMES, name, 'saves-aside', '%s-%s' % (SEED_TO[HOST_CID], time.strftime('%m%d-%H%M%S')))
+            os.makedirs(os.path.dirname(aside), exist_ok=True)
+            n = len(os.listdir(hp))
+            shutil.move(hp, aside)
+            rig.say('host copy %s: %s (%d files) moved aside -> %s' % (HOST_CID, hp, n, aside))
     for cid, files in SEED.items():
         for name in mirror.user_folders(cid):
+            why = real_saves_refusal(name, mirror.SAVED_GAMES, mirror.USER_FOLDER_REAL)   # WO-207 0.2: a seed never lands in the real saves
+            if why: raise SystemExit('refusing to seed copy %s: %s' % (cid, why))
             dst = os.path.join(mirror.SAVED_GAMES, name, 'saves', SEED_TO[cid])
             os.makedirs(dst, exist_ok=True)
             for sub, f in files:   # every run from the same world: the host's identify save writes over its loaded save
@@ -123,7 +155,7 @@ def seed_saves():
 def relay(plan_file=None):
     st = state()
     if procs.matches(st.get('relay')): rig.say('relay already up'); return 0
-    exe = os.path.join(rig.RIG, 'run', 'relay', 'KcdMpServer.exe')
+    exe = os.path.join(mirror.BUILD, 'relay', 'KcdMpServer.exe')
     argv = [exe, '--port', str(RELAY_PORT), '--urls', 'http://127.0.0.1:%d' % RELAY_HTTP]
     env = rig.clean_env()
     if plan_file:
@@ -169,23 +201,25 @@ def up(cid):
         if bad:
             for b in bad: rig.say('NOT STARTING B:', b)
             rig.note('b-refused', why=bad); return 1
+    bad = user_folder_refusal(cid)
+    if bad:
+        rig.say('NOT STARTING %s: %s' % (cid, bad)); rig.note('refused-real-saves', copy=cid, why=bad); return 1
     exe = os.path.join(p['root'], rig.EXE_REL)
     argv = [exe] + ([] if cid == 'A' else ['-multi_inst'])
     t0 = time.time()
-    rec = procs.start(argv, p['root'], rig.clean_env({'KCDMP_INSTANCE': cid}), cid)
+    genv = {'KCDMP_INSTANCE': cid}
+    for kv in filter(None, os.environ.get('KCDMP_RIG_GAME_ENV', '').split(';')):   # WO-207: a native twin's test switch, KCDMP_TEST_* only
+        k, _, v = kv.partition('=')
+        if k.startswith('KCDMP_TEST_'): genv[k] = v
+    rec = procs.start(argv, p['root'], rig.clean_env(genv), cid)
     st[key] = rec; st[key + '_since'] = t0; rig.save_state(st)
     rig.note('start', copy=cid, **rec, argv=argv, instance=cid)
     rig.say('copy', cid, 'pid', rec['pid'])
-    # A second copy stops at the game's own Yes/No start box (A.4: -multi_inst only allows it) until it is answered.
-    # KCDMP_RIG_AFTER_START_B: a local program of the test machine, started with the new copy's pid (nothing of it is in the repository).
-    hook = os.environ.get('KCDMP_RIG_AFTER_START_B')
+    # WO-207 0.1: a second copy stops at the game's own Yes/No start box (A.4: -multi_inst only allows it); the rig answers it
+    # (tools/rig/dialogs.py: the box among this copy's own windows, by class and owner, its Yes button by control id). 30 s: none -> on.
+    box = None
     if cid == 'B':
-        if hook and os.path.exists(hook):
-            procs.start([sys.executable, '-I', hook, str(rec['pid']), '180'], rig.REPO, rig.clean_env(), 'after-start-B',
-                        log_path=os.path.join(rig.run_dir(), 'after-start-B.log'))
-            rig.note('after-start-hook', copy=cid, hook=os.path.basename(hook))
-        else:
-            rig.say('copy B waits at the game\'s own start prompt until it is answered')
+        box = dialogs.answer_in_background(rec, 30.0, log=lambda m: (rig.say('copy B', m)), matches=procs.matches)
     # a second instance writes kcd(1).log (A.4); the first writes kcd.log
     log = os.path.join(p['root'], 'kcd.log' if cid == 'A' else 'kcd(1).log')
     line, _ = wait_line(log, t0, r"^PlayVideoOnly 'main_menu|^User folder is", 420, rec)
@@ -198,11 +232,46 @@ def up(cid):
             rig.say('copy %s uses the user folder %s -- stopped at once' % (cid, w.user_folder)); procs.stop(rec); return 1
         if w.menu or not procs.matches(rec): break
         time.sleep(1)
+    if box:
+        box['thread'].join(timeout=35)
+        rig.note('instance-box', copy=cid, **{k: v for k, v in (box.get('result') or {'found': None}).items()})
     if w.device_lost:
         rig.note('device-lost', copy=cid, lines=w.device_lost[:5]); rig.say('DEVICE-REMOVED: stopping both'); down(); return 1
     rig.note('menu', copy=cid, ok=w.menu, user_folder=w.user_folder, http_port=w.http_port)
     rig.say('copy', cid, 'menu' if w.menu else 'NOT at its menu', 'port', w.http_port, 'user folder', w.user_folder)
     return 0 if w.menu else 1
+
+
+def cfg_user_folder(root):
+    """The sys_user_folder the copy's own system.cfg names (the last line wins, as the engine applies the file); None = none."""
+    p = os.path.join(root, 'system.cfg')
+    if not os.path.exists(p): return None
+    val = None
+    for l in open(p, encoding='utf-8', errors='replace'):
+        m = re.match(r'^\s*sys_user_folder\s*=\s*(.*?)\s*$', l, re.I)
+        if m: val = m.group(1).strip('"')
+    return val
+
+
+def real_saves_refusal(user_folder, saved_games, real_name):
+    """WO-207 0.2, pure (tested): why a copy with this user folder would touch the player's real saves, or None. The game appends
+    "(N)" to a second instance's folder, and an empty or missing folder is the game's default -- the real one."""
+    if not user_folder: return 'no own user folder (the game\'s default is the player\'s real one)'
+    path = user_folder if os.path.isabs(user_folder) else os.path.join(saved_games, user_folder)
+    norm = lambda q: os.path.normcase(os.path.realpath(q)).rstrip('\\/')
+    mine, real = norm(path), norm(os.path.join(saved_games, real_name))
+    if mine == real or mine.startswith(real + os.sep): return 'the user folder %s resolves into the real saves folder %s' % (user_folder, real)
+    if real.startswith(mine + os.sep): return 'the user folder %s contains the real saves folder %s' % (user_folder, real)
+    base = re.sub(r'\(\d+\)$', '', os.path.basename(mine))
+    if os.path.dirname(mine) == os.path.dirname(real) and base == os.path.basename(real):
+        return 'the user folder %s is the real one with an instance suffix' % user_folder
+    return None
+
+
+def user_folder_refusal(cid, override=None):
+    """A copy whose user folder (its system.cfg's, or a dry run's override) resolves to the real saves folder is never started."""
+    uf = override if override is not None else cfg_user_folder(plan(cid)['root'])
+    return real_saves_refusal(uf, mirror.SAVED_GAMES, mirror.USER_FOLDER_REAL)
 
 
 def port_of(cid):
@@ -408,7 +477,7 @@ def collect(tag):
             put(os.path.join(p['root'], f), f)
             put(os.path.join(p['agent_dir'], f), f)
         put(os.path.join(rig.run_dir(), 'relay.log'), 'relay.log')
-        tool = os.path.join(rig.RIG, 'run', 'logpack', 'KcdMp.LogPack.Tool.exe')
+        tool = os.path.join(mirror.BUILD, 'logpack', 'KcdMp.LogPack.Tool.exe')
         packed = os.path.join(d + '.packed')
         if os.path.exists(tool):
             r = subprocess.run([tool, d, packed, '--no-verify'], capture_output=True, text=True)
@@ -442,6 +511,12 @@ if __name__ == '__main__':
     if v == 'prepare': prepare()
     elif v == 'relay': sys.exit(relay(a[0] if a else None))
     elif v == 'up': sys.exit(up(a[0]))
+    elif v == 'guard':   # WO-207 0.2's dry run: would this copy (or this user folder) be started? Nothing is started.
+        uf = a[a.index('--user-folder') + 1] if '--user-folder' in a else None
+        why = user_folder_refusal(a[0].upper(), uf)
+        rig.note('guard-dry-run', copy=a[0].upper(), user_folder=uf if uf is not None else cfg_user_folder(plan(a[0])['root']), refused=why)
+        rig.say('guard %s (%s): %s' % (a[0].upper(), uf if uf is not None else 'its system.cfg', 'REFUSED -- ' + why if why else 'allowed'))
+        sys.exit(1 if why else 0)
     elif v == 'host':
         delay = float(a[a.index('--agent-delay') + 1]) if '--agent-delay' in a else None
         at_load = float(a[a.index('--at-load') + 1]) if '--at-load' in a else None

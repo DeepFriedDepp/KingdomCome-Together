@@ -564,7 +564,7 @@ public partial class GameBridge(ClientConfig config)
     // A peer's skip that resolved while our own was still resolving. Applied
     // once our own skip ends (SetWorldTime mid-skip is untested); only the
     // highest target is kept -- applying is forward-only anyway.
-    private (byte SourceId, byte Kind, uint WorldTime, bool Quiet)? _pendingTimeSkip;
+    private (byte SourceId, byte Kind, uint WorldTime, bool Quiet, DateTime ReceivedUtc)? _pendingTimeSkip;   // WO-207 C.3: when it arrived
     private readonly object _timeSkipLock = new();
 
     // Clock-jump watcher: the fallback detector for time advances that emit
@@ -1291,6 +1291,8 @@ public partial class GameBridge(ClientConfig config)
     private async Task RunLoopAsync(HttpGameTransport http, CancellationToken ct)
     {
         _httpForMenu = http;
+        http.Decoupled = W207("queue_decouple");   // WO-207 B.3 (a twin's KCDMP_TEST_W207_OFF can turn it off from the start)
+        _combat.FramesFirst = W207("queue_decouple");
         while (!ct.IsCancellationRequested)
         {
             await WaitForGameAsync(ct);
@@ -2290,8 +2292,10 @@ public partial class GameBridge(ClientConfig config)
                 while (_voiceQueue.TryDequeue(out var voiceFrame))
                     if (_voice is not null) await SendVoiceAsync(stream, voiceFrame);
 
-                // Send everything the receive loop buffered this tick as one call.
-                await _transport.FlushAsync(cts.Token);
+                // Send everything the receive loop buffered this tick as one call. WO-207 B.3: asked for, never waited for (this loop
+                // sends this player's position: it must not stand still behind the game's console).
+                if (W207("queue_decouple")) _transport.RequestFlush();
+                else await _transport.FlushAsync(cts.Token);
 
                 // Print average read time every 100 ticks
                 if (tickCount % 100 == 0)
@@ -2421,6 +2425,9 @@ public partial class GameBridge(ClientConfig config)
             // paused must not be left that way.
             try { await _transport.ExecuteNowAsync("if KCD2MP_Wo102ResumeAll then KCD2MP_Wo102ResumeAll(\"agent-disconnect\") end"); }
             catch (Exception ex) { Console.WriteLine($"[disconnect] Wo102ResumeAll did not send: {ex.Message}"); }
+            // WO-207 C.2: the session is over -- the player's own background setting back (sent now, like the two above)
+            try { await _transport.ExecuteNowAsync(Wo207KeepAwakeLua(false)); }
+            catch (Exception ex) { Console.WriteLine($"[disconnect] the keep-awake release did not send: {ex.Message}"); }
         }
     }
 
@@ -4082,7 +4089,7 @@ public partial class GameBridge(ClientConfig config)
     /// when our own skip is still resolving -- SetWorldTime mid-skip is
     /// untested, and our own skip's result may supersede it anyway.
     /// </summary>
-    private async Task ApplyTimeSkipAsync(byte sourceId, byte kind, uint worldTime, bool quiet, CancellationToken ct)
+    private async Task ApplyTimeSkipAsync(byte sourceId, byte kind, uint worldTime, bool quiet, CancellationToken ct, DateTime? receivedUtc = null)
     {
         // WO-140: this game's own C_SkipTime runs (the DLL's edges -- the log's AfterSkipTime marker only
         // comes at the end): a clock write now reaches the skip's target and ends it (observed: the host's
@@ -4092,7 +4099,7 @@ public partial class GameBridge(ClientConfig config)
             lock (_timeSkipLock)
             {
                 if (_pendingTimeSkip is null || worldTime > _pendingTimeSkip.Value.WorldTime)
-                    _pendingTimeSkip = (sourceId, kind, worldTime, quiet);
+                    _pendingTimeSkip = (sourceId, kind, worldTime, quiet, DateTime.UtcNow);
             }
             return;
         }
@@ -4112,12 +4119,23 @@ public partial class GameBridge(ClientConfig config)
             return;
         }
 
-        Console.WriteLine($"[timeskip] {who} -> worldTime={worldTime} kind={kind}{(quiet ? " (quiet)" : "")}");
+        // WO-207 C.3 (mp_skip_end_exact): an announced skip's end is the host's clock at that moment; held through this game's own skip, it
+        // is that moment plus the real time since, at the world's ratio -- this clock meets the host's now, not after the slow pull-in.
+        uint rawEnd = worldTime;
+        bool exact = !quiet && W207("skip_end_exact");
+        if (exact) worldTime = Wo207Rules.SkipEndTarget(worldTime, receivedUtc ?? DateTime.UtcNow, DateTime.UtcNow, WorldTimeRatio);
+        Console.WriteLine($"[timeskip] {who} -> worldTime={worldTime} kind={kind}{(quiet ? " (quiet)" : "")}{(exact && worldTime != rawEnd ? $" (the host's end {rawEnd} + the real time since)" : "")}");
         try
         {
             await ExecLuaAsync(string.Format(CultureInfo.InvariantCulture,
                 "if KCD2MP_ApplyTimeSkip then KCD2MP_ApplyTimeSkip(\"{0}\",{1},{2},{3}) end",
                 EscapeLua(who), kind, worldTime, quiet || W140SharedSkip ? "true" : "false"));   // WO-140: both slept -- no "slept till" toast
+            if (exact && W140SharedSkip)   // WO-207 C.3: this game's own count ran past the host's end -- back to it now (the forward write above covers behind)
+            {
+                var pulled = await _combat.Wo140PullAsync(worldTime, worldTime, ct);
+                Console.WriteLine(pulled is { Result: 1 } pr ? $"MP-W207 skip end: this clock had run {pr.Before - worldTime} s past the host's -- set to it ({pr.Before} -> {pr.After})"
+                                                            : $"MP-W207 skip end: this clock meets the host's end {worldTime} (forward written{(pulled is { Result: 3 } ? "; a skip still runs, the pull waits" : "")})");
+            }
             // WO-102 Phase 6: a peer's announced sleep/wait/fast travel is a
             // resync point here too (quiet clock reports are not).
             if (!quiet)
@@ -4136,7 +4154,7 @@ public partial class GameBridge(ClientConfig config)
 
     private void ApplyPendingTimeSkipIfAny()
     {
-        (byte SourceId, byte Kind, uint WorldTime, bool Quiet)? pending;
+        (byte SourceId, byte Kind, uint WorldTime, bool Quiet, DateTime ReceivedUtc)? pending;
         lock (_timeSkipLock)
         {
             pending = _pendingTimeSkip;
@@ -4144,7 +4162,7 @@ public partial class GameBridge(ClientConfig config)
         }
         if (pending is not null)
             _ = ApplyTimeSkipAsync(pending.Value.SourceId, pending.Value.Kind,
-                pending.Value.WorldTime, pending.Value.Quiet, CancellationToken.None);
+                pending.Value.WorldTime, pending.Value.Quiet, CancellationToken.None, pending.Value.ReceivedUtc);
     }
 
     /// <summary>
@@ -4572,6 +4590,13 @@ public partial class GameBridge(ClientConfig config)
         // a pull's answer came after its timeout. Leash frames never wait for NPC traffic now.
         var leashLane = Channel.CreateUnbounded<InFrame>(new UnboundedChannelOptions { SingleReader = true });
         _ = Wo147LeashLaneAsync(leashLane.Reader, ct);
+        // WO-207 A.1: the conversation's own lane. On the bench the listener's camera samples waited 3-5 s behind NPC traffic and the
+        // listener's DLL ended the view for silence; a line or a vote is a moment too (lines, options, votes, the camera, the end).
+        var convLane = Channel.CreateUnbounded<InFrame>(new UnboundedChannelOptions { SingleReader = true });
+        _ = Wo207ConvLaneAsync(convLane.Reader, ct);
+        // WO-207 B.3: the activity frames' own lane (each row a native write through the pipe; in order, never in the frame processor's way)
+        var actLane = Channel.CreateUnbounded<InFrame>(new UnboundedChannelOptions { SingleReader = true });
+        _ = Wo207ActivityLaneAsync(actLane.Reader, ct);
         // The coalescer's clock: a pending Lua push must go out once it is due
         // even when no further frame for that NPC arrives (a puppet that just
         // stopped). Through the channel, so the push state stays single-threaded.
@@ -4606,14 +4631,17 @@ public partial class GameBridge(ClientConfig config)
                 if (Wo206TakeAtRead(type, payload)) continue;   // WO-206 E: an epoch is known from the frame it arrives in, never behind the queue
                 uint stamp = Wo206StampAtRead(payload);         // WO-206 E: the world epoch this frame was sent under
                 if (Wo147IsLeashFrame(type)) { leashLane.Writer.TryWrite(new InFrame(type, payload, arrival, stamp)); continue; }
+                if (type == Protocol.ConvDown && W207("conv_lane")) { convLane.Writer.TryWrite(new InFrame(type, payload, arrival, stamp)); continue; }   // WO-207 A.1
+                if ((type == Protocol.ActivityHostDown || type == Protocol.ActivityExtraDown) && W207("queue_decouple"))   // WO-207 B.3
+                { actLane.Writer.TryWrite(new InFrame(type, payload, arrival, stamp)); continue; }
                 FeedNativeAtRead(type, payload, arrival);
                 if (W202("net_game_queue") && Wo202Coalesce(frames.Writer, type, payload, arrival, stamp)) continue;   // WO-202 III.1: a waiting state is replaced
-                frames.Writer.TryWrite(new InFrame(type, payload, arrival, stamp));
+                Wo207Queue(frames.Writer, new InFrame(type, payload, arrival, stamp), type);   // WO-207 B.1
             }
         }
         catch (OperationCanceledException) { }
         catch (Exception ex) when (ex is IOException or SocketException or EndOfStreamException) { }
-        finally { frames.Writer.TryComplete(); leashLane.Writer.TryComplete(); }
+        finally { frames.Writer.TryComplete(); leashLane.Writer.TryComplete(); convLane.Writer.TryComplete(); actLane.Writer.TryComplete(); }
         await processor;
     }
 
@@ -4695,890 +4723,897 @@ public partial class GameBridge(ClientConfig config)
                 if (Wo202Resolve(frameRaw) is not { } frame) continue;   // WO-202 III.1: a coalesced slot is its body's newest state
                 Wo206NoteProcessorOn(frame.Type);   // WO-206: a frame (or a flush) that holds the processor is named (the bench's stall watch)
                 if (frame.Type == FlushTickType) { Wo136ReplayIfReleased(); await FlushDueNpcLuaPushesAsync(); continue; }
-                Wo147NoteProcessing(frame.Arrival);   // the backlog fix: how far behind the reader this processor is
-                Wo136ReplayIfReleased();          // WO-136: the moment the hold ends, what it kept goes first
-                if (Wo136Defer(frame)) continue;   // WO-136: the host's NPCs and avatars wait for the world to load
-                if (Wo140DropSeparate(frame.Type)) continue;   // WO-140: nothing of the host's world reaches a joiner in its own
-                if (Wo206DropStale(frame)) continue;   // WO-206 E: a world write from an older world epoch (a load since it was sent)
-                int type       = frame.Type;
-                var payload    = frame.Payload;
-                int payloadLen = payload.Length;
-
-                if (type == Protocol.Pong && payloadLen == 8)
+                var w207 = Wo207Begin(frame);   // WO-207 B.1: the kind, its wait in the queue and its handler's time
+                try
                 {
-                    long ts = BinaryPrimitives.ReadInt64LittleEndian(payload);
-                    if (_pingsSent.TryRemove(ts, out long sentAt))
-                    {
-                        int ms = (int)((System.Diagnostics.Stopwatch.GetTimestamp() - sentAt)
-                                       * 1000L / System.Diagnostics.Stopwatch.Frequency);
-                        Console.WriteLine($"[ping] {ms} ms");
-                        _stats.OnPong(ms);
-                        try { await ExecLuaAsync($"KCD2MP_ShowPing({ms})"); } catch { }
-                    }
-                }
-                else if (type == Protocol.ClockSyncDown && payloadLen == Protocol.ClockSyncDownPayloadLen)
-                {
-                    // WO-98 Phase 1: [t0 client send][t1 relay recv][t2 relay send]; t3 = now.
-                    long t3 = DateTime.UtcNow.Ticks;
-                    long t0 = BinaryPrimitives.ReadInt64LittleEndian(payload);
-                    long t1 = BinaryPrimitives.ReadInt64LittleEndian(payload.AsSpan(8));
-                    long t2 = BinaryPrimitives.ReadInt64LittleEndian(payload.AsSpan(16));
-                    OnClockSample(t0, t1, t2, t3);
-                }
-                else if (type == Protocol.Ghost && Protocol.IsGhostPayloadLen(payloadLen))
-                {
-                    // Ghost: [ghostId:1][x:4f][y:4f][z:4f][rotZ:4f][flags:1]
-                    // WO-100.5 Phase 2 appends [pace:1][dir:1][stance:1][animSpeedCenti:2].
-                    // WO-101: decoded by PositionCodec, shared with the relay
-                    // round-trip gate; the length was already gated above.
-                    PositionCodec.TryDecodeGhost(payload.AsSpan(0, payloadLen), out var gs);
-                    byte ghostId   = gs.GhostId;
-                    float x        = gs.X;
-                    float y        = gs.Y;
-                    float z        = gs.Z;
-                    float rotZ     = gs.RotZ;
-                    bool  isRiding = gs.IsRiding;
-                    bool  isStale  = gs.IsStale;   // WO-99 Phase 1
-                    if (Wo144DropFromRemoved(ghostId)) continue;   // WO-144: a removed ghost stays removed
-                    Wo127NoteGhost(ghostId, x, y, z, isRiding, isStale);   // WO-127: the joiner's avatar for the leash recorder
+                    Wo147NoteProcessing(frame.Arrival);   // the backlog fix: how far behind the reader this processor is
+                    Wo136ReplayIfReleased();          // WO-136: the moment the hold ends, what it kept goes first
+                    if (Wo136Defer(frame)) continue;   // WO-136: the host's NPCs and avatars wait for the world to load
+                    if (Wo140DropSeparate(frame.Type)) continue;   // WO-140: nothing of the host's world reaches a joiner in its own
+                    if (Wo206DropStale(frame)) continue;   // WO-206 E: a world write from an older world epoch (a load since it was sent)
+                    if (Wo207DropStale(frame)) continue;   // WO-207 B.2: a combat moment already older than its use, dropped before any handler
+                    int type       = frame.Type;
+                    var payload    = frame.Payload;
+                    int payloadLen = payload.Length;
 
-                    // WO-118 Phase 2b: the native writer already has this sample --
-                    // fed at the socket read (FeedNativeAtRead, WO-118 follow-up).
-
-                    // Both conditions, not just the flag: a sender that sets
-                    // the bit but sends a short packet is a bug we must not
-                    // read past the end of. The codec applies that rule.
-                    BodyState? body = gs.Body;
-                    // WO-121: the v8 state block is change-gated, so most packets
-                    // carry none; the legacy Lua gait path (KCD2MP_UpdateGhost
-                    // clears its body state on a call without one) gets the
-                    // newest block's derivation, held while the sender's 1 s
-                    // heartbeat keeps it fresh.
-                    if (gs.State2 is BodyState2 st2n) { _peerState2At[ghostId] = DateTime.UtcNow; _peerLastState2[ghostId] = st2n; Wo136OnPeerState2(ghostId, st2n); Wo154OnPeerState2(ghostId, st2n); }
-                    else if (_peerLastState2.TryGetValue(ghostId, out var st2h) && _peerState2At.TryGetValue(ghostId, out var st2t)
-                             && (DateTime.UtcNow - st2t).TotalSeconds < 3.0)
-                        body = st2h.ToLegacy(gs.IsRiding);
-                    if (body is BodyState bs) _stats.OnBodyState(ghostId, bs);
-                    else if (gs.BodyStateShort) _stats.BodyStateShortPackets++;
-                    // WO-59: a ghost id we have never seen this connection is
-                    // a newly-arrived peer -- re-announce our clock so THEY
-                    // converge too (our connect-time sync went out before
-                    // they were ready to hear it). Consumed by the next
-                    // world-time poll (<=10 s), which is also a natural
-                    // debounce against their position stream.
-                    if (!_peerLastSeenUtc.ContainsKey(ghostId))
+                    if (type == Protocol.Pong && payloadLen == 8)
                     {
-                        _timeSyncPending = true;
-                        // WO-90: and tell the new arrival where we are in the
-                        // story. Checkpoints are rare enough that waiting for
-                        // our next one could mean they never hear it.
-                        if (_localObjective is string mine && !Wo133WithholdMarker())   // WO-133
-                            _ = _sendStoryBeat?.Invoke(Protocol.StoryBeatKindObjective, mine);
-                    }
-                    _peerLastSeenUtc[ghostId] = DateTime.UtcNow;   // WO-40 Phase 4: live-peer gate for reload convergence
-                    RefreshDiscordPeerCount();
-                    if (_stats.OnGhostPacket(ghostId, x, y, z, isStale, out string? rawPkt) is string pktAgg) Console.WriteLine(pktAgg);   // WO-98 Phase 6
-                    if (rawPkt is not null) Console.WriteLine(rawPkt);
-                    // WO-94: a peer position that jumps further than any horse
-                    // between two samples, inside a catch-up window, is the
-                    // "untracked teleport" hazard (WO-92 s6.4 hazard 1).
-                    if (_ghostLastPos.TryGetValue(ghostId, out var lastP))
-                    {
-                        float ddx = x - lastP.X, ddy = y - lastP.Y, ddz = z - lastP.Z;
-                        double jump = Math.Sqrt(ddx * ddx + ddy * ddy + ddz * ddz);
-                        double dtS = Math.Max(0.05, (DateTime.UtcNow - lastP.AtUtc).TotalSeconds);
-                        if (jump > 50 && jump / dtS > 60)
+                        long ts = BinaryPrimitives.ReadInt64LittleEndian(payload);
+                        if (_pingsSent.TryRemove(ts, out long sentAt))
                         {
-                            string tag = CatchupTag();
-                            if (tag.Length > 0)
-                                Console.WriteLine($"[quest] ghost {ghostId} teleported {jump:F0} m in {dtS:F1}s{tag}");
+                            int ms = (int)((System.Diagnostics.Stopwatch.GetTimestamp() - sentAt)
+                                           * 1000L / System.Diagnostics.Stopwatch.Frequency);
+                            Console.WriteLine($"[ping] {ms} ms");
+                            _stats.OnPong(ms);
+                            try { await ExecLuaAsync($"KCD2MP_ShowPing({ms})"); } catch { }
                         }
                     }
-                    _ghostLastPos[ghostId] = (x, y, z, DateTime.UtcNow);
-                    _ghostLastYaw[ghostId] = rotZ;
-                    _voice?.UpdateGhostPos(ghostId, x, y, z);
-                    // The backlog fix: behind, a sample a newer one supersedes (no state block of its own) is not pushed.
-                    if (!Wo147GhostSkip(ghostId, frame.Arrival, gs.State2 is not null))
-                        await UpdateGhostAsync(ghostId.ToString(), x, y, z, rotZ, isRiding, body);
-                }
-                else if (type == Protocol.ActionDown)
-                {
-                    // WO-100.5 Phase 3. The inbox does the ordering, the
-                    // generation check and the counting; dispatch is separate
-                    // so the wire half stands on its own.
-                    var action = _actionIn.Accept(payload.AsSpan(0, payloadLen), out var reject);
-                    if (action is InboundAction a)
+                    else if (type == Protocol.ClockSyncDown && payloadLen == Protocol.ClockSyncDownPayloadLen)
                     {
-                        string detail = a.Kind == ActionKind.Attack && a.Payload.Length >= AttackPayload.Len
-                            ? AttackPayload.FromBytes(a.Payload).ToString()
-                            : $"payload_len={a.Payload.Length}";
-                        if (a.Kind == ActionKind.NpcRequest)
+                        // WO-98 Phase 1: [t0 client send][t1 relay recv][t2 relay send]; t3 = now.
+                        long t3 = DateTime.UtcNow.Ticks;
+                        long t0 = BinaryPrimitives.ReadInt64LittleEndian(payload);
+                        long t1 = BinaryPrimitives.ReadInt64LittleEndian(payload.AsSpan(8));
+                        long t2 = BinaryPrimitives.ReadInt64LittleEndian(payload.AsSpan(16));
+                        OnClockSample(t0, t1, t2, t3);
+                    }
+                    else if (type == Protocol.Ghost && Protocol.IsGhostPayloadLen(payloadLen))
+                    {
+                        // Ghost: [ghostId:1][x:4f][y:4f][z:4f][rotZ:4f][flags:1]
+                        // WO-100.5 Phase 2 appends [pace:1][dir:1][stance:1][animSpeedCenti:2].
+                        // WO-101: decoded by PositionCodec, shared with the relay
+                        // round-trip gate; the length was already gated above.
+                        PositionCodec.TryDecodeGhost(payload.AsSpan(0, payloadLen), out var gs);
+                        byte ghostId   = gs.GhostId;
+                        float x        = gs.X;
+                        float y        = gs.Y;
+                        float z        = gs.Z;
+                        float rotZ     = gs.RotZ;
+                        bool  isRiding = gs.IsRiding;
+                        bool  isStale  = gs.IsStale;   // WO-99 Phase 1
+                        if (Wo144DropFromRemoved(ghostId)) continue;   // WO-144: a removed ghost stays removed
+                        Wo127NoteGhost(ghostId, x, y, z, isRiding, isStale);   // WO-127: the joiner's avatar for the leash recorder
+
+                        // WO-118 Phase 2b: the native writer already has this sample --
+                        // fed at the socket read (FeedNativeAtRead, WO-118 follow-up).
+
+                        // Both conditions, not just the flag: a sender that sets
+                        // the bit but sends a short packet is a bug we must not
+                        // read past the end of. The codec applies that rule.
+                        BodyState? body = gs.Body;
+                        // WO-121: the v8 state block is change-gated, so most packets
+                        // carry none; the legacy Lua gait path (KCD2MP_UpdateGhost
+                        // clears its body state on a call without one) gets the
+                        // newest block's derivation, held while the sender's 1 s
+                        // heartbeat keeps it fresh.
+                        if (gs.State2 is BodyState2 st2n) { _peerState2At[ghostId] = DateTime.UtcNow; _peerLastState2[ghostId] = st2n; Wo136OnPeerState2(ghostId, st2n); Wo154OnPeerState2(ghostId, st2n); }
+                        else if (_peerLastState2.TryGetValue(ghostId, out var st2h) && _peerState2At.TryGetValue(ghostId, out var st2t)
+                                 && (DateTime.UtcNow - st2t).TotalSeconds < 3.0)
+                            body = st2h.ToLegacy(gs.IsRiding);
+                        if (body is BodyState bs) _stats.OnBodyState(ghostId, bs);
+                        else if (gs.BodyStateShort) _stats.BodyStateShortPackets++;
+                        // WO-59: a ghost id we have never seen this connection is
+                        // a newly-arrived peer -- re-announce our clock so THEY
+                        // converge too (our connect-time sync went out before
+                        // they were ready to hear it). Consumed by the next
+                        // world-time poll (<=10 s), which is also a natural
+                        // debounce against their position stream.
+                        if (!_peerLastSeenUtc.ContainsKey(ghostId))
                         {
-                            OnNpcRequestIn(a);
+                            _timeSyncPending = true;
+                            // WO-90: and tell the new arrival where we are in the
+                            // story. Checkpoints are rare enough that waiting for
+                            // our next one could mean they never hear it.
+                            if (_localObjective is string mine && !Wo133WithholdMarker())   // WO-133
+                                _ = _sendStoryBeat?.Invoke(Protocol.StoryBeatKindObjective, mine);
                         }
-                        else if (await DispatchWo121ActionAsync(a, ct))
+                        _peerLastSeenUtc[ghostId] = DateTime.UtcNow;   // WO-40 Phase 4: live-peer gate for reload convergence
+                        RefreshDiscordPeerCount();
+                        if (_stats.OnGhostPacket(ghostId, x, y, z, isStale, out string? rawPkt) is string pktAgg) Console.WriteLine(pktAgg);   // WO-98 Phase 6
+                        if (rawPkt is not null) Console.WriteLine(rawPkt);
+                        // WO-94: a peer position that jumps further than any horse
+                        // between two samples, inside a catch-up window, is the
+                        // "untracked teleport" hazard (WO-92 s6.4 hazard 1).
+                        if (_ghostLastPos.TryGetValue(ghostId, out var lastP))
                         {
-                            // WO-121: attack / jump / block / dodge rows, NPC rows, the host lever.
-                        }
-                        else if (a.Kind == ActionKind.NpcResync && Wo191OnResyncIn(a))
-                        {
-                            // WO-191 3b: a joiner with no body for its attacker asked for that one NPC (pinned, no burst)
-                        }
-                        else if (a.Kind == ActionKind.NpcResync)
-                        {
-                            // WO-102 Phase 6: a non-owner asks for a burst.
-                            byte rr = a.Payload.Length >= 1 ? a.Payload[0] : (byte)0;
-                            _resyncInRequests++;
-                            if (!_hostAuthority || !_isDamageAuthority)
+                            float ddx = x - lastP.X, ddy = y - lastP.Y, ddz = z - lastP.Z;
+                            double jump = Math.Sqrt(ddx * ddx + ddy * ddy + ddz * ddz);
+                            double dtS = Math.Max(0.05, (DateTime.UtcNow - lastP.AtUtc).TotalSeconds);
+                            if (jump > 50 && jump / dtS > 60)
                             {
-                                _resyncInRefused++;
-                                Console.WriteLine($"MP-NPCRESYNC dir=in from={a.SourceGhostId} reason={NpcResyncReason.Name(rr)} result=refused cause={(!_hostAuthority ? "host-authority-off" : "not-owner")}");
+                                string tag = CatchupTag();
+                                if (tag.Length > 0)
+                                    Console.WriteLine($"[quest] ghost {ghostId} teleported {jump:F0} m in {dtS:F1}s{tag}");
                             }
-                            else await BurstNpcResyncAsync(rr, $"ghost-{a.SourceGhostId}", ct);
                         }
-                        else
-                        // No receiver acts on this yet: Phase 1's block write
-                        // was refused by the engine (docs/WO-100.5-findings.md
-                        // S2.3), so an accepted action is logged and dropped.
-                        // Named as a drop rather than left looking applied.
-                        Console.WriteLine(FormattableString.Invariant(
-                            $"MP-ACTION section=inbound ghost={a.SourceGhostId} kind={a.Kind} phase={a.Phase} seq={a.Seq} gen={a.Gen} {detail} dispatch=dropped-no-receiver"));
+                        _ghostLastPos[ghostId] = (x, y, z, DateTime.UtcNow);
+                        _ghostLastYaw[ghostId] = rotZ;
+                        _voice?.UpdateGhostPos(ghostId, x, y, z);
+                        // The backlog fix: behind, a sample a newer one supersedes (no state block of its own) is not pushed.
+                        if (!Wo147GhostSkip(ghostId, frame.Arrival, gs.State2 is not null))
+                            await UpdateGhostAsync(ghostId.ToString(), x, y, z, rotZ, isRiding, body);
                     }
-                    else
+                    else if (type == Protocol.ActionDown)
                     {
-                        Console.WriteLine(FormattableString.Invariant(
-                            $"MP-ACTION section=inbound reject={reject}"));
-                        Wo191OnActionReject(reject);   // WO-191 1c: per kind, once a minute
-                    }
-                }
-                else if (Protocol.IsJoinDown(type, payloadLen))
-                {
-                    // WO-123: the join channel (request, offer, chunks, acks, done, abort, ready, status).
-                    await Wo123OnFrameAsync(type, payload, ct);
-                }
-                else if (type == Protocol.WorldSavedDown && payloadLen == Protocol.WorldSavedDownPayloadLen)
-                {
-                    // WO-122 Phase 3: the host wrote a world save. Logged here; the
-                    // Henry-snapshot WO pairs the joiner's snapshot with it.
-                    await OnWorldSavedInAsync(payload.AsSpan(0, payloadLen).ToArray());
-                }
-                else if (type == Protocol.PlayerHitV8Down)
-                {
-                    // WO-121: friendly fire -- a partner's hit on our Henry.
-                    await OnPlayerHitV8InAsync(payload.AsSpan(0, payloadLen).ToArray(), ct);
-                }
-                else if (type == Protocol.Name && payloadLen >= 2)
-                {
-                    // Name packet: [ghostId:1][name:UTF-8...]
-                    byte ghostId = payload[0];
-                    string gname = Encoding.UTF8.GetString(payload, 1, payloadLen - 1);
-                    _ghostNames[ghostId] = gname;
-                    Wo144OnPeerConnected(ghostId, gname);   // WO-144: the relay's connection set, the only source of partners
-                    Wo206OnPeerConnected(ghostId);          // WO-206 E: it hears the host's epochs at once
-                    await SetGhostNameAsync(ghostId.ToString(), gname);
-                }
-                else if (type == Protocol.ReleaseVersion && payloadLen >= 2)
-                {
-                    // ReleaseVersion (0x1E, WO-19): [ghostId:1][releaseVersion:UTF-8...]
-                    byte ghostId = payload[0];
-                    string releaseVersion = Encoding.UTF8.GetString(payload, 1, payloadLen - 1);
-                    _ghostReleaseVersions[ghostId] = releaseVersion;
-                    Console.WriteLine($"[version] ghost {ghostId} is on release {releaseVersion}");
-                }
-                else if (type == Protocol.Disconnect && payloadLen == 1)
-                {
-                    // Disconnect packet: [ghostId:1]
-                    byte ghostId = payload[0];
-                    Console.WriteLine($"[disconnect] ghost {ghostId} removed");
-                    Wo144OnPeerDisconnected(ghostId);   // WO-144: out of every partner loop at once
-                    Wo148OnPeerGone(ghostId);           // WO-148: its avatar sets down what it carried
-                    Wo154ForgetPeer(ghostId);           // WO-154 2: a rejoin starts from up
-                    _w206.ForgetPeer(ghostId); _w206.ForgetJoiner(ghostId);   // WO-206 E: its acknowledged epoch and the host's view of it go
-                    _peerLastSeenUtc.TryRemove(ghostId, out _);
-                    _peerCutscene.TryRemove(ghostId, out _);   // WO-98 Phase 5
-                    RefreshDiscordPeerCount();
-                    _voice?.RemovePlayer(ghostId);
-                    _ghostAppearance.TryRemove(ghostId, out _);
-                    _ghostKnownItemClasses.TryRemove(ghostId, out _);
-                    _ghostNeverEquips.TryRemove(ghostId, out _);
-                    _ghostUnwearable.TryRemove(ghostId, out _); _ghostWantedAppearance.TryRemove(ghostId, out _);
-                    _ghostLastAppearance.TryRemove(ghostId, out _);   // WO-88
-                    // WO-17: a respawned ghost gets a fresh Soul.Guid, and a
-                    // gone ghost has nothing left to detach.
-                    _ghostSoulGuidCache.TryRemove(ghostId, out _);
-                    Wo144ForgetLiveSoul(ghostId);   // WO-144 2.1
-                    _ghostHostileUntilUtc.TryRemove(ghostId, out _);
-                    // WO-94: a gone peer's prompt is moot and its catch-up
-                    // window on our side is closed.
-                    _peerObjective.TryRemove(ghostId, out _);
-                    _storyDivergenceTold.TryRemove(ghostId, out _);
-                    _lastSharedObjective.TryRemove(ghostId, out _);      // WO-96
-                    _peerFingerprint.TryRemove(ghostId, out _);          // WO-96
-                    _peerGapTold.TryRemove(ghostId, out _);
-                    _peerRegistryMismatchTold.TryRemove(ghostId, out _);
-                    _ghostLastPos.TryRemove(ghostId, out _);
-                    // WO-100 Phase 4 item 1: the body is gone, so every event
-                    // still queued for it is invalid. Forgetting the entity id
-                    // alone is not enough -- a reconnecting peer reuses the
-                    // ghost id, and a queued swing would then wait for the NEW
-                    // body's id and play on it.
-                    // WO-174: the host takes the figure out of every skirmish BEFORE its body goes (the engine's own RemoveSoul: no
-                    // vanished party stays in a fight, a scripted brawl's included); the entity id is still known here
-                    if (_isDamageAuthority) { try { await Wo174LeaveBeforeRemoveAsync(ghostId); } catch (Exception ex) { Console.WriteLine($"MP-W174 leave-fight failed: {ex.Message}"); } }
-                    _ghostEntityIds.TryRemove(ghostId.ToString(), out _);
-                    BumpGhostGeneration(ghostId.ToString(), "peer disconnected");
-                    if (_peerApproach.TryRemove(ghostId, out _))
-                        try { await ExecLuaAsync($"if KCD2MP_QuestPromptMoot then KCD2MP_QuestPromptMoot(\"peer left\", \"{ghostId}\") end"); } catch { }
-                    if (_peerCatchup.TryRemove(ghostId, out _))
-                        try { await ExecLuaAsync($"if KCD2MP_QuestCatchupRemote then KCD2MP_QuestCatchupRemote(\"{ghostId}\", \"\", \"\", 0) end"); } catch { }
-                    // A peer who disconnects mid-pause must not leave us
-                    // slowed forever with no PauseDown(exit) ever coming.
-                    await ApplyPeerPauseAsync(ghostId, paused: false, ct);
-                    // WO-113: a gone peer's mirror gravestones go with them;
-                    // the owner re-announces on its next connect.
-                    try { await _combat.MirrorGraveAsync(2, ghostId, 0, 0, 0, 0, ct); } catch { }
-                    try { await ExecLuaAsync($"KCD2MP_RemoveGhost(\"{ghostId}\")"); } catch { }
-                    await Wo123OnPeerGoneAsync(ghostId);   // WO-123: a joiner gone mid-join resumes the host
-                    await Wo124OnPeerGoneAsync(ghostId);   // WO-124: the host gone -> the joiner leaves its world
-                    Wo144AfterPeerGone(ghostId);           // WO-144: its name and per-partner rows go last (the handlers above read them)
-                }
-                else if (type == Protocol.VoiceDown && payloadLen == 1 + Protocol.VoiceFrameLen)
-                {
-                    // Voice packet: [sourceId:1][pcm: 640 bytes]
-                    byte sourceId = payload[0];
-                    var pcm = new byte[Protocol.VoiceFrameLen];
-                    Buffer.BlockCopy(payload, 1, pcm, 0, Protocol.VoiceFrameLen);
-                    _voice?.OnVoiceReceived(sourceId, pcm);
-                }
-                else if (type == Protocol.DamageDown && payloadLen == Protocol.DamageDownPayloadLen)
-                {
-                    // Damage: [sourceGhostId:1][guid:16][stamina:4f][health:4f][flags:1]
-                    // Applied through the DLL, not Lua: Lua writes are inert.
-                    byte  sourceId = payload[0];
-                    var   soul     = new Guid(payload.AsSpan(1, 16));
-                    float stamina  = ReadFloat(payload, 17);
-                    float health   = ReadFloat(payload, 21);
-                    bool  suppress = (payload[25] & Protocol.DamageFlagSuppressHitReaction) != 0;
-
-                    bool applied = config.GuidDamageFallbackEnabled
-                                && await _combat.ApplyDamageAsync(soul, stamina, health, suppress, ct, nonLethal: Wo131JoinerActive);   // WO-147
-                    // WO-100.5 Phase 4: the receiving half of the same
-                    // visibility. A guid that does not resolve here is the
-                    // per-save-identity hazard WO-39/WO-40 measured, and it now
-                    // says so on the MP-DMG channel instead of only in prose.
-                    Console.WriteLine(FormattableString.Invariant(
-                        $"MP-DMG dir=in route=guid-fallback ghost={sourceId} soul={soul} hp={health:F1} st={stamina:F1} result={(!config.GuidDamageFallbackEnabled ? "disabled" : applied ? "applied" : "unresolved")}"));
-                    if (!applied)
-                        Console.WriteLine($"[combat] damage from ghost {sourceId} not applied " +
-                                          $"(soul {soul} not loaded here, the fallback is off, or the DLL is absent)");
-                    else
-                        // WO-17: the ghost representing sourceId just landed a
-                        // real hit in this world -- the "Henry is attacking an
-                        // innocent NPC" moment. No-op when aggro is disabled.
-                        _ = TriggerReactiveAggroAsync(sourceId, ct);
-                }
-                else if (type == Protocol.NpcDamageDown
-                         && payloadLen >= 1 + 1 + 1 + Protocol.NpcDamageFixedTail
-                         && payloadLen <= 1 + 1 + Protocol.MaxNpcNameLen + Protocol.NpcDamageFixedTail)
-                {
-                    // Name-addressed NPC damage (WO-40 Phase 5):
-                    // [sourceGhostId:1][nameLen:1][name][stamina:4f][health:4f][flags:1].
-                    // The name resolves to THIS install's per-save guid via the
-                    // reflection REST (cached), then applies through the same
-                    // DLL pipe as 0x22 -- so the DLL's credit-out still stops
-                    // echoes.
-                    byte ndSource = payload[0];
-                    int ndNameLen = payload[1];
-                    if (payloadLen == 2 + ndNameLen + Protocol.NpcDamageFixedTail)
-                    {
-                        string ndName = Encoding.UTF8.GetString(payload, 2, ndNameLen);
-                        if (NpcNamePattern.IsMatch(ndName))
+                        // WO-100.5 Phase 3. The inbox does the ordering, the
+                        // generation check and the counting; dispatch is separate
+                        // so the wire half stands on its own.
+                        var action = _actionIn.Accept(payload.AsSpan(0, payloadLen), out var reject);
+                        if (action is InboundAction a)
                         {
-                            int no = 2 + ndNameLen;
-                            float ndStamina = ReadFloat(payload, no);
-                            float ndHealth  = ReadFloat(payload, no + 4);
-                            bool  ndSupp    = (payload[no + 8] & Protocol.DamageFlagSuppressHitReaction) != 0;
-                            bool  ndFatal   = (payload[no + 8] & Protocol.NpcDamageFlagFatal) != 0;   // WO-86
-                            NoteRequestResolvedIn(ndSource, ndName);   // WO-102 Phase 5
-                            Guid? localGuid = await ResolveLocalSoulGuidAsync(ndName, ct);
-                            // WO-99 Phase 0: a name that resolves to OUR player
-                            // soul is the peer's player, not a shared NPC --
-                            // refuse it before anything touches the local body.
-                            await RefreshPlayerIdentityAsync(force: false, ct);
-                            var ndVerdict = _dmgGuard.CheckInbound(ndName, localGuid);
-                            if (ndVerdict != NpcDamageGuard.Inbound.Apply)
+                            Wo207Trace.Kind.Value = Wo207Trace.ActionKindBase + (int)a.Kind;   // WO-207 B.1: charged to its action kind
+                            string detail = a.Kind == ActionKind.Attack && a.Payload.Length >= AttackPayload.Len
+                                ? AttackPayload.FromBytes(a.Payload).ToString()
+                                : $"payload_len={a.Payload.Length}";
+                            if (a.Kind == ActionKind.NpcRequest)
                             {
-                                _stats.DmgIn++; _stats.DmgInRefused++;
-                                Console.WriteLine(FormattableString.Invariant(
-                                    $"MP-DMG dir=in ghost={ndSource} npc={ndName} hp={ndHealth:F1} st={ndStamina:F1} fatal={(ndFatal ? 1 : 0)} result=refused reason={NpcDamageGuard.Reason(ndVerdict)} authority={(_isDamageAuthority ? 1 : 0)}"));
-                                continue;
+                                OnNpcRequestIn(a);
                             }
-                            // WO-200 II.1: on the joiner a copy's health and stamina are the host's values, never a blow applied here
-                            if (localGuid is not null && Wo200SkipLocalHit(ndName, ndHealth, ndStamina, ndFatal)) { _stats.DmgIn++; continue; }
-                            // WO-86: a FATAL packet may carry no delta at all
-                            // (the Lua observer saw the death, not the blow);
-                            // there is nothing to apply then, only the death.
-                            bool ndHasDelta = ndHealth > 0f || ndStamina > 0f;
-                            // WO-121 Phase 5: an attributed hit on the NPC's
-                            // authority carries the peer's avatar as the attacker.
-                            bool? ndAttrib = ndHasDelta && localGuid is Guid alg
-                                ? await TryApplyAttributedAsync(ndSource, ndName, alg, ndStamina, ndHealth, payload[no + 8], ct)
-                                : null;
-                            // WO-147: on a joiner a non-fatal host hit never kills its copy (the host decides deaths).
-                            bool ndApplied = ndAttrib ?? (ndHasDelta && localGuid is Guid lg
-                                && await _combat.ApplyDamageAsync(lg, ndStamina, ndHealth, ndSupp, ct, nonLethal: Wo131JoinerActive && !ndFatal));
-                            if (ndApplied || (ndFatal && localGuid is not null))
-                                _dmgGuard.NoteInboundApplied(ndName, ndApplied ? ndHealth : 0f, ndApplied ? ndStamina : 0f, ndFatal, DateTime.UtcNow);
-                            // WO-86 Phase 1: every inbound NPC damage event, with
-                            // what this client did about it.
-                            Console.WriteLine($"[npcdmg] in: ghost {ndSource} hit '{ndName}' hp -{ndHealth:F1} st -{ndStamina:F1}"
-                                            + (ndFatal ? " FATAL" : "")
-                                            + (localGuid is null ? " -> no local soul answers to that name"
-                                               : !ndHasDelta ? " -> no delta to apply"
-                                               : ndApplied ? " -> applied" : " -> pipe apply FAILED")
-                                            + (ndFatal ? CatchupTag() : string.Empty));
-                            _stats.DmgIn++; if (ndApplied) _stats.DmgInApplied++; else _stats.DmgInFailed++;
-                            Console.WriteLine(FormattableString.Invariant(
-                                $"MP-DMG dir=in ghost={ndSource} npc={ndName} hp={ndHealth:F1} st={ndStamina:F1} fatal={(ndFatal ? 1 : 0)} result={(localGuid is null ? "nosoul" : !ndHasDelta ? "nodelta" : ndApplied ? "applied" : "failed")} authority={(_isDamageAuthority ? 1 : 0)}"));
-                            if (ndApplied)
-                                _ = TriggerReactiveAggroAsync(ndSource, ct);
-                            if (ndFatal && _isDamageAuthority && Wo176IsArranged(ndName))
-                                Wo176NoteFatalKept(ndName, ndSource);   // WO-176 A1: a quest's arranged fight decides its own deaths
-                            else if (ndFatal)
-                                await ApplyRemoteNpcDeathAsync(ndName, localGuid, ndSource, "0x31 FATAL", ct);
-                        }
-                    }
-                }
-                else if (type == Protocol.DeathDown && payloadLen == Protocol.DeathDownPayloadLen)
-                {
-                    // Death is its own packet rather than inferred from health
-                    // reaching zero, and the DLL treats it as idempotent.
-                    byte sourceId = payload[0];
-                    var  soul     = new Guid(payload.AsSpan(1, 16));
-                    // WO-100.5 Phase 4: 0x14 carries the same per-save guid as
-                    // 0x12 and is gated by the same toggle, for the same
-                    // reason. Reported on the MP-DMG channel so "the death
-                    // never arrived" and "the death arrived and the guid did
-                    // not resolve" stop looking identical in a field log.
-                    bool applied  = config.GuidDamageFallbackEnabled
-                                 && await _combat.ApplyDeathAsync(soul, ct);
-                    Console.WriteLine(FormattableString.Invariant(
-                        $"MP-DMG dir=in route=guid-fallback-death ghost={sourceId} soul={soul} result={(!config.GuidDamageFallbackEnabled ? "disabled" : applied ? "applied" : "unresolved")}"));
-                    if (!applied)
-                        Console.WriteLine($"[combat] death from ghost {sourceId} not applied " +
-                                          $"(soul {soul} not loaded here, the fallback is off, or the DLL is absent)");
-                }
-                else if (type == Protocol.PauseDown && payloadLen == Protocol.PauseDownPayloadLen)
-                {
-                    // PauseDown: [sourceGhostId:1][state:1]
-                    // WO-138: the state byte is 0 (running) or the sender's reasons.
-                    byte sourceId = payload[0];
-                    bool paused = payload[1] != Protocol.PauseStateExited;
-                    Wo138OnPeerPause(sourceId, payload[1]);
-                    await ApplyPeerPauseAsync(sourceId, paused, ct);
-                }
-                else if (type == Protocol.PlayerStateDown && payloadLen == Protocol.PlayerStateDownPayloadLen)
-                {
-                    // WO-28 Flow A: [ghostId:1][health:4f][stamina:4f][flags:1]
-                    // Rendered, not reconciled -- a player's health is
-                    // authoritative on their own machine, so this is simply
-                    // what that ghost's health IS.
-                    byte  sourceId = payload[0];
-                    float health   = ReadFloat(payload, 1);
-                    float stamina  = ReadFloat(payload, 5);
-                    byte  vflags   = payload[9];
-                    await ApplyGhostVitalsAsync(sourceId, health, stamina, vflags, ct);
-                }
-                else if (type == Protocol.PlayerHitDown && payloadLen == Protocol.PlayerHitDownPayloadLen)
-                {
-                    // WO-28 Flow B: [health:4f][stamina:4f][flags:1] -- loss
-                    // amounts. No ghost id: the relay routed this to us
-                    // precisely because it is about us.
-                    float healthLoss  = ReadFloat(payload, 0);
-                    float staminaLoss = ReadFloat(payload, 4);
-                    await Wo161OnLegacyHitInAsync(healthLoss, staminaLoss, ct);   // WO-161: counted and logged; applied as before
-                }
-                else if (type == Protocol.PlayerRespawnedDown && payloadLen == Protocol.PlayerRespawnedDownPayloadLen)
-                {
-                    // WO-113: [ghostId:1][x:4f][y:4f][z:4f][reason:1]. The
-                    // ghost's own position stream follows and its interpolator
-                    // snaps any jump over 5 m; this names the event.
-                    byte sourceId = payload[0];
-                    float rx = ReadFloat(payload, 1), ry = ReadFloat(payload, 5), rz = ReadFloat(payload, 9);
-                    string who = _ghostNames.TryGetValue(sourceId, out var rn) ? rn : $"player {sourceId}";
-                    Console.WriteLine(FormattableString.Invariant(
-                        $"[respawn] {who} respawned at ({rx:F1}, {ry:F1}, {rz:F1}) reason={Protocol.RespawnReasonName(payload[13])}"));
-                    _ = Wo132OnPeerUpAsync(sourceId, "respawned");   // WO-132 (was WO-131 1g's StopFight)
-                    _ = Wo166OnPeerRespawnedAsync(sourceId, payload[13]);   // WO-166 R1: the respawn amnesty (host)
-                }
-                else if (type == Protocol.GraveAddDown && payloadLen == Protocol.GraveAddDownPayloadLen)
-                {
-                    // WO-113: [ghostId:1][graveId:8][x:4f][y:4f][z:4f] -> a mirror
-                    // gravestone + marker in our world (never lootable, never saved).
-                    byte sourceId = payload[0];
-                    ulong gid = BinaryPrimitives.ReadUInt64LittleEndian(payload.AsSpan(1));
-                    float gx = ReadFloat(payload, 9), gy = ReadFloat(payload, 13), gz = ReadFloat(payload, 17);
-                    bool ok = await _combat.MirrorGraveAsync(1, sourceId, gid, gx, gy, gz, ct);
-                    Console.WriteLine(FormattableString.Invariant(
-                        $"[grave] peer {sourceId} grave 0x{gid:X16} at ({gx:F1}, {gy:F1}, {gz:F1}) -> mirror {(ok ? "shown" : "not shown (DLL refused/absent)")}"));
-                }
-                else if (type == Protocol.GraveRemoveDown && payloadLen == Protocol.GraveRemoveDownPayloadLen)
-                {
-                    byte sourceId = payload[0];
-                    ulong gid = BinaryPrimitives.ReadUInt64LittleEndian(payload.AsSpan(1));
-                    bool ok = await _combat.MirrorGraveAsync(0, sourceId, gid, 0, 0, 0, ct);
-                    Console.WriteLine($"[grave] peer {sourceId} grave 0x{gid:X16} removed -> mirror {(ok ? "removed" : "not present")}");
-                }
-                else if (type == Protocol.PlayerDeathDown && payloadLen == Protocol.PlayerDeathDownPayloadLen)
-                {
-                    // WO-28 Flow C: [ghostId:1]. Idempotent -- the mod's own
-                    // setter only logs on an actual transition.
-                    byte sourceId = payload[0];
-                    string who = _ghostNames.TryGetValue(sourceId, out var dn) ? dn : $"player {sourceId}";
-                    Console.WriteLine($"[death] {who} died and is reloading their own save");
-                    _ = Wo132OnPeerDownAsync(sourceId, "died", hide: !_w154AvatarFalls);   // WO-132 (was WO-131 1g's StopFight); WO-155: his figure lies instead of vanishing
-                    Wo166NotePeerDeath(sourceId);   // WO-166 R1: where he died
-                    Wo155CollapseFigure(sourceId, "his death packet");
-                    try
-                    {
-                        await ExecLuaAsync($"KCD2MP_SetGhostDead(\"{sourceId}\", true)");
-                        await ExecLuaAsync($"if KCD2MP_ShowInteractionMsg then KCD2MP_ShowInteractionMsg(\"{EscapeLua(who)} died\") end");
-                    }
-                    catch { }
-                }
-                else if (type == Protocol.CombatRole && payloadLen == Protocol.CombatRolePayloadLen)
-                {
-                    // WO-110 R4: every authority decision the relay sends, on
-                    // this machine's console AND in kcd.log (the runbook reads
-                    // kcd.log), whether or not it changes anything.
-                    bool amAuthority = payload[0] != 0;
-                    Console.WriteLine(FormattableString.Invariant(
-                        $"MP-AUTHORITY-OWNER self_id={_myGhostId} authority={(amAuthority ? "self" : "peer")} reason=relay-combatrole"));
-                    try { await ExecLuaAsync(FormattableString.Invariant($"if KCD2MP_AuthorityOwnerLog then KCD2MP_AuthorityOwnerLog({_myGhostId},{(amAuthority ? "true" : "false")}) end")); } catch { }
-                    await ApplyCombatRoleAsync(amAuthority, ct);
-                }
-                else if (type == Protocol.TimeSkipDown && payloadLen == Protocol.TimeSkipDownPayloadLen)
-                {
-                    // Time-skip sync (WO-38): [sourceGhostId:1][phase:1][kind:1][worldTime:4].
-                    // A start carries no time and needs nothing done here --
-                    // the join rule is enforced relay-side. Both done phases
-                    // apply the clock; only the announced one shows a toast.
-                    byte  tsSource = payload[0];
-                    byte  tsPhase  = payload[1];
-                    byte  tsKind   = payload[2];
-                    uint  tsTime   = BinaryPrimitives.ReadUInt32LittleEndian(payload.AsSpan(3));
-                    Wo140NoteHostClock(tsSource, tsPhase, tsTime);   // WO-140: the host's clock, for the joiner's pin
-                    if (Wo133DropTimeSkip(tsSource, tsPhase, tsKind, tsTime))
-                    {
-                        // WO-133 (H2): the host of a shared world ignores a joiner's skip --
-                        // not applied, and not remembered for reload convergence either.
-                    }
-                    else if (tsPhase == Protocol.TimeSkipPhaseStart)
-                    {
-                        string tsWho = _ghostNames.TryGetValue(tsSource, out var tsName) ? tsName : $"player {tsSource}";
-                        Console.WriteLine($"[timeskip] {tsWho} began a skip (kind={tsKind})");
-                    }
-                    else if (tsPhase is Protocol.TimeSkipPhaseDone or Protocol.TimeSkipPhaseDoneQuiet)
-                    {
-                        // WO-40 Phase 4: remember the newest peer-reported
-                        // clock (latest report wins, whatever its direction --
-                        // it is only consulted if WE reload) for reload
-                        // convergence.
-                        _peerWorldTime = tsTime;
-                        _peerWorldTimeUtc = DateTime.UtcNow;
-                        await ApplyTimeSkipAsync(tsSource, tsKind, tsTime,
-                            quiet: tsPhase == Protocol.TimeSkipPhaseDoneQuiet, ct);
-                    }
-                }
-                else if (type == Protocol.NpcStateDown
-                         && payloadLen >= 1 + 1 + 1 + Protocol.NpcStateFixedTail
-                         && payloadLen <= 1 + 1 + Protocol.MaxNpcNameLen + Protocol.NpcStateFixedTail)
-                {
-                    // NPC sync (WO-32): [sourceGhostId:1][nameLen:1][name][x][y][z][rotZ][health][flags]
-                    // The name is validated before interpolation -- it crosses
-                    // into a Lua string literal and relay data must not be able
-                    // to inject code. A name for an entity not loaded in this
-                    // world is handled (ignored) on the Lua side.
-                    int nameLen = payload[1];
-                    if (payloadLen != 2 + nameLen + Protocol.NpcStateFixedTail) CountDrop(type, "namelen-mismatch");   // WO-110 R9
-                    if (payloadLen == 2 + nameLen + Protocol.NpcStateFixedTail)
-                    {
-                        string npcName = Encoding.UTF8.GetString(payload, 2, nameLen);
-                        if (!NpcNamePattern.IsMatch(npcName)) CountDrop(type, "name-rejected");   // WO-110 R9
-                        if (NpcNamePattern.IsMatch(npcName) && !Wo136DropRidden(npcName) && !Wo139DropStopped(npcName) && !Wo148DropCarried(npcName))   // WO-136 Phase 3: the rider owns the horse; WO-139: a guard stopping this player; WO-148: the carrier owns the body
-                        {
-                            Wo127NoteRecv(npcName);   // WO-127: age of the host's last update, for the leash recorder
-                            int o = 2 + nameLen;
-                            float nx    = ReadFloat(payload, o);
-                            float ny    = ReadFloat(payload, o + 4);
-                            float nz    = ReadFloat(payload, o + 8);
-                            float nrot  = ReadFloat(payload, o + 12);
-                            float nhp   = ReadFloat(payload, o + 16);
-                            byte nflags = payload[o + Protocol.NpcStateFlagsOffset];
-                            if (!_isDamageAuthority) Wo136NoteNpcFlags(npcName, nflags);   // WO-136 Phase 4: a knockout or a death ends the engagement first
-                            ushort nseq = BinaryPrimitives.ReadUInt16LittleEndian(payload.AsSpan(o + Protocol.NpcStateSeqOffset));      // WO-110 R6
-                            uint nSenderMs = BinaryPrimitives.ReadUInt32LittleEndian(payload.AsSpan(o + Protocol.NpcStateSenderMsOffset));
-                            // The backlog fix (mp_npc_catchup): behind, a sample a newer one of this NPC with the same
-                            // flags supersedes says nothing the newer will not -- skipped whole (never a death, a
-                            // knockout, a weapon drawn, a swing cue or a resync row: those differ or are events).
-                            if (Wo147NpcSkip(npcName, nseq, payload[o + Protocol.NpcStateFlagsOffset], frame.Arrival)) continue;
-                            Wo147NpcProcessed(npcName, frame.Arrival);
-
-                            // WO-49: a sheathed→drawn transition in the stream
-                            // is the moment the local copy's hands change --
-                            // re-read its equipped set for swing resolution.
-                            bool npcDrawn = (nflags & 0x04) != 0;
-                            bool wasDrawn = _npcLastDrawn.TryGetValue(npcName, out bool d0) && d0;
-                            _npcLastDrawn[npcName] = npcDrawn;
-                            if (npcDrawn && !wasDrawn && _npcEntityIds.ContainsKey(npcName))
-                                RefreshNpcEquipped(npcName);
-
-                            // WO-49: the swing cue (bit 3) rides the same
-                            // native path ghost swings use (WO-46) when this
-                            // world's copy is known by entity id: strip the
-                            // bit so the Lua does not also play its WO-40
-                            // guard-flick cue; native failure re-arms that
-                            // cue explicitly, late but visible. Dead/KO bits
-                            // veto, matching the Lua cue's own guard.
-                            bool npcKnown = _npcEntityIds.TryGetValue(npcName, out uint npcEntityId);
-                            bool npcSwingNative = (nflags & 0x08) != 0
-                                && (nflags & 0x03) == 0
-                                && npcKnown;
-                            if (npcSwingNative) nflags &= 0xF7;
-                            // WO-121: the owner streams this NPC's committed rows
-                            // (NpcAttack) -- the heuristic cue flag would add a
-                            // second swing. Stripped; the row plays instead.
-                            if ((nflags & 0x08) != 0 || npcSwingNative)
-                                if (Wo121SupersedesNpcCue(npcName)) { npcSwingNative = false; nflags &= 0xF7; }
-
-                            // WO-86: the stream's dead bit. Logged on every
-                            // transition (Phase 1), and a WITNESSED 0->1 -- a
-                            // body this client saw alive on this stream and now
-                            // sees dead -- kills the local copy too, so both
-                            // worlds agree. A body dead on its FIRST packet is
-                            // a late-join corpse or a save-state difference and
-                            // only freezes, exactly as before: nothing kills a
-                            // living NPC on the strength of a stranger's save.
-                            byte  nsrc    = payload[0];
-                            bool  nDead   = (nflags & Protocol.NpcStateFlagDead) != 0;
-                            bool  nResync = (nflags & Protocol.NpcStateFlagResync) != 0;   // WO-102 Phase 6
-                            if (nResync) _resyncInPackets++;
-                            bool  nSeen   = _npcLastDead.TryGetValue(npcName, out bool nWasDead);
-                            _npcLastDead[npcName] = nDead;
-                            if (nDead && (!nSeen || !nWasDead))
+                            else if (await DispatchWo121ActionAsync(a, ct))
                             {
-                                Console.WriteLine($"[npcdeath] in: 0x27 from ghost {nsrc} says '{npcName}' is dead (hp={nhp:F1})"
-                                                + (nSeen ? " -- witnessed transition, killing the local copy"
-                                                         : " -- dead on its first packet here (late join / save state): freeze only"));
+                                // WO-121: attack / jump / block / dodge rows, NPC rows, the host lever.
                             }
-                            else if (!nDead && nSeen && nWasDead)
+                            else if (a.Kind == ActionKind.NpcResync && Wo191OnResyncIn(a))
                             {
-                                Console.WriteLine($"[npcdeath] in: 0x27 from ghost {nsrc} says '{npcName}' is ALIVE again (hp={nhp:F1}) -- was dead on this stream; a reload on their side?");
-                                Wo195NoteAlive(npcName);   // WO-195: its dead mark goes
+                                // WO-191 3b: a joiner with no body for its attacker asked for that one NPC (pinned, no burst)
                             }
-
-                            // WO-118 Phase 1: the native writer already has this sample --
-                            // fed at the socket read (FeedNativeAtRead, WO-118 follow-up).
-                            if (npcSwingNative)
+                            else if (a.Kind == ActionKind.NpcResync)
                             {
-                                // The Lua hold below (KCD2MP_NpcNativeSwingHold, 0.9 s) has a native twin:
-                                // a per-frame write would stomp the swing exactly like the Lua one (WO-39).
-                                Interlocked.Increment(ref _nativeHolds);
-                                _ = _combat.NpcHoldAsync(npcName, 900, ct);
-                            }
-
-                            // WO-153 4: a sample the host sent BEFORE its NPC died can reach this agent after the death was
-                            // applied here (the field: stream hp=1.8, 12 ms after ApplyDeath), and it would have put the copy
-                            // "alive" again in the mod's bookkeeping and skipped the owner-death landing. For 10 s after a death
-                            // was applied from a peer, an ALIVE sample of that NPC is not passed on.
-                            if (!nDead && Wo153DeathHeld(npcName))
-                            {
-                                Interlocked.Increment(ref _w153StaleAliveDropped);
+                                // WO-102 Phase 6: a non-owner asks for a burst.
+                                byte rr = a.Payload.Length >= 1 ? a.Payload[0] : (byte)0;
+                                _resyncInRequests++;
+                                if (!_hostAuthority || !_isDamageAuthority)
+                                {
+                                    _resyncInRefused++;
+                                    Console.WriteLine($"MP-NPCRESYNC dir=in from={a.SourceGhostId} reason={NpcResyncReason.Name(rr)} result=refused cause={(!_hostAuthority ? "host-authority-off" : "not-owner")}");
+                                }
+                                else await BurstNpcResyncAsync(rr, $"ghost-{a.SourceGhostId}", ct);
                             }
                             else
-                            {
-                            Wo131OnNpcSample(npcName, nhp, nDead);   // WO-131 1c: the copy's health follows the host's
-
-                            string npcLua = string.Format(CultureInfo.InvariantCulture,
-                                "if KCD2MP_ApplyNpcState then KCD2MP_ApplyNpcState(\"{0}\",{1:F3},{2:F3},{3:F3},{4:F4},{5:F1},{6},{7},{8},{9}) end",
-                                npcName, nx, ny, nz, nrot, nhp, nflags, nsrc, nseq, nSenderMs);   // WO-102 Phase 2: source id = the stream's owner (MP-AUTHORITY); WO-110 R6: seq + sender ms
-                            if (_npcLua.Offer(npcName, NpcNativeBound(npcName), nflags, nhp, frame.Arrival, npcLua))   // WO-118 follow-up
-                                await ExecLuaAsync(npcLua);
-                            }
-
-                            if (nDead && nSeen && !nWasDead)
-                                await ApplyRemoteNpcDeathAsync(npcName, null, nsrc, "0x27 dead transition", ct);
-                            else if (nDead && nResync && _hostAuthority && !nWasDead)
-                            {
-                                // WO-102 Phase 6: under host authority the owner's
-                                // life state IS the truth, including on a first
-                                // packet -- the WO-86 "freeze only on a first dead
-                                // packet" rule is the claim model's caution about a
-                                // stranger's save, and here the stranger is the owner.
-                                _resyncDeadApplied++;
-                                await ApplyRemoteNpcDeathAsync(npcName, null, nsrc, "0x27 resync dead", ct);
-                            }
-
-                            if (npcSwingNative)
-                            {
-                                string npcFragSpec = ResolveNpcSwingSpec(npcName);
-                                _ = _combat.GhostSwingAsync(npcEntityId, npcFragSpec, ct)
-                                    .ContinueWith(t =>
-                                    {
-                                        if (t.IsFaulted || !t.Result)
-                                        {
-                                            Console.WriteLine($"[npcsync] native swing for {npcName} did not apply — falling back to the Lua cue");
-                                            _ = ExecLuaAsync($"if KCD2MP_NpcSwingCueFallback then KCD2MP_NpcSwingCueFallback(\"{npcName}\") end");
-                                        }
-                                    }, TaskScheduler.Default);
-                                await ExecLuaAsync($"if KCD2MP_NpcNativeSwingHold then KCD2MP_NpcNativeSwingHold(\"{npcName}\") end");
-                            }
+                            // No receiver acts on this yet: Phase 1's block write
+                            // was refused by the engine (docs/WO-100.5-findings.md
+                            // S2.3), so an accepted action is logged and dropped.
+                            // Named as a drop rather than left looking applied.
+                            Console.WriteLine(FormattableString.Invariant(
+                                $"MP-ACTION section=inbound ghost={a.SourceGhostId} kind={a.Kind} phase={a.Phase} seq={a.Seq} gen={a.Gen} {detail} dispatch=dropped-no-receiver"));
                         }
-                    }
-                }
-                else if (type == Protocol.HorseInfoDown
-                         && payloadLen >= 2
-                         && payloadLen <= 2 + Protocol.MaxHorseNameLen)
-                {
-                    // Horse identity (WO-38 Phase 5): [sourceGhostId:1][nameLen:1][name].
-                    // Same validate-before-Lua-interpolation discipline as NpcStateDown.
-                    byte hiSource = payload[0];
-                    int hiNameLen = payload[1];
-                    if (payloadLen == 2 + hiNameLen)
-                    {
-                        string horseName = hiNameLen == 0 ? "" : Encoding.UTF8.GetString(payload, 2, hiNameLen);
-                        if (hiNameLen == 0 || NpcNamePattern.IsMatch(horseName))
-                            await ExecLuaAsync($"if KCD2MP_SetGhostHorse then KCD2MP_SetGhostHorse(\"{hiSource}\",\"{horseName}\") end");
-                    }
-                }
-                else if (type == Protocol.WeatherDown
-                         && payloadLen >= 1 + 1 + 2
-                         && payloadLen <= 1 + 1 + Protocol.MaxWeatherNameLen + 2)
-                {
-                    // Weather sync (WO-40 Phase 3):
-                    // [sourceGhostId:1][nameLen:1][profileName][blendSec:2].
-                    // Same validate-before-Lua-interpolation discipline as
-                    // NpcStateDown; the apply is change-gated.
-                    int wNameLen = payload[1];
-                    if (config.WeatherSyncEnabled && payloadLen == 2 + wNameLen + 2)
-                    {
-                        string wProfile = Encoding.UTF8.GetString(payload, 2, wNameLen);
-                        ushort wBlend = BinaryPrimitives.ReadUInt16LittleEndian(payload.AsSpan(2 + wNameLen));
-                        if (WeatherNamePattern.IsMatch(wProfile))
-                        {
-                            await Wo151OnHostWeatherAsync(wProfile);   // WO-151 3.7: the gate first -- only the host's profile blends here
-                            await ApplyWeatherAsync(wProfile, wBlend);
-                        }
-                    }
-                }
-                else if (type == Protocol.StoryBeatDown
-                         && payloadLen >= 1 + 2
-                         && payloadLen <= 1 + 2 + Protocol.MaxStoryBeatTextLen)
-                {
-                    // Story progress (WO-90):
-                    // [sourceGhostId:1][kind:1][len:1][text utf8].
-                    //
-                    // The text is a peer-supplied string that ends up inside a
-                    // Lua literal, so it is length-checked here and escaped at
-                    // the call site (ReportStoryDivergence -> EscapeLua). It
-                    // drives a toast and a console line and nothing else --
-                    // deliberately: this layer reports divergence, it never
-                    // gates behaviour on it.
-                    byte sbSource = payload[0];
-                    byte sbKind   = payload[1];
-                    int  sbLen    = payload[2];
-                    if (sbKind == Protocol.StoryBeatKindObjective && payloadLen == 3 + sbLen && sbLen > 0)
-                    {
-                        string sbText = Encoding.UTF8.GetString(payload, 3, sbLen);
-                        _peerObjective[sbSource] = sbText;
-                        Console.WriteLine($"[story] ghost {sbSource} objective -> {StoryBeat.Humanize(sbText)}");
-                        ReportStoryDivergence(sbSource, sbText);
-                        ReevaluateQuestPrompts();   // WO-94
-                    }
-                    else if ((sbKind == Protocol.StoryBeatKindApproach
-                              || sbKind == Protocol.StoryBeatKindCatchupBegin
-                              || sbKind == Protocol.StoryBeatKindCatchupEnd)
-                             && payloadLen == 3 + sbLen && sbLen > 0)
-                    {
-                        // WO-94 Shared Quests. The text is peer-supplied and
-                        // ends up in a Lua literal: shape-checked here (path
-                        // characters only), registry-checked in the mod.
-                        string qText = Encoding.UTF8.GetString(payload, 3, sbLen);
-                        if (!StoryBeat.IsValidBeatPath(qText))
-                            Console.WriteLine($"[quest] ghost {sbSource} sent a malformed beat path (kind {sbKind}); dropped");
-                        else if (sbKind == Protocol.StoryBeatKindApproach)
-                            OnPeerApproach(sbSource, qText);
                         else
-                            OnPeerCatchup(sbSource, qText, begin: sbKind == Protocol.StoryBeatKindCatchupBegin);
-                    }
-                    else if (sbKind == Protocol.StoryBeatKindCutscene && payloadLen == 3 + sbLen && sbLen > 0)
-                    {
-                        // WO-98 Phase 5: "start|end <type> <name>" -- shape-checked
-                        // (plain tokens only) before it reaches a log line or Lua.
-                        string csText = Encoding.UTF8.GetString(payload, 3, sbLen);
-                        var csParts = csText.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-                        if (csParts.Length == 3 && (csParts[0] == "start" || csParts[0] == "end")
-                            && IsPlainToken(csParts[1]) && IsPlainToken(csParts[2]))
                         {
-                            bool csActive = csParts[0] == "start";
-                            _peerCutscene[sbSource] = (csActive, csParts[1], csParts[2]);
-                            _stats.CutscenePeerEdges++;
-                            string csWho = _ghostNames.TryGetValue(sbSource, out var csDn) ? csDn : $"player {sbSource}";
-                            Console.WriteLine($"MP-CUTSCENE side=peer ghost={sbSource} who=\"{csWho}\" state={csParts[0]} type={csParts[1]} name={csParts[2]} local={(_localCutsceneActive ? 1 : 0)}");
-                            _ = ExecLuaAsync($"if KCD2MP_SetPeerCutscene then KCD2MP_SetPeerCutscene(\"{sbSource}\", {(csActive ? "true" : "false")}, \"{EscapeLua(csParts[2])}\") end");
+                            Console.WriteLine(FormattableString.Invariant(
+                                $"MP-ACTION section=inbound reject={reject}"));
+                            Wo191OnActionReject(reject);   // WO-191 1c: per kind, once a minute
                         }
-                        else Console.WriteLine($"[quest] ghost {sbSource} sent a malformed cutscene edge; dropped");
                     }
-                    else if (sbKind == Protocol.StoryBeatKindFingerprint && payloadLen == 3 + sbLen && sbLen > 0)
+                    else if (Protocol.IsJoinDown(type, payloadLen))
                     {
-                        // WO-96 Phase 2: a peer's per-quest objective fingerprint.
-                        // Shape-checked by TryDecode before anything else looks
-                        // at it; compared off the receive thread.
-                        string fpText = Encoding.UTF8.GetString(payload, 3, sbLen);
-                        _peerFingerprint[sbSource] = fpText;
-                        _ = Task.Run(() => ComparePeerFingerprint(sbSource, fpText));
+                        // WO-123: the join channel (request, offer, chunks, acks, done, abort, ready, status).
+                        await Wo123OnFrameAsync(type, payload, ct);
                     }
-                }
-                else if (type == Protocol.ItemDropDown && payloadLen == Protocol.ItemDropDownPayloadLen)
-                {
-                    // Dropped-item sync (WO-48):
-                    // [sourceGhostId:1][dropId:4][itemClass:16][amount:2][health:4f][x:4f][y:4f][z:4f].
-                    // Handed to the mod as a pending drop; it materializes the
-                    // pickup entity only once the local player is near enough
-                    // for the ground to be streamed (placing far away was
-                    // observed to drop the item through the world). Dedupe by
-                    // dropId is the mod's job -- heartbeats repeat this packet.
-                    byte idSource   = payload[0];
-                    uint idDropId   = BinaryPrimitives.ReadUInt32LittleEndian(payload.AsSpan(1));
-                    var  idClass    = new Guid(payload.AsSpan(5, Protocol.ItemClassLen));
-                    ushort idAmount = BinaryPrimitives.ReadUInt16LittleEndian(payload.AsSpan(21));
-                    float idHealth  = ReadFloat(payload, 23);
-                    float idX       = ReadFloat(payload, 27);
-                    float idY       = ReadFloat(payload, 31);
-                    float idZ       = ReadFloat(payload, 35);
-                    if (idDropId != 0 && idAmount > 0)
-                        await ExecLuaAsync(string.Format(CultureInfo.InvariantCulture,
-                            "if KCD2MP_ItemDropAdd then KCD2MP_ItemDropAdd(\"{0}\",\"{1}\",{2},{3:F4},{4:F3},{5:F3},{6:F3},\"{7}\") end",
-                            idDropId, idClass, idAmount, idHealth, idX, idY, idZ, idSource));
-                }
-                else if (type == Protocol.ItemClaimDown && payloadLen == Protocol.ItemClaimDownPayloadLen)
-                {
-                    // [claimerGhostId:1][dropId:4]. The relay echoes claims to
-                    // everyone INCLUDING the claimant, in arrival order -- the
-                    // first echo a client sees for a dropId settles that drop
-                    // everywhere (the mod ignores repeats). Also retires the
-                    // drop from our own heartbeat set, whoever won it.
-                    byte icClaimer = payload[0];
-                    uint icDropId  = BinaryPrimitives.ReadUInt32LittleEndian(payload.AsSpan(1));
-                    _myOpenDrops.TryRemove(icDropId, out _);
-                    bool claimIsMine = icClaimer == _myGhostId;
-                    Console.WriteLine($"[itemsync] drop {icDropId} claimed by {(claimIsMine ? "us" : $"ghost {icClaimer}")}");
-                    await ExecLuaAsync($"if KCD2MP_ItemDropClaimed then KCD2MP_ItemDropClaimed(\"{icDropId}\",\"{icClaimer}\",{(claimIsMine ? "true" : "false")}) end");
-                }
-                else if (type == Protocol.CombatEventDown
-                         && (payloadLen == Protocol.CombatEventDownPayloadLen || payloadLen == Protocol.CombatEventDownPayloadLenV2))
-                {
-                    // Combat visibility (WO-39 Phase 1): [sourceGhostId:1][event:1].
-                    // WO-99 Phase 4: v2 appends [sid:2], the sender's swing counter.
-                    ushort ceSid = payloadLen == Protocol.CombatEventDownPayloadLenV2
-                        ? BinaryPrimitives.ReadUInt16LittleEndian(payload.AsSpan(2)) : (ushort)0;
-                    // Purely cosmetic on this side -- the Lua applies a
-                    // draw/holster call or a one-shot animation to the ghost.
-                    // An event byte this build does not know is passed through
-                    // anyway; the Lua ignores unknown values, so a newer peer
-                    // can emit new events without breaking us.
-                    byte ceSource = payload[0];
-                    byte ceEvent  = payload[1];
-                    // WO-121: a peer on v8 rows swings through the Attack event and
-                    // holds its block natively -- the old cue would play on top.
-                    if (Wo121SupersedesCombatCue(ceSource, ceEvent))
+                    else if (type == Protocol.WorldSavedDown && payloadLen == Protocol.WorldSavedDownPayloadLen)
                     {
-                        Console.WriteLine($"[combatviz] ghost {ceSource} event {ceEvent} superseded by the v8 rows/state -- not played");
-                        continue;
+                        // WO-122 Phase 3: the host wrote a world save. Logged here; the
+                        // Henry-snapshot WO pairs the joiner's snapshot with it.
+                        await OnWorldSavedInAsync(payload.AsSpan(0, payloadLen).ToArray());
                     }
-                    // WO-46: swings go native when the ghost's entity id is
-                    // known and the DLL pipe is up — the WO-45 rung-2 route
-                    // renders a real, complete Mannequin swing where the Lua
-                    // clip path could only manage a guard-transition cue. The
-                    // Lua side still gets a call for the one-shot locomotion
-                    // hold; everything else (draw/sheathe/block, or a swing
-                    // with no native path available) stays on the old call.
-                    if (ceEvent == Protocol.CombatEventSwing
-                        && _ghostEntityIds.TryGetValue(ceSource.ToString(), out uint ceEntityId))
+                    else if (type == Protocol.PlayerHitV8Down)
                     {
-                        // No IsConnected pre-check: GhostSwingAsync connects the
-                        // pipe on demand (the agent's one startup connect can
-                        // race the injection and give up), and on failure —
-                        // DLL absent, stale entity id after a respawn — the old
-                        // Lua cue runs as the fallback, late but visible.
-                        string fragSpec = ResolveSwingSpec(ceSource);
-                        // WO-98 Phase 6: the receive-side hops, correlated by a
-                        // per-machine rsid. (A cross-machine id would need a
-                        // wire field on CombatEventUp; docs/WO-98-findings.md s6.)
-                        long rsid = ++_stats.SwingsRecv;
-                        Console.WriteLine($"MP-SWING hop=recv rsid={rsid} sid={ceSid} ghost={ceSource} entity=0x{ceEntityId:X} spec=\"{fragSpec}\"");
-                        // WO-100 Phase 4: the inbox owns validity, the bounded
-                        // precondition wait, the reason vocabulary and the
-                        // queue bound. The fire-and-forget task this replaced
-                        // had none of the four.
-                        // WO-118: the native writer holds the ghost for the swing,
-                        // before the swing is queued (the Lua hold below is late).
-                        _ = _combat.NpcHoldAsync("kcd2mp_" + ceSource, 900, ct);
-                        EnsureSwingInbox(ct).TryEnqueue(new SwingInbox.Entry(
-                            ceSource.ToString(), ceSid, rsid,
-                            GhostGeneration(ceSource.ToString()), fragSpec, DateTime.UtcNow));
-                        await ExecLuaAsync($"if KCD2MP_GhostNativeSwingHold then KCD2MP_GhostNativeSwingHold(\"{ceSource}\") end");
+                        // WO-121: friendly fire -- a partner's hit on our Henry.
+                        await OnPlayerHitV8InAsync(payload.AsSpan(0, payloadLen).ToArray(), ct);
                     }
-                    else if (ceEvent == Protocol.CombatEventWeaponDrawn
-                             && OversizedItemFor(ceSource) is Guid oversized)
+                    else if (type == Protocol.Name && payloadLen >= 2)
                     {
-                        // WO-47: a ghost whose synced main-hand weapon lives in
-                        // the Oversized slot (halberd/polearm) never gets it
-                        // attached by DrawWeapon() -- route the draw through
-                        // DrawFromInventory instead (live-verified; see
-                        // KCD2MP_GhostDrawItem for the ordering trap).
-                        await ExecLuaAsync($"if KCD2MP_GhostDrawItem then KCD2MP_GhostDrawItem(\"{ceSource}\",\"{oversized}\") end");
+                        // Name packet: [ghostId:1][name:UTF-8...]
+                        byte ghostId = payload[0];
+                        string gname = Encoding.UTF8.GetString(payload, 1, payloadLen - 1);
+                        _ghostNames[ghostId] = gname;
+                        Wo144OnPeerConnected(ghostId, gname);   // WO-144: the relay's connection set, the only source of partners
+                        Wo206OnPeerConnected(ghostId);          // WO-206 E: it hears the host's epochs at once
+                        await SetGhostNameAsync(ghostId.ToString(), gname);
+                    }
+                    else if (type == Protocol.ReleaseVersion && payloadLen >= 2)
+                    {
+                        // ReleaseVersion (0x1E, WO-19): [ghostId:1][releaseVersion:UTF-8...]
+                        byte ghostId = payload[0];
+                        string releaseVersion = Encoding.UTF8.GetString(payload, 1, payloadLen - 1);
+                        _ghostReleaseVersions[ghostId] = releaseVersion;
+                        Console.WriteLine($"[version] ghost {ghostId} is on release {releaseVersion}");
+                    }
+                    else if (type == Protocol.Disconnect && payloadLen == 1)
+                    {
+                        // Disconnect packet: [ghostId:1]
+                        byte ghostId = payload[0];
+                        Console.WriteLine($"[disconnect] ghost {ghostId} removed");
+                        Wo144OnPeerDisconnected(ghostId);   // WO-144: out of every partner loop at once
+                        Wo148OnPeerGone(ghostId);           // WO-148: its avatar sets down what it carried
+                        Wo154ForgetPeer(ghostId);           // WO-154 2: a rejoin starts from up
+                        _w206.ForgetPeer(ghostId); _w206.ForgetJoiner(ghostId);   // WO-206 E: its acknowledged epoch and the host's view of it go
+                        _peerLastSeenUtc.TryRemove(ghostId, out _);
+                        _peerCutscene.TryRemove(ghostId, out _);   // WO-98 Phase 5
+                        RefreshDiscordPeerCount();
+                        _voice?.RemovePlayer(ghostId);
+                        _ghostAppearance.TryRemove(ghostId, out _);
+                        _ghostKnownItemClasses.TryRemove(ghostId, out _);
+                        _ghostNeverEquips.TryRemove(ghostId, out _);
+                        _ghostUnwearable.TryRemove(ghostId, out _); _ghostWantedAppearance.TryRemove(ghostId, out _);
+                        _ghostLastAppearance.TryRemove(ghostId, out _);   // WO-88
+                        // WO-17: a respawned ghost gets a fresh Soul.Guid, and a
+                        // gone ghost has nothing left to detach.
+                        _ghostSoulGuidCache.TryRemove(ghostId, out _);
+                        Wo144ForgetLiveSoul(ghostId);   // WO-144 2.1
+                        _ghostHostileUntilUtc.TryRemove(ghostId, out _);
+                        // WO-94: a gone peer's prompt is moot and its catch-up
+                        // window on our side is closed.
+                        _peerObjective.TryRemove(ghostId, out _);
+                        _storyDivergenceTold.TryRemove(ghostId, out _);
+                        _lastSharedObjective.TryRemove(ghostId, out _);      // WO-96
+                        _peerFingerprint.TryRemove(ghostId, out _);          // WO-96
+                        _peerGapTold.TryRemove(ghostId, out _);
+                        _peerRegistryMismatchTold.TryRemove(ghostId, out _);
+                        _ghostLastPos.TryRemove(ghostId, out _);
+                        // WO-100 Phase 4 item 1: the body is gone, so every event
+                        // still queued for it is invalid. Forgetting the entity id
+                        // alone is not enough -- a reconnecting peer reuses the
+                        // ghost id, and a queued swing would then wait for the NEW
+                        // body's id and play on it.
+                        // WO-174: the host takes the figure out of every skirmish BEFORE its body goes (the engine's own RemoveSoul: no
+                        // vanished party stays in a fight, a scripted brawl's included); the entity id is still known here
+                        if (_isDamageAuthority) { try { await Wo174LeaveBeforeRemoveAsync(ghostId); } catch (Exception ex) { Console.WriteLine($"MP-W174 leave-fight failed: {ex.Message}"); } }
+                        _ghostEntityIds.TryRemove(ghostId.ToString(), out _);
+                        BumpGhostGeneration(ghostId.ToString(), "peer disconnected");
+                        if (_peerApproach.TryRemove(ghostId, out _))
+                            try { await ExecLuaAsync($"if KCD2MP_QuestPromptMoot then KCD2MP_QuestPromptMoot(\"peer left\", \"{ghostId}\") end"); } catch { }
+                        if (_peerCatchup.TryRemove(ghostId, out _))
+                            try { await ExecLuaAsync($"if KCD2MP_QuestCatchupRemote then KCD2MP_QuestCatchupRemote(\"{ghostId}\", \"\", \"\", 0) end"); } catch { }
+                        // A peer who disconnects mid-pause must not leave us
+                        // slowed forever with no PauseDown(exit) ever coming.
+                        await ApplyPeerPauseAsync(ghostId, paused: false, ct);
+                        // WO-113: a gone peer's mirror gravestones go with them;
+                        // the owner re-announces on its next connect.
+                        try { await _combat.MirrorGraveAsync(2, ghostId, 0, 0, 0, 0, ct); } catch { }
+                        try { await ExecLuaAsync($"KCD2MP_RemoveGhost(\"{ghostId}\")"); } catch { }
+                        await Wo123OnPeerGoneAsync(ghostId);   // WO-123: a joiner gone mid-join resumes the host
+                        await Wo124OnPeerGoneAsync(ghostId);   // WO-124: the host gone -> the joiner leaves its world
+                        Wo144AfterPeerGone(ghostId);           // WO-144: its name and per-partner rows go last (the handlers above read them)
+                    }
+                    else if (type == Protocol.VoiceDown && payloadLen == 1 + Protocol.VoiceFrameLen)
+                    {
+                        // Voice packet: [sourceId:1][pcm: 640 bytes]
+                        byte sourceId = payload[0];
+                        var pcm = new byte[Protocol.VoiceFrameLen];
+                        Buffer.BlockCopy(payload, 1, pcm, 0, Protocol.VoiceFrameLen);
+                        _voice?.OnVoiceReceived(sourceId, pcm);
+                    }
+                    else if (type == Protocol.DamageDown && payloadLen == Protocol.DamageDownPayloadLen)
+                    {
+                        // Damage: [sourceGhostId:1][guid:16][stamina:4f][health:4f][flags:1]
+                        // Applied through the DLL, not Lua: Lua writes are inert.
+                        byte  sourceId = payload[0];
+                        var   soul     = new Guid(payload.AsSpan(1, 16));
+                        float stamina  = ReadFloat(payload, 17);
+                        float health   = ReadFloat(payload, 21);
+                        bool  suppress = (payload[25] & Protocol.DamageFlagSuppressHitReaction) != 0;
+
+                        bool applied = config.GuidDamageFallbackEnabled
+                                    && await _combat.ApplyDamageAsync(soul, stamina, health, suppress, ct, nonLethal: Wo131JoinerActive);   // WO-147
+                        // WO-100.5 Phase 4: the receiving half of the same
+                        // visibility. A guid that does not resolve here is the
+                        // per-save-identity hazard WO-39/WO-40 measured, and it now
+                        // says so on the MP-DMG channel instead of only in prose.
+                        Console.WriteLine(FormattableString.Invariant(
+                            $"MP-DMG dir=in route=guid-fallback ghost={sourceId} soul={soul} hp={health:F1} st={stamina:F1} result={(!config.GuidDamageFallbackEnabled ? "disabled" : applied ? "applied" : "unresolved")}"));
+                        if (!applied)
+                            Console.WriteLine($"[combat] damage from ghost {sourceId} not applied " +
+                                              $"(soul {soul} not loaded here, the fallback is off, or the DLL is absent)");
+                        else
+                            // WO-17: the ghost representing sourceId just landed a
+                            // real hit in this world -- the "Henry is attacking an
+                            // innocent NPC" moment. No-op when aggro is disabled.
+                            _ = TriggerReactiveAggroAsync(sourceId, ct);
+                    }
+                    else if (type == Protocol.NpcDamageDown
+                             && payloadLen >= 1 + 1 + 1 + Protocol.NpcDamageFixedTail
+                             && payloadLen <= 1 + 1 + Protocol.MaxNpcNameLen + Protocol.NpcDamageFixedTail)
+                    {
+                        // Name-addressed NPC damage (WO-40 Phase 5):
+                        // [sourceGhostId:1][nameLen:1][name][stamina:4f][health:4f][flags:1].
+                        // The name resolves to THIS install's per-save guid via the
+                        // reflection REST (cached), then applies through the same
+                        // DLL pipe as 0x22 -- so the DLL's credit-out still stops
+                        // echoes.
+                        byte ndSource = payload[0];
+                        int ndNameLen = payload[1];
+                        if (payloadLen == 2 + ndNameLen + Protocol.NpcDamageFixedTail)
+                        {
+                            string ndName = Encoding.UTF8.GetString(payload, 2, ndNameLen);
+                            if (NpcNamePattern.IsMatch(ndName))
+                            {
+                                int no = 2 + ndNameLen;
+                                float ndStamina = ReadFloat(payload, no);
+                                float ndHealth  = ReadFloat(payload, no + 4);
+                                bool  ndSupp    = (payload[no + 8] & Protocol.DamageFlagSuppressHitReaction) != 0;
+                                bool  ndFatal   = (payload[no + 8] & Protocol.NpcDamageFlagFatal) != 0;   // WO-86
+                                NoteRequestResolvedIn(ndSource, ndName);   // WO-102 Phase 5
+                                Guid? localGuid = await ResolveLocalSoulGuidAsync(ndName, ct);
+                                // WO-99 Phase 0: a name that resolves to OUR player
+                                // soul is the peer's player, not a shared NPC --
+                                // refuse it before anything touches the local body.
+                                await RefreshPlayerIdentityAsync(force: false, ct);
+                                var ndVerdict = _dmgGuard.CheckInbound(ndName, localGuid);
+                                if (ndVerdict != NpcDamageGuard.Inbound.Apply)
+                                {
+                                    _stats.DmgIn++; _stats.DmgInRefused++;
+                                    Console.WriteLine(FormattableString.Invariant(
+                                        $"MP-DMG dir=in ghost={ndSource} npc={ndName} hp={ndHealth:F1} st={ndStamina:F1} fatal={(ndFatal ? 1 : 0)} result=refused reason={NpcDamageGuard.Reason(ndVerdict)} authority={(_isDamageAuthority ? 1 : 0)}"));
+                                    continue;
+                                }
+                                // WO-200 II.1: on the joiner a copy's health and stamina are the host's values, never a blow applied here
+                                if (localGuid is not null && Wo200SkipLocalHit(ndName, ndHealth, ndStamina, ndFatal)) { _stats.DmgIn++; continue; }
+                                // WO-86: a FATAL packet may carry no delta at all
+                                // (the Lua observer saw the death, not the blow);
+                                // there is nothing to apply then, only the death.
+                                bool ndHasDelta = ndHealth > 0f || ndStamina > 0f;
+                                // WO-121 Phase 5: an attributed hit on the NPC's
+                                // authority carries the peer's avatar as the attacker.
+                                bool? ndAttrib = ndHasDelta && localGuid is Guid alg
+                                    ? await TryApplyAttributedAsync(ndSource, ndName, alg, ndStamina, ndHealth, payload[no + 8], ct)
+                                    : null;
+                                // WO-147: on a joiner a non-fatal host hit never kills its copy (the host decides deaths).
+                                bool ndApplied = ndAttrib ?? (ndHasDelta && localGuid is Guid lg
+                                    && await _combat.ApplyDamageAsync(lg, ndStamina, ndHealth, ndSupp, ct, nonLethal: Wo131JoinerActive && !ndFatal));
+                                if (ndApplied || (ndFatal && localGuid is not null))
+                                    _dmgGuard.NoteInboundApplied(ndName, ndApplied ? ndHealth : 0f, ndApplied ? ndStamina : 0f, ndFatal, DateTime.UtcNow);
+                                // WO-86 Phase 1: every inbound NPC damage event, with
+                                // what this client did about it.
+                                Console.WriteLine($"[npcdmg] in: ghost {ndSource} hit '{ndName}' hp -{ndHealth:F1} st -{ndStamina:F1}"
+                                                + (ndFatal ? " FATAL" : "")
+                                                + (localGuid is null ? " -> no local soul answers to that name"
+                                                   : !ndHasDelta ? " -> no delta to apply"
+                                                   : ndApplied ? " -> applied" : " -> pipe apply FAILED")
+                                                + (ndFatal ? CatchupTag() : string.Empty));
+                                _stats.DmgIn++; if (ndApplied) _stats.DmgInApplied++; else _stats.DmgInFailed++;
+                                Console.WriteLine(FormattableString.Invariant(
+                                    $"MP-DMG dir=in ghost={ndSource} npc={ndName} hp={ndHealth:F1} st={ndStamina:F1} fatal={(ndFatal ? 1 : 0)} result={(localGuid is null ? "nosoul" : !ndHasDelta ? "nodelta" : ndApplied ? "applied" : "failed")} authority={(_isDamageAuthority ? 1 : 0)}"));
+                                if (ndApplied)
+                                    _ = TriggerReactiveAggroAsync(ndSource, ct);
+                                if (ndFatal && _isDamageAuthority && Wo176IsArranged(ndName))
+                                    Wo176NoteFatalKept(ndName, ndSource);   // WO-176 A1: a quest's arranged fight decides its own deaths
+                                else if (ndFatal)
+                                    await ApplyRemoteNpcDeathAsync(ndName, localGuid, ndSource, "0x31 FATAL", ct);
+                            }
+                        }
+                    }
+                    else if (type == Protocol.DeathDown && payloadLen == Protocol.DeathDownPayloadLen)
+                    {
+                        // Death is its own packet rather than inferred from health
+                        // reaching zero, and the DLL treats it as idempotent.
+                        byte sourceId = payload[0];
+                        var  soul     = new Guid(payload.AsSpan(1, 16));
+                        // WO-100.5 Phase 4: 0x14 carries the same per-save guid as
+                        // 0x12 and is gated by the same toggle, for the same
+                        // reason. Reported on the MP-DMG channel so "the death
+                        // never arrived" and "the death arrived and the guid did
+                        // not resolve" stop looking identical in a field log.
+                        bool applied  = config.GuidDamageFallbackEnabled
+                                     && await _combat.ApplyDeathAsync(soul, ct);
+                        Console.WriteLine(FormattableString.Invariant(
+                            $"MP-DMG dir=in route=guid-fallback-death ghost={sourceId} soul={soul} result={(!config.GuidDamageFallbackEnabled ? "disabled" : applied ? "applied" : "unresolved")}"));
+                        if (!applied)
+                            Console.WriteLine($"[combat] death from ghost {sourceId} not applied " +
+                                              $"(soul {soul} not loaded here, the fallback is off, or the DLL is absent)");
+                    }
+                    else if (type == Protocol.PauseDown && payloadLen == Protocol.PauseDownPayloadLen)
+                    {
+                        // PauseDown: [sourceGhostId:1][state:1]
+                        // WO-138: the state byte is 0 (running) or the sender's reasons.
+                        byte sourceId = payload[0];
+                        bool paused = payload[1] != Protocol.PauseStateExited;
+                        Wo138OnPeerPause(sourceId, payload[1]);
+                        await ApplyPeerPauseAsync(sourceId, paused, ct);
+                    }
+                    else if (type == Protocol.PlayerStateDown && payloadLen == Protocol.PlayerStateDownPayloadLen)
+                    {
+                        // WO-28 Flow A: [ghostId:1][health:4f][stamina:4f][flags:1]
+                        // Rendered, not reconciled -- a player's health is
+                        // authoritative on their own machine, so this is simply
+                        // what that ghost's health IS.
+                        byte  sourceId = payload[0];
+                        float health   = ReadFloat(payload, 1);
+                        float stamina  = ReadFloat(payload, 5);
+                        byte  vflags   = payload[9];
+                        await ApplyGhostVitalsAsync(sourceId, health, stamina, vflags, ct);
+                    }
+                    else if (type == Protocol.PlayerHitDown && payloadLen == Protocol.PlayerHitDownPayloadLen)
+                    {
+                        // WO-28 Flow B: [health:4f][stamina:4f][flags:1] -- loss
+                        // amounts. No ghost id: the relay routed this to us
+                        // precisely because it is about us.
+                        float healthLoss  = ReadFloat(payload, 0);
+                        float staminaLoss = ReadFloat(payload, 4);
+                        await Wo161OnLegacyHitInAsync(healthLoss, staminaLoss, ct);   // WO-161: counted and logged; applied as before
+                    }
+                    else if (type == Protocol.PlayerRespawnedDown && payloadLen == Protocol.PlayerRespawnedDownPayloadLen)
+                    {
+                        // WO-113: [ghostId:1][x:4f][y:4f][z:4f][reason:1]. The
+                        // ghost's own position stream follows and its interpolator
+                        // snaps any jump over 5 m; this names the event.
+                        byte sourceId = payload[0];
+                        float rx = ReadFloat(payload, 1), ry = ReadFloat(payload, 5), rz = ReadFloat(payload, 9);
+                        string who = _ghostNames.TryGetValue(sourceId, out var rn) ? rn : $"player {sourceId}";
+                        Console.WriteLine(FormattableString.Invariant(
+                            $"[respawn] {who} respawned at ({rx:F1}, {ry:F1}, {rz:F1}) reason={Protocol.RespawnReasonName(payload[13])}"));
+                        _ = Wo132OnPeerUpAsync(sourceId, "respawned");   // WO-132 (was WO-131 1g's StopFight)
+                        _ = Wo166OnPeerRespawnedAsync(sourceId, payload[13]);   // WO-166 R1: the respawn amnesty (host)
+                    }
+                    else if (type == Protocol.GraveAddDown && payloadLen == Protocol.GraveAddDownPayloadLen)
+                    {
+                        // WO-113: [ghostId:1][graveId:8][x:4f][y:4f][z:4f] -> a mirror
+                        // gravestone + marker in our world (never lootable, never saved).
+                        byte sourceId = payload[0];
+                        ulong gid = BinaryPrimitives.ReadUInt64LittleEndian(payload.AsSpan(1));
+                        float gx = ReadFloat(payload, 9), gy = ReadFloat(payload, 13), gz = ReadFloat(payload, 17);
+                        bool ok = await _combat.MirrorGraveAsync(1, sourceId, gid, gx, gy, gz, ct);
+                        Console.WriteLine(FormattableString.Invariant(
+                            $"[grave] peer {sourceId} grave 0x{gid:X16} at ({gx:F1}, {gy:F1}, {gz:F1}) -> mirror {(ok ? "shown" : "not shown (DLL refused/absent)")}"));
+                    }
+                    else if (type == Protocol.GraveRemoveDown && payloadLen == Protocol.GraveRemoveDownPayloadLen)
+                    {
+                        byte sourceId = payload[0];
+                        ulong gid = BinaryPrimitives.ReadUInt64LittleEndian(payload.AsSpan(1));
+                        bool ok = await _combat.MirrorGraveAsync(0, sourceId, gid, 0, 0, 0, ct);
+                        Console.WriteLine($"[grave] peer {sourceId} grave 0x{gid:X16} removed -> mirror {(ok ? "removed" : "not present")}");
+                    }
+                    else if (type == Protocol.PlayerDeathDown && payloadLen == Protocol.PlayerDeathDownPayloadLen)
+                    {
+                        // WO-28 Flow C: [ghostId:1]. Idempotent -- the mod's own
+                        // setter only logs on an actual transition.
+                        byte sourceId = payload[0];
+                        string who = _ghostNames.TryGetValue(sourceId, out var dn) ? dn : $"player {sourceId}";
+                        Console.WriteLine($"[death] {who} died and is reloading their own save");
+                        _ = Wo132OnPeerDownAsync(sourceId, "died", hide: !_w154AvatarFalls);   // WO-132 (was WO-131 1g's StopFight); WO-155: his figure lies instead of vanishing
+                        Wo166NotePeerDeath(sourceId);   // WO-166 R1: where he died
+                        Wo155CollapseFigure(sourceId, "his death packet");
+                        try
+                        {
+                            await ExecLuaAsync($"KCD2MP_SetGhostDead(\"{sourceId}\", true)");
+                            await ExecLuaAsync($"if KCD2MP_ShowInteractionMsg then KCD2MP_ShowInteractionMsg(\"{EscapeLua(who)} died\") end");
+                        }
+                        catch { }
+                    }
+                    else if (type == Protocol.CombatRole && payloadLen == Protocol.CombatRolePayloadLen)
+                    {
+                        // WO-110 R4: every authority decision the relay sends, on
+                        // this machine's console AND in kcd.log (the runbook reads
+                        // kcd.log), whether or not it changes anything.
+                        bool amAuthority = payload[0] != 0;
+                        Console.WriteLine(FormattableString.Invariant(
+                            $"MP-AUTHORITY-OWNER self_id={_myGhostId} authority={(amAuthority ? "self" : "peer")} reason=relay-combatrole"));
+                        try { await ExecLuaAsync(FormattableString.Invariant($"if KCD2MP_AuthorityOwnerLog then KCD2MP_AuthorityOwnerLog({_myGhostId},{(amAuthority ? "true" : "false")}) end")); } catch { }
+                        await ApplyCombatRoleAsync(amAuthority, ct);
+                    }
+                    else if (type == Protocol.TimeSkipDown && payloadLen == Protocol.TimeSkipDownPayloadLen)
+                    {
+                        // Time-skip sync (WO-38): [sourceGhostId:1][phase:1][kind:1][worldTime:4].
+                        // A start carries no time and needs nothing done here --
+                        // the join rule is enforced relay-side. Both done phases
+                        // apply the clock; only the announced one shows a toast.
+                        byte  tsSource = payload[0];
+                        byte  tsPhase  = payload[1];
+                        byte  tsKind   = payload[2];
+                        uint  tsTime   = BinaryPrimitives.ReadUInt32LittleEndian(payload.AsSpan(3));
+                        Wo140NoteHostClock(tsSource, tsPhase, tsTime);   // WO-140: the host's clock, for the joiner's pin
+                        if (Wo133DropTimeSkip(tsSource, tsPhase, tsKind, tsTime))
+                        {
+                            // WO-133 (H2): the host of a shared world ignores a joiner's skip --
+                            // not applied, and not remembered for reload convergence either.
+                        }
+                        else if (tsPhase == Protocol.TimeSkipPhaseStart)
+                        {
+                            string tsWho = _ghostNames.TryGetValue(tsSource, out var tsName) ? tsName : $"player {tsSource}";
+                            Console.WriteLine($"[timeskip] {tsWho} began a skip (kind={tsKind})");
+                        }
+                        else if (tsPhase is Protocol.TimeSkipPhaseDone or Protocol.TimeSkipPhaseDoneQuiet)
+                        {
+                            // WO-40 Phase 4: remember the newest peer-reported
+                            // clock (latest report wins, whatever its direction --
+                            // it is only consulted if WE reload) for reload
+                            // convergence.
+                            _peerWorldTime = tsTime;
+                            _peerWorldTimeUtc = DateTime.UtcNow;
+                            await ApplyTimeSkipAsync(tsSource, tsKind, tsTime,
+                                quiet: tsPhase == Protocol.TimeSkipPhaseDoneQuiet, ct);
+                        }
+                    }
+                    else if (type == Protocol.NpcStateDown
+                             && payloadLen >= 1 + 1 + 1 + Protocol.NpcStateFixedTail
+                             && payloadLen <= 1 + 1 + Protocol.MaxNpcNameLen + Protocol.NpcStateFixedTail)
+                    {
+                        // NPC sync (WO-32): [sourceGhostId:1][nameLen:1][name][x][y][z][rotZ][health][flags]
+                        // The name is validated before interpolation -- it crosses
+                        // into a Lua string literal and relay data must not be able
+                        // to inject code. A name for an entity not loaded in this
+                        // world is handled (ignored) on the Lua side.
+                        int nameLen = payload[1];
+                        if (payloadLen != 2 + nameLen + Protocol.NpcStateFixedTail) CountDrop(type, "namelen-mismatch");   // WO-110 R9
+                        if (payloadLen == 2 + nameLen + Protocol.NpcStateFixedTail)
+                        {
+                            string npcName = Encoding.UTF8.GetString(payload, 2, nameLen);
+                            if (!NpcNamePattern.IsMatch(npcName)) CountDrop(type, "name-rejected");   // WO-110 R9
+                            if (NpcNamePattern.IsMatch(npcName) && !Wo136DropRidden(npcName) && !Wo139DropStopped(npcName) && !Wo148DropCarried(npcName))   // WO-136 Phase 3: the rider owns the horse; WO-139: a guard stopping this player; WO-148: the carrier owns the body
+                            {
+                                Wo127NoteRecv(npcName);   // WO-127: age of the host's last update, for the leash recorder
+                                int o = 2 + nameLen;
+                                float nx    = ReadFloat(payload, o);
+                                float ny    = ReadFloat(payload, o + 4);
+                                float nz    = ReadFloat(payload, o + 8);
+                                float nrot  = ReadFloat(payload, o + 12);
+                                float nhp   = ReadFloat(payload, o + 16);
+                                byte nflags = payload[o + Protocol.NpcStateFlagsOffset];
+                                if (!_isDamageAuthority) Wo136NoteNpcFlags(npcName, nflags);   // WO-136 Phase 4: a knockout or a death ends the engagement first
+                                ushort nseq = BinaryPrimitives.ReadUInt16LittleEndian(payload.AsSpan(o + Protocol.NpcStateSeqOffset));      // WO-110 R6
+                                uint nSenderMs = BinaryPrimitives.ReadUInt32LittleEndian(payload.AsSpan(o + Protocol.NpcStateSenderMsOffset));
+                                // The backlog fix (mp_npc_catchup): behind, a sample a newer one of this NPC with the same
+                                // flags supersedes says nothing the newer will not -- skipped whole (never a death, a
+                                // knockout, a weapon drawn, a swing cue or a resync row: those differ or are events).
+                                if (Wo147NpcSkip(npcName, nseq, payload[o + Protocol.NpcStateFlagsOffset], frame.Arrival)) continue;
+                                Wo147NpcProcessed(npcName, frame.Arrival);
+
+                                // WO-49: a sheathed→drawn transition in the stream
+                                // is the moment the local copy's hands change --
+                                // re-read its equipped set for swing resolution.
+                                bool npcDrawn = (nflags & 0x04) != 0;
+                                bool wasDrawn = _npcLastDrawn.TryGetValue(npcName, out bool d0) && d0;
+                                _npcLastDrawn[npcName] = npcDrawn;
+                                if (npcDrawn && !wasDrawn && _npcEntityIds.ContainsKey(npcName))
+                                    RefreshNpcEquipped(npcName);
+
+                                // WO-49: the swing cue (bit 3) rides the same
+                                // native path ghost swings use (WO-46) when this
+                                // world's copy is known by entity id: strip the
+                                // bit so the Lua does not also play its WO-40
+                                // guard-flick cue; native failure re-arms that
+                                // cue explicitly, late but visible. Dead/KO bits
+                                // veto, matching the Lua cue's own guard.
+                                bool npcKnown = _npcEntityIds.TryGetValue(npcName, out uint npcEntityId);
+                                bool npcSwingNative = (nflags & 0x08) != 0
+                                    && (nflags & 0x03) == 0
+                                    && npcKnown;
+                                if (npcSwingNative) nflags &= 0xF7;
+                                // WO-121: the owner streams this NPC's committed rows
+                                // (NpcAttack) -- the heuristic cue flag would add a
+                                // second swing. Stripped; the row plays instead.
+                                if ((nflags & 0x08) != 0 || npcSwingNative)
+                                    if (Wo121SupersedesNpcCue(npcName)) { npcSwingNative = false; nflags &= 0xF7; }
+
+                                // WO-86: the stream's dead bit. Logged on every
+                                // transition (Phase 1), and a WITNESSED 0->1 -- a
+                                // body this client saw alive on this stream and now
+                                // sees dead -- kills the local copy too, so both
+                                // worlds agree. A body dead on its FIRST packet is
+                                // a late-join corpse or a save-state difference and
+                                // only freezes, exactly as before: nothing kills a
+                                // living NPC on the strength of a stranger's save.
+                                byte  nsrc    = payload[0];
+                                bool  nDead   = (nflags & Protocol.NpcStateFlagDead) != 0;
+                                bool  nResync = (nflags & Protocol.NpcStateFlagResync) != 0;   // WO-102 Phase 6
+                                if (nResync) _resyncInPackets++;
+                                bool  nSeen   = _npcLastDead.TryGetValue(npcName, out bool nWasDead);
+                                _npcLastDead[npcName] = nDead;
+                                if (nDead && (!nSeen || !nWasDead))
+                                {
+                                    Console.WriteLine($"[npcdeath] in: 0x27 from ghost {nsrc} says '{npcName}' is dead (hp={nhp:F1})"
+                                                    + (nSeen ? " -- witnessed transition, killing the local copy"
+                                                             : " -- dead on its first packet here (late join / save state): freeze only"));
+                                }
+                                else if (!nDead && nSeen && nWasDead)
+                                {
+                                    Console.WriteLine($"[npcdeath] in: 0x27 from ghost {nsrc} says '{npcName}' is ALIVE again (hp={nhp:F1}) -- was dead on this stream; a reload on their side?");
+                                    Wo195NoteAlive(npcName);   // WO-195: its dead mark goes
+                                }
+
+                                // WO-118 Phase 1: the native writer already has this sample --
+                                // fed at the socket read (FeedNativeAtRead, WO-118 follow-up).
+                                if (npcSwingNative)
+                                {
+                                    // The Lua hold below (KCD2MP_NpcNativeSwingHold, 0.9 s) has a native twin:
+                                    // a per-frame write would stomp the swing exactly like the Lua one (WO-39).
+                                    Interlocked.Increment(ref _nativeHolds);
+                                    _ = _combat.NpcHoldAsync(npcName, 900, ct);
+                                }
+
+                                // WO-153 4: a sample the host sent BEFORE its NPC died can reach this agent after the death was
+                                // applied here (the field: stream hp=1.8, 12 ms after ApplyDeath), and it would have put the copy
+                                // "alive" again in the mod's bookkeeping and skipped the owner-death landing. For 10 s after a death
+                                // was applied from a peer, an ALIVE sample of that NPC is not passed on.
+                                if (!nDead && Wo153DeathHeld(npcName))
+                                {
+                                    Interlocked.Increment(ref _w153StaleAliveDropped);
+                                }
+                                else
+                                {
+                                Wo131OnNpcSample(npcName, nhp, nDead);   // WO-131 1c: the copy's health follows the host's
+
+                                string npcLua = string.Format(CultureInfo.InvariantCulture,
+                                    "if KCD2MP_ApplyNpcState then KCD2MP_ApplyNpcState(\"{0}\",{1:F3},{2:F3},{3:F3},{4:F4},{5:F1},{6},{7},{8},{9}) end",
+                                    npcName, nx, ny, nz, nrot, nhp, nflags, nsrc, nseq, nSenderMs);   // WO-102 Phase 2: source id = the stream's owner (MP-AUTHORITY); WO-110 R6: seq + sender ms
+                                if (_npcLua.Offer(npcName, NpcNativeBound(npcName), nflags, nhp, frame.Arrival, npcLua))   // WO-118 follow-up
+                                    await ExecLuaAsync(npcLua);
+                                }
+
+                                if (nDead && nSeen && !nWasDead)
+                                    await ApplyRemoteNpcDeathAsync(npcName, null, nsrc, "0x27 dead transition", ct);
+                                else if (nDead && nResync && _hostAuthority && !nWasDead)
+                                {
+                                    // WO-102 Phase 6: under host authority the owner's
+                                    // life state IS the truth, including on a first
+                                    // packet -- the WO-86 "freeze only on a first dead
+                                    // packet" rule is the claim model's caution about a
+                                    // stranger's save, and here the stranger is the owner.
+                                    _resyncDeadApplied++;
+                                    await ApplyRemoteNpcDeathAsync(npcName, null, nsrc, "0x27 resync dead", ct);
+                                }
+
+                                if (npcSwingNative)
+                                {
+                                    string npcFragSpec = ResolveNpcSwingSpec(npcName);
+                                    _ = _combat.GhostSwingAsync(npcEntityId, npcFragSpec, ct)
+                                        .ContinueWith(t =>
+                                        {
+                                            if (t.IsFaulted || !t.Result)
+                                            {
+                                                Console.WriteLine($"[npcsync] native swing for {npcName} did not apply — falling back to the Lua cue");
+                                                _ = ExecLuaAsync($"if KCD2MP_NpcSwingCueFallback then KCD2MP_NpcSwingCueFallback(\"{npcName}\") end");
+                                            }
+                                        }, TaskScheduler.Default);
+                                    await ExecLuaAsync($"if KCD2MP_NpcNativeSwingHold then KCD2MP_NpcNativeSwingHold(\"{npcName}\") end");
+                                }
+                            }
+                        }
+                    }
+                    else if (type == Protocol.HorseInfoDown
+                             && payloadLen >= 2
+                             && payloadLen <= 2 + Protocol.MaxHorseNameLen)
+                    {
+                        // Horse identity (WO-38 Phase 5): [sourceGhostId:1][nameLen:1][name].
+                        // Same validate-before-Lua-interpolation discipline as NpcStateDown.
+                        byte hiSource = payload[0];
+                        int hiNameLen = payload[1];
+                        if (payloadLen == 2 + hiNameLen)
+                        {
+                            string horseName = hiNameLen == 0 ? "" : Encoding.UTF8.GetString(payload, 2, hiNameLen);
+                            if (hiNameLen == 0 || NpcNamePattern.IsMatch(horseName))
+                                await ExecLuaAsync($"if KCD2MP_SetGhostHorse then KCD2MP_SetGhostHorse(\"{hiSource}\",\"{horseName}\") end");
+                        }
+                    }
+                    else if (type == Protocol.WeatherDown
+                             && payloadLen >= 1 + 1 + 2
+                             && payloadLen <= 1 + 1 + Protocol.MaxWeatherNameLen + 2)
+                    {
+                        // Weather sync (WO-40 Phase 3):
+                        // [sourceGhostId:1][nameLen:1][profileName][blendSec:2].
+                        // Same validate-before-Lua-interpolation discipline as
+                        // NpcStateDown; the apply is change-gated.
+                        int wNameLen = payload[1];
+                        if (config.WeatherSyncEnabled && payloadLen == 2 + wNameLen + 2)
+                        {
+                            string wProfile = Encoding.UTF8.GetString(payload, 2, wNameLen);
+                            ushort wBlend = BinaryPrimitives.ReadUInt16LittleEndian(payload.AsSpan(2 + wNameLen));
+                            if (WeatherNamePattern.IsMatch(wProfile))
+                            {
+                                await Wo151OnHostWeatherAsync(wProfile);   // WO-151 3.7: the gate first -- only the host's profile blends here
+                                await ApplyWeatherAsync(wProfile, wBlend);
+                            }
+                        }
+                    }
+                    else if (type == Protocol.StoryBeatDown
+                             && payloadLen >= 1 + 2
+                             && payloadLen <= 1 + 2 + Protocol.MaxStoryBeatTextLen)
+                    {
+                        // Story progress (WO-90):
+                        // [sourceGhostId:1][kind:1][len:1][text utf8].
+                        //
+                        // The text is a peer-supplied string that ends up inside a
+                        // Lua literal, so it is length-checked here and escaped at
+                        // the call site (ReportStoryDivergence -> EscapeLua). It
+                        // drives a toast and a console line and nothing else --
+                        // deliberately: this layer reports divergence, it never
+                        // gates behaviour on it.
+                        byte sbSource = payload[0];
+                        byte sbKind   = payload[1];
+                        int  sbLen    = payload[2];
+                        if (sbKind == Protocol.StoryBeatKindObjective && payloadLen == 3 + sbLen && sbLen > 0)
+                        {
+                            string sbText = Encoding.UTF8.GetString(payload, 3, sbLen);
+                            _peerObjective[sbSource] = sbText;
+                            Console.WriteLine($"[story] ghost {sbSource} objective -> {StoryBeat.Humanize(sbText)}");
+                            ReportStoryDivergence(sbSource, sbText);
+                            ReevaluateQuestPrompts();   // WO-94
+                        }
+                        else if ((sbKind == Protocol.StoryBeatKindApproach
+                                  || sbKind == Protocol.StoryBeatKindCatchupBegin
+                                  || sbKind == Protocol.StoryBeatKindCatchupEnd)
+                                 && payloadLen == 3 + sbLen && sbLen > 0)
+                        {
+                            // WO-94 Shared Quests. The text is peer-supplied and
+                            // ends up in a Lua literal: shape-checked here (path
+                            // characters only), registry-checked in the mod.
+                            string qText = Encoding.UTF8.GetString(payload, 3, sbLen);
+                            if (!StoryBeat.IsValidBeatPath(qText))
+                                Console.WriteLine($"[quest] ghost {sbSource} sent a malformed beat path (kind {sbKind}); dropped");
+                            else if (sbKind == Protocol.StoryBeatKindApproach)
+                                OnPeerApproach(sbSource, qText);
+                            else
+                                OnPeerCatchup(sbSource, qText, begin: sbKind == Protocol.StoryBeatKindCatchupBegin);
+                        }
+                        else if (sbKind == Protocol.StoryBeatKindCutscene && payloadLen == 3 + sbLen && sbLen > 0)
+                        {
+                            // WO-98 Phase 5: "start|end <type> <name>" -- shape-checked
+                            // (plain tokens only) before it reaches a log line or Lua.
+                            string csText = Encoding.UTF8.GetString(payload, 3, sbLen);
+                            var csParts = csText.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                            if (csParts.Length == 3 && (csParts[0] == "start" || csParts[0] == "end")
+                                && IsPlainToken(csParts[1]) && IsPlainToken(csParts[2]))
+                            {
+                                bool csActive = csParts[0] == "start";
+                                _peerCutscene[sbSource] = (csActive, csParts[1], csParts[2]);
+                                _stats.CutscenePeerEdges++;
+                                string csWho = _ghostNames.TryGetValue(sbSource, out var csDn) ? csDn : $"player {sbSource}";
+                                Console.WriteLine($"MP-CUTSCENE side=peer ghost={sbSource} who=\"{csWho}\" state={csParts[0]} type={csParts[1]} name={csParts[2]} local={(_localCutsceneActive ? 1 : 0)}");
+                                _ = ExecLuaAsync($"if KCD2MP_SetPeerCutscene then KCD2MP_SetPeerCutscene(\"{sbSource}\", {(csActive ? "true" : "false")}, \"{EscapeLua(csParts[2])}\") end");
+                            }
+                            else Console.WriteLine($"[quest] ghost {sbSource} sent a malformed cutscene edge; dropped");
+                        }
+                        else if (sbKind == Protocol.StoryBeatKindFingerprint && payloadLen == 3 + sbLen && sbLen > 0)
+                        {
+                            // WO-96 Phase 2: a peer's per-quest objective fingerprint.
+                            // Shape-checked by TryDecode before anything else looks
+                            // at it; compared off the receive thread.
+                            string fpText = Encoding.UTF8.GetString(payload, 3, sbLen);
+                            _peerFingerprint[sbSource] = fpText;
+                            _ = Task.Run(() => ComparePeerFingerprint(sbSource, fpText));
+                        }
+                    }
+                    else if (type == Protocol.ItemDropDown && payloadLen == Protocol.ItemDropDownPayloadLen)
+                    {
+                        // Dropped-item sync (WO-48):
+                        // [sourceGhostId:1][dropId:4][itemClass:16][amount:2][health:4f][x:4f][y:4f][z:4f].
+                        // Handed to the mod as a pending drop; it materializes the
+                        // pickup entity only once the local player is near enough
+                        // for the ground to be streamed (placing far away was
+                        // observed to drop the item through the world). Dedupe by
+                        // dropId is the mod's job -- heartbeats repeat this packet.
+                        byte idSource   = payload[0];
+                        uint idDropId   = BinaryPrimitives.ReadUInt32LittleEndian(payload.AsSpan(1));
+                        var  idClass    = new Guid(payload.AsSpan(5, Protocol.ItemClassLen));
+                        ushort idAmount = BinaryPrimitives.ReadUInt16LittleEndian(payload.AsSpan(21));
+                        float idHealth  = ReadFloat(payload, 23);
+                        float idX       = ReadFloat(payload, 27);
+                        float idY       = ReadFloat(payload, 31);
+                        float idZ       = ReadFloat(payload, 35);
+                        if (idDropId != 0 && idAmount > 0)
+                            await ExecLuaAsync(string.Format(CultureInfo.InvariantCulture,
+                                "if KCD2MP_ItemDropAdd then KCD2MP_ItemDropAdd(\"{0}\",\"{1}\",{2},{3:F4},{4:F3},{5:F3},{6:F3},\"{7}\") end",
+                                idDropId, idClass, idAmount, idHealth, idX, idY, idZ, idSource));
+                    }
+                    else if (type == Protocol.ItemClaimDown && payloadLen == Protocol.ItemClaimDownPayloadLen)
+                    {
+                        // [claimerGhostId:1][dropId:4]. The relay echoes claims to
+                        // everyone INCLUDING the claimant, in arrival order -- the
+                        // first echo a client sees for a dropId settles that drop
+                        // everywhere (the mod ignores repeats). Also retires the
+                        // drop from our own heartbeat set, whoever won it.
+                        byte icClaimer = payload[0];
+                        uint icDropId  = BinaryPrimitives.ReadUInt32LittleEndian(payload.AsSpan(1));
+                        _myOpenDrops.TryRemove(icDropId, out _);
+                        bool claimIsMine = icClaimer == _myGhostId;
+                        Console.WriteLine($"[itemsync] drop {icDropId} claimed by {(claimIsMine ? "us" : $"ghost {icClaimer}")}");
+                        await ExecLuaAsync($"if KCD2MP_ItemDropClaimed then KCD2MP_ItemDropClaimed(\"{icDropId}\",\"{icClaimer}\",{(claimIsMine ? "true" : "false")}) end");
+                    }
+                    else if (type == Protocol.CombatEventDown
+                             && (payloadLen == Protocol.CombatEventDownPayloadLen || payloadLen == Protocol.CombatEventDownPayloadLenV2))
+                    {
+                        // Combat visibility (WO-39 Phase 1): [sourceGhostId:1][event:1].
+                        // WO-99 Phase 4: v2 appends [sid:2], the sender's swing counter.
+                        ushort ceSid = payloadLen == Protocol.CombatEventDownPayloadLenV2
+                            ? BinaryPrimitives.ReadUInt16LittleEndian(payload.AsSpan(2)) : (ushort)0;
+                        // Purely cosmetic on this side -- the Lua applies a
+                        // draw/holster call or a one-shot animation to the ghost.
+                        // An event byte this build does not know is passed through
+                        // anyway; the Lua ignores unknown values, so a newer peer
+                        // can emit new events without breaking us.
+                        byte ceSource = payload[0];
+                        byte ceEvent  = payload[1];
+                        // WO-121: a peer on v8 rows swings through the Attack event and
+                        // holds its block natively -- the old cue would play on top.
+                        if (Wo121SupersedesCombatCue(ceSource, ceEvent))
+                        {
+                            Console.WriteLine($"[combatviz] ghost {ceSource} event {ceEvent} superseded by the v8 rows/state -- not played");
+                            continue;
+                        }
+                        // WO-46: swings go native when the ghost's entity id is
+                        // known and the DLL pipe is up — the WO-45 rung-2 route
+                        // renders a real, complete Mannequin swing where the Lua
+                        // clip path could only manage a guard-transition cue. The
+                        // Lua side still gets a call for the one-shot locomotion
+                        // hold; everything else (draw/sheathe/block, or a swing
+                        // with no native path available) stays on the old call.
+                        if (ceEvent == Protocol.CombatEventSwing
+                            && _ghostEntityIds.TryGetValue(ceSource.ToString(), out uint ceEntityId))
+                        {
+                            // No IsConnected pre-check: GhostSwingAsync connects the
+                            // pipe on demand (the agent's one startup connect can
+                            // race the injection and give up), and on failure —
+                            // DLL absent, stale entity id after a respawn — the old
+                            // Lua cue runs as the fallback, late but visible.
+                            string fragSpec = ResolveSwingSpec(ceSource);
+                            // WO-98 Phase 6: the receive-side hops, correlated by a
+                            // per-machine rsid. (A cross-machine id would need a
+                            // wire field on CombatEventUp; docs/WO-98-findings.md s6.)
+                            long rsid = ++_stats.SwingsRecv;
+                            Console.WriteLine($"MP-SWING hop=recv rsid={rsid} sid={ceSid} ghost={ceSource} entity=0x{ceEntityId:X} spec=\"{fragSpec}\"");
+                            // WO-100 Phase 4: the inbox owns validity, the bounded
+                            // precondition wait, the reason vocabulary and the
+                            // queue bound. The fire-and-forget task this replaced
+                            // had none of the four.
+                            // WO-118: the native writer holds the ghost for the swing,
+                            // before the swing is queued (the Lua hold below is late).
+                            _ = _combat.NpcHoldAsync("kcd2mp_" + ceSource, 900, ct);
+                            EnsureSwingInbox(ct).TryEnqueue(new SwingInbox.Entry(
+                                ceSource.ToString(), ceSid, rsid,
+                                GhostGeneration(ceSource.ToString()), fragSpec, DateTime.UtcNow));
+                            await ExecLuaAsync($"if KCD2MP_GhostNativeSwingHold then KCD2MP_GhostNativeSwingHold(\"{ceSource}\") end");
+                        }
+                        else if (ceEvent == Protocol.CombatEventWeaponDrawn
+                                 && OversizedItemFor(ceSource) is Guid oversized)
+                        {
+                            // WO-47: a ghost whose synced main-hand weapon lives in
+                            // the Oversized slot (halberd/polearm) never gets it
+                            // attached by DrawWeapon() -- route the draw through
+                            // DrawFromInventory instead (live-verified; see
+                            // KCD2MP_GhostDrawItem for the ordering trap).
+                            await ExecLuaAsync($"if KCD2MP_GhostDrawItem then KCD2MP_GhostDrawItem(\"{ceSource}\",\"{oversized}\") end");
+                        }
+                        else
+                        {
+                            await ExecLuaAsync($"if KCD2MP_GhostCombat then KCD2MP_GhostCombat(\"{ceSource}\",{ceEvent}) end");
+                        }
+                    }
+                    else if (type == Protocol.AppearanceDown && payloadLen >= 2)
+                    {
+                        // Appearance: [sourceGhostId:1][itemCount:1][itemClass:16]*itemCount
+                        byte sourceId = payload[0];
+                        int itemCount = payload[1];
+                        if (payloadLen == 2 + itemCount * Protocol.ItemClassLen)
+                        {
+                            var items = new Guid[itemCount];
+                            for (int i = 0; i < itemCount; i++)
+                                items[i] = new Guid(payload.AsSpan(2 + i * Protocol.ItemClassLen, Protocol.ItemClassLen));
+                            // WO-88 finding 2: remember the raw set (ApplyAppearanceAsync
+                            // rewrites aliases in place) so a respawned body can be
+                            // re-dressed from it without waiting for the next heartbeat.
+                            _ghostLastAppearance[sourceId] = (Guid[])items.Clone();
+                            _ = ApplyAppearanceAsync(sourceId, items, ct);
+                        }
+                    }
+                    else if (Interactions?.HandlePacket(type, payload) == true)
+                    {
+                        // Session packet consumed by the interaction layer.
+                    }
+                    else if (Dice?.HandlePacket(type, payload) == true)
+                    {
+                        // Dice packet consumed by the dice layer.
                     }
                     else
                     {
-                        await ExecLuaAsync($"if KCD2MP_GhostCombat then KCD2MP_GhostCombat(\"{ceSource}\",{ceEvent}) end");
+                        // WO-110 R9: a known type that failed its exact-length gate
+                        // above, or a type this build does not know. Counted, not
+                        // silent -- MP-RELAY-DROPS side=client every 60 s. WO-203
+                        // II.5: the two apart (the relay's own catch-all said
+                        // "unknown-or-wrong-length" for both and hid session C's
+                        // too-long W164 frames), a wrong length with its length.
+                        CountDrop(type, Protocol.IsKnownDown(type) ? $"wrong-length:{payloadLen}" : "unknown-type");
                     }
                 }
-                else if (type == Protocol.AppearanceDown && payloadLen >= 2)
-                {
-                    // Appearance: [sourceGhostId:1][itemCount:1][itemClass:16]*itemCount
-                    byte sourceId = payload[0];
-                    int itemCount = payload[1];
-                    if (payloadLen == 2 + itemCount * Protocol.ItemClassLen)
-                    {
-                        var items = new Guid[itemCount];
-                        for (int i = 0; i < itemCount; i++)
-                            items[i] = new Guid(payload.AsSpan(2 + i * Protocol.ItemClassLen, Protocol.ItemClassLen));
-                        // WO-88 finding 2: remember the raw set (ApplyAppearanceAsync
-                        // rewrites aliases in place) so a respawned body can be
-                        // re-dressed from it without waiting for the next heartbeat.
-                        _ghostLastAppearance[sourceId] = (Guid[])items.Clone();
-                        _ = ApplyAppearanceAsync(sourceId, items, ct);
-                    }
-                }
-                else if (Interactions?.HandlePacket(type, payload) == true)
-                {
-                    // Session packet consumed by the interaction layer.
-                }
-                else if (Dice?.HandlePacket(type, payload) == true)
-                {
-                    // Dice packet consumed by the dice layer.
-                }
-                else
-                {
-                    // WO-110 R9: a known type that failed its exact-length gate
-                    // above, or a type this build does not know. Counted, not
-                    // silent -- MP-RELAY-DROPS side=client every 60 s. WO-203
-                    // II.5: the two apart (the relay's own catch-all said
-                    // "unknown-or-wrong-length" for both and hid session C's
-                    // too-long W164 frames), a wrong length with its length.
-                    CountDrop(type, Protocol.IsKnownDown(type) ? $"wrong-length:{payloadLen}" : "unknown-type");
-                }
+                finally { Wo207End(w207); }
             }
         }
         catch (OperationCanceledException) { }
@@ -6187,6 +6222,9 @@ public partial class GameBridge(ClientConfig config)
                 return;
             case string w204 when w204.StartsWith("w204_", StringComparison.Ordinal):   // WO-204: the switches and the status (Wo204OnEvent)
                 Wo204OnEvent(name, arg);
+                return;
+            case string w207 when w207.StartsWith("w207_", StringComparison.Ordinal):   // WO-207: the vote icon's moment, the switches (Wo207OnEvent)
+                Wo207OnEvent(name, arg);
                 return;
             case "w206_cfg":         // WO-206 E: mp_epoch_check, mp_research_death_from_health
             case "w206_status":      // WO-206 E: mp_w206_status
@@ -7165,7 +7203,7 @@ public partial class GameBridge(ClientConfig config)
     public static bool IsMenuSafeLua(string lua) => MenuSafeLua.IsMatch(lua);
 
     private static readonly System.Text.RegularExpressions.Regex MenuSafeLua = new(
-        @"^(if )?KCD2MP_(Wo12[1-5]|Join|HostOnlyLock|EmitEvent|SetHitSensor|WorldSavedIn|SaveRefused|SaveLeak|W154VoiceState)|^if KCD2MP_Wo12[45]|^System\.LogAlways",
+        @"^(if )?KCD2MP_(Wo12[1-5]|Join|HostOnlyLock|EmitEvent|SetHitSensor|WorldSavedIn|SaveRefused|SaveLeak|W154VoiceState|W207KeepAwake)|^if KCD2MP_Wo12[45]|^System\.LogAlways",
         System.Text.RegularExpressions.RegexOptions.CultureInvariant);
 
     // WO-110 R9: the client side of the framing-drop counters (the relay has

@@ -214,6 +214,8 @@ public sealed class LogTailGameTransport : IGameTransport
     public Task ExecuteAsync(string lua, CancellationToken ct = default) =>
         _http.ExecuteAsync(lua, ct);
 
+    public void RequestFlush() => _http.RequestFlush();   // WO-207 B.3
+
     public Task FlushAsync(CancellationToken ct = default) =>
         _http.FlushAsync(ct);
 

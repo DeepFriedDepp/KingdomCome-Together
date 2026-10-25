@@ -32,6 +32,10 @@ public partial class GameBridge
 
     private async Task Wo201SpeechPollAsync(uint fig)
     {
+        // WO-207 A.1: while a partner listens to this player's conversation its lines go first at the pipe's gate (mp_conv_pipe_first)
+        bool listened;
+        lock (_w3cLock) listened = _w3cTalk is { } t && t.Listeners.Count > 0;
+        if (listened && W207("conv_pipe_first")) Wo207Trace.Kind.Value = Wo207Trace.ConvKind;
         var a = new byte[5];
         a[0] = 1;
         BinaryPrimitives.WriteUInt32LittleEndian(a.AsSpan(1), fig);

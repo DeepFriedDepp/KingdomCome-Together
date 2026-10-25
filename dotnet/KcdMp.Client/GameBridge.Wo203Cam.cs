@@ -45,6 +45,7 @@ public partial class GameBridge
     private W203Listen? _w3cListen;
     private readonly Dictionary<byte, (int Cid, string Anchor)> _w3cOffers = [];
     private volatile bool _w3cJoinOn = true, _w3cCameraOn = true;
+    private long _w207CamHolds;   // WO-207 A.1: the last shot re-sent while the starter's own camera had no dialogue shot
     private long _w3cAnnounced, _w3cJoinsIn, _w3cSnapshots, _w3cCamOut, _w3cSamplesOut, _w3cCamIn, _w3cSamplesIn, _w3cViewOn, _w3cViewRefused,
                  _w3cLeavesOut, _w3cEndsOut, _w3cEndsIn, _w3cNativeOut, _w3cBad;
 
@@ -124,15 +125,32 @@ public partial class GameBridge
     private async Task W3cPumpAsync(W203Talk talk, CancellationToken ct)
     {
         var pending = new List<Wo203CamRules.CamSample>();
+        // WO-207 A.1 (mp_conv_pipe_first): the pump's calls go first at the pipe's gate, and its poll is the DLL's off-main one (cmd 2: read
+        // from the sampler's ring on the pipe's thread); off (the twin): a background caller, the poll on the game's main thread (cmd 9)
+        bool first = W207("conv_pipe_first");
+        if (first) Wo207Trace.Kind.Value = Wo207Trace.ConvKind;
+        // WO-207 A.1 (mp_conv_cam_hold): the starter's own camera can leave the dialogue's shots while the talk goes on (a trade's screen, the
+        // bench's innkeeper) -- the sampler never sends a first-person view, and after 3 s the listener's view ended for silence. While the
+        // talk runs, a second without a new sample re-sends the last shot at the current time: the listener holds it.
+        bool hold = W207("conv_hold");
+        Wo203CamRules.CamSample? last = null;
+        long lastSentMs = Environment.TickCount64;
         while (!ct.IsCancellationRequested)
         {
             try { await Task.Delay(33, ct); } catch (OperationCanceledException) { break; }
-            var r = await W3cNativeAsync(Protocol.Wo203OpConvCamPoll, [2]);
+            var r = await W3cNativeAsync(Protocol.Wo203OpConvCamPoll, [first ? (byte)2 : (byte)9]);
             if (r is not { Ok: true }) continue;
             long qpc = QpcMs(), unix = UnixMs();
             foreach (var (t, s) in Wo203CamRules.DecodePoll(r.Value.Payload))
                 pending.Add(s with { Seq = ++talk.Seq, T = Wo203CamRules.HostMs(t, qpc, unix, ClockOffsetMs) });
+            if (pending.Count == 0 && hold && last is { } l && Environment.TickCount64 - lastSentMs >= 1000)
+            {
+                pending.Add(l with { Seq = ++talk.Seq, T = Wo203CamRules.HostMs(qpc, qpc, unix, ClockOffsetMs), Cut = false });
+                Interlocked.Increment(ref _w207CamHolds);
+            }
             if (pending.Count == 0) continue;
+            last = pending[^1];
+            lastSentMs = Environment.TickCount64;
             byte[] to;
             lock (_w3cLock) to = [.. talk.Listeners];
             if (to.Length == 0) { pending.Clear(); continue; }
@@ -450,7 +468,7 @@ public partial class GameBridge
 
     private void Wo203CamStats(ref string line) =>
         line += $" | cam announced={Interlocked.Read(ref _w3cAnnounced)} joins_in={Interlocked.Read(ref _w3cJoinsIn)} snapshots={Interlocked.Read(ref _w3cSnapshots)}"
-              + $" cam_out={Interlocked.Read(ref _w3cCamOut)}/{Interlocked.Read(ref _w3cSamplesOut)} cam_in={Interlocked.Read(ref _w3cCamIn)}/{Interlocked.Read(ref _w3cSamplesIn)}"
+              + $" cam_out={Interlocked.Read(ref _w3cCamOut)}/{Interlocked.Read(ref _w3cSamplesOut)} cam_in={Interlocked.Read(ref _w3cCamIn)}/{Interlocked.Read(ref _w3cSamplesIn)} cam_holds={Interlocked.Read(ref _w207CamHolds)}"
               + $" dll_calls={Interlocked.Read(ref _w3cDllCalls)} view_on={Interlocked.Read(ref _w3cViewOn)} view_refused={Interlocked.Read(ref _w3cViewRefused)} leaves_out={Interlocked.Read(ref _w3cLeavesOut)}"
               + $" ends_out={Interlocked.Read(ref _w3cEndsOut)} ends_in={Interlocked.Read(ref _w3cEndsIn)} native_failed={Interlocked.Read(ref _w3cNativeOut)} bad={Interlocked.Read(ref _w3cBad)}"
               + $" listening={(_w3cListen is { } l ? $"{l.Starter}:{l.Cid}{(l.ViewOn ? "+view" : "")}" : "-")} talk={(_w3cTalk is { } t ? $"{t.Cid}/{t.Listeners.Count}{(t.Armed ? "+armed" : "")}" : "-")}";

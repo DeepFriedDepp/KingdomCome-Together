@@ -16,14 +16,20 @@
 // Pipe ops (wo203.h, the conv range):
 //   91 ConvPoll [op][on:1] -> [armed:1][current:1 (255 unknown)][voteRow:1 (255 none)][n:1] per row [used:1][iconLen:1][icon]
 //      [difficulty:4][value:4][flag:1][textLen:1][text], then (WO-204) [snapSeq:4][onRight:1]   (on=1 arms WO-201's detour if needed)
+//      then (WO-207 A.3) [timerSeq:4][timerOn:1][limit:f32][sinceSetMs:4][sinceUpdateMs:4]: the decision timer the starter's HUD shows
 //   92 ConvVoteMark [op][index:1 (255 = clear)][nameLen:1][name] -> [result:1] the vote recorded (0), out of range (2), not armed (3)
-//   93 ConvSpeak [op][eid:4][durMs:4][pl:1][path] -> [result:1] 0 spoken by the body's own speak manager, 1 no actor, 2 no speak
-//      manager, 3 not resolved, 4 faulted (the LISTENER: a line of the starter's conversation, voiced the way the engine voices it, so
-//      its lip-sync and positional voice run; the actor's speak-manager slot is read out of the engine's own speak callback
-//      OnAudioStopFile; the original Speak is called, past WO-201's capture, so the line is never captured back)
+//   93 ConvSpeak [op][eid:4][durMs:4][pl:1][path] then (WO-207) [flags:1][nl:1][name] -> [result:1] 0 spoken by the body's own speak
+//      manager, 1 no actor, 2 no speak manager, 3 not resolved, 4 faulted (the LISTENER: a line of the starter's conversation, voiced
+//      the way the engine voices it, so its lip-sync and positional voice run; the actor's speak-manager slot is read out of the
+//      engine's own speak callback OnAudioStopFile; the original Speak is called, past WO-201's capture, so the line is never captured
+//      back). WO-207 A.4: flags bit 0 -- a body without a speak manager gets one the engine's own way (the slot after the getter: the
+//      get-or-create the engine's dialogue and barks call, C_Actor +0x210 on the build the research read); bit 1 -- eid 0 is the
+//      entity named <name> here (the host listening: its own NPC, no copy id).
 #include "wo203.h"
 #include "wo201.h"
 #include "motion.h"
+#include "npc_drive.h"
+#include "engine.h"
 #include "wo163.h"
 #include "anchors.h"
 #include "fault_guard.h"
@@ -88,6 +94,7 @@ CryStr g_speakPath[16];
 int g_speakNext = 0;
 CryStr g_emptyStr, g_purposeStr;
 std::atomic<uint32_t> c_spoken{0}, c_speakNoActor{0}, c_speakNoMan{0}, c_speakFault{0};
+std::atomic<uint32_t> c_speakMade{0}, c_speakMakeRefused{0}, c_speakByName{0}, c_speakNoName{0};   // WO-207 A.4
 fault::Site g_speakSite{"wo203conv::speak", fault::Kind::Call};
 
 std::atomic<uint32_t> c_marks{0}, c_icons{0}, c_labels{0}, c_reflush{0}, c_reflushFault{0}, c_clears{0}, c_stale{0}, c_active{0};
@@ -132,6 +139,38 @@ void hk_active(void* self, int32_t index, int32_t stopper) {
     g_current = index;
     c_active.fetch_add(1, std::memory_order_relaxed);
     g_origActive(self, index, stopper);
+}
+
+// WO-207 A.3: the decision timer. The HUD interface's SetDialogTimeLimit() / UpdateDialogTimeLimit(float 1 -> 0) / ClearDialogTimeLimit()
+// (each named by the Flash function it calls; WO-203's map: +0x28 / +0x30 / +0x38) are swapped like the highlight above: each call is
+// noted and the game's own runs unchanged. Read-only towards the game: the listener's agent draws the same timer on its own HUD.
+using TlFn = void (*)(void* self);
+using TlUpdFn = void (*)(void* self, float limit);
+TlFn g_origSetTl = nullptr, g_origClearTl = nullptr;
+TlUpdFn g_origUpdTl = nullptr;
+int g_setTlSlot = -1, g_updTlSlot = -1, g_clearTlSlot = -1;
+std::atomic<uint32_t> g_tlSeq{0};
+std::atomic<int> g_tlOn{0};
+std::atomic<float> g_tlLimit{1.0f};
+std::atomic<uint64_t> g_tlSetAt{0}, g_tlUpdAt{0};
+std::atomic<uint32_t> c_tlSets{0}, c_tlUpdates{0}, c_tlClears{0};
+
+void hk_set_tl(void* self) {
+    const uint64_t now = GetTickCount64();
+    g_tlLimit = 1.0f; g_tlSetAt = now; g_tlUpdAt = now; g_tlOn = 1;
+    g_tlSeq.fetch_add(1);
+    c_tlSets.fetch_add(1, std::memory_order_relaxed);
+    g_origSetTl(self);
+}
+void hk_upd_tl(void* self, float limit) {
+    g_tlLimit = limit; g_tlUpdAt = GetTickCount64();
+    c_tlUpdates.fetch_add(1, std::memory_order_relaxed);
+    g_origUpdTl(self, limit);
+}
+void hk_clear_tl(void* self) {
+    if (g_tlOn.exchange(0)) g_tlSeq.fetch_add(1);
+    c_tlClears.fetch_add(1, std::memory_order_relaxed);
+    g_origClearTl(self);
 }
 
 // Put back what our vote wrote into a row, when that row object is still the one we wrote.
@@ -199,6 +238,15 @@ uint8_t op_poll(uint8_t, const uint8_t* body, size_t len, uint8_t* out, size_t c
     out[3] = k;
     // WO-204 III.3: the snapshot's sequence (a new set of rows = a new decision) and the side it was shown on, after the rows
     if (o + 5 <= cap) { std::memcpy(out + o, &g_snapSeq, 4); out[o + 4] = g_snapOnRight; o += 5; }
+    // WO-207 A.3: the decision timer as the starter's HUD shows it (after the snapshot's tail, so an older agent stops before it)
+    if (o + 17 <= cap) {
+        const uint64_t now = GetTickCount64();
+        const uint32_t seq = g_tlSeq.load(), sinceSet = static_cast<uint32_t>(now - g_tlSetAt.load()), sinceUpd = static_cast<uint32_t>(now - g_tlUpdAt.load());
+        const float lim = g_tlLimit.load();
+        std::memcpy(out + o, &seq, 4); out[o + 4] = static_cast<uint8_t>(g_tlOn.load() ? 1 : 0);
+        std::memcpy(out + o + 5, &lim, 4); std::memcpy(out + o + 9, &sinceSet, 4); std::memcpy(out + o + 13, &sinceUpd, 4);
+        o += 17;
+    }
     *outLen = o;
     return wo163::kROk;
 }
@@ -223,23 +271,63 @@ uint8_t op_mark(uint8_t, const uint8_t* body, size_t len, uint8_t* out, size_t c
     return wo163::kROk;
 }
 
+// WO-207 A.4: the slot after the speak-manager getter is its get-or-create only when both read the same field: the getter
+// "mov rax,[rbx+F]" and the maker "cmp qword ptr [rbx+F],0", each in its first 0x30 bytes (C_Actor, F = 0x210 on the build the
+// research read). Anything else is never called.
+bool make_matches_getter(void* getter, void* make) {
+    uint8_t g[0x30]{}, m[0x30]{};
+    if (!fault::guarded(g_readSite, [&] { std::memcpy(g, getter, sizeof g); std::memcpy(m, make, sizeof m); })) return false;
+    int32_t field = -1;
+    for (size_t i = 0; i + 7 <= sizeof g; ++i)
+        if (g[i] == 0x48 && g[i + 1] == 0x8B && g[i + 2] == 0x83) { std::memcpy(&field, g + i + 3, 4); break; }
+    if (field <= 0 || field > 0x2000) return false;
+    for (size_t i = 0; i + 8 <= sizeof m; ++i) {
+        int32_t f2 = 0;
+        if (m[i] == 0x48 && m[i + 1] == 0x83 && m[i + 2] == 0xBB && m[i + 7] == 0x00) { std::memcpy(&f2, m + i + 3, 4); if (f2 == field) return true; }
+    }
+    return false;
+}
+
 uint8_t op_speak(uint8_t, const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t* outLen) {
     *outLen = 0;
     if (len < 10 || cap < 1) return wo163::kRBadRequest;
     uint32_t eid = 0, durMs = 0;
     std::memcpy(&eid, body + 1, 4); std::memcpy(&durMs, body + 5, 4);
     const uint8_t pl = body[9];
-    if (len != 10u + pl || !pl) return wo163::kRBadRequest;
+    if (!pl || len < 10u + pl) return wo163::kRBadRequest;
+    uint8_t flags = 0;
+    char name[64] = "";
+    if (len != 10u + pl) {   // WO-207 A.4: the tail
+        if (len < 12u + pl) return wo163::kRBadRequest;
+        flags = body[10 + pl];
+        const uint8_t nl = body[11 + pl];
+        if (len != 12u + pl + nl || nl >= sizeof name) return wo163::kRBadRequest;
+        std::memcpy(name, body + 12 + pl, nl); name[nl] = 0;
+    }
     *outLen = 1;
     using SpeakFn = void (*)(void* speakMan, void* params);
     SpeakFn speak = reinterpret_cast<SpeakFn>(wo201speech::speak_fn());
     if (!speak || !g_speakManSlot) { out[0] = 3; return wo163::kROk; }
-    void* actor = motion::actor_of(eid);
+    if (eid == 0 && (flags & 2) && name[0]) {   // the host's own NPC: found by its name here (a full walk, main thread; lines are few)
+        void* e = npcdrive::entity_by_name(name);
+        eid = e ? engine::entity_id(e) : 0;
+        if (eid) c_speakByName.fetch_add(1); else c_speakNoName.fetch_add(1);
+    }
+    void* actor = eid ? motion::actor_of(eid) : nullptr;
     if (!actor) { c_speakNoActor.fetch_add(1); out[0] = 1; return wo163::kROk; }
     void* vt = nullptr; void* getMan = nullptr; void* man = nullptr;
     if (!rd(actor, 0, &vt) || !rd(vt, static_cast<ptrdiff_t>(g_speakManSlot), &getMan) || !getMan) { c_speakNoMan.fetch_add(1); out[0] = 2; return wo163::kROk; }
     using GetFn = void* (*)(void*);
-    if (!fault::guarded(g_speakSite, [&] { man = reinterpret_cast<GetFn>(getMan)(actor); }) || !man) { c_speakNoMan.fetch_add(1); out[0] = 2; return wo163::kROk; }
+    if (!fault::guarded(g_speakSite, [&] { man = reinterpret_cast<GetFn>(getMan)(actor); })) { c_speakNoMan.fetch_add(1); out[0] = 2; return wo163::kROk; }
+    // WO-207 A.4: the listener's bodies (the partner's figure, the host's NPC copies) never spoke in a dialogue of this machine, so the
+    // engine never made their speak manager; the engine's own get-or-create (the next slot) makes it the way its dialogue does
+    if (!man && (flags & 1)) {
+        void* make = nullptr;
+        if (rd(vt, static_cast<ptrdiff_t>(g_speakManSlot + 8), &make) && make && make_matches_getter(getMan, make)) {
+            if (fault::guarded(g_speakSite, [&] { man = reinterpret_cast<GetFn>(make)(actor); }) && man) c_speakMade.fetch_add(1);
+        } else c_speakMakeRefused.fetch_add(1);
+    }
+    if (!man) { c_speakNoMan.fetch_add(1); out[0] = 2; return wo163::kROk; }
     char path[200];
     const size_t n = pl < sizeof path - 1 ? pl : sizeof path - 1;
     std::memcpy(path, body + 10, n); path[n] = 0;
@@ -262,10 +350,14 @@ uint8_t op_speak(uint8_t, const uint8_t* body, size_t len, uint8_t* out, size_t 
 
 int status(char* out, int n) {
     return std::snprintf(out, static_cast<size_t>(n), "hud=%s slots=+0x%X/+0x%X marks=%u icons=%u labels=%u reflush=%u faults=%u clears=%u stale=%u active=%u "
-                         "speak_slot=+0x%zX spoken=%u no_actor=%u no_man=%u speak_faults=%u",
+                         "speak_slot=+0x%zX spoken=%u no_actor=%u no_man=%u speak_faults=%u made=%u make_refused=%u by_name=%u no_name=%u "
+                         "timer_slots=+0x%X/+0x%X/+0x%X timer_sets=%u timer_updates=%u timer_clears=%u",
                          g_why, g_setSlot >= 0 ? g_setSlot * 8 : 0, g_activeSlot >= 0 ? g_activeSlot * 8 : 0, c_marks.load(), c_icons.load(),
                          c_labels.load(), c_reflush.load(), c_reflushFault.load(), c_clears.load(), c_stale.load(), c_active.load(),
-                         g_speakManSlot, c_spoken.load(), c_speakNoActor.load(), c_speakNoMan.load(), c_speakFault.load());
+                         g_speakManSlot, c_spoken.load(), c_speakNoActor.load(), c_speakNoMan.load(), c_speakFault.load(),
+                         c_speakMade.load(), c_speakMakeRefused.load(), c_speakByName.load(), c_speakNoName.load(),
+                         g_setTlSlot >= 0 ? g_setTlSlot * 8 : 0, g_updTlSlot >= 0 ? g_updTlSlot * 8 : 0, g_clearTlSlot >= 0 ? g_clearTlSlot * 8 : 0,
+                         c_tlSets.load(), c_tlUpdates.load(), c_tlClears.load());
 }
 
 // The actor's speak-manager getter slot, read out of the engine's own speak callback (OnAudioStopFile: GetActor(eid), then
@@ -289,6 +381,35 @@ void resolve_speak() {
     if (!g_speakManSlot) { logf("WO203-CONV voice: the speak-manager slot not found in the callback's code -- the plain play stays"); return; }
     logf("WO203-CONV voice resolver: the actor's speak manager slot +0x%zX -- %s the build the research read", g_speakManSlot,
          g_speakManSlot == 0x4D8 ? "the same as" : "DIFFERENT from (the found slot is used)");
+}
+
+// WO-207 A.3: each timer slot is the one after SetDialogSequences' whose function references its Flash name; a slot not found (or not
+// writable) leaves that call alone and the listener's timer off.
+void install_timer(HMODULE gm, void* const* vt) {
+    struct T { const char* name; int* slot; void* hook; void** orig; };
+    const T ts[] = {{"SetDialogTimeLimit", &g_setTlSlot, reinterpret_cast<void*>(&hk_set_tl), reinterpret_cast<void**>(&g_origSetTl)},
+                    {"UpdateDialogTimeLimit", &g_updTlSlot, reinterpret_cast<void*>(&hk_upd_tl), reinterpret_cast<void**>(&g_origUpdTl)},
+                    {"ClearDialogTimeLimit", &g_clearTlSlot, reinterpret_cast<void*>(&hk_clear_tl), reinterpret_cast<void**>(&g_origClearTl)}};
+    for (const T& t : ts) {
+        const char* name = anchor::find_cstring(gm, t.name);
+        if (!name) { logf("WO207-TIMER the name %s not found -- that call is not mirrored", t.name); continue; }
+        for (int s = g_setSlot + 1; s < g_setSlot + 24 && *t.slot < 0; ++s) {
+            void* f = nullptr;
+            if (!rd(vt, s * 8, &f) || !f) break;
+            if (s != g_activeSlot && anchor::function_refs(gm, f, name)) *t.slot = s;
+        }
+        if (*t.slot < 0) { logf("WO207-TIMER %s's slot not found -- that call is not mirrored", t.name); continue; }
+        void** at = const_cast<void**>(vt) + *t.slot;
+        void* cur = nullptr;
+        DWORD old = 0;
+        if (!rd(at, 0, &cur) || !cur || !VirtualProtect(at, 8, PAGE_READWRITE, &old)) { logf("WO207-TIMER %s's slot not writable", t.name); *t.slot = -1; continue; }
+        *t.orig = cur;
+        InterlockedExchangePointer(at, t.hook);
+        VirtualProtect(at, 8, old, &old);
+    }
+    logf("WO207-TIMER resolver: SetDialogTimeLimit +0x%X, UpdateDialogTimeLimit +0x%X, ClearDialogTimeLimit +0x%X -- %s the build the research read",
+         g_setTlSlot * 8, g_updTlSlot * 8, g_clearTlSlot * 8,
+         (g_setTlSlot * 8 == 0x28 && g_updTlSlot * 8 == 0x30 && g_clearTlSlot * 8 == 0x38) ? "the same as" : "DIFFERENT from (the found slots are used)");
 }
 
 void install() {
@@ -326,6 +447,7 @@ void install() {
     VirtualProtect(at, 8, old, &old);
     wo201vote::set_before_flush(&before_flush);
     g_why = "armed";
+    install_timer(gm, vt);
     logf("WO203-CONV resolver: the HUD interface's SetDialogSequences slot +0x%X, SetActiveSequenceChanged slot +0x%X -- %s the build the research read",
          g_setSlot * 8, g_activeSlot * 8, (g_setSlot * 8 == 0x10 && g_activeSlot * 8 == 0x18) ? "the same as" : "DIFFERENT from (the found slots are used)");
 }

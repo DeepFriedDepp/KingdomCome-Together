@@ -202,6 +202,58 @@ public sealed class CombatPipe : IAsyncDisposable
 
     private readonly SemaphoreSlim _gate = new(1, 1);
     private NamedPipeClientStream? _pipe;
+
+    /// <summary>
+    /// WO-207 B.3 (mp_queue_decouple): a relay frame's handler (<see cref="Wo207Trace.Kind"/> set) goes through the gate before any
+    /// background poll that waits for it. The DLL answers one request a frame and the agent's own loops keep ~86 a second waiting on
+    /// the joiner (position reads, digest reads, the fade / cutscene / speech / ranged polls): a frame's call used to queue behind all
+    /// of them (WO-207 B.1: activity frames 157 ms each, the queue 154 s behind after a fight).
+    /// </summary>
+    public bool FramesFirst { get; set; } = true;
+    private int _framesWaiting;
+
+    // WO-207 B.5: when each caller waiting at the gate began (frame-driven callers and background ones apart) -- the pipe's share of "how
+    // far behind": the oldest frame caller's wait now.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<long, (long At, bool Frame)> _gateWaiters = new();
+    private long _gateWaiterSeq;
+
+    public (long FrameMs, long BackgroundMs) OldestGateWaitMs()
+    {
+        long now = Environment.TickCount64, f = 0, b = 0;
+        foreach (var w in _gateWaiters.Values)
+        {
+            long ms = Math.Max(0, now - w.At);
+            if (w.Frame) f = Math.Max(f, ms); else b = Math.Max(b, ms);
+        }
+        return (f, b);
+    }
+
+    private async Task EnterGateAsync(CancellationToken ct)
+    {
+        long id = Interlocked.Increment(ref _gateWaiterSeq);
+        _gateWaiters[id] = (Environment.TickCount64, Wo207Trace.Kind.Value != 0);
+        try { await EnterGateInnerAsync(ct); }
+        finally { _gateWaiters.TryRemove(id, out _); }
+    }
+
+    private async Task EnterGateInnerAsync(CancellationToken ct)
+    {
+        if (!FramesFirst) { await _gate.WaitAsync(ct); return; }
+        if (Wo207Trace.Kind.Value != 0)
+        {
+            Interlocked.Increment(ref _framesWaiting);
+            try { await _gate.WaitAsync(ct); }
+            finally { Interlocked.Decrement(ref _framesWaiting); }
+            return;
+        }
+        while (true)
+        {
+            await _gate.WaitAsync(ct);
+            if (Volatile.Read(ref _framesWaiting) == 0) return;
+            _gate.Release();   // a frame's handler waits: it goes first
+            await Task.Delay(1, ct);
+        }
+    }
     private bool _warnedUnavailable;
 
     // LocalHit arrives unsolicited, interleaved with command replies, so a
@@ -2375,7 +2427,9 @@ public sealed class CombatPipe : IAsyncDisposable
     {
         if (!await EnsureConnectedAsync(ct)) return (null, PipeReason.NotConnected);
 
-        await _gate.WaitAsync(ct);
+        long gateAt = Environment.TickCount64;
+        await EnterGateAsync(ct);
+        long sentAt = Environment.TickCount64;
         try
         {
             // Drop anything left over from an earlier command that timed out.
@@ -2469,7 +2523,11 @@ public sealed class CombatPipe : IAsyncDisposable
             Drop();
             return (null, PipeReason.NotConnected);
         }
-        finally { _gate.Release(); }
+        finally
+        {
+            _gate.Release();
+            Wo207Trace.Pipe(Wo207Trace.Kind.Value, (type << 8) | (payload.Length > 0 ? payload[0] : 0), sentAt - gateAt, Environment.TickCount64 - sentAt);   // WO-207 B.1: the gate's wait, the round trip (by frame type and its first byte: the op of a multiplexed type)
+        }
     }
 
     private static readonly TimeSpan ReplyDeadline = TimeSpan.FromSeconds(5);

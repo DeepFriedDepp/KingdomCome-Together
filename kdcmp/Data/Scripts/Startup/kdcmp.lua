@@ -766,6 +766,7 @@ function KCD2MP_EmitTick()
     if not KCD2MP.emitRunning then return end
     Script.SetTimer(KCD2MP.emitIntervalMs, KCD2MP_EmitTick)  -- reschedule FIRST: a Lua error must not kill the stream
     local nowClock = os.clock()
+    if KCD2MP_W207AwakeWatch and nowClock - (KCD2MP._w207WatchAt or 0) > 2 then KCD2MP._w207WatchAt = nowClock; pcall(KCD2MP_W207AwakeWatch) end   -- WO-207 C.2
 
     -- WO-59 Thread D: a frame-rate floor signal, so the next "FPS dropped"
     -- report comes with numbers in the bundle instead of testimony.
@@ -30735,6 +30736,8 @@ end
 System.AddCCommand("mp_dog_sync", 'KCD2MP_DogSyncSet(%line)', "WO-191 follow-up: (both) village dogs walk, lie and follow on your partner's screen as on the host's; the players' own dogs stay their own (default on): mp_dog_sync on|off")
 
 local function handleAction(action, activation, value)
+    -- WO-207 A.7: one key press, one listen action (the game's dialog map left enabled doubles them)
+    if KCD2MP_W207ListenOnce and KCD2MP_W207ListenOnce(action, activation) then return end
     -- WO-204 III.3: the listener's options (his own listen actions); true = consumed
     if KCD2MP_W204OnAction then
         local okc, usedc = pcall(KCD2MP_W204OnAction, action, activation)
@@ -33048,7 +33051,7 @@ end
         if not L then return false end
         if KCD2MP_W204ConvClear then pcall(KCD2MP_W204ConvClear) end   -- WO-204: the partner's rows and lines go with the view
         w3c_hud(false)
-        pcall(ActionMapManager.EnableActionMap, "dialog", false)
+        pcall(ActionMapManager.EnableActionMap, L.map or "dialog", false)
         W3C.listening = nil
         W3C.gen = W3C.gen + 1   -- the watch chain stops
         W3C.stats.leaves = W3C.stats.leaves + 1
@@ -33083,7 +33086,10 @@ end
         W3C.listening = { starter = tostring(starter), cid = tostring(cid), anchor = tostring(anchor or ""), hidden = {} }
         W3C.offers[tostring(starter)] = nil
         W3C.stats.enters = W3C.stats.enters + 1
-        pcall(ActionMapManager.EnableActionMap, "dialog", true)
+        -- WO-207 A.4 (mp_listen_map): the listener's own exclusive map (the keys pak's kcd2mp_listen: the four listen actions only); the
+        -- game's "dialog" map includes open_pause_menu on the same Back keys -- a Back that cleared a vote opened the pause menu
+        W3C.listening.map = (W207 and W207.on and W207.on.listen_map == false) and "dialog" or "kcd2mp_listen"
+        pcall(ActionMapManager.EnableActionMap, W3C.listening.map, true)
         w3c_hud(true)
         pcall(function() W3C.listening.hp = player.soul:GetState("health") end)
         W3C.gen = W3C.gen + 1
@@ -33269,6 +33275,7 @@ do
         C4.rows, C4.dec, C4.vote, C4.sel = nil, nil, nil, 0
         C4.subGen = C4.subGen + 1
         pcall(UIAction.CallFunction, "hud", 0, "ClearSubtitles")
+        if KCD2MP_W207TimerClear then KCD2MP_W207TimerClear() end   -- WO-207 A.3: leaving takes the timer too
     end
     -- the listener: a line of the starter's conversation (earlier = a catch-up line: 0.8 s each, marked)
     function KCD2MP_W204Line(starter, cid, speaker, isPlayer, stringName, durMs, earlier)
@@ -33309,7 +33316,10 @@ do
         if not C4.rows or C4.cid ~= tostring(cid) or C4.dec ~= tonumber(decId) then return false end
         C4.stats.chosen = C4.stats.chosen + 1
         c4_highlight(tonumber(index) or 0)
-        KCD2MP_ShowNativeToast(C4.vote ~= nil and C4.vote == tonumber(index) and "Your pick" or "Their pick")
+        local pick = C4.vote ~= nil and C4.vote == tonumber(index) and "Your pick" or "Their pick"
+        KCD2MP_ShowNativeToast(pick)
+        mp_log(string.format("WO204-CONV chosen decision=%s row=%s vote=%s -> %s (the listener)", tostring(decId), tostring(index), tostring(C4.vote), pick))
+        if KCD2MP_W207TimerClear then KCD2MP_W207TimerClear() end   -- WO-207 A.3: the decision is over
         local dec = C4.dec
         Script.SetTimer(1000, function()
             if C4.rows and C4.dec == dec then
@@ -33358,8 +33368,45 @@ do
         c4_send(rows, (v ~= nil and v >= 0) and v or nil, onRight == true)
         if tonumber(current) and tonumber(current) >= 0 then c4_highlight(tonumber(current)) end
         C4.stats.icons = C4.stats.icons + 1
+        KCD2MP_EmitEvent("w207_icon", tostring((v ~= nil and v >= 0) and v or "clear"))   -- WO-207 A.4: when it showed (the agent stamps it)
         return true
     end
+    -- WO-207 A.3, the listener: the starter's decision timer on this player's own HUD (SetDialogTimeLimit, UpdateDialogTimeLimit 1 -> 0,
+    -- ClearDialogTimeLimit: the HUD's own functions, WO-203's map), run on between the starter's messages by its rate. Only a display:
+    -- the starter's engine decides when it runs out, and this player's vote never holds it.
+    C4.timer = C4.timer or { on = false, left = 1, rate = 0, at = 0, gen = 0, shown = 0 }
+    local T = C4.timer
+    local function c4_timer_clear()
+        if T.on then pcall(UIAction.CallFunction, "hud", 0, "ClearDialogTimeLimit") end
+        T.on = false
+        T.gen = T.gen + 1
+    end
+    local function c4_timer_tick(gen)
+        if not T.on or T.gen ~= gen then return end
+        local left = math.max(0, T.left - T.rate * (os.clock() - T.at))
+        pcall(UIAction.CallFunction, "hud", 0, "UpdateDialogTimeLimit", left)
+        Script.SetTimer(100, function() c4_timer_tick(gen) end)
+    end
+    function KCD2MP_W207Timer(starter, cid, decId, on, left, rate)
+        if not c4_listening(starter, cid) then return false end
+        if tonumber(on) ~= 1 then
+            if T.on then mp_log(string.format("WO207-TIMER cleared decision=%s (the listener)", tostring(decId))) end
+            c4_timer_clear()
+            return true
+        end
+        T.left, T.rate, T.at = tonumber(left) or 1, tonumber(rate) or 0, os.clock()
+        if not T.on then
+            T.on = true
+            T.gen = T.gen + 1
+            T.shown = T.shown + 1
+            pcall(UIAction.CallFunction, "hud", 0, "SetDialogTimeLimit")
+            mp_log(string.format("WO207-TIMER shown decision=%s left=%.2f rate=%.3f/s (the listener)", tostring(decId), T.left, T.rate))
+            local gen = T.gen
+            c4_timer_tick(gen)
+        end
+        return true
+    end
+    KCD2MP_W207TimerClear = c4_timer_clear
     W204.statusMore = W204.statusMore or {}
     W204.statusMore[#W204.statusMore + 1] = function()
         local s = C4.stats
@@ -33439,6 +33486,143 @@ do
     function KCD2MP_W206Probe(arg) return w206_cd_set("w206_probe", "mp_anim_probe", arg) end
     System.AddCCommand("mp_digest", "KCD2MP_W206Digest(%line)", "WO-206 C: checkpoint digests of the shared world, compared across both machines (default on): mp_digest on|off")
     System.AddCCommand("mp_anim_probe", "KCD2MP_W206Probe(%line)", "WO-206 D: the animation probe every bundle's checks read (default on): mp_anim_probe on|off")
+end
+
+-- ===== WO-207 C.2: the game keeps running while its window is not in front (mp_keep_awake, default on) =====
+-- The engine sleeps while its window is inactive (sys_SleepIfInactiveWH, default 1): a co-op game behind another window ran at 20-34 fps
+-- and its partner's queue fell 40-90 s behind (WO-206's bench; every joiner who alt-tabs). While the agent says a session is live
+-- (KCD2MP_W207KeepAwake, every 5 s, with the launcher's choice) the mod sets the cvar to 0 through the engine's own cvar call, and puts the
+-- player's own value back when the session ends (the agent's word, or 20 s without it) and at quit (the agent's word on the exit). The
+-- player's system.cfg is never written. mp_keep_awake off: the player's own value at once, nothing set again.
+do
+    W207 = W207 or {}
+    W207.awake = W207.awake or { on = true, live = false, chosen = true, was = nil, pushAt = 0, sets = 0, restores = 0 }
+    local A = W207.awake
+    local CV = "sys_SleepIfInactiveWH"
+    local function cv_read()
+        local ok, v = pcall(System.GetCVar, CV)
+        return ok and tonumber(v) or nil
+    end
+    local function w207_restore(why)
+        if A.was == nil then return end
+        local was = A.was
+        A.was = nil
+        pcall(System.SetCVar, CV, tostring(was))
+        A.restores = A.restores + 1
+        mp_log(string.format("WO207-AWAKE %s back to the player's own %s (%s)", CV, tostring(was), tostring(why)))
+    end
+    local function w207_apply(why)
+        if not (A.on and A.chosen and A.live) then w207_restore(why); return end
+        local cur = cv_read()
+        if A.was == nil then
+            if cur == nil then mp_log("WO207-AWAKE " .. CV .. " unreadable -- left alone"); return end
+            A.was = cur
+        end
+        if cur ~= 0 then
+            pcall(System.SetCVar, CV, "0")
+            A.sets = A.sets + 1
+            mp_log(string.format("WO207-AWAKE %s 0 while the session runs (the player's own %s is put back after it; %s)", CV, tostring(A.was), tostring(why)))
+        end
+    end
+    -- the agent: live 1 = a session runs (every 5 s), 0 = it ended or the game quits; chosen = the launcher's setting
+    function KCD2MP_W207KeepAwake(live, chosen)
+        A.live = tonumber(live) == 1
+        if chosen ~= nil then A.chosen = tonumber(chosen) == 1 end
+        A.pushAt = os.clock()
+        w207_apply(A.live and "session" or "session over")
+        return true
+    end
+    -- the mod's own clock: an agent gone without a word (killed) gives the player's value back after 20 s
+    function KCD2MP_W207AwakeWatch()
+        if A.was ~= nil and A.live and os.clock() - A.pushAt > 20 then A.live = false; w207_restore("no word from the agent for 20 s") end
+    end
+    function KCD2MP_W207SetKeepAwake(arg)
+        local v = KCD2MP_Wo122ParseBool(arg)
+        if v == "bad" then mp_log("mp_keep_awake: expected on|off, got '" .. tostring(arg) .. "'"); return false end
+        if v == nil then
+            mp_log(string.format("WO207-TOGGLE mp_keep_awake is %s (launcher %s, session %s, %s now %s, player's own %s, sets=%d restores=%d)",
+                A.on and "on" or "off", A.chosen and "on" or "off", A.live and "live" or "none", CV, tostring(cv_read()), tostring(A.was), A.sets, A.restores))
+            return true
+        end
+        A.on = v
+        mp_log("WO207-TOGGLE mp_keep_awake " .. (v and "on" or "off"))
+        w207_apply("mp_keep_awake " .. (v and "on" or "off"))
+        KCD2MP_EmitEvent("w207_cfg", "keep_awake=" .. (v and "on" or "off"))
+        return true
+    end
+    System.AddCCommand("mp_keep_awake", "KCD2MP_W207SetKeepAwake(%line)",
+        "WO-207 C.2: the game keeps running while its window is not in front, during a session (default on): mp_keep_awake on|off")
+end
+
+-- ===== WO-207 A/B/C/D: the agent's switches (each new mechanism ships on, with its own switch; the agent hears w207_cfg) =====
+do
+    W207 = W207 or {}
+    W207.NAMES = {
+        conv_lane = "mp_conv_lane", queue_drop_stale = "mp_queue_drop_stale", queue_decouple = "mp_queue_decouple",
+        joiner_npc_triggers = "mp_joiner_npc_triggers", skip_end_exact = "mp_skip_end_exact", queue_measure = "mp_queue_measure",
+        conv_pipe_first = "mp_conv_pipe_first", conv_options_early = "mp_conv_options_early", conv_hold = "mp_conv_cam_hold",   -- WO-160 owns mp_conv_hold
+        listen_map = "mp_listen_map", listen_once = "mp_listen_once",
+    }
+    W207.HELP = {
+        skip_end_exact = "C.3: (joiner) a shared sleep or wait ends on the host's clock at once (its end, plus the real time since), not after a slow pull-in",
+        joiner_npc_triggers = "D.2: (joiner) an NPC's own area trigger (the blacksmith in his smithy) never writes this world's quest States: the host's world decides",
+        conv_lane = "A.1: (both) a joined conversation's lines, options, votes and camera never wait behind the NPC traffic",
+        queue_drop_stale = "B.2: (both) a combat action already older than its use is dropped before it reaches the game",
+        queue_decouple = "B.3: (both) nothing waits for the game's console: the newest state of each body goes at the game's own pace",
+        queue_measure = "B.4: (both) the queue's lag (the ping line) counts only frames waiting for the agent, never its idle moments",
+        conv_pipe_first = "A.1: (both) a joined conversation's camera, lines and options go first at the agent's pipe to the DLL (the camera poll off the game's main thread)",
+        conv_options_early = "A.1: (both) the talker's options are copied from the moment a partner is here, so a talk that opens at a decision shows it to the listener",
+        conv_hold = "A.1: (both) while the talker's own view has no dialogue shot (a trade's screen), the listener holds the last one instead of leaving",
+        listen_map = "A.4: (both) listening uses the mod's own key map: Back clears a vote or leaves and never opens the pause menu",
+        listen_once = "A.7: (both) one key press is one listen action, even when the game's own dialog map is still on beside the mod's",
+    }
+    W207.on = W207.on or {}
+    -- WO-207 A.7 (mp_listen_once): the same listen action pressed again within 120 ms is the same key press arriving through a second
+    -- key map (the final smoke: the host's own dialog map was still on after its talk -- every vote doubled, one Down moved two rows,
+    -- one Back cleared the vote and then left). true = swallow this one.
+    W207.lastListen = W207.lastListen or {}
+    function KCD2MP_W207ListenOnce(action, activation)
+        if W207.on.listen_once == false then return false end
+        if type(action) ~= "string" or string.sub(action, 1, 14) ~= "kcd2mp_listen_" then return false end
+        if activation ~= "press" and activation ~= 1 then return false end
+        local now = os.clock()
+        local last = W207.lastListen[action]
+        W207.lastListen[action] = now
+        if last and now - last >= 0 and now - last < 0.12 then
+            W207.listenDup = (W207.listenDup or 0) + 1
+            if W207.listenDup <= 5 then mp_log("WO207-LISTEN " .. action .. " arrived twice for one press -- the second is dropped") end
+            return true
+        end
+        return false
+    end
+    function KCD2MP_W207Set(name, arg)
+        local label = W207.NAMES[tostring(name)]
+        if not label then mp_log("WO207-TOGGLE unknown switch '" .. tostring(name) .. "'"); return false end
+        local v = KCD2MP_Wo122ParseBool(arg)
+        if v == "bad" then mp_log(label .. ": expected on|off, got '" .. tostring(arg) .. "'"); return false end
+        if v == nil then
+            mp_log("WO207-TOGGLE " .. label .. " is " .. ((W207.on[tostring(name)] ~= false) and "on" or "off"))
+            return true
+        end
+        W207.on[tostring(name)] = v
+        mp_log("WO207-TOGGLE " .. label .. " " .. (v and "on" or "off") .. " -- sent to the agent")
+        KCD2MP_EmitEvent("w207_cfg", tostring(name) .. "=" .. (v and "on" or "off"))
+        return true
+    end
+    function KCD2MP_W207Status()
+        local parts = {}
+        for k, label in pairs(W207.NAMES) do parts[#parts + 1] = label .. "=" .. ((W207.on[k] ~= false) and "on" or "off") end
+        table.sort(parts)
+        mp_log("WO207-STATUS " .. table.concat(parts, " "))
+        KCD2MP_EmitEvent("w207_status", "")
+        return true
+    end
+    System.AddCCommand("mp_w207_status", "KCD2MP_W207Status()", "WO-207: every WO-207 switch and its counts")
+    for k, label in pairs(W207.NAMES) do
+        local fname = "KCD2MP_W207Set_" .. k
+        _G[fname] = function(arg) return KCD2MP_W207Set(k, arg) end
+        System.AddCCommand(label, fname .. "(%line)", "WO-207 " .. (W207.HELP[k] or k) .. " (default on): " .. label .. " on|off")
+    end
 end
 
 -- ===== Player hook =====

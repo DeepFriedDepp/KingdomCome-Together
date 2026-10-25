@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="us-ascii"?>
+<!-- Copyright (C) 2026 the Kingdom Come: Together contributors (AUTHORS). SPDX-License-Identifier: GPL-3.0-only
+     GPLv3 section 7 additional terms: NOTICE. This project's own material only; Kingdom Come: Deliverance II and
+     its content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
+
+     WO-207 A.4: OUR own actionmap, inserted into the game's Libs/Config/defaultProfile.xml just after its actionmap named "dialog"
+     by the agent's keys-pak verb (dotnet/KcdMp.Client/KeybindPak.cs MergeListenMap), into Mods\kdcmp\Data\kdcmp_keys.pak. The
+     listener's lock: exclusive at the game's own dialogue priority (nothing else moves or turns Henry), holding only the four listen
+     actions -- the game's "dialog" map includes open_pause_menu on the same Back keys, so a Back that cleared a vote opened the pause
+     menu and ended listening. The game's file is never shipped. -->
+<kdcmp_patch target="Libs/Config/defaultProfile.xml" insert="after-actionmap:dialog">
+	<actionmap name="kcd2mp_listen" priority="minigames" exclusivity="1"><!-- KCD2MP (WO-207): listening to a partner's conversation -->
+		<action name="kcd2mp_listen_cancel" onPress="1" keyboard="_keybinds_ref_" />
+		<action name="kcd2mp_listen_up" onPress="1" keyboard="_keybinds_ref_" />
+		<action name="kcd2mp_listen_down" onPress="1" keyboard="_keybinds_ref_" />
+		<action name="kcd2mp_listen_confirm" onPress="1" keyboard="_keybinds_ref_" />
+	</actionmap>
+</kdcmp_patch>

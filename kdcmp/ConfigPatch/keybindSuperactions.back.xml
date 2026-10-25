@@ -8,4 +8,5 @@
      verb (dotnet/KcdMp.Client/KeybindPak.cs MergeBack), into Mods\kdcmp\Data\kdcmp_keys.pak. The game's file is never shipped. -->
 <kdcmp_patch target="Libs/Config/keybindSuperactions.xml" insert="into-superaction:back">
 		<action name="kcd2mp_listen_cancel" map="dialog" /><!-- KCD2MP (WO-203B): leave the partner's conversation -->
+		<action name="kcd2mp_listen_cancel" map="kcd2mp_listen" /><!-- KCD2MP (WO-207): the same, in the listener's own map -->
 </kdcmp_patch>

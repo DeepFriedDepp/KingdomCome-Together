@@ -119,7 +119,7 @@ public partial class GameBridge
             if (Wo206Rules.WorldCategory(f.Type, f.Payload) is Wo206Cat cat && !Wo206Admit(cat, f.Stamp, $"held frame 0x{f.Type:X2}")) { stale++; continue; }
             long now = Stopwatch.GetTimestamp();
             FeedNativeAtRead(f.Type, f.Payload, now, replay: true);
-            if (w is not null && w.TryWrite(new InFrame(f.Type, f.Payload, now, f.Stamp))) n++;
+            if (w is not null && Wo207Queue(w, new InFrame(f.Type, f.Payload, now, f.Stamp), f.Type)) n++;
         }
         Interlocked.Add(ref _w136Replayed, n);
         Console.WriteLine(FormattableString.Invariant(

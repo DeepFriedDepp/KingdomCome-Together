@@ -248,8 +248,12 @@ def up_b():
     st['b'] = rec; st['b_since'] = t0; save_state(st)
     note('start', copy='B', **rec, argv=[exe, '-multi_inst'])
     say('copy B pid', rec['pid'])
+    import dialogs   # WO-207 0.1: the game's own "start another instance?" box, answered Yes
+    box = dialogs.answer_in_background(rec, 30.0, log=lambda m: say('copy B', m), matches=procs.matches)
     w = procs.LogWatch(klog(rootb), since=t0)
     r = wait_menu(w, rec, 300, 'B')
+    box['thread'].join(timeout=35)
+    note('instance-box', copy='B', **(box.get('result') or {'found': None}))
     a_watch.poll()
     if r == 'wrong-user-folder':
         say('copy B uses the user folder %s -- stopping it at once' % w.user_folder)
@@ -280,6 +284,58 @@ def frame_id(port, root, wait=3.0):
         if m: return int(m.group(1)), time.time()
         time.sleep(0.1)
     return None
+
+
+def lua_value(port, root, expr, wait=3.0):
+    """One Lua value through the console, read back from the line it writes into the copy's own log (a string, or None)."""
+    path = klog(root)
+    off = os.path.getsize(path) if os.path.exists(path) else 0
+    tok = 'RIGV%d' % int(time.time() * 1000)
+    try: console(port, '#System.LogAlways("[%s] "..tostring(%s))' % (tok, expr), timeout=5)
+    except Exception: return None
+    t0 = time.time()
+    while time.time() - t0 < wait:
+        with open(path, 'rb') as f:
+            f.seek(off); data = f.read().decode('utf-8', 'replace')
+        m = re.search(r'\[%s\] (\S+)' % tok, data)
+        if m: return m.group(1)
+        time.sleep(0.1)
+    return None
+
+
+def memory_row(cid, rec, port, status=False):
+    """WO-207 E.1: one copy's memory once a minute -- the process's working set and private bytes, the Lua heap (KB), the DLL's own
+    counters (its status line, when the build prints one), and the sizes of the files that grow with a session."""
+    root = mirror.ROOT_A if cid == 'A' else mirror.ROOT_B
+    row = {'proc': procs.working_set_mb(rec['pid']) if procs.matches(rec) else None}
+    v = lua_value(port, root, 'collectgarbage("count")') if port else None
+    try: row['lua_kb'] = round(float(v)) if v else None
+    except ValueError: row['lua_kb'] = None
+    for nm in ('kcdmp-native.mirror.log', 'kcdmp-anim.jsonl', 'digest.jsonl'):
+        p = os.path.join(root, nm)
+        row[nm] = os.path.getsize(p) // 1024 if os.path.exists(p) else None
+    row['kcd_log_kb'] = os.path.getsize(klog(root)) // 1024 if os.path.exists(klog(root)) else None
+    arec = load_state().get('agent_' + cid.lower())   # the agent: its own process, and the DLL's caches through its status line
+    row['agent'] = procs.working_set_mb(arec['pid']) if arec and procs.matches(arec) else None
+    alog = os.path.join(RIG, 'copies', cid, 'agent', 'agent.log')
+    off = os.path.getsize(alog) if os.path.exists(alog) else 0
+    if port and status:
+        try: console(port, '#KCD2MP_EmitEvent("w206_status", "")', timeout=5)
+        except Exception: pass
+    row['dll'] = None
+    t0 = time.time()
+    while True:   # the agent answers through the DLL's pipe: up to 6 s for the fresh line, else the newest one in the last 2 MB
+        try:
+            with open(alog, 'rb') as f:
+                f.seek(max(0, (off if status else os.path.getsize(alog)) - 2_000_000)); tail = f.read().decode('utf-8', 'replace')
+            m = list(re.finditer(r'memory scope_cache=(\d+) queue_ages=(\d+)', tail))
+            if m: row['dll'] = {'scope_cache': int(m[-1].group(1)), 'queue_ages': int(m[-1].group(2))}
+        except OSError:
+            pass
+        if not status or time.time() - t0 > 6 or (row['dll'] and os.path.getsize(alog) > off and 'memory scope_cache' in tail[-(os.path.getsize(alog) - off):]):
+            break
+        time.sleep(1)
+    return row
 
 
 def fps(port, root, span=10.0):
@@ -314,6 +370,8 @@ def watch(minutes):
                'api': (api_up(ports[0]) if ports[0] else None, api_up(ports[1]) if ports[1] else None)}
         if len(rows) % 6 == 0 and all(alive):   # a frame rate per copy every minute
             row['fps'] = (fps(ports[0], mirror.ROOT_A) if ports[0] else None, fps(ports[1], mirror.ROOT_B) if ports[1] else None)
+            st5 = len(rows) % 30 == 0   # the DLL's status every 5 minutes (it prints its caches' sizes)
+            row['mem'] = {'A': memory_row('A', a, ports[0], st5), 'B': memory_row('B', b, ports[1], st5)}   # WO-207 E.1
         rows.append(row)
         note('watch', **row)
         if wa.device_lost or wb.device_lost:

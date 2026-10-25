@@ -34,6 +34,7 @@ public static class BatchPolicy
         "KCD2MP_W138Hold", "KCD2MP_Wo133Gate", "KCD2MP_ShowPing", "KCD2MP_Wo114Busy", "KCD2MP_W143Sync", "KCD2MP_Wo121Alive",
         "KCD2MP_FriendlyFireSession", "KCD2MP_W141AvatarStance",
         "KCD2MP_W154MenuSession",   // WO-154 7b: the menu's once-a-second session push
+        "KCD2MP_W207KeepAwake",     // WO-207 C.2: the session's keep-awake word, every 5 s
     };
 
     private static readonly Regex Head = new(@"^(?:if (KCD2MP_\w+) then )?(KCD2MP_\w+)\((.*)\)(?: end)?$", RegexOptions.CultureInvariant | RegexOptions.Singleline);
@@ -88,6 +89,7 @@ public sealed class BatchQueue
         public int Encoded;              // encoded length of Text
         public long EnqueuedMs;
         public int Sends;                // how many batches carried it (a retry is a second send)
+        public int Kind207;              // WO-207 B.1: the inbound kind whose handler queued it (Wo207Trace.Kind; 0 = none)
     }
 
     public int MaxEntries { get; init; } = 256;
@@ -99,6 +101,18 @@ public sealed class BatchQueue
     private int _queuedEncoded;
 
     public int Count => _q.Count;
+    /// <summary>WO-207 B.5: the enqueue time of the oldest waiting entry a frame's handler queued and of the oldest the agent's own loops
+    /// queued (-1 none) -- the console's share of "how far behind" (the caller holds the queue's lock).</summary>
+    public (long Frame, long Background) OldestEnqueuedMs()
+    {
+        long f = -1, b = -1;
+        foreach (var e in _q)
+        {
+            if (e.Kind207 != 0) { if (f < 0 || e.EnqueuedMs < f) f = e.EnqueuedMs; }
+            else if (b < 0 || e.EnqueuedMs < b) b = e.EnqueuedMs;
+        }
+        return (f, b);
+    }
     public int QueuedEncoded => _queuedEncoded;
     /// <summary>Level statements replaced by a newer one (queued or put back).</summary>
     public long Superseded { get; private set; }

@@ -42,6 +42,8 @@
 //      cmd 1 arm    [anchorEid:4][every:1, optional] -> [result:1] 0 armed, 1 not resolved
 //      cmd 0 disarm               -> [was:1]
 //      cmd 2 poll                 -> [n:1] n x {t:i64, rel pos 3f, rel quat 4f, fov f, anchor 3f, yaw f, flags:1 (1 cut)}
+//                                    WO-207 A.1: served on the pipe's reader thread (the ring under g_sLock); cmd 9 = the same poll on the
+//                                    game's main thread (the agent's mp_conv_pipe_first off, the twin)
 //      cmd 3 status               -> text
 //      cmd 4 arm by name [every:1][len:1][name] -> [result:1] 0 armed, 2 no such entity
 #include "wo203.h"
@@ -291,6 +293,20 @@ uint8_t g_lastWhyCode = 255;   // the code of the last way out (255 none yet): t
 SRWLOCK g_ringLock = SRWLOCK_INIT;   // the sample ring and the on/off edge (see add_sample)
 
 std::atomic<uint32_t> c_enters{0}, c_leaves{0}, c_faults{0}, c_refused{0};
+std::atomic<uint32_t> c_lateFirst{0};   // WO-207 A.6: views whose first sample came after kSilenceMs
+
+// WO-207 A.6 (cam_first_grace): until a view's first sample the silence rule waits kFirstSampleMs -- the pair's three silence drops
+// (d17) all came 3.0-3.3 s after the view went on, before any sample: the talk's first dialogue shot was later. The twin
+// (KCDMP_TEST_W207_OFF names cam_first_grace in the game's own environment, the bench only): 3 s from the view's start, as before.
+bool first_grace_off() {
+    static int v = -1;
+    if (v < 0) {
+        char b[256]{};
+        const DWORD n = GetEnvironmentVariableA("KCDMP_TEST_W207_OFF", b, sizeof b);
+        v = (n > 0 && n < sizeof b && std::strstr(b, "cam_first_grace")) ? 1 : 0;
+    }
+    return v == 1;
+}
 
 const char* kWhy[] = {"leave", "end", "silence", "combat", "scene", "load", "menu", "disconnect", "fault", "lost", "taken", "reenter",
                       "hit", "off"};
@@ -421,6 +437,10 @@ bool add_sample(const Sample& x) {
     AcquireSRWLockExclusive(&g_ringLock);
     if (g_v.st == St::Off) { ReleaseSRWLockExclusive(&g_ringLock); return false; }
     ++g_v.samplesIn;
+    if (!g_v.lastArrivalMs && now - g_v.enteredMs > wo203cam::kSilenceMs) {
+        c_lateFirst.fetch_add(1);
+        logf("WO207-CAM the view's first sample came %lld ms after it went on (later than the old 3 s rule)", static_cast<long long>(now - g_v.enteredMs));
+    }
     g_v.lastArrivalMs = now;
     const int64_t age = now - x.tMs;   // how old the sample is when it arrives (the play-out plays it at +kDelayMs)
     g_v.ageSum += double(age);
@@ -480,8 +500,9 @@ void tick_view() {
     if (!g_v.direct) {
         AcquireSRWLockShared(&g_ringLock);
         const int64_t since = g_v.lastArrivalMs ? now - g_v.lastArrivalMs : now - g_v.enteredMs;
+        const int64_t limit = (g_v.lastArrivalMs || first_grace_off()) ? wo203cam::kSilenceMs : wo203cam::kFirstSampleMs;
         ReleaseSRWLockShared(&g_ringLock);
-        if (since > wo203cam::kSilenceMs) { restore(kWhySilence, true); return; }
+        if (since > limit) { restore(kWhySilence, true); return; }
     }
     Pose rel{};
     Play how = Play::None;
@@ -553,12 +574,17 @@ struct Sampler {
     uint32_t frames = 0, queued = 0, cuts = 0, inHead = 0, noAnchor = 0, dropped = 0, polled = 0;
     double sumUs = 0, maxUs = 0;
 } g_s;
+// WO-207 A.1: the ring (q, n), polled and lastPollMs are shared with the off-main poll (cmd 2); a whole-sampler reset (arm, disarm) too
+SRWLOCK g_sLock = SRWLOCK_INIT;
+std::atomic<uint32_t> c_pollsOffMain{0};
 
 void queue(const Sampler::S& x) {
+    AcquireSRWLockExclusive(&g_sLock);
     if (g_s.n == kOutRing) { std::memmove(&g_s.q[0], &g_s.q[1], sizeof(Sampler::S) * (kOutRing - 1)); --g_s.n; ++g_s.dropped; }
     g_s.q[g_s.n++] = x;
     ++g_s.queued;
     g_s.lastQueuedMs = x.t;
+    ReleaseSRWLockExclusive(&g_sLock);
 }
 
 void tick_sampler() {
@@ -569,9 +595,12 @@ void tick_sampler() {
     if (!entity_tm(g_s.anchorEid, am)) { ++g_s.noAnchor; return; }
     const Pose cam = wo203cam::pose_from_camera(m, fov);
     const int64_t nowMs = now_ms();
-    if (nowMs - g_s.lastPollMs > kOrphanMs) {
+    AcquireSRWLockShared(&g_sLock);
+    const int64_t lastPoll = g_s.lastPollMs;
+    ReleaseSRWLockShared(&g_sLock);
+    if (nowMs - lastPoll > kOrphanMs) {
         g_s.armed = false;
-        logf("WO203B-CAMPOLL disarmed: not polled for %lld ms (the agent went away) frames=%u queued=%u", static_cast<long long>(nowMs - g_s.lastPollMs), g_s.frames, g_s.queued);
+        logf("WO203B-CAMPOLL disarmed: not polled for %lld ms (the agent went away) frames=%u queued=%u", static_cast<long long>(nowMs - lastPoll), g_s.frames, g_s.queued);
         return;
     }
     if (nowMs - g_s.feetAtMs >= kFeetEveryMs) {
@@ -684,13 +713,13 @@ int view_status(char* out, int n) {
     return std::snprintf(out, size_t(n),
                          "resolve=%s view=%s%s anchor=%u view_id=%u prev=%u active=%u n=%d frames=%u interp=%u snap=%u extrap=%u hold=%u samples=%u "
                          "late=%u age_ms mean=%.0f max=%lld over_delay=%u cuts=%u yields=%u resumes=%u frame_offsets=%u cost_us=%.1f/%.1f readback n=%u over=%u max_m=%.4f max_deg=%.3f max_fov=%.4f "
-                         "enters=%u leaves=%u refused=%u faults=%u last_why=%s | sampler=%s "
+                         "enters=%u leaves=%u refused=%u faults=%u late_first=%u last_why=%s | sampler=%s "
                          "frames=%u queued=%u cuts=%u in_head=%u no_anchor=%u dropped=%u polled=%u cost_us=%.1f/%.1f",
                          g_eng.why, st, g_v.direct ? "(direct)" : "", g_v.anchorEid, g_v.viewId, g_v.prevViewId,
                          g_eng.ok ? active_view() : kNoView, g_v.n, g_v.frames, g_v.playN[1], g_v.playN[2], g_v.playN[3], g_v.playN[4], g_v.samplesIn,
                          g_v.samplesLate, g_v.samplesIn ? g_v.ageSum / g_v.samplesIn : 0.0, static_cast<long long>(g_v.ageMax), g_v.ageOverDelay, g_v.cuts, g_v.yields, g_v.resumes, g_v.frameOffsetLogs, mean, g_v.maxUs, g_v.rbN, g_v.rbOver, g_v.rbPosMax, g_v.rbDegMax,
                          g_v.rbFovMax, c_enters.load(), c_leaves.load(), c_refused.load(),
-                         c_faults.load(), g_v.lastWhy, g_s.armed ? "armed" : "off", g_s.frames, g_s.queued, g_s.cuts, g_s.inHead, g_s.noAnchor,
+                         c_faults.load(), c_lateFirst.load(), g_v.lastWhy, g_s.armed ? "armed" : "off", g_s.frames, g_s.queued, g_s.cuts, g_s.inHead, g_s.noAnchor,
                          g_s.dropped, g_s.polled, smean, g_s.maxUs);
 }
 
@@ -795,10 +824,13 @@ uint8_t op_poll(uint8_t, const uint8_t* body, size_t len, uint8_t* out, size_t c
     switch (cmd) {
         case 0:
             out[0] = g_s.armed ? 1 : 0;
-            if (g_s.armed) logf("WO203B-CAMPOLL disarmed frames=%u queued=%u cuts=%u in_head=%u no_anchor=%u dropped=%u cost_us mean=%.1f max=%.1f",
-                                g_s.frames, g_s.queued, g_s.cuts, g_s.inHead, g_s.noAnchor, g_s.dropped, g_s.frames ? g_s.sumUs / g_s.frames : 0, g_s.maxUs);
+            if (g_s.armed) logf("WO203B-CAMPOLL disarmed frames=%u queued=%u cuts=%u in_head=%u no_anchor=%u dropped=%u polled=%u off_main=%u cost_us mean=%.1f max=%.1f",
+                                g_s.frames, g_s.queued, g_s.cuts, g_s.inHead, g_s.noAnchor, g_s.dropped, g_s.polled, c_pollsOffMain.load(),
+                                g_s.frames ? g_s.sumUs / g_s.frames : 0, g_s.maxUs);
+            AcquireSRWLockExclusive(&g_sLock);
             g_s.armed = false;
             g_s.n = 0;
+            ReleaseSRWLockExclusive(&g_sLock);
             *outLen = 1;
             return wo163::kROk;
         case 1: {
@@ -807,20 +839,24 @@ uint8_t op_poll(uint8_t, const uint8_t* body, size_t len, uint8_t* out, size_t c
             if (!resolve() || !a) { out[0] = 1; *outLen = 1; return wo163::kROk; }
             uint8_t every = 0;
             get(body, len, &k, &every);
+            AcquireSRWLockExclusive(&g_sLock);
             g_s = Sampler{};
             g_s.armed = true;
             g_s.every = every != 0;
             g_s.anchorEid = a;
             g_s.lastPollMs = now_ms();
             g_s.cutPending = true;   // the first shot is a cut
+            ReleaseSRWLockExclusive(&g_sLock);
             logf("WO203B-CAMPOLL armed anchor=%u%s", a, g_s.every ? " (every frame)" : "");
             out[0] = 0;
             *outLen = 1;
             return wo163::kROk;
         }
-        case 2: {
+        case 2:
+        case 9: {
             constexpr size_t kEach = 8 + 32 + 16 + 1;
             const int fit = int((cap - 1) / kEach);
+            AcquireSRWLockExclusive(&g_sLock);
             const int cnt = g_s.n < fit ? g_s.n : fit;
             size_t o = 0;
             put(out, &o, static_cast<uint8_t>(cnt));
@@ -837,6 +873,7 @@ uint8_t op_poll(uint8_t, const uint8_t* body, size_t len, uint8_t* out, size_t c
             if (cnt > 0) { std::memmove(&g_s.q[0], &g_s.q[cnt], sizeof(Sampler::S) * size_t(g_s.n - cnt)); g_s.n -= cnt; }
             ++g_s.polled;
             g_s.lastPollMs = now_ms();
+            ReleaseSRWLockExclusive(&g_sLock);
             *outLen = o;
             return wo163::kROk;
         }
@@ -846,12 +883,14 @@ uint8_t op_poll(uint8_t, const uint8_t* body, size_t len, uint8_t* out, size_t c
             if (!get(body, len, &k, &every) || !get_name(body, len, &k, name, sizeof name)) return wo163::kRBadRequest;
             const uint32_t a = resolve() ? entity_named(name) : 0;
             if (!a) { logf("WO203B-CAMPOLL arm refused: no entity named '%s'", name); out[0] = 2; *outLen = 1; return wo163::kROk; }
+            AcquireSRWLockExclusive(&g_sLock);
             g_s = Sampler{};
             g_s.armed = true;
             g_s.every = every != 0;
             g_s.anchorEid = a;
             g_s.lastPollMs = now_ms();
             g_s.cutPending = true;
+            ReleaseSRWLockExclusive(&g_sLock);
             logf("WO203B-CAMPOLL armed anchor=%s (%u)%s", name, a, g_s.every ? " (every frame)" : "");
             out[0] = 0;
             *outLen = 1;
@@ -879,9 +918,19 @@ bool op_view_off_main(uint8_t op, const uint8_t* body, size_t len, uint8_t* out,
     return true;
 }
 
+// WO-207 A.1: op 95 cmd 2 (the starter's poll) on the pipe's reader thread -- it only reads this file's own ring (g_sLock), no engine
+// call. At 27-45 fps the pipe's one request a frame left the camera samples 0.2-2.5 s late and the listener's view ended for silence.
+bool op_poll_off_main(uint8_t op, const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t* outLen, uint8_t* reason) {
+    if (len < 2 || body[1] != 2) return false;
+    c_pollsOffMain.fetch_add(1, std::memory_order_relaxed);
+    *reason = op_poll(op, body, len, out, cap, outLen);
+    return true;
+}
+
 } // namespace
 
 const bool kReg = wo203::reg_tick("cam", &tick) && wo203::reg_status("cam", &status) && wo203::reg_op(kOpView, &op_view) &&
-                  wo203::reg_op(kOpPoll, &op_poll) && wo203::reg_op_off_main(kOpView, &op_view_off_main);
+                  wo203::reg_op(kOpPoll, &op_poll) && wo203::reg_op_off_main(kOpView, &op_view_off_main) &&
+                  wo203::reg_op_off_main(kOpPoll, &op_poll_off_main);
 
 } // namespace kcdmp::wo203::cam

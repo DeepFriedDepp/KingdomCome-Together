@@ -233,6 +233,9 @@ public class Wo204Tests
         Assert.NotNull(doc.SelectSingleNode("//superaction[@name='down']/action[@name='kcd2mp_listen_down'][@map='dialog']"));
         Assert.NotNull(doc.SelectSingleNode("//superaction[@name='primary_action']/action[@name='kcd2mp_listen_confirm']"));
         Assert.NotNull(doc.SelectSingleNode("//superaction[@name='confirm_dialog_extra']/action[@name='kcd2mp_listen_confirm']"));
+        // WO-207 A.4: each also in the listener's own map
+        foreach (var (sup, act) in KeybindPak.ListenOptionActions)
+            Assert.NotNull(doc.SelectSingleNode($"//superaction[@name='{sup}']/action[@name='{act}'][@map='kcd2mp_listen']"));
         Assert.Equal(4, doc.SelectNodes("//control")!.Count);   // the keys stay the game's: none added
         Assert.Null(doc.SelectSingleNode("//conflict/action"));    // never into the conflict groups' references
         Assert.Null(KeybindPak.MergeIntoSuperaction(m!, "up", KeybindPak.ListenLine("kcd2mp_listen_up", "up"), ["kcd2mp_listen_up"], out _));   // never twice

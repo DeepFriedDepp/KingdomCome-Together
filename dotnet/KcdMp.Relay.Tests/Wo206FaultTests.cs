@@ -527,6 +527,31 @@ public class Wo206FaultTests
         Assert.Matches(@" cut=1 ", f.SummaryLine(false));
     }
 
+    // WO-207 C.4: "#2" = the step's second time (the rejoin after a host reload is the session's second join): the first join passes,
+    // the second is cut
+    private static readonly string CutSecondPlan = Plan("{ \"name\": \"cut2\", \"kind\": \"cut\", \"role\": \"joiner\", \"at\": \"step:world-sent#2\" }");
+
+    [Fact]
+    public async Task Wo207Fault_a_step_rule_with_an_occurrence_waits_for_that_time()
+    {
+        await using var relay = await FaultRelay.StartAsync(CutSecondPlan);
+        Assert.False(await JoinerCutAfterTheWorldAsync(relay));   // the first world-sent: kept
+        Assert.Equal(0, relay.Rule("cut2").CutCount);
+        Assert.True(await JoinerCutAfterTheWorldAsync(relay));    // the second: cut
+        Assert.Equal(2, relay.Faults!.StepCount("world-sent"));
+        Assert.Contains(relay.Faults.RecentLines(), l => l.StartsWith("RELAY-FAULT cut2 fired kind=cut") && l.Contains("at=step:world-sent#2"));
+    }
+
+    [Theory]
+    [InlineData("step:world-sent#0")]
+    [InlineData("step:world-sent#x")]
+    [InlineData("step:world-sent#100")]
+    public void Wo207Fault_an_occurrence_out_of_range_is_refused(string at)
+    {
+        var ex = Assert.Throws<FormatException>(() => RelayFaultPlan.Parse("{ \"rules\": [ { \"kind\": \"cut\", \"at\": \"" + at + "\" } ] }"));
+        Assert.Contains("#1..#99", ex.Message);
+    }
+
     [Fact]
     public async Task Wo206Fault_cut_twin_without_the_switch_keeps_the_joiner()
     {
