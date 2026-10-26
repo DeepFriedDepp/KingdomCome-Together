@@ -1583,16 +1583,18 @@ def s_forced(r, starter='host', wait_s=float(os.environ.get('KCDMP_RIG_FORCED_S'
         if p:
             x, y, z = (float(v) for v in p.split())
             L.teleport(x + 3.0, y)
-        m = S.wait('k', sm['k'], FORCED_TALK, wait_s)
+        # the scene world's forced talk can come inside the step before (d14-c4forced: during the host's own Gnarly talks): the
+        # session's whole log first (each run is a fresh game), then the wait
+        m = S.wait('k', 0, FORCED_TALK, 0.5) or S.wait('k', sm['k'], FORCED_TALK, wait_s)
         detail = {'starter': starter, 'waited_s': wait_s, 'forced': None}
         if not m: return False, 'no-forced-talk', detail
         detail['forced'] = '%s (Id %s)' % (m.group(1).split('.')[-1], m.group(2))
         cid = m.group(2)
-        ma = L.wait('k', lm['k'], r'WO208-AUTOJOIN partner=\d+ cid=%s (.*)' % cid, 20)
+        ma = L.wait('k', 0, r'WO208-AUTOJOIN partner=\d+ cid=%s (.*)' % cid, 20)
         detail['autojoin'] = ma.group(1)[:120] if ma else None
-        on = L.wait('k', lm['k'], r'WO203B-LISTEN on partner=\d+ cid=%s' % cid, 20)
+        on = L.wait('k', 0, r'WO203B-LISTEN on partner=\d+ cid=%s' % cid, 20)
         detail['listening'] = bool(on)
-        sa = S.wait('a', sm['a'], r'WO203B-JOIN partner \d+ listens to conversation %s \(auto-joined' % cid, 5)
+        sa = S.wait('a', 0, r'WO203B-JOIN partner \d+ listens to conversation %s \(auto-joined' % cid, 5)
         detail['starter_saw_auto'] = bool(sa)
         # the talk played out: the starter's own confirm key through its decisions, or interrupted after 90 s
         sk = keys.Keys(rec_of(S), 'wo208-forced-starter')
