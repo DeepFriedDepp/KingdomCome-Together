@@ -253,7 +253,7 @@ def s_walk(r, secs=30.0):
     return fn
 
 
-def s_skip(r, kind, hours, strict=None):
+def s_skip(r, kind, hours, strict=None, gap_gate=True):
     """A shared sleep / wait. The joiner asks (its bed's own event), the host answers yes (mp_sleep_yes); then the joiner's own skip
     starts the way an accepter's does (the bench's stand-in for the hour picker: a bench agent's w206_test), its DLL's "began"
     sends the Begin, and the host's skip runs. Pass: the host's skip began and ended, the joiner's ended, the clocks agree."""
@@ -308,6 +308,11 @@ def s_skip(r, kind, hours, strict=None):
         detail = {'gap_s_at': gaps, 'strict': strict_now, 'bg_copy': bg.id, 'bg_fps_during_skip': fps_rows, 'skip_s': round(t_end - t0, 1),
                   'host_time': raw.get(r.a.id), 'joiner_time': raw.get(r.b.id), 'began': began.group(0)[:120] if began else None}
         rig.note('skip-clock', kind=kind, **{k: v for k, v in detail.items() if k != 'began'})
+        # the maintainer (WO-207 crash work): the clock gap is a bench artifact (one copy is always the inactive window) -- logged, never a
+        # gate in the smoke; the skip itself (asked, voted, begun, ended) still is
+        if not gap_gate:
+            detail['gap_gate'] = 'logged only'
+            return True, 'ok' if ok else 'ok-gap-logged', detail
         return ok, ('ok' if ok else 'clocks-differ'), detail
     return fn
 
@@ -324,6 +329,15 @@ FIND_BANDITS = (
 ATTACK = ('local e = System.GetEntityByName("%s"); local tg = %s; if e and tg then local t = XGenAIModule.MakeTableFromType('
           '"crime:attackInitiatedByConcept"); t.target = tg.this.id; t.priorityTarget = true; '
           'pcall(function() XGenAIModule.SendMessageToEntityData(e.this.id, "crime:attackInitiatedByConcept", t) end) end')
+
+# the crash work's bisect (KCDMP_RIG_C1_FRESH=1): the same message only to an NPC not already fighting. It did not stop the host's
+# crash (x-d21-fresh): the cause was the mod's own leave + re-add of a fighting soul (WO-136, fixed by mp_skirmish_keep)
+ATTACK_FRESH = ('local e = System.GetEntityByName("%s"); local tg = %s; local busy = false; '
+                'if e and e.soul then pcall(function() busy = e.soul:IsInCombatMode() == true end) end; '
+                'if busy then System.LogAlways("[W207FRESH] " .. e:GetName() .. " fighting: not re-sent") end; '
+                'if e and tg and not busy then local t = XGenAIModule.MakeTableFromType('
+                '"crime:attackInitiatedByConcept"); t.target = tg.this.id; t.priorityTarget = true; '
+                'pcall(function() XGenAIModule.SendMessageToEntityData(e.this.id, "crime:attackInitiatedByConcept", t) end) end')
 
 STOP = ('local e = System.GetEntityByName("%s"); if e then local t = XGenAIModule.MakeTableFromType("stopFight"); t.soulCount = 1; '
         't.messageId = "w206stop%d"; pcall(function() XGenAIModule.SendMessageToEntityData(e.this.id, "stopFight", t) end) end')
@@ -894,6 +908,11 @@ def s_c1fight(r, secs=float(os.environ.get('KCDMP_RIG_C1_S', '300'))):
     """WO-207 0.3 c1fight: the host and the joiner against two or three bandits for 5 minutes, the joiner fighting (its own swings:
     the left button sent to the joiner's game in front, the maintainer's allowance). Both players are kept alive; the bandits are set
     on again every minute. Pass: both took damage, the joiner swung, and the host applied at least one of the joiner's blows."""
+    reset = os.environ.get('KCDMP_RIG_C1_RESET', '1') != '0'
+    fresh = os.environ.get('KCDMP_RIG_C1_FRESH', '0') == '1'
+    via_mod = os.environ.get('KCDMP_RIG_C1_VIA_MOD', '0') == '1'
+    on_figure = os.environ.get('KCDMP_RIG_C1_FIGURE', '1') != '0'
+
     def fn():
         t = r.a.ask(FIND_BANDITS3, 'W207K', 6)
         if not t or t.startswith('none'): return False, 'no-bandits', t
@@ -912,9 +931,15 @@ def s_c1fight(r, secs=float(os.environ.get('KCDMP_RIG_C1_S', '300'))):
         def provoke():
             # the first bandit on the host, the others on the joiner's figure (the joiner must be in the fight: a run where the figure
             # was not found had the joiner untouched for 5 minutes); counted when the figure is not there
-            r.a.lua(ATTACK % (bandits[0], 'player'))
+            atk = ATTACK_FRESH if fresh else ATTACK
+            r.a.lua(atk % (bandits[0], 'player'))
             if r.a.ask('System.LogAlways("[W207F] " .. tostring(%s ~= nil))' % FIGURE, 'W207F', 3) != 'true': fig_missing[0] += 1
-            for b in bandits[1:]: r.a.lua(ATTACK % (b, FIGURE))
+            for b in bandits[1:]:
+                # KCDMP_RIG_C1_VIA_MOD=1: the figure's attackers through the mod's own guard-pursuit attack (WO-139 KCD2MP_W139HostAttack:
+                # the same interrupt at the joiner's avatar, with the mod's rules)
+                if not on_figure: r.a.lua(atk % (b, 'player'))   # KCDMP_RIG_C1_FIGURE=0: every bandit on the host; the joiner fights beside him
+                elif via_mod: r.a.lua('if KCD2MP_W139HostAttack then KCD2MP_W139HostAttack("%s", 1) end' % b)
+                else: r.a.lua(atk % (b, FIGURE))
 
         def rejoin_fight():
             # the fight drifts: the joiner goes back beside the second bandit (the host's position of it)
@@ -969,7 +994,9 @@ def s_c1fight(r, secs=float(os.environ.get('KCDMP_RIG_C1_S', '300'))):
                 if h:
                     try: lows[c.id] = min(lows[c.id], float(h))
                     except ValueError: pass
-            if time.time() - last > 30:
+            # KCDMP_RIG_C1_RESET=0 (the crash work): the bandits are set on once and the fight runs as players fight it -- no re-set every
+            # 30 s (each re-set terminates the bandits' combat instantly and reconnects the figure's soul), no mid-fight teleport
+            if reset and time.time() - last > 30:
                 n_prov = getattr(provoke, 'n', 0) + 1; provoke.n = n_prov
                 if n_prov % 2 == 0: rejoin_fight(); time.sleep(2)
                 provoke(); last = time.time()
@@ -980,7 +1007,7 @@ def s_c1fight(r, secs=float(os.environ.get('KCDMP_RIG_C1_S', '300'))):
         blows = [l for l in r.a.lines(r.a.alog, ma['a']) if 'WO204-BLOW' in l]
         verdicts = sum(1 for l in r.b.lines(r.b.alog, mb['a']) if re.search(r'hit[- ]verdict|MP-W161|0x73|PlayerHit', l, re.I))
         fighting = sum(1 for l in r.b.lines(r.b.nlog, mb['n']) if 'fight=1' in l and any(b in l for b in bandits))
-        detail = {'bandits': bandits, 'secs': secs, 'health_low': lows, 'joiner_swings': swings, 'figure_missing_at_provoke': fig_missing[0],
+        detail = {'bandits': bandits, 'secs': secs, 'reset_every_30s': reset, 'fresh_only': fresh, 'via_mod': via_mod, 'bandits_on_figure': on_figure, 'health_low': lows, 'joiner_swings': swings, 'figure_missing_at_provoke': fig_missing[0],
                   'host_applied_joiner_blows': len(blows),
                   'blow_examples': [l[-160:] for l in blows[:3]], 'joiner_verdicts': verdicts, 'joiner_copy_fight_lines': fighting}
         if lows['A'] >= 100.0 and lows['B'] >= 100.0: return False, 'no-damage', detail
@@ -1509,12 +1536,14 @@ def run(name, args):
         'e2twin': [('e2-twin', s_e2(r, twin=True))],
         'long': [('join', s_join(r)), ('bones', s_bones(r)), ('soak', s_soak(r, float(args[0]) if args else 20.0)), ('c2-twin', s_c2(r)),
                  ('c3-twin', s_c3(r)), ('fight', s_fight(r)), ('e2', s_e2(r)), ('e2-twin', s_e2(r, twin=True))],
-        'smoke': [('join', s_join(r)), ('walk30', s_walk(r)), ('sleep', s_skip(r, 'sleep', 9)), ('wait', s_skip(r, 'wait', 3)),
+        # the crash work: N fights in one pair session (KCDMP_RIG_C1_N, default 10); a game that exits ends the run (copy-exited)
+        'c1x': [('join', s_join(r))] + [('c1fight-%02d' % (i + 1), s_c1fight(r)) for i in range(int(os.environ.get('KCDMP_RIG_C1_N', '10')))],
+        'smoke': [('join', s_join(r)), ('walk30', s_walk(r)), ('sleep', s_skip(r, 'sleep', 9, gap_gate=False)), ('wait', s_skip(r, 'wait', 3, gap_gate=False)),
                   ('fight', s_fight(r)), ('talk', s_talk(r)), ('loot', s_loot(r))],
         # WO-207 F: the pair smoke grown -- the queue after the join, the clocks strict after each skip (C.3), the conversation both
         # ways with voting and the decision timer (A), the queue after the fight (B.5), no unexplained divergence at the end (D)
         'smoke2': [('join', s_join(r)), ('queue-after-join', s_queue(r)), ('walk30', s_walk(r)),
-                   ('sleep', s_skip(r, 'sleep', 9, strict=True)), ('wait', s_skip(r, 'wait', 3, strict=True)),
+                   ('sleep', s_skip(r, 'sleep', 9, strict=True, gap_gate=False)), ('wait', s_skip(r, 'wait', 3, strict=True, gap_gate=False)),
                    ('fight', s_fight(r)), ('queue-after-fight', s_queue(r)),
                    ('conv-host-starts', s_conv(r, 'host')), ('conv-joiner-starts', s_conv(r, 'joiner', plan=('notfollowed', 'changed', 'cleared', 'followed', 'leave'))),
                    ('conv-timed', s_conv(r, 'host', npcs=('david', 'michal'))),
@@ -1524,7 +1553,7 @@ def run(name, args):
     for nm, fn in plan:
         # 'long' runs independent checks: one failing does not stop the next (a failed join does)
         if not r.step(nm, fn) and (name not in ('long', 'joinscene', 'joinfight', 'e2pair', 'c1pair', 'e2twinpair', 's1pair', 'smoke', 's1front',
-                                               'c1fight', 'c2tavern', 'convboth', 'convtimed', 'smoke2', 'awake', 'soak2', 'convscene') or nm == 'join'
+                                               'c1fight', 'c2tavern', 'convboth', 'convtimed', 'smoke2', 'awake', 'soak2', 'convscene', 'c1x') or nm == 'join'
                                               or r.steps[-1]['reason'] == 'copy-exited'): break   # a game gone ends the run
     return r.finish()
 

@@ -211,24 +211,25 @@ joiner's queue p99 16 ms. Main: the joiner's queue **346 s** behind (p50) at the
 The pair smoke now covers join, the queue after the join, walk, sleep, wait, a fight, the queue after the fight, and a joined
 conversation started by each role.
 
-| step | d17 | d18 | d19 (this build) |
-|---|---|---|---|
-| join | pass (64.6 s paused) | pass (66.0 s) | pass (72.6 s) |
-| queue after the join, p99 | 31 ms | 16 ms | 16 ms |
-| walk (p90 each way) | 0.08 / 0.09 m | 0.08 / 0.09 m | 0.09 / 0.09 m |
-| sleep 9 h (gap at +1 / +10 / +60 s) | pass (38 / 9 / 3) | pass (38 / 20 / 3) | **fail: 22,675 / 20,134 / 3,213 game-s** -- the joiner's clock stayed behind |
-| wait 3 h | pass (2 / 4 / 4) | pass (4 / 4 / 3) | pass (3 / 3 / 2) |
-| fight | pass (6 verdicts) | pass (9 verdicts) | **fail: the joiner's game crashed** (CombatModule -> XGenAIModule data) |
-| queue after the fight, p99 | 103 ms | 187 ms | - |
-| talk, the host starts | pass | fail: a talk whose every dialogue camera is invalid (the engine says so) gives the listener no shot | - |
-| talk, the joiner starts | fail: one line, the "earlier" one (bench check, fixed) | fail: the host's keys arrived twice (A.7, fixed in d19) | - |
-| a timed decision | fail: none reachable on the bench save | fail: the same | - |
-| loot | fail: the bench picked a buried stash (fixed) | fail: the bench's new pick found none (fixed) | - |
-| digest | fail: 45 short-lived quest differences | fail: 16 | - |
+| step | d17 | d18 | d19 | d29 (the crash fixes, this commit) |
+|---|---|---|---|---|
+| join | pass (64.6 s paused) | pass (66.0 s) | pass (72.6 s) | pass (64.1 s) |
+| queue after the join, p99 | 31 ms | 16 ms | 16 ms | 16 ms |
+| walk (p90 each way) | 0.08 / 0.09 m | 0.08 / 0.09 m | 0.09 / 0.09 m | 0.10 / 0.07 m |
+| sleep 9 h (gap at +1 / +10 / +60 s) | pass (38 / 9 / 3) | pass (38 / 20 / 3) | **fail: 22,675 / 20,134 / 3,213 game-s** -- the joiner's clock stayed behind | logged only: 30 / 19 / 0 game-s (pass) |
+| wait 3 h | pass (2 / 4 / 4) | pass (4 / 4 / 3) | pass (3 / 3 / 2) | logged only: 4 / 4 / 4 (pass) |
+| fight | pass (6 verdicts) | pass (9 verdicts) | **fail: the joiner's game crashed** (CombatModule -> XGenAIModule data) | pass (11 verdicts) |
+| queue after the fight, p99 | 103 ms | 187 ms | - | 531 ms |
+| talk, the host starts | pass | fail: a talk whose every dialogue camera is invalid (the engine says so) gives the listener no shot | - | fail: the listener dropped for silence |
+| talk, the joiner starts | fail: one line, the "earlier" one (bench check, fixed) | fail: the host's keys arrived twice (A.7, fixed in d19) | - | fail: the listener dropped for silence |
+| a timed decision | fail: none reachable on the bench save | fail: the same | - | pass (the David/Michal talk) |
+| loot | fail: the bench picked a buried stash (fixed) | fail: the bench's new pick found none (fixed) | - | fail: the take not seen (Stash19) |
+| digest | fail: 45 short-lived quest differences | fail: 16 | - | fail: 72 unexplained quest differences |
 
-**The release gate does not pass on this build.** Join, walk, wait and the queues pass on every build; the shared 9 h sleep and the
-fight failed on d19 (they passed on d17 and d18; d19 adds only A.7's guard, which neither touches), and the fight crashes are this
-WO's top open item (six this WO). The conversation steps fail on the cases named above.
+**The release gate does not pass on d29.** No game crashed (both fight crash groups are fixed, H). Join, walk, sleep, wait, the
+fight, both queues and the timed talk pass; the sleep and wait clock gaps are logged, never a gate (the maintainer: one copy is
+always the inactive window, a bench artefact). The talks started by each role (the listener dropped for silence), loot (the take not
+seen) and the digest fail, as on earlier builds.
 
 ## G: the animation detectors
 
@@ -241,18 +242,104 @@ WO's top open item (six this WO). The conversation steps fail on the cases named
   delay (idle variations and standing are one family; locomotion by speed band). d17's smoke fight: **9.8 %** (main's fight: 27.6 %;
   WO-206's exact class+fragment: 70.3 % here, 65.3 % on main), position p95 **0.13 m** (main 20.3 m), stream delay 418 ms, weapon
   drawn 0 %.
-* **Crashes.** Four engine crashes in bench fights this WO, on worker and main threads with no mod frame on the stack: the host
-  `RPGModule+0x64afe4` twice (d5, d17), the joiner `CombatModule+0x55b0xx` twice (d5, d17 twin), and one joiner `XGenAIModule`
-  crash during a talk step after 40 copies re-bound (d13). Not reproduced on demand; open (the crash notes and dumps are kept locally).
+* **Crashes.** See H: both fight crash groups were the mod's own and are fixed.
 
+
+## H: the fight crashes (the crash work)
+
+Every dump kept (the host 18, the joiner 9) read with the bench's own minidump reader and the game's DLLs on disk; the crash report
+now names the entities the faulting registers lead to. Grouped by cause:
+
+**1. The host, `RPGModule+0x64afe4` (18 dumps, AI worker thread, reading 0x28) -- the mod's own, fixed.** The function is the target
+follower's step (XGenAI `NPC:Update:TargetFollower` -> RPGModule). It reads a bandit's requested target (its combat actor's vt+0x50:
+the model's target wrapper at +0x1110) with no null test; the wrapper is null. The soul is a **bandit** fighting the joiner's figure,
+never the figure (the report names tapo_kasparBandit_2/3/6). How it got there: a bench-only probe on the engine's
+`C_Skirmish::RemoveSoul` (`KCDMP_TEST_SKIRMISH_PROBE=1`, the caller's stack unwound) shows the figure taken out of the bandits'
+skirmish 49-76 times per session by **WO-136's `leave_and_add`**: to change a fighting soul's opponent it calls
+`RemoveSoulFromSkirmish` then `AddSoulToSkirmish` -- on every joiner swing at a bandit that is not the figure's opponent (191-198
+swings per fight), and again from its pending queue every 0.6 s (up to 3 redos), and on each bandit at the host's hand-over. Each
+removal clears the target of every bandit fighting that soul; the re-add gives the skirmish a target before the bandit's combat actor
+has one, and the AI worker reads the missing one. The crash lands **8 ms** (d25) and **15 ms** (d24) after a WO-136 redo removed the
+figure (`KCDMP+0x84db6 <- +0x80724`, wo136 tick). Main's build crashes the same way (it predates this WO).
+
+The fix: **`mp_skirmish_keep`** (on): a soul already in a skirmish is never taken out of it to change its opponent -- the add alone;
+a fighting NPC still turns by its forced target (`combat_forcedTarget`, which WO-136 sets first). The DLL holds it (op 15 of 0x22);
+the twin is `KCDMP_TEST_W207_OFF=skirmish_keep` in the game's environment. The figure's removals per session: 49-76 before, 6 with the
+fix (the joiner's own deaths, WO-132). The fight is unchanged: the host applied 25 of the joiner's blows in the fix's first fight
+(18 before), 9-35 per fight over the fix's runs.
+
+**2. The joiner, `CombatModule+0x55b065` / `+0x559d32` / `+0x8ff0a` (6 dumps) and `XGenAIModule+0x25542c0` via `+0x8ff0d` (1)
+-- the mod's own, fixed.** The local player's dodge or perfect-block multi-trigger (owner `C_CombatPlayer`): a copy's slot planner
+(its own update, `C_CombatActorSlotPlanner` vt+0x38) creates a sub-trigger on the player's multi-trigger (`0x8fdd0`: push {attacker,
+trigger}, set up its window, then Start, vt+0x60); the player's own update cleans that multi-trigger (`0x576090`: every sub-trigger
+not yet started is stopped and deleted). The sub-trigger is freed between its creation and its Start (the pair zeroed in the dump,
+the trigger's memory reused). No mod frame on any stack, and the mod's main-thread tick never runs during the entity jobs (in 605 ms
+with a worker creating a trigger the main thread logged nothing). Vanilla has the same two paths on different threads (the host
+player: 40 of 128 creations had a cleanup on another thread within 2 ms) and never crashed this way: its attackers are always in
+the player's skirmish. The copies here were not: the attacker recovered from the dumps (its combat actor, saved by the creator's
+frame) was a copy that WO-132 had released from the player's skirmish 28 s (d26) and 2.5 min (the d26 proof) before -- yet WO-178's
+copy engine state still ran its wind-up with the player as its opponent (WO-187 writes the wished opponent back) and planned the
+player's windows with PlanSlot. A bench-only probe on the creation and on two trigger destructors (`KCDMP_TEST_TRIGGER_PROBE=1`)
+showed every deletion going through the player's own multi-trigger update, never through the mod.
+
+The fix: **`mp_plan_in_fight`** (on): a copy plans the local player's defence windows only while the engine has the copy and the
+player in a skirmish fight (the skirmish manager's own relation test, read-only, that frame; unanswered plans nothing). A copy in the
+fight still gets its three windows (9 wind-ups planned 3 slots in the proof's first minutes); one the joiner's world let go of gets
+none. The DLL holds it (op 16 of 0x22); the twin is `KCDMP_TEST_W207_OFF=plan_in_fight`.
+
+**3. Single samples, not reproduced:** the joiner `XGenAIModule+0x104e0cf` once during a talk step after 40 copies re-bound (d13);
+main's build, the joiner executing 0x0 in a CryAction worker once in the tavern.
+
+**The 30 s re-set is not needed:** with the bandits set on once and no teleport (x-d19-noreset) the host crashed in the second fight
+the same way. The trigger is the joiner swinging at bandits -- what players do.
+
+### The bisect (c1fight on the pair, one pair session per row, fights of 5 minutes until a game exits)
+
+Each row is one pair session: c1fight back to back (the host and the joiner against three bandits for 5 minutes, the joiner swinging,
+the bandits set on the joiner's figure every 30 s unless said) until a game exits. "host" / "joiner" = the groups above.
+
+| run | what is off / on | fights | crash |
+|---|---|---|---|
+| this WO's final build | nothing | 1 clean | host in 2 |
+| the same, no 30 s re-set, no teleport | one provoke per fight | 1 (the joiner not in the fight) | host in 2 |
+| main (0.63.0, before this WO) | -- | 1 clean | host in 2 |
+| every WO-207 switch off (agent and DLL: the camera poll off the main thread, conv_pipe_first, queue_decouple, queue_drop_stale, w189_fast, conv_voice_make, conv_voice_by_name, joiner_npc_triggers, the rest) | | 1 clean | host in 2 |
+| a figure-target gate (tried, removed) | on / off | 2 clean / 1 clean | joiner in 3 / host in 2 |
+| mp_copy_engine_state off | | 0 | host in 1 |
+| the figure guard off, combat automation on | | 0 | joiner in 1 |
+| automation on + copy engine state off | | 0 | host in 1 |
+| WO-121 avatar combat off | | 0 | host in 1 |
+| the figure's AI paused every 0.5 s | | 1 clean | host in 2 |
+| the attack message only to bandits not fighting | | 1 (bench) | host in 2 |
+| every bandit set on the host only, the joiner beside, swinging | | 0 | host in 1 |
+| the crash report names the registers' entities | | 1 clean | host in 2: the soul is a bandit |
+| the skirmish probe (stack scan / unwound) | | 1 clean each | host in 2, 15 ms / 8 ms after a WO-136 removal of the figure |
+| **mp_skirmish_keep on** (the host fix) | | 1 clean | **joiner** in 2 (no host crash) |
+| mp_skirmish_keep **off** (its twin) | | 1 clean | **host in 2** (76 figure removals) |
+| the host fix + trigger probes | | 10, no crash (7 pass, 3 bench faults) | -- |
+| the host fix + copy engine state **off** | | **10 of 10, no crash** | -- |
+| the host fix only (copy engine state on) | | 5 bench faults (the joiner window refused the foreground), 0 clean | **joiner in 6**: the attacker a copy released 2.5 min before |
+| **both fixes** (the final tree) | | **10 of 10, no crash** | -- |
+| mp_plan_in_fight **off** (its twin), mp_skirmish_keep on | | 8 clean, the 9th ended by an outside stop | none in 8 |
+
+### The proof
+
+* **Both fixes, 10 bench fights in a row on the pair: 10 of 10 pass, no crash on either side.** The joiner swung 186-202 times per
+  fight, the host applied 7-43 of its blows per fight (verdicts 20-45), the joiner's copies fought every fight; the real saves' hash
+  list matched before and after.
+* **The host fix's twin** (`mp_skirmish_keep` off, the same build otherwise) crashed the host in the second fight, the same
+  `RPGModule+0x64afe4` on a bandit.
+* **The joiner fix's twin** (`mp_plan_in_fight` off) did **not** crash in 8 fights. The race is rare: with copies planning out of a
+  fight the joiner crashed in 2 of 26 fights after the host fix (fight 2 and fight 6 of two sessions; none in a 10-fight probe session or in the twin's 8).
+  The twin exercises the path (6 of 30 sampled plannings were by copies not in the player's fight); the fix's case rests on the two
+  recovered attackers and the copy-engine-state bisect (off: 10 of 10 clean). A longer twin was not run.
 
 ## Open items
 
-1. **Fight crashes (six on the bench this WO)**: the host `RPGModule+0x64afe4` (AI worker thread, three times), the joiner
-   `CombatModule+0x55b0xx` / `+0x8ff0d` (main thread, three times), no mod frame on any stack; the bench fights set the bandits on
-   the joiner's figure every 30 s. Main's and d9's fights ran clean. Dumps kept locally.
-2. **The shared sleep's clocks (C.3)**: not proven; the twin gives the same gaps, and the d19 smoke's 9 h sleep left the joiner
-   53 game-minutes behind.
+1. **The joiner fix's twin did not crash** in 8 fights (the race is rare, ~1 in 13 fights); a longer twin run is owed. Both fight
+   crash groups are otherwise fixed and proven (H).
+2. **The shared sleep's clocks (C.3)**: not proven; the twin gives the same gaps. The maintainer: the gap is a bench artefact (one copy is
+   always the inactive window) -- logged in the smoke, never a pass/fail.
 3. **A talk with no valid dialogue camera** gives the listener no shot (the view ends after 10 s): the sampler only sends dialogue
    shots.
 4. **What leaves the game's dialog map on after the host's own talks** (A.7 guards the doubled keys; the cause is not found), and the
@@ -260,5 +347,6 @@ WO's top open item (six this WO). The conversation steps fail on the cases named
 5. **Timed decisions** (A.3): mirrored, not reachable on the bench saves.
 6. **The digest's long-session differences** (village behaviours, 15-minute clock edges): short-lived, not explained.
 7. **D.3 and E** (the soaks) not run, on the maintainer's word.
-8. The d13 joiner crash in XGenAIModule during a talk step (once).
+8. Two single crashes not reproduced: the joiner in XGenAIModule during a talk step (d13), and main's build executing 0x0 in a
+   CryAction worker in the tavern.
 

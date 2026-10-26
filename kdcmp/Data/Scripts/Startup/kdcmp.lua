@@ -33561,7 +33561,8 @@ do
         conv_lane = "mp_conv_lane", queue_drop_stale = "mp_queue_drop_stale", queue_decouple = "mp_queue_decouple",
         joiner_npc_triggers = "mp_joiner_npc_triggers", skip_end_exact = "mp_skip_end_exact", queue_measure = "mp_queue_measure",
         conv_pipe_first = "mp_conv_pipe_first", conv_options_early = "mp_conv_options_early", conv_hold = "mp_conv_cam_hold",   -- WO-160 owns mp_conv_hold
-        listen_map = "mp_listen_map", listen_once = "mp_listen_once",
+        listen_map = "mp_listen_map", listen_once = "mp_listen_once", skirmish_keep = "mp_skirmish_keep",
+        plan_in_fight = "mp_plan_in_fight",
     }
     W207.HELP = {
         skip_end_exact = "C.3: (joiner) a shared sleep or wait ends on the host's clock at once (its end, plus the real time since), not after a slow pull-in",
@@ -33575,6 +33576,8 @@ do
         conv_hold = "A.1: (both) while the talker's own view has no dialogue shot (a trade's screen), the listener holds the last one instead of leaving",
         listen_map = "A.4: (both) listening uses the mod's own key map: Back clears a vote or leaves and never opens the pause menu",
         listen_once = "A.7: (both) one key press is one listen action, even when the game's own dialog map is still on beside the mod's",
+        skirmish_keep = "fight crashes: (host) a fighter is never taken out of its fight to change its opponent (the remove + re-add crashed the host's AI)",
+        plan_in_fight = "fight crashes: (joiner) a copy plans your dodge and perfect-block windows only while the game has it in a fight with you",
     }
     W207.on = W207.on or {}
     -- WO-207 A.7 (mp_listen_once): the same listen action pressed again within 120 ms is the same key press arriving through a second

@@ -161,8 +161,24 @@ uint32_t current_opponent(const motion::NpcCombat& c);
 // (RemoveSoulFromSkirmish, WO-132) and is added back against the new target
 // (override 1 -- sets the opponent of an NPC that is not fighting, WO-119).
 // Read back: the combat model's opponent. method: 1 add only, 2 remove + add.
+// WO-207 crash work (mp_skirmish_keep, on): never the leave -- see wo136.h.
+std::atomic<int> g_keep{-1};   // -1: not read yet (the twin's environment decides the start)
+std::atomic<uint32_t> c_keptIn{0};
+bool keep_on() {
+    int k = g_keep.load();
+    if (k < 0) {
+        char b[256]{};
+        const DWORD n = GetEnvironmentVariableA("KCDMP_TEST_W207_OFF", b, sizeof b);
+        k = (n > 0 && n < sizeof b && std::strstr(b, "skirmish_keep")) ? 0 : 1;
+        int expect = -1;
+        if (g_keep.compare_exchange_strong(expect, k)) logf("WO207-SKIRMISH-KEEP %s at start%s", k ? "on" : "off", k ? "" : " (KCDMP_TEST_W207_OFF: the twin)");
+        k = g_keep.load();
+    }
+    return k == 1;
+}
 bool leave_and_add(void* ns, void* targetSoul) {
     uint64_t rv = 0;
+    if (keep_on()) { c_keptIn.fetch_add(1); return hits::skirmish_add(ns, targetSoul, 1, &rv); }
     hits::skirmish_remove(ns, &rv);
     return hits::skirmish_add(ns, targetSoul, 1, &rv);
 }
@@ -460,6 +476,8 @@ void tick() {
 }
 
 void set_host_target(bool on) { g_hostTarget.store(on); }
+void set_skirmish_keep(bool on) { keep_on(); g_keep.store(on ? 1 : 0); }
+bool skirmish_keep() { return keep_on(); }
 bool host_target() { return g_hostTarget.load(); }
 
 int forget_avatar(uint32_t avatarEid, const char* why) {
@@ -504,11 +522,11 @@ int forget_npc(uint32_t npcEid, const char* why) {
 
 int status_text(char* out, int n) {
     return std::snprintf(out, n,
-        "wo136 fights=%s threat=%u switch=%u switch_fail=%u swing=%u swing_none=%u combatant=%u handover=%u handover_late=%u handover_lost=%u handover_none=%u tracked=%zu pending=%zu forced=%zu forced_set=%u forced_clear=%u forced_fail=%u host_target=%s host_struck=%u host_counted=%u forget=%u",
+        "wo136 fights=%s threat=%u switch=%u switch_fail=%u swing=%u swing_none=%u combatant=%u handover=%u handover_late=%u handover_lost=%u handover_none=%u tracked=%zu pending=%zu forced=%zu forced_set=%u forced_clear=%u forced_fail=%u host_target=%s host_struck=%u host_counted=%u forget=%u skirmish_keep=%s kept_in=%u",
         g_on.load() ? "on" : "off", c_threat.load(), c_switch.load(), c_switchFail.load(), c_swing.load(), c_swingNone.load(),
         c_combatant.load(), c_handover.load(), c_handoverLate.load(), c_handoverLost.load(), c_handoverNone.load(), g_threat.size(), g_pending.size(),
         g_forced.size(), c_forcedSet.load(), c_forcedClear.load(), c_forcedFail.load(),
-        g_hostTarget.load() ? "on" : "off", c_hostStruck.load(), c_hostCounted.load(), c_forget.load());
+        g_hostTarget.load() ? "on" : "off", c_hostStruck.load(), c_hostCounted.load(), c_forget.load(), keep_on() ? "on" : "off", c_keptIn.load());
 }
 
 } // namespace kcdmp::wo136

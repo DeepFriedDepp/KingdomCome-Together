@@ -60,6 +60,10 @@ constexpr uint8_t kOpHostTarget  = 13;   // [on:1] -> []
 // WO-154 3.5 (live checks only): the host's Henry fights npcEid by the engine's own combat automation for secs
 // (no input; his blows are the game's own hits). off: automation off at once. [on:1][npcEid:4][secs:1] -> []
 constexpr uint8_t kOpPlayerFight = 14;
+// WO-207 crash work: mp_skirmish_keep on|off (wo136.h) -- a soul in a skirmish is never taken out of it to change its opponent
+constexpr uint8_t kOpSkirmishKeep = 15;   // [on:1] -> []
+// WO-207 crash work: mp_plan_in_fight on|off (wo166.cpp) -- a copy plans the player's defence windows only in a skirmish fight with him
+constexpr uint8_t kOpPlanInFight = 16;    // [on:1] -> []
 constexpr uint8_t kOpTestFight  = 8;   // [npcEid:4][targetEid:4][override:1] live checks only: a test NPC fights (skirmish + combat + automation)   // [on:1] live checks only: the player's block via SetBlockMode (no input)
 
 constexpr uint8_t kROk         = 0;

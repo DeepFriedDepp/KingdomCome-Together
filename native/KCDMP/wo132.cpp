@@ -20,6 +20,7 @@
 #include "npc_drive.h"
 #include "rttr_abi.h"
 #include "wo136.h"
+#include "wo166.h"
 #include "wo195.h"
 
 namespace kcdmp::wo132 {
@@ -251,6 +252,22 @@ uint8_t handle(const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t
         if (n != 1) return kRBadRequest;
         kcdmp::wo136::set_enabled(a[0] != 0);
         logf("WO136-FIGHTS %s -- the threat rule and the hand-over at the host's down", a[0] ? "on" : "off");
+        return kROk;
+    }
+    case kOpSkirmishKeep: {
+        if (n != 1) return kRBadRequest;
+        kcdmp::wo136::set_skirmish_keep(a[0] != 0);
+        logf("WO207-SKIRMISH-KEEP %s -- %s", a[0] ? "on" : "off",
+             a[0] ? "a soul in a skirmish is never taken out of it to change its opponent (the add alone; a fighting NPC turns by its forced target)"
+                  : "the leave + re-add as before");
+        return kROk;
+    }
+    case kOpPlanInFight: {
+        if (n != 1) return kRBadRequest;
+        kcdmp::wo166::set_plan_in_fight(a[0] != 0);
+        logf("WO207-PLAN-IN-FIGHT %s -- %s", a[0] ? "on" : "off",
+             a[0] ? "a copy plans the local player's defence windows only while the engine has them in a skirmish fight"
+                  : "planned whenever the copy's opponent is the player, as before");
         return kROk;
     }
     case kOpHostTarget: {

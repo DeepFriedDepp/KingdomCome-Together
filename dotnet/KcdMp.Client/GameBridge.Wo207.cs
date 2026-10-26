@@ -129,6 +129,19 @@ public partial class GameBridge
         if (name == "queue_decouple" && _httpForMenu is { } http) http.Decoupled = val == "on";
         if (name == "queue_decouple") _combat.FramesFirst = val == "on";
         if (name == "joiner_npc_triggers") _w207NpcTrigDue = true;   // D.2: on sends the list again, off forgets it
+        if (name == "skirmish_keep") _ = Wo207PushSkirmishKeepAsync(val == "on");   // the fight crashes: the DLL holds it (op 15)
+        if (name == "plan_in_fight") _ = Wo207PushNativeSwitchAsync(16, "mp_plan_in_fight", val == "on");   // the joiner's fight crash (op 16)
+    }
+
+    // The fight crashes (mp_skirmish_keep: a fighter is never taken out of its skirmish to change its opponent; mp_plan_in_fight: a copy
+    // plans the player's defence windows only in a fight with him) -- the DLL's own state (on from its start unless the bench's twin
+    // names it in KCDMP_TEST_W207_OFF); the agent sends only the player's own toggle.
+    private Task Wo207PushSkirmishKeepAsync(bool on) => Wo207PushNativeSwitchAsync(15, "mp_skirmish_keep", on);
+
+    private async Task Wo207PushNativeSwitchAsync(byte op, string label, bool on)
+    {
+        var r = await _combat.Wo132Async(op, [(byte)(on ? 1 : 0)]);
+        Console.WriteLine($"MP-W207 {label} {(on ? "on" : "off")} -> {(r is { Ok: true } ? "the DLL took it" : "the DLL did not take it (an older KCDMP.dll?)")}");
     }
 }
 

@@ -502,6 +502,44 @@ uint32_t player_eid() {
     return e ? engine::entity_id(e) : 0;
 }
 
+// WO-207 crash work (mp_plan_in_fight, on): a copy plans the local player's defence windows (WO-178's PlanSlot) only while the engine
+// has the copy and the player in a skirmish fight (the skirmish manager's own relation test, read-only, this frame). Planned, the copy's
+// slot planner creates sub-triggers on the player's multi-triggers from the copy's own update; the player's update deletes every
+// sub-trigger not yet started. A copy the joiner's world had let go of (WO-132 released it; WO-187 still wished it on the player) did
+// that from an update the engine does not keep apart from the player's: the player's dodge / perfect-block sub-trigger was deleted
+// between its creation and its Start (CombatModule+0x55b065 / +0x559d32 / +0x8ff0a, the joiner's fight crash). Off (or
+// KCDMP_TEST_W207_OFF naming plan_in_fight in the game's own environment, the bench's twin): planned whenever its opponent is the player.
+std::atomic<int> g_planInFight{-1};   // -1: not read yet (the twin's environment decides the start)
+std::atomic<uint32_t> c_planOutOfFight{0}, c_planUnanswered{0};
+bool plan_in_fight_on() {
+    int k = g_planInFight.load();
+    if (k < 0) {
+        char b[256]{};
+        const DWORD n = GetEnvironmentVariableA("KCDMP_TEST_W207_OFF", b, sizeof b);
+        k = (n > 0 && n < sizeof b && std::strstr(b, "plan_in_fight")) ? 0 : 1;
+        int expect = -1;
+        if (g_planInFight.compare_exchange_strong(expect, k)) logf("WO207-PLAN-IN-FIGHT %s at start%s", k ? "on" : "off", k ? "" : " (KCDMP_TEST_W207_OFF: the twin)");
+        k = g_planInFight.load();
+    }
+    return k == 1;
+}
+// true: plan. The copy's soul and the player's, looked up this frame; an unanswered relation plans nothing (fail closed).
+bool plan_allowed(uint32_t eid, const char* name) {
+    if (!plan_in_fight_on()) return true;
+    const uint32_t pe = player_eid();
+    void* cs = eid ? hits::soul_of_eid(eid) : nullptr;
+    void* ps = pe ? hits::soul_of_eid(pe) : nullptr;
+    bool answered = false, hostile = false;
+    const char* why = "no soul";
+    if (cs && ps) hits::skirmish_hostile(cs, ps, &answered, &hostile, &why);
+    if (answered && hostile) return true;
+    const uint32_t k = (answered ? c_planOutOfFight : c_planUnanswered).fetch_add(1) + 1;
+    if (k <= 20 || k % 100 == 0)
+        logf("WO207-PLAN-IN-FIGHT npc=%s %s -- no defence window planned on the local player [n=%u]", name ? name : "?",
+             answered ? "is not in a skirmish fight with the local player (the engine's relation test)" : why, k);
+    return false;
+}
+
 bool name_ok(const char* s, size_t n) {
     if (n == 0 || n > 63) return false;
     for (size_t i = 0; i < n; ++i) {
@@ -715,7 +753,7 @@ void tick() {
                     s.targetSet = oppMe && ensure_target_player(ca, model, &hadTarget);
                     (s.targetSet ? (hadTarget ? c_targetHad : c_targetSet) : c_targetFailed).fetch_add(1);
                     if (!s.targetSet) s.canHitWrote = set_can_hit(model, s.canHit);   // no target: ours, re-written every frame
-                    if (oppMe && s.countdown) s.planned = plan_defender_slots(ca);   // the attack's own planning: the perfect-block window
+                    if (oppMe && s.countdown && plan_allowed(s.eid, s.name.c_str())) s.planned = plan_defender_slots(ca);   // the attack's own planning: the perfect-block window
                     wo187::note_plan(s.name.c_str(), oppMe, s.planned, oppMe && s.countdown && s.planned == 0);   // WO-187 A3
                     (s.canHit ? c_canHitYes : c_canHitNo).fetch_add(1);
                     float wlen = -1, wcls = -1;
@@ -1006,11 +1044,13 @@ int status_text(char* out, int n) {
     if (w0 < 0 || w0 >= n) return w0;
     // WO-187 A3: the shield windows the copies' wind-ups planned (slot types planned) and the plannings refused
     return w0 + std::snprintf(out + w0, n - w0, " engine_state=%s windups=%u engine_strikes=%u engine_restores=%u opp_player=%u opp_other=%u planned=%u plan_refused=%u"
-        " takeovers=%u takeover_kept=%u takeover_failed=%u",
+        " takeovers=%u takeover_kept=%u takeover_failed=%u plan_in_fight=%s plan_out_of_fight=%u plan_unanswered=%u",
         g_setState ? "armed" : (g_setStateResolved ? "not-armed" : "unresolved"), c_engineWindup.load(), c_engineStrike.load(), c_engineRestore.load(),
         c_engineOppPlayer.load(), c_engineOppOther.load(), c_planned.load(), c_planRefused.load(), c_takeovers.load(), c_takeoverKept.load(),
-        c_takeoverFailed.load());
+        c_takeoverFailed.load(), plan_in_fight_on() ? "on" : "off", c_planOutOfFight.load(), c_planUnanswered.load());
 }
+
+void set_plan_in_fight(bool on) { plan_in_fight_on(); g_planInFight.store(on ? 1 : 0); }
 
 void on_pipe_closed() {
     // main thread is not guaranteed here: the windows end at the next tick (live=false restores them)

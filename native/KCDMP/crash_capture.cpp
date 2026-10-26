@@ -4,10 +4,12 @@
 // WO-202 I.1 crash_capture (crash_capture.h): the chained unhandled-exception filter and its writer thread.   WO202-CRASH.
 #include "crash_capture.h"
 #include "crash_rules.h"
+#include "engine.h"
 #include "fault_guard.h"
 #include "inline_hook.h"
 #include "log.h"
 #include "main_thread.h"
+#include "motion.h"
 #include "x64_len.h"
 
 #include <windows.h>
@@ -46,6 +48,7 @@ using UefFn = LONG(WINAPI*)(EXCEPTION_POINTERS*);
 UefFn g_uefOrig = nullptr;
 std::atomic<bool> g_testMain{false};
 
+fault::Site g_readSite{"crash_capture::named_read", fault::Kind::Read};   // WO-207 crash work: the register chains' reads
 using MdwFn = BOOL(WINAPI*)(HANDLE, DWORD, HANDLE, MINIDUMP_TYPE, PMINIDUMP_EXCEPTION_INFORMATION, PMINIDUMP_USER_STREAM_INFORMATION,
                             PMINIDUMP_CALLBACK_INFORMATION);
 MdwFn g_mdw = nullptr;
@@ -264,6 +267,28 @@ void write_report() {
             "  rsi %016llx rdi %016llx r8  %016llx r9  %016llx\r\n  r10 %016llx r11 %016llx r12 %016llx r13 %016llx\r\n"
             "  r14 %016llx r15 %016llx\r\n",
             c.Rip, c.Rsp, c.Rbp, c.Rax, c.Rbx, c.Rcx, c.Rdx, c.Rsi, c.Rdi, c.R8, c.R9, c.R10, c.R11, c.R12, c.R13, c.R14, c.R15);
+        // WO-207 crash work: the entities the registers lead to -- a register, the object it points to, that object's soul (+0x30, a
+        // C_SkirmishSoul's) and the soul's entity (+0xD68) -- named. Reads and the entity's own GetName only, each guarded.
+        put("\r\nentities the registers lead to (reg -> [reg] -> +0x30 -> +0xD68):\r\n");
+        const char* rn[] = {"rax", "rbx", "rcx", "rdx", "rsi", "rdi", "r12", "r13", "r14", "r15"};
+        const DWORD64 rv[] = {c.Rax, c.Rbx, c.Rcx, c.Rdx, c.Rsi, c.Rdi, c.R12, c.R13, c.R14, c.R15};
+        auto q = [](uintptr_t a, uintptr_t* out) {
+            if (a < 0x10000 || a > 0x00007FFFFFFFFFFFull || (a & 7)) return false;
+            return fault::guarded(g_readSite, [&] { *out = *reinterpret_cast<const uintptr_t*>(a); });
+        };
+        int named = 0;
+        for (int i = 0; i < 10; ++i) {
+            uintptr_t chain[4] = {static_cast<uintptr_t>(rv[i]), 0, 0, 0};
+            if (!q(chain[0], &chain[1])) continue;
+            if (!q(chain[1] + 0x30, &chain[2])) chain[2] = 0;
+            if (!chain[2] || !q(chain[2] + 0xD68, &chain[3])) chain[3] = 0;
+            for (int k = 0; k < 4; ++k) {
+                if (!chain[k]) continue;
+                const char* nm = engine::entity_name(reinterpret_cast<void*>(chain[k]));
+                if (nm && nm[0]) { put("  %s step %d (%016llx) is the entity '%.60s'\r\n", rn[i], k, static_cast<unsigned long long>(chain[k]), nm); ++named; }
+            }
+        }
+        if (!named) put("  none\r\n");
     }
 
     // every hook placed
@@ -430,6 +455,143 @@ void test_watch() {
     else if (!std::strcmp(word, "fastfail")) __fastfail(7);
 }
 
+// ---- WO-207 crash work, the bench only (KCDMP_TEST_SKIRMISH_PROBE=1): who removes a soul from its skirmish ----
+// A pass-through gate at RPGModule's C_Skirmish::RemoveSoul (found by its own log label): the soul's name (its vt+0x18, the call the
+// function makes itself next), the thread, and the return addresses a scan of the stack finds (values just after a call instruction).
+bool g_skirProbe = false, g_skirTried = false;
+fault::Site g_skirSite{"crash_capture::skirmish_probe", fault::Kind::Read};
+bool skirmish_remove_cb(void* skirmish, void* soul) {
+    using NameFn = const char*(__fastcall*)(void*);
+    const char* nm = nullptr;
+    fault::guarded(g_skirSite, [&] { nm = (*reinterpret_cast<NameFn* const*>(soul))[3](soul); });
+    char name[64] = "?";
+    if (nm) fault::guarded_silent([&] { std::snprintf(name, sizeof name, "%s", nm); });
+    char line[1400];
+    int n = std::snprintf(line, sizeof line, "W207-SKIRMISH remove soul=%s skirmish=%p tid=%lu%s stack:", name, skirmish, GetCurrentThreadId(),
+                          GetCurrentThreadId() == main_thread::main_thread_id() ? " (main)" : "");
+    // the frames, unwound (this callback, the thunk's known layout, then the engine's own unwind data) -- printed from the hooked call's caller
+    CONTEXT ctx{};
+    RtlCaptureContext(&ctx);
+    uintptr_t rips[28]{};
+    FrameKind kinds[28]{};
+    const int fr = unwind(ctx, rips, kinds, 28);
+    bool past = false;
+    for (int i = 0; i < fr && n < static_cast<int>(sizeof line) - 80; ++i) {
+        if (inlinehook::hook_of_page(rips[i]) >= 0) { past = true; continue; }
+        if (!past) continue;
+        const Mod* m = module_of(rips[i]);
+        if (m) n += std::snprintf(line + n, sizeof line - n, " %s+0x%llx", m->name, static_cast<unsigned long long>(rips[i] - m->base));
+        else n += std::snprintf(line + n, sizeof line - n, " 0x%llx", static_cast<unsigned long long>(rips[i]));
+    }
+    logf("%s", line);
+    return false;   // never refuses: the engine's own RemoveSoul always runs
+}
+void skirmish_probe_try() {
+    if (g_skirTried) return;
+    HMODULE rpg = GetModuleHandleA("RPGModule.dll");
+    if (!rpg) return;
+    g_skirTried = true;
+    // the function: the one whose code loads "wh::rpgmodule::C_Skirmish::RemoveSoul" (this build: RPGModule+0x63D230)
+    static constexpr uint8_t kRemoveSoul[16] = {0x48, 0x89, 0x5C, 0x24, 0x18, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57};
+    uint8_t* fn = reinterpret_cast<uint8_t*>(rpg) + 0x63D230;
+    const char* why = nullptr;
+    g_skirProbe = inlinehook::install_gate(fn, kRemoveSoul, sizeof kRemoveSoul, &skirmish_remove_cb, &why);
+    logf("W207-SKIRMISH probe (bench only) at RPGModule+0x63D230: %s", g_skirProbe ? "installed" : (why ? why : "?"));
+}
+
+// ---- WO-207 crash work, the bench only (KCDMP_TEST_TRIGGER_PROBE=1): who destroys the local player's slot triggers ----
+// The joiner's fight crash: the player's perfect-block / dodge multi-trigger's sub-trigger is destroyed between its creation and its
+// Start. Pass-through gates at two destructors (C_CombatSlotTrigger's deleting destructor and the perfect-block family's shared body,
+// this build's CombatModule+0x559560 / +0x55B760, their exact prologues checked): a trigger whose combat actor (+8) is the local
+// player's is logged with its class, the thread and the unwound stack.
+bool g_trigProbe = false, g_trigTried = false;
+std::atomic<void*> g_playerCa{nullptr};   // the main thread's tick: the local player's combat actor
+std::atomic<uint32_t> g_trigLogged{0};
+void log_stack_line(const char* head) {
+    char line[1400];
+    int n = std::snprintf(line, sizeof line, "%s tid=%lu%s stack:", head, GetCurrentThreadId(),
+                          GetCurrentThreadId() == main_thread::main_thread_id() ? " (main)" : "");
+    CONTEXT ctx{};
+    RtlCaptureContext(&ctx);
+    uintptr_t rips[28]{};
+    FrameKind kinds[28]{};
+    const int fr = unwind(ctx, rips, kinds, 28);
+    bool past = false;
+    for (int i = 0; i < fr && n < static_cast<int>(sizeof line) - 80; ++i) {
+        if (inlinehook::hook_of_page(rips[i]) >= 0) { past = true; continue; }
+        if (!past) continue;
+        const Mod* m = module_of(rips[i]);
+        if (m) n += std::snprintf(line + n, sizeof line - n, " %s+0x%llx", m->name, static_cast<unsigned long long>(rips[i] - m->base));
+        else n += std::snprintf(line + n, sizeof line - n, " 0x%llx", static_cast<unsigned long long>(rips[i]));
+    }
+    logf("%s", line);
+}
+bool trigger_dtor_cb(void* trig, void* /*flags*/) {
+    void* ca = nullptr;
+    void* me = g_playerCa.load();
+    if (!me || !fault::guarded_silent([&] { ca = *reinterpret_cast<void* const*>(static_cast<char*>(trig) + 8); })) return false;
+    if (ca != me && static_cast<char*>(ca) - 8 != me) return false;
+    if (g_trigLogged.fetch_add(1) >= 4000) return false;
+    char cls[96] = "?";
+    fault::guarded_silent([&] {
+        const char* vt = *reinterpret_cast<const char* const*>(trig);
+        const char* col = *reinterpret_cast<const char* const*>(vt - 8);
+        const int32_t td = *reinterpret_cast<const int32_t*>(col + 12), self = *reinterpret_cast<const int32_t*>(col + 20);
+        const char* name = col - self + td + 16;
+        int i = 0;
+        for (; i < 95 && name[i]; ++i) cls[i] = name[i];
+        cls[i] = 0;
+    });
+    char head[160];
+    std::snprintf(head, sizeof head, "W207-TRIGGER destroyed %s %p (the local player's)", cls, trig);
+    log_stack_line(head);
+    return false;   // never refuses: the engine's own destructor always runs
+}
+// The other side: a sub-trigger created on one of the player's multi-triggers (CombatModule+0x8FDD0, the attacker's slot planner's
+// update creates it): the multi-trigger's class, the attacker's entity id (its combat actor's owner +0x30) and the thread.
+bool trigger_create_cb(void* multi, void* attackerCa, void*, void*) {
+    void* ca = nullptr; void* owner = nullptr;
+    uint32_t eid = 0;
+    void* me = g_playerCa.load();
+    if (!me || !fault::guarded_silent([&] { ca = *reinterpret_cast<void* const*>(static_cast<char*>(multi) + 8); })) return false;
+    if (ca != me && static_cast<char*>(ca) - 8 != me && static_cast<char*>(ca) + 8 != me) return false;
+    fault::guarded_silent([&] {
+        owner = *reinterpret_cast<void* const*>(static_cast<char*>(attackerCa) + 0x2D8);
+        if (owner) eid = *reinterpret_cast<const uint32_t*>(static_cast<char*>(owner) + 0x30);
+    });
+    if (g_trigLogged.fetch_add(1) >= 4000) return false;
+    char cls[96] = "?";
+    fault::guarded_silent([&] {
+        const char* vt = *reinterpret_cast<const char* const*>(multi);
+        const char* col = *reinterpret_cast<const char* const*>(vt - 8);
+        const int32_t td = *reinterpret_cast<const int32_t*>(col + 12), self = *reinterpret_cast<const int32_t*>(col + 20);
+        const char* name = col - self + td + 16;
+        int i = 0;
+        for (; i < 95 && name[i]; ++i) cls[i] = name[i];
+        cls[i] = 0;
+    });
+    logf("W207-TRIGGER created on %s %p by attacker eid=0x%X tid=%lu%s", cls, multi, eid, GetCurrentThreadId(),
+         GetCurrentThreadId() == main_thread::main_thread_id() ? " (main)" : "");
+    return false;
+}
+void trigger_probe_try() {
+    if (g_trigTried) return;
+    HMODULE cm = GetModuleHandleA("CombatModule.dll");
+    if (!cm) return;
+    g_trigTried = true;
+    static constexpr uint8_t kSlotDtor[15] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x57, 0x48, 0x83, 0xEC, 0x20, 0x8B, 0xDA, 0x48, 0x8B, 0xF9};
+    static constexpr uint8_t kPbBody[18] = {0x48, 0x89, 0x5C, 0x24, 0x10, 0x48, 0x89, 0x74, 0x24, 0x18, 0x57, 0x48, 0x81, 0xEC, 0x80, 0x00, 0x00, 0x00};
+    const char* w1 = nullptr; const char* w2 = nullptr;
+    const bool a = inlinehook::install_gate(reinterpret_cast<uint8_t*>(cm) + 0x559560, kSlotDtor, sizeof kSlotDtor, &trigger_dtor_cb, &w1);
+    const bool b = inlinehook::install_gate(reinterpret_cast<uint8_t*>(cm) + 0x55B760, kPbBody, sizeof kPbBody, &trigger_dtor_cb, &w2);
+    static constexpr uint8_t kCreate[15] = {0x48, 0x8B, 0xC4, 0x48, 0x83, 0xEC, 0x68, 0x48, 0x89, 0x58, 0x10, 0x48, 0x89, 0x70, 0x18};
+    const char* w3 = nullptr;
+    const bool c = inlinehook::install_gate4(reinterpret_cast<uint8_t*>(cm) + 0x8FDD0, kCreate, sizeof kCreate, &trigger_create_cb, &w3);
+    g_trigProbe = a || b || c;
+    logf("W207-TRIGGER probe (bench only): C_CombatSlotTrigger dtor +0x559560 %s, perfect-block family body +0x55B760 %s, sub-trigger "
+         "creation +0x8FDD0 %s", a ? "installed" : (w1 ? w1 : "?"), b ? "installed" : (w2 ? w2 : "?"), c ? "installed" : (w3 ? w3 : "?"));
+}
+
 } // namespace
 
 void install() {
@@ -439,6 +601,8 @@ void install() {
     GetCurrentDirectoryA(MAX_PATH, cwd);
     std::snprintf(g_root, sizeof g_root, "%s%skcdmp-crashes", cwd, (cwd[0] && cwd[std::strlen(cwd) - 1] == '\\') ? "" : "\\");
     if (HMODULE dbg = LoadLibraryA("dbghelp.dll")) g_mdw = reinterpret_cast<MdwFn>(GetProcAddress(dbg, "MiniDumpWriteDump"));
+    { char e[8]{}; g_skirProbe = GetEnvironmentVariableA("KCDMP_TEST_SKIRMISH_PROBE", e, sizeof e) == 1 && e[0] == '1'; g_skirTried = !g_skirProbe; }
+    { char e[8]{}; g_trigProbe = GetEnvironmentVariableA("KCDMP_TEST_TRIGGER_PROBE", e, sizeof e) == 1 && e[0] == '1'; g_trigTried = !g_trigProbe; }
     refresh_modules();
     g_go = CreateEventA(nullptr, FALSE, FALSE, nullptr);
     g_done = CreateEventA(nullptr, TRUE, FALSE, nullptr);
@@ -485,6 +649,9 @@ void tick() {
         }
     }
     if (g_testArmed && now - lastTest >= 1000) { lastTest = now; test_watch(); }
+    if (!g_skirTried) skirmish_probe_try();   // WO-207 crash work (bench only): once RPGModule is loaded
+    if (!g_trigTried) trigger_probe_try();     // WO-207 crash work (bench only): once CombatModule is loaded
+    if (g_trigProbe) g_playerCa.store(motion::player_combat_actor());
 }
 
 void note_pipe(uint8_t type, uint8_t op, uint16_t len) {

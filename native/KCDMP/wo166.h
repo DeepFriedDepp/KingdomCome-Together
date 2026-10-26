@@ -43,5 +43,7 @@ void note_local_hit_dropped(uint32_t eid, float hp, float st);   // hits.cpp's d
 uint8_t auto_mode();               // C1 (motion.cpp reads it)
 int status_text(char* out, int n);
 void on_pipe_closed();
+// WO-207 crash work: mp_plan_in_fight on|off (wo166.cpp) -- a copy plans the player's defence windows only in a skirmish fight with him
+void set_plan_in_fight(bool on);
 
 } // namespace kcdmp::wo166

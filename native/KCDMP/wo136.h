@@ -82,6 +82,14 @@ int forget_npc(uint32_t npcEid, const char* why);
 
 void set_enabled(bool on);
 bool enabled();
+// WO-207 crash work (mp_skirmish_keep, default on): a soul already in a skirmish is never taken out of it to change its opponent.
+// The leave + re-add (RemoveSoulFromSkirmish then AddSoulToSkirmish, an avatar's swing and its 0.6 s redos, an NPC's switch) cleared
+// the target of every NPC fighting that soul, and the re-add gave the skirmish a target before the combat actor had one: the AI
+// worker's target follower read the missing target (RPGModule+0x64afe4, the host's fight crash). On: the add alone (an NPC already
+// fighting turns by its forced target, combat_forcedTarget). Off (or KCDMP_TEST_W207_OFF naming skirmish_keep in the game's own
+// environment, the bench's twin): the leave + re-add as before.
+void set_skirmish_keep(bool on);
+bool skirmish_keep();
 // WO-165 C1: the NPCs this module knows in a fight a partner is part of (threat rows and forced pairs), up to max.
 int fight_npcs(uint32_t* out, int max);
 int status_text(char* out, int n);
