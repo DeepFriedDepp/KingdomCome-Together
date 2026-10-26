@@ -74,6 +74,14 @@ void set_npc_watch(bool on);
 // WO-132: an engaged copy's local hit on the player was put back (logs only, 0x9C).
 using DiscardFn = void (*)(uint32_t attackerEid, float stamina, float health);
 void set_discard_callback(DiscardFn fn);
+// WO-208 B (mp_defence_local, joiner): an engaged copy's blow on the local player judged by this machine's own engine and KEPT -- the
+// engine's verdict (wo208_rules.h DefOutcome: 1 hit, 2 blocked, 3 perfect block, 4 guard broken; 5 missed, from wo166's window) and
+// the damage it applied, measured over the watch window. Main thread (pipe frame 0xAE -> the agent sends it to the host).
+using DefenceFn = void (*)(uint32_t attackerEid, uint8_t outcome, float stamina, float health);
+void set_defence_callback(DefenceFn fn);
+void report_defence(uint32_t attackerEid, uint8_t outcome, float stamina, float health);   // wo166's missed window (main thread)
+// WO-208 B: when an engaged copy's blow last landed on the local player (QPC seconds; -1 never) -- wo166's window asks at its end.
+double last_local_hit_from(uint32_t attackerEid);
 // WO-132 (joiner, main thread): hits by this attacker on the local player are discarded.
 bool discard_from(uint32_t eid, bool on);
 int discard_count();

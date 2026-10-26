@@ -11,6 +11,7 @@
 #include "wo203.h"
 #include "engine.h"
 #include "fault_guard.h"
+#include "hits.h"
 #include "log.h"
 #include "main_thread.h"
 #include "motion.h"
@@ -119,15 +120,27 @@ void gather(std::vector<Body>& out, double now) {
         if (d > g_radius) continue;
         out.push_back({bb[i].eid, motion::is_avatar_eid(bb[i].eid) ? "figure" : "copy"});
     }
-    // the NPCs around the player: the entity walk once a second (kWalkEveryS); between walks its list is re-checked by position
+    // the NPCs around the player and (WO-208: the host's NPCs that fight or walk with a partner far from the host's own player) around
+    // the partners' figures: the entity walk once a second (kWalkEveryS); between walks its list is re-checked by position
     static std::vector<uint32_t> s_walked;
     static double s_lastWalk = -1e9;
+    npcscan::Anchor an[9];
+    int na = 0;
+    an[na++] = {pp[0], pp[1], pp[2]};
+    {
+        uint32_t av[8]{}; void* souls[8]{};
+        const int nav = hits::avatar_list(av, souls, 8);
+        for (int i = 0; i < nav && na < 9; ++i) {
+            void* ae = engine::entity_by_id(av[i]);
+            float ap[3]{};
+            if (ae && engine::entity_world_pos(ae, ap)) an[na++] = {ap[0], ap[1], ap[2]};
+        }
+    }
     if (now - s_lastWalk >= kWalkEveryS) {
         s_lastWalk = now;
         s_walked.clear();
-        const npcscan::Anchor a{pp[0], pp[1], pp[2]};
         uint32_t walked = 0; uint8_t refuse = 0;
-        npcscan::for_each_in_radius(&a, 1, g_radius, [](void* e, const char*, float, float, float, bool isHorse, void* c) {
+        npcscan::for_each_in_radius(an, na, g_radius, [](void* e, const char*, float, float, float, bool isHorse, void* c) {
             auto* w = static_cast<std::vector<uint32_t>*>(c);
             if (isHorse || static_cast<int>(w->size()) >= kMaxBodies) return;
             w->push_back(engine::entity_id(e));
@@ -141,7 +154,10 @@ void gather(std::vector<Body>& out, double now) {
         void* e = engine::entity_by_id(eid);   // gone since the walk: left out (an id is never dereferenced, only looked up)
         float p[3]{};
         if (!e || !engine::entity_world_pos(e, p)) continue;
-        if ((p[0] - pp[0]) * (p[0] - pp[0]) + (p[1] - pp[1]) * (p[1] - pp[1]) + (p[2] - pp[2]) * (p[2] - pp[2]) > g_radius * g_radius) continue;
+        bool inRange = false;   // ("near" is a Windows header macro)
+        for (int i = 0; i < na && !inRange; ++i)
+            inRange = (p[0] - an[i].x) * (p[0] - an[i].x) + (p[1] - an[i].y) * (p[1] - an[i].y) + (p[2] - an[i].z) * (p[2] - an[i].z) <= g_radius * g_radius;
+        if (!inRange) continue;
         out.push_back({eid, "npc"});
     }
 }

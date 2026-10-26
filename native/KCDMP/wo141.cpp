@@ -2,6 +2,7 @@
 // GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 #include "wo141.h"
+#include "wo208.h"
 #include "wo204.h"
 #include "wo204_rules.h"
 #include "wo172.h"
@@ -1510,7 +1511,7 @@ uint8_t handle(const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t
             if (!name_at(1, &nm, &at) || nm.empty() || len != at + R::kWireBytes || cap < 1) return kRBadRequest;
             R::Activity a;
             if (!R::decode(body + at, R::kWireBytes, &a)) return kRBadRequest;
-            if (!g_applyOn.load()) { out[0] = 0; *outLen = 1; return kRNotArmed; }
+            if (!g_applyOn.load() || wo208::probe_owned_name(nm.c_str())) { out[0] = 0; *outLen = 1; return kRNotArmed; }   // WO-208 A.1
             const bool known = g_desired.count(lower(nm.c_str())) != 0;
             set_desired(nm, a);
             out[0] = known ? 1 : 0; *outLen = 1;

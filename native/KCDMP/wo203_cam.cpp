@@ -48,6 +48,8 @@
 //      cmd 4 arm by name [every:1][len:1][name] -> [result:1] 0 armed, 2 no such entity
 #include "wo203.h"
 #include "wo203_cam_rules.h"
+#include "wo208.h"
+#include "wo208_rules.h"
 #include "wo163.h"
 #include "engine.h"
 #include "anchors.h"
@@ -573,6 +575,8 @@ struct Sampler {
     bool haveFeet = false;
     uint32_t frames = 0, queued = 0, cuts = 0, inHead = 0, noAnchor = 0, dropped = 0, polled = 0;
     double sumUs = 0, maxUs = 0;
+    int64_t armedMs = 0, lastShotMs = 0;   // WO-208 C.2: when the talk's sampler armed, when it last sampled a dialogue shot
+    uint32_t headSent = 0;                 // WO-208 C.2: the starter's own view sent (no dialogue shot)
 } g_s;
 // WO-207 A.1: the ring (q, n), polled and lastPollMs are shared with the off-main poll (cmd 2); a whole-sampler reset (arm, disarm) too
 SRWLOCK g_sLock = SRWLOCK_INIT;
@@ -610,9 +614,18 @@ void tick_sampler() {
     if (g_s.haveFeet && wo203cam::in_player_head(cam.p, g_s.feet)) {
         // B.6: the starter's own first-person camera (before the first shot, after the last): never sent; the next shot is a cut
         ++g_s.inHead;
-        g_s.cutPending = true;
-        g_s.havePrev = false;
-        return;
+        // WO-208 C.2 (mp_conv_cam_player_view): a talk whose dialogue cameras never take over ("Every dialogue camera is invalid or is
+        // outside of collision": the starter's view stays in his head the whole talk) sent nothing, and the listener's view ended for
+        // silence (d29's pair drops, both roles). Once a running talk has sampled no dialogue shot for kHeadLiftMs, the starter's own
+        // rendered view goes out like a shot; a dialogue shot after it is a cut, as before.
+        if (!wo208rules::head_lift(wo208::on(wo208rules::kBitPlayerView), nowMs, g_s.lastShotMs, g_s.armedMs)) {
+            g_s.cutPending = true;
+            g_s.havePrev = false;
+            return;
+        }
+        ++g_s.headSent;
+    } else {
+        g_s.lastShotMs = nowMs;
     }
     Sampler::S x{};
     x.t = now_ms();
@@ -824,8 +837,8 @@ uint8_t op_poll(uint8_t, const uint8_t* body, size_t len, uint8_t* out, size_t c
     switch (cmd) {
         case 0:
             out[0] = g_s.armed ? 1 : 0;
-            if (g_s.armed) logf("WO203B-CAMPOLL disarmed frames=%u queued=%u cuts=%u in_head=%u no_anchor=%u dropped=%u polled=%u off_main=%u cost_us mean=%.1f max=%.1f",
-                                g_s.frames, g_s.queued, g_s.cuts, g_s.inHead, g_s.noAnchor, g_s.dropped, g_s.polled, c_pollsOffMain.load(),
+            if (g_s.armed) logf("WO203B-CAMPOLL disarmed frames=%u queued=%u cuts=%u in_head=%u head_sent=%u no_anchor=%u dropped=%u polled=%u off_main=%u cost_us mean=%.1f max=%.1f",
+                                g_s.frames, g_s.queued, g_s.cuts, g_s.inHead, g_s.headSent, g_s.noAnchor, g_s.dropped, g_s.polled, c_pollsOffMain.load(),
                                 g_s.frames ? g_s.sumUs / g_s.frames : 0, g_s.maxUs);
             AcquireSRWLockExclusive(&g_sLock);
             g_s.armed = false;
@@ -845,6 +858,7 @@ uint8_t op_poll(uint8_t, const uint8_t* body, size_t len, uint8_t* out, size_t c
             g_s.every = every != 0;
             g_s.anchorEid = a;
             g_s.lastPollMs = now_ms();
+            g_s.armedMs = g_s.lastPollMs;   // WO-208 C.2
             g_s.cutPending = true;   // the first shot is a cut
             ReleaseSRWLockExclusive(&g_sLock);
             logf("WO203B-CAMPOLL armed anchor=%u%s", a, g_s.every ? " (every frame)" : "");
@@ -889,6 +903,7 @@ uint8_t op_poll(uint8_t, const uint8_t* body, size_t len, uint8_t* out, size_t c
             g_s.every = every != 0;
             g_s.anchorEid = a;
             g_s.lastPollMs = now_ms();
+            g_s.armedMs = g_s.lastPollMs;   // WO-208 C.2
             g_s.cutPending = true;
             ReleaseSRWLockExclusive(&g_sLock);
             logf("WO203B-CAMPOLL armed anchor=%s (%u)%s", name, a, g_s.every ? " (every frame)" : "");

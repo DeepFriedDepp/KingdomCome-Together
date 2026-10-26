@@ -248,6 +248,43 @@ def test_known_local(tmp):
           and res4["unexplained"][0]["key"] == other, f"code={code4}")
 
 
+def test_not_a_quest(tmp):
+    # WO-208 D.2: a State under no quest (a <Gameplay> / <Module> concept: a tutorial, the open-world combat chatter) is each machine's
+    # own -- the State mirror carries quest States only; a quest's own State that differs stays unexplained
+    import zipfile
+    pak = os.path.join(tmp, "Scripts.pak")
+    with zipfile.ZipFile(pak, "w") as z:
+        for path, kind in (("Barbora", "Project"), ("Barbora/trosecko", "Level"), ("Barbora/trosecko/kovar", "Quest"),
+                           ("Barbora/open_world", "Gameplay"), ("Barbora/open_world/tutorialy/tut_x", "Gameplay")):
+            z.writestr("Quests/Final/%s.xml" % path, '<Database Name="brambora"><%s Name="%s"><Port Name="p"/></%s></Database>'
+                       % (kind, path.split("/")[-1], kind))
+    saved = analyze.SCRIPTS_PAK, analyze._CONCEPT_ROOTS
+    analyze.SCRIPTS_PAK, analyze._CONCEPT_ROOTS = pak, None
+    try:
+        tut, kov = "Barbora.open_world.tutorialy.tut_x.state13", "Barbora.trosecko.kovar.KovarJeVKovarne"
+        h, j = write_bundles(tmp, "tut", scenario(overrides=[("host", "quest", tut, "sv:1", 20, None), ("joiner", "quest", tut, "sv:0", 20, None)]))
+        code, res = run(h, j)
+        check("D.2 a tutorial State (a <Gameplay>, under no quest) differing is each machine's own (explained, named)", code == 0 and res
+              and not res["unexplained"] and any(str(f.get("why", "")).startswith("known-local: under no quest") and f["key"] == tut
+                                                 for f in res["explained"]), f"code={code}")
+        analyze.NOT_A_QUEST_RULE = False
+        try:
+            code2, res2 = run(h, j)
+        finally:
+            analyze.NOT_A_QUEST_RULE = True
+        twin("D.2 the not-a-quest rule off", code2 == 0 and res2 and not res2["unexplained"], f"code={code2}")
+        h3, j3 = write_bundles(tmp, "kov", scenario(overrides=[("host", "quest", kov, "sv:1", 20, None), ("joiner", "quest", kov, "sv:2", 20, None)]))
+        code3, res3 = run(h3, j3)
+        check("D.2 a quest's own State differing stays unexplained (under a <Quest>)", code3 == 1 and res3 and res3["unexplained"][0]["key"] == kov,
+              f"code={code3}")
+        analyze.SCRIPTS_PAK, analyze._CONCEPT_ROOTS = os.path.join(tmp, "no-such.pak"), None
+        code4, res4 = run(h, j)
+        check("D.2 the game's files unreadable: the rule fails closed (unexplained)", code4 == 1 and res4 and res4["unexplained"][0]["key"] == tut,
+              f"code={code4}")
+    finally:
+        analyze.SCRIPTS_PAK, analyze._CONCEPT_ROOTS = saved
+
+
 def test_c2(tmp):
     key = "jaunt/watch_1300"
     h, j = write_bundles(tmp, "c2", scenario(overrides=[("host", "quest", key, "timer:armed:13:00", 40, None)]))
@@ -377,9 +414,11 @@ def test_briefings(tmp):
 
 def main():
     tmp = tempfile.mkdtemp(prefix="kcdmp-digest-test-")
+    # the game's own Scripts.pak is never read by these tests: the not-a-quest rule sees only test_not_a_quest's own pak
+    analyze.SCRIPTS_PAK, analyze._CONCEPT_ROOTS = os.path.join(tmp, "no-scripts.pak"), None
     try:
         test_digest()
-        for t in (test_c1, test_clock_edge, test_known_local, test_c2, test_c3, test_applied, test_bad_input, test_briefings):
+        for t in (test_c1, test_clock_edge, test_known_local, test_not_a_quest, test_c2, test_c3, test_applied, test_bad_input, test_briefings):
             t(tmp)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)

@@ -441,6 +441,7 @@ public partial class GameBridge
         int n = _w137Queue.Reset();
         _w137LastHostSeq = 0;
         _w137Retries.Clear();
+        _w208QuestNextTry.Clear();
         _w137Asked.Clear();
         _w137JoinerWasActive = false;
         Console.WriteLine($"MP-W137 joiner: join 0x{joinId:x8} loads the host's world{(n > 0 ? $" -- {n} host change(s) queued before it dropped (already in that world)" : "")}; changes from now on are applied once it is up");
@@ -460,52 +461,65 @@ public partial class GameBridge
                 // host's #949 there; its profile step came out of the scene's order and a later scene never started)
                 bool sceneWait = _w137Queue.Count > 0 && Wo151OwnScenePositioning();
                 if (sceneWait) Interlocked.Increment(ref _w151SceneDeferred);
-                while (!sceneWait && budget-- > 0 && W137Joiner && Wo137Active(W151MirrorHolding) && _w137Queue.TryPeek(out var c))
-                {
-                    if (!await Wo137ApplyOneAsync(c)) break;   // not now (the DLL did not answer, the node is asleep): the next tick tries again
-                    _w137Queue.Remove(c);   // exactly this one: a correction put in front meanwhile stays
-                }
+                // not now (the DLL did not answer, the node is asleep): the next tick tries again -- WO-208 D.2: past a sleeping node
+                bool aside = W208("quest_wait_aside");
+                if (!sceneWait)
+                    await Wo208Rules.DrainQuestTickAsync(_w137Queue, c => Wo208QuestStepAsync(c, aside), () => W137Joiner && Wo137Active(W151MirrorHolding), aside, budget);
                 if (W137Joiner && Wo137Active(W151MirrorHolding)) await Wo151ProcessStashedPartsAsync();   // WO-151 3.1
             }
             catch (Exception ex) { Console.WriteLine($"MP-W137 drain failed: {ex.GetType().Name}: {ex.Message}"); }
         }
     }
 
-    /// <summary>One host change onto this copy. False = keep it (try again next tick).</summary>
-    private async Task<bool> Wo137ApplyOneAsync(QuestChange c)
+    private readonly ConcurrentDictionary<string, long> _w208QuestNextTry = new(StringComparer.Ordinal);
+
+    /// <summary>WO-208 D.2: a change waiting aside for its sleeping node is tried once a second, not on every 50 ms tick.</summary>
+    private async Task<Wo208Rules.QuestStep> Wo208QuestStepAsync(QuestChange c, bool aside)
     {
-        if (!Wo206Admit(Wo206Cat.Quest, c.WorldEpoch, $"queued host change #{c.Seq} {c.Path}")) return true;   // WO-206 E: the host loaded since
-        if (Wo137Rules.PerMachine(c)) { Wo137Veto("apply-per-machine"); return true; }
-        if (_w154Contest.IsContested(c.Path)) { Wo137Veto("apply-contested"); return true; }   // WO-154 1: each world's own
+        long now = Environment.TickCount64;
+        if (aside && _w208QuestNextTry.TryGetValue(c.Path, out long next) && now < next) return Wo208Rules.QuestStep.NodeWaits;
+        var r = await Wo137ApplyOneAsync(c, aside);
+        if (r == Wo208Rules.QuestStep.NodeWaits && aside) _w208QuestNextTry[c.Path] = now + Wo208Rules.QuestAsideEveryMs;
+        else _w208QuestNextTry.TryRemove(c.Path, out _);
+        return r;
+    }
+
+    /// <summary>One host change onto this copy. Not Done = keep it (try again: its node is asleep here, or the DLL did not answer).</summary>
+    private async Task<Wo208Rules.QuestStep> Wo137ApplyOneAsync(QuestChange c, bool aside = false)
+    {
+        const Wo208Rules.QuestStep Done = Wo208Rules.QuestStep.Done;
+        if (!Wo206Admit(Wo206Cat.Quest, c.WorldEpoch, $"queued host change #{c.Seq} {c.Path}")) return Done;   // WO-206 E: the host loaded since
+        if (Wo137Rules.PerMachine(c)) { Wo137Veto("apply-per-machine"); return Done; }
+        if (_w154Contest.IsContested(c.Path)) { Wo137Veto("apply-contested"); return Done; }   // WO-154 1: each world's own
         // WO-147: a correction fires only while this copy still differs from the host's value (the field's
         // "carryingBags SetCart 4->2 (the host had 4)": an earlier correction's cascade had already put it on 4).
-        if (c.Seq == 0 && c.Port.Length > 0 && await Wo147CorrectionStillNeededAsync(c) == false) return true;
+        if (c.Seq == 0 && c.Port.Length > 0 && await Wo147CorrectionStillNeededAsync(c) == false) return Done;
         if (c.Port.Length == 0)
         {
             Interlocked.Increment(ref _w137ApplyFail); Wo137Veto("apply-no-port");
             Console.WriteLine(FormattableString.Invariant($"MP-W137 joiner: host change #{c.Seq} {c.Path} {c.Old}->{c.New} came through no port -- not applicable here (the checkpoint compares it)"));
-            return true;
+            return Done;
         }
         // WO-200 I.3: a change the host's own conversation made reaches the host's Henry only (the talker-only rules hold while it applies)
         var r = await _combat.Wo137ApplyAsync(c.Seq, c.Path, c.Port, mirrorTalker: c.InClosure && W200("s1_route"));
         if (r is not { } a)
         {
             int n = _w137Retries.AddOrUpdate(c.Path, 1, (_, k) => k + 1);
-            if (n <= 20) return false;
+            if (n <= 20) return Wo208Rules.QuestStep.NoAnswer;
             _w137Retries.TryRemove(c.Path, out _);
             Interlocked.Increment(ref _w137ApplyFail);
             Console.WriteLine($"MP-W137 joiner: host change #{c.Seq} {c.Path} {c.Port}: the DLL did not answer 20 times -- dropped");
-            return true;
+            return Done;
         }
         if (Wo137Rules.Retryable(a.Result))
         {
             int n = _w137Retries.AddOrUpdate(c.Path, 1, (_, k) => k + 1);
-            if (n == 1) Console.WriteLine(FormattableString.Invariant($"MP-W137 joiner: host change #{c.Seq} {c.Path} {c.Port} waits: {Wo137Rules.AppliedName(a.Result)} here (tries again)"));
-            if (n <= 600) return false;   // ~30 s of ticks
+            if (n == 1) Console.WriteLine(FormattableString.Invariant($"MP-W137 joiner: host change #{c.Seq} {c.Path} {c.Port} waits: {Wo137Rules.AppliedName(a.Result)} here (tries again{(aside ? "; the later changes go on past it" : "")})"));
+            if (n <= Wo208Rules.QuestAsleepTries(aside)) return Wo208Rules.QuestStep.NodeWaits;   // ~30 s
             _w137Retries.TryRemove(c.Path, out _);
             Interlocked.Increment(ref _w137ApplyFail);
             Console.WriteLine(FormattableString.Invariant($"MP-W137 joiner: host change #{c.Seq} {c.Path} {c.Port} still {Wo137Rules.AppliedName(a.Result)} after 30 s -- dropped (the checkpoint compares it)"));
-            return true;
+            return Done;
         }
         _w137Retries.TryRemove(c.Path, out _);
         switch (a.Result)
@@ -530,7 +544,7 @@ public partial class GameBridge
                 Console.WriteLine(FormattableString.Invariant($"MP-W137 joiner: host change #{c.Seq} {c.Path} {c.Port} not applied: {Wo137Rules.AppliedName(a.Result)}"));
                 break;
         }
-        return true;
+        return Done;
     }
 
     // ---------------------------------------------------------------- joiner: results, checkpoints

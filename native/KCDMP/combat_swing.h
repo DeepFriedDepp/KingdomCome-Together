@@ -65,6 +65,15 @@ const char* swing_result_name(SwingResult r);
 /// returns Ok, matching WO-45's live observation.
 SwingResult ghost_swing(uint32_t entityId, const char* fragSpec);
 
+/// WO-208 A (main thread): queue the host's fragment (its id, its 20-byte tag block, its priority, its flags) on this body through its
+/// own C_CombatAnimActionManager -- ghost_swing's route without the spec text. On Ok, *outAction holds one reference of the caller's
+/// (read its status at +0x28, step its priority at +0x24, drop it with release_action).
+SwingResult install_fragment(uint32_t entityId, uint32_t fragmentId, const uint8_t tags[20], int32_t priority, uint32_t flags, void** outAction);
+bool release_action(void* action);
+/// WO-208 A.2: the game's own stop of an action (IAction::Stop: never installed when still pending, blended out when running);
+/// false when the game's function is not found in this build (the caller steps the priority down instead). Main thread.
+bool stop_action(void* action);
+
 // WO-167 C3: "shown" means rendered. ghost_swing hands its reference to the queued action to the watch (true = taken); each frame the
 // watch reads the action's status until it was installed or never will be (wo167_rules.h), then drops the reference. Main thread only.
 bool swing_watch_take(uint32_t eid, void* action);

@@ -12,7 +12,7 @@ namespace KcdMp.Client;
 /// WO-203B (docs/WO-203B-findings.md): the pure rules of the minimal Act I session and the conversation camera. The bridge is
 /// GameBridge.Wo203Cam.cs; the native half is wo203_cam.cpp (ops 94 / 95); the mod's half is kdcmp.lua's area "cam".
 /// Wire texts (Conv channel, ProtocolWo203.cs; fields never hold '|', lists ';', sub-fields '~'):
-///   1 Announce  v1|cid|kind|joinable|-|anchor|participants(soul;soul)|0,0,0|-
+///   1 Announce  v1|cid|kind|joinable|-|anchor|participants(soul;soul)|0,0,0|-   (the fifth field "forced" since WO-208 C.4)
 ///   2 Join      v1|cid|auto
 ///   3 Snapshot  v1|cid|kind|anchor|participants|lines=0|open=0|timer=0/0
 ///   5 Cam       v1|cid|s1;s2;s3   each seq~tHostMs~px,py,pz~qx,qy,qz,qw~fov~cut~alias~ax,ay,az,yaw (relative to the anchor; the
@@ -53,8 +53,14 @@ public static class Wo203CamRules
 
     // ---------------------------------------------------------------- texts
 
-    public static string AnnounceText(int cid, string kind, bool joinable, string anchor, IEnumerable<string> others) =>
-        string.Create(Inv, $"v1|{cid}|{kind}|{(joinable ? 1 : 0)}|-|{anchor}|{string.Join(';', others)}|0,0,0|-");
+    public static string AnnounceText(int cid, string kind, bool joinable, string anchor, IEnumerable<string> others, bool startsByItself = false) =>
+        string.Create(Inv, $"v1|{cid}|{kind}|{(joinable ? 1 : 0)}|{(startsByItself ? ForcedMark : "-")}|{anchor}|{string.Join(';', others)}|0,0,0|-");
+
+    /// <summary>WO-208 C.4: the announce's fifth field (WO-203's unused "-") says the conversation started by itself (a quest forced it,
+    /// or an NPC opened it): the partner near the starter listens in by itself.</summary>
+    public const string ForcedMark = "forced";
+
+    public static bool AnnounceStartsByItself(string text) => text.Split('|') is { Length: 9 } f && f[0] == "v1" && f[4] == ForcedMark;
 
     public static bool TryParseAnnounce(string text, out int cid, out string kind, out bool joinable, out string anchor)
     {

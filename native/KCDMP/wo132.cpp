@@ -3,6 +3,7 @@
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 // WO-132 -- see wo132.h.
 #include "wo132.h"
+#include "wo208.h"
 #include "fault_guard.h"
 
 #include <windows.h>
@@ -132,6 +133,7 @@ uint8_t handle(const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t
         const double now = now_s();
         void* soul = hits::soul_of_eid(eid);
         if (!soul) { c_fail.fetch_add(1); return kRNoActor; }
+        if (wo208::probe_only(eid)) return kRNoActor;   // WO-208 A.1: the probe's copy has one owner
         uint8_t first = 0, sk = 0;
         // Only a copy near this player engages it (15 m); a farther one is let go.
         float dist = -1;
@@ -383,6 +385,8 @@ bool release_copy(uint32_t eid, const char* why) {
 }
 
 bool release_dead(uint32_t eid) { return release_copy(eid, "the copy is dead (WO-195)"); }
+
+bool engaged(uint32_t eid) { return eid != 0 && is_engaged(eid); }
 
 void on_pipe_closed() {
     // Nothing drives the engaged copies any more: let them go (the Lua copy

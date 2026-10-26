@@ -338,6 +338,9 @@ constexpr uint8_t kWo163Reply         = 0xAC;
 // WO-184: the unsolicited 0xAD Menu [opened] -- the ESC menu's edge in a session (wo138.cpp's PauseGame gate; the
 // same value as wo138_rules.h kMenuFrame, pinned by the native tests and CombatPipe.MenuOut's test).
 constexpr uint8_t kMenuOut            = 0xAD;
+// WO-208 B: the unsolicited 0xAE Defence [attackerEid:4][outcome:1][st:4f][hp:4f] -- an engaged copy's blow on the local player judged by
+// this machine's own engine (wo208_rules.h kDef*: 1 hit, 2 blocked, 3 perfect block, 4 guard broken, 5 missed) and the damage it applied.
+constexpr uint8_t kDefenceOut         = 0xAE;
 constexpr uint8_t kSaveListReply      = 0x8D;   // [ok][seq][listed][idx:2][count:2][current][contPl][contIdx:2][nameLen][contName]
 constexpr uint8_t kLocalAction        = 0x96;   // unsolicited: [kind][phase][ic][zone][type][flags][guid:16][eid:4][nameLen][name]
 constexpr uint8_t kPvpHitOut          = 0x97;   // unsolicited: [victimEid:4][st:4f][hp:4f][flags][material]

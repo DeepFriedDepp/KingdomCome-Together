@@ -125,6 +125,10 @@ public partial class GameBridge
             !int.TryParse(f[1], NumberStyles.None, CultureInfo.InvariantCulture, out int ratio1000) || ratio1000 < 1000 || ratio1000 > 100000) return;
         if (!W200("world_clock_from_host") || !_joinedWorld || _isDamageAuthority) { await Wo200RatioAsync(15.0, "off"); return; }
         if (_localSkipActive || _w140LocalSkipping || Wo136Holding || _lastPolledWorldTime is not uint mine) { if (_w200Slewing) await Wo200RatioAsync(15.0, "a skip or a load"); return; }
+        // WO-208 D.2 (mp_clock_stands_with_host): this clock stands with the host's (WO-144: the host is in a dialogue, ratio 0) -- no
+        // correction writes a running ratio over it (the baseline: the joiner's clock ran on through the host's talks, up to 917 game s
+        // ahead, then was pulled back in jumps)
+        if (!Wo208Rules.ClockSlewAllowed(_w144Following, W208("clock_stands_with_host"))) { Wo208NoteClockHeld(); return; }
         double hostRatio = ratio1000 / 1000.0;
         double myNow = mine + (DateTime.UtcNow - _lastPollUtc).TotalSeconds * _w200Ratio;
         double err = myNow - host;   // game seconds this clock is ahead of the host's

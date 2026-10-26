@@ -91,6 +91,7 @@ public sealed class CombatPipe : IAsyncDisposable
     private const byte NpcAvatarHit      = 0x9A;   // WO-132, unsolicited: [victimEid:4][st:4f][hp:4f][attackerEid:4][flags][nameLen][name]
     private const byte NpcCombatOut      = 0x9B;   // WO-132, unsolicited: a watched NPC's combat state (wo132.h)
     private const byte DiscardedHit      = 0x9C;   // WO-132, unsolicited: [attackerEid:4][st:4f][hp:4f]
+    private const byte DefenceOut        = 0xAE;   // WO-208 B, unsolicited: [attackerEid:4][outcome:1][st:4f][hp:4f] (native pipe_server.h kDefenceOut)
     private const byte Wo137             = 0x23;   // WO-137 [op][...] -> 0x9D [ok][seq][op][reason][payload] (native wo137.h)
     private const byte Wo137Reply        = 0x9D;
     private const byte QuestChangeOut    = 0x9E;   // WO-137, unsolicited: one quest State change (QuestChange)
@@ -160,6 +161,8 @@ public sealed class CombatPipe : IAsyncDisposable
 
     /// <summary>WO-132: an engaged copy's local hit on the player was put back (attacker eid, stamina, health).</summary>
     public Func<uint, float, float, Task>? OnDiscardedHit { get; set; }
+    /// <summary>WO-208 B: an engaged copy's blow on the local player judged by this machine's engine (attacker eid, outcome, stamina, health).</summary>
+    public Func<uint, byte, float, float, Task>? OnDefence { get; set; }
 
     /// <summary>
     /// WO-138: one 0xA0 frame of the DLL's NPC rows. Called ON the reader, so it only
@@ -2203,6 +2206,16 @@ public sealed class CombatPipe : IAsyncDisposable
                         try { OnTrespass?.Invoke(body[1], body[2], tx, ty, tz); } catch (Exception ex) { Console.WriteLine($"[wo139] trespass edge not handled: {ex.Message}"); }
                     }
                     else Console.WriteLine($"[wo139] malformed Crime frame ({body.Length} bytes)");
+                }
+                else if (type == DefenceOut && body.Length == 13)
+                {
+                    if (OnDefence is { } h)
+                    {
+                        uint at = BinaryPrimitives.ReadUInt32LittleEndian(body.AsSpan(0));
+                        byte outcome = body[4];
+                        float st = BinaryPrimitives.ReadSingleLittleEndian(body.AsSpan(5)), hp = BinaryPrimitives.ReadSingleLittleEndian(body.AsSpan(9));
+                        _ = Task.Run(async () => { try { await h(at, outcome, st, hp); } catch (Exception ex) { Console.WriteLine($"[wo208] defence not handled: {ex.Message}"); } });
+                    }
                 }
                 else if (type == DiscardedHit && body.Length == 12)
                 {

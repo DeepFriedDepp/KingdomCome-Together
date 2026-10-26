@@ -68,8 +68,10 @@ public partial class GameBridge
             lock (_w3cLock) foreach (byte p in to) talk.Told.Add(p);
             Interlocked.Increment(ref _w3cAnnounced);
             Interlocked.Increment(ref _w204TalksAnnounced);
-            Console.WriteLine($"WO203B-TALK this player's conversation {t.Cid} ({t.Kind}) with {string.Join(',', t.Others)} -- announced to {to.Count} partner(s)");
-            string text = Wo203CamRules.AnnounceText(t.Cid, t.Kind, true, talk.Anchor, t.Others);
+            // WO-208 C.4: a conversation that started by itself (a quest forced it, an NPC opened it) is marked: the partner near listens in
+            bool byItself = Wo204Rules.ParseDialogueHead(line) is { } head && Wo208Rules.StartsByItself(head.Origin);
+            Console.WriteLine($"WO203B-TALK this player's conversation {t.Cid} ({t.Kind}) with {string.Join(',', t.Others)} -- announced to {to.Count} partner(s){(byItself ? " (it started by itself: the partner near listens in)" : "")}");
+            string text = Wo203CamRules.AnnounceText(t.Cid, t.Kind, true, talk.Anchor, t.Others, byItself);
             _ = Task.Run(async () => { foreach (byte p in to) await Wo203SendConvAsync(p, Protocol.ConvAnnounce, text); });
             return;
         }
@@ -176,12 +178,14 @@ public partial class GameBridge
             case Protocol.ConvAnnounce:
                 if (!Wo203CamRules.TryParseAnnounce(m.Text, out int acid, out _, out bool joinable, out string anchor)) { Interlocked.Increment(ref _w3cBad); return; }
                 lock (_w3cLock) { if (joinable) _w3cOffers[src] = (acid, anchor); else _w3cOffers.Remove(src); }
-                Console.WriteLine($"WO203B-OFFER partner {src}: conversation {acid} with '{anchor}' {(joinable ? "joinable" : "not joinable")}");
-                _ = ExecLuaAsync($"if KCD2MP_W203Offer then KCD2MP_W203Offer({src}, {acid}, {(joinable ? 1 : 0)}, \"{EscapeLua(anchor)}\") end");
+                // WO-208 C.4 (mp_conv_autojoin): a conversation that started by itself -- the mod listens in when this player is near and free
+                bool auto = joinable && Wo203CamRules.AnnounceStartsByItself(m.Text) && W208("conv_autojoin");
+                Console.WriteLine($"WO203B-OFFER partner {src}: conversation {acid} with '{anchor}' {(joinable ? "joinable" : "not joinable")}{(auto ? " (started by itself: auto-join within 30 m)" : "")}");
+                _ = ExecLuaAsync($"if KCD2MP_W203Offer then KCD2MP_W203Offer({src}, {acid}, {(joinable ? 1 : 0)}, \"{EscapeLua(anchor)}\", {(auto ? 1 : 0)}) end");
                 break;
             case Protocol.ConvJoin:
             {
-                if (!Wo203CamRules.TryParseCid(m.Text, out int jcid, out _)) { Interlocked.Increment(ref _w3cBad); return; }
+                if (!Wo203CamRules.TryParseCid(m.Text, out int jcid, out string jrest)) { Interlocked.Increment(ref _w3cBad); return; }
                 W203Talk? talk;
                 lock (_w3cLock) { talk = _w3cTalk; if (talk is null || talk.Cid != jcid) talk = null; else talk.Listeners.Add(src); }
                 if (talk is null)
@@ -192,7 +196,7 @@ public partial class GameBridge
                 }
                 Interlocked.Increment(ref _w3cJoinsIn);
                 Interlocked.Increment(ref _w3cSnapshots);
-                Console.WriteLine($"WO203B-JOIN partner {src} listens to conversation {jcid} -- snapshot sent{(talk.CamUp ? ", sampler arming" : "; the camera starts with the dialogue's")}");
+                Console.WriteLine($"WO203B-JOIN partner {src} listens to conversation {jcid}{(jrest == "1" ? " (auto-joined: it started by itself)" : "")} -- snapshot sent{(talk.CamUp ? ", sampler arming" : "; the camera starts with the dialogue's")}");
                 _ = Wo203SendConvAsync(W3cPeerOf(src), Protocol.ConvSnapshot, Wo203CamRules.SnapshotText(talk.Cid, talk.Kind, talk.Anchor, talk.Others));
                 W3cArmIfListened(talk);
                 Wo204OnConvJoined(talk, src);   // WO-204 III.4: the lines so far and the open options
@@ -248,16 +252,17 @@ public partial class GameBridge
                 else if (f[0] == "camera") _w3cCameraOn = on;
                 Console.WriteLine($"WO203B-TOGGLE {f[0]} {(on ? "on" : "off")}");
                 break;
-            case "w203_join" when f.Length == 2 && byte.TryParse(f[0], out byte starter) && int.TryParse(f[1], out int cid):
+            case "w203_join" when f.Length is 2 or 3 && byte.TryParse(f[0], out byte starter) && int.TryParse(f[1], out int cid):
             {
+                bool autoJoin = f.Length == 3 && f[2] == "auto";   // WO-208 C.4: the mod listened in by itself
                 bool ok;
                 lock (_w3cLock)
                 {
                     ok = _w3cJoinOn && _w3cOffers.TryGetValue(starter, out var o) && o.Cid == cid && _w3cListen is not { Listening: true };
                     if (ok) _w3cListen = new W203Listen { Starter = starter, Cid = cid, Anchor = _w3cOffers[starter].Anchor, Joining = true, AskedMs = Environment.TickCount64 };
                 }
-                Console.WriteLine($"WO203B-JOIN asking partner {starter} to join conversation {cid}{(ok ? "" : " -- refused here (no such offer / already listening / switched off)")}");
-                if (ok) _ = Wo203SendConvAsync(W3cPeerOf(starter), Protocol.ConvJoin, Wo203CamRules.JoinText(cid, false));
+                Console.WriteLine($"WO203B-JOIN asking partner {starter} to join conversation {cid}{(autoJoin ? " (auto)" : "")}{(ok ? "" : " -- refused here (no such offer / already listening / switched off)")}");
+                if (ok) _ = Wo203SendConvAsync(W3cPeerOf(starter), Protocol.ConvJoin, Wo203CamRules.JoinText(cid, autoJoin));
                 break;
             }
             case "w203_leave" when f.Length >= 2 && byte.TryParse(f[0], out byte st) && int.TryParse(f[1], out int lcid):

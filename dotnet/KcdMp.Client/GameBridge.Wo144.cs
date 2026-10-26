@@ -123,6 +123,7 @@ public partial class GameBridge
         bool want = (now & Wo138Codec.ReasonClock) != 0 && _joinedWorld && !_w140Separate;
         if (want == _w144Following && ((was ^ now) & Wo138Codec.ReasonClock) == 0) return;
         _w144Following = want;
+        Interlocked.Exchange(ref _w208ClockHeldTold, 0);   // WO-208 D.2: the next stand is told again
         Console.WriteLine($"MP-W144 the host's clock {(want ? "stands -- this clock stands with it" : "runs -- this clock runs with it")}");
         _ = ExecLuaAsync($"if KCD2MP_W144FollowHostClock then KCD2MP_W144FollowHostClock({(want ? "true" : "false")}, \"host\") end");
     }

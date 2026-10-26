@@ -498,6 +498,17 @@ public sealed class QuestApplyQueue
         }
     }
 
+    /// <summary>WO-208 D.2: the first change whose path is not in <paramref name="aside"/> (a waiting node's later changes stay behind it).</summary>
+    public bool TryPeekPast(IReadOnlySet<string>? aside, out QuestChange c)
+    {
+        lock (_gate)
+        {
+            for (var n = _q.First; n is not null; n = n.Next)
+                if (aside is null || !aside.Contains(n.Value.Path)) { c = n.Value; return true; }
+            c = default; return false;
+        }
+    }
+
     public void Pop() { lock (_gate) { if (_q.First is not null) _q.RemoveFirst(); } }
 
     /// <summary>

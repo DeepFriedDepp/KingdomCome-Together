@@ -91,6 +91,20 @@ public partial class GameBridge
         var sw = named ? pair.Swing : null;
         byte zone = named && _w132LastSent.TryGetValue(attacker, out var ev) ? (byte)ev.State.AtkZone : (byte)0;
         string hostWhy = sw is not null ? "-" : !named ? "no-attacker" : missile ? "missile" : pair.Why;
+        // WO-208 B (mp_defence_local): the joiner's own engine judges this copy's blow -- the host waits for its outcome and sends no
+        // verdict when it comes; none in time: the host's verdict, as before
+        if (named && !missile && W208("defence_local"))
+        {
+            var d = await Wo208AwaitOutcomeAsync(ghost, attacker);
+            if (d.Judged)
+            {
+                Wo208NoteJudged(ghost, attacker, d.Outcome, d.Hp, d.St, verdict, d.WaitedMs);
+                Wo166NoteStruck(ghost, attacker);   // WO-166 R1: who struck this figure (the respawn amnesty names them)
+                if (Wo208Rules.HostRecoils(W208("defence_recoil"), d.Outcome, zone, verdict)) _ = Wo208AttackerRecoilAsync(attacker, d.Outcome, sw, verdict);   // B.4
+                return;
+            }
+            Wo208NoteFallback(ghost, attacker, verdict, d.WaitedMs, d.Outcome);
+        }
         string how = "fallback";
         uint hid = 0;
         if (config.HitVerdictEnabled && _wo122Stream is not null)
@@ -203,6 +217,7 @@ public partial class GameBridge
     /// <summary>The verdict's judgement (was its swing shown?), the lunge when not, and its damage (waitedMs: WO-167 C3's wait, -1 none).</summary>
     private async Task Wo161JudgeApplyAsync(uint hitId, HitVerdictMsg m, string by, long waitedMs, CancellationToken ct)
     {
+        if (Wo208SkipHostVerdict(m.Attacker, hitId)) return;   // WO-208 B: this machine's engine judged that blow -- one blow, one judge
         long now = Environment.TickCount64;
         long? played = null, recv = null; string? refused = null; bool fits = false;
         if (m.Attacker.Length > 0)

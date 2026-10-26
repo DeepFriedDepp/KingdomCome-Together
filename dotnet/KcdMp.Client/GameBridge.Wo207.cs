@@ -253,7 +253,11 @@ public partial class GameBridge
         if (!W207("joiner_npc_triggers")) return;
         var idx = await Wo147QuestIndexAsync();
         if (idx is null) { Console.WriteLine("WO207-QUIET Scripts.pak not read -- the joiner's NPC triggers are not quiet"); return; }
-        var paths = idx.NpcTriggerPaths().Where(p => Encoding.ASCII.GetByteCount(p) <= 400).ToList();
+        // WO-208 D.2 (mp_joiner_player_triggers): the joiner's own player-watching AreaTriggers go quiet too -- the host's value is mirrored
+        var all = idx.NpcTriggerPaths().ToList();
+        int playerN = 0;
+        if (W208("joiner_player_triggers")) { var pl = idx.PlayerTriggerPaths(); playerN = pl.Count; all.AddRange(pl); }
+        var paths = all.Distinct(StringComparer.Ordinal).Where(p => Encoding.ASCII.GetByteCount(p) <= 400).ToList();
         int resolved = 0, missing = 0, i = 0;
         while (i < paths.Count)
         {
@@ -273,6 +277,6 @@ public partial class GameBridge
             if (r is not { Ok: true } x || x.Payload.Length < 2) { Console.WriteLine($"WO207-QUIET the DLL refused NPC triggers at {i}/{paths.Count}"); return; }
             resolved += x.Payload[0]; missing += x.Payload[1];
         }
-        Console.WriteLine($"WO207-QUIET joiner: {resolved} NPC trigger(s) of the game's quest files are quiet here ({missing} of {paths.Count} not loaded now) -- the host's world decides their States");
+        Console.WriteLine($"WO207-QUIET joiner: {resolved} NPC trigger(s) of the game's quest files are quiet here ({missing} of {paths.Count} not loaded now; {playerN} of them watch the player, WO-208 D.2) -- the host's world decides their States");
     }
 }

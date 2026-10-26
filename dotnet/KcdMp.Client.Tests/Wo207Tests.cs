@@ -8,6 +8,12 @@ using Xunit;
 namespace KcdMp.Client.Tests;
 
 /// <summary>WO-207: the queue's trace (B.1), the decision timer's rules (A.3), the keep-awake flag (C.2).</summary>
+/// <summary>WO-208: the WO-207 trace's counters are process-wide (Wo207Trace is static): its tests run apart from every other class (the
+/// gates' runs saw The_trace_charges_a_handlers_calls_to_its_kind fail beside other classes' readers, pass alone).</summary>
+[CollectionDefinition("Wo207Trace", DisableParallelization = true)]
+public class Wo207TraceCollection { }
+
+[Collection("Wo207Trace")]
 public class Wo207Tests
 {
     // ---- A.3 the decision timer

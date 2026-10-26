@@ -354,6 +354,7 @@ def s_fight(r, secs=40.0):
         t = r.a.ask(FIND_BANDITS, 'W206K', 6)
         if not t or t.startswith('none'): return False, 'no-bandits', t
         b1, b2, x, y, z = t.split()
+        r.bandits = [b1, b2]   # WO-208 D.1: the loot step's body
         x, y = float(x), float(y)
         r.a.teleport(x + 4.0, y)
         r.b.teleport(x + 5.5, y + 1.0)
@@ -460,37 +461,148 @@ def s_talk(r, secs=float(os.environ.get('KCDMP_RIG_TALK_S', '150'))):
     return fn
 
 
-CHEST_NEAR = ('local best, bd; local p = player:GetWorldPos(); for _, c in ipairs({"Stash", "CartStash", "DestroStash"}) do '
+CHEST_NEAR = ('W208PICK = nil; local best, bd; local p = player:GetWorldPos(); for _, c in ipairs({"Stash", "CartStash", "DestroStash"}) do '
               'for _, e in ipairs(System.GetEntitiesByClass(c) or {}) do if e.inventory and #(e.inventory:GetInventoryTable() or {}) > 0 then '
               'local q = e:GetWorldPos(); local raw = (q.x - p.x) ^ 2 + (q.y - p.y) ^ 2; local tz = System.GetTerrainElevation({x = q.x, y = q.y, z = 0}) or q.z; '
               'local dd = raw; if q.z < tz - 1.5 then dd = raw + 1e6 end; '   # WO-207: a buried stash only when nothing else is near (the mod's reach)
               'if raw < 250000 and (not bd or dd < bd) then bd = dd; best = e end end end end; '
-              'if best then local q = best:GetWorldPos(); System.LogAlways(string.format("[W206C] %s %.2f %.2f %.2f", best:GetName(), q.x, q.y, q.z)) '
+              'if best then W208PICK = best; local q = best:GetWorldPos(); System.LogAlways(string.format("[W206C] %s %.2f %.2f %.2f", best:GetName(), q.x, q.y, q.z)) '
               'else System.LogAlways("[W206C] none") end')
 
-TAKE_ONE = ('local e = System.GetEntityByName("%s"); local w = e and (e.inventory:GetInventoryTable() or {})[1]; local cls = "?"; '
+TAKE_ONE = ('local e = W208PICK or System.GetEntityByName("%s"); local w = e and (e.inventory:GetInventoryTable() or {})[1]; local cls = "?"; '
             'if w then local it = ItemManager.GetItem(w); if it then cls = tostring(it.class) end; pcall(function() player.inventory:AddItem(w) end) end; '
             'System.LogAlways("[W206L] " .. tostring(w) .. " " .. cls)')
+
+
+REACH = ('local e = W208PICK or System.GetEntityByName("%s"); local p = player:GetWorldPos(); local q = e and e:GetWorldPos(); '
+         'System.LogAlways(string.format("[W208R] %%.2f", q and math.sqrt((q.x - p.x) ^ 2 + (q.y - p.y) ^ 2 + (q.z - p.z) ^ 2) or -1))')
+
+FIND_BODY = ('W208PICK = nil; local best, bd; local p = player:GetWorldPos(); for _, e in ipairs(System.GetEntitiesInSphere(p, 500) or {}) do '
+             'if (e.class == "NPC" or e.class == "NPC_Female") and e.GetName and e.inventory and e.actor then local n = e:GetName(); local d = false; '
+             'pcall(function() d = e.actor:IsDead() == true end); local k = 0; pcall(function() k = #(e.inventory:GetInventoryTable() or {}) end); '
+             'if d and k > 0 and not string.find(n, "kcd2mp_", 1, true) and not string.find(n, "DialogTwin_", 1, true) then '
+             'local q = e:GetWorldPos(); local dd = (q.x - p.x) ^ 2 + (q.y - p.y) ^ 2; if not bd or dd < bd then bd = dd; best = e end end end end; '
+             'if best then W208PICK = best; local q = best:GetWorldPos(); System.LogAlways(string.format("[W208B] %s %.2f %.2f %.2f %d", best:GetName(), q.x, q.y, q.z, '
+             '#(best.inventory:GetInventoryTable() or {}))) else System.LogAlways("[W208B] none") end')
+
+# the bench's body (WO-208 D.1): the host's own actor kill on a bandit of the fight step (the host's world decides; its death reaches the joiner)
+KILL_ONE = ('local e = System.GetEntityByName("%s"); local how = "none"; if e and e.actor then '
+            'if pcall(function() e.actor:Kill() end) then how = "kill" end end; local d = false; pcall(function() d = e.actor:IsDead() == true end); '
+            'if not d and e and e.soul then pcall(function() e.soul:SetState("health", 0) end); how = how .. "+health0" end; '
+            'System.LogAlways("[W208K] " .. how .. " dead=" .. tostring(d))')
+
+# the joiner asks the host for the body's items the way the game's use of a body does (WO-131's wrapper -> WO-134), with the loot
+# screen's own opening left out (a console-opened loot screen stops the Lua timers, WO-201): the mod's session starts on the host's list
+OPEN_BODY = ('local e = W208PICK or System.GetEntityByName("%s"); local ok = e and KCD2MP_W134LootRequest and KCD2MP_W134LootRequest(e, function() end, player, nil); '
+             'System.LogAlways("[W208O] " .. tostring(ok))')
+
+
+def reach_teleport(c, name, x, y, z, tries=3):
+    """Beside a container or a body within the mod's reach (3 m): a write, a few seconds for the ground, the distance read back,
+    and again when the copy did not stay there (a shelf or a floor the write fell through). Returns the last distance."""
+    d = None
+    for i in range(tries):
+        if z is None: c.teleport(x + 0.8, y)
+        else: c.teleport(x + 0.8, y, z + 0.05 + 0.4 * i)
+        time.sleep(4)   # the pass snapshots a container on arrival
+        t = c.ask(REACH % name, 'W208R', 5)
+        try: d = float(t)
+        except (TypeError, ValueError): d = None
+        if d is not None and 0 <= d <= 2.5: return d
+    return d
+
+
+def loot_body(r, bandits):
+    """WO-208 D.1, the body half: one item out of a dead NPC's body on the joiner, through the host. The host kills one bandit of the
+    fight step (or a body already lies near); the joiner's mod asks the host for its items (WO134-BODY open), the item moves to the
+    joiner's pack, the mod's session sends the take (WO134-BODY take), the host takes it out of its body (host-take ... ok) and the
+    joiner hears back (result ... ok). A body the host's own world emptied meanwhile (d9-loot5: the crime scene's bandit looted it on
+    the host; the open then showed the host's 0 items, as it should) is the bench's pick: the next body instead, once."""
+    ok, why, detail = loot_body_once(r, bandits)
+    if why == 'body-empty-on-host':
+        ok2, why2, detail2 = loot_body_once(r, bandits)
+        detail2['first'] = detail
+        return ok2, why2, detail2
+    return ok, why, detail
+
+
+def loot_body_once(r, bandits):
+    t = r.b.ask(FIND_BODY, 'W208B', 6)
+    killed = None
+    if (not t or t == 'none') and bandits:
+        killed = r.a.ask(KILL_ONE % bandits[0], 'W208K', 6)
+        for _ in range(12):
+            time.sleep(5)
+            t = r.b.ask(FIND_BODY, 'W208B', 6)
+            if t and t != 'none': break
+    if not t or t == 'none': return False, 'no-body', {'killed': killed}
+    name, x, y, z, n = t.split()
+    # at the body's own height first (a body on a floor; d9-loot5's first take stood 44 m off after three terrain-height writes), then the
+    # terrain's; a body the copy cannot reach is the bench's, said as such
+    d = reach_teleport(r.b, name, float(x), float(y), float(z))
+    if d is None or d < 0 or d > 2.5: d = reach_teleport(r.b, name, float(x), float(y), None)
+    ma, mb = r.a.mark(), r.b.mark()
+    detail = {'body': name, 'items': int(n), 'killed': killed, 'dist': d}
+    if d is None or d < 0 or d > 2.5: return False, 'body-out-of-reach', detail
+    opened = r.b.ask(OPEN_BODY % name, 'W208O', 5)
+    mo = r.b.wait('k', mb['k'], r'WO134-BODY open npc=%s -- the loot screen opens on the host.s items \((\d+)\)' % re.escape(name), 20)
+    detail.update({'open_call': opened, 'opened': mo.group(0)[:120] if mo else None})
+    if not mo: return False, 'body-not-opened', detail
+    if mo.group(1) == '0': return False, 'body-empty-on-host', detail
+    # the body's items on the joiner are the host's, refreshed on the open (WO134-BODY state ... copy deleted=N created=N): a take right
+    # then can find the list empty for a moment (d9-loot5's last take: "nil") -- tried again, at most three times
+    for i in range(3):
+        detail['took'] = r.b.ask(TAKE_ONE % name, 'W206L', 5)
+        if detail['took'] and not str(detail['took']).startswith('nil'): break
+        detail['take_retries'] = i + 1
+        time.sleep(1.5)
+    mt = r.b.wait('k', mb['k'], r'WO134-BODY take npc=%s cls=(\S+) amt=(\d+) tok=(\S+)' % re.escape(name), 20)
+    if not mt: return False, 'body-take-not-seen', detail
+    detail['joiner_take'] = mt.group(0)[:160]
+    mh = r.a.wait('k', ma['k'], r'WO134-BODY host-take npc=%s cls=\S+ amt=\d+ from=\S+ -> (\S+)' % re.escape(name), 20)
+    detail['host_take'] = mh.group(0)[:160] if mh else None
+    mr = r.b.wait('k', mb['k'], r'WO134-BODY result npc=%s tok=%s (\S+)' % (re.escape(name), re.escape(mt.group(3))), 20)
+    detail['result'] = mr.group(0)[:160] if mr else None
+    if not mh: return False, 'host-not-told', detail
+    if not mr or mr.group(1) != 'ok': return False, 'body-take-refused', detail
+    return True, 'ok', detail
 
 
 def s_loot(r):
     """One loot take: the joiner takes one item out of a chest within 500 m (moved beside it first) into its own pack, the way the
     loot screen moves it; the mod's container pass sees it (WO134-CHEST take) and the joiner's agent records it in its own ledger
-    for the host's world (chests are per player, WO-134)."""
+    for the host's world (chests are per player, WO-134). WO-208 D.1: then one item out of a body (loot_body); both must pass."""
     def fn():
+        ok, why, det = chest_take()
+        if not ok: return ok, why, det
+        bok, bwhy, bdet = loot_body(r, getattr(r, 'bandits', None))
+        return bok, ('ok' if bok else 'body-' + bwhy if not bwhy.startswith('body') else bwhy), {'chest': det, 'body': bdet}
+
+    def chest_take():
         t = r.b.ask(CHEST_NEAR, 'W206C', 6)
         if not t or t == 'none': return False, 'no-chest', t
         name, x, y, z = t.split()
-        r.b.teleport(float(x) + 0.8, float(y), float(z) + 0.05)   # within the mod's 3 m reach, at the chest's own height (shelves)
-        time.sleep(4)   # the pass snapshots a container on arrival
+        dist = reach_teleport(r.b, name, float(x), float(y), float(z))   # within the mod's 3 m reach, at the chest's own height (shelves)
+        # never take from a chest the copy was not moved to (d14-smoke2: 931 m from Stash19 after the timed talk) -- the bench's, said so
+        if dist is None or dist < 0 or dist > 2.5: return False, 'chest-out-of-reach', {'chest': name, 'dist': dist}
         ma, mb = r.a.mark(), r.b.mark()
         took = r.b.ask(TAKE_ONE % name, 'W206L', 5)
         mk = r.b.wait('k', mb['k'], r'WO134-CHEST take chest=(\S+) cls=(\S+) n=(\d+)', 20)
-        if not mk: return False, 'no-take-seen', {'chest': name, 'took': took}
+        if not mk:
+            # WO-208 D.1: which gate kept the joiner's chest pass from seeing the take (its loop alive, the copy guard, the reach)
+            diag = r.b.ask('local w = KCD2MP.w134 or {}; local w1 = KCD2MP.w131 or {}; local p = player:GetWorldPos(); '
+                           'local e = System.GetEntityByName("%s"); local q = e and e:GetWorldPos(); '
+                           'System.LogAlways(string.format("[W208L] loop=%%s alive_age=%%.1f tick_age=%%.1f joiner=%%s shared=%%s chests=%%s '
+                           'w131=%%s w131_guard=%%s w131_age=%%.1f authority=%%s hitsensor=%%s dist=%%.2f", tostring(KCD2MP.w134LoopRunning), '
+                           'os.clock() - (KCD2MP._w134LoopAliveAt or -1e6), os.clock() - (w.aliveAt or -1e6), tostring(w.joiner), tostring(w.shared), '
+                           'tostring(w.chests), tostring(KCD2MP_W131IsActive and KCD2MP_W131IsActive()), tostring(w1.guard), '
+                           'os.clock() - (w1.aliveAt or -1e6), tostring(KCD2MP.wo102 and KCD2MP.wo102.authorityHost), tostring(KCD2MP.hitSensorOn), '
+                           'q and math.sqrt((q.x - p.x) ^ 2 + (q.y - p.y) ^ 2 + (q.z - p.z) ^ 2) or -1))' % name, 'W208L', 5)
+            return False, 'no-take-seen', {'chest': name, 'took': took, 'chest_pass': diag, 'dist': dist}
         # chests are per player (WO-134): the take goes into this joiner's own ledger for the host's world (stored with its next
         # Henry snapshot); the host is not told live, by design
         ml = r.b.wait('a', mb['a'], r'MP-WO134 chests: joiner took (\d+) x (\S+) from (\S+) .*ledger (\d+)', 20)
-        detail = {'chest': name, 'took': took, 'joiner_lua': mk.group(0)[:160], 'joiner_agent': ml.group(0)[:200] if ml else None}
+        detail = {'chest': name, 'took': took, 'dist': dist, 'joiner_lua': mk.group(0)[:160], 'joiner_agent': ml.group(0)[:200] if ml else None}
         return (True, 'ok', detail) if ml else (False, 'not-in-ledger', detail)
     return fn
 
@@ -1047,8 +1159,16 @@ def s_c2tavern(r, secs=float(os.environ.get('KCDMP_RIG_C2_S', '600'))):
                 'if d < now then d = d + 86400 end; Calendar.SetWorldTime(d)')
         time.sleep(45)   # schedules move the drinkers in, the joiner's clock is pulled to the host's
         r.a.teleport(x + 1.2, y, z + 0.05)
-        r.b.teleport(x + 2.2, y + 0.8, z + 0.05)
-        time.sleep(5)
+        # WO-208: the joiner's long jump into the tavern landed before its interior streamed in (the baseline's joiner stood outside
+        # with 1 NPC within 15 m while the host had 11): put it beside the innkeeper again until it stands there
+        joiner_at = None
+        for _ in range(6):
+            r.b.teleport(x + 2.2, y + 0.8, z + 0.05)
+            time.sleep(4)
+            q = r.b.pos()
+            if q and abs(q[0] - (x + 2.2)) < 3.0 and abs(q[1] - (y + 0.8)) < 3.0 and abs(q[2] - z) < 2.0:
+                joiner_at = q; break
+        time.sleep(2)
         counts = {}
         t0 = time.time()
         while time.time() - t0 < secs:
@@ -1059,11 +1179,195 @@ def s_c2tavern(r, secs=float(os.environ.get('KCDMP_RIG_C2_S', '600'))):
         near = {k: max((n for n, _m in v), default=0) for k, v in counts.items()}
         minute = {k: v[-1][1] if v else None for k, v in counts.items()}
         detail = {'innkeeper': inn, 'others': parts[4][:300] if len(parts) > 4 else '', 'npcs_within_15m_max': near, 'clock_minute_of_day': minute,
-                  'secs': secs, 't0_ms': int(t0 * 1000), 't1_ms': int(time.time() * 1000)}
+                  'secs': secs, 't0_ms': int(t0 * 1000), 't1_ms': int(time.time() * 1000), 'joiner_in_tavern': joiner_at is not None}
         if near.get(r.a.id, 0) < 3: return False, 'tavern-empty', detail
+        if joiner_at is None or near.get(r.b.id, 0) < 3: return False, 'joiner-not-in-tavern', detail   # WO-208: both players inside
         night = [m for m in minute.values() if m is not None and (m >= 20 * 60 or m < 5 * 60)]
         if len(night) < 2: return False, 'not-night', detail
         return True, 'ok', detail
+    return fn
+
+
+# ---------------------------------------------------------------- WO-208 B: the joiner's own defence
+
+def s_defence(r, attackers=1, swings=40, secs=float(os.environ.get('KCDMP_RIG_DEF_S', '420'))):
+    """WO-208 B: <attackers> bandit(s) set on the joiner's figure only (the host stands off at 8 m); the joiner defends with his own keys
+    (the maintainer's allowance; send-only, his copy's window in front): the right button held for a while (block), pressed as a
+    copy's swing winds up (the strike window's own line in his DLL's log: a timed block / perfect block), released for open blows, and
+    now and then the dodge (space). Until the host has judged <swings> blows of those bandits on the figure (or <secs>). Pass: at least
+    95 % judged by the joiner's engine (WO208-DEF outcome on the host), fallbacks under 5 %, every outcome the host took is one the
+    joiner's engine logged (by attacker and order), and the host saw the figure blocking (its guard state streamed)."""
+    def fn():
+        t = r.a.ask(FIND_BANDITS3, 'W207K', 6)
+        if not t or t.startswith('none'): return False, 'no-bandits', t
+        names, x, y, z = t.split()
+        bandits = names.split(',')[:attackers]
+        group = names.split(',')   # WO-208: the group joins its fellow's attack -- every blow of the group counts (d9: bandit 5 sent, 1 and 4 struck)
+        x, y = float(x), float(y)
+        r.b.teleport(x + 3.0, y)
+        r.a.teleport(x + 11.0, y + 2.0)
+        time.sleep(4)
+        for c in (r.a, r.b): c.keep_up()
+        r.b.lua('pcall(function() player.human:DrawWeapon() end)')
+        ma, mb = r.a.mark(), r.b.mark()
+        for b in bandits: r.a.lua(ATTACK % (b, FIGURE))
+        import threading
+        sys.path.insert(0, os.path.join(rig.REPO, 'tools', 'dev-input'))
+        import game_input
+        sent = {'block_holds': 0, 'timed_blocks': 0, 'dodges': 0, 'open': 0, 'refused': 0, 'err': None}
+        stop = threading.Event()
+
+        def defender():
+            try:
+                g = game_input.Game('wo208-defence')
+                g.pids = {rec_of(r.b)['pid']}
+                if not put_front(r.b): sent['err'] = 'joiner not in front'; return
+                g.tap('tab', 80)   # lock on
+                off = r.b.size(r.b.nlog)
+                n = 0
+                while not stop.is_set():
+                    try:
+                        # a copy's swing winding up at this player (the strike window's begin line): block on it, or dodge, or take it open
+                        new = r.b.lines(r.b.nlog, off); off = r.b.size(r.b.nlog)
+                        windup = any('WO166-STRIKE' in l and ' begin ' in l for l in new)
+                        if windup:
+                            k = n % 5
+                            if k in (0, 1, 2):
+                                time.sleep(0.15 if k == 0 else 0.30)   # early / late presses: blocks and perfect blocks
+                                g.click('right', 260); sent['timed_blocks'] += 1
+                            elif k == 3:
+                                time.sleep(0.2); g.tap('space', 80); sent['dodges'] += 1
+                            else:
+                                sent['open'] += 1
+                            n += 1
+                        elif n % 7 == 6:
+                            g.click('right', 900); sent['block_holds'] += 1; n += 1   # a held guard between swings
+                    except game_input.NotFocused:
+                        sent['refused'] += 1
+                        if sent['refused'] > 20 or not put_front(r.b): break
+                        try: g.release_all()
+                        except game_input.NotFocused: pass
+                    stop.wait(0.05)
+            except BaseException as ex:
+                sent['err'] = '%s: %s' % (type(ex).__name__, ex)
+            finally:
+                try: g.release_all()
+                except BaseException: pass
+        th = threading.Thread(target=defender, daemon=True); th.start()
+        t0 = last = time.time()
+        while time.time() - t0 < secs:
+            judged = sum(1 for l in r.a.lines(r.a.alog, ma['a']) if ('WO208-DEF outcome' in l or 'WO208-DEF fallback' in l) and any(b in l for b in group))
+            if judged >= swings: break
+            if time.time() - last > 30:
+                for b in bandits: r.a.lua(ATTACK % (b, FIGURE))
+                last = time.time()
+            time.sleep(2)
+        stop.set(); th.join(timeout=10)
+        for i, b in enumerate(bandits): r.a.lua(STOP % (b, i))
+        for c in (r.a, r.b): c.stop_keep()
+        time.sleep(2)
+        hl = [l for l in r.a.lines(r.a.alog, ma['a']) if any(b in l for b in group)]
+        jl = [l for l in r.b.lines(r.b.alog, mb['a']) if any(b in l for b in group)]
+        host_out = [re.search(r'WO208-DEF outcome npc=(\S+) joiner=\d+ engine=(\S+)', l) for l in hl]
+        host_out = [(m.group(1), m.group(2)) for m in host_out if m]
+        fallbacks = sum(1 for l in hl if 'WO208-DEF fallback' in l)
+        joiner_out = [re.search(r'WO208-DEF out npc=(\S+) outcome=(\S+)', l) for l in jl]
+        joiner_out = [(m.group(1), m.group(2)) for m in joiner_out if m]
+        # every outcome the host took is one the joiner's engine logged, in the same order per attacker
+        def per(xs):
+            d = {}
+            for n, o in xs: d.setdefault(n, []).append(o)
+            return d
+        hp, jp = per(host_out), per(joiner_out)
+        mismatch = 0
+        for n, outs in hp.items():
+            it = iter(jp.get(n, []))
+            for o in outs:
+                if not any(o == q for q in it): mismatch += 1
+        skipped = sum(1 for l in jl if 'WO208-DEF skipped' in l)
+        blocking = sum(1 for l in r.a.lines(r.a.nlog, ma['n']) if re.search(r'WO121-MOTION body=kcd2mp_\d+ block=1', l))
+        # B.6: the joiner's own lock-on on the copy that swings at him (the strike window's mid line names the player's opponent)
+        mids = [l for l in r.b.lines(r.b.nlog, mb['n']) if 'WO166-STRIKE' in l and ' mid ' in l and any(b in l for b in group)]
+        locked = sum(1 for l in mids if 'player_opponent=this-copy' in l)
+        total = len(host_out) + fallbacks
+        rate = round(100.0 * len(host_out) / total, 1) if total else None
+        from collections import Counter
+        no_outcome = sum(1 for l in r.b.lines(r.b.nlog, mb['n']) if 'WO208-DEF no outcome' in l)
+        recoils = sum(1 for l in hl if 'WO208-DEF recoil' in l)
+        detail = {'bandits': bandits, 'group': group, 'judged_by_joiner': len(host_out), 'fallbacks': fallbacks, 'rate_pct': rate,
+                  'joiner_windows_without_evidence': no_outcome, 'host_recoils_b4': recoils,
+                  'joiner_outcomes': dict(Counter(o for _, o in joiner_out)), 'host_took': dict(Counter(o for _, o in host_out)),
+                  'outcome_mismatch': mismatch, 'joiner_skipped_host_verdicts': skipped, 'host_saw_figure_block_lines': blocking,
+                  'lock_on_windows': '%d/%d' % (locked, len(mids)), 'input': sent}
+        if total == 0: return False, 'no-blows', detail
+        if rate < 95.0: return False, 'judged-below-95', detail
+        if fallbacks * 100.0 / total >= 5.0: return False, 'fallbacks-5', detail
+        if mismatch: return False, 'outcome-mismatch', detail
+        return True, 'ok', detail
+    return fn
+
+
+# ---------------------------------------------------------------- WO-208 A.1: the village walk (the owner's probe)
+
+NPC_POS = ('local out = {}; for _, e in ipairs(System.GetEntitiesInSphere(player:GetWorldPos(), %d) or {}) do '
+           'if e.class == "NPC" and e.soul and not string.find(e:GetName(), "kcd2mp_", 1, true) then local q = e:GetWorldPos(); '
+           'out[#out + 1] = string.format("%%s,%%.2f,%%.2f,%%.2f", e:GetName(), q.x, q.y, q.z) end end; '
+           'System.LogAlways("[W208V] " .. table.concat(out, ";"))')
+
+
+def write_probe_name(r, name):
+    """The probe's NPC for the owner (wo208.cpp reads kcdmp-w208-probe.txt beside each game every 2 s) and for the mod's own copy
+    writers (KCD2MP_W208Probe) -- the bench only."""
+    for c in (r.a, r.b):
+        with open(os.path.join(c.p['root'], 'kcdmp-w208-probe.txt'), 'w', encoding='ascii') as f: f.write(name + '\n')
+        c.lua('KCD2MP_W208Probe = "%s"' % name)
+
+
+def s_village(r, secs=float(os.environ.get('KCDMP_RIG_VILLAGE_S', '300'))):
+    """WO-208 A.1 the village walk: the players in the bench save's town for 5 minutes beside a villager who walks (the NPC near the host
+    that moved the most in 4 s, by day); both follow it when it walks away. The probe's NPC is that villager (KCDMP_RIG_PROBE_PICK=1)."""
+    def fn():
+        t = r.a.ask(FIND_INN % os.environ.get('KCDMP_RIG_INN', 'ttkc_woman_2'), 'W207I', 6)
+        if not t or t == 'none': return False, 'no-town', t
+        parts = t.split()
+        x, y, z = float(parts[1]), float(parts[2]), float(parts[3])
+        # by day: 10:00 of the next game day (the villagers' routines walk them between home, work and the square)
+        r.a.lua('local now = Calendar.GetWorldTime(); local d = math.floor(now / 86400) * 86400 + 10 * 3600; '
+                'if d < now then d = d + 86400 end; Calendar.SetWorldTime(d)')
+        time.sleep(30)
+        r.a.teleport(x + 6.0, y + 6.0)
+        r.b.teleport(x + 7.0, y + 6.5)
+        time.sleep(6)
+
+        def positions():
+            v = r.a.ask(NPC_POS % 45, 'W208V', 4) or ''
+            d = {}
+            for item in filter(None, v.split(';')):
+                try: n, a, b, c = item.split(','); d[n] = (float(a), float(b), float(c))
+                except ValueError: pass
+            return d
+        walker, moved = None, 0.0
+        for _ in range(5):
+            p0 = positions(); time.sleep(4); p1 = positions()
+            for n, q in p1.items():
+                if n in p0:
+                    m = ((q[0] - p0[n][0]) ** 2 + (q[1] - p0[n][1]) ** 2) ** 0.5
+                    if m > moved: walker, moved = n, m
+            if walker and moved >= 2.0: break
+        if not walker or moved < 1.0: return False, 'no-walker', {'moved': moved}
+        if os.environ.get('KCDMP_RIG_PROBE_PICK') == '1': write_probe_name(r, walker)
+        follows = 0
+        t0 = time.time()
+        while time.time() - t0 < secs:
+            time.sleep(20)
+            p = positions().get(walker)
+            hp = r.a.pos()
+            if p and hp and ((p[0] - hp[0]) ** 2 + (p[1] - hp[1]) ** 2) ** 0.5 > 18:
+                r.a.teleport(p[0] + 4.0, p[1] + 4.0)
+                r.b.teleport(p[0] + 5.0, p[1] + 4.5)
+                follows += 1
+        return True, 'ok', {'walker': walker, 'moved_in_4s': round(moved, 2), 'follows': follows, 'secs': secs,
+                            't0_ms': int(t0 * 1000), 't1_ms': int(time.time() * 1000)}
     return fn
 
 
@@ -1250,14 +1554,66 @@ def conv_stats(c, mark):
 
 
 # the player's own talk of a joinable kind (Wo203CamRules: "normal" / "ingame"; the player's soul is "Dude" in the souls list -- an
-# NPC-to-NPC gossip is "ingame" too)
-OWN_TALK = r"New dialogue '.*\((?:normal|ingame) - Id: (\d+)\).*souls = '[^']*\bDude\b"
+# NPC-to-NPC gossip is "ingame" too). WO-208: the player as a talker ("Ex: Dude"), never a combat bark's target ("Nx: Dude ... COMBAT_SHOUT_
+# TARGET", an "ingame" CombatShout: m0-convboth-2 took bark 155 for the talk 159 it was interrupted by)
+OWN_TALK = r"New dialogue '.*\((?:normal|ingame) - Id: (\d+)\)(?! \(CombatShout\)).*souls = '[^']*\bEx: Dude\b"
 
 # the starter 1.4 m before the NPC along its own facing (only its position is written, like every bench teleport), so the NPC is in
 # front of it for the use key
 FACE_NPC = ('local e = System.GetEntityByName("%s"); if e then local q = e:GetWorldPos(); local d = player:GetDirectionVector(1); '
             'local n = math.sqrt(d.x * d.x + d.y * d.y); if n > 0.01 then d = {x = d.x / n, y = d.y / n} else d = {x = 0, y = 1} end; '
             'player:SetWorldPos({x = q.x - d.x * 1.4, y = q.y - d.y * 1.4, z = q.z + 0.05}) end')
+
+
+FORCED_TALK = r"New dialogue '([^' ]*)[^']* \((?:normal|ingame) - Id: (\d+)\) \((?:ForceDialogNode|AI::RequestDialog)\)'.*souls = '[^']*\bEx: Dude\b"
+
+
+def s_forced(r, starter='host', wait_s=float(os.environ.get('KCDMP_RIG_FORCED_S', '300'))):
+    """WO-208 C.4: a conversation that starts by itself for <starter> (a quest's ForceDialogNode or an NPC's AI::RequestDialog, the
+    scene world's Gnarly talk after the host's second): it runs on the starter's machine and the partner within 30 m listens in without
+    a key (WO208-AUTOJOIN ... listening in; the starter's agent: auto-joined). The listener is put 3 m from the starter first. The talk
+    is then played out with the starter's own confirm key (or interrupted after 90 s). Pass: the forced talk started on the starter's
+    machine, the partner auto-joined and listened, no silence drop."""
+    def fn():
+        import keys
+        S, L = (r.a, r.b) if starter == 'host' else (r.b, r.a)
+        sm, lm = S.mark(), L.mark()
+        # the partner beside the starter (30 m is the rule; 3 m keeps the bench's own walk out of it)
+        p = S.ask('local q = player:GetWorldPos(); System.LogAlways(string.format("[W208P] %.2f %.2f %.2f", q.x, q.y, q.z))', 'W208P', 5)
+        if p:
+            x, y, z = (float(v) for v in p.split())
+            L.teleport(x + 3.0, y)
+        m = S.wait('k', sm['k'], FORCED_TALK, wait_s)
+        detail = {'starter': starter, 'waited_s': wait_s, 'forced': None}
+        if not m: return False, 'no-forced-talk', detail
+        detail['forced'] = '%s (Id %s)' % (m.group(1).split('.')[-1], m.group(2))
+        cid = m.group(2)
+        ma = L.wait('k', lm['k'], r'WO208-AUTOJOIN partner=\d+ cid=%s (.*)' % cid, 20)
+        detail['autojoin'] = ma.group(1)[:120] if ma else None
+        on = L.wait('k', lm['k'], r'WO203B-LISTEN on partner=\d+ cid=%s' % cid, 20)
+        detail['listening'] = bool(on)
+        sa = S.wait('a', sm['a'], r'WO203B-JOIN partner \d+ listens to conversation %s \(auto-joined' % cid, 5)
+        detail['starter_saw_auto'] = bool(sa)
+        # the talk played out: the starter's own confirm key through its decisions, or interrupted after 90 s
+        sk = keys.Keys(rec_of(S), 'wo208-forced-starter')
+        t0 = time.time()
+        end = None
+        while time.time() - t0 < 90:
+            end = S.wait('k', sm['k'], r'\[ID: %s\] Dialog ending' % cid, 4)
+            if end: break
+            sk.press('confirm')
+        sk.release()
+        if not end:
+            S.ask('local d = false; pcall(function() d = player.human:IsInDialog() == true end); if d then '
+                  'pcall(function() player.human:InterruptDialog() end) end; System.LogAlways("[W208X] " .. tostring(d))', 'W208X', 5)
+        detail['ended'] = bool(end)
+        silence = [l for l in L.lines(L.klog, lm['k']) if 'WO203B-LISTEN off' in l and 'why=silence' in l]
+        detail['silence_drops'] = len(silence)
+        if not ma or 'listening in' not in (ma.group(1) if ma else ''): return False, 'not-auto-joined', detail
+        if not on: return False, 'listener-not-listening', detail
+        if silence: return False, 'listener-dropped-silence', detail
+        return True, 'ok', detail
+    return fn
 
 
 def s_conv(r, starter='host', plan=('changed', 'cleared', 'notfollowed', 'followed', 'leave'), npcs=None, secs=float(os.environ.get('KCDMP_RIG_CONV_S', '600')),
@@ -1463,11 +1819,15 @@ def s_conv(r, starter='host', plan=('changed', 'cleared', 'notfollowed', 'follow
         sk.release()
         lk.release()
         time.sleep(3)
+        # WO-208 C.3: a talk the step gave up on is closed the game's own way before the next step -- left open at a decision, the
+        # starter stayed in it for the rest of the run (the baseline smoke: the host's bailiff talk, then every listen key doubled)
+        closed = S.ask('local d = false; pcall(function() d = player.human:IsInDialog() == true end); if d then '
+                       'pcall(function() player.human:InterruptDialog() end) end; System.LogAlways("[W208X] " .. tostring(d))', 'W208X', 5)
         ss, ls = conv_stats(S, sm0['a']), conv_stats(L, lm0['a'])
         silence = [l for l in L.lines(L.klog, lm0['k']) if 'WO203B-LISTEN off' in l and 'why=silence' in l]
         missing = [x for x in todo + (['leave'] if want_leave else []) if x not in {c['case'] for c in cases}]
         detail = {'starter': starter, 'talks': talks, 'decisions': cases, 'tried': tried, 'starter_stats': ss, 'listener_stats': ls,
-                  'silence_drops': len(silence), 'cases_missing': missing}
+                  'silence_drops': len(silence), 'cases_missing': missing, 'starter_talk_left_open': closed == 'true'}
         if not talks: return False, 'no-dialogue', detail
         if not any(t.get('listening') for t in talks): return False, 'listener-not-listening', detail
         if silence: return False, 'listener-dropped-silence', detail
@@ -1510,6 +1870,11 @@ def run(name, args):
         'convhost': [('join', s_join(r)), ('conv-host-starts', s_conv(r, 'host'))],
         'convjoiner': [('join', s_join(r)), ('conv-joiner-starts', s_conv(r, 'joiner'))],
         'convboth': [('join', s_join(r)), ('conv-host-starts', s_conv(r, 'host')), ('conv-joiner-starts', s_conv(r, 'joiner', plan=('notfollowed', 'changed', 'cleared', 'followed', 'leave')))],
+        # WO-208 C.4: the scene world's forced Gnarly talk (after the host's second talk with him), the joiner auto-joined
+        'convforced': [('join', s_join(r)), ('daytime', s_daytime(r, 10 * 3600)),
+                       ('conv-host-semin', s_conv(r, 'host', npcs=('tsem_suk', 'tsem_seminsr', 'tsem_seminjr'))), ('forced-host', s_forced(r, 'host'))],
+        'convforcedj': [('join', s_join(r)), ('daytime', s_daytime(r, 10 * 3600)),
+                        ('conv-joiner-semin', s_conv(r, 'joiner', npcs=('tsem_suk', 'tsem_seminsr', 'tsem_seminjr'))), ('forced-joiner', s_forced(r, 'joiner'))],
         'convtimed': [('join', s_join(r)), ('conv-timed-host', s_conv(r, 'host', npcs=('david', 'michal'))), ('conv-timed-joiner', s_conv(r, 'joiner', npcs=('michal', 'david')))],
         # A.4's trialog: the Semin camp world (KCDMP_RIG_HOST_SAVE_FILE=release/w206rig/seed/w194scene.whs, KCDMP_RIG_HOST_SAVE=w194scene)
         # (the host agent with KCDMP_TEST_W194=1: the arrival scene started as the host quest's own; the Gnarly talk it forces after)
@@ -1521,6 +1886,12 @@ def run(name, args):
         # WO-207 0.3 (WO-204's missing scenarios) and B.5's queue measures, each on fresh seed copies (pair.py prepare)
         'c1fight': [('join', s_join(r)), ('queue-after-join', s_queue(r)), ('c1fight', s_c1fight(r)), ('queue-after-fight', s_queue(r))],
         'c2tavern': [('join', s_join(r)), ('c2tavern', s_c2tavern(r)), ('queue-in-tavern', s_queue(r))],
+        # WO-208 A.1: the owner's probe in three places (the probe's NPC by KCDMP_TEST_W208_PROBE, or picked by the village walk)
+        'village': [('join', s_join(r)), ('village', s_village(r))],
+        'probefight': [('join', s_join(r)), ('c1fight', s_c1fight(r))],
+        'probetavern': [('join', s_join(r)), ('c2tavern', s_c2tavern(r))],
+        # WO-208 B: the joiner's own defence, one and two attackers (KCDMP_RIG_DEF_S bounds each)
+        'defence': [('join', s_join(r)), ('defence-1v1', s_defence(r, 1)), ('defence-2v1', s_defence(r, 2))],
         'queue': [('queue', s_queue(r))],
         'soak2': [('join', s_join(r)), ('soak', s_soak(r, float(args[0]) if args else 30.0)), ('digest', s_digest(r))],   # D.3 / E
         'awake': [('join', s_join(r)), ('awake', s_awake(r))],   # C.2: run with KCDMP_RIG_SLEEP_INACTIVE=1 (the twin: KCDMP_RIG_AWAKE_EXPECT=asleep)
@@ -1529,6 +1900,8 @@ def run(name, args):
         's1front': [('join', s_join(r)), ('host-in-front', lambda: (lambda ok: (ok, 'ok' if ok else 'not-in-front', ''))(put_front(r.a)))] +
                    [('s1-%02d-%s' % (i + 1, k), s_skip(r, k, h)) for i, (k, h) in enumerate([('sleep', 9), ('wait', 3)] * 5)],   # C.1: the joiner behind
         'joinloot': [('join', s_join(r)), ('loot', s_loot(r))],
+        # WO-208 D.1's acceptance: the loot step 5 times in a row, each on a chest and on a body (the fight step leaves the bandits)
+        'loot5': [('join', s_join(r)), ('fight', s_fight(r))] + [('loot%d' % (i + 1), s_loot(r)) for i in range(5)],
         'b1twin': [('b1-twin', s_b1(r, twin=True))],
         'c2': [('c2-twin', s_c2(r))],
         'c3': [('c3-twin', s_c3(r))],
@@ -1553,7 +1926,7 @@ def run(name, args):
     for nm, fn in plan:
         # 'long' runs independent checks: one failing does not stop the next (a failed join does)
         if not r.step(nm, fn) and (name not in ('long', 'joinscene', 'joinfight', 'e2pair', 'c1pair', 'e2twinpair', 's1pair', 'smoke', 's1front',
-                                               'c1fight', 'c2tavern', 'convboth', 'convtimed', 'smoke2', 'awake', 'soak2', 'convscene', 'c1x') or nm == 'join'
+                                               'c1fight', 'c2tavern', 'convboth', 'convtimed', 'smoke2', 'awake', 'soak2', 'convscene', 'c1x', 'probefight', 'probetavern', 'village', 'defence', 'loot5', 'convforced', 'convforcedj') or nm == 'join'
                                               or r.steps[-1]['reason'] == 'copy-exited'): break   # a game gone ends the run
     return r.finish()
 

@@ -108,6 +108,8 @@ public static partial class Protocol
         (ConvUp,        ConvDown,        "conv",         JoinHeaderLen + LootFixedLen + 1, JoinHeaderLen + LootFixedLen + ConvTextMax, JoinFrom.Either),
         // WO-203 Act II: the side channel (defence, early engage, worn sets, poses, join progress, focus, travel) -- the LootMsg shape, either way
         (W203Up,        W203Down,        "w203",         JoinHeaderLen + LootFixedLen + 1, JoinHeaderLen + LootFixedLen + W203TextMax, JoinFrom.Either),
+        // WO-208 A.2: the host's NPCs' full and upper body as state (ProtocolWo208.cs) -- host to joiner only
+        (NpcAnimUp,     NpcAnimDown,     "npc-anim",     JoinHeaderLen + 1, JoinHeaderLen + NpcAnimBodyMax, JoinFrom.Host),
     };
 
     /// <summary>The JoinWire row for an up type, or null.</summary>

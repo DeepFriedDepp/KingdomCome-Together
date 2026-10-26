@@ -43,6 +43,15 @@ KNOWN_LOCAL = (
      "drive -- the fogControl_* game profiles -- reaches the joiner through the profile mirror (WO-189): on 0.6-2.5 s after the "
      "host's 05:00 and off after its 07:00 on the bench (WO-207, d4-dread)"),
 )
+# WO-208 D.2: the State mirror (WO-137) records a change only under a quest node -- wo137.cpp record(): "world simulation (event
+# places, professions, ...): not under a C_Quest". The digest's keyspace is every State and clock of the quest FILES, so it also holds
+# the concepts the game declares as <Gameplay> or <Module> (the tutorials, the open-world combat chatter, a random event's state, the
+# fog machine): each machine runs its own, by that design, and they differ where the players' own play differs. A key whose top concept
+# file (Scripts.pak Quests/Final/Barbora/.../<name>.xml, its first node after <Database>) is not a <Quest> is that, by the game's own
+# files; with the files unreadable the rule stays off (fail closed: the key stays unexplained).
+NOT_A_QUEST_RULE = True
+SCRIPTS_PAK = os.environ.get("KCDMP_SCRIPTS_PAK", r"D:\SteamLibrary\steamapps\common\KCD2Mod\Data\Scripts.pak")
+_CONCEPT_ROOTS = None
 MAX_LISTED = 20
 SECTION = "## First divergence"
 WIN_TAR = r"C:\WINDOWS\system32\tar.exe"
@@ -273,6 +282,53 @@ def known_local(ep):
     return next((why for prefix, why in KNOWN_LOCAL if ep["key"].startswith(prefix)), None)
 
 
+def concept_roots(pak=None):
+    """{dotted concept path: its root node kind} for every quest file in the game's Scripts.pak ("Barbora.trosecko.kumaniNaTrosecku":
+    "Quest", "Barbora.open_world.tutorialy.tutorial_x": "Gameplay"); {} when the pak cannot be read."""
+    global _CONCEPT_ROOTS
+    if pak is None and _CONCEPT_ROOTS is not None:
+        return _CONCEPT_ROOTS
+    import zipfile
+    out = {}
+    try:
+        z = zipfile.ZipFile(pak or SCRIPTS_PAK)
+    except (OSError, zipfile.BadZipFile):
+        z = None
+    if z is not None:
+        for n in z.namelist():
+            nn = n.replace("\\", "/")
+            if not (nn.startswith("Quests/Final/") and nn.endswith(".xml")):
+                continue
+            head = z.read(n)[:4096].decode("utf-8", "replace")
+            kinds = [k for k in re.findall(r"<(\w+)\s[^>]*\bName=\"", head) if k != "Database"]
+            if kinds:
+                out[nn[len("Quests/Final/"):-4].replace("/", ".")] = kinds[0]
+    if pak is None:
+        _CONCEPT_ROOTS = out
+    return out
+
+
+def not_a_quest(ep, roots=None):
+    """WO-208 D.2: why this key is outside the State mirror by design (its top concept is not a <Quest>), or None."""
+    if ep["cat"] != "quest" or not ep.get("key"):
+        return None
+    roots = concept_roots() if roots is None else roots
+    if not roots:
+        return None   # the game's files unreadable: fail closed
+    parts = ep["key"].split(".")
+    nearest = None
+    for i in range(1, len(parts)):
+        kind = roots.get(".".join(parts[:i]))
+        if kind == "Quest":
+            return None   # under a quest: the mirror carries it (wo137.cpp record(): the C_Quest ancestor)
+        if kind is not None:
+            nearest = (kind, ".".join(parts[:i]))
+    if nearest is None or nearest[1].count(".") < 2:
+        return None   # no concept file of its own below the level's (a name the files do not have): not ours to call
+    return (f"known-local: under no quest (its nearest concept, {nearest[1]}, is a <{nearest[0]}>) -- each machine runs its own and the "
+            f"State mirror carries quest States only (WO-137: world simulation is not under a C_Quest)")
+
+
 def in_flight(ep, cur, nxt, h, j):
     """Explained when every lagging side has an applied row for the key within one checkpoint interval."""
     maps = [c["map"] for c in (nxt[1], nxt[2]) if c["map"] is not None]
@@ -335,6 +391,10 @@ def compare(h, j):
     if KNOWN_LOCAL_RULE:
         for ep in episodes:
             why = None if ep["explained"] else known_local(ep)
+            if why: ep["explained"], ep["why"] = True, why
+    if NOT_A_QUEST_RULE:
+        for ep in episodes:
+            why = None if ep["explained"] else not_a_quest(ep)
             if why: ep["explained"], ep["why"] = True, why
     return stats, episodes, (median(deltas) if deltas else 0)
 

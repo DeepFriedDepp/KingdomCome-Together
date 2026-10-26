@@ -3,6 +3,8 @@
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 // WO-121 Phases 5 and 6 -- see hits.h.
 #include "hits.h"
+#include "wo208.h"
+#include "wo208_rules.h"
 #include "wo166.h"
 #include "wo170_rules.h"
 #include "wo174_rules.h"
@@ -137,11 +139,14 @@ std::vector<PlayerHitMark> g_marks;
 // the replay's own callback (the engine applied it; this only says how much).
 // WO-170: kWatchFigure -- a blow of a partner's figure that no relayed swing of the partner's matches: measured and put back (health and
 // stamina; nothing is forwarded), the victim any soul (an NPC, the local player, another figure).
-enum WatchKind : uint8_t { kWatchPvp = 0, kWatchNpc = 1, kWatchDiscard = 2, kWatchReplay = 3, kWatchFigure = 4 };
-struct NewWatch { void* soul; uint32_t eid; float hp0, st0; uint8_t flags, material; uint8_t kind; uint32_t attackerEid; };
+// WO-208 B: kWatchDefence -- an engaged copy's blow on the local player with mp_defence_local: this machine's engine judged it (the
+// verdict read from the record it built, +0x54..+0x57) and its damage is KEPT; measured from the lowest point (as a replay), reported to
+// the agent (DefenceFn), which tells the host -- the host holds its own judgement of that blow for it (WO208-DEF).
+enum WatchKind : uint8_t { kWatchPvp = 0, kWatchNpc = 1, kWatchDiscard = 2, kWatchReplay = 3, kWatchFigure = 4, kWatchDefence = 5 };
+struct NewWatch { void* soul; uint32_t eid; float hp0, st0; uint8_t flags, material; uint8_t kind; uint32_t attackerEid; uint8_t outcome = 0; };
 std::vector<NewWatch> g_newWatches;
 struct Watch { void* soul; uint32_t eid; float hp0, st0, dh = 0, ds = 0; uint8_t flags, material; double t0; int frames = 0, landedAt = -1;
-               uint8_t kind = 0; uint32_t attackerEid = 0; bool fatal = false; };
+               uint8_t kind = 0; uint32_t attackerEid = 0; bool fatal = false; uint8_t outcome = 0; };
 std::vector<Watch> g_watches;   // main thread only
 constexpr double kWatchS = 0.6;
 std::atomic<uint64_t> g_playerWuid{0};
@@ -149,6 +154,10 @@ std::atomic<uint32_t> g_playerEid{0};
 std::atomic<PvpFn> g_pvpFn{nullptr};
 std::atomic<NpcHitFn> g_npcHitFn{nullptr};
 std::atomic<DiscardFn> g_discardFn{nullptr};
+std::atomic<DefenceFn> g_defenceFn{nullptr};
+// WO-208 B: the last landed blow of each engaged copy on the local player (attacker eid -> QPC seconds), main thread
+std::unordered_map<uint32_t, double> g_defLanded;
+std::atomic<uint32_t> c_defJudged{0}, c_defOutcome[7]{};
 // WO-132: attacker entity ids whose hits on the local player are discarded
 // (the joiner's engaged copies of host NPCs). Main thread writes.
 // WO-153 2: 256, not 64. The field's status lines read `discard_eids=64` (the cap) in four of five joiner runs against 88-229
@@ -311,10 +320,21 @@ void* hit_common(bool missile, HitFn orig, void* self, void* out, const uint8_t*
         void* psoul = rttr::read_player_soul();
         float hp0 = 0, st0 = 0;
         const bool r0 = psoul && rttr::soul_state(psoul, "health", &hp0) && rttr::soul_state(psoul, "stamina", &st0);
+        // WO-208 B (mp_defence_local): this machine's engine judges the copy's blow -- its verdict, read from the record it built (block
+        // +0x54, perfect +0x56, broken +0x57: WO-176's reads), and the damage it applies is kept. Off: measured and put back (WO-132).
+        const bool local = wo208::on(wo208rules::kBitDefenceLocal);
+        uint8_t outcome = 0;
+        if (local) {
+            uint32_t v = 0;
+            outcome = rd(data, 0x54, &v) ? wo208rules::def_outcome(static_cast<uint8_t>(v & 0xFF), static_cast<uint8_t>((v >> 16) & 0xFF),
+                                                                   static_cast<uint8_t>((v >> 24) & 0xFF)) : wo208rules::kDefHit;
+        }
         void* res = orig(self, out, data);
         if (r0) {
             std::lock_guard<std::mutex> lock(g_qMutex);
-            g_newWatches.push_back({psoul, veid, hp0, st0, static_cast<uint8_t>(missile ? 0x02 : 0), mat, static_cast<uint8_t>(kWatchDiscard), aeid});
+            NewWatch nw{psoul, veid, hp0, st0, static_cast<uint8_t>(missile ? 0x02 : 0), mat, static_cast<uint8_t>(local ? kWatchDefence : kWatchDiscard), aeid};
+            nw.outcome = outcome;
+            g_newWatches.push_back(nw);
         }
         return res;
     }
@@ -651,8 +671,18 @@ bool is_discard_attacker(uint32_t eid) { return is_discard_attacker_impl(eid); }
 
 void note_player_damage(float st, float hp) {
     // A forwarded host hit landed on the local player: a discard watch open
-    // right now must not put it back.
-    for (auto& w : g_watches) if (w.kind == kWatchDiscard) { w.hp0 -= hp; w.st0 -= st; }
+    // right now must not put it back (WO-208 B: nor count it as a copy's blow judged here).
+    for (auto& w : g_watches) if (w.kind == kWatchDiscard || w.kind == kWatchDefence) { w.hp0 -= hp; w.st0 -= st; }
+}
+
+void set_defence_callback(DefenceFn fn) { g_defenceFn.store(fn); }
+void report_defence(uint32_t attackerEid, uint8_t outcome, float stamina, float health) {
+    c_defOutcome[outcome < 7 ? outcome : 0].fetch_add(1);
+    if (DefenceFn fn = g_defenceFn.load()) fn(attackerEid, outcome, stamina, health);
+}
+double last_local_hit_from(uint32_t attackerEid) {
+    auto it = g_defLanded.find(attackerEid);
+    return it == g_defLanded.end() ? -1.0 : it->second;
 }
 
 bool discard_from(uint32_t eid, bool on) {
@@ -823,7 +853,18 @@ void tick() {
     }
     for (const auto& n : nw) {
         bool merged = false;   // a second hit inside the window: same baseline, longer window
-        for (auto& w : g_watches) if (w.soul == n.soul && w.kind == n.kind) { w.t0 = now; w.flags |= n.flags; merged = true; break; }
+        for (auto& w : g_watches) {
+            if (w.soul != n.soul || w.kind != n.kind) continue;
+            // WO-208 B: another copy's blow on the player while one's measure is open -- the first ends at the second's own start (the
+            // engine applies a blow a frame after its call, so the second's starting health closes the first); each is reported alone
+            if (n.kind == kWatchDefence && w.attackerEid != n.attackerEid) {
+                if (w.hp0 - n.hp0 > w.dh) w.dh = w.hp0 - n.hp0;
+                if (w.st0 - n.st0 > w.ds) w.ds = w.st0 - n.st0;
+                w.t0 = now - 10.0;   // ends this frame
+                continue;
+            }
+            w.t0 = now; w.flags |= n.flags; merged = true; break;
+        }
         if (merged && n.kind == kWatchFigure) g_figureWatchesOpen.fetch_sub(1, std::memory_order_relaxed);   // WO-170: the open watch carries it
         // WO-165: a second replay on the same victim inside the window shares the first one's measure (one soul, one baseline); its
         // own report says so (health -1) at once, so no caller waits for a number that cannot be separated.
@@ -833,7 +874,8 @@ void tick() {
         }
         if (!merged) {
             Watch w{n.soul, n.eid, n.hp0, n.st0, 0, 0, n.flags, n.material, now};
-            w.kind = n.kind; w.attackerEid = n.attackerEid;
+            w.kind = n.kind; w.attackerEid = n.attackerEid; w.outcome = n.outcome;
+            if (n.kind == kWatchDefence) g_defLanded[n.attackerEid] = now;   // WO-208 B: wo166's window asks
             g_watches.push_back(w);
         }
     }
@@ -843,7 +885,7 @@ void tick() {
         ++w.frames;
         // The soul must still be this avatar's (a release or a respawn ends the watch).
         // A discard watch is on the local player's soul (a load replaces it).
-        const bool live = w.kind == kWatchDiscard ? rttr::read_player_soul() == w.soul
+        const bool live = (w.kind == kWatchDiscard || w.kind == kWatchDefence) ? rttr::read_player_soul() == w.soul
                         : w.kind == kWatchReplay ? (rttr::read_player_soul() == w.soul || soul_of_eid(w.eid) == w.soul)
                         : w.kind == kWatchFigure ? (avatar_soul(w.eid) == w.soul || rttr::read_player_soul() == w.soul || soul_of_eid(w.eid) == w.soul)
                         : avatar_soul(w.eid) == w.soul;
@@ -857,7 +899,7 @@ void tick() {
                 w.fatal = true; if (w.landedAt < 0) w.landedAt = w.frames;
             }
             if (st < w.st0 - 0.25f) { w.ds += w.st0 - st; rttr::soul_set_state(w.soul, "stamina", w.st0); if (w.landedAt < 0) w.landedAt = w.frames; }
-        } else if (live && w.kind == kWatchReplay && rttr::soul_state(w.soul, "health", &hp) && rttr::soul_state(w.soul, "stamina", &st)) {
+        } else if (live && (w.kind == kWatchReplay || w.kind == kWatchDefence) && rttr::soul_state(w.soul, "health", &hp) && rttr::soul_state(w.soul, "stamina", &st)) {
             // measured from the lowest point, nothing put back: the engine's own application is the result
             if (w.hp0 - hp > w.dh + 0.01f) { w.dh = w.hp0 - hp; if (w.landedAt < 0) w.landedAt = w.frames; }
             if (w.st0 - st > w.ds + 0.25f) { w.ds = w.st0 - st; if (w.landedAt < 0) w.landedAt = w.frames; }
@@ -884,6 +926,17 @@ void tick() {
             logf("WO170-FIGUREHIT dropped npc=%s by=%s(0x%X) why=not-relayed -- the figure's own blow: hp -%.2f st -%.2f put back (landed at frame %d of %d)%s%s",
                  vn[0] ? vn : "?", an[0] ? an : "?", w.attackerEid, w.dh, w.ds, w.landedAt, w.frames,
                  w.fatal ? " -- it killed the body: not put back (a dead body is not raised)" : "", live ? "" : " -- victim gone");
+            it = g_watches.erase(it);
+            continue;
+        }
+        if (w.kind == kWatchDefence) {
+            c_defJudged.fetch_add(1);
+            c_defOutcome[w.outcome < 7 ? w.outcome : 0].fetch_add(1);
+            const uint32_t k = c_defJudged.load();
+            if (k <= 60 || k % 50 == 0)
+                logf("WO208-DEF judged attacker=0x%X outcome=%s hp -%.2f st -%.2f (landed at frame %d of %d) -- this machine's engine; kept, to the host [n=%u]",
+                     w.attackerEid, wo208rules::def_outcome_name(w.outcome), w.dh, w.ds, w.landedAt, w.frames, k);
+            if (DefenceFn fn = g_defenceFn.load()) fn(w.attackerEid, w.outcome, w.ds, w.dh);
             it = g_watches.erase(it);
             continue;
         }

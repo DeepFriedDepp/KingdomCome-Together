@@ -3,6 +3,8 @@
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 // WO-166: 0.48.2's native half (wo166.h).
 #include "wo166.h"
+#include "wo208.h"
+#include "wo208_rules.h"
 #include "wo163.h"
 #include "wo166_rules.h"
 #include "wo172.h"
@@ -61,6 +63,7 @@ struct Strike {
     bool canHitWrote = false, canHit = false;   // WO-178: the copy's CanHitByAttack is ours for this window (the green shield's condition)
     uint32_t canHitLost = 0;               // WO-178: ticks it read back other than what we wrote (the engine's own update overwrote it)
     bool targetSet = false;                // WO-178: the copy's combat target is the local player (the engine decides CanHitByAttack itself)
+    bool playerDodged = false;             // WO-208 B: the local player's own dodge seen while the window ran (a miss needs it)
     bool sawCanHit = false;                // WO-178: the engine's own CanHitByAttack read yes in this window
     int planned = 0;                       // WO-178: the defender's slots this wind-up planned the engine's way (perfect block among them)
     int pbStage = 0;                       // WO-178: 1 = perfect-blocked (0x10, OpponentHit), 2 = 0x20; the window holds to pbAt + kPbHoldS
@@ -618,6 +621,30 @@ bool take_over_leftover(const Strike& s, void* ca, void* model, int32_t* cur) {
     return true;
 }
 
+// WO-208 B (mp_defence_local): a window of a copy that swung at the local player inside his fight, closed: its blow is judged by this
+// machine's engine -- landed (hits.cpp's defence watch reports it) or, when none of its blows landed from the window's start, missed
+// (his dodge, a step back), told 0.3 s after the end (a blow the engine applies on the frame after) so the host drops its own judgement.
+struct MissCheck { uint32_t eid; double begin, due; bool dodged; };
+std::vector<MissCheck> g_missChecks;   // main thread
+std::atomic<uint32_t> c_defMissed{0}, c_defLandedWin{0}, c_defNoEvidence{0};
+void miss_check_tick(double now) {
+    for (auto it = g_missChecks.begin(); it != g_missChecks.end();) {
+        if (now < it->due) { ++it; continue; }
+        if (wo208rules::def_window_missed(it->begin - 0.05, hits::last_local_hit_from(it->eid), it->dodged)) {
+            const uint32_t k = c_defMissed.fetch_add(1) + 1;
+            if (k <= 40 || k % 50 == 0) logf("WO208-DEF judged attacker=0x%X outcome=missed -- its window closed with no blow landed on the local player [n=%u]", it->eid, k);
+            hits::report_defence(it->eid, wo208rules::kDefMissed, 0.0f, 0.0f);
+        } else if (hits::last_local_hit_from(it->eid) >= it->begin - 0.05) c_defLandedWin.fetch_add(1);
+        else {
+            const uint32_t k = c_defNoEvidence.fetch_add(1) + 1;
+            if (k <= 20 || k % 50 == 0)
+                logf("WO208-DEF no outcome attacker=0x%X -- no blow landed and no dodge of his in the window: told, the host's verdict applies at once [n=%u]", it->eid, k);
+            hits::report_defence(it->eid, wo208rules::kDefNone, 0.0f, 0.0f);
+        }
+        it = g_missChecks.erase(it);
+    }
+}
+
 // The prior state and fields back, if the model still reads ours.
 void restore(Strike& s, bool closing) {
     // WO-172 C1: a body that died inside its window keeps what its death left -- no Guard/Idle written over a corpse
@@ -640,6 +667,8 @@ void restore(Strike& s, bool closing) {
     if (s.engine) set_reachable(model, false);
     if (s.canHitWrote) set_can_hit(model, false);
     if (s.oppHitSet) set_opponent_hit(model, false);
+    if (s.targetSet && !closing && wo208::on(wo208rules::kBitDefenceLocal) && hits::is_discard_attacker(s.eid))
+        g_missChecks.push_back({s.eid, s.begin, now_s() + 0.3, s.playerDodged});   // WO-208 B
     if (s.targetSet && !s.sawCanHit && (s.n <= kLogFirst || s.n % 50 == 0))
         logf("WO178-CANHIT npc=%s window=%u the engine's own CanHitByAttack never read yes (out of its reach, or its can-hit step refused)", s.name.c_str(), s.n);
     s.done = true;
@@ -711,6 +740,7 @@ void note_local_hit_dropped(uint32_t eid, float hp, float st) {
 }
 
 void tick() {
+    if (!g_missChecks.empty()) miss_check_tick(now_s());   // WO-208 B
     if (g_strikes.empty()) return;
     const double now = now_s();
     const bool live = g_on.load() && !g_faulted.load();
@@ -750,7 +780,7 @@ void tick() {
                     s.engineReach = engine_reach(ca, model);   // in State 4 now: the reach's guard step stays out
                     s.canHit = wo178rules::in_reach(dist, wo178rules::copy_reach_limit(s.engineReach, s.hitDist));
                     bool hadTarget = false;
-                    s.targetSet = oppMe && ensure_target_player(ca, model, &hadTarget);
+                    s.targetSet = oppMe && wo208::target_player_ok(s.eid, "strike") && ensure_target_player(ca, model, &hadTarget);   // WO-208 F.1
                     (s.targetSet ? (hadTarget ? c_targetHad : c_targetSet) : c_targetFailed).fetch_add(1);
                     if (!s.targetSet) s.canHitWrote = set_can_hit(model, s.canHit);   // no target: ours, re-written every frame
                     if (oppMe && s.countdown && plan_allowed(s.eid, s.name.c_str())) s.planned = plan_defender_slots(ca);   // the attack's own planning: the perfect-block window
@@ -855,6 +885,12 @@ void tick() {
                     }
                 }
             }
+        }
+        // WO-208 B: the local player's own dodge while the window runs (a miss is told only with it)
+        if (s.wrote && !s.done && !s.playerDodged && now >= s.begin && wo208::on(wo208rules::kBitDefenceLocal)) {
+            motion::ModelRead pm{};
+            const uint32_t pe = player_eid();
+            if (pe && motion::read_model(pe, &pm) && (pm.valid & motion::kMvState) && (pm.state & wo208rules::kPlayerStateDodge) != 0) s.playerDodged = true;
         }
         if (s.wrote && !s.done && !s.midRead && now >= (s.begin + s.end) / 2) {
             s.midRead = true;
@@ -974,7 +1010,9 @@ uint8_t handle(uint8_t op, const uint8_t* body, size_t len, uint8_t* out, size_t
             const std::string name(reinterpret_cast<const char*>(body + 13), n);
             const uint32_t eid = hits::eid_of_name(name.c_str());
             if (!eid) { text("refused=no-entity"); return wo163::kRNoActor; }
-            const double now = now_s();
+            if (wo208::probe_only(eid)) { text("refused=probe-owner"); return wo163::kRNoActor; }   // WO-208 A.1
+            // WO-208 A.2: a copy the owner drives swings when the host's streamed state says so, one stream delay after its row came
+            const double now = now_s() + wo208::owner_shift_s(eid);
             const StrikeWindow w = strike_window(now * 1000.0, startMs, hitMs);
             if (!w.valid) { text("refused=timing"); return wo163::kROk; }
             // a swing on a copy whose window is still open: the window runs on with the new row's fields

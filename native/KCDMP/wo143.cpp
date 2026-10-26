@@ -2,6 +2,7 @@
 // GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 #include "wo143.h"
+#include "wo208.h"
 #include "fault_guard.h"
 #include "wo143_rules.h"
 #include "npcstate.h"
@@ -1183,6 +1184,10 @@ uint8_t handle(const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t
         *next = off + 1 + nl;
         return true;
     };
+    if (body[0] == 2 || body[0] == 3 || body[0] == 4 || body[0] == 8 || body[0] == 9) {   // WO-208 A.1: the probe's copy has one owner
+        std::string nm; size_t at = 0;
+        if (name_at(1, &nm, &at) && wo208::probe_owned_name(nm.c_str())) return kRNotArmed;
+    }
     switch (body[0]) {
         case 1: {   // Config [capture][apply] -> [armed]
             if (len != 3 || cap < 1) return kRBadRequest;

@@ -3,6 +3,8 @@
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 // WO-187: 0.60.5's native half (wo187.h).
 #include "wo187.h"
+#include "wo208.h"
+#include "wo208_rules.h"
 #include "wo187_rules.h"
 #include "wo163.h"
 
@@ -188,6 +190,10 @@ void apply_wish(uint32_t copy, Wish& w, double now, const char* moment) {
     void* ent = wish_entity(w);
     void* ca = nullptr; void* model = nullptr;
     if (!ent || !motion::combat_parts(copy, false, &ca, &model)) return;
+    if (w.kind == Opp::LocalPlayer && !wo208::target_player_ok(copy, "wish")) {   // WO-208 F.1 (mp_target_in_fight): never outside his fight
+        unpin(copy, w, "the copy is not in the local player's fight");
+        return;
+    }
     const uint32_t want = engine::entity_id(ent);
     bool viaReq = false;
     const uint32_t was = current_eid(copy, model, &viaReq);
@@ -316,7 +322,7 @@ void watch_moves(double now) {
     for (auto it = g_moves.begin(); it != g_moves.end();) {
         Move& m = it->second;
         const uint32_t eid = it->first;
-        if (now - m.at > kMoveWatchS || !engine::entity_by_id(eid)) { it = g_moves.erase(it); continue; }
+        if (now - m.at > kMoveWatchS || !engine::entity_by_id(eid) || wo208::probe_owned(eid)) { it = g_moves.erase(it); continue; }
         const ScopeRead r = read_fullbody(eid);
         if (!r.ok) { ++it; continue; }
         std::string line = scope_line(r);
@@ -627,6 +633,7 @@ uint8_t handle(uint8_t op, const uint8_t* body, size_t len, uint8_t* out, size_t
             const uint8_t kind = body[5], why = body[10];
             if (!copy || kind > 2) return wo163::kRBadRequest;
             if (!engine::entity_by_id(copy)) return wo163::kRNoActor;
+            if (wo208::probe_only(copy)) { out[0] = 0; *outLen = 1; return wo163::kROk; }   // WO-208 A.1
             const double now = now_s();
             auto it = g_wishes.find(copy);
             if (kind == 0) {
@@ -683,6 +690,7 @@ uint8_t handle(uint8_t op, const uint8_t* body, size_t len, uint8_t* out, size_t
             uint32_t eid = 0;
             std::memcpy(&eid, body + 1, 4);
             if (!eid || !engine::entity_by_id(eid)) return wo163::kRNoActor;
+            if (wo208::probe_only(eid)) { out[0] = 0; *outLen = 1; return wo163::kROk; }   // WO-208 A.1: the probe's copy has one owner
             motion::State2 st{};
             parse_state2(body + 6, &st);
             if (body[5] != 0 && wo195::dead_gate(eid, "guard-hold")) {   // WO-195: a dead copy's guard is never held

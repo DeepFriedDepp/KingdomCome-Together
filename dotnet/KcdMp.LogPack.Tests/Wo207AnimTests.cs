@@ -26,6 +26,17 @@ public class Wo207AnimTests
         Assert.False(AnimCompare.SameAction(null, -1, 1.4, "CAnimActionAIMovement", 4, 1.4));                      // twin: an empty FullBody
     }
 
+    [Fact]
+    public void WO208_the_fragment_family_counts_one_fragment_as_one_animation_whatever_class_carries_it()
+    {
+        Assert.Equal("fragment#43", AnimCompare.FragmentFamily("C_CallbackAction", 43));
+        Assert.Equal("idle", AnimCompare.FragmentFamily("C_VariationAction", 1718));
+        Assert.True(AnimCompare.SameFragment("C_CallbackAction", 43, 0, "C_CombatAnimAction", 43, 0));     // the owner's install of the host's fragment
+        Assert.False(AnimCompare.SameAction("C_CallbackAction", 43, 0, "C_CombatAnimAction", 43, 0));     // the WO-207 measure counts the class
+        Assert.False(AnimCompare.SameFragment("C_CallbackAction", 43, 0, "C_CombatAnimAction", 44, 0));    // twin: another fragment differs
+        Assert.False(AnimCompare.SameFragment(null, -1, 0, "C_CombatAnimAction", 43, 0));                  // twin: an empty FullBody differs
+    }
+
     private static string Line(long t, string m, string name, string kind, double x, string cls, int fr) =>
         string.Create(CultureInfo.InvariantCulture,
             $"{{\"t\":{t},\"m\":\"{m}\",\"f\":1,\"a\":[{{\"n\":\"{name}\",\"k\":\"{kind}\",\"p\":[{x:0.###},0,10],\"dead\":0,\"rag\":0,\"q\":0,\"sc\":[{{\"s\":\"FullBody\",\"c\":\"{cls}\",\"fr\":{fr},\"pr\":2}}]}}]}}\n");

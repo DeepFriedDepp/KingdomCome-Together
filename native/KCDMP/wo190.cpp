@@ -10,6 +10,7 @@
 #include "wo187.h"
 #include "wo204.h"
 #include "wo204_rules.h"
+#include "wo208.h"
 
 #include "engine.h"
 #include "gait_logic.h"
@@ -360,6 +361,7 @@ void tick() {
     if (now - s_lastGather >= 0.25) { s_lastGather = now; gather(s_cands, now); }
     const double period = mode == Mode::On ? kReadPeriodS : (mode == Mode::Auto ? kAutoReadPeriodS : kIdleWatchPeriodS);
     for (const Cand& c : s_cands) {
+        if (wo208::probe_owned(c.eid)) continue;   // WO-208 A.1: the probe's copy has one owner (its base rule is the owner's)
         if (mode == Mode::Auto && !c.fight) {
             BodyTrace& pb = g_bodies[c.eid];
             pb.role = c.role;

@@ -3,6 +3,7 @@
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 // WO-197: the animation-sync release's native half (wo197.h).
 #include "wo197.h"
+#include "wo208.h"
 #include "wo197_rules.h"
 #include "wo163.h"
 #include "wo166.h"
@@ -347,6 +348,7 @@ uint8_t pair(const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t* 
     if (!pair_request_ok(len, lenA, lenV)) return wo163::kRBadRequest;
     const std::string specA(reinterpret_cast<const char*>(body + 11), lenA);
     const std::string specV(reinterpret_cast<const char*>(body + 12 + lenA), lenV);
+    if (wo208::probe_owned(a) || wo208::probe_owned(v)) return wo163::kRNoActor;   // WO-208 A.1: the probe's copy has one owner
     // WO-202 IV.3: a = 0xFFFFFFFF, a query: this machine's own player's combat opponent -- [eid:4][255][255][0][nameLen:1][name] -- so the
     // player's clinch can name the body it clinched (the joiner's copy of it is found by that name; the field: 4 of the host's clinches
     // reached the joiner and none played, "his figure has no opponent body here")
@@ -398,6 +400,7 @@ uint8_t sync_guard(const uint8_t* body, size_t len, uint8_t* out, size_t cap, si
     out[0] = 2; out[1] = out[2] = 255; *outLen = 3;
     if (!resolve() || !g_ssg) return wo163::kROk;
     if (!g_clinch.load() || !body_ok(m) || !body_ok(s)) return wo163::kRNoActor;
+    if (wo208::probe_owned(m) || wo208::probe_owned(s)) return wo163::kRNoActor;   // WO-208 A.1
     void* mca = nullptr; void* mm = nullptr; void* sca = nullptr; void* sm = nullptr;
     if (!motion::combat_parts(m, false, &mca, &mm) || !motion::combat_parts(s, false, &sca, &sm)) return wo163::kRNoActor;
     wo187::set_logical_target(mca, engine::entity_by_id(s));
@@ -480,7 +483,7 @@ uint8_t handle(uint8_t op, const uint8_t* body, size_t len, uint8_t* out, size_t
             uint32_t eid = 0;
             std::memcpy(&eid, body + 1, 4);
             void* ca = nullptr; void* m = nullptr;
-            if (!body_ok(eid) || !motion::combat_parts(eid, false, &ca, &m)) return wo163::kRNoActor;
+            if (!body_ok(eid) || wo208::probe_owned(eid) || !motion::combat_parts(eid, false, &ca, &m)) return wo163::kRNoActor;
             const std::string before = wo187::director_text(ca, 0);
             const int r = ensure_guard(ca);
             const std::string after = wo187::director_text(ca, 0);

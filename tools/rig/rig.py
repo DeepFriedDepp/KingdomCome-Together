@@ -18,7 +18,7 @@ processes it started (pid + creation time + image).
 
 Environment: KCD2MP_INSTALL (root A), KCDMP_RIG_ROOT_B (root B), KCDMP_RIG_RUN (the run's folder name).
 """
-import json, os, re, sys, time, urllib.error, urllib.parse, urllib.request
+import json, os, re, sys, threading, time, urllib.error, urllib.parse, urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -58,10 +58,13 @@ def save_state(s):
     with open(STATE, 'w', encoding='utf-8') as f: json.dump(s, f, indent=1)
 
 
+_NOTE_LOCK = threading.Lock()
+
+
 def note(event, **kv):
     """One JSON line per rig event in the run folder (what was started, sent, measured, stopped)."""
     row = dict(t=time.strftime('%Y-%m-%d %H:%M:%S'), event=event, **kv)
-    with open(os.path.join(run_dir(), 'rig-events.jsonl'), 'a', encoding='utf-8') as f: f.write(json.dumps(row) + '\n')
+    with _NOTE_LOCK, open(os.path.join(run_dir(), 'rig-events.jsonl'), 'a', encoding='utf-8') as f: f.write(json.dumps(row) + '\n')
     return row
 
 
@@ -361,6 +364,13 @@ def watch(minutes):
     rows = []
     verdict = 'pass'
     low_ram = 0
+    stop = threading.Event()
+
+    def vram10():   # WO-208 F.1: free VRAM every 10 s on the pair, apart from the slower rows (each crash note carries the sample before it)
+        while not stop.wait(10):
+            try: note('vram10', s=round(time.time() - t0), vram=machine.vram_free_mb())
+            except Exception as e: note('vram10', s=round(time.time() - t0), error=str(e)[:200])
+    threading.Thread(target=vram10, daemon=True).start()
     while time.time() - t0 < minutes * 60:
         wa.poll(); wb.poll()
         alive = (procs.matches(a), procs.matches(b))
@@ -392,6 +402,7 @@ def watch(minutes):
                 row['s'], (row['vram'] or {}).get('free_mb'), row['ram']['ram_free_mb'],
                 (row['ws_a'] or {}).get('ws_mb'), (row['ws_b'] or {}).get('ws_mb'), row['api'], row.get('fps')))
         time.sleep(10)
+    stop.set()
     note('watch-end', verdict=verdict, minutes=round((time.time() - t0) / 60, 1))
     say('watch:', verdict, 'after %.1f min' % ((time.time() - t0) / 60))
     return 0 if verdict == 'pass' else 1

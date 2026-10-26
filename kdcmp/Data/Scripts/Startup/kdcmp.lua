@@ -10079,7 +10079,7 @@ function KCD2MP_NpcPuppetTick(arg, gen)
             -- SetWorldPos + anim restarts stomp one-shots before a frame
             -- renders (WO-39's ghost lesson) -- while a cue plays, this
             -- puppet gets no writes at all; the lerp catches up after.
-            if p.swingCuePending then
+            if p.swingCuePending and not (KCD2MP_W208Owned and KCD2MP_W208Owned(name)) then   -- WO-208 A: not on an owned copy
                 p.swingCuePending = nil
                 pcall(function() KCD2MP_PuppetSwingCue(name, p, e) end)
             end
@@ -12371,6 +12371,7 @@ end
 -- here -- the native action owns the render. Clears any pending Lua cue so a
 -- packet that raced both paths cannot double-render.
 function KCD2MP_NpcNativeSwingHold(name)
+    if KCD2MP_W208Owned and KCD2MP_W208Owned(name) then return end   -- WO-208 A: the copy has one owner
     local p = KCD2MP.npcPuppets[name]
     if p then
         p.swingCuePending = nil
@@ -32867,6 +32868,7 @@ end
 function KCD2MP_W203Anim(cid, bodyName, clip, faceName, x, y, z, femaleClip)
     local C = KCD2MP.W203.conv
     if not C.on then return end
+    if KCD2MP_W208Owned and KCD2MP_W208Owned(bodyName) then return end   -- WO-208 A: the copy has one owner
     local e = w203_body(bodyName)
     if e and femaleClip and femaleClip ~= "" and string.find(tostring(e.class), "Female", 1, true) then clip = femaleClip end
     if not e or not clip or clip == "" then C.refused = C.refused + 1; return end
@@ -32951,14 +32953,38 @@ end
         return ok
 end
 
-    -- The agent: a partner's conversation exists (joinable 1/0) or is gone.
-    function KCD2MP_W203Offer(starter, cid, joinable, anchor)
+    -- WO-208 C.4 (mp_conv_autojoin; the agent decides it is on): the partner's conversation started by itself (a quest forced it, an NPC
+    -- opened it) -- this player listens in when he is within 30 m of the partner and free: not listening already, no talk of his own, no
+    -- fight. Otherwise the prompt stays, as for any talk.
+    local W3C_AUTO_RANGE = 30.0
+    local function w3c_autojoin(starter, cid)
+        local why = nil
+        local fig = w3c_figure(starter)
+        if W3C.listening then why = "listening already"
+        elseif not W3C.join then why = "joining is off"
+        elseif not fig then why = "no partner figure here"
+        elseif not w3c_near(fig, W3C_AUTO_RANGE) then why = "the partner is farther than 30 m"
+        else
+            local own, danger = false, false
+            pcall(function() own = player.human:IsInDialog() == true end)
+            pcall(function() danger = player.soul:IsInCombatDanger() == true end)
+            if own then why = "in a talk of his own" elseif danger then why = "in a fight" end
+        end
+        if why then W3C.stats.autoNot = (W3C.stats.autoNot or 0) + 1 else W3C.stats.auto = (W3C.stats.auto or 0) + 1 end
+        mp_log(string.format("WO208-AUTOJOIN partner=%s cid=%s %s [auto=%d not=%d]", starter, cid,
+            why and ("not joined -- " .. why) or "listening in: it started by itself and the partner is near", W3C.stats.auto or 0, W3C.stats.autoNot or 0))
+        if not why then KCD2MP_EmitEvent("w203_join", starter .. " " .. cid .. " auto") end
+end
+
+    -- The agent: a partner's conversation exists (joinable 1/0) or is gone; auto 1: it started by itself (WO-208 C.4).
+    function KCD2MP_W203Offer(starter, cid, joinable, anchor, auto)
         KCD2MP_W203InstallPrompt()   -- the entity classes may have loaded after this file
         starter = tostring(starter)
         if tonumber(joinable) == 1 then
             W3C.offers[starter] = { cid = tostring(cid), anchor = tostring(anchor or "") }
             W3C.stats.offers = W3C.stats.offers + 1
             mp_log(string.format("WO203B-OFFER partner=%s cid=%s anchor=%s -- 'Join conversation' on the partner and the NPC within %d m", starter, tostring(cid), tostring(anchor), W3C_RANGE))
+            if tonumber(auto) == 1 then w3c_autojoin(starter, tostring(cid)) end
         else
             W3C.offers[starter] = nil
         end
@@ -33046,10 +33072,30 @@ end
         end
 end
 
+    -- WO-208 C.5 (mp_listen_show_head): the listener's own Henry stands in the starter's shots, and the game hides the player's head for
+    -- its first-person view: while listening its own wh_pl_ShowHead shows it; the player's own value comes back on every way out
+    local function w3c_head(on)
+        local L = W3C.listening
+        if not L then return end
+        if on then
+            if W208 and W208.on and W208.on.listen_show_head == false then return end
+            local was = nil
+            pcall(function() if type(System.GetCVar) == "function" then was = System.GetCVar("wh_pl_ShowHead") end end)
+            L.headWas = was
+            pcall(System.SetCVar, "wh_pl_ShowHead", "1")
+            mp_log("WO208-HEAD listening: wh_pl_ShowHead 1 (was " .. tostring(was) .. ")")
+        elseif L.headWas ~= nil or (W208 and W208.on and W208.on.listen_show_head ~= false) then
+            local back = L.headWas ~= nil and tostring(L.headWas) or "0"
+            pcall(System.SetCVar, "wh_pl_ShowHead", back)
+            mp_log("WO208-HEAD back: wh_pl_ShowHead " .. back)
+        end
+end
+
     local function w3c_restore(reason)
         local L = W3C.listening
         if not L then return false end
         if KCD2MP_W204ConvClear then pcall(KCD2MP_W204ConvClear) end   -- WO-204: the partner's rows and lines go with the view
+        w3c_head(false)   -- WO-208 C.5
         w3c_hud(false)
         pcall(ActionMapManager.EnableActionMap, L.map or "dialog", false)
         W3C.listening = nil
@@ -33082,6 +33128,21 @@ end
 
     -- The agent: the view is on (the snapshot arrived) -- the listening state here.
     function KCD2MP_W203Enter(starter, cid, anchor)
+        -- WO-208 C.3 (mp_listen_own_talk_first): a player inside a talk of his own does not listen to the partner's -- the game's own
+        -- dialog map is on for his talk, and every listen key arrived twice through it (the baseline smoke: the host's no-camera talk
+        -- stayed open at its first decision, the host then listened to the joiner's talk from inside it, and a Back meant to clear a
+        -- vote opened the pause menu)
+        if not (W208 and W208.on and W208.on.listen_own_talk_first == false) then
+            local own = false
+            pcall(function() own = player.human:IsInDialog() == true end)
+            if own then
+                W3C.stats.ownTalkRefused = (W3C.stats.ownTalkRefused or 0) + 1
+                mp_log(string.format("WO208-LISTEN refused partner=%s cid=%s -- this player is in a talk of his own (his own talk first) [n=%d]",
+                    tostring(starter), tostring(cid), W3C.stats.ownTalkRefused))
+                KCD2MP_EmitEvent("w203_leave", tostring(starter) .. " " .. tostring(cid) .. " own-talk")
+                return
+            end
+        end
         if W3C.listening then w3c_restore("reenter") end
         W3C.listening = { starter = tostring(starter), cid = tostring(cid), anchor = tostring(anchor or ""), hidden = {} }
         W3C.offers[tostring(starter)] = nil
@@ -33091,6 +33152,7 @@ end
         W3C.listening.map = (W207 and W207.on and W207.on.listen_map == false) and "dialog" or "kcd2mp_listen"
         pcall(ActionMapManager.EnableActionMap, W3C.listening.map, true)
         w3c_hud(true)
+        w3c_head(true)   -- WO-208 C.5
         pcall(function() W3C.listening.hp = player.soul:GetState("health") end)
         W3C.gen = W3C.gen + 1
         local gen = W3C.gen
@@ -33584,9 +33646,32 @@ do
     -- key map (the final smoke: the host's own dialog map was still on after its talk -- every vote doubled, one Down moved two rows,
     -- one Back cleared the vote and then left). true = swallow this one.
     W207.lastListen = W207.lastListen or {}
+    -- WO-208 C.3: the agent -- this player's own talk ended (the engine's own line: "Dialog ending" or "Dialog interrupted")
+    function KCD2MP_W208OwnTalkEnd(cid, how)
+        W207.ownTalkEndAt = os.clock()
+        W207.ownTalkEndHow = tostring(how)
+        W207.ownTalkEnds = (W207.ownTalkEnds or 0) + 1
+    end
     function KCD2MP_W207ListenOnce(action, activation)
-        if W207.on.listen_once == false then return false end
         if type(action) ~= "string" or string.sub(action, 1, 14) ~= "kcd2mp_listen_" then return false end
+        -- WO-208 C.3: a listen action with nobody listening and the player in no dialogue of his own: only the game's own dialog map
+        -- carries it then (the listen map is on only while listening) -- that map was left on. Told (at most once a minute) with how
+        -- long ago this player's own last talk ended, so the bench can name what leaves it on.
+        if (activation == "press" or activation == 1) and not (KCD2MP.W203 and KCD2MP.W203.cam and KCD2MP.W203.cam.listening) then
+            local own = false
+            pcall(function() own = player.human:IsInDialog() == true end)
+            if not own then
+                W207.mapLeft = (W207.mapLeft or 0) + 1
+                local now = os.clock()
+                if not W207.mapLeftAt or now - W207.mapLeftAt > 60 then
+                    W207.mapLeftAt = now
+                    mp_log(string.format("WO208-DIALOGMAP %s arrived with no dialogue running and nobody listening: the game's dialog map is still on (%d so far; this player's own last talk ended %s s ago, %s)",
+                        action, W207.mapLeft, W207.ownTalkEndAt and string.format("%.1f", now - W207.ownTalkEndAt) or "?", tostring(W207.ownTalkEndHow)))
+                    KCD2MP_EmitEvent("w208_dialogmap", tostring(action))
+                end
+            end
+        end
+        if W207.on.listen_once == false then return false end
         if activation ~= "press" and activation ~= 1 then return false end
         local now = os.clock()
         local last = W207.lastListen[action]
@@ -33625,6 +33710,81 @@ do
         local fname = "KCD2MP_W207Set_" .. k
         _G[fname] = function(arg) return KCD2MP_W207Set(k, arg) end
         System.AddCCommand(label, fname .. "(%line)", "WO-207 " .. (W207.HELP[k] or k) .. " (default on): " .. label .. " on|off")
+    end
+end
+
+-- ===== WO-208: the agent's switches (each new mechanism ships on, with its own switch; the agent hears w208_cfg) =====
+do
+    W208 = W208 or {}
+    W208.NAMES = {
+        conv_cam_player_view = "mp_conv_cam_player_view",
+        target_in_fight = "mp_target_in_fight",
+        defence_local = "mp_defence_local",
+        copy_anim_owner = "mp_copy_anim_owner",
+        listen_show_head = "mp_listen_show_head",
+        joiner_player_triggers = "mp_joiner_player_triggers",
+        quest_wait_aside = "mp_quest_wait_aside",
+        defence_recoil = "mp_defence_recoil",
+        clock_stands_with_host = "mp_clock_stands_with_host",
+        listen_own_talk_first = "mp_listen_own_talk_first",
+        conv_autojoin = "mp_conv_autojoin",
+    }
+    W208.HELP = {
+        conv_cam_player_view = "C.2: (both) a talk whose dialogue cameras never take over shows the listener the talker's own view instead of nothing",
+        target_in_fight = "F.1: (joiner) a copy of the host's NPC takes you as its opponent only while the game has it in a fight with you (a fight crash)",
+        defence_local = "B: (both) your block, parry, perfect block and dodge against the host's NPCs are judged by your own game, not the host's",
+        copy_anim_owner = "A: (both) each copy of the host's NPCs has one animation owner, driven by the host's NPC's own state",
+        listen_show_head = "C.5: (both) while you listen to your partner's conversation, your own character keeps his head in its shots",
+        joiner_player_triggers = "D.2: (joiner) a quest's area that watches the player never writes the joiner's own quest state: the host's world decides",
+        quest_wait_aside = "D.2: (joiner) a host quest step whose part of the quest sleeps here waits aside; the host's later steps arrive in order without it",
+        defence_recoil = "B.4: (host) when your partner blocks a stab of one of your NPCs, that NPC recoils on your screen as it does on theirs",
+        clock_stands_with_host = "D.2: (joiner) while the host is in a conversation and its clock stands, yours stands too (nothing runs it on)",
+        listen_own_talk_first = "C.3: (both) while you are in a conversation of your own you do not join your partner's (your keys stay your talk's)",
+        conv_autojoin = "C.4: (both) a conversation that starts by itself for your partner (a quest or an NPC starts it) takes you in when you are within 30 m and free",
+    }
+    W208.on = W208.on or {}
+    W208.DEFAULT_OFF = { copy_anim_owner = true }   -- the owner starts off until its acceptance passed on the pair
+    -- WO-208 A: is this copy driven by its one owner (the DLL's, from the host NPC's streamed state)? The mod's own animation writers on
+    -- a copy (the swing cue and hold, the conversation's gestures) leave it alone. Its weapon state stays the engine's own draw and
+    -- holster at the stream's moment (human:DrawWeapon / HolsterWeapon): the host's draws and holsters run on the torso's scopes,
+    -- which the owner does not drive (WeaponHolsterFull, TorsoDetail). The bench's A.1 names one copy (KCD2MP_W208Probe);
+    -- with mp_copy_anim_owner on, the agent says every copy is (KCD2MP_W208OwnerAll, renewed every 2 s).
+    function KCD2MP_W208Owned(name)
+        if KCD2MP_W208Probe and name == KCD2MP_W208Probe then return true end
+        return KCD2MP_W208OwnerAll == true and (os.clock() - (KCD2MP_W208OwnerAllAt or -1e9)) < 6 and KCD2MP.npcPuppets ~= nil and KCD2MP.npcPuppets[name] ~= nil
+    end
+    function KCD2MP_W208SetOwnerAll(on)
+        KCD2MP_W208OwnerAll = on == true
+        KCD2MP_W208OwnerAllAt = os.clock()
+    end
+    local function w208_is_on(k) if W208.on[k] == nil then return not W208.DEFAULT_OFF[k] end return W208.on[k] end
+    function KCD2MP_W208Set(name, arg)
+        local label = W208.NAMES[tostring(name)]
+        if not label then mp_log("WO208-TOGGLE unknown switch '" .. tostring(name) .. "'"); return false end
+        local v = KCD2MP_Wo122ParseBool(arg)
+        if v == "bad" then mp_log(label .. ": expected on|off, got '" .. tostring(arg) .. "'"); return false end
+        if v == nil then
+            mp_log("WO208-TOGGLE " .. label .. " is " .. (w208_is_on(tostring(name)) and "on" or "off"))
+            return true
+        end
+        W208.on[tostring(name)] = v
+        mp_log("WO208-TOGGLE " .. label .. " " .. (v and "on" or "off") .. " -- sent to the agent")
+        KCD2MP_EmitEvent("w208_cfg", tostring(name) .. "=" .. (v and "on" or "off"))
+        return true
+    end
+    function KCD2MP_W208Status()
+        local parts = {}
+        for k, label in pairs(W208.NAMES) do parts[#parts + 1] = label .. "=" .. (w208_is_on(k) and "on" or "off") end
+        table.sort(parts)
+        mp_log("WO208-STATUS " .. table.concat(parts, " "))
+        KCD2MP_EmitEvent("w208_status", "")
+        return true
+    end
+    System.AddCCommand("mp_w208_status", "KCD2MP_W208Status()", "WO-208: every WO-208 switch and its counts")
+    for k, label in pairs(W208.NAMES) do
+        local fname = "KCD2MP_W208Set_" .. k
+        _G[fname] = function(arg) return KCD2MP_W208Set(k, arg) end
+        System.AddCCommand(label, fname .. "(%line)", "WO-208 " .. (W208.HELP[k] or k) .. " (default " .. (W208.DEFAULT_OFF[k] and "off" or "on") .. "): " .. label .. " on|off")
     end
 end
 

@@ -33,6 +33,9 @@ public sealed class AnimCompareResult
     /// <summary>WO-207 G.2: the copy runs a different full-body action (<see cref="AnimCompare.SameAction"/>), and the share where both
     /// machines read tags and they differ; the most frequent (host, joiner) pairs of a mismatch.</summary>
     public double? ActionMismatch, TagMismatch;
+    /// <summary>WO-208 A: the same, every other action by its fragment alone (the copy's owner installs the host's fragment through the combat
+    /// module's own action class: one fragment is one animation whatever class carries it).</summary>
+    public double? FragmentMismatch;
     public List<(string Host, string Joiner, int N)> TopMismatches = new();
     public List<AnimBodyCompare> Bodies = new();
     public string Section = "";
@@ -65,6 +68,22 @@ public static class AnimCompare
         "CAnimActionAIMovement" or "CAnimActionMovementTransition" or "C_CombatAnimActionMovement" or "C_PlayerMovementAction" => "locomotion",
         _ => cls + "#" + frag.ToString(CultureInfo.InvariantCulture),
     };
+
+    /// <summary>WO-208 A: <see cref="Family"/>, every other action by its fragment alone.</summary>
+    public static string FragmentFamily(string? cls, int frag)
+    {
+        string f = Family(cls, frag);
+        return f is "empty" or "idle" or "locomotion" ? f : "fragment#" + frag.ToString(CultureInfo.InvariantCulture);
+    }
+
+    /// <summary>WO-208 A: <see cref="SameAction"/> by <see cref="FragmentFamily"/>.</summary>
+    public static bool SameFragment(string? hc, int hf, double hv, string? jc, int jf, double jv)
+    {
+        string a = FragmentFamily(hc, hf), b = FragmentFamily(jc, jf);
+        bool am = a is "idle" or "locomotion", bm = b is "idle" or "locomotion";
+        if (am && bm) return SpeedBand(hv) == SpeedBand(jv);
+        return a == b;
+    }
 
     /// <summary>WO-207 G.2: standing (under 0.3 m/s), walking (to 2.2), running (to 4.5), sprinting.</summary>
     public static int SpeedBand(double mps) => mps < 0.3 ? 0 : mps < 2.2 ? 1 : mps < 4.5 ? 2 : 3;
@@ -133,7 +152,7 @@ public static class AnimCompare
         }
 
         var all = new List<double>();
-        int poseN = 0, poseBad = 0, wBad = 0, actBad = 0, tagN = 0, tagBad = 0;
+        int poseN = 0, poseBad = 0, wBad = 0, actBad = 0, tagN = 0, tagBad = 0, fragBad = 0;
         var mism = new Dictionary<(string, string), int>();
         foreach (var (name, h, j) in pairs)
         {
@@ -151,12 +170,18 @@ public static class AnimCompare
                     if (!string.Equals(hsm.Fb, x.Fb, StringComparison.Ordinal) || hsm.FbFrag != x.FbFrag) bpBad++;
                     // WO-207 G.2: any of the host's samples within the window, by family and gait
                     double jv = SpeedAt(j.S, ji);
-                    bool same = false;
+                    bool same = false, sameFrag = false;
                     long t0 = x.T - res.OffsetMs - PoseWindowMs, t1 = x.T - res.OffsetMs + PoseWindowMs;
                     int k = idx;
                     while (k > 0 && h.S[k - 1].T >= t0) k--;
-                    for (; k < h.S.Count && h.S[k].T <= t1 && !same; k++)
-                        same = h.S[k].T >= t0 && SameAction(h.S[k].Fb, h.S[k].FbFrag, SpeedAt(h.S, k), x.Fb, x.FbFrag, jv);
+                    for (; k < h.S.Count && h.S[k].T <= t1 && !(same && sameFrag); k++)
+                    {
+                        if (h.S[k].T < t0) continue;
+                        double hv = SpeedAt(h.S, k);
+                        same = same || SameAction(h.S[k].Fb, h.S[k].FbFrag, hv, x.Fb, x.FbFrag, jv);
+                        sameFrag = sameFrag || SameFragment(h.S[k].Fb, h.S[k].FbFrag, hv, x.Fb, x.FbFrag, jv);
+                    }
+                    if (!sameFrag) fragBad++;
                     if (!same)
                     {
                         ba++;
@@ -179,6 +204,7 @@ public static class AnimCompare
             res.P50 = Pct(all, 50); res.P95 = Pct(all, 95);
             res.PoseMismatch = opt.ComparePose && poseN > 0 ? (double)poseBad / poseN : null;
             res.ActionMismatch = opt.ComparePose && poseN > 0 ? (double)actBad / poseN : null;
+            res.FragmentMismatch = opt.ComparePose && poseN > 0 ? (double)fragBad / poseN : null;
             res.TagMismatch = tagN > 0 ? (double)tagBad / tagN : null;
             res.WeaponMismatch = (double)wBad / all.Count;
             res.TopMismatches = mism.OrderByDescending(kv => kv.Value).Take(8).Select(kv => (kv.Key.Item1, kv.Key.Item2, kv.Value)).ToList();
@@ -244,6 +270,7 @@ public static class AnimCompare
         sb.Append($"| stream delay | {(r.OffsetEstimated ? r.OffsetMs + " ms" : "not estimated")} |\n");
         sb.Append($"| position error, p50 | {M(r.P50)} |\n| position error, p95 | {M(r.P95)} |\n");
         sb.Append($"| the copy runs a different full-body action (WO-207: the same family within {PoseWindowMs} ms of the delay; idle and locomotion by speed band) | {(r.ActionMismatch is double am ? P(am) : "off")} |\n");
+        sb.Append($"| the copy runs a different full-body fragment (WO-208: the same, every other action by its fragment alone) | {(r.FragmentMismatch is double fm ? P(fm) : "off")} |\n");
         sb.Append($"| full-body action or fragment differs at the delay, exactly (WO-206) | {(r.PoseMismatch is double pm ? P(pm) : "off")} |\n");
         if (r.TagMismatch is double tm) sb.Append($"| Mannequin tags differ (both read) | {P(tm)} |\n");
         sb.Append($"| weapon drawn differs | {P(r.WeaponMismatch)} |\n\n");

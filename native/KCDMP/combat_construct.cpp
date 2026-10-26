@@ -53,6 +53,7 @@
 // EntityModule.dll / CombatModule.dll this session (docs/WO-44-findings.md).
 
 #include "combat_swing.h"
+#include "anchors.h"
 #include "fault_guard.h"
 #include "hits.h"
 #include "engine.h"
@@ -963,6 +964,104 @@ SwingResult ghost_swing(uint32_t entityId, const char* fragSpec) {
          entityId, out.fragmentID, status, refc ? refc - 1 : 0, watched ? " watched" : "", fragSpec);
     kcdmp::hits::note_figure_swing(entityId);   // WO-170 F1: a partner's figure's swing the partner sent -- one blow of it is licensed (hits.cpp)
     return SwingResult::Ok;
+}
+
+// --- WO-208 A: one fragment, as the host's world ran it --------------------
+// The owner's installer: ghost_swing's route without the spec text -- the host's fragment id and its tags (the action's own +0x3C
+// block, read on the host) at the host's priority, through the copy's own C_CombatAnimActionManager. The same engine calls, in the
+// same order; one reference stays ours (*outAction, dropped with release_action) so the owner can read the action's status, step its
+// priority as the host's did, and never stack a second one. Main thread.
+SwingResult install_fragment(uint32_t entityId, uint32_t fragmentId, const uint8_t tags[20], int32_t priority, uint32_t flags, void** outAction) {
+    *outAction = nullptr;
+    HMODULE entityModule = GetModuleHandleA("EntityModule.dll");
+    HMODULE combatModule = GetModuleHandleA("CombatModule.dll");
+    if (!entityModule || !combatModule) return SwingResult::ModuleMissing;
+    auto* ctorFn  = reinterpret_cast<char*>(combatModule) + kRvaCombatAnimCtor;
+    auto* queueFn = reinterpret_cast<char*>(combatModule) + kRvaQueueAction;
+    static int prologueState = 0;   // 0 unchecked, 1 ok, -1 mismatch
+    if (prologueState == 0)
+        prologueState = (prologue_matches(ctorFn, kPrologueCtor, sizeof(kPrologueCtor)) &&
+                         prologue_matches(queueFn, kPrologueQueue, sizeof(kPrologueQueue))) ? 1 : -1;
+    if (prologueState < 0) return SwingResult::BuildMismatch;
+    const auto exports = module_exports(entityModule);
+    if (exports.empty()) return SwingResult::NoExports;
+    void* actor = resolve_actor(entityModule, exports, /*wantPlayer*/ false, entityId);
+    if (!actor) actor = resolve_any_actor(entityId);
+    if (!actor) return SwingResult::ActorNotResolved;
+    void* combatActor = nullptr;
+    if (!read_ptr(actor, kOffCombatActorInActor, &combatActor)) return SwingResult::CombatActorFailed;
+    if (!combatActor) {
+        auto fn = reinterpret_cast<GetOrCreateFn>(reinterpret_cast<char*>(entityModule) + kRvaGetOrCreateCombat);
+        if (!call_get_or_create(fn, actor, &combatActor) || !combatActor) return SwingResult::CombatActorFailed;
+    }
+    void* manager = nullptr;
+    if (!read_ptr(combatActor, kOffAnimActionManager, &manager) || !manager) return SwingResult::ManagerMissing;
+    void* allocFn = nullptr;
+    if (!read_ptr(combatModule, kRvaCombatAllocGlobal, &allocFn) || !allocFn) return SwingResult::AllocatorMissing;
+    void* mem = nullptr;
+    if (!call_combat_alloc(reinterpret_cast<CombatAllocFn>(allocFn), 0x1A8, &mem) || !mem) return SwingResult::AllocFailed;
+    void* anim = nullptr;
+    uint8_t t[20];
+    std::memcpy(t, tags, sizeof t);
+    {
+        KCDMP_FAULT_CALL(site, "combat_construct::install_fragment_ctor");
+        if (!fault::guarded(site, [&] {
+                anim = reinterpret_cast<void* (*)(void*, void*, void*, uint32_t, uint32_t, const void*, uint32_t)>(ctorFn)(
+                    mem, mem, combatActor, static_cast<uint32_t>(priority), fragmentId, t, flags);
+            }) || !anim)
+            return SwingResult::CtorFailed;
+    }
+    // two references in: one for QueueAction to consume (the game's own convention), one the owner keeps
+    InterlockedIncrement(reinterpret_cast<volatile LONG*>(reinterpret_cast<char*>(anim) + 0x58));
+    InterlockedIncrement(reinterpret_cast<volatile LONG*>(reinterpret_cast<char*>(anim) + 0x58));
+    void* sp = anim;
+    if (!call_queue_action(reinterpret_cast<QueueActionFn>(queueFn), manager, &sp, -1.0f)) {
+        call_release(anim);
+        return SwingResult::QueueFaulted;
+    }
+    *outAction = anim;
+    return SwingResult::Ok;
+}
+
+bool release_action(void* action) { return action && call_release(action); }
+
+// WO-208 A.2 (rules 2 and 3): the game's own stop of an action -- Mannequin's IAction::Stop (CombatModule's copy, 1.5.5 +0x10AB10:
+// flags at +0x2C |= Stopping | BlendOut, then the same for each sub-action), after which the controller never installs the action and
+// blends a running one out. Found by its own bytes (the profiler call masked), exactly once in CombatModule's .text, or never used.
+namespace {
+void* g_stopFn = nullptr;
+int g_stopState = 0;   // 0 unresolved, 1 found, -1 not found (the owner keeps its priority step-down)
+void* resolve_stop() {
+    if (g_stopState) return g_stopFn;
+    g_stopState = -1;
+    HMODULE cm = GetModuleHandleA("CombatModule.dll");
+    anchor::Range t{};
+    if (!cm || !anchor::section(cm, ".text", &t)) return nullptr;
+    static const uint8_t pat[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10, 0x57, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0xF9,
+                                  0x48, 0x8D, 0x0D, 0, 0, 0, 0, 0xE8, 0, 0, 0, 0, 0x81, 0x4F, 0x2C, 0x01, 0x20, 0x00, 0x00, 0x33, 0xDB,
+                                  0x48, 0x8B, 0x87, 0x88, 0x00, 0x00, 0x00};
+    static const bool wild[sizeof pat] = {false, false, false, false, false, false, false, false, false, false, false, false, false, false,
+                                          false, false, false, false, false, false, false, true, true, true, true, false, true, true, true, true};
+    int n = 0;
+    const uint8_t* hit = nullptr;
+    for (const uint8_t* p = t.begin; p + sizeof pat <= t.end; ++p) {
+        size_t k = 0;
+        while (k < sizeof pat && (wild[k] || p[k] == pat[k])) ++k;
+        if (k == sizeof pat) { hit = p; if (++n > 1) break; }
+    }
+    if (n == 1) { g_stopFn = const_cast<uint8_t*>(hit); g_stopState = 1; }
+    logf("WO208-OWN action stop %s (CombatModule+0x%llX, %d match(es))", n == 1 ? "found" : "NOT found -- the owner steps priorities down only",
+         hit ? static_cast<unsigned long long>(hit - reinterpret_cast<const uint8_t*>(cm)) : 0ULL, n);
+    return g_stopFn;
+}
+}
+
+bool stop_action(void* action) {
+    if (!action) return false;
+    void* fn = resolve_stop();
+    if (!fn) return false;
+    KCDMP_FAULT_CALL(site, "combat_construct::stop_action");
+    return fault::guarded(site, [&] { reinterpret_cast<void (*)(void*)>(fn)(action); });
 }
 
 // --- WO-167 C3: "shown" means rendered (wo167_rules.h). ----------------------

@@ -38,7 +38,13 @@ public partial class GameBridge
             return;
         }
         int end = Wo203ConvRules.ParseEnd(line);
-        if (end >= 0) { _w203OwnTalks.TryRemove(end, out _); return; }
+        if (end >= 0)
+        {
+            // WO-208 C.3: this player's own talk ended -- the mod notes when and how (its dialog-map watch names it if the map stays on)
+            if (_w203OwnTalks.TryRemove(end, out _))
+                _ = ExecLuaAsync($"if KCD2MP_W208OwnTalkEnd then KCD2MP_W208OwnTalkEnd({end}, \"{(line.Contains(" Dialog interrupted", StringComparison.Ordinal) ? "interrupted" : "ending")}\") end");
+            return;
+        }
         if (Wo203ConvRules.ParseAnim(line) is not { } a || !_w203OwnTalks.TryGetValue(a.Cid, out var others) || !W203Partnered) return;
         if ((Wo203ConvRules.Place(a.Who, others) ?? Wo204PlaceByRole(a.Cid, a.Who)) is not { } p) { Interlocked.Increment(ref _w203AnimUnplaced); return; }
         string text = Wo203ConvRules.AnimText(a.Cid, _myGhostId, p.Body, a.Fragment, p.Face);

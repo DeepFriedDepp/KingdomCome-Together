@@ -82,6 +82,16 @@ public sealed class QuestValueIndex
             if (SoulsAliasRx.Match(m.Groups[2].Value) is { Success: true } a) _areaTriggers.Add((module, m.Groups[1].Value, a.Groups[1].Value));
     }
 
+    /// <summary>
+    /// WO-208 D.2: the AreaTriggers that watch the PLAYER (their soul alias names the player), outside the game's tutorial modules. On a
+    /// joiner they measured the joiner's own Henry against the host's areas and wrote the joiner's own States (the pub brawl's
+    /// trackingPlayerNearPub: 2 on the host, 0 on the joiner for a whole tavern run) -- the host's world decides; the joiner's tutorials stay
+    /// his own (WO-204 Act VI).
+    /// </summary>
+    public IReadOnlyList<string> PlayerTriggerPaths() =>
+        _areaTriggers.Where(t => t.Alias.Contains("player", StringComparison.OrdinalIgnoreCase) && !t.Module.Contains(".tutorialy", StringComparison.OrdinalIgnoreCase))
+                     .Select(t => t.Module + "." + t.Node).Distinct(StringComparer.Ordinal).OrderBy(p => p, StringComparer.Ordinal).ToList();
+
     /// <summary>WO-207 D.2: the NPC triggers' node paths, in path order.</summary>
     public IReadOnlyList<string> NpcTriggerPaths()
     {

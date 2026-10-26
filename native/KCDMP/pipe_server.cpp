@@ -3,6 +3,7 @@
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 #include "crash_capture.h"
 #include "pipe_server.h"
+#include "wo208.h"
 #include "mannequin_read.h"
 #include "local_state.h"
 #include "npc_scan.h"
@@ -283,6 +284,16 @@ void send_wo141_frame(const uint8_t* body, uint16_t len) { send_unsolicited(kAct
 void send_wo143_frame(const uint8_t* body, uint16_t len) { send_unsolicited(kActivity2Out, body, len, "Activity2"); }
 
 // WO-132: an engaged copy's local hit on the player was put back (main thread).
+// WO-208 B: a copy's blow judged here (main thread)
+void send_defence(uint32_t attackerEid, uint8_t outcome, float st, float hp) {
+    BYTE body[13]{};
+    std::memcpy(body, &attackerEid, 4);
+    body[4] = outcome;
+    std::memcpy(body + 5, &st, 4);
+    std::memcpy(body + 9, &hp, 4);
+    send_unsolicited(kDefenceOut, body, sizeof(body), "Defence");
+}
+
 void send_discarded(uint32_t attackerEid, float st, float hp) {
     BYTE body[12]{};
     std::memcpy(body, &attackerEid, 4);
@@ -696,6 +707,7 @@ void serve(HANDLE h) {
                 rttr::SwingResult res = rttr::SwingResult::Ok;
                 const bool ran = run_sync_bounded<rttr::SwingResult>(
                     [entityId, spec](rttr::SwingResult& result) {
+                        if (kcdmp::wo208::probe_owned(entityId)) { result = rttr::SwingResult::QueueFaulted; return; }   // WO-208 A.1: one owner
                         result = rttr::ghost_swing(entityId, spec.c_str());
                         if (result == rttr::SwingResult::Ok) kcdmp::wo187::note_move(entityId);   // WO-187 C2: the move's scope is watched
                     },
@@ -1542,6 +1554,7 @@ bool start() {
     // WO-132: NPC hits on avatars, watched NPCs' combat state, discarded copy hits.
     kcdmp::hits::set_npc_hit_callback(&send_npc_avatar_hit);
     kcdmp::hits::set_discard_callback(&send_discarded);
+    kcdmp::hits::set_defence_callback(&send_defence);   // WO-208 B
     kcdmp::wo132::set_combat_callback(&send_npc_combat);
     // WO-137: quest State changes.
     kcdmp::wo137::set_send_callback(&send_quest_change);

@@ -6226,6 +6226,9 @@ public partial class GameBridge(ClientConfig config)
             case string w207 when w207.StartsWith("w207_", StringComparison.Ordinal):   // WO-207: the vote icon's moment, the switches (Wo207OnEvent)
                 Wo207OnEvent(name, arg);
                 return;
+            case string w208 when w208.StartsWith("w208_", StringComparison.Ordinal):   // WO-208: the switches and the status (Wo208OnEvent)
+                Wo208OnEvent(name, arg);
+                return;
             case "w206_cfg":         // WO-206 E: mp_epoch_check, mp_research_death_from_health
             case "w206_status":      // WO-206 E: mp_w206_status
                 Wo206OnEvent(name, arg);

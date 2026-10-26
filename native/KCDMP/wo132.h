@@ -87,5 +87,7 @@ void on_pipe_closed();
 bool release_dead(uint32_t eid);
 // WO-201 B4: the same release for a living copy whose host NPC left combat (`why` is logged).
 bool release_copy(uint32_t eid, const char* why);
+// WO-208 F.1 (main thread): does this machine hold the copy in the local player's fight (engaged: its skirmish add, until released)?
+bool engaged(uint32_t eid);
 
 } // namespace kcdmp::wo132

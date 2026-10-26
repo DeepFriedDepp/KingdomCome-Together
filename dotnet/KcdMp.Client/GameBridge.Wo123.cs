@@ -302,6 +302,9 @@ public partial class GameBridge
             case Protocol.CarryDown:        // WO-148
                 await Wo148OnFrameAsync(src, body);
                 return;
+            case Protocol.NpcAnimDown:      // WO-208 A.2: the host's NPCs as state
+                await Wo208OnNpcAnimAsync(body);
+                return;
             case Protocol.HitVerdictDown:   // WO-161
                 await Wo161OnVerdictInAsync(src, joinId, body, ct);
                 return;
