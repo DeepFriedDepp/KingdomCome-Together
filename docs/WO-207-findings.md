@@ -247,7 +247,7 @@ seen) and the digest fail, as on earlier builds.
 
 ## H: the fight crashes (the crash work)
 
-Every dump kept (the host 18, the joiner 9) read with the bench's own minidump reader and the game's DLLs on disk; the crash report
+Every dump kept (the host 18, the joiner 10) read with the bench's own minidump reader and the game's DLLs on disk; the crash report
 now names the entities the faulting registers lead to. Grouped by cause:
 
 **1. The host, `RPGModule+0x64afe4` (18 dumps, AI worker thread, reading 0x28) -- the mod's own, fixed.** The function is the target
@@ -268,7 +268,7 @@ the twin is `KCDMP_TEST_W207_OFF=skirmish_keep` in the game's environment. The f
 fix (the joiner's own deaths, WO-132). The fight is unchanged: the host applied 25 of the joiner's blows in the fix's first fight
 (18 before), 9-35 per fight over the fix's runs.
 
-**2. The joiner, `CombatModule+0x55b065` / `+0x559d32` / `+0x8ff0a` (6 dumps) and `XGenAIModule+0x25542c0` via `+0x8ff0d` (1)
+**2. The joiner, `CombatModule+0x55b065` / `+0x559d32` / `+0x8ff0a` (7 dumps, one the twin's) and `XGenAIModule+0x25542c0` via `+0x8ff0d` (1)
 -- the mod's own, fixed.** The local player's dodge or perfect-block multi-trigger (owner `C_CombatPlayer`): a copy's slot planner
 (its own update, `C_CombatActorSlotPlanner` vt+0x38) creates a sub-trigger on the player's multi-trigger (`0x8fdd0`: push {attacker,
 trigger}, set up its window, then Start, vt+0x60); the player's own update cleans that multi-trigger (`0x576090`: every sub-trigger
@@ -321,6 +321,7 @@ the bandits set on the joiner's figure every 30 s unless said) until a game exit
 | the host fix only (copy engine state on) | | 5 bench faults (the joiner window refused the foreground), 0 clean | **joiner in 6**: the attacker a copy released 2.5 min before |
 | **both fixes** (the final tree) | | **10 of 10, no crash** | -- |
 | mp_plan_in_fight **off** (its twin), mp_skirmish_keep on | | 8 clean, the 9th ended by an outside stop | none in 8 |
+| the same twin again, up to 20 fights | | 1 clean | **joiner in 2**: the attacker a copy released 4.3 min before |
 
 ### The proof
 
@@ -329,15 +330,14 @@ the bandits set on the joiner's figure every 30 s unless said) until a game exit
   list matched before and after.
 * **The host fix's twin** (`mp_skirmish_keep` off, the same build otherwise) crashed the host in the second fight, the same
   `RPGModule+0x64afe4` on a bandit.
-* **The joiner fix's twin** (`mp_plan_in_fight` off) did **not** crash in 8 fights. The race is rare: with copies planning out of a
-  fight the joiner crashed in 2 of 26 fights after the host fix (fight 2 and fight 6 of two sessions; none in a 10-fight probe session or in the twin's 8).
-  The twin exercises the path (6 of 30 sampled plannings were by copies not in the player's fight); the fix's case rests on the two
-  recovered attackers and the copy-engine-state bisect (off: 10 of 10 clean). A longer twin was not run.
+* **The joiner fix's twin** (`mp_plan_in_fight` off) ran 8 fights clean, then, run again for up to 20, **crashed the joiner in the
+  second fight**: `CombatModule+0x8ff0a`, the player's perfect-block multi-trigger, the attacker (from the dump) a copy WO-132 had
+  released from the player's skirmish 4.3 minutes before -- the same shape as the two crashes before the fix. The race is rare
+  (3 joiner crashes in 28 fights with copies planning out of a fight, none in the fix's 10).
 
 ## Open items
 
-1. **The joiner fix's twin did not crash** in 8 fights (the race is rare, ~1 in 13 fights); a longer twin run is owed. Both fight
-   crash groups are otherwise fixed and proven (H).
+1. Both fight crash groups are fixed and proven, each with a twin that crashes again (H).
 2. **The shared sleep's clocks (C.3)**: not proven; the twin gives the same gaps. The maintainer: the gap is a bench artefact (one copy is
    always the inactive window) -- logged in the smoke, never a pass/fail.
 3. **A talk with no valid dialogue camera** gives the listener no shot (the view ends after 10 s): the sampler only sends dialogue
