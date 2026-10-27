@@ -243,7 +243,9 @@ hostile attacked him, so the gate never had to refuse: the fix rests on the stat
 | no-input-capture | **pass**, first and last | 119 binaries (1,432 imports) and 1,410 scripts (the bench, the harness, the input helper included); the self-test caught every planted capture (8 of 8) |
 | every offline gate | **pass** | 97 of 97 on the release candidate: native 10,102, relay 197, agent 2,007, setup 77, log pack 71, 77 Lua suites, 4 static, the relay table 96 of 96, the relay's fault modes 37, the digest 62, the bench 42, the save tools 14 + 7 |
 | relay table | **pass** | 96 rules (NpcOpp 0x7C / 0x7D added), every W164 text fits its row |
-| payload, publishing, the save round trip | the installer build (below) | |
+| payload | **pass** | the installer build's payload smoke (the published relay, release 0.63.8, rtt 23 ms), no-input-tooling and no-screenshot (1,036 files, 0 hits), no-input-capture on the payload (963 binaries, the pak's script), the test install 41 of 41 |
+| publishing | **pass** | the pending commit against the denylist and the field logs' player names |
+| the save round trip | **pass**, live | inside the installer build, against a bench copy on the release candidate (its agent up, no relay: a lone host with the relay up runs out of memory on the bench, Open). The first attempt met exactly that and was not shipped |
 | the real saves unchanged | **pass** | the hash list checked before and after every run: 270 checks, every one a match; the mirror roots 136 of 136 |
 | each fix's twin fails its own test | **pass**, except `owner_neutral` (its twin did not reproduce) | below |
 
@@ -263,8 +265,9 @@ hostile attacked him, so the gate never had to refuse: the fix rests on the stat
 | F `game_hostile_gate` | the copies' own attacks at him while the game holds them not hostile | 0: none arose in the 10 fights (it never had to refuse) | 104 of 706 (rc5's crash session) |
 | D.4 `quest_wake_with_host`, the analyzer's three rules | unit and synthetic tests with their twins | pass | fail, each |
 
-**The installer:** built from this commit by the installer build, which runs the payload, publishing and save round-trip gates;
-its result is added to this document with Part 0's remaining columns.
+**The installer:** `KingdomComeTogether-Setup-0.63.8.exe`, 107,630,848 bytes (0.63.7: 107,613,730), the three start saves inside,
+unsigned as before, a release candidate for the two-player session (not soak-tested: not a public release); built from the WO's
+commit, every gate of the build passed. It stays with the maintainer.
 
 **Measured and reported:** frame rates in the smoke (the whole pair test), median: the release candidate's host 66.6 / joiner 41.6 fps
 against 0.63.7's 63.7 / 43.9 -- no drop; with the owner off 59.8 / 50.0. The clock gaps: the joiner's 9-hour sleep 47 s a second after,
@@ -309,6 +312,9 @@ leaves the copies held in his old fight), `KCDMP_TEST_W209_OFF=game_hostile_gate
   invisible there; whether one shows a T-pose as it comes into view is not measured. Seated people still stand on the joiner's screen
   in a tavern. The family measure counts the owner's own action class.
 - **D.3** the mod's 2.6 GB step in the first minutes after a load: bounded, not attributed.
+- **A host alone with the relay up** (no partner joined yet): its memory grows about 80 MB a second to some 23 GB and the game hangs
+  within four minutes on the bench -- 0.63.7 the same, every WO-209 switch off the same, the owner on or off the same; without the
+  relay it stays flat. Found when the installer's save round trip met it (WO-208's did too). Not attributed yet; the next WO's first item.
 - **D.4** quest modules awake on the joiner and asleep on the host; the smoke's States both machines run themselves.
 - **D.5** quest areas for both players: its own WO.
 - **E.1** a timed decision on the pair; **E.2** the brawl scenario's trigger.
