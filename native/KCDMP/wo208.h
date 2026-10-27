@@ -27,6 +27,8 @@ bool probe_owned(uint32_t eid);
 // combat relations are read, never rewritten by it, and Part B needs the engagement and the strike window).
 bool probe_only(uint32_t eid);
 bool probe_owned_name(const char* name);
+// probe_only by the NPC's name (a writer addressed by name).
+bool probe_only_name(const char* name);
 // F.1 (mp_target_in_fight, main thread): may the local player be written as this copy's opponent now? Only while the engine has the copy and
 // the player in a skirmish fight (its own relation test, read-only); counted and told when not (site: who asked -- "wish", "strike").
 bool target_player_ok(uint32_t copy, const char* site);   // the same, by the NPC's name (a writer addressed by name)

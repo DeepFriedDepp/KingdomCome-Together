@@ -15,10 +15,12 @@ public class Wo208Tests
     {
         Assert.Equal(15u, Wo208Rules.ConfigBits(_ => true));
         Assert.Equal(8u, Wo208Rules.ConfigBits(n => n == "copy_anim_owner"));
-        Assert.True(Wo208Rules.Default("defence_local", null, null));
-        Assert.False(Wo208Rules.Default("defence_local", "defence_local", null));                 // a twin
-        Assert.False(Wo208Rules.Default("copy_anim_owner", null, null));                          // starts off
-        Assert.True(Wo208Rules.Default("copy_anim_owner", null, "copy_anim_owner"));             // the bench turns it on
+        Assert.True(Wo208Rules.Default("defence_local", null, null));                          // WO-209: every switch ships on
+        Assert.False(Wo208Rules.Default("defence_local", "defence_local", null));              // its twin turns it off
+        Assert.False(Wo208Rules.Default("defence_local", "defence_local", "defence_local"));   // a twin wins
+        Assert.True(Wo208Rules.Default("copy_anim_owner", null, null));                           // the owner ships on (WO-209)
+        Assert.False(Wo208Rules.Default("copy_anim_owner", "copy_anim_owner", null));            // the bench's owner-off runs
+        Assert.Empty(Wo208Rules.DefaultOff);
         Assert.Equal(4u, Wo208Rules.ConfigBits(n => n == "defence_local"));
         Assert.Equal(0u, Wo208Rules.ConfigBits(_ => false));
         Assert.Equal(1u, Wo208Rules.ConfigBits(n => n == "conv_cam_player_view"));

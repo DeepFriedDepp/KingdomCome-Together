@@ -19,6 +19,9 @@ public static class AnimLimits
     /// teleport and after the observing player's: a body that streams in shows no action for its first second or two on BOTH machines
     /// (WO-206's baseline: 17 of the host's own T-poses, all within 1.8 s of the body appearing).</summary>
     public const long TposeGraceMs = 3000;
+    /// <summary>WO-209 C.3: tpose and stuck judge a body only within this of its machine's own player. WO-208's one fight T-pose was the
+    /// bandits 846 m from the joiner before the scenario took him there: a body that far is not animated, its full body reads empty.</summary>
+    public const double ViewM = 150;
     /// <summary>WO-207 G.1: a jump of a body longer than this between two samples is a teleport (its own grace starts).</summary>
     public const double TeleportM = 5.0;
     /// <summary>WO-207 G.1: the observing player's jump longer than this (the rig's teleports, a fast travel) gives every body on that
@@ -175,19 +178,21 @@ public static class AnimDetect
         var en = new HashSet<string>(enabled ?? Enabled, StringComparer.Ordinal);
         var an = new AnimAnalysis { Stream = s, Enabled = en };
         var playerJumps = PlayerTeleports(s);
+        var players = s.Bodies.Values.Where(x => x.Kind == "player").GroupBy(x => x.Machine, StringComparer.Ordinal).ToDictionary(g => g.Key, g => g.First(), StringComparer.Ordinal);
         foreach (var ser in s.Bodies.Values.OrderBy(x => x.Machine, StringComparer.Ordinal).ThenBy(x => x.Name, StringComparer.Ordinal))
         {
             if (ser.S.Count == 0) continue;
             an.Bodies.Add(Info(ser));
             var o = an.Findings;
-            if (en.Contains("tpose")) Tpose(ser, o, Grace(ser, playerJumps.TryGetValue(ser.Machine, out var pj) ? pj : new List<long>()));
+            var far = Far(ser, players.TryGetValue(ser.Machine, out var pl) ? pl : null);
+            if (en.Contains("tpose")) Tpose(ser, o, Grace(ser, playerJumps.TryGetValue(ser.Machine, out var pj) ? pj : new List<long>()), far);
             if (en.Contains("sliding")) Sliding(ser, o);
             if (en.Contains("floating")) Ground(ser, o, +1);
             if (en.Contains("sinking")) Ground(ser, o, -1);
             if (en.Contains("jitter")) Jitter(ser, o);
             if (en.Contains("rubberband")) Rubberband(ser, o);
             if (en.Contains("deathpose")) DeathPose(ser, o);
-            if (en.Contains("stuck")) Stuck(ser, o);
+            if (en.Contains("stuck")) Stuck(ser, o, far);
         }
         return an;
     }
@@ -275,15 +280,33 @@ public static class AnimDetect
         return g;
     }
 
-    private static void Tpose(AnimSeries ser, List<AnimFinding> o, bool[] grace)
+    /// <summary>WO-209 C.3: per sample, true when the body is farther than <see cref="AnimLimits.ViewM"/> from its machine's own player at
+    /// that moment (the player's nearest sample in time); false when there is no player series (judged as before).</summary>
+    internal static bool[] Far(AnimSeries ser, AnimSeries? player)
     {
         var S = ser.S;
-        Runs(ser, "tpose", i => grace[i] ? null : Living(S[i]) && S[i].Fb is null, null, AnimLimits.TposeEmptyMs, true, null, "FullBody empty", o);
+        var f = new bool[S.Count];
+        if (player is null || player.S.Count == 0 || ser.Kind == "player") return f;
+        var P = player.S;
+        int j = 0;
+        for (int i = 0; i < S.Count; i++)
+        {
+            while (j + 1 < P.Count && Math.Abs(P[j + 1].T - S[i].T) <= Math.Abs(P[j].T - S[i].T)) j++;
+            f[i] = Dist3(S[i], P[j]) > AnimLimits.ViewM;
+        }
+        return f;
+    }
+
+    private static void Tpose(AnimSeries ser, List<AnimFinding> o, bool[] grace, bool[]? far = null)
+    {
+        var S = ser.S;
+        far ??= new bool[S.Count];
+        Runs(ser, "tpose", i => grace[i] || far[i] ? null : Living(S[i]) && S[i].Fb is null, null, AnimLimits.TposeEmptyMs, true, null, "FullBody empty", o);
         Runs(ser, "tpose", i =>
         {
             var b = S[i].Bones;
             if (b?.LHand is null || b.RHand is null || b.Head is null) return null;
-            if (grace[i]) return null;
+            if (grace[i] || far[i]) return null;
             if (!Living(S[i])) return false;
             return ArmsOut(b);
         }, null, AnimLimits.TposeBonesMs, false, null, "arms straight out", o);
@@ -440,14 +463,15 @@ public static class AnimDetect
     /// <summary>WO-207 G.1: a queued action that waits longer than <see cref="AnimLimits.StuckAgeMs"/> without starting, on a living body that is
     /// not in its normal idle (the probe's queue age with its queue detail; a probe file without them is not judged: its queue length alone
     /// flagged healthy NPCs, and the first queue age counted actions waiting to resume).</summary>
-    private static void Stuck(AnimSeries ser, List<AnimFinding> o)
+    private static void Stuck(AnimSeries ser, List<AnimFinding> o, bool[]? far = null)
     {
         var S = ser.S;
         if (!S.Any(x => x.QOutrank >= 0)) return;
+        far ??= new bool[S.Count];
         var runs = new List<AnimFinding>();
         Runs(ser, "stuck", i =>
         {
-            if (S[i].QOutrank < 0) return null;
+            if (S[i].QOutrank < 0 || far[i]) return null;
             if (S[i].Dead || S[i].Rag || IsNormalIdle(S[i].Fb, S[i].FbFrag)) return false;
             return S[i].QOutrank > AnimLimits.StuckAgeMs;
         }, i => S[i].QOutrank / 1000.0, 0, false, null, "", runs);

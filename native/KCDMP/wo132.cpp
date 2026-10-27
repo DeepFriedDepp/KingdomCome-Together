@@ -4,6 +4,8 @@
 // WO-132 -- see wo132.h.
 #include "wo132.h"
 #include "wo208.h"
+#include "wo209.h"
+#include "wo209_rules.h"
 #include "fault_guard.h"
 
 #include <windows.h>
@@ -12,6 +14,7 @@
 #include <cstdio>
 #include <cstring>
 #include <mutex>
+#include <unordered_map>
 #include <vector>
 
 #include "engine.h"
@@ -115,6 +118,7 @@ uint8_t handle(const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t
              eid, isPlayer ? "the local player" : "a body", ok ? "removed" : "FAILED", static_cast<unsigned long long>(rv));
         // WO-154 3.3: nothing of the mod's keeps an NPC on it (a forced pair, a remembered threat, a queued switch)
         if (!isPlayer) kcdmp::wo136::forget_avatar(eid, "the avatar left its fight");
+        if (isPlayer) local_player_left_fight("op 1");
         if (!ok) { c_leaveFail.fetch_add(1); return kRFailed; }
         c_leave.fetch_add(1);
         out[0] = static_cast<uint8_t>(rv & 0xFF);
@@ -147,6 +151,9 @@ uint8_t handle(const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t
             }
         }
         bool tooFar = on && (dist < 0 || dist > (intent ? kIntentRangeM : kEngageRangeM));
+        // WO-209 A (mp_copy_opponent_mirror): a copy the mirror holds in this player's fight (the host's NPC fights his figure) is never let
+        // go for its distance -- adds only, never a removal; the fight's end (the host's NPC out of combat, dead) still releases it
+        if (tooFar && is_engaged(eid) && wo209::mirror_holds_player(eid)) tooFar = false;
         if (tooFar) { on = false; c_far.fetch_add(1); }
         if (on && hits::scene_owned_eid(eid, "wo132-engage")) on = false;   // WO-174: a scripted brawl's copy never engages the player through the mod
         if (on && wo195::dead_gate(eid, "engage")) on = false;   // WO-195: a dead copy is never engaged again (an engage on it is an engage off)
@@ -387,6 +394,52 @@ bool release_copy(uint32_t eid, const char* why) {
 bool release_dead(uint32_t eid) { return release_copy(eid, "the copy is dead (WO-195)"); }
 
 bool engaged(uint32_t eid) { return eid != 0 && is_engaged(eid); }
+
+// WO-209 (d1-defence-early's joiner crash): the local player left his skirmish -- no copy is in his fight any more, whatever the mod held:
+// every engagement ends here (no skirmish call: his side is gone already), so F.1 refuses him as an opponent until a copy is added to his
+// new fight (the mirror's engage, op 2); the crash's copy had him written back after his respawn while the mod still counted it as held.
+// rc4-c1x's joiner crash (CombatModule+0x8ff0a): his death's own leave (respawn.cpp) did not come here -- a copy kept as held from the
+// old fight was never added to his new one, and its own attacks at him ran from the old skirmish.
+void local_player_left_fight(const char* why) {
+    if (g_engaged.empty() || !wo209::on(wo209rules::kBitOppMirror)) return;
+    const size_t n = g_engaged.size();
+    for (uint32_t e : g_engaged) { hits::discard_from(e, false); motion::set_npc_engage(e, false, nullptr, now_s()); }
+    g_engaged.clear();
+    logf("WO209-ENGAGE the local player left his fight (%s): %zu copy/copies no longer held in it (re-added only by a new engage)",
+         why ? why : "?", n);
+}
+
+bool mirror_engage(uint32_t eid, float maxM, const char* why) {
+    if (!eid) return false;
+    if (is_engaged(eid)) return true;
+    void* soul = hits::soul_of_eid(eid);
+    void* psoul = hits::soul_of_eid(player_eid());
+    if (!soul || !psoul) return false;
+    if (hits::scene_owned_eid(eid, "wo209-mirror")) return false;   // WO-174: a scripted brawl's copy never engages the player through the mod
+    if (wo195::dead_gate(eid, "engage")) return false;
+    float pp[3]{}, cp[3]{};
+    void* pe = engine::entity_by_id(player_eid());
+    void* ce = engine::entity_by_id(eid);
+    if (!pe || !ce || !npcdrive::entity_pos(pe, pp) || !npcdrive::entity_pos(ce, cp)) return false;
+    const float dx = pp[0] - cp[0], dy = pp[1] - cp[1], dz = pp[2] - cp[2];
+    const float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
+    if (dist > maxM) {
+        // told once per copy every 10 s: a copy the mirror cannot take into his fight stays out of it (F.1 then refuses him as its target)
+        static std::unordered_map<uint32_t, double> told;
+        double& t = told.try_emplace(eid, -1e9).first->second;
+        if (now_s() - t >= 10.0) { t = now_s(); logf("WO132-ENGAGE eid=0x%X NOT engaged (%s): the copy is %.1f m from the local player (the mirror engages within %.0f m)", eid, why ? why : "mirror", dist, maxM); }
+        return false;
+    }
+    uint64_t rv = 0;
+    const bool sk = hits::skirmish_add(soul, psoul, 1, &rv);
+    if (sk) c_engageSkirmish.fetch_add(1);
+    hits::discard_from(eid, true);
+    g_engaged.push_back(eid);
+    c_engageOn.fetch_add(1);
+    logf("WO132-ENGAGE eid=0x%X on (%s, %.1f m): skirmish vs the local player %s (rv=0x%llX); its local hits on the player are discarded", eid,
+         why ? why : "mirror", dist, sk ? "added" : "NOT added", static_cast<unsigned long long>(rv));
+    return true;
+}
 
 void on_pipe_closed() {
     // Nothing drives the engaged copies any more: let them go (the Lua copy

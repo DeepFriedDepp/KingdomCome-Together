@@ -98,7 +98,7 @@ do
                          "conv_autojoin" }) do
         check("a: " .. k .. " has a name and a help line", W208.NAMES[k] ~= nil and W208.HELP[k] ~= nil, k)
     end
-    check("a: the owner starts off (until its acceptance), the rest on", W208.DEFAULT_OFF.copy_anim_owner == true and not W208.DEFAULT_OFF.defence_local)
+    check("a: every switch ships on (WO-209), the owner and defence_local too", next(W208.DEFAULT_OFF) == nil)
     clearLog()
     KCD2MP_W208Set("quest_wait_aside", "off")
     check("a: a switch goes to the agent", evts("w208_cfg")[1] == "quest_wait_aside=off", evts("w208_cfg")[1])

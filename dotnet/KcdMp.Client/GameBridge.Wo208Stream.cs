@@ -42,6 +42,8 @@ public partial class GameBridge
                 await Task.Delay(100, ct);
                 try { await Wo208StreamTickAsync(); }
                 catch (Exception ex) { Console.WriteLine($"MP-W208 stream tick failed: {ex.GetType().Name}: {ex.Message}"); }
+                try { await Wo209OppTickAsync(); }   // WO-209 A: the same stream's opponents
+                catch (Exception ex) { Console.WriteLine($"MP-W209 opponent tick failed: {ex.GetType().Name}: {ex.Message}"); }
             }
         }
         catch (OperationCanceledException) { }

@@ -4428,6 +4428,7 @@ public partial class GameBridge(ClientConfig config)
         // stamps, solo, docs/WO-118-findings.md). Same epoch semantics (boot),
         // so a reconnecting agent keeps a continuous clock.
         var packet = NpcStateCodec.BuildUp(npcName, x, y, z, rotZ, health, flags, seq, SenderMsNow());
+        _w209NpcIn.AddOrUpdate(npcName, 1, (_, n) => n + 1);   // WO-209: the host's side of the minute line (samples sent per NPC)
         if ((flags & Protocol.NpcStateFlagResync) != 0) _resyncEmitted++;
         if (!asClaim) Wo132NoteNpcState(npcName, flags);   // WO-132: a drawn NPC's combat state is watched
         try { await WritePacketAsync(stream, packet, ct); if (!asClaim) { _stats.NpcStateOut++; Wo127NoteSent(npcName); } }   // WO-110 Phase 6: a SENT packet, not a hand-off
@@ -6229,6 +6230,9 @@ public partial class GameBridge(ClientConfig config)
             case string w208 when w208.StartsWith("w208_", StringComparison.Ordinal):   // WO-208: the switches and the status (Wo208OnEvent)
                 Wo208OnEvent(name, arg);
                 return;
+            case string w209 when w209.StartsWith("w209_", StringComparison.Ordinal):   // WO-209: the switches and the status (Wo209OnEvent)
+                Wo209OnEvent(name, arg);
+                return;
             case "w206_cfg":         // WO-206 E: mp_epoch_check, mp_research_death_from_health
             case "w206_status":      // WO-206 E: mp_w206_status
                 Wo206OnEvent(name, arg);
@@ -7111,7 +7115,7 @@ public partial class GameBridge(ClientConfig config)
                 if (p[1] == "off")
                 {
                     _nativeBound.TryRemove(npc, out _);   // WO-118 follow-up: Lua writes it: full rate again
-                    _ = _combat.NpcBindAsync(false, 0, 0, 0, 0, 0, 0, npc);
+                    NativeBindInOrder(() => _combat.NpcBindAsync(false, 0, 0, 0, 0, 0, 0, npc));
                     return;
                 }
                 if (p.Length != 8
@@ -7132,18 +7136,37 @@ public partial class GameBridge(ClientConfig config)
                 if (npc.StartsWith("kcd2mp_", StringComparison.Ordinal) && byte.TryParse(npc.AsSpan(7), out byte bindGhost)
                     && _ghostEntityIds.TryAdd(bindGhost.ToString(), eid))
                     Console.WriteLine($"[wo121] ghost {bindGhost} entity id 0x{eid:X} learned from its native bind");
-                _ = Task.Run(async () =>
+                NativeBindInOrder(async () =>
                 {
                     var (ok, reason) = await _combat.NpcBindAsync(true, eid, wuid, ax, ay, az, delayMs, npc);
                     if (ok) Interlocked.Increment(ref _nativeBindsOk); else Interlocked.Increment(ref _nativeBindsRefused);
                     if (ok) _nativeBound[npc] = 1; else _nativeBound.TryRemove(npc, out _);   // WO-118 follow-up
                     string tag = NativeNpcCodec.ReasonTag(reason);
                     if (!ok) Console.WriteLine($"[npcwrite] bind {npc} eid=0x{eid:X} refused: {tag}");
-                    await ExecLuaAsync($"if KCD2MP_NpcNativeAck then KCD2MP_NpcNativeAck(\"{npc}\", {(ok ? 1 : 0)}, \"{tag}\") end");
+                    // the ack is not waited for: the next bind or unbind in the order goes out at once
+                    _ = ExecLuaAsync($"if KCD2MP_NpcNativeAck then KCD2MP_NpcNativeAck(\"{npc}\", {(ok ? 1 : 0)}, \"{tag}\") end");
                 });
                 return;
             }
         }
+    }
+
+    private readonly object _nativeBindLock = new();
+    private Task _nativeBindChain = Task.CompletedTask;
+    private long _nativeBindChained;
+
+    /// <summary>
+    /// WO-209: the Lua side's native binds and unbinds reach the DLL in the order it emitted them (d8-defence: an unbind sent at once and
+    /// the bind after it sent from its own task crossed -- the bind landed first, the unbind 115 ms later, and the camp bandit's copy
+    /// stayed unbound, never written again, 16 m from its fight, while Lua held it bound). Twin: KCDMP_TEST_W209_OFF=native_bind_order
+    /// (the old way: the unbind at once, the bind from its own task).
+    /// </summary>
+    private void NativeBindInOrder(Func<Task> op)
+    {
+        if (!W209("native_bind_order")) { _ = Task.Run(op); return; }
+        Interlocked.Increment(ref _nativeBindChained);
+        lock (_nativeBindLock)
+            _nativeBindChain = _nativeBindChain.ContinueWith(_ => op(), CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default).Unwrap();
     }
 
     private async Task OnNativeNpcDroppedAsync(byte reason, string npc)

@@ -59,6 +59,9 @@ int status_text(char* out, int n);
 // Host (WO-165's lock tick, main thread): an NPC fighting a partner's figure, offered while mp_host_lock_answer is on.
 bool host_answer_on();
 void offer_local(uint32_t eid);
+// WO-209 (main thread): the game's own last answer to the local player's picker for a listed copy, before this hook's override:
+// 1 hostile, 0 not hostile, -1 not listed or not asked yet.
+int game_hostile(uint32_t eid);
 
 // C4 switches (wo173.cpp reads them).
 bool hold_on();

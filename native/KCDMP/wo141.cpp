@@ -3,6 +3,8 @@
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 #include "wo141.h"
 #include "wo208.h"
+#include "wo209.h"
+#include "wo209_rules.h"
 #include "wo204.h"
 #include "wo204_rules.h"
 #include "wo172.h"
@@ -1511,7 +1513,10 @@ uint8_t handle(const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t
             if (!name_at(1, &nm, &at) || nm.empty() || len != at + R::kWireBytes || cap < 1) return kRBadRequest;
             R::Activity a;
             if (!R::decode(body + at, R::kWireBytes, &a)) return kRBadRequest;
-            if (!g_applyOn.load() || wo208::probe_owned_name(nm.c_str())) { out[0] = 0; *outLen = 1; return kRNotArmed; }   // WO-208 A.1
+            // WO-208 A.1 / WO-209: the owner's copies take the rows while the neutral rule is on (wo209_rules.h activity_refused_for_owner)
+            const bool ownerKeeps = wo209rules::activity_refused_for_owner(wo208::probe_only_name(nm.c_str()), wo208::probe_owned_name(nm.c_str()),
+                                                                            wo200::copy_neutral_always(), wo209::fix_on(wo209rules::kFixOwnerNeutral));
+            if (!g_applyOn.load() || ownerKeeps) { out[0] = 0; *outLen = 1; return kRNotArmed; }
             const bool known = g_desired.count(lower(nm.c_str())) != 0;
             set_desired(nm, a);
             out[0] = known ? 1 : 0; *outLen = 1;

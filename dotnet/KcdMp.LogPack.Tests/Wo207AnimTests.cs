@@ -37,6 +37,20 @@ public class Wo207AnimTests
         Assert.False(AnimCompare.SameFragment(null, -1, 0, "C_CombatAnimAction", 43, 0));                  // twin: an empty FullBody differs
     }
 
+    [Fact]
+    public void WO209_a_posture_compares_by_its_fragment_not_as_standing_idle()
+    {
+        // the host's bandit at its waiting spot (C_AnimActionIdleState WaitingStand2 1631), the owner's copy in it (its own class, the same fragment)
+        Assert.Equal("fragment#1631", AnimCompare.FragmentFamily("C_AnimActionIdleState", 1631));
+        Assert.True(AnimCompare.SameFragment("C_AnimActionIdleState", 1631, 0, "C_CombatAnimAction", 1631, 0));
+        // twin: the old writers' copy standing beside the bench while the host's villager sits there -- a difference, no longer idle == idle
+        Assert.False(AnimCompare.SameFragment("C_AnimActionIdleState", 34, 0, "CAnimActionAIMovement", 5, 0));
+        // the standing idle stays one family (male 5, female 0)
+        Assert.Equal("idle", AnimCompare.FragmentFamily("C_AnimActionIdleState", 5));
+        Assert.Equal("idle", AnimCompare.FragmentFamily("C_AnimActionIdleState", 0));
+        Assert.True(AnimCompare.SameFragment("C_AnimActionIdleState", 5, 0, "CAnimActionAIMovement", 5, 0));
+    }
+
     private static string Line(long t, string m, string name, string kind, double x, string cls, int fr) =>
         string.Create(CultureInfo.InvariantCulture,
             $"{{\"t\":{t},\"m\":\"{m}\",\"f\":1,\"a\":[{{\"n\":\"{name}\",\"k\":\"{kind}\",\"p\":[{x:0.###},0,10],\"dead\":0,\"rag\":0,\"q\":0,\"sc\":[{{\"s\":\"FullBody\",\"c\":\"{cls}\",\"fr\":{fr},\"pr\":2}}]}}]}}\n");

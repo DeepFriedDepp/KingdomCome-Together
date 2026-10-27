@@ -124,7 +124,11 @@ public partial class GameBridge
         if (f.Length != 2 || !uint.TryParse(f[0], NumberStyles.None, CultureInfo.InvariantCulture, out uint host) ||
             !int.TryParse(f[1], NumberStyles.None, CultureInfo.InvariantCulture, out int ratio1000) || ratio1000 < 1000 || ratio1000 > 100000) return;
         if (!W200("world_clock_from_host") || !_joinedWorld || _isDamageAuthority) { await Wo200RatioAsync(15.0, "off"); return; }
-        if (_localSkipActive || _w140LocalSkipping || Wo136Holding || _lastPolledWorldTime is not uint mine) { if (_w200Slewing) await Wo200RatioAsync(15.0, "a skip or a load"); return; }
+        // WO-209 D.1 (mp_clock_quiet_in_skip): the game's own time-lapse (a sleep, a wait) runs on its own ratio -- no write over it (the
+        // smoke's 9 h sleep: the reset 3 s in ran the joiner's sleep 56.5 s past the host's); the next correction after it writes afresh
+        bool skipping = _localSkipActive || _w140LocalSkipping;
+        if (skipping && !Wo209Rules.RatioWriteAllowed(true, W209("clock_quiet_in_skip"))) { Wo209NoteSkipQuiet(); return; }
+        if (skipping || Wo136Holding || _lastPolledWorldTime is not uint mine) { if (_w200Slewing) await Wo200RatioAsync(15.0, "a skip or a load"); return; }
         // WO-208 D.2 (mp_clock_stands_with_host): this clock stands with the host's (WO-144: the host is in a dialogue, ratio 0) -- no
         // correction writes a running ratio over it (the baseline: the joiner's clock ran on through the host's talks, up to 917 game s
         // ahead, then was pulled back in jumps)
@@ -138,6 +142,7 @@ public partial class GameBridge
 
     private async Task Wo200RatioAsync(double ratio, string why)
     {
+        if (Interlocked.Exchange(ref _w209RatioDirty, 0) == 1) _w200Ratio = double.NaN;   // WO-209 D.1: after a skip the game's ratio is its own
         if (Math.Abs(ratio - _w200Ratio) < 0.05) return;
         _w200Ratio = ratio;
         _w200Slewing = Math.Abs(ratio - 15.0) >= 0.05;

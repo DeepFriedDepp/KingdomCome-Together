@@ -421,6 +421,24 @@ uint8_t sync_guard(const uint8_t* body, size_t len, uint8_t* out, size_t cap, si
 
 } // namespace
 
+int start_sync_guard(int32_t type, uint32_t master, uint32_t slave, char* why, size_t whyN) {
+    if (why && whyN) why[0] = 0;
+    if (!resolve() || !g_ssg) { if (why) std::snprintf(why, whyN, "StartSyncGuard not armed"); return -1; }
+    void* mca = nullptr; void* mm = nullptr; void* sca = nullptr; void* sm = nullptr;
+    if (!motion::combat_parts(master, false, &mca, &mm) || !motion::combat_parts(slave, false, &sca, &sm)) { if (why) std::snprintf(why, whyN, "no combat actor"); return -1; }
+    // the engine's own refusals, read beforehand so a refused start says which (C_CombatActorClinch::StartSyncGuard: the master's guard
+    // stance unset, a scope-0 action that is not a plain Guard on either; the rows' absence is the engine's own log line)
+    const std::string md = wo187::director_text(mca, 0), sd = wo187::director_text(sca, 0);
+    bool r = false;
+    c_syncGuards.fetch_add(1);
+    KCDMP_FAULT_CALL(site, "wo197::start_sync_guard_owner");
+    if (!fault::guarded(site, [&] { r = g_ssg(type, mca, sca, nullptr, nullptr); })) { if (why) std::snprintf(why, whyN, "faulted"); return -1; }
+    if (r) c_syncGuardOk.fetch_add(1);
+    else if (why) std::snprintf(why, whyN, "refused by the engine (master scope 0 %s, slave scope 0 %s; a missing guard_sync_movement row or an unset guard stance is the engine's own kcd.log line)",
+                                md.empty() ? "?" : md.c_str(), sd.empty() ? "?" : sd.c_str());
+    return r ? 1 : 0;
+}
+
 bool cat_on(uint8_t bit) { return (g_cats.load(std::memory_order_relaxed) & bit) != 0; }
 bool activity_now(bool minigame, bool stance, bool unstance) {
     const uint8_t want = minigame ? kCatWork : stance ? kCatSeats : unstance ? kCatRoutines : kCatSeats;   // "none" (standing up) rides the seats switch

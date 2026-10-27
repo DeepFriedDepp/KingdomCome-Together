@@ -110,6 +110,8 @@ public static partial class Protocol
         (W203Up,        W203Down,        "w203",         JoinHeaderLen + LootFixedLen + 1, JoinHeaderLen + LootFixedLen + W203TextMax, JoinFrom.Either),
         // WO-208 A.2: the host's NPCs' full and upper body as state (ProtocolWo208.cs) -- host to joiner only
         (NpcAnimUp,     NpcAnimDown,     "npc-anim",     JoinHeaderLen + 1, JoinHeaderLen + NpcAnimBodyMax, JoinFrom.Host),
+        // WO-209 A: the host's NPCs' opponents (ProtocolWo209.cs) -- host to joiner only
+        (NpcOppUp,      NpcOppDown,      "npc-opp",      JoinHeaderLen + 1, JoinHeaderLen + NpcOppBodyMax, JoinFrom.Host),
     };
 
     /// <summary>The JoinWire row for an up type, or null.</summary>

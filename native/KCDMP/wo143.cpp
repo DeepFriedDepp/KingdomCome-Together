@@ -3,6 +3,8 @@
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 #include "wo143.h"
 #include "wo208.h"
+#include "wo209.h"
+#include "wo209_rules.h"
 #include "fault_guard.h"
 #include "wo143_rules.h"
 #include "npcstate.h"
@@ -1167,6 +1169,14 @@ bool activity_locomotion(uint32_t eid) {
     return eid && (g_apply.load(std::memory_order_relaxed) & kBitGaits) && g_hoeing.count(eid) != 0;
 }
 
+bool shot_in_flight(uint32_t eid) {
+    if (!eid) return false;
+    const double now = now_s();
+    for (const auto& f : g_flight)
+        if (f.eid == eid && !f.done && now - f.started <= (f.ticked ? K::kOneShotTickLimitS : K::kOneShotKeepS)) return true;
+    return false;
+}
+
 void on_pipe_closed() {
     stop_everything("the agent is gone");
     g_apply = 0;
@@ -1186,7 +1196,10 @@ uint8_t handle(const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t
     };
     if (body[0] == 2 || body[0] == 3 || body[0] == 4 || body[0] == 8 || body[0] == 9) {   // WO-208 A.1: the probe's copy has one owner
         std::string nm; size_t at = 0;
-        if (name_at(1, &nm, &at) && wo208::probe_owned_name(nm.c_str())) return kRNotArmed;
+        // WO-209 C.2 (mp_copy_oneshot_request): a work one-shot on an owned copy is the game's own NPC-state request, the same the host's NPC
+        // ran -- the owner holds the full body while it runs (shot_in_flight); the bench's A.1 copy stays the probe's alone
+        const bool shotRequest = body[0] == 4 && wo209::on(wo209rules::kBitShotRequest);
+        if (name_at(1, &nm, &at) && wo208::probe_owned_name(nm.c_str()) && !(shotRequest && !wo208::probe_only(hits::eid_of_name(nm.c_str())))) return kRNotArmed;
     }
     switch (body[0]) {
         case 1: {   // Config [capture][apply] -> [armed]

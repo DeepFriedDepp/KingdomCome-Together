@@ -233,6 +233,7 @@ public partial class GameBridge
             _w147NpcNewest[name] = (BinaryPrimitives.ReadUInt16LittleEndian(payload.AsSpan(o + Protocol.NpcStateSeqOffset)),
                                     payload[o + Protocol.NpcStateFlagsOffset], at);
             _w147SilentSent.TryRemove(name, out _);
+            _w209NpcIn.AddOrUpdate(name, 1, (_, n) => n + 1);   // WO-209: the host's samples per NPC, read (the minute line)
             Wo187NoteStream(payload, at);   // WO-187 B1/B2: the host's own position of the NPC, its clock, its samples per second
         }
         else if (type == Protocol.Ghost && payload.Length >= 1) _w147GhostNewestMs[payload[0]] = at;

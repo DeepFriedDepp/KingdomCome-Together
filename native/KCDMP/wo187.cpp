@@ -149,15 +149,17 @@ struct Wish {
     int overwrites = 0;
     void* pinFrom = nullptr; void* pinTo = nullptr;
     uint32_t windups = 0;
+    bool mirrored = false;     // WO-209 A: set by the opponent mirror (the host NPC's own opponent), not by the agent's op 36
 };
 std::unordered_map<uint32_t, Wish> g_wishes;   // main thread
+std::atomic<uint32_t> c_mirrorSkipped{0}, c_mirrorWishes{0};
 std::atomic<uint32_t> c_wishes{0}, c_applied{0}, c_overwritten{0}, c_pinned{0}, c_windupHeld{0}, c_windupOver{0}, c_windupNoWish{0}, c_dropped{0},
     c_applyFail{0}, c_planWindups{0}, c_planPlanned{0}, c_planRefused{0}, c_planNotMe{0};
 
 const char* why_name(uint8_t w) {
     switch (w) {
         case 1: return "host-npc-targets-me"; case 2: return "host-npc-targets-the-host"; case 3: return "host-npc-targets-another-player";
-        case 4: return "engaged"; case 5: return "paired-move"; case 6: return "test"; default: return "?";
+        case 4: return "engaged"; case 5: return "paired-move"; case 6: return "test"; case 7: return "mirrored-from-the-host-npc"; default: return "?";
     }
 }
 
@@ -183,6 +185,17 @@ void unpin(uint32_t copy, Wish& w, const char* why) {
     w.pinned = false; w.pinFrom = w.pinTo = nullptr;
 }
 
+// The wish's target pinned with the game's own forced-target relation (copy -> target): the skirmish picker's forced relation wins outright.
+void pin_now(uint32_t copy, Wish& w, uint32_t want, const char* why) {
+    void* fs = hits::soul_of_eid(copy);
+    void* ts = hits::soul_of_eid(want);
+    const int r = fs && ts ? sctx::set_soul_relation(fs, ts, "combat_forcedTarget", true) : -1;
+    if (r >= 0) { w.pinned = true; w.pinFrom = fs; w.pinTo = ts; c_pinned.fetch_add(1); }
+    if (c_pinned.load() <= kLogFirst || r < 0)
+        logf("WO187-OPP npc=%s pinned to %s with combat_forcedTarget (%s) -> %s", name_of(copy), who(want).c_str(), why,
+             r == 1 ? "set (read back)" : r == 0 ? "already set" : "NOT set (the context manager refused)");
+}
+
 // One wish against the copy's model: applied, or written back when something else wrote it. Main thread.
 void apply_wish(uint32_t copy, Wish& w, double now, const char* moment) {
     w.checkedAt = now;
@@ -197,7 +210,11 @@ void apply_wish(uint32_t copy, Wish& w, double now, const char* moment) {
     const uint32_t want = engine::entity_id(ent);
     bool viaReq = false;
     const uint32_t was = current_eid(copy, model, &viaReq);
-    if (was == want) { w.applied = true; return; }
+    if (was == want) {
+        w.applied = true;
+        if (w.mirrored && !w.pinned && g_pin.load()) pin_now(copy, w, want, "mirrored: pinned at once");   // WO-209 A
+        return;
+    }
     if (!set_logical_target(ca, ent)) { c_applyFail.fetch_add(1); return; }
     bool v2 = false;
     const uint32_t now2 = current_eid(copy, model, &v2);
@@ -212,7 +229,7 @@ void apply_wish(uint32_t copy, Wish& w, double now, const char* moment) {
     c_overwritten.fetch_add(1);
     if (c_overwritten.load() <= kLogFirst || c_overwritten.load() % 50 == 0)
         logf("WO187-OPP npc=%s overwritten (was=%s, wished %s) -- written back (#%d this wish, %s)", name_of(copy), who(was).c_str(), who(want).c_str(), w.overwrites, moment);
-    if (pin_due(w.overwrites, w.pinned, g_pin.load())) {
+    if (pin_due(w.overwrites, w.pinned, g_pin.load()) || (w.mirrored && !w.pinned && g_pin.load())) {   // WO-209 A: the copy's AI never picks
         void* fs = hits::soul_of_eid(copy);
         void* ts = hits::soul_of_eid(want);
         const int r = fs && ts ? sctx::set_soul_relation(fs, ts, "combat_forcedTarget", true) : -1;
@@ -451,6 +468,40 @@ bool motion_params(uint32_t eid, MotionParams* out) {
     return true;
 }
 
+bool mirror_wish(uint32_t copy, uint8_t kind, uint32_t target, uint32_t* have) {
+    if (have) *have = 0;
+    if (!copy || kind > 2 || !engine::entity_by_id(copy)) return false;
+    const double now = now_s();
+    auto it = g_wishes.find(copy);
+    if (kind == 0 || wo195::dead_gate(copy, "wish")) {   // the host's NPC fights nobody (or the copy is dead): the mirror's wish goes, with its pin
+        if (it != g_wishes.end() && it->second.mirrored) {
+            unpin(copy, it->second, kind == 0 ? "the host's NPC has no opponent" : "the copy is dead (WO-195)");
+            g_wishes.erase(it);
+        }
+        return false;
+    }
+    const Opp k = static_cast<Opp>(kind);
+    const uint32_t tgt = k == Opp::Figure ? target : 0;
+    if (k == Opp::Figure && !engine::entity_by_id(tgt)) return false;
+    if (it == g_wishes.end() || it->second.kind != k || it->second.target != tgt || !it->second.mirrored) {
+        if (it != g_wishes.end()) unpin(copy, it->second, "the host's NPC changed opponent");
+        Wish w; w.kind = k; w.target = tgt; w.why = 7; w.refreshedAt = now; w.mirrored = true;
+        g_wishes[copy] = w;
+        c_mirrorWishes.fetch_add(1);
+        if (g_logical.load()) apply_wish(copy, g_wishes[copy], now, "mirrored");
+        it = g_wishes.find(copy);
+    } else {
+        it->second.refreshedAt = now;
+    }
+    void* model = nullptr; void* ca = nullptr;
+    if (!motion::combat_parts(copy, false, &ca, &model)) return false;
+    bool viaReq = false;
+    const uint32_t cur = current_eid(copy, model, &viaReq);
+    if (have) *have = cur;
+    void* e = wish_entity(it->second);
+    return e && cur == engine::entity_id(e);
+}
+
 uint8_t drop_wish(uint32_t eid, const char* why) {
     auto it = g_wishes.find(eid);
     if (it == g_wishes.end()) return 0;
@@ -616,7 +667,7 @@ void tick() {
             it = g_wishes.erase(it);
             continue;
         }
-        if (g_logical.load() && now - w.checkedAt >= kOppRecheckS) apply_wish(it->first, w, now, "re-check");
+        if (g_logical.load() && now - w.checkedAt >= (w.mirrored ? kMirrorRecheckS : kOppRecheckS)) apply_wish(it->first, w, now, "re-check");
         ++it;
     }
     if (!g_moves.empty()) watch_moves(now);
@@ -636,6 +687,11 @@ uint8_t handle(uint8_t op, const uint8_t* body, size_t len, uint8_t* out, size_t
             if (wo208::probe_only(copy)) { out[0] = 0; *outLen = 1; return wo163::kROk; }   // WO-208 A.1
             const double now = now_s();
             auto it = g_wishes.find(copy);
+            if (it != g_wishes.end() && it->second.mirrored && opp_wish_live(now, it->second.refreshedAt)) {   // WO-209 A: the mirror's copy
+                c_mirrorSkipped.fetch_add(1);
+                out[0] = it->second.applied ? 1 : 0; *outLen = 1;
+                return wo163::kROk;
+            }
             if (kind == 0) {
                 if (it != g_wishes.end()) { unpin(copy, it->second, "the agent cleared it"); g_wishes.erase(it); }
                 out[0] = 0; *outLen = 1;
@@ -747,7 +803,7 @@ int status_text(char* out, int n) {
         "wo187 slt=%s logical=%s pin=%s guard=%s idle=%s defence=%s combo=%s scope_log=%s linger=%s chase_follow=%s wishes=%zu wishes_made=%u applied=%u "
         "overwritten=%u pinned=%u apply_fail=%u windup_held=%u windup_overwritten=%u windup_no_wish=%u dropped=%u slt_calls=%u slt_faults=%u "
         "plan_windups=%u plan_planned=%u plan_refused=%u plan_not_me=%u scope=%s scope_reads=%u scope_refused=%u moves=%u empty_after=%u "
-        "restored_combat=%u restored_pulse=%u restore_fail=%u chase_follows=%u chase_hold_ends=%u avatar_hit=%s",
+        "restored_combat=%u restored_pulse=%u restore_fail=%u chase_follows=%u chase_hold_ends=%u avatar_hit=%s mirror_wishes=%u mirror_skipped=%u",
         g_slt ? "armed" : (g_sltResolved ? "not-armed" : "unresolved"), g_logical.load() ? "on" : "off", g_pin.load() ? "on" : "off",
         g_guard.load() ? "on" : "off", g_idle.load() ? "on" : "off", g_defence.load() ? "on" : "off", g_combo.load() ? "on" : "off",
         g_scopeLog.load() ? "on" : "off", g_linger.load() ? "on" : "off", g_chase.load() ? "on" : "off", g_wishes.size(), c_wishes.load(), c_applied.load(), c_overwritten.load(),
@@ -755,7 +811,7 @@ int status_text(char* out, int n) {
         c_sltFaults.load(), c_planWindups.load(), c_planPlanned.load(), c_planRefused.load(), c_planNotMe.load(),
         g_scopeArmed ? "armed" : (g_scopeResolved ? "not-armed" : "unresolved"), c_scopeReads.load(), c_scopeRefused.load(), c_moves.load(),
         c_emptyAfter.load(), c_restoredCombat.load(), c_restoredPulse.load(), c_restoreFail.load(), npcdrive::chase_follows(),
-        npcdrive::chase_hold_ends(), g_avatarHit.load() ? "on" : "off");
+        npcdrive::chase_hold_ends(), g_avatarHit.load() ? "on" : "off", c_mirrorWishes.load(), c_mirrorSkipped.load());
 }
 
 void on_pipe_closed() {

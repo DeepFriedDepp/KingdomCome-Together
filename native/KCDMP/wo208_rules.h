@@ -15,8 +15,8 @@ constexpr uint32_t kBitPlayerView = 1;   // C.2 mp_conv_cam_player_view
 constexpr uint32_t kBitTargetInFight = 2;   // F.1 mp_target_in_fight: a copy is made the local player's opponent only inside his fight
 constexpr uint32_t kBitDefenceLocal = 4;    // B mp_defence_local: a copy's blow on the joiner is judged by the joiner's own engine
 constexpr uint32_t kBitOwner = 8;           // A mp_copy_anim_owner: one owner per copy, driven by the host NPC's streamed state
-// the owner starts off until its acceptance passed on the pair (A.3); the agent turns it on (mp_copy_anim_owner)
-constexpr uint32_t kBitsDefault = kBitPlayerView | kBitTargetInFight | kBitDefenceLocal;
+// WO-209: every bit ships on (the maintainer: "all changes shipped ON, and only switched off manually"), the owner and defence_local too
+constexpr uint32_t kBitsDefault = kBitPlayerView | kBitTargetInFight | kBitDefenceLocal | kBitOwner;
 
 // The bench's twins: KCDMP_TEST_W208_OFF in the game's own environment names the switches that stay off whatever the agent says
 // (a comma list; a name matches whole, never as a part of a longer one).

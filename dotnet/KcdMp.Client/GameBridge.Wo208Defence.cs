@@ -56,6 +56,7 @@ public partial class GameBridge
             return;
         }
         if (Wo208Rules.IsJudgement(outcome)) _w208JudgedAt[npc] = Environment.TickCount64;   // none: the host's verdict is applied here as before
+        else _w209NoneAt[npc] = Environment.TickCount64;   // WO-209 B: a host verdict waiting for this window goes now
         uint seq = Interlocked.Increment(ref _w208DefSeq);
         Interlocked.Increment(ref _w208DefOut);
         if (outcome == Wo208Rules.DefMissed) Interlocked.Increment(ref _w208DefMissed);

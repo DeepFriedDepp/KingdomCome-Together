@@ -306,6 +306,21 @@ public class Wo206AnimTests
         Assert.Equal(Stander, f[0].Body);
     }
 
+    [Theory]
+    [InlineData(846.0, false)]   // WO-208's fight probe: the bandits 846 m from the joiner, not animated there -- not a T-pose
+    [InlineData(20.0, true)]     // the twin: the same empty full body beside the player is one
+    public void WO209_a_body_far_from_its_machines_player_is_never_a_tpose(double distM, bool found)
+    {
+        var scene = Clean();
+        var player = new Body { Name = "Dude", Kind = "player" };
+        var st = B(scene, Stander);
+        foreach (var s in st.S) player.S.Add(new Smp { T = s.T, X = s.X - (float)distM, Y = s.Y, Z = s.Z, Gz = s.Gz });
+        scene.Add(player);
+        foreach (var s in st.Between(6, 10)) s.Fb = null;
+        var f = Run(scene, "tpose", true).Findings.Where(x => x.Detector == "tpose" && x.Body == Stander).ToList();
+        Assert.Equal(found, f.Count > 0);
+    }
+
     [Fact]
     public void WO207_one_deathpose_finding_per_body_per_stretch()
     {

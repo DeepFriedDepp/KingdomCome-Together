@@ -12,7 +12,7 @@ public static class Wo208Rules
     public static readonly string[] SwitchNames = ["conv_cam_player_view", "target_in_fight", "defence_local", "copy_anim_owner", "listen_show_head", "joiner_player_triggers", "quest_wait_aside", "defence_recoil", "clock_stands_with_host", "listen_own_talk_first", "conv_autojoin"];
 
     /// <summary>The switches that start off (the owner until its acceptance passes on the pair); the bench's KCDMP_TEST_W208_ON names one on.</summary>
-    public static readonly string[] DefaultOff = ["copy_anim_owner"];
+    public static readonly string[] DefaultOff = [];   // WO-209: every switch ships on (the owner and defence_local too); off only by hand
 
     /// <summary>A switch the mod has not set: on, unless it starts off (DefaultOff) and the bench's on-list does not name it, or a twin names it off.</summary>
     public static bool Default(string name, string? twinOff, string? benchOn) =>

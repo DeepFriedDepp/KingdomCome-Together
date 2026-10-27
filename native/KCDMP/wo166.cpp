@@ -5,6 +5,7 @@
 #include "wo166.h"
 #include "wo208.h"
 #include "wo208_rules.h"
+#include "wo209.h"
 #include "wo163.h"
 #include "wo166_rules.h"
 #include "wo172.h"
@@ -627,6 +628,7 @@ bool take_over_leftover(const Strike& s, void* ca, void* model, int32_t* cur) {
 struct MissCheck { uint32_t eid; double begin, due; bool dodged; };
 std::vector<MissCheck> g_missChecks;   // main thread
 std::atomic<uint32_t> c_defMissed{0}, c_defLandedWin{0}, c_defNoEvidence{0};
+std::atomic<uint32_t> c_aiSkipped{0};   // WO-209 B: strike windows left to the copy's own attack
 void miss_check_tick(double now) {
     for (auto it = g_missChecks.begin(); it != g_missChecks.end();) {
         if (now < it->due) { ++it; continue; }
@@ -1011,6 +1013,8 @@ uint8_t handle(uint8_t op, const uint8_t* body, size_t len, uint8_t* out, size_t
             const uint32_t eid = hits::eid_of_name(name.c_str());
             if (!eid) { text("refused=no-entity"); return wo163::kRNoActor; }
             if (wo208::probe_only(eid)) { text("refused=probe-owner"); return wo163::kRNoActor; }   // WO-208 A.1
+            // WO-209 B: the copy swings at the local player with its own combat attack -- the engine runs its own states and windows
+            if (wo209::attack_ai_drives(eid)) { c_aiSkipped.fetch_add(1); text("refused=attack-ai"); return wo163::kROk; }
             // WO-208 A.2: a copy the owner drives swings when the host's streamed state says so, one stream delay after its row came
             const double now = now_s() + wo208::owner_shift_s(eid);
             const StrikeWindow w = strike_window(now * 1000.0, startMs, hitMs);

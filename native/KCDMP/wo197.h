@@ -46,6 +46,9 @@ bool guard_engine_on();
 // B5 (main thread): the engine's EnsureGuardAction on this combat actor. 1 = a Guard runs in scope 0 now (installed, or already there),
 // 0 = the engine refused, -1 = not armed (the function was not found on this build).
 int ensure_guard(void* ca);
+// WO-209 C.1 (main thread): the engine's own clinch start, C_CombatActorClinch::StartSyncGuard(type, master, slave) on two bodies by entity
+// id (the owner's: a copy as master, the local player as slave). 1 started, 0 refused (why says what the engine had), -1 not armed.
+int start_sync_guard(int32_t type, uint32_t master, uint32_t slave, char* why, size_t whyN);
 
 void tick();   // main thread, every frame (B1 / B3 polls)
 uint8_t handle(uint8_t op, const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t* outLen);

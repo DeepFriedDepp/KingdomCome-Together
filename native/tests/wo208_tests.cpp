@@ -53,6 +53,7 @@ int wo208_tests(int* passed) {
         WCHECK(first_rule(10.0, -1.0), "twin: the first rule calls the same window a miss");
     }
     WCHECK((kBitsDefault & kBitDefenceLocal) != 0 && twin_off_bits("defence_local") == kBitDefenceLocal, "ships on; its twin name");
+    WCHECK((kBitsDefault & kBitOwner) != 0 && twin_off_bits("copy_anim_owner") == kBitOwner, "the owner ships on (WO-209); its twin name");
 
     // ---- A: the owner's rules
     WCHECK(family(nullptr, 0) == Fam::Empty && family("", 0) == Fam::Empty, "no action: empty");

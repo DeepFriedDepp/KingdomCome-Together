@@ -61,6 +61,11 @@ bool ensure_target(void* ca, void* model, void* entity, bool* hadIt);
 uint8_t on_windup(uint32_t eid, const char* name, void* ca, void* model);
 // WO-195 (main thread): this copy's wish dropped (its pin cleared). Returns wo195rules::kHeldWish (| kHeldPin) for what it had, 0 = none.
 uint8_t drop_wish(uint32_t eid, const char* why);
+// WO-209 A (main thread): the opponent mirror's wish -- kind 1 the local player, 2 an entity (a figure, or the copy of the NPC the host's
+// NPC fights), 0 clears a mirrored wish. Refreshed by every stream word (stale after kOppStaleS like an agent's), re-checked every
+// kMirrorRecheckS, pinned with combat_forcedTarget at once (the copy's own AI never picks), and the agent's op 36 leaves the copy alone
+// while it holds. F.1 still applies to the local player. Returns whether the copy's opponent is the wished one now (have = it).
+bool mirror_wish(uint32_t copy, uint8_t kind, uint32_t target, uint32_t* have);
 // A3 (wo166.cpp): one wind-up's planning.
 void note_plan(const char* name, bool opponentIsPlayer, int planned, bool refused);
 

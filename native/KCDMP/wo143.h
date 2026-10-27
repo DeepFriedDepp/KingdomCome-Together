@@ -56,4 +56,8 @@ void set_tick_hz(int hz);   // WO-201 B9: a paused copy's one-shot NPC-state tic
 // its creep along the row is the walking class, not standing.
 bool activity_locomotion(uint32_t eid);
 
+// WO-209 C.2 (main thread): a one-shot this DLL asked for runs on the body (its NPC-state request, not finished, not past its limit) --
+// the copy's owner holds the full body meanwhile.
+bool shot_in_flight(uint32_t eid);
+
 } // namespace kcdmp::wo143

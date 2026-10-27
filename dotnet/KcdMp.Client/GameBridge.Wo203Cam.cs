@@ -28,6 +28,8 @@ public partial class GameBridge
         public readonly HashSet<byte> Told = [], Listeners = [];
         public CancellationTokenSource? Pump;
         public int Seq;
+        public string ForcedPath = "";   // WO-209 D.2: a conversation that started by itself -- its dialogue and when (the host's clock)
+        public long ForcedStartMs;
     }
 
     private sealed class W203Listen   // the LISTENER's state
@@ -69,10 +71,14 @@ public partial class GameBridge
             Interlocked.Increment(ref _w3cAnnounced);
             Interlocked.Increment(ref _w204TalksAnnounced);
             // WO-208 C.4: a conversation that started by itself (a quest forced it, an NPC opened it) is marked: the partner near listens in
-            bool byItself = Wo204Rules.ParseDialogueHead(line) is { } head && Wo208Rules.StartsByItself(head.Origin);
+            var head = Wo204Rules.ParseDialogueHead(line);
+            bool byItself = head is { } hd && Wo208Rules.StartsByItself(hd.Origin);
+            if (byItself) { talk.ForcedPath = head!.Value.Path; talk.ForcedStartMs = Wo203CamRules.HostMs(QpcMs(), QpcMs(), UnixMs(), ClockOffsetMs); }
             Console.WriteLine($"WO203B-TALK this player's conversation {t.Cid} ({t.Kind}) with {string.Join(',', t.Others)} -- announced to {to.Count} partner(s){(byItself ? " (it started by itself: the partner near listens in)" : "")}");
             string text = Wo203CamRules.AnnounceText(t.Cid, t.Kind, true, talk.Anchor, t.Others, byItself);
+            if (byItself) text = Wo209Rules.WithForcedTag(text, talk.ForcedPath, talk.ForcedStartMs);   // WO-209 D.2: which dialogue, and when
             _ = Task.Run(async () => { foreach (byte p in to) await Wo203SendConvAsync(p, Protocol.ConvAnnounce, text); });
+            if (byItself) Wo209CheckForcedTwin(talk, null);   // WO-209 D.2: the partner runs the same forced talk already?
             return;
         }
         if (Wo203CamRules.IsCameraActivated(line))
@@ -178,6 +184,13 @@ public partial class GameBridge
             case Protocol.ConvAnnounce:
                 if (!Wo203CamRules.TryParseAnnounce(m.Text, out int acid, out _, out bool joinable, out string anchor)) { Interlocked.Increment(ref _w3cBad); return; }
                 lock (_w3cLock) { if (joinable) _w3cOffers[src] = (acid, anchor); else _w3cOffers.Remove(src); }
+                if (Wo209Rules.TryParseForcedTag(m.Text, out string fpath, out long fstart))   // WO-209 D.2: the partner's forced talk
+                {
+                    _w209PartnerForced[src] = (acid, fpath, fstart, anchor);
+                    W203Talk? mine;
+                    lock (_w3cLock) mine = _w3cTalk;
+                    if (mine is not null && mine.ForcedPath.Length > 0) Wo209CheckForcedTwin(mine, src);
+                }
                 // WO-208 C.4 (mp_conv_autojoin): a conversation that started by itself -- the mod listens in when this player is near and free
                 bool auto = joinable && Wo203CamRules.AnnounceStartsByItself(m.Text) && W208("conv_autojoin");
                 Console.WriteLine($"WO203B-OFFER partner {src}: conversation {acid} with '{anchor}' {(joinable ? "joinable" : "not joinable")}{(auto ? " (started by itself: auto-join within 30 m)" : "")}");
@@ -230,6 +243,7 @@ public partial class GameBridge
                 if (!Wo203CamRules.TryParseReason(m.Text, out int ecid, out string reason)) { Interlocked.Increment(ref _w3cBad); return; }
                 Interlocked.Increment(ref _w3cEndsIn);
                 lock (_w3cLock) if (_w3cOffers.TryGetValue(src, out var o) && o.Cid == ecid) _w3cOffers.Remove(src);
+                if (_w209PartnerForced.TryGetValue(src, out var pf) && pf.Cid == ecid) _w209PartnerForced.TryRemove(src, out _);   // WO-209 D.2
                 _ = ExecLuaAsync($"if KCD2MP_W203Gone then KCD2MP_W203Gone({src}, {ecid}) end");
                 _ = W3cOutAsync(src, ecid, reason == "ended" ? "end" : reason, tellStarter: false, luaReason: reason);
                 break;

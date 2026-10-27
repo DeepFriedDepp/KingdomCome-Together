@@ -78,7 +78,7 @@ Table g_tables[4]{};
 std::atomic<int> g_cur{-1};
 
 // Per-candidate counters the hook bumps (slots assigned by the main thread, stable per entity while it is listed).
-struct Slot { std::atomic<uint32_t> eid{0}, yes{0}, gameNo{0}, gameYes{0}, excluded{0}; };
+struct Slot { std::atomic<uint32_t> eid{0}, yes{0}, gameNo{0}, gameYes{0}, excluded{0}; std::atomic<uint8_t> lastGame{0}; };   // lastGame: 0 not asked, 1 yes, 2 no
 Slot g_slots[64];
 std::atomic<const void*> g_lastOwner{nullptr}, g_lastMe{nullptr}, g_lastCand{nullptr};   // the live read's evidence (status)
 std::atomic<uint32_t> c_asked{0}, c_askedLocal{0}, c_listed{0}, c_yes{0}, c_gameYes{0}, c_gameNo{0}, c_foreign{0}, c_faults{0};
@@ -118,6 +118,7 @@ bool __fastcall hostile_detour(void* rpg, const void* candidate) {
     c_listed.fetch_add(1, std::memory_order_relaxed);
     Slot& s = g_slots[hit->slot & 63];
     (game ? s.gameYes : s.gameNo).fetch_add(1, std::memory_order_relaxed);
+    s.lastGame.store(game ? 1 : 2, std::memory_order_relaxed);
     const bool on = g_isHost.load(std::memory_order_relaxed) ? g_hostAnswer.load(std::memory_order_relaxed) : g_joinerLock.load(std::memory_order_relaxed);
     if (!answer_hostile(on, true, true, static_cast<Ex>(hit->ex))) {
         if (hit->ex) s.excluded.fetch_add(1, std::memory_order_relaxed);
@@ -231,6 +232,7 @@ int slot_for(uint32_t eid) {
         for (const auto& kv : g_slotOf) if (kv.second == i) { used = true; break; }
         if (used) continue;
         g_slots[i].eid.store(eid); g_slots[i].yes.store(0); g_slots[i].gameNo.store(0); g_slots[i].gameYes.store(0); g_slots[i].excluded.store(0);
+        g_slots[i].lastGame.store(0);
         g_slotOf[eid] = i;
         return i;
     }
@@ -740,6 +742,13 @@ void install() {
 }
 
 bool host_answer_on() { return g_isHost.load() && g_hostAnswer.load() && g_armed.load() && !g_off.load(); }
+
+int game_hostile(uint32_t eid) {
+    auto it = g_slotOf.find(eid);
+    if (it == g_slotOf.end()) return -1;
+    const uint8_t g = g_slots[it->second & 63].lastGame.load(std::memory_order_relaxed);
+    return g == 1 ? 1 : g == 2 ? 0 : -1;
+}
 bool hold_on() { return g_hold.load(); }
 bool hit_reach_on() { return g_hitReach.load(); }
 bool own_block_on() { return g_ownBlock.load(); }

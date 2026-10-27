@@ -69,9 +69,13 @@ public static class AnimCompare
         _ => cls + "#" + frag.ToString(CultureInfo.InvariantCulture),
     };
 
-    /// <summary>WO-208 A: <see cref="Family"/>, every other action by its fragment alone.</summary>
+    /// <summary>WO-208 A: <see cref="Family"/>, every other action by its fragment alone. WO-209 C.6: the idle state with any fragment but the
+    /// standing idle (MotionIdle: 5 in the male table, 0 in the female one) is a posture -- sitting, lying, a waiting spot -- and compares by its
+    /// fragment too: the host's NPC sitting against a copy standing is a difference, and the owner's copy sitting with the host's fragment
+    /// (installed through its own action class) is the same.</summary>
     public static string FragmentFamily(string? cls, int frag)
     {
+        if (cls == "C_AnimActionIdleState" && frag != 5 && frag != 0) return "fragment#" + frag.ToString(CultureInfo.InvariantCulture);
         string f = Family(cls, frag);
         return f is "empty" or "idle" or "locomotion" ? f : "fragment#" + frag.ToString(CultureInfo.InvariantCulture);
     }

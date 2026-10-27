@@ -48,6 +48,7 @@ int wo202_tests(int* passed);              // wo202_tests.cpp (WO-202: the crash
 int wo204_tests(int* passed);              // wo204_tests.cpp (WO-204: nearest_player_v2's Evaluate shape and compares, the quiet windows)
 int wo206_tests(int* passed);              // wo206_tests.cpp (WO-206: the per-copy pipe and log names)
 int wo208_tests(int* passed);              // wo208_tests.cpp (WO-208: the switch word, the talk's own-view rule, the owner's rules)
+int wo209_tests(int* passed);              // wo209_tests.cpp (WO-209: the switch word, the opponent mirror, the copy's own attack, the owner on every copy)
 int wo203_tests(int* passed);              // wo203_tests.cpp (WO-203: every area's rules, one file per area)
 int wo197_tests(int* passed);              // wo197_tests.cpp (WO-197: the recoil and clinch polls, the kept main actions, the pair request)
 int wo194_tests(int* passed);              // wo194_tests.cpp (WO-194: the hold, its release, the time gate, the FastForward stop)
@@ -360,6 +361,14 @@ int main() {
     {
         int fp = 0;
         const int ff = wo208_tests(&fp);
+        g_pass += fp;
+        g_fail += ff;
+    }
+
+    // WO-209: the switch word and its twins, the opponent mirror
+    {
+        int fp = 0;
+        const int ff = wo209_tests(&fp);
         g_pass += fp;
         g_fail += ff;
     }

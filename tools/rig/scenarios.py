@@ -52,6 +52,18 @@ class Copy:
         rig.note('lua-lost', copy=self.id, code=code[:200])
         return False
 
+    def lua_nowait(self, code):
+        """Lua sent once, not waited for (WO-209: the defender's turn to the attacker -- lua()'s kcd.log token can take seconds to appear,
+        and the defender stalled behind it, missing the swings after; a lost turn is only a turn)."""
+        # one try, a short timeout: rig.console retries a busy API (503) for up to ~40 s, and d7's defender stalled behind it again
+        import urllib.parse, urllib.request
+        enc = urllib.parse.quote('#' + code, safe='')
+        try:
+            with urllib.request.urlopen('http://localhost:%d/api/System/Console/ExecuteString?command=%s' % (self.port, enc), timeout=1.5) as resp:
+                resp.read(1 << 16)
+            return True
+        except (OSError, ValueError): return False
+
     @staticmethod
     def size(p): return os.path.getsize(p) if os.path.exists(p) else 0
 
@@ -87,14 +99,20 @@ class Copy:
     def teleport(self, x, y, z=None):
         """A position write held on the terrain until the ground has caught it (WO-1xx: long writes land before physics)."""
         if z is None:
-            self.lua('local zz = System.GetTerrainElevation({x=%f, y=%f, z=0}); player:SetWorldPos({x=%f, y=%f, z=zz + 0.2})' % (x, y, x, y))
+            code = 'local zz = System.GetTerrainElevation({x=%f, y=%f, z=0}); player:SetWorldPos({x=%f, y=%f, z=zz + 0.2})' % (x, y, x, y)
         else:
-            self.lua('player:SetWorldPos({x=%f, y=%f, z=%f})' % (x, y, z))
+            code = 'player:SetWorldPos({x=%f, y=%f, z=%f})' % (x, y, z)
+        # WO-209: the joiner's first console call after a join or the bench's clock jump is lost for half a minute (lua-lost in
+        # every run; rc4-defence's 1-v-1 phase had no fight for it) -- a lost move is asked again
+        for _ in range(3):
+            if self.lua(code): return True
+            time.sleep(3)
+        return False
 
     def keep_up(self):
         """A health keeper for a fight (never a real death in a throwaway world)."""
         self.lua('W206KEEP = (W206KEEP or 0) + 1; local gen = W206KEEP; local function k() if gen ~= W206KEEP then return end; '
-                 'if player.soul:GetState("health") < 60 then player.soul:SetState("health", 100) end; Script.SetTimer(400, k) end; k()')
+                 'if player.soul:GetState("health") < 80 then player.soul:SetState("health", 100) end; Script.SetTimer(200, k) end; k()')   # WO-209: real blows land (B)
 
     def stop_keep(self): self.lua('W206KEEP = (W206KEEP or 0) + 1')
 
@@ -259,8 +277,14 @@ def s_skip(r, kind, hours, strict=None, gap_gate=True):
     sends the Begin, and the host's skip runs. Pass: the host's skip began and ended, the joiner's ended, the clocks agree."""
     def fn():
         ma, mb = r.a.mark(), r.b.mark()
-        r.b.lua('KCD2MP_EmitEvent("w140_ask", "%s 0")' % kind)
-        if not r.a.wait('a', ma['a'], r'MP-W140 .*wants to (sleep|wait).*asking this player', 40): return False, 'no-prompt', 'the host was never asked'
+        # WO-209: the ask is sent again until the host is asked -- right after a join the joiner's console can stay unconfirmed for
+        # half a minute (rc1-sleep1 and its twin: lua-lost, the host never asked)
+        asked = None
+        for _ in range(4):
+            r.b.lua('KCD2MP_EmitEvent("w140_ask", "%s 0")' % kind)
+            asked = r.a.wait('a', ma['a'], r'MP-W140 .*wants to (sleep|wait).*asking this player', 30)
+            if asked: break
+        if not asked: return False, 'no-prompt', 'the host was never asked'
         time.sleep(0.6)
         r.a.cmd('mp_sleep_yes')
         if not r.b.wait('a', mb['a'], r'MP-W140 vote .*everyone said yes', 40): return False, 'no-yes', 'the joiner never heard the yes'
@@ -1190,6 +1214,13 @@ def s_c2tavern(r, secs=float(os.environ.get('KCDMP_RIG_C2_S', '600'))):
 
 # ---------------------------------------------------------------- WO-208 B: the joiner's own defence
 
+# a UNIT vector (WO-209 d2/d3: the raw difference scaled the player's own transform -- "Not-orthonormal matrix in CEntity::CalcLocalTM()
+# on 'Dude'", scale 1.19 -> 2.62 -- until CryPhysics crashed the joiner's game: the bench's, not the mod's)
+FACE_TO = ('local e = System.GetEntityByName("%s"); if e then local a, p = e:GetWorldPos(), player:GetWorldPos(); '
+           'local dx, dy = a.x - p.x, a.y - p.y; local n = math.sqrt(dx * dx + dy * dy); '
+           'if n > 0.05 then pcall(function() player:SetDirectionVector({x = dx / n, y = dy / n, z = 0}) end) end end')
+
+
 def s_defence(r, attackers=1, swings=40, secs=float(os.environ.get('KCDMP_RIG_DEF_S', '420'))):
     """WO-208 B: <attackers> bandit(s) set on the joiner's figure only (the host stands off at 8 m); the joiner defends with his own keys
     (the maintainer's allowance; send-only, his copy's window in front): the right button held for a while (block), pressed as a
@@ -1203,6 +1234,8 @@ def s_defence(r, attackers=1, swings=40, secs=float(os.environ.get('KCDMP_RIG_DE
         names, x, y, z = t.split()
         bandits = names.split(',')[:attackers]
         group = names.split(',')   # WO-208: the group joins its fellow's attack -- every blow of the group counts (d9: bandit 5 sent, 1 and 4 struck)
+        # WO-209: every copy's blow on the joiner counts, whoever the camp sends (d5: bandits 4 and 6 fought, the picked three never struck)
+        def ingroup(l): return re.search(r' npc=(?!kcd2mp_)\S', l) is not None
         x, y = float(x), float(y)
         r.b.teleport(x + 3.0, y)
         r.a.teleport(x + 11.0, y + 2.0)
@@ -1222,21 +1255,35 @@ def s_defence(r, attackers=1, swings=40, secs=float(os.environ.get('KCDMP_RIG_DE
                 g = game_input.Game('wo208-defence')
                 g.pids = {rec_of(r.b)['pid']}
                 if not put_front(r.b): sent['err'] = 'joiner not in front'; return
-                g.tap('tab', 80)   # lock on
+                # lock on: Tab toggles -- a lock carried over from the last phase (d9: the joiner still locked on a bandit 154 m away at
+                # the first camp, none of his blocks counting at the second) is let go first, then taken again on the nearest in view
+                last_mid = [l for l in r.b.lines(r.b.nlog, max(0, r.b.size(r.b.nlog) - 400000)) if 'WO209-ATK mid ' in l]
+                if last_mid and 'player_opponent=none' not in last_mid[-1]:
+                    g.tap('tab', 80); time.sleep(0.4)
+                g.tap('tab', 80)
                 off = r.b.size(r.b.nlog)
                 n = 0
                 while not stop.is_set():
                     try:
                         # a copy's swing winding up at this player (the strike window's begin line): block on it, or dodge, or take it open
                         new = r.b.lines(r.b.nlog, off); off = r.b.size(r.b.nlog)
-                        windup = any('WO166-STRIKE' in l and ' begin ' in l for l in new)
+                        windup = any(('WO166-STRIKE' in l and ' begin ' in l) or ('WO209-ATK' in l and 'own attack at the local player started' in l) for l in new)
+                        # WO-209: the player turns to the bandit that attacks him (a player's own reflex): the engine's per-frame lock-on pick
+                        # takes the nearest lockable enemy in his view cone (WO-186)
+                        for l in new:
+                            m9 = re.search(r'WO209-ATK npc=(\S+) .*own attack at the local player started', l)
+                            if m9: r.b.lua_nowait(FACE_TO % m9.group(1)); sent['turns'] = sent.get('turns', 0) + 1
                         if windup:
-                            k = n % 5
-                            if k in (0, 1, 2):
-                                time.sleep(0.15 if k == 0 else 0.30)   # early / late presses: blocks and perfect blocks
-                                g.click('right', 260); sent['timed_blocks'] += 1
+                            # WO-209: the copy's own attack lands 0.6 s after its start (d6: p50 605 ms, up to 1.5 s) -- a held guard through
+                            # it, presses near the blow (blocks, perfect blocks), a dodge, an open blow (d6's 0.15 / 0.30 s presses came early)
+                            k = n % 6
+                            if k in (0, 5):
+                                time.sleep(0.10); g.click('right', 1300); sent['block_holds'] += 1
+                            elif k in (1, 2):
+                                time.sleep(0.40 if k == 1 else 0.55)
+                                g.click('right', 300); sent['timed_blocks'] += 1
                             elif k == 3:
-                                time.sleep(0.2); g.tap('space', 80); sent['dodges'] += 1
+                                time.sleep(0.35); g.tap('space', 80); sent['dodges'] += 1
                             else:
                                 sent['open'] += 1
                             n += 1
@@ -1256,7 +1303,7 @@ def s_defence(r, attackers=1, swings=40, secs=float(os.environ.get('KCDMP_RIG_DE
         th = threading.Thread(target=defender, daemon=True); th.start()
         t0 = last = time.time()
         while time.time() - t0 < secs:
-            judged = sum(1 for l in r.a.lines(r.a.alog, ma['a']) if ('WO208-DEF outcome' in l or 'WO208-DEF fallback' in l) and any(b in l for b in group))
+            judged = sum(1 for l in r.a.lines(r.a.alog, ma['a']) if ('WO208-DEF outcome' in l or 'WO208-DEF fallback' in l) and ingroup(l))
             if judged >= swings: break
             if time.time() - last > 30:
                 for b in bandits: r.a.lua(ATTACK % (b, FIGURE))
@@ -1266,8 +1313,8 @@ def s_defence(r, attackers=1, swings=40, secs=float(os.environ.get('KCDMP_RIG_DE
         for i, b in enumerate(bandits): r.a.lua(STOP % (b, i))
         for c in (r.a, r.b): c.stop_keep()
         time.sleep(2)
-        hl = [l for l in r.a.lines(r.a.alog, ma['a']) if any(b in l for b in group)]
-        jl = [l for l in r.b.lines(r.b.alog, mb['a']) if any(b in l for b in group)]
+        hl = [l for l in r.a.lines(r.a.alog, ma['a']) if ingroup(l)]
+        jl = [l for l in r.b.lines(r.b.alog, mb['a']) if ingroup(l)]
         host_out = [re.search(r'WO208-DEF outcome npc=(\S+) joiner=\d+ engine=(\S+)', l) for l in hl]
         host_out = [(m.group(1), m.group(2)) for m in host_out if m]
         fallbacks = sum(1 for l in hl if 'WO208-DEF fallback' in l)
@@ -1287,14 +1334,14 @@ def s_defence(r, attackers=1, swings=40, secs=float(os.environ.get('KCDMP_RIG_DE
         skipped = sum(1 for l in jl if 'WO208-DEF skipped' in l)
         blocking = sum(1 for l in r.a.lines(r.a.nlog, ma['n']) if re.search(r'WO121-MOTION body=kcd2mp_\d+ block=1', l))
         # B.6: the joiner's own lock-on on the copy that swings at him (the strike window's mid line names the player's opponent)
-        mids = [l for l in r.b.lines(r.b.nlog, mb['n']) if 'WO166-STRIKE' in l and ' mid ' in l and any(b in l for b in group)]
-        locked = sum(1 for l in mids if 'player_opponent=this-copy' in l)
+        mids = [l for l in r.b.lines(r.b.nlog, mb['n']) if (('WO166-STRIKE' in l and ' mid ' in l) or 'WO209-ATK mid ' in l) and ingroup(l)]
+        locked = sum(1 for l in mids if 'player_opponent=this-copy' in l)   # WO-209 B: the copy's own attack's window says it too
         total = len(host_out) + fallbacks
         rate = round(100.0 * len(host_out) / total, 1) if total else None
         from collections import Counter
         no_outcome = sum(1 for l in r.b.lines(r.b.nlog, mb['n']) if 'WO208-DEF no outcome' in l)
         recoils = sum(1 for l in hl if 'WO208-DEF recoil' in l)
-        detail = {'bandits': bandits, 'group': group, 'judged_by_joiner': len(host_out), 'fallbacks': fallbacks, 'rate_pct': rate,
+        detail = {'bandits': bandits, 'group': group, 'attackers_seen': sorted({n for n, _ in host_out} | {m.group(1) for l in hl for m in [re.search(r'WO208-DEF fallback npc=(\S+)', l)] if m}), 'judged_by_joiner': len(host_out), 'fallbacks': fallbacks, 'rate_pct': rate,
                   'joiner_windows_without_evidence': no_outcome, 'host_recoils_b4': recoils,
                   'joiner_outcomes': dict(Counter(o for _, o in joiner_out)), 'host_took': dict(Counter(o for _, o in host_out)),
                   'outcome_mismatch': mismatch, 'joiner_skipped_host_verdicts': skipped, 'host_saw_figure_block_lines': blocking,
@@ -1335,8 +1382,17 @@ def s_village(r, secs=float(os.environ.get('KCDMP_RIG_VILLAGE_S', '300'))):
         r.a.lua('local now = Calendar.GetWorldTime(); local d = math.floor(now / 86400) * 86400 + 10 * 3600; '
                 'if d < now then d = d + 86400 end; Calendar.SetWorldTime(d)')
         time.sleep(30)
+
+        def put_joiner(px, py):
+            # WO-209 rc3-off-village-1: the joiner's move was lost (he stood 163 m off all run, no copy near him, the step passed)
+            for _ in range(4):
+                r.b.teleport(px, py)
+                time.sleep(3)
+                q = r.b.pos()
+                if q and ((q[0] - px) ** 2 + (q[1] - py) ** 2) ** 0.5 < 15: return True
+            return False
         r.a.teleport(x + 6.0, y + 6.0)
-        r.b.teleport(x + 7.0, y + 6.5)
+        if not put_joiner(x + 7.0, y + 6.5): return False, 'joiner-not-moved', {'to': [round(x + 7.0), round(y + 6.5)]}
         time.sleep(6)
 
         def positions():
@@ -1356,7 +1412,7 @@ def s_village(r, secs=float(os.environ.get('KCDMP_RIG_VILLAGE_S', '300'))):
             if walker and moved >= 2.0: break
         if not walker or moved < 1.0: return False, 'no-walker', {'moved': moved}
         if os.environ.get('KCDMP_RIG_PROBE_PICK') == '1': write_probe_name(r, walker)
-        follows = 0
+        follows, near, checks = 0, 0, 0
         t0 = time.time()
         while time.time() - t0 < secs:
             time.sleep(20)
@@ -1364,10 +1420,101 @@ def s_village(r, secs=float(os.environ.get('KCDMP_RIG_VILLAGE_S', '300'))):
             hp = r.a.pos()
             if p and hp and ((p[0] - hp[0]) ** 2 + (p[1] - hp[1]) ** 2) ** 0.5 > 18:
                 r.a.teleport(p[0] + 4.0, p[1] + 4.0)
-                r.b.teleport(p[0] + 5.0, p[1] + 4.5)
+                put_joiner(p[0] + 5.0, p[1] + 4.5)
                 follows += 1
-        return True, 'ok', {'walker': walker, 'moved_in_4s': round(moved, 2), 'follows': follows, 'secs': secs,
-                            't0_ms': int(t0 * 1000), 't1_ms': int(time.time() * 1000)}
+                hp = r.a.pos()
+            jp = r.b.pos()
+            if hp and jp:
+                checks += 1
+                if ((jp[0] - hp[0]) ** 2 + (jp[1] - hp[1]) ** 2) ** 0.5 < 25: near += 1
+                else: put_joiner(hp[0] + 1.0, hp[1] + 0.5)
+        info = {'walker': walker, 'moved_in_4s': round(moved, 2), 'follows': follows, 'joiner_near': '%d/%d' % (near, checks), 'secs': secs,
+                't0_ms': int(t0 * 1000), 't1_ms': int(time.time() * 1000)}
+        if checks and near * 2 < checks: return False, 'joiner-not-near', info
+        return True, 'ok', info
+    return fn
+
+
+# ---------------------------------------------------------------- WO-209 E.2: the joined talk away from the tavern's brawl, and the brawl
+
+# by day, outside the tavern: the bailiff first, then the smith, the miller (the tavern's evening brawl -- the random event rvacka --
+# made the WO-208 runs' listener leave for combat, as designed, and cost the step)
+DAY_NPCS = ('ttkc_drozd', 'ttkc_kovar', 'ttkc_mlynar')
+
+NEAR_FIGHTER = ('local p = player:GetWorldPos(); local best, bd; for _, e in ipairs(System.GetEntitiesInSphere(p, 12) or {}) do '
+                'if e.class == "NPC" and e.soul and e:GetName() ~= "%s" and not string.find(e:GetName(), "kcd2mp_", 1, true) '
+                'and not string.find(e:GetName(), "DialogTwin_", 1, true) then '   # rc1-convbrawl: the talk's own stand-in was picked
+                'local h = 0; pcall(function() h = e.soul:GetState("health") end); local q = e:GetWorldPos(); local dd = (q.x - p.x) ^ 2 + (q.y - p.y) ^ 2; '
+                'if h and h > 0 and (not bd or dd < bd) then bd = dd; best = e end end end; '
+                'System.LogAlways("[W209F] " .. (best and best:GetName() or "none"))')
+
+
+def s_convbrawl(r, secs=float(os.environ.get('KCDMP_RIG_BRAWL_S', '240'))):
+    """WO-209 E.2: a fight that starts during a joined talk -- the listener leaves for it. In the tavern at night (the evening's scripted
+    brawl may start by itself; the bench starts one the same way the c1fight step does, a tavern guest set on the listener's figure, a
+    few seconds into the talk). Pass: the listener was listening, then left with why=combat within 30 s of the fight's start."""
+    def fn():
+        t = r.a.ask(FIND_INN % os.environ.get('KCDMP_RIG_INN', 'ttkc_woman_2'), 'W207I', 6)
+        if not t or t == 'none': return False, 'no-innkeeper', t
+        parts = t.split()
+        inn, x, y, z = parts[0], float(parts[1]), float(parts[2]), float(parts[3])
+        r.a.teleport(x + 1.3, y, z + 0.05)
+        for _ in range(6):
+            r.b.teleport(x + 2.6, y + 1.0, z + 0.05)
+            time.sleep(4)
+            q = r.b.pos()
+            if q and abs(q[0] - (x + 2.6)) < 3.0 and abs(q[1] - (y + 1.0)) < 3.0: break
+        ma, mb = r.a.mark(), r.b.mark()
+        r.a.lua('local e = System.GetEntityByName("%s"); if e then local f = BasicAIActions and BasicAIActions.OnTalk or e.OnTalk; f(e, player, 0) end' % inn)
+        m = r.a.wait('k', ma['k'], OWN_TALK, 25)
+        if not m: return False, 'no-dialogue', {'innkeeper': inn}
+        cid = m.group(1)
+        joined = False
+        tj = time.time()
+        while time.time() - tj < 60 and not joined:
+            joined = r.b.ask(JOIN_OFFER % cid, 'W207J', 4) == 'listening'
+            if not joined: time.sleep(1)
+        detail = {'innkeeper': inn, 'cid': cid, 'listening': joined}
+        if not joined: return False, 'listener-not-listening', detail
+        time.sleep(4)
+        fighter = r.a.ask(NEAR_FIGHTER % inn, 'W209F', 4)
+        detail['fighter'] = fighter
+        t_fight = time.time()
+        if fighter and fighter != 'none': r.a.lua(ATTACK % (fighter, FIGURE))
+        off = r.b.wait('k', mb['k'], r'WO203B-LISTEN off partner=\d+ cid=%s why=(\S+)' % cid, 30)
+        detail['left_after_s'] = round(time.time() - t_fight, 1) if off else None
+        detail['why'] = off.group(1) if off else None
+        detail['skirmish_lines_host'] = sum(1 for l in r.a.lines(r.a.klog, ma['k']) if 'Skirmish event: SoulAdded' in l)
+        if fighter and fighter != 'none': r.a.lua(STOP % (fighter, 0))
+        r.a.ask('local d = false; pcall(function() d = player.human:IsInDialog() == true end); if d then '
+                'pcall(function() player.human:InterruptDialog() end) end; System.LogAlways("[W208X] " .. tostring(d))', 'W208X', 5)
+        if not off: return False, 'listener-stayed', detail
+        return off.group(1) == 'combat', ('ok' if off.group(1) == 'combat' else 'left-for-' + off.group(1)), detail
+    return fn
+
+
+# ---------------------------------------------------------------- WO-209 E.1: a timed decision the bench can reach (the probe)
+
+# the Trosecko quests whose dialogues carry a positive TimeLimit (Scripts.pak), by folder name
+E1_QUESTS = ('kumaniNaTrosecku', 'socky', 'kejkliri', 'zbranePanaSemina', 'korenarkaZachrana', 'poustevnik', 'poustevnik_a_vdova', 'pracharna',
+             'rasuvUcen', 'pytlakPtacek', 'hadkaKonaru', 'svatba', 'mysi1', 'hledaniPsa', 'kocovnickaCest', 'zranenyLovci', 'mucirna',
+             'nebakovPruzkum', 'utokNaNebakov', 'bohutovaVlozka', 'prepadeni', 'naTroskach', 'vezniNaTroskach', 'zachrana', 'nebakovObrana')
+
+E1_ASK = ('local out = {}; for _, q in ipairs({%s}) do local st, ac, co = "?", "?", "?"; '
+          'pcall(function() st = tostring(QuestSystem.IsQuestStarted(q)) end); pcall(function() ac = tostring(QuestSystem.IsQuestActive(q)) end); '
+          'pcall(function() co = tostring(QuestSystem.IsQuestCompleted(q)) end); local obs = ""; '
+          'pcall(function() local t = QuestSystem.GetActiveObjectives(q); if type(t) == "table" then local l = {}; for k, v in pairs(t) do l[#l + 1] = tostring(k) .. "=" .. tostring(v) end; obs = table.concat(l, "+") end end); '
+          'out[#out + 1] = q .. ":" .. st .. "," .. ac .. "," .. co .. (obs ~= "" and ("," .. obs) or "") end; System.LogAlways("[W209Q] " .. table.concat(out, ";"))')
+
+
+def s_e1probe(r):
+    """WO-209 E.1: which of the Trosecko quests with timed decisions are started, active or completed on the bench save (the host), and
+    their active objectives -- the step a timed decision is reachable from. Pass: the answer came back (the probe reads only)."""
+    def fn():
+        v = r.a.ask(E1_ASK % ','.join('"%s"' % q for q in E1_QUESTS), 'W209Q', 8)
+        if not v: return False, 'no-answer', None
+        rows = dict(x.split(':', 1) for x in v.split(';') if ':' in x)
+        return True, 'ok', rows
     return fn
 
 
@@ -1687,10 +1834,13 @@ def s_conv(r, starter='host', plan=('changed', 'cleared', 'notfollowed', 'follow
             info = {'npc': npc, 'cid': cid, 'offer_ms': (agent_ts(offer.string, day0) - agent_ts(ann.string, day0)) if offer and ann else None}
             joined = False
             tj = time.time()
-            while time.time() - tj < 60 and not joined:
+            # WO-209: 120 s -- right after the bench's clock jump (convday's 10:00) the joiner's console answered a minute late (rc1 and rc3:
+            # the join went out at 62-63 s and took)
+            while time.time() - tj < 120 and not joined:
                 joined = L.ask(JOIN_OFFER % cid, 'W207J', 4) == 'listening'
                 if not joined: time.sleep(1)
             info['listening'] = joined
+            info['join_s'] = round(time.time() - tj, 1)
             if not joined: return info
             seen, ended, left = set(), None, False
             tt = time.time()
@@ -1902,6 +2052,13 @@ def run(name, args):
         's1front': [('join', s_join(r)), ('host-in-front', lambda: (lambda ok: (ok, 'ok' if ok else 'not-in-front', ''))(put_front(r.a)))] +
                    [('s1-%02d-%s' % (i + 1, k), s_skip(r, k, h)) for i, (k, h) in enumerate([('sleep', 9), ('wait', 3)] * 5)],   # C.1: the joiner behind
         'joinloot': [('join', s_join(r)), ('loot', s_loot(r))],
+        # WO-209 E.2: the joined talk by day outside the tavern (both roles), and the fight that starts during a joined talk
+        'convday': [('join', s_join(r)), ('daytime', s_daytime(r, 10 * 3600)), ('conv-host-starts', s_conv(r, 'host', npcs=DAY_NPCS)),
+                    ('conv-joiner-starts', s_conv(r, 'joiner', npcs=DAY_NPCS, plan=('notfollowed', 'changed', 'cleared', 'followed', 'leave')))],
+        'convbrawl': [('join', s_join(r)), ('evening', s_daytime(r, 21 * 3600)), ('brawl', s_convbrawl(r))],
+        'e1probe': [('join', s_join(r)), ('e1probe', s_e1probe(r))],
+        # WO-209 D.1: one 9 h sleep on the pair, the clocks' gaps logged (the twin: KCDMP_TEST_W209_OFF=clock_quiet_in_skip in the agents' env)
+        'sleep1': [('join', s_join(r)), ('sleep', s_skip(r, 'sleep', 9, strict=True, gap_gate=False))],
         # WO-208 D.1's acceptance: the loot step 5 times in a row, each on a chest and on a body (the fight step leaves the bandits)
         'loot5': [('join', s_join(r)), ('fight', s_fight(r))] + [('loot%d' % (i + 1), s_loot(r)) for i in range(5)],
         'b1twin': [('b1-twin', s_b1(r, twin=True))],
@@ -1928,7 +2085,7 @@ def run(name, args):
     for nm, fn in plan:
         # 'long' runs independent checks: one failing does not stop the next (a failed join does)
         if not r.step(nm, fn) and (name not in ('long', 'joinscene', 'joinfight', 'e2pair', 'c1pair', 'e2twinpair', 's1pair', 'smoke', 's1front',
-                                               'c1fight', 'c2tavern', 'convboth', 'convtimed', 'smoke2', 'awake', 'soak2', 'convscene', 'c1x', 'probefight', 'probetavern', 'village', 'defence', 'loot5', 'convforced', 'convforcedj') or nm == 'join'
+                                               'c1fight', 'c2tavern', 'convboth', 'convday', 'convtimed', 'smoke2', 'awake', 'soak2', 'convscene', 'c1x', 'probefight', 'probetavern', 'village', 'defence', 'loot5', 'convforced', 'convforcedj') or nm == 'join'
                                               or r.steps[-1]['reason'] == 'copy-exited'): break   # a game gone ends the run
     return r.finish()
 

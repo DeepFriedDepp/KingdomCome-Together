@@ -211,6 +211,22 @@ public partial class GameBridge
             });
             return;
         }
+        // WO-209 B: the verdict's wait for the copy's own blow (Wo161JudgeApplyAsync) is never in the relay's reader loop either -- the copies'
+        // swing rows behind it waited with it (d4-defence: a row sent 47.397 dispatched 48.076, its blow landing past the host's hold)
+        if (Wo209Rules.VerdictWaits(W209Eff("copy_attack_ai", 2u), W208("defence_local"), m.Attacker.Length > 0))
+        {
+            _ = Task.Run(async () =>
+            {
+                try { await Wo161JudgeApplyAsync(hitId, m, by, -1, ct); }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
+                catch (Exception ex)
+                {
+                    Interlocked.Increment(ref _w209VerdictWaitFaults);
+                    Console.WriteLine($"WO161-HIT victim=me by={by} hid={hitId} NOT applied: {ex.GetType().Name}: {ex.Message} -- counted (WO-209's verdict wait faulted)");
+                }
+            });
+            return;
+        }
         await Wo161JudgeApplyAsync(hitId, m, by, -1, ct);
     }
 
@@ -218,6 +234,18 @@ public partial class GameBridge
     private async Task Wo161JudgeApplyAsync(uint hitId, HitVerdictMsg m, string by, long waitedMs, CancellationToken ct)
     {
         if (Wo208SkipHostVerdict(m.Attacker, hitId)) return;   // WO-208 B: this machine's engine judged that blow -- one blow, one judge
+        // WO-209 B: the copy's own attack may still land here after the host's hold ran out (its blow comes a stream delay after the host's):
+        // the host's verdict waits for it -- a judgement here wins (one blow, one judge: no double damage), this engine's "none" lets it through
+        if (Wo209Rules.VerdictWaits(W209Eff("copy_attack_ai", 2u), W208("defence_local"), m.Attacker.Length > 0))
+        {
+            long t0 = Environment.TickCount64;
+            while (Environment.TickCount64 - t0 < Wo209Rules.VerdictWaitMs)
+            {
+                await Task.Delay(30, ct);
+                if (Wo208SkipHostVerdict(m.Attacker, hitId)) { Interlocked.Increment(ref _w209VerdictWaitSkipped); return; }
+                if (_w209NoneAt.TryGetValue(m.Attacker, out long na) && na >= t0 - 300) break;
+            }
+        }
         long now = Environment.TickCount64;
         long? played = null, recv = null; string? refused = null; bool fits = false;
         if (m.Attacker.Length > 0)

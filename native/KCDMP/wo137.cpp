@@ -23,6 +23,8 @@
 #include "port_gate.h"
 #include "respawn.h"
 #include "wo200.h"
+#include "wo209.h"
+#include "wo209_rules.h"
 
 namespace kcdmp::wo137 {
 
@@ -88,6 +90,7 @@ struct Anchors {
     void* nodeName = nullptr;
     void* nodeParent = nullptr;
     void* release = nullptr;
+    void* wake = nullptr;              // WO-209 D.4: C_Node::Wake(E_NodeWakeReason)
     void* portDirection = nullptr;
     void* runtimeState = nullptr;
     void* resolver = nullptr;          // C_ConceptModule::GetResourceResolver
@@ -377,6 +380,40 @@ bool is_state(const void* node) {
     return A.stateVft && node && rd(node, 0, &vp) && vp == A.stateVft;
 }
 
+// WO-209 D.4 (mp_quest_wake_with_host): the node is hibernated here while the host's change proves it awake there -- its topmost
+// hibernated ancestor (the module the quest data hibernated) woken through the engine's own C_Node::Wake, the reason the quest's own
+// Wake port passes. True when the node reads awake afterwards.
+std::atomic<uint32_t> c_wakes{0}, c_wakeFail{0};
+bool wake_for_host(void* node, const char* path) {
+    if (!A.wake || !A.nodeParent || !A.release || !kcdmp::wo209::on(kcdmp::wo209rules::kBitQuestWake)) return false;
+    void* held[16]; int nh = 0, n = 0;
+    void* chain[16]; int rt[16];
+    void* cur = node;
+    while (cur && n < 16) {
+        chain[n] = cur; rt[n] = node_runtime(cur); ++n;
+        void* par = nullptr;
+        if (!call_parent(cur, &par) || !par || nh >= 16) break;
+        held[nh++] = par;
+        cur = par;
+    }
+    const int top = kcdmp::wo209rules::wake_root(rt, n);
+    bool ok = false;
+    if (top >= 0) {
+        void* root = chain[top];
+        KCDMP_FAULT_CALL(site, "wo137::wake_for_host");
+        const bool ran = fault::guarded(site, [&] { reinterpret_cast<void(__fastcall*)(void*, int32_t)>(A.wake)(root, kcdmp::wo209rules::kWakeReasonScript); });
+        ok = ran && node_runtime(node) != 1;
+        char rp[kMaxPath + 64];
+        if (!node_path(root, rp, sizeof rp)) std::snprintf(rp, sizeof rp, "?");
+        const uint32_t k = (ok ? c_wakes : c_wakeFail).fetch_add(1) + 1;
+        if (k <= 60 || k % 50 == 0)
+            logf("WO209-WAKE %s asleep here, awake on the host (its change came): its module %s woken the engine's way -> %s (#%u)", path, rp,
+                 ok ? "awake" : ran ? "still asleep" : "faulted", k);
+    }
+    for (int i = 0; i < nh; ++i) call_release(held[i]);
+    return ok;
+}
+
 // ---------------------------------------------------------------------------
 // The detector.
 // ---------------------------------------------------------------------------
@@ -569,6 +606,7 @@ Applied apply(const char* path, const char* portNm, Val* before, Val* after) {
             if (!node_path(node, qp, sizeof qp, &qe) || qe == 0) { res = Applied::NotAQuest; break; }
         }
         decode(static_cast<char*>(node) + kOffStateValue, before);
+        if (node_runtime(node) == 1) wake_for_host(node, path);   // WO-209 D.4: the host has it awake (its change came)
         if (node_runtime(node) == 1) { res = Applied::Asleep; break; }   // 1 = Hibernating (C_Node::Execute's branch)
         port = find_port(node, portNm);
         if (!port) { res = Applied::NoPort; break; }
@@ -1133,6 +1171,7 @@ void install() {
     A.getPort       = find_export(ce, "?GetPort@C_Node@conceptmodule@wh@@");
     A.nodeName      = find_export(ce, "?GetName@C_Node@conceptmodule@wh@@");
     A.nodeParent    = find_export(ce, "?GetParent@C_Node@conceptmodule@wh@@");
+    A.wake          = find_export(ce, "?Wake@C_Node@conceptmodule@wh@@");
     A.release       = find_export(ce, "?Release@C_SharedResource@conceptmodule@wh@@");
     A.portDirection = find_export(ce, "?GetDirection@I_Port@conceptmodule@wh@@");
     A.runtimeState  = find_export(ce, "?GetRuntimeState@C_Node@conceptmodule@wh@@");

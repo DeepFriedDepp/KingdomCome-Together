@@ -248,6 +248,75 @@ def test_known_local(tmp):
           and res4["unexplained"][0]["key"] == other, f"code={code4}")
 
 
+def test_default_only(tmp):
+    # WO-209 D.4: a State at sv:0 on the joiner only for the whole run (WO-208's soak: eight Kuttenberg States) is default-only
+    key = "Barbora.kutnohorsko.mapaKPokladu.hibernace.HracZiskavaMapuAHledaTabor"
+    h, j = write_bundles(tmp, "defonly", scenario(overrides=[("joiner", "quest", key, "sv:0", 1, None)]))
+    code, res = run(h, j)
+    check("D.4 a State at sv:0 on one side only, all run long, is default-only (explained, named)", code == 0 and res
+          and not res["unexplained"] and any(str(f.get("why", "")).startswith("default-only") and f["key"] == key for f in res["explained"]),
+          f"code={code}")
+    analyze.DEFAULT_ONLY_RULE = False
+    try:
+        code2, res2 = run(h, j)
+    finally:
+        analyze.DEFAULT_ONLY_RULE = True
+    twin("D.4 the default-only rule off", code2 == 0 and res2 and not res2["unexplained"], f"code={code2}")
+    # the rule is narrow: a value other than the default, or a default later set, stays unexplained
+    h3, j3 = write_bundles(tmp, "defset", scenario(overrides=[("joiner", "quest", key, "sv:1", 1, None)]))
+    code3, res3 = run(h3, j3)
+    check("D.4 a State at sv:1 on one side only stays unexplained", code3 == 1 and res3 and res3["unexplained"][0]["key"] == key, f"code={code3}")
+    h4, j4 = write_bundles(tmp, "deflater", scenario(overrides=[("joiner", "quest", key, "sv:0", 1, 40), ("joiner", "quest", key, "sv:2", 40, None)]))
+    code4, res4 = run(h4, j4)
+    check("D.4 a default set later (sv:0 -> sv:2) stays unexplained", code4 == 1 and res4 and any(f["key"] == key for f in res4["unexplained"]), f"code={code4}")
+
+
+def test_timer_local(tmp):
+    # WO-209 D.4: quest timers a step apart, and a timer on the host only, are each machine's own (never mirrored, WO-198)
+    t1 = "Barbora.trosecko.kumaniNaTrosecku.rvacka_v_hospode.timer_keepSkirmishBarksActive"
+    t2 = "Barbora.trosecko.kumaniNaTrosecku.rvacka_v_hospode.eskalace_bitky.escalationTimer"
+    h, j = write_bundles(tmp, "timers", scenario(overrides=[("host", "quest", t1, "clk:1", 20, 40), ("joiner", "quest", t1, "clk:2", 20, 40)]))
+    code, res = run(h, j)
+    check("D.4 a quest timer both run, a step apart then the same, is timer-local (explained)", code == 0 and res and not res["unexplained"]
+          and any(str(f.get("why", "")).startswith("timer-local") for f in res["explained"]), f"code={code}")
+    analyze.TIMER_LOCAL_RULE = False
+    try:
+        code2, res2 = run(h, j)
+    finally:
+        analyze.TIMER_LOCAL_RULE = True
+    twin("D.4 the timer-local rule off", code2 == 0 and res2 and not res2["unexplained"], f"code={code2}")
+    h5, j5 = write_bundles(tmp, "timerhost", scenario(overrides=[("host", "quest", t2, "clk:1", 30, None)]))
+    code5, res5 = run(h5, j5)
+    check("D.4 a timer on the host only stays unexplained (the Jaunt's shape)", code5 == 1 and res5 and any(f["key"] == t2 for f in res5["unexplained"]), f"code={code5}")
+    st = "Barbora.trosecko.kumaniNaTrosecku.rvacka_v_hospode.chovani_stamgastu_a_kumanu.sittingInPub"
+    h3, j3 = write_bundles(tmp, "timerstate", scenario(overrides=[("host", "quest", st, "sv:2", 30, None)]))
+    code3, res3 = run(h3, j3)
+    check("D.4 a State differing (not a timer) stays unexplained", code3 == 1 and res3 and any(f["key"] == st for f in res3["unexplained"]), f"code={code3}")
+
+
+def test_absent_initial(tmp):
+    # WO-209 D.4: an applied change from sv:0 on a joiner that did not have the key (its node asleep) is absent-is-initial
+    key = "Barbora.trosecko.zranenyLovci.tipsteri.marklivingsoul_1.removeNPCMetaroleConextNotSet"
+    sc = scenario(overrides=[("host", "quest", key, "sv:1", 41, None), ("joiner", "quest", key, "sv:1", 41, None)],
+                  applied=[("joiner", "quest", key, "sv:0", "sv:1", "host-change", 40, 300, None)])
+    h, j = write_bundles(tmp, "absinit", sc)
+    code, res = run(h, j)
+    check("D.4 a change from sv:0 where the key was absent is absent-is-initial (explained)", code == 0 and res and not res["unexplained"]
+          and any(str(f.get("why", "")).startswith("absent-is-initial") for f in res["explained"]), f"code={code}")
+    analyze.ABSENT_INITIAL_RULE = False
+    try:
+        code2, res2 = run(h, j)
+    finally:
+        analyze.ABSENT_INITIAL_RULE = True
+    twin("D.4 the absent-is-initial rule off", code2 == 0 and res2 and not res2["unexplained"], f"code={code2}")
+    sc4 = scenario(overrides=[("host", "quest", key, "sv:2", 41, None), ("joiner", "quest", key, "sv:2", 41, None)],
+                   applied=[("joiner", "quest", key, "sv:1", "sv:2", "host-change", 40, 300, None)])
+    h4, j4 = write_bundles(tmp, "absinit1", sc4)
+    code4, res4 = run(h4, j4)
+    check("D.4 a change from sv:1 where the key was absent stays unexplained", code4 == 1 and res4
+          and any(f["kind"] == "applied-stale" for f in res4["unexplained"]), f"code={code4}")
+
+
 def test_not_a_quest(tmp):
     # WO-208 D.2: a State under no quest (a <Gameplay> / <Module> concept: a tutorial, the open-world combat chatter) is each machine's
     # own -- the State mirror carries quest States only; a quest's own State that differs stays unexplained
@@ -418,7 +487,7 @@ def main():
     analyze.SCRIPTS_PAK, analyze._CONCEPT_ROOTS = os.path.join(tmp, "no-scripts.pak"), None
     try:
         test_digest()
-        for t in (test_c1, test_clock_edge, test_known_local, test_not_a_quest, test_c2, test_c3, test_applied, test_bad_input, test_briefings):
+        for t in (test_c1, test_clock_edge, test_known_local, test_default_only, test_timer_local, test_absent_initial, test_not_a_quest, test_c2, test_c3, test_applied, test_bad_input, test_briefings):
             t(tmp)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)

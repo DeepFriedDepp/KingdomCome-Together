@@ -89,5 +89,12 @@ bool release_dead(uint32_t eid);
 bool release_copy(uint32_t eid, const char* why);
 // WO-208 F.1 (main thread): does this machine hold the copy in the local player's fight (engaged: its skirmish add, until released)?
 bool engaged(uint32_t eid);
+// WO-209 A (main thread): the opponent mirror engages this copy in the local player's fight -- his skirmish joined (AddSoulToSkirmish,
+// the same as op 2's first engage; adds only), its local hits on him discarded as op 2's. The combat hold stays op 2's. False when
+// refused: dead, a scripted scene's copy, farther than maxM, no soul. True when it is engaged (already, or now).
+bool mirror_engage(uint32_t eid, float maxM, const char* why);
+// WO-209 (main thread): the local player left his skirmish (`why`: op 1, his death's own leave) -- no copy is in his fight any more:
+// every engagement ends (no skirmish call: his side is gone already), so a copy is in his fight again only by a new engage.
+void local_player_left_fight(const char* why);
 
 } // namespace kcdmp::wo132

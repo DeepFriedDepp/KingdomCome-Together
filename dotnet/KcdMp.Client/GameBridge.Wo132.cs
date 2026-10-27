@@ -91,12 +91,22 @@ public partial class GameBridge
                 // Joiner: an engaged copy with no fresh host state lets go.
                 var now = DateTime.UtcNow;
                 foreach (var (name, e) in _w132Engaged.ToArray())
+                {
+                    // WO-209 A (adds only): the mirror's stream still has its host NPC fighting -- it stays in my fight
+                    if (now - e.At > Wo132Rules.EngageStale && Wo209MirrorFights(name))
+                    {
+                        _w132Engaged[name] = (now, e.Eid);
+                        long k = Interlocked.Increment(ref _w209StaleKept);
+                        if (k <= 20 || k % 100 == 0) Console.WriteLine($"WO209-OPP keep {name}: no host combat state for {Wo132Rules.EngageStale.TotalSeconds:F0} s, but the mirror has its host NPC fighting -- it stays in my fight [n={k}]");
+                        continue;
+                    }
                     if (now - e.At > Wo132Rules.EngageStale && _w132Engaged.TryRemove(name, out _))
                     {
                         Interlocked.Increment(ref _w132EngageOff);
                         var r = await _combat.Wo132EngageAsync(false, e.Eid, default, ct);
                         Console.WriteLine($"MP-W132 engage off {name}: no host combat state for {Wo132Rules.EngageStale.TotalSeconds:F0} s -> released, still bound and paused ({(r.Ok ? "ok" : "reason " + r.Reason)})");
                     }
+                }
                 if (Environment.TickCount64 - lastStats >= 60_000)
                 {
                     lastStats = Environment.TickCount64;
@@ -373,6 +383,20 @@ public partial class GameBridge
                 }
                 return;
             }
+        }
+        // WO-209 A (mp_copy_opponent_mirror): adds only, never a removal -- a copy whose host NPC still fights (it turned to the host or another
+        // body) stays in my skirmish; the mirror changes only its opponent. The fight's end, a death and a knockout still release it.
+        // (the bind churn too: a copy the native writer dropped for a moment reads "no longer the host's bound copy" -- d1-defence-early: two
+        // fighting copies were taken out of the joiner's skirmish and re-added 100 ms later by the mirror)
+        if (v == Wo132Rules.EngageVerdict.Release && engaged && cur.Eid != 0 && !w195Dead && Wo136Rules.MayEngage(Wo136HostNpcDown(ev.Name))
+            && Wo209Rules.KeepEngaged(W209Eff("copy_opponent_mirror", 1u), ev.InCombat, ev.Target != NpcCombatTarget.None))
+        {
+            _w132Engaged[ev.Name] = (DateTime.UtcNow, cur.Eid);
+            _ = _combat.Wo132EngageAsync(true, cur.Eid, ev.State, ct);
+            long kept = Interlocked.Increment(ref _w209KeptEngaged);
+            if (kept <= 20 || kept % 100 == 0)
+                Console.WriteLine($"WO209-OPP keep {ev.Name}: its host NPC fights {ev.Target}{(ev.Target == NpcCombatTarget.Avatar ? ":" + ev.TargetGhost : "")} now -- it stays in my skirmish, only its opponent changes (adds only) [n={kept}]");
+            return;
         }
         if (v == Wo132Rules.EngageVerdict.Release && engaged && Wo190HoldEngagement(ev.Name, ev, engaged))
         {

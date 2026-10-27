@@ -8,6 +8,9 @@
 #include "wo163.h"
 #include "wo187.h"
 #include "wo132.h"
+#include "wo209.h"
+#include "wo209_rules.h"
+#include "wo143.h"
 #include "combat_swing.h"
 #include "engine.h"
 #include "fault_guard.h"
@@ -64,9 +67,10 @@ uint8_t op(uint8_t opc, const uint8_t* body, size_t len, uint8_t* out, size_t ca
         return wo163::kROk;
     }
     if (opc == kOpStatus) {
-        char t[512];
+        char t[768];
         int n = status(t, sizeof t);
         if (n < 0) n = 0;
+        if (static_cast<size_t>(n) >= sizeof t) n = static_cast<int>(sizeof t) - 1;   // snprintf's count is the untruncated length
         if (static_cast<size_t>(n) > cap) n = static_cast<int>(cap);
         std::memcpy(out, t, static_cast<size_t>(n));
         *outLen = static_cast<size_t>(n);
@@ -483,6 +487,7 @@ struct OwnCopy {
     bool held = false;
     void* baseAct = nullptr;    // rule 1: the host's base fragment, ours, while the copy's own base is missing
     uint32_t baseFrag = 0;
+    uint64_t aiHostAct = 0;     // WO-209 B: the host action last started as the copy's own combat attack (the engine runs it to its end)
 };
 std::unordered_map<uint32_t, OwnCopy> g_owned;   // main thread
 std::atomic<uint32_t> c_oInstalls{0}, c_oRefusals{0}, c_oStale{0}, c_oWithdraws{0}, c_oSteps{0}, c_oPulses{0}, c_oApplied{0}, c_oCopies{0};
@@ -499,7 +504,8 @@ const char* cls_name(uint8_t id) {
     }
 }
 
-std::atomic<uint32_t> c_oStops{0};
+std::atomic<uint32_t> c_oStops{0}, c_oShotHolds{0};
+std::atomic<uint32_t> c_oAiHolds{0}, c_oQueueFull{0};   // WO-209 B: owner passes that left the full body to the copy's own attack
 void own_retire(OwnCopy& oc, Probe::Scope& s, double now, const char* why) {
     if (!s.act) return;
     // rules 2 and 3: an action of ours still pending is removed (the game's own stop: never installed later); a running one steps down,
@@ -528,7 +534,25 @@ void own_apply(uint32_t eid, OwnCopy& oc, int cm, const HostScope hsc[2], const 
     }
     wo187::ScopeInfo cs[16];
     const int cn = wo187::read_all_scopes(eid, cs, 16);
+    // WO-209 C.2 (mp_copy_oneshot_request): the host's work one-shot runs on the copy as the game's own NPC-state request (WO-143's) --
+    // the owner holds the full body while it runs: nothing installed over it, no base given under it
+    const bool shot = wo209::on(wo209rules::kBitShotRequest) && wo143::shot_in_flight(eid);
+    if (shot) c_oShotHolds.fetch_add(1);
+    // WO-209 B: the copy's own combat attack owns its full body while it runs -- the owner's state is a stream delay behind, and the host's
+    // footwork just before the swing, installed over the attack, cut it after 26 ms (d9-defence: the copy started again late, its blow
+    // past the host's hold)
+    const bool aiRuns = wo209::ai_owns_body(eid);
+    if (aiRuns) c_oAiHolds.fetch_add(1);
+    // WO-209 C: nothing of the owner's is queued on a copy whose action queue is already long (the engine allows 10). rc1-c2tavern-1: a
+    // seated copy's own actions at the head of its queue (its movement, its look pose) never let the owner's installs start, the owner
+    // withdrew each as stale and installed the next, and they piled up behind them -- 11,004 queue overflows on one copy, 59,993 on
+    // seven the next night, 125,205 in the smoke. (rc2 left a seated copy to the game instead: no overflow, but the beds' sleepers stood
+    // -- the owner's own install is what lays them down: lying matched 0 % of 2,716 samples, rc1 ~100 %.)
+    const wo187::QueueInfo qi = wo187::queue_info(eid);
+    const bool queueFull = wo209::fix_on(wo209rules::kFixOwnerQueueCap) && wo209rules::owner_queue_full(qi.n);
+    if (queueFull) c_oQueueFull.fetch_add(1);
     for (int k = 0; k < 2; ++k) {
+        if ((shot || aiRuns) && k == 0) continue;
         const HostScope* hs = have[k] ? &hsc[k] : nullptr;
         const Fam fam = hs ? family_of_id(hs->cls, hs->frag) : Fam::Empty;
         Probe::Scope& o = oc.own[k];
@@ -543,6 +567,14 @@ void own_apply(uint32_t eid, OwnCopy& oc, int cm, const HostScope hsc[2], const 
         bool copyRuns = false;
         for (int i = 0; i < cn && hs; ++i)
             if (cs[i].ok && !cs[i].empty && !std::strcmp(cs[i].name, kOwnScopes[k]) && cs[i].frag == hs->frag && cs[i].act != o.act) copyRuns = true;
+        // WO-209 C.1 (mp_copy_paired_engine): a paired action the host's NPC leads against the joiner's figure -- the engine's own way here,
+        // with the local player as the partner, once per host action (decide() holds every paired fragment otherwise)
+        if (k == 0 && hs && fam == Fam::Hold && hs->cls == kClsCombatAnim && oc.aiHostAct != hs->act && !copyRuns && wo209::paired_wants(eid, hs->frag)) {
+            oc.aiHostAct = hs->act;
+            if (o.act) own_retire(oc, o, now, "the host's paired action");
+            wo209::paired_engine(eid, hs->frag);
+            continue;
+        }
         switch (decide(fam, hs ? hs->act : 0, hs ? hs->prio : 0, copyRuns, view)) {
             case Do::Nothing: break;
             case Do::Withdraw: own_retire(oc, o, now, copyRuns ? "the copy runs it itself" : "the host's scope is back at its base"); break;
@@ -556,6 +588,11 @@ void own_apply(uint32_t eid, OwnCopy& oc, int cm, const HostScope hsc[2], const 
                 if (wr_prio(o.act, hs->prio)) { c_oSteps.fetch_add(1); o.prio = hs->prio; }
                 break;
             case Do::Install: {
+                // WO-209 B (mp_copy_attack_ai): the host's NPC attacks the joiner's figure there -- the copy's own combat attack at the local
+                // player here (the engine's AI attack: his engine resolves the blow), once per host action; refused -> the fragment as before
+                // (started on the state's arrival, owner_tick's early path -- or refused there: the delayed state never asks again)
+                if (k == 0 && wo209::attack_ai_wants(eid, hs->cls, hs->frag)) break;
+                if (queueFull) break;   // the host's action waits for room (the queue cap above)
                 if (o.act) own_retire(oc, o, now, "the host's next action");
                 void* act = nullptr;
                 const rttr::SwingResult r = rttr::install_fragment(eid, hs->frag, hs->tags, hs->prio, hs->flags, &act);
@@ -576,7 +613,7 @@ void own_apply(uint32_t eid, OwnCopy& oc, int cm, const HostScope hsc[2], const 
     // fragment (its standing idle, its walk, its footwork: the class the host runs, by fragment and tags) as an action of ours at the
     // bottom priority; the copy's own base action, when it comes back, replaces it (ours is let go). A paused copy never re-queues its
     // own (A.1's tavern probe: the innkeeper's copy stood empty for 12 s, and the nudge of its locomotion "took" nothing).
-    const bool empty = cn > 0 && cs[0].ok && cs[0].empty;
+    const bool empty = cn > 0 && cs[0].ok && cs[0].empty && !shot;
     if (oc.baseAct) {
         uint32_t st = 0;
         const bool ours = !empty && cn > 0 && cs[0].act == oc.baseAct;
@@ -589,7 +626,7 @@ void own_apply(uint32_t eid, OwnCopy& oc, int cm, const HostScope hsc[2], const 
     if (!empty) oc.fullEmptySince = -1;
     else {
         if (oc.fullEmptySince < 0) oc.fullEmptySince = now;
-        if (now - oc.fullEmptySince > 0.3 && now - oc.lastPulse > 1.0 && !oc.baseAct) {
+        if (now - oc.fullEmptySince > 0.3 && now - oc.lastPulse > 1.0 && !oc.baseAct && !queueFull) {
             oc.lastPulse = now;
             const HostScope* hb = have[0] && is_base(family_of_id(hsc[0].cls, hsc[0].frag)) && hsc[0].cls != kClsNone ? &hsc[0] : nullptr;
             const char* how = "no host base to give it";
@@ -669,6 +706,36 @@ void owner_tick(double now) {
         if (!e || v.empty()) { it = g_copyStates.erase(it); continue; }
         const char* nm = engine::entity_name(e);
         if (!g_ownerOnly.empty() && (!nm || _stricmp(nm, g_ownerOnly.c_str()) != 0)) { it = g_copyStates.erase(it); continue; }
+        // WO-209 B: the host's NPC's attack at the joiner's figure starts the copy's own attack as soon as its state arrives -- its blow is
+        // the joiner's engine's to judge, and the host holds its own verdict at most 450 ms (the stream delay below would spend most of it)
+        {
+            const CopyState& nw = v.back();
+            const uint8_t* fb = nullptr;
+            for (int k = 0; k < nw.n; ++k) if (nw.sc[k][0] == 0) fb = nw.sc[k];
+            if (fb) {
+                uint16_t frag = 0; std::memcpy(&frag, fb + 2, 2);
+                uint32_t act = 0; std::memcpy(&act, fb + 30, 4);
+                if (wo209::attack_ai_wants(eid, fb[1], frag)) {
+                    auto ins0 = g_owned.try_emplace(eid);
+                    OwnCopy& oc0 = ins0.first->second;
+                    if (ins0.second) { oc0.name = nm ? nm : "?"; c_oCopies.fetch_add(1); oc0.lastState = now; }
+                    // one host attack, one copy attack: the row path usually started it already (the row comes before the state) -- the
+                    // host action is marked as the copy's then too, or its state still showing it 0.6 s on asked for it again (d6-defence:
+                    // a combo's 897 started twice, every later swing of the combo a second behind the host's)
+                    const bool fresh = oc0.aiHostAct != act;
+                    oc0.aiHostAct = act;
+                    // and only while no attack of the copy's runs: a combo finisher's host action changes inside one fragment (d7: a
+                    // second 937 started over the row's and cut it at 263 ms, its blow never landing)
+                    if (fresh && !wo209::ai_attack_recent(eid, 0.6) && !wo209::ai_attack_running(eid)) {
+                        KCDMP_FAULT_CALL(site0, "wo208::own_ai_attack_early");
+                        fault::guarded(site0, [&] {
+                            if (oc0.own[0].act) own_retire(oc0, oc0.own[0], now, "the host's attack (the copy's own)");
+                            wo209::ai_attack(eid, frag);
+                        });
+                    }
+                }
+            }
+        }
         // the newest state at least one stream delay old
         int pick = -1;
         for (int i = 0; i < static_cast<int>(v.size()); ++i) if (now - v[i].at >= g_ownerDelayS) pick = i;
@@ -815,13 +882,21 @@ bool probe_owned_name(const char* name) {
     return false;
 }
 
+bool probe_only_name(const char* name) {
+    if (!name) return false;
+    if (g_p.joiner && !g_p.name.empty() && _stricmp(name, g_p.name.c_str()) == 0) return true;
+    if (!on(kBitOwner) || g_ownerOnly.empty()) return false;
+    for (const auto& kv : g_owned) if (_stricmp(kv.second.name.c_str(), name) == 0) return true;
+    return false;
+}
+
 int status(char* out, int n) {
     return std::snprintf(out, static_cast<size_t>(n), "w208 bits=0x%X twin_off=0x%X configured=%d | target_violations=%u bodies=%u | probe %s npc=%s installs=%u "
-                         "refusals=%u stale=%u withdraws=%u | owner copies=%zu ever=%u applied=%u installs=%u refusals=%u stale=%u withdraws=%u stops=%u steps=%u base=%u "
+                         "refusals=%u stale=%u withdraws=%u | owner copies=%zu ever=%u applied=%u installs=%u refusals=%u stale=%u withdraws=%u stops=%u steps=%u base=%u shot_holds=%u ai_holds=%u queue_full=%u "
                          "stream reads=%u bodies=%u states_in=%u bad=%u", g_bits.load(), twin_off(), g_configured.load() ? 1 : 0, c_violations.load(), c_violationBodies.load(),
                          g_p.host ? "host" : g_p.joiner ? "joiner" : "off", g_p.name.c_str(), g_p.installs, g_p.refusals, g_p.stale, g_p.withdraws, g_owned.size(),
                          c_oCopies.load(), c_oApplied.load(), c_oInstalls.load(), c_oRefusals.load(), c_oStale.load(), c_oWithdraws.load(), c_oStops.load(), c_oSteps.load(),
-                         c_oPulses.load(), c_streamReads.load(), c_streamBodies.load(), c_statesIn.load(), c_statesBad.load());
+                         c_oPulses.load(), c_oShotHolds.load(), c_oAiHolds.load(), c_oQueueFull.load(), c_streamReads.load(), c_streamBodies.load(), c_statesIn.load(), c_statesBad.load());
 }
 
 namespace {

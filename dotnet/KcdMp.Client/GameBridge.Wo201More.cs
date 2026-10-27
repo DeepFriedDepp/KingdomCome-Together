@@ -39,6 +39,7 @@ public partial class GameBridge
         Wo206DigestTick(n);                               // WO-206 C/D: the checkpoint digests and the probe, 4 Hz
         Wo207Tick(n);                                     // WO-207 B.1: the inbound queue, every second
         Wo208Tick(n);                                     // WO-208: the DLL's switch word every 2 s
+        Wo209Tick(n);                                     // WO-209: its switch word every 2 s, the mirror's numbers every 30 s
     }
 
     private void Wo201OnEventMore(string name, string? arg)

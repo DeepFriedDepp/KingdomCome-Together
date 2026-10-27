@@ -4,6 +4,7 @@
 #include "crash_capture.h"
 #include "pipe_server.h"
 #include "wo208.h"
+#include "wo209.h"
 #include "mannequin_read.h"
 #include "local_state.h"
 #include "npc_scan.h"
@@ -707,6 +708,7 @@ void serve(HANDLE h) {
                 rttr::SwingResult res = rttr::SwingResult::Ok;
                 const bool ran = run_sync_bounded<rttr::SwingResult>(
                     [entityId, spec](rttr::SwingResult& result) {
+                        if (kcdmp::wo209::row_attack(entityId, spec.c_str())) { result = rttr::SwingResult::Ok; return; }   // WO-209 B: the copy's own attack
                         if (kcdmp::wo208::probe_owned(entityId)) { result = rttr::SwingResult::QueueFaulted; return; }   // WO-208 A.1: one owner
                         result = rttr::ghost_swing(entityId, spec.c_str());
                         if (result == rttr::SwingResult::Ok) kcdmp::wo187::note_move(entityId);   // WO-187 C2: the move's scope is watched

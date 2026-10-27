@@ -33743,7 +33743,7 @@ do
         conv_autojoin = "C.4: (both) a conversation that starts by itself for your partner (a quest or an NPC starts it) takes you in when you are within 30 m and free",
     }
     W208.on = W208.on or {}
-    W208.DEFAULT_OFF = { copy_anim_owner = true }   -- the owner starts off until its acceptance passed on the pair
+    W208.DEFAULT_OFF = {}   -- WO-209: every switch ships on (the owner and defence_local too); off only by hand
     -- WO-208 A: is this copy driven by its one owner (the DLL's, from the host NPC's streamed state)? The mod's own animation writers on
     -- a copy (the swing cue and hold, the conversation's gestures) leave it alone. Its weapon state stays the engine's own draw and
     -- holster at the stream's moment (human:DrawWeapon / HolsterWeapon): the host's draws and holsters run on the torso's scopes,
@@ -33785,6 +33785,60 @@ do
         local fname = "KCD2MP_W208Set_" .. k
         _G[fname] = function(arg) return KCD2MP_W208Set(k, arg) end
         System.AddCCommand(label, fname .. "(%line)", "WO-208 " .. (W208.HELP[k] or k) .. " (default " .. (W208.DEFAULT_OFF[k] and "off" or "on") .. "): " .. label .. " on|off")
+    end
+end
+
+-- ===== WO-209: the agent's switches (each new mechanism ships on, with its own switch; the agent hears w209_cfg) =====
+do
+    W209 = W209 or {}
+    W209.NAMES = {
+        copy_opponent_mirror = "mp_copy_opponent_mirror",
+        copy_attack_ai = "mp_copy_attack_ai",
+        copy_paired_engine = "mp_copy_paired_engine",
+        copy_oneshot_request = "mp_copy_oneshot_request",
+        clock_quiet_in_skip = "mp_clock_quiet_in_skip",
+        forced_talk_once = "mp_forced_talk_once",
+        quest_wake_with_host = "mp_quest_wake_with_host",
+    }
+    W209.HELP = {
+        copy_opponent_mirror = "A: (both) each copy of the host's NPCs fights whom the host's NPC fights: you, when it attacks your figure there",
+        copy_attack_ai = "B: (joiner) a copy's swing at you is its own combat attack, so your own game judges your block, parry and dodge",
+        copy_paired_engine = "C.1: (joiner) a clinch or a sync attack between a copy and you plays the game's own paired way",
+        copy_oneshot_request = "C.2: (joiner) a copy's work one-shot (serving, drinking, woodcutting) is the game's own request on it",
+        clock_quiet_in_skip = "D.1: (joiner) while your own sleep or wait runs, the clock correction toward the host's clock waits (your sleep runs its full length)",
+        forced_talk_once = "D.2: (both) a talk a quest forces on you while your partner already has the same talk ends at once, and you listen to your partner's",
+        quest_wake_with_host = "D.4: (joiner) a part of a quest asleep here that the host has awake is woken when the host's step arrives, so the step lands",
+    }
+    W209.on = W209.on or {}
+    W209.DEFAULT_OFF = {}
+    local function w209_is_on(k) if W209.on[k] == nil then return not W209.DEFAULT_OFF[k] end return W209.on[k] end
+    function KCD2MP_W209Set(name, arg)
+        local label = W209.NAMES[tostring(name)]
+        if not label then mp_log("WO209-TOGGLE unknown switch '" .. tostring(name) .. "'"); return false end
+        local v = KCD2MP_Wo122ParseBool(arg)
+        if v == "bad" then mp_log(label .. ": expected on|off, got '" .. tostring(arg) .. "'"); return false end
+        if v == nil then
+            mp_log("WO209-TOGGLE " .. label .. " is " .. (w209_is_on(tostring(name)) and "on" or "off"))
+            return true
+        end
+        W209.on[tostring(name)] = v
+        mp_log("WO209-TOGGLE " .. label .. " " .. (v and "on" or "off") .. " -- sent to the agent")
+        KCD2MP_EmitEvent("w209_cfg", tostring(name) .. "=" .. (v and "on" or "off"))
+        return true
+    end
+    function KCD2MP_W209Status()
+        local parts = {}
+        for k, label in pairs(W209.NAMES) do parts[#parts + 1] = label .. "=" .. (w209_is_on(k) and "on" or "off") end
+        table.sort(parts)
+        mp_log("WO209-STATUS " .. table.concat(parts, " "))
+        KCD2MP_EmitEvent("w209_status", "")
+        return true
+    end
+    System.AddCCommand("mp_w209_status", "KCD2MP_W209Status()", "WO-209: every WO-209 switch and its counts")
+    for k, label in pairs(W209.NAMES) do
+        local fname = "KCD2MP_W209Set_" .. k
+        _G[fname] = function(arg) return KCD2MP_W209Set(k, arg) end
+        System.AddCCommand(label, fname .. "(%line)", "WO-209 " .. (W209.HELP[k] or k) .. " (default " .. (W209.DEFAULT_OFF[k] and "off" or "on") .. "): " .. label .. " on|off")
     end
 end
 

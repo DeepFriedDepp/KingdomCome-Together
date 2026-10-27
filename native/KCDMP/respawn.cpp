@@ -4,6 +4,9 @@
 #include "respawn.h"
 #include "fault_guard.h"
 #include "wo136.h"
+#include "wo132.h"
+#include "wo209.h"
+#include "wo209_rules.h"
 #include "respawn_actions.h"
 #include "engine.h"
 #include "buffs.h"
@@ -799,6 +802,9 @@ void step_executor(DWORD now) {
                         logf("WO131-STOPFIGHT the local player's death -> StopFight %s (the skirmish remove was unavailable)",
                              stopped ? "sent to the player's skirmish" : (actions::stop_fight_available() ? "FAULTED" : "NOT armed"));
                     }
+                    // WO-209 (rc4-c1x's joiner crash): his death's leave ends every copy's engagement too, as op 1's leave does
+                    if (wo209::fix_on(wo209rules::kFixDeathLeave)) wo132::local_player_left_fight("his death");
+                    else logf("WO209-ENGAGE the local player's death: the copies stay held in his old fight (KCDMP_TEST_W209_OFF=death_leave_clears)");
                 }
             }
             g_x.phase = Phase::Idle;

@@ -50,6 +50,18 @@ KNOWN_LOCAL = (
 # file (Scripts.pak Quests/Final/Barbora/.../<name>.xml, its first node after <Database>) is not a <Quest> is that, by the game's own
 # files; with the files unreadable the rule stays off (fail closed: the key stays unexplained).
 NOT_A_QUEST_RULE = True
+# WO-209 D.4: a quest State on one side only at its initial value (sv:0) for the whole episode, its node not loaded on the other side --
+# no value was ever set on either machine (WO-208's soak: eight Kuttenberg States at sv:0 on the joiner from its first checkpoint, absent
+# on the host in the Trosky region, all 351 checkpoints). A value set later (sv:0 -> sv:1) or the other side holding a value is not this.
+DEFAULT_ONLY_RULE = True
+# WO-209 D.4: a quest timer both machines run, a step apart for a while and then the same again (clk: on both sides, cleared) -- the
+# game's quest timers are not C_StateVariables and are never mirrored (WO-198), each machine runs its own, and the States they set are
+# mirrored (WO-200's out-port replay). The smoke's inn-brawl timers: a step apart for 5-111 checkpoints. A timer on one machine only
+# (the Jaunt's shape, WO-207) and a State differing are never this.
+TIMER_LOCAL_RULE = True
+# WO-209 D.4: an applied row whose "before" is the initial value (sv:0) on a side where the key was absent (its node asleep or not yet
+# loaded there; WO-209's mp_quest_wake_with_host wakes it for this very change) -- absent reads as the initial value, nothing was lost.
+ABSENT_INITIAL_RULE = True
 SCRIPTS_PAK = os.environ.get("KCDMP_SCRIPTS_PAK", r"D:\SteamLibrary\steamapps\common\KCD2Mod\Data\Scripts.pak")
 _CONCEPT_ROOTS = None
 MAX_LISTED = 20
@@ -382,6 +394,8 @@ def compare(h, j):
                 if k in live:
                     live[k]["count"] += 1
                     live[k]["last_seq"] = seq
+                    if (kind, hv, jv) != (live[k]["kind"], live[k]["host_value"], live[k]["joiner_value"]):
+                        live[k]["changed"] = True   # the default-only rule needs the value unchanged for the whole episode
                 else:
                     live[k] = {"kind": kind, "cat": cat, "key": k, "epoch": epoch, "seq": seq, "host_value": hv,
                                "joiner_value": jv, "host_t": hc["t"], "joiner_t": jc["t"], "sort_t": hc["t"],
@@ -396,7 +410,38 @@ def compare(h, j):
         for ep in episodes:
             why = None if ep["explained"] else not_a_quest(ep)
             if why: ep["explained"], ep["why"] = True, why
+    if DEFAULT_ONLY_RULE:
+        for ep in episodes:
+            why = None if ep["explained"] else default_only(ep)
+            if why: ep["explained"], ep["why"] = True, why
+    if TIMER_LOCAL_RULE:
+        for ep in episodes:
+            why = None if ep["explained"] else timer_local(ep)
+            if why: ep["explained"], ep["why"] = True, why
     return stats, episodes, (median(deltas) if deltas else 0)
+
+
+def timer_local(ep):
+    """WO-209 D.4: why this quest key is a timer each machine runs itself (TIMER_LOCAL_RULE), or None."""
+    if ep["cat"] != "quest" or ep.get("changed") or ep["kind"] != "value-differs" or ep.get("cleared_seq") is None:
+        return None
+    vals = [ep["host_value"], ep["joiner_value"]]
+    if not all(isinstance(v, str) and v.startswith("clk:") for v in vals):
+        return None
+    return ("timer-local: a quest timer both machines run, a step apart and then the same again -- the game's timers are not States "
+            "and are never mirrored (WO-198); the States they set are")
+
+
+def default_only(ep):
+    """WO-209 D.4: why this key is a State at its initial value on one side only (DEFAULT_ONLY_RULE), or None."""
+    if ep["cat"] != "quest" or ep.get("changed") or ep["kind"] not in ("missing-on-host", "missing-on-joiner"):
+        return None
+    present = ep["joiner_value"] if ep["kind"] == "missing-on-host" else ep["host_value"]
+    if present != "sv:0":
+        return None
+    side = "joiner" if ep["kind"] == "missing-on-host" else "host"
+    return (f"default-only: a State at its initial value (sv:0) on the {side} only, unchanged for the whole episode, its node not loaded "
+            f"on the other side -- no value was ever set on either machine")
 
 
 def applied_findings(side, offset):
@@ -419,6 +464,10 @@ def applied_findings(side, offset):
                 if v is not MISSING and r["before"] != v:
                     finding("applied-stale", r, f"before {fmt(r['before'])} but the {side.role}'s reconstructed "
                                                 f"value then was {fmt(v)}")
+                    if ABSENT_INITIAL_RULE and v is None and r["before"] == "sv:0" and r["cat"] == "quest":
+                        out[-1]["explained"] = True
+                        out[-1]["why"] = (f"absent-is-initial: the {side.role} did not have the key (its node asleep or not loaded "
+                                          f"there) and the change started from the initial value sv:0 -- nothing was lost")
             p = rows[i - 1] if i else None
             if (p and (p["after"], p["epoch"]) == (r["after"], r["epoch"]) and r["before"] == p["after"]
                     and not side.changed_between(cat, key, p["t"], r["t"], p["after"])):
@@ -555,17 +604,17 @@ def render(res):
             out.append(f"\n... and {len(rest) - MAX_LISTED} more.")
     else:
         out.append("None.")
-    out += ["", f"## Explained (in flight, the clock's step edge, or known-local; up to {MAX_LISTED})", ""]
+    out += ["", f"## Explained (in flight, the clock's step edge, known-local, default-only, timer-local, absent-is-initial; up to {MAX_LISTED})", ""]
     if res["explained"]:
         out += ["| kind | cat | key | host | joiner | epoch | seq | cleared at | applied on the lagging side |",
                 "|---|---|---|---|---|---:|---:|---:|---|"]
         for f in res["explained"][:MAX_LISTED]:
             hv, jv = values(f)
             ap = ("the clock's 15-minute step edge (no applied row needed)" if f.get("why") == "clock-edge"
-                  else f["why"] if str(f.get("why") or "").startswith("known-local")
-                  else "; ".join(f"{a['side']} `{a['cause']}` at {iso(a['t'])}" for a in f["applied"] or []))
+                  else f["why"] if f.get("why")   # known-local, default-only, timer-local, absent-is-initial
+                  else "; ".join(f"{a['side']} `{a['cause']}` at {iso(a['t'])}" for a in f.get("applied") or []))
             out.append(f"| {f['kind']} | {f['cat']} | `{cell(f['key'])}` | {cell(hv)} | {cell(jv)} | {f['epoch']} | "
-                       f"{f['seq']} | {f['cleared_seq']} | {cell(ap)} |")
+                       f"{f['seq']} | {f.get('cleared_seq', '-')} | {cell(ap)} |")
         if len(res["explained"]) > MAX_LISTED:
             out.append(f"\n... and {len(res['explained']) - MAX_LISTED} more.")
     else:

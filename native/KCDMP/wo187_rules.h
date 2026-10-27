@@ -20,6 +20,9 @@ enum class Opp : uint8_t { None = 0, LocalPlayer = 1, Figure = 2 };
 constexpr double kOppStaleS = 4.0;
 // The opponent is re-read (and put back if something else wrote it) this often while a wish is live.
 constexpr double kOppRecheckS = 0.5;
+// WO-209 A: a wish of the opponent mirror (the host NPC's own opponent, streamed 10 times a second) is re-read this often: the copy
+// follows a change within one stream tick, and another writer's opponent is put back as quickly.
+constexpr double kMirrorRecheckS = 0.1;
 // Overwritten this many times in one wish: pinned with the game's own forced-target relation (combat_forcedTarget, copy -> target).
 constexpr int kPinAfterOverwrites = 2;
 
