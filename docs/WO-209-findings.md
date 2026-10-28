@@ -265,7 +265,8 @@ hostile attacked him, so the gate never had to refuse: the fix rests on the stat
 | F `game_hostile_gate` | the copies' own attacks at him while the game holds them not hostile | 0: none arose in the 10 fights (it never had to refuse) | 104 of 706 (rc5's crash session) |
 | D.4 `quest_wake_with_host`, the analyzer's three rules | unit and synthetic tests with their twins | pass | fail, each |
 
-**The installer:** `KingdomComeTogether-Setup-0.63.8.exe`, 107,630,848 bytes (0.63.7: 107,613,730), the three start saves inside,
+**The installer:** `KingdomComeTogether-Setup-0.63.8.exe`, 107,619,183 bytes (0.63.7: 107,613,730), rebuilt after the open items
+(rc7, the commit before this document's last update; its live save round trip passed again), the three start saves inside,
 unsigned as before, a release candidate for the two-player session (not soak-tested: not a public release); built from the WO's
 commit, every gate of the build passed. It stays with the maintainer.
 
