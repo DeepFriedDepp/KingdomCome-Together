@@ -308,6 +308,9 @@ public partial class GameBridge
             case Protocol.NpcOppDown:       // WO-209 A: the host's NPCs' opponents
                 await Wo209OnNpcOppAsync(src, body);
                 return;
+            case Protocol.NpcAnimAskDown:   // WO-210 A.3/A.4: a joiner asks for bodies' whole-body state again
+                await Wo210OnAnimAskAsync(src, body);
+                return;
             case Protocol.HitVerdictDown:   // WO-161
                 await Wo161OnVerdictInAsync(src, joinId, body, ct);
                 return;
@@ -730,6 +733,7 @@ public partial class GameBridge
         {
             await WriteJoinAsync(WorldReceiver.BuildReady(_joinReceivedId, _joinReceivedSeq));
             Console.WriteLine($"MP-JOIN joiner: ready sent for join 0x{_joinReceivedId:x8} (worldsaved_seq={_joinReceivedSeq}, {why})");
+            _ = Wo210AfterSkipAsync("join");   // WO-210 A.4: the host's whole-body states afresh for this world
             SetJoinUi("ready", "In the world.");
             _joinReceivedId = 0;
         }

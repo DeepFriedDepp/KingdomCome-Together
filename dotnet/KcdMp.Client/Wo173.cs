@@ -17,10 +17,14 @@ public readonly record struct Wo173Hit(bool Ok, byte Reason, byte Applied, byte 
     public static Wo173Hit? TryDecode(bool ok, byte reason, byte[] p)
     {
         if (!ok || p.Length < 33) return new Wo173Hit(false, reason, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
-        return new Wo173Hit(true, reason, p[0], p[1], p[2], p[3], p[4], BinaryPrimitives.ReadUInt64LittleEndian(p.AsSpan(5)),
+        // WO-210 C.1: the react byte's bit 7 = the DLL queued the engine's own ClientHit (its hit signal and hit event follow)
+        return new Wo173Hit(true, reason, p[0], p[1], p[2], (byte)(p[3] & 0x7F), p[4], BinaryPrimitives.ReadUInt64LittleEndian(p.AsSpan(5)),
                             BinaryPrimitives.ReadUInt64LittleEndian(p.AsSpan(13)), BinaryPrimitives.ReadUInt32LittleEndian(p.AsSpan(21)),
-                            BinaryPrimitives.ReadSingleLittleEndian(p.AsSpan(25)), BinaryPrimitives.ReadSingleLittleEndian(p.AsSpan(29)));
+                            BinaryPrimitives.ReadSingleLittleEndian(p.AsSpan(25)), BinaryPrimitives.ReadSingleLittleEndian(p.AsSpan(29))) { ClientHit = (p[3] & 0x80) != 0 };
     }
+
+    /// <summary>WO-210 C.1: the engine's own ClientHit was queued for this blow (its brain hit signal comes from the engine).</summary>
+    public bool ClientHit { get; init; }
 }
 
 /// <summary>WO-173 (docs/WO-173-findings.md): the pure rules of 0.49.0's agent half. The bridge is GameBridge.Wo173.cs.</summary>

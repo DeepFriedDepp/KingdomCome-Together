@@ -220,9 +220,11 @@ public class Wo204Tests
             "\t<superaction name=\"down\" ui_group=\"general\" keyboard=\"writeable\">\r\n\t\t<action name=\"down\" map=\"navigation_down\" />\r\n\t\t<control input=\"s\" controller=\"keyboard\" />\r\n\t</superaction>\r\n" +
             "\t<superaction name=\"primary_action\" ui_group=\"general\" keyboard=\"writeable\">\r\n\t\t<action name=\"dialog_confirm\" map=\"dialog\" />\r\n\t\t<control input=\"e\" controller=\"keyboard\" />\r\n\t</superaction>\r\n" +
             "\t<superaction name=\"confirm_dialog_extra\" ui_group=\"\" keyboard=\"hidden\">\r\n\t\t<action name=\"dialog_confirm_mouse\" map=\"dialog\" />\r\n\t\t<control input=\"mouse1\" controller=\"keyboard\" />\r\n\t</superaction>\r\n" +
+            "\t<superaction name=\"ui_and_dialog_wheel_up\" ui_group=\"\" keyboard=\"hidden\">\r\n\t\t<action name=\"scroll_up\" map=\"navigation_up\" />\r\n\t\t<control input=\"mwheel_up\" controller=\"keyboard\" />\r\n\t</superaction>\r\n" +
+            "\t<superaction name=\"ui_and_dialog_wheel_down\" ui_group=\"\" keyboard=\"hidden\">\r\n\t\t<action name=\"scroll_down\" map=\"navigation_down\" />\r\n\t\t<control input=\"mwheel_down\" controller=\"keyboard\" />\r\n\t</superaction>\r\n" +
             "\t<conflict name=\"directions\">\r\n\t\t<superaction name=\"up\" />\r\n\t\t<superaction name=\"down\" />\r\n\t</conflict>\r\n</keybinds>\r\n";
         string? m = supers;
-        foreach (var (sup, act) in KeybindPak.ListenOptionActions)
+        foreach (var (sup, act) in KeybindPak.ListenOptionActions.Concat(KeybindPak.ListenWheelActions))   // WO-210 F.1: the wheel too
         {
             m = KeybindPak.MergeIntoSuperaction(m!, sup, KeybindPak.ListenLine(act, sup), [act], out string why);
             Assert.True(m is not null, sup + ": " + why);
@@ -232,11 +234,13 @@ public class Wo204Tests
         Assert.NotNull(doc.SelectSingleNode("//superaction[@name='up']/action[@name='kcd2mp_listen_up'][@map='dialog']"));
         Assert.NotNull(doc.SelectSingleNode("//superaction[@name='down']/action[@name='kcd2mp_listen_down'][@map='dialog']"));
         Assert.NotNull(doc.SelectSingleNode("//superaction[@name='primary_action']/action[@name='kcd2mp_listen_confirm']"));
-        Assert.NotNull(doc.SelectSingleNode("//superaction[@name='confirm_dialog_extra']/action[@name='kcd2mp_listen_confirm']"));
+        Assert.NotNull(doc.SelectSingleNode("//superaction[@name='confirm_dialog_extra']/action[@name='kcd2mp_listen_confirm_mouse']"));   // WO-210 F.1: its own action
+        Assert.NotNull(doc.SelectSingleNode("//superaction[@name='ui_and_dialog_wheel_up']/action[@name='kcd2mp_listen_wheel_up'][@map='dialog']"));
+        Assert.NotNull(doc.SelectSingleNode("//superaction[@name='ui_and_dialog_wheel_down']/action[@name='kcd2mp_listen_wheel_down'][@map='kcd2mp_listen']"));
         // WO-207 A.4: each also in the listener's own map
-        foreach (var (sup, act) in KeybindPak.ListenOptionActions)
+        foreach (var (sup, act) in KeybindPak.ListenOptionActions.Concat(KeybindPak.ListenWheelActions))
             Assert.NotNull(doc.SelectSingleNode($"//superaction[@name='{sup}']/action[@name='{act}'][@map='kcd2mp_listen']"));
-        Assert.Equal(4, doc.SelectNodes("//control")!.Count);   // the keys stay the game's: none added
+        Assert.Equal(6, doc.SelectNodes("//control")!.Count);   // the keys stay the game's: none added
         Assert.Null(doc.SelectSingleNode("//conflict/action"));    // never into the conflict groups' references
         Assert.Null(KeybindPak.MergeIntoSuperaction(m!, "up", KeybindPak.ListenLine("kcd2mp_listen_up", "up"), ["kcd2mp_listen_up"], out _));   // never twice
         Assert.Null(KeybindPak.MergeIntoSuperaction(m!, "nope", KeybindPak.ListenLine("kcd2mp_listen_up", "nope"), ["kcd2mp_listen_up"], out _));

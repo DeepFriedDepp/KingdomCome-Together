@@ -26,6 +26,8 @@
 #include "wo163.h"
 #include "wo172.h"
 #include "wo176.h"
+#include "wo210.h"
+#include "wo210_rules.h"
 
 namespace kcdmp::wo178 {
 namespace {
@@ -156,12 +158,37 @@ bool clinch_gate(void* /*type*/, void* a, void* b, void* /*r9*/) {
     c_clinchAsked.fetch_add(1, std::memory_order_relaxed);
     uint32_t eid = 0;
     if (!listed_eid(a == me ? b : a, &eid)) return false;
+    wo210::note_clinch_ask(eid, true, a == me);   // WO-210 B.1: the clinch-loop detector (more than 3 within 1 s)
     c_clinchRefused.fetch_add(1, std::memory_order_relaxed);
     g_clinchLastEid.store(eid, std::memory_order_relaxed);
     const uint32_t slot = g_clinchRingN.fetch_add(1, std::memory_order_relaxed) % kClinchRing;
     g_clinchRingEid[slot].store(eid, std::memory_order_relaxed);
     g_clinchRingMs[slot].store(GetTickCount64(), std::memory_order_relaxed);
     return true;
+}
+
+// ---- WO-210 B.1: the engine's own clinch test (C_CombatActorClinch::CanClinch, `this` = the asker's clinch, the asker at +8, its opponent
+// at its model +0x1118). A pair of the local player and a listed copy fails the engine's own test, in both roles: no clinch start, no
+// pending byte, no retry every frame, no Guard forced on both bodies, no weapon contact denied (session E: StartSyncGuard refused 4 a
+// frame -- the auto-trigger and the pending retry of both bodies -- 158 to 202 asks a fight, the copy's own attacks cut, T-poses). The
+// clinch between the joiner and a copy is the host's; StartSyncGuard's refusal above stays the counted backstop.
+std::atomic<bool> g_canClinchArmed{false};
+std::atomic<uint32_t> c_canAsked{0}, c_canRefused{0};
+std::atomic<uint32_t> g_canLastEid{0};
+bool canclinch_gate(void* clinch, void* /*a2*/) {
+    // mp_clinch_guard is B.1's switch (the WO keeps the name); the bench's twin (clinch_refusal_final) turns this gate off alone
+    if (!g_clinchGuard.load(std::memory_order_relaxed) || !wo210::fix_on(wo210rules::kFixClinchFinal)) return false;
+    void* me = motion::player_combat_actor();
+    void* asker = nullptr;
+    if (!me || !clinch || !read_ptr(clinch, 8, &asker) || !asker) return false;
+    void* opp = motion::opponent_ca(asker);
+    if (!opp || (asker != me && opp != me)) return false;
+    c_canAsked.fetch_add(1, std::memory_order_relaxed);
+    uint32_t eid = 0;
+    if (!listed_eid(asker == me ? opp : asker, &eid)) return false;
+    c_canRefused.fetch_add(1, std::memory_order_relaxed);
+    g_canLastEid.store(eid, std::memory_order_relaxed);
+    return true;   // CanClinch returns false: the engine's own "can't clinch"
 }
 
 bool copy_code(const void* src, uint8_t* out, size_t n) {
@@ -719,6 +746,36 @@ void install_clinch() {
     char a[64];
     anchor::describe(fn, a, sizeof a);
     logf("WO178-CLINCH guard armed: StartSyncGuard=%s (label + the registry's prologue) -- no clinch between the local player and a listed copy", a);
+    // WO-210 B.1: CanClinch -- the clinch component's vtable (RTTI) +0x38, a call there into the auto-trigger, whose first call (after the
+    // build's debugger probe) is the engine's clinch test; each candidate checked by the registry's prologue
+    void* const* vft = anchor::find_vftable(cm, ".?AVC_CombatActorClinch@combatmodule@wh@@", 0);
+    const uint8_t* slot = nullptr;
+    if (vft) { const void* p = nullptr; if (copy_code(&vft[0x38 / 8], reinterpret_cast<uint8_t*>(&p), sizeof p)) slot = static_cast<const uint8_t*>(p); }
+    const uint8_t* can = nullptr;
+    int candidates = 0;
+    if (slot) {
+        const uint8_t* lv1[32]{};
+        const int n1 = anchor::function_call_targets(cm, slot, lv1, 32);
+        for (int i = 0; i < n1 && !can; ++i) {
+            const uint8_t* lv2[48]{};
+            const int n2 = anchor::function_call_targets(cm, lv1[i], lv2, 48);
+            for (int k = 0; k < n2; ++k) {
+                uint8_t head[sizeof hookpro::kCanClinch]{};
+                if (!copy_code(lv2[k], head, sizeof head)) continue;
+                if (std::memcmp(head, hookpro::kCanClinch, sizeof head) == 0) { ++candidates; if (!can) can = lv2[k]; }
+            }
+        }
+    }
+    if (!can) { logf("WO210-CLINCH CanClinch gate not armed: %s", !vft ? "no C_CombatActorClinch vtable" : !slot ? "its +0x38 unreadable" : "no call with the registry's prologue"); return; }
+    const char* why2 = nullptr;
+    if (!inlinehook::install_gate(const_cast<uint8_t*>(can), hookpro::kCanClinch, sizeof hookpro::kCanClinch, &canclinch_gate, &why2)) {
+        logf("WO210-CLINCH CanClinch gate not armed: the patch was refused (%s)", why2 ? why2 : "?");
+        return;
+    }
+    g_canClinchArmed.store(true);
+    anchor::describe(can, a, sizeof a);
+    logf("WO210-CLINCH CanClinch gate armed: %s (the clinch component's vtable +0x38 -> its auto-trigger's first test; %d candidate(s) with the prologue) -- "
+         "the local player and a copy fail the engine's own clinch test", a, candidates);
 }
 
 void install() {
@@ -791,6 +848,15 @@ void tick() {
             s_clinchSaid = r;
             logf("WO178-CLINCH refused npc=%s refused=%u asked=%u -- a copy cannot take its half of the clinch (its body plays the host's swings)",
                  name_of(g_clinchLastEid.load()), r, c_clinchAsked.load());
+        }
+        // WO-210 B.1: the engine's own clinch test failed for a pair of the local player and a copy (counted, told at most every 10 s)
+        static uint32_t s_canSaid = 0;
+        static double s_canAt = 0;
+        const uint32_t cr = c_canRefused.load();
+        if (cr != s_canSaid && now - s_canAt >= 10.0) {
+            s_canSaid = cr; s_canAt = now;
+            logf("WO210-CLINCH can_clinch refused=%u asked=%u last=%s -- the local player and a copy fail the engine's own clinch test (no start, no retry)",
+                 cr, c_canAsked.load(), name_of(g_canLastEid.load()));
         }
     }
     if (!g_armed.load() || now < g_next) return;

@@ -5,6 +5,7 @@
 #include "wo203.h"
 #include "wo163.h"
 #include "fault_guard.h"
+#include "main_thread.h"
 #include "log.h"
 #include <windows.h>
 #include <cstdio>
@@ -121,7 +122,17 @@ void install() {
 void tick() {
     int* n = nullptr;
     Named* t = ticks(n);
-    for (int i = 0; i < *n; ++i) t[i].fn();
+    static bool s_blocked[64] = {};
+    static bool s_read = false;
+    if (!s_read) {   // WO-210 H.3 (research only): an area KCDMP_TEST_TASK_BLOCK names ("wo203:<area>") never ticks in this game
+        s_read = true;
+        for (int i = 0; i < *n && i < 64; ++i) {
+            char nm[64];
+            std::snprintf(nm, sizeof nm, "wo203:%s", t[i].area);
+            if (main_thread::test_task_blocked(nm)) { s_blocked[i] = true; logf("WO203 tick %s blocked for this game (KCDMP_TEST_TASK_BLOCK, research)", t[i].area); }
+        }
+    }
+    for (int i = 0; i < *n; ++i) if (i >= 64 || !s_blocked[i]) t[i].fn();
 }
 
 } // namespace kcdmp::wo203

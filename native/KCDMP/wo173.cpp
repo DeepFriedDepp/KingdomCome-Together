@@ -29,6 +29,8 @@
 #include "wo172.h"
 #include "wo178.h"
 #include "wo178_rules.h"
+#include "wo210.h"
+#include "wo210_rules.h"
 
 namespace kcdmp::wo173 {
 namespace {
@@ -97,6 +99,11 @@ std::atomic<bool> g_reactFaulted{false};
 bool g_reactResolved = false, g_reactArmed = false;
 const char* g_reactWhy = "not resolved";
 ReactionSites g_sites{};
+// WO-210 C.1: the handler's own ClientHit (wo173_rules.h parse_clienthit_sites), checked against CGameRules' RTTI vtable and its prologue
+ClientHitSites g_ch{};
+std::atomic<bool> g_chArmed{false};
+const void* g_vftGameRules = nullptr;
+std::atomic<uint32_t> c_chCalls{0}, c_chHandled{0}, c_chRefused{0};
 void* const* g_vftHitAction = nullptr;   // WO-178
 std::atomic<uint32_t> c_playerRecoil{0}, c_playerKept{0};
 uintptr_t g_setAction = 0;
@@ -108,7 +115,7 @@ struct Pending {
     float joinerSt = 0, joinerHp = 0, st0 = -1, hp0 = -1, stMax = 100, capSt = -1;
     uint8_t outcome = 0, react = 0;
     int32_t reactKind = -1;
-    bool engine = false, stateRead = false;
+    bool engine = false, stateRead = false, clientHit = false;   // WO-210 C.1: clientHit = the handler's own ClientHit queued
     int32_t stateAfter = 0;
     Fallback fb = Fallback::None;
     double t0 = 0;
@@ -120,6 +127,7 @@ std::vector<Pending> g_pending;                       // main thread only
 std::unordered_map<uint32_t, float> g_stMaxSeen;      // NPC entity id -> highest stamina seen (main thread)
 
 std::atomic<uint32_t> c_kept{0};   // WO-176 (A1): blows refused because the victim is in a quest's arranged fight
+std::atomic<uint32_t> c_strikeForCall{0};   // WO-210 C.4: blows judged by the engine with Striking for the call
 std::atomic<uint32_t> c_requests{0}, c_engine{0}, c_fallback{0}, c_hit{0}, c_blocked{0}, c_pb{0}, c_broken{0}, c_reactQueued{0}, c_reactOther{0},
     c_corrected{0}, c_raised{0}, c_koAfter{0}, c_koFullStamina{0}, c_capped{0}, c_unmeasured{0}, c_stateHit{0}, c_faults{0};
 uint32_t c_fb[16]{};
@@ -130,6 +138,7 @@ std::vector<Held> g_held;
 std::unordered_map<uint32_t, std::vector<uint8_t>> g_heldDone;   // id -> op 18's 33-byte answer
 uint32_t g_heldSeq = 0;
 std::atomic<uint32_t> c_held{0}, c_heldEngine{0}, c_heldRaw{0}, c_heldOther{0}, c_floorStopped{0}, c_medianCapped{0};
+std::atomic<uint32_t> c_corrRetired{0}, c_noValues{0};   // WO-210 C.4
 // WO-178 C4 (2): the engine's own stamina cost of a landed blow, per NPC and attack kind, and per kind alone (main thread).
 std::unordered_map<uint64_t, kcdmp::wo178rules::Ring> g_medNpc;
 std::unordered_map<int, kcdmp::wo178rules::Ring> g_medKind;
@@ -202,6 +211,21 @@ bool resolve_react() {
     }
     g_sites = s;
     g_setAction = target;
+    // WO-210 C.1: ClientHit -- the same handler window; the import must lead into Shared.dll's code; the game rules' class by RTTI; the
+    // slot's function in WHGame.dll's code with the prologue read
+    {
+        ClientHitSites ch{};
+        HMODULE sh = GetModuleHandleA("Shared.dll"), wg = GetModuleHandleA("WHGame.dll");
+        uintptr_t gi = 0;
+        const char* chWhy = nullptr;
+        if (!parse_clienthit_sites(buf, want, reinterpret_cast<uintptr_t>(caller), s.resultRbp, s.victimOff, &ch)) chWhy = "its call is not in the collision handler (once)";
+        else if (!sh || !wg) chWhy = "Shared / WHGame not loaded";
+        else if (ch.iatSlot < lo || ch.iatSlot + 8 > hi || !rd(reinterpret_cast<const void*>(ch.iatSlot), 0, &gi) || !in_module_text(sh, gi)) chWhy = "its GetGameIface import does not lead into Shared.dll";
+        else if (!(g_vftGameRules = anchor::find_vftable(wg, ".?AVCGameRules@@", 0))) chWhy = "no CGameRules vtable";
+        if (chWhy) logf("WO210-DEATH ClientHit not armed: %s -- the joiner's blows keep WO-173's own tail", chWhy);
+        else { g_ch = ch; g_chArmed = true; logf("WO210-DEATH ClientHit armed: the handler's own call (game rules at the game interface +0x%X, slot 0x%X; result flags +0x%X, handled +0x%X)",
+                                                ch.gameRulesOff, ch.clientHitSlot, ch.flagsOff, ch.handledOff); }
+    }
     // WO-178: the player's own hit reaction is the ordinary C_CombatActorActionHit only (react() checks the created action's class)
     g_vftHitAction = anchor::find_vftable(cm, ".?AVC_CombatActorActionHit@combatmodule@wh@@", 0);
     g_reactArmed = true;
@@ -247,9 +271,16 @@ void finish(Pending& p, bool measured, float eHp, float eSt) {
     if (soul) { rttr::soul_state(soul, "health", &hpNow); rttr::soul_state(soul, "stamina", &stNow); }
     char corr[96] = "-";
     if (p.engine) {
-        const Correction c = health_correction(p.outcome, measured ? eHp : -1.0f, p.joinerHp, hpNow);
-        float credit = (measured ? eHp : p.joinerHp) - p.joinerHp;   // what the echo guard was told up front vs what landed
-        if (c.apply && c.extraDamage > 0) {
+        // WO-210 E.2: a blow the joiner's game filtered carries no numbers (0/0) -- never a correction toward them, twin or not
+        const bool noNumbers = p.joinerHp <= 0.0f && p.joinerSt <= 0.0f;
+        const Correction c = noNumbers ? Correction{} : health_correction(p.outcome, measured ? eHp : -1.0f, p.joinerHp, hpNow);
+        // what the echo guard was told up front vs what landed (WO-210 C.4: it was told the engine's own drop at once -- nothing late)
+        float credit = wo210::fix_on(wo210rules::kFixNoJoinerValues) ? 0.0f : (measured ? eHp : p.joinerHp) - p.joinerHp;
+        if (c.apply && wo210::fix_on(wo210rules::kFixNoJoinerValues)) {
+            // WO-210 C.4: the host's engine's result stands -- the joiner's numbers are never applied (the twin keeps the correction)
+            c_corrRetired.fetch_add(1);
+            std::snprintf(corr, sizeof corr, "retired(%s%.2f)", c.extraDamage > 0 ? "+" : "-", c.extraDamage > 0 ? c.extraDamage : c.raiseBy);
+        } else if (c.apply && c.extraDamage > 0) {
             void* soulR = rttr::find_soul_by_guid(p.guid);
             void* aSoul = hits::soul_of_eid(p.avatarEid);
             void* att = aSoul ? (buffs::as_c_soul(aSoul) ? buffs::as_c_soul(aSoul) : aSoul) : nullptr;
@@ -277,11 +308,11 @@ void finish(Pending& p, bool measured, float eHp, float eSt) {
     char est[32], ehp[32];
     if (p.engine && measured) { std::snprintf(est, sizeof est, "%.2f", eSt); std::snprintf(ehp, sizeof ehp, "%.2f", eHp); }
     else { std::snprintf(est, sizeof est, p.engine ? "?" : "raw"); std::snprintf(ehp, sizeof ehp, p.engine ? "?" : "raw"); }
-    logf("WO173-HIT npc=%s seq=%u engine=%s st=%s/%.2f hp=%s/%.2f joiner_said=st%.2f/hp%.2f reaction=%s kind=%d state=0x%X knockdown=%s dead=%s "
+    logf("WO173-HIT npc=%s seq=%u engine=%s st=%s/%.2f hp=%s/%.2f joiner_said=st%.2f/hp%.2f reaction=%s clienthit=%s kind=%d state=0x%X knockdown=%s dead=%s "
          "st_before=%.1f/%.0f correction=%s fallback=%s%s%s",
          p.name.c_str(), p.seq, p.engine ? kcdmp::wo165::outcome_name(static_cast<kcdmp::wo165::Outcome>(p.outcome)) : "-", est,
          p.engine ? p.joinerSt : (p.capSt >= 0 ? p.capSt : p.joinerSt), ehp, p.joinerHp, p.joinerSt, p.joinerHp,
-         react_name(static_cast<React>(p.react)), p.reactKind, p.stateRead ? static_cast<unsigned>(p.stateAfter) : 0u, ko ? "yes" : "no",
+         react_name(static_cast<React>(p.react)), p.clientHit ? "queued" : "-", p.reactKind, p.stateRead ? static_cast<unsigned>(p.stateAfter) : 0u, ko ? "yes" : "no",
          dead ? "yes" : "no", p.st0, p.stMax, corr, fallback_name(p.fb), p.capSt >= 0 && p.capSt < p.joinerSt ? " (stamina capped)" : "", held_note(p).c_str());
 }
 
@@ -328,10 +359,21 @@ uint8_t do_real_hit(const uint8_t* body, size_t len, uint8_t* out, size_t cap, s
     }
     p.atkType = (rflags & 1) ? f.type : static_cast<int8_t>(-1);
     p.heldS = heldS;
+    // WO-210 C.4: the hold is over and the figure showed no strike window (inside its own hit reaction: an NPC's blow on it) -- the blow
+    // goes through the engine all the same, the figure reading Striking for the processor's call alone (wo165 Request strikeForCall);
+    // the capped raw path is the twin's (no_raw_window)
+    bool strikeForCall = false;
+    if (fb == Fallback::NoSwingWindow && wo210::fix_on(wo210rules::kFixNoRawWindow)) {
+        fb = Fallback::None;
+        strikeForCall = true;
+        const uint32_t k = c_strikeForCall.fetch_add(1) + 1;
+        if (k <= 50 || k % 100 == 0) logf("WO210-BLOW npc=%s the figure had no strike window (its own reaction, held %.0f ms): judged by the engine, Striking for the call alone [n=%u]", name.c_str(), heldS < 0 ? 0.0 : heldS * 1000.0, k);
+    }
     wo165::Result rr{};
     if (fb == Fallback::None) {
         wo165::Request rq{};
         rq.attackerEid = avatarEid; rq.victimEid = veid; rq.fields = f;
+        rq.strikeForCall = strikeForCall;
         rq.flags = wo165::kFlagSkipFilter | wo165::kFlagIntended | (g_reactOn.load() && !g_reactFaulted.load() ? wo165::kFlagReact : 0);
         rr = wo165::replay(rq);
         if (rr.reason != wo165::kOk) {
@@ -347,8 +389,19 @@ uint8_t do_real_hit(const uint8_t* body, size_t len, uint8_t* out, size_t cap, s
     uint8_t applied = 0;
     float stApplied = 0, hpApplied = 0;
     if (fb == Fallback::None) {
-        // the engine applied the blow: only the victim-side history, the skirmish and (switch) the threat of WO-121's path run
-        ar = hits::apply_attributed_ex(ab, alen, false, -1.0f, g_threat.load());
+        // the engine applied the blow: only the victim-side history, the skirmish and (switch) the threat of WO-121's path run.
+        // WO-210 C.4: the echo guard is told what the engine took, read now (the core applied it in the call), never the joiner's number --
+        // and nothing late (finish), so no credit outlives this blow and eats the next one
+        const uint8_t* abUse = ab;
+        uint8_t abCredit[30 + 256];
+        if (wo210::fix_on(wo210rules::kFixNoJoinerValues) && alen <= sizeof abCredit) {
+            float hpNow = -1;
+            const float took = (vsoul && p.hp0 >= 0 && rttr::soul_state(vsoul, "health", &hpNow) && hpNow >= 0 && p.hp0 > hpNow) ? p.hp0 - hpNow : 0.0f;
+            std::memcpy(abCredit, ab, alen);
+            std::memcpy(abCredit + 20, &took, 4);
+            abUse = abCredit;
+        }
+        ar = hits::apply_attributed_ex(abUse, alen, false, -1.0f, g_threat.load());
         applied = 1;
         c_engine.fetch_add(1);
         switch (rr.outcome) {
@@ -360,8 +413,14 @@ uint8_t do_real_hit(const uint8_t* body, size_t len, uint8_t* out, size_t cap, s
         }
         (rr.react == static_cast<uint8_t>(React::Queued) ? c_reactQueued : c_reactOther).fetch_add(1);
         p.engine = true; p.seq = rr.seq; p.outcome = static_cast<uint8_t>(rr.outcome); p.react = rr.react; p.reactKind = rr.reactKind;
+        p.clientHit = rr.clientHit;
     } else if (routes_nowhere(fb)) {
         c_kept.fetch_add(1);   // WO-176 (A1): no engine, no raw blow -- the agent tells the joiner the fight is the story's
+    } else if (wo210::fix_on(wo210rules::kFixNoJoinerValues)) {
+        // WO-210 C.4: a blow the host's engine did not judge is not applied from the joiner's numbers (the twin keeps the capped raw path)
+        const uint32_t k = c_noValues.fetch_add(1) + 1;
+        if (k <= 50 || k % 100 == 0)
+            logf("WO210-BLOW npc=%s not applied: %s -- the host's engine judges the joiner's blows, his numbers are never applied [n=%u]", name.c_str(), fallback_name(fb), k);
     } else {
         float capSt;
         if (wo178::engine_cap_on()) {
@@ -386,7 +445,7 @@ uint8_t do_real_hit(const uint8_t* body, size_t len, uint8_t* out, size_t cap, s
     out[0] = applied;
     out[1] = static_cast<uint8_t>(rr.outcome);
     out[2] = static_cast<uint8_t>(fb);
-    out[3] = rr.react;
+    out[3] = static_cast<uint8_t>(rr.react | (rr.clientHit ? 0x80 : 0));   // WO-210 C.1: bit 7 = the engine's own ClientHit queued
     out[4] = ar.steps;
     std::memcpy(out + 5, &ar.attackerWuid, 8);
     std::memcpy(out + 13, &ar.victimWuid, 8);
@@ -398,6 +457,35 @@ uint8_t do_real_hit(const uint8_t* body, size_t len, uint8_t* out, size_t cap, s
 }
 
 }   // namespace
+
+// WO-210 C.1: the handler's last step after its reaction block, on the replay's own result: the handled edit, then CGameRules::ClientHit
+// (queued; the next frame's ProcessLocalHit sends the brain its hit signal and the victim its hit event: OnHit's reaction, a lethal hit's
+// death, the corpse's dead state). Main thread, never from inside the game rules' own hit processing (the replay runs from the pipe).
+bool clienthit_armed() { return g_chArmed.load() && !g_reactFaulted.load(); }
+bool lethal_offsets(uint32_t* lethal0, uint32_t* lethal1) {
+    if (!resolve_react() || !g_sites.killedOff0 || !g_sites.killedOff1) return false;
+    *lethal0 = g_sites.killedOff0; *lethal1 = g_sites.killedOff1;
+    return true;
+}
+bool client_hit(uint8_t* result, uint8_t react, uint8_t outcome) {
+    if (!clienthit_armed() || !result) return false;
+    HMODULE wg = GetModuleHandleA("WHGame.dll");
+    void* gi = engine::game_iface();
+    void* gr = nullptr; void* vt = nullptr; void* fn = nullptr;
+    if (!gi || !rd(gi, g_ch.gameRulesOff, &gr) || !gr || !rd(gr, 0, &vt) || vt != g_vftGameRules || !rd(vt, g_ch.clientHitSlot, &fn) || !fn
+        || !in_module_text(wg, reinterpret_cast<uintptr_t>(fn)) || !prologue_is(reinterpret_cast<uintptr_t>(fn), kClientHitPrologue, sizeof kClientHitPrologue)) {
+        c_chRefused.fetch_add(1);
+        return false;
+    }
+    const bool handled = clienthit_handled(static_cast<React>(react), outcome);
+    clienthit_edit(result, g_ch, handled);
+    KCDMP_FAULT_CALL(site, "wo173::client_hit");
+    const bool ok = fault::guarded(site, [&] { reinterpret_cast<void(__fastcall*)(void*, void*)>(fn)(gr, result); });
+    if (!ok) { g_chArmed = false; logf("WO210-DEATH ClientHit faulted: switched off for this session"); return false; }
+    c_chCalls.fetch_add(1);
+    if (handled) c_chHandled.fetch_add(1);
+    return true;
+}
 
 bool mark_intended(void* model, bool on, uint8_t* prev) {
     if (!model || g_reactFaulted.load() || !resolve_react()) return false;
@@ -607,7 +695,7 @@ int status_text(char* out, int n) {
         "wo173 real_hits=%s faulted=%s react=%s(%s) threat=%s requests=%u engine=%u hit=%u blocked=%u pb=%u broken=%u react_queued=%u react_other=%u "
         "fallback=%u [off=%u no_row=%u no_window=%u no_victim=%u dead=%u replay=%u filtered=%u core=%u not_armed=%u] capped=%u corrected=%u raised=%u "
         "state_hit=%u ko_after=%u ko_full_stamina=%u unmeasured=%u faults=%u pending=%zu arranged_kept=%u held=%u[engine=%u raw=%u other=%u waiting=%zu] "
-        "median_capped=%u floor_stopped=%u hold=%s engine_cap=%s player_recoil=%u player_kept=%u",
+        "median_capped=%u floor_stopped=%u hold=%s engine_cap=%s player_recoil=%u player_kept=%u corrections_retired=%u not_applied=%u",
         g_on.load() ? "on" : "off", g_faulted.load() ? "yes" : "no", g_reactOn.load() ? (g_reactFaulted.load() ? "OFF(fault)" : "on") : "off",
         g_reactResolved ? g_reactWhy : "unresolved", g_threat.load() ? "on" : "off", c_requests.load(), c_engine.load(), c_hit.load(), c_blocked.load(),
         c_pb.load(), c_broken.load(), c_reactQueued.load(), c_reactOther.load(), c_fallback.load(),
@@ -616,7 +704,8 @@ int status_text(char* out, int n) {
         c_fb[static_cast<int>(Fallback::Filtered)], c_fb[static_cast<int>(Fallback::CoreNotRun)], c_fb[static_cast<int>(Fallback::NotArmed)],
         c_capped.load(), c_corrected.load(), c_raised.load(), c_stateHit.load(), c_koAfter.load(), c_koFullStamina.load(), c_unmeasured.load(),
         c_faults.load(), g_pending.size(), c_kept.load(), c_held.load(), c_heldEngine.load(), c_heldRaw.load(), c_heldOther.load(), g_held.size(),
-        c_medianCapped.load(), c_floorStopped.load(), wo178::hold_on() ? "on" : "off", wo178::engine_cap_on() ? "on" : "off", c_playerRecoil.load(), c_playerKept.load());
+        c_medianCapped.load(), c_floorStopped.load(), wo178::hold_on() ? "on" : "off", wo178::engine_cap_on() ? "on" : "off", c_playerRecoil.load(), c_playerKept.load(),
+        c_corrRetired.load(), c_noValues.load());
 }
 
 }   // namespace kcdmp::wo173

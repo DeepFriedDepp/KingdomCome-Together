@@ -277,6 +277,8 @@ public partial class GameBridge
         if (!W137Joiner) return;
         if (!_w189Mirror) { Console.WriteLine($"WO189-PROFILE host '{op}{name}' -- not applied (mp_profile_mirror is off)"); return; }
         if (!Wo189Rules.IsQuestProfile(name, Wo189Rules.QuestProfiles)) { Console.WriteLine($"WO189-PROFILE host '{op}{name}' refused: not a quest profile"); return; }
+        if (op != '=') Wo210ForgetOwnProfiles();   // WO-210 H.6: a live change -- the next catch-up reads this player's profiles afresh
+        else if (await Wo210ProfileSkipAsync(op, name)) return;
         byte? r = await _combat.Wo189ProfileAsync(op == '-' ? (byte)3 : (byte)2, name);
         string res = r switch
         {
@@ -370,6 +372,7 @@ public partial class GameBridge
         _w189ConfirmName = "";
         _w189Pending.Reset();
         _w189Capture.GameplayStarted();
+        Wo210ForgetOwnProfiles();
         if (!_w189Mirrored.IsEmpty)
         {
             Console.WriteLine($"WO189-PROFILE a load: {_w189Mirrored.Count} mirrored profile(s) forgotten (the loaded save sets its own layers; the catch-up asks again at the next join)");

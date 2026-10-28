@@ -86,6 +86,8 @@ public static class Briefing
         Scorecard(inp, sb);
         StoodOut(inp, sb);
         // WO-206 D: the animation detectors' counts and the worst bodies (one line when the bundle has no probe file)
+        // WO-210 0.3 / H.4: every instrument's count on its own line (before the animation section, which ends the briefing)
+        sb.Append('\n').Append(W210Instruments.Section(inp.Anim?.Stream, NativeLines(inp).ToList(), AgentLines(inp).ToList(), Kcd(inp).ToList()));
         sb.Append('\n').Append(AnimReport.Section(inp.Anim, inp.AnimError));
         return sb.ToString();
     }
@@ -101,6 +103,15 @@ public static class Briefing
     {
         var keys = new List<string>();
         if (!inp.Logs.TryGetValue("agent.log", out var cur)) return keys;
+        // WO-210 H.4: an agent that names its game launch (MP-LAUNCH id=, the game's own log start) -- an earlier log counts only when it
+        // names the same launch (session E's joiner briefing carried the launch before's marks through the 30-minute window)
+        if (LaunchId(cur) is string id)
+        {
+            foreach (var k in new[] { "agent.prev2.log", "agent.prev.log" })
+                if (inp.Logs.TryGetValue(k, out var pl) && LaunchId(pl) == id) keys.Add(k);
+            keys.Add("agent.log");
+            return keys;
+        }
         DateTime? start = LogStart(inp, "agent.log", cur);
         foreach (var k in new[] { "agent.prev2.log", "agent.prev.log" })
             if (inp.Logs.ContainsKey(k) && start is DateTime st && inp.Mtimes.TryGetValue(k, out var mt) && mt <= st.AddMinutes(1) && st - mt <= SessionGap)
@@ -108,6 +119,11 @@ public static class Briefing
         keys.Add("agent.log");
         return keys;
     }
+
+    private static readonly Regex Launch = new(@"MP-LAUNCH id=(\S+)", RegexOptions.Compiled);
+
+    /// <summary>WO-210 H.4: the game launch an agent log names (its first MP-LAUNCH line), null for an older agent.</summary>
+    public static string? LaunchId(string[] lines) => lines.Take(400).Select(x => Launch.Match(x)).FirstOrDefault(m => m.Success)?.Groups[1].Value;
 
     /// <summary>When a log began: its file's last write date with its first line's time of day (a day earlier when the log ran past
     /// midnight). Null without the file's time.</summary>
@@ -192,9 +208,7 @@ public static class Briefing
         string? first = agent.Select(x => AgentTime.Match(x)).FirstOrDefault(m => m.Success)?.Groups[1].Value;
         string? last = agent.Reverse().Select(x => AgentTime.Match(x)).FirstOrDefault(m => m.Success)?.Groups[1].Value;
         sb.Append($"- **this agent's log:** {first ?? "?"} to {last ?? "?"}\n");
-        var roleLine = agent.LastOrDefault(x => x.Contains("NPC->player damage authority", StringComparison.Ordinal));
-        string role = roleLine is null ? "?" : roleLine.Contains("now holds", StringComparison.Ordinal) ? "host" : "joiner";
-        sb.Append($"- **role:** {role}\n");
+        sb.Append($"- **role:** {SessionRole(agent)}\n");
         var build = AgentLines(inp).Select(x => Regex.Match(x, @" build=(\S+)")).LastOrDefault(m => m.Success)?.Groups[1].Value;
         sb.Append($"- **version:** {build ?? "?"}\n");
         var pings = AgentLines(inp).Select(x => Ping.Match(x)).Where(m => m.Success).Select(m => int.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture)).ToList();
@@ -206,6 +220,20 @@ public static class Briefing
         sb.Append($"- **connection trouble:** struggling {struggling} time(s); the game (not the network) late {game} time(s); the game stopped answering {holds} time(s)\n");
         int crashes = inp.Logs.Keys.Count(k => k.StartsWith("crashes/", StringComparison.Ordinal) && k.EndsWith("/crash.txt", StringComparison.Ordinal));
         sb.Append($"- **crashes:** {crashes} (above)\n\n");
+    }
+
+    /// <summary>
+    /// WO-210 H.4: the role the agent itself took in this session -- a joiner's agent says so when it joins (MP-JOIN joiner:), a host's
+    /// takes the NPC damage authority first; never the last authority line (session E's joiner bundle was labelled "host": the
+    /// authority passed to that machine at the session's end).
+    /// </summary>
+    public static string SessionRole(IReadOnlyList<string> agent)
+    {
+        if (agent.Any(x => x.Contains("MP-JOIN joiner:", StringComparison.Ordinal) || x.Contains(" role=joiner ", StringComparison.Ordinal))) return "joiner";
+        var first = agent.FirstOrDefault(x => x.Contains("NPC->player damage authority", StringComparison.Ordinal));
+        if (first is not null && first.Contains("now holds", StringComparison.Ordinal)) return "host";
+        if (agent.Any(x => x.Contains(" role=host ", StringComparison.Ordinal))) return "host";
+        return "?";
     }
 
     private static IEnumerable<string> Kcd(Input inp) => inp.Logs.TryGetValue("kcd.log", out var k) ? k : Array.Empty<string>();

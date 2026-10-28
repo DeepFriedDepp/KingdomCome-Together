@@ -72,10 +72,14 @@ struct HookRec {
     uintptr_t page = 0;     // trampoline at page+0, thunk at page+kThunkAt (a detour has no thunk)
     uintptr_t fn = 0;       // the callback (thunk hooks) or the detour
     bool detour = false;
+    uint32_t len = 0;       // WO-210: the bytes the patch replaced (their copy starts the trampoline)
 };
 int hook_count();
 bool hook_at(int i, HookRec* out);
 // The hook whose page holds `addr` (its trampoline or thunk), or -1.
 int hook_of_page(uintptr_t addr);
+// WO-210: a function's first n bytes as they were before this file patched it (the trampoline's copy, then the live bytes past the
+// patch); false when no hook of ours starts at `target` -- the caller compares the live bytes then.
+bool original_bytes(const void* target, uint8_t* out, size_t n);
 
 } // namespace kcdmp::inlinehook

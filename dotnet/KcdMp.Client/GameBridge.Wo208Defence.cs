@@ -109,6 +109,12 @@ public partial class GameBridge
         long blow = Environment.TickCount64;
         int rtt = _clockRttMedianMs is double r ? (int)Math.Min(1000.0, Math.Max(0.0, r)) : 0;
         int hold = Wo208Rules.HoldMs(Wo208Rules.HoldCapMs, rtt);
+        // WO-210 E.3: a combo's later swing (the same attacker struck this figure within 1.6 s) -- the copy's own finisher lands ~150 ms behind
+        // the host's, past the 450 ms hold: the hold runs to the combo's end plus 150 ms. A blow the joiner's game never answers costs that
+        // wait only; an answered one (hit, block, parry, "none") is applied at once as before.
+        long lastBlow = _w210LastBlow.TryGetValue((ghost, attacker), out long lb) ? lb : 0;
+        _w210LastBlow[(ghost, attacker)] = blow;
+        if (W210("combo_hold") && Wo210Rules.ComboContinues(lastBlow, blow)) { hold = Wo210Rules.ComboHoldMs(rtt); Interlocked.Increment(ref _w210ComboHolds); }
         while (true)
         {
             if (_w208Outcomes.TryGetValue((ghost, attacker), out var list))

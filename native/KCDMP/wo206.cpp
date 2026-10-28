@@ -3,6 +3,9 @@
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 // WO-206 -- the digest sweep and the animation probe (wo206.h). Read-only: nothing here writes to the game.
 #include "wo206.h"
+#include "wo208.h"
+#include "wo208_rules.h"
+#include "wo210_rules.h"
 #include "wo206_rules.h"
 #include "wo163.h"
 #include "wo172.h"
@@ -256,10 +259,32 @@ void probe_tick(double now) {
         uint8_t tg[20]{};
         char tgh[41] = "";
         if (wo187::tag_state(b.eid, tg, sizeof tg)) for (int i = 0; i < 20; ++i) std::snprintf(tgh + 2 * i, 3, "%02x", tg[i]);
-        std::snprintf(buf, sizeof buf, "%s{\"n\":\"%s\",\"k\":\"%s\",\"p\":[%.3f,%.3f,%.3f],\"r\":[0,0,%.4f],\"dead\":%d,\"rag\":%d,\"q\":%d,\"qa\":%d,\"qd\":[%s],\"tg\":\"%s\",\"sa\":%.0f,\"sc\":[",
+        std::snprintf(buf, sizeof buf, "%s{\"n\":\"%s\",\"k\":\"%s\",\"p\":[%.3f,%.3f,%.3f],\"r\":[0,0,%.4f],\"dead\":%d,\"rag\":%d,\"q\":%d,\"qa\":%d,\"qd\":[%s],\"tg\":\"%s\",\"sa\":%.0f,",
                       firstBody ? "" : ",", name, b.kind, p[0], p[1], p[2], npcdrive::entity_yaw(e), wo172::copy_dead(b.eid) ? 1 : 0,
                       (ragdoll_class(fb) || lying) ? 1 : 0, q.n < 0 ? 0 : q.n, qa, qd, tgh, (now - c.at) * 1000.0);
         line += buf;
+        // WO-210 0.3: the combat state (combat mode, the model's state, the opponent), the FullBody's family by the game's fragment name,
+        // and on a copy the host NPC's FullBody family as the owner last applied it (the stale-posture and combat-idle instruments)
+        {
+            motion::ModelRead m{};
+            const bool mr = motion::read_model(b.eid, &m);
+            char opn[96] = "";
+            if (mr && m.opponentEid) { void* oe = engine::entity_by_id(m.opponentEid); const char* on = oe ? engine::entity_name(oe) : nullptr; json_escape(on ? on : "?", opn, sizeof opn); }
+            const char* fam = "empty";
+            const wo187::ScopeInfo* fbs = nullptr;
+            for (int i = 0; i < c.n; ++i) if (c.sc[i].ok && !c.sc[i].empty && std::strcmp(c.sc[i].name, "FullBody") == 0) fbs = &c.sc[i];
+            if (fbs) { char fn[96] = ""; wo187::fragment_name(b.eid, fbs->frag, fn, sizeof fn); fam = wo210rules::pfam_name(wo210rules::family(wo208rules::class_id(fbs->action), fn, fbs->frag)); }
+            const char* hf = "-";
+            uint8_t hcls = 0; uint32_t hfr = 0;
+            if (std::strcmp(b.kind, "copy") == 0 && wo208::host_fullbody(b.eid, &hcls, &hfr)) {
+                char fn[96] = "";
+                wo187::fragment_name(b.eid, hfr, fn, sizeof fn);
+                hf = wo210rules::pfam_name(wo210rules::family(hcls, fn, hfr));
+            }
+            std::snprintf(buf, sizeof buf, "\"cm\":%d,\"cs\":%d,\"op\":\"%s\",\"fam\":\"%s\",\"hf\":\"%s\",\"sc\":[", mr && m.combatMode ? 1 : 0,
+                          mr && (m.valid & motion::kMvState) ? m.state : -1, opn, fam, hf);
+            line += buf;
+        }
         bool firstScope = true;
         for (int i = 0; i < c.n; ++i) {
             const wo187::ScopeInfo& s = c.sc[i];
@@ -267,7 +292,9 @@ void probe_tick(double now) {
             char sn[48], an[96];
             json_escape(s.name, sn, sizeof sn);
             json_escape(s.action, an, sizeof an);
-            std::snprintf(buf, sizeof buf, "%s{\"s\":\"%s\",\"c\":\"%s\",\"fr\":%u,\"pr\":%d}", firstScope ? "" : ",", sn, an, s.frag, s.prio);
+            char fnm[96] = "", fne[112] = "";
+            if (wo187::fragment_name(b.eid, s.frag, fnm, sizeof fnm)) json_escape(fnm, fne, sizeof fne);   // WO-210 0.3: the game's own name
+            std::snprintf(buf, sizeof buf, "%s{\"s\":\"%s\",\"c\":\"%s\",\"fr\":%u,\"fn\":\"%s\",\"pr\":%d}", firstScope ? "" : ",", sn, an, s.frag, fne, s.prio);
             line += buf;
             firstScope = false;
         }

@@ -127,6 +127,8 @@ public partial class GameBridge
         // WO-209 D.1 (mp_clock_quiet_in_skip): the game's own time-lapse (a sleep, a wait) runs on its own ratio -- no write over it (the
         // smoke's 9 h sleep: the reset 3 s in ran the joiner's sleep 56.5 s past the host's); the next correction after it writes afresh
         bool skipping = _localSkipActive || _w140LocalSkipping;
+        // WO-210 H.5: the host's clock kept for the marks; a gap outside a skip told
+        if (_lastPolledWorldTime is uint mine0) Wo210OnHostClock(host, ratio1000 / 1000.0, mine0 + (DateTime.UtcNow - _lastPollUtc).TotalSeconds * _w200Ratio - host, skipping);
         if (skipping && !Wo209Rules.RatioWriteAllowed(true, W209("clock_quiet_in_skip"))) { Wo209NoteSkipQuiet(); return; }
         if (skipping || Wo136Holding || _lastPolledWorldTime is not uint mine) { if (_w200Slewing) await Wo200RatioAsync(15.0, "a skip or a load"); return; }
         // WO-208 D.2 (mp_clock_stands_with_host): this clock stands with the host's (WO-144: the host is in a dialogue, ratio 0) -- no

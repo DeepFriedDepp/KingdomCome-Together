@@ -63,7 +63,7 @@ def state(): return rig.load_state()
 def prepare():
     """Fresh per-copy agent and DLL folders from the rig's build (release\\w206rig\\run\\agent, dll\\KCDMP_w206_*.dll)."""
     ddir = os.path.join(mirror.BUILD, 'dll') if os.environ.get('KCDMP_RIG_BUILD') else os.path.join(rig.RIG, 'dll')
-    dlls = sorted(glob.glob(os.path.join(ddir, 'KCDMP_w20*.dll')), key=os.path.getmtime)
+    dlls = sorted(glob.glob(os.path.join(ddir, 'KCDMP_w2[0-9]*.dll')), key=os.path.getmtime)
     if not dlls: raise SystemExit('no DLL in the rig (run deploy.ps1)')
     src_agent = os.environ.get('KCDMP_RIG_AGENT_SRC', os.path.join(mirror.BUILD, 'agent'))
     for cid in ('A', 'B'):
@@ -473,7 +473,7 @@ def collect(tag):
         put(os.path.join(p['root'], 'kcdmp-native.mirror.log'), 'kcdmp-native.mirror.log')
         put(os.path.join(p['dll_dir'], 'kcdmp-native-%s.log' % cid), 'kcdmp-native.log')
         put(os.path.join(p['agent_dir'], 'agent.log'), 'agent.log')
-        for f in ('kcdmp-anim.jsonl', 'digest.jsonl', 'applied.jsonl'):
+        for f in ('kcdmp-anim.jsonl', 'kcdmp-anim.1.jsonl', 'digest.jsonl', 'applied.jsonl'):   # WO-210: the probe's rotated piece too (E.1's overlap)
             put(os.path.join(p['root'], f), f)
             put(os.path.join(p['agent_dir'], f), f)
         put(os.path.join(rig.run_dir(), 'relay.log'), 'relay.log')

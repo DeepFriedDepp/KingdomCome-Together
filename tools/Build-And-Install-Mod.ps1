@@ -49,7 +49,9 @@ $Files = @(
     'Libs\Tables\item\clothing_preset__kdcmp.xml',
     'Libs\Tables\rpg\buff__kcdmp.xml',   # WO-113: the death-guard buff row
     'Libs\Tables\rpg\soul__kcdmp.xml',   # WO-177: the partner figures' own souls
-    'Libs\UI\Textures\Icons\SkillChecks\kct_vote_icon.dds'   # WO-203 I.4: the vote icon in a dialogue option row (tools\Build-VoteIcon.py)
+    'Libs\UI\Textures\Icons\SkillChecks\kct_vote_icon.dds',   # WO-203 I.4: the vote icon in a dialogue option row (tools\Build-VoteIcon.py)
+    'Libs\UI\Textures\Icons\SkillChecks\kct_hover_icon.dds',  # WO-210 F.2a: the partner's cursor on a row (a ring)
+    'Libs\UI\Textures\Icons\SkillChecks\kct_pick_icon.dds'    # WO-210 F.2b: the pick on its row
 )
 # WO-148: no Libs\Config files any more. They were full copies of the game's own
 # defaultProfile.xml and keybindSuperactions.xml with our dice keys added; the repo

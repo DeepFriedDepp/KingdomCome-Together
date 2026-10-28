@@ -14,6 +14,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdio>
+#include <cstring>
 #include <memory>
 #include <mutex>
 #include <numeric>
@@ -40,6 +41,7 @@ struct Repeating {
     std::string           siteName;
     const char*           name;
     fault::Site           site;
+    bool                  blocked = false;   // WO-210 H.3 (research only): KCDMP_TEST_TASK_BLOCK names it
     Repeating(const char* n, std::function<void()> f)
         : fn(std::move(f)), siteName(std::string("main::task/") + (n ? n : "?")), name(n ? n : "?"),
           site(siteName.c_str(), fault::Kind::Call) {}
@@ -162,6 +164,7 @@ void hooked_update(void* self, float dt) {
     if (cost && g_cost.size() < repeating.size()) g_cost.resize(repeating.size());
     for (size_t i = 0; i < repeating.size(); ++i) {
         Repeating& r = *repeating[i];
+        if (r.blocked) continue;
         if (!cost) { run_guarded(r.site, &r.fn); continue; }
         const double a = now_us();
         run_guarded(r.site, &r.fn);
@@ -227,8 +230,31 @@ void post_repeating(std::function<void()> work) {
     post_repeating("?", std::move(work));
 }
 
+// WO-210 H.3 (research only): KCDMP_TEST_TASK_BLOCK in the game's environment, names separated by ',' or '|' ("all" = every one): those
+// per-frame tasks never run in this game (a lone host's memory bisect). Read once; every block logged at registration.
+bool test_task_blocked(const char* name) {
+    static char list[512] = {0};
+    static int state = 0;   // 0 unread, 1 none, 2 a list
+    if (state == 0) {
+        const DWORD n = GetEnvironmentVariableA("KCDMP_TEST_TASK_BLOCK", list, sizeof list);
+        state = (n > 0 && n < sizeof list) ? 2 : 1;
+    }
+    if (state != 2 || !name) return false;
+    const size_t nl = std::strlen(name);
+    for (const char* p = list; *p;) {
+        const char* e = p;
+        while (*e && *e != ',' && *e != '|') ++e;
+        const size_t l = static_cast<size_t>(e - p);
+        if ((l == 3 && std::strncmp(p, "all", 3) == 0) || (l > 0 && l <= nl && std::strncmp(name, p, l) == 0 && (l == nl || name[l] == ':')))
+            return true;
+        p = *e ? e + 1 : e;
+    }
+    return false;
+}
+
 void post_repeating(const char* name, std::function<void()> work) {
     auto r = std::make_shared<Repeating>(name, std::move(work));
+    if (test_task_blocked(name)) { r->blocked = true; logf("MAIN: task %s blocked for this game (KCDMP_TEST_TASK_BLOCK, research)", r->name); }
     std::lock_guard<std::mutex> lock(g_mutex);
     g_repeating.push_back(std::move(r));
 }

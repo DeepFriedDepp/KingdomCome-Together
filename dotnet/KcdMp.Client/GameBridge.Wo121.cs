@@ -302,6 +302,9 @@ public partial class GameBridge
             if (npcHit && !_w151Reactions) return;
             if (!NpcNamePattern.IsMatch(f.Name) || Protocol.IsNeverSyncedNpcName(f.Name)) return;
             if (!Wo163OutboundRowOk(f)) return;
+            // WO-210 D.4: an NPC's attack row -- its opponent's word right behind it, not up to a stream tick later (the joiner's copy waits for
+            // it before it swings). Off this handler: the pipe's reader awaits it, a pipe call here would wait on that very reader.
+            if (!npcHit && W210("opp_with_row") && W137Host) { Interlocked.Increment(ref _w210OppWithRow); _ = Task.Run(Wo209OppTickAsync); }
             pkt = _actionOut.Build(npcHit ? ActionKind.NpcHit : ActionKind.NpcAttack, ActionPhase.Commit, new RowEvent(ms, 0, f.Row, f.Name).ToBytes());
             what = $"npc={f.Name} row={f.Row}";
             // WO-151: the table the row came from (a hit or a paired bite proves the DLL's descriptor read)
@@ -603,7 +606,9 @@ public partial class GameBridge
             _w121Engaged[source] = DateTime.UtcNow + Wo121EngagementHold;
             if (fresh) await Wo121EngageAsync(source, true);
         }
-        if (!scene && r.Ok && r.AttackerWuid != 0)
+        // WO-210 C.1: the engine's own ClientHit already sent the brain its hit signal for this blow -- never two
+        bool engineSignalled = _w210EngineSignal.TryRemove(npcName, out long sigAt) && Environment.TickCount64 - sigAt < 3000;
+        if (!scene && r.Ok && r.AttackerWuid != 0 && !engineSignalled)
         {
             // The brain's hit-reaction message, in the engine's own format
             // (WHGame CGameRules::SendAISignal: "attacker(%lld),hitStrength(%d),

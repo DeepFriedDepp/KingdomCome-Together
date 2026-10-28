@@ -97,10 +97,11 @@ constexpr int kMaxHooks = 128;
 HookRec g_hooks[kMaxHooks];
 std::atomic<int> g_hookCount{0};
 
-void note_hook(void* target, void* page, void* fn, bool detour) {
+void note_hook(void* target, void* page, void* fn, bool detour, size_t len) {
     const int i = g_hookCount.load();
     if (i >= kMaxHooks) return;
-    g_hooks[i] = HookRec{reinterpret_cast<uintptr_t>(target), reinterpret_cast<uintptr_t>(page), reinterpret_cast<uintptr_t>(fn), detour};
+    g_hooks[i] = HookRec{reinterpret_cast<uintptr_t>(target), reinterpret_cast<uintptr_t>(page), reinterpret_cast<uintptr_t>(fn), detour,
+                         static_cast<uint32_t>(len)};
     g_hookCount.store(i + 1);
 }
 
@@ -112,6 +113,19 @@ bool hook_at(int i, HookRec* out) {
     if (i < 0 || i >= g_hookCount.load() || !out) return false;
     *out = g_hooks[i];
     return true;
+}
+
+bool original_bytes(const void* target, uint8_t* out, size_t n) {
+    const int c = g_hookCount.load();
+    for (int i = 0; i < c; ++i) {
+        const HookRec& r = g_hooks[i];
+        if (r.target != reinterpret_cast<uintptr_t>(target) || !r.len) continue;
+        const size_t fromPage = n < r.len ? n : r.len;
+        std::memcpy(out, reinterpret_cast<const void*>(r.page), fromPage);   // the trampoline starts with the replaced bytes
+        if (n > fromPage) std::memcpy(out + fromPage, static_cast<const uint8_t*>(target) + fromPage, n - fromPage);
+        return true;
+    }
+    return false;
 }
 
 int hook_of_page(uintptr_t addr) {
@@ -205,7 +219,7 @@ bool install_impl(void* target, const uint8_t* expect, size_t len, Callback cb, 
         VirtualProtect(tgt, len, old, &ignored);
         FlushInstructionCache(GetCurrentProcess(), tgt, len);
         resume_all(&g_sus);
-        note_hook(tgt, mem, detour ? detour : reinterpret_cast<void*>(cb), detour != nullptr);
+        note_hook(tgt, mem, detour ? detour : reinterpret_cast<void*>(cb), detour != nullptr, len);
         *why = "ok";
         return true;
     }

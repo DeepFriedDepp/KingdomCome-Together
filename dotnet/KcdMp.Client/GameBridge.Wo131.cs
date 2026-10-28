@@ -111,7 +111,7 @@ public partial class GameBridge
     /// go to the host, and with what health? Outside a joiner session every
     /// hit passes unchanged. A joiner never sends FATAL.
     /// </summary>
-    private async Task<(bool Send, float Health, bool Fatal)> Wo131GateOutboundAsync(Guid soul, string npcName, float health, bool died)
+    private async Task<(bool Send, float Health, bool Fatal)> Wo131GateOutboundAsync(Guid soul, string npcName, float health, bool died, bool judge = false)
     {
         if (Wo140HoldOutbound($"a hit on {npcName}")) return (false, 0, false);   // WO-140: its own world, not the host's
         if (!Wo131JoinerActive) return (true, health, died);
@@ -125,8 +125,8 @@ public partial class GameBridge
             Console.WriteLine(FormattableString.Invariant(
                 $"MP-DMG dir=drop npc={npcName} hp={health:F1} fatal={(died ? 1 : 0)} reason=wo131-{Wo131Rules.Tag(v)} bound={(hc?.Bound == true ? 1 : 0)} age_ms={(hc?.AgeMs ?? 65535)} dist_m={(hc?.DistM ?? -1):F2} -- a hit counts only on the host's NPC where the host has it"));
             // The refused blow leaves no trace on a guarded copy: its health goes
-            // straight back to the host's (credited, so it never echoes).
-            if (_w131Guarded.TryGetValue(npcName, out uint geid) && _w131StreamHp.TryGetValue(npcName, out float shp))
+            // straight back to the host's (credited, so it never echoes). WO-210 E.2: a filtered blow left none to begin with.
+            if (!judge && _w131Guarded.TryGetValue(npcName, out uint geid) && _w131StreamHp.TryGetValue(npcName, out float shp))
             {
                 var (fok, fb, fa, _) = await _combat.Wo131FollowHpAsync(soul, geid, shp);
                 if (fok) Console.WriteLine(FormattableString.Invariant($"MP-WO131 refused hit on {npcName}: copy health put back {fb:F1} -> {fa:F1} (the host's)"));
@@ -142,7 +142,7 @@ public partial class GameBridge
         // off the copy at once (the host's result arrives in its stream and the follow writes it); before
         // this the local value stood until the host's next change (the field: copy 64.6 / host 29.8,
         // copy 1.0 / host 29.2).
-        if (_w151HealthHost && _w131Guarded.TryGetValue(npcName, out uint feid) && _w131StreamHp.TryGetValue(npcName, out float fhp))
+        if (!judge && _w151HealthHost && _w131Guarded.TryGetValue(npcName, out uint feid) && _w131StreamHp.TryGetValue(npcName, out float fhp))
         {
             var (fok, fb, fa, _) = await _combat.Wo131FollowHpAsync(soul, feid, fhp);
             if (fok)

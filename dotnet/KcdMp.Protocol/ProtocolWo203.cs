@@ -69,7 +69,8 @@ public static partial class Protocol
 
     // ---- Conv kinds (APPEND-ONLY) ----
     public const byte ConvAnnounce = 1, ConvJoin = 2, ConvSnapshot = 3, ConvLine = 4, ConvCam = 5, ConvAnim = 6, ConvOptions = 7,
-                      ConvVote = 8, ConvChosen = 9, ConvSkill = 10, ConvLeave = 11, ConvEnd = 12, ConvTimer = 13;
+                      ConvVote = 8, ConvChosen = 9, ConvSkill = 10, ConvLeave = 11, ConvEnd = 12, ConvTimer = 13,
+                      ConvHover = 14;   // WO-210 F.2a: the starter's cursor row, at most 10 a second ("v1|cid|dec|row|seq", row -1 = none)
 
     // ---- WO-203B: the conversation camera's native ops (WO-163 family, wo203.h conv range; native wo203_cam.cpp) ----
     public const byte Wo203OpConvView = 94;      // the listener's view: enter / samples / leave / status / readback
@@ -79,7 +80,7 @@ public static partial class Protocol
     {
         ConvAnnounce => "announce", ConvJoin => "join", ConvSnapshot => "snapshot", ConvLine => "line", ConvCam => "cam",
         ConvAnim => "anim", ConvOptions => "options", ConvVote => "vote", ConvChosen => "chosen", ConvSkill => "skill",
-        ConvLeave => "leave", ConvEnd => "end", ConvTimer => "timer",
+        ConvLeave => "leave", ConvEnd => "end", ConvTimer => "timer", ConvHover => "hover",
         _ => $"unknown-{k}",
     };
 

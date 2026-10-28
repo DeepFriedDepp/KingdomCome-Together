@@ -192,6 +192,8 @@ bool read_model(uint32_t eid, ModelRead* out);        // false = no actor for ei
 bool is_avatar_eid(uint32_t eid);
 // The local player's combat actor (main-thread cache; 0 when unknown).
 void* player_combat_actor();
+// WO-210 B.1 (any thread, read-only): a combat actor's opponent as a combat actor, or null.
+void* opponent_ca(void* ca);
 
 // WO-165 (main thread): the combat actor and its model for an entity (create = make the combat actor when it has none, as the
 // avatars do); the local player's from the cache, checked by class. False when either is missing.

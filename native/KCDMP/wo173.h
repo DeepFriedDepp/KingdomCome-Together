@@ -41,6 +41,12 @@ uint8_t react(void* aCa, void* vCa, uint8_t* result, int32_t* kindOut);
 // before the processor (the hit core then skips its facing test -- the joiner's own game already judged that he hit this NPC). prev = the
 // value before (restored by the caller after the call). False = not armed / unreadable (the call then runs without it).
 bool mark_intended(void* model, bool on, uint8_t* prev);
+// WO-210 C.1: the collision handler's own ClientHit on a replay's result (react = WO-173's tail result, outcome = wo165::Outcome). Main thread.
+bool client_hit(uint8_t* result, uint8_t react, uint8_t outcome);
+bool clienthit_armed();
+// WO-210 E.2 (main thread): the result struct's two lethal bytes, as the collision handler's reaction block reads them; false until the
+// block verified (resolve_react).
+bool lethal_offsets(uint32_t* lethal0, uint32_t* lethal1);
 
 void tick();                 // main thread, every frame: the pending blows' measures and corrections
 int status_text(char* out, int n);

@@ -40,10 +40,21 @@ public partial class GameBridge
             while (!ct.IsCancellationRequested)
             {
                 await Task.Delay(100, ct);
+                // WO-210 D.4: the opponents first -- a row of the same tick then finds the copy already on the joiner (the twin opp_with_row:
+                // the stream first, as before)
+                bool oppFirst = W210("opp_with_row");
+                if (oppFirst)
+                {
+                    try { await Wo209OppTickAsync(); }   // WO-209 A: the same stream's opponents
+                    catch (Exception ex) { Console.WriteLine($"MP-W209 opponent tick failed: {ex.GetType().Name}: {ex.Message}"); }
+                }
                 try { await Wo208StreamTickAsync(); }
                 catch (Exception ex) { Console.WriteLine($"MP-W208 stream tick failed: {ex.GetType().Name}: {ex.Message}"); }
-                try { await Wo209OppTickAsync(); }   // WO-209 A: the same stream's opponents
-                catch (Exception ex) { Console.WriteLine($"MP-W209 opponent tick failed: {ex.GetType().Name}: {ex.Message}"); }
+                if (!oppFirst)
+                {
+                    try { await Wo209OppTickAsync(); }
+                    catch (Exception ex) { Console.WriteLine($"MP-W209 opponent tick failed: {ex.GetType().Name}: {ex.Message}"); }
+                }
             }
         }
         catch (OperationCanceledException) { }

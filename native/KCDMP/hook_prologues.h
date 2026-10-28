@@ -89,6 +89,20 @@ inline constexpr uint8_t kClinchStart[19] = {
     0x40, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57, 0x48, 0x81, 0xEC, 0x80, 0x00, 0x00, 0x00,
 };
 
+// wo178.cpp (WO-210 B.1): C_CombatActorClinch::CanClinch -- the engine's own clinch test (the clinch component's auto-trigger's first call,
+// found through the component's RTTI vtable +0x38), gated: a pair of the local player and a copy fails it.
+// mov [rsp+8],rbx; mov [rsp+10h],rsi; push rdi; sub rsp,80h
+inline constexpr uint8_t kCanClinch[18] = {
+    0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10, 0x57, 0x48, 0x81, 0xEC, 0x80, 0x00, 0x00, 0x00,
+};
+
+// wo210_hit.cpp (WO-210 E.2): C_CombatRPG::RPGProcessHit -- the melee handlers' hit processor (its own profiler label), gated for the
+// local player's blow on a copy: the gate runs the engine's dry run and returns 0 ("Hit was filtered").
+// mov [rsp+20h],rbp; push rdi; push r12; push r13; push r14; push r15
+inline constexpr uint8_t kRpgProcessHit[14] = {
+    0x48, 0x89, 0x6C, 0x24, 0x20, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57,
+};
+
 // wo178.cpp (research, installed only by a duel trace): C_CombatActor's state handler -- the callback StartCombatMode registers on the
 // model's State property (its slot read from the registered thunk, the vftable by RTTI). Pass-through: logs the actor and old/new state.
 // push rbx; push rdi; push r14; sub rsp,30h; mov rbx,rcx; mov edi,r9d
@@ -158,6 +172,8 @@ inline constexpr Entry kAll[] = {
     {"weather BlendToProfile", kBlendToProfile, sizeof kBlendToProfile},
     {"wo178 hostility test", kHostileTest, sizeof kHostileTest},
     {"wo178 clinch start", kClinchStart, sizeof kClinchStart},
+    {"wo178 CanClinch (WO-210 B.1)", kCanClinch, sizeof kCanClinch},
+    {"wo210 RPGProcessHit (E.2)", kRpgProcessHit, sizeof kRpgProcessHit},
     {"wo178 state handler (research)", kStateHandler, sizeof kStateHandler},
     {"wo178 slot start (research)", kSlotStart, sizeof kSlotStart},
     {"wo178 slot end (research)", kSlotEnd, sizeof kSlotEnd},

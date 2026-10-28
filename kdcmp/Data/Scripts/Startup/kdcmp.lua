@@ -25611,7 +25611,12 @@ function KCD2MP_W200RiderHeld(name, p, e, horse)
         r = nil
     end
     if not r then r = { horse = horse, n = 3 }; w.riders[name] = r end
-    if r.gaveUp then return false end
+    if r.gaveUp then
+        -- WO-210 G.1 (mp_rider_sync): a horse this world cannot carry him on (no physics here: a parked world horse) -- never left at
+        -- the saddle's height with no horse under him (session E: "running through the air"); he goes on the ground under the stream
+        if KCD2MP_W210IsOn and KCD2MP_W210IsOn("rider_sync") and KCD2MP_W210RiderGround then return KCD2MP_W210RiderGround(name, p, e, horse) end
+        return false
+    end
     local he = nil
     pcall(function() he = System.GetEntityByName(horse) end)
     local hp, ep = nil, nil
@@ -33318,18 +33323,43 @@ do
         end
         return out
     end
-    local function c4_send(rows, voteIdx, right)
+    -- WO-210 F.2: the marks a row carries -- the partner's pick (kct_pick), the vote (kct_vote), the starter's cursor (kct_hover; with the
+    -- listener's own vote on it, the vote stays). mp_conv_mark_over_icon (F.2c, "couldnt see vote" in session E: every row of that decision
+    -- was a skill check with an icon of its own, and the vote was never drawn): a mark replaces the row's own icon while it applies; off,
+    -- a row with an icon of its own keeps it (as before).
+    local function c4_mark_of(r, voteIdx, marks)
+        if marks and marks.pick ~= nil and r.index == marks.pick then return "kct_pick" end
+        if voteIdx ~= nil and r.index == voteIdx then return "kct_vote" end
+        if marks and marks.hover ~= nil and r.index == marks.hover then return "kct_hover" end
+        return nil
+    end
+    local function c4_send(rows, voteIdx, right, marks)
         local flat = {}
+        local over = not (KCD2MP_W210IsOn and not KCD2MP_W210IsOn("conv_mark_over_icon"))
         for _, r in ipairs(rows) do
             local icon = r.icon
-            if voteIdx ~= nil and r.index == voteIdx and icon == "" then icon = "kct_vote" end   -- a row with an icon of its own keeps it
+            local mark = c4_mark_of(r, voteIdx, marks)
+            if mark and (icon == "" or over) then icon = mark end   -- off: a row with an icon of its own keeps it
             flat[#flat + 1] = r.text; flat[#flat + 1] = r.used; flat[#flat + 1] = icon; flat[#flat + 1] = r.diff; flat[#flat + 1] = r.val
         end
         pcall(UIAction.SetArray, "hud", 0, "SequenceList", flat)
         pcall(UIAction.CallFunction, "hud", 0, "SetDialogSequences", right ~= false)
     end
+    -- WO-210 F.1: the listener's key counts of one decision (which device moved the cursor), told when the decision ends
+    local function c4_keys_flush(why)
+        local k = C4.keys
+        if not k or not C4.dec then C4.keys = nil; return end
+        mp_log(string.format("WO210-LISTEN keys partner=%s cid=%s dec=%s rows=%d up=%d down=%d wheel_up=%d wheel_down=%d confirm=%d confirm_mouse=%d (%s)",
+            tostring(C4.starter), tostring(C4.cid), tostring(C4.dec), C4.rows and #C4.rows or 0, k.kcd2mp_listen_up or 0, k.kcd2mp_listen_down or 0,
+            k.kcd2mp_listen_wheel_up or 0, k.kcd2mp_listen_wheel_down or 0, k.kcd2mp_listen_confirm or 0, k.kcd2mp_listen_confirm_mouse or 0, tostring(why)))
+        KCD2MP_EmitEvent("w210_listen_keys", string.format("%d %d %d %d %d %d", k.kcd2mp_listen_up or 0, k.kcd2mp_listen_down or 0,
+            k.kcd2mp_listen_wheel_up or 0, k.kcd2mp_listen_wheel_down or 0, k.kcd2mp_listen_confirm or 0, k.kcd2mp_listen_confirm_mouse or 0))
+        C4.keys = nil
+    end
     local function c4_highlight(i) pcall(UIAction.CallFunction, "hud", 0, "SetActiveSequenceChanged", i, 0) end
     function KCD2MP_W204ConvClear()
+        c4_keys_flush("cleared")
+        C4.hover, C4.pick = nil, nil
         if C4.rows then
             pcall(UIAction.CallFunction, "hud", 0, "ClearDialogSequences")
             pcall(UIAction.SetVisible, "hud", 0, "DialogRight", false)
@@ -33365,7 +33395,9 @@ do
         if not c4_listening(starter, cid) then return false end
         local rows = c4_rows(csv)
         if #rows == 0 then return false end
+        c4_keys_flush("next decision")
         C4.rows, C4.starter, C4.cid, C4.dec, C4.sel, C4.vote = rows, tostring(starter), tostring(cid), tonumber(decId), 0, nil
+        C4.hover, C4.pick, C4.hoverAt = nil, nil, 0
         C4.stats.options = C4.stats.options + 1
         pcall(UIAction.SetVisible, "hud", 0, "DialogRight", true)
         c4_send(rows, nil, true)
@@ -33377,8 +33409,19 @@ do
     function KCD2MP_W204Chosen(starter, cid, decId, index)
         if not C4.rows or C4.cid ~= tostring(cid) or C4.dec ~= tonumber(decId) then return false end
         C4.stats.chosen = C4.stats.chosen + 1
-        c4_highlight(tonumber(index) or 0)
+        c4_keys_flush("chosen")
         local pick = C4.vote ~= nil and C4.vote == tonumber(index) and "Your pick" or "Their pick"
+        if KCD2MP_W210IsOn and KCD2MP_W210IsOn("conv_pick_hold") then
+            -- WO-210 F.2b: the pick shown on its row for the second before the line (the agent holds the line); the listener's own cursor
+            -- stays where it is (it used to jump to the pick)
+            C4.pick = tonumber(index)
+            c4_send(C4.rows, C4.vote, true, { pick = C4.pick })
+            c4_highlight(C4.sel)
+            mp_log(string.format("WO210-PICK shown dec=%s row=%s vote=%s label=%s", tostring(decId), tostring(index), tostring(C4.vote), pick))
+            KCD2MP_EmitEvent("w210_pick_shown", tostring(decId) .. " " .. tostring(index))
+        else
+            c4_highlight(tonumber(index) or 0)
+        end
         KCD2MP_ShowNativeToast(pick)
         mp_log(string.format("WO204-CONV chosen decision=%s row=%s vote=%s -> %s (the listener)", tostring(decId), tostring(index), tostring(C4.vote), pick))
         if KCD2MP_W207TimerClear then KCD2MP_W207TimerClear() end   -- WO-207 A.3: the decision is over
@@ -33396,6 +33439,19 @@ do
     function KCD2MP_W204OnAction(action, activation)
         if not C4.rows or not (KCD2MP.W203 and KCD2MP.W203.cam and KCD2MP.W203.cam.listening) then return false end
         local a = tostring(action)
+        -- WO-210 F.1a: the game's own option list also moves with the mouse wheel and confirms with the mouse button (the host listening in
+        -- session E voted the top row every time: the wheel never moved the listener's cursor). Counted per decision for the bench; with
+        -- mp_listen_wheel off (the twin) the wheel is counted and never acted on.
+        if a == "kcd2mp_listen_wheel_up" or a == "kcd2mp_listen_wheel_down" or a == "kcd2mp_listen_confirm_mouse" then
+            if activation ~= "press" and activation ~= 1 then return true end
+            C4.keys = C4.keys or {}
+            C4.keys[a] = (C4.keys[a] or 0) + 1
+            if a == "kcd2mp_listen_confirm_mouse" then a = "kcd2mp_listen_confirm"
+            elseif KCD2MP_W210IsOn and not KCD2MP_W210IsOn("listen_wheel") then return true
+            else a = (a == "kcd2mp_listen_wheel_up") and "kcd2mp_listen_up" or "kcd2mp_listen_down" end
+        elseif a == "kcd2mp_listen_up" or a == "kcd2mp_listen_down" or a == "kcd2mp_listen_confirm" then
+            if activation == "press" or activation == 1 then C4.keys = C4.keys or {}; C4.keys[a] = (C4.keys[a] or 0) + 1 end
+        end
         if a ~= "kcd2mp_listen_up" and a ~= "kcd2mp_listen_down" and a ~= "kcd2mp_listen_confirm" and a ~= "kcd2mp_listen_cancel" then return false end
         if activation ~= "press" and activation ~= 1 then return a ~= "kcd2mp_listen_cancel" end
         local n = #C4.rows
@@ -33408,7 +33464,7 @@ do
         if a == "kcd2mp_listen_confirm" then
             C4.vote = C4.rows[C4.sel + 1].index
             C4.stats.votes = C4.stats.votes + 1
-            c4_send(C4.rows, C4.vote, true)
+            c4_send(C4.rows, C4.vote, true, { hover = C4.hover })
             c4_highlight(C4.sel)
             KCD2MP_EmitEvent("w204_vote", C4.starter .. " " .. C4.cid .. " " .. tostring(C4.dec) .. " " .. tostring(C4.vote))
             return true
@@ -33417,9 +33473,31 @@ do
         if C4.vote == nil then return false end
         C4.vote = nil
         C4.stats.clears = C4.stats.clears + 1
-        c4_send(C4.rows, nil, true)
+        c4_send(C4.rows, nil, true, { hover = C4.hover })
         c4_highlight(C4.sel)
         KCD2MP_EmitEvent("w204_vote", C4.starter .. " " .. C4.cid .. " " .. tostring(C4.dec) .. " clear")
+        return true
+    end
+    -- WO-210 F.2a, the listener: the starter's cursor (ConvHover) as a soft mark on that row (kct_hover: a ring), his own cursor and his
+    -- vote left as they are; the list is re-sent at most every 200 ms (a re-send replays the list's "on" animation), the last row wins
+    function KCD2MP_W210Hover(starter, cid, decId, row)
+        if not C4.rows or C4.cid ~= tostring(cid) or C4.dec ~= tonumber(decId) or C4.pick ~= nil then return false end
+        local r = tonumber(row)
+        if r ~= nil and r < 0 then r = nil end
+        if r == C4.hover then return true end
+        C4.hover = r
+        C4.hoverGen = (C4.hoverGen or 0) + 1
+        local gen = C4.hoverGen
+        local wait = math.max(1, math.floor(((C4.hoverAt or 0) + 0.2 - os.clock()) * 1000))
+        Script.SetTimer(wait, function()
+            if C4.hoverGen ~= gen or not C4.rows or C4.pick ~= nil then return end
+            C4.hoverAt = os.clock()
+            c4_send(C4.rows, C4.vote, true, { hover = C4.hover })
+            c4_highlight(C4.sel)
+            C4.stats.hovers = (C4.stats.hovers or 0) + 1
+            mp_log(string.format("WO210-HOVER shown dec=%s row=%s", tostring(decId), tostring(C4.hover)))
+            KCD2MP_EmitEvent("w210_hover_shown", tostring(decId) .. " " .. tostring(C4.hover))
+        end)
         return true
     end
     -- the starter: the listener's vote in his own options -- the copied rows again with the icon, the highlight where it was
@@ -33676,7 +33754,26 @@ do
         local now = os.clock()
         local last = W207.lastListen[action]
         W207.lastListen[action] = now
-        if last and now - last >= 0 and now - last < 0.12 then
+        -- WO-210 F.1b: one press through two maps arrives twice in ONE frame; the mouse wheel's notches come a frame or two apart and
+        -- are every one a move -- the same frame (the engine's frame id) is the duplicate, else 15 ms for the wheel, 120 ms for the rest
+        local dupWindow = 0.12
+        if not (KCD2MP_W210IsOn and not KCD2MP_W210IsOn("listen_wheel")) then
+            local fid = nil
+            pcall(function() if System.GetFrameID then fid = System.GetFrameID() end end)
+            W207.lastListenFrame = W207.lastListenFrame or {}
+            local lastFid = W207.lastListenFrame[action]
+            W207.lastListenFrame[action] = fid
+            if fid ~= nil then
+                if lastFid ~= nil and lastFid == fid then
+                    W207.listenDup = (W207.listenDup or 0) + 1
+                    if W207.listenDup <= 5 then mp_log("WO207-LISTEN " .. action .. " arrived twice in one frame -- the second is dropped") end
+                    return true
+                end
+                return false
+            end
+            if string.find(action, "wheel", 1, true) then dupWindow = 0.015 end
+        end
+        if last and now - last >= 0 and now - last < dupWindow then
             W207.listenDup = (W207.listenDup or 0) + 1
             if W207.listenDup <= 5 then mp_log("WO207-LISTEN " .. action .. " arrived twice for one press -- the second is dropped") end
             return true
@@ -33839,6 +33936,122 @@ do
         local fname = "KCD2MP_W209Set_" .. k
         _G[fname] = function(arg) return KCD2MP_W209Set(k, arg) end
         System.AddCCommand(label, fname .. "(%line)", "WO-209 " .. (W209.HELP[k] or k) .. " (default " .. (W209.DEFAULT_OFF[k] and "off" or "on") .. "): " .. label .. " on|off")
+    end
+end
+
+-- ===== WO-210: the agent's switches (each new mechanism ships on, with its own switch; the agent hears w210_cfg) =====
+do
+    W210 = W210 or {}
+    W210.NAMES = {
+        copy_state_always = "mp_copy_state_always",
+        death_engine = "mp_death_engine",
+        knockdown_sync = "mp_knockdown_sync",
+        copy_ready = "mp_copy_ready",
+        copy_hit_local_none = "mp_copy_hit_local_none",
+        rider_sync = "mp_rider_sync",
+        state_one_request = "mp_state_one_request",
+        listen_wheel = "mp_listen_wheel",
+        conv_hover = "mp_conv_hover",
+        conv_pick_hold = "mp_conv_pick_hold",
+        conv_mark_over_icon = "mp_conv_mark_over_icon",
+        combo_hold = "mp_combo_hold",
+        profile_snapshot = "mp_profile_snapshot",
+    }
+    W210.HELP = {
+        copy_state_always = "A: (joiner) every copy always shows its host NPC's whole-body state: a copy let go, stood up or switched gets the host's current state at once, and a body left lying, sitting or empty is put right within a quarter second",
+        death_engine = "C: (both) the joiner's killing blow is a normal death (the game's own reaction, a lootable body); a copy dies as its host NPC did",
+        knockdown_sync = "C.3: (joiner) a knockdown is the host's: the copy falls and gets up with its host NPC",
+        copy_ready = "D: (joiner) a copy draws and takes its stance with its host NPC",
+        copy_hit_local_none = "E.2: (joiner) your blows on a copy are judged by the host's game only: no damage, flinch or death on your screen from them (the swing and its impact still play)",
+        rider_sync = "G: (joiner) a rider no horse here can carry walks on the ground under the host's rider, never in the air",
+        state_one_request = "H.1: (joiner) one pending NPC-state request per copy at a time",
+        listen_wheel = "F.1: (both) as the listener, the mouse wheel moves your choice and the mouse button votes, as in your own talks",
+        conv_hover = "F.2: (both) as the listener, you see the row your partner's cursor is on (a ring)",
+        conv_pick_hold = "F.2: (both) as the listener, your partner's pick shows on its row for a second before the line plays",
+        conv_mark_over_icon = "F.2: (both) a vote, the partner's cursor or the pick shows even on a row with its own icon (a skill check)",
+        combo_hold = "E.3: (both) your defence against a combo's later swing waits for the host's word on it, not only the first swing's",
+        profile_snapshot = "H.6: (joiner) after a join, the host's quest layers you already have are answered at once, not one game call each",
+    }
+    W210.on = W210.on or {}
+    W210.DEFAULT_OFF = {}
+    local function w210_is_on(k) if W210.on[k] == nil then return not W210.DEFAULT_OFF[k] end return W210.on[k] end
+    function KCD2MP_W210IsOn(name) return w210_is_on(tostring(name)) end
+    function KCD2MP_W210Set(name, arg)
+        local label = W210.NAMES[tostring(name)]
+        if not label then mp_log("WO210-TOGGLE unknown switch '" .. tostring(name) .. "'"); return false end
+        local v = KCD2MP_Wo122ParseBool(arg)
+        if v == "bad" then mp_log(label .. ": expected on|off, got '" .. tostring(arg) .. "'"); return false end
+        if v == nil then
+            mp_log("WO210-TOGGLE " .. label .. " is " .. (w210_is_on(tostring(name)) and "on" or "off"))
+            return true
+        end
+        W210.on[tostring(name)] = v
+        mp_log("WO210-TOGGLE " .. label .. " " .. (v and "on" or "off") .. " -- sent to the agent")
+        KCD2MP_EmitEvent("w210_cfg", tostring(name) .. "=" .. (v and "on" or "off"))
+        return true
+    end
+    function KCD2MP_W210Status()
+        local parts = {}
+        for k, label in pairs(W210.NAMES) do parts[#parts + 1] = label .. "=" .. (w210_is_on(k) and "on" or "off") end
+        table.sort(parts)
+        mp_log("WO210-STATUS " .. table.concat(parts, " "))
+        KCD2MP_EmitEvent("w210_status", "")
+        return true
+    end
+    System.AddCCommand("mp_w210_status", "KCD2MP_W210Status()", "WO-210: every WO-210 switch and its counts")
+    -- G.1: a rider whose horse this world cannot mount him on is put on the ground under the host's rider's spot (the stream's saddle
+    -- height with no horse under it was "running through the air"); the host's word "on foot" gives him back to the stream
+    W210.riders = W210.riders or { told = {}, n = 0 }
+    function KCD2MP_W210RiderGround(name, p, e, horse)
+        if not (p and p.tx and p.ty and p.tz) then return false end
+        local g = nil
+        pcall(function() g = System.GetTerrainElevation({ x = p.tx, y = p.ty, z = p.tz }) end)
+        g = tonumber(g)
+        if not g or p.tz < g + 0.5 then return false end   -- the stream has him on the ground already: nothing to correct
+        KCD2MP_NpcNativeSync(name, p, e, false, "rider-ground")
+        pcall(function() e:SetWorldPos({ x = p.tx, y = p.ty, z = g }) end)
+        local R = W210.riders
+        local now = os.clock()
+        if (now - (R.told[name] or -1e9)) >= 10.0 then
+            R.told[name] = now
+            R.n = R.n + 1
+            mp_log(string.format("WO210-RIDER ground npc=%s horse=%s z=%.2f ground=%.2f -- no horse here can carry him: on the ground under the host's rider [n=%d]",
+                tostring(name), tostring(horse), p.tz, g, R.n))
+        end
+        return true
+    end
+    -- C.1 / C.2: the game's own loot test on a body (BasicActor:AddLootAction asks user.actor:CanLoot(self.id)) -- true, false, or nil
+    -- when it cannot be asked here
+    function KCD2MP_W210Lootable(e)
+        if not (e and e.id and player and player.actor and player.actor.CanLoot) then return nil end
+        local ok, r = pcall(function() return player.actor:CanLoot(e.id) end)
+        if not ok then return nil end
+        return r == true
+    end
+    -- C.1 / C.2: a body after a killing blow, as the game sees it -- dead, and whether its loot is offered (the agent asks after the
+    -- engine's death had its time, and after the finish when the engine's own did not set the dead state)
+    function KCD2MP_W210DeathCheck(name, how)
+        local e = nil
+        pcall(function() e = System.GetEntityByName(tostring(name)) end)
+        local dead = nil
+        if e and e.actor and e.actor.IsDead then pcall(function() dead = e.actor:IsDead() == true end) end
+        local lootable = KCD2MP_W210Lootable(e)
+        mp_log(string.format("WO210-DEATH check npc=%s how=%s dead=%s lootable=%s", tostring(name), tostring(how),
+            dead == nil and "?" or (dead and "yes" or "no"), lootable == nil and "?" or (lootable and "yes" or "no")))
+        return lootable
+    end
+    -- H.5: the sun's game time here (the sky's own time of day, e_TimeOfDay) under a mark's id -- the agent asks at every mark; the
+    -- briefing puts it beside both machines' world time
+    function KCD2MP_W210Sun(mark)
+        local d = -1
+        pcall(function() d = tonumber(System.GetCVar("e_TimeOfDay")) or -1 end)
+        mp_log(string.format("WO210-SUN mark=%s sun=%02d:%02d", tostring(mark), math.floor(d), math.floor((d % 1) * 60)))
+        return true
+    end
+    for k, label in pairs(W210.NAMES) do
+        local fname = "KCD2MP_W210Set_" .. k
+        _G[fname] = function(arg) return KCD2MP_W210Set(k, arg) end
+        System.AddCCommand(label, fname .. "(%line)", "WO-210 " .. (W210.HELP[k] or k) .. " (default " .. (W210.DEFAULT_OFF[k] and "off" or "on") .. "): " .. label .. " on|off")
     end
 end
 

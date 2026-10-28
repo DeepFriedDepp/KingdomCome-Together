@@ -177,7 +177,14 @@ do
     KCD2MP_W204OnAction("kcd2mp_listen_down", "press")
     KCD2MP_W204OnAction("kcd2mp_listen_confirm", "press")
     arr = last("SetArray:SequenceList")
-    check("b: a row with its own icon keeps it (the vote shows nowhere else)", arr and arr.arr[13] == "skill_speech" and arr.arr[8] == "")
+    -- WO-210 F.2c (mp_conv_mark_over_icon, on): the vote shows over a row's own icon while it applies ("couldnt see vote": every row of
+    -- that decision was a skill check); off (the twin) the row keeps its own icon and the vote shows nowhere
+    check("b: the vote shows over a row's own icon (WO-210 F.2c)", arr and arr.arr[13] == "kct_vote" and arr.arr[8] == "", arr and tostring(arr.arr[13]))
+    KCD2MP_W210Set("conv_mark_over_icon", "off")
+    KCD2MP_W204VoteIcon("0~ui_barbora___seq1_7WVl~0~-~0~0;1~=Leave (you go)~1~-~0~0;2~ui_barbora___seq3_x~0~skill_speech~2~0", 2, 2, true)   -- the starter's path: no vote event
+    local arr2 = last("SetArray:SequenceList")
+    check("b: mp_conv_mark_over_icon off: a row with its own icon keeps it (the twin)", arr2 and arr2.arr[13] == "skill_speech" and arr2.arr[8] == "")
+    KCD2MP_W210Set("conv_mark_over_icon", "on")
     check("b: voting again moves the vote", evts("w204_vote")[2] == "1 233 1 2", evts("w204_vote")[2])
     check("b: the cancel clears a vote (not a leave)", KCD2MP_W204OnAction("kcd2mp_listen_cancel", "press") == true and evts("w204_vote")[3] == "1 233 1 clear", evts("w204_vote")[3])
     check("b: with no vote the cancel is WO-203B's (it leaves)", KCD2MP_W204OnAction("kcd2mp_listen_cancel", "press") == false)

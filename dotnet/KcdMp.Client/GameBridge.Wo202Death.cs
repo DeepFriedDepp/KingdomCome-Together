@@ -19,10 +19,15 @@ public partial class GameBridge
     private long _w202DeathChecks, _w202DeathFalls, _w202DeathFallFailed, _w202DeathLying;
 
     /// <summary>Every joiner blow the host's world took (WO-173's real hit, its held completion): the body is read when no death reaction came.</summary>
-    private void Wo202NoteJoinerBlow(string npc, bool applied, byte react)
+    private void Wo202NoteJoinerBlow(string npc, bool applied, byte react, bool clientHit = false)
     {
-        if (!Wo202Rules.DeathFallWanted(W202("death_engine_only"), _isDamageAuthority, applied, react) || !W164Text.IsNpcName(npc)) return;
-        _ = Wo202DeathFallAsync(npc, Wo173Rules.ReactName(react));
+        // WO-210 C.1 (mp_death_engine): every applied blow of a joiner is followed, the engine's combat death too -- each corpse must pass the
+        // game's loot test; the twin (off) follows only the blows the engine took without a reaction, as WO-202 did
+        bool every = W210("death_engine") && _isDamageAuthority && applied;
+        if ((!every && !Wo202Rules.DeathFallWanted(W202("death_engine_only"), _isDamageAuthority, applied, react)) || !W164Text.IsNpcName(npc)) return;
+        // the engine's own ClientHit was queued (or its combat reaction): its death (the HitDeath fragment, its ragdoll, the corpse's dead
+        // state) plays first; the fall is the last resort, read only after the engine had its time
+        _ = Wo202DeathFallAsync(npc, Wo173Rules.ReactName(react), clientHit || react == 1 ? Wo210Rules.DeathFallAfterEngineMs : Wo202Rules.DeathFallChecksMs);
     }
 
     private long _w202DeathAnnounced, _w202DeathRefused;
@@ -63,7 +68,7 @@ public partial class GameBridge
         catch (Exception ex) { Console.WriteLine($"[npcdeath] FATAL for '{npc}' not sent: {ex.GetBaseException().Message}"); }
     }
 
-    private async Task Wo202DeathFallAsync(string npc, string reaction)
+    private async Task Wo202DeathFallAsync(string npc, string reaction, int[]? checksMs = null)
     {
         try
         {
@@ -72,13 +77,32 @@ public partial class GameBridge
             var a = new byte[5 + name.Length];   // eid 0 + [len][name]: op 57 finds the body by its name (any body, the host's own too)
             a[4] = (byte)name.Length;
             name.CopyTo(a, 5);
-            foreach (int wait in Wo202Rules.DeathFallChecksMs)
+            foreach (int wait in checksMs ?? Wo202Rules.DeathFallChecksMs)
             {
                 await Task.Delay(wait);
                 var r = await _combat.Wo163Async(KcdMp.Wire.Protocol.Wo195OpCheck, a);
                 if (r is not { Ok: true, Payload.Length: >= 4 } x) return;   // the body is gone (or an older DLL)
                 Interlocked.Increment(ref _w202DeathChecks);
                 if (x.Payload[0] != 1) continue;                              // not dead (yet): the blow did not kill
+                if (W210("death_engine"))
+                {
+                    // WO-210 C.1: every dead body ends a lootable corpse -- the engine's dead state, set the engine's way when its own death
+                    // did not set it (the handler's lethal-no-reaction branch: its ragdoll, then StartDeadAction); the physics fall below
+                    // only when the DLL cannot (an older build, a fault)
+                    bool upright0 = Wo195Rules.Upright(x.Payload[0], x.Payload[2]);
+                    var f = await Wo210FinishBodyAsync(npc);
+                    string how = Wo210FinishHow(f, upright0);
+                    if (f is { Result: Protocol.Wo210FinishDone } && upright0)
+                    {
+                        Interlocked.Increment(ref _w202DeathFalls);
+                        Console.WriteLine($"WO202-DEATHFALL npc={npc} reaction={reaction} dead=yes upright=yes -> finished the engine's way (its ragdoll and its dead state; lootable) " +
+                                          "-- a joiner's killing blow without the death reaction (the last resort)");
+                    }
+                    else if (f is { Result: Protocol.Wo210FinishDone or Protocol.Wo210FinishAlready }) Interlocked.Increment(ref _w202DeathLying);
+                    await Task.Delay(Wo195Rules.RagdollSettleMs);
+                    await Wo210DeathCheckAsync(npc, how);
+                    if (f is { Result: Protocol.Wo210FinishDone or Protocol.Wo210FinishAlready }) return;
+                }
                 if (!Wo195Rules.Upright(x.Payload[0], x.Payload[2]))
                 {
                     Interlocked.Increment(ref _w202DeathLying);

@@ -8,6 +8,7 @@
 #include "wo187_rules.h"
 #include "wo209.h"
 #include "wo209_rules.h"
+#include "wo210_kd.h"
 #include "wo163_rules.h"
 #include "fault_guard.h"
 #include "npc_scan.h"   // WO-144 2.3: body_kind (a horse or an animal is entity-written)
@@ -1185,7 +1186,8 @@ void tick() {
                          p.name.c_str(), wo209rules::kActivityDriftM, wo209rules::kActivityDriftS, k);
             }
         } else p.activityDriftSince = 0;
-        if ((s.flags & (0x01 | 0x02 | 0x10)) != 0 || now < p.holdUntil || parented || activity_held(p.eid)) {
+        // WO-210 C.3: a copy lying for its host NPC's knockdown is the engine's ragdoll's -- written as the dead and the carried are not
+        if ((s.flags & (0x01 | 0x02 | 0x10)) != 0 || now < p.holdUntil || parented || activity_held(p.eid) || wo210kd::held_down(p.eid)) {
             // Dead / unconscious / carried stay on Lua's own behaviour; a swing
             // one-shot owns the body for its hold. Neither is a pull.
             p.haveLast = false;
@@ -1345,6 +1347,13 @@ bool physics_status(void* e, PhysicsStatus* out) {
         }
     }
     return true;
+}
+
+// WO-210 E.6 (main thread): does this writer drive the body -- a copy of the host's NPC (or a partner's figure) on this machine
+bool is_bound_eid(uint32_t eid) {
+    if (!eid) return false;
+    for (const auto& kv : g_bound) if (kv.second.eid == eid) return true;
+    return false;
 }
 
 int bound_bodies(BoundBody* out, int max) {

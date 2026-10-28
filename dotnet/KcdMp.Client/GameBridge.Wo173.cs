@@ -113,7 +113,8 @@ public partial class GameBridge
     {
         // WO-204 IV.3: a blow the joiner's own engine judged blocked (stamina only) is applied as he judged it -- WO-121's attributed damage
         // with his values (the caller's path on null); the host's engine never re-judges it into a hit
-        if (W204("blow_joiner_values") && Wo204Rules.JoinerJudgedBlocked(health, stamina))
+        // WO-210 C.4: retired -- the defender's world judges; the joiner's computed values for a blow on a host NPC are never applied
+        if (!W210("no_raw_blows") && W204("blow_joiner_values") && Wo204Rules.JoinerJudgedBlocked(health, stamina))
         {
             Interlocked.Increment(ref _w204BlowsJoinerValues);
             Wo204NoteBlow(source, npc, health, stamina, "joiner-values(blocked)");
@@ -124,6 +125,10 @@ public partial class GameBridge
         string gid = source.ToString(CultureInfo.InvariantCulture);
         long now = Environment.TickCount64;
         Wo166Rules.Strike? f = _w173LastRow.TryGetValue(gid, out var lr) ? Wo173Rules.FieldsFor(lr.Row, lr.At, now) : null;
+        // WO-210 C.4: no fresh swing row (a kick, a combo the capture missed) -- the engine's hit all the same, with the joiner's own last
+        // attack (his weapon's row) or a plain slash at the engine's zone pick: the host's engine computes the damage and the stamina itself,
+        // never the raw write (session E: 9 raw blows, every one "fallback=no-swing-row")
+        if (f is null && W210("no_raw_blows")) f = Wo210Rules.FallbackStrike(_w173LastRow.TryGetValue(gid, out var lr2) ? lr2.Row : null);
         Wo173Hit? h;
         try
         {
@@ -163,6 +168,7 @@ public partial class GameBridge
             return (false, 0, 0, 0, x.Fallback);
         }
         _w173Touched[npc] = now;
+        if (x.ClientHit) _w210EngineSignal[npc] = now;   // WO-210 C.1: the engine sends the brain its own hit signal for this blow
         if (x.ByEngine) Interlocked.Increment(ref _w173Engine);
         else if (x.AppliedAny) Interlocked.Increment(ref _w173Raw);
         else Interlocked.Increment(ref _w173Failed);
@@ -170,7 +176,7 @@ public partial class GameBridge
         if ((int)verdict is > 0 and < 7) Interlocked.Increment(ref _w173Verdicts[(int)verdict]);
         Console.WriteLine(FormattableString.Invariant(
             $"MP-W173 hit npc={npc} by_ghost={source} applied={(x.ByEngine ? "engine" : x.AppliedAny ? "raw" : "none")} verdict={(verdict == HitVerdict.None ? "-" : HitVerdictMsg.VerdictName(verdict))} reaction={Wo173Rules.ReactName(x.React)} joiner_said=st{stamina:F1}/hp{health:F1} raw_applied=st{x.StApplied:F1}/hp{x.HpApplied:F1} row={(f is null ? "none" : $"type{f.Value.Type}/zone{f.Value.Zone}")} fallback={Wo173Rules.FallbackName(x.Fallback)} seq={x.Seq}"));
-        Wo202NoteJoinerBlow(npc, x.AppliedAny, x.React);   // WO-202 II.3: a killing blow without the death reaction leaves the body upright
+        Wo202NoteJoinerBlow(npc, x.AppliedAny, x.React, x.ClientHit);   // WO-202 II.3: a killing blow without the death reaction leaves the body upright
         // C2: the outcome goes to the joiner whose blow it was
         if (W164Text.IsNpcName(npc))
         {

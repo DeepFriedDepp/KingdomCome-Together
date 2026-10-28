@@ -135,6 +135,7 @@ public partial class GameBridge
                 lock (c)
                 {
                     c.Current = cur; c.OnRight = right;
+                    Wo210NoteCurrent(c.Cid, c.DecId, cur, c.Open);   // WO-210 F.2a: the starter's cursor, to the listeners (<= 10 a second)
                     if (rows.Count > 0 && seq != 0 && seq != c.SnapSeq)
                     {
                         c.SnapSeq = seq; c.Rows = rows; c.Open = true; ++c.DecId;
@@ -232,14 +233,17 @@ public partial class GameBridge
             case Protocol.ConvLine when Wo204Rules.TryParseLine(m.Text, out var line):
                 Interlocked.Increment(ref _w204LinesIn);
                 if (!mine || l!.Cid != line.Cid) return;
-                _ = ExecLuaAsync(string.Create(System.Globalization.CultureInfo.InvariantCulture,
-                    $"if KCD2MP_W204Line then KCD2MP_W204Line({src}, {line.Cid}, \"{EscapeLua(line.Name)}\", {(line.IsPlayer ? "true" : "false")}, \"{EscapeLua(line.StringName)}\", {line.DurMs}, {(line.Earlier ? "true" : "false")}) end"));
-                if (!line.Earlier && W204("conv_voice")) _ = Wo204VoiceAsync(src, line);
+                _ = Wo210DeliverLineAsync(src, line);   // WO-210 F.2b: held behind a pick for its second (in order); else at once
+                return;
+            case Protocol.ConvHover when Wo210Rules.TryParseHover(m.Text, out int hcid, out int hdec, out int hrow, out long hseq):   // WO-210 F.2a
+                if (!mine || l!.Cid != hcid) return;
+                Wo210OnConvHover(src, hcid, hdec, hrow, hseq);
                 return;
             case Protocol.ConvOptions when Wo204Rules.TryParseOptions(m.Text, out int ocid, out int dec, out var rows):
                 Interlocked.Increment(ref _w204OptionsIn);
                 if (!mine || l!.Cid != ocid) return;
                 _w204ListenDec = (src, ocid, dec);
+                Wo210NoteOptions(src, ocid, dec);   // WO-210 F.2b: a decision is up -- a line before its pick waits for it
                 _ = ExecLuaAsync($"if KCD2MP_W204Options then KCD2MP_W204Options({src}, {ocid}, {dec}, \"{EscapeLua(Wo204Rules.RowsForLua(rows))}\") end");
                 return;
             case Protocol.ConvChosen when Wo203CamRules.TryParseCid(m.Text, out int ccid, out string rest):
@@ -247,6 +251,7 @@ public partial class GameBridge
                 Interlocked.Increment(ref _w204ChosenIn);
                 var f = rest.Split('|');
                 if (!mine || l!.Cid != ccid || f.Length != 2 || !int.TryParse(f[0], out int cdec) || !int.TryParse(f[1], out int cidx)) return;
+                Wo210NotePick(src, ccid, cdec);   // WO-210 F.2b: the lines after it wait for the pick's second
                 _ = ExecLuaAsync($"if KCD2MP_W204Chosen then KCD2MP_W204Chosen({src}, {ccid}, {cdec}, {cidx}) end");
                 return;
             }

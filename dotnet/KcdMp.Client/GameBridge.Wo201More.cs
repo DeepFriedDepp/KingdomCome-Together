@@ -40,6 +40,7 @@ public partial class GameBridge
         Wo207Tick(n);                                     // WO-207 B.1: the inbound queue, every second
         Wo208Tick(n);                                     // WO-208: the DLL's switch word every 2 s
         Wo209Tick(n);                                     // WO-209: its switch word every 2 s, the mirror's numbers every 30 s
+        Wo210Tick(n);                                     // WO-210: its switch word every 2 s, its numbers every 30 s, the DLL's asks
     }
 
     private void Wo201OnEventMore(string name, string? arg)

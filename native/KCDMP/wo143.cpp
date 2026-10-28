@@ -5,6 +5,8 @@
 #include "wo208.h"
 #include "wo209.h"
 #include "wo209_rules.h"
+#include "wo210.h"
+#include "wo210_rules.h"
 #include "fault_guard.h"
 #include "wo143_rules.h"
 #include "npcstate.h"
@@ -112,6 +114,13 @@ bool ilock_add(void* p, long d) {
     KCDMP_FAULT_READ(site, "wo143::ilock_add");
     return fault::guarded(site, [&] { InterlockedAdd(static_cast<volatile long*>(p), d); });
 }
+// WO-210 H.1: a guarded copy of n bytes (the pending-change field, RequestStateChange's head)
+bool copy_bytes(const void* src, void* dst, size_t n) {
+    for (size_t i = 0; i < n; ++i) { uint8_t b = 0; if (!rd8(src, i, &b)) return false; static_cast<uint8_t*>(dst)[i] = b; }
+    return true;
+}
+int g_pendingOff = -1;   // C_NPCContext: the pending change request's id (-1 none), read out of RequestStateChange's own first compare
+
 bool prologue_ok(const void* fn, const uint8_t* want, size_t n) {
     for (size_t i = 0; i < n; ++i) { uint8_t b = 0; if (!rd8(fn, i, &b) || b != want[i]) return false; }
     return true;
@@ -715,6 +724,47 @@ int start_shot(const std::string& name, const char* frag, const char* tags, uint
 
 // A paused body's NPC-state machine, ticked like C_NPC::Update does it (its
 // three NPC-state steps only -- the brain stays paused).
+// WO-210 H.1: one pending NPC-state request per copy -- a one-shot asked while the copy's context still processes a change waits here
+// (a newer one for the same copy replaces it) and is asked when the context is free, at most kDeferMaxS later
+bool change_pending(uint32_t eid) {
+    if (g_pendingOff < 0) return false;
+    void* ctx = X::context_of(eid);
+    int32_t v = -1;
+    return ctx && copy_bytes(static_cast<char*>(ctx) + g_pendingOff, &v, sizeof v) && v != -1;
+}
+struct Deferred { std::string name, frag, tags; uint64_t alignW = 0; uint8_t flags = 0; bool stop = false; double at = 0; };
+std::unordered_map<uint32_t, Deferred> g_deferred;
+std::atomic<uint32_t> c_deferred{0}, c_deferReplaced{0}, c_deferStarted{0}, c_deferExpired{0};
+constexpr double kDeferMaxS = 3.0;
+void deferred_tick(double now) {
+    for (auto it = g_deferred.begin(); it != g_deferred.end();) {
+        if (!engine::entity_by_id(it->first) || now - it->second.at > kDeferMaxS) { c_deferExpired.fetch_add(1); it = g_deferred.erase(it); continue; }
+        if (change_pending(it->first)) { ++it; continue; }
+        const Deferred d = it->second;
+        it = g_deferred.erase(it);
+        char why[128];
+        const int id = d.stop ? start_shot(d.name, "", "", 0, false, why, sizeof why)
+                              : start_shot(d.name, d.frag.c_str(), d.tags.c_str(), d.alignW, false, why, sizeof why, (d.flags & 2) != 0 && d.alignW != 0);
+        if (id >= 0) c_deferStarted.fetch_add(1);
+        else logf("WO143-SHOT %s '%s' (waited for the copy's own change) not started: %s", d.name.c_str(), d.frag.c_str(), why);
+    }
+}
+// true: deferred (the caller answers ok with request id 0)
+bool defer_if_pending(const std::string& nm, const std::string& frag, const std::string& tags, uint64_t alignW, uint8_t flags, bool stop) {
+    if (!wo210::on(wo210rules::kBitOneRequest)) return false;
+    void* e = X::entity_named(nm.c_str());
+    const uint32_t eid = e ? engine::entity_id(e) : 0;
+    if (!eid || !change_pending(eid)) return false;
+    auto ins = g_deferred.try_emplace(eid);
+    if (!ins.second) c_deferReplaced.fetch_add(1);
+    ins.first->second = Deferred{nm, frag, tags, alignW, flags, stop, now_s()};
+    const uint32_t k = c_deferred.fetch_add(1) + 1;
+    if (k <= 20 || k % 100 == 0)
+        logf("WO210-REQ npc=%s '%s': its context still processes a change of its own -- asked when it is free (one pending request per copy) [n=%u]",
+             nm.c_str(), stop ? "stop" : frag.c_str(), k);
+    return true;
+}
+
 void tick_body(uint32_t eid) {
     void* obj = npc_object(eid);
     void* ctx = X::context_of(eid);
@@ -1119,6 +1169,19 @@ void install() {
     const bool evOk = prologue_ok(ev, kProMakeEvCtx, sizeof kProMakeEvCtx);
     const bool ibOk = prologue_ok(ib, kProInitBlock, sizeof kProInitBlock);
     g_reqChange = rscOk ? rsc : nullptr; g_mkAnimAction = mkOk ? mk : nullptr; g_mkEventCtx = evOk ? ev : nullptr; g_initReqBlock = ibOk ? ib : nullptr;
+    // WO-210 H.1: the context's pending change request (the engine refuses a second one: "Can't request state change with another change
+    // request already being processed") -- the field RequestStateChange itself compares with -1 first: cmp dword [r13+disp32], -1
+    if (g_reqChange) {
+        uint8_t head[0x80]{};
+        if (copy_bytes(g_reqChange, head, sizeof head))
+            for (size_t i = 0; i + 8 <= sizeof head; ++i)
+                if (head[i] == 0x41 && head[i + 1] == 0x83 && head[i + 2] == 0xBD && head[i + 7] == 0xFF) {
+                    uint32_t d = 0; std::memcpy(&d, head + i + 3, 4);
+                    if (d > 0x40 && d < 0x2000) g_pendingOff = static_cast<int>(d);
+                    break;
+                }
+        logf("WO210-REQ the context's pending change: %s", g_pendingOff >= 0 ? "read from RequestStateChange's own first compare" : "NOT found (requests are not held back)");
+    }
     g_invalidAlign = reinterpret_cast<const uint64_t*>(base + kRvaInvalidAlign);
     g_invalidTrigger = reinterpret_cast<const uint64_t*>(base + kRvaInvalidTrigger);
     g_animArmed = g_reqChange && g_mkAnimAction && g_mkEventCtx && g_initReqBlock && g_vftAnimAction;
@@ -1161,6 +1224,7 @@ void tick() {
     drain_captured(now);
     flight_tick(now);
     settle_tick(now);
+    if (!g_deferred.empty()) deferred_tick(now);   // WO-210 H.1
 }
 
 void set_frame_callback(FrameFn fn) { g_frame = fn; }
@@ -1247,6 +1311,10 @@ uint8_t handle(const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t
             if (g) { alignW = X::wuid_of(g); if (!alignW) { logf("WO143-SHOT %s '%s': the object is not in this world, skipped", nm.c_str(), frag.c_str()); return kRNotFound; } }
             char why[128];
             c_shotsIn.fetch_add(1);
+            if (!avatar && defer_if_pending(nm, frag, tags, alignW, flags, false)) {   // WO-210 H.1
+                std::memset(out, 0, 4); *outLen = 4;
+                return kROk;
+            }
             // a copy is never held for its one-shot: the host's stream already carries the aligned place (J3: the
             // innkeeper, held for an aligned table cleaning, walked off under the tick on her own pending walk and
             // was snapped back); an avatar's aligned minigame entry holds through op 9
@@ -1293,6 +1361,7 @@ uint8_t handle(const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t
             std::string nm; size_t at = 0;
             if (!name_at(1, &nm, &at) || nm.empty() || len != at) return kRBadRequest;
             if (!g_animArmed) return kRNotArmed;
+            if (std::strncmp(nm.c_str(), "kcd2mp_", 7) != 0 && defer_if_pending(nm, "", "", 0, 0, true)) return kROk;   // WO-210 H.1
             char why[128];
             const int id = start_shot(nm, "", "", 0, false, why, sizeof why);
             if (id < 0) logf("WO143-SHOT %s stop not requested: %s", nm.c_str(), why);

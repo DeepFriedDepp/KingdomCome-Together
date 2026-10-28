@@ -34,6 +34,8 @@
 #include "wo140.h"
 #include "wo141.h"
 #include "wo143.h"
+#include "wo210_hit.h"
+#include "fault_guard.h"
 #include "wo147.h"
 #include "wo151.h"
 #include "wo163.h"
@@ -253,6 +255,10 @@ void send_pvp_hit(uint32_t victimEid, float st, float hp, uint8_t flags, uint8_t
     body[12] = flags; body[13] = material;
     send_unsolicited(kPvpHitOut, body, sizeof(body), "PvpHit");
 }
+
+// WO-210 E.2: the local player's blow on a copy, filtered here (main thread, wo210_hit's tick): the LocalHit frame with no numbers and
+// byte 26 "judge it there" -- an agent that predates it reads 26 bytes and drops it as a hit that carries nothing.
+void send_wo210_hit(const void* body, uint16_t len) { send_unsolicited(kLocalHit, body, len, "LocalHit(E.2)"); }
 
 // WO-132: an NPC's hit on an avatar (main thread, hits::tick).
 void send_npc_avatar_hit(uint32_t victimEid, float st, float hp, uint32_t attackerEid, uint8_t flags, const char* name) {
@@ -515,12 +521,14 @@ void send_npc_status(HANDLE h, uint8_t seq) {
 //
 // Fixed here instead, one level up, with the identical shape PR #1 used --
 // state with process lifetime behind a shared_ptr, so giving up on it can
-// never dangle anything. The actual run_sync call moves to a detached helper
-// thread; serve() waits on ITS OWN bounded timeout against the shared state.
-// If that elapses, serve() logs it, replies failure, and goes back to
-// reading the pipe; the helper thread and run_sync's own wait are left to
-// finish whenever (or if) the game recovers -- harmlessly, since nothing on
-// the pipe thread still references them by then.
+// never dangle anything. The task is posted to the main thread with that
+// state (WO-210 H.3: no longer through a helper thread per request); serve()
+// waits on ITS OWN bounded timeout against the shared state. If that
+// elapses, serve() logs it, replies failure, and goes back to reading the
+// pipe; the posted task finishes whenever (or if) the game recovers --
+// harmlessly, since nothing on the pipe thread still references it by then.
+KCDMP_FAULT_CALL(g_sitePipeTask, "pipe::main-thread task");
+
 template <typename T>
 struct PipeSyncState {
     std::mutex mutex;
@@ -553,15 +561,25 @@ constexpr uint8_t  kReasonUnknownCommand = 18;   // mirrors PipeReason.UnknownCo
 template <typename T>
 bool run_sync_bounded(const std::function<void(T&)>& work, const char* what, T& outValue, bool* faultedOut = nullptr) {
     auto state = std::make_shared<PipeSyncState<T>>();
-    std::thread([state, work] {
+    // WO-210 H.3: the task is posted to the main thread directly; serve() waits on the shared state, bounded. It used to be a detached
+    // helper thread per request (its run_sync waited for the frame) -- one OS thread created and torn down for every pipe request, ~50 a
+    // second on a host alone, and the host alone climbed ~50-85 MB/s with it. The guarantee is the same: nothing here references the
+    // caller's frame (work is copied, state is shared), so a wait given up on can never dangle, and a task the frame runs late still lands.
+    std::function<void(T&)> task = work;
+    main_thread::post([state, task] {
         bool faulted = false;
-        const bool ran = main_thread::run_sync([&] { work(state->value); }, 5000, &faulted);
+        try {
+            faulted = !fault::guarded(g_sitePipeTask, [&] { task(state->value); });
+        } catch (...) {
+            logf("PIPE: a task raised a C++ exception on the main thread -- swallowed");
+            faulted = true;
+        }
         std::lock_guard<std::mutex> lock(state->mutex);
-        state->ran = ran;
+        state->ran = true;
         state->faulted = faulted;
         state->done = true;
         state->cv.notify_all();
-    }).detach();
+    });
 
     std::unique_lock<std::mutex> lock(state->mutex);
     if (!state->cv.wait_for(lock, std::chrono::milliseconds(kPipeSyncTimeoutMs),
@@ -1557,6 +1575,7 @@ bool start() {
     kcdmp::hits::set_npc_hit_callback(&send_npc_avatar_hit);
     kcdmp::hits::set_discard_callback(&send_discarded);
     kcdmp::hits::set_defence_callback(&send_defence);   // WO-208 B
+    kcdmp::wo210hit::set_frame_callback(&send_wo210_hit);   // WO-210 E.2
     kcdmp::wo132::set_combat_callback(&send_npc_combat);
     // WO-137: quest State changes.
     kcdmp::wo137::set_send_callback(&send_quest_change);

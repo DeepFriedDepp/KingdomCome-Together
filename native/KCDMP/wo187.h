@@ -88,6 +88,9 @@ struct QueueInfo { int n = -1; int kept = 0; char first[48]{}; int32_t firstPrio
 QueueInfo queue_info(uint32_t eid);
 // WO-190 0.1 (main thread, read-only): the body's Mannequin tag state (its action controller's context +0x10, WO-100's read), n <= 20 bytes.
 bool tag_state(uint32_t eid, uint8_t* out, size_t n);
+// WO-210 0.3: a fragment's name in the body's own mannequin table (the game's fragment-ID tag names), and the reverse (main thread).
+bool fragment_name(uint32_t eid, uint32_t frag, char* out, size_t n);
+bool fragment_id(uint32_t eid, const char* name, uint32_t* out);
 // WO-201 follow-up (research, main thread, read-only): the animated character's desired motion parameters (id 0 travel speed, 2 travel
 // angle, 4 turn angle, 6 stop leg: CryAnimation's EMotionParamID) and the actor's requested velocity.
 struct MotionParams { int count = 0; uint8_t id[6]{}; float value[6]{}; float reqVel[2]{}; };

@@ -355,3 +355,81 @@ public class BriefingWo204Tests
         Assert.Equal("1 (415)", s["conversations announced (barks kept out)"]);
     }
 }
+
+/// <summary>WO-210 H.4: the session's own role, this launch's logs by the launch id, the instruments' section.</summary>
+public class BriefingWo210Tests
+{
+    private static Briefing.Input Inp(params (string Key, string[] Lines, DateTime? Mtime)[] files)
+    {
+        var inp = new Briefing.Input();
+        foreach (var (k, l, mt) in files) { inp.Logs[k] = l; if (mt is DateTime t) inp.Mtimes[k] = t; }
+        return inp;
+    }
+
+    [Fact]
+    public void The_joiners_bundle_says_joiner_even_when_the_authority_passed_to_it()
+    {
+        var agent = new[] { "20:08:02.026 m=1 off=? [role] this client no longer holds NPC->player damage authority",
+                            "20:08:02.459 m=1 off=? MP-JOIN joiner: the host (ghost 0) runs a SHARED WORLD -- this machine follows",
+                            "20:14:26.647 m=1 off=+1847 [role] this client now holds NPC->player damage authority" };
+        Assert.Equal("joiner", Briefing.SessionRole(agent));
+        Assert.Equal("host", Briefing.SessionRole(new[] { "21:05:28.412 m=1 off=? [role] this client now holds NPC->player damage authority" }));
+        Assert.Equal("?", Briefing.SessionRole(Array.Empty<string>()));
+    }
+
+    [Fact]
+    public void Only_logs_naming_this_launch_count()
+    {
+        var now = new DateTime(2026, 10, 27, 21, 27, 44);
+        var same = Inp(("agent.log", new[] { "21:01:49.130 m=5 off=? x", "21:01:49.143 m=12 off=? MP-LAUNCH id=20261027-210140 (the game's own log start)" }, now),
+                       ("agent.prev.log", new[] { "20:21:44.317 m=5 off=? x", "20:21:44.330 m=6 off=? MP-LAUNCH id=20261027-202130 (the game's own log start)" }, new DateTime(2026, 10, 27, 20, 58, 4)),
+                       ("agent.prev2.log", new[] { "21:00:44.317 m=5 off=? x", "21:00:44.330 m=6 off=? MP-LAUNCH id=20261027-210140 (the game's own log start)" }, new DateTime(2026, 10, 27, 21, 1, 0)));
+        // the launch before ended 4 minutes before this one began (inside WO-204's 30-minute window) -- it is not this launch: out
+        Assert.Equal(new[] { "agent.prev2.log", "agent.log" }, Briefing.SessionAgentKeys(same));
+        Assert.Equal("20261027-210140", Briefing.LaunchId(same.Logs["agent.log"]));
+        Assert.Null(Briefing.LaunchId(new[] { "x" }));
+    }
+
+    [Fact]
+    public void The_instruments_section_counts_every_line()
+    {
+        var native = new[] { "[22:00:00.000] t1 WO210-STATE reseat npc=a was=lying(its own) want=standing path=15-host-base ms=300 -> ok [n=1]",
+                             "[22:00:01.000] t1 WO210-STATE reseat npc=b was=empty want=standing path=unknown ms=300 -> ok [n=2]",
+                             "[22:00:02.000] t1 WO210-CLINCH loop npc=c: 5 asks within 1000 ms (asks=5 refused=5 started_by=the-copy) [n=1]" };
+        var md = W210Instruments.Section(null, native, new[] { "22:00:03.000 m=1 off=? WO210-STATE handover npc=a path=15-host-base" });
+        Assert.Contains("the owner's reseats:** 2 (path unknown: 1)", md);
+        Assert.Contains("loops 1", md);
+        Assert.Contains("released the game's way: 1", md);
+        Assert.Contains("empty bodies** (a copy's whole body with no action over 0.3 s, within 60 m): no probe", md);
+    }
+
+    [Fact]
+    public void Stale_postures_come_from_the_probes_own_families()
+    {
+        string L(long t, string fam, string hf, double x) => "{\"t\":" + t + ",\"m\":\"joiner\",\"a\":[{\"n\":\"Dude\",\"k\":\"player\",\"p\":[0,0,0]},{\"n\":\"ttkc_man_5\",\"k\":\"copy\",\"p\":["
+            + x.ToString(System.Globalization.CultureInfo.InvariantCulture) + ",0,0],\"fam\":\"" + fam + "\",\"hf\":\"" + hf + "\",\"sc\":[{\"s\":\"FullBody\",\"c\":\"C_AnimActionIdleState\",\"fr\":45,\"fn\":\"Lying\",\"pr\":3}]}]}";
+        var lines = new List<string>();
+        for (int i = 0; i < 20; i++) lines.Add(L(1000 + i * 100, "lying", "moving", i * 0.5));   // 1.9 s lying while its NPC walks, 9.5 m slid
+        for (int i = 0; i < 10; i++) lines.Add(L(3100 + i * 100, "lying", "lying", 9.5));        // its NPC lies too: fine
+        var s = AnimStream.Parse(new StringReader(string.Join("\n", lines)));
+        var st = W210Instruments.StalePostures(s);
+        Assert.Single(st);
+        Assert.Equal(1, st[0].N);
+        Assert.InRange(st[0].Moved, 9.0, 10.0);
+        Assert.Empty(W210Instruments.EmptyBodies(s));
+    }
+
+    [Fact]
+    public void Every_mark_shows_both_clocks_and_the_sun_here()
+    {
+        var agent = new[] { "21:10:00.000 m=1 off=+1 WO210-TIME mark=k3x9q2mzt1 this=06:12 host=06:10 gap_game_s=+118 role=joiner",
+                            "21:12:00.000 m=1 off=+1 WO210-TIME mark=local this=07:00 host=? gap_game_s=? role=joiner" };
+        var kcd = new[] { "[KCD2-MP] WO210-SUN mark=k3x9q2mzt1 sun=06:40" };
+        var c = W210Instruments.MarkClocks(agent, kcd);
+        Assert.Equal(2, c.Count);
+        Assert.Equal(("k3x9q2mzt1", "06:12", "06:10", "+118", "06:40"), c[0]);
+        Assert.Equal("?", c[1].Sun);
+        var md = W210Instruments.Section(null, Array.Empty<string>(), agent, kcd);
+        Assert.Contains("| k3x9q2mzt1 | 06:12 | 06:10 | +118 | 06:40 |", md);
+    }
+}

@@ -138,9 +138,9 @@ public class Wo203W164FitTests
     public void The_new_kinds_are_named_and_append_only()
     {
         Assert.Equal(((byte)0x76, (byte)0x77, (byte)0x78, (byte)0x79), (Protocol.ConvUp, Protocol.ConvDown, Protocol.W203Up, Protocol.W203Down));
-        string[] conv = { "announce", "join", "snapshot", "line", "cam", "anim", "options", "vote", "chosen", "skill", "leave", "end", "timer" };
+        string[] conv = { "announce", "join", "snapshot", "line", "cam", "anim", "options", "vote", "chosen", "skill", "leave", "end", "timer", "hover" };   // WO-210 F.2a
         for (int i = 0; i < conv.Length; i++) Assert.Equal(conv[i], Protocol.ConvKindName((byte)(i + 1)));
-        Assert.Equal("unknown-14", Protocol.ConvKindName(14));
+        Assert.Equal("unknown-15", Protocol.ConvKindName(15));
         Assert.Equal((byte)13, Protocol.ConvTimer);
         string[] w203 = { "defence-swing", "defence-outcome", "guard-state", "engage-early", "npc-worn", "npc-pose", "join-progress", "focus-edge", "travel-route" };
         for (int i = 0; i < w203.Length; i++) Assert.Equal(w203[i], Protocol.W203KindName((byte)(i + 1)));

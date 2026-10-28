@@ -2125,6 +2125,13 @@ bool is_avatar_eid(uint32_t eid) {
 
 void* player_combat_actor() { return g_playerCa.load(); }
 
+// WO-210 B.1 (any thread, read-only): a combat actor's opponent as a combat actor (its model +0x1118, checked by class), or null
+void* opponent_ca(void* ca) {
+    void* model = nullptr; void* opp = nullptr;
+    if (!ca || !rd(ca, kCaModel, &model) || !model || !rd(model, kModelOpponent, &opp) || !opp) return nullptr;
+    return as_combat_actor(opp);
+}
+
 // ---- WO-165: the attacker's four attack fields (the replay's precondition) ------------------------------------------------
 namespace {
 template <class T> bool wr(void* base, size_t off, const T& v) {

@@ -3,6 +3,9 @@
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 // WO-165: the replay through the engine's hit processor (wo165.h).
 #include "wo165.h"
+#include "inline_hook.h"
+#include "wo210_rules.h"
+#include "wo210.h"
 #include "wo166_rules.h"
 #include "wo166.h"
 #include "wo178.h"
@@ -128,7 +131,10 @@ bool resolve() {
     const uint8_t* process = anchor::function_by_string(cm, kProcessLabel, &n);
     if (!process) { g_why = "the RPGProcessHit label is not referenced by exactly one function"; logf("WO165-REPLAY not armed: %s (%d)", g_why, n); return false; }
     uint8_t pro[sizeof kProcessPrologue]{};
-    if (!copy_bytes(process, pro, sizeof pro) || std::memcmp(pro, kProcessPrologue, sizeof pro) != 0) {
+    bool proOk = copy_bytes(process, pro, sizeof pro) && std::memcmp(pro, kProcessPrologue, sizeof pro) == 0;
+    // WO-210 E.2: the mod's own gate sits at its entry (wo210_hit.cpp) -- the bytes it replaced are the prologue read; calls through it pass
+    if (!proOk) proOk = inlinehook::original_bytes(process, pro, sizeof pro) && std::memcmp(pro, kProcessPrologue, sizeof pro) == 0;
+    if (!proOk) {
         g_why = "RPGProcessHit's prologue is not the one read (another build)"; logf("WO165-REPLAY not armed: %s", g_why); return false;
     }
     const uint8_t* caller = anchor::function_by_string(cm, kCallerLabel, &n);
@@ -269,7 +275,10 @@ Result replay(const Request& rq) {
         // him there: live, block zone 2 vs the swing's zone 5 left a "blocked" blow at almost a hit's damage); put back after the call
         int32_t prevBz = 0;
         const bool bzSet = ownBlock && motion::write_block_zone(vModel, res.written.zone, &prevBz);
+        int32_t prevState = 0;
+        const bool stSet = rq.strikeForCall && motion::read_state(aModel, &prevState) && prevState != kStateStriking && motion::write_state(aModel, kStateStriking);
         ok = call_process(g_fnProcess, rpg, result, hitIn, flags, &ret);
+        if (stSet) motion::write_state(aModel, prevState);
         if (bzSet) motion::write_block_zone(vModel, prevBz, nullptr);
         hits::replay_end(&cap);
         if (marked && !prevIntended) wo173::mark_intended(aModel, false, nullptr);
@@ -312,6 +321,11 @@ Result replay(const Request& rq) {
         slot_for(res.seq)->d = Damage{2, 0, 0, true};   // no record, no blow: nothing to measure
     }
     res.outcome = classify(ret, cap.seen, flags, cap.seen ? cap.rec : nullptr);
+    // WO-210 C.1 (mp_death_engine): the handler's last step on the same result -- ClientHit (the engine's own hit event: the reaction of a
+    // victim out of combat mode, a lethal hit's death, the corpse's dead state the loot check asks for). NPC victims only; "Hit was
+    // filtered" skips it, as the handler does.
+    if (cap.seen && !victimIsPlayer && (rq.flags & kFlagReact) && res.outcome != Outcome::Filtered && wo210::on(wo210rules::kBitDeathEngine))
+        res.clientHit = wo173::client_hit(result, res.react, static_cast<uint8_t>(res.outcome));
     switch (res.outcome) {
         case Outcome::Hit: c_hits.fetch_add(1); break;
         case Outcome::Blocked: c_blocked.fetch_add(1); break;

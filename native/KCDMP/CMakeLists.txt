@@ -82,6 +82,9 @@ add_library(KCDMP SHARED
     wo203_join.cpp
     wo208.cpp
     wo209.cpp
+    wo210.cpp
+    wo210_kd.cpp
+    wo210_hit.cpp
 )
 
 target_include_directories(KCDMP PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

@@ -85,6 +85,34 @@ def draw_icon():
     return out
 
 
+def draw_hover():
+    """WO-210 F.2a: the partner's cursor on a row -- a thin hollow ring in the same warm metal (nothing inside: the row stays readable)."""
+    c = N / 2.0
+    out = Image.new('RGBA', (N, N), (0, 0, 0, 0))
+    rim = radial(N, (236, 214, 160), (150, 116, 70), c - N * 0.18, c - N * 0.20, N * 0.75)
+    ring = mask_circle(N, c, c, N * 0.44)
+    hole = mask_circle(N, c, c, N * 0.36)
+    ring.paste(0, (0, 0), hole)
+    out.paste(rim, (0, 0), ring)
+    return out
+
+
+def draw_pick():
+    """WO-210 F.2b: the pick -- the vote's badge (rim, dark disc) with a cream check mark."""
+    c = N / 2.0
+    out = Image.new('RGBA', (N, N), (0, 0, 0, 0))
+    rim = radial(N, (236, 214, 160), (122, 92, 52), c - N * 0.18, c - N * 0.20, N * 0.75)
+    out.paste(rim, (0, 0), mask_circle(N, c, c, N * 0.47))
+    out.paste(Image.new('RGBA', (N, N), (28, 22, 16, 255)), (0, 0), mask_circle(N, c, c, N * 0.40 + N * 0.012))
+    face = radial(N, (64, 56, 46), (24, 20, 16), c - N * 0.06, c - N * 0.14, N * 0.48)
+    out.paste(face, (0, 0), mask_circle(N, c, c, N * 0.40))
+    ck = Image.new('L', (N, N), 0)
+    ImageDraw.Draw(ck).line([(c - N * 0.20, c + N * 0.01), (c - N * 0.05, c + N * 0.16), (c + N * 0.22, c - N * 0.15)], fill=255,
+                            width=int(N * 0.09), joint='curve')
+    out.paste(Image.new('RGBA', (N, N), (240, 231, 208, 255)), (0, 0), ck)
+    return out
+
+
 def reduce(im, size):
     a = np.asarray(im, np.float32) / 255.0
     rgb, alpha = a[..., :3] * a[..., 3:4], a[..., 3:4]
@@ -105,6 +133,12 @@ def main():
     path = os.path.join(a.out, 'kct_vote_icon.dds')
     icon.save(path, pixel_format='DXT5')
     print('wrote', path, os.path.getsize(path), 'bytes', icon.size)
+    # WO-210 F.2: the partner's cursor (a ring) and the pick (a check mark), the same size and format
+    for name, draw in (('kct_hover_icon.dds', draw_hover), ('kct_pick_icon.dds', draw_pick)):
+        im = reduce(draw(), SIZE)
+        p = os.path.join(a.out, name)
+        im.save(p, pixel_format='DXT5')
+        print('wrote', p, os.path.getsize(p), 'bytes', im.size)
     if a.preview:
         big = icon.resize((256, 256), Image.NEAREST)
         sheet = Image.new('RGBA', (256 + 64 + 24, 256), (70, 64, 56, 255))

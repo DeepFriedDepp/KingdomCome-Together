@@ -27,6 +27,10 @@ public struct AnimSample
     public int FbFrag;          // its fragment; -1 = unknown
     public int Scopes;          // installed scopes holding an action
     public AnimBones? Bones;    // only on the few bodies the probe samples bones for
+    // WO-210 0.3 (null / -1 in an older probe): the FullBody's fragment name, its whole-body family and (a copy) the host NPC's family as
+    // the owner last applied it, the combat mode, the opponent's name
+    public string? FbName, Fam, Hf, Op;
+    public sbyte Cm;
 }
 
 /// <summary>WO-206 D: the optional bones (world metres). Any one may be missing.</summary>
@@ -112,6 +116,10 @@ public sealed class AnimStream
             QOutrank = -1,
             Tg = Str(a, "tg") is { Length: > 0 } tg ? Intern(tg) : null,
             FbFrag = -1,
+            Fam = Str(a, "fam") is { Length: > 0 } fam ? Intern(fam) : null,
+            Hf = Str(a, "hf") is { Length: > 0 } hf && hf != "-" ? Intern(hf) : null,
+            Op = Str(a, "op") is { Length: > 0 } op ? Intern(op) : null,
+            Cm = (sbyte)(Long(a, "cm", out long cmv) ? (cmv != 0 ? 1 : 0) : -1),
         };
         if (a.TryGetProperty("sc", out var sc) && sc.ValueKind == JsonValueKind.Array)
             foreach (var e in sc.EnumerateArray())
@@ -128,6 +136,7 @@ public sealed class AnimStream
                 {
                     smp.Fb = c;
                     smp.FbFrag = Long(e, "fr", out long fr) ? (int)fr : -1;
+                    smp.FbName = Str(e, "fn") is { Length: > 0 } fnm ? Intern(fnm) : null;
                     fbPrio = Long(e, "pr", out long pr) ? pr : long.MinValue;
                 }
             }

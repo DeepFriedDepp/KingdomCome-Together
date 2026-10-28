@@ -26,6 +26,7 @@
 #include "wo194.h"
 #include "wo195.h"
 
+#include <windows.h>
 #include <atomic>
 #include <cstdio>
 #include <cstring>
@@ -60,9 +61,31 @@ int status_text(char* out, int n) {
                          hits::skirmish_relation_armed() ? "armed" : "off", c_asked.load(), c_answeredHostile.load(), c_answeredNot.load(), c_unanswered.load());
 }
 
+// WO-210 H.3: every request of the family counted by op, the busiest told once a minute (WO163-OPS) -- a lone host's memory climb is spread
+// over the ops the agent asks most; the counts say which those are on a given machine
+std::atomic<uint32_t> c_byOp[256]{};
+std::atomic<uint64_t> g_opsToldAtMs{0};
+void tell_ops() {
+    const uint64_t now = GetTickCount64();
+    uint64_t was = g_opsToldAtMs.load();
+    if (now - was < 60000 || !g_opsToldAtMs.compare_exchange_strong(was, now)) return;
+    uint32_t top[12][2]{};
+    for (int op = 0; op < 256; ++op) {
+        const uint32_t c = c_byOp[op].exchange(0);
+        for (int i = 0; i < 12; ++i)
+            if (c > top[i][1]) { for (int j = 11; j > i; --j) { top[j][0] = top[j - 1][0]; top[j][1] = top[j - 1][1]; } top[i][0] = static_cast<uint32_t>(op); top[i][1] = c; break; }
+    }
+    char b[300]; int k = 0;
+    for (int i = 0; i < 12 && top[i][1] && k < static_cast<int>(sizeof b) - 16; ++i)
+        k += std::snprintf(b + k, sizeof b - static_cast<size_t>(k), "%s%u:%u", k ? " " : "", top[i][0], top[i][1]);
+    logf("WO163-OPS the last minute's requests by op (op:count): %s", k ? b : "none");
+}
+
 uint8_t handle(const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t* outLen) {
     *outLen = 0;
     if (!len) return kRBadRequest;
+    c_byOp[body[0]].fetch_add(1, std::memory_order_relaxed);
+    tell_ops();
     switch (body[0]) {
         case kOpSkirmishHostile: {
             if (len < 2 || cap < 2) return kRBadRequest;

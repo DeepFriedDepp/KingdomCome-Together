@@ -42,6 +42,10 @@ struct Request {
     uint32_t victimEid = 0;      // 0 = the local player
     motion::AttackFields fields;
     uint8_t flags = 0;
+    // WO-210 C.4: the attacker's combat State reads Striking for the processor's call alone (written plainly before it, the prior value
+    // put back right after, in the same call -- no frame sees it): the engine judges the victim's block only against a striking attacker,
+    // and a partner's figure inside its own hit reaction has no strike window when his blow arrives (the old way: the capped raw path)
+    bool strikeForCall = false;
 };
 
 enum Reason : uint8_t {
@@ -58,6 +62,7 @@ struct Result {
     uint32_t seq = 0;
     uint8_t flags[kFlagsBytes]{};
     uint8_t recBlock = 0, recSecond = 0, recPerfect = 0, recBroken = 0, recZoneMismatch = 0;
+    bool clientHit = false;   // WO-210 C.1: the handler's own ClientHit queued on this result
     motion::AttackFields before, written;
     motion::ModelRead victimModel;   // the victim's block fields as they were when the call was made
     motion::ModelRead attackerModel; // WO-176 (B2): the attacker's State when the call was made (Striking = the engine judges a block)

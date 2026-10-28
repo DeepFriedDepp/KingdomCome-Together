@@ -292,6 +292,9 @@ public static class Wo201Rules
         if (h1 < 0) return false;
         horse = rest[h0..h1];
         if (actor.StartsWith("DialogTwin_", StringComparison.Ordinal) || actor.StartsWith("kcd2mp", StringComparison.Ordinal)) return false;
+        // WO-210 G.1: the host's own player is no NPC rider (session E: "the host says Dude is on tvid_horse_1" 12 times on the joiner);
+        // his horse travels as his figure's own mount
+        if (actor == "Dude") return false;
         return IsEntityName(actor) && IsEntityName(horse);
     }
 

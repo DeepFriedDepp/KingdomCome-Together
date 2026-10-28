@@ -339,6 +339,7 @@ public partial class GameBridge
             case Protocol.W164MarkPing when W164Text.IsMarkId(m.Text):
                 Interlocked.Increment(ref _w164MarkPingsIn);
                 Console.WriteLine($"MP-MARK ping from player {src}: mark={m.Text} -- this machine's block follows");
+                Wo210TimeAtMark(m.Text);   // WO-210 H.5
                 if (W202("mark_key")) await ExecLuaAsync($"if KCD2MP_W202PartnerMarked then KCD2MP_W202PartnerMarked(\"{(src == 0 ? "your host" : "your partner")}\") end");   // WO-202 VI
                 await W164MarkAsync(m.Text, $"peer{src}");
                 // the host passes a joiner's ping on to the other joiners

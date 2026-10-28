@@ -105,6 +105,7 @@ public class Wo201Tests
         Assert.False(m);
         Assert.False(Wo201Rules.TryMountLine("Actor 'DialogTwin_tsem_suk' starts mounting horse 'DialogTwin_tsem_sukHorse' instantly", out _, out _, out _));
         Assert.False(Wo201Rules.TryMountLine("Actor 'kcd2mp_1' starts mounting horse 'h' ", out _, out _, out _));
+        Assert.False(Wo201Rules.TryMountLine("Actor 'Dude' starts mounting horse 'tvid_horse_1' instantly", out _, out _, out _));   // WO-210 G.1: the host himself
         Assert.False(Wo201Rules.TryMountLine("Actor 'x' does something", out _, out _, out _));
         Assert.Contains("Actor '", LogTailGameTransport.Wo144Prefixes);
     }

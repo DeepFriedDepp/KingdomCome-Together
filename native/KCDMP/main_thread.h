@@ -60,5 +60,7 @@ float last_dt();
 
 // WO-202 I.1: the game's main thread (the one the frame hook runs on), 0 before the first frame. The crash capture names it.
 unsigned long main_thread_id();
+// WO-210 H.3 (research only): a name KCDMP_TEST_TASK_BLOCK lists (prefix up to '::' or the whole name; "all"): the bisect's switch.
+bool test_task_blocked(const char* name);
 
 } // namespace kcdmp::main_thread

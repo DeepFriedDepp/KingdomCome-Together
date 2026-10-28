@@ -182,6 +182,22 @@ public partial class GameBridge
                 // the mod's ApplyDeath kills the soul with no death reaction: the copy stays upright, frozen in the dead action's first pose
                 // (live: head 1.4 m up, physics still a living entity; a vanilla kill lies as a ragdoll). The game's own ragdoll then lays it down.
                 bool upright = Wo195Rules.Upright(x.Payload[0], x.Payload[2]);
+                // WO-210 C.2 (mp_death_engine): a dead copy ends a corpse the engine's way -- its ragdoll and its dead state (op 142, the hit
+                // handler's own lethal branch), so it lies as its host NPC does and this player's game offers its loot; the twin (off) keeps
+                // WO-195's physics ragdoll for an upright one
+                (byte Result, bool DeadState)? fin = null;
+                if (W210("death_engine") && x.Payload[0] == 1)
+                {
+                    fin = await Wo210FinishBodyAsync(npc, eid);
+                    if (fin is { Result: Protocol.Wo210FinishDone or Protocol.Wo210FinishAlready })
+                    {
+                        await Task.Delay(Wo195Rules.RagdollSettleMs);
+                        var rf = await _combat.Wo163Async(Protocol.Wo195OpCheck, a);
+                        if (rf is { Ok: true, Payload.Length: >= 4 } yf) x = yf;
+                        _ = Wo210DeathCheckAsync(npc, "copy-" + Wo210FinishHow(fin, upright));
+                        upright = false;   // the finish lays it down (its own ragdoll); the physics ragdoll below is not needed
+                    }
+                }
                 if (upright)
                 {
                     await ExecLuaAsync($"if KCD2MP_W195Ragdoll then KCD2MP_W195Ragdoll(\"{EscapeLua(npc)}\") end");

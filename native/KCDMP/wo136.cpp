@@ -176,10 +176,12 @@ bool keep_on() {
     }
     return k == 1;
 }
+// WO-210 E.6: the leave is gone entirely -- a soul in a skirmish is never taken out of it to change its opponent (WO-207 H's crash
+// route; session E still printed "leave + re-add" twice, from this path's old text and its twin). The add alone; a fighting NPC turns by
+// its forced target.
 bool leave_and_add(void* ns, void* targetSoul) {
     uint64_t rv = 0;
-    if (keep_on()) { c_keptIn.fetch_add(1); return hits::skirmish_add(ns, targetSoul, 1, &rv); }
-    hits::skirmish_remove(ns, &rv);
+    c_keptIn.fetch_add(1);
     return hits::skirmish_add(ns, targetSoul, 1, &rv);
 }
 
@@ -239,7 +241,7 @@ void decide(uint32_t npc, NpcThreat& t, double now, const char* why) {
     else if (asked) queue(npc, p.to, Kind::Switch, why);
     else c_switchFail.fetch_add(1);
     logf("WO136-TARGET npc=%s %s -> %s threat=%d/%d damage=%.1f/%.1f why=%s -> %s", nb, src_name(cur, b1, sizeof b1), src_name(p.to, b2, sizeof b2),
-         p.toScore, p.curScore, p.toDamage, p.curDamage, why, ok ? "switched (read back)" : asked ? "asked (leave + re-add; read back over the next frames)" : "NOT switched (no soul / the skirmish call failed)");
+         p.toScore, p.curScore, p.toDamage, p.curDamage, why, ok ? "switched (read back)" : asked ? "asked (skirmish add; read back over the next frames)" : "NOT switched (no soul / the skirmish call failed)");
 }
 
 // for_each_entity: the nearest fighting NPC within reach of a point.
@@ -276,8 +278,16 @@ bool hand_visit(void* e, void* ctx) {
 void set_enabled(bool on) { g_on.store(on); }
 bool enabled() { return g_on.load(); }
 
+std::atomic<uint32_t> c_copySkipped{0};
 void note_threat(uint32_t npcEid, uint32_t srcEid, int weight, const char* why, float damage) {
     if (!g_on.load() || !npcEid) return;
+    // WO-210 E.6: a copy of the host's NPC is never retargeted here -- its opponent is the host NPC's, mirrored (WO-209 A); the joiner's own
+    // hits on it went into this arbitration (session E: "WO136-TARGET npc=tkrc_man_1 avatar -> host ... asked" on the joiner)
+    if (npcdrive::is_bound_eid(npcEid)) {
+        const uint32_t k = c_copySkipped.fetch_add(1) + 1;
+        if (k <= 10 || k % 200 == 0) logf("WO210-TARGET npc=0x%X is a copy of the host's NPC: its opponent is the host's (the mirror), never this machine's threat rule [n=%u]", npcEid, k);
+        return;
+    }
     if (srcEid != kPlayer && hits::scene_owned_eid(npcEid, "wo136-threat")) return;   // WO-174: no avatar is a threat to a scripted brawl's actor
     const bool host = srcEid == kPlayer;
     const bool hostTarget = host && g_hostTarget.load();
@@ -365,6 +375,7 @@ int handover_fights(bool removePlayer, const char* why) {
         float np[3];
         char nb[64];
         name_of(npc, nb, sizeof nb);
+        if (npcdrive::is_bound_eid(npc)) { c_copySkipped.fetch_add(1); continue; }   // WO-210 E.6: a copy's opponent is the host's (the mirror)
         if (!pos_of(npc, np)) continue;
         float d[16];
         for (int i = 0; i < na; ++i) { float ap[3]; d[i] = pos_of(ae[i], ap) ? dist(ap, np) : -1.0f; }
@@ -397,7 +408,7 @@ int handover_fights(bool removePlayer, const char* why) {
         else if (asked) queue(picks[i].npc, picks[i].to, Kind::Handover, why);
         else c_handoverLost.fetch_add(1);
         logf("WO136-HANDOVER npc=%s -> avatar eid=0x%X (%.1f m) %s -- %s: the fight goes on with the partner", nb, picks[i].to, picks[i].d,
-             ok ? "handed over (read back)" : asked ? "asked (leave + re-add; read back over the next frames)" : "NOT asked (no soul / the skirmish call failed)", why);
+             ok ? "handed over (read back)" : asked ? "asked (skirmish add; read back over the next frames)" : "NOT asked (no soul / the skirmish call failed)", why);
     }
     return np_;
 }

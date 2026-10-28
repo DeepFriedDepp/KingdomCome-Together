@@ -11,10 +11,16 @@
 #include "wo209.h"
 #include "wo209_rules.h"
 #include "wo143.h"
+#include "wo172.h"
+#include "wo210.h"
+#include "wo210_kd.h"
+#include "wo210_rules.h"
 #include "combat_swing.h"
 #include "engine.h"
 #include "fault_guard.h"
 #include "hits.h"
+#include "buffs.h"
+#include "respawn_actions.h"
 #include "log.h"
 #include "motion.h"
 #include "npc_drive.h"
@@ -29,6 +35,7 @@
 #include <cstring>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace kcdmp::wo208 {
@@ -416,8 +423,12 @@ uint8_t op_stream_read(const uint8_t* body, size_t len, uint8_t* out, size_t cap
         if (n <= 0) continue;
         bool cm = false;
         motion::combat_mode_of(eid, &cm);
+        // WO-210 C.3: the body's knockdown (a human whose physics is no living entity) rides the same byte, bit 1
+        const char* fbCls = nullptr;
+        for (int i = 0; i < n; ++i) if (sc[i].ok && !sc[i].empty && !std::strcmp(sc[i].name, "FullBody")) fbCls = sc[i].action;
+        const bool down = wo210kd::host_down(eid, e, fbCls);
         uint8_t rec[2 + 2 * kWireScope];
-        uint64_t sig = cm ? 1 : 2;
+        uint64_t sig = (cm ? 1 : 2) | (down ? 4 : 0);
         int nsc = 0;
         for (int i = 0; i < n && nsc < 2; ++i) {
             const uint8_t which = !std::strcmp(sc[i].name, "FullBody") ? 0 : !std::strcmp(sc[i].name, "UpperBody") ? 1 : 255;
@@ -429,7 +440,7 @@ uint8_t op_stream_read(const uint8_t* body, size_t len, uint8_t* out, size_t cap
         const size_t need = 1 + nl + 2 + static_cast<size_t>(nsc) * kWireScope;
         if (o + need > cap) break;
         out[o] = static_cast<uint8_t>(nl); std::memcpy(out + o + 1, nm, nl); o += 1 + nl;
-        out[o] = cm ? 1 : 0; out[o + 1] = static_cast<uint8_t>(nsc); o += 2;
+        out[o] = static_cast<uint8_t>((cm ? wo210rules::kCmCombat : 0) | (down ? wo210rules::kCmDown : 0)); out[o + 1] = static_cast<uint8_t>(nsc); o += 2;
         std::memcpy(out + o, rec + 2, static_cast<size_t>(nsc) * kWireScope); o += static_cast<size_t>(nsc) * kWireScope;
         hb.sig = sig; hb.sentAt = now;
         ++count;
@@ -437,6 +448,31 @@ uint8_t op_stream_read(const uint8_t* body, size_t len, uint8_t* out, size_t cap
     }
     out[0] = static_cast<uint8_t>(count);
     *outLen = o;
+    return wo163::kROk;
+}
+
+// WO-210 op 141 (A.3/A.4, the host): a joiner asked for these bodies' state again -- their signatures are forgotten, so the next poll
+// sends them; no names: every body. [n:1] n x ([nameLen:1][name])
+std::atomic<uint32_t> c_forgot{0};
+uint8_t op_stream_forget(const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t* outLen) {
+    *outLen = 0;
+    if (len < 2) return wo163::kRBadRequest;
+    const int n = body[1];
+    if (n == 0) { c_forgot.fetch_add(static_cast<uint32_t>(g_hostBodies.size())); g_hostBodies.clear(); }
+    size_t o = 2;
+    for (int i = 0; i < n; ++i) {
+        if (o + 1 > len) return wo163::kRBadRequest;
+        const size_t nl = body[o];
+        if (nl == 0 || o + 1 + nl > len) return wo163::kRBadRequest;
+        const std::string want(reinterpret_cast<const char*>(body + o + 1), nl);
+        o += 1 + nl;
+        for (auto it = g_hostBodies.begin(); it != g_hostBodies.end(); ++it) {
+            void* e = engine::entity_by_id(it->first);
+            const char* nm = e ? engine::entity_name(e) : nullptr;
+            if (nm && _stricmp(nm, want.c_str()) == 0) { g_hostBodies.erase(it); c_forgot.fetch_add(1); break; }
+        }
+    }
+    if (cap >= 1) { out[0] = static_cast<uint8_t>(n); *outLen = 1; }
     return wo163::kROk;
 }
 
@@ -489,8 +525,17 @@ struct OwnCopy {
     void* baseAct = nullptr;    // rule 1: the host's base fragment, ours, while the copy's own base is missing
     uint32_t baseFrag = 0;
     uint64_t aiHostAct = 0;     // WO-209 B: the host action last started as the copy's own combat attack (the engine runs it to its end)
+    // WO-210 A: the host NPC's current FullBody (the state the owner applied last), the copy's last exit path (A.2) and the watchdog's
+    // breach stretch (A.5)
+    HostScope host{}; bool hostHave = false;
+    double baseAt = -1e9; bool baseStarted = false;
+    uint8_t lastPath = 0; double lastPathAt = -1e9;
+    double watchAt = 0, breachSince = -1, transSince = -1; uint8_t breach = 0; uint32_t transFrag = 0xFFFFFFFFu;
+    double askedAt = -1e9, reseatBackoff = 0;
 };
 std::unordered_map<uint32_t, OwnCopy> g_owned;   // main thread
+std::unordered_set<uint32_t> g_readyHeld;          // WO-210 D.3: copies whose combat-mode hold the host NPC's streamed state set
+std::atomic<uint32_t> c_readyHolds{0}, c_readyReleases{0};
 std::atomic<uint32_t> c_oInstalls{0}, c_oRefusals{0}, c_oStale{0}, c_oWithdraws{0}, c_oSteps{0}, c_oPulses{0}, c_oApplied{0}, c_oCopies{0}, c_oFar{0};
 std::string g_ownerOnly;
 double g_ownerDelayS = 0.38;
@@ -507,6 +552,121 @@ const char* cls_name(uint8_t id) {
 
 std::atomic<uint32_t> c_oStops{0}, c_oShotHolds{0};
 std::atomic<uint32_t> c_oAiHolds{0}, c_oQueueFull{0};   // WO-209 B: owner passes that left the full body to the copy's own attack
+
+// ---- WO-210 A: the hand-over (research design: the one rule) ----------------------------------------------------------------------
+// The body's neutral idle when the host's state is not known yet: the host's own standing idle as it streamed it for a body of the
+// same table (its flags), on this copy's own tags; one template per table, found by the game's name of the fragment (MotionIdle is 5
+// in the male table, 0 in the female one).
+struct IdleTpl { bool have = false; HostScope s{}; };
+IdleTpl g_idleTpl[2];
+int idle_table(uint32_t eid) {
+    uint32_t id = 0;
+    if (!wo187::fragment_id(eid, "MotionIdle", &id)) return -1;
+    return id == 5 ? 0 : id == 0 ? 1 : -1;
+}
+void learn_idle(uint32_t eid, const HostScope& h) {
+    if (h.cls != kClsAIMovement && h.cls != kClsIdleState) return;
+    char nm[64];
+    if (!wo187::fragment_name(eid, h.frag, nm, sizeof nm) || std::strcmp(nm, "MotionIdle") != 0) return;
+    const int t = idle_table(eid);
+    if (t >= 0 && !g_idleTpl[t].have) { g_idleTpl[t].have = true; g_idleTpl[t].s = h; logf("WO210-STATE neutral idle learned for table %d: class=%u frag=%u flags=0x%X", t, h.cls, h.frag, h.flags); }
+}
+bool neutral_idle(uint32_t eid, HostScope* out) {
+    const int t = idle_table(eid);
+    if (t < 0 || !g_idleTpl[t].have) return false;
+    *out = g_idleTpl[t].s;
+    uint8_t tg[20]{};
+    if (wo187::tag_state(eid, tg, sizeof tg)) std::memcpy(out->tags, tg, sizeof tg);   // this copy's own tags
+    return true;
+}
+std::string frag_name_of(uint32_t eid, uint32_t frag) {
+    char nm[96];
+    return wo187::fragment_name(eid, frag, nm, sizeof nm) ? std::string(nm) : std::string();
+}
+wo210rules::PFam pfam_of(uint32_t eid, uint8_t cls, uint32_t frag) {
+    return wo210rules::family(cls, frag_name_of(eid, frag).c_str(), frag);
+}
+// The asks the agent drains (op 140): a copy whose own engine posture the hand-over could not lay over -- released the game's way.
+struct Ask { uint8_t kind; std::string name; };
+std::vector<Ask> g_asks;   // main thread
+std::atomic<uint32_t> c_asksOut{0};
+void own_retire(OwnCopy& oc, Probe::Scope& s, double now, const char* why);
+bool is_ours(const OwnCopy& oc, const void* act) {
+    if (!act) return false;
+    if (act == oc.baseAct || act == oc.own[0].act || act == oc.own[1].act) return true;
+    for (const auto& r : oc.retired) if (r.act == act) return true;
+    return false;
+}
+// The host's current FullBody state installed the owner's way, in the same frame as the release of what it replaces: a base family as
+// our base action under the copy's own base (the copy's own base, when it comes, replaces it); any other family at the host's priority
+// as our scope action. Unknown host state: the body's neutral idle. Never "withdraw and leave it", never "stop and leave it empty".
+bool own_handover(uint32_t eid, OwnCopy& oc, double now, uint8_t path) {
+    oc.lastPath = path; oc.lastPathAt = now;
+    if (!wo210::on(wo210rules::kBitStateAlways)) return false;
+    if (wo172::copy_dead(eid)) return false;   // C.2: a dead copy is never driven again
+    // a host scope with nothing in it (d6-waitnight: a wanderer whose host NPC's FullBody was empty, 24 reseats of "the host's state" --
+    // fragment 0 with the empty scope's tags, nothing that plays) is no state to hand over: the copy's own neutral idle, never empty
+    const HostScope* hs = oc.hostHave && (oc.host.cls != kClsNone || !wo210::fix_on(wo210rules::kFixEmptyHostNeutral)) ? &oc.host : nullptr;
+    const Fam fam = hs ? family_of_id(hs->cls, hs->frag) : Fam::Empty;
+    bool installed = false, neutral = false;
+    if (hs && !is_base(fam) && fam != Fam::Hold) {
+        if (oc.own[0].act && oc.own[0].hostAct == hs->act) installed = true;   // ours already plays it
+        else {
+            void* act = nullptr;
+            const rttr::SwingResult r = rttr::install_fragment(eid, hs->frag, hs->tags, hs->prio, hs->flags, &act);
+            if (r == rttr::SwingResult::Ok && act) {
+                if (oc.own[0].act) own_retire(oc, oc.own[0], now, "the hand-over");
+                oc.own[0].act = act; oc.own[0].hostAct = hs->act; oc.own[0].frag = hs->frag; oc.own[0].prio = hs->prio; oc.own[0].queuedAt = now; oc.own[0].started = false;
+                installed = true;
+            }
+        }
+    } else {
+        // a fight's base is the copy's own engine's: its combat footwork and its own attacks run from its combat director. The host's
+        // footwork installed as ours (d8-fight10: 87 hand-overs at the host's base) left the copies' own attacks unstarted -- the blows on
+        // the joiner judged by his game fell from 88.8 % to 44.6 % at the same camp -- so a copy in combat mode, or a host base that is
+        // combat footwork, gets nothing installed: ours steps down and its own engine runs it (the twin fight_base_own off: as d8)
+        bool cmNow = false;
+        motion::combat_mode_of(eid, &cmNow);
+        if (wo210::fix_on(wo210rules::kFixFightBaseOwn) && (fam == Fam::CombatMove || cmNow)) {
+            if (oc.own[0].act) own_retire(oc, oc.own[0], now, "a fight's base is the copy's own");
+            if (oc.baseAct) { rttr::stop_action(oc.baseAct); oc.retired.push_back({oc.baseAct, now}); oc.baseAct = nullptr; oc.baseFrag = 0; }
+            wo210::note_handover(path, true, false);
+            return true;
+        }
+        HostScope b{};
+        bool have = false;
+        if (hs && hs->cls != kClsNone && is_base(fam)) { b = *hs; have = true; }
+        else if (neutral_idle(eid, &b)) { have = true; neutral = true; }
+        // the copy's own base already queued (an action of its own engine at a base priority, over our withdrawn one): it takes the scope
+        // at once -- nothing of ours is queued under it (a fight's every swing would add one)
+        bool ownBaseQueued = false;
+        {
+            const wo187::QueueInfo qi = wo187::queue_info(eid);
+            for (int i = 0; i < qi.nacts; ++i) if (qi.acts[i] && !is_ours(oc, qi.acts[i]) && qi.prio[i] >= 2) ownBaseQueued = true;
+        }
+        if (ownBaseQueued) installed = true;
+        else if (have && oc.baseAct && oc.baseFrag == b.frag) installed = true;   // ours already plays that base
+        else if (have) {
+            void* act = nullptr;
+            const rttr::SwingResult r = rttr::install_fragment(eid, b.frag, b.tags, kBasePriority, b.flags, &act);
+            if (r == rttr::SwingResult::Ok && act) {
+                if (oc.baseAct) { rttr::stop_action(oc.baseAct); oc.retired.push_back({oc.baseAct, now}); }
+                oc.baseAct = act; oc.baseFrag = b.frag; oc.baseAt = now; oc.baseStarted = false;
+                installed = true;
+            }
+        }
+        if (!installed) {
+            bool c = false;
+            motion::combat_mode_of(eid, &c);
+            installed = (c && motion::requeue_guard_idle(eid)) || motion::request_idle_pulse(eid);
+        }
+        // ours on the scope (a posture, a gesture) steps down under the base: the base replaces it now
+        if (oc.own[0].act) own_retire(oc, oc.own[0], now, "the hand-over to the host's base");
+    }
+    wo210::note_handover(path, installed, neutral);
+    return installed;
+}
+
 void own_retire(OwnCopy& oc, Probe::Scope& s, double now, const char* why) {
     if (!s.act) return;
     // rules 2 and 3: an action of ours still pending is removed (the game's own stop: never installed later); a running one steps down,
@@ -578,11 +738,17 @@ void own_apply(uint32_t eid, OwnCopy& oc, int cm, const HostScope hsc[2], const 
         }
         switch (decide(fam, hs ? hs->act : 0, hs ? hs->prio : 0, copyRuns, view)) {
             case Do::Nothing: break;
-            case Do::Withdraw: own_retire(oc, o, now, copyRuns ? "the copy runs it itself" : "the host's scope is back at its base"); break;
+            case Do::Withdraw:
+                // WO-210 A (path 15): the host's scope is back at its base -- the host's base is installed in the same frame, under the
+                // copy's own base (session E: a withdrawn posture kept looping on a paused copy whose own base never came back)
+                if (k == 0 && !copyRuns && wo210::on(wo210rules::kBitStateAlways)) own_handover(eid, oc, now, wo210rules::kPathBase);
+                else own_retire(oc, o, now, copyRuns ? "the copy runs it itself" : "the host's scope is back at its base");
+                break;
             case Do::Stale: {
                 const uint32_t n = c_oStale.fetch_add(1) + 1;
                 if (n <= 40 || n % 100 == 0) logf("WO208-OWN stale npc=%s frag=%u not started in %.0f ms -- removed (#%u)", oc.name.c_str(), o.frag, view.ageS * 1000.0, n);
                 own_retire(oc, o, now, "stale");
+                if (k == 0) { oc.lastPath = wo210rules::kPathStale; oc.lastPathAt = now; }   // A.2 path 3: the watchdog charges a breach to it
                 break;
             }
             case Do::StepPriority:
@@ -617,8 +783,15 @@ void own_apply(uint32_t eid, OwnCopy& oc, int cm, const HostScope hsc[2], const 
     const bool empty = cn > 0 && cs[0].ok && cs[0].empty && !shot;
     if (oc.baseAct) {
         uint32_t st = 0;
-        const bool ours = !empty && cn > 0 && cs[0].act == oc.baseAct;
-        if (!rd(oc.baseAct, 0x28, &st) || st >= 4 || (!empty && !ours)) {   // finished, or the copy's own base is back: ours goes
+        const bool readable = rd(oc.baseAct, 0x28, &st);
+        if (st == 2 || st == 3) oc.baseStarted = true;
+        // WO-210 A: the hand-over installs our base while a withdrawn action of ours may still run above it for a moment -- ours goes when
+        // it finished, or when an action that is not ours holds the full body after ours started (the copy's own base is back) or a second
+        // after it was queued (another took the scope). Before WO-210 it went as soon as anything else ran (rule 1 only knew an empty body).
+        const void* cur = (!empty && cn > 0 && cs[0].ok) ? cs[0].act : nullptr;
+        const bool otherHolds = cur && !is_ours(oc, cur);
+        const bool legacy = !wo210::on(wo210rules::kBitStateAlways) && !empty && cn > 0 && cs[0].act != oc.baseAct;
+        if (!readable || st >= 4 || legacy || (otherHolds && (oc.baseStarted || now - oc.baseAt > 1.0))) {   // finished, or the copy's own base is back: ours goes
             if (st < 4) rttr::stop_action(oc.baseAct);
             oc.retired.push_back({oc.baseAct, now});
             oc.baseAct = nullptr;
@@ -655,17 +828,99 @@ void own_apply(uint32_t eid, OwnCopy& oc, int cm, const HostScope hsc[2], const 
             oc.retired.erase(oc.retired.begin() + static_cast<std::ptrdiff_t>(i));
         } else ++i;
     }
+    // WO-210 A.5 the watchdog: every 250 ms, the copy's full body against the host NPC's current family (wo210_rules.h check()); a breach
+    // that outlasts its threshold is reseated through the hand-over and told (WO210-STATE reseat), charged to the copy's last exit path
+    if (wo210::on(wo210rules::kBitStateAlways) && now - oc.watchAt >= wo210rules::kWatchEveryS && cn > 0 && cs[0].ok) {
+        oc.watchAt = now;
+        using namespace wo210rules;
+        const PFam copyF = cs[0].empty ? PFam::Empty : pfam_of(eid, class_id(cs[0].action), cs[0].frag);
+        const PFam hostF = have[0] ? pfam_of(eid, hsc[0].cls, hsc[0].frag) : PFam::Empty;
+        bool trans = false;
+        if (!cs[0].empty && transition_name(frag_name_of(eid, cs[0].frag).c_str())) {
+            if (oc.transFrag != cs[0].frag) { oc.transFrag = cs[0].frag; oc.transSince = now; }
+            trans = now - oc.transSince <= kTransitionMaxS;
+        } else oc.transFrag = 0xFFFFFFFFu;
+        const bool mod = shot || aiRuns || copyF == PFam::Combat || copyF == PFam::Paired;
+        Verdict v = check(copyF, hostF, trans, mod, !wo210::fix_on(kFixPostureOtherGrace));
+        if (!have[0] && v != Verdict::Empty) v = Verdict::Ok;   // no host state to judge a posture by: only an empty body counts
+        // the same fragment is the same body, whatever class plays it (the owner installs the host's idle-state postures through a combat
+        // action: d1's first watchdog took "ours, other" against "the host's, working" for the very same work fragment, 132 reseats)
+        if (v != Verdict::Empty && have[0] && !cs[0].empty && cs[0].frag == hsc[0].frag) v = Verdict::Ok;
+        wo210::note_check(static_cast<uint8_t>(v));
+        if (v == Verdict::Ok) { oc.breachSince = -1; oc.breach = 0; oc.reseatBackoff = 0; }
+        else {
+            if (oc.breachSince < 0 || oc.breach != static_cast<uint8_t>(v)) { oc.breachSince = now; oc.breach = static_cast<uint8_t>(v); }
+            const double held = now - oc.breachSince;
+            if (held >= breach_after_s(v) + oc.reseatBackoff) {
+                const bool copysOwn = !cs[0].empty && !is_ours(oc, cs[0].act);
+                // a breach no exit explains: the host's posture the owner's install has not shown yet (16), the copy's own engine posture (17)
+                uint8_t path = charged_path(oc.lastPath, oc.lastPathAt, now);
+                if (path == kPathUnknown && v == Verdict::MissingPosture) path = kPathInstallPending;
+                if (path == kPathUnknown && (v == Verdict::StalePosture || v == Verdict::StaleDead) && copysOwn) path = kPathOwnPosture;
+                if (path == kPathUnknown && v == Verdict::PostureOther) path = kPathInstallPending;   // the host's gesture not shown yet
+                const bool ok = own_handover(eid, oc, now, path);
+                // the copy's own engine posture (its NPC state's bed, seat or workstation: an idle state at priority 3) is over any base
+                // of ours: its stance is released the game's own way by the agent (op 140), at most every 5 s
+                if ((v == Verdict::StalePosture || v == Verdict::StaleDead) && copysOwn && now - oc.askedAt >= 5.0 && g_asks.size() < 64) {
+                    oc.askedAt = now;
+                    g_asks.push_back({1, oc.name});
+                }
+                wo210::note_reseat(oc.name.c_str(), cs[0].empty ? "empty" : (std::string(pfam_name(copyF)) + (copysOwn ? "(its own)" : "(ours)")).c_str(),
+                                   pfam_name(hostF), path, held, ok);
+                oc.breachSince = now;   // asked again after another threshold, backed off while the same breach outlasts the reseats (1 s .. 8 s)
+                oc.reseatBackoff = oc.reseatBackoff <= 0 ? 0.75 : (oc.reseatBackoff * 2 > 8.0 ? 8.0 : oc.reseatBackoff * 2);
+            }
+        }
+    }
 }
 
-void own_release(uint32_t eid, OwnCopy& oc, double now, const char* why) {
+// WO-210 op 140: the asks the agent does the game's own way: [max:1] -> [n:1] n x ([kind:1][nameLen:1][name])
+uint8_t op_asks(const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t* outLen) {
+    if (len != 2 || cap < 1) return wo163::kRBadRequest;
+    const size_t max = body[1] ? body[1] : 1;
+    size_t o = 1, n = 0;
+    while (!g_asks.empty() && n < max) {
+        const Ask& a = g_asks.front();
+        const size_t nl = a.name.size() > 63 ? 63 : a.name.size();
+        if (o + 2 + nl > cap) break;
+        out[o] = a.kind; out[o + 1] = static_cast<uint8_t>(nl); std::memcpy(out + o + 2, a.name.data(), nl);
+        o += 2 + nl; ++n;
+        g_asks.erase(g_asks.begin());
+        c_asksOut.fetch_add(1);
+    }
+    out[0] = static_cast<uint8_t>(n);
+    *outLen = o;
+    return wo163::kROk;
+}
+
+void own_release(uint32_t eid, OwnCopy& oc, double now, const char* why, uint8_t path = wo210rules::kPathUnknown) {
     const bool alive = engine::entity_by_id(eid) != nullptr;
-    for (auto& s : oc.own) if (s.act) { if (alive) { wr_prio(s.act, kWithdrawnPriority); rttr::release_action(s.act); } s = Probe::Scope{}; }
-    if (oc.baseAct) { if (alive) { rttr::stop_action(oc.baseAct); rttr::release_action(oc.baseAct); } oc.baseAct = nullptr; }
+    // WO-210 A.2 (paths 2, 12, 13, 14): the host's current base -- or the body's neutral idle when the host's state is a posture or not
+    // known -- installed now under the copy's own base and left running when we let go: the copy's own engine replaces it once it queues
+    // its own base, and until then the host's last base plays (session E: the owner switched off live left every copy empty, "hard core
+    // T posing"; a let-go copy kept looping the host's last posture). A dead copy is left as it lies (C.2).
+    const bool hand = alive && path != wo210rules::kPathDeath && wo210::on(wo210rules::kBitStateAlways) && !wo172::copy_dead(eid);
+    if (hand) {
+        const bool baseKnown = oc.hostHave && oc.host.cls != kClsNone && is_base(family_of_id(oc.host.cls, oc.host.frag));
+        const HostScope keep = oc.host; const bool keepHave = oc.hostHave;
+        if (!baseKnown) oc.hostHave = false;
+        own_handover(eid, oc, now, path);
+        oc.host = keep; oc.hostHave = keepHave;
+    }
+    for (auto& s : oc.own) if (s.act) {
+        if (alive) {
+            uint32_t st = 0;
+            if (hand && rd(s.act, 0x28, &st) && st < 2) rttr::stop_action(s.act); else wr_prio(s.act, kWithdrawnPriority);
+            rttr::release_action(s.act);
+        }
+        s = Probe::Scope{};
+    }
+    if (oc.baseAct) { if (alive) { if (!hand) rttr::stop_action(oc.baseAct); rttr::release_action(oc.baseAct); } oc.baseAct = nullptr; }
     for (auto& r : oc.retired) if (alive) rttr::release_action(r.act);
     oc.retired.clear();
     if (oc.held && alive) motion::set_npc_guard_hold(eid, false, nullptr, npcdrive::now_s());
-    logf("WO208-OWN let go npc=%s (%s)", oc.name.c_str(), why);
-    (void)now;
+    wo210::note_release(path);
+    logf("WO208-OWN let go npc=%s (%s)%s", oc.name.c_str(), why, hand ? " -- the host's base handed over" : "");
 }
 
 void owner_tick(double now) {
@@ -696,7 +951,7 @@ void owner_tick(double now) {
         }
     }
     if (!on(kBitOwner)) {
-        for (auto& kv : g_owned) own_release(kv.first, kv.second, now, "mp_copy_anim_owner off");
+        for (auto& kv : g_owned) own_release(kv.first, kv.second, now, "mp_copy_anim_owner off", wo210rules::kPathSwitch);
         g_owned.clear(); g_copyStates.clear();
         return;
     }
@@ -720,10 +975,25 @@ void owner_tick(double now) {
             const float d = engine::entity_world_pos(e, cp) ? std::sqrt((cp[0] - me[0]) * (cp[0] - me[0]) + (cp[1] - me[1]) * (cp[1] - me[1])) : -1.0f;
             const auto ow = g_owned.find(eid);
             if (d >= 0 && !wo209rules::owner_keeps(ow != g_owned.end(), d)) {
-                if (ow != g_owned.end()) { own_release(eid, ow->second, now, "far from the local player"); g_owned.erase(ow); c_oFar.fetch_add(1); }
+                if (ow != g_owned.end()) { own_release(eid, ow->second, now, "far from the local player", wo210rules::kPathFar); g_owned.erase(ow); c_oFar.fetch_add(1); }
                 v.clear();
                 ++it;
                 continue;
+            }
+        }
+        // WO-210 D.3 (mp_copy_ready): the host NPC's combat mode as its newest state carries it, held on the copy at once -- its draw and its
+        // stance come with the host's (WO-209: a copy's first swings came while still out of combat, the host's npc-combat report 1.5-2 s
+        // later); the host's NPC out of combat lets go of the hold this set (the mirror's own hold on a copy in the joiner's fight stays)
+        if (wo210::on(wo210rules::kBitCopyReady) && !wo172::copy_dead(eid) && !wo210kd::held_down(eid)) {
+            const CopyState& nw = v.back();
+            if (nw.cm & wo210rules::kCmCombat) {
+                motion::State2 st{};
+                st.bits = motion::kBitCombat;
+                motion::set_npc_guard_hold(eid, true, &st, npcdrive::now_s());
+                if (g_readyHeld.insert(eid).second) c_readyHolds.fetch_add(1);
+            } else if (g_readyHeld.erase(eid) && !wo209::mirror_holds_player(eid)) {
+                motion::set_npc_guard_hold(eid, false, nullptr, npcdrive::now_s());
+                c_readyReleases.fetch_add(1);
             }
         }
         // WO-209 B: the host's NPC's attack at the joiner's figure starts the copy's own attack as soon as its state arrives -- its blow is
@@ -732,7 +1002,7 @@ void owner_tick(double now) {
             const CopyState& nw = v.back();
             const uint8_t* fb = nullptr;
             for (int k = 0; k < nw.n; ++k) if (nw.sc[k][0] == 0) fb = nw.sc[k];
-            if (fb) {
+            if (fb && !wo210kd::held_down(eid)) {   // WO-210 C.3: never an attack from a copy that lies
                 uint16_t frag = 0; std::memcpy(&frag, fb + 2, 2);
                 uint32_t act = 0; std::memcpy(&act, fb + 30, 4);
                 if (wo209::attack_ai_wants(eid, fb[1], frag)) {
@@ -760,11 +1030,29 @@ void owner_tick(double now) {
         int pick = -1;
         for (int i = 0; i < static_cast<int>(v.size()); ++i) if (now - v[i].at >= g_ownerDelayS) pick = i;
         if (pick < 0) { ++it; continue; }
+        // WO-210 C.2: a dead copy is never driven again -- it lies as it died; the owner lets go of it once, without a hand-over
+        if (wo210::on(wo210rules::kBitDeathEngine) && wo172::copy_dead(eid)) {
+            const auto dw = g_owned.find(eid);
+            if (dw != g_owned.end()) { own_release(eid, dw->second, now, "dead: it lies as it died", wo210rules::kPathDeath); g_owned.erase(dw); }
+            v.clear();
+            ++it;
+            continue;
+        }
         auto ins = g_owned.try_emplace(eid);
         OwnCopy& oc = ins.first->second;
         if (ins.second) { oc.name = nm ? nm : "?"; c_oCopies.fetch_add(1); }
         oc.lastState = now;
         const CopyState& s = v[pick];
+        // WO-210 C.3 (mp_knockdown_sync): the host NPC's knockdown -- the copy falls on its down edge and is stood up on its up edge, the
+        // engine's way; while it lies the engine's ragdoll has the body (the owner installs nothing, the position stream writes nothing)
+        bool kdHeld = false;
+        KCDMP_FAULT_CALL(siteKd, "wo208::kd_tick");
+        fault::guarded(siteKd, [&] { kdHeld = wo210kd::copy_tick(eid, oc.name.c_str(), (v.back().cm & wo210rules::kCmDown) != 0, now); });   // the newest word: a fall starts at once
+        if (kdHeld) {
+            if (pick > 0) v.erase(v.begin(), v.begin() + pick);
+            ++it;
+            continue;
+        }
         HostScope hsc[2]{}; bool have[2]{false, false};
         for (int k = 0; k < s.n; ++k) {
             const uint8_t* p = s.sc[k];
@@ -778,14 +1066,19 @@ void owner_tick(double now) {
             uint32_t act = 0; std::memcpy(&act, p + 30, 4); h.act = act;
             have[which] = true;
         }
+        // WO-210 A: the host's current FullBody for the hand-over; its standing idle teaches this table's neutral idle
+        if (have[0]) { oc.host = hsc[0]; oc.hostHave = true; learn_idle(eid, hsc[0]); }
         KCDMP_FAULT_CALL(site, "wo208::own_apply");
-        if (!fault::guarded(site, [&] { own_apply(eid, oc, s.cm, hsc, have, now); })) logf("WO208-OWN apply FAULTED npc=%s", oc.name.c_str());
+        if (!fault::guarded(site, [&] { own_apply(eid, oc, s.cm & wo210rules::kCmCombat, hsc, have, now); })) {
+            logf("WO208-OWN apply FAULTED npc=%s", oc.name.c_str());
+            own_handover(eid, oc, now, wo210rules::kPathFault);   // A.2 path 13: a fault inside the owner hands the host's state over
+        }
         if (pick > 0) v.erase(v.begin(), v.begin() + pick);
         ++it;
     }
     // a copy the stream has not spoken of for 3 s is let go (its own engine and the old writers again)
     for (auto it = g_owned.begin(); it != g_owned.end();) {
-        if (now - it->second.lastState > 3.0 || !engine::entity_by_id(it->first)) { own_release(it->first, it->second, now, "the host's stream is quiet"); it = g_owned.erase(it); }
+        if (now - it->second.lastState > 3.0 || !engine::entity_by_id(it->first)) { own_release(it->first, it->second, now, "the host's stream is quiet", wo210rules::kPathFar); it = g_owned.erase(it); }
         else ++it;
     }
 }
@@ -856,13 +1149,31 @@ void probe_tick() {
 
 bool on(uint32_t bit) { return (g_bits.load(std::memory_order_relaxed) & ~twin_off() & bit) != 0; }
 
+bool host_fullbody(uint32_t eid, uint8_t* cls, uint32_t* frag) {
+    const auto it = g_owned.find(eid);
+    if (it == g_owned.end() || !it->second.hostHave) return false;
+    if (cls) *cls = it->second.host.cls;
+    if (frag) *frag = it->second.host.frag;
+    return true;
+}
+
 bool probe_owned(uint32_t eid) {
     if (!eid) return false;
     if (eid == g_probeEid.load(std::memory_order_relaxed)) return true;
     return on(kBitOwner) && g_owned.count(eid) != 0;   // A.2: the owner's copies (main thread: every writer that asks runs there)
 }
 
-std::atomic<uint32_t> c_targetRefused{0};
+std::atomic<uint32_t> c_targetRefused{0}, c_fightHeals{0};
+bool in_player_fight(uint32_t copy) {
+    const bool sw = on(kBitTargetInFight);
+    if (!sw) return true;
+    void* pe = engine::entity_by_id(kPlayerEntity);
+    void* cs = hits::soul_of_eid(copy);
+    void* ps = pe ? hits::soul_of_eid(engine::entity_id(pe)) : nullptr;
+    bool answered = false, hostile = false;
+    if (cs && ps) hits::skirmish_hostile(cs, ps, &answered, &hostile);
+    return target_player_allowed(sw, wo132::engaged(copy), answered, hostile);
+}
 bool target_player_ok(uint32_t copy, const char* site) {
     const bool sw = on(kBitTargetInFight);
     if (!sw) return true;
@@ -873,6 +1184,31 @@ bool target_player_ok(uint32_t copy, const char* site) {
     if (cs && ps) hits::skirmish_hostile(cs, ps, &answered, &hostile);
     const bool held = wo132::engaged(copy);   // the mod's own word: WO-132 holds it in his fight (released: never written back)
     if (target_player_allowed(sw, held, answered, hostile)) return true;
+    // WO-210 E.3 (fight_heal): held by the mod, out of the engine's skirmish relation. In 0.63.8 the joiner's own hits on a copy re-added
+    // it through WO-136's leave-and-re-add (gone: E.6, a crash route), which also pulled a copy that drifted into another skirmish back
+    // into his; an add alone does not move it. Healed the engine's way: its stale fight ended (StopFight on its soul, as WO-201's combat
+    // end) and every copy's hold in his fight let go (WO-209's own recovery when he leaves his fight) -- the mirror engages each again.
+    if (held && answered && !hostile && wo210::fix_on(wo210rules::kFixFightHeal)) {
+        static std::unordered_map<uint32_t, wo210rules::HealTrack> s_heal;
+        static double s_lastHeal = -1e9;
+        const double now = npcdrive::now_s();
+        if (wo210rules::heal_step(s_heal[copy], now, s_lastHeal)) {
+            s_lastHeal = now;
+            s_heal.clear();
+            bool stopped = false;
+            if (actions::stop_fight_available()) {
+                void* c2 = buffs::as_c_soul(cs) ? buffs::as_c_soul(cs) : cs;
+                stopped = actions::stop_fight(c2);
+            }
+            wo132::local_player_left_fight("a copy held in it was out of the engine's skirmish relation (WO-210 fight_heal)");
+            const uint32_t k = c_fightHeals.fetch_add(1) + 1;
+            void* e = engine::entity_by_id(copy);
+            const char* nm = e ? engine::entity_name(e) : nullptr;
+            logf("WO210-HEAL npc=%s out of the local player's skirmish relation for %.1f s: its fight ended the engine's way (stop_fight=%s), every "
+                 "copy engaged again by the mirror [n=%u]", nm ? nm : "?", wo210rules::kHealAfterS, stopped ? "called" : "not available", k);
+            return false;
+        }
+    }
     const uint32_t k = c_targetRefused.fetch_add(1) + 1;
     if (k <= 20 || k % 100 == 0) {
         void* e = engine::entity_by_id(copy);
@@ -913,10 +1249,11 @@ bool probe_only_name(const char* name) {
 int status(char* out, int n) {
     return std::snprintf(out, static_cast<size_t>(n), "w208 bits=0x%X twin_off=0x%X configured=%d | target_violations=%u bodies=%u | probe %s npc=%s installs=%u "
                          "refusals=%u stale=%u withdraws=%u | owner copies=%zu ever=%u applied=%u installs=%u refusals=%u stale=%u withdraws=%u stops=%u steps=%u base=%u shot_holds=%u ai_holds=%u queue_full=%u far=%u "
-                         "stream reads=%u bodies=%u states_in=%u bad=%u", g_bits.load(), twin_off(), g_configured.load() ? 1 : 0, c_violations.load(), c_violationBodies.load(),
+                         "stream reads=%u bodies=%u states_in=%u bad=%u forgot=%u | W210 ready_holds=%u ready_releases=%u asks=%u", g_bits.load(), twin_off(), g_configured.load() ? 1 : 0, c_violations.load(), c_violationBodies.load(),
                          g_p.host ? "host" : g_p.joiner ? "joiner" : "off", g_p.name.c_str(), g_p.installs, g_p.refusals, g_p.stale, g_p.withdraws, g_owned.size(),
                          c_oCopies.load(), c_oApplied.load(), c_oInstalls.load(), c_oRefusals.load(), c_oStale.load(), c_oWithdraws.load(), c_oStops.load(), c_oSteps.load(),
-                         c_oPulses.load(), c_oShotHolds.load(), c_oAiHolds.load(), c_oQueueFull.load(), c_oFar.load(), c_streamReads.load(), c_streamBodies.load(), c_statesIn.load(), c_statesBad.load());
+                         c_oPulses.load(), c_oShotHolds.load(), c_oAiHolds.load(), c_oQueueFull.load(), c_oFar.load(), c_streamReads.load(), c_streamBodies.load(), c_statesIn.load(), c_statesBad.load(),
+                         c_forgot.load(), c_readyHolds.load(), c_readyReleases.load(), c_asksOut.load());
 }
 
 namespace {
@@ -924,8 +1261,11 @@ int status_reg(char* out, int n) { return status(out, n); }
 void tick_reg() { probe_tick(); }
 uint8_t stream_read_reg(uint8_t, const uint8_t* b, size_t l, uint8_t* o, size_t c, size_t* ol) { return op_stream_read(b, l, o, c, ol); }
 uint8_t stream_in_reg(uint8_t, const uint8_t* b, size_t l, uint8_t* o, size_t c, size_t* ol) { return op_stream_in(b, l, o, c, ol); }
+uint8_t asks_reg(uint8_t, const uint8_t* b, size_t l, uint8_t* o, size_t c, size_t* ol) { return op_asks(b, l, o, c, ol); }
+uint8_t forget_reg(uint8_t, const uint8_t* b, size_t l, uint8_t* o, size_t c, size_t* ol) { return op_stream_forget(b, l, o, c, ol); }
 const bool kReg = wo203::reg_op(kOpConfig, &op) && wo203::reg_op(kOpStatus, &op) && wo203::reg_status("w208", &status_reg)
-               && wo203::reg_tick("w208", &tick_reg) && wo203::reg_op(kOpStreamRead, &stream_read_reg) && wo203::reg_op(kOpStreamIn, &stream_in_reg);
+               && wo203::reg_tick("w208", &tick_reg) && wo203::reg_op(kOpStreamRead, &stream_read_reg) && wo203::reg_op(kOpStreamIn, &stream_in_reg)
+               && wo203::reg_op(kOpW210Asks, &asks_reg) && wo203::reg_op(kOpW210StreamForget, &forget_reg);
 } // namespace
 
 } // namespace kcdmp::wo208

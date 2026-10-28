@@ -108,6 +108,11 @@ void* soul_of_eid(uint32_t eid);
 uint32_t eid_of_name(const char* name);   // one entity walk per name, cached and re-verified
 // WO-147: as the hit hook marks a real blow of the local player's on this body (any thread).
 void mark_player_hit(uint32_t victimEid);
+// WO-210 E.2: the gate's dry run of the local player's blow on a copy (wo210_hit.cpp), on the calling thread: while it is open the hit
+// hook runs the original and nothing else -- no "hit by the player" mark (a later drop on that copy would be sent as his blow), no
+// host-side bookkeeping, no watch. The blow's report is the gate's own.
+void dry_run_begin();
+void dry_run_end();
 
 // WO-165 (main thread): the replay window around one call into the engine's hit processor (wo165.cpp). While it is open, the slot hook
 // treats a blow of exactly this attacker on exactly this victim, on this thread, as the replay: never discarded (WO-162 Q1.3 #9), the

@@ -1621,7 +1621,7 @@ public partial class GameBridge(ClientConfig config)
         // Outbound combat: the DLL notices a nearby NPC lose health and we put
         // it on the wire. Never fired for damage we applied on a peer's behalf —
         // the DLL credits those out — or two clients would echo a hit forever.
-        Func<Guid, float, float, bool, bool, Task> onLocalHitCore = async (soul, stamina, health, died, byPlayer) =>
+        Func<Guid, float, float, bool, bool, bool, Task> onLocalHitCore = async (soul, stamina, health, died, byPlayer, judge) =>
         {
             // WO-86: a FATAL hit is never noise, whatever its delta -- the
             // DLL's sampler reports the drop that took the soul to zero, which
@@ -1654,7 +1654,8 @@ public partial class GameBridge(ClientConfig config)
             // stamina to 0 on this path (pipe_server.cpp send_local_hit).
             // Anything under half a hit point is sensor noise, not combat
             // state worth a wire message and a peer-side game-thread apply.
-            if (Wo147Rules.HitCarriesNothing(health, stamina)) return;
+            // WO-210 E.2: a blow the DLL filtered (judge) carries no numbers by design -- the host's engine judges it.
+            if (!judge && Wo147Rules.HitCarriesNothing(health, stamina)) return;
             // WO-147: on a joiner only this player's own blows go to the host (the sampler reports any drop
             // near the player: the field's host avatar hit a hidden local copy and the gate took it for the
             // joiner's). And a blow that cost only stamina now goes too (a block, a broken weapon).
@@ -1701,16 +1702,16 @@ public partial class GameBridge(ClientConfig config)
                 {
                     // WO-131 1b/1c: on a joiner, only a hit on the host's NPC where
                     // the host has it goes out, and never as a kill.
-                    var (w131Send, w131Health, w131Fatal) = await Wo131GateOutboundAsync(soul, npcName, health, died);
+                    var (w131Send, w131Health, w131Fatal) = await Wo131GateOutboundAsync(soul, npcName, health, died, judge);
                     if (!w131Send) { _stats.DmgOutDropped++; return; }
                     health = w131Health; died = w131Fatal;
                     await SendNpcDamageAsync(stream, npcName, stamina, health, suppressHitReaction: true, fatal: died,
-                                             attributed: byPlayer && _npcAttribution);   // WO-121 Phase 5
+                                             attributed: byPlayer && _npcAttribution, judgeThere: judge);   // WO-121 Phase 5; WO-210 E.2
                     if (byPlayer && _npcAttribution) _w121AttribOut++;
-                    Console.WriteLine($"[combat] sent hit {health:F1} on '{npcName}' ({soul}){(died ? " FATAL" : "")}");
+                    Console.WriteLine($"[combat] sent hit {health:F1} on '{npcName}' ({soul}){(died ? " FATAL" : "")}{(judge ? " (not judged here: the host's engine decides)" : "")}");
                     NoteRequestResolvedOut(npcName);   // WO-102 Phase 5
                     _stats.DmgOut++; if (died) _stats.DmgOutFatal++;
-                    Console.WriteLine(FormattableString.Invariant($"MP-DMG dir=out npc={npcName} hp={health:F1} st={stamina:F1} fatal={(died ? 1 : 0)} authority={(_isDamageAuthority ? 1 : 0)}"));
+                    Console.WriteLine(FormattableString.Invariant($"MP-DMG dir=out npc={npcName} hp={health:F1} st={stamina:F1} fatal={(died ? 1 : 0)} authority={(_isDamageAuthority ? 1 : 0)} judge_there={(judge ? 1 : 0)}"));
                     Wo191NoteFight(npcName, "a-player-hit-it");   // WO-191 2
                     if (died)
                     {
@@ -1731,6 +1732,13 @@ public partial class GameBridge(ClientConfig config)
                     // another, and nothing in a field log distinguished "this
                     // path fired and did nothing" from "this path never fired".
                     bool ghostTarget = npcName is not null;   // i.e. a kcd2mp_ body
+                    if (judge)
+                    {
+                        // WO-210 E.2: only a named host NPC's copy can be judged by the host's engine; no guid-addressed values instead
+                        _stats.DmgOutDropped++;
+                        Console.WriteLine($"MP-DMG dir=drop route=guid soul={soul} reason=judge-there-needs-a-name");
+                        return;
+                    }
                     // WO-132: one path per hit. An avatar's hits already go by 0x21
                     // (an NPC's) and friendly fire (a player's); this second send
                     // was the joiner's "soul not loaded / failed" twin of every hit.
@@ -1795,10 +1803,10 @@ public partial class GameBridge(ClientConfig config)
         // same loop can deliver -- a deadlock until the 5 s deadline (live, run
         // C: every gated hit dropped as "no-answer"). On a joiner the handler
         // runs off the reader loop.
-        _combat.OnLocalHit = (soul, stamina, health, died, byPlayer) =>
+        _combat.OnLocalHit = (soul, stamina, health, died, byPlayer, judge) =>
         {
-            if (!Wo131JoinerActive) return onLocalHitCore(soul, stamina, health, died, byPlayer);
-            _ = Task.Run(() => onLocalHitCore(soul, stamina, health, died, byPlayer));
+            if (!Wo131JoinerActive) return onLocalHitCore(soul, stamina, health, died, byPlayer, judge);
+            _ = Task.Run(() => onLocalHitCore(soul, stamina, health, died, byPlayer, judge));
             return Task.CompletedTask;
         };
         // Connect now rather than lazily, so the DLL has somewhere to push hits
@@ -4135,6 +4143,15 @@ public partial class GameBridge(ClientConfig config)
                 var pulled = await _combat.Wo140PullAsync(worldTime, worldTime, ct);
                 Console.WriteLine(pulled is { Result: 1 } pr ? $"MP-W207 skip end: this clock had run {pr.Before - worldTime} s past the host's -- set to it ({pr.Before} -> {pr.After})"
                                                             : $"MP-W207 skip end: this clock meets the host's end {worldTime} (forward written{(pulled is { Result: 3 } ? "; a skip still runs, the pull waits" : "")})");
+                // WO-210 H.5 (the bench's wait-night: the joiner 9.8 game-hours ahead of the host for 30 s after a shared wait): this pull set
+                // the clock back, and the next poll read the backward step as a save reload and converged forward to the old reading again.
+                // It is this machine's own write -- the poll starts from it, as WO-140's pull does (the twin skip_end_sticks off: the old order)
+                if (pulled is { Result: 1 } own && W210("skip_end_sticks"))
+                {
+                    _lastPolledWorldTime = own.After;
+                    _lastPollUtc = DateTime.UtcNow;
+                    _suppressJumpUntilUtc = DateTime.UtcNow.AddSeconds(30);
+                }
             }
             // WO-102 Phase 6: a peer's announced sleep/wait/fast travel is a
             // resync point here too (quiet clock reports are not).
@@ -5052,14 +5069,19 @@ public partial class GameBridge(ClientConfig config)
                                 // WO-86: a FATAL packet may carry no delta at all
                                 // (the Lua observer saw the death, not the blow);
                                 // there is nothing to apply then, only the death.
-                                bool ndHasDelta = ndHealth > 0f || ndStamina > 0f;
+                                // WO-210 E.2: a joiner's blow not judged on his screen carries no numbers -- it is still a blow for the engine here
+                                bool ndJudge = (payload[no + 8] & Protocol.NpcDamageFlagJudgeThere) != 0;
+                                bool ndHasDelta = ndHealth > 0f || ndStamina > 0f || ndJudge;
                                 // WO-121 Phase 5: an attributed hit on the NPC's
                                 // authority carries the peer's avatar as the attacker.
                                 bool? ndAttrib = ndHasDelta && localGuid is Guid alg
                                     ? await TryApplyAttributedAsync(ndSource, ndName, alg, ndStamina, ndHealth, payload[no + 8], ct)
                                     : null;
                                 // WO-147: on a joiner a non-fatal host hit never kills its copy (the host decides deaths).
-                                bool ndApplied = ndAttrib ?? (ndHasDelta && localGuid is Guid lg
+                                // WO-210 C.4/E.2: such a blow goes through the engine (the attributed path) or nowhere -- never a raw value apply
+                                if (ndJudge && ndAttrib is null)
+                                    Console.WriteLine($"MP-DMG dir=in ghost={ndSource} npc={ndName} judge_there=1 result=not-applied reason=no-engine-path (attribution off, not the authority, or no figure)");
+                                bool ndApplied = ndAttrib ?? (!ndJudge && ndHasDelta && localGuid is Guid lg
                                     && await _combat.ApplyDamageAsync(lg, ndStamina, ndHealth, ndSupp, ct, nonLethal: Wo131JoinerActive && !ndFatal));
                                 if (ndApplied || (ndFatal && localGuid is not null))
                                     _dmgGuard.NoteInboundApplied(ndName, ndApplied ? ndHealth : 0f, ndApplied ? ndStamina : 0f, ndFatal, DateTime.UtcNow);
@@ -6098,6 +6120,7 @@ public partial class GameBridge(ClientConfig config)
                 return;
             case "mp_mark":          // WO-140: the checklist's markers (mark_<word>)
                 Console.WriteLine($"MP-MARK {(arg ?? "").Trim()} -- the tester's marker (typed on this machine)");
+                Wo210TimeAtMark("local");   // WO-210 H.5
                 // WO-164 M: "Something's wrong here" (mark_odd) -- a state snapshot here and on the partner's machine, joined by mark=
                 if ((arg ?? "").Trim().StartsWith("odd", StringComparison.Ordinal)) _ = W164MarkAsync(Wo164Rules.NewMarkId(_w164Rnd), "local", Wo204Rules.MarkNoteOf(arg));
                 return;
@@ -6232,6 +6255,9 @@ public partial class GameBridge(ClientConfig config)
                 return;
             case string w209 when w209.StartsWith("w209_", StringComparison.Ordinal):   // WO-209: the switches and the status (Wo209OnEvent)
                 Wo209OnEvent(name, arg);
+                return;
+            case string w210 when w210.StartsWith("w210_", StringComparison.Ordinal):   // WO-210: the switches and the status (Wo210OnEvent)
+                Wo210OnEvent(name, arg);
                 return;
             case "w206_cfg":         // WO-206 E: mp_epoch_check, mp_research_death_from_health
             case "w206_status":      // WO-206 E: mp_w206_status
@@ -7301,7 +7327,7 @@ public partial class GameBridge(ClientConfig config)
     public async Task SendNpcDamageAsync(Stream stream, string npcName,
                                                 float stamina, float health,
                                                 bool suppressHitReaction,
-                                                bool fatal = false, bool attributed = false)
+                                                bool fatal = false, bool attributed = false, bool judgeThere = false)
     {
         var nb = Encoding.UTF8.GetBytes(npcName);
         var packet = new byte[3 + 1 + nb.Length + Protocol.NpcDamageFixedTail];
@@ -7315,6 +7341,7 @@ public partial class GameBridge(ClientConfig config)
         byte ndFlags = suppressHitReaction ? Protocol.DamageFlagSuppressHitReaction : (byte)0;
         if (fatal) ndFlags |= Protocol.NpcDamageFlagFatal;   // WO-86
         if (attributed) ndFlags |= Protocol.NpcDamageFlagAttributed;   // WO-121
+        if (judgeThere) ndFlags |= Protocol.NpcDamageFlagJudgeThere;   // WO-210 E.2
         packet[o + 8] = ndFlags;
         await WritePacketAsync(stream, packet);
     }

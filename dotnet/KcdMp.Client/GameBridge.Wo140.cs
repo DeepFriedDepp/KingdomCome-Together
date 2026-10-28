@@ -562,6 +562,7 @@ public partial class GameBridge
     private async Task Wo140OnLocalEndedAsync()
     {
         ApplyPendingTimeSkipIfAny();   // the host's clock that arrived during this game's own skip (held, see ApplyTimeSkipAsync)
+        _ = Wo210AfterSkipAsync("skip-end");   // WO-210 A.4: every copy near gets the host's whole-body state afresh
         if (!W140SharedSkip) return;
         Interlocked.Exchange(ref _w140SharedUntilMs, Environment.TickCount64 + 15_000);   // the host's report and the pin still to come
         bool host = _isDamageAuthority;

@@ -452,17 +452,17 @@ public class RelayTableGateTests : IClassFixture<RelayFixture>
     {
         var (host, joiner) = await HostAndJoinerAsync();
         await using var _h = host; await using var _j = joiner;
-        long unknown = Drops("0x7E:unknown-type"), ghost = Drops("0x02:unknown-type"), again = Drops("0x00:handshake-again");
-        await host.SendRawAsync(Frame(0x7E, new byte[] { 1, 2, 3 }));                 // a type nobody defined (a newer peer; WO-208 took 0x7A/0x7B)
+        long unknown = Drops("0xEE:unknown-type"), ghost = Drops("0x02:unknown-type"), again = Drops("0x00:handshake-again");
+        await host.SendRawAsync(Frame(0xEE, new byte[] { 1, 2, 3 }));                 // a type nobody defined (a newer peer; WO-208 took 0x7A/0x7B, WO-210 0x7E/0x7F)
         await host.SendRawAsync(Frame(Protocol.Ghost, new byte[Protocol.GhostPayloadLen]));   // a down type sent up
         await host.SendRawAsync(Frame(Protocol.Handshake, new byte[] { Protocol.Version, 0 }));
         var ping = new byte[Protocol.PingPayloadLen];
         await host.SendRawAsync(Frame(Protocol.Ping, ping));
         await host.ReadUntilAsync(Protocol.Pong, Wait);
-        Assert.Equal(unknown + 1, Drops("0x7E:unknown-type"));
+        Assert.Equal(unknown + 1, Drops("0xEE:unknown-type"));
         Assert.Equal(ghost + 1, Drops("0x02:unknown-type"));
         Assert.Equal(again + 1, Drops("0x00:handshake-again"));
-        Assert.Equal(0, Drops("0x7E:wrong-length") + Drops("0x02:wrong-length"));
+        Assert.Equal(0, Drops("0xEE:wrong-length") + Drops("0x02:wrong-length"));
     }
 
     [Fact]

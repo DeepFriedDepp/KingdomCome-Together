@@ -112,6 +112,8 @@ public static partial class Protocol
         (NpcAnimUp,     NpcAnimDown,     "npc-anim",     JoinHeaderLen + 1, JoinHeaderLen + NpcAnimBodyMax, JoinFrom.Host),
         // WO-209 A: the host's NPCs' opponents (ProtocolWo209.cs) -- host to joiner only
         (NpcOppUp,      NpcOppDown,      "npc-opp",      JoinHeaderLen + 1, JoinHeaderLen + NpcOppBodyMax, JoinFrom.Host),
+        // WO-210 A.3/A.4: the joiner asks the host for bodies' whole-body state again (ProtocolWo210.cs) -- joiner to host only
+        (NpcAnimAskUp,  NpcAnimAskDown,  "npc-anim-ask", JoinHeaderLen + 1, JoinHeaderLen + NpcAnimAskBodyMax, JoinFrom.Joiner),
     };
 
     /// <summary>The JoinWire row for an up type, or null.</summary>

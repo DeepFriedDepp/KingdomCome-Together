@@ -120,7 +120,9 @@ public partial class GameBridge
         // (II.4); only a partner's figure (its own player's activity) still is
         bool release = _w160ReleaseOn && avatar && Wo160Rules.ReleaseBeforeApply(avatar, had && !prev.IsNone, changed);
         int before = W160ErrorsOf(name);
-        if (release)
+        // WO-210 A: a host copy whose host NPC left the posture its own body holds (session E's floating sleepers) -- released the game's way
+        if (!avatar && await Wo210ReleaseOnLeaveAsync(name, had, prev, a)) release = true;
+        else if (release)
         {
             try { await ExecLuaAsync($"if KCD2MP_W160Release then KCD2MP_W160Release(\"{EscapeLua(name)}\", \"activity-changed\") end"); } catch { }
             Interlocked.Increment(ref _w160Released);

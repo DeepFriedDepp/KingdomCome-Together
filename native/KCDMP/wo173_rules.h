@@ -131,6 +131,60 @@ inline bool parse_reaction_sites(const uint8_t* code, size_t n, uintptr_t addr, 
     return true;
 }
 
+// ---------------------------------------------------------------------------------------------------------------- WO-210 C.1: ClientHit
+// The handler's last step after the reaction block (research: the death RE): the game rules' ClientHit queues the hit result, and the
+// next frame's ProcessLocalHit sends the brain its hit signal and the victim actor its hit event -> C_HitDeathReactions::OnHit (the
+// non-combat hit reaction, a lethal hit's death, or the ragdoll + StartDeadAction that makes a corpse lootable). The replay never made it.
+//   E   call [rip+GetGameIface] ; lea rdx,[rbp+RES] ; mov rcx,[rax+GR] ; mov rax,[rcx] ; call [rax+SLOT]
+//   F1  test r15b,r15b ; je +8 ; and dword [rbp+FL],0FFFFFFFDh ; mov byte [rbp+HD],1       -- a handled hit (the reaction took)
+//   F2  cmp [r14+VICT],r13 ; je +4 ; and dword [rbp+FL],0FFFFFFDFh                       -- a victim exists
+struct ClientHitSites {
+    uint32_t gameRulesOff = 0;   // GetGameIface() -> its CGameRules
+    uint32_t clientHitSlot = 0;  // CGameRules vtable byte offset of ClientHit
+    uint32_t flagsOff = 0;       // result struct -> its flags word
+    uint32_t handledOff = 0;     // result struct -> the handled byte
+    uintptr_t iatSlot = 0;       // E's import slot (GetGameIface)
+};
+inline constexpr int16_t kPatE[26] = {0xFF, 0x15, X, X, X, X, 0x48, 0x8D, 0x55, X, 0x48, 0x8B, 0x88, X, X, X, X, 0x48, 0x8B, 0x01, 0xFF, 0x90, X, X, X, X};
+inline constexpr int16_t kPatF1[13] = {0x45, 0x84, 0xFF, 0x74, 0x08, 0x83, 0x65, X, 0xFD, 0xC6, 0x45, X, 0x01};
+inline constexpr int16_t kPatF2[13] = {0x4D, 0x39, 0xAE, X, X, X, X, 0x74, 0x04, 0x83, 0x65, X, 0xDF};
+// res = the reaction block's own result displacement (ReactionSites::resultRbp, a signed byte); victimOff = its victim offset.
+inline bool parse_clienthit_sites(const uint8_t* code, size_t n, uintptr_t addr, uint32_t resultRbp, uint32_t victimOff, ClientHitSites* out) {
+    ClientHitSites s{};
+    int ne = 0, nf1 = 0, nf2 = 0;
+    int32_t fl1 = 0, fl2 = 0, hd = 0;
+    const int32_t res = static_cast<int8_t>(static_cast<uint8_t>(resultRbp));
+    for (size_t i = 0; i < n; ++i) {
+        const uint8_t* p = code + i;
+        const size_t avail = n - i;
+        if (match_at(p, avail, kPatE, 26) && static_cast<int8_t>(p[9]) == res) {
+            s.iatSlot = addr + i + 6 + static_cast<intptr_t>(s32(p + 2));
+            s.gameRulesOff = u32(p + 13);
+            s.clientHitSlot = u32(p + 22);
+            ++ne;
+        }
+        if (match_at(p, avail, kPatF1, 13)) { fl1 = static_cast<int8_t>(p[7]); hd = static_cast<int8_t>(p[11]); ++nf1; }
+        if (match_at(p, avail, kPatF2, 13) && u32(p + 3) == victimOff) { fl2 = static_cast<int8_t>(p[11]); ++nf2; }
+    }
+    if (ne != 1 || nf1 != 1 || nf2 != 1 || fl1 != fl2) return false;
+    if (fl1 - res < 0 || fl1 - res >= 0xA0 || hd - res < 0 || hd - res >= 0xA0) return false;
+    if (s.gameRulesOff == 0 || s.gameRulesOff > 0x1000 || s.clientHitSlot == 0 || s.clientHitSlot > 0x2000 || (s.clientHitSlot & 7)) return false;
+    s.flagsOff = static_cast<uint32_t>(fl1 - res);
+    s.handledOff = static_cast<uint32_t>(hd - res);
+    *out = s;
+    return true;
+}
+// The handler's own edit of the result before ClientHit: a handled hit drops flag 2 and sets the handled byte; a victim drops flag 0x20.
+inline void clienthit_edit(uint8_t* result, const ClientHitSites& s, bool handled) {
+    uint32_t f = 0;
+    std::memcpy(&f, result + s.flagsOff, 4);
+    if (handled) { f &= ~2u; result[s.handledOff] = 1; }
+    f &= ~0x20u;
+    std::memcpy(result + s.flagsOff, &f, 4);
+}
+inline constexpr uint8_t kClientHitPrologue[23] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x6C, 0x24, 0x10, 0x48, 0x89, 0x74, 0x24, 0x18,
+                                                   0x57, 0x48, 0x83, 0xEC, 0x40, 0x48, 0x8B, 0xF9};
+
 // The prologues read this WO (1.5.5). A build whose bytes differ leaves the reaction tail unarmed (the hit itself still runs).
 inline constexpr uint8_t kCreateHitActionPrologue[22] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x6C, 0x24, 0x18, 0x56,
                                                          0x57, 0x41, 0x54, 0x41, 0x56, 0x41, 0x57, 0x48, 0x83, 0xEC, 0x40};
@@ -161,6 +215,15 @@ inline const char* react_name(React r) {
         case React::PlayerKept: return "player-only-hit-reactions";
         default: return "-";
     }
+}
+
+// "handled" = the reaction took (queued, the victim's own action took it, the group test's uninterruptible skip), or -- for a victim that
+// can react -- the hit was blocked / perfect-blocked / broke the block (the handler's three opponent tests; WO-165's outcome stands in).
+enum : uint8_t { kOutBlocked = 2, kOutPerfect = 3, kOutBroken = 4 };   // wo165::Outcome's numbers (wo165.h)
+inline bool clienthit_handled(React r, uint8_t outcome) {
+    if (r == React::Queued || r == React::Own || r == React::SameGroup) return true;
+    if (r == React::NotAlive) return false;
+    return outcome == kOutBlocked || outcome == kOutPerfect || outcome == kOutBroken;
 }
 
 // ---------------------------------------------------------------------------------------------------------------- C1: one blow, once

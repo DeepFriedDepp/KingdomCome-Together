@@ -165,6 +165,8 @@ bool stream_info(const char* name, double* ageS, bool* bound);
 // WO-190 0.1 (main thread): the bound bodies (entity id, rendered planar speed, seconds since the stream's newest sample, held for a swing).
 struct BoundBody { uint32_t eid = 0; float speedMps = 0; double streamAgeS = -1; bool held = false; };
 int bound_bodies(BoundBody* out, int max);
+// WO-210 E.6: this writer drives the body (a copy of the host's NPC, a partner's figure). Main thread.
+bool is_bound_eid(uint32_t eid);
 
 // WO-131 1b: is a hit on this name's local body a hit on the host's NPC? Main
 // thread. bound = this DLL drives the body; ageS = seconds since the newest

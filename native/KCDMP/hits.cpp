@@ -207,7 +207,11 @@ bool read_hit(const uint8_t* data, uint64_t* aw, uint32_t* aeid, uint64_t* vw, u
     return rd(data, 0x00, aw) && rd(data, 0x08, aeid) && rd(data, 0x10, vw) && rd(data, 0x18, veid) && rd(data, 0x4C, material);
 }
 
+thread_local bool t_dryRun = false;   // WO-210 E.2: the gate's dry run on this thread
+std::atomic<uint32_t> c_dryRunHits{0};
+
 void* hit_common(bool missile, HitFn orig, void* self, void* out, const uint8_t* data) {
+    if (t_dryRun) { c_dryRunHits.fetch_add(1, std::memory_order_relaxed); return orig(self, out, data); }   // WO-210 E.2: nothing of ours
     (missile ? c_missile : c_melee).fetch_add(1, std::memory_order_relaxed);
     uint64_t aw = 0, vw = 0; uint32_t aeid = 0, veid = 0; uint8_t mat = 0;
     if (!g_pvpHook.load(std::memory_order_relaxed) || !read_hit(data, &aw, &aeid, &vw, &veid, &mat)) return orig(self, out, data);
@@ -811,6 +815,9 @@ void set_replay_damage_callback(ReplayDmgFn fn) { g_replayDmgFn.store(fn); }
 uint32_t replay_seen() { return c_replaySeen.load(); }
 
 uint32_t eid_of_name(const char* name) { return name && *name ? eid_by_name(name) : 0; }
+
+void dry_run_begin() { t_dryRun = true; }
+void dry_run_end() { t_dryRun = false; }
 
 void mark_player_hit(uint32_t victimEid) {
     if (!victimEid) return;

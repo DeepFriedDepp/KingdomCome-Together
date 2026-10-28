@@ -268,7 +268,7 @@ uint8_t handle(const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t
         kcdmp::wo136::set_skirmish_keep(a[0] != 0);
         logf("WO207-SKIRMISH-KEEP %s -- %s", a[0] ? "on" : "off",
              a[0] ? "a soul in a skirmish is never taken out of it to change its opponent (the add alone; a fighting NPC turns by its forced target)"
-                  : "the leave + re-add as before");
+                  : "kept anyway: WO-210 E.6 took the leave out of every path (the add alone)");
         return kROk;
     }
     case kOpPlanInFight: {

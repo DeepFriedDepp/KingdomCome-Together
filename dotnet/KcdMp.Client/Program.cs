@@ -199,8 +199,20 @@ static string? GetSteamNameFromKcdLog()
         using var reader = new StreamReader(stream);
 
         int n = 0;
+        bool launchSaid = false;
         while (reader.ReadLine() is { } line)
         {
+            // WO-210 H.4: this game launch's own id (its kcd.log's start) -- the briefing counts an earlier agent log of the bundle only
+            // when it names the same launch
+            if (!launchSaid)
+            {
+                var ls = Regex.Match(line, @"^Log Started at (\d{4})-(\d\d)-(\d\d)\s+(\d\d):(\d\d):(\d\d)");
+                if (ls.Success)
+                {
+                    launchSaid = true;
+                    Console.WriteLine($"MP-LAUNCH id={ls.Groups[1].Value}{ls.Groups[2].Value}{ls.Groups[3].Value}-{ls.Groups[4].Value}{ls.Groups[5].Value}{ls.Groups[6].Value} (the game's own log start)");
+                }
+            }
             var m = nameRe.Match(line);
             if (m.Success)
             {

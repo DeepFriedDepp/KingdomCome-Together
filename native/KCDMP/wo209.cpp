@@ -20,6 +20,8 @@
 #include "anchors.h"
 #include "wo208.h"
 #include "wo178.h"
+#include "wo210.h"
+#include "wo210_rules.h"
 #include <windows.h>
 #include <algorithm>
 #include <atomic>
@@ -307,6 +309,7 @@ std::vector<AiPending> g_aiPending;  // main thread: refused attacks asked again
 std::atomic<uint32_t> c_aiNotHostile{0};   // attacks refused: the game holds the copy not hostile to the local player
 std::atomic<uint32_t> c_aiCalls{0}, c_aiStarted{0}, c_aiRefused{0}, c_aiFault{0}, c_aiLanded{0}, c_aiMissed{0}, c_aiNone{0}, c_lockSamples{0}, c_lockOn{0};
 std::atomic<uint32_t> c_aiRetried{0}, c_aiRetryLapsed{0}, c_rowAwaitMirror{0}, c_rowNotHeld{0};
+std::atomic<uint32_t> c_aiOutOfFight{0};   // WO-210 E.1: stretches a held copy was out of his fight by the engine's relation (the owner's way)
 void ai_retry_tick(double now);
 constexpr double kLockSampleS = 0.3;   // B.6 / A.4: the local player's own opponent read this far into the copy's attack (lock-on)
 
@@ -443,9 +446,30 @@ bool mirrored(uint32_t copy) {
     return it != g_mirror.end() && qpc_s() - it->second.at <= kMirrorStaleS;
 }
 
+namespace {
+// WO-210 E.1 (ai_in_fight): the copy's own attack claims the host's attack only while the engine holds the copy in his fight (F.1's relation,
+// read-only); out of it (its own engine retargeted it to the host's figure) the owner shows the host's attack -- one line a stretch.
+bool ai_in_his_fight(uint32_t copy) {
+    const bool fix = wo210::fix_on(wo210rules::kFixAiInFight);
+    const bool in = !fix || wo208::in_player_fight(copy);
+    static std::unordered_map<uint32_t, double> s_out;   // main thread: copy -> when its stretch out of his fight began
+    const double now = qpc_s();
+    auto it = s_out.find(copy);
+    if (in) { if (it != s_out.end()) s_out.erase(it); }
+    else if (it == s_out.end() || now - it->second > 30.0) {
+        s_out[copy] = now;
+        const uint32_t k = c_aiOutOfFight.fetch_add(1) + 1;
+        if (k <= 40 || k % 50 == 0)
+            logf("WO210-ATK npc=%s is held in the local player's fight but out of it by the engine's relation (its own engine's target is "
+                 "another): the host's attacks shown the owner's way, the host judges their blows [n=%u]", name_of(copy), k);
+    }
+    return wo210rules::ai_claims_attack(true, fix, in);
+}
+} // namespace
+
 bool attack_ai_wants(uint32_t copy, uint8_t cls, uint32_t frag) {
     return on(kBitAttackAi) && cls == wo208rules::kClsCombatAnim && attack_frag(frag) && mirror_holds_player(copy) && wo132::engaged(copy)
-           && resolve_ai_attack() != nullptr;
+           && resolve_ai_attack() != nullptr && ai_in_his_fight(copy);
 }
 
 bool ai_attack_recent(uint32_t copy, double withinS) {
@@ -462,7 +486,7 @@ bool ai_attack_running(uint32_t copy) {
 bool ai_owns_body(uint32_t copy) { return on(kBitAttackAi) && ai_attack_running(copy); }
 
 bool attack_ai_drives(uint32_t copy) {
-    return on(kBitAttackAi) && mirror_holds_player(copy) && wo132::engaged(copy) && resolve_ai_attack() != nullptr;
+    return on(kBitAttackAi) && mirror_holds_player(copy) && wo132::engaged(copy) && resolve_ai_attack() != nullptr && ai_in_his_fight(copy);
 }
 
 namespace { bool ai_attack_zone(uint32_t copy, uint32_t hostFrag, int zone, const char* via, bool retry = false); }
@@ -589,11 +613,11 @@ int status(char* out, int n) {
     const uint32_t ts = c_twinSamples.load(), tm = c_twinMatch.load();
     return std::snprintf(out, static_cast<size_t>(n), "w209 bits=0x%X twin_off=0x%X configured=%d | opp host reads=%u out=%u changes=%u | mirror off-samples=%u off-match=%u (%.1f %%) | mirror copies=%zu in=%u bad=%u "
                          "samples=%u match=%u (%.1f %%) engaged=%u combat_held=%u engage_refused=%u cleared=%u follows=%u follow_p50=%.0f ms follow_p90=%.0f ms | "
-                         "ai_attack %s calls=%u started=%u refused=%u not_hostile=%u retried=%u retry_lapsed=%u row_await_mirror=%u row_not_held=%u faults=%u landed=%u missed=%u none=%u lock_on=%u/%u | paired start=%u start_refused=%u move=%u move_refused=%u held=%u",
+                         "ai_attack %s calls=%u started=%u refused=%u not_hostile=%u out_of_fight=%u retried=%u retry_lapsed=%u row_await_mirror=%u row_not_held=%u faults=%u landed=%u missed=%u none=%u lock_on=%u/%u | paired start=%u start_refused=%u move=%u move_refused=%u held=%u",
                          g_bits.load(), twin_off(), g_configured.load() ? 1 : 0, c_oppReads.load(), c_oppOut.load(), c_oppChanges.load(), ts, tm, ts ? 100.0 * tm / ts : 0.0, g_mirror.size(),
                          c_in.load(), c_bad.load(), s, m, s ? 100.0 * m / s : 0.0, c_engaged.load(), c_combatHeld.load(), c_engageRefused.load(), c_cleared.load(), c_follows.load(),
                          follow_p(0.5), follow_p(0.9), g_aiAttackState == 1 ? "found" : g_aiAttackState ? "NOT-found" : "unresolved", c_aiCalls.load(),
-                         c_aiStarted.load(), c_aiRefused.load(), c_aiNotHostile.load(), c_aiRetried.load(), c_aiRetryLapsed.load(), c_rowAwaitMirror.load(), c_rowNotHeld.load(), c_aiFault.load(), c_aiLanded.load(), c_aiMissed.load(), c_aiNone.load(), c_lockOn.load(), c_lockSamples.load(), c_pairStart.load(),
+                         c_aiStarted.load(), c_aiRefused.load(), c_aiNotHostile.load(), c_aiOutOfFight.load(), c_aiRetried.load(), c_aiRetryLapsed.load(), c_rowAwaitMirror.load(), c_rowNotHeld.load(), c_aiFault.load(), c_aiLanded.load(), c_aiMissed.load(), c_aiNone.load(), c_lockOn.load(), c_lockSamples.load(), c_pairStart.load(),
                          c_pairStartRefused.load(), c_pairMove.load(), c_pairMoveRefused.load(), c_pairHeld.load());
 }
 

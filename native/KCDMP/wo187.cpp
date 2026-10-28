@@ -382,6 +382,62 @@ bool parse_state2(const uint8_t* p, motion::State2* st) { std::memcpy(st, p, siz
 
 bool tag_state(uint32_t eid, uint8_t* out, size_t n) { return read_tag_state(eid, out, n); }
 
+// WO-210 0.3: a fragment's name as the game's mannequin database names it -- the body's context (GetContext, +0xB0) -> its SControllerDef
+// (+0x00) -> the fragment-ID CTagDefinition (+0x18, mannequin_read.cpp's two call sites) -> tag `frag` (array +0x08, count at [-4], stride
+// 0x20, name +0x18). Each controller definition is checked once by a known answer (its table names MotionIdle at 5 -- the male table with
+// its 4 imported test tags -- or at 0 -- the female table) and its names are kept; a definition that fails the check is never read again.
+namespace {
+struct FragTable { bool ok = false; std::vector<std::string> names; };
+std::unordered_map<const void*, FragTable> g_fragTables;   // main thread
+bool read_cstr(const void* p, char* out, size_t n) {
+    size_t i = 0;
+    for (; i + 1 < n; ++i) { char ch = 0; if (!rd(p, static_cast<ptrdiff_t>(i), &ch)) return false; out[i] = ch; if (!ch) return true; }
+    out[i] = 0;
+    return true;
+}
+const FragTable* frag_table(uint32_t eid) {
+    if (!resolve_scope()) return nullptr;
+    void* actor = motion::actor_of(eid);
+    void* anim = actor ? call_get(actor, kVtGetAnimatedActor) : nullptr;
+    void* ctrl = anim ? call_get(anim, kVtGetActionController) : nullptr;
+    void* vp = nullptr;
+    if (!ctrl || !rd(ctrl, 0, &vp) || vp != g_vftCtrl) return nullptr;
+    void* ctx = call_get(ctrl, 0xB0);
+    void* def = nullptr; void* frags = nullptr; char* tags = nullptr;
+    if (!ctx || !rd(ctx, 0, &def) || !def || !rd(def, 0x18, &frags) || !frags) return nullptr;
+    auto it = g_fragTables.find(frags);
+    if (it != g_fragTables.end()) return it->second.ok ? &it->second : nullptr;
+    FragTable& t = g_fragTables[frags];
+    int32_t n = 0;
+    if (!rd(frags, 0x08, &tags) || !tags || !rd(tags, -4, &n) || n <= 0 || n > 8192) return nullptr;
+    t.names.resize(static_cast<size_t>(n));
+    for (int32_t i = 0; i < n; ++i) {
+        const char* np = nullptr; char b[96]{};
+        if (rd(tags, static_cast<ptrdiff_t>(i) * 0x20 + 0x18, &np) && np && read_cstr(np, b, sizeof b)) t.names[static_cast<size_t>(i)] = b;
+    }
+    t.ok = (n > 5 && t.names[5] == "MotionIdle") || t.names[0] == "MotionIdle";
+    logf("WO210-FRAG fragment table %p: %d names, MotionIdle at %s -- %s", frags, n, t.names[0] == "MotionIdle" ? "0" : (n > 5 && t.names[5] == "MotionIdle") ? "5" : "neither",
+         t.ok ? "read" : "REFUSED (the known answer failed)");
+    return t.ok ? &t : nullptr;
+}
+} // namespace
+
+bool fragment_name(uint32_t eid, uint32_t frag, char* out, size_t n) {
+    if (!out || n == 0) return false;
+    out[0] = 0;
+    const FragTable* t = frag_table(eid);
+    if (!t || frag >= t->names.size() || t->names[frag].empty()) return false;
+    std::snprintf(out, n, "%s", t->names[frag].c_str());
+    return true;
+}
+
+bool fragment_id(uint32_t eid, const char* name, uint32_t* out) {
+    const FragTable* t = name ? frag_table(eid) : nullptr;
+    if (!t) return false;
+    for (size_t i = 0; i < t->names.size(); ++i) if (t->names[i] == name) { if (out) *out = static_cast<uint32_t>(i); return true; }
+    return false;
+}
+
 QueueInfo queue_info(uint32_t eid) {
     constexpr size_t kCtrlQueueBegin = 0x50, kCtrlQueueEnd = 0x58;
     QueueInfo q;

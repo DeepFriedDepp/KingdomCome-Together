@@ -125,6 +125,7 @@ public partial class GameBridge
     /// <summary>The forwarded engine lines (Wo144OnEngineLine) -- never consumes.</summary>
     private void Wo204OnEngineLine(string line)
     {
+        if (Wo210Rules.TopicActivated(line) >= 0) { Wo210OnTopicActivated(); return; }   // WO-210 F.2a: the starter's cursor moved
         int topic = Wo204Rules.TopicSelected(line);   // III.3: the starter chose -- the listeners' options close
         if (topic >= 0) { Wo204ConvOnTopicSelected(topic); return; }
         if (!W137Joiner || !W204("copy_unstick") || Wo204Rules.StateSearchFailedNpc(line) is not string npc) return;

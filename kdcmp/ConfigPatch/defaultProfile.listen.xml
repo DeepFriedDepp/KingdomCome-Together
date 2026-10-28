@@ -14,5 +14,8 @@
 		<action name="kcd2mp_listen_up" onPress="1" keyboard="_keybinds_ref_" />
 		<action name="kcd2mp_listen_down" onPress="1" keyboard="_keybinds_ref_" />
 		<action name="kcd2mp_listen_confirm" onPress="1" keyboard="_keybinds_ref_" />
+		<action name="kcd2mp_listen_wheel_up" onPress="1" keyboard="_keybinds_ref_" /><!-- WO-210 F.1: the wheel and the mouse button -->
+		<action name="kcd2mp_listen_wheel_down" onPress="1" keyboard="_keybinds_ref_" />
+		<action name="kcd2mp_listen_confirm_mouse" onPress="1" keyboard="_keybinds_ref_" />
 	</actionmap>
 </kdcmp_patch>

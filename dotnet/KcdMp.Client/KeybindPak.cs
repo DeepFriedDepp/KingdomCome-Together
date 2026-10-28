@@ -53,7 +53,8 @@ public static class KeybindPak
     /// the end of the game's "dialog" actionmap and listed inside the game's own "back" superaction, so the player's own Back keys (and
     /// his rebinds of them) drive it and no key of its own exists. Not in <see cref="Actions"/> (those two files' other places).
     /// </summary>
-    public static readonly string[] DialogActions = { "kcd2mp_listen_cancel", "kcd2mp_listen_up", "kcd2mp_listen_down", "kcd2mp_listen_confirm" };
+    public static readonly string[] DialogActions = { "kcd2mp_listen_cancel", "kcd2mp_listen_up", "kcd2mp_listen_down", "kcd2mp_listen_confirm",
+                                                      "kcd2mp_listen_wheel_up", "kcd2mp_listen_wheel_down", "kcd2mp_listen_confirm_mouse" };   // WO-210 F.1
     public const string ListenCancelAction = "kcd2mp_listen_cancel";
     /// <summary>WO-204 III.3: the listener's own options actions, each listed inside the game's own superaction(s) whose keys move or
     /// confirm a dialogue's choice (keybindSuperactions.xml 1.5.5: up / down hold the dialog's navigation, primary_action dialog_confirm,
@@ -61,7 +62,13 @@ public static class KeybindPak
     public static readonly (string Superaction, string Action)[] ListenOptionActions =
     {
         ("up", "kcd2mp_listen_up"), ("down", "kcd2mp_listen_down"), ("primary_action", "kcd2mp_listen_confirm"),
-        ("confirm_dialog_extra", "kcd2mp_listen_confirm"),
+        ("confirm_dialog_extra", "kcd2mp_listen_confirm_mouse"),   // WO-210 F.1: the mouse button's own action (its count tells a click from E)
+    };
+    /// <summary>WO-210 F.1: the game's own wheel superactions (its dialogue list scrolls with them: mwheel_up / mwheel_down) -- an optional
+    /// group: a game file without them keeps every other listen key, and the outcome says so.</summary>
+    public static readonly (string Superaction, string Action)[] ListenWheelActions =
+    {
+        ("ui_and_dialog_wheel_up", "kcd2mp_listen_wheel_up"), ("ui_and_dialog_wheel_down", "kcd2mp_listen_wheel_down"),
     };
 
     /// <summary>WO-178 0.d: the quicksave key's action (its key is the player's choice: settings.json QuickSaveKey, Wo178Rules).</summary>
@@ -509,7 +516,20 @@ public static class KeybindPak
                     so = so is null ? null : MergeIntoSuperaction(so, sup, ListenLine(act, sup), [act], out whyO);
                     if (so is null) { whyO = sup + ": " + whyO; break; }
                 }
-                if (so is not null) s = so;
+                if (so is not null)
+                {
+                    s = so;
+                    // WO-210 F.1: the wheel, optional (every one or none)
+                    string? sw = s;
+                    string whyW = "ok";
+                    foreach (var (sup, act) in ListenWheelActions)
+                    {
+                        sw = sw is null ? null : MergeIntoSuperaction(sw, sup, ListenLine(act, sup), [act], out whyW);
+                        if (sw is null) { whyW = sup + ": " + whyW; break; }
+                    }
+                    if (sw is not null) s = sw;
+                    else listenNote = "the listener's wheel is not bound (the game's file has no wheel superaction): " + whyW;
+                }
                 else listenNote = "the listener's options keys are not bound: " + whyO;
             }
             else listenNote = "the listen cancel is not bound: " + whyD;

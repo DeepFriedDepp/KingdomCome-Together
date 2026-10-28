@@ -306,7 +306,9 @@ public sealed class CombatPipe : IAsyncDisposable
     /// </summary>
     /// WO-121: the fifth argument -- the DLL saw the LOCAL PLAYER land this hit at
     /// the combat-hit chokepoint (byte 25; false from an older DLL).
-    public Func<Guid, float, float, bool, bool, Task>? OnLocalHit { get; set; }
+    /// <summary>(soul, stamina, health, died, byPlayer, judgeThere) -- judgeThere (WO-210 E.2, byte 26): the DLL filtered the local player's
+    /// blow on a copy; it carries no numbers and goes to the host's engine.</summary>
+    public Func<Guid, float, float, bool, bool, bool, Task>? OnLocalHit { get; set; }
 
     public bool IsConnected => _pipe?.IsConnected == true;
 
@@ -2069,10 +2071,11 @@ public sealed class CombatPipe : IAsyncDisposable
                     // WO-86: trailing died byte; absent from a pre-WO-86 DLL.
                     bool  died    = body.Length >= 25 && body[24] != 0;
                     bool  byPlayer = body.Length >= 26 && body[25] != 0;   // WO-121
+                    bool  judge   = body.Length >= 27 && body[26] != 0;   // WO-210 E.2
                     if (died) Console.WriteLine($"[npcdeath] DLL reports a FATAL local hit on {soul} (hp -{health:F1})");
                     if (OnLocalHit is { } handler)
                     {
-                        try { await handler(soul, stamina, health, died, byPlayer); }
+                        try { await handler(soul, stamina, health, died, byPlayer, judge); }
                         catch (Exception ex) { Console.WriteLine($"[combat] local hit not sent: {ex.Message}"); }
                     }
                 }
@@ -2438,6 +2441,7 @@ public sealed class CombatPipe : IAsyncDisposable
     private async Task<(byte[]? Body, PipeReason Fail)> SendAndAwaitAsync(
         byte type, byte[] payload, byte wantType, CancellationToken ct)
     {
+        if (Wo210PipeBlock.Blocks(type, type == Wo163 && payload.Length > 0 ? payload[0] : -1)) return (null, PipeReason.NotConnected);   // WO-210 H.3's bisect only
         if (!await EnsureConnectedAsync(ct)) return (null, PipeReason.NotConnected);
 
         long gateAt = Environment.TickCount64;
