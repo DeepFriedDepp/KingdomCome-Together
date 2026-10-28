@@ -23,6 +23,7 @@
 #include <share.h>
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -490,7 +491,7 @@ struct OwnCopy {
     uint64_t aiHostAct = 0;     // WO-209 B: the host action last started as the copy's own combat attack (the engine runs it to its end)
 };
 std::unordered_map<uint32_t, OwnCopy> g_owned;   // main thread
-std::atomic<uint32_t> c_oInstalls{0}, c_oRefusals{0}, c_oStale{0}, c_oWithdraws{0}, c_oSteps{0}, c_oPulses{0}, c_oApplied{0}, c_oCopies{0};
+std::atomic<uint32_t> c_oInstalls{0}, c_oRefusals{0}, c_oStale{0}, c_oWithdraws{0}, c_oSteps{0}, c_oPulses{0}, c_oApplied{0}, c_oCopies{0}, c_oFar{0};
 std::string g_ownerOnly;
 double g_ownerDelayS = 0.38;
 bool g_ownerEnvRead = false;
@@ -699,6 +700,10 @@ void owner_tick(double now) {
         g_owned.clear(); g_copyStates.clear();
         return;
     }
+    float me[3]{};
+    void* pe = engine::entity_by_id(kPlayerEntity);
+    const bool haveMe = pe && engine::entity_world_pos(pe, me);
+    const bool nearOnly = haveMe && wo209::fix_on(wo209rules::kFixOwnerNear);
     for (auto it = g_copyStates.begin(); it != g_copyStates.end();) {
         const uint32_t eid = it->first;
         auto& v = it->second;
@@ -706,6 +711,21 @@ void owner_tick(double now) {
         if (!e || v.empty()) { it = g_copyStates.erase(it); continue; }
         const char* nm = engine::entity_name(e);
         if (!g_ownerOnly.empty() && (!nm || _stricmp(nm, g_ownerOnly.c_str()) != 0)) { it = g_copyStates.erase(it); continue; }
+        // WO-209 (the owner's village runs): the host streams every body within 40 m of either player, so copies by the host 130 m and more
+        // from the local player were owned here with no full-body action the engine plays at that distance (empty: a T-pose as they come
+        // into view). The owner drives the copies near the local player; a farther one is its own engine's and the old writers', as with
+        // the owner off (owner_near_only)
+        if (nearOnly) {
+            float cp[3]{};
+            const float d = engine::entity_world_pos(e, cp) ? std::sqrt((cp[0] - me[0]) * (cp[0] - me[0]) + (cp[1] - me[1]) * (cp[1] - me[1])) : -1.0f;
+            const auto ow = g_owned.find(eid);
+            if (d >= 0 && !wo209rules::owner_keeps(ow != g_owned.end(), d)) {
+                if (ow != g_owned.end()) { own_release(eid, ow->second, now, "far from the local player"); g_owned.erase(ow); c_oFar.fetch_add(1); }
+                v.clear();
+                ++it;
+                continue;
+            }
+        }
         // WO-209 B: the host's NPC's attack at the joiner's figure starts the copy's own attack as soon as its state arrives -- its blow is
         // the joiner's engine's to judge, and the host holds its own verdict at most 450 ms (the stream delay below would spend most of it)
         {
@@ -892,11 +912,11 @@ bool probe_only_name(const char* name) {
 
 int status(char* out, int n) {
     return std::snprintf(out, static_cast<size_t>(n), "w208 bits=0x%X twin_off=0x%X configured=%d | target_violations=%u bodies=%u | probe %s npc=%s installs=%u "
-                         "refusals=%u stale=%u withdraws=%u | owner copies=%zu ever=%u applied=%u installs=%u refusals=%u stale=%u withdraws=%u stops=%u steps=%u base=%u shot_holds=%u ai_holds=%u queue_full=%u "
+                         "refusals=%u stale=%u withdraws=%u | owner copies=%zu ever=%u applied=%u installs=%u refusals=%u stale=%u withdraws=%u stops=%u steps=%u base=%u shot_holds=%u ai_holds=%u queue_full=%u far=%u "
                          "stream reads=%u bodies=%u states_in=%u bad=%u", g_bits.load(), twin_off(), g_configured.load() ? 1 : 0, c_violations.load(), c_violationBodies.load(),
                          g_p.host ? "host" : g_p.joiner ? "joiner" : "off", g_p.name.c_str(), g_p.installs, g_p.refusals, g_p.stale, g_p.withdraws, g_owned.size(),
                          c_oCopies.load(), c_oApplied.load(), c_oInstalls.load(), c_oRefusals.load(), c_oStale.load(), c_oWithdraws.load(), c_oStops.load(), c_oSteps.load(),
-                         c_oPulses.load(), c_oShotHolds.load(), c_oAiHolds.load(), c_oQueueFull.load(), c_streamReads.load(), c_streamBodies.load(), c_statesIn.load(), c_statesBad.load());
+                         c_oPulses.load(), c_oShotHolds.load(), c_oAiHolds.load(), c_oQueueFull.load(), c_oFar.load(), c_streamReads.load(), c_streamBodies.load(), c_statesIn.load(), c_statesBad.load());
 }
 
 namespace {

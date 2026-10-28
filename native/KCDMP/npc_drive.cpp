@@ -6,6 +6,8 @@
 #include "npc_drive.h"
 #include "wo187.h"
 #include "wo187_rules.h"
+#include "wo209.h"
+#include "wo209_rules.h"
 #include "wo163_rules.h"
 #include "fault_guard.h"
 #include "npc_scan.h"   // WO-144 2.3: body_kind (a horse or an animal is entity-written)
@@ -289,6 +291,7 @@ float stream_speed(const Stream& s) {
     return -1.0f;
 }
 std::atomic<uint32_t> c_chaseFollow{0}, c_chaseEnded{0};
+std::atomic<uint32_t> c_activityDrift{0};   // WO-209: activity holds ended because the host's NPC walked away from the body
 
 struct Puppet {
     std::string key, name;
@@ -317,6 +320,7 @@ struct Puppet {
     uint64_t writes = 0;
     uint32_t frameNo = 0;
     double   livingCheckAt = 0;     // WO-131 2b: when the body's physics was last checked for a ragdoll
+    double   activityDriftSince = 0; // WO-209: since when its host NPC is far from the body an activity holds
     bool     beast = false;         // WO-144 2.3: a horse or an encounter animal whose physics is not a living entity
     // MP-NPCPULL window
     double   winStart = 0;
@@ -359,6 +363,7 @@ void notify_drop(uint8_t reason, const std::string& name) {
     if (DropFn fn = g_dropFn.load()) fn(reason, name.c_str());
 }
 
+std::unordered_set<uint32_t> g_driftBlocked;   // WO-209: bodies whose hold ended for drift -- no hold again until the body is back by its host NPC
 void drop(std::unordered_map<std::string, Puppet>::iterator it, uint8_t reason, bool tell) {
     logf("MP-NPCWRITE npc=%s event=drop reason=%s eid=0x%X writes=%llu", it->second.name.c_str(), reason_name(reason),
          it->second.eid, static_cast<unsigned long long>(it->second.writes));
@@ -370,6 +375,7 @@ void drop(std::unordered_map<std::string, Puppet>::iterator it, uint8_t reason, 
             r = (t - r->second.at > kRagdollGraceS) ? g_ragdolled.erase(r) : std::next(r);
         g_ragdolled[it->first] = Ragdolled{it->second.eid, t};
     }
+    g_driftBlocked.erase(it->second.eid);
     g_bound.erase(it);
 }
 
@@ -911,8 +917,10 @@ bool snap_fix() { return g_snapFix.load(std::memory_order_relaxed); }
 
 // WO-141: bodies an activity holds (main thread only: wo141's reconcile and this tick).
 std::unordered_set<uint32_t> g_activityHeld;
+std::atomic<uint32_t> c_driftRefused{0};
 void set_activity_hold(uint32_t eid, bool on) {
     if (!eid) return;
+    if (on && g_driftBlocked.count(eid)) { c_driftRefused.fetch_add(1, std::memory_order_relaxed); return; }
     if (on) { if (g_activityHeld.insert(eid).second) logf("MP-NPCWRITE eid=%u event=activity-hold (the activity owns the body)", eid); }
     else if (g_activityHeld.erase(eid)) logf("MP-NPCWRITE eid=%u event=activity-release (the stream takes the body back)", eid);
 }
@@ -1156,6 +1164,27 @@ void tick() {
             p.holdUntil = now;
             c_chaseEnded.fetch_add(1, std::memory_order_relaxed);
         }
+        // WO-209 (the owner's village runs: copies held at a seat while their host NPC walked off, one 46 m away most of a run): an activity
+        // hold whose host NPC is kActivityDriftM from the body for kActivityDriftS ends -- the row that would have ended it was lost or
+        // refused -- and the stream takes the body back
+        const bool driftBlocked = g_driftBlocked.count(p.eid) != 0;
+        if ((activity_held(p.eid) || driftBlocked) && s.n > 0 && wo209::fix_on(wo209rules::kFixActivityDrift)) {
+            float cur[3];
+            const RingSample& ns = s.ring[s.n - 1];
+            const bool drifted = read_pos(e, cur) && wo209rules::activity_drifted(std::sqrt((cur[0] - ns.x) * (cur[0] - ns.x) + (cur[1] - ns.y) * (cur[1] - ns.y)));
+            if (driftBlocked) { if (!drifted) g_driftBlocked.erase(p.eid); }   // back by its host NPC: an activity may hold it again
+            else if (!drifted) p.activityDriftSince = 0;
+            else if (p.activityDriftSince == 0) p.activityDriftSince = now;
+            else if (now - p.activityDriftSince >= wo209rules::kActivityDriftS) {
+                p.activityDriftSince = 0;
+                set_activity_hold(p.eid, false);
+                g_driftBlocked.insert(p.eid);
+                const uint32_t k = c_activityDrift.fetch_add(1, std::memory_order_relaxed) + 1;
+                if (k <= 200 || k % 100 == 0)
+                    logf("WO209-DRIFT npc=%s its host NPC is over %.0f m from the body an activity held for %.0f s: the hold ends, the stream takes it [n=%u]",
+                         p.name.c_str(), wo209rules::kActivityDriftM, wo209rules::kActivityDriftS, k);
+            }
+        } else p.activityDriftSince = 0;
         if ((s.flags & (0x01 | 0x02 | 0x10)) != 0 || now < p.holdUntil || parented || activity_held(p.eid)) {
             // Dead / unconscious / carried stay on Lua's own behaviour; a swing
             // one-shot owns the body for its hold. Neither is a pull.

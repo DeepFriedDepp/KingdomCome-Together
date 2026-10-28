@@ -75,6 +75,12 @@ int wo209_tests(int* passed) {
            (kFixDeathLeave & (kFixOwnerNeutral | kFixOwnerQueueCap)) == 0, "the death leave's twin by name (rc4-c1x's joiner crash)");
     WCHECK(twin_off_bits("game_hostile_gate") == kFixGameHostile && (kBitsDefault & kFixGameHostile) == 0 &&
            (kFixGameHostile & (kFixOwnerNeutral | kFixOwnerQueueCap | kFixDeathLeave)) == 0, "the hostile gate's twin by name (rc5-c1x's joiner crash)");
+    WCHECK(twin_off_bits("activity_drift_release") == kFixActivityDrift && twin_off_bits("owner_near_only") == kFixOwnerNear &&
+           (kBitsDefault & (kFixActivityDrift | kFixOwnerNear)) == 0 && kFixActivityDrift != kFixOwnerNear, "the village fixes' twins by name");
+    WCHECK(!activity_drifted(0.5f) && !activity_drifted(4.0f) && activity_drifted(4.5f) && activity_drifted(46.0f), "drift: a seated copy 46 m from its host NPC (rc4-village-1) lets go");
+    WCHECK(owner_keeps(false, 10.0f) && owner_keeps(false, 60.0f) && !owner_keeps(false, 65.0f) && owner_keeps(true, 65.0f) && !owner_keeps(true, 71.0f) && !owner_keeps(true, 135.0f),
+           "the owner near the local player: takes within 60 m, lets go past 70 m (130-148 m T-poses in rc6-village-2)");
+    WCHECK(!owner_keeps(false, -1.0f), "no distance: not taken");
     WCHECK(!owner_queue_full(-1) && !owner_queue_full(0) && !owner_queue_full(5), "room: the owner installs (an unreadable queue is no cap)");
     WCHECK(owner_queue_full(6) && owner_queue_full(10), "six queued: the owner waits (rc1-c2tavern-1: 11,004 overflows on one copy)");
 

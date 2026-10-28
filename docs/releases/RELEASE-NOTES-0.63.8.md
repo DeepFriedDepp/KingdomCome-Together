@@ -35,18 +35,19 @@ maintainer. The evidence is `docs/WO-209-findings.md`; what to try together is `
 ## Changed
 
 - **The host's people on the joiner's screen now have one animation owner** (`mp_copy_anim_owner`, now **on**; 0.63.7 had it off):
-  each one plays the animation the host's person plays, driven by the host's own state -- sleepers now lie down on the joiner's
-  screen too, and fights match the host's far more closely. If the people around you look worse than in 0.63.7, both type `mp_copy_anim_owner off` and tell us where.
+  each one plays the animation the host's person plays, driven by the host's own state -- sleepers lie down and seated people stay
+  seated on the joiner's screen now, villagers keep to where they are on the host's, and fights match the host's far more closely. If the people around you look worse than in 0.63.7, both type `mp_copy_anim_owner off` and tell us where.
 - **The joiner's own game judges his defence** (`mp_defence_local`, on as before): block, perfect block, parry and dodge against the
   host's enemies -- about nine blows in ten on our bench now that their swings are their own attacks; the rest (the last swing of a
   combo, the first of a fight) take the host's verdict.
 
 ## Known
 
-- **Animations of the host's people on the joiner's screen** (`mp_copy_anim_owner`): sleepers now lie down, but seated people can
-  still stand on the joiner's screen, walkers can slide more than on the host's, and in a village some people can lag behind
-  where they are on the host's screen. A person the owner lets go can keep looping the same idle. If it looks worse than 0.63.7,
-  both type `mp_copy_anim_owner off`.
+- **Animations of the host's people on the joiner's screen** (`mp_copy_anim_owner`): walkers can still slide more than on the host's
+  screen, and a person the owner lets go can keep looping the same idle. If it looks worse than 0.63.7, both type
+  `mp_copy_anim_owner off`.
+- **The host waiting alone:** on our bench a host waiting for the partner climbs in memory until the partner is in (0.63.7 did the
+  same). Have the partner join within a couple of minutes, and tell us how high Task Manager showed the host's memory.
 - **Lock-on** takes the enemy in front of the joiner; an enemy attacking from the side is not taken until he turns to it.
 - **Quest areas** count only the host's character (unchanged).
 - **A timed choice in a joined conversation** has not been tried on our bench (none was in reach); tell us if you meet one.

@@ -4,6 +4,11 @@ Two players, one host and one joiner, both on 0.63.8, in the same world. If anyt
 that moment. To say what you saw, open the console (~) and type `mark <what you saw>`: the note reaches the other player's bug report
 too. Send both bug reports after the session.
 
+## 0. Hosting
+- **Host:** while you wait for your partner to join, keep Task Manager open on the game's memory. **Joiner:** join within a couple of
+  minutes. On our bench a host waiting alone climbs about 80 MB a second (0.63.7 did the same) and stops climbing once the partner is in.
+- **Expected:** the host's memory levels off once the joiner is in. Tell us how high it went and how long the host waited.
+
 ## 1. The same tavern, the animation owner off and on
 - Both stand in a busy tavern for two minutes (the owner is on in this build). **Joiner:** type `mark owner on`, watch two minutes.
   Then **both** type `mp_copy_anim_owner off` (the joiner also `mark owner off`), watch two more, and **both** type
@@ -51,7 +56,7 @@ too. Send both bug reports after the session.
 ## Known in this build
 - Lock-on takes the enemy in front of the joiner; one that attacks from the side is not taken until the joiner turns to it.
 - About one blow in ten on the joiner is still judged by the host's game (the last swing of a combo, the first of a fight).
-- With the animation owner on: seated people can stand on the joiner's screen, walkers can slide, and in a village some people
-  lag behind where they are on the host's screen. Mark it, and say whether `mp_copy_anim_owner off` looks better there.
+- With the animation owner on, walkers can slide more than on the host's screen. Mark it, and say whether `mp_copy_anim_owner off`
+  looks better there.
 - A place a quest waits for you to reach counts only the host's character.
 - A timed choice in a joined conversation has not been tried on our bench; mark one if you meet it.

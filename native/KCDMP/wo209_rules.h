@@ -22,6 +22,8 @@ constexpr uint32_t kFixOwnerNeutral = 0x100;   // the owner's copies take the ac
 constexpr uint32_t kFixOwnerQueueCap = 0x200;  // the owner queues nothing on a copy whose action queue is long: owner_queue_cap
 constexpr uint32_t kFixDeathLeave = 0x400;     // the local player's death ends every copy's engagement (as op 1's leave): death_leave_clears
 constexpr uint32_t kFixGameHostile = 0x800;    // no attack of its own at the local player from a copy the game holds not hostile: game_hostile_gate
+constexpr uint32_t kFixActivityDrift = 0x1000; // a seat/bed/workstation hold ends when the host's NPC is far from the body: activity_drift_release
+constexpr uint32_t kFixOwnerNear = 0x2000;     // the owner drives only copies near the local player: owner_near_only
 
 // The bench's twins: KCDMP_TEST_W209_OFF in the game's own environment (a comma list, whole names: wo208rules::list_has).
 struct Named { const char* name; uint32_t bit; };
@@ -35,7 +37,18 @@ inline constexpr Named kNames[] = {
     {"owner_queue_cap", kFixOwnerQueueCap},
     {"death_leave_clears", kFixDeathLeave},
     {"game_hostile_gate", kFixGameHostile},
+    {"activity_drift_release", kFixActivityDrift},
+    {"owner_near_only", kFixOwnerNear},
 };
+
+// The owner's village runs (rc4/rc6): copies held at a seat while their host NPC walked off (one 46 m away most of a run), and copies
+// 130-148 m from the joiner (near the host: the stream's 40 m around each player) owned with no full-body action the engine plays there.
+constexpr float kActivityDriftM = 4.0f;    // the host's NPC this far from the held body...
+constexpr double kActivityDriftS = 2.0;    // ...this long: the hold ends, the stream takes the body back
+inline bool activity_drifted(float planarM) { return planarM > kActivityDriftM; }
+constexpr float kOwnerNearM = 60.0f;       // the owner takes a copy within this of the local player...
+constexpr float kOwnerFarM = 70.0f;        // ...and lets an owned one go beyond this (no flapping at the edge)
+inline bool owner_keeps(bool owned, float distM) { return distM >= 0 && distM <= (owned ? kOwnerFarM : kOwnerNearM); }
 
 // The activity rows (WO-141) on a copy the animation owner owns. WO-208 kept every owned copy out of them, and with the WO-200 neutral rule
 // on that also kept out the neutral write -- a copy bound at a camp's waiting spot kept the spot's demand and stood there (d5-defence: a

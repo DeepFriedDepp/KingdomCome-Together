@@ -294,30 +294,44 @@ on; the WO's own ship rules (B's 95 %, C.6's comparison) are reported above, the
 Test switches (the bench's twins only, never a console command): `KCDMP_TEST_W209_OFF=owner_neutral` (the owner's copies refuse the
 activity rows again), `KCDMP_TEST_W209_OFF=owner_queue_cap` (the owner queues onto a copy whatever its action queue holds),
 `KCDMP_TEST_W209_OFF=native_bind_order` (the game's native bind and unbind sent unordered again), `KCDMP_TEST_W209_OFF=death_leave_clears` (the joiner's death
-leaves the copies held in his old fight), `KCDMP_TEST_W209_OFF=game_hostile_gate` (a copy the game holds not hostile attacks him anyway).
+leaves the copies held in his old fight), `KCDMP_TEST_W209_OFF=game_hostile_gate` (a copy the game holds not hostile attacks him anyway), `KCDMP_TEST_W209_OFF=activity_drift_release` (a seated copy
+stays held while its host NPC walks off), `KCDMP_TEST_W209_OFF=owner_near_only` (the owner drives far copies too).
 
-## Open
+## After the release candidate: the open items worked down
 
-- **B's last misses** (the host's verdict for them; B's 95 % not met): a combo's finishing swing (the copy's own finisher is the
-  engine's pick and lands ~150 ms after the host's), a fight's first swing, and the joiner's game not answering for a second (the
-  bench). The combo's own request (the engine's attack inputs: light, heavy, special; the copy uses the light one) is the next thing
-  to try.
-- **Lock-on over all windows** (the WO's 90 %): the bench's player never turns to an attacker as a player does. A bench aim that turns
-  the view (not the body) is what would settle it.
-- **C.1** paired actions: not exercised on the bench (no clinch arose); the tester script asks for one.
-- **A copy the owner lets go** loops the host's last fragment until its own AI acts (the same pose on both screens; the family
-  measure counts it).
-- **The owner in a village:** copies held seated (the activity rows given back to owned copies) stay where they sat while their host
-  NPC walks off (one 46 m away for most of a run); far copies (130 m and more) have no full-body action at all with the owner on --
-  invisible there; whether one shows a T-pose as it comes into view is not measured. Seated people still stand on the joiner's screen
-  in a tavern. The family measure counts the owner's own action class.
-- **D.3** the mod's 2.6 GB step in the first minutes after a load: bounded, not attributed.
-- **A host alone with the relay up** (no partner joined yet): its memory grows about 80 MB a second to some 23 GB and the game hangs
-  within four minutes on the bench -- 0.63.7 the same, every WO-209 switch off the same, the owner on or off the same; without the
-  relay it stays flat. Found when the installer's save round trip met it (WO-208's did too). Not attributed yet; the next WO's first item.
-- **D.4** quest modules awake on the joiner and asleep on the host; the smoke's States both machines run themselves.
-- **D.5** quest areas for both players: its own WO.
-- **E.1** a timed decision on the pair; **E.2** the brawl scenario's trigger.
-- **The bench:** the joiner's first console call after the bench's clock jump is lost (WO-208's runs too); the village walk now
-  checks the joiner's place and moves him again -- four of the WO's village runs had him away from the host most of the time and
-  were measured again.
+The maintainer's word after the first candidate: finish the open items before pushing, good enough for a gamer, and say plainly
+what is still open. Built and checked on the bench (rc7):
+
+- **Seated copies left behind in a village** (`activity_drift_release`, a test switch): a copy held at its seat, bed or workstation
+  whose host NPC is more than 4 m from the body for 2 s lets go and follows the stream; it is held again only once it is back by its
+  host NPC (a dice table's minigame hold had put it back every frame). On the bench it let go 14 times in one village walk.
+- **Far copies with no animation** (`owner_near_only`, a test switch): the host streams every body within 40 m of either player, so
+  copies standing by the host 130 m from the joiner were owned with nothing the joiner's engine plays at that distance. The owner now
+  drives the copies within 60 m of the joiner (let go past 70 m); farther ones are their own engine's, as with the owner off.
+- rc7 against rc4 (both every switch on): the tavern's seated people seated **98 %** (0 %), sleepers lying 85 % (80 %), position error
+  p95 0.85 m (7.0 m), no overflow, no T-pose; the fight unchanged (12 % different action, 0.42 m, no T-pose); the village walk: seated people seated
+  **91 %** (rc6: 77 %), sleepers lying 100 %, position error p95 **0.34 m** (rc4 / rc6: 18.3 m / 1.2 m), a different fragment 10.7 % (25-54 %),
+  **no T-pose and no stuck queue** (rc6: 10 and 15), no overflow.
+
+## Still open -- what a player may meet
+
+- **A host waiting alone** (no partner joined yet) climbs in memory, about 80 MB a second on the bench, and stops once the partner is
+  in; a host left alone four minutes ran the bench PC out of memory. 0.63.7 does the same. Without the relay it stays flat; it goes on
+  when the agent is stopped (something it switched on in the game); the new memory is the engine's own data (large blocks of floats);
+  ten subsystems switched off one by one changed nothing. Not found. The tester script's first step watches it on a real host.
+- **About one blow in ten on the joiner** is still judged by the host's game (a combo's last swing lands ~150 ms later on the copy;
+  a fight's first swing), as every blow was in 0.63.7.
+- **Lock-on** takes the enemy in front of the joiner; one attacking from the side only once he turns to it.
+- **A clinch with a copy** has not happened on the bench; the tester script asks for one.
+- **A copy the owner lets go** keeps looping the host's last idle until its own AI does something else (the same idle on both screens).
+- **Walkers on the joiner's screen** slide more than the host's own walkers outside fights (C.7 met in the fight only).
+- **Quest areas** count only the host's character (D.5, its own WO); **a timed choice in a joined talk** has not been tried on the
+  pair (E.1).
+
+## Still open -- the measures and the bench
+
+- Part 0's tavern, village and smoke columns for 0.63.7 (about four hours of the bench); B's 95 % and the WO's lock-on 90 % (the
+  bench's player never turns to an attacker); the digest's last rows (D.4: quest modules awake on one side only, States both machines
+  run themselves); D.3's bounded 2.6 GB step after a load; E.2's brawl trigger.
+- The bench: the joiner's first console call after the bench's clock jump is lost (moves are now asked again; the village walk checks
+  the joiner's place); once the joiner's trace file was reopened mid-run and lost a village walk's samples.
