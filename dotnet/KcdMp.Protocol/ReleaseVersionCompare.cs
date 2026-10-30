@@ -44,6 +44,10 @@ public static class ReleaseVersionCompare
         parts = [0, 0, 0, 0];
         if (string.IsNullOrWhiteSpace(s)) return false;
 
+        // WO-211 0.2: a peer's release string carries its build id ("0.63.9+<id>"): the version is what is compared here (another
+        // build of the same version is refused at the relay, and the joiner is told so there)
+        int plus = s.IndexOf('+');
+        if (plus >= 0) s = s[..plus];
         var segments = s.Trim().Split('.');
         if (segments.Length < 2 || segments.Length > 4) return false;
 

@@ -41,7 +41,7 @@ public static class RelaySmoke
 
             // The exact handshake GameBridge.ConnectAndRunAsync sends.
             var nameBytes = Encoding.UTF8.GetBytes(name);
-            var rel = Encoding.UTF8.GetBytes(ReleaseVersionInfo.Current);
+            var rel = Encoding.UTF8.GetBytes(ReleaseVersionInfo.Wire);   // WO-211 0.2: the release string the agent sends (version+build id)
             int len = 2 + nameBytes.Length + rel.Length;
             var hs = new byte[3 + len];
             hs[0] = Protocol.Handshake;
@@ -60,7 +60,7 @@ public static class RelaySmoke
             }
             if (type == Protocol.ReleaseVersionMismatch)
             {
-                Console.WriteLine($"RELAY-SMOKE FAIL release mismatch: relay is {Encoding.UTF8.GetString(payload)}, this agent {ReleaseVersionInfo.Current}");
+                Console.WriteLine($"RELAY-SMOKE FAIL release mismatch: relay is {Encoding.UTF8.GetString(payload)}, this agent {ReleaseVersionInfo.Wire}");
                 return 1;
             }
             if (type != Protocol.Ack)
@@ -92,7 +92,7 @@ public static class RelaySmoke
                 break;
             }
 
-            Console.WriteLine($"RELAY-SMOKE ok id={id} protocol=v{Protocol.Version} release={ReleaseVersionInfo.Current} rtt_ms={sw.Elapsed.TotalMilliseconds:F0}");
+            Console.WriteLine($"RELAY-SMOKE ok id={id} protocol=v{Protocol.Version} release={ReleaseVersionInfo.Wire} rtt_ms={sw.Elapsed.TotalMilliseconds:F0}");
             return 0;
         }
         catch (Exception ex)

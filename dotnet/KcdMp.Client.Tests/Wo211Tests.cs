@@ -96,5 +96,8 @@ public class Wo211Tests
         Assert.Equal("Your partner is on a different 0.63.9 build (b1); install the same one.", BuildId.MismatchText("0.63.9+a1", "0.63.9+b1"));
         Assert.Contains("both players need the same version", BuildId.MismatchText("0.63.8", "0.63.9+b1"));
         Assert.True(BuildId.IsBuildId(BuildId.Current));
+        // the launcher compares versions only: a same-build partner's "0.63.9+<id>" is the same version, not "versions don't match"
+        Assert.Equal(ReleaseVersionComparison.Equal, ReleaseVersionCompare.Compare("0.63.9", "0.63.9+4744d98-2610301016"));
+        Assert.Equal(ReleaseVersionComparison.LocalIsOlder, ReleaseVersionCompare.Compare("0.63.9", "0.64.0+abc"));
     }
 }
