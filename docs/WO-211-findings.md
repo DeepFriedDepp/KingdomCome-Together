@@ -88,7 +88,8 @@ logged as "no listener takes it"). On the main thread nothing changes.
 **B.2 numbers (the pair, d2).** On each copy, 20 map and 20 inventory opens and closes with the pair joined: **every map close put 2
 element events (`ApseMap/OnHide`, `ApseMap/OnUnload`) on a non-main thread** -- 40 on each machine; the guard skipped all 40, none was
 a listener of the mod's; 221-241 events ran on the main thread as before. The inventory's closes stay on the main thread. On 0.63.9
-each of those 40 built and freed a Lua table on the render thread: one race per map close. **Twin** (`KCDMP_TEST_W211_OFF=ui_lua_main_only`, the old
+each of those 40 built and freed a Lua table on the render thread: one race per map close. **On the final build, 50 map and 50 inventory opens and
+closes on each machine: 100 off-main events each, all skipped, no crash.** **Twin** (`KCDMP_TEST_W211_OFF=ui_lua_main_only`, the old
 behaviour, the same storm): **the host's game crashed** on its 10th map close -- an access violation inside the script system on the
 main thread, in the very millisecond the twin let the map's `OnHide` / `OnUnload` Lua dispatch run on the render thread
 (23:49:36.335, the crash at .336): the same race as the field's, seen from the main thread's side. **Joined talks on the final build** (`convvote_both`, the ring and the
@@ -176,7 +177,10 @@ The rest of the debug map (F4 and the others) is untouched.
   them); relay round trip 199 (one new: another build of the same version is refused); agent 2,033; setup 77; log bundles 77; every
   synthetic Lua suite (WO-211's own 26; the co-op menu's suite updated for its new row); the static checks; the relay message table (97)
   and fault-mode (37) gates; the digest analyzer and rig tests; the save tools. **Found on the way:** with a build id stamped, the relay
-  tests' peers (which sent the plain version) were all refused -- the tests now send the release string the agent sends.
+  tests' peers (which sent the plain version) were all refused -- the tests now send the release string the agent sends; and the
+  installer's own payload smoke caught two more of the same: the agent's relay-smoke mode still sent the plain version (refused by
+  the published relay as "the same version, another build"), and the launcher's version compare would have told a same-build partner
+  "Versions don't match" (it could not read the "+id"). Both fixed before the installer was built again.
 - **No-input-capture gate** (`tools/Check-NoInputCapture.ps1 -SelfTest`), first and last over every binary and script built here, the
   dev builds and the bench's own tools included (the input helper gained three keys to send: the map, the journal, the flight key):
   PASS both times, the self-test catching every planted capture.
@@ -184,7 +188,13 @@ The rest of the debug map (F4 and the others) is untouched.
   a match, mirror roots only.
 - **The installer** `KingdomComeTogether-Setup-0.63.9-<build id>.exe` is built from this commit with `tools/Build-Installer.ps1`
   (the soak waived as the WO says -- the safety gates are hard, the rest reported): the publishing gate, the payload's no-input-capture
-  check and the live save round trip run inside it. Installers stay local; its name, size and hash are in the commit that follows.
+  check and the live save round trip run inside it. Installers stay local. **Built:** `KingdomComeTogether-Setup-0.63.9-5cbf569-2610301028.exe`
+  (build id `5cbf569-2610301028`, 107,698,812 bytes, sha256 `f54c318bfeff0569b2cfcb22853071136046951429b807525d6cfe383c491eb7`,
+  unsigned): the publishing gate, the live save round trip, the payload smoke, the test installs (41 of 41), the payload's
+  no-input-capture, no-input-tooling and no-screenshot gates and the relay fault gate all PASS; the soak waived as the WO says. The
+  bench's runs used the dev builds d2/d3 (`ca7c641`): the installer's commit adds only tests, documents, the bench's tools, the agent's
+  relay-smoke mode and the launcher's version compare -- the session's own code is the same. The real saves matched their hash list
+  after the installer's round trip too.
 
 ## Switches
 
