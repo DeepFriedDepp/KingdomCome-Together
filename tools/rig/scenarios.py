@@ -2524,7 +2524,8 @@ def s_w210_ff(r, secs=float(os.environ.get('KCDMP_RIG_FF_S', '40'))):
 
 
 W211_STATUS_RX = r'MP-W211-NATIVE (w211 .*)'
-INV_Q = ('local n = -1; pcall(function() n = 0; for _ in pairs(player.inventory:GetInventoryTable() or {}) do n = n + 1 end end); local h = -1; '
+TORCH = '4cea28a0-0814-405a-bf24-4fd711f7eb63'
+INV_Q = ('local n = -1; pcall(function() n = player.inventory:GetCountOfClass("' + TORCH + '") end); local h = -1; '
          'pcall(function() h = player.soul:GetState("health") end); local p = player:GetWorldPos(); '
          'System.LogAlways(string.format("[W211S] %d %.2f %.2f %.2f %.2f", n, h, p.x, p.y, p.z))')
 
@@ -2597,8 +2598,9 @@ def s_w211_link(r, cut_s):
         b, a = r.b, r.a
         if cut_s > 30:
             # the Henry in the host's world made unlike the one in his own save (two torches more, health 63): what lands at home tells
-            b.lua('pcall(function() player.inventory:CreateItem("4cea28a0-0814-405a-bf24-4fd711f7eb63", 1, 2) end); '
-                  'pcall(function() player.soul:SetState("health", 63) end)')
+            for _ in range(2):
+                b.lua('pcall(function() local it = ItemManager.CreateItem("' + TORCH + '", 1, 1); player.inventory:AddItem(it) end)')
+            b.lua('pcall(function() player.soul:SetState("health", 63) end)')
             time.sleep(2)
         s0 = w211_state(b)
         mb, ma = b.mark(), a.mark()
@@ -2608,6 +2610,7 @@ def s_w211_link(r, cut_s):
         while time.time() - t0 < 420 and not hit:
             hit = b.wait('a', mb['a'], r'WO211-LINK hold: the link|MP-JOIN joiner: leaving the host|MP-CONN fail', 3)
             if not hit:
+                if cut_s > 30: b.lua_nowait('pcall(function() player.soul:SetState("health", 63) end)')   # held at 63 up to the drop
                 s = w211_state(b)
                 if s: s0 = s
         if not hit: return False, 'no-cut', {'before': s0}
