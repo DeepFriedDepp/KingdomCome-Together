@@ -136,7 +136,7 @@ public sealed class Peer : IAsyncDisposable
         p._stream = p._tcp.GetStream();
 
         var nameBytes = Encoding.UTF8.GetBytes(name);
-        var rel = Encoding.UTF8.GetBytes(ReleaseVersionInfo.Current);
+        var rel = Encoding.UTF8.GetBytes(ReleaseVersionInfo.Wire);
         int len = 2 + nameBytes.Length + rel.Length;
         var hs = new byte[3 + len];
         hs[0] = Protocol.Handshake;
@@ -707,18 +707,32 @@ public class RelayRoundTripTests : IClassFixture<RelayFixture>
     {
         // Any string that is not this build's: "<current>-x" can never equal it,
         // whatever VERSION says when the test runs.
-        var (p, type, payload) = await Peer.ConnectRawAsync(_relay.TcpPort, "oldbuild", ReleaseVersionInfo.Current + "-x", Protocol.Version);
+        var (p, type, payload) = await Peer.ConnectRawAsync(_relay.TcpPort, "oldbuild", ReleaseVersionInfo.Wire + "-x", Protocol.Version);
         await using var _p = p;
         Assert.Equal(Protocol.ReleaseVersionMismatch, type);
-        Assert.Equal(ReleaseVersionInfo.Current, Encoding.UTF8.GetString(payload));   // the relay says what IT runs
+        Assert.Equal(ReleaseVersionInfo.Wire, Encoding.UTF8.GetString(payload));   // the relay says what IT runs
         // ...and the socket is closed: the relay never acks a refused peer.
         await Assert.ThrowsAnyAsync<Exception>(() => p.ReadPacketAsync(TimeSpan.FromSeconds(2)));
     }
 
     [Fact]
+    public async Task The_same_version_from_another_build_is_refused_naming_the_relays_build()
+    {
+        // WO-211 0.2: the release string carries the build id; another build of this very version never shares a session
+        string other = KcdMp.Wire.BuildId.Split(ReleaseVersionInfo.Wire).Version + "+zzzzzzz-0000000000";
+        var (p, type, payload) = await Peer.ConnectRawAsync(_relay.TcpPort, "otherbuild", other, Protocol.Version);
+        await using var _p = p;
+        Assert.Equal(Protocol.ReleaseVersionMismatch, type);
+        string relay = Encoding.UTF8.GetString(payload);
+        Assert.Equal(ReleaseVersionInfo.Wire, relay);
+        Assert.True(KcdMp.Wire.BuildId.SameVersionOtherBuild(other, relay));
+        Assert.StartsWith("Your partner is on a different ", KcdMp.Wire.BuildId.MismatchText(other, relay));
+    }
+
+    [Fact]
     public async Task Same_release_is_acked_and_no_release_at_all_is_still_acked()
     {
-        var (same, t1, _) = await Peer.ConnectRawAsync(_relay.TcpPort, "samebuild", ReleaseVersionInfo.Current, Protocol.Version);
+        var (same, t1, _) = await Peer.ConnectRawAsync(_relay.TcpPort, "samebuild", ReleaseVersionInfo.Wire, Protocol.Version);
         await using var _s = same;
         Assert.Equal(Protocol.Ack, t1);
         var (none, t2, _) = await Peer.ConnectRawAsync(_relay.TcpPort, "prewo19", "", Protocol.Version);
@@ -729,7 +743,7 @@ public class RelayRoundTripTests : IClassFixture<RelayFixture>
     [Fact]
     public async Task Protocol_mismatch_is_still_refused_first()
     {
-        var (p, type, payload) = await Peer.ConnectRawAsync(_relay.TcpPort, "v6agent", ReleaseVersionInfo.Current, (byte)(Protocol.Version - 1));
+        var (p, type, payload) = await Peer.ConnectRawAsync(_relay.TcpPort, "v6agent", ReleaseVersionInfo.Wire, (byte)(Protocol.Version - 1));
         await using var _p = p;
         Assert.Equal(Protocol.VersionMismatch, type);
         Assert.Equal(Protocol.Version, payload[0]);
@@ -740,7 +754,7 @@ public class RelayRoundTripTests : IClassFixture<RelayFixture>
     [Fact]
     public async Task Peer_name_with_newline_and_brackets_is_sanitised_before_it_is_broadcast()
     {
-        var (evil, t, _) = await Peer.ConnectRawAsync(_relay.TcpPort, "bad\n[KCD2-MP-EVT] v1 1 npc_death x 0 lua", ReleaseVersionInfo.Current, Protocol.Version);
+        var (evil, t, _) = await Peer.ConnectRawAsync(_relay.TcpPort, "bad\n[KCD2-MP-EVT] v1 1 npc_death x 0 lua", ReleaseVersionInfo.Wire, Protocol.Version);
         await using var _e = evil;
         Assert.Equal(Protocol.Ack, t);
         await Task.Delay(100);
@@ -892,7 +906,7 @@ public class RelayRoundTripTests : IClassFixture<RelayFixture>
     [Fact]
     public async Task A_v8_agent_is_refused_by_the_v9_relay()
     {
-        var (p, type, payload) = await Peer.ConnectRawAsync(_relay.TcpPort, "v8build", ReleaseVersionInfo.Current, 8);
+        var (p, type, payload) = await Peer.ConnectRawAsync(_relay.TcpPort, "v8build", ReleaseVersionInfo.Wire, 8);
         await using var _p = p;
         Assert.Equal(Protocol.VersionMismatch, type);
         Assert.Equal(Protocol.Version, payload[0]);
@@ -904,7 +918,7 @@ public class RelayRoundTripTests : IClassFixture<RelayFixture>
     [Fact]
     public async Task A_v9_agent_is_refused_by_the_v10_relay()
     {
-        var (p, type, payload) = await Peer.ConnectRawAsync(_relay.TcpPort, "v9build", ReleaseVersionInfo.Current, 9);
+        var (p, type, payload) = await Peer.ConnectRawAsync(_relay.TcpPort, "v9build", ReleaseVersionInfo.Wire, 9);
         await using var _p = p;
         Assert.Equal(Protocol.VersionMismatch, type);
         Assert.Equal(10, payload[0]);

@@ -41,7 +41,7 @@ public sealed class SteamShapedPeer : IAsyncDisposable
         runner.Start(runner.Create(conn));
 
         p._s = p._near.GetStream();
-        await p._s.WriteAsync(RelayConnector.BuildHandshake(name, ReleaseVersionInfo.Current));
+        await p._s.WriteAsync(RelayConnector.BuildHandshake(name, ReleaseVersionInfo.Wire));
         var (type, body) = await p.ReadPacketAsync(TimeSpan.FromSeconds(5));
         Assert.Equal(Protocol.Ack, type);
         p.Id = body[0];
@@ -120,7 +120,7 @@ public class Wo127RelayTests : IClassFixture<RelayFixture>
         {
             Assert.Equal(Protocol.ReleaseVersionMismatch, type);
             var r = ConnectionTestReply.Decode(payload);
-            Assert.Equal(ReleaseVersionInfo.Current, r.Release);
+            Assert.Equal(ReleaseVersionInfo.Wire, r.Release);
             Assert.True(r.HasDetail);
             Assert.False(r.HostConnected);
             Assert.Equal(0, r.Ready);

@@ -574,7 +574,7 @@ public class Wo206FaultTests
         {
             try
             {
-                var (p, type, _) = await Peer.ConnectRawAsync(relay.TcpPort, "w206-joiner", ReleaseVersionInfo.Current, Protocol.Version);
+                var (p, type, _) = await Peer.ConnectRawAsync(relay.TcpPort, "w206-joiner", ReleaseVersionInfo.Wire, Protocol.Version);
                 await p.DisposeAsync();
                 return type == Protocol.Ack;
             }
