@@ -15,6 +15,8 @@
 #include "wo210.h"
 #include "wo210_kd.h"
 #include "wo210_rules.h"
+#include "wo211.h"
+#include "wo211_rules.h"
 #include "combat_swing.h"
 #include "engine.h"
 #include "fault_guard.h"
@@ -532,6 +534,7 @@ struct OwnCopy {
     uint8_t lastPath = 0; double lastPathAt = -1e9;
     double watchAt = 0, breachSince = -1, transSince = -1; uint8_t breach = 0; uint32_t transFrag = 0xFFFFFFFFu;
     double askedAt = -1e9, reseatBackoff = 0;
+    double overflowAt = -1e9;   // WO-211 C.3: the last clean reseat for an over-full queue
 };
 std::unordered_map<uint32_t, OwnCopy> g_owned;   // main thread
 std::unordered_set<uint32_t> g_readyHeld;          // WO-210 D.3: copies whose combat-mode hold the host NPC's streamed state set
@@ -609,6 +612,19 @@ bool own_handover(uint32_t eid, OwnCopy& oc, double now, uint8_t path) {
     const HostScope* hs = oc.hostHave && (oc.host.cls != kClsNone || !wo210::fix_on(wo210rules::kFixEmptyHostNeutral)) ? &oc.host : nullptr;
     const Fam fam = hs ? family_of_id(hs->cls, hs->frag) : Fam::Empty;
     bool installed = false, neutral = false;
+    // WO-211 C.2: a hand-over never queues behind a long queue (the field's seated copy: nine of our actions waiting behind its own look
+    // actions, 3,712 overflows) -- ours still pending are withdrawn first (one pending action of ours per copy); still long: nothing new
+    if (wo211::on(wo211rules::kBitHandoverQueueCap) && wo209rules::owner_queue_full(wo187::queue_info(eid).n)) {
+        for (auto& sc : oc.own) {
+            uint32_t st = 0;
+            if (sc.act && rd(sc.act, 0x28, &st) && st < 2) own_retire(oc, sc, now, "a long queue: one pending action of ours at a time");
+        }
+        if (wo209rules::owner_queue_full(wo187::queue_info(eid).n)) {
+            wo211::note_handover_queue_full();
+            wo210::note_handover(path, false, false);
+            return false;
+        }
+    }
     if (hs && !is_base(fam) && fam != Fam::Hold) {
         if (oc.own[0].act && oc.own[0].hostAct == hs->act) installed = true;   // ours already plays it
         else {
@@ -1155,6 +1171,26 @@ bool host_fullbody(uint32_t eid, uint8_t* cls, uint32_t* frag) {
     if (cls) *cls = it->second.host.cls;
     if (frag) *frag = it->second.host.frag;
     return true;
+}
+
+// WO-211 C.3 (main thread): the engine said this copy's action queue is over-full -- every action of ours on it withdrawn the engine's way
+// (a pending one stopped, never installed; a running one stepped down), then one clean hand-over. 1 reseated, 2 not an owned copy,
+// 3 too soon after the last.
+uint8_t overflow_reseat(uint32_t eid, const char* name, double everyS) {
+    auto it = eid ? g_owned.find(eid) : g_owned.end();
+    if (it == g_owned.end()) { wo211::note_overflow_reseat(false, false); return 2; }
+    OwnCopy& oc = it->second;
+    const double now = npcdrive::now_s();
+    if (now - oc.overflowAt < everyS) return 3;
+    oc.overflowAt = now;
+    for (auto& sc : oc.own) if (sc.act) own_retire(oc, sc, now, "the engine's queue is over-full");
+    if (oc.baseAct) { rttr::stop_action(oc.baseAct); oc.retired.push_back({oc.baseAct, now}); oc.baseAct = nullptr; oc.baseFrag = 0; }
+    const wo187::QueueInfo qi = wo187::queue_info(eid);
+    const bool ok = own_handover(eid, oc, now, wo210rules::kPathOverflow);
+    wo211::note_overflow_reseat(true, ok);
+    logf("WO211-OVERFLOW npc=%s queue=%d first=%s: ours withdrawn, %s", name ? name : oc.name.c_str(), qi.n, qi.first,
+         ok ? "a clean hand-over installed" : "nothing installed (the queue is still long, or no state)");
+    return 1;
 }
 
 bool probe_owned(uint32_t eid) {

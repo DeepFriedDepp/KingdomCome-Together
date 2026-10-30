@@ -159,6 +159,13 @@ inline constexpr uint8_t kSetDialogSequences[23] = {
     0x88, 0x54, 0x24, 0x10, 0x55, 0x53, 0x56, 0x57, 0x48, 0x8D, 0x6C, 0x24, 0xB8, 0x48, 0x81, 0xEC, 0x48, 0x01, 0x00, 0x00, 0x48, 0x8B, 0xF1,
 };
 
+// wo211.cpp (WO-211 B): CryAction's element-listener Lua dispatch (the one function the listeners' OnUnload calls that reads
+// "__ui_action_name") -- gated so it never builds a Lua table off the main thread.
+// mov [rsp+10h],rdx; push rbx; push r13; push r15; sub rsp,60h
+inline constexpr uint8_t kUiElementLuaNotify[14] = {
+    0x48, 0x89, 0x54, 0x24, 0x10, 0x53, 0x41, 0x55, 0x41, 0x57, 0x48, 0x83, 0xEC, 0x60,
+};
+
 struct Entry { const char* name; const uint8_t* bytes; size_t len; };
 inline constexpr Entry kAll[] = {
     {"motion UpdateMannequinTags", kMotionTags, sizeof kMotionTags},
@@ -183,6 +190,7 @@ inline constexpr Entry kAll[] = {
     {"wo201 C_DistanceTrigger::Evaluate", kDistEvaluate, sizeof kDistEvaluate},
     {"wo201 C_ActorSpeakMan::Speak", kActorSpeak, sizeof kActorSpeak},
     {"wo201 C_UIHudInteractiveDialog::SetDialogSequences", kSetDialogSequences, sizeof kSetDialogSequences},
+    {"wo211 CryAction element-listener Lua dispatch (B)", kUiElementLuaNotify, sizeof kUiElementLuaNotify},
 };
 
 } // namespace kcdmp::hookpro

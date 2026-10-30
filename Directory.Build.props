@@ -30,5 +30,12 @@
          stack traces carry line numbers), so turn it off rather than map it. -->
     <EnableSourceLink>false</EnableSourceLink>
     <EnableSourceControlManagerQueries>false</EnableSourceControlManagerQueries>
+    <!-- WO-211 0.2: the build id (tools/Write-BuildId.ps1 writes the git-ignored BUILD_ID: the short commit and the build time). Every
+         assembly carries it as AssemblyMetadata "KcdMpBuildId" (KcdMp.Wire.BuildId reads it); no file: "dev". -->
+    <KcdMpBuildIdFile>$(MSBuildThisFileDirectory)BUILD_ID</KcdMpBuildIdFile>
+    <KcdMpBuildId Condition="Exists('$(KcdMpBuildIdFile)')">$([System.IO.File]::ReadAllText('$(KcdMpBuildIdFile)').Trim())</KcdMpBuildId>
   </PropertyGroup>
+  <ItemGroup Condition="'$(KcdMpBuildId)' != ''">
+    <AssemblyMetadata Include="KcdMpBuildId" Value="$(KcdMpBuildId)" />
+  </ItemGroup>
 </Project>

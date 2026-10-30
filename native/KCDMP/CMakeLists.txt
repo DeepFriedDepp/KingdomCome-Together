@@ -85,7 +85,20 @@ add_library(KCDMP SHARED
     wo210.cpp
     wo210_kd.cpp
     wo210_hit.cpp
+    wo211.cpp
 )
 
 target_include_directories(KCDMP PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 set_target_properties(KCDMP PROPERTIES OUTPUT_NAME "KCDMP")
+# WO-211 0.2: the build id (tools/Write-BuildId.ps1 writes the repo root's git-ignored BUILD_ID: the short commit and the build time);
+# a change re-runs the configure step. No file: "dev".
+set(KCDMP_BUILD_ID_FILE "${CMAKE_CURRENT_SOURCE_DIR}/../../BUILD_ID")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${KCDMP_BUILD_ID_FILE}")
+set(KCDMP_BUILD_ID "dev")
+if(EXISTS "${KCDMP_BUILD_ID_FILE}")
+    file(STRINGS "${KCDMP_BUILD_ID_FILE}" _kcdmp_bid LIMIT_COUNT 1 REGEX "^[0-9A-Za-z.-]+$")
+    if(_kcdmp_bid)
+        set(KCDMP_BUILD_ID "${_kcdmp_bid}")
+    endif()
+endif()
+target_compile_definitions(KCDMP PRIVATE KCDMP_BUILD_ID="${KCDMP_BUILD_ID}")

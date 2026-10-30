@@ -79,6 +79,8 @@ public static class Briefing
         var sb = new StringBuilder();
         sb.Append("# Kingdom Come: Together -- briefing\n\n");
         sb.Append("Written by the bug report itself (WO-202). Times are this machine's clock.\n\n");
+        var (bv, bid) = BuildOf(inp);   // WO-211 0.2: the build id in the first lines (the installer's name carries the same)
+        sb.Append($"**Build:** {bv} build {bid}\n\n");
         Crashes(inp, sb);
         Session(inp, sb);
         Marks(inp, sb);
@@ -209,7 +211,7 @@ public static class Briefing
         string? last = agent.Reverse().Select(x => AgentTime.Match(x)).FirstOrDefault(m => m.Success)?.Groups[1].Value;
         sb.Append($"- **this agent's log:** {first ?? "?"} to {last ?? "?"}\n");
         sb.Append($"- **role:** {SessionRole(agent)}\n");
-        var build = AgentLines(inp).Select(x => Regex.Match(x, @" build=(\S+)")).LastOrDefault(m => m.Success)?.Groups[1].Value;
+        var build = AgentLines(inp).Where(x => !x.Contains("MP-BUILD ", StringComparison.Ordinal)).Select(x => Regex.Match(x, @" build=(\S+)")).LastOrDefault(m => m.Success)?.Groups[1].Value;
         sb.Append($"- **version:** {build ?? "?"}\n");
         var pings = AgentLines(inp).Select(x => Ping.Match(x)).Where(m => m.Success).Select(m => int.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture)).ToList();
         if (pings.Count > 0)
@@ -227,13 +229,38 @@ public static class Briefing
     /// takes the NPC damage authority first; never the last authority line (session E's joiner bundle was labelled "host": the
     /// authority passed to that machine at the session's end).
     /// </summary>
+    /// WO-211 F: first the role the agent itself recorded at its marks (MP-MARK-SNAP ... origin=... role=host|joiner, the session's own word
+    /// at that moment); the joiner's lines no longer include the start-up question every agent asks ("MP-JOIN joiner: the game is at a
+    /// loaded world" -- the second pair's host bundle said "joiner" from it).
     public static string SessionRole(IReadOnlyList<string> agent)
     {
-        if (agent.Any(x => x.Contains("MP-JOIN joiner:", StringComparison.Ordinal) || x.Contains(" role=joiner ", StringComparison.Ordinal))) return "joiner";
+        var marks = agent.Select(x => MarkRole.Match(x)).Where(m => m.Success).Select(m => m.Groups[1].Value).ToList();
+        if (marks.Count > 0) return marks.GroupBy(r => r).OrderByDescending(g => g.Count()).ThenBy(g => g.Key, StringComparer.Ordinal).First().Key;
         var first = agent.FirstOrDefault(x => x.Contains("NPC->player damage authority", StringComparison.Ordinal));
         if (first is not null && first.Contains("now holds", StringComparison.Ordinal)) return "host";
+        if (agent.Any(x => (x.Contains("MP-JOIN joiner:", StringComparison.Ordinal) && !x.Contains("MP-JOIN joiner: the game is at", StringComparison.Ordinal))
+                           || x.Contains(" role=joiner ", StringComparison.Ordinal))) return "joiner";
         if (agent.Any(x => x.Contains(" role=host ", StringComparison.Ordinal))) return "host";
         return "?";
+    }
+
+    /// <summary>WO-211 0.2: the version and build id the agent logged at its start (MP-BUILD version=... build=...), the newest.</summary>
+    public static (string Version, string Id) BuildOf(Input inp)
+    {
+        var m = AgentLines(inp).Select(x => BuildLine.Match(x)).LastOrDefault(x => x.Success);
+        return m is null ? ("?", "unknown (an agent older than WO-211)") : (m.Groups[1].Value, m.Groups[2].Value);
+    }
+    private static readonly Regex BuildLine = new(@"MP-BUILD version=(\S+) build=(\S+)", RegexOptions.CultureInvariant);
+
+    /// <summary>WO-211 F: the role an agent recorded with a mark's snapshot.</summary>
+    private static readonly Regex MarkRole = new(@"MP-MARK-SNAP mark=\S+ agent origin=\S+ role=(host|joiner)\b", RegexOptions.CultureInvariant);
+
+    /// <summary>WO-211 F: the role recorded with one mark (its snapshot lines follow the mark within a few lines), or null.</summary>
+    private static string? RoleAtMark(string[] lines, int i)
+    {
+        for (int k = i; k < Math.Min(lines.Length, i + 40); k++)
+            if (MarkRole.Match(lines[k]) is { Success: true } m) return m.Groups[1].Value;
+        return null;
     }
 
     private static IEnumerable<string> Kcd(Input inp) => inp.Logs.TryGetValue("kcd.log", out var k) ? k : Array.Empty<string>();
@@ -257,7 +284,8 @@ public static class Briefing
                 string note = m.Success && m.Groups["n"].Success ? $" -- \"{m.Groups["n"].Value.Trim()}\"" : "";
                 // WO-204 Act V: the partner's own note travels with his mark (W164 MarkNote) and is logged right after its ping
                 if (!m.Success && PartnerNote(lines, i, pm!.Groups["m"].Value) is string pn) note = $" -- \"{pn}\"";
-                sb.Append($"### {t} {who}{note}\n\n");
+                string roleAt = RoleAtMark(lines, i) is string ra ? $" (this machine: the {ra})" : "";   // WO-211 F: the role at that moment
+                sb.Append($"### {t} {who}{note}{roleAt}\n\n");
                 double at = Secs(t);
                 // the quest step: the last quest change this machine logged before the mark
                 var step = lines.Take(i).Reverse().FirstOrDefault(x => x.Contains("WO137-CHANGE", StringComparison.Ordinal) || x.Contains("MP-W137", StringComparison.Ordinal) && x.Contains(" -> ", StringComparison.Ordinal));

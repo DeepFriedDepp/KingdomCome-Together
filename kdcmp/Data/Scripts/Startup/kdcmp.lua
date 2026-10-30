@@ -12061,10 +12061,12 @@ function KCD2MP_LabelTick()
                 local lx, ly, lz, lvl = lbl.x, lbl.y, lbl.z, "stream"
                 if lbl.ent then lx, ly, lz, lvl = KCD2MP_W158BadgeAnchor(lbl.ent, lbl.x, lbl.y, lbl.z) end
                 if lbl.ent then KCD2MP_W158BadgeNote(id, lvl) end
-                System.DrawLabel({x=lx, y=ly, z=lz}, lbl.size, lbl.name, 1, 1, 0, 1)
+                local nm = KCD2MP_W211BadgeName and KCD2MP_W211BadgeName(id, lbl.name) or lbl.name   -- WO-211 A.1.5: "(reconnecting)"
+                System.DrawLabel({x=lx, y=ly, z=lz}, lbl.size, nm, 1, 1, 0, 1)
             end)
         end
     end
+    if KCD2MP_W211FlyCheck then pcall(KCD2MP_W211FlyCheck) end   -- WO-211 E: the debug flight's state, 10 times a second in a session
     -- Draw ping in top-left corner using 2D screen-space DrawText(x, y, text, size).
     if KCD2MP.pingText and not (mm and (mm.clean or mm.pingLine == false)) then
         pcall(function()
@@ -26610,6 +26612,12 @@ do
         W.crimeStats.raised = W.crimeStats.raised + (planted > 0 and 1 or 0)
         mp_log(string.format("WO151-CRIME joint %s raised in this world: planted in %d of %d witness(es) (%s) -- the host's Henry answers for it too",
             tostring(kind), planted, #who, #who > 0 and table.concat(who, ",") or "-"))
+        -- WO-211 D: the host is told plainly that a coming stop is the partner's crime (never taken for something else)
+        if planted > 0 and KCD2MP_W211IsOn and KCD2MP_W211IsOn("joint_crime_told") then
+            local words = { theft = "theft", lockpick = "lockpicking", trespass = "trespassing", horsetheft = "horse theft", robbody = "robbing a body" }
+            pcall(KCD2MP_ShowNativeToast, "Shared crime is on: your partner's " .. (words[tostring(kind)] or tostring(kind)) .. " was seen -- the guards hold you to account too.")
+            mp_log("WO211-CRIME joint: the host was told the partner's " .. tostring(kind) .. " counts against him too")
+        end
         return planted
     end
 
@@ -27930,6 +27938,8 @@ do
           help = "Saves the game the Saviour Schnapps way, without using one. In a session the host's game saves the shared world." },
         { id = "unstuck", group = "Help", label = "I'm stuck", kind = "action", cmd = "mp_unstuck", fn = "KCD2MP_W151Unstuck",
           help = "Frees you from a stuck state: a bed, a picker that did not close, a knockdown." },
+        { id = "leave_world", group = "Help", label = "Leave the host's world", kind = "action", cmd = "mp_leave", fn = "KCD2MP_W211Leave", arg = "menu",
+          help = "Only while the connection to your host is lost: leave now instead of waiting (your progress is saved first)." },
         { id = "repair_combat", group = "Help", label = "Fix my weapons / stuck fight", kind = "action", cmd = "mp_repair_combat", fn = "KCD2MP_W174Repair",
           help = "Frees weapons that will not draw and a fight that never ends. Then save your game into a new slot." },
         { id = "report", group = "Help", label = "Something's wrong here", kind = "action", cmd = "mark_odd", fn = "KCD2MP_Mark", arg = "odd",
@@ -34052,6 +34062,178 @@ do
         local fname = "KCD2MP_W210Set_" .. k
         _G[fname] = function(arg) return KCD2MP_W210Set(k, arg) end
         System.AddCCommand(label, fname .. "(%line)", "WO-210 " .. (W210.HELP[k] or k) .. " (default " .. (W210.DEFAULT_OFF[k] and "off" or "on") .. "): " .. label .. " on|off")
+    end
+end
+
+-- ===== WO-211: the 0.63.9 beta patch (docs/WO-211-findings.md) =====
+-- The switches (each new mechanism ships on with its own switch; mp_allow_fly is a tester's permission and ships off), A's link hold
+-- (the joiner stays in the host's world while the agent reconnects: the clock still, the player's movement held, the message and the
+-- co-op menu's Leave; the host's held figure says "reconnecting"), E's flight gate (the Modding Tools' debug flight, the "flymode"
+-- action on F3, read from the player's own fly state -- never from input -- and set back to off while a session runs).
+do
+    W211 = W211 or {}
+    W211.NAMES = {
+        link_hold = "mp_link_hold",
+        ui_lua_main_only = "mp_ui_lua_main_only",
+        overflow_reseat = "mp_overflow_reseat",
+        joint_crime_told = "mp_joint_crime_told",
+        allow_fly = "mp_allow_fly",
+    }
+    W211.HELP = {
+        link_hold = "A: (both) a dropped link holds the joiner in the host's world for up to 60 s while it reconnects (no load, no jump); the host keeps the partner's figure, marked reconnecting",
+        ui_lua_main_only = "B: (both) the game's menus never call the mod's Lua listeners off the main thread (the host's crash in the field)",
+        overflow_reseat = "C.3: (joiner) a copy whose action queue the game says is over-full is reseated the clean way at once",
+        joint_crime_told = "D: (both) with shared crime on, a stop or a crime that is your partner's says so plainly",
+        allow_fly = "E: (testers) the Modding Tools' debug flight (F3) in a session -- it breaks the people around you; off by default",
+    }
+    W211.DEFAULT_OFF = { allow_fly = true }
+    W211.on = W211.on or {}
+    KCD2MP.w211 = KCD2MP.w211 or { holding = false, holdLeft = 0, holdText = "", ratioWas = nil, ratioSet = false, holdUsed = false,
+        reconnecting = {}, flyRefused = 0, flyToldAt = -1e9, flyCheckAt = 0, flyAllowedTold = false, holds = 0 }
+    local function w211_is_on(k) if W211.on[k] == nil then return not W211.DEFAULT_OFF[k] end return W211.on[k] end
+    function KCD2MP_W211IsOn(name) return w211_is_on(tostring(name)) end
+    function KCD2MP_W211Set(name, arg)
+        local label = W211.NAMES[tostring(name)]
+        if not label then mp_log("WO211-TOGGLE unknown switch '" .. tostring(name) .. "'"); return false end
+        local v = KCD2MP_Wo122ParseBool(arg)
+        if v == "bad" then mp_log(label .. ": expected on|off, got '" .. tostring(arg) .. "'"); return false end
+        if v == nil then
+            mp_log("WO211-TOGGLE " .. label .. " is " .. (w211_is_on(tostring(name)) and "on" or "off"))
+            return true
+        end
+        W211.on[tostring(name)] = v
+        mp_log("WO211-TOGGLE " .. label .. " " .. (v and "on" or "off") .. " -- sent to the agent")
+        if tostring(name) == "allow_fly" then
+            local text = v and "Flying is allowed for testing: it breaks the people around you." or "Flying is turned off in co-op again."
+            mp_log("WO211-FLY " .. text)
+            pcall(KCD2MP_ShowNativeToast, text)
+            KCD2MP.w211.flyAllowedTold = false
+        end
+        KCD2MP_EmitEvent("w211_cfg", tostring(name) .. "=" .. (v and "on" or "off"))
+        return true
+    end
+    function KCD2MP_W211Status()
+        local parts = {}
+        for k, label in pairs(W211.NAMES) do parts[#parts + 1] = label .. "=" .. (w211_is_on(k) and "on" or "off") end
+        table.sort(parts)
+        local w = KCD2MP.w211
+        mp_log(string.format("WO211-STATUS %s holding=%s holds=%d fly_refused=%d", table.concat(parts, " "), tostring(w.holding), w.holds, w.flyRefused))
+        KCD2MP_EmitEvent("w211_status", "")
+        return true
+    end
+    System.AddCCommand("mp_w211_status", "KCD2MP_W211Status()", "WO-211: every WO-211 switch and its counts")
+
+    -- A.1 (the joiner): the hold. on: the world's clock stands, the player's own movement is held (the "actionmap" hold: the player and
+    -- movement maps off, so the co-op menu and the console still work), the line says how long is left; off: all of it given back.
+    -- The agent calls it again every second while the hold runs (idempotent: a load or another path that resumed the clock is undone).
+    function KCD2MP_W211LinkHold(on, left, text)
+        local w = KCD2MP.w211
+        if on then
+            if not w.holding then
+                w.holding = true
+                w.holds = w.holds + 1
+                w.ratioWas, w.ratioSet = nil, false
+                pcall(function() w.ratioWas = Calendar.GetWorldTimeRatio() end)
+                local okH, how = KCD2MP_JoinHold(true, "actionmap")
+                w.holdUsed = okH and true or false
+                mp_log(string.format("WO211-LINK hold on: clock ratio was %s, movement %s (%s)", tostring(w.ratioWas), okH and "held" or "NOT held", tostring(how)))
+                pcall(KCD2MP_ShowNativeToast, "Connection to your host lost -- reconnecting...")
+            end
+            pcall(function() Calendar.SetWorldTimeRatio(0); w.ratioSet = true end)
+            w.holdLeft, w.holdText = tonumber(left) or 0, tostring(text or "")
+            if w.holdText ~= "" then pcall(KCD2MP_ShowInteractionMsg, w.holdText) end
+            return true
+        end
+        if not w.holding then return false end
+        w.holding = false
+        if w.ratioSet and w.ratioWas ~= nil then pcall(function() Calendar.SetWorldTimeRatio(w.ratioWas) end) end
+        w.ratioSet = false
+        if w.holdUsed then pcall(KCD2MP_JoinHold, false, "actionmap") end
+        w.holdUsed = false
+        pcall(KCD2MP_ShowInteractionMsg, "")
+        mp_log("WO211-LINK hold off: the clock and the player's movement given back")
+        return true
+    end
+
+    -- A.1: the co-op menu's "Leave the host's world" (and mp_leave): only while a hold runs -- the agent leaves the game's own way
+    -- (the final snapshot first, then this player's own save).
+    function KCD2MP_W211Leave(src)
+        local w = KCD2MP.w211
+        if not w.holding then
+            mp_log("WO211-LINK leave asked (" .. tostring(src) .. ") with no hold running -- nothing to do")
+            pcall(KCD2MP_ShowNativeToast, "Nothing to leave: this is for when the connection to your host is lost.")
+            return false
+        end
+        mp_log("WO211-LINK leave asked (" .. tostring(src) .. ") during the hold -- the agent leaves the host's world")
+        KCD2MP_EmitEvent("w211_leave", tostring(src or "console"))
+        return true
+    end
+    System.AddCCommand("mp_leave", "KCD2MP_W211Leave(%line)", "WO-211 A.1: while the connection to your host is lost, leave the host's world now (your progress is saved first)")
+
+    -- A.2.3 (the joiner, his own world after a leave from a dropped link): he is put where he stood at the drop. A long move lands before
+    -- the ground's physics is there, so he is held 1.5 m over the ground (or the drop's own height, the higher) for 3 s, then let go.
+    function KCD2MP_W211PlaceAt(x, y, z, rot)
+        x, y, z = tonumber(x), tonumber(y), tonumber(z)
+        if not (x and y and z and player) then return false end
+        local n = 0
+        local function hold()
+            n = n + 1
+            local g = nil
+            pcall(function() g = System.GetTerrainElevation({ x = x, y = y, z = z }) end)
+            local tz = math.max(z, (tonumber(g) or z) + (n < 30 and 1.5 or 0.2))
+            pcall(function() player:SetWorldPos({ x = x, y = y, z = tz }) end)
+            if n == 1 and rot then pcall(function() player:SetWorldAngles({ x = 0, y = 0, z = tonumber(rot) or 0 }) end) end
+            if n < 31 then Script.SetTimer(100, hold) else mp_log(string.format("WO211-HOME placed at (%.1f, %.1f, %.1f)", x, y, tz)) end
+        end
+        hold()
+        return true
+    end
+
+    -- A.1.5 (the host): the partner's figure while its link is down -- its badge says so.
+    function KCD2MP_W211FigureReconnecting(id, on)
+        KCD2MP.w211.reconnecting[tostring(id)] = on and true or nil
+        mp_log("WO211-LINK figure " .. tostring(id) .. (on and " reconnecting" or " back (or gone)"))
+        return true
+    end
+    function KCD2MP_W211BadgeName(id, name)
+        if KCD2MP.w211.reconnecting[tostring(id)] then return tostring(name) .. " (reconnecting)" end
+        return name
+    end
+
+    -- E: the debug flight -- read from the player's own fly state (never from input), ten times a second while a session runs.
+    function KCD2MP_W211FlyCheck()
+        local w = KCD2MP.w211
+        local now = os.clock()
+        if (now - w.flyCheckAt) < 0.1 then return end
+        w.flyCheckAt = now
+        local mm = KCD2MP.w154menu
+        local inSession = w.holding or (mm and mm.roleNow and mm.roleNow() ~= "none")
+        if not inSession or not (player and player.player and player.player.GetFlyMode) then return end
+        local off = FlyMode_Off or 0
+        local ok, mode = pcall(function() return player.player:GetFlyMode() end)
+        if not ok or mode == nil or mode == off then return end
+        if w211_is_on("allow_fly") then
+            if not w.flyAllowedTold then
+                w.flyAllowedTold = true
+                mp_log("WO211-FLY flying in a session -- allowed by mp_allow_fly (testers)")
+                KCD2MP_EmitEvent("w211_fly", "allowed mode=" .. tostring(mode))
+            end
+            return
+        end
+        local okS = pcall(function() player.player:SetFlyMode(off) end)
+        w.flyRefused = w.flyRefused + 1
+        mp_log(string.format("WO211-FLY the debug flight (mode %s) set back to off in a session (%s) [n=%d]", tostring(mode), okS and "done" or "FAILED", w.flyRefused))
+        KCD2MP_EmitEvent("w211_fly", "refused mode=" .. tostring(mode) .. (okS and "" or " failed"))
+        if (now - w.flyToldAt) >= 5.0 then
+            w.flyToldAt = now
+            pcall(KCD2MP_ShowNativeToast, "Flying is turned off in co-op: it breaks the people around you.")
+        end
+    end
+
+    for k, label in pairs(W211.NAMES) do
+        local fname = "KCD2MP_W211Set_" .. k
+        _G[fname] = function(arg) return KCD2MP_W211Set(k, arg) end
+        System.AddCCommand(label, fname .. "(%line)", "WO-211 " .. (W211.HELP[k] or k) .. " (default " .. (W211.DEFAULT_OFF[k] and "off" or "on") .. "): " .. label .. " on|off")
     end
 end
 

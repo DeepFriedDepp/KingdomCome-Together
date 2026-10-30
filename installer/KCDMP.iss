@@ -73,7 +73,12 @@ UsePreviousGroup=no
 DisableProgramGroupPage=yes
 LicenseFile=..\LICENSE
 OutputDir=..\release
+#ifdef AppBuildId
+; WO-211 0.2: the build id (the short commit and the build time) tells builds of one version apart
+OutputBaseFilename=KingdomComeTogether-Setup-{#AppVersion}-{#AppBuildId}
+#else
 OutputBaseFilename=KingdomComeTogether-Setup-{#AppVersion}
+#endif
 ; WO-134: the installer's own icon (the launcher's multi-size .ico, built by tools\Build-Branding.py)
 SetupIconFile=..\KCDMP_launcher\app.ico
 ; WO-134: the exe keeps its path across the rename, so Windows' icon cache kept showing the

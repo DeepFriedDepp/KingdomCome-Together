@@ -127,6 +127,8 @@ public partial class GameBridge
             try { await ExecLuaAsync($"if KCD2MP_W160Release then KCD2MP_W160Release(\"{EscapeLua(name)}\", \"activity-changed\") end"); } catch { }
             Interlocked.Increment(ref _w160Released);
         }
+        // WO-211 C.1: never a placement into the very seat the hand-over released this copy from a moment ago (the two never fight)
+        if (!avatar && !release && Wo211ReseatHeld(name, a)) return null;
         bool? known = await _combat.Wo141ApplyAsync(name, a);
         _w160Given[name] = a;
         if (changed && !avatar)

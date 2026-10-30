@@ -48,6 +48,7 @@ public partial class GameBridge
         bool changed = _w206.LearnWorld(world, join);
         Wo206SyncPublic();
         if (changed) Console.WriteLine($"MP-W206 the host's world epoch is {world} now ({why}; join epoch {join}) -- what was read before this is the old world's");
+        Wo211OnEpochHeard(world);   // WO-211 A.1: a link hold ends here -- the same world in place, a changed one through the in-world rejoin
         // the answer goes out at once: everything this agent sends after it was sent knowing the new world
         _ = Wo203SendSideAsync(Protocol.JoinTargetHost, Protocol.W203Epoch, Wo206Rules.EpochText(world, join, Wo206Rules.Ack));
         return true;

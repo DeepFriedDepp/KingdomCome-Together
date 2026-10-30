@@ -2,6 +2,7 @@
 // GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 // WO-202 I.1 crash_capture (crash_capture.h): the chained unhandled-exception filter and its writer thread.   WO202-CRASH.
+#include "wo211.h"
 #include "crash_capture.h"
 #include "crash_rules.h"
 #include "engine.h"
@@ -206,6 +207,7 @@ void write_report() {
         addr_text(reinterpret_cast<uintptr_t>(self), me, sizeof me);
         put("mod dll:   %s timestamp 0x%08lX size 0x%lX (matches the build's .pdb)\r\n", me, nt ? nt->FileHeader.TimeDateStamp : 0ul,
             nt ? nt->OptionalHeader.SizeOfImage : 0ul);
+        put("build id:  %s (WO-211 0.2: the same id names the installer and the agent's and launcher's logs)\r\n", wo211::build_id());
     }
 
     // the stack

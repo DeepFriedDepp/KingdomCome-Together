@@ -378,6 +378,19 @@ public class BriefingWo210Tests
     }
 
     [Fact]
+    public void The_hosts_bundle_says_host_though_every_agent_asks_where_its_game_is()
+    {
+        // WO-211 F: the second pair's host bundle said "role: joiner" from the start-up question every agent asks
+        var host = new[] { "18:44:41.339 m=5089 off=? [role] this client now holds NPC->player damage authority",
+                           "18:44:42.119 m=5869 off=? MP-JOIN joiner: the game is at a loaded world (asked the mod)" };
+        Assert.Equal("host", Briefing.SessionRole(host));
+        // the role the agent recorded with its marks wins over everything else
+        var marked = new[] { "18:44:42.119 m=5869 off=? MP-JOIN joiner: the host (ghost 0) runs a SHARED WORLD",
+                             "18:50:29.272 m=1 off=-+0 MP-MARK-SNAP mark=5wrw1xmw3m agent origin=local role=host build=0.63.9 peers=1" };
+        Assert.Equal("host", Briefing.SessionRole(marked));
+    }
+
+    [Fact]
     public void Only_logs_naming_this_launch_count()
     {
         var now = new DateTime(2026, 10, 27, 21, 27, 44);

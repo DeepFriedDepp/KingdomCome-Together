@@ -31,6 +31,8 @@ namespace KCDMP_launcher.Components.Shared
             Assembly.GetExecutingAssembly()
                 .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
             ?? "0.0.0";
+        /// <summary>WO-211 0.2: this build's id (the short commit and the build time; "dev" without one) -- the About shows it.</summary>
+        public static string BuildId { get; } = KcdMp.Wire.BuildId.Current;
         public static string ConfigFilePath { get; } = Path.Combine(AppFolder, "config.json");
 
         public static StyleProfile CurrentStyleProfile { get; set; } = new StyleProfile();

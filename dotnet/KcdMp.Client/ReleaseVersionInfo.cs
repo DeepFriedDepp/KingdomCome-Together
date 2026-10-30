@@ -20,4 +20,10 @@ public static class ReleaseVersionInfo
     public static readonly string Current =
         Assembly.GetExecutingAssembly().GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
         ?? "0.0.0";
+
+    /// <summary>WO-211 0.2: this build's id (KcdMp.Wire.BuildId: the short commit and the build time; "dev" without one).</summary>
+    public static readonly string BuildIdValue = KcdMp.Wire.BuildId.Current;
+
+    /// <summary>WO-211 0.2: the release string the handshake carries ("version+build id"; a dev build: the version alone).</summary>
+    public static readonly string Wire = KcdMp.Wire.BuildId.Wire(Current, BuildIdValue);
 }

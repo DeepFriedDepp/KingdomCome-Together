@@ -462,6 +462,8 @@ public sealed class LogTailGameTransport : IGameTransport
         "] Dialog ending",
         // WO-160: the game's planner failing a placement this mod asked for (counted per NPC, GameBridge.Wo160)
         "[NPCContext]:Couldn't find actions to get NPC into game loaded state",
+        // WO-211 C.3: a body's over-full action queue (the field's seated copy: 3,712 of these), the owner's clean reseat (GameBridge.Wo211)
+        Wo211Rules.OverflowMarker,
         // WO-204 IV.5: a copy stuck in a state the engine cannot leave (2,577 of these for one joiner copy in session D)
         "[NPCContext]:NPC state search has failed!",
         "counldn't reach the loaded state in",

@@ -191,17 +191,19 @@ public class ClientSession
                 int ready = _clientHandler.ReadyClientCount;
                 _logger.Information("[test] connection test over {Transport} from {ClientRemoteEndPoint}: answered release {Release}, ready={Ready}, host={Host}.",
                     Transport, _conn.Remote, RelayReleaseVersion.Current, ready, hostHere ? 1 : 0);
-                EnqueueRaw(BuildPacket(Protocol.ReleaseVersionMismatch, ConnectionTestReply.BuildPayload(RelayReleaseVersion.Current, ready, hostHere)));
+                EnqueueRaw(BuildPacket(Protocol.ReleaseVersionMismatch, ConnectionTestReply.BuildPayload(RelayReleaseVersion.Wire, ready, hostHere)));
                 return;
             }
 
-            if (ReleaseVersion is { Length: > 0 } && !string.Equals(ReleaseVersion, RelayReleaseVersion.Current, StringComparison.Ordinal))
+            // WO-211 0.2: the release string carries the build id ("version+id"): the same version from another build is refused too
+            if (ReleaseVersion is { Length: > 0 } && !string.Equals(ReleaseVersion, RelayReleaseVersion.Wire, StringComparison.Ordinal))
             {
                 _clientHandler.NoteRefusedRelease(ReleaseVersion);   // WO-127: the host's launcher says so in plain words
-                _logger.Warning("[!] Rejecting '{Name}' from {ClientRemoteEndPoint}: release {ClientRelease} does not match this relay's {RelayRelease} (both machines must run the same build).",
-                    name, _conn.Remote, ReleaseVersion, RelayReleaseVersion.Current);
-                _clientHandler.CountDrop(Protocol.Handshake, "release-mismatch");
-                EnqueueRaw(BuildPacket(Protocol.ReleaseVersionMismatch, Encoding.UTF8.GetBytes(RelayReleaseVersion.Current)));
+                bool otherBuild = KcdMp.Wire.BuildId.SameVersionOtherBuild(ReleaseVersion, RelayReleaseVersion.Wire);
+                _logger.Warning("[!] Rejecting '{Name}' from {ClientRemoteEndPoint}: release {ClientRelease} does not match this relay's {RelayRelease} ({Why}; both machines must run the same build).",
+                    name, _conn.Remote, ReleaseVersion, RelayReleaseVersion.Wire, otherBuild ? "the same version, another build" : "another version");
+                _clientHandler.CountDrop(Protocol.Handshake, otherBuild ? "build-mismatch" : "release-mismatch");
+                EnqueueRaw(BuildPacket(Protocol.ReleaseVersionMismatch, Encoding.UTF8.GetBytes(RelayReleaseVersion.Wire)));
                 return;
             }
 

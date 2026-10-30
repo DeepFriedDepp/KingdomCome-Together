@@ -205,6 +205,7 @@ public partial class GameBridge
         if (r.Stealth.Length == 0 && Wo195StealthForReport() is { Length: > 0 } st) r = r with { Stealth = st };   // WO-195 2b: his stealth goes with it
         await Wo139SendAsync(Protocol.CrimeAskUp, Protocol.JoinTargetHost, Protocol.CrimeAskReport, tok, Wo139Rules.ReportText(r));
         Interlocked.Increment(ref _w139Reports);
+        Wo211NoteOwnCrime(r.Crime);   // WO-211 D: a stop for a kind he never reported is his partner's (joint)
         Console.WriteLine(FormattableString.Invariant($"MP-W139 joiner -> host crime #{tok}: {r.Crime} {r.Where} at ({r.X:F1}, {r.Y:F1}, {r.Z:F1}) victim={(r.Victim.Length > 0 ? r.Victim : "-")} stealth={(r.Stealth.Length > 0 ? r.Stealth : "-")} ({why}) -- the host's world judges it"));
     }
 
@@ -489,6 +490,7 @@ public partial class GameBridge
                     Interlocked.Increment(ref _w139StopsIn);
                     Console.WriteLine($"MP-W139 joiner: stop #{m.Tok} by {guard} for {string.Join(",", crimes.Select(c => $"{c.Crime}:{c.Count}"))} (the crime table's fine {fine / 10.0:F1} groschen) -- the game's own arrest runs here");
                     _w139StoppedHere[guard] = true;
+                    Wo211OnStop(crimes.Select(c => c.Crime));   // WO-211 D: the partner's crime under the joint mode, told plainly
                     await ExecLuaAsync($"if KCD2MP_W139Stop then KCD2MP_W139Stop({m.Tok}, \"{guard}\", \"{string.Join(",", crimes.Select(c => $"{c.Crime}:{c.Count}"))}\") end");
                     return;
                 case Protocol.CrimeHostPursue when Wo139Rules.TryParsePursue(m.Text, out bool on, out string pg):
@@ -518,6 +520,7 @@ public partial class GameBridge
                     return;
                 case Protocol.CrimeHostCleared when Wo139Rules.TryParseCleared(m.Text, out string why, out string cst):
                     Console.WriteLine($"MP-W139 joiner: the host cleared my record in {(cst.Length > 0 ? cst : "every settlement")} ({why})");
+                    Wo211CrimesCleared();
                     await ExecLuaAsync($"if KCD2MP_W139Cleared then KCD2MP_W139Cleared(\"{why}\") end");
                     return;
                 case Protocol.CrimeHostMode when Wo139Rules.TryParseMode(m.Text, out bool mon, out string mwhy):

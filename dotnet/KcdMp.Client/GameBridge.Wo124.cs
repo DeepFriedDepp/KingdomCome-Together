@@ -157,6 +157,7 @@ public partial class GameBridge
         if (_jj is { } jj && jj.Phase is "loading" or "post-load")
             Console.WriteLine($"MP-JOIN joiner: the relay connection dropped while join 0x{jj.JoinId:x8} was {jj.Phase}");
         if ((_jj is not null || _rejoinPending) && W202("rejoin_recover")) Wo207ArmLinkRejoin(_jj?.JoinId ?? 0);   // WO-207 C.4
+        if (_w211Holding) return;   // WO-211 A.1: the teardown started a link hold -- the leave comes only if the link does not come back
         if (_joinedWorld) await LeaveSharedWorldAsync("relay-lost", "Lost the connection to your host.");
         else if (_jj is { Phase: "preparing" or "loading" } j2) await AbortJoinerJoinAsync(j2, Protocol.JoinAbortIo, "relay-lost", "Lost the connection to your host.", sendAbort: false);
     }
@@ -335,7 +336,7 @@ public partial class GameBridge
         Wo206LoadSettled();         // WO-206 E: the next load bumps the world epoch again
         Wo151OnGameplayStarted();   // WO-151 3.7: the weather applied memory goes; a joiner re-applies the host's
         Wo125HostOnGameplayStarted();
-        if (_ownLoadExpected) { _ownLoadExpected = false; _leaveInProgress = false; Console.WriteLine("MP-JOIN joiner: back in this player's own world (Gameplay started)"); }
+        if (_ownLoadExpected) { _ownLoadExpected = false; _leaveInProgress = false; Console.WriteLine("MP-JOIN joiner: back in this player's own world (Gameplay started)"); Wo211AfterHomeLoad(); }
         if (_jj is { } j && j.GameplayStarted is { } t) { j.GameplayUtc = DateTime.UtcNow; t.TrySetResult(true); }
     }
 
@@ -950,10 +951,14 @@ public partial class GameBridge
         // WO-184 B4: one final snapshot while this game is still in the host's world (paired with the newest host save it follows); a
         // leave that cannot take it says so plainly
         string finalWhy = _joinedWorld ? await Wo184FinalSnapshotAsync("leave (" + why + ")") : "-";
-        if (finalWhy is not ("" or "-")) message += $" Your last progress could not be saved ({finalWhy}).";
+        if (finalWhy is not ("" or "-")) message += " " + Wo211Rules.SnapshotLostText(finalWhy);   // WO-211 A.2.4: never silent
         // WO-125 Phase 2: the target is recomputed now -- the newest own save whose playthrough is not the
         // host's (a hand-placed copy of the host's world is never "own"). None: the way back to the menu.
         var (src, ownWhy) = await Wo125NewestOwnLoadableAsync();
+        // WO-211 A.2.3: a leave after a dropped link goes home with the drop moment's Henry -- the paired final snapshot spliced into this
+        // player's own newest save (his own quest items kept, the host world's left there), placed where he stood
+        if (why == "relay-lost" && finalWhy == "" && src is not null && _joinedTag is string homeTag && W211Fix("drop_henry_home"))
+            src = await Wo211SpliceHomeAsync(homeTag, src) ?? src;
         SetJoinedWorld(false);
         _jj = null;
         _rewinding = false;

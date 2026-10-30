@@ -78,6 +78,7 @@ try
     var teeStream = new StreamWriter(agentLogPath, append: false) { AutoFlush = true };
     Console.SetOut(new TeeTextWriter(Console.Out, teeStream));
     Console.WriteLine($"[log] agent output tee -> {agentLogPath}");
+    Console.WriteLine($"MP-BUILD version={ReleaseVersionInfo.Current} build={ReleaseVersionInfo.BuildIdValue} (WO-211 0.2: the installer, the launcher's About, the DLL's log and the crash reports name the same id)");
 }
 catch (Exception ex)
 {

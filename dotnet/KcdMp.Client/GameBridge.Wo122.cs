@@ -100,7 +100,9 @@ public partial class GameBridge
     {
         _wo122Connected = false;
         _wo122Stream = null;
-        if (_lockHeld) await Wo122SetLockAsync(false, "disconnect");
+        // WO-211 A.1: a joiner holding in the host's world for the link keeps the lock (a save now would be a copy of the host's world)
+        if (_lockHeld && !_w211Holding) await Wo122SetLockAsync(false, "disconnect");
+        else if (_lockHeld) Console.WriteLine("MP-SAVELOCK kept through the link hold (WO-211 A.1): this game is still in the host's world");
         await Wo133OnDisconnectAsync();   // WO-133: the old quest layer is back outside a session
     }
 
@@ -426,6 +428,17 @@ public partial class GameBridge
     private async Task OnWorldSaveObservedAsync(ObservedSave s)
     {
         string kind = Protocol.SaveKindName(s.Kind);
+        // WO-211 A.2: the final snapshot of a leave after a dropped link is written AFTER the session ended (the field: its quicksave came
+        // 1.6 s after the drop, read as "no session" -- the wait never heard of it and cancelled at 15 s): a pending snapshot wait takes it
+        bool snapWaiting;
+        lock (_snapGate) snapWaiting = _snapWait is not null;
+        if (snapWaiting && !_wo122Connected && W211Fix("snapshot_after_drop")
+            && Wo125OnJoinerSaveObserved(s.FullPath, Convert.ToHexString(s.Md5).ToLowerInvariant()))
+        {
+            Interlocked.Increment(ref _w211SnapAfterDrop);
+            Console.WriteLine($"MP-WORLDSAVE observed {s.Display} ({kind}, {s.Bytes} B, verify ok) -- the final snapshot of a leave after the link dropped (WO-211 A.2)");
+            return;
+        }
         if (_combatRoleApplied && _wo122Connected && !_isDamageAuthority)
         {
             // WO-125: the snapshot's own QuickSave, or a leak moved out at once.

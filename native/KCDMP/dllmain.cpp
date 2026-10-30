@@ -6,6 +6,7 @@
 // Loaded by KCDMP_LauncherInjector.exe via CreateRemoteThread(LoadLibraryA),
 // which is what KCDMP_launcher's LaunchGame already expects.
 
+#include "wo211.h"
 #include "motion.h"
 #include "hits.h"
 #include "wo132.h"
@@ -67,7 +68,7 @@ namespace {
 
 DWORD WINAPI plugin_main(LPVOID) {
     // DllMain runs under the loader lock, so all real work happens here.
-    kcdmp::logf("KCDMP.dll attached, pid=%lu", GetCurrentProcessId());
+    kcdmp::logf("KCDMP.dll attached, pid=%lu build=%s", GetCurrentProcessId(), kcdmp::wo211::build_id());   // WO-211 0.2: the build id
     // WO-202 I.1: before anything else -- a crash from here on leaves its evidence (crash_capture.h).
     kcdmp::crash::install();
 

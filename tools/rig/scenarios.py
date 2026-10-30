@@ -2523,6 +2523,230 @@ def s_w210_ff(r, secs=float(os.environ.get('KCDMP_RIG_FF_S', '40'))):
     return fn
 
 
+W211_STATUS_RX = r'MP-W211-NATIVE (w211 .*)'
+INV_Q = ('local n = -1; pcall(function() n = 0; for _ in pairs(player.inventory:GetInventoryTable() or {}) do n = n + 1 end end); local h = -1; '
+         'pcall(function() h = player.soul:GetState("health") end); local p = player:GetWorldPos(); '
+         'System.LogAlways(string.format("[W211S] %d %.2f %.2f %.2f %.2f", n, h, p.x, p.y, p.z))')
+
+
+def w211_native(c, secs=12):
+    """A copy's DLL WO-211 counters (mp_w211_status -> the agent asks the DLL), as a dict of the numbers after each key=."""
+    m = c.mark()
+    c.lua('KCD2MP_W211Status()')
+    hit = c.wait('a', m['a'], W211_STATUS_RX, secs)
+    if not hit: return None
+    return {k: v for k, v in re.findall(r'(\w+)=([\w./-]+)', hit.group(1))}
+
+
+def w211_state(c):
+    """(items, health, x, y, z) of this copy's player, or None."""
+    t = c.ask(INV_Q, 'W211S', 6)
+    if not t: return None
+    f = t.split()
+    return (int(f[0]), float(f[1]), float(f[2]), float(f[3]), float(f[4]))
+
+
+def s_w211_menus(r, cycles=int(os.environ.get('KCDMP_RIG_MENU_N', '20'))):
+    """WO-211 B.2: the game's own menus (the map, the inventory) opened and closed <cycles> times on each copy, the host first, with the
+    pair joined -- the field host's crash came as its map closed: an element unloaded on the render thread while the mod's Lua listeners
+    were registered, and CryAction built and freed a Lua table there. The DLL's own counters say how many element events reached the Lua
+    dispatch off the main thread and what the guard did (skipped; the twin KCDMP_TEST_W211_OFF=ui_lua_main_only: let through). A game
+    that exits fails the step (copy-exited)."""
+    def storm(c, tag):
+        sys.path.insert(0, os.path.join(rig.REPO, 'tools', 'dev-input'))
+        import game_input
+        g = game_input.Game(tag)
+        g.pids = {rec_of(c)['pid']}
+        if not put_front(c): return {'err': 'not in front'}
+        opened = closed = 0
+        try:
+            for _ in range(cycles):
+                for key in ('m', 'i'):
+                    m = c.mark()
+                    g.tap(key, 80)
+                    if c.wait('k', m['k'], r'PlayAudio: ApseOpen', 6): opened += 1
+                    time.sleep(1.2)
+                    m2 = c.mark()
+                    g.tap('esc', 80)
+                    if c.wait('k', m2['k'], r'PlayAudio: ApseClose', 6): closed += 1
+                    time.sleep(1.2)
+        except game_input.NotFocused as ex:
+            return {'opened': opened, 'closed': closed, 'err': 'focus lost: %s' % ex}
+        finally:
+            try: g.release_all()
+            except Exception: pass
+        return {'opened': opened, 'closed': closed}
+    def fn():
+        out = {}
+        for c, nm in ((r.a, 'host'), (r.b, 'joiner')):
+            before = w211_native(c) or {}
+            st = storm(c, 'wo211-menus-' + nm)
+            after = w211_native(c) or {}
+            out[nm] = {'storm': st, 'before': before, 'after': after}
+        ok = all(out[k]['storm'].get('closed', 0) >= cycles for k in out)
+        return ok, 'menus closed %d/%d host, %d/%d joiner' % (out['host']['storm'].get('closed', 0), 2 * cycles, out['joiner']['storm'].get('closed', 0), 2 * cycles), out
+    return fn
+
+
+def s_w211_link(r, cut_s):
+    """WO-211 A.4: the relay cuts the joiner's link (the run's fault plan: a cut at t:+240 s, its reconnects refused for <cut_s> s). <= 30 s:
+    the joiner holds in the host's world and is back in place (no load, no jump: his own position before and after, the host's figure
+    kept). Over the hold's 60 s: the final snapshot paired, he lands in his own world with the drop moment's Henry (items, health,
+    position compared). The twin (KCDMP_TEST_W211_OFF=link_hold,snapshot_after_drop,drop_henry_home): the field's immediate leave."""
+    def fn():
+        b, a = r.b, r.a
+        if cut_s > 30:
+            # the Henry in the host's world made unlike the one in his own save (two torches more, health 63): what lands at home tells
+            b.lua('pcall(function() player.inventory:CreateItem("4cea28a0-0814-405a-bf24-4fd711f7eb63", 1, 2) end); '
+                  'pcall(function() player.soul:SetState("health", 63) end)')
+            time.sleep(2)
+        s0 = w211_state(b)
+        mb, ma = b.mark(), a.mark()
+        samples = []
+        t0 = time.time()
+        hit = None
+        while time.time() - t0 < 420 and not hit:
+            hit = b.wait('a', mb['a'], r'WO211-LINK hold: the link|MP-JOIN joiner: leaving the host|MP-CONN fail', 3)
+            if not hit:
+                s = w211_state(b)
+                if s: s0 = s
+        if not hit: return False, 'no-cut', {'before': s0}
+        cut_at = time.time()
+        res = {'before': s0, 'first': hit.group(0)}
+        if cut_s <= 30:
+            end = b.wait('a', mb['a'], r'WO211-LINK hold ends after ([\d.]+) s: (.*)', 120)
+            leave = b.wait('a', mb['a'], r'MP-JOIN joiner: leaving the host', 1)
+            time.sleep(6)
+            s1 = w211_state(b)
+            loads = [l for l in b.lines(b.klog, mb['k']) if 'Loading saved game' in l]
+            back = a.wait('a', ma['a'], r'WO211-LINK host: ghost \d+ is back after ([\d.]+) s', 5)
+            held = a.wait('a', ma['a'], r'WO211-LINK host: ghost \d+.s link dropped', 1)
+            jump = None
+            if s0 and s1: jump = ((s1[2] - s0[2]) ** 2 + (s1[3] - s0[3]) ** 2) ** 0.5
+            res.update({'hold_end': end.group(0) if end else None, 'leave': bool(leave), 'after': s1, 'jump_m': jump, 'loads_after_cut': len(loads),
+                        'host_figure_held': bool(held), 'host_figure_back': back.group(0) if back else None, 'secs': round(time.time() - cut_at, 1)})
+            ok = bool(end) and 'the same' in end.group(2) and not leave and not loads and jump is not None and jump < 1.0
+            return ok, 'resumed in place' if ok else 'not resumed in place', res
+        home = b.wait('a', mb['a'], r'MP-JOIN joiner: back in this player.s own world', 300)
+        time.sleep(10)
+        s1 = w211_state(b)
+        al = b.lines(b.alog, mb['a'])
+        pick = lambda rx: [l.strip()[:240] for l in al if re.search(rx, l)][:6]
+        res.update({'home': bool(home), 'after': s1, 'final': pick(r'WO184-FINAL|WO189-SAVE|PAIRED'), 'splice': pick(r'WO211-HOME'),
+                    'hold': pick(r'WO211-LINK hold'), 'leave': pick(r'MP-JOIN joiner: leaving'), 'secs': round(time.time() - cut_at, 1)})
+        if s0 and s1:
+            res['jump_m'] = ((s1[2] - s0[2]) ** 2 + (s1[3] - s0[3]) ** 2) ** 0.5
+            res['items_before_after'] = (s0[0], s1[0]); res['health_before_after'] = (s0[1], s1[1])
+        paired = any('NOT paired' not in l and ('paired' in l.lower()) for l in res['final'])
+        ok = bool(home) and paired and bool(res['splice']) and s1 is not None and res.get('jump_m', 99) < 5.0
+        return ok, 'home with the drop moment\'s Henry' if ok else 'not home with the drop moment\'s Henry', res
+    return fn
+
+
+def s_w211_ffhits(r, n=int(os.environ.get('KCDMP_RIG_FF_N', '10'))):
+    """WO-211 D: friendly fire off, crime shared (joint) -- in the bench town by a guard, each player hits the other <n> times (the
+    joiner with his own swings at the host's Henry, then the host's swings at the joiner's figure). Pass: 0 fines and 0 crime entries on
+    both machines (the WO-139/151 lines, the engine's own crime lines)."""
+    def fn():
+        for c in (r.a, r.b): c.lua('KCD2MP_Wo121SetFriendlyFire("off")'); c.lua('if KCD2MP_W151SetCrimeMode then KCD2MP_W151SetCrimeMode("joint") end')
+        t = r.a.ask(FIND_INN % os.environ.get('KCDMP_RIG_INN', 'ttkc_woman_2'), 'W207I', 6)
+        if t and t != 'none':
+            p = t.split(); cx, cy = float(p[1]), float(p[2])
+            r.a.teleport(cx + 3.0, cy + 3.0); r.b.teleport(cx + 3.0, cy + 1.7)
+        time.sleep(6)
+        ma, mb = r.a.mark(), r.b.mark()
+        import threading
+        out = {}
+        for who, c in (('joiner', r.b), ('host', r.a)):
+            f = c.ask(FWD_Q, 'W210F', 6)
+            other = r.a if c is r.b else r.b
+            if f:
+                x, y, z, dx, dy = (float(v) for v in f.split()); nn = (dx * dx + dy * dy) ** 0.5 or 1.0
+                other.teleport(x + dx / nn * 1.3, y + dy / nn * 1.3)
+            time.sleep(3)
+            c.lua('pcall(function() player.human:DrawWeapon() end)')
+            sw = {'sent': 0, 'refused': 0, 'err': None}
+            stop = threading.Event()
+            th = threading.Thread(target=w211_swinger, args=(c, sw, stop, 'wo211-ff-' + who, n), daemon=True); th.start()
+            th.join(timeout=30 + n * 3); stop.set()
+            out[who + '_swings'] = sw
+            time.sleep(4)
+        time.sleep(15)
+        # the mod's own crime lines (the ledger, the joint mode, the stops) -- never the town's ambient crime barks
+        crime = lambda c, m: [l.strip()[:220] for l in (c.lines(c.alog, m['a']) + c.lines(c.klog, m['k']))
+                              if re.search(r'MP-W139|MP-W151|WO139-|WO151-CRIME|WO211-CRIME|WO154-JUDGE|stop #', l)
+                              and not re.search(r'w139_shops|w151_cfg|STATS|ready to sell|trespass level|native: WO139-NATIVE|wrapped', l)]
+        out['host_lines'], out['joiner_lines'] = crime(r.a, ma)[-20:], crime(r.b, mb)[-20:]
+        hits = [l.strip()[:200] for c, m in ((r.a, ma), (r.b, mb)) for l in (c.lines(c.alog, m['a']) + c.lines(c.nlog, m['n']))
+                if re.search(r'pvp|PvP|MP-FF|friendly', l)]
+        out['hit_lines'] = hits[-12:]
+        stops = [l for l in out['host_lines'] + out['joiner_lines'] if re.search(r'stop #|crime #|joint|JUDGE', l)]
+        out['stops_or_fines'] = stops
+        for c in (r.a, r.b): c.lua('KCD2MP_Wo121SetFriendlyFire("on")')
+        return not stops, '0 fines, 0 crime entries' if not stops else '%d crime line(s)' % len(stops), out
+    return fn
+
+
+def w211_swinger(c, sw, stop, tag, n):
+    """<n> swings of this copy's own player (lock on, the left button), its window in front; send-only."""
+    sys.path.insert(0, os.path.join(rig.REPO, 'tools', 'dev-input'))
+    import game_input
+    g = None
+    try:
+        g = game_input.Game(tag)
+        g.pids = {rec_of(c)['pid']}
+        if not put_front(c): sw['err'] = 'not in front'; return
+        g.tap('tab', 80)
+        for _ in range(n):
+            if stop.is_set(): break
+            if not put_front(c): sw['refused'] += 1; break   # the other copy can take the front between swings: this one, each time
+            time.sleep(0.3)
+            try: g.click('left', 90); sw['sent'] += 1
+            except game_input.NotFocused:
+                sw['refused'] += 1
+                try: g.release_all()
+                except game_input.NotFocused: pass
+            stop.wait(1.6)
+    except BaseException as ex:
+        sw['err'] = '%s: %s' % (type(ex).__name__, ex)
+    finally:
+        try:
+            if g: g.release_all()
+        except BaseException: pass
+
+
+def s_w211_fly(r):
+    """WO-211 E: the Modding Tools' flight key (F3) in a session, on each copy: with mp_allow_fly off the player's fly state is set back to
+    off within a tick (the toast told); with it on the flight stays. The flight is read from the player's own state, never from input."""
+    def fn():
+        sys.path.insert(0, os.path.join(rig.REPO, 'tools', 'dev-input'))
+        import game_input
+        FLY_Q = 'local m = -1; pcall(function() m = player.player:GetFlyMode() end); System.LogAlways(string.format("[W211F] %d", m))'
+        out = {}
+        for c, nm in ((r.a, 'host'), (r.b, 'joiner')):
+            g = game_input.Game('wo211-fly-' + nm)
+            g.pids = {rec_of(c)['pid']}
+            for allow in ('off', 'on'):
+                c.lua('KCD2MP_W211Set("allow_fly", "%s")' % allow)
+                time.sleep(1)
+                m = c.mark()
+                if not put_front(c): out[nm + '-' + allow] = 'not in front'; continue
+                g.tap('f3', 80)
+                time.sleep(1.5)
+                mode = c.ask(FLY_Q, 'W211F', 6)
+                refused = c.wait('k', m['k'], r'WO211-FLY the debug flight', 1)
+                out[nm + '-' + allow] = {'mode_after_1_5s': mode, 'refused_line': bool(refused)}
+                c.lua('pcall(function() player.player:SetFlyMode(FlyMode_Off or 0) end)')
+                time.sleep(1)
+            c.lua('KCD2MP_W211Set("allow_fly", "off")')
+            try: g.release_all()
+            except Exception: pass
+        ok = all(isinstance(out.get(k + '-off'), dict) and out[k + '-off']['mode_after_1_5s'] in ('0',) and out[k + '-off']['refused_line'] for k in ('host', 'joiner'))
+        on_flies = all(isinstance(out.get(k + '-on'), dict) and out[k + '-on']['mode_after_1_5s'] not in ('0', None) for k in ('host', 'joiner'))
+        return ok, 'flight refused with the switch off%s' % (', kept with it on' if on_flies else ' (the key did not fly with it on)'), out
+    return fn
+
+
 def run(name, args):
     r = Run(name)
     plan = {
@@ -2619,6 +2843,15 @@ def run(name, args):
         'kdforce': [('join', s_join(r)), ('kd-force', s_w210_kdforce(r))],   # WO-210 C.3: the game's own fall and stand-up on the host's bandit
         'convvote_both': [('join', s_join(r)), ('conv-host-starts', s_conv(r, 'host')), ('conv-joiner-starts', s_conv(r, 'joiner', plan=('notfollowed', 'changed', 'cleared', 'followed', 'leave')))],
         'fight10': [('join', s_join(r))] + [('c1fight-%02d' % (i + 1), s_c1fight(r)) for i in range(int(os.environ.get('KCDMP_RIG_C1_N', '10')))],
+        # WO-211: B's menu storm, A's link cut (the run's relay plan sets the cut), D's partner hits, E's flight
+        'w211menus': [('join', s_join(r)), ('menus', s_w211_menus(r))],
+        'w211link': [('join', s_join(r)), ('link-cut', s_w211_link(r, float(args[0]) if args else 5.0))],
+        'w211link5': [('join', s_join(r)), ('link-cut-5', s_w211_link(r, 5.0))],
+        'w211link30': [('join', s_join(r)), ('link-cut-30', s_w211_link(r, 30.0))],
+        'w211link90': [('join', s_join(r)), ('link-cut-90', s_w211_link(r, 90.0))],
+        'w211ff': [('join', s_join(r)), ('ffhits', s_w211_ffhits(r))],
+        'w211fly': [('join', s_join(r)), ('fly', s_w211_fly(r))],
+        'w211misc': [('join', s_join(r)), ('fly', s_w211_fly(r)), ('ffhits', s_w211_ffhits(r)), ('menus', s_w211_menus(r))],
         # the crash work: N fights in one pair session (KCDMP_RIG_C1_N, default 10); a game that exits ends the run (copy-exited)
         'c1x': [('join', s_join(r))] + [('c1fight-%02d' % (i + 1), s_c1fight(r)) for i in range(int(os.environ.get('KCDMP_RIG_C1_N', '10')))],
         'smoke': [('join', s_join(r)), ('walk30', s_walk(r)), ('sleep', s_skip(r, 'sleep', 9, gap_gate=False)), ('wait', s_skip(r, 'wait', 3, gap_gate=False)),
@@ -2637,7 +2870,7 @@ def run(name, args):
         # 'long' runs independent checks: one failing does not stop the next (a failed join does)
         if not r.step(nm, fn) and (name not in ('long', 'joinscene', 'joinfight', 'e2pair', 'c1pair', 'e2twinpair', 's1pair', 'smoke', 's1front',
                                                'c1fight', 'c2tavern', 'convboth', 'convday', 'convtimed', 'smoke2', 'awake', 'soak2', 'convscene', 'c1x', 'probefight', 'probetavern', 'village', 'defence', 'loot5', 'convforced', 'convforcedj',
-                                               'idle_check', 'toggle_live', 'convvote_both', 'fight10') or nm == 'join'
+                                               'idle_check', 'toggle_live', 'convvote_both', 'fight10', 'w211misc') or nm == 'join'
                                               or r.steps[-1]['reason'] == 'copy-exited'): break   # a game gone ends the run
     return r.finish()
 

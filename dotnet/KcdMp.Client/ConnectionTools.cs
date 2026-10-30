@@ -140,10 +140,10 @@ public static class ConnectionTest
                 if (type != Protocol.ReleaseVersionMismatch)
                     return Failed(via, ConnectionTrouble.Unknown, $"unexpected reply 0x{type:X2} to a connection test");
                 var reply = ConnectionTestReply.Decode(body);
-                bool match = reply.Release == ReleaseVersionInfo.Current;
+                bool match = reply.Release == ReleaseVersionInfo.Wire;   // WO-211 0.2: the version and the build id
                 if (!match)
                 {
-                    var p = PlainConnectionError.For(ConnectionTrouble.VersionMismatch, reply.Release, ReleaseVersionInfo.Current);
+                    var p = PlainConnectionError.For(ConnectionTrouble.VersionMismatch, reply.Release, ReleaseVersionInfo.Wire);
                     return new Result(true, via, rttMs, connectMs, reply.Release, false, reply.HasDetail ? reply.HostConnected : null, reply.Ready,
                         ConnectionTrouble.VersionMismatch, p.Sentence, p.NextStep, steamPing, relayed, "release differs");
                 }

@@ -17,4 +17,7 @@ public static class RelayReleaseVersion
     public static readonly string Current =
         Assembly.GetExecutingAssembly().GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
         ?? "0.0.0";
+
+    /// <summary>WO-211 0.2: what a client's handshake must carry -- this relay's version and build id (the host's own build).</summary>
+    public static readonly string Wire = KcdMp.Wire.BuildId.Wire(Current, KcdMp.Wire.BuildId.Current);
 }

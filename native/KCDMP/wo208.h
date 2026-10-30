@@ -41,5 +41,7 @@ bool in_player_fight(uint32_t copy);
 // A.2 with B (main thread): how much later than its row's arrival this copy's swing starts -- the owner applies the host's state one
 // stream delay after it arrived; 0 for a copy the owner does not drive. WO-166 opens the copy's strike window that much later.
 double owner_shift_s(uint32_t eid);
+// WO-211 C.3 (main thread): an over-full copy reseated the clean way. 1 reseated, 2 not an owned copy, 3 too soon.
+uint8_t overflow_reseat(uint32_t eid, const char* name, double everyS);
 
 } // namespace kcdmp::wo208

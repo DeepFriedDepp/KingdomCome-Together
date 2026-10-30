@@ -157,11 +157,12 @@ enum Path : uint8_t {
     kPathConvEnd = 8, kPathSceneEnd = 9, kPathSkipEnd = 10, kPathLoad = 11, kPathSwitch = 12, kPathFault = 13, kPathBind = 14, kPathBase = 15,
     kPathInstallPending = 16,   // no exit: the host's posture, not shown yet by the owner's own install
     kPathOwnPosture = 17,       // no exit: the copy's own engine posture (its NPC state's bed, seat, workstation)
-    kPathCount = 18,
+    kPathOverflow = 18,         // WO-211 C.3: the engine said the copy's action queue is over-full -- a clean reseat
+    kPathCount = 19,
 };
 inline const char* path_name(uint8_t p) {
     static const char* k[] = {"unknown", "1-drift", "2-far", "3-stale", "4-attack-end", "5-clinch", "6-death", "7-get-up", "8-conv-end", "9-scene-end",
-                              "10-skip-end", "11-load", "12-switch", "13-fault", "14-bind", "15-host-base", "16-install-pending", "17-own-posture"};
+                              "10-skip-end", "11-load", "12-switch", "13-fault", "14-bind", "15-host-base", "16-install-pending", "17-own-posture", "18-overflow"};
     return p < kPathCount ? k[p] : "?";
 }
 // The path a reseat is charged to: the last exit recorded on the copy within kPathWindowS, else unknown (a bug to find).

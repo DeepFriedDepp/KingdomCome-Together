@@ -64,8 +64,19 @@ public partial class GameBridge
     {
         bool avatar = name.StartsWith("kcd2mp_", StringComparison.Ordinal);
         if (!Wo210Rules.ReleaseOnLeave(W210("copy_state_always"), avatar, had, prev, next)) return false;
+        // WO-211 C.1: only when the host NPC actually left the bed, seat or workstation the copy holds -- a seated gesture or a dialogue pose
+        // in the same seat (an unstance change: "path 15" alone) released the field's seated drinker every half minute and WO-160 sat him
+        // down again, round and round (the twin seat_same_object: the WO-210 rule)
+        if (W211Fix("seat_same_object") && !Wo211Rules.LeftPosture(prev, next))
+        {
+            long kept = Interlocked.Increment(ref _w211SeatKept);
+            if (kept <= 40 || kept % 100 == 0)
+                Console.WriteLine($"WO211-SEAT npc={name} kept: {prev.Normalised()} -> {next.Normalised()} -- the host NPC is still on it (no release) [n={kept}]");
+            return false;
+        }
         try { await ExecLuaAsync($"if KCD2MP_W160Release then KCD2MP_W160Release(\"{EscapeLua(name)}\", \"w210-host-left\") end"); }
         catch { return false; }
+        Wo211NoteRelease(name, prev);
         _w210ReleasedAt[name] = Environment.TickCount64;
         long k = Interlocked.Increment(ref _w210LeaveReleases);
         if (k <= 200 || k % 50 == 0)
@@ -89,6 +100,7 @@ public partial class GameBridge
             _w210ReleasedAt[name] = now;
             try { await ExecLuaAsync($"if KCD2MP_W160Release then KCD2MP_W160Release(\"{EscapeLua(name)}\", \"w210-reseat\") end"); }
             catch { continue; }
+            if (_w160Given.TryGetValue(name, out var given)) Wo211NoteRelease(name, given);   // WO-211 C.1: the re-seat guard and the loop count
             long k = Interlocked.Increment(ref _w210AskReleases);
             if (k <= 200 || k % 50 == 0)
                 Console.WriteLine($"WO210-STATE handover npc={name} path=watchdog: the copy's own posture its host NPC left released the game's way [n={k}]");

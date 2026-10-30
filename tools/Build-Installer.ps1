@@ -94,6 +94,12 @@ trap { try { Stop-Transcript | Out-Null } catch {}; break }
 Write-Host "Build of $Version at $(Get-Date -Format s), commit $(& git -C $root rev-parse HEAD 2>$null)"
 Write-Host "Inno Setup compiler: $iscc"
 
+# WO-211 0.2: the build id (the short commit and the build time) -- written into the git-ignored BUILD_ID before anything is built, so
+# every assembly, the DLL and this installer's name carry the same one (the version stays the maintainer's)
+$buildId = (& powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Write-BuildId.ps1") -Repo $root | Select-Object -Last 1)
+if ($LASTEXITCODE -ne 0 -or $buildId -notmatch '^[0-9A-Za-z.-]{1,40}$') { throw "Write-BuildId failed: '$buildId'" }
+Write-Host "Build id: $buildId"
+
 # WO-157: code signing, when its settings are present (never committed: environment or the git-ignored
 # tools\signing.local.json). A half-configured signing stops the build here.
 . (Join-Path $PSScriptRoot "CodeSigning.ps1")
@@ -368,7 +374,7 @@ if ($LASTEXITCODE -ne 0) { throw "the relay fault-mode gate FAILED -- a shipped 
 
 $iss = Join-Path $root "installer\KCDMP.iss"
 Write-Host "Compiling $iss (version $Version) ..."
-$isccArgs = @("/DAppVersion=$Version")
+$isccArgs = @("/DAppVersion=$Version", "/DAppBuildId=$buildId")   # WO-211 0.2: the build id names the installer
 if ($ReleaseCandidate) { $isccArgs += "/DReleaseCandidate=1" }
 $signMeta = $null
 if ($signing) {
@@ -381,7 +387,7 @@ try { & $iscc @isccArgs $iss }
 finally { if ($signMeta) { Remove-Item $signMeta -Force -ErrorAction SilentlyContinue } }
 if ($LASTEXITCODE -ne 0) { throw "ISCC failed with exit code $LASTEXITCODE" }
 
-$setup = Join-Path $root "release\KingdomComeTogether-Setup-$Version.exe"
+$setup = Join-Path $root "release\KingdomComeTogether-Setup-$Version-$buildId.exe"
 if (-not (Test-Path $setup)) { throw "ISCC reported success but $setup is missing" }
 
 if ($signing) { Assert-KcdmpSigned -Files @($setup) }
@@ -389,6 +395,7 @@ if ($signing) { Assert-KcdmpSigned -Files @($setup) }
 $mb = [math]::Round((Get-Item $setup).Length / 1MB, 1)
 Write-Host ""
 Write-Host "Installer: $setup ($mb MB)"
+Write-Host "build id : $buildId"
 Write-Host ("sha256   : " + (Get-FileHash $setup -Algorithm SHA256).Hash.ToLowerInvariant())
 Write-Host ("signed   : " + $(if ($signing) { "yes (Azure Artifact Signing)" } else { "NO -- unsigned build" }))
 if ($ReleaseCandidate) { Write-Host ("WARNING: " + $rcNote) -ForegroundColor Yellow }

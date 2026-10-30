@@ -1346,9 +1346,10 @@ public partial class GameBridge(ClientConfig config)
                 AgentConnectionStatus.Fail(string.IsNullOrWhiteSpace(config.SteamCode) ? "direct" : "steam", ConnectionTrouble.Lost, "the relay connection ended", fatal: false);
 
             if (ct.IsCancellationRequested) break;
-            Console.WriteLine("Reconnecting in 3 s...");
+            int reconnectMs = Wo211ReconnectDelayMs();   // WO-211 A.1: growing gaps while a link hold runs, 3 s otherwise
+            Console.WriteLine(FormattableString.Invariant($"Reconnecting in {reconnectMs / 1000.0:0.#} s...{(_w211Holding ? " (WO-211 link hold)" : "")}"));
             Console.WriteLine();
-            await Task.Delay(3000, ct).ContinueWith(_ => { });
+            await Task.Delay(reconnectMs, ct).ContinueWith(_ => { });
         }
     }
 
@@ -1452,7 +1453,7 @@ public partial class GameBridge(ClientConfig config)
         // WO-19: the trailing release-version field is optional and unlengthed
         // on purpose -- see Protocol.cs's release version layer doc -- so an old
         // relay that only reads [version][nameLen][name] is unaffected.
-        await stream.WriteAsync(RelayConnector.BuildHandshake(config.PlayerName ?? Environment.MachineName, ReleaseVersionInfo.Current), appCt);
+        await stream.WriteAsync(RelayConnector.BuildHandshake(config.PlayerName ?? Environment.MachineName, ReleaseVersionInfo.Wire), appCt);   // WO-211 0.2: version+build id
 
         // --- Ack (S→C 0xFF [id:1]) or a rejection: 0x09 [serverVersion:1],
         // 0x36 [maxPlayers:1], or 0x3D [relayRelease:UTF-8] (WO-110 R9). The
@@ -1483,10 +1484,11 @@ public partial class GameBridge(ClientConfig config)
         if (replyType == Protocol.ReleaseVersionMismatch)
         {
             string relayRelease = ConnectionTestReply.Decode(replyBody).Release;
-            AgentConnectionStatus.Fail(via, ConnectionTrouble.VersionMismatch, $"relay release {relayRelease}, agent {ReleaseVersionInfo.Current}", fatal: true,
-                relayRelease, ReleaseVersionInfo.Current);
-            // Into the game too: the player sees why nothing connects.
-            try { await ExecLuaAsync($"if KCD2MP_ShowNativeToast then KCD2MP_ShowNativeToast(\"KCD2-MP: your host runs {EscapeLua(relayRelease)}, you run {EscapeLua(ReleaseVersionInfo.Current)} -- both players need the same version\") end"); await _transport.FlushAsync(appCt); } catch { }
+            AgentConnectionStatus.Fail(via, ConnectionTrouble.VersionMismatch, $"relay release {relayRelease}, agent {ReleaseVersionInfo.Wire}", fatal: true,
+                relayRelease, ReleaseVersionInfo.Wire);
+            // Into the game too: the player sees why nothing connects (WO-211 0.2: the same version from another build says so)
+            Console.WriteLine($"MP-BUILD refused by the relay: {KcdMp.Wire.BuildId.MismatchText(ReleaseVersionInfo.Wire, relayRelease)} (this build {ReleaseVersionInfo.Wire}, the relay's {relayRelease})");
+            try { await ExecLuaAsync($"if KCD2MP_ShowNativeToast then KCD2MP_ShowNativeToast(\"KCD2-MP: {EscapeLua(KcdMp.Wire.BuildId.MismatchText(ReleaseVersionInfo.Wire, relayRelease))}\") end"); await _transport.FlushAsync(appCt); } catch { }
             throw new ReleaseVersionMismatchException(relayRelease);
         }
 
@@ -2284,6 +2286,7 @@ public partial class GameBridge(ClientConfig config)
                         // keys. Adding smoothing here would be inventing a
                         // problem the engine does not have.
                         if (nat is null) local = await ReadLocalBodyStateAsync(cts.Token);   // log path: the separate 0x09 read, as before
+                        _w211LastOwnPos = (x, y, z, rotZ);   // WO-211 A.2.3: where this player stood at a drop
                         await SendPositionAsync(stream, x, y, z, rotZ, riding,
                                                 state2: Wo121State2For(natState2, nowTimestamp, consume: true, out _));
                         // WO-100.5 Phase 3: the accepted input rides the same
@@ -2315,6 +2318,9 @@ public partial class GameBridge(ClientConfig config)
         finally
         {
             try { PrintSessionSummary("disconnect"); } catch { }   // WO-98 Phase 6
+            // WO-211 A.1: a joiner in the host's world whose link dropped (not the agent stopping) holds there while it reconnects --
+            // decided before the per-WO teardowns below, which read it (the save lock stays, the leave does not run, the host stays shown)
+            if (!appCt.IsCancellationRequested) { try { await Wo211TryHoldAsync("relay-lost"); } catch (Exception ex) { Console.WriteLine($"WO211-LINK hold failed: {ex.Message}"); } }
             _stats = new SessionCounters();
             _peerCutscene.Clear();
             cts.Cancel();
@@ -2424,9 +2430,13 @@ public partial class GameBridge(ClientConfig config)
             // peer's ghost removal is the RELAY's Disconnect broadcast, and the
             // local NPCs resume through Lua's own silence path (release +
             // dwell), which needs no agent.
-            Console.WriteLine("Removing all ghosts (sent now, not batched -- WO-110 R11)...");
-            try { await _transport.ExecuteNowAsync("KCD2MP_RemoveAllGhosts()"); }
-            catch (Exception ex) { Console.WriteLine($"[disconnect] RemoveAllGhosts did not send: {ex.Message}"); }
+            if (_w211Holding) Console.WriteLine("The host's figure stays through the link hold (WO-211 A.1)...");
+            else
+            {
+                Console.WriteLine("Removing all ghosts (sent now, not batched -- WO-110 R11)...");
+                try { await _transport.ExecuteNowAsync("KCD2MP_RemoveAllGhosts()"); }
+                catch (Exception ex) { Console.WriteLine($"[disconnect] RemoveAllGhosts did not send: {ex.Message}"); }
+            }
             // WO-102.5 Phase 1: guarantee resume when THIS agent goes away --
             // closed, crashed, or the relay dropped it. The game and its Lua
             // state keep running without us, so whatever it still believes is
@@ -4925,6 +4935,7 @@ public partial class GameBridge(ClientConfig config)
                         string gname = Encoding.UTF8.GetString(payload, 1, payloadLen - 1);
                         _ghostNames[ghostId] = gname;
                         Wo144OnPeerConnected(ghostId, gname);   // WO-144: the relay's connection set, the only source of partners
+                        Wo211OnPeerBack(ghostId);               // WO-211 A.1.5: a held figure of this ghost carries on
                         Wo206OnPeerConnected(ghostId);          // WO-206 E: it hears the host's epochs at once
                         await SetGhostNameAsync(ghostId.ToString(), gname);
                     }
@@ -4941,6 +4952,9 @@ public partial class GameBridge(ClientConfig config)
                         // Disconnect packet: [ghostId:1]
                         byte ghostId = payload[0];
                         Console.WriteLine($"[disconnect] ghost {ghostId} removed");
+                        // WO-211 A.1.5: was it a partner in this world (its leash state fresh and "in world")? Read before anything forgets it.
+                        bool w211InWorld = _leashJoinerState.TryGetValue(ghostId, out var w211Ls) && (w211Ls.S.Flags & Protocol.LeashFlagInWorld) != 0
+                                           && (DateTime.UtcNow - w211Ls.AtUtc).TotalSeconds < LeashFreshS * 3;
                         Wo144OnPeerDisconnected(ghostId);   // WO-144: out of every partner loop at once
                         Wo148OnPeerGone(ghostId);           // WO-148: its avatar sets down what it carried
                         Wo154ForgetPeer(ghostId);           // WO-154 2: a rejoin starts from up
@@ -4988,7 +5002,8 @@ public partial class GameBridge(ClientConfig config)
                         // WO-113: a gone peer's mirror gravestones go with them;
                         // the owner re-announces on its next connect.
                         try { await _combat.MirrorGraveAsync(2, ghostId, 0, 0, 0, 0, ct); } catch { }
-                        try { await ExecLuaAsync($"KCD2MP_RemoveGhost(\"{ghostId}\")"); } catch { }
+                        // WO-211 A.1.5: a partner in this world keeps its figure, marked reconnecting, for the hold's window (Wo211HostFigureTick)
+                        if (!Wo211HoldFigure(ghostId, w211InWorld)) { try { await ExecLuaAsync($"KCD2MP_RemoveGhost(\"{ghostId}\")"); } catch { } }
                         await Wo123OnPeerGoneAsync(ghostId);   // WO-123: a joiner gone mid-join resumes the host
                         await Wo124OnPeerGoneAsync(ghostId);   // WO-124: the host gone -> the joiner leaves its world
                         Wo144AfterPeerGone(ghostId);           // WO-144: its name and per-partner rows go last (the handlers above read them)
@@ -6258,6 +6273,9 @@ public partial class GameBridge(ClientConfig config)
                 return;
             case string w210 when w210.StartsWith("w210_", StringComparison.Ordinal):   // WO-210: the switches and the status (Wo210OnEvent)
                 Wo210OnEvent(name, arg);
+                return;
+            case string w211 when w211.StartsWith("w211_", StringComparison.Ordinal):   // WO-211: the switches, the hold's Leave, the flight, the status
+                Wo211OnEvent(name, arg);
                 return;
             case "w206_cfg":         // WO-206 E: mp_epoch_check, mp_research_death_from_health
             case "w206_status":      // WO-206 E: mp_w206_status
