@@ -42,6 +42,7 @@ public partial class GameBridge
         Wo209Tick(n);                                     // WO-209: its switch word every 2 s, the mirror's numbers every 30 s
         Wo210Tick(n);                                     // WO-210: its switch word every 2 s, its numbers every 30 s, the DLL's asks
         Wo211Tick(n);                                     // WO-211: its switch word every 2 s, its numbers every 30 s, the host's held figures
+        Wo213Tick(n);                                     // WO-213 A: the link's numbers every 10 s, Steam's every 2 s
     }
 
     private void Wo201OnEventMore(string name, string? arg)

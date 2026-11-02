@@ -80,7 +80,8 @@ bool g_truncated = false;
 std::string g_path;
 uint64_t g_fileBytes = 0;
 double g_lastSample = 0, g_lastFlush = 0;
-uint64_t c_lines = 0, c_bodies = 0, c_scopeReads = 0, c_skipped = 0, c_rotations = 0;
+uint64_t c_lines = 0, c_bodies = 0, c_scopeReads = 0, c_skipped = 0, c_rotations = 0, c_rotateRetries = 0;
+double g_retryRotateAt = 0;   // WO-213: a failed rotation's next try
 // the probe's own cost on the main thread (the bench: the probe alone took ~6 % of the frame rate), per part, logged every 10 s
 double c_tGather = 0, c_tScopes = 0, c_tLine = 0, g_lastCostLog = 0;
 uint64_t c_costSamples = 0;
@@ -99,9 +100,10 @@ void open_file() {
     if (p.back() != '\\') p += '\\';
     p += "kcdmp-anim.jsonl";
     g_path = p;
-    g_file = _fsopen(p.c_str(), g_truncated ? "ab" : "wb", _SH_DENYWR);   // one file per game process: the first start truncates
+    const bool append = g_truncated;
+    g_file = _fsopen(p.c_str(), append ? "ab" : "wb", _SH_DENYWR);   // one file per game process: the first start truncates
     g_truncated = true;
-    g_fileBytes = 0;
+    if (!append) g_fileBytes = 0;   // WO-213: an append (a rotation that waits for a reader) keeps counting the file's bytes
     if (g_file) logf("WO206-PROBE writing %s (machine=%s %.0f Hz %.0f m, %d scope reads a sample)", p.c_str(), machine_name(g_machine), g_hz,
                      g_radius, g_scopeReads);
 }
@@ -313,12 +315,13 @@ void probe_tick(double now) {
         c_tGather = c_tScopes = c_tLine = 0; c_costSamples = 0; g_lastCostLog = now;
     }
     g_fileBytes += line.size();
-    if (g_fileBytes > kMaxFileBytes) {   // a long session keeps this file and the one before it (the bundle's size stays bounded)
+    if (g_fileBytes > kMaxFileBytes && now >= g_retryRotateAt) {   // a long session keeps this file and the one before it (the bundle's size stays bounded)
         std::fclose(g_file); g_file = nullptr;
         const std::string prev = g_path.substr(0, g_path.size() - 6) + ".1.jsonl";
-        MoveFileExA(g_path.c_str(), prev.c_str(), MOVEFILE_REPLACE_EXISTING);
-        g_truncated = false;
-        ++c_rotations;
+        // WO-213: a reader holding the file (the bench's judge) makes the move fail -- then keep appending and try again a second later;
+        // the "wb" reopen used to truncate the file under the reader (a figure walk's 15 minutes were lost so)
+        if (MoveFileExA(g_path.c_str(), prev.c_str(), MOVEFILE_REPLACE_EXISTING)) { g_truncated = false; ++c_rotations; }
+        else { ++c_rotateRetries; g_retryRotateAt = now + 1.0; }
         return;
     }
     if (now - g_lastFlush > 1.0) { std::fflush(g_file); g_lastFlush = now; }
@@ -422,11 +425,11 @@ int status_text(char* out, int n) {
     if (!out || n <= 0) return 0;
     const int k = std::snprintf(out, static_cast<size_t>(n),
         "wo206 digest armed=%d paths=%zu passes=%u reads=%llu found=%llu faults=%llu | probe on=%d machine=%s lines=%llu bodies=%llu scope_reads=%llu skipped=%llu"
-        " | memory scope_cache=%zu queue_ages=%zu",   // WO-207 E.1: the probe's own long-lived containers (entries)
+        " rotations=%llu rotate_retries=%llu | memory scope_cache=%zu queue_ages=%zu",   // WO-207 E.1: the probe's own long-lived containers (entries)
         g_armed ? 1 : 0, g_paths.size(), g_sweep.passes, static_cast<unsigned long long>(c_reads), static_cast<unsigned long long>(c_found),
         static_cast<unsigned long long>(c_faults), g_probe.load() ? 1 : 0, machine_name(g_machine), static_cast<unsigned long long>(c_lines),
         static_cast<unsigned long long>(c_bodies), static_cast<unsigned long long>(c_scopeReads), static_cast<unsigned long long>(c_skipped),
-        g_scopes.size(), g_qages.size());
+        static_cast<unsigned long long>(c_rotations), static_cast<unsigned long long>(c_rotateRetries), g_scopes.size(), g_qages.size());
     return k < 0 ? 0 : (k >= n ? n - 1 : k);
 }
 

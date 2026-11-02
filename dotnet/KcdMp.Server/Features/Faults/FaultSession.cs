@@ -5,6 +5,7 @@ using System.Buffers.Binary;
 using System.Net.Sockets;
 using System.Threading.Channels;
 using KcdMp.Server.Features.ClientHandling;
+using KcdMp.Wire;
 
 namespace KcdMp.Server.Features.Faults;
 
@@ -35,6 +36,10 @@ public sealed class FaultSession
 	private int _closed, _closing, _started;
 	private int _roleCache;   // 0 none (not ready), 1 host, 2 joiner
 	private long _roleAtMs = long.MinValue;
+	// WO-213 F.1: the link rule's two directions, made when the rule first matches this connection (then kept: a link is the session's)
+	private LinkShaper? _upShaper, _downShaper;
+	private LinkShaper.Stalls? _stalls;
+	private readonly object _shaperLock = new();
 
 	/// <summary>Accept order, 1 = the first connection (the jitter seed's stream id).</summary>
 	public int Ordinal { get; }
@@ -54,7 +59,8 @@ public sealed class FaultSession
 		Ordinal = ordinal;
 		Up = new FaultLink(engine, this, FaultDir.Up);
 		Down = new FaultLink(engine, this, FaultDir.Down);
-		Connection = new RelayConnection(new FaultStream(this), real.Remote, real.IsLoopback, real.Transport, CloseGraceful, real.IdentityKey);
+		var fs = new FaultStream(this);
+		Connection = new RelayConnection(fs, real.Remote, real.IsLoopback, real.Transport, CloseGraceful, real.IdentityKey) { Steam = real.Steam, Path = fs };   // WO-213: the shaper is this link's path
 	}
 
 	/// <summary>Ties this connection to its session (for its role and name) and starts the pumps.</summary>
@@ -67,6 +73,53 @@ public sealed class FaultSession
 		_ = Guard(Up.PumpAsync(ct));
 		_ = Guard(Down.PumpAsync(ct));
 	}
+
+	/// <summary>WO-213 F.1: this direction's shaper, made the first time an active link rule matches this connection's role.</summary>
+	internal LinkShaper? ShaperFor(FaultDir dir)
+	{
+		var have = dir == FaultDir.Up ? _upShaper : _downShaper;
+		if (have is not null) return have;
+		RelayFaults.RuleState? match = null;
+		FaultRole? role = null; bool roleRead = false;
+		foreach (var rs in _engine.Rules)
+		{
+			var r = rs.Rule;
+			if (r.Kind != FaultKind.Link || r.Link is null || (r.Dir & dir) == 0 || !rs.IsActive) continue;
+			if (r.Role != FaultRole.Any)
+			{
+				if (!roleRead) { role = Role; roleRead = true; }
+				if (role != r.Role) continue;
+			}
+			match = rs; break;
+		}
+		if (match is null) return null;
+		lock (_shaperLock)
+		{
+			have = dir == FaultDir.Up ? _upShaper : _downShaper;
+			if (have is not null) return have;
+			_stalls ??= new LinkShaper.Stalls(match.Rule.Link!, unchecked(_engine.Plan.Seed * 7919 + Ordinal));
+			int seed = unchecked(_engine.Plan.Seed * 104_729 ^ Ordinal * 31 ^ (int)dir);
+			var rsLocal = match;
+			LinkShaper sh = dir == FaultDir.Up
+				? new LinkShaper(match.Rule.Link!, _stalls, seed, "up", f => DeliverUpAsync(f), n => { Interlocked.Increment(ref rsLocal.Frames); Interlocked.Add(ref rsLocal.Bytes, n); })
+				: new LinkShaper(match.Rule.Link!, _stalls, seed, "down", f => DeliverDownAsync(f), n => { Interlocked.Increment(ref rsLocal.Frames); Interlocked.Add(ref rsLocal.Bytes, n); });
+			if (dir == FaultDir.Up) _upShaper = sh; else _downShaper = sh;
+			_ = Guard(sh.PumpAsync(_cts.Token));
+			return sh;
+		}
+	}
+
+	/// <summary>WO-213 F.1: the up frame goes the unreliable way when the client said it sends state that way (its LinkHello) and it is state.</summary>
+	private bool UpUnreliable(byte[] frame) => _client is { LinkUnreliableState: true } && frame.Length >= 3 && LinkState.IsStateType(frame[0]);
+
+	internal IEnumerable<string> ShaperSummaries()
+	{
+		string who = $"id={IdText} role={(Role is { } r ? FaultRule.RoleName(r) : "none")}";
+		if (_downShaper is { } d) yield return d.TakeSummary(who);
+		if (_upShaper is { } u) yield return u.TakeSummary(who);
+	}
+
+	internal LinkShaper? DownShaper => _downShaper;
 
 	private async Task Guard(Task t)
 	{
@@ -119,6 +172,7 @@ public sealed class FaultSession
 					first = false;
 					if (_engine.RefuseHandshake(this, frame)) { Close(); return; }
 				}
+				if (ShaperFor(FaultDir.Up) is { } us) { await us.EnqueueAsync(frame, UpUnreliable(frame), ct); continue; }   // WO-213 F.1
 				if (!Up.Enqueue(frame)) return;
 			}
 		}
@@ -153,6 +207,14 @@ public sealed class FaultSession
 	// ---------------------------------------------------------------- down: session -> link -> socket
 
 	internal bool EnqueueDown(byte[] packet) => Volatile.Read(ref _closed) == 0 && Volatile.Read(ref _closing) == 0 && Down.Enqueue(packet);
+
+	/// <summary>WO-213 F.1: a down frame through the link rule's shaper when one is on (waits while its send buffer is full).</summary>
+	internal async ValueTask EnqueueDownAsync(byte[] packet, bool state, CancellationToken ct)
+	{
+		if (Volatile.Read(ref _closed) != 0 || Volatile.Read(ref _closing) != 0) throw new IOException("connection closed by the relay's fault layer");
+		if (ShaperFor(FaultDir.Down) is { } ds) { await ds.EnqueueAsync(packet, state, ct); return; }
+		if (!Down.Enqueue(packet)) throw new IOException("connection closed by the relay's fault layer");
+	}
 
 	internal async ValueTask DeliverDownAsync(byte[] frame)
 	{
@@ -207,6 +269,8 @@ public sealed class FaultSession
 		_upOut.Writer.TryComplete();
 		Up.MarkClosed();
 		Down.MarkClosed();
+		_upShaper?.Close();
+		_downShaper?.Close();
 		_real.Dispose();
 		_engine.Unregister(this);
 	}
@@ -325,7 +389,7 @@ public sealed class FaultLink
 	{
 		var role = Session.Role;
 		foreach (var rs in _engine.Rules)
-			if (rs.IsActive && rs.Rule.Kind != FaultKind.Cut && (rs.Rule.Dir & Dir) != 0
+			if (rs.IsActive && rs.Rule.Kind is not (FaultKind.Cut or FaultKind.Link) && (rs.Rule.Dir & Dir) != 0
 				&& (rs.Rule.Role == FaultRole.Any || rs.Rule.Role == role))
 				yield return rs;
 	}
@@ -393,7 +457,7 @@ public sealed class FaultLink
 		foreach (var rs in _engine.Rules)
 		{
 			var r = rs.Rule;
-			if (r.Kind == FaultKind.Cut || (r.Dir & Dir) == 0 || !rs.IsActive) continue;
+			if (r.Kind is FaultKind.Cut or FaultKind.Link || (r.Dir & Dir) == 0 || !rs.IsActive) continue;   // WO-213: a link rule is LinkShaper's
 			if (r.Role != FaultRole.Any)
 			{
 				if (!roleRead) { role = Session.Role; roleRead = true; }
@@ -482,7 +546,7 @@ public sealed class FaultLink
 /// session's write loop writes one per call) handed to the down link, and
 /// completes at once.
 /// </summary>
-internal sealed class FaultStream : Stream
+internal sealed class FaultStream : Stream, ILinkPath
 {
 	private readonly FaultSession _s;
 	private byte[]? _cur;
@@ -521,11 +585,14 @@ internal sealed class FaultStream : Stream
 	public override int Read(byte[] buffer, int offset, int count) =>
 		ReadAsync(buffer.AsMemory(offset, count)).AsTask().GetAwaiter().GetResult();
 
-	public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken ct = default)
-	{
-		if (!_s.EnqueueDown(buffer.ToArray())) throw new IOException("connection closed by the relay's fault layer");
-		return ValueTask.CompletedTask;
-	}
+	public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken ct = default) =>
+		_s.EnqueueDownAsync(buffer.ToArray(), state: false, ct);   // WO-213 F.1: waits while a link rule's send buffer is full
+
+	// ---- WO-213: the scheduler's view of this link (ILinkPath): the shaper's numbers when a link rule shapes it
+	public string Transport => _s.ShaperFor(FaultDir.Down) is null ? "tcp" : "shaped";
+	public bool CanSendUnreliable => _s.ShaperFor(FaultDir.Down) is not null;   // made now when the link rule matches (the hello may come first)
+	public ValueTask SendAsync(ReadOnlyMemory<byte> frame, bool state, CancellationToken ct) => _s.EnqueueDownAsync(frame.ToArray(), state, ct);
+	public LinkPathStatus Status() => _s.DownShaper is { } d ? new LinkPathStatus(true, d.RateBytesPerS, d.PendingBytes, d.QueueMs) : default;
 
 	public override Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken ct) =>
 		WriteAsync(buffer.AsMemory(offset, count), ct).AsTask();

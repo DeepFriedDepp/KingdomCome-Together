@@ -307,6 +307,11 @@ public class RelayTableGateTests : IClassFixture<RelayFixture>
                 await host.SendRawAsync(Frame(up, b));
                 await ArrivesAsync(host, Protocol.ClockSyncDown, Protocol.ClockSyncDownPayloadLen);
                 return;
+            case Protocol.LinkHelloUp:   // WO-213: relay-local, the answer comes back to the sender
+                b[0] = Protocol.LinkVersion;
+                await host.SendRawAsync(Frame(up, b));
+                await ArrivesAsync(host, Protocol.LinkHelloDown, Protocol.LinkHelloDownLen);
+                return;
             case Protocol.VoiceUp:
                 await host.SendRawAsync(Frame(up, b));
                 await ArrivesAsync(joiner, Protocol.VoiceDown, 1 + len, host.Id);

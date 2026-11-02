@@ -176,4 +176,8 @@ bool is_bound_eid(uint32_t eid);
 struct HitCheck { bool bound = false; double ageS = -1; float distM = -1; uint8_t flags = 0; uint32_t eid = 0; };
 bool hit_check(const char* name, HitCheck* out);
 
+// WO-213 E.1: the play-out delay this copy's position is rendered at now (s), or -1 when it is not written by this writer -- the owner
+// (wo208.cpp) applies the host's animation states the same delay after they arrive, so the actions start where the position is.
+double playout_delay_s(uint32_t eid);
+
 } // namespace kcdmp::npcdrive

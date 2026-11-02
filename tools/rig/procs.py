@@ -191,7 +191,9 @@ class LogWatch:
             with open(self.path, 'rb') as f: head = f.read(600).decode('utf-8', 'replace')
             m = LOG_STARTED.search(head)
             if not m: return []
-            started = time.mktime(time.strptime(m.group(1) + ' ' + m.group(2), '%Y-%m-%d %H:%M:%S'))
+            st = time.strptime(m.group(1) + ' ' + m.group(2), '%Y-%m-%d %H:%M:%S')
+            # WO-213: the hour a clock falls back happens twice (2026-11-01 01:00-02:00): both readings, the one nearer the launch
+            started = min((time.mktime(st[:8] + (dst,)) for dst in (0, 1)), key=lambda t: abs(t - self.since))
             if started < self.since - 30: return []
             self.ours = True
             self.off = 0

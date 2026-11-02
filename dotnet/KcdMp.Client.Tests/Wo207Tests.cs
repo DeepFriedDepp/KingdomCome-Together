@@ -393,4 +393,250 @@ public class Wo207PipeTests
         int at = await FramePosition(false);
         Assert.True(at >= 10, $"served at {at}");
     }
+
+    // WO-213 D.4: the position read (CombatPipe.Priority) goes before the waiting polls and frame calls alike
+    private static async Task<int> PriorityPosition(bool priority)
+    {
+        string name = BenchInstance.PipeNameFor("t213" + Guid.NewGuid().ToString("N")[..8]);
+        var server = new System.IO.Pipes.NamedPipeServerStream(name, System.IO.Pipes.PipeDirection.InOut, 1, System.IO.Pipes.PipeTransmissionMode.Byte, System.IO.Pipes.PipeOptions.Asynchronous);
+        var served = new List<byte>();
+        try
+        {
+            var accept = server.WaitForConnectionAsync();
+            await using var pipe = new CombatPipe(name) { FramesFirst = true };
+            Assert.True(await pipe.EnsureConnectedAsync());
+            await accept;
+            var dll = Task.Run(async () =>
+            {
+                byte seq = 0;
+                var head = new byte[3];
+                for (int k = 0; k < 16; k++)
+                {
+                    int got = 0;
+                    while (got < 3) got += await server.ReadAsync(head.AsMemory(got));
+                    var body = new byte[head[1] | (head[2] << 8)];
+                    got = 0;
+                    while (got < body.Length) got += await server.ReadAsync(body.AsMemory(got));
+                    lock (served) served.Add(body[0]);
+                    await Task.Delay(15);   // one answer a frame
+                    await server.WriteAsync(new byte[] { 0x9F, 4, 0, 1, seq++, body[0], 0 });
+                }
+            });
+            var calls = Enumerable.Range(1, 12).Select(i => pipe.Wo138Async((byte)i, [])).ToList();   // the background polls
+            calls.AddRange(Enumerable.Range(20, 3).Select(i => Task.Run(async () => { Wo207Trace.Kind.Value = 0x27; return await pipe.Wo138Async((byte)i, []); })));   // frames' calls
+            await Task.Delay(40);
+            await Task.Run(async () => { CombatPipe.Priority.Value = priority; await pipe.Wo138Async(99, []); });   // the position read
+            await Task.WhenAll(calls);
+            await dll;
+            lock (served) return served.IndexOf(99);
+        }
+        finally { server.Dispose(); }
+    }
+
+    [Fact]
+    public async Task The_position_read_goes_before_the_frames_calls_and_the_polls()
+    {
+        // one give-way each (PriorityYields): ahead of the twelve polls; at worst behind the three frame calls that were already waiting
+        int at = await PriorityPosition(true);
+        Assert.InRange(at, 0, 5);
+    }
+
+    [Fact]
+    public async Task Twin_D4_off_the_position_read_waits_behind_them()
+    {
+        int at = await PriorityPosition(false);
+        Assert.True(at >= 12, $"served at {at}");
+    }
+
+    // WO-213 D.4, the busy host: the polls waiting at the pipe have each given way to an earlier read already. On one first-come line
+    // (the twin) the next read waited behind every one of them -- 55 / 101 ms at the gate on average (village / fight), the host's figure
+    // out every 168 / 216 ms; on their own line it waits for the one call at the line's head at most
+    private static async Task<(int First, int Next)> NextReadPosition(bool ownLine)
+    {
+        string name = BenchInstance.PipeNameFor("t213l" + Guid.NewGuid().ToString("N")[..8]);
+        var server = new System.IO.Pipes.NamedPipeServerStream(name, System.IO.Pipes.PipeDirection.InOut, 1, System.IO.Pipes.PipeTransmissionMode.Byte, System.IO.Pipes.PipeOptions.Asynchronous);
+        var served = new List<byte>();
+        try
+        {
+            var accept = server.WaitForConnectionAsync();
+            await using var pipe = new CombatPipe(name) { FramesFirst = true, OwnLine = ownLine };
+            Assert.True(await pipe.EnsureConnectedAsync());
+            await accept;
+            var dll = Task.Run(async () =>
+            {
+                byte seq = 0;
+                var head = new byte[3];
+                for (int k = 0; k < 14; k++)
+                {
+                    int got = 0;
+                    while (got < 3) got += await server.ReadAsync(head.AsMemory(got));
+                    var body = new byte[head[1] | (head[2] << 8)];
+                    got = 0;
+                    while (got < body.Length) got += await server.ReadAsync(body.AsMemory(got));
+                    lock (served) served.Add(body[0]);
+                    await Task.Delay(15);   // one answer a frame
+                    await server.WriteAsync(new byte[] { 0x9F, 4, 0, 1, seq++, body[0], 0 });
+                }
+            });
+            var polls = Enumerable.Range(1, 12).Select(i => pipe.Wo138Async((byte)i, [])).ToList();   // the background polls
+            await Task.Delay(40);
+            await Task.Run(async () =>
+            {
+                CombatPipe.Priority.Value = true;
+                await pipe.Wo138Async(98, []);   // a read: each waiting poll gives way to it
+                await pipe.Wo138Async(99, []);   // the next read
+            });
+            await Task.WhenAll(polls);
+            await dll;
+            lock (served) return (served.IndexOf(98), served.IndexOf(99));
+        }
+        finally { server.Dispose(); }
+    }
+
+    [Fact]
+    public async Task The_next_read_does_not_wait_behind_the_polls_that_gave_way_to_the_last()
+    {
+        var (first, next) = await NextReadPosition(true);
+        Assert.InRange(first, 0, 5);
+        Assert.InRange(next - first, 1, 2);
+    }
+
+    [Fact]
+    public async Task Twin_one_first_come_line_the_next_read_waits_behind_every_poll()
+    {
+        var (first, next) = await NextReadPosition(false);
+        Assert.True(next - first >= 8, $"the read at {first}, the next at {next}");
+    }
+
+    // WO-213 D.4: priority calls back to back (the position loop and the NPC feed) never starve a poll -- it gives way at most
+    // PriorityYields times, then keeps its place; the twin (no bound) waited for as long as the priority calls kept coming
+    private static async Task<double> PollWaitUnderPriorityLoad(int yields)
+    {
+        string name = BenchInstance.PipeNameFor("t213s" + Guid.NewGuid().ToString("N")[..8]);
+        var server = new System.IO.Pipes.NamedPipeServerStream(name, System.IO.Pipes.PipeDirection.InOut, 1, System.IO.Pipes.PipeTransmissionMode.Byte, System.IO.Pipes.PipeOptions.Asynchronous);
+        using var stop = new CancellationTokenSource();
+        try
+        {
+            var accept = server.WaitForConnectionAsync();
+            await using var pipe = new CombatPipe(name) { FramesFirst = true, PriorityYields = yields };
+            Assert.True(await pipe.EnsureConnectedAsync());
+            await accept;
+            var dll = Task.Run(async () =>
+            {
+                byte seq = 0;
+                var head = new byte[3];
+                try
+                {
+                    while (!stop.IsCancellationRequested)
+                    {
+                        int got = 0;
+                        while (got < 3) got += await server.ReadAsync(head.AsMemory(got), stop.Token);
+                        var body = new byte[head[1] | (head[2] << 8)];
+                        got = 0;
+                        while (got < body.Length) got += await server.ReadAsync(body.AsMemory(got), stop.Token);
+                        await Task.Delay(1);
+                        await server.WriteAsync(new byte[] { 0x9F, 4, 0, 1, seq++, body[0], 0 }, stop.Token);
+                    }
+                }
+                catch (OperationCanceledException) { }
+                catch (IOException) { }
+            });
+            // two priority callers back to back for 1.5 s
+            var prio = Enumerable.Range(0, 2).Select(_ => Task.Run(async () =>
+            {
+                CombatPipe.Priority.Value = true;
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                while (sw.ElapsedMilliseconds < 1500) await pipe.Wo138Async(7, []);
+            })).ToList();
+            await Task.Delay(100);
+            var w = System.Diagnostics.Stopwatch.StartNew();
+            await pipe.Wo138Async(55, []);   // a background poll
+            double waited = w.Elapsed.TotalMilliseconds;
+            await Task.WhenAll(prio);
+            stop.Cancel();
+            try { await dll; } catch { }
+            return waited;
+        }
+        finally { server.Dispose(); }
+    }
+
+    // WO-213: frames' calls back to back (a joined talk's camera stream on the listener) never starve a poll either -- it gives way to
+    // them FrameYields times, then keeps its place; the twin (WO-207's rule, no bound) waited as long as the frames kept coming
+    private static async Task<double> PollWaitUnderFrameLoad(int frameYields)
+    {
+        string name = BenchInstance.PipeNameFor("t213f" + Guid.NewGuid().ToString("N")[..8]);
+        var server = new System.IO.Pipes.NamedPipeServerStream(name, System.IO.Pipes.PipeDirection.InOut, 1, System.IO.Pipes.PipeTransmissionMode.Byte, System.IO.Pipes.PipeOptions.Asynchronous);
+        using var stop = new CancellationTokenSource();
+        try
+        {
+            var accept = server.WaitForConnectionAsync();
+            await using var pipe = new CombatPipe(name) { FramesFirst = true, FrameYields = frameYields };
+            Assert.True(await pipe.EnsureConnectedAsync());
+            await accept;
+            var dll = Task.Run(async () =>
+            {
+                byte seq = 0;
+                var head = new byte[3];
+                try
+                {
+                    while (!stop.IsCancellationRequested)
+                    {
+                        int got = 0;
+                        while (got < 3) got += await server.ReadAsync(head.AsMemory(got), stop.Token);
+                        var body = new byte[head[1] | (head[2] << 8)];
+                        got = 0;
+                        while (got < body.Length) got += await server.ReadAsync(body.AsMemory(got), stop.Token);
+                        await Task.Delay(2);
+                        await server.WriteAsync(new byte[] { 0x9F, 4, 0, 1, seq++, body[0], 0 }, stop.Token);
+                    }
+                }
+                catch (OperationCanceledException) { }
+                catch (IOException) { }
+            });
+            // three frame handlers back to back for 1.5 s
+            var frames = Enumerable.Range(0, 3).Select(_ => Task.Run(async () =>
+            {
+                Wo207Trace.Kind.Value = Wo207Trace.ConvKind;
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                while (sw.ElapsedMilliseconds < 1500) await pipe.Wo138Async(9, []);
+            })).ToList();
+            await Task.Delay(100);
+            var w = System.Diagnostics.Stopwatch.StartNew();
+            await pipe.Wo138Async(56, []);   // a background poll
+            double waited = w.Elapsed.TotalMilliseconds;
+            await Task.WhenAll(frames);
+            stop.Cancel();
+            try { await dll; } catch { }
+            return waited;
+        }
+        finally { server.Dispose(); }
+    }
+
+    [Fact]
+    public async Task A_poll_gives_way_to_frames_calls_a_bounded_number_of_times()
+    {
+        double waited = await PollWaitUnderFrameLoad(4);
+        Assert.True(waited < 600, $"waited {waited:F0} ms");
+    }
+
+    [Fact]
+    public async Task Twin_without_the_frame_bound_a_poll_waits_while_frames_keep_coming()
+    {
+        double waited = await PollWaitUnderFrameLoad(int.MaxValue);
+        Assert.True(waited >= 1000, $"waited {waited:F0} ms");
+    }
+
+    [Fact]
+    public async Task A_poll_gives_way_to_priority_calls_for_a_bounded_time_only()
+    {
+        double waited = await PollWaitUnderPriorityLoad(1);
+        Assert.True(waited < 400, $"waited {waited:F0} ms");
+    }
+
+    [Fact]
+    public async Task Twin_without_the_bound_a_poll_waits_while_priority_calls_keep_coming()
+    {
+        double waited = await PollWaitUnderPriorityLoad(int.MaxValue);
+        Assert.True(waited >= 1000, $"waited {waited:F0} ms");
+    }
 }

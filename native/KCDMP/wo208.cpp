@@ -15,6 +15,7 @@
 #include "wo210.h"
 #include "wo210_kd.h"
 #include "wo210_rules.h"
+#include "wo213.h"
 #include "wo211.h"
 #include "wo211_rules.h"
 #include "combat_swing.h"
@@ -535,7 +536,10 @@ struct OwnCopy {
     double watchAt = 0, breachSince = -1, transSince = -1; uint8_t breach = 0; uint32_t transFrag = 0xFFFFFFFFu;
     double askedAt = -1e9, reseatBackoff = 0;
     double overflowAt = -1e9;   // WO-211 C.3: the last clean reseat for an over-full queue
+    double stateAt = 0;         // WO-213 E.2: when the host's newest state of this body arrived
+    double lateAskAt = -1e9;    // WO-213 E.2: the last time this body was asked for again
 };
+std::unordered_set<uint32_t> g_postureHeld;   // WO-213 E.3: copies whose posture holds (the watchdog's last check), main thread
 std::unordered_map<uint32_t, OwnCopy> g_owned;   // main thread
 std::unordered_set<uint32_t> g_readyHeld;          // WO-210 D.3: copies whose combat-mode hold the host NPC's streamed state set
 std::atomic<uint32_t> c_readyHolds{0}, c_readyReleases{0};
@@ -862,6 +866,24 @@ void own_apply(uint32_t eid, OwnCopy& oc, int cm, const HostScope hsc[2], const 
         // the same fragment is the same body, whatever class plays it (the owner installs the host's idle-state postures through a combat
         // action: d1's first watchdog took "ours, other" against "the host's, working" for the very same work fragment, 132 reseats)
         if (v != Verdict::Empty && have[0] && !cs[0].empty && cs[0].frag == hsc[0].frag) v = Verdict::Ok;
+        // WO-213 E.3: the copy and its host NPC both in a posture -- the position writer leaves the body alone while it holds
+        if (wo213rules::posture_holds(posture(copyF), posture(hostF) || (posture(copyF) && hostF == PFam::Other), true)) g_postureHeld.insert(eid);
+        else g_postureHeld.erase(eid);
+        // WO-213 E.2: a posture breach while the host's state of this body is late (none past its 2 s resend) is late, not missing:
+        // the copy keeps its last posture, nothing is reseated; after a 2 s hold the body is asked for again (op 140, kind 2)
+        if (wo213::on(wo213rules::kBitPostureHoldLate) && (v == Verdict::MissingPosture || v == Verdict::StalePosture || v == Verdict::PostureOther)) {
+            const wo213rules::Late late = wo213rules::lateness(now - oc.stateAt);
+            if (late != wo213rules::Late::Fresh) {
+                wo213::note_late_check();
+                if (late == wo213rules::Late::AskAgain && now - oc.lateAskAt >= wo213rules::kLateHoldS && g_asks.size() < 64) {
+                    oc.lateAskAt = now;
+                    g_asks.push_back({2, oc.name});
+                    wo213::note_late_ask();
+                }
+                v = Verdict::Ok;
+            }
+        }
+        if (v == Verdict::MissingPosture) wo213::note_missing_check();
         wo210::note_check(static_cast<uint8_t>(v));
         if (v == Verdict::Ok) { oc.breachSince = -1; oc.breach = 0; oc.reseatBackoff = 0; }
         else {
@@ -910,6 +932,7 @@ uint8_t op_asks(const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_
 }
 
 void own_release(uint32_t eid, OwnCopy& oc, double now, const char* why, uint8_t path = wo210rules::kPathUnknown) {
+    g_postureHeld.erase(eid);   // WO-213 E.3: a copy the owner lets go of is the position writer's again
     const bool alive = engine::entity_by_id(eid) != nullptr;
     // WO-210 A.2 (paths 2, 12, 13, 14): the host's current base -- or the body's neutral idle when the host's state is a posture or not
     // known -- installed now under the copy's own base and left running when we let go: the copy's own engine replaces it once it queues
@@ -1043,8 +1066,12 @@ void owner_tick(double now) {
             }
         }
         // the newest state at least one stream delay old
+        // WO-213 E.1: the owner applies a state the same delay after its arrival as the copy's position is played out (the old 0.38 s
+        // when the play-out is off or not known yet)
+        double ownerDelay = g_ownerDelayS;
+        if (wo213::on(wo213rules::kBitPlayoutAdaptive)) { const double pd = npcdrive::playout_delay_s(eid); if (pd > 0) ownerDelay = pd; }
         int pick = -1;
-        for (int i = 0; i < static_cast<int>(v.size()); ++i) if (now - v[i].at >= g_ownerDelayS) pick = i;
+        for (int i = 0; i < static_cast<int>(v.size()); ++i) if (now - v[i].at >= ownerDelay) pick = i;
         if (pick < 0) { ++it; continue; }
         // WO-210 C.2: a dead copy is never driven again -- it lies as it died; the owner lets go of it once, without a hand-over
         if (wo210::on(wo210rules::kBitDeathEngine) && wo172::copy_dead(eid)) {
@@ -1058,6 +1085,7 @@ void owner_tick(double now) {
         OwnCopy& oc = ins.first->second;
         if (ins.second) { oc.name = nm ? nm : "?"; c_oCopies.fetch_add(1); }
         oc.lastState = now;
+        oc.stateAt = v.back().at;   // WO-213 E.2: the newest state's arrival, applied or not yet
         const CopyState& s = v[pick];
         // WO-210 C.3 (mp_knockdown_sync): the host NPC's knockdown -- the copy falls on its down edge and is stood up on its up edge, the
         // engine's way; while it lies the engine's ragdoll has the body (the owner installs nothing, the position stream writes nothing)
@@ -1176,6 +1204,8 @@ bool host_fullbody(uint32_t eid, uint8_t* cls, uint32_t* frag) {
 // WO-211 C.3 (main thread): the engine said this copy's action queue is over-full -- every action of ours on it withdrawn the engine's way
 // (a pending one stopped, never installed; a running one stepped down), then one clean hand-over. 1 reseated, 2 not an owned copy,
 // 3 too soon after the last.
+bool posture_holds(uint32_t eid) { return g_postureHeld.count(eid) != 0; }   // WO-213 E.3
+
 uint8_t overflow_reseat(uint32_t eid, const char* name, double everyS) {
     auto it = eid ? g_owned.find(eid) : g_owned.end();
     if (it == g_owned.end()) { wo211::note_overflow_reseat(false, false); return 2; }

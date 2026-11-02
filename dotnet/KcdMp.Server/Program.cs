@@ -89,6 +89,7 @@ public class Program
 		// WO-127: Steam P2P beside the TCP listener. Does nothing unless Steam:Enabled.
 		builder.Services.AddSingleton<SteamRelayStatus>();
 		builder.Services.AddHostedService<SteamRelayService>();
+		builder.Services.AddHostedService<LinkReportService>();   // WO-213 A: each client's link, every 10 s (Steam's numbers every 2 s)
 
 		// WO-206 B: registered only with the switch on; a bad plan stops the
 		// relay here -- a faulted test run without its faults is no run at all.

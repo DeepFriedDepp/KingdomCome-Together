@@ -145,8 +145,20 @@ public sealed class SteamRelayService : BackgroundService
 				var conn = await listener.AcceptAsync(ct);
 				int flags = conn.InfoFlags();
 				_status.AddPeer(1);
+				// WO-213 B: the connection's limits and its two lanes (events, state), read back; the twin leaves Steam's own
+				if (!KcdMp.Wire.W213Switch.TwinOff("steam_cfg"))
+				{
+					try
+					{
+						var linkCfg = conn.ApplyLinkConfig(KcdMp.Wire.W213Switch.SteamSendRateMin, KcdMp.Wire.W213Switch.SteamSendRateMax, KcdMp.Wire.W213Switch.SteamNagleUs, null,
+							lanes: true, KcdMp.Wire.W213Switch.SteamStatePriority, KcdMp.Wire.W213Switch.SteamEventWeight, KcdMp.Wire.W213Switch.SteamStateWeight);
+						_logger.Information("MP-LINK steam-config applied (WO-213 B), read back: {Cfg}", linkCfg.Log);
+					}
+					catch (Exception ex) { _logger.Warning("MP-LINK steam-config not applied: {Error}", ex.Message); }
+				}
+				else _logger.Information("MP-LINK steam-config left at Steam's own (the twin: steam_cfg off): {Cfg}", conn.ReadLinkConfig().Log);
 				_logger.Information("[+] a Steam peer connected (relayed={Relayed}); handshake next", (flags & 16) != 0 ? 1 : 0);
-				var client = _runner.Create(RelayConnection.FromSteam(conn.GetStream(), conn.PeerKey));   // WO-144: the same player's new connection replaces his old one
+				var client = _runner.Create(RelayConnection.FromSteam(conn.GetStream(), conn.PeerKey, conn));   // WO-144: the same player's new connection replaces his old one
 				_runner.Start(client);
 				_ = WatchPeerAsync(conn);
 			}

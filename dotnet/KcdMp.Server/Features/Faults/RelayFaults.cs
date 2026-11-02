@@ -390,6 +390,8 @@ public sealed class RelayFaults
 	{
 		string line = SummaryLine(final);
 		Emit(final && Rules.Any(r => r.Hollow), line);
+		foreach (var s in Sessions())   // WO-213 F.1: each shaped link's own numbers
+			foreach (var l in s.ShaperSummaries()) Emit(false, l);
 	}
 
 	/// <summary>At exit: every active rule ends (reason=exit), a never-fired one says so, then the final summary.</summary>

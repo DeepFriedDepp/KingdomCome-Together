@@ -237,10 +237,12 @@ def figure_error(fig, truth, max_off_ms=1000):
     return best
 
 
-def s_walk(r, secs=30.0):
+def s_walk(r, secs=30.0, smooth=False):
     """Both walk 30 s side by side (position writes at 1 m/s on the wall clock). Judged from the probe files (10 samples a second on
     both machines): each machine's figure of the other against the other machine's own player position, at the best constant stream
-    delay in 0..1000 ms. Pass: p90 within 1.5 m both ways, with at least 50 compared samples each."""
+    delay in 0..1000 ms. Pass: p90 within 1.5 m both ways, with at least 50 compared samples each.
+    WO-213 D.4/E.5 `smooth`: a step every frame (a 1 ms timer) at 1.4 m/s on a circle of 8 m from where each stands -- a position change
+    every frame, as a walking player's, so the figure's own send rate and its play-out are what the judge sees."""
     def fn():
         pa = r.a.pos()
         if not pa: return False, 'no-pos', 'copy A gave no position'
@@ -253,8 +255,18 @@ def s_walk(r, secs=30.0):
                   'local z = System.GetTerrainElevation({x=x0, y=y, z=0}); player:SetWorldPos({x=x0, y=y, z=z + 0.05}); '
                   'Script.SetTimer(100, step) end; step()')
         steps = int(secs * 10)
-        r.a.lua(walker % (pa[0], pa[1], steps))
-        r.b.lua(walker % (pa[0] + 2.0, pa[1], steps))
+        if smooth:
+            walker = ('W206WALK = (W206WALK or 0) + 1; local gen, d = W206WALK, 0; local cx, cy, len = %.3f, %.3f, %.1f; '
+                      'local function step() if gen ~= W206WALK or d >= len then return end; local ft = 0.016; '
+                      'pcall(function() ft = System.GetFrameTime() end); if type(ft) ~= "number" or ft <= 0 or ft > 0.1 then ft = 0.016 end; '
+                      'd = d + 1.4 * ft; local a = d / 8.0; local x, y = cx + 8.0 * math.cos(a), cy + 8.0 * math.sin(a); '
+                      'local z = System.GetTerrainElevation({x=x, y=y, z=0}); player:SetWorldPos({x=x, y=y, z=z + 0.05}); '
+                      'Script.SetTimer(1, step) end; step()')
+            r.a.lua(walker % (pa[0] - 8.0, pa[1], secs * 1.4))
+            r.b.lua(walker % (pa[0] - 6.0, pa[1], secs * 1.4))
+        else:
+            r.a.lua(walker % (pa[0], pa[1], steps))
+            r.b.lua(walker % (pa[0] + 2.0, pa[1], steps))
         t0 = time.time()
         time.sleep(secs + 1)
         t1 = time.time()
@@ -982,8 +994,10 @@ def agent_ms(line, day0):
     m = AGENT_TS.match(line)
     if not m: return None
     h, mi, s, ms = (int(x) for x in m.groups())
-    t = time.mktime(time.localtime(day0)[:3] + (h, mi, s, 0, 0, -1)) * 1000 + ms
-    return int(t + (86_400_000 if t < day0 * 1000 - 43_200_000 else 0))
+    # WO-213: the hour a clock falls back happens twice (01:00-02:00 on 2026-11-01): both readings, the one nearer day0
+    ts = [time.mktime(time.localtime(day0)[:3] + (h, mi, s, 0, 0, dst)) * 1000 + ms for dst in (0, 1)]
+    ts = [t + (86_400_000 if t < day0 * 1000 - 43_200_000 else 0) for t in ts]
+    return int(min(ts, key=lambda t: abs(t - day0 * 1000)))
 
 
 def queue_lags(c, t0_ms, t1_ms):
@@ -1841,7 +1855,9 @@ def s_conv(r, starter='host', plan=('changed', 'cleared', 'notfollowed', 'follow
                 if not joined: time.sleep(1)
             info['listening'] = joined
             info['join_s'] = round(time.time() - tj, 1)
-            if not joined: return info
+            if not joined:   # the starter finishes its own talk all the same (WO-213: a listener gone at once for combat left the host's
+                info['ended'] = finish_starter(cid, sm)   # talk open at its first decision, and the next step's listens were all refused)
+                return info
             seen, ended, left = set(), None, False
             tt = time.time()
             while time.time() - tt < 240 and time.time() - T0 < secs and not ended:
@@ -2796,7 +2812,8 @@ def run(name, args):
         'c1fight': [('join', s_join(r)), ('queue-after-join', s_queue(r)), ('c1fight', s_c1fight(r)), ('queue-after-fight', s_queue(r))],
         'c2tavern': [('join', s_join(r)), ('c2tavern', s_c2tavern(r)), ('queue-in-tavern', s_queue(r))],
         # WO-208 A.1: the owner's probe in three places (the probe's NPC by KCDMP_TEST_W208_PROBE, or picked by the village walk)
-        'village': [('join', s_join(r)), ('village', s_village(r))],
+        'village': [('join', s_join(r)), ('village', s_village(r)), ('figwalk', s_walk(r, 40, smooth=True))],   # WO-213: the figures walking
+        'w213walk': [('join', s_join(r)), ('figwalk', s_walk(r, 40, smooth=True)), ('figwalk2', s_walk(r, 40, smooth=True))],   # WO-213 D.4/E.5 alone
         'probefight': [('join', s_join(r)), ('c1fight', s_c1fight(r))],
         'probetavern': [('join', s_join(r)), ('c2tavern', s_c2tavern(r))],
         # WO-208 B: the joiner's own defence, one and two attackers (KCDMP_RIG_DEF_S bounds each)
@@ -2855,6 +2872,9 @@ def run(name, args):
         'w211ff': [('join', s_join(r)), ('ffhits', s_w211_ffhits(r))],
         'w211fly': [('join', s_join(r)), ('fly', s_w211_fly(r))],
         'w211misc': [('join', s_join(r)), ('fly', s_w211_fly(r)), ('ffhits', s_w211_ffhits(r)), ('menus', s_w211_menus(r))],
+        # WO-213 F.2: the 15-minute session (a walk, a fight, a tavern, a talk), each part on the same pair
+        'w213session': [('join', s_join(r)), ('village', s_village(r, 240)), ('figwalk', s_walk(r, 40, smooth=True)), ('c1fight', s_c1fight(r, 180)), ('c2tavern', s_c2tavern(r, 240)),
+                        ('talk', s_talk(r, 150))],
         # the crash work: N fights in one pair session (KCDMP_RIG_C1_N, default 10); a game that exits ends the run (copy-exited)
         'c1x': [('join', s_join(r))] + [('c1fight-%02d' % (i + 1), s_c1fight(r)) for i in range(int(os.environ.get('KCDMP_RIG_C1_N', '10')))],
         'smoke': [('join', s_join(r)), ('walk30', s_walk(r)), ('sleep', s_skip(r, 'sleep', 9, gap_gate=False)), ('wait', s_skip(r, 'wait', 3, gap_gate=False)),
@@ -2873,7 +2893,7 @@ def run(name, args):
         # 'long' runs independent checks: one failing does not stop the next (a failed join does)
         if not r.step(nm, fn) and (name not in ('long', 'joinscene', 'joinfight', 'e2pair', 'c1pair', 'e2twinpair', 's1pair', 'smoke', 's1front',
                                                'c1fight', 'c2tavern', 'convboth', 'convday', 'convtimed', 'smoke2', 'awake', 'soak2', 'convscene', 'c1x', 'probefight', 'probetavern', 'village', 'defence', 'loot5', 'convforced', 'convforcedj',
-                                               'idle_check', 'toggle_live', 'convvote_both', 'fight10', 'w211misc') or nm == 'join'
+                                               'idle_check', 'toggle_live', 'convvote_both', 'fight10', 'w211misc', 'w213session', 'w213walk') or nm == 'join'
                                               or r.steps[-1]['reason'] == 'copy-exited'): break   # a game gone ends the run
     return r.finish()
 

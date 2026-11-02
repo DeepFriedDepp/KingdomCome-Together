@@ -112,6 +112,48 @@ internal static class SteamNative
 
     [DllImport(Lib, CallingConvention = Cc)] public static extern void SteamAPI_SteamNetworkingMessage_t_Release(IntPtr msg);
 
+    // --- WO-213: the connection's own config, lanes, messages we fill ourselves, a loopback pair ------------------------
+    // ESteamNetworkingGetConfigValueResult GetConfigValue(eValue, eScopeType, intptr_t scopeObj, *pOutDataType, void *pResult, size_t *cbResult)
+    [DllImport(Lib, CallingConvention = Cc)] public static extern int SteamAPI_ISteamNetworkingUtils_GetConfigValue(IntPtr self, int eValue, int eScopeType, IntPtr scopeObj, out int dataType, byte[] result, ref UIntPtr cbResult);
+    // const char *GetConfigValueInfo(eValue, *pOutDataType, *pOutScope) -- SDK 1.53+ returns the value's name (null = no such value)
+    [DllImport(Lib, CallingConvention = Cc)] public static extern IntPtr SteamAPI_ISteamNetworkingUtils_GetConfigValueInfo(IntPtr self, int eValue, out int dataType, out int scope);
+    [DllImport(Lib, CallingConvention = Cc)] [return: MarshalAs(UnmanagedType.I1)] public static extern bool SteamAPI_ISteamNetworkingUtils_SetConnectionConfigValueInt32(IntPtr self, uint conn, int eValue, int val);
+    [DllImport(Lib, CallingConvention = Cc)] [return: MarshalAs(UnmanagedType.I1)] public static extern bool SteamAPI_ISteamNetworkingUtils_SetGlobalConfigValueFloat(IntPtr self, int eValue, float val);
+    [DllImport(Lib, CallingConvention = Cc)] public static extern IntPtr SteamAPI_ISteamNetworkingUtils_AllocateMessage(IntPtr self, int cbAllocateBuffer);
+    // EResult ConfigureConnectionLanes(hConn, nNumLanes, const int *pLanePriorities, const uint16 *pLaneWeights)
+    [DllImport(Lib, CallingConvention = Cc)] public static extern int SteamAPI_ISteamNetworkingSockets_ConfigureConnectionLanes(IntPtr self, uint conn, int nLanes, int[] priorities, ushort[] weights);
+    // void SendMessages(int nMessages, SteamNetworkingMessage_t *const *pMessages, int64 *pOutMessageNumberOrResult)
+    [DllImport(Lib, CallingConvention = Cc)] public static extern void SteamAPI_ISteamNetworkingSockets_SendMessages(IntPtr self, int n, IntPtr[] msgs, long[] results);
+    [DllImport(Lib, CallingConvention = Cc)] public static extern int SteamAPI_ISteamNetworkingSockets_GetConnectionRealTimeStatus(IntPtr self, uint conn, out RealTimeStatus status, int nLanes, [Out] LaneStatus[] lanes);
+    [DllImport(Lib, CallingConvention = Cc)] [return: MarshalAs(UnmanagedType.I1)] public static extern bool SteamAPI_ISteamNetworkingSockets_CreateSocketPair(IntPtr self, out uint conn1, out uint conn2, [MarshalAs(UnmanagedType.I1)] bool networkLoopback, IntPtr identity1, IntPtr identity2);
+
+    /// <summary>SteamNetConnectionRealTimeLaneStatus_t, 64 bytes.</summary>
+    [StructLayout(LayoutKind.Sequential, Pack = 8, Size = 64)]
+    public struct LaneStatus
+    {
+        public int PendingUnreliable;
+        public int PendingReliable;
+        public int SentUnackedReliable;
+        public int Reserved;
+        public long QueueTimeUsec;
+    }
+
+    // ESteamNetworkingConfigValue (steamnetworkingtypes.h), the ones WO-213 reads or sets; GetConfigValueInfo names each at runtime
+    // (SteamSession.ConfigName) so a wrong number shows up as a wrong name in the log, never as a silent wrong setting.
+    public const int CfgFakePacketLossSend = 2, CfgFakePacketLossRecv = 3, CfgFakePacketLagSend = 4, CfgFakePacketLagRecv = 5,
+                     CfgSendBufferSize = 9, CfgSendRateMin = 10, CfgSendRateMax = 11, CfgNagleTime = 12;
+    // ESteamNetworkingConfigScope / ESteamNetworkingConfigDataType
+    public const int ScopeGlobal = 1, ScopeSocketsInterface = 2, ScopeListenSocket = 3, ScopeConnection = 4;
+    public const int TypeInt32 = 1, TypeInt64 = 2, TypeFloat = 3, TypeString = 4, TypePtr = 5;
+    // ESteamNetworkingGetConfigValueResult
+    public const int GetCfgOk = 1, GetCfgOkInherited = 2;
+
+    /// <summary>SteamNetworkingMessage_t offsets of the fields a sender fills (Msg has the receiver's).</summary>
+    public static class MsgOut
+    {
+        public const int Data = 0, Size = 8, Conn = 12, Flags = 196, Lane = 208;
+    }
+
     // --- networking messages (v002) ---------------------------------------------
 
     [DllImport(Lib, CallingConvention = Cc)] public static extern IntPtr SteamAPI_SteamNetworkingMessages_SteamAPI_v002();
@@ -215,5 +257,5 @@ internal static class SteamNative
     public const int P2PReliable = 2;
 
     // ESteamNetworkingConfigValue
-    public const int ConfigSendBufferSize = 9;
+    public const int ConfigSendBufferSize = CfgSendBufferSize;
 }

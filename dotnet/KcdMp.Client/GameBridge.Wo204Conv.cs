@@ -72,7 +72,8 @@ public partial class GameBridge
             if (c.Lines.Count > Wo204Rules.ConvLinesKept) c.Lines.RemoveAt(0);
         }
         if (to.Length == 0) return;
-        string text = Wo204Rules.LineText(msg, UnixMs() - l.AgeMs);
+        // WO-213 E.4: the line's start on the relay's clock (both agents' shared clock), so the listener can tell how late it is
+        string text = Wo204Rules.LineText(msg, UnixMs() + (long)Math.Round(ClockOffsetMs is double o && double.IsFinite(o) ? o : 0.0) - l.AgeMs);
         Interlocked.Add(ref _w204LinesOut, to.Length);
         _ = Task.Run(async () => { foreach (byte p in to) await Wo203SendConvAsync(p, Protocol.ConvLine, text); });
     }

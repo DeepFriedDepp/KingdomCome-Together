@@ -158,7 +158,7 @@ public class Wo204Tests
         var l = new Wo204Rules.ConvLineMsg(233, 4, "@", "Partner|x", true, "zpet_hejtman_s_tak_co_syn_JIUh", "Localization/dialog/a/dude_zpet", 2400, false);
         string t = Wo204Rules.LineText(l, 1234);
         Assert.True(Wo204Rules.TryParseLine(t, out var back));
-        Assert.Equal(l with { Name = "Partner/x" }, back);   // a field never holds '|'
+        Assert.Equal(l with { Name = "Partner/x", StartHostMs = 1234 }, back);   // a field never holds '|'; WO-213 E.4 keeps the start
         Assert.True(Wo204Rules.TryParseLine(Wo204Rules.LineText(l with { Earlier = true }, 0), out var e) && e.Earlier);
         Assert.False(Wo204Rules.TryParseLine("v1|233|4|@|n|1|bad key<>|p|100|0|0", out _));
         Assert.False(Wo204Rules.TryParseLine("v2|233|4|@|n|1|k|p|100|0|0", out _));

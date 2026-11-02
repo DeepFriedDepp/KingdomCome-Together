@@ -147,7 +147,9 @@ public static class Wo204Rules
         return u > 0 && u + 1 < f.Length ? f[(u + 1)..] : f;
     }
 
-    public readonly record struct ConvLineMsg(int Cid, int LineId, string Speaker, string Name, bool IsPlayer, string StringName, string Path, int DurMs, bool Earlier);
+    /// <summary>WO-213 E.4: StartHostMs = when the starter's engine began the line, on the relay's clock (0 = unknown).</summary>
+    public readonly record struct ConvLineMsg(int Cid, int LineId, string Speaker, string Name, bool IsPlayer, string StringName, string Path, int DurMs, bool Earlier,
+        long StartHostMs = 0);
 
     /// <summary>ConvLine (kind 4): "v1|cid|lineId|speakerSoul|speakerName|isPlayer|stringName|voicePath|durMs|startHostMs|earlier" (WO-203's
     /// design §2); speakerSoul "@" = the starter's own Henry (his figure on the listener's screen).</summary>
@@ -163,7 +165,8 @@ public static class Wo204Rules
         if (f[3].Length is 0 or > 64 || f[6].Length is 0 or > 96 || !f[6].All(c => char.IsAsciiLetterOrDigit(c) || c == '_')) return false;
         if (!int.TryParse(f[8], System.Globalization.NumberStyles.None, Inv, out int dur) || dur > 60000) return false;
         if (f[5] is not ("0" or "1") || f[10] is not ("0" or "1")) return false;
-        l = new ConvLineMsg(cid, id, f[3], f[4], f[5] == "1", f[6], f[7], dur, f[10] == "1");
+        long.TryParse(f[9], System.Globalization.NumberStyles.Integer, Inv, out long start);   // WO-213 E.4 (an older starter: its local clock)
+        l = new ConvLineMsg(cid, id, f[3], f[4], f[5] == "1", f[6], f[7], dur, f[10] == "1", start);
         return true;
     }
 

@@ -163,8 +163,12 @@ public partial class GameBridge
                 Interlocked.Increment(ref _w207ConvLaneFrames);
                 long wait = (Stopwatch.GetTimestamp() - f.Arrival) * 1000 / Stopwatch.Frequency;
                 if (wait > Interlocked.Read(ref _w207ConvLaneMaxWaitMs)) Interlocked.Exchange(ref _w207ConvLaneMaxWaitMs, wait);
-                // the listener's camera samples and lines go into its DLL first at the pipe's gate (mp_conv_pipe_first)
-                Wo207Trace.Kind.Value = W207("conv_pipe_first") ? Wo207Trace.ConvKind : 0;
+                // the listener's camera samples and lines go into its DLL first at the pipe's gate (mp_conv_pipe_first); WO-213: the camera
+                // samples (the DLL takes them off the main thread) the priority way -- as frames' calls, a talk's camera stream at its own
+                // rate (13.6 a second) kept the listener's polls waiting (4 s at the median); lines and options stay frames' calls
+                bool cam = W213On("link_sched") && LinkKinds.Of(f.Type, f.Payload) == "conv:" + Protocol.ConvCam;
+                CombatPipe.Priority.Value = cam;
+                Wo207Trace.Kind.Value = !cam && W207("conv_pipe_first") ? Wo207Trace.ConvKind : 0;
                 try { await Wo123OnFrameAsync(f.Type, f.Payload, ct); }
                 catch (Exception ex) { Console.WriteLine($"MP-W207 conv lane: a frame failed: {ex.GetType().Name}: {ex.Message}"); }
             }

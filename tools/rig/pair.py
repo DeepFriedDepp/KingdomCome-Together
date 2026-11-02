@@ -60,6 +60,15 @@ def plan(cid):
 def state(): return rig.load_state()
 
 
+def test_env():
+    """WO-213: KCDMP_RIG_TEST_ENV=K=V;K=V -- a twin's test switches (KCDMP_TEST_* only) for both agents, both games and the relay."""
+    out = {}
+    for kv in filter(None, os.environ.get('KCDMP_RIG_TEST_ENV', '').split(';')):
+        k, _, v = kv.partition('=')
+        if k.startswith('KCDMP_TEST_'): out[k] = v
+    return out
+
+
 def prepare():
     """Fresh per-copy agent and DLL folders from the rig's build (release\\w206rig\\run\\agent, dll\\KCDMP_w206_*.dll)."""
     ddir = os.path.join(mirror.BUILD, 'dll') if os.environ.get('KCDMP_RIG_BUILD') else os.path.join(rig.RIG, 'dll')
@@ -157,7 +166,7 @@ def relay(plan_file=None):
     if procs.matches(st.get('relay')): rig.say('relay already up'); return 0
     exe = os.path.join(mirror.BUILD, 'relay', 'KcdMpServer.exe')
     argv = [exe, '--port', str(RELAY_PORT), '--urls', 'http://127.0.0.1:%d' % RELAY_HTTP]
-    env = rig.clean_env()
+    env = rig.clean_env(test_env())
     if plan_file:
         env['KCDMP_TEST_RELAY_FAULTS'] = '1'
         argv += ['--test-faults', os.path.abspath(plan_file)]
@@ -211,6 +220,7 @@ def up(cid):
     for kv in filter(None, os.environ.get('KCDMP_RIG_GAME_ENV', '').split(';')):   # WO-207: a native twin's test switch, KCDMP_TEST_* only
         k, _, v = kv.partition('=')
         if k.startswith('KCDMP_TEST_'): genv[k] = v
+    genv.update(test_env())   # WO-213
     rec = procs.start(argv, p['root'], rig.clean_env(genv), cid)
     st[key] = rec; st[key + '_since'] = t0; rig.save_state(st)
     rig.note('start', copy=cid, **rec, argv=argv, instance=cid)
@@ -452,6 +462,7 @@ def start_agent(cid, role, port, twin=False):
     for kv in filter(None, os.environ.get('KCDMP_RIG_AGENT_ENV', '').split(';')):   # a twin's test switch (K=V;...), KCDMP_TEST_* only
         k, _, v = kv.partition('=')
         if k.startswith('KCDMP_TEST_'): env[k] = v
+    env.update(test_env())   # WO-213
     env['DOTNET_ROOT'] = os.environ.get('DOTNET_ROOT', os.path.expandvars(r'%USERPROFILE%\.dotnet-sdk8'))
     rec = procs.start(argv, p['agent_dir'], env, 'agent-' + cid)
     st['agent_' + cid.lower()] = rec; rig.save_state(st)

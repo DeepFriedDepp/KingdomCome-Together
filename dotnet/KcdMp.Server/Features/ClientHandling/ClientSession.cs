@@ -8,6 +8,7 @@ using System.Net.Sockets;
 using System.Text;
 using KcdMp.Server.Features.Interactions;
 using KcdMp.Server.Features.Tcp;
+using KcdMp.Wire;
 using ILogger = Serilog.ILogger;
 
 namespace KcdMp.Server.Features.ClientHandling;
@@ -50,7 +51,68 @@ public class ClientSession
     private int _queuedBytes;
     private long _npcCoalesced;
 
-    private readonly record struct QueuedWrite(byte[]? Packet, byte? GhostId, string? NpcKey = null);
+    private readonly record struct QueuedWrite(byte[]? Packet, byte? GhostId, string? NpcKey = null, long Ts = 0);
+
+    // WO-213 A.1/A.4: what this client's link carried each way, per kind, and this queue's own numbers (LinkReportService logs them)
+    public KcdMp.Wire.LinkMeter Meter { get; } = new();
+    private readonly List<double> _w213AgeAtWriteMs = new(512);
+    private long _w213Coalesced, _w213Written;
+    private static long Now() => System.Diagnostics.Stopwatch.GetTimestamp();
+
+    /// <summary>WO-213 A.4: depth, bytes, the oldest frame's wait, each written frame's wait (p50/p99/max) since the last call; the window starts over.</summary>
+    public string TakeQueueText()
+    {
+        int depth; int bytes; double oldest;
+        List<double> ages; long coal, written;
+        lock (_writeQueueLock)
+        {
+            depth = _sched is { } sc ? sc.EventCount + sc.DirtySlots : _writeQueue.Count;   // WO-213 C: the scheduler's backlog when it runs
+            bytes = _sched is { } sb ? (int)sb.EventBytes : _queuedBytes;
+            oldest = _writeQueue.Count > 0 && _writeQueue.Peek().Ts > 0 ? System.Diagnostics.Stopwatch.GetElapsedTime(_writeQueue.Peek().Ts).TotalMilliseconds : 0;
+            ages = new List<double>(_w213AgeAtWriteMs); _w213AgeAtWriteMs.Clear();
+            coal = _w213Coalesced; written = _w213Written; _w213Coalesced = 0; _w213Written = 0;
+        }
+        double Q(double q) => ages.Count == 0 ? 0 : KcdMp.Wire.ArrivalStats.Quantile(ages, q);
+        return string.Create(System.Globalization.CultureInfo.InvariantCulture,
+            $"depth={depth} bytes={bytes} oldest_ms={oldest:F0} written={written} age_p50={Q(0.5):F1} age_p99={Q(0.99):F1} age_max={(ages.Count > 0 ? ages.Max() : 0):F0} coalesced={coal}");
+    }
+
+    /// <summary>WO-213 A.3: the Steam connection under this session, when it is one.</summary>
+    public KcdMp.Steam.SteamP2PConnection? SteamConnection => _conn.Steam;
+
+    /// <summary>WO-213: how this link is carried ("tcp", "steam", or "shaped" under the test shaper).</summary>
+    public string LinkPathTransport => _conn.Path?.Transport ?? _conn.Transport;
+
+    /// <summary>WO-213 C: the scheduler's numbers for the report line (empty while the session runs the 0.63.9 queue).</summary>
+    public string SchedulerText() => (_sched is null ? " sched=off" : _sched.TakeText() + $" rate={_writer!.LastRate}")
+        + (_compact is { } c ? string.Create(System.Globalization.CultureInfo.InvariantCulture, $" compact_frames={c.Frames} compact_bytes={c.Bytes} full_size_bytes={c.BytesBefore} compact_fulls={c.Fulls}") : "");
+
+    /// <summary>The link features this relay offers a client: latest wins and unreliable state (C), compact NPC states (D.3).</summary>
+    internal static ushort RelayLinkCaps =>
+        (ushort)((W213Switch.TwinOff("link_sched") ? 0 : Protocol.LinkCapLatestWins)
+               | (W213Switch.TwinOff("link_sched") || W213Switch.TwinOff("state_unreliable") ? 0 : Protocol.LinkCapUnreliableState)
+               | (W213Switch.TwinOff("npc_compact") ? 0 : Protocol.LinkCapCompactNpc));
+
+    private void OnLinkHello(byte[] hello)
+    {
+        Protocol.TryParseLinkHello(hello, out byte version, out ushort caps, out _, out _);
+        ushort both = (ushort)(caps & RelayLinkCaps);
+        var path = _conn.Path;
+        byte transport = _conn.Steam is not null ? Protocol.LinkTransportSteam : path is { Transport: "shaped" } ? Protocol.LinkTransportShaped : Protocol.LinkTransportTcp;
+        int rate = _conn.Steam?.RealTimeStatus()?.SendRateBytesPerSec ?? (path?.Status() is { Known: true } st ? st.RateBytesPerS : 0);
+        LinkUnreliableState = (both & Protocol.LinkCapUnreliableState) != 0;
+        if (_sched is not null && _writer is not null) _sched.Options.Unreliable = LinkUnreliableState && _writer.Path.CanSendUnreliable;
+        LinkCompactNpc = (both & Protocol.LinkCapCompactNpc) != 0;
+        if (LinkCompactNpc && _writer is not null)
+        {
+            var enc = new NpcCompact.Encoder();
+            _compact = enc;
+            _writer.Transform = f => f.Length > 0 && f[0] == Protocol.NpcStateDown ? enc.Encode(f) : f;
+        }
+        _logger.Information("MP-LINK hello client={Id} version={Version} asked=0x{Asked:X4} both=0x{Both:X4} transport={Transport} rate={Rate}",
+            Id, version, caps, both, Protocol.LinkTransportName(transport), rate);
+        EnqueueRaw(Protocol.BuildLinkHelloDown(both, transport, rate));
+    }
 
     /// <summary>
     /// WO-76: assigned by <see cref="ClientHandler.TryMarkReady"/> from its
@@ -82,6 +144,12 @@ public class ClientSession
     /// </summary>
     public bool ClaimsHost { get; private set; }
 
+    /// <summary>WO-213 C.2: the client's LinkHello said it sends and takes state the unreliable way (and the relay agreed).</summary>
+    public bool LinkUnreliableState { get; internal set; }
+
+    /// <summary>WO-213 D.3: the client takes compact NPC states (NpcStateQ, 0x83).</summary>
+    public bool LinkCompactNpc { get; internal set; }
+
     /// <summary>WO-19. Null when the client's Handshake carried no trailing
     /// release-version field (an old build, or a synthetic test peer).</summary>
     public string? ReleaseVersion { get; private set; }
@@ -112,11 +180,74 @@ public class ClientSession
         _sessions = sessions;
         _clientHandler = clientHandler;
         IsLoopback = conn.IsLoopback;
+        // WO-213 C: the scheduler (state latest-wins, events first and in order); the 0.63.9 queue when its twin turns it off
+        if (!W213Switch.TwinOff("link_sched"))
+        {
+            var opts = new LinkSchedOptions { Budget = !W213Switch.TwinOff("link_budget") };
+            _sched = new LinkScheduler(opts);
+            if (!W213Switch.TwinOff("npc_bands")) _sched.BandOf = BandOf;
+            ILinkPath path = conn.Path ?? (conn.Steam is { } sc ? new KcdMp.Steam.SteamLinkPath(sc) : new StreamLinkPath(_stream));
+            _writer = new LinkWriter(_sched, path);
+        }
+    }
+
+    private readonly LinkScheduler? _sched;
+    private readonly LinkWriter? _writer;
+    private NpcCompact.Encoder? _compact;   // D.3, once the hello agreed
+
+    /// <summary>
+    /// WO-213 D.2: a body's band for the send order -- an NPC state by its distance to the nearest player (0 fighting within 15 m:
+    /// drawn or engaged; 1 within 40 m; 2 within 150 m; 3 beyond), a player's position always 0 (D.4); the rest: the body's NPC band.
+    /// </summary>
+    private int? BandOf(StatePiece p)
+    {
+        if (p.Kind == "pos") return W213Switch.TwinOff("figure_band") ? 1 : 0;
+        if (p.Type != Protocol.NpcStateDown || p.Item.Length < 2 + Protocol.NpcStateFixedTail) return null;
+        int o = 2 + p.Item[1];
+        float x = BitConverter.ToSingle(p.Item, o), y = BitConverter.ToSingle(p.Item, o + 4);
+        bool drawn = (p.Item[o + Protocol.NpcStateFlagsOffset] & (Protocol.NpcStateFlagEngaged | 0x04)) != 0;
+        float d = _clientHandler.NearestPlayerM(x, y);
+        return drawn && d <= 15 ? 0 : d <= 40 ? 1 : d <= 150 ? 2 : 3;
+    }
+
+    /// <summary>WO-213 C: a frame into the scheduler; the events' backlog keeps the 0.63.9 cap (past it the client is cut).</summary>
+    private void SchedEnqueue(byte[] packet)
+    {
+        lock (_writeQueueLock) if (_writeQueueStopped) return;
+        if (_sched!.EventBytes + packet.Length > MaxQueuedBytes)
+        {
+            AbortWriteQueue($"outbound queue limit reached ({MaxQueuedBytes / 1024} KB of events waiting)");
+            return;
+        }
+        try { _writer!.Enqueue(packet); }
+        catch (IOException) { AbortWriteQueue(null); return; }
+        _writeSignal.Release();
+    }
+
+    private async Task SchedWriteLoopAsync()
+    {
+        long pruneAt = Environment.TickCount64 + 30_000;
+        while (true)
+        {
+            await _writeSignal.WaitAsync(10);
+            try
+            {
+                await _writer!.PumpOnceAsync(CancellationToken.None, (f, _) => { if (f.Length >= 3) Meter.CountFrame(true, f[0], f.AsSpan(3)); });
+            }
+            catch (Exception ex)
+            {
+                _logger.Debug(ex, "[!] Write loop for {Name} stopped", Name ?? $"id={Id}");
+                AbortWriteQueue(null);
+                return;
+            }
+            if (Environment.TickCount64 >= pruneAt) { _sched!.Prune(); pruneAt = Environment.TickCount64 + 30_000; }
+            lock (_writeQueueLock) if (_writeQueueStopped && _sched!.EventCount == 0) return;   // what was written before the close went out
+        }
     }
 
     public async Task RunAsync()
     {
-        var writeTask = WriteLoopAsync();
+        var writeTask = _writer is null ? WriteLoopAsync() : SchedWriteLoopAsync();   // WO-213 C
         try
         {
             // --- Handshake:  [version:1][nameLen:1][name:UTF-8] ---
@@ -278,6 +409,7 @@ public class ClientSession
                 await ReadExactWithIdleTimeoutAsync(header);
                 int type = header[0];
                 int payloadLen = BinaryPrimitives.ReadUInt16LittleEndian(header.AsSpan(1));
+                Meter.Count(false, KcdMp.Wire.LinkKinds.Of(type, default), payloadLen + 3);   // WO-213 A.1: what this client sent (the type's name)
 
                 // WO-203 II.5: one gate for every frame, from the one table (Protocol.RelayUp + Protocol.JoinWire). An unknown
                 // type and a known type of a wrong length are counted apart -- the old catch-all said "unknown-or-wrong-length"
@@ -296,6 +428,15 @@ public class ClientSession
                     var tsBytes = new byte[8];
                     await ReadExactAsync(tsBytes);
                     EnqueueRaw(BuildPacket(Protocol.Pong, tsBytes));
+                    continue;
+                }
+
+                if (type == Protocol.LinkHelloUp && payloadLen == Protocol.LinkHelloUpLen)
+                {
+                    // WO-213: the client's link features; the answer names the ones both sides use and how this link is carried
+                    var hello = new byte[Protocol.LinkHelloUpLen];
+                    await ReadExactAsync(hello);
+                    OnLinkHello(hello);
                     continue;
                 }
 
@@ -1383,12 +1524,13 @@ public class ClientSession
 
     private void EnqueueRaw(byte[] packet)
     {
+        if (_writer is not null) { SchedEnqueue(packet); return; }   // WO-213 C
         bool overflow;
         lock (_writeQueueLock)
         {
             if (_writeQueueStopped) return;
             overflow = _queuedBytes + packet.Length > MaxQueuedBytes;
-            if (!overflow) { _writeQueue.Enqueue(new(packet, null)); _queuedBytes += packet.Length; }
+            if (!overflow) { _writeQueue.Enqueue(new(packet, null, null, Now())); _queuedBytes += packet.Length; }
         }
 
         if (overflow) AbortWriteQueue($"outbound queue limit reached ({MaxQueuedBytes / 1024} KB queued; {_npcCoalesced} NPC samples were already thinned)");
@@ -1404,6 +1546,7 @@ public class ClientSession
     /// </summary>
     private void EnqueueNpcPacket(string key, byte[] packet)
     {
+        if (_writer is not null) { SchedEnqueue(packet); return; }   // WO-213 C: one slot per (source, NPC), always
         bool overflow = false, queued = false, coalesced = false;
         lock (_writeQueueLock)
         {
@@ -1413,17 +1556,18 @@ public class ClientSession
                 _queuedBytes += packet.Length - old.Length;
                 _pendingNpcPackets[key] = packet;
                 _npcCoalesced++;
+                _w213Coalesced++;
                 coalesced = true;
             }
             else if (_queuedBytes >= PressureBytes)
             {
                 overflow = _queuedBytes + packet.Length > MaxQueuedBytes;
-                if (!overflow) { _pendingNpcPackets[key] = packet; _writeQueue.Enqueue(new(null, null, key)); _queuedBytes += packet.Length; queued = true; }
+                if (!overflow) { _pendingNpcPackets[key] = packet; _writeQueue.Enqueue(new(null, null, key, Now())); _queuedBytes += packet.Length; queued = true; }
             }
             else
             {
                 overflow = _queuedBytes + packet.Length > MaxQueuedBytes;
-                if (!overflow) { _writeQueue.Enqueue(new(packet, null)); _queuedBytes += packet.Length; queued = true; }
+                if (!overflow) { _writeQueue.Enqueue(new(packet, null, null, Now())); _queuedBytes += packet.Length; queued = true; }
             }
         }
         if (coalesced) _clientHandler.CountDrop(Protocol.NpcStateDown, "pressure-coalesced");
@@ -1433,6 +1577,7 @@ public class ClientSession
 
     private void EnqueueGhostPacket(byte ghostId, byte[] packet)
     {
+        if (_writer is not null) { SchedEnqueue(packet); return; }   // WO-213 C: one slot per player
         bool overflow;
         bool queued = false;
         lock (_writeQueueLock)
@@ -1445,6 +1590,7 @@ public class ClientSession
                 // payload so a slow client receives the newest position.
                 _queuedBytes += packet.Length - oldGhost.Length;
                 _pendingGhostPackets[ghostId] = packet;
+                _w213Coalesced++;
                 return;
             }
 
@@ -1452,7 +1598,7 @@ public class ClientSession
             if (!overflow)
             {
                 _pendingGhostPackets[ghostId] = packet;
-                _writeQueue.Enqueue(new(null, ghostId));
+                _writeQueue.Enqueue(new(null, ghostId, null, Now()));
                 _queuedBytes += packet.Length;
                 queued = true;
             }
@@ -1510,7 +1656,12 @@ public class ClientSession
                     {
                         packet = queued.Packet;
                     }
-                    if (packet is not null) _queuedBytes -= packet.Length;
+                    if (packet is not null)
+                    {
+                        _queuedBytes -= packet.Length;
+                        _w213Written++;
+                        if (queued.Ts > 0 && _w213AgeAtWriteMs.Count < 20_000) _w213AgeAtWriteMs.Add(System.Diagnostics.Stopwatch.GetElapsedTime(queued.Ts).TotalMilliseconds);
+                    }
                 }
                 else if (_writeQueueStopped)
                 {
@@ -1519,6 +1670,7 @@ public class ClientSession
             }
 
             if (packet is null) continue;
+            if (packet.Length >= 3) Meter.CountFrame(true, packet[0], packet.AsSpan(3));   // WO-213 A.1
 
             try { await _stream.WriteAsync(packet); }
             catch (Exception ex)

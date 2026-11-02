@@ -34237,6 +34237,70 @@ do
     end
 end
 
+-- ===== WO-213: the internet stream (docs/WO-213-findings.md) =====
+-- The switches: every new mechanism ships on with its own switch. The link's own (latest wins, unreliable state, Steam's limits, the
+-- budget, compact NPC states) take effect at the next connection; the rest at once. The agent does the work; this only says it.
+do
+    W213 = W213 or {}
+    W213.NAMES = {
+        link_sched = "mp_link_sched",
+        state_unreliable = "mp_state_unreliable",
+        steam_cfg = "mp_steam_cfg",
+        link_budget = "mp_link_budget",
+        npc_bands = "mp_npc_bands",
+        npc_compact = "mp_npc_compact",
+        playout_adaptive = "mp_playout_adaptive",
+        posture_hold_late = "mp_posture_hold_late",
+        posture_no_pos = "mp_posture_no_pos",
+        figure_playout = "mp_figure_playout",
+        figure_band = "mp_figure_band",
+        line_latency = "mp_line_latency",
+        link_toast = "mp_link_toast",
+    }
+    W213.HELP = {
+        link_sched = "C: (both) a body's newer state replaces its older unsent one; events first, in order (next connection)",
+        state_unreliable = "C.2: (both) state travels unreliably where the link can (Steam's state lane); events stay reliable (next connection)",
+        steam_cfg = "B: (both) Steam's send rate, no Nagle, an event lane and a state lane (next connection)",
+        link_budget = "D.1: (both) the send budget from the link's own rate (next connection)",
+        npc_bands = "D.2: (host) NPCs sent by distance and fight: 30 / 20 / 10 / 2 Hz",
+        npc_compact = "D.3: (both) compact NPC states on the link to the joiner (next connection)",
+        playout_adaptive = "E.1: (joiner) copies play a measured delay behind the host, extrapolating at most 150 ms",
+        posture_hold_late = "E.2: (joiner) a copy keeps its posture while the host's state is late; late is not missing",
+        posture_no_pos = "E.3: (joiner) a seated, lying or working copy takes no position while its posture holds",
+        figure_playout = "E.5: (both) the partner's figure on the same play-out as the copies",
+        figure_band = "D.4: (both) the figures in the top band: this player's position is read every frame it moves, never behind NPC states",
+        line_latency = "E.4: (both) a joined conversation's late line keeps its voice inside its window and never cuts the one before",
+        link_toast = "G: (joiner) a plain word when the link to the host is poor for 10 s",
+    }
+    W213.on = W213.on or {}
+    local function w213_is_on(k) if W213.on[k] == nil then return true end return W213.on[k] end
+    function KCD2MP_W213Set(name, arg)
+        local label = W213.NAMES[tostring(name)]
+        if not label then mp_log("WO213-TOGGLE unknown switch '" .. tostring(name) .. "'"); return false end
+        local v = KCD2MP_Wo122ParseBool(arg)
+        if v == "bad" then mp_log(label .. ": expected on|off, got '" .. tostring(arg) .. "'"); return false end
+        if v == nil then mp_log("WO213-TOGGLE " .. label .. " is " .. (w213_is_on(tostring(name)) and "on" or "off")); return true end
+        W213.on[tostring(name)] = v
+        mp_log("WO213-TOGGLE " .. label .. " " .. (v and "on" or "off") .. " -- sent to the agent")
+        KCD2MP_EmitEvent("w213_cfg", tostring(name) .. "=" .. (v and "on" or "off"))
+        return true
+    end
+    function KCD2MP_W213Status()
+        local parts = {}
+        for k, label in pairs(W213.NAMES) do parts[#parts + 1] = label .. "=" .. (w213_is_on(k) and "on" or "off") end
+        table.sort(parts)
+        mp_log("WO213-STATUS " .. table.concat(parts, " "))
+        KCD2MP_EmitEvent("w213_status", "")
+        return true
+    end
+    System.AddCCommand("mp_w213_status", "KCD2MP_W213Status()", "WO-213: every WO-213 switch, the link's numbers and the DLL's")
+    for k, label in pairs(W213.NAMES) do
+        local fname = "KCD2MP_W213Set_" .. k
+        _G[fname] = function(arg) return KCD2MP_W213Set(k, arg) end
+        System.AddCCommand(label, fname .. "(%line)", "WO-213 " .. (W213.HELP[k] or k) .. " (default on): " .. label .. " on|off")
+    end
+end
+
 -- ===== Player hook =====
 
 local ok2, err2 = pcall(function()

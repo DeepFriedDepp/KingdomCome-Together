@@ -70,6 +70,7 @@ public partial class GameBridge
     private (byte Src, int Cid, long At)? _w210Pick;             // the last pick and when it came
     private readonly SemaphoreSlim _w210LineGate = new(1, 1);
     private long _w210LinesHeld, _w210LineHoldMsSum;
+    private long _w213PickAnswered = -1;   // WO-213 E.4: the pick whose first line was planned
 
     private void Wo210NoteOptions(byte src, int cid, int dec) => _w210Open = (src, cid, dec, Environment.TickCount64);
     private void Wo210NotePick(byte src, int cid, int dec) { _w210Open = null; _w210Pick = (src, cid, Environment.TickCount64); }
@@ -79,6 +80,7 @@ public partial class GameBridge
     /// the second to end -- nothing waits longer than 1.4 s.</summary>
     private async Task Wo210DeliverLineAsync(byte src, Wo204Rules.ConvLineMsg line)
     {
+        long ageAtArrival = Wo213LineAge(line);   // WO-213 E.4: measured where it arrived -- the pick's hold below never counts against it
         await _w210LineGate.WaitAsync();
         try
         {
@@ -100,9 +102,18 @@ public partial class GameBridge
                     if (k <= 10) Console.WriteLine($"WO210-LINE held ms={held} cid={line.Cid} (the pick first) [n={k}]");
                 }
             }
+            // WO-213 E.4: a line still inside its window (the measured line latency plus its own length) is shown for what is left of it,
+            // voice included, after the line before it has had its time; one past its own end is shown as a subtitle only
+            bool firstAfterPick = false;   // E.4: the first line after this talk's pick
+            if (!line.Earlier && _w210Pick is { } pk && pk.Src == src && pk.Cid == line.Cid && pk.At != _w213PickAnswered)
+            {
+                firstAfterPick = true;
+                _w213PickAnswered = pk.At;
+            }
+            var (showMs, voice) = await Wo213LinePlanAsync(line, ageAtArrival, firstAfterPick);
             await ExecLuaAsync(string.Create(CultureInfo.InvariantCulture,
-                $"if KCD2MP_W204Line then KCD2MP_W204Line({src}, {line.Cid}, \"{EscapeLua(line.Name)}\", {(line.IsPlayer ? "true" : "false")}, \"{EscapeLua(line.StringName)}\", {line.DurMs}, {(line.Earlier ? "true" : "false")}) end"));
-            if (!line.Earlier && W204("conv_voice")) _ = Wo204VoiceAsync(src, line);
+                $"if KCD2MP_W204Line then KCD2MP_W204Line({src}, {line.Cid}, \"{EscapeLua(line.Name)}\", {(line.IsPlayer ? "true" : "false")}, \"{EscapeLua(line.StringName)}\", {showMs}, {(line.Earlier ? "true" : "false")}) end"));
+            if (!line.Earlier && voice && W204("conv_voice")) _ = Wo204VoiceAsync(src, line);
         }
         finally { _w210LineGate.Release(); }
     }

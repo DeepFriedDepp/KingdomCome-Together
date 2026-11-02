@@ -57,6 +57,7 @@ public sealed class SteamSession : IDisposable
     public event Action<string>? Log;
 
     internal IntPtr Sockets => _sockets;
+    internal IntPtr NetUtils => _netUtils;
     internal IntPtr Messages => _messages;
     internal IntPtr Legacy => _legacy;
     internal IntPtr Friends => _friends;
@@ -229,6 +230,60 @@ public sealed class SteamSession : IDisposable
 
     internal void Forget(SteamP2PConnection c) => _conns.TryRemove(c.Handle, out _);
     internal void Forget(SteamP2PListener l) => _listeners.TryRemove(l.Handle, out _);
+
+    // --- WO-213: the networking config, read back by name ---------------------------------------------------------------
+
+    /// <summary>Steam's own name of a config value ("SendRateMin"), or null when this SDK has no such value.</summary>
+    public string? ConfigName(int value)
+    {
+        try
+        {
+            IntPtr p = SteamNative.SteamAPI_ISteamNetworkingUtils_GetConfigValueInfo(_netUtils, value, out _, out _);
+            return p == IntPtr.Zero ? null : Marshal.PtrToStringUTF8(p);
+        }
+        catch (EntryPointNotFoundException) { return null; }
+    }
+
+    /// <summary>
+    /// An int32 config value at a scope (SteamNative.ScopeGlobal, or ScopeConnection with the connection's handle). Null when Steam
+    /// refused the read; <paramref name="result"/> is Steam's ESteamNetworkingGetConfigValueResult either way.
+    /// </summary>
+    public int? GetConfigInt(int value, int scope, uint scopeObj, out int result)
+    {
+        var buf = new byte[8];
+        var cb = (UIntPtr)8;
+        result = SteamNative.SteamAPI_ISteamNetworkingUtils_GetConfigValue(_netUtils, value, scope, (IntPtr)scopeObj, out int type, buf, ref cb);
+        if (result is not (SteamNative.GetCfgOk or SteamNative.GetCfgOkInherited) || type != SteamNative.TypeInt32) return null;
+        return BitConverter.ToInt32(buf, 0);
+    }
+
+    public float? GetConfigFloat(int value, int scope, uint scopeObj, out int result)
+    {
+        var buf = new byte[8];
+        var cb = (UIntPtr)8;
+        result = SteamNative.SteamAPI_ISteamNetworkingUtils_GetConfigValue(_netUtils, value, scope, (IntPtr)scopeObj, out int type, buf, ref cb);
+        if (result is not (SteamNative.GetCfgOk or SteamNative.GetCfgOkInherited) || type != SteamNative.TypeFloat) return null;
+        return BitConverter.ToSingle(buf, 0);
+    }
+
+    public bool SetGlobalConfigInt(int value, int val) => SteamNative.SteamAPI_ISteamNetworkingUtils_SetGlobalConfigValueInt32(_netUtils, value, val);
+    public bool SetGlobalConfigFloat(int value, float val) => SteamNative.SteamAPI_ISteamNetworkingUtils_SetGlobalConfigValueFloat(_netUtils, value, val);
+
+    /// <summary>
+    /// WO-213 F.5: two connections of this process talking to each other. <paramref name="networkLoopback"/> true sends their packets
+    /// through 127.0.0.1 -- Steam's real send path (its send-rate limit, lanes, Nagle, the fake lag and loss settings) on one PC,
+    /// where two accounts can never connect to each other. Test tools only.
+    /// </summary>
+    public (SteamP2PConnection A, SteamP2PConnection B) CreateLoopbackPair(bool networkLoopback)
+    {
+        if (!SteamNative.SteamAPI_ISteamNetworkingSockets_CreateSocketPair(_sockets, out uint h1, out uint h2, networkLoopback, IntPtr.Zero, IntPtr.Zero))
+            throw new IOException("CreateSocketPair refused");
+        var a = new SteamP2PConnection(this, h1, LocalSteamId, incoming: false);
+        var b = new SteamP2PConnection(this, h2, LocalSteamId, incoming: true);
+        _conns[h1] = a; _conns[h2] = b;
+        a.OnState(SteamNative.StateConnected, 0, ""); b.OnState(SteamNative.StateConnected, 0, "");
+        return (a, b);
+    }
 
     // --- rich presence ------------------------------------------------------------
 

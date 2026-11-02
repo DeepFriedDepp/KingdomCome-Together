@@ -84,6 +84,19 @@ Exactly one thing: **the address and port**, e.g. `100.64.12.3:7778`
 "Add Server" in their launcher, or straight into the Join box, and click
 Join.
 
+## When the internet link is slow
+
+The host's world reaches the joiner as a stream of small updates (where each
+person nearby stands, what they are doing) and events (a hit, a death, a line
+of a conversation). A person's newest update replaces an older one that has
+not left yet; events go first and are never dropped. People fighting near a
+player are sent 30 times a second, people further away less often, and the
+joiner's game plays them a short, measured delay behind the host so they move
+smoothly. Joining first moves the host's world across (about 1.4 MB: a few
+seconds at Steam's usual rate). If the link stays poor for 10 seconds, the
+joiner reads "Your connection to the host is struggling: NPCs may look
+jumpy". There is nothing to configure.
+
 ## If it's not connecting
 
 - Confirm the relay is actually running (the host's launcher shows "Host

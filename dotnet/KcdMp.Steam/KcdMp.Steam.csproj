@@ -21,4 +21,9 @@
     <InternalsVisibleTo Include="KcdMpSteamProbe" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- WO-213: SteamLinkPath is the scheduler's way out on a Steam connection (KcdMp.Wire.ILinkPath) -->
+    <ProjectReference Include="..\KcdMp.Protocol\KcdMp.Protocol.csproj" />
+  </ItemGroup>
+
 </Project>

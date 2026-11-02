@@ -7,6 +7,8 @@
 #include "wo138.h"
 #include "fault_guard.h"
 #include "wo138_rules.h"
+#include "wo213.h"
+#include "wo209.h"
 
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -246,6 +248,7 @@ struct Tracked {
     bool        haveAttr = false;
     R::Sent     sent;
     bool        culled = false;
+    double      bandAt = 0;         // WO-213 D.2: the slot of this NPC's last send (its band's cadence)
 };
 
 std::atomic<bool> g_on{false};
@@ -384,8 +387,17 @@ void flush_rows(const std::vector<Row>& rows) {
 
 void sender_tick(double now) {
     if (!g_on.load(std::memory_order_relaxed) || g_tracked.empty()) return;
-    if (now - g_lastTick < g_cfg.emitMs / 1000.0) return;
-    g_lastTick = now;
+    // WO-213 D.2: with the bands on the tick is the fastest band's (33 ms), and each NPC goes at its own band's rate below
+    const bool bandsOn = wo213::on(wo213rules::kBitNpcBands);
+    const wo213rules::Bands& bnd = wo213::bands();
+    const double period = bandsOn ? (std::min)(g_cfg.emitMs / 1000.0, wo213rules::tick_s(bnd)) : g_cfg.emitMs / 1000.0;
+    if (now - g_lastTick < period) return;
+    g_lastTick = bandsOn ? wo213rules::band_slot(g_lastTick, now, period) : now;   // D.2: the tick keeps the fastest band's cadence
+    R::Config cfg = g_cfg;   // this tick's: the attribute round robin at the real tick, the cull out to the 150 m band
+    if (bandsOn) {
+        cfg.emitMs = static_cast<uint16_t>(period * 1000.0 + 0.5);
+        if (cfg.cull && cfg.cullRadius < bnd.midM) cfg.cullRadius = bnd.midM;
+    }
     const double t0 = now_s();
     ++g_ticks;
 
@@ -404,7 +416,7 @@ void sender_tick(double now) {
     }
 
     // Round robin: every NPC's health / life / drawn state once per attrMs.
-    const int batch = R::attr_batch(static_cast<int>(g_tracked.size()), g_cfg);
+    const int batch = R::attr_batch(static_cast<int>(g_tracked.size()), cfg);
     std::vector<size_t> attrIdx;
     for (int k = 0; k < batch && !g_tracked.empty(); ++k) {
         attrIdx.push_back(g_attrCursor % g_tracked.size());
@@ -424,19 +436,29 @@ void sender_tick(double now) {
         t.s.x = x; t.s.y = y; t.s.z = z; t.s.rot = yaw; t.s.notHuman = t.notHuman;
         if (!t.haveAttr || std::find(attrIdx.begin(), attrIdx.end(), idx) != attrIdx.end()) read_attrs(t);
 
-        const bool eng = R::engaged(t.s, havePlayer, pp[0], pp[1], g_cfg.engageRange);
+        const bool eng = R::engaged(t.s, havePlayer, pp[0], pp[1], cfg.engageRange);
         const bool swing = R::swing_cue(playerHit, t.s, havePlayer, pp[0], pp[1]);
         float dMin = 1e9f;
         if (havePlayer) dMin = R::dist2d(x, y, pp[0], pp[1]);
         for (const auto& a : g_anchors) dMin = std::min(dMin, R::dist2d(x, y, a.x, a.y));
-        const R::Cull c = R::cull(dMin, g_cfg, eng, R::heartbeat_due(t.sent, now, g_cfg), t.s.dead && !t.sent.dead,
+        const R::Cull c = R::cull(dMin, cfg, eng, R::heartbeat_due(t.sent, now, cfg), t.s.dead && !t.sent.dead,
                                   t.s.ko != t.sent.ko);
         if (c == R::Cull::Culled) { t.culled = true; continue; }
         t.culled = false;
         // WO-202 IV.4 fight_pos_fresh: a fighting NPC near ANY player (the partner's fights too, not only the host's 12 m) goes out every
         // tick -- standing in guard it moved less than the send threshold and waited for the 2 s heartbeat (the field: p90 1.0 s old)
-        const bool fresh = wo202::on(wo202rules::kBitFightPosFresh) && wo202rules::fight_fresh(t.s.drawn, t.s.dead, t.s.ko, dMin, g_cfg.engageRange);
-        if (!R::should_send(t.s, t.sent, eng || fresh, swing, now, g_cfg) && !fresh) continue;
+        // WO-213 D.2: fighting = a weapon in hand, engaged, or a combat opponent -- the bench's bandits fighting the partner's figure read
+        // no weapon in hand and went out in the 40 m band
+        const bool opponent = bandsOn && wo209::host_fights(t.eid);
+        const bool fresh = wo202::on(wo202rules::kBitFightPosFresh) && wo202rules::fight_fresh(t.s.drawn || opponent, t.s.dead, t.s.ko, dMin, cfg.engageRange);
+        if (!R::should_send(t.s, t.sent, eng || fresh, swing, now, cfg) && !fresh) continue;
+        // WO-213 D.2: not before its band's period (a death, a knock-out, a draw, an engagement change and a swing cue go at once)
+        const int band = wo213rules::band(dMin, eng || t.s.drawn || opponent, bnd);
+        if (bandsOn && t.sent.any) {
+            const bool urgent = swing || (t.s.dead && !t.sent.dead) || t.s.ko != t.sent.ko || t.s.drawn != t.sent.drawn || eng != t.sent.engaged;
+            if (!urgent && !wo213rules::band_due(now - t.bandAt, band, bnd)) continue;
+        }
+        if (bandsOn) { wo213::note_band_send(band); t.bandAt = wo213rules::band_slot(t.bandAt, now, wo213rules::band_period_s(band, bnd)); }
 
         if (t.s.dead && !t.sent.dead)
             logf("WO138-SEND %s: the dead bit goes out (hp=%.1f)", t.name.c_str(), t.s.hp);

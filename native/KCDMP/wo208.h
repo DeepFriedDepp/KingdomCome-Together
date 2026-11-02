@@ -44,4 +44,8 @@ double owner_shift_s(uint32_t eid);
 // WO-211 C.3 (main thread): an over-full copy reseated the clean way. 1 reseated, 2 not an owned copy, 3 too soon.
 uint8_t overflow_reseat(uint32_t eid, const char* name, double everyS);
 
+// WO-213 E.3: the owner's last check found this copy and its host NPC in a posture (sitting, lying, kneeling, working) -- the position
+// writer leaves it where it sits. Main thread.
+bool posture_holds(uint32_t eid);
+
 } // namespace kcdmp::wo208

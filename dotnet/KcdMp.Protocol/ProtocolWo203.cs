@@ -150,6 +150,7 @@ public static partial class Protocol
         (GraveRemoveUp,     "grave-remove",      GraveRemoveUpPayloadLen, GraveRemoveUpPayloadLen),
         (PlayerHitV8Up,     "player-hit-v8",     PlayerHitV8.UpLen, PlayerHitV8.UpLen),
         (WorldSavedUp,      "world-saved",       WorldSavedUpPayloadLen, WorldSavedUpPayloadLen),   // the damage authority only
+        (LinkHelloUp,       "link-hello",        LinkHelloUpLen, LinkHelloUpLen),               // WO-213: relay-local, never forwarded
     };
 
     /// <summary>The RelayUp row for an up type, or null (a join row, the Handshake, or not an up type).</summary>
@@ -170,6 +171,7 @@ public static partial class Protocol
         PlayerHitDown, PlayerDeathDown, CombatRole, NpcStateDown, TimeSkipDown, HorseInfoDown, CombatEventDown, WeatherDown,
         NpcDamageDown, ItemDropDown, ItemClaimDown, ServerFull, StoryBeatDown, ClockSyncDown, ActionDown, ReleaseVersionMismatch,
         PlayerRespawnedDown, GraveAddDown, GraveRemoveDown, PlayerHitV8Down, WorldSavedDown, Ack,
+        LinkHelloDown, NpcStateQDown,   // WO-213
     };
 
     // One lookup per type byte, built on first use (not in a field initializer: JoinWire lives in another part of this partial

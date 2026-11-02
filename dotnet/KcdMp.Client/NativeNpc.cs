@@ -194,7 +194,39 @@ public sealed class NativeNpcFeed
     /// <summary>Mirrors the mod's mp_npc_native_write (default on). Off: nothing is forwarded.</summary>
     public volatile bool Enabled = true;
 
-    public long Enqueued, Sent, Batches, FailedBatches, DroppedNotConnected;
+    public long Enqueued, Sent, Batches, FailedBatches, DroppedNotConnected, Coalesced;
+
+    /// <summary>
+    /// WO-213 C.1: the pipe lane is "latest wins" too -- when samples piled up while the pipe was busy (over BacklogSamples), each body
+    /// keeps only its two newest (two: the DLL's ring still gets a segment to interpolate), in their arrival order. Off (the twin,
+    /// link_sched): every sample, oldest first, as before.
+    /// </summary>
+    public bool LatestWins = !KcdMp.Wire.W213Switch.TwinOff("link_sched");
+    public const int BacklogSamples = 64;
+    /// <summary>WO-213 C.1: the feed's rounds at most this often while it goes first at the pipe's gate (about one game frame's samples a round).</summary>
+    public const int BatchEveryMs = 33;
+
+    /// <summary>The rule on what one read of the queue took: the samples it dropped (0 when off or no backlog).</summary>
+    public static int Backlog(List<NativeNpcSample> pending, bool latestWins) =>
+        latestWins && pending.Count > BacklogSamples ? KeepNewestPerBody(pending) : 0;
+
+    public static int KeepNewestPerBody(List<NativeNpcSample> pending, int keep = 2)
+    {
+        var seen = new Dictionary<(byte, string), int>();
+        var kept = new List<NativeNpcSample>(pending.Count);
+        for (int i = pending.Count - 1; i >= 0; i--)
+        {
+            var k = (pending[i].Src, pending[i].Name);
+            int n = seen.TryGetValue(k, out int c) ? c : 0;
+            if (n >= keep) continue;
+            seen[k] = n + 1;
+            kept.Add(pending[i]);
+        }
+        kept.Reverse();
+        int dropped = pending.Count - kept.Count;
+        pending.Clear(); pending.AddRange(kept);
+        return dropped;
+    }
 
     public NativeNpcFeed(CombatPipe pipe) { _pipe = pipe; }
 
@@ -209,14 +241,28 @@ public sealed class NativeNpcFeed
 
     private async Task LoopAsync(CancellationToken ct)
     {
+        // WO-213 C.1: the samples go first at the pipe's gate (the DLL takes them on its reader thread, no frame's wait) -- behind the
+        // frame handlers' main-thread calls they waited seconds when a clock change set every host NPC's posture moving
+        CombatPipe.Priority.Value = LatestWins;
         var pending = new List<NativeNpcSample>(512);
         var batch = new List<NativeNpcSample>(128);
+        long lastBatchMs = 0;
         while (!ct.IsCancellationRequested)
         {
             try
             {
                 if (!await _queue.Reader.WaitToReadAsync(ct)) return;
+                // WO-213 C.1: first at the gate, so at most one round a BatchEveryMs -- each sample keeps its own arrival stamp (the DLL's
+                // play-out measures from it); sent at once one batch at a time, the joiner's pipe carried ~30x the calls and its polls starved
+                if (LatestWins)
+                {
+                    long wait = BatchEveryMs - (Environment.TickCount64 - lastBatchMs);
+                    if (wait > 0) await Task.Delay((int)wait, ct);
+                    lastBatchMs = Environment.TickCount64;
+                }
                 while (_queue.Reader.TryRead(out var s)) pending.Add(s);
+                int coalesced = Backlog(pending, LatestWins);   // WO-213 C.1
+                if (coalesced > 0) Interlocked.Add(ref Coalesced, coalesced);
                 while (pending.Count > 0)
                 {
                     int n = NativeNpcCodec.TakeBatch(pending, batch);

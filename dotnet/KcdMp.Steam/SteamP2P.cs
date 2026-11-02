@@ -9,7 +9,17 @@ namespace KcdMp.Steam;
 /// <summary>Steam's own view of a live connection (GetConnectionRealTimeStatus). Quality is 0..1, -1 unknown.</summary>
 public readonly record struct SteamLinkStatus(int PingMs, float QualityLocal, float QualityRemote,
     float OutBytesPerSec, float InBytesPerSec, int SendRateBytesPerSec, int PendingReliable,
-    int SentUnackedReliable, long QueueTimeUsec);
+    int SentUnackedReliable, long QueueTimeUsec)
+{
+    // WO-213 A.3: the rest of Steam's numbers, and the two lanes' own queues when the connection has them (B)
+    public float OutPacketsPerSec { get; init; }
+    public float InPacketsPerSec { get; init; }
+    public int PendingUnreliable { get; init; }
+    public (int PendingUnreliable, int PendingReliable, long QueueTimeUsec)[] Lanes { get; init; } = [];
+}
+
+/// <summary>WO-213 B: what a connection's config says after we set it (read back), and Steam's answer to each set.</summary>
+public sealed record SteamLinkConfig(int? SendRateMin, int? SendRateMax, int? NagleTime, int? SendBufferSize, int Lanes, string Log);
 
 /// <summary>A P2P listen socket on one virtual port. Incoming connections are accepted as they arrive.</summary>
 public sealed class SteamP2PListener : IDisposable
@@ -196,11 +206,119 @@ public sealed class SteamP2PConnection : IDisposable
 
     public SteamLinkStatus? RealTimeStatus()
     {
-        int r = SteamNative.SteamAPI_ISteamNetworkingSockets_GetConnectionRealTimeStatus(_session.Sockets, Handle, out var s, 0, IntPtr.Zero);
+        int lanes = Volatile.Read(ref _lanes);
+        SteamNative.RealTimeStatus s;
+        SteamNative.LaneStatus[]? ls = null;
+        int r;
+        if (lanes > 0)
+        {
+            ls = new SteamNative.LaneStatus[lanes];
+            r = SteamNative.SteamAPI_ISteamNetworkingSockets_GetConnectionRealTimeStatus(_session.Sockets, Handle, out s, lanes, ls);
+        }
+        else r = SteamNative.SteamAPI_ISteamNetworkingSockets_GetConnectionRealTimeStatus(_session.Sockets, Handle, out s, 0, IntPtr.Zero);
         return r == SteamNative.ResultOk
             ? new SteamLinkStatus(s.Ping, s.QualityLocal, s.QualityRemote, s.OutBytesPerSec, s.InBytesPerSec,
                                   s.SendRateBytesPerSecond, s.PendingReliable, s.SentUnackedReliable, s.QueueTimeUsec)
+            {
+                OutPacketsPerSec = s.OutPacketsPerSec, InPacketsPerSec = s.InPacketsPerSec, PendingUnreliable = s.PendingUnreliable,
+                Lanes = ls is null ? [] : ls.Select(l => (l.PendingUnreliable, l.PendingReliable, l.QueueTimeUsec)).ToArray(),
+            }
             : null;
+    }
+
+    // ---- WO-213 B: the connection's limits and its two lanes ----------------------------------------------------------
+
+    private int _lanes;
+    public int LaneCount => Volatile.Read(ref _lanes);
+    public long UnreliableSent, UnreliableRefused, LaneSendFailures;
+
+    /// <summary>
+    /// Sets what is given (null = leave Steam's own value), splits the connection into two lanes when <paramref name="lanes"/> (lane 0
+    /// the events: first priority; lane 1 the state: second, so state never holds an event back), and reads every value back at
+    /// the connection's scope. Each refusal is in the log text with Steam's answer.
+    /// </summary>
+    public SteamLinkConfig ApplyLinkConfig(int? sendRateMin, int? sendRateMax, int? nagleUs, int? sendBuffer, bool lanes,
+        int statePriority = 1, ushort eventWeight = 1, ushort stateWeight = 1)
+    {
+        var log = new System.Text.StringBuilder();
+        void Set(int v, int? val)
+        {
+            if (val is not int x) return;
+            bool ok = SteamNative.SteamAPI_ISteamNetworkingUtils_SetConnectionConfigValueInt32(_session.NetUtils, Handle, v, x);
+            if (!ok) log.Append($" set {_session.ConfigName(v) ?? v.ToString()}={x} REFUSED;");
+        }
+        // the max before the min: Steam clamps a min above the current max
+        Set(SteamNative.CfgSendRateMax, sendRateMax);
+        Set(SteamNative.CfgSendRateMin, sendRateMin);
+        Set(SteamNative.CfgNagleTime, nagleUs);
+        Set(SteamNative.CfgSendBufferSize, sendBuffer);
+        if (lanes)
+        {
+            int r = SteamNative.SteamAPI_ISteamNetworkingSockets_ConfigureConnectionLanes(_session.Sockets, Handle, 2, [0, statePriority], [eventWeight, stateWeight]);
+            if (r == SteamNative.ResultOk) Volatile.Write(ref _lanes, 2);
+            else log.Append($" lanes REFUSED result={r};");
+        }
+        return ReadLinkConfig(log.ToString());
+    }
+
+    public SteamLinkConfig ReadLinkConfig(string log = "")
+    {
+        int? Get(int v, out string text)
+        {
+            int? x = _session.GetConfigInt(v, SteamNative.ScopeConnection, Handle, out int res);
+            text = $"{_session.ConfigName(v) ?? "#" + v}={(x is int y ? y.ToString() : "?")}{(res == SteamNative.GetCfgOkInherited ? "(default)" : res == SteamNative.GetCfgOk ? "" : $"(result {res})")}";
+            return x;
+        }
+        var min = Get(SteamNative.CfgSendRateMin, out string t1);
+        var max = Get(SteamNative.CfgSendRateMax, out string t2);
+        var nag = Get(SteamNative.CfgNagleTime, out string t3);
+        var buf = Get(SteamNative.CfgSendBufferSize, out string t4);
+        return new SteamLinkConfig(min, max, nag, buf, LaneCount, $"{t1} {t2} {t3} {t4} lanes={LaneCount}{log}");
+    }
+
+    /// <summary>
+    /// One message on a lane, never waiting: reliable (resent until it arrives, in order within its lane) or unreliable (lost if a
+    /// packet is; no Nagle either way). False when Steam refused it (a full send buffer: k_EResultLimitExceeded) -- an unreliable
+    /// one is then simply not sent (the next state replaces it), a reliable one the caller tries again.
+    /// </summary>
+    public unsafe bool TrySendOnLane(ReadOnlySpan<byte> data, bool reliable, int lane, out int result)
+    {
+        result = SteamNative.ResultOk;
+        if (Volatile.Read(ref _closedFlag) != 0) { result = SteamNative.ResultNoConnection; return false; }
+        if (lane >= LaneCount) lane = 0;
+        IntPtr m = SteamNative.SteamAPI_ISteamNetworkingUtils_AllocateMessage(_session.NetUtils, data.Length);
+        if (m == IntPtr.Zero) { result = SteamNative.ResultLimitExceeded; Interlocked.Increment(ref LaneSendFailures); return false; }
+        IntPtr buf = Marshal.ReadIntPtr(m, SteamNative.MsgOut.Data);
+        fixed (byte* p = data) Buffer.MemoryCopy(p, (void*)buf, data.Length, data.Length);
+        Marshal.WriteInt32(m, SteamNative.MsgOut.Conn, unchecked((int)Handle));
+        Marshal.WriteInt32(m, SteamNative.MsgOut.Flags, reliable ? SteamNative.SendReliableNoNagle : SteamNative.SendNoNagle);
+        Marshal.WriteInt16(m, SteamNative.MsgOut.Lane, (short)lane);
+        var res = new long[1];
+        SteamNative.SteamAPI_ISteamNetworkingSockets_SendMessages(_session.Sockets, 1, [m], res);   // Steam owns (and frees) the message now
+        if (res[0] > 0)
+        {
+            Interlocked.Increment(ref MessagesSent);
+            Interlocked.Add(ref BytesSent, data.Length);
+            if (!reliable) Interlocked.Increment(ref UnreliableSent);
+            return true;
+        }
+        result = (int)-res[0];
+        if (!reliable) Interlocked.Increment(ref UnreliableRefused);
+        else Interlocked.Increment(ref LaneSendFailures);
+        return false;
+    }
+
+    /// <summary>A reliable message on a lane, waiting (as SendAsync) while Steam's send buffer is full.</summary>
+    public async ValueTask SendOnLaneAsync(ReadOnlyMemory<byte> data, int lane, CancellationToken ct = default)
+    {
+        while (true)
+        {
+            if (Volatile.Read(ref _closedFlag) != 0) throw new IOException("Steam connection closed. " + EndDebug);
+            if (TrySendOnLane(data.Span, reliable: true, lane, out int r)) return;
+            if (r != SteamNative.ResultLimitExceeded) throw new IOException($"Steam send failed (EResult {r}).");
+            Interlocked.Increment(ref SendRetries);
+            await Task.Delay(2, ct);
+        }
     }
 
     /// <summary>Round-trip time Steam measures itself, in ms; -1 before it knows.</summary>
@@ -320,4 +438,34 @@ public sealed class SteamConnectionStream : Stream
         if (disposing) _conn.Close("stream disposed");
         base.Dispose(disposing);
     }
+}
+
+/// <summary>
+/// WO-213 B/C: a Steam connection as the scheduler's path. Events: reliable on lane 0; state: unreliable on lane 1 when the connection
+/// has its two lanes (a refused one is simply not sent: the next state replaces it). Status = Steam's own real-time numbers.
+/// </summary>
+public sealed class SteamLinkPath(SteamP2PConnection conn) : KcdMp.Wire.ILinkPath
+{
+    public SteamP2PConnection Connection => conn;
+    public string Transport => "steam";
+    public bool CanSendUnreliable => conn.LaneCount >= 2;
+    public bool StateOwnLane => CanSendUnreliable;
+
+    public ValueTask SendAsync(ReadOnlyMemory<byte> frame, bool state, CancellationToken ct)
+    {
+        if (state && CanSendUnreliable)
+        {
+            conn.TrySendOnLane(frame.Span, reliable: false, lane: 1, out _);
+            return ValueTask.CompletedTask;
+        }
+        return conn.SendOnLaneAsync(frame, 0, ct);
+    }
+
+    // With the state on its own lane the scheduler's queue check is that lane's and the events' lane is reported apart (an event burst on
+    // lane 0 -- a world transfer -- does not hold state back: Steam shares the rate between the lanes 3:1); one lane: everything Steam holds.
+    public KcdMp.Wire.LinkPathStatus Status() => conn.RealTimeStatus() is not { } s ? default
+        : StateOwnLane && s.Lanes.Length >= 2
+            ? new KcdMp.Wire.LinkPathStatus(true, s.SendRateBytesPerSec, s.Lanes[1].PendingUnreliable + s.Lanes[1].PendingReliable, (int)Math.Min(int.MaxValue, Math.Max(0, s.Lanes[1].QueueTimeUsec / 1000)))
+              { EventPendingBytes = s.Lanes[0].PendingUnreliable + s.Lanes[0].PendingReliable }
+            : new KcdMp.Wire.LinkPathStatus(true, s.SendRateBytesPerSec, s.PendingReliable + s.PendingUnreliable, (int)Math.Min(int.MaxValue, Math.Max(0, s.QueueTimeUsec / 1000)));
 }

@@ -46,6 +46,11 @@ namespace KcdMp.Server.Features.Faults;
 //       throttle:    "bytes_per_s" (> 0)
 //       stall:       for_s > 0 (the stall's length)
 //       cut:         for_s = how long reconnects of the cut client are refused (0 = none); "heal" is its end
+//       link:        WO-213 F.1, a link like the field's (LinkShaper): "bytes_per_s" (> 0, the send rate), "buffer_bytes" (the send
+//                    buffer: a writer waits while it is full, default 524288 = Steam's own), "ms" (one-way latency), "jitter_ms",
+//                    "loss_pct" (0..50: a lost unreliable state frame is gone, a lost reliable one comes rto_ms later and holds the
+//                    reliable frames behind it), "stall_per_min" + "stall_min_ms" / "stall_max_ms" (the whole link holds: the
+//                    field's ping spikes), "rto_ms" (default 2 * ms + 100). for_s must be 0: a link is the session's.
 //     } ]
 //   }
 //
@@ -56,7 +61,7 @@ namespace KcdMp.Server.Features.Faults;
 // fires once: at its first moment, never again.
 // =============================================================================
 
-public enum FaultKind { Lag, JitterHold, Throttle, Stall, Cut }
+public enum FaultKind { Lag, JitterHold, Throttle, Stall, Cut, Link }
 
 /// <summary>WO-206 B: which client a rule acts on. Resolved per frame: authority can move.</summary>
 public enum FaultRole { Any, Host, Joiner }
@@ -68,7 +73,7 @@ public enum FaultDir { Up = 1, Down = 2, Both = Up | Down }
 public sealed record FaultRule(
 	int Index, string Name, FaultKind Kind, FaultRole Role, FaultDir Dir,
 	string? AtStep, long AtMs, long ForMs,
-	int LagMs, int JitterMs, int HoldMs, int EveryMs, long BytesPerS, int AtStepNth = 1)
+	int LagMs, int JitterMs, int HoldMs, int EveryMs, long BytesPerS, int AtStepNth = 1, LinkShape? Link = null)
 {
 	/// <summary>The rule's "at" as the plan wrote it, for the log lines.</summary>
 	public string At => AtStep is { } s ? "step:" + s + (AtStepNth > 1 ? "#" + AtStepNth.ToString(CultureInfo.InvariantCulture) : "") : "t:+" + (AtMs / 1000.0).ToString("0.###", CultureInfo.InvariantCulture);
@@ -76,13 +81,16 @@ public sealed record FaultRule(
 	public static string KindName(FaultKind k) => k switch
 	{
 		FaultKind.Lag => "lag", FaultKind.JitterHold => "jitter-hold", FaultKind.Throttle => "throttle",
-		FaultKind.Stall => "stall", _ => "cut",
+		FaultKind.Stall => "stall", FaultKind.Link => "link", _ => "cut",
 	};
 
 	public static string RoleName(FaultRole r) => r switch { FaultRole.Host => "host", FaultRole.Joiner => "joiner", _ => "any" };
 
 	public static string DirName(FaultDir d) => d switch { FaultDir.Up => "up", FaultDir.Down => "down", _ => "both" };
 }
+
+/// <summary>WO-213 F.1: a link rule's shape (LinkShaper). Times in ms, the rate and buffer in bytes.</summary>
+public sealed record LinkShape(long BytesPerS, int BufferBytes, int Ms, int JitterMs, double LossPct, double StallPerMin, int StallMinMs, int StallMaxMs, int RtoMs);
 
 /// <summary>WO-206 B: a validated fault plan. <see cref="Parse"/> throws <see cref="FormatException"/> on anything off.</summary>
 public sealed class RelayFaultPlan
@@ -104,7 +112,8 @@ public sealed class RelayFaultPlan
 	private static readonly Regex NamePattern = new("^[A-Za-z0-9_-]{1,32}$", RegexOptions.CultureInvariant);
 	private static readonly HashSet<string> TopKeys = new(StringComparer.Ordinal) { "seed", "rules" };
 	private static readonly HashSet<string> RuleKeys = new(StringComparer.Ordinal)
-		{ "name", "kind", "role", "dir", "at", "for_s", "ms", "jitter_ms", "hold_ms", "every_ms", "bytes_per_s" };
+		{ "name", "kind", "role", "dir", "at", "for_s", "ms", "jitter_ms", "hold_ms", "every_ms", "bytes_per_s",
+		  "buffer_bytes", "loss_pct", "stall_per_min", "stall_min_ms", "stall_max_ms", "rto_ms" };   // WO-213 F.1: the link's
 
 	public static RelayFaultPlan Load(string path) => Parse(File.ReadAllText(path), Path.GetFileName(path));
 
@@ -163,7 +172,8 @@ public sealed class RelayFaultPlan
 			"throttle" => FaultKind.Throttle,
 			"stall" => FaultKind.Stall,
 			"cut" => FaultKind.Cut,
-			var k => throw new FormatException($"{where}: unknown kind '{k}' (lag, jitter-hold, throttle, stall, cut)"),
+			"link" => FaultKind.Link,
+			var k => throw new FormatException($"{where}: unknown kind '{k}' (lag, jitter-hold, throttle, stall, cut, link)"),
 		};
 		var role = (Str(r, "role", where) ?? "any") switch
 		{
@@ -227,19 +237,40 @@ public sealed class RelayFaultPlan
 				if (forMs <= 0) throw new FormatException($"{where}: a stall needs for_s > 0 (its length) -- an endless stall is a cut");
 				break;
 		}
+		LinkShape? link = null;
+		if (kind == FaultKind.Link)
+		{
+			if (forMs != 0) throw new FormatException($"{where}: a link is the whole session's (for_s must be 0)");
+			int ms = r.TryGetProperty("ms", out var lm) ? Int(lm, "ms", where) : 0;
+			int jit = r.TryGetProperty("jitter_ms", out var lj) ? Int(lj, "jitter_ms", where) : 0;
+			long rate = Need(r, "bytes_per_s", where);
+			int buf = r.TryGetProperty("buffer_bytes", out var lb) ? Int(lb, "buffer_bytes", where) : 512 * 1024;
+			double loss = r.TryGetProperty("loss_pct", out var ll) ? Num(ll, "loss_pct", where) : 0;
+			double spm = r.TryGetProperty("stall_per_min", out var ls) ? Num(ls, "stall_per_min", where) : 0;
+			int smin = r.TryGetProperty("stall_min_ms", out var ls1) ? Int(ls1, "stall_min_ms", where) : 0;
+			int smax = r.TryGetProperty("stall_max_ms", out var ls2) ? Int(ls2, "stall_max_ms", where) : 0;
+			int rto = r.TryGetProperty("rto_ms", out var lr) ? Int(lr, "rto_ms", where) : 2 * ms + 100;
+			if (rate <= 0 || buf < 1024 || ms < 0 || ms > 10000 || jit < 0 || jit > 10000 || loss < 0 || loss > 50 || spm < 0 || spm > 600
+				|| smin < 0 || smax < smin || smax > 30000 || rto < 1 || rto > 30000)
+				throw new FormatException($"{where}: a link needs bytes_per_s > 0, buffer_bytes >= 1024, ms/jitter_ms 0..10000, loss_pct 0..50, " +
+					"stall_per_min 0..600, 0 <= stall_min_ms <= stall_max_ms <= 30000, rto_ms 1..30000");
+			link = new LinkShape(rate, buf, ms, jit, loss, spm, smin, smax, rto);
+		}
 		// A key of another kind is refused: "ms" on a throttle is a plan that does not say what it means.
 		foreach (var (key, kinds) in KindKeys)
 			if (r.TryGetProperty(key, out _) && Array.IndexOf(kinds, kind) < 0)
 				throw new FormatException($"{where}: '{key}' does not apply to {FaultRule.KindName(kind)}");
 
-		return new FaultRule(index, name, kind, role, dir, atStep, atMs, forMs, lagMs, jitterMs, holdMs, everyMs, bps, nth);
+		return new FaultRule(index, name, kind, role, dir, atStep, atMs, forMs, lagMs, jitterMs, holdMs, everyMs, bps, nth, link);
 	}
 
 	private static readonly (string Key, FaultKind[] Kinds)[] KindKeys =
 	{
-		("ms", new[] { FaultKind.Lag }), ("jitter_ms", new[] { FaultKind.Lag }),
+		("ms", new[] { FaultKind.Lag, FaultKind.Link }), ("jitter_ms", new[] { FaultKind.Lag, FaultKind.Link }),
 		("hold_ms", new[] { FaultKind.JitterHold }), ("every_ms", new[] { FaultKind.JitterHold }),
-		("bytes_per_s", new[] { FaultKind.Throttle }),
+		("bytes_per_s", new[] { FaultKind.Throttle, FaultKind.Link }),
+		("buffer_bytes", new[] { FaultKind.Link }), ("loss_pct", new[] { FaultKind.Link }), ("stall_per_min", new[] { FaultKind.Link }),
+		("stall_min_ms", new[] { FaultKind.Link }), ("stall_max_ms", new[] { FaultKind.Link }), ("rto_ms", new[] { FaultKind.Link }),
 	};
 
 	private static string? Str(JsonElement r, string key, string where)

@@ -485,6 +485,22 @@ public class ClientHandler
 			_playerPositions[sender.Id] = (x, y, z);
 	}
 
+	/// <summary>
+	/// WO-213 D.2: the 2D distance from (x, y) to the nearest player who reported a position (float.MaxValue when none did). Read for
+	/// the ORDER the scheduler sends bodies' states in, never for whether anything is forwarded.
+	/// </summary>
+	public float NearestPlayerM(float x, float y)
+	{
+		float best = float.MaxValue;
+		lock (_lock)
+			foreach (var p in _playerPositions.Values)
+			{
+				float dx = p.X - x, dy = p.Y - y, d = MathF.Sqrt(dx * dx + dy * dy);
+				if (d < best) best = d;
+			}
+		return best;
+	}
+
 	/// <summary>WO-81: drops a disconnected client's cached position.</summary>
 	public void ClearPlayerPositionFor(ClientSession client)
 	{

@@ -51,6 +51,7 @@ int wo208_tests(int* passed);              // wo208_tests.cpp (WO-208: the switc
 int wo209_tests(int* passed);              // wo209_tests.cpp (WO-209: the switch word, the opponent mirror, the copy's own attack, the owner on every copy)
 int wo210_tests(int* passed);              // wo210_tests.cpp (WO-210: the switch word, the whole-body families, the watchdog, the clinch-loop detector)
 int wo211_tests(int* passed);              // wo211_tests.cpp (WO-211: the UI-dispatch guard, the overflow reseat, build ids)
+int wo213_tests(int* passed);              // wo213_tests.cpp (WO-213: bands, the play-out delay, late postures)
 int wo203_tests(int* passed);              // wo203_tests.cpp (WO-203: every area's rules, one file per area)
 int wo197_tests(int* passed);              // wo197_tests.cpp (WO-197: the recoil and clinch polls, the kept main actions, the pair request)
 int wo194_tests(int* passed);              // wo194_tests.cpp (WO-194: the hold, its release, the time gate, the FastForward stop)
@@ -387,6 +388,14 @@ int main() {
     {
         int fp = 0;
         const int ff = wo211_tests(&fp);
+        g_pass += fp;
+        g_fail += ff;
+    }
+
+    // WO-213: bands, the play-out delay, late postures
+    {
+        int fp = 0;
+        const int ff = wo213_tests(&fp);
         g_pass += fp;
         g_fail += ff;
     }

@@ -22,6 +22,8 @@ bool on(uint32_t bit);   // wo209_rules.h kBit*: the agent's word, less the benc
 // A fix with no switch of its own (wo209_rules.h kFix*): on unless the bench's twin turns it off.
 bool fix_on(uint32_t fixBit);
 int status(char* out, int n);
+// WO-213 D.2 (the host, main thread): this NPC had a combat opponent (the local player, a partner's figure or an NPC) at its last read
+bool host_fights(uint32_t eid);
 // A (main thread): the mirror holds this copy in the local player's fight -- its host NPC fights his figure there now (wo132's op 2 never
 // lets it go for its distance meanwhile).
 bool mirror_holds_player(uint32_t copy);

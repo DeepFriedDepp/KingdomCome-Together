@@ -440,6 +440,11 @@ bool mirror_holds_player(uint32_t copy) {
     return it != g_mirror.end() && it->second.kind == kHerePlayer && qpc_s() - it->second.at <= kMirrorStaleS;
 }
 
+bool host_fights(uint32_t eid) {
+    const auto it = g_hostOpp.find(eid);
+    return it != g_hostOpp.end() && it->second.kind != kHostNone;
+}
+
 bool mirrored(uint32_t copy) {
     if (!on(kBitOppMirror)) return false;
     auto it = g_mirror.find(copy);

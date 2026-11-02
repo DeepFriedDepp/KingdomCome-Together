@@ -326,6 +326,7 @@ public partial class GameBridge(ClientConfig config)
     private long _lastLogSeq = -1;
     private ulong _lastNativeFrame;
     private LocalState? _lastNative;
+    private long _w213LastNativeReadMs;   // WO-213 D.4: the last native read (the reads' pace)
     private int _posNativeMisses;
     private bool _posNativeGaveUp;                 // 20 consecutive refusals: DLL too old / hop unmapped
     private bool _posNativeRefusedByOracle;        // the known-answer check failed: native disagrees with the log line
@@ -1503,6 +1504,8 @@ public partial class GameBridge(ClientConfig config)
         byte myId = replyBody[0];
         _myGhostId = myId;
         Console.WriteLine($"Connected! Assigned id={myId} (protocol v{Protocol.Version})");
+        Wo213OnConnect(link);   // WO-213 A: the link's meters; Steam's own config read back
+        Wo213StartWriter(link, stream);   // WO-213 B/C: Steam's limits and lanes, the scheduler, the hello
         Console.WriteLine();
 
         _discordPresence?.SetConnected(config.IsHosting);
@@ -2318,6 +2321,8 @@ public partial class GameBridge(ClientConfig config)
         finally
         {
             try { PrintSessionSummary("disconnect"); } catch { }   // WO-98 Phase 6
+            try { Wo213OnDisconnect(); } catch { }                 // WO-213 A.1: the connection's per-kind totals
+            Wo213StopWriter();                                     // WO-213 C
             // WO-211 A.1: a joiner in the host's world whose link dropped (not the agent stopping) holds there while it reconnects --
             // decided before the per-WO teardowns below, which read it (the save lock stays, the leave does not run, the host stays shown)
             if (!appCt.IsCancellationRequested) { try { await Wo211TryHoldAsync("relay-lost"); } catch (Exception ex) { Console.WriteLine($"WO211-LINK hold failed: {ex.Message}"); } }
@@ -4651,10 +4656,23 @@ public partial class GameBridge(ClientConfig config)
                 var payload    = new byte[payloadLen];
                 await ReadExactAsync(stream, payload, ct);
                 long arrival   = Stopwatch.GetTimestamp();
+                int wireBytes  = payloadLen + 3;
+                if (type == Protocol.NpcStateQDown)   // WO-213 D.3: the relay's compact NPC state, back to the 0x27 payload everything below reads
+                {
+                    if (Wo213Expand(payload) is not { } full) { Wo213NoteIn(type, payload, arrival, wireBytes); continue; }
+                    type = Protocol.NpcStateDown; payload = full;
+                }
+                Wo213NoteIn(type, payload, arrival, wireBytes);   // WO-213 A.1/A.5: at the socket, before any queue of this agent
                 Wo138NoteArrival(type, payload);   // WO-138: the source's link is alive (the joiner's hold)
                 Wo147NotePositionAtRead(type, payload, arrival);   // WO-147: the leash's positions, stamped as they arrive
                 Wo147NoteNpcAtRead(type, payload, arrival);        // the backlog fix: the newest sample of each NPC/avatar, as read
                 Volatile.Write(ref _w202LastReadMs, W147StampMs(arrival));   // WO-202 III.2: the queue's lag is measured against this
+                if (Wo213TakeAtRead(type, payload)) continue;   // WO-213: the relay's answer to the hello
+                if (_w213Repeats is { } rf)   // WO-213 C.2: a relay repeat of a posture / opponent already applied here goes no further
+                {
+                    if (rf.Filter(type, payload, Environment.TickCount64) is not { } kept) continue;
+                    payload = kept;
+                }
                 if (W202("ping_network") && Wo202TakeAtRead(type, payload)) continue;   // WO-202 III.2: the network's answers, never behind the queue
                 if (Wo206TakeAtRead(type, payload)) continue;   // WO-206 E: an epoch is known from the frame it arrives in, never behind the queue
                 uint stamp = Wo206StampAtRead(payload);         // WO-206 E: the world epoch this frame was sent under
@@ -4858,7 +4876,9 @@ public partial class GameBridge(ClientConfig config)
                         _ghostLastYaw[ghostId] = rotZ;
                         _voice?.UpdateGhostPos(ghostId, x, y, z);
                         // The backlog fix: behind, a sample a newer one supersedes (no state block of its own) is not pushed.
-                        if (!Wo147GhostSkip(ghostId, frame.Arrival, gs.State2 is not null))
+                        // WO-213 D.4: the DLL drives the figure from every sample (30-45 a second while it moves); the game's Lua update at the
+                        // old pace -- one Lua call a sample crowded the joiner's console (a joined talk's join request waited 67 s)
+                        if (!Wo147GhostSkip(ghostId, frame.Arrival, gs.State2 is not null) && Wo213GhostLuaDue(ghostId, isRiding, gs.State2 is not null))
                             await UpdateGhostAsync(ghostId.ToString(), x, y, z, rotZ, isRiding, body);
                     }
                     else if (type == Protocol.ActionDown)
@@ -6277,6 +6297,9 @@ public partial class GameBridge(ClientConfig config)
             case string w211 when w211.StartsWith("w211_", StringComparison.Ordinal):   // WO-211: the switches, the hold's Leave, the flight, the status
                 Wo211OnEvent(name, arg);
                 return;
+            case string w213 when w213.StartsWith("w213_", StringComparison.Ordinal):   // WO-213: the switches and the status
+                Wo213OnEvent(name, arg);
+                return;
             case "w206_cfg":         // WO-206 E: mp_epoch_check, mp_research_death_from_health
             case "w206_status":      // WO-206 E: mp_w206_status
                 Wo206OnEvent(name, arg);
@@ -7247,7 +7270,7 @@ public partial class GameBridge(ClientConfig config)
                 $"if KCD2MP_NpcNativeAlive then KCD2MP_NpcNativeAlive({(s.Armed ? 1 : 0)}, {(s.NativeOn ? 1 : 0)}, {s.Bound}, {s.Writing}) end"));
             if ((++_nativeHeartbeats % 10) == 0)
                 Console.WriteLine(FormattableString.Invariant(
-                    $"MP-NPCWRITE-STATUS armed={(s.Armed ? 1 : 0)} on={(s.NativeOn ? 1 : 0)} bound={s.Bound} writing={s.Writing} frames={s.FramesWritten} writes={s.Writes} drops={s.Drops} samples={s.Samples} feed_enqueued={Interlocked.Read(ref _nativeFeed.Enqueued)} feed_sent={Interlocked.Read(ref _nativeFeed.Sent)} feed_batches={Interlocked.Read(ref _nativeFeed.Batches)} feed_failed={Interlocked.Read(ref _nativeFeed.FailedBatches)} binds_ok={Interlocked.Read(ref _nativeBindsOk)} binds_refused={Interlocked.Read(ref _nativeBindsRefused)} dll_drops_seen={Interlocked.Read(ref _nativeDrops)} holds={Interlocked.Read(ref _nativeHolds)} lua_bound={_nativeBound.Count} lua_pushed={_npcLua.Pushed} lua_coalesced={_npcLua.Coalesced}"));
+                    $"MP-NPCWRITE-STATUS armed={(s.Armed ? 1 : 0)} on={(s.NativeOn ? 1 : 0)} bound={s.Bound} writing={s.Writing} frames={s.FramesWritten} writes={s.Writes} drops={s.Drops} samples={s.Samples} feed_enqueued={Interlocked.Read(ref _nativeFeed.Enqueued)} feed_sent={Interlocked.Read(ref _nativeFeed.Sent)} feed_batches={Interlocked.Read(ref _nativeFeed.Batches)} feed_failed={Interlocked.Read(ref _nativeFeed.FailedBatches)} feed_coalesced={Interlocked.Read(ref _nativeFeed.Coalesced)} binds_ok={Interlocked.Read(ref _nativeBindsOk)} binds_refused={Interlocked.Read(ref _nativeBindsRefused)} dll_drops_seen={Interlocked.Read(ref _nativeDrops)} holds={Interlocked.Read(ref _nativeHolds)} lua_bound={_nativeBound.Count} lua_pushed={_npcLua.Pushed} lua_coalesced={_npcLua.Coalesced}"));
         }
         catch { }
         finally { Interlocked.Exchange(ref _nativeHeartbeatBusy, 0); }
@@ -7432,10 +7455,17 @@ public partial class GameBridge(ClientConfig config)
             Console.WriteLine("MP-POSNATIVE re-armed after 60 s -- the native read is checked against the log line again");
         }
         if (_posNativeGaveUp || _posNativeRefusedByOracle) return null;
+        // WO-213 D.4: the top band is 30 Hz -- the read at most every 25 ms (the loop goes round every ~16 ms; each read is a pipe call)
+        bool band = W213On("figure_band");
+        long nowMs = Environment.TickCount64;
+        if (band && _lastNative is LocalState recent && nowMs - _w213LastNativeReadMs < W213Rules.FigureReadEveryMs) return recent;
+        _w213LastNativeReadMs = nowMs;
         LocalState? r = null;
+        CombatPipe.Priority.Value = band;   // WO-213 D.4: first at the pipe's gate (this method's own flow only)
         try { r = await _combat.ReadLocalStateAsync(ct); }
         catch (OperationCanceledException) { throw; }
         catch { }
+        finally { CombatPipe.Priority.Value = false; }
         if (r is not LocalState ls)
         {
             if (++_posNativeMisses == PosNativeGiveUpAfter)
@@ -7818,9 +7848,16 @@ public partial class GameBridge(ClientConfig config)
 
     private async Task WritePacketAsync(Stream stream, byte[] packet, CancellationToken ct = default)
     {
+        if (Wo213TryQueue(stream, packet)) return;   // WO-213 C: the scheduler is this link's writer (it counts what it sends)
+        long t0 = Stopwatch.GetTimestamp();
         await _tcpWriteLock.WaitAsync(ct);
+        long t1 = Stopwatch.GetTimestamp();
         try { await stream.WriteAsync(packet, ct); }
-        finally { _tcpWriteLock.Release(); }
+        finally
+        {
+            _tcpWriteLock.Release();
+            Wo213NoteOut(packet, Stopwatch.GetElapsedTime(t0, t1).TotalMilliseconds, Stopwatch.GetElapsedTime(t1).TotalMilliseconds);   // WO-213 A.1/A.2
+        }
     }
 
     private static bool IntervalElapsed(ref long lastTimestamp, TimeSpan interval, long nowTimestamp)
@@ -7847,11 +7884,10 @@ public partial class GameBridge(ClientConfig config)
         }
     }
 
+    // WO-213 D.4 (mp_figure_band): the figure in the top band -- the NPC sender's own 1.5 cm gate, so a walking player goes out every round
+    // of the loop; off (the twin): 5 cm, which a walk crossed every second round (the bench's walk: one send per 52 ms, 10 cm apart)
     private bool HasChanged(float x, float y, float z, float rotZ) =>
-        Math.Abs(x - _lastX)       > PosThreshold ||
-        Math.Abs(y - _lastY)       > PosThreshold ||
-        Math.Abs(z - _lastZ)       > PosThreshold ||
-        Math.Abs(rotZ - _lastRotZ) > RotThreshold;
+        W213Rules.FigureChanged(x - _lastX, y - _lastY, z - _lastZ, rotZ - _lastRotZ, W213On("figure_band"), PosThreshold, RotThreshold);
 
     // -------------------------------------------------------------------------
     // Source-generated regexes

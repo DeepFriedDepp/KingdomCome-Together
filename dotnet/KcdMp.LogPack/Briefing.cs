@@ -81,6 +81,13 @@ public static class Briefing
         sb.Append("Written by the bug report itself (WO-202). Times are this machine's clock.\n\n");
         var (bv, bid) = BuildOf(inp);   // WO-211 0.2: the build id in the first lines (the installer's name carries the same)
         sb.Append($"**Build:** {bv} build {bid}\n\n");
+        // WO-213 G: the link to the partner is the first thing read in every two-player bundle
+        try
+        {
+            sb.Append(LinkSection.Section(AgentLines(inp).ToList(),
+                inp.Logs.Where(kv => kv.Key.StartsWith("relay", StringComparison.OrdinalIgnoreCase)).OrderBy(kv => kv.Key, StringComparer.Ordinal).SelectMany(kv => kv.Value).ToList()));
+        }
+        catch (Exception ex) { sb.Append($"## Link\n\n(not read: {ex.GetType().Name}: {ex.Message})\n\n"); }   // never the briefing's end
         Crashes(inp, sb);
         Session(inp, sb);
         Marks(inp, sb);

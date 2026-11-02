@@ -38,6 +38,13 @@ public sealed class RelayConnection : IDisposable
     /// </summary>
     public string IdentityKey { get; }
 
+    /// <summary>WO-213 A.3/B: the Steam connection under a Steam stream (its status, its config, its lanes); null on TCP.</summary>
+    public KcdMp.Steam.SteamP2PConnection? Steam { get; init; }
+
+    /// <summary>WO-213 C: the scheduler's way out on this connection (the fault mode's stream, a Steam path, a TCP path); null = the
+    /// session writes its stream as before.</summary>
+    public KcdMp.Wire.ILinkPath? Path { get; init; }
+
     public RelayConnection(Stream stream, string remote, bool isLoopback, string transport, Action dispose, string identityKey = "")
     {
         Stream = stream;
@@ -57,8 +64,8 @@ public sealed class RelayConnection : IDisposable
     }
 
     /// <summary>A Steam P2P stream: never loopback, logged without an id.</summary>
-    public static RelayConnection FromSteam(Stream steamStream, string peerKey = "") =>
-        new(steamStream, "steam-peer", isLoopback: false, "steam", steamStream.Dispose, "steam:" + peerKey);
+    public static RelayConnection FromSteam(Stream steamStream, string peerKey = "", KcdMp.Steam.SteamP2PConnection? steam = null) =>
+        new(steamStream, "steam-peer", isLoopback: false, "steam", steamStream.Dispose, "steam:" + peerKey) { Steam = steam };
 
     public void Dispose()
     {

@@ -40,6 +40,7 @@
 #include "wo151.h"
 #include "wo163.h"
 #include "wo203.h"
+#include "wo213.h"
 #include "wo201.h"
 #include "buffs.h"
 #include "instance.h"
@@ -827,6 +828,11 @@ void serve(HANDLE h) {
                 // WO-110 R12: by-value capture; result in the shared state (see ReadBodyState).
                 struct LocalStateOut { bool ok = false; bool ok2 = false; kcdmp::localstate::LocalState ls{}; kcdmp::motion::State2 st2{}; };
                 LocalStateOut r{};
+                // WO-213 D.4: this frame's read, made by the frame hook while the agent asks -- answered here, without waiting a frame
+                if (kcdmp::wo213::local_take(&r.ls, &r.ok, &r.st2, &r.ok2)) {
+                    send_local_state(h, r.ok, seq, r.ls, r.ok2 ? &r.st2 : nullptr);
+                    break;
+                }
                 bool faulted = false;
                 const bool ran = run_sync_bounded<LocalStateOut>(
                     [](LocalStateOut& out) {
