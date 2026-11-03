@@ -10,6 +10,7 @@
     line, a Windows user folder and a mark note that names a player by the start of their handle. Each case is one pending commit over the
     remote's main, scanned by tools\Check-Publishing.ps1 (no push):
       * a line naming any of them fails the gate;
+      * a note word that starts a handle but is a word the remote's main already uses passes (WO-213); the handle in full fails;
       * the repository's own URL, which holds its owner's handle, passes;
       * the owner's handle anywhere else fails;
       * a line with none of them passes.
@@ -46,7 +47,9 @@ try {
         "12:00:01.000 m=2 off=-+0 MP-JOIN host: join 0x12345678 requested by SynthHandleQx (ghost 1) -- timeout 180 s once paused",
         "12:00:02.000 m=3 off=-+0 MP-CUTSCENE side=peer ghost=0 who=`"$owner`" state=start",
         "12:00:03.000 m=4 off=-+0 E:\$users\WinUserQv\Saved Games\kingdomcome2\saves",
-        '[KCD2-MP] MP-MARK odd world_time=1 note=Synth was standing there -- the tester''s marker t=1.0'
+        '[KCD2-MP] MP-MARK odd world_time=1 note=Synth was standing there -- the tester''s marker t=1.0',
+        '12:00:04.000 m=5 off=? [KcdLog] Found Steam name: Startrider Qy',
+        '[KCD2-MP] MP-MARK odd world_time=2 note=start of the walk -- the tester''s marker t=2.0'
     ) | Set-Content -LiteralPath (Join-Path $field 'agent.log') -Encoding ascii
     $deny = Join-Path $tmp 'deny.txt'
     Set-Content -LiteralPath $deny -Value 'zz-not-in-any-line-zz' -Encoding ascii
@@ -58,6 +61,8 @@ try {
         @('a note''s name (the start of a handle)', 'Synth said hi', $false),
         @('the owner''s handle outside the URL', "by $owner", $false),
         @('the repository''s own URL', "see https://github.com/$owner/ExampleRepo for the code", $true),
+        @('a note word starting a handle that the remote''s main already uses (WO-213)', 'start again', $true),
+        @('that handle in full', 'see Startrider Qy', $false),
         @('nothing of them', 'a plain line', $true)
     )
     foreach ($c in $cases) {

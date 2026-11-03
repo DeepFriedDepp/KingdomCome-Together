@@ -147,8 +147,16 @@ foreach ($fd in $fieldDirs) {
         }
     }
 }
+# WO-213: a note word that only starts a name, and that the remote's main already uses as a word of its own, is the project's own
+# vocabulary rather than that name: a tester's handle starting with a common word made every line with that word a hit. The whole
+# names gate always.
+$ownWords = 0
 foreach ($w in @($noteWords)) {
-    foreach ($n in @($names)) { if ($n.StartsWith($w, [StringComparison]::OrdinalIgnoreCase)) { [void]$names.Add($w); break } }
+    foreach ($n in @($names)) {
+        if (-not $n.StartsWith($w, [StringComparison]::OrdinalIgnoreCase)) { continue }
+        if ($n.Length -gt $w.Length -and (Invoke-GitQ $RepoDir @('grep', '-l', '-i', '-w', '-F', '-e', $w, $base, '--'))) { $ownWords++; break }
+        [void]$names.Add($w); break
+    }
 }
 foreach ($n in $names) { $subs.Add($n) }
 # the repository's own URL (and its owner/name path) is the one place its owner's handle may appear
@@ -161,7 +169,7 @@ $srcUrl = Invoke-GitQ $source @('config', '--get', 'remote.origin.url')
 if ($srcUrl) { $s2 = ([string]$srcUrl).Trim(); $repoUrls.Add($s2); $repoUrls.Add(($s2 -replace '\.git$', '')) }
 foreach ($u in @($repoUrls)) { if ($u -match 'github\.com[:/](.+?)(?:\.git)?$') { $repoUrls.Add($Matches[1]) } }
 $repoUrls = @($repoUrls | Where-Object { $_ } | Select-Object -Unique | Sort-Object Length -Descending)
-Write-Host ("PUBLISHING GATE: {0} player name(s) or handle(s) from {1} field bundle file(s) gate too (the repository's own URL excepted)" -f $names.Count, $fieldFiles)
+Write-Host ("PUBLISHING GATE: {0} player name(s) or handle(s) from {1} field bundle file(s) gate too (the repository's own URL excepted); {2} note word(s) starting a name are the remote's own words" -f $names.Count, $fieldFiles, $ownWords)
 
 $commits = @(Invoke-GitQ $RepoDir @('rev-list', '--reverse', "$base..HEAD"))
 $commits = @($commits | Where-Object { $_ })
