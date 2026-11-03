@@ -220,6 +220,29 @@ agent's once-a-minute fps samples had put the cost on the figure band; the DLL's
   the old behaviour for that copy. Test: in place held; 0.31 m off written, and still written back in place; the next sitting held
   again. Twins: holding again after 2 s of writes; the posture alone (a body 24 m off held).
 
+## Gates and the installer
+
+- **Offline gates on the final source: 99 of 99 pass** -- native unit tests 10,258 (this work's rules among them: the bands' cadence,
+  the play-out, late against missing, the seated hold's sitting); relay round trip 229; agent 2,055; setup 77; log bundles 79; 80
+  synthetic Lua suites; the static checks; the relay message table (99) and fault-mode (37) gates; the digest analyzer (62) and rig (42)
+  tests; the save tools (14, 7).
+- **No-input-capture gate** (`tools/Check-NoInputCapture.ps1 -SelfTest`), first and last over every binary and script built here --
+  the dev builds, the bench's tools and the Steam link probe included: PASS both times (72 binaries, 1,433 scripts), the self-test
+  catching every planted capture.
+- **The real saves:** checked before and after every bench run -- every check a match, mirror roots only.
+- **The publishing gate** (found on the way): one tester's handle in this work's field bundles starts with a common word that another
+  tester's mark note uses, and the rule that gates a note word starting a handle made every line with that word a hit. A note word the
+  remote's main already uses as a word of its own is now the project's vocabulary, not the handle; the whole names still gate. Test:
+  such a word passes and the handle in full fails; twin: the rule before fails the first.
+- **The bench measured this code:** the dev build d15's native code section, agent, relay, protocol and Lua are identical to the
+  installer's commit, which adds documents and the publishing gate's rule.
+- **The installer** `KingdomComeTogether-Setup-0.64.0-905419f-2611030022.exe` is built from `905419f` with `tools/Build-Installer.ps1`
+  (the soak waived as the WO says -- the safety gates are hard, the rest reported): build id `905419f-2611030022`, 107,783,113 bytes,
+  sha256 `ebe5fd5d52aa27789df8f3125147c0a2f932c2915f420bdaaa38d251316b042c`, unsigned. The publishing gate, the live save round trip,
+  the payload smoke (the published relay and agent as `0.64.0+905419f-2611030022`), the test installs (41 of 41), the payload's
+  no-input-capture (963 binaries), no-input-tooling and no-screenshot gates and the relay fault gate all PASS; the real saves matched
+  their hash list after the round trip too. Installers stay local.
+
 ## Open
 
 - **The joined talk on the bench is noisy**, before and after alike in kind: the vote's own time is unchanged (157-263 ms before,
