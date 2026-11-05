@@ -1505,6 +1505,7 @@ public partial class GameBridge(ClientConfig config)
         _myGhostId = myId;
         Console.WriteLine($"Connected! Assigned id={myId} (protocol v{Protocol.Version})");
         Wo213OnConnect(link);   // WO-213 A: the link's meters; Steam's own config read back
+        Wo214OnConnect();       // WO-214: the mod's own switches
         Wo213StartWriter(link, stream);   // WO-213 B/C: Steam's limits and lanes, the scheduler, the hello
         Console.WriteLine();
 
@@ -2887,7 +2888,7 @@ public partial class GameBridge(ClientConfig config)
         var known = _ghostKnownItemClasses.GetOrAdd(ghostId, static _ => []);
         var applied = _ghostAppearance.GetOrAdd(ghostId, static _ => []);
         var unwearable = _ghostUnwearable.GetOrAdd(ghostId, static _ => new Wo135Rules.Unwearable());
-        var targetSet = Wo144WithoutLights(target);   // WO-144 2.4: lights are the torch sync's, never an outfit piece
+        var targetSet = Wo214KeepHeld(ghostId, Wo144WithoutLights(target));   // WO-144 2.4: lights are the torch sync's, never an outfit piece; WO-214 F: the weapon in the partner's hand stays
         lock (unwearable) unwearable.OnTarget(targetSet);
         // What the peer wears (the swing catalog resolves its weapon from this).
         lock (applied) { applied.Clear(); applied.UnionWith(targetSet); }
@@ -5594,6 +5595,11 @@ public partial class GameBridge(ClientConfig config)
                         // Lua side still gets a call for the one-shot locomotion
                         // hold; everything else (draw/sheathe/block, or a swing
                         // with no native path available) stays on the old call.
+                        if (ceEvent == Protocol.CombatEventWeaponDrawn)
+                        {
+                            await Wo214TestStripAsync(ceSource);   // WO-214 F: the bench's fault only
+                            await Wo214PreDrawAsync(ceSource, ct);   // WO-214 F: the weapon he last held is on his figure before its draw
+                        }
                         if (ceEvent == Protocol.CombatEventSwing
                             && _ghostEntityIds.TryGetValue(ceSource.ToString(), out uint ceEntityId))
                         {
@@ -6299,6 +6305,9 @@ public partial class GameBridge(ClientConfig config)
                 return;
             case string w213 when w213.StartsWith("w213_", StringComparison.Ordinal):   // WO-213: the switches and the status
                 Wo213OnEvent(name, arg);
+                return;
+            case string w214 when w214.StartsWith("w214_", StringComparison.Ordinal):   // WO-214: the switches, the status, F's hands
+                Wo214OnEvent(name, arg);
                 return;
             case "w206_cfg":         // WO-206 E: mp_epoch_check, mp_research_death_from_health
             case "w206_status":      // WO-206 E: mp_w206_status
@@ -7886,8 +7895,9 @@ public partial class GameBridge(ClientConfig config)
 
     // WO-213 D.4 (mp_figure_band): the figure in the top band -- the NPC sender's own 1.5 cm gate, so a walking player goes out every round
     // of the loop; off (the twin): 5 cm, which a walk crossed every second round (the bench's walk: one send per 52 ms, 10 cm apart)
+    // WO-214 A.4 (figure_turn): a turn of the figure counts as a change (WO-213 D.4 made it 0.01 rad); the twin ignores the turn
     private bool HasChanged(float x, float y, float z, float rotZ) =>
-        W213Rules.FigureChanged(x - _lastX, y - _lastY, z - _lastZ, rotZ - _lastRotZ, W213On("figure_band"), PosThreshold, RotThreshold);
+        W213Rules.FigureChanged(x - _lastX, y - _lastY, z - _lastZ, W214On("figure_turn") ? rotZ - _lastRotZ : 0f, W213On("figure_band"), PosThreshold, RotThreshold);
 
     // -------------------------------------------------------------------------
     // Source-generated regexes

@@ -11,6 +11,7 @@
 #include "wo210_kd.h"
 #include "wo208.h"
 #include "wo213.h"
+#include "wo214.h"
 #include "wo163_rules.h"
 #include "fault_guard.h"
 #include "npc_scan.h"   // WO-144 2.3: body_kind (a horse or an animal is entity-written)
@@ -279,6 +280,7 @@ struct Stream {
     int         gapN = 0, gapI = 0;
     double      lastArrival = 0;
     bool        lastMoved = false;   // the newest accepted sample moved from the one before it (the stream is in motion)
+    double      resumedAfterS = 0;   // WO-214 B: a sample came after this long a silence (the bound body blends from where it stands)
 };
 struct SenderClock { double curMin = 1e300, curStart = 0, prevMin = 1e300, lastSeen = 0; bool havePrev = false; bool init = false; };
 
@@ -332,6 +334,8 @@ struct Puppet {
     double   livingCheckAt = 0;     // WO-131 2b: when the body's physics was last checked for a ragdoll
     double   activityDriftSince = 0; // WO-209: since when its host NPC is far from the body an activity holds
     wo213rules::PostureSitting sitting;  // WO-213 E.3: a held posture's body found off its place takes the stream for the rest of that sitting
+    bool     silenceHeld = false;   // WO-214 B: this silence already passed the old 4 s drop (counted once)
+    const char* blendWhy = "bind";  // WO-214 A.3: what asked for the next blend (bind, resume, hold-end, extrap-end)
     bool     beast = false;         // WO-144 2.3: a horse or an encounter animal whose physics is not a living entity
     // MP-NPCPULL window
     double   winStart = 0;
@@ -453,6 +457,7 @@ void push_sample(const InSample& in, double now) {
     // shifts whenever the clock's minimum offset improves.
     const bool stamped = in.senderMs != 0 && g_senderClock.load(std::memory_order_relaxed);
     if (seqOk && stamped && s.haveSenderMs && static_cast<int32_t>(in.senderMs - s.lastSenderMs) <= 0) seqOk = false;
+    if (s.lastSampleAt > 0 && now - s.lastSampleAt >= wo214rules::kResumeBlendS) s.resumedAfterS = now - s.lastSampleAt;   // WO-214 B
     s.lastSampleAt = now;
     s.src = in.src;
     if (!seqOk) return;
@@ -1038,8 +1043,23 @@ uint8_t bind_main(const BindRequest& req) {
     if (g_bound.find(key) == g_bound.end() && g_bound.size() >= kMaxBound) return refuse(kTableFull, "");
 
     const double now = now_s();
+    // WO-214 B (one_bind): a bind asked again for a body bound to that same entity changes nothing -- the field re-bound bound bodies
+    // every ~3 s (1,266 of 2,894 binds), each time a fresh puppet (its blend, its play-out, its ring for a stream quiet 2 s)
+    {
+        auto bi = g_bound.find(key);
+        if (bi != g_bound.end() && wo214rules::bind_noop(wo214::on(wo214rules::kBitOneBind), true, bi->second.eid, bi->second.ent, req.eid, e)) {
+            wo214::note_rebind_noop();
+            static uint32_t s_noops = 0;
+            if (++s_noops <= 20 || s_noops % 200 == 0)
+                logf("MP-NPCBIND npc=%s result=ok rebind_noop=1 eid=0x%X -- already bound to this body: left as it is [n=%u]", req.name, req.eid, s_noops);
+            return kOk;
+        }
+    }
     Puppet& p = g_bound[key];
     const bool rebind = p.eid != 0;
+    // WO-214 B: how long the stream this bind is for had been silent (a bind for a stream the host no longer sends drops at once)
+    double streamAge = -1;
+    { auto si = g_streams.find(key); if (si != g_streams.end() && si->second.lastSampleAt > 0) streamAge = now - si->second.lastSampleAt; }
     p = Puppet{};
     p.key = key; p.name = req.name; p.eid = req.eid; p.ent = e; p.wuid = nativeWuid ? nativeWuid : req.wuid;
     p.beast = beast;
@@ -1057,12 +1077,12 @@ uint8_t bind_main(const BindRequest& req) {
     }
     p.blendPending = true;   // the first write starts from the body, not from the stream (blend_start)
     g_statBound.store(static_cast<uint16_t>(g_bound.size()));
-    logf("MP-NPCBIND npc=%s result=ok%s%s%s%s eid=0x%X wuid=%016llX lua_wuid=%016llX anchor=(%.2f,%.2f,%.2f) delay_ms=%u jitter_allow_ms=%.0f bound=%zu",
+    logf("MP-NPCBIND npc=%s result=ok%s%s%s%s eid=0x%X wuid=%016llX lua_wuid=%016llX anchor=(%.2f,%.2f,%.2f) delay_ms=%u jitter_allow_ms=%.0f bound=%zu stream_age_s=%.1f",
          req.name, rebind ? " rebind=1" : "", beast ? " body=horse-or-animal (entity-written)" : "",
          noPhys ? " physics=none-yet (entity-written until it has physics)" : "", parent ? " seated=held (written once free)" : "",
          req.eid, static_cast<unsigned long long>(nativeWuid),
          static_cast<unsigned long long>(req.wuid), req.anchor[0], req.anchor[1], req.anchor[2], req.delayMs,
-         p.lateApplied * 1000.0, g_bound.size());
+         p.lateApplied * 1000.0, g_bound.size(), streamAge);
     return kOk;
 }
 
@@ -1178,11 +1198,22 @@ void tick() {
         const bool keepMoving = sIt != g_streams.end() && g_walkFromHost.load(std::memory_order_relaxed) &&
                                 now - sIt->second.lastSampleAt <= kSilenceMovingS && stream_speed(sIt->second) >= kExtrapMinMps;
         if (keepMoving && now - sIt->second.lastSampleAt > kSilenceS) c_silenceKept.fetch_add(1, std::memory_order_relaxed);
-        if (sIt == g_streams.end() || (!holdAll && !keepMoving && now - sIt->second.lastSampleAt > kSilenceS)) {
+        // WO-214 B (one_bind): a silent stream's body holds where its last sample has it (its last pose); only a stream silent for
+        // kBoundForgetS is forgotten -- the old rule dropped it after 4 s, two lost heartbeats, and the next sample bound it afresh
+        const bool oneBind = wo214::on(wo214rules::kBitOneBind);
+        const double silentS = sIt != g_streams.end() ? now - sIt->second.lastSampleAt : 1e9;
+        if (sIt == g_streams.end() || (!holdAll && wo214rules::silence_drops(oneBind, silentS, keepMoving))) {
             auto cur = it++;
             pull_flush(cur->second, now);
+            if (oneBind && sIt != g_streams.end()) wo214::note_forget();
             drop(cur, kSilence, true);
             continue;
+        }
+        if (oneBind && silentS > wo214rules::kSilenceOldS) { if (!p.silenceHeld) { p.silenceHeld = true; wo214::note_silence_hold(); } }
+        else if (silentS < 1.0) p.silenceHeld = false;
+        if (sIt->second.resumedAfterS > 0) {   // WO-214 B: back after a silence -- from where the body stands, never a jump
+            if (wo214rules::resume_blends(oneBind, sIt->second.resumedAfterS)) { p.blendPending = true; p.blendWhy = "resume"; wo214::note_silence_resume(sIt->second.resumedAfterS); }
+            sIt->second.resumedAfterS = 0;
         }
         void* e = engine::entity_by_id(p.eid);
         if (e != p.ent || !is_a(e, g_vftEntity)) {
@@ -1238,6 +1269,7 @@ void tick() {
             p.haveLast = false;
             p.havePrev = false;
             p.blendPending = true;   // it resumes from wherever the engine or the one-shot leaves the body
+            p.blendWhy = "hold-end";
             // WO-163 (A5): a swing hold is a fight hold -- the frame is an unwritten one, the engine's position is what is seen.
             // The other reasons are not a fight: no hold, no step across them.
             float held[3];
@@ -1293,9 +1325,21 @@ void tick() {
         float segMps = 0.0f;
         if (!render(s, now - renderDelay, renderDelay, pose, &ex, &segMps, e1)) { ++it; continue; }
         if (ex) c_extrapFrames.fetch_add(1, std::memory_order_relaxed);
-        if (p.extrapolating && !ex) { p.blendPending = true; c_extrapEnds.fetch_add(1, std::memory_order_relaxed); }   // back onto the stream, from the body
+        if (p.extrapolating && !ex) { p.blendPending = true; p.blendWhy = "extrap-end"; c_extrapEnds.fetch_add(1, std::memory_order_relaxed); }   // back onto the stream, from the body
         p.extrapolating = ex;
-        if (p.blendPending) blend_start(p, e, pose);
+        if (p.blendPending) {
+            blend_start(p, e, pose);
+            // WO-214 A.3: a blend over 1 m, with the stream's own last gap -- a big blend on a stream that had no 1 s gap is the receiver's
+            const float bl = std::sqrt(p.off[0] * p.off[0] + p.off[1] * p.off[1] + p.off[2] * p.off[2]);
+            if (p.blending && bl > 1.0f) {
+                const double gapS = s.n >= 2 ? s.ring[s.n - 1].at - s.ring[s.n - 2].at : -1.0;
+                static uint32_t s_big = 0;
+                if (++s_big <= 300 || s_big % 100 == 0)
+                    logf("WO214-BLEND npc=%s cm=%.0f why=%s stream_gap_ms=%.0f gap_over_1s=%d samples=%d [n=%u]", p.name.c_str(), bl * 100.0, p.blendWhy,
+                         gapS * 1000.0, gapS > 1.0 ? 1 : 0, s.n, s_big);
+            }
+            p.blendWhy = "bind";
+        }
         if (p.blending) blend_apply(p, pose, dt);
         bool wrote = false;
         // WO-121: the rendered planar speed (this pose against the last one written).

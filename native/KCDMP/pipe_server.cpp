@@ -5,6 +5,7 @@
 #include "pipe_server.h"
 #include "wo208.h"
 #include "wo209.h"
+#include "wo214.h"
 #include "mannequin_read.h"
 #include "local_state.h"
 #include "npc_scan.h"
@@ -728,7 +729,12 @@ void serve(HANDLE h) {
                 const bool ran = run_sync_bounded<rttr::SwingResult>(
                     [entityId, spec](rttr::SwingResult& result) {
                         if (kcdmp::wo209::row_attack(entityId, spec.c_str())) { result = rttr::SwingResult::Ok; return; }   // WO-209 B: the copy's own attack
-                        if (kcdmp::wo208::probe_owned(entityId)) { result = rttr::SwingResult::QueueFaulted; return; }   // WO-208 A.1: one owner
+                        // WO-208 A.1: one owner -- WO-214 D.1/D.2 (reaction_rows): the host's hit and death reactions play on an owned copy too
+                        if (kcdmp::wo214rules::owner_refuses_row(kcdmp::wo208::probe_owned(entityId), kcdmp::wo214::on(kcdmp::wo214rules::kBitReactionRows), spec.c_str())) {
+                            result = kcdmp::wo214::on(kcdmp::wo214rules::kBitReactionRows) ? rttr::SwingResult::OwnerOwns : rttr::SwingResult::QueueFaulted;
+                            return;
+                        }
+                        if (kcdmp::wo208::probe_owned(entityId)) kcdmp::wo214::note_owned_reaction(kcdmp::wo214rules::death_row(spec.c_str()));
                         result = rttr::ghost_swing(entityId, spec.c_str());
                         if (result == rttr::SwingResult::Ok) kcdmp::wo187::note_move(entityId);   // WO-187 C2: the move's scope is watched
                     },

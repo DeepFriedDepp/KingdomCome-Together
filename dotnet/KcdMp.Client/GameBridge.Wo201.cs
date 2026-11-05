@@ -69,6 +69,7 @@ public partial class GameBridge
         Wo201ValuesReset();
         Wo201CombatReset();
         Wo201HandsReset();
+        Wo214HandsReset();   // WO-214 F: a partner's last hand goes with him
         Wo201Dude2Reset();
         Wo201NearReset();
         _ = Wo201PushConfigAsync();   // role none: the DLL's joiner rules stand down at once

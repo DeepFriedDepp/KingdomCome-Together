@@ -302,9 +302,18 @@ public partial class GameBridge
         {
             if (now - nw.AtMs > 120_000) { _w147NpcNewest.TryRemove(name, out _); _w147NpcProcessedMs.TryRemove(name, out _); _w147NpcPushedAtMs.TryRemove(name, out _); _w147SilentSent.TryRemove(name, out _); continue; }
             long done = _w147NpcProcessedMs.TryGetValue(name, out long d) ? d : -1;
-            if (!Wo147Rules.SilenceDue(now, nw.AtMs, done, _w147SilentSent.ContainsKey(name))) continue;
+            // WO-214 B (one_bind): a body in the host's range is silent only after 12 s (the old 3 s: one lost heartbeat released it)
+            int releaseMs = Wo214SilenceReleaseMs(name);
+            if (!Wo147Rules.SilenceDue(now, nw.AtMs, done, _w147SilentSent.ContainsKey(name), releaseMs))
+            {
+                if (releaseMs > Wo147Rules.SilenceReleaseMs && Wo147Rules.SilenceDue(now, nw.AtMs, done, false)
+                    && (!_w214HeldOnce.TryGetValue(name, out long heldAt) || heldAt != nw.AtMs))
+                { _w214HeldOnce[name] = nw.AtMs; Interlocked.Increment(ref _w214SilenceHeld); }
+                continue;
+            }
             _w147SilentSent[name] = true;
             Interlocked.Increment(ref _w147SilentNotes);
+            Wo214NoteSilent(name, now - nw.AtMs, releaseMs);   // WO-214 B: the release's distance (in the host's range or not)
             await ExecLuaAsync("if KCD2MP_NpcStreamSilent then KCD2MP_NpcStreamSilent(\"" + name + "\") end");
         }
     }

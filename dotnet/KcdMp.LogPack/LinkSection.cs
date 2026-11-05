@@ -121,6 +121,7 @@ public static class LinkSection
             }
             sb.Append(hz.Count > 0 ? $"- **fighting NPCs** (within 15 m of a player, drawn, engaged or with an opponent): {Q(hz, 0.5).ToString("F1", CultureInfo.InvariantCulture)} Hz p50 over {hz.Count} windows (worst window {hz.Min().ToString("F1", CultureInfo.InvariantCulture)} Hz)\n"
                                    : "- **fighting NPCs**: none in this session\n");
+            sb.Append(BandTable(bands, agent.Where(l => l.Contains("MP-LINK npc-moving who=", StringComparison.Ordinal)).ToList()));   // WO-214 G
         }
         // ---- the scheduler (this agent's way out; on the host the relay's per client)
         var outs = agent.Concat(relay).Where(l => (l.Contains("MP-LINK out who=", StringComparison.Ordinal) || l.Contains("MP-LINK relay client=", StringComparison.Ordinal)) && l.Contains(" sched=on", StringComparison.Ordinal)).Select(Fields).ToList();
@@ -154,6 +155,50 @@ public static class LinkSection
                         .Take(2).Select(l => l.Length > 140 ? l[..140] : l));
                 sb.Append($"  - {g.T} {g.Kind} longest {F0(g.Ms)} ms; before it: {before}\n");
             }
+        }
+        sb.Append('\n');
+        return sb.ToString();
+    }
+
+    private static readonly string[] BandNames = ["fight", "40m", "150m", "far"];
+    private static readonly string[] BandWords = ["fighting, within 15 m", "within 40 m", "within 150 m", "beyond 150 m"];
+
+    /// <summary>
+    /// WO-214 G: the band table in plain words -- per band, every NPC's rate at this machine (MP-LINK npc-bands: mostly idle bodies, which
+    /// only the 2 s heartbeat sends) beside the walking ones' (MP-LINK npc-moving; an older build has none), and the verdict line: "walking
+    /// NPCs within 40 m reached you N times a second".
+    /// </summary>
+    public static string BandTable(IReadOnlyList<string> bandLines, IReadOnlyList<string> movingLines)
+    {
+        var sb = new StringBuilder();
+        static (List<double> P50, List<double> P10, int Bodies) Read(IReadOnlyList<string> lines, string band)
+        {
+            var p50 = new List<double>(); var p10 = new List<double>(); int bodies = 0;
+            foreach (var l in lines)
+            {
+                var m = Regex.Match(l, " " + Regex.Escape(band) + @"=(\d+):p50=([\d.]+)Hz:p10=([\d.]+)Hz");
+                if (!m.Success || !int.TryParse(m.Groups[1].Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out int n) || n == 0) continue;
+                if (!double.TryParse(m.Groups[2].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out double a)
+                    || !double.TryParse(m.Groups[3].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out double b)) continue;
+                p50.Add(a); p10.Add(b); bodies += n;
+            }
+            return (p50, p10, bodies);
+        }
+        var near = Read(movingLines, "40m");
+        if (movingLines.Count > 0)
+            sb.Append("- **walking NPCs**: ").Append(near.P50.Count == 0 ? "no walking NPC within 40 m was measured"
+                : FormattableString.Invariant($"walking NPCs within 40 m reached you {Q(near.P50, 0.5):F0} times a second (the slowest tenth {Q(near.P10, 0.1):F0}; {near.Bodies} body-windows)")).Append('\n');
+        sb.Append("\n| band | NPCs per window (p50) | every NPC, Hz p50 | walking NPCs, Hz p50 / slowest tenth |\n|---|---|---|---|\n");
+        for (int b = 0; b < BandNames.Length; b++)
+        {
+            var all = Read(bandLines, BandNames[b]);
+            var mov = Read(movingLines, BandNames[b]);
+            if (all.P50.Count == 0 && mov.P50.Count == 0) continue;
+            int perWin = all.P50.Count == 0 ? 0 : (int)Math.Round((double)all.Bodies / all.P50.Count);
+            string walking = movingLines.Count == 0 ? "(not measured: an older build)" : mov.P50.Count == 0 ? "none walked"
+                : FormattableString.Invariant($"{Q(mov.P50, 0.5):F1} / {Q(mov.P10, 0.1):F1} ({mov.Bodies} body-windows)");
+            string every = all.P50.Count == 0 ? "-" : Q(all.P50, 0.5).ToString("F1", CultureInfo.InvariantCulture);
+            sb.Append($"| {BandWords[b]} | {perWin} | {every} | {walking} |\n");
         }
         sb.Append('\n');
         return sb.ToString();

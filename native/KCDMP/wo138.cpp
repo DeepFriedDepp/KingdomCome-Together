@@ -8,6 +8,7 @@
 #include "fault_guard.h"
 #include "wo138_rules.h"
 #include "wo213.h"
+#include "wo214.h"
 #include "wo209.h"
 
 #ifndef NOMINMAX
@@ -249,7 +250,24 @@ struct Tracked {
     R::Sent     sent;
     bool        culled = false;
     double      bandAt = 0;         // WO-213 D.2: the slot of this NPC's last send (its band's cadence)
+    float       sentRot = 0;        // WO-214 A.0/A.1: the yaw that went out last (the change test's rotation)
 };
+
+// ---- WO-214 A.0: the change test's decisions, one line each, for ten bodies for 60 s (the bench: KCDMP_TEST_W214_DECIDE=1) ----------
+// A window opens when a partner's anchor is known and bodies are in the near band; its bodies are chosen in its first tick (the ones that
+// moved since the tick before first, then the nearest), kept for the window, and every decision on them is logged; a summary per body
+// closes it. The read is the live entity's world matrix (npc_scan.cpp read_pos_yaw) -- no cache stands between the engine and the test.
+struct DecideSum { uint32_t reads = 0, changed = 0, moved = 0, unchanged = 0, notDue = 0, culled = 0, sent = 0, sentMoved = 0, sentHb = 0, sentOther = 0;
+                   double maxDeltaCm = 0; int lastBand = -1; };
+struct Decide {
+    bool envRead = false, on = false;
+    double winStart = -1, winEnd = -1, nextWin = 0;
+    bool choosing = false;
+    std::vector<std::pair<float, std::string>> cand;   // (score, lower) collected in the window's first tick
+    std::unordered_map<std::string, DecideSum> sum;     // the chosen bodies (lower-case names)
+    uint32_t windows = 0, lines = 0;
+} g_dec;
+double g_anchorsAt = 0;
 
 std::atomic<bool> g_on{false};
 R::Config g_cfg;
@@ -423,6 +441,29 @@ void sender_tick(double now) {
         g_attrCursor = (g_attrCursor + 1) % g_tracked.size();
     }
 
+    // WO-214 A.0 (the bench only): a decision window opens once a partner's anchor is known; its first tick picks the bodies
+    if (!g_dec.envRead) {
+        g_dec.envRead = true;
+        char b[16] = {};
+        const DWORD n = GetEnvironmentVariableA("KCDMP_TEST_W214_DECIDE", b, sizeof b);
+        g_dec.on = n > 0 && n < sizeof b && b[0] == '1';
+        if (g_dec.on) logf("WO214-DECIDE armed (KCDMP_TEST_W214_DECIDE=1, the bench): 60 s windows of the change test's decisions for ten near bodies");
+    }
+    const bool decWin = g_dec.on && g_dec.winStart > 0 && now < g_dec.winEnd;
+    if (g_dec.on && !decWin && g_dec.winStart > 0) {   // a window just closed: one summary line per body
+        for (const auto& kv : g_dec.sum) {
+            const DecideSum& d = kv.second;
+            const double secs = g_dec.winEnd - g_dec.winStart;
+            logf("WO214-DECIDE-SUM npc=%s band_last=%d reads=%u changed=%u (moved %u) unchanged=%u not_due=%u culled=%u sent=%u (moved %u, heartbeat %u, other %u) "
+                 "sent_hz=%.1f max_delta_cm=%.1f", kv.first.c_str(), d.lastBand, d.reads, d.changed, d.moved, d.unchanged, d.notDue, d.culled, d.sent,
+                 d.sentMoved, d.sentHb, d.sentOther, secs > 0 ? d.sent / secs : 0.0, d.maxDeltaCm);
+        }
+        logf("WO214-DECIDE window %u closed: %zu bodies, %u decision lines", g_dec.windows, g_dec.sum.size(), g_dec.lines);
+        g_dec.winStart = -1; g_dec.sum.clear(); g_dec.lines = 0;
+        g_dec.nextWin = now + 120.0;   // the next window two minutes on
+    }
+    if (g_dec.on && g_dec.winStart < 0 && !g_anchors.empty() && now >= g_dec.nextWin && bandsOn) { g_dec.choosing = true; g_dec.cand.clear(); }
+
     std::vector<Row> rows;
     uint16_t resolved = 0;
     for (size_t idx = 0; idx < g_tracked.size(); ++idx) {
@@ -433,6 +474,7 @@ void sender_tick(double now) {
         float x, y, z, yaw;
         if (!npcscan::read_entity(e, &x, &y, &z, &yaw)) continue;
         ++resolved;
+        const float prevX = t.s.x, prevY = t.s.y;   // WO-214 A.0: the previous tick's read (a window's pick prefers bodies that move)
         t.s.x = x; t.s.y = y; t.s.z = z; t.s.rot = yaw; t.s.notHuman = t.notHuman;
         if (!t.haveAttr || std::find(attrIdx.begin(), attrIdx.end(), idx) != attrIdx.end()) read_attrs(t);
 
@@ -441,9 +483,32 @@ void sender_tick(double now) {
         float dMin = 1e9f;
         if (havePlayer) dMin = R::dist2d(x, y, pp[0], pp[1]);
         for (const auto& a : g_anchors) dMin = std::min(dMin, R::dist2d(x, y, a.x, a.y));
+        if (g_dec.choosing && dMin <= bnd.nearM && !t.notHuman) {
+            const float mv = std::sqrt((x - prevX) * (x - prevX) + (y - prevY) * (y - prevY));
+            g_dec.cand.emplace_back((mv > 0.01f ? 1000.0f : 0.0f) - dMin, t.lower);
+        }
+        DecideSum* dec = decWin ? (g_dec.sum.count(t.lower) ? &g_dec.sum[t.lower] : nullptr) : nullptr;
+        const float dx = x - t.sent.x, dy = y - t.sent.y, dz = z - t.sent.z;
+        const double deltaCm = 100.0 * std::max(std::fabs(dx), std::max(std::fabs(dy), std::fabs(dz)));   // the test is per axis
+        auto decide = [&](const char* cull, int changed, int band, int due, int sent, const char* why) {
+            if (!dec) return;
+            ++dec->reads; if (changed) ++dec->changed; if (deltaCm > cfg.moveEps * 100.0) ++dec->moved;
+            if (std::strcmp(why, "unchanged") == 0) ++dec->unchanged;
+            if (std::strcmp(why, "not-due") == 0) ++dec->notDue;
+            if (std::strcmp(cull, "culled") == 0) ++dec->culled;
+            if (sent) { ++dec->sent; if (std::strcmp(why, "moved") == 0) ++dec->sentMoved; else if (std::strcmp(why, "heartbeat") == 0) ++dec->sentHb; else ++dec->sentOther; }
+            if (deltaCm > dec->maxDeltaCm) dec->maxDeltaCm = deltaCm;
+            if (band >= 0) dec->lastBand = band;
+            ++g_dec.lines;
+            logf("WO214-DECIDE npc=%s band=%d d=%.1f read_pos=(%.2f,%.2f,%.2f) yaw=%.3f last_sent_pos=(%.2f,%.2f,%.2f) last_sent_yaw=%.3f delta_cm=%.1f "
+                 "planar_cm=%.1f eps_cm=%.1f since_sent_ms=%.0f since_slot_ms=%.0f cull=%s change=%d due=%d sent=%d why=%s src=entity",
+                 t.name.c_str(), band, dMin, x, y, z, yaw, t.sent.x, t.sent.y, t.sent.z, t.sentRot, deltaCm,
+                 100.0 * std::sqrt(dx * dx + dy * dy), cfg.moveEps * 100.0, t.sent.any ? (now - t.sent.at) * 1000.0 : -1.0,
+                 t.sent.any ? (now - t.bandAt) * 1000.0 : -1.0, cull, changed, due, sent, why);
+        };
         const R::Cull c = R::cull(dMin, cfg, eng, R::heartbeat_due(t.sent, now, cfg), t.s.dead && !t.sent.dead,
                                   t.s.ko != t.sent.ko);
-        if (c == R::Cull::Culled) { t.culled = true; continue; }
+        if (c == R::Cull::Culled) { t.culled = true; decide("culled", 0, -1, 0, 0, "culled"); continue; }
         t.culled = false;
         // WO-202 IV.4 fight_pos_fresh: a fighting NPC near ANY player (the partner's fights too, not only the host's 12 m) goes out every
         // tick -- standing in guard it moved less than the send threshold and waited for the 2 s heartbeat (the field: p90 1.0 s old)
@@ -451,14 +516,22 @@ void sender_tick(double now) {
         // no weapon in hand and went out in the 40 m band
         const bool opponent = bandsOn && wo209::host_fights(t.eid);
         const bool fresh = wo202::on(wo202rules::kBitFightPosFresh) && wo202rules::fight_fresh(t.s.drawn || opponent, t.s.dead, t.s.ko, dMin, cfg.engageRange);
-        if (!R::should_send(t.s, t.sent, eng || fresh, swing, now, cfg) && !fresh) continue;
-        // WO-213 D.2: not before its band's period (a death, a knock-out, a draw, an engagement change and a swing cue go at once)
+        // WO-214 A.1 (send_turn): a turn is a change too -- position, health and the flags were; a body turning in place went out only
+        // on its 2 s heartbeat
+        const bool turnOnly = t.sent.any && !R::should_send(t.s, t.sent, eng || fresh, swing, now, cfg) &&
+                              wo214rules::turned(yaw, t.sentRot, wo214::on(wo214rules::kBitSendTurn));
+        const bool changed = turnOnly || R::should_send(t.s, t.sent, eng || fresh, swing, now, cfg);
         const int band = wo213rules::band(dMin, eng || t.s.drawn || opponent, bnd);
+        const char* cullName = c == R::Cull::FarBand ? "far-band" : "send";
+        if (!changed && !fresh) { decide(cullName, 0, band, 0, 0, "unchanged"); continue; }
+        // WO-213 D.2: not before its band's period (a death, a knock-out, a draw, an engagement change and a swing cue go at once)
         if (bandsOn && t.sent.any) {
             const bool urgent = swing || (t.s.dead && !t.sent.dead) || t.s.ko != t.sent.ko || t.s.drawn != t.sent.drawn || eng != t.sent.engaged;
-            if (!urgent && !wo213rules::band_due(now - t.bandAt, band, bnd)) continue;
+            if (!urgent && !wo213rules::band_due(now - t.bandAt, band, bnd)) { decide(cullName, 1, band, 0, 0, "not-due"); continue; }
         }
         if (bandsOn) { wo213::note_band_send(band); t.bandAt = wo213rules::band_slot(t.bandAt, now, wo213rules::band_period_s(band, bnd)); }
+        decide(cullName, 1, band, 1, 1, deltaCm > cfg.moveEps * 100.0 ? "moved" : turnOnly ? "turned" : R::heartbeat_due(t.sent, now, cfg) ? "heartbeat" : fresh ? "fight-fresh" : "state");
+        if (turnOnly) wo214::note_turn_send();
 
         if (t.s.dead && !t.sent.dead)
             logf("WO138-SEND %s: the dead bit goes out (hp=%.1f)", t.name.c_str(), t.s.hp);
@@ -466,6 +539,20 @@ void sender_tick(double now) {
         t.sent.any = true;
         t.sent.x = x; t.sent.y = y; t.sent.z = z; t.sent.hp = t.s.hp; t.sent.at = now;
         t.sent.dead = t.s.dead; t.sent.ko = t.s.ko; t.sent.drawn = t.s.drawn; t.sent.engaged = eng;
+        t.sentRot = yaw;
+    }
+    if (g_dec.choosing) {   // WO-214 A.0: the window's ten -- the moving first, then the nearest
+        g_dec.choosing = false;
+        std::sort(g_dec.cand.begin(), g_dec.cand.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
+        if (!g_dec.cand.empty()) {
+            std::string list;
+            for (size_t i = 0; i < g_dec.cand.size() && i < 10; ++i) { g_dec.sum[g_dec.cand[i].second] = DecideSum{}; list += (i ? "," : "") + g_dec.cand[i].second; }
+            g_dec.winStart = now; g_dec.winEnd = now + 60.0; ++g_dec.windows;
+            logf("WO214-DECIDE window %u open for 60 s: %s | anchors=%zu (pushed %.1f s ago) player=%d tick=%.0f ms bands near %.0f m/%u ms mid %.0f m/%u ms eps %.1f cm heartbeat %u ms",
+                 g_dec.windows, list.c_str(), g_anchors.size(), g_anchorsAt > 0 ? now - g_anchorsAt : -1.0, havePlayer ? 1 : 0, period * 1000.0,
+                 bnd.nearM, bnd.nearMs, bnd.midM, bnd.midMs, cfg.moveEps * 100.0, cfg.heartbeatMs);
+        } else g_dec.nextWin = now + 5.0;   // nobody near yet: look again in 5 s
+        g_dec.cand.clear();
     }
     g_resolved = resolved;
     if (!rows.empty()) flush_rows(rows);
@@ -686,6 +773,7 @@ uint8_t handle(const uint8_t* b, size_t len, uint8_t* out, size_t cap, size_t* o
             std::memcpy(&a, p + 1 + i * 12, 12);
             if (std::isfinite(a.x) && std::isfinite(a.y) && std::isfinite(a.z)) g_anchors.push_back(a);
         }
+        g_anchorsAt = now_s();   // WO-214 A.0: the decision log says how old the partner's anchor was
         return kROk;
     }
     case kOpStatus: {

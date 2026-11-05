@@ -357,9 +357,19 @@ public partial class GameBridge
         string was = _w167HostWeapon.TryGetValue(r.Name, out var pw) ? pw : "";
         _w167HostWeapon[r.Name] = w;
         if (w == was) return;
-        if (!(W151InFight(r.Name) || W167HostFought(r.Name))) return;   // out of a fight the stream's drawn flag decides, once
+        // WO-214 E (draw_event): the host NPC's hand is its copy's at once, in a fight or not, and held while that hand holds it -- the field's
+        // halberd NPC took his weapon into his hand before the fight with the joiner began, this said nothing out of a fight, and the copy
+        // fought bare-handed (its drawn flag, the soul's HasWeaponInHand, read false on that fighter: drawn and sheathed again in 0.5 s)
+        bool drawEvent = W214On("draw_event");
+        if (drawEvent && w == "-" && was is "" or "-") return;   // a hand that never held a weapon: nothing to put away (d1: 66 such)
+        if (!drawEvent && !(W151InFight(r.Name) || W167HostFought(r.Name))) return;   // out of a fight the stream's drawn flag decides, once
         Interlocked.Increment(ref _w167WeaponCalls);
-        await ExecLuaAsync($"if KCD2MP_W167Weapon then KCD2MP_W167Weapon(\"{r.Name}\", \"{w}\", \"hands\") end");
+        if (drawEvent)
+        {
+            Interlocked.Increment(ref w == "-" ? ref _w214Holsters : ref _w214Draws);
+            Console.WriteLine($"WO214-DRAW npc={r.Name} hand={(w == "-" ? "-" : w[..Math.Min(8, w.Length)])} told={(w == "-" ? "sheathe" : "draw")} (the host NPC's hand changed)");
+        }
+        await ExecLuaAsync($"if KCD2MP_W167Weapon then KCD2MP_W167Weapon(\"{r.Name}\", \"{w}\", \"{(drawEvent ? "hands214" : "hands")}\") end");
     }
 
     /// <summary>C2: a host attack row played on a copy says armed or unarmed -- the copy follows (with the host's class when known).</summary>

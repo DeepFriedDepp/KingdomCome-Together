@@ -16,6 +16,16 @@ public readonly record struct SteamLinkStatus(int PingMs, float QualityLocal, fl
     public float InPacketsPerSec { get; init; }
     public int PendingUnreliable { get; init; }
     public (int PendingUnreliable, int PendingReliable, long QueueTimeUsec)[] Lanes { get; init; } = [];
+
+    /// <summary>
+    /// WO-214 A.0: Steam's queue time as milliseconds, or null when Steam has no estimate -- it reports int64's maximum then (the
+    /// field's briefing printed queue_ms=9223372036854775807 on every line). Negative values are no estimate either.
+    /// </summary>
+    public static double? QueueMs(long usec) => usec < 0 || usec >= long.MaxValue / 2 ? null : usec / 1000.0;
+
+    /// <summary>WO-214 A.0: <see cref="QueueMs"/> for a log line: "-" when Steam has no estimate.</summary>
+    public static string QueueMsText(long usec) =>
+        QueueMs(usec) is { } ms ? ms.ToString("F1", System.Globalization.CultureInfo.InvariantCulture) : "-";
 }
 
 /// <summary>WO-213 B: what a connection's config says after we set it (read back), and Steam's answer to each set.</summary>
@@ -465,7 +475,7 @@ public sealed class SteamLinkPath(SteamP2PConnection conn) : KcdMp.Wire.ILinkPat
     // lane 0 -- a world transfer -- does not hold state back: Steam shares the rate between the lanes 3:1); one lane: everything Steam holds.
     public KcdMp.Wire.LinkPathStatus Status() => conn.RealTimeStatus() is not { } s ? default
         : StateOwnLane && s.Lanes.Length >= 2
-            ? new KcdMp.Wire.LinkPathStatus(true, s.SendRateBytesPerSec, s.Lanes[1].PendingUnreliable + s.Lanes[1].PendingReliable, (int)Math.Min(int.MaxValue, Math.Max(0, s.Lanes[1].QueueTimeUsec / 1000)))
+            ? new KcdMp.Wire.LinkPathStatus(true, s.SendRateBytesPerSec, s.Lanes[1].PendingUnreliable + s.Lanes[1].PendingReliable, (int)Math.Min(int.MaxValue, SteamLinkStatus.QueueMs(s.Lanes[1].QueueTimeUsec) ?? 0))
               { EventPendingBytes = s.Lanes[0].PendingUnreliable + s.Lanes[0].PendingReliable }
-            : new KcdMp.Wire.LinkPathStatus(true, s.SendRateBytesPerSec, s.PendingReliable + s.PendingUnreliable, (int)Math.Min(int.MaxValue, Math.Max(0, s.QueueTimeUsec / 1000)));
+            : new KcdMp.Wire.LinkPathStatus(true, s.SendRateBytesPerSec, s.PendingReliable + s.PendingUnreliable, (int)Math.Min(int.MaxValue, SteamLinkStatus.QueueMs(s.QueueTimeUsec) ?? 0));
 }

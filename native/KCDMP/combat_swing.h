@@ -51,6 +51,8 @@ enum class SwingResult : uint8_t {
     CtorFailed        = 14,
     QueueFaulted      = 15,  // ENGINE REFUSED THE ACTION
     Timeout           = 16,  // synthesised by the pipe when the game thread never took the task
+    // 17, 18: the pipe's own (TaskFaulted, UnknownCommand)
+    OwnerOwns         = 19,  // WO-214 D.2: the copy's animation owner (WO-208) shows its actions; the row was not played (was 15)
 };
 
 /// Human-readable name for a code, for the native log. Never used for

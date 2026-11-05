@@ -48,7 +48,8 @@ def plan(cid):
         'dir': base,
         'agent_dir': os.path.join(base, 'agent'),
         'dll_dir': os.path.join(base, 'dll'),
-        'data_dir': os.path.join(base, 'data'),
+        # WO-214 F: KCDMP_RIG_JOIN_DATA=<tag> gives the joiner copy a Henry store of its own (a world never joined there: a first join)
+        'data_dir': os.path.join(base, 'data-' + JOIN_DATA if JOIN_DATA and cid == JOIN_CID else 'data'),
         'backup_dir': os.path.join(base, 'backups'),
         'bundle_dir': os.path.join(base, 'bundle'),
         'dice_port': 5900 + 10 * n + 1,      # the maintainer's launcher/agent keep 5901/5902
@@ -119,6 +120,15 @@ HOST_CID = 'B' if os.environ.get('KCDMP_RIG_HOST') == 'B' else 'A'
 JOIN_CID = 'A' if HOST_CID == 'B' else 'B'
 SEED = {HOST_CID: [('playline4', 'save440.whs')], JOIN_CID: [('OLD/playline1', 'autosave026.whs')]}
 SEED_TO = {HOST_CID: 'playline4', JOIN_CID: 'playline3'}
+# WO-214 F: the joiner's usual Henry (that early save) carries nothing -- no weapon, no clothes -- so a draw test measures nothing.
+# KCDMP_RIG_JOIN_SAVE=<dir>/<file> (under the real saves, read only; another playthrough than the host's world) is seeded into the
+# joiner's playline2 and pinned as his first-join Henry (mp_join_henry playline2/<file>); with KCDMP_RIG_JOIN_DATA=<tag> (a Henry store
+# of the copy's own) the host's world is a first join there, so that Henry is the one brought.
+JOIN_SAVE = os.environ.get('KCDMP_RIG_JOIN_SAVE', '').strip().replace('\\', '/')
+JOIN_DATA = re.sub(r'[^A-Za-z0-9_-]', '', os.environ.get('KCDMP_RIG_JOIN_DATA', ''))
+if JOIN_SAVE:
+    SEED[JOIN_CID] = [tuple(JOIN_SAVE.rsplit('/', 1))]
+    SEED_TO[JOIN_CID] = 'playline2'
 
 
 def seed_saves():
@@ -431,6 +441,26 @@ def join_from_menu(cid, p, st, key, port):
             rig.note('pre-join-lua', copy=c, lua=pre)
         rig.say('pre-join Lua on both copies:', pre)
         time.sleep(2)
+    if JOIN_SAVE:   # WO-214 F: the pinned Henry, the console's answer (the launcher's answer only knows bring / fresh)
+        # sent once the agent asks (the first try, 3 s after the agent's start, never reached it: the agent asked "Bring / Start fresh"
+        # and waited, the host idled beside a joiner that never asked for the world -- and died of out-of-memory), then confirmed
+        pin = 'playline2/' + JOIN_SAVE.rsplit('/', 1)[1]
+        alog = os.path.join(p['agent_dir'], 'agent.log')
+        def seen(rx):
+            try:
+                with open(alog, encoding='utf-8', errors='replace') as f: return re.search(rx, f.read()) is not None
+            except OSError: return False
+        t0 = time.time()
+        while time.time() - t0 < 120 and not seen(r'MP-HENRY joiner: first join to world \S+ -- asking the player'): time.sleep(1)
+        for i in range(4):
+            rig.console(port_of(cid), '#KCD2MP_SetJoinHenry("%s")' % pin)
+            t1 = time.time()
+            while time.time() - t1 < 10 and not seen(r"first-join answer '%s'" % re.escape(pin)): time.sleep(0.5)
+            if seen(r"first-join answer '%s'" % re.escape(pin)):
+                rig.note('join-choice', copy=cid, choice=pin, tries=i + 1)
+                rig.say('copy', cid, 'first-join answer taken: %s (pinned, try %d)' % (pin, i + 1))
+                return 0
+        rig.say('copy', cid, 'the agent did not take the pinned first-join answer %s' % pin); return 1
     url = 'http://localhost:%d/join-choice?c=bring' % p['version_port']
     t0 = time.time()
     while time.time() - t0 < 90:

@@ -11,7 +11,7 @@ last 200 lines of each log. Nothing here reads input; nothing takes focus.
     scenarios: join, walk, sleep, wait, fight, talk, loot, smoke (join walk sleep wait fight talk loot), soak [min], c2, c3,
     e2, e2twin, b1, b1twin, joinfight (B3), joinscene (B1 + twin), stats, long [min] (join soak c2 c3 fight e2 e2twin)
 """
-import json, os, re, sys, time
+import json, math, os, re, sys, time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -2192,6 +2192,8 @@ def s_w210_kills(r, kills=int(os.environ.get('KCDMP_RIG_KILLS', '10')), per_s=12
             t0 = time.time(); dead = False
             while time.time() - t0 < per_s and not dead:
                 time.sleep(2)
+                # WO-214 D: his weapon stays drawn (a move holsters it, and fists do 0 HP on a bandit: "joiner_said=hp0.0", 1 kill in 20)
+                r.b.lua_nowait('pcall(function() if not player.human:IsWeaponDrawn() then player.human:DrawWeapon() end end)')
                 dead = r.a.ask(DEAD_Q % name, 'W210D', 3) == 'true'
                 if not dead and time.time() - t0 > 20 and int(time.time() - t0) % 20 < 2:
                     r.b.teleport(*(lambda q: (q[0] + 1.4, q[1]) if q else (x + 1.6, y))(pos_of(r.a, name)))
@@ -2766,6 +2768,305 @@ def s_w211_fly(r):
     return fn
 
 
+# ---------------------------------------------------------------- WO-214: walking away, turning in place, the figure's weapon, host kills
+
+def probe_yaws(root, t0_ms, t1_ms, kind):
+    """(t ms, yaw) of one kind of body in a copy's probe file between two wall times (WO-214 A.4)."""
+    import json
+    out = []
+    p = os.path.join(root, 'kcdmp-anim.jsonl')
+    if not os.path.exists(p): return out
+    with open(p, encoding='utf-8', errors='replace') as f:
+        for l in f:
+            try: row = json.loads(l)
+            except ValueError: continue
+            if not t0_ms <= row.get('t', 0) <= t1_ms: continue
+            for a in row.get('a', []):
+                if a.get('k') == kind and a.get('r'): out.append((row['t'], a['r'][2]))
+    return out
+
+
+def s_w214_away(r, dist=70.0, rounds=2):
+    """WO-214 C.1: by day in the bench save's town, the host stands; the joiner walks <dist> m away in a straight line at 1.4 m/s (a step
+    every frame) and back, <rounds> times. Measured from the joiner's native log over the step: the owner's empty stretches within 60 m
+    (WO214-EMPTY), its let-gos and their distances (WO208-OWN let go ... far ... m), the reseats charged to an unnamed path."""
+    def fn():
+        t = r.a.ask(FIND_INN % os.environ.get('KCDMP_RIG_INN', 'ttkc_woman_2'), 'W207I', 6)
+        if not t or t == 'none': return False, 'no-town', t
+        parts = t.split()
+        x, y = float(parts[1]), float(parts[2])
+        r.a.lua('local now = Calendar.GetWorldTime(); local d = math.floor(now / 86400) * 86400 + 10 * 3600; '
+                'if d < now then d = d + 86400 end; Calendar.SetWorldTime(d)')
+        time.sleep(30)
+        r.a.teleport(x + 6.0, y + 6.0)
+        r.b.teleport(x + 7.0, y + 6.5)
+        time.sleep(20)
+        mb = r.b.mark()
+        walker = ('W214AWAY = (W214AWAY or 0) + 1; local gen, d, leg = W214AWAY, 0, 0; local x0, y0, len, legs = %.3f, %.3f, %.1f, %d; '
+                  'local function step() if gen ~= W214AWAY or leg >= legs then return end; local ft = 0.016; '
+                  'pcall(function() ft = System.GetFrameTime() end); if type(ft) ~= "number" or ft <= 0 or ft > 0.1 then ft = 0.016 end; '
+                  'd = d + 1.4 * ft; if d >= len then d = 0; leg = leg + 1 end; local off = (leg %% 2 == 0) and d or (len - d); '
+                  'local xx, yy = x0 + off, y0; local z = System.GetTerrainElevation({x=xx, y=yy, z=0}); player:SetWorldPos({x=xx, y=yy, z=z + 0.05}); '
+                  'Script.SetTimer(1, step) end; step()')
+        r.b.lua(walker % (x + 7.0, y + 6.5, dist, rounds * 2))
+        secs = rounds * 2 * dist / 1.4
+        time.sleep(secs + 15)
+        r.b.lua('W214AWAY = (W214AWAY or 0) + 1')
+        time.sleep(5)
+        nl = r.b.lines(r.b.nlog, mb['n'])
+        empty = [l for l in nl if 'WO214-EMPTY' in l and 'open=0' in l]
+        secs_empty = sum(float(re.search(r'secs=([\d.]+)', l).group(1)) for l in empty)
+        letgo = [float(m.group(1)) for l in nl for m in [re.search(r'let go npc=\S+ \(far from the local player: (\d+) m\)', l)] if m]
+        unknown = sum(1 for l in nl if 'WO210-STATE reseat' in l and 'path=unknown' in l)
+        info = {'empty_stretches': len(empty), 'empty_secs': round(secs_empty, 1), 'letgos': len(letgo),
+                'letgo_m_min': min(letgo) if letgo else None, 'reseats_unknown': unknown, 'walk_s': round(secs)}
+        return True, 'ok', info
+    return fn
+
+
+def s_w214_turn(r, secs=20.0, radps=0.6):
+    """WO-214 A.4: the host turns in place (its player's yaw a step every frame, <radps> rad/s, for <secs>), the joiner beside him.
+    Judged from the probes: the joiner's figure of the host against the host's own yaw at the best constant delay (0..1000 ms)."""
+    import math
+    def fn():
+        pa = r.a.pos()
+        if not pa: return False, 'no-pos', 'copy A gave no position'
+        r.b.teleport(pa[0] + 3.0, pa[1])
+        time.sleep(5)
+        turner = ('W214TURN = (W214TURN or 0) + 1; local gen, el, yaw = W214TURN, 0, 0; local secs, w = %.1f, %.3f; '
+                  'pcall(function() yaw = player:GetWorldAngles().z end); '
+                  'local function step() if gen ~= W214TURN or el >= secs then return end; local ft = 0.016; '
+                  'pcall(function() ft = System.GetFrameTime() end); if type(ft) ~= "number" or ft <= 0 or ft > 0.1 then ft = 0.016 end; '
+                  'el = el + ft; yaw = yaw + w * ft; pcall(function() player:SetWorldAngles({x = 0, y = 0, z = yaw}) end); '
+                  'Script.SetTimer(1, step) end; step()')
+        t0 = time.time()
+        r.a.lua(turner % (secs, radps))
+        time.sleep(secs + 1)
+        t1 = time.time()
+        time.sleep(3)
+        w0, w1 = int(t0 * 1000) + 1000, int(t1 * 1000)
+        host = probe_yaws(r.a.p['root'], w0 - 1500, w1, 'player')
+        fig = probe_yaws(r.b.p['root'], w0, w1, 'figure')
+        if len(host) < 20 or len(fig) < 20: return False, 'no-probe-yaws', {'host': len(host), 'figure': len(fig)}
+        turned = abs(((host[-1][1] - host[0][1] + math.pi) % (2 * math.pi)) - math.pi)
+        import bisect
+        ht = [h[0] for h in host]
+        best = None
+        for off in range(0, 1001, 50):
+            errs = []
+            for t, yv in fig:
+                i = bisect.bisect_left(ht, t - off)
+                if 0 < i < len(host): errs.append(abs(((yv - host[i][1] + math.pi) % (2 * math.pi)) - math.pi))
+            if len(errs) < 10: continue
+            errs.sort()
+            p90 = errs[int(0.9 * (len(errs) - 1))]
+            if best is None or p90 < best[1]: best = (off, p90, errs[len(errs) // 2], len(errs))
+        detail = {'host_turned_rad': round(turned, 2), 'best_delay_ms': best and best[0], 'p90_deg': best and round(math.degrees(best[1]), 1),
+                  'p50_deg': best and round(math.degrees(best[2]), 1), 'n': best and best[3]}
+        if turned < 0.5: return False, 'host-did-not-turn', detail
+        ok = best is not None and math.degrees(best[1]) <= 15.0
+        return ok, ('ok' if ok else 'figure-yaw-behind'), detail
+    return fn
+
+
+# the host's view of the joiner's figure's weapon (WO-214 F): drawn, and whether its right hand holds an item (a null id is empty)
+HAND_OF = ('local function hand_of(hu) local h = "-"; pcall(function() local it = hu:GetItemInHand(0); local s = tostring(it); '
+           'if it and not s:find("0000000000000000", 1, true) then h = (s:match("(%x+)%s*$") or s) end end); return h end; ')
+FIG_WEAPON_Q = (HAND_OF.replace('%', '%%') + 'local f = %s; local out = "none"; if f and f.human then local d = "?"; pcall(function() d = tostring(f.human:IsWeaponDrawn()) end); '
+                'out = "drawn=" .. d .. " hand=" .. hand_of(f.human) end; System.LogAlways("[W214F] " .. out)')
+OWN_WEAPON_Q = (HAND_OF + 'local d = "?"; pcall(function() d = tostring(player.human:IsWeaponDrawn()) end); '
+                'local c = "?"; pcall(function() local s = player.soul; c = tostring((s:IsInCombatDanger() == true) or (s:IsInCombatMode() == true)) end); '
+                'System.LogAlways("[W214O] drawn=" .. d .. " hand=" .. hand_of(player.human) .. " combat=" .. c)')
+# The bench joiner's usual Henry (an early save of another playthrough) carries nothing: no weapon, no clothes (d2: drawn=false after
+# every B, his AvatarHit rows r_noweapon). A sword created into his inventory is gone again before his draw (the engine: "Ignoring draw
+# of item in DrawItemLogic. Item is no longer in owner's inventory"), so F runs with an armed Henry of another playthrough instead:
+# KCDMP_RIG_JOIN_SAVE + KCDMP_RIG_JOIN_DATA (tools/rig/pair.py). ItemManager.CreateItem is nil in this game (the inventory's works).
+
+
+def s_w214_draws(r, n=5, in_fight=False):
+    """WO-214 F: the joiner draws and sheathes <n> times (2.5 s drawn, 2.5 s sheathed); 1.5 s after each, the host's figure of him is read
+    (drawn, the item in its hand) against his own. In a fight (<in_fight>): a bandit is first set on the joiner's figure on the host."""
+    def fn():
+        if in_fight:
+            # a fight beside the joiner: the bandits set on the HOST, the joiner 3 m from him -- the d5 run set them on the joiner's figure,
+            # and his Henry (only his sword on: the bench's saves) was downed in one burst (health 100 -> 7 in 0.3 s; the keeper's 200 ms
+            # cannot catch that), a downed Henry draws nothing. Each row records whether his own game counts him in combat (combat=)
+            t = r.a.ask(FIND_BANDITS3, 'W207K', 6)
+            if not t or t.startswith('none'): return False, 'no-bandits', t
+            names, x, y, z = t.split()
+            r.a.teleport(float(x) + 4.0, float(y))
+            # the joiner 12 m from the host's fight (KCDMP_RIG_W214_FIGHT_M): at 3 m the bandits took his figure too and his Henry (only his
+            # sword on) was downed before his first draw in two of three runs; the leash itself pulls him beside the host after the jump
+            fm = float(os.environ.get('KCDMP_RIG_W214_FIGHT_M', '3'))
+            for _ in range(3):   # d8: the joiner's move was lost once and he stayed in the village, 40+ m from the fight
+                r.b.teleport(float(x) + 4.0 + fm, float(y) + 1.0)
+                time.sleep(4)
+                pb = r.b.pos()
+                if pb and math.hypot(pb[0] - (float(x) + 4.0 + fm), pb[1] - (float(y) + 1.0)) < 12.0: break
+            for c in (r.a, r.b): c.keep_up()
+            for nm in names.split(','): r.a.lua(ATTACK % (nm, 'player'))
+            time.sleep(3)
+        else:
+            pa = r.a.pos()
+            if not pa: return False, 'no-pos', 'copy A gave no position'
+            r.b.teleport(pa[0] + 3.0, pa[1])
+            time.sleep(4)
+        armed = getattr(r, '_w214_armed', None)
+        if armed is None:
+            # his weapon set, the game's own way: the mod's repair (WO-174) equips the best melee weapon of his own inventory
+            # (Actor.EquipInventoryItem) when his draw is refused -- a weapon CREATED into a joiner's inventory is gone again before
+            # his draw (the d2 runs), one from his own save stays
+            armed = {'before': r.b.ask(OWN_WEAPON_Q, 'W214O', 3), 'join_save': os.environ.get('KCDMP_RIG_JOIN_SAVE') or 'the usual'}
+            mk = r.b.mark()
+            r.b.lua('if KCD2MP_W174Repair then KCD2MP_W174Repair("wo214-bench") end')
+            hit = r.b.wait('k', mk['k'], r'WO174-REPAIR step=result result=(.*?) draw_ok=(yes|no)|WO174-SAY Nothing was wrong', 25)
+            armed['repair'] = hit.group(0)[:160] if hit else None
+            r._w214_armed = armed
+            time.sleep(6)   # his outfit poll (3 s) and the host's apply of it to his figure
+        # the joiner's own draw and sheathe through the game's own calls (Human.DrawWeapon / HolsterWeapon: the active weapon set, the
+        # same draw the B key starts) -- no input: the window manager refused the rig's window push while the PC was in use (d4), and a
+        # focus fight is never an option
+        def drawn_(t): return bool(t) and 'drawn=true' in t
+        def hand_(t):
+            m = re.search(r'hand=(\S+)', t or '')
+            return m.group(1) if m else '-'
+        # KCDMP_RIG_W214_KEYS=1: the B key (the game's own toggle) instead -- in a fight the game refuses a scripted draw (d7: 0 of 5),
+        # and a key needs the joiner's window in front, which the window manager grants only while the PC is not in use
+        keys = os.environ.get('KCDMP_RIG_W214_KEYS') == '1'
+        g = None
+        if keys:
+            sys.path.insert(0, os.path.join(rig.REPO, 'tools', 'dev-input'))
+            import game_input
+            g = game_input.Game('wo214-draws')
+            g.pids = {rec_of(r.b)['pid']}
+            if not put_front(r.b): return False, 'joiner-not-in-front', {'armed': armed}
+        rows = []
+        for i in range(n):
+            for want in ('draw', 'sheathe'):
+                for _ in range(2):   # a call the game did not take (a busy frame, an animation) is made once more
+                    t_call = time.time()
+                    if g is not None:
+                        try: g.tap('b', 90)
+                        except Exception as ex: return False, 'joiner-not-in-front', {'err': str(ex), 'rows': rows}
+                    else:
+                        r.b.lua('pcall(function() player.human:%s() end)' % ('DrawWeapon' if want == 'draw' else 'HolsterWeapon'))
+                    time.sleep(1.5)
+                    own = r.b.ask(OWN_WEAPON_Q, 'W214O', 3)
+                    if bool(own) and (('drawn=true' in own) == (want == 'draw')): break
+                # the host's figure, read until it matches him (for up to 4 s after the first read): how long the mirror took from his
+                # call, not one sample (d6's loop timed from his call and never read: his own console's reply alone took that long)
+                fig, took_s, t_read0 = None, None, time.time()
+                while True:
+                    fig = r.a.ask(FIG_WEAPON_Q % FIGURE, 'W214F', 3)
+                    if drawn_(fig) == drawn_(own) and (hand_(fig) == '-') == (hand_(own) == '-'):
+                        took_s = round(time.time() - t_call, 2); break
+                    if time.time() - t_read0 > 4.0: break
+                    time.sleep(0.4)
+                rows.append({'i': i, 'want': want, 'joiner': own, 'host_sees': fig, 'matched_after_s': took_s, 'at_ms': int(time.time() * 1000)})
+                time.sleep(1.0)
+        if g is not None:
+            try: g.release_all()
+            except BaseException: pass
+        if in_fight:
+            for c in (r.a, r.b): c.stop_keep()
+
+        def drawn(t): return bool(t) and 'drawn=true' in t
+        def hand(t):
+            m = re.search(r'hand=(\S+)', t or '')
+            return m.group(1) if m else '-'
+        took = sum(1 for x in rows if drawn(x['joiner']) == (x['want'] == 'draw'))
+        match = sum(1 for x in rows if drawn(x['joiner']) == drawn(x['host_sees']) and (hand(x['joiner']) == '-') == (hand(x['host_sees']) == '-'))
+        waits = sorted(x['matched_after_s'] for x in rows if x.get('matched_after_s') is not None)
+        detail = {'cycles': n, 'in_fight': in_fight, 'armed': armed, 'joiner_took': '%d/%d' % (took, len(rows)), 'matches': '%d/%d' % (match, len(rows)),
+                  'matched_after_s': {'p50': waits[len(waits) // 2] if waits else None, 'max': waits[-1] if waits else None},
+                  'first_read_matched': sum(1 for x in rows if x.get('matched_after_s') is not None and x['matched_after_s'] <= 2.6), 'rows': rows}
+        if took < len(rows): return False, 'joiner-did-not-draw', detail   # no draw on his side: the step measures nothing
+        return match == len(rows), ('ok' if match == len(rows) else 'figure-hand-differs'), detail
+    return fn
+
+
+def host_swinger(r, swings, stop, tag):
+    """The host's own attacks (WO-214 D: kills by the host; run with KCDMP_RIG_HOST=B so the host is the copy in front): lock on, the left
+    button. Send-only, as joiner_swinger."""
+    sys.path.insert(0, os.path.join(rig.REPO, 'tools', 'dev-input'))
+    import game_input
+    g = None
+    try:
+        g = game_input.Game(tag)
+        g.pids = {rec_of(r.a)['pid']}
+        if not put_front(r.a): swings['err'] = 'host not in front'; return
+        n = 0
+        while not stop.is_set():
+            try:
+                if n % 6 == 0: g.tap('tab', 80)
+                g.click('left', 90)
+                swings['sent'] += 1
+            except game_input.NotFocused:
+                swings['refused'] += 1
+                if swings['refused'] > 20 or not put_front(r.a): break
+                try: g.release_all()
+                except game_input.NotFocused: pass
+            n += 1
+            stop.wait(1.2)
+    except BaseException as ex:
+        swings['err'] = '%s: %s' % (type(ex).__name__, ex)
+    finally:
+        try:
+            if g: g.release_all()
+        except BaseException: pass
+
+
+def s_w214_hostkills(r, kills=int(os.environ.get('KCDMP_RIG_KILLS', '10')), per_s=120):
+    """WO-214 D: the host kills <kills> bandits with his own blows (each brought low first: health 8; set on the host's player), the joiner
+    beside the fight. Measured on the joiner: each death's copy -- its death row (MP-ACTION ... CombatDeath ... result=, WO214-DEATHROW),
+    the death applied (WO214-DEATH how=), still upright (must be 0)."""
+    def fn():
+        done, rows = 0, []
+        for i in range(kills * 2):
+            if done >= kills: break
+            t = r.a.ask(FIND_BANDIT1, 'W210B', 6)
+            if not t or t == 'none': break
+            name, x, y, z = t.split()
+            x, y = float(x), float(y)
+            r.a.teleport(x + 1.6, y)
+            r.b.teleport(x + 6.0, y + 2.0)
+            time.sleep(4)
+            for c in (r.a, r.b): c.keep_up()
+            # his weapon first, then the fight: once locked on with his fists out the game refuses a scripted draw, and a move holsters it
+            # (the first d8 run: 86 swings with the weapon sheathed, fists do 0 HP on a bandit)
+            r.a.lua('pcall(function() if not player.human:IsWeaponDrawn() then player.human:DrawWeapon() end end)')
+            time.sleep(2.0)
+            drawn0 = r.a.ask(OWN_WEAPON_Q, 'W214O', 3)
+            mb = r.b.mark()
+            r.a.lua(SET_STATE % (name, 'health', 8.0))
+            r.a.lua(ATTACK % (name, 'player'))
+            import threading
+            swings = {'sent': 0, 'refused': 0, 'err': None}
+            stop = threading.Event()
+            th = threading.Thread(target=host_swinger, args=(r, swings, stop, 'wo214-hostkill'), daemon=True); th.start()
+            t0 = time.time(); dead = False
+            while time.time() - t0 < per_s and not dead:
+                time.sleep(2)
+                dead = r.a.ask(DEAD_Q % name, 'W210D', 3) == 'true'
+                # no move of the host mid-fight (it holsters his weapon): the bandit was set on him and comes to him
+            stop.set(); th.join(timeout=10)
+            for c in (r.a, r.b): c.stop_keep()
+            time.sleep(4)
+            jl = r.b.lines(r.b.alog, mb['a'])
+            death = [l for l in jl if 'WO214-DEATH npc=%s ' % name in l]
+            row = [l for l in jl if 'kind=NpcHit npc=%s ' % name in l and 'Death' in l]
+            if dead: done += 1
+            rows.append({'npc': name, 'dead': dead, 'swings': swings['sent'], 'swing_err': swings['err'], 'drawn_at_start': drawn0,
+                         'death_row': (re.search(r'result=(\S+)', row[-1]).group(1) if row else None),
+                         'death': (re.search(r'how=(\S+)', death[-1]).group(1) if death else None)})
+            rig.say('  kill', rows[-1])
+        upright = sum(1 for x in rows if x['death'] == 'still-upright')
+        detail = {'kills': done, 'upright': upright, 'rows': rows}
+        if done == 0: return False, 'no-kill', detail
+        return upright == 0, ('ok' if upright == 0 else 'upright-dead'), detail
+    return fn
+
+
 def run(name, args):
     r = Run(name)
     plan = {
@@ -2872,6 +3173,10 @@ def run(name, args):
         'w211ff': [('join', s_join(r)), ('ffhits', s_w211_ffhits(r))],
         'w211fly': [('join', s_join(r)), ('fly', s_w211_fly(r))],
         'w211misc': [('join', s_join(r)), ('fly', s_w211_fly(r)), ('ffhits', s_w211_ffhits(r)), ('menus', s_w211_menus(r))],
+        # WO-214: C.1 the joiner walks away and back, A.4 the host turns in place, F the figure's weapon, D kills by the host
+        'w214away': [('join', s_join(r)), ('away', s_w214_away(r)), ('turn', s_w214_turn(r)), ('draws', s_w214_draws(r, 5, False)), ('draws-fight', s_w214_draws(r, 5, True))],
+        'w214hostkills': [('join', s_join(r)), ('hostkills', s_w214_hostkills(r))],
+        'w214draws': [('join', s_join(r)), ('draws', s_w214_draws(r, 5, False)), ('draws-fight', s_w214_draws(r, 5, True))],
         # WO-213 F.2: the 15-minute session (a walk, a fight, a tavern, a talk), each part on the same pair
         'w213session': [('join', s_join(r)), ('village', s_village(r, 240)), ('figwalk', s_walk(r, 40, smooth=True)), ('c1fight', s_c1fight(r, 180)), ('c2tavern', s_c2tavern(r, 240)),
                         ('talk', s_talk(r, 150))],
@@ -2893,7 +3198,7 @@ def run(name, args):
         # 'long' runs independent checks: one failing does not stop the next (a failed join does)
         if not r.step(nm, fn) and (name not in ('long', 'joinscene', 'joinfight', 'e2pair', 'c1pair', 'e2twinpair', 's1pair', 'smoke', 's1front',
                                                'c1fight', 'c2tavern', 'convboth', 'convday', 'convtimed', 'smoke2', 'awake', 'soak2', 'convscene', 'c1x', 'probefight', 'probetavern', 'village', 'defence', 'loot5', 'convforced', 'convforcedj',
-                                               'idle_check', 'toggle_live', 'convvote_both', 'fight10', 'w211misc', 'w213session', 'w213walk') or nm == 'join'
+                                               'idle_check', 'toggle_live', 'convvote_both', 'fight10', 'w211misc', 'w213session', 'w213walk', 'w214away', 'w214hostkills', 'w214draws') or nm == 'join'
                                               or r.steps[-1]['reason'] == 'copy-exited'): break   # a game gone ends the run
     return r.finish()
 

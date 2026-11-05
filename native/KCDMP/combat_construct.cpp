@@ -798,6 +798,7 @@ const char* swing_result_name(SwingResult r) {
         case SwingResult::CtorFailed:        return "ctor-failed";
         case SwingResult::QueueFaulted:      return "engine-refused";
         case SwingResult::Timeout:           return "timeout";
+        case SwingResult::OwnerOwns:         return "owner-owns";
     }
     return "unknown";
 }

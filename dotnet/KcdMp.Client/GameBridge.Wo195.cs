@@ -174,6 +174,9 @@ public partial class GameBridge
         try
         {
             await Task.Delay(Wo195Rules.FallCheckMs);
+            // WO-214 D.3: a copy whose death reaction plays (its death row, here within 2 s) is given the reaction's own fall first
+            if (W214On("death_ground") && _w214DeathRowPlayedMs.TryGetValue(npc, out long playedMs) && Environment.TickCount64 - playedMs < 2000)
+                await Task.Delay(Wo214Rules.DeathReactionGraceMs);
             var a = new byte[4];
             BinaryPrimitives.WriteUInt32LittleEndian(a, eid);
             var r = await _combat.Wo163Async(Protocol.Wo195OpCheck, a);
@@ -181,7 +184,21 @@ public partial class GameBridge
             {
                 // the mod's ApplyDeath kills the soul with no death reaction: the copy stays upright, frozen in the dead action's first pose
                 // (live: head 1.4 m up, physics still a living entity; a vanilla kill lies as a ragdoll). The game's own ragdoll then lays it down.
-                bool upright = Wo195Rules.Upright(x.Payload[0], x.Payload[2]);
+                // WO-214 D.3 (death_ground): this check follows a death the host decided -- a body whose physics is still a living entity is
+                // upright whatever its soul reads yet (the field: 484 ms after the death the soul read alive, the check said "not needed",
+                // and the body stood dead 96 s). Its soul read dead: the engine's way below; not yet: asked again, then the ragdoll.
+                bool deathGround = W214On("death_ground");
+                if (deathGround && x.Payload[0] != 1 && x.Payload[2] == 1)
+                {
+                    for (int i = 0; i < 3 && x.Payload[0] != 1; i++)
+                    {
+                        await Task.Delay(Wo214Rules.SoulDeadRecheckMs);
+                        var rs = await _combat.Wo163Async(Protocol.Wo195OpCheck, a);
+                        if (rs is { Ok: true, Payload.Length: >= 4 } ys) x = ys;
+                    }
+                }
+                bool upright = deathGround ? Wo214Rules.UprightDead(x.Payload[2]) : Wo195Rules.Upright(x.Payload[0], x.Payload[2]);
+                string how214 = "engine";
                 // WO-210 C.2 (mp_death_engine): a dead copy ends a corpse the engine's way -- its ragdoll and its dead state (op 142, the hit
                 // handler's own lethal branch), so it lies as its host NPC does and this player's game offers its loot; the twin (off) keeps
                 // WO-195's physics ragdoll for an upright one
@@ -195,15 +212,24 @@ public partial class GameBridge
                         var rf = await _combat.Wo163Async(Protocol.Wo195OpCheck, a);
                         if (rf is { Ok: true, Payload.Length: >= 4 } yf) x = yf;
                         _ = Wo210DeathCheckAsync(npc, "copy-" + Wo210FinishHow(fin, upright));
+                        if (upright) how214 = "finished";
                         upright = false;   // the finish lays it down (its own ragdoll); the physics ragdoll below is not needed
                     }
                 }
                 if (upright)
                 {
+                    how214 = "ragdolled";
                     await ExecLuaAsync($"if KCD2MP_W195Ragdoll then KCD2MP_W195Ragdoll(\"{EscapeLua(npc)}\") end");
                     await Task.Delay(Wo195Rules.RagdollSettleMs);
                     var r2 = await _combat.Wo163Async(Protocol.Wo195OpCheck, a);
                     if (r2 is { Ok: true, Payload.Length: >= 4 } y) x = y;
+                }
+                if (deathGround)
+                {
+                    // WO-214 D.3's instrument: every death applied here ends on the ground -- or is told upright (it must read 0)
+                    bool still = x.Payload[2] == 1;
+                    if (still) Interlocked.Increment(ref _w214StillUpright); else Interlocked.Increment(ref _w214DeathDown);
+                    Console.WriteLine($"WO214-DEATH npc={npc} after_ms={Environment.TickCount64 - releasedMs} soul_dead={(x.Payload[0] == 1 ? "yes" : "no")} how={(still ? "still-upright" : how214)} living={Wo195Rules.Tri(x.Payload[2], "yes", "no(ragdoll)")}");
                 }
                 bool down = x.Payload[1] != 1 && x.Payload[3] == 0 && x.Payload[2] == 0;
                 Interlocked.Increment(ref down ? ref _w195FallDown : ref _w195FallStanding);

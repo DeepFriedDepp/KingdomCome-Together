@@ -206,7 +206,9 @@ do
 end
 
 -- (B) the writer hand-over: Lua waits for the DLL to let go before it writes the body (MP-AUTHORITY-VIOLATION path=legacy) ----
+-- WO-214 B: with one_bind on the heartbeat may be 10 s late (a busy joiner's console), so the 3 s rule is its twin's (one_bind off)
 do
+    W214 = W214 or {}; W214.on = W214.on or {}; W214.on.one_bind = false
     resetNpc()
     local n = "ttkc_man_3"
     local e = mkEntity(n, 0, 0, 0); ENTS[n] = e
@@ -226,6 +228,122 @@ do
     run(1.0, feed)
     check("B: after the hold (1.5 s) Lua writes it itself", #e.writes > w0, tostring(#e.writes - w0))
     noErrs("B")
+    W214.on.one_bind = nil
+end
+
+-- (B2) WO-214 B (one_bind on, the default): a heartbeat 4 s late keeps the DLL writing; 10 s without one lets it go ---------------
+do
+    resetNpc()
+    local n = "ttkc_man_4"
+    local e = mkEntity(n, 0, 0, 0); ENTS[n] = e
+    KCD2MP.npcNativeWrite = true
+    KCD2MP._npcNative.armed = true; KCD2MP._npcNative.on = true; KCD2MP._npcNative.aliveAt = NOW
+    local function feed() KCD2MP_ApplyNpcState(n, 5, 0, 0, 0, 100, 0, 0, nil, nil) end
+    KCD2MP_ApplyNpcState(n, 5, 0, 0, 0, 100, 0, 0, 1, 1000)
+    tick()
+    local p = KCD2MP.npcPuppets[n]
+    p.nativeSent = true; p.nativeOwned = true
+    NOW = NOW + 4.0
+    local w0 = #e.writes
+    local mark = #LOG
+    run(1.0, feed)
+    check("B2: one_bind: a heartbeat 5 s late keeps the DLL's writer (no let-go, no Lua write)",
+          p.nativeOwned == true and countEvt("npc_native", n .. " off", mark) == 0 and #e.writes == w0, tostring(p.nativeOwned) .. "/" .. tostring(#e.writes - w0))
+    NOW = NOW + 6.0
+    run(1.0, feed)
+    check("B2: ... 11 s without one: the DLL is let go (fail closed, as before)", p.nativeOwned == false and countEvt("npc_native", n .. " off", mark) == 1, tostring(p.nativeOwned))
+    noErrs("B2")
+end
+
+-- (F) WO-214 F (figure_hands): this player's own hand goes to the partner at each draw and sheathe; the partner's figure holds it -----
+do
+    ERRS = {}
+    local CLS = "efa237c7-3905-4813-b9c3-a32b449c17ad"
+    local ITEMS = { [101] = { class = CLS } }
+    local oldIM = ItemManager
+    ItemManager = { GetItem = function(it) return ITEMS[it] end }
+    local HAND = nil
+    local oldPlayer = player
+    player = { id = 1, human = { GetItemInHand = function(self, h) if h == 0 then return HAND end return nil end, IsWeaponDrawn = function() return false end } }
+    local function runTimers(secs)
+        local t_end = NOW + secs
+        while NOW < t_end do
+            NOW = NOW + 0.05
+            local due = {}
+            for i = #TIMERS, 1, -1 do local tm = TIMERS[i]; if NOW >= tm.at + tm.ms / 1000 then due[#due + 1] = tm; table.remove(TIMERS, i) end end
+            for i = #due, 1, -1 do due[i].f() end
+        end
+    end
+    W214.on.figure_hands = nil   -- the default: on
+    W214.hand.sentDrawn, W214.hand.sentCls, W214.hand.sentAt, W214.hand.drawSince = nil, nil, -1e9, nil
+    local mark = #LOG
+    KCD2MP_W214OwnHandTick(NOW, false)
+    check("F: the first poll says sheathed, once", countEvt("w214_hand", "0 -", mark) == 1)
+    KCD2MP_W214OwnHandTick(NOW + 0.2, false)
+    check("F: ...and nothing more while nothing changes", countEvt("w214_hand", "", mark) == 1)
+    local t = NOW + 1
+    KCD2MP_W214OwnHandTick(t, true)            -- drawn, the hand still empty (the draw's own animation)
+    KCD2MP_W214OwnHandTick(t + 0.4, true)
+    check("F: a draw whose hand is still filling sends nothing yet", countEvt("w214_hand", "1 ", mark) == 0)
+    HAND = 101
+    KCD2MP_W214OwnHandTick(t + 0.6, true)
+    check("F: the hand filled: the class in it is sent", countEvt("w214_hand", "1 " .. CLS, mark) == 1, lastLog("w214_hand", mark))
+    KCD2MP_W214OwnHandTick(t + 5, true)
+    check("F: no repeat while it holds the same", countEvt("w214_hand", "1 " .. CLS, mark) == 1)
+    KCD2MP_W214OwnHandTick(t + 11, true)
+    check("F: ...a heartbeat every 10 s while drawn", countEvt("w214_hand", "1 " .. CLS, mark) == 2)
+    HAND = nil
+    KCD2MP_W214OwnHandTick(t + 12, false)
+    check("F: the sheathe is sent", countEvt("w214_hand", "0 -", mark) == 2)
+    W214.on.figure_hands = false   -- the twin: nothing is sent
+    local m2 = #LOG
+    HAND = 101
+    KCD2MP_W214OwnHandTick(t + 20, true)
+    KCD2MP_W214OwnHandTick(t + 22, true)
+    check("F: the twin (figure_hands off) sends nothing", countEvt("w214_hand", "", m2) == 0)
+    W214.on.figure_hands = nil
+    player = oldPlayer
+
+    -- the partner's figure: its own draw left the hand empty (the field) -> the class goes into its weapon set and is drawn
+    local FIG, eq = nil, nil
+    local fig = mkEntity("kcd2mp_1", 0, 0, 0)
+    fig.inventory = { FindItem = function(self, c) if c == CLS and fig._has then return 101 end return nil end,
+                      CreateItem = function(self, c) if c == CLS then fig._has = true end end }
+    fig.actor.EquipInventoryItem = function(self, it) eq = it end
+    fig.human.GetItemInHand = function(self, h) if h == 0 then return FIG end return nil end
+    fig.human.DrawWeapon = function() if eq then FIG = eq end return true end
+    fig.human.HolsterWeapon = function() FIG = nil return true end
+    fig.human.HolsterToInventory = function() FIG = nil end
+    fig.human.DrawFromInventory = function(self, it) FIG = it end
+    local oldG = KCD2MP.ghosts["1"]
+    KCD2MP.ghosts["1"] = { entity = fig }
+    TIMERS = {}
+    local m3 = #LOG
+    KCD2MP_W214FigureHand("1", true, CLS, false)
+    runTimers(0.4)
+    check("F: the figure's own draw, still running, is watched first (nothing touched in its first 0.4 s)", eq == nil and countEvt("w214_figure_hand", "", m3) == 0)
+    runTimers(3.0)
+    check("F: the figure's hand stayed empty: the class is created, equipped into its weapon set and drawn",
+          FIG == 101 and countEvt("w214_figure_hand", "1 fixed equipped+drawn", m3) == 1, lastLog("WO214-HAND figure", m3))
+    local m4 = #LOG
+    KCD2MP_W214FigureHand("1", true, CLS, false)
+    check("F: a figure already holding it: ok at once", countEvt("w214_figure_hand", "1 ok held", m4) == 1, lastLog("WO214-HAND figure", m4))
+    KCD2MP.ghostWeaponDrawn["1"] = nil
+    local m5 = #LOG
+    KCD2MP_W214FigureHand("1", false, "-", false)
+    runTimers(3.0)
+    check("F: sheathed, the hand still full after 1.5 s: put away", FIG == nil and countEvt("w214_figure_hand", "1 fixed holstered", m5) == 1, lastLog("WO214-HAND figure", m5))
+    W214.on.figure_hands = false   -- the twin: the figure is left to today's path
+    FIG, eq, fig._has = nil, nil, nil
+    local m6 = #LOG
+    KCD2MP_W214FigureHand("1", true, CLS, false)
+    runTimers(3.0)
+    check("F: the twin (figure_hands off) touches nothing", FIG == nil and eq == nil and countEvt("w214_figure_hand", "", m6) == 0)
+    W214.on.figure_hands = nil
+    KCD2MP.ghosts["1"] = oldG
+    ItemManager = oldIM
+    TIMERS = {}
+    noErrs("F")
 end
 
 -- (C) the tester pages' marker words are registered (typing an unregistered one printed "unknown command") ------------------

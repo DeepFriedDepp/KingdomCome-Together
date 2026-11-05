@@ -385,8 +385,15 @@ public static class Briefing
         int fell = agent.Count(x => x.Contains("WO202-DEATHFALL", StringComparison.Ordinal) && x.Contains("-> ragdoll down", StringComparison.Ordinal));
         int standing = agent.Count(x => x.Contains("WO202-DEATHFALL", StringComparison.Ordinal) && x.Contains("STILL UPRIGHT", StringComparison.Ordinal));
         o.Add(new Score("bodies a joiner's blow killed without the death reaction: laid down / still upright", $"{fell} / {standing}", "every one down"));
-        var draws = agent.Count(x => x.Contains("WO202-DRAW", StringComparison.Ordinal) && x.Contains("played", StringComparison.Ordinal));
-        o.Add(new Score("weapon draws played on copies", draws.ToString(CultureInfo.InvariantCulture), "every draw the host's NPC makes"));
+        // WO-214 E: nothing ever printed WO202-DRAW (this score read 0 in every session); a copy's draw is the mod's WO214-DRAW ... played (the
+        // host NPC's own hand drawn on its copy) and its WO167-WEAPON line; the host NPC's draws the agent was told of: WO214-DRAW ... told=draw
+        int draws = agent.Concat(Kcd(inp)).Count(x => (x.Contains("WO202-DRAW", StringComparison.Ordinal) || x.Contains("WO214-DRAW", StringComparison.Ordinal)) && x.Contains(" played", StringComparison.Ordinal));
+        int told = agent.Count(x => x.Contains("WO214-DRAW", StringComparison.Ordinal) && x.Contains("told=draw", StringComparison.Ordinal));
+        o.Add(new Score("weapon draws played on copies", told > 0 ? $"{draws} of {told} the host's NPCs made" : draws.ToString(CultureInfo.InvariantCulture), "every draw the host's NPC makes"));
+        // WO-214 F: the partner's figure holds the weapon he holds -- the mod's verdict per draw (WO214-HAND figure ... ok|fixed|failed)
+        var hands = agent.Where(x => x.Contains("WO214-HAND figure kcd2mp_", StringComparison.Ordinal)).Select(x => System.Text.RegularExpressions.Regex.Match(x, @"WO214-HAND figure kcd2mp_\d+ (ok|fixed|failed) ")).Where(m => m.Success).Select(m => m.Groups[1].Value).ToList();
+        if (hands.Count > 0)
+            o.Add(new Score("the partner's figure held his weapon", $"{hands.Count(h => h != "failed")} of {hands.Count} ({hands.Count(h => h == "fixed")} only after a fix)", "every one"));
         var w197 = agent.LastOrDefault(x => x.Contains("MP-W197-STATS", StringComparison.Ordinal));
         string recoils = w197 is null ? "n/a" : $"recoils {Rx(w197, "recoil_played")}, clinches {Rx(w197, "clinch_played")}";
         o.Add(new Score("recoils and clinches played", recoils, "every one the host's world plays"));

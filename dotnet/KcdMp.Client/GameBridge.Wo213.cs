@@ -149,6 +149,7 @@ public partial class GameBridge
             if (_w209OppLast.TryGetValue(name, out var opp)) { oppKind = opp.Kind; oppAgeMs = Environment.TickCount64 - opp.At; }
             int band = Wo213BandOf(x, y, W213Rules.Fighting((flags & (Protocol.NpcStateFlagEngaged | 0x04)) != 0, oppKind, oppAgeMs));
             _w213NpcWin.AddOrUpdate(name, (1, band), (_, v) => (v.N + 1, band));
+            Wo214NoteBandSample(name, x, y);   // WO-214 A.0/G: the walking bodies' own rates
         }
         else _w213Arrival.Arrive(kind, null, arrival);
     }
@@ -221,6 +222,7 @@ public partial class GameBridge
         var snap = _w213NpcWin.ToArray();
         _w213NpcWin.Clear();
         _w213NpcWinStartTs = Stopwatch.GetTimestamp();
+        Console.WriteLine(Wo214MovingLine(who, s, snap));   // WO-214 A.0/G: the same window, the bodies that walked
         var sb = new StringBuilder($"MP-LINK npc-bands who={who} window_s={s.ToString("F1", CultureInfo.InvariantCulture)}");
         for (int b = 0; b < W213BandNames.Length; b++)
         {
@@ -333,7 +335,7 @@ public partial class GameBridge
             if (sc.RealTimeStatus() is not { } s) return;
             string lanes = s.Lanes.Length == 0 ? "-" : string.Join('/', s.Lanes.Select(l => string.Create(CultureInfo.InvariantCulture, $"{l.PendingReliable}r{l.PendingUnreliable}u{l.QueueTimeUsec / 1000}ms")));
             Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
-                $"MP-LINK steam who={W213Who} ping={s.PingMs} q_local={s.QualityLocal:F2} q_remote={s.QualityRemote:F2} out_pps={s.OutPacketsPerSec:F0} out_Bps={s.OutBytesPerSec:F0} in_pps={s.InPacketsPerSec:F0} in_Bps={s.InBytesPerSec:F0} send_rate={s.SendRateBytesPerSec} pend_unrel={s.PendingUnreliable} pend_rel={s.PendingReliable} unacked={s.SentUnackedReliable} queue_ms={s.QueueTimeUsec / 1000.0:F1} lanes={lanes} unrel_sent={Interlocked.Read(ref sc.UnreliableSent)} unrel_refused={Interlocked.Read(ref sc.UnreliableRefused)}"));
+                $"MP-LINK steam who={W213Who} ping={s.PingMs} q_local={s.QualityLocal:F2} q_remote={s.QualityRemote:F2} out_pps={s.OutPacketsPerSec:F0} out_Bps={s.OutBytesPerSec:F0} in_pps={s.InPacketsPerSec:F0} in_Bps={s.InBytesPerSec:F0} send_rate={s.SendRateBytesPerSec} pend_unrel={s.PendingUnreliable} pend_rel={s.PendingReliable} unacked={s.SentUnackedReliable} queue_ms={SteamLinkStatus.QueueMsText(s.QueueTimeUsec)} lanes={lanes} unrel_sent={Interlocked.Read(ref sc.UnreliableSent)} unrel_refused={Interlocked.Read(ref sc.UnreliableRefused)}"));
             if (!_w213SteamConfigLogged) { _w213SteamConfigLogged = true; Console.WriteLine($"MP-LINK steam-config now: {sc.ReadLinkConfig().Log}"); }
         }
         catch (Exception ex) { Console.WriteLine($"MP-LINK steam status failed: {ex.GetType().Name}: {ex.Message}"); }

@@ -706,6 +706,7 @@ function KCD2MP_PollWeaponDrawn()
         mp_log("CombatViz: Human.IsWeaponDrawn unavailable -- drawn-state sync disabled")
         return
     end
+    if KCD2MP_W214OwnHandTick then pcall(KCD2MP_W214OwnHandTick, now, drawn) end   -- WO-214 F: the hand itself, to the partner
     if KCD2MP._weaponReadOk == nil then
         KCD2MP._weaponReadOk = true
         mp_log("CombatViz: IsWeaponDrawn readable, initial=" .. tostring(drawn))
@@ -2907,7 +2908,9 @@ end
 --           npc_native_cfg on|off on|off     (native write, sender clock)
 KCD2MP.npcNativeWrite = true
 KCD2MP._npcNative = { aliveAt = nil, armed = false, on = false, bound = 0, writing = 0,
-                      binds = 0, acks = 0, nacks = 0, holds = 0, unbinds = 0 }
+                      binds = 0, acks = 0, nacks = 0, holds = 0, unbinds = 0,
+                      -- WO-214 B: who re-asks -- Lua's own re-sends of an unanswered bind, and the answers that found no bind to answer
+                      resends = 0, ackNotSent = 0, ackNoPuppet = 0, nackNoPuppet = 0, beats = 0 }
 TUNE.NPC_NATIVE_STALE_S  = 3.0   -- heartbeat age at which Lua writes every puppet itself again
 TUNE.NPC_NATIVE_RESEND_S = 3.0   -- an unanswered bind is re-sent after this long
 TUNE.NPC_NATIVE_RETRY_S  = 10.0  -- a refused or dropped puppet is offered again after this long
@@ -2920,8 +2923,11 @@ TUNE.NPC_NATIVE_UNBIND_HOLD_S = 1.5
 
 function KCD2MP_NpcNativeHealthy()
     local n = KCD2MP._npcNative
+    -- WO-214 B (one_bind): the agent's heartbeat reaches this file through the game's console, which a busy joiner runs seconds behind --
+    -- three seconds without one unbound every puppet ("off tick", 184 in the field) and this file wrote them all itself; ten now
+    local staleS = (KCD2MP_W214On and KCD2MP_W214On("one_bind")) and 10.0 or TUNE.NPC_NATIVE_STALE_S
     return KCD2MP.npcNativeWrite and n.armed and n.on and n.aliveAt ~= nil
-        and (os.clock() - n.aliveAt) < TUNE.NPC_NATIVE_STALE_S
+        and (os.clock() - n.aliveAt) < staleS
 end
 
 -- The agent's heartbeat (GameBridge.NativeHeartbeatAsync), once a second while
@@ -2933,6 +2939,11 @@ function KCD2MP_NpcNativeAlive(armed, on, bound, writing)
     n.armed = (tonumber(armed) or 0) == 1
     n.on = (tonumber(on) or 0) == 1
     n.bound, n.writing = tonumber(bound) or 0, tonumber(writing) or 0
+    n.beats = (n.beats or 0) + 1
+    if n.beats % 30 == 0 then   -- WO-214 B: the bind traffic as this file sees it, every 30 beats (~30 s)
+        mp_log(string.format("WO214-BINDS lua binds=%d resends=%d acks=%d nacks=%d ack_not_sent=%d ack_no_puppet=%d nack_no_puppet=%d unbinds=%d",
+            n.binds or 0, n.resends or 0, n.acks or 0, n.nacks or 0, n.ackNotSent or 0, n.ackNoPuppet or 0, n.nackNoPuppet or 0, n.unbinds or 0))
+    end
     local healthy = KCD2MP_NpcNativeHealthy()
     if healthy ~= was then
         mp_log(string.format("MP-NPCWRITE native=%s armed=%d on=%d bound=%d (heartbeat)",
@@ -2954,7 +2965,11 @@ function KCD2MP_NpcNativeAck(name, ok, reason)
         local g = gid and KCD2MP.ghosts and KCD2MP.ghosts[gid]
         p = g and g.istate
     end
-    if not p then return end
+    if not p then
+        if ok then n.ackNoPuppet = (n.ackNoPuppet or 0) + 1 else n.nackNoPuppet = (n.nackNoPuppet or 0) + 1 end   -- WO-214 B
+        return
+    end
+    if ok and not p.nativeSent then n.ackNotSent = (n.ackNotSent or 0) + 1 end   -- WO-214 B: an answer to a bind this puppet no longer waits for
     if ok and p.nativeSent then
         p.nativeOwned = true
         p.nativeUnbindAt = nil
@@ -2992,7 +3007,10 @@ function KCD2MP_NpcNativeSync(name, p, e, want, why)
     local now = os.clock()
     if want then
         if p.nativeOwned or not e then return end
-        if p.nativeSent and (now - (p.nativeSentAt or 0)) < TUNE.NPC_NATIVE_RESEND_S then return end
+        -- WO-214 B (one_bind): an unanswered bind is sent again after 10 s, not 3 -- a busy joiner's console answers late (the bench:
+        -- 571 of 793 binds were re-sends), and the DLL leaves a bind asked again for a bound body as it is
+        local resendS = (KCD2MP_W214On and KCD2MP_W214On("one_bind")) and 10.0 or TUNE.NPC_NATIVE_RESEND_S
+        if p.nativeSent and (now - (p.nativeSentAt or 0)) < resendS then return end
         if p.nativeRetryAt and now < p.nativeRetryAt then return end
         local hexid = string.match(tostring(e.id), "(%x+)%s*$")
         if not hexid then return end
@@ -3003,6 +3021,7 @@ function KCD2MP_NpcNativeSync(name, p, e, want, why)
                 wuid = string.match(s, "(%x+)%s*$") or "?"
             end
         end)
+        if p.nativeSent then KCD2MP._npcNative.resends = (KCD2MP._npcNative.resends or 0) + 1 end   -- WO-214 B: an unanswered bind, sent again
         p.nativeSent, p.nativeSentAt, p.nativeRetryAt = true, now, nil
         KCD2MP._npcNative.binds = KCD2MP._npcNative.binds + 1
         KCD2MP_EmitEvent("npc_native", string.format("%s on %s %s %.3f %.3f %.3f %d", name, hexid, wuid,
@@ -9982,6 +10001,12 @@ function KCD2MP_NpcPuppetTick(arg, gen)
             -- and the hold is moot.
             local rd = KCD2MP._npcDeathRemote[name]
             local remoteDead = rd ~= nil and (now - (rd.at or 0)) < 10.0
+            -- WO-214 E (draw_event): a host hand row that came before this copy was driven here is applied now
+            if W214 and W214.pendingWeapon and W214.pendingWeapon[name] and KCD2MP_W167Weapon then
+                local pc = W214.pendingWeapon[name]
+                W214.pendingWeapon[name] = nil
+                pcall(KCD2MP_W167Weapon, name, pc, "hands214")
+            end
             -- WO-40 Phase 6: the authority's weapon state, applied on the
             -- transition (the same DrawWeapon/HolsterWeapon calls the ghost
             -- path live-verified in WO-39).
@@ -10484,11 +10509,20 @@ function KCD2MP_NpcPuppetTick(arg, gen)
             -- WO-39 stomping mechanism, applied to a second code path), and
             -- the joiner's global animation collapse followed the session's
             -- heaviest per-frame load. External stops recover within 1 s.
+            -- WO-214 C.3 (anim_hold): a clip stays at least 0.4 s -- a change shows at once, but not again within 0.4 s of the last (a
+            -- heartbeat-fed copy flipped idle/walk every 60 ms and each flip queued a clip: 1,030 animation-queue overflows on the joiner);
+            -- the combat idle is never held
+            if KCD2MP_W214On and KCD2MP_W214On("anim_hold") and p.animTag ~= nil and tag ~= p.animTag and tag ~= "combatidle"
+               and p.animTag ~= "combatidle" and (now - (p.animTagAt or -1e9)) < 0.4 then
+                tag, anim = p.animTag, p.animClip or anim
+                W214.animHeld = (W214.animHeld or 0) + 1
+            end
             if p.animTag ~= tag or (now - (p.animRefreshAt or 0)) > 1.0 then
                 p.animRefreshAt = now
                 pcall(function() e:StartAnimation(0, anim, 0, 0.15, 1.0, true) end)
+                p.animClip = anim   -- WO-214 C.3: the clip of the held tag
                 if p.animTag ~= tag then
-                    p.animTag = tag
+                    p.animTag, p.animTagAt = tag, now
                     mp_log(string.format("NPC-SYNC anim %s -> %s spd=%.2f", name, tag, spd))
                 end
             end
@@ -24595,7 +24629,16 @@ function KCD2MP_W167Weapon(name, cls, why)
     name, cls = tostring(name or ""), tostring(cls or "?")
     local e, p = nil, KCD2MP.npcPuppets[name]
     pcall(function() e = System.GetEntityByName(name) end)
-    if not (e and p) or p.dead or p.ko then return false end
+    if not (e and p) or p.dead or p.ko then
+        -- WO-214 E (draw_event): the host NPC's hand before its copy is driven here -- kept, applied once the puppet runs
+        if why == "hands214" and not (p and (p.dead or p.ko)) then
+            W214.pendingWeapon = W214.pendingWeapon or {}
+            W214.pendingWeapon[name] = cls
+            W214.weaponPending = (W214.weaponPending or 0) + 1
+        end
+        return false
+    end
+    if W214 and W214.pendingWeapon then W214.pendingWeapon[name] = nil end
     if KCD2MP_W201InvBusy and KCD2MP_W201InvBusy(e) then   -- WO-201 B5: a screen is open on this copy's inventory
         return KCD2MP_W201InvDefer("w167-weapon", name, "the host NPC's weapon", function() KCD2MP_W167Weapon(name, cls, why) end)
     end
@@ -24607,6 +24650,8 @@ function KCD2MP_W167Weapon(name, cls, why)
     C.weap[name] = st
     local now = os.clock()
     st.at = now   -- the hand is C2's now: the stream's drawn flag and the old re-assert leave this copy alone for a while
+    -- WO-214 E (draw_event): told by the host NPC's own hand -- held for as long as that hand holds a weapon (its "-" ends it), not 15 s
+    if why == "hands214" then st.hands = (cls ~= "-") elseif cls == "-" then st.hands = false end
     if cls == "-" then
         if st.drawn == false then return true end
         st.drawn = false   -- the class it held is kept: its next draw is the same weapon
@@ -24654,6 +24699,7 @@ function KCD2MP_W167Weapon(name, cls, why)
     C.stats.drawn = C.stats.drawn + 1
     mp_log(string.format("WO167-WEAPON npc=%s hand=%s owned=%s drawn=%s why=%s -- the host's NPC holds a weapon: this copy holds it too, once",
         name, (want and want ~= "?") and string.sub(want, 1, 8) or "?", owned, how, tostring(why)))
+    if why == "hands214" then mp_log(string.format("WO214-DRAW npc=%s played how=%s hand=%s", name, how, (want and want ~= "?") and string.sub(want, 1, 8) or "?")) end
     return true
 end
 
@@ -24662,6 +24708,7 @@ function KCD2MP_W167WeaponHeld(name, now)
     local W = KCD2MP.w167
     if not W.copyWeapons then return false end
     local st = W.combat.weap[name]
+    if st ~= nil and st.hands then W.combat.stats.held = W.combat.stats.held + 1; return true end   -- WO-214 E: the host's hand holds it
     if st == nil or (now - (st.at or -1e9)) >= W.WEAPON_HOLD_S then return false end
     W.combat.stats.held = W.combat.stats.held + 1
     return true
@@ -34298,6 +34345,189 @@ do
         local fname = "KCD2MP_W213Set_" .. k
         _G[fname] = function(arg) return KCD2MP_W213Set(k, arg) end
         System.AddCCommand(label, fname .. "(%line)", "WO-213 " .. (W213.HELP[k] or k) .. " (default on): " .. label .. " on|off")
+    end
+end
+
+-- ===== WO-214: after 0.64.0 in the field (docs/WO-214-findings.md) =====
+-- Every switch ships on. The agent tells this file the states (KCD2MP_W214Cfg, with the bench's twins applied); a console switch here
+-- goes to the agent, which tells the DLL and this file back.
+do
+    W214 = W214 or {}
+    W214.on = W214.on or {}
+    W214.NAMES = {
+        send_turn = "mp_send_turn", one_bind = "mp_one_bind", owner_base = "mp_owner_base", combat_end = "mp_combat_end",
+        reaction_rows = "mp_reaction_rows", death_row = "mp_death_row", death_ground = "mp_death_ground", draw_event = "mp_draw_event",
+        figure_hands = "mp_figure_hands", figure_turn = "mp_figure_turn", anim_hold = "mp_anim_hold",
+    }
+    W214.HELP = {
+        send_turn = "A.1: (host) an NPC turning in place is sent at its band's rate",
+        one_bind = "B: (joiner) one bind per body -- a silent stream's body holds, a re-asked bind changes nothing",
+        owner_base = "C.1: (joiner) a copy the owner lets go of, or whose host posture it cannot show, gets a base at once",
+        combat_end = "C.2: (joiner) a copy's combat action ends with its host NPC's fight",
+        reaction_rows = "D.1/D.2: (joiner) the host NPC's hit and death reactions play on an owned copy",
+        death_row = "D.1: (joiner) a death row is never replaced by a plain hit",
+        death_ground = "D.3: (joiner) every death applied here ends on the ground",
+        draw_event = "E: (joiner) the host NPC's weapon in its hand is its copy's at once, and held",
+        figure_hands = "F: (both) the partner's figure holds the weapon the partner holds",
+        figure_turn = "A.4: (both) this player turning in place is sent to the partner as a change (not only on the 2 s heartbeat)",
+        anim_hold = "C.3: (joiner) a copy this file animates changes its locomotion clip only once the change holds",
+    }
+    function KCD2MP_W214On(name)
+        local v = W214.on[tostring(name)]
+        if v == nil then return true end
+        return v
+    end
+    function KCD2MP_W214Cfg(list)
+        local n = 0
+        for kv in string.gmatch(tostring(list or ""), "[^,]+") do
+            local k, v = string.match(kv, "^%s*([%w_]+)=(%a+)%s*$")
+            if k and W214.NAMES[k] then W214.on[k] = (v == "on"); n = n + 1 end
+        end
+        if n > 0 and not W214.told then
+            W214.told = true
+            local parts = {}
+            for k in pairs(W214.NAMES) do parts[#parts + 1] = k .. "=" .. (KCD2MP_W214On(k) and "on" or "off") end
+            table.sort(parts)
+            mp_log("WO214-CFG " .. table.concat(parts, " "))
+        end
+        return true
+    end
+    function KCD2MP_W214Set(name, arg)
+        local label = W214.NAMES[tostring(name)]
+        if not label then mp_log("WO214-TOGGLE unknown switch '" .. tostring(name) .. "'"); return false end
+        local v = KCD2MP_Wo122ParseBool(arg)
+        if v == "bad" then mp_log(label .. ": expected on|off, got '" .. tostring(arg) .. "'"); return false end
+        if v == nil then mp_log("WO214-TOGGLE " .. label .. " is " .. (KCD2MP_W214On(name) and "on" or "off")); return true end
+        W214.on[tostring(name)] = v
+        mp_log("WO214-TOGGLE " .. label .. " " .. (v and "on" or "off") .. " -- sent to the agent")
+        KCD2MP_EmitEvent("w214_cfg", tostring(name) .. "=" .. (v and "on" or "off"))
+        return true
+    end
+    function KCD2MP_W214Status()
+        local parts = {}
+        for k, label in pairs(W214.NAMES) do parts[#parts + 1] = label .. "=" .. (KCD2MP_W214On(k) and "on" or "off") end
+        table.sort(parts)
+        local hs = W214.hand and W214.hand.stats or {}
+        mp_log("WO214-STATUS " .. table.concat(parts, " ") .. string.format(" anim_held=%d weapon_pending=%d hand_sent=%d figure_ok=%d figure_fixed=%d figure_failed=%d",
+            W214.animHeld or 0, W214.weaponPending or 0, hs.sent or 0, hs.ok or 0, hs.fixed or 0, hs.failed or 0))
+        KCD2MP_EmitEvent("w214_status", "")
+        return true
+    end
+    System.AddCCommand("mp_w214_status", "KCD2MP_W214Status()", "WO-214: every WO-214 switch and the DLL's numbers")
+
+    -- ---- F (figure_hands, both roles): the partner's figure holds the weapon the partner holds ----
+    -- The field: the joiner drew; the host's figure of him ran its draw ("CombatViz: ghost 1 drew weapon") and showed no weapon -- the
+    -- figure's weapon came only from the outfit packets and Human.DrawWeapon() (the figure's active weapon set), and nothing compared the
+    -- two hands. Now this player's own main-hand item class goes to the partner at every draw, sheathe and change (every 10 s while drawn;
+    -- the agent sends it on the WO-203 side channel), and the partner's figure is made to hold that class: the game's own equip into its
+    -- weapon set (Actor.EquipInventoryItem, WO-174's lesson) and a draw; DrawFromInventory only last (WO-47's trap: swings may not render
+    -- after it on that draw) and for an oversized weapon (WO-47's own path).
+    --   WO214-HAND own drawn=<0|1> cls=<class|-> why=draw|sheathe|change
+    --   WO214-HAND figure=<id> want=<class|-> held=<class|-> -> ok|fixed|failed <how> (<ms> ms)
+    W214.hand = W214.hand or { sentDrawn = nil, sentCls = nil, sentAt = -1e9, drawSince = nil, gen = {}, stats = { sent = 0, ok = 0, fixed = 0, failed = 0 } }
+
+    function KCD2MP_W214OwnHandTick(now, drawn)
+        if not KCD2MP_W214On("figure_hands") then return end
+        if not (player and player.human and KCD2MP.w136 and KCD2MP.w136.handClass) then return end
+        local h = W214.hand
+        local cls = drawn and KCD2MP.w136.handClass(player, 0) or nil
+        if drawn and not cls and h.sentDrawn ~= true then
+            -- the draw's own animation: the hand fills within a second -- up to 1.5 s, the item it then holds is what is sent
+            h.drawSince = h.drawSince or now
+            if now - h.drawSince < 1.5 then return end
+        end
+        if not drawn then h.drawSince = nil end
+        local why = nil
+        if drawn ~= h.sentDrawn then why = drawn and "draw" or "sheathe"
+        elseif drawn and cls ~= h.sentCls then why = "change"
+        elseif drawn and now - h.sentAt >= 10 then why = "beat" end
+        if not why then return end
+        h.drawSince = nil
+        h.sentDrawn, h.sentCls, h.sentAt = drawn, cls, now
+        h.stats.sent = h.stats.sent + 1
+        if why ~= "beat" then mp_log(string.format("WO214-HAND own drawn=%d cls=%s why=%s", drawn and 1 or 0, tostring(cls or "-"), why)) end
+        KCD2MP_EmitEvent("w214_hand", (drawn and "1" or "0") .. " " .. tostring(cls or "-"))
+    end
+
+    -- the partner's hand (the agent: his W203 FigureHand row): his figure <id> here holds <cls> while <drawn>
+    function KCD2MP_W214FigureHand(id, drawn, cls, oversized)
+        if not KCD2MP_W214On("figure_hands") then return false end   -- the twin: today's path (the outfit and DrawWeapon only)
+        id = tostring(id); cls = tostring(cls or "-")
+        local h = W214.hand
+        local g = KCD2MP.ghosts and KCD2MP.ghosts[id]
+        local e = g and g.entity
+        if not (e and e.human and KCD2MP.w136 and KCD2MP.w136.handClass) then return false end
+        local gen = (h.gen[id] or 0) + 1   -- a newer message supersedes a check still running
+        h.gen[id] = gen
+        local t0 = os.clock()
+        local function held() return KCD2MP.w136.handClass(e, 0) end
+        local function live() local gg = KCD2MP.ghosts[id]; return h.gen[id] == gen and gg ~= nil and gg.entity == e end
+        local function report(result, how)
+            local now = held()
+            if result == "ok" then h.stats.ok = h.stats.ok + 1 elseif result == "fixed" then h.stats.fixed = h.stats.fixed + 1 else h.stats.failed = h.stats.failed + 1 end
+            mp_log(string.format("WO214-HAND figure=%s want=%s held=%s -> %s %s (%.0f ms)", id, drawn and cls or "-", tostring(now or "-"), result, how,
+                (os.clock() - t0) * 1000))
+            KCD2MP_EmitEvent("w214_figure_hand", id .. " " .. result .. " " .. how)
+        end
+        if not drawn then
+            -- the sheathe is the combat event's own (HolsterWeapon); a hand still full 1.5 s later, while sheathed, is put away
+            Script.SetTimer(1500, function()
+                if not live() then return end
+                if held() == nil then return report("ok", "empty") end
+                if KCD2MP.ghostWeaponDrawn[id] then return end   -- drawn again since
+                pcall(function() e.human:HolsterWeapon() end)
+                Script.SetTimer(1200, function() if live() then report(held() == nil and "fixed" or "failed", "holstered") end end)
+            end)
+            return true
+        end
+        if cls == "-" then return true end   -- drawn, the hand empty (fists): nothing to hold
+        local function item()
+            local it = nil
+            pcall(function() it = e.inventory and e.inventory:FindItem(cls) end)
+            if not it and e.inventory then
+                pcall(function() e.inventory:CreateItem(cls, 1, 1) end)
+                pcall(function() it = e.inventory:FindItem(cls) end)
+            end
+            return it
+        end
+        local function lastResort(it)
+            pcall(function() e.human:DrawFromInventory(it, 0, true) end)
+            KCD2MP.ghostWeaponDrawn[id] = true
+            Script.SetTimer(1000, function()
+                if live() then report(held() == cls and "fixed" or "failed", "drawn-from-inventory") end
+            end)
+        end
+        local function fix()
+            local it = item()
+            if not it then return report("failed", "no-item") end
+            if oversized then return lastResort(it) end   -- WO-47: an oversized weapon's own path
+            pcall(function() e.actor:EquipInventoryItem(it) end)   -- the game's own equip: into the figure's weapon set
+            if held() ~= nil then pcall(function() e.human:HolsterToInventory(0, false) end) end   -- a wrong item in hand goes first
+            pcall(function() e.human:DrawWeapon() end)
+            KCD2MP.ghostWeaponDrawn[id] = true
+            Script.SetTimer(1200, function()
+                if not live() then return end
+                if held() == cls then return report("fixed", "equipped+drawn") end
+                lastResort(it)
+            end)
+        end
+        -- the figure's own draw (the combat event, sent at the partner's draw's start) is about half a second along when this message
+        -- (sent once his hand filled) lands: watched for 0.5 s more before anything is touched
+        local waited = 0
+        local function check()
+            if not live() then return end
+            if held() == cls then return report("ok", waited == 0 and "held" or "drew") end
+            if waited >= 500 then return fix() end
+            waited = waited + 250
+            Script.SetTimer(250, check)
+        end
+        check()
+        return true
+    end
+    for k, label in pairs(W214.NAMES) do
+        local fname = "KCD2MP_W214Set_" .. k
+        _G[fname] = function(arg) return KCD2MP_W214Set(k, arg) end
+        System.AddCCommand(label, fname .. "(%line)", "WO-214 " .. (W214.HELP[k] or k) .. " (default on): " .. label .. " on|off")
     end
 end
 

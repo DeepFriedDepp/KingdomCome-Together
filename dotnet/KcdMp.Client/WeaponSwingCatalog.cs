@@ -165,6 +165,19 @@ public sealed class WeaponSwingCatalog
     /// plain DrawWeapon() path -- the ghost draw event must go through
     /// KCD2MP_GhostDrawItem (DrawFromInventory) for them instead.
     /// </summary>
+    /// <summary>
+    /// WO-214 F: the equipped item a drawn figure holds in its main hand -- the item whose weapon class sits in the main-hand melee slot
+    /// (PrimaryMainHand or Oversized), by the lowest class as <see cref="SpecFor"/> picks it; null when none.
+    /// </summary>
+    public Guid? MainHandItemOf(IReadOnlyCollection<Guid> equipped)
+    {
+        Guid? best = null; int bestClass = int.MaxValue;
+        foreach (var g in equipped)
+            if (_itemToWeaponClass.TryGetValue(g, out int c) && c < bestClass && _weaponClasses.TryGetValue(c, out var wc)
+                && wc.EquipSlot is "PrimaryMainHand" or "Oversized") { best = g; bestClass = c; }
+        return best;
+    }
+
     public Guid? OversizedItemOf(IReadOnlyCollection<Guid> equipped)
     {
         foreach (var g in equipped)

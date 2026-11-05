@@ -37,7 +37,7 @@ public sealed class LinkReportService : BackgroundService
                     string role = _clients.IsDamageAuthority(c) ? "host" : "joiner";
                     if (c.SteamConnection is { } sc && sc.RealTimeStatus() is { } s)
                         _logger.Information("{Line:l}", string.Create(CultureInfo.InvariantCulture,
-                            $"MP-LINK steam who=relay client={c.Id} role={role} ping={s.PingMs} q_local={s.QualityLocal:F2} q_remote={s.QualityRemote:F2} out_pps={s.OutPacketsPerSec:F0} out_Bps={s.OutBytesPerSec:F0} in_Bps={s.InBytesPerSec:F0} send_rate={s.SendRateBytesPerSec} pend_unrel={s.PendingUnreliable} pend_rel={s.PendingReliable} unacked={s.SentUnackedReliable} queue_ms={s.QueueTimeUsec / 1000.0:F1} lanes={s.Lanes.Length} unrel_sent={Interlocked.Read(ref sc.UnreliableSent)} unrel_refused={Interlocked.Read(ref sc.UnreliableRefused)}"));
+                            $"MP-LINK steam who=relay client={c.Id} role={role} ping={s.PingMs} q_local={s.QualityLocal:F2} q_remote={s.QualityRemote:F2} out_pps={s.OutPacketsPerSec:F0} out_Bps={s.OutBytesPerSec:F0} in_Bps={s.InBytesPerSec:F0} send_rate={s.SendRateBytesPerSec} pend_unrel={s.PendingUnreliable} pend_rel={s.PendingReliable} unacked={s.SentUnackedReliable} queue_ms={KcdMp.Steam.SteamLinkStatus.QueueMsText(s.QueueTimeUsec)} lanes={s.Lanes.Length} unrel_sent={Interlocked.Read(ref sc.UnreliableSent)} unrel_refused={Interlocked.Read(ref sc.UnreliableRefused)}"));
                     if (n % 5 != 0) continue;
                     string via = c.LinkPathTransport;
                     _logger.Information("{Line:l}", $"MP-LINK relay client={c.Id} role={role} via={via} {c.TakeQueueText()}{c.SchedulerText()} | {c.Meter.TakeLine("relay-" + role)}");

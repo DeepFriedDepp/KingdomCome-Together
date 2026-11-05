@@ -218,6 +218,27 @@ public sealed class ActionRowCatalog
     }
 
     /// <summary>
+    /// WO-214 D.1: the death row to play on a body whose host NPC's own death row it did not take -- a <c>combat_action_hit</c> row with a
+    /// death fragment of the body's actor class, scored as <see cref="HitFallbackRow"/> scores reactions (the body's own weapon first, the
+    /// blow's zone, the guard side); never the failed row; the same tie-breaks, so every machine picks the same. Null = none fits.
+    /// </summary>
+    public (Guid Guid, Row Row)? DeathFallbackRow(Guid failedGuid, Row failed, Row? bodyRow)
+    {
+        long actor = bodyRow is { ActorClass: not 0 } br ? br.ActorClass : failed.ActorClass;
+        IReadOnlyList<string> weapon = bodyRow is { } sw ? Wo165Rules.WeaponTags(sw.Tags) : Array.Empty<string>();
+        (Guid Guid, Row Row)? best = null; int bestScore = -1;
+        foreach (var (g, r) in _rows)
+        {
+            if (g == failedGuid || r.Table != "combat_action_hit" || !r.Fragment.Contains("Death", StringComparison.Ordinal)) continue;
+            if (actor != 0 && r.ActorClass != 0 && r.ActorClass != actor) continue;
+            int s = Wo187Rules.HitFallbackScore(failed.Tags, failed.Zone, weapon, r.Fragment, r.Tags, r.Zone);
+            if (best is null || s > bestScore || (s == bestScore && (string.CompareOrdinal(r.Tags, best.Value.Row.Tags) < 0
+                || (r.Tags == best.Value.Row.Tags && g.CompareTo(best.Value.Guid) < 0)))) { best = (g, r); bestScore = s; }
+        }
+        return best;
+    }
+
+    /// <summary>
     /// WO-167 (C4): a plain attack row to play instead of a paired (sync) one on a copy that has no sync data -- a <c>CombatAttackGen</c>
     /// row of the attack table with the same right-hand weapon (Wo167Rules.PlainScore: the attack type, the strength, the zone, the left
     /// hand); the best score, then the lowest tags, then the lowest GUID, so every machine chooses the same. Null = none fits.

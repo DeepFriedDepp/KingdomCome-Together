@@ -61,6 +61,36 @@ public static class W210Instruments
         return res.OrderByDescending(x => x.Secs).ToList();
     }
 
+    private static readonly Regex EmptyLine = new(@"WO214-EMPTY npc=(?<n>\S+) secs=(?<s>[\d.]+) dist_m=[\d.]+ open=(?<o>[01])", RegexOptions.Compiled);
+
+    /// <summary>
+    /// WO-214 C.1: the owner's watchdog's empty stretches (WO214-EMPTY: one line when a stretch over 0.3 s ends, and one every 10 s while
+    /// one is open). A stretch still open at the end of the log counts with its last open line. Null when the build has no such line.
+    /// </summary>
+    public static List<Stretch>? OwnerEmpty(IReadOnlyList<string> native)
+    {
+        var lines = native.Where(x => x.Contains("WO214-EMPTY npc=", StringComparison.Ordinal)).ToList();
+        if (lines.Count == 0) return native.Any(x => x.Contains("WO214-CFG", StringComparison.Ordinal)) ? new List<Stretch>() : null;
+        var by = new Dictionary<string, Stretch>(StringComparer.Ordinal);
+        var open = new Dictionary<string, double>(StringComparer.Ordinal);
+        foreach (var l in lines)
+        {
+            var m = EmptyLine.Match(l);
+            if (!m.Success || !double.TryParse(m.Groups["s"].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out double s)) continue;
+            string n = m.Groups["n"].Value;
+            if (m.Groups["o"].Value == "1") { open[n] = s; continue; }
+            open.Remove(n);
+            if (!by.TryGetValue(n, out var st)) by[n] = st = new Stretch { Name = n };
+            st.N++; st.Secs += s; st.Longest = Math.Max(st.Longest, s);
+        }
+        foreach (var (n, s) in open)
+        {
+            if (!by.TryGetValue(n, out var st)) by[n] = st = new Stretch { Name = n };
+            st.N++; st.Secs += s; st.Longest = Math.Max(st.Longest, s);
+        }
+        return by.Values.OrderByDescending(x => x.Secs).ToList();
+    }
+
     private static bool Near(List<AnimSample> player, AnimSample smp, float r)
     {
         int lo = 0, hi = player.Count - 1;
@@ -97,10 +127,17 @@ public static class W210Instruments
     public static string Section(AnimStream? anim, IReadOnlyList<string> native, IReadOnlyList<string> agent, IReadOnlyList<string> kcd)
     {
         var sb = new StringBuilder("## WO-210 instruments\n\n");
-        var empty = anim is null ? new List<Stretch>() : EmptyBodies(anim);
+        var probeEmpty = anim is null ? new List<Stretch>() : EmptyBodies(anim);
+        // WO-214 C.1: the owner's own watchdog sees every owned copy every 250 ms for the whole session (WO214-EMPTY); the probe's file holds
+        // only the session's last minutes (the field: 5.8 s here against a 3-minute stretch the watchdog saw) -- its lines win when present
+        var watched = OwnerEmpty(native);
+        var empty = watched ?? probeEmpty;
         var stale = anim is null ? new List<Stretch>() : StalePostures(anim);
         string Line(List<Stretch> l) => l.Count == 0 ? "none" : FormattableString.Invariant($"{l.Count} bod(ies), {l.Sum(x => x.N)} stretch(es), {l.Sum(x => x.Secs):0.#} s, {l.Sum(x => x.Moved):0.#} m moved");
-        sb.Append("- **empty bodies** (a copy's whole body with no action over 0.3 s, within 60 m): ").Append(anim is null ? "no probe" : Line(empty)).Append('\n');
+        string LineW(List<Stretch> l) => l.Count == 0 ? "none" : FormattableString.Invariant($"{l.Count} bod(ies), {l.Sum(x => x.N)} stretch(es), {l.Sum(x => x.Secs):0.#} s (longest {l.Max(x => x.Longest):0.#} s)");
+        sb.Append("- **empty bodies** (a copy's whole body with no action over 0.3 s, within 60 m): ")
+          .Append(watched is not null ? LineW(watched) + " -- the owner's watchdog, the whole session" + (anim is null ? "" : "; the probe's last minutes: " + Line(probeEmpty))
+                                      : anim is null ? "no probe" : Line(probeEmpty)).Append('\n');
         sb.Append("- **stale postures** (a copy lying or sitting while its host NPC stands or walks, over 0.5 s): ").Append(anim is null ? "no probe" : Line(stale)).Append('\n');
         int reseats = Count(native, "WO210-STATE reseat"), unknown = native.Count(x => x.Contains("WO210-STATE reseat", StringComparison.Ordinal) && x.Contains("path=unknown", StringComparison.Ordinal));
         int handovers = Count(agent, "WO210-STATE handover");
@@ -111,6 +148,15 @@ public static class W210Instruments
         int noReact = deaths.Count(x => x.Contains("victim-cannot-react", StringComparison.Ordinal));
         var checks = kcd.Where(x => x.Contains("WO210-DEATH check", StringComparison.Ordinal)).ToList();
         sb.Append(FormattableString.Invariant($"- **the joiner's killing blows:** {deaths.Count} (without the game's reaction: {noReact}); death falls (the last resort) {Count(agent, "WO202-DEATHFALL npc=")}; bodies finished the engine's way {native.Count(x => x.Contains("WO210-DEATH finish", StringComparison.Ordinal) && x.Contains("result=finished", StringComparison.Ordinal))}; death checks {checks.Count} (unlootable: {checks.Count(x => x.Contains("lootable=no", StringComparison.Ordinal))})\n"));
+        // WO-214 D: every death applied here ends on the ground (WO214-DEATH, the agent's check after the death), and a death row this copy
+        // did not take is never a plain hit (WO214-DEATHROW)
+        var applied = agent.Where(x => x.Contains("WO214-DEATH npc=", StringComparison.Ordinal)).ToList();
+        if (applied.Count > 0 || agent.Any(x => x.Contains("WO214-DEATHROW", StringComparison.Ordinal)))
+        {
+            int How(string h) => applied.Count(x => x.Contains(" how=" + h, StringComparison.Ordinal));
+            var rows = agent.Where(x => x.Contains("WO214-DEATHROW", StringComparison.Ordinal)).ToList();
+            sb.Append(FormattableString.Invariant($"- **deaths applied here** (WO-214 D): {applied.Count} -- on the ground {applied.Count - How("still-upright")} (the engine's own {How("engine")}, finished the engine's way {How("finished")}, ragdolled {How("ragdolled")}), **still upright {How("still-upright")}**; death rows this copy did not take {rows.Count} (its own death row played {rows.Count(x => x.Contains("own death row plays", StringComparison.Ordinal))}, the fall at the death {rows.Count(x => x.Contains("the fall at the soul's death", StringComparison.Ordinal))})\n"));
+        }
         sb.Append(FormattableString.Invariant($"- **knockdowns:** {Count(native, "WO210-KD fall")} fall(s), {Count(native, "WO210-KD up")} get-up(s); raw blows {Count(agent, "applied=raw")}\n"));
         var filtered = native.Where(x => x.Contains("WO210-HITLOCAL blow", StringComparison.Ordinal)).ToList();
         int oldWay = native.Count(x => x.Contains("PIPE: LocalHit", StringComparison.Ordinal) && x.Contains("by the player", StringComparison.Ordinal));

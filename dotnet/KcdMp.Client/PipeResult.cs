@@ -52,6 +52,8 @@ public enum PipeReason : byte
     TaskFaulted = 17,
     /// <summary>WO-110 R12: the DLL does not know this command type (an agent newer than the DLL).</summary>
     UnknownCommand = 18,
+    /// <summary>WO-214 D.2: the copy's animation owner (WO-208) shows its actions -- the row was not played (0.64.0 said EngineRefused).</summary>
+    OwnerOwns = 19,
 
     // ---- agent-side reasons. Deliberately above the native range so the two
     // vocabularies can never collide as either side grows. ----
@@ -98,6 +100,7 @@ public readonly record struct PipeResult(bool Ok, PipeReason Reason)
         PipeReason.AllocFailed         => "alloc-failed",
         PipeReason.CtorFailed          => "ctor-failed",
         PipeReason.EngineRefused       => "engine-refused",
+        PipeReason.OwnerOwns           => "owner-owns",
         PipeReason.Timeout             => "dll-timeout",
         PipeReason.NotConnected        => "not-connected",
         PipeReason.NoAnswer            => "no-answer",
