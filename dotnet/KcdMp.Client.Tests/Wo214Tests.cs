@@ -72,6 +72,16 @@ public class Wo214Tests
     }
 
     [Fact]
+    public void A_copy_still_living_after_the_engines_finish_is_laid_down_too()
+    {
+        // the bench: a copy killed while held in its fight was finished the engine's way, stood on, and read still-upright
+        Assert.True(Wo214Rules.RagdollAfterFinish(deathGround: true, livingAfter: 1));
+        Assert.False(Wo214Rules.RagdollAfterFinish(deathGround: true, livingAfter: 0));    // the finish laid it down: nothing more
+        Assert.False(Wo214Rules.RagdollAfterFinish(deathGround: true, livingAfter: 255));  // unread: not guessed
+        Assert.False(Wo214Rules.RagdollAfterFinish(deathGround: false, livingAfter: 1));   // the twin: the finish alone (today's)
+    }
+
+    [Fact]
     public void The_hand_text_round_trips_and_refuses_anything_else()
     {
         var sword = Guid.Parse("efa237c7-3905-4813-b9c3-a32b449c17ad");

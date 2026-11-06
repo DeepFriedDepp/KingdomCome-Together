@@ -36,6 +36,13 @@ public static class Wo214Rules
     /// <summary>D.3: a copy playing its death reaction gets this much longer before its fall is forced (the reaction's own fall).</summary>
     public const int DeathReactionGraceMs = 800;
 
+    /// <summary>
+    /// D.3: after the engine's own finish of a dead copy (WO-210's lethal branch), a body whose physics is still a living entity gets the
+    /// ragdoll too. The bench: a copy killed while held in its fight was "finished", stood on, and its death read still-upright (the
+    /// field's "dead NPC standing for the joiner"). The twin (death_ground off): the finish alone, as before.
+    /// </summary>
+    public static bool RagdollAfterFinish(bool deathGround, byte livingAfter) => deathGround && livingAfter == 1;
+
     // ---------------------------------------------------------------- E: the host NPC's weapon in its copy's hand
 
     /// <summary>E: a weapon drawn on a copy within this of the host's draw counts as in time (the WO's 500 ms).</summary>

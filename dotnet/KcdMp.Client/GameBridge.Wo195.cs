@@ -213,12 +213,15 @@ public partial class GameBridge
                         if (rf is { Ok: true, Payload.Length: >= 4 } yf) x = yf;
                         _ = Wo210DeathCheckAsync(npc, "copy-" + Wo210FinishHow(fin, upright));
                         if (upright) how214 = "finished";
-                        upright = false;   // the finish lays it down (its own ragdoll); the physics ragdoll below is not needed
+                        // the finish lays it down (its own ragdoll) -- WO-214 D.3: a body still living after it (a copy killed while held in
+                        // its fight) gets the physics ragdoll below as well
+                        upright = Wo214Rules.RagdollAfterFinish(deathGround, x.Payload[2]);
+                        if (upright) how214 = "finished+ragdolled";
                     }
                 }
                 if (upright)
                 {
-                    how214 = "ragdolled";
+                    if (how214 != "finished+ragdolled") how214 = "ragdolled";
                     await ExecLuaAsync($"if KCD2MP_W195Ragdoll then KCD2MP_W195Ragdoll(\"{EscapeLua(npc)}\") end");
                     await Task.Delay(Wo195Rules.RagdollSettleMs);
                     var r2 = await _combat.Wo163Async(Protocol.Wo195OpCheck, a);
