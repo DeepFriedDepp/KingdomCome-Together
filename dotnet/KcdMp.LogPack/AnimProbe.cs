@@ -57,6 +57,9 @@ public sealed class AnimStream
     /// <summary>Where the probe file sits inside a bundle: the bundle's anim folder (the bundle had none before WO-206 D).</summary>
     public const string BundleEntry = "anim/" + FileName;
     public const string ReportEntry = "anim/anim-report.html";
+    /// <summary>WO-215 G: the session probe's file (the whole session, one body a line) and the one before it.</summary>
+    public const string SessionFileName = "kcdmp-anim-session.jsonl", SessionPrevName = "kcdmp-anim-session.1.jsonl";
+    public const string SessionEntry = "anim/" + SessionFileName, SessionPrevEntry = "anim/" + SessionPrevName;
 
     public readonly Dictionary<(string Machine, string Name), AnimSeries> Bodies = new();
     public int Lines, BadLines, BadActors, Samples;

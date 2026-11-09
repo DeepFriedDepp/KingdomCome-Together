@@ -27,6 +27,11 @@ public static class W210Instruments
     public static List<Stretch> StalePostures(AnimStream s) =>
         Runs(s, (smp, _) => smp.Fam is string f && Postures.Contains(f) && smp.Hf is string h && Bases.Contains(h), 0.5, needPlayer: false);
 
+    /// <summary>WO-215 G: a copy standing (or empty) while the host NPC's family the owner applied is a posture or work (lying, sitting,
+    /// kneeling, working), for more than 1 s -- "T-pose" on a tester's screen is a missing activity in ours.</summary>
+    public static List<Stretch> ActivityMissing(AnimStream s) =>
+        Runs(s, (smp, _) => (smp.Fb is null || smp.Fam is "standing") && smp.Hf is string h && Postures.Contains(h), 1.0, needPlayer: false);
+
     private static List<Stretch> Runs(AnimStream s, Func<AnimSample, bool, bool> pred, double minS, bool needPlayer)
     {
         var res = new List<Stretch>();

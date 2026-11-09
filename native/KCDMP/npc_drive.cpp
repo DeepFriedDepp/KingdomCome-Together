@@ -12,6 +12,7 @@
 #include "wo208.h"
 #include "wo213.h"
 #include "wo214.h"
+#include "wo215.h"
 #include "wo163_rules.h"
 #include "fault_guard.h"
 #include "npc_scan.h"   // WO-144 2.3: body_kind (a horse or an animal is entity-written)
@@ -95,6 +96,7 @@ constexpr double kNeedCapS      = 0.50;   // a longer gap is a moved-gated silen
 constexpr double kLateMaxS      = 0.30;   // the allowance never exceeds this
 constexpr double kLateSlew      = 0.10;   // the applied allowance moves at most 10 % of real time
 constexpr float  kSnapM2        = 25.0f;  // mp_npc_ring_push: an XY step over 5 m is a teleport
+constexpr float  kRouteFarM2    = 625.0f; // WO-215 A.1: the route's corrector blends a body up to 25 m off its stream; past that, a teleport
 // The shortest segment render() interpolates over. Ported from Lua as 50 ms,
 // harmless for 100 ms NPC streams -- but the peer's ghost streams every ~30 ms,
 // so each segment was stretched to 50 ms: the body crossed it at 60 % speed
@@ -130,6 +132,7 @@ std::atomic<bool> g_senderClock{true};    // mp_npc_senderclock mirror
 std::atomic<bool> g_bindFar{true};        // WO-154 6.2: mp_bind_far -- a body with no physics yet, or seated on a cart, is bound
 std::atomic<uint32_t> c_bindNoPhys{0}, c_bindParented{0};
 std::atomic<bool> g_dropAll{false};
+std::atomic<double> g_anySampleAt{0.0};   // WO-215 A: the local clock of the last sample of any body (the link's pulse; link_stall)
 std::atomic<bool> g_holdAll{false};      // WO-138: the host is paused, hold every copy
 std::atomic<bool> g_snapFix{true};       // WO-166 C4: mp_snap_fix
 std::atomic<bool> g_walkFromHost{true};   // WO-201 B10: mp_walk_from_host
@@ -268,6 +271,7 @@ struct Stream {
     uint8_t     src = 0;
     double      lastSampleAt = 0;   // local clock of the last sample (accepted or not)
     double      lastAcceptedAt = 0; // local clock of the last sample that entered the ring
+    double      gapEma = 0;         // WO-215 A: this body's usual gap between accepted samples (wo215_rules.h gap_ema; 0 = none yet)
     bool        haveSenderMs = false;
     uint32_t    lastSenderMs = 0;   // the newest accepted sample's sender stamp
     double      needQ = 0;          // ~95th percentile of (drain time - newest stamp), seconds
@@ -299,6 +303,33 @@ float stream_speed(const Stream& s) {
         }
     }
     return -1.0f;
+}
+// WO-215 A: the stream's planar velocity over its newest samples (>= 0.25 s apart); false when the ring cannot say.
+bool stream_vel(const Stream& s, float* vx, float* vy) {
+    *vx = *vy = 0.0f;
+    if (s.n < 2) return false;
+    const RingSample& a = s.ring[s.n - 1];
+    for (int i = s.n - 2; i >= 0; --i) {
+        const RingSample& b = s.ring[i];
+        const double dt = a.at - b.at;
+        if (dt >= 0.25) {
+            if (dt >= 3.0) return false;
+            *vx = static_cast<float>((a.x - b.x) / dt); *vy = static_cast<float>((a.y - b.y) / dt);
+            return true;
+        }
+    }
+    return false;
+}
+// WO-215 A.3: the stream's vertical speed over its newest samples (>= 0.25 s apart), m/s; 0 when the ring cannot say. A fall, a jump.
+float stream_vz(const Stream& s) {
+    if (s.n < 2) return 0.0f;
+    const RingSample& a = s.ring[s.n - 1];
+    for (int i = s.n - 2; i >= 0; --i) {
+        const RingSample& b = s.ring[i];
+        const double dt = a.at - b.at;
+        if (dt >= 0.25) return dt < 3.0 ? static_cast<float>((a.z - b.z) / dt) : 0.0f;
+    }
+    return 0.0f;
 }
 std::atomic<uint32_t> c_chaseFollow{0}, c_chaseEnded{0};
 std::atomic<uint32_t> c_activityDrift{0};   // WO-209: activity holds ended because the host's NPC walked away from the body
@@ -336,7 +367,10 @@ struct Puppet {
     wo213rules::PostureSitting sitting;  // WO-213 E.3: a held posture's body found off its place takes the stream for the rest of that sitting
     bool     silenceHeld = false;   // WO-214 B: this silence already passed the old 4 s drop (counted once)
     const char* blendWhy = "bind";  // WO-214 A.3: what asked for the next blend (bind, resume, hold-end, extrap-end)
+    bool     blendFar = false;      // WO-215 A.1: the route's corrector blends whatever the distance (never a snap; a teleport over 25 m still jumps)
     bool     beast = false;         // WO-144 2.3: a horse or an encounter animal whose physics is not a living entity
+    bool     human = true;          // WO-215 A: a man or a woman (npc_scan body kind 0) -- only these are routed
+    bool     noPhys = false;        // WO-215 A: no physics here (out of this machine's physics range): entity-written, never routed
     // MP-NPCPULL window
     double   winStart = 0;
     uint32_t winFrames = 0, winMoved = 0, winFlyChecks = 0, winFlying = 0, cosN = 0, winLag = 0;
@@ -384,6 +418,7 @@ void drop(std::unordered_map<std::string, Puppet>::iterator it, uint8_t reason, 
     logf("MP-NPCWRITE npc=%s event=drop reason=%s eid=0x%X writes=%llu", it->second.name.c_str(), reason_name(reason),
          it->second.eid, static_cast<unsigned long long>(it->second.writes));
     motion::body_released(it->second.key.c_str(), it->second.eid);   // WO-121: gait/combat hand the body back
+    wo215::route_release(it->second.eid, "dropped");                  // WO-215 A: its movement request ends with it
     if (tell) notify_drop(reason, it->second.name);
     if (reason == kNotLiving) {   // WO-147: remembered for the hit gate (a ragdoll is a moment, not a release)
         const double t = now_s();
@@ -459,8 +494,10 @@ void push_sample(const InSample& in, double now) {
     if (seqOk && stamped && s.haveSenderMs && static_cast<int32_t>(in.senderMs - s.lastSenderMs) <= 0) seqOk = false;
     if (s.lastSampleAt > 0 && now - s.lastSampleAt >= wo214rules::kResumeBlendS) s.resumedAfterS = now - s.lastSampleAt;   // WO-214 B
     s.lastSampleAt = now;
+    g_anySampleAt.store(now, std::memory_order_relaxed);   // WO-215 A: the link's own pulse (any body's sample)
     s.src = in.src;
     if (!seqOk) return;
+    if (s.lastAcceptedAt > 0) s.gapEma = wo215rules::gap_ema(s.gapEma, now - s.lastAcceptedAt);   // WO-215 A: the body's own cadence
     s.haveSeq = true; s.lastSeq = in.seq; s.lastAcceptedAt = now;
     if (stamped) { s.haveSenderMs = true; s.lastSenderMs = in.senderMs; }
     s.flags = in.flags;
@@ -602,7 +639,9 @@ void blend_start(Puppet& p, void* e, const float pose[4]) {
     if (!read_pos(e, cur)) return;
     const float ox = cur[0] - pose[0], oy = cur[1] - pose[1], oz = cur[2] - pose[2];
     const float d2 = ox * ox + oy * oy + oz * oz;
-    if (d2 > kSnapM2) return;                                              // a teleport is never smoothed
+    const bool routeFar = p.blendFar;
+    p.blendFar = false;
+    if (d2 > kSnapM2 && !(routeFar && d2 <= kRouteFarM2)) return;               // a teleport is never smoothed (WO-215: the corrector's up to 25 m is)
     const float orot = wrap_pi(yaw_of(e) - pose[3]);
     if (d2 < kBlendDoneM * kBlendDoneM && std::fabs(orot) < kBlendDoneM) return;
     p.off[0] = ox; p.off[1] = oy; p.off[2] = oz; p.offRot = orot;
@@ -753,6 +792,7 @@ void disarm(const char* why) {
     logf("MP-NPCWRITE DISARMED -- %s; every bound puppet dropped, Lua writes them again", why);
     for (auto it = g_bound.begin(); it != g_bound.end();) {
         motion::body_released(it->second.key.c_str(), it->second.eid);
+        wo215::route_release(it->second.eid, "writer disarmed");
         notify_drop(kFault, it->second.name);
         it = g_bound.erase(it);
     }
@@ -1063,6 +1103,8 @@ uint8_t bind_main(const BindRequest& req) {
     p = Puppet{};
     p.key = key; p.name = req.name; p.eid = req.eid; p.ent = e; p.wuid = nativeWuid ? nativeWuid : req.wuid;
     p.beast = beast;
+    p.human = npcscan::body_kind(e) == 0;   // WO-215 A
+    p.noPhys = noPhys;
     std::memcpy(p.anchor, req.anchor, sizeof(p.anchor));
     p.delay = (req.delayMs >= 20 && req.delayMs <= 2000) ? req.delayMs / 1000.0 : 0.12;
     p.winStart = now;
@@ -1174,6 +1216,7 @@ void tick() {
             logf("MP-NPCWRITE npc=%s event=drop reason=pipe-closed writes=%llu", it->second.name.c_str(),
                  static_cast<unsigned long long>(it->second.writes));
             motion::body_released(it->second.key.c_str(), it->second.eid);
+            wo215::route_release(it->second.eid, "pipe closed");
             g_playoutByEid.erase(it->second.eid);   // WO-213 E.1
             it = g_bound.erase(it);
         }
@@ -1263,9 +1306,12 @@ void tick() {
         const bool postureHeld = wo213rules::posture_hold_sitting(holds, havePos, dx, dy, now, &p.sitting);
         if (p.sitting.drifted && !wasDrifted) wo213::note_posture_drift(p.name.c_str(), std::sqrt(dx * dx + dy * dy));
         if (postureHeld && (s.flags & (0x01 | 0x02 | 0x10)) == 0 && now >= p.holdUntil && !parented && !activity_held(p.eid)) wo213::note_posture_skip();
-        if ((s.flags & (0x01 | 0x02 | 0x10)) != 0 || now < p.holdUntil || parented || activity_held(p.eid) || wo210kd::held_down(p.eid) || postureHeld) {
+        if ((s.flags & (0x01 | 0x02 | 0x10)) != 0 || now < p.holdUntil || parented || activity_held(p.eid) || wo210kd::held_down(p.eid) || postureHeld ||
+            wo215::probe_owned(p.eid)) {
             // Dead / unconscious / carried stay on Lua's own behaviour; a swing
             // one-shot owns the body for its hold. Neither is a pull.
+            // WO-215 A: a held body is not routed -- its request (if any) ends; A.0's probe owns its own body
+            if (wo215::walk_own(p.eid)) wo215::route_release(p.eid, "held");
             p.haveLast = false;
             p.havePrev = false;
             p.blendPending = true;   // it resumes from wherever the engine or the one-shot leaves the body
@@ -1291,7 +1337,9 @@ void tick() {
         if (now - p.livingCheckAt > 0.5) {
             p.livingCheckAt = now;
             PhysicsStatus ps{};
-            if (!p.beast && physics_status(e, &ps) && ps.present && !ps.living) {   // WO-144: a horse's is never a living entity
+            const bool psOk = physics_status(e, &ps);
+            if (psOk) p.noPhys = !ps.present;   // WO-215 A: physics comes and goes with this machine's physics range
+            if (!p.beast && psOk && ps.present && !ps.living) {   // WO-144: a horse's is never a living entity
                 auto cur = it++;
                 drop(cur, kNotLiving, true);
                 continue;
@@ -1327,6 +1375,48 @@ void tick() {
         if (ex) c_extrapFrames.fetch_add(1, std::memory_order_relaxed);
         if (p.extrapolating && !ex) { p.blendPending = true; p.blendWhy = "extrap-end"; c_extrapEnds.fetch_add(1, std::memory_order_relaxed); }   // back onto the stream, from the body
         p.extrapolating = ex;
+        // WO-215 A: the route. A copy on the ground moves by the engine's own movement request toward its stream (the writer does not
+        // write it); the writer corrects a body the stream left over mp_route_correct_m behind (a blend, never a snap) and keeps what the
+        // route cannot do: figures, beasts, riders, falls, fighting bodies, a body whose request the engine refused (wo215_rules.h).
+        {
+            wo215::RouteIn ri;
+            ri.eid = p.eid; ri.ent = e; ri.name = p.name.c_str();
+            const RingSample& nsm = s.ring[s.n - 1];
+            ri.newest[0] = nsm.x; ri.newest[1] = nsm.y; ri.newest[2] = nsm.z; ri.newest[3] = nsm.rot;
+            ri.render[0] = pose[0]; ri.render[1] = pose[1]; ri.render[2] = pose[2]; ri.render[3] = pose[3];
+            // a moved-gated stream goes quiet when its NPC stops: no sample for twice the body's own usual gap (at least half a second)
+            // is a stop, whatever the ring's last speed said -- a far body's samples come about once a second (wo215_rules.h stop_after)
+            const double silent215 = now - s.lastAcceptedAt;
+            const double stopAfter215 = wo215rules::stop_after(s.gapEma);
+            ri.streamMps = silent215 < stopAfter215 ? stream_speed(s) : 0.0f;
+            if (ri.streamMps < 0.0f) ri.streamMps = 0.0f;
+            ri.streamVz = stream_vz(s);
+            if (ri.streamMps > 0.0f) stream_vel(s, &ri.streamVx, &ri.streamVy);
+            ri.figure = figure; ri.beast = p.beast; ri.parented = parented;
+            ri.human = p.human; ri.physics = !p.noPhys;
+            // WO-215 A: this body silent while every stream is quiet is a link stall, not its NPC's stop (the stream is moved-gated)
+            ri.stall = wo215rules::link_stall(silent215, now - g_anySampleAt.load(std::memory_order_relaxed), stopAfter215);
+            ri.gapS = static_cast<float>(s.gapEma > 0.0 ? s.gapEma : 0.1);
+            ri.fight = (s.flags & (0x04 | 0x08)) != 0 || now < p.holdUntil || wo209::mirrored(p.eid);
+            ri.now = now;
+            const wo215::RouteOut ro = wo215::route_frame(ri);
+            if (ro.v == wo215::Verdict::Routed) {
+                p.haveLast = false;
+                p.havePrev = false;
+                p.blendPending = true;   // when the writer takes it again (the corrector, a fall, a fight), from where the body stands
+                p.blendWhy = "route-end";
+                p.blending = false;
+                p.extrapolating = false;
+                const double renderAt2 = now - renderDelay;
+                const double gapS2 = s.n > 0 && renderAt2 > s.ring[s.n - 1].at ? renderAt2 - s.ring[s.n - 1].at : -1.0;
+                // the gait is the engine's own (motion.cpp leaves a routed body's tags alone); its combat holds stay
+                motion::body_frame(p.key.c_str(), e, p.eid, 0.0f, 0.0f, 0.0f, s.haveSt2 ? &s.st2 : nullptr, s.haveSt2 ? now - s.st2At : 1e9, now, gapS2);
+                if (now - p.winStart >= kPullWindowS) pull_flush(p, now);
+                ++it;
+                continue;
+            }
+            if (ro.v == wo215::Verdict::Correct && p.blendPending) p.blendFar = true;
+        }
         if (p.blendPending) {
             blend_start(p, e, pose);
             // WO-214 A.3: a blend over 1 m, with the stream's own last gap -- a big blend on a stream that had no 1 s gap is the receiver's

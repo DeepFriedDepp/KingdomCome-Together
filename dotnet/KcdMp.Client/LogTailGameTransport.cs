@@ -466,6 +466,8 @@ public sealed class LogTailGameTransport : IGameTransport
         Wo211Rules.OverflowMarker,
         // WO-204 IV.5: a copy stuck in a state the engine cannot leave (2,577 of these for one joiner copy in session D)
         "[NPCContext]:NPC state search has failed!",
+        // WO-215 D.1/E: a copy whose combat actor this engine could not set up (the field's ghost Cuman: 1,606 of these)
+        Wo215Rules.GhostMarker,
         "counldn't reach the loaded state in",
         // WO-164: a dialogue's commands (the talk line's count: a haggle that played nothing) and the minigame entities (dice)
         "] DialogCommand-",

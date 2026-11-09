@@ -64,6 +64,7 @@ public static class Packer
         opt ??= new PackOptions();
         Directory.CreateDirectory(outDir);
         sources = ArrangeAnim(sources);
+        sources = ArrangeAnimSession(sources);
         var res = new PackResult();
         void Say(string s) => progress?.Invoke(s);
 
@@ -223,6 +224,25 @@ public static class Packer
         }
         catch { }
         return sources;
+    }
+
+    /// <summary>WO-215 G: the session probe's files (beside kcd.log, like the detail file) go into the anim folder too.</summary>
+    internal static IReadOnlyList<SourceFile> ArrangeAnimSession(IReadOnlyList<SourceFile> sources)
+    {
+        var outp = sources.ToList();
+        foreach (var (name, entry) in new[] { (AnimStream.SessionFileName, AnimStream.SessionEntry), (AnimStream.SessionPrevName, AnimStream.SessionPrevEntry) })
+        {
+            if (outp.Any(s => s.EntryName == entry)) continue;
+            if (outp.FirstOrDefault(s => s.EntryName == name) is { } top) { outp[outp.IndexOf(top)] = top with { EntryName = entry }; continue; }
+            try
+            {
+                var kcd = outp.FirstOrDefault(s => s.EntryName == "kcd.log" && s.Path is not null);
+                string? dir = kcd is null ? null : System.IO.Path.GetDirectoryName(kcd.Path);
+                if (dir is not null && File.Exists(System.IO.Path.Combine(dir, name))) outp.Add(new SourceFile(entry, System.IO.Path.Combine(dir, name)));
+            }
+            catch { }
+        }
+        return outp;
     }
 
     private static bool IsLog(string entry) => entry.EndsWith(".log", StringComparison.OrdinalIgnoreCase);

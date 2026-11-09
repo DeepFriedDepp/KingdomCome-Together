@@ -166,6 +166,13 @@ inline constexpr uint8_t kUiElementLuaNotify[14] = {
     0x48, 0x89, 0x54, 0x24, 0x10, 0x53, 0x41, 0x55, 0x41, 0x57, 0x48, 0x83, 0xEC, 0x60,
 };
 
+// wo215.cpp: C_XGenAIModule::UpdateInternal (found by its profiler label) -- the AI update's entry, where the route's movement requests
+// are made on the update's own thread (WO-215 A: a9's crash).
+// mov rax,rsp; push rbp; push rdi; push r13; lea rbp,[rax-68h]; sub rsp,150h
+inline constexpr uint8_t kAiUpdateInternal[18] = {
+    0x48, 0x8B, 0xC4, 0x55, 0x57, 0x41, 0x55, 0x48, 0x8D, 0x68, 0x98, 0x48, 0x81, 0xEC, 0x50, 0x01, 0x00, 0x00,
+};
+
 struct Entry { const char* name; const uint8_t* bytes; size_t len; };
 inline constexpr Entry kAll[] = {
     {"motion UpdateMannequinTags", kMotionTags, sizeof kMotionTags},
@@ -191,6 +198,7 @@ inline constexpr Entry kAll[] = {
     {"wo201 C_ActorSpeakMan::Speak", kActorSpeak, sizeof kActorSpeak},
     {"wo201 C_UIHudInteractiveDialog::SetDialogSequences", kSetDialogSequences, sizeof kSetDialogSequences},
     {"wo211 CryAction element-listener Lua dispatch (B)", kUiElementLuaNotify, sizeof kUiElementLuaNotify},
+    {"wo215 C_XGenAIModule::UpdateInternal (A)", kAiUpdateInternal, sizeof kAiUpdateInternal},
 };
 
 } // namespace kcdmp::hookpro

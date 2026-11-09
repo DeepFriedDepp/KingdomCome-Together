@@ -160,12 +160,18 @@ enum Path : uint8_t {
     kPathOverflow = 18,         // WO-211 C.3: the engine said the copy's action queue is over-full -- a clean reseat
     kPathEmptyRefused = 19,     // WO-214 C.1: the hand-over's install of the host's posture was refused here (a base was given under it)
     kPathEmptyOwn = 20,         // WO-214 C.1: no exit of ours: the copy's own engine left its full body empty (its own action ended)
-    kPathCount = 21,
+    kPathRefusedHere = 21,      // WO-215 C: the host's activity installed twice and never shown on this body: a named refusal, the base instead
+    kPathStaleOurs = 22,        // WO-215 C: our own posture outlived the host NPC's (no exit recorded): the host's state handed over
+    kPathDormantHost = 23,      // WO-215 D.1: the host NPC's whole body empty past 2 s -- dormant on the host: the copy is parked, not reseated
+    kPathNpcState = 24,         // WO-215 C: the activity is the NPC-state placement's (WO-141 holds its stance or unstance): no fragment of ours over it
+    kPathNpcStateRefused = 25,  // WO-215 C: ... and the game's planner refused that placement here: a named refusal, the base instead
+    kPathCount = 26,
 };
 inline const char* path_name(uint8_t p) {
     static const char* k[] = {"unknown", "1-drift", "2-far", "3-stale", "4-attack-end", "5-clinch", "6-death", "7-get-up", "8-conv-end", "9-scene-end",
                               "10-skip-end", "11-load", "12-switch", "13-fault", "14-bind", "15-host-base", "16-install-pending", "17-own-posture", "18-overflow",
-                              "19-empty-refused", "20-empty-own"};
+                              "19-empty-refused", "20-empty-own", "21-refused-here", "22-stale-ours", "23-dormant-host", "24-npc-state",
+                              "25-npc-state-refused"};
     return p < kPathCount ? k[p] : "?";
 }
 // The path a reseat is charged to: the last exit recorded on the copy within kPathWindowS, else unknown (a bug to find).

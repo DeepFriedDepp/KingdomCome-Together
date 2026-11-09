@@ -17,6 +17,8 @@
 #include "wo210_rules.h"
 #include "wo213.h"
 #include "wo214.h"
+#include "wo215.h"
+#include "wo141.h"
 #include "wo211.h"
 #include "wo211_rules.h"
 #include "combat_swing.h"
@@ -544,6 +546,9 @@ struct OwnCopy {
     double c2Stop[wo214rules::kChurnStops] = {-1e9, -1e9, -1e9}, c2RestUntil = 0;   // WO-214 C.2: the last stops here, a rest after churn
     // WO-214 C.1's instrument: a stretch of an empty full body within 60 m of the local player (the probe saw 6 s of a 3-minute one)
     double emptySince = -1, emptyLogAt = -1e9; float emptyDist = 0;
+    // WO-215 C: the host activity this copy's installs have not shown (same host fragment), how often, since when; refused until
+    uint32_t c215Frag = 0xFFFFFFFFu; int c215Tries = 0; double c215At = -1e9, c215RefusedUntil = 0; bool c215Missing = false;
+    double hostEmptySince = -1, dormantAskAt = -1e9;   // WO-215 D.1: the host NPC's whole body empty since
 };
 std::atomic<uint32_t> c_emptyStretches{0};
 std::atomic<uint64_t> c_emptyMs{0};
@@ -608,6 +613,12 @@ std::string frag_name_of(uint32_t eid, uint32_t frag) {
     char nm[96];
     return wo187::fragment_name(eid, frag, nm, sizeof nm) ? std::string(nm) : std::string();
 }
+// WO-215 A: a routed copy's walk start and stop are its own movement system's (the engine's request plays IdleToMove / MoveToIdle itself):
+// for such a copy the host's walk transitions are locomotion -- the copy's base -- never an install of ours (E.1's rule is for written copies)
+Fam fam_of(uint32_t eid, uint8_t cls, uint32_t frag) {
+    if (cls == kClsMoveTransition && walk_transition_frag(frag) && wo215::walk_own(eid)) return Fam::Loco;
+    return family_of_id(cls, frag);
+}
 wo210rules::PFam pfam_of(uint32_t eid, uint8_t cls, uint32_t frag) {
     return wo210rules::family(cls, frag_name_of(eid, frag).c_str(), frag);
 }
@@ -622,6 +633,28 @@ bool is_ours(const OwnCopy& oc, const void* act) {
     for (const auto& r : oc.retired) if (r.act == act) return true;
     return false;
 }
+// WO-215 C/B: the ladder's base on a copy whose host activity cannot be shown here: the copy's own neutral idle (learned from its host's
+// standing idles), else the engine's own idle through a locomotion pulse (its AI movement action's MotionIdle) -- never an empty body.
+std::atomic<uint32_t> c_w215Bases{0}, c_w215Refused{0}, c_w215RefusedRest{0}, c_w215Dormant{0}, c_w215StaleOurs{0}, c_w215NpcState{0};
+bool w215_give_base(uint32_t eid, OwnCopy& oc, double now) {
+    HostScope b{};
+    if (neutral_idle(eid, &b)) {
+        if (oc.baseAct && oc.baseFrag == b.frag) return true;
+        void* ba = nullptr;
+        if (rttr::install_fragment(eid, b.frag, b.tags, kBasePriority, b.flags, &ba) == rttr::SwingResult::Ok && ba) {
+            if (oc.baseAct) { rttr::stop_action(oc.baseAct); oc.retired.push_back({oc.baseAct, now}); }
+            oc.baseAct = ba; oc.baseFrag = b.frag; oc.baseAt = now; oc.baseStarted = false;
+            c_w215Bases.fetch_add(1, std::memory_order_relaxed);
+            return true;
+        }
+    }
+    bool c = false;
+    motion::combat_mode_of(eid, &c);
+    const bool given = (c && motion::requeue_guard_idle(eid)) || motion::request_idle_pulse(eid);
+    if (given) c_w215Bases.fetch_add(1, std::memory_order_relaxed);
+    return given;
+}
+
 // The host's current FullBody state installed the owner's way, in the same frame as the release of what it replaces: a base family as
 // our base action under the copy's own base (the copy's own base, when it comes, replaces it); any other family at the host's priority
 // as our scope action. Unknown host state: the body's neutral idle. Never "withdraw and leave it", never "stop and leave it empty".
@@ -632,7 +665,7 @@ bool own_handover(uint32_t eid, OwnCopy& oc, double now, uint8_t path) {
     // a host scope with nothing in it (d6-waitnight: a wanderer whose host NPC's FullBody was empty, 24 reseats of "the host's state" --
     // fragment 0 with the empty scope's tags, nothing that plays) is no state to hand over: the copy's own neutral idle, never empty
     const HostScope* hs = oc.hostHave && (oc.host.cls != kClsNone || !wo210::fix_on(wo210rules::kFixEmptyHostNeutral)) ? &oc.host : nullptr;
-    const Fam fam = hs ? family_of_id(hs->cls, hs->frag) : Fam::Empty;
+    const Fam fam = hs ? fam_of(eid, hs->cls, hs->frag) : Fam::Empty;
     bool installed = false, neutral = false;
     // WO-211 C.2: a hand-over never queues behind a long queue (the field's seated copy: nine of our actions waiting behind its own look
     // actions, 3,712 overflows) -- ours still pending are withdrawn first (one pending action of ours per copy); still long: nothing new
@@ -779,7 +812,7 @@ void own_apply(uint32_t eid, OwnCopy& oc, int cm, const HostScope hsc[2], const 
     for (int k = 0; k < 2; ++k) {
         if ((shot || aiRuns) && k == 0) continue;
         const HostScope* hs = have[k] ? &hsc[k] : nullptr;
-        const Fam fam = hs ? family_of_id(hs->cls, hs->frag) : Fam::Empty;
+        const Fam fam = hs ? fam_of(eid, hs->cls, hs->frag) : Fam::Empty;
         Probe::Scope& o = oc.own[k];
         Own view;
         if (o.act) {
@@ -866,7 +899,7 @@ void own_apply(uint32_t eid, OwnCopy& oc, int cm, const HostScope hsc[2], const 
         if (oc.fullEmptySince < 0) oc.fullEmptySince = now;
         if (now - oc.fullEmptySince > 0.3 && now - oc.lastPulse > 1.0 && !oc.baseAct && !queueFull) {
             oc.lastPulse = now;
-            const HostScope* hb = have[0] && is_base(family_of_id(hsc[0].cls, hsc[0].frag)) && hsc[0].cls != kClsNone ? &hsc[0] : nullptr;
+            const HostScope* hb = have[0] && is_base(fam_of(eid, hsc[0].cls, hsc[0].frag)) && hsc[0].cls != kClsNone ? &hsc[0] : nullptr;
             const char* how = "no host base to give it";
             HostScope nb{};
             bool c = false;
@@ -906,11 +939,11 @@ void own_apply(uint32_t eid, OwnCopy& oc, int cm, const HostScope hsc[2], const 
     if (now - oc.w214At >= wo210rules::kWatchEveryS && cn > 0 && cs[0].ok) {
         oc.w214At = now;
         if (cm || wo209::mirrored(eid)) oc.hostFightAt = now;
-        const bool hostBase = have[0] && is_base(family_of_id(hsc[0].cls, hsc[0].frag));
+        const bool hostBase = have[0] && is_base(fam_of(eid, hsc[0].cls, hsc[0].frag));
         if (!hostBase) oc.hostBaseSince = -1; else if (oc.hostBaseSince < 0) oc.hostBaseSince = now;
         // the candidate: the full body's action -- not our base, not a base family itself, not paired, and not ours while it still mirrors
         // the host's current action (that is the owner's own business)
-        const Fam curFam = cs[0].empty ? Fam::Empty : family_of_id(class_id(cs[0].action), cs[0].frag);
+        const Fam curFam = cs[0].empty ? Fam::Empty : fam_of(eid, class_id(cs[0].action), cs[0].frag);
         const bool mirrorsHost = oc.own[0].act && cs[0].act == oc.own[0].act && have[0] && hsc[0].act == oc.own[0].hostAct;
         const bool combatClass = !cs[0].empty && class_id(cs[0].action) == kClsCombatAnim;
         const bool candidate = !cs[0].empty && cs[0].act && cs[0].act != oc.baseAct && !is_base(curFam) && curFam != Fam::Hold && !mirrorsHost
@@ -969,6 +1002,7 @@ void own_apply(uint32_t eid, OwnCopy& oc, int cm, const HostScope hsc[2], const 
         } else oc.transFrag = 0xFFFFFFFFu;
         const bool mod = shot || aiRuns || copyF == PFam::Combat || copyF == PFam::Paired;
         Verdict v = check(copyF, hostF, trans, mod, !wo210::fix_on(kFixPostureOtherGrace));
+        if (have[0] && hsc[0].cls == kClsNone) { if (oc.hostEmptySince < 0) oc.hostEmptySince = now; } else oc.hostEmptySince = -1;   // WO-215 D.1
         if (!have[0] && v != Verdict::Empty) v = Verdict::Ok;   // no host state to judge a posture by: only an empty body counts
         // the same fragment is the same body, whatever class plays it (the owner installs the host's idle-state postures through a combat
         // action: d1's first watchdog took "ours, other" against "the host's, working" for the very same work fragment, 132 reseats)
@@ -1005,6 +1039,75 @@ void own_apply(uint32_t eid, OwnCopy& oc, int cm, const HostScope hsc[2], const 
                 if (path == kPathUnknown && v == Verdict::PostureOther) path = kPathInstallPending;   // the host's gesture not shown yet
                 // WO-214 C.1: an empty body no exit of ours explains is the copy's own engine's (its own action ended with nothing after)
                 if (path == kPathUnknown && v == Verdict::Empty && wo214::on(wo214rules::kBitOwnerBase)) path = kPathEmptyOwn;
+                const bool line215 = wo215::on(wo215rules::kBitActivityLine);
+                // WO-215 C: our own posture outlived the host NPC's and no exit was recorded (the field's 8 "path=unknown"): named
+                if (path == kPathUnknown && line215 && (v == Verdict::StalePosture || v == Verdict::StaleDead) && !copysOwn) {
+                    path = kPathStaleOurs; c_w215StaleOurs.fetch_add(1, std::memory_order_relaxed);
+                }
+                // WO-215 D.1: the host NPC's whole body empty for 2 s -- the host holds this body dormant (an encounter pool's parked one, the
+                // field's Cuman: 42 reseats that could install nothing): no copy should stand here -- the agent parks it (ask kind 3)
+                if (wo215::on(wo215rules::kBitDormant) && v == Verdict::Empty && have[0] && hsc[0].cls == kClsNone && oc.hostEmptySince >= 0 &&
+                    now - oc.hostEmptySince >= 2.0) {
+                    if (now - oc.dormantAskAt >= 5.0 && g_asks.size() < 64) { oc.dormantAskAt = now; g_asks.push_back({3, oc.name}); c_w215Dormant.fetch_add(1); }
+                    wo210::note_reseat(oc.name.c_str(), "empty", "empty", kPathDormantHost, held, false);
+                    oc.breachSince = now;
+                    oc.reseatBackoff = 2.0;
+                    return;
+                }
+                // WO-215 C: the host's activity installed twice and still not on the body is refused HERE (its fragment needs what this copy has
+                // not: a tool, an object, a smart object's use): a named refusal, the ladder's base instead, the copy reported as missing it --
+                // never the field's endless 16-install-pending loop (231 reseats); asked again after 30 s or when the host's activity changes
+                // WO-215 C.0 (one description, one path): the field's "working" and "sitting" loops were bodies whose activity WO-141 held as an
+                // NPC-state stance or unstance (cooking, woodchopping, a bench) while this watchdog installed the same activity's fragment over
+                // it, again and again. The NPC-state placement is the activity's path when it holds one: the owner leaves the body to it; a
+                // placement the game's planner gave up on is a named refusal (the base instead, reported missing).
+                if (line215 && (v == Verdict::MissingPosture || v == Verdict::PostureOther) && have[0]) {
+                    const int np = wo141::activity_path(oc.name.c_str());
+                    if (np == 1 || np == 2) {
+                        c_w215NpcState.fetch_add(1, std::memory_order_relaxed);
+                        wo210::note_reseat(oc.name.c_str(), cs[0].empty ? "empty" : pfam_name(copyF), pfam_name(hostF), kPathNpcState, held, false);
+                        oc.breachSince = now;
+                        oc.reseatBackoff = 2.0;
+                        return;
+                    }
+                    if (np == 3 && now >= oc.c215RefusedUntil) {
+                        oc.c215RefusedUntil = now + 30.0;
+                        oc.c215Missing = true;
+                        const bool based = wo215::on(wo215rules::kBitLadder) && w215_give_base(eid, oc, now);
+                        const uint32_t k = c_w215Refused.fetch_add(1, std::memory_order_relaxed) + 1;
+                        if (k <= 200 || k % 50 == 0)
+                            logf("WO215-ACTIVITY-MISSING npc=%s host=%s(%s frag %u) npc-state-refused: the game's planner gave up on its placement here -> %s; "
+                                 "asked again when the host's activity changes [n=%u]", oc.name.c_str(), pfam_name(hostF), frag_name_of(eid, hsc[0].frag).c_str(),
+                                 hsc[0].frag, based ? "the copy's base (its own idle)" : "no base", k);
+                        wo210::note_reseat(oc.name.c_str(), cs[0].empty ? "empty" : pfam_name(copyF), pfam_name(hostF), kPathNpcStateRefused, held, based);
+                        oc.breachSince = now;
+                        oc.reseatBackoff = 4.0;
+                        return;
+                    }
+                    if (oc.c215Frag != hsc[0].frag || now - oc.c215At > 30.0) { oc.c215Frag = hsc[0].frag; oc.c215Tries = 0; oc.c215Missing = false; oc.c215RefusedUntil = 0; }
+                    oc.c215At = now;
+                    if (now < oc.c215RefusedUntil) {
+                        c_w215RefusedRest.fetch_add(1, std::memory_order_relaxed);
+                        oc.breachSince = now;
+                        oc.reseatBackoff = 4.0;
+                        return;
+                    }
+                    if (++oc.c215Tries > 2) {
+                        oc.c215RefusedUntil = now + 30.0;
+                        oc.c215Missing = true;
+                        // B (ladder): the rung under the activity this copy cannot show -- its own idle, else the engine's (the twin: none)
+                        const bool based = wo215::on(wo215rules::kBitLadder) && w215_give_base(eid, oc, now);
+                        const uint32_t k = c_w215Refused.fetch_add(1, std::memory_order_relaxed) + 1;
+                        if (k <= 200 || k % 50 == 0)
+                            logf("WO215-ACTIVITY-MISSING npc=%s host=%s(%s frag %u) refused-here: installed %d times, never shown on this body -> %s; asked again in 30 s "
+                                 "or when the host's activity changes [n=%u]", oc.name.c_str(), pfam_name(hostF), frag_name_of(eid, hsc[0].frag).c_str(), hsc[0].frag,
+                                 oc.c215Tries - 1, based ? "the copy's base (its own idle)" : "no base could be given", k);
+                        wo210::note_reseat(oc.name.c_str(), cs[0].empty ? "empty" : pfam_name(copyF), pfam_name(hostF), kPathRefusedHere, held, based);
+                        oc.breachSince = now;
+                        oc.reseatBackoff = 4.0;
+                        return;
+                    }
+                }
                 const bool ok = own_handover(eid, oc, now, path);
                 // the copy's own engine posture (its NPC state's bed, seat or workstation: an idle state at priority 3) is over any base
                 // of ours: its stance is released the game's own way by the agent (op 140), at most every 5 s
@@ -1050,7 +1153,7 @@ void own_release(uint32_t eid, OwnCopy& oc, double now, const char* why, uint8_t
     // T posing"; a let-go copy kept looping the host's last posture). A dead copy is left as it lies (C.2).
     const bool hand = alive && path != wo210rules::kPathDeath && wo210::on(wo210rules::kBitStateAlways) && !wo172::copy_dead(eid);
     if (hand) {
-        const bool baseKnown = oc.hostHave && oc.host.cls != kClsNone && is_base(family_of_id(oc.host.cls, oc.host.frag));
+        const bool baseKnown = oc.hostHave && oc.host.cls != kClsNone && is_base(fam_of(eid, oc.host.cls, oc.host.frag));
         const HostScope keep = oc.host; const bool keepHave = oc.hostHave;
         if (!baseKnown) oc.hostHave = false;
         own_handover(eid, oc, now, path);
@@ -1115,6 +1218,14 @@ void owner_tick(double now) {
         if (!e || v.empty()) { it = g_copyStates.erase(it); continue; }
         const char* nm = engine::entity_name(e);
         if (!g_ownerOnly.empty() && (!nm || _stricmp(nm, g_ownerOnly.c_str()) != 0)) { it = g_copyStates.erase(it); continue; }
+        // WO-215 A.0: the probe owns its body for its run -- the owner lets it go (its installs released) and leaves it alone meanwhile
+        if (wo215::probe_owned(eid)) {
+            const auto ow = g_owned.find(eid);
+            if (ow != g_owned.end()) { own_release(eid, ow->second, now, "the A.0 probe owns it", wo210rules::kPathSwitch); g_owned.erase(ow); }
+            v.clear();
+            ++it;
+            continue;
+        }
         // WO-209 (the owner's village runs): the host streams every body within 40 m of either player, so copies by the host 130 m and more
         // from the local player were owned here with no full-body action the engine plays at that distance (empty: a T-pose as they come
         // into view). The owner drives the copies near the local player; a farther one is its own engine's and the old writers', as with
@@ -1123,7 +1234,9 @@ void owner_tick(double now) {
             float cp[3]{};
             const float d = engine::entity_world_pos(e, cp) ? std::sqrt((cp[0] - me[0]) * (cp[0] - me[0]) + (cp[1] - me[1]) * (cp[1] - me[1])) : -1.0f;
             const auto ow = g_owned.find(eid);
-            if (d >= 0 && !wo209rules::owner_keeps(ow != g_owned.end(), d)) {
+            // WO-215 B (letgo_cull): an owned copy is let go only at the cull range (the stream's 150 m), never at WO-209's 70 m -- the route
+            // and the ladder keep a base on it out there; the twin: 70 m
+            if (d >= 0 && !wo215rules::owner_keeps(wo215::on(wo215rules::kBitLetGoCull), ow != g_owned.end(), d, wo209rules::kOwnerNearM)) {
                 if (ow != g_owned.end()) {
                     // WO-214 C.1: the distance of each let-go, against the cull and the bands (the field: 114 let-gos)
                     char why[64]; std::snprintf(why, sizeof why, "far from the local player: %.0f m", d);
@@ -1319,6 +1432,14 @@ bool host_fullbody(uint32_t eid, uint8_t* cls, uint32_t* frag) {
 // (a pending one stopped, never installed; a running one stepped down), then one clean hand-over. 1 reseated, 2 not an owned copy,
 // 3 too soon after the last.
 bool posture_holds(uint32_t eid) { return g_postureHeld.count(eid) != 0; }   // WO-213 E.3
+void w215_counters(uint32_t out[6], uint32_t* missingNow) {
+    out[0] = c_w215Bases.load(); out[1] = c_w215Refused.load(); out[2] = c_w215RefusedRest.load(); out[3] = c_w215Dormant.load(); out[4] = c_w215StaleOurs.load();
+    out[5] = c_w215NpcState.load();
+    uint32_t m = 0;
+    const double now = npcdrive::now_s();
+    for (const auto& kv : g_owned) if (kv.second.c215Missing && now < kv.second.c215RefusedUntil + 5.0) ++m;
+    if (missingNow) *missingNow = m;
+}
 
 uint8_t overflow_reseat(uint32_t eid, const char* name, double everyS) {
     auto it = eid ? g_owned.find(eid) : g_owned.end();

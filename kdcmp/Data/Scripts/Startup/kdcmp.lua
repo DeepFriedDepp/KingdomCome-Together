@@ -9512,6 +9512,8 @@ function KCD2MP_ApplyNpcState(name, x, y, z, rot, hp, flags, src, seq, senderMs)
             KCD2MP._npcDivergeUntil[name] = nil
             mp_log("NPC-DIVERGE " .. tostring(name) .. ": stand-off over, accepting the stream again")
         end
+        -- WO-215 D.1: a ghost (its combat actor could not be set up here) is not bound again while the engine keeps failing on it
+        if KCD2MP_W215GhostRefuse and KCD2MP_W215GhostRefuse(name) then return end
     end
 
     if not p then
@@ -34528,6 +34530,231 @@ do
         local fname = "KCD2MP_W214Set_" .. k
         _G[fname] = function(arg) return KCD2MP_W214Set(k, arg) end
         System.AddCCommand(label, fname .. "(%line)", "WO-214 " .. (W214.HELP[k] or k) .. " (default on): " .. label .. " on|off")
+    end
+end
+
+-- ===== WO-215: the animation substrate (docs/WO-215-findings.md) =====
+-- Every switch ships on. The agent tells this file the states (KCD2MP_W215Cfg, with the bench's twins applied); a console switch here
+-- goes to the agent, which tells the DLL and this file back.
+do
+    W215 = W215 or {}
+    W215.on = W215.on or {}
+    W215.NAMES = {
+        route = "mp_route", gait = "mp_route_gait", ladder = "mp_ladder", letgo_cull = "mp_letgo_cull", activity_line = "mp_activity_line",
+        dormant = "mp_dormant", ghost_fight = "mp_ghost_fight", probe_all = "mp_probe_all",
+    }
+    W215.HELP = {
+        route = "A.1: (joiner) a copy on the ground moves by the engine's own movement request; the writer only corrects it",
+        gait = "A.2: (joiner) the request's speed class follows the host NPC's own speed (walk, jog, run, sprint)",
+        ladder = "B: (joiner) a living bound copy's full body is never empty (the host's activity, its posture, its own idle, the default idle)",
+        letgo_cull = "B: (joiner) the owner lets a copy go only at the cull range (150 m), never at 70 m",
+        activity_line = "C: (both) one activity line per NPC: the copy installs it by a named path or reports why not",
+        dormant = "D.1: (host) a dormant body (an encounter pool's parked wanderer) is not sent as a copy until it wakes",
+        ghost_fight = "E: (joiner) this player leaves a fight whose every opponent is a copy its engine could not set up",
+        probe_all = "G: (both) the animation probe covers the whole session, one body a frame",
+    }
+    function KCD2MP_W215On(name)
+        local v = W215.on[tostring(name)]
+        if v == nil then return true end
+        return v
+    end
+    function KCD2MP_W215Cfg(list)
+        local n = 0
+        for kv in string.gmatch(tostring(list or ""), "[^,]+") do
+            local k, v = string.match(kv, "^%s*([%w_]+)=(%a+)%s*$")
+            if k and W215.NAMES[k] then W215.on[k] = (v == "on"); n = n + 1 end
+        end
+        if n > 0 and not W215.told then
+            W215.told = true
+            local parts = {}
+            for k in pairs(W215.NAMES) do parts[#parts + 1] = k .. "=" .. (KCD2MP_W215On(k) and "on" or "off") end
+            table.sort(parts)
+            mp_log("WO215-CFG " .. table.concat(parts, " "))
+        end
+        return true
+    end
+    function KCD2MP_W215Set(name, arg)
+        local label = W215.NAMES[tostring(name)]
+        if not label then mp_log("WO215-TOGGLE unknown switch '" .. tostring(name) .. "'"); return false end
+        local v = KCD2MP_Wo122ParseBool(arg)
+        if v == "bad" then mp_log(label .. ": expected on|off, got '" .. tostring(arg) .. "'"); return false end
+        if v == nil then mp_log("WO215-TOGGLE " .. label .. " is " .. (KCD2MP_W215On(name) and "on" or "off")); return true end
+        W215.on[tostring(name)] = v
+        mp_log("WO215-TOGGLE " .. label .. " " .. (v and "on" or "off") .. " -- sent to the agent")
+        KCD2MP_EmitEvent("w215_cfg", tostring(name) .. "=" .. (v and "on" or "off"))
+        return true
+    end
+    function KCD2MP_W215Status()
+        local parts = {}
+        for k, label in pairs(W215.NAMES) do parts[#parts + 1] = label .. "=" .. (KCD2MP_W215On(k) and "on" or "off") end
+        table.sort(parts)
+        mp_log("WO215-STATUS " .. table.concat(parts, " "))
+        KCD2MP_EmitEvent("w215_status", "")
+        return true
+    end
+    -- mp_route_correct_m <metres>: how far from where the stream says a routed copy may be before the writer blends it back (default 1.5)
+    function KCD2MP_W215CorrectM(arg)
+        local m = tonumber(arg)
+        if not m or m < 0.2 or m > 20 then mp_log("mp_route_correct_m: expected metres 0.2..20, got '" .. tostring(arg) .. "'"); return false end
+        KCD2MP_EmitEvent("w215_tune", string.format("%d -", math.floor(m * 100 + 0.5)))
+        mp_log(string.format("WO215-TOGGLE mp_route_correct_m %.2f -- sent to the agent", m))
+        return true
+    end
+    System.AddCCommand("mp_route_correct_m", "KCD2MP_W215CorrectM(%line)", "WO-215 A.1: a routed copy this far (metres) from its stream is blended back by the writer (default 1.5)")
+    System.AddCCommand("mp_w215_status", "KCD2MP_W215Status()", "WO-215: every WO-215 switch and the DLL's numbers")
+    for k, label in pairs(W215.NAMES) do
+        local fname = "KCD2MP_W215Set_" .. k
+        _G[fname] = function(arg) return KCD2MP_W215Set(k, arg) end
+        System.AddCCommand(label, fname .. "(%line)", "WO-215 " .. (W215.HELP[k] or k) .. " (default on): " .. label .. " on|off")
+    end
+
+    -- ---- D.1 / E (the joiner): ghosts -- copies whose combat actor this engine could not set up ----
+    -- The field: a pool Cuman the host held dormant stood on the joiner with an empty body for 11 minutes; the engine logged "Combat actor
+    -- init failed" for it 1,606 times while the joiner's player boxed it and could not leave the fight. The agent tells this file each such
+    -- body (KCD2MP_W215Ghost, at most every 5 s): it is unbound, parked (paused and hidden: never left standing), and its stream refused
+    -- until a minute passes without the engine's failure. E: this player in combat whose only opponents are ghosts leaves the fight the
+    -- game's own way (TryEndCombat and the skirmish's StopFight, WO-174's end of combat) after 2 s.
+    W215.ghosts = W215.ghosts or {}
+    W215.gstats = W215.gstats or { marked = 0, unbound = 0, refused = 0, fightsEnded = 0 }
+    W215.GHOST_KEEP_S = 60.0
+    W215.GHOST_FIGHT_S = 2.0
+    function KCD2MP_W215Ghost(name)
+        if not KCD2MP_W215On("dormant") then return false end
+        name = tostring(name or "")
+        if name == "" then return false end
+        local now = os.clock()
+        local g = W215.ghosts[name]
+        if g then g.at = now; g.n = g.n + 1; return true end
+        W215.ghosts[name] = { at = now, since = now, n = 1 }
+        W215.gstats.marked = W215.gstats.marked + 1
+        local p = KCD2MP.npcPuppets[name]
+        if p then
+            pcall(KCD2MP_NpcNativeSync, name, p, nil, false, "ghost")
+            KCD2MP.npcPuppets[name] = nil
+            W215.gstats.unbound = W215.gstats.unbound + 1
+        end
+        local e = nil
+        pcall(function() e = System.GetEntityByName(name) end)
+        if e then pcall(function() e:Hide(1) end) end
+        pcall(System.ExecuteCommand, "wh_ai_PauseNPC " .. name)
+        if KCD2MP.w131 then KCD2MP.w131.parked[name] = { at = now, why = "ghost" } end
+        mp_log(string.format("WO215-GHOST npc=%s unbound=%s -- the engine could not set up its combat actor: parked (paused, hidden), its stream refused until it stops failing [n=%d]",
+            name, tostring(p ~= nil), W215.gstats.marked))
+        return true
+    end
+    -- D.1: the owner's watchdog saw the host NPC's whole body empty past 2 s (ask kind 3): the host holds it dormant -- unbound and parked
+    W215.dormantUntil = W215.dormantUntil or {}
+    W215.gstats.dormant = W215.gstats.dormant or 0
+    function KCD2MP_W215Dormant(name)
+        if not KCD2MP_W215On("dormant") then return false end
+        name = tostring(name or "")
+        if name == "" then return false end
+        local p = KCD2MP.npcPuppets[name]
+        if p then
+            pcall(KCD2MP_NpcNativeSync, name, p, nil, false, "dormant")
+            KCD2MP.npcPuppets[name] = nil
+        end
+        local e = nil
+        pcall(function() e = System.GetEntityByName(name) end)
+        if e then pcall(function() e:Hide(1) end) end
+        pcall(System.ExecuteCommand, "wh_ai_PauseNPC " .. name)
+        if KCD2MP.w131 then KCD2MP.w131.parked[name] = { at = os.clock(), why = "dormant-host" } end
+        W215.dormantUntil[name] = os.clock() + 10.0
+        W215.gstats.dormant = W215.gstats.dormant + 1
+        mp_log(string.format("WO215-DORMANT npc=%s unbound=%s -- its host NPC's whole body is empty (dormant on the host): parked here, not left standing [n=%d]",
+            name, tostring(p ~= nil), W215.gstats.dormant))
+        return true
+    end
+    -- the puppet start's question: is this name a ghost (its stream refused), or a body just parked as dormant on the host?
+    function KCD2MP_W215GhostRefuse(name)
+        local du = W215.dormantUntil and W215.dormantUntil[name]
+        if du then
+            if os.clock() < du then return true end
+            W215.dormantUntil[name] = nil
+        end
+        local g = W215.ghosts[name]
+        if not g then return false end
+        if os.clock() - g.at > W215.GHOST_KEEP_S then
+            W215.ghosts[name] = nil
+            mp_log("WO215-GHOST npc=" .. tostring(name) .. " no failure for a minute: its stream is taken again")
+            return false
+        end
+        W215.gstats.refused = W215.gstats.refused + 1
+        return true
+    end
+    -- E: the agent asks this once a second while ghosts are about (the joiner)
+    function KCD2MP_W215GhostFightTick()
+        if not KCD2MP_W215On("ghost_fight") then W215.gfSince = nil; return false end
+        local now = os.clock()
+        local inCombat = false
+        pcall(function()
+            local s = player and player.soul
+            inCombat = s ~= nil and ((s.IsInCombatDanger ~= nil and s:IsInCombatDanger() == true) or (s.IsInCombatMode ~= nil and s:IsInCombatMode() == true))
+        end)
+        if not inCombat then W215.gfSince = nil; return false end
+        local pp = player:GetWorldPos()
+        local ghostsNear, live = {}, 0
+        for _, e in ipairs(System.GetEntitiesInSphere(pp, 30) or {}) do
+            local nm = e.GetName and e:GetName() or ""
+            if e.soul and nm ~= "" and not string.find(nm, "kcd2mp_", 1, true) and e ~= player then
+                local g = W215.ghosts[nm]
+                if g and now - g.at <= 5.0 then ghostsNear[#ghostsNear + 1] = nm
+                elseif not g then
+                    local dead, fighting = false, false
+                    pcall(function() dead = e.actor and e.actor:IsDead() == true end)
+                    pcall(function() fighting = e.soul.IsInCombatDanger ~= nil and e.soul:IsInCombatDanger() == true end)
+                    if fighting and not dead then live = live + 1 end
+                end
+            end
+        end
+        -- every ghost failing recently counts, near or not (the engine's own line names the body it fights)
+        local recent = 0
+        for _, g in pairs(W215.ghosts) do if now - g.at <= 5.0 then recent = recent + 1 end end
+        if recent == 0 or live > 0 then W215.gfSince = nil; return false end
+        W215.gfSince = W215.gfSince or now
+        if now - W215.gfSince < W215.GHOST_FIGHT_S then return false end
+        W215.gfSince = nil
+        local ended = false
+        if W174 and W174.endFights then ended = W174.endFights("w215-ghost") end
+        W215.gstats.fightsEnded = W215.gstats.fightsEnded + 1
+        mp_log(string.format("WO215-GHOSTFIGHT this player was in combat with ghosts only (%s; %d failing) for %.1f s, no live opponent within 30 m -> the game's own end of combat (TryEndCombat=%s, the skirmish's StopFight asked) [n=%d]",
+            table.concat(ghostsNear, ","), recent, W215.GHOST_FIGHT_S, tostring(ended), W215.gstats.fightsEnded))
+        return true
+    end
+
+    -- ---- A.0 (the bench): the movement request on one copy, through the agent to the DLL (op 152) ----
+    -- mode 1 order (gait 0 walk, 1 jog, 2 run, 3 sprint; +128 = the exact stop facing yaw), 2 stop, 3 follow a line from (x,y,z) along yaw
+    -- for secs (a new order every frame), 4 release. The DLL logs WO215-PROBE lines (10 a second) with the body's position and its target.
+    function KCD2MP_W215Probe(mode, name, x, y, z, yaw, gait, secs)
+        KCD2MP_EmitEvent("w215_probe", string.format("%d %s %.3f %.3f %.3f %.4f %d %d", tonumber(mode) or 0, tostring(name), tonumber(x) or 0,
+            tonumber(y) or 0, tonumber(z) or 0, tonumber(yaw) or 0, tonumber(gait) or 0, tonumber(secs) or 15))
+        return true
+    end
+    -- the nearest living NPC (not a partner's figure) between minM and maxM of this player: "[W215PICK] name x y z yaw" or "[W215PICK] none"
+    function KCD2MP_W215Pick(minM, maxM)
+        local p = player and player:GetWorldPos()
+        local best, bd
+        if p then
+            for _, e in ipairs(System.GetEntitiesInSphere(p, tonumber(maxM) or 25) or {}) do
+                local nm = e.GetName and e:GetName() or ""
+                if (e.class == "NPC" or e.class == "NPC_Female") and e.soul and not string.find(nm, "kcd2mp_", 1, true) and not string.find(nm, "DialogTwin_", 1, true) then
+                    local h = 0
+                    pcall(function() h = e.soul:GetState("health") end)
+                    local q = e:GetWorldPos()
+                    local dd = math.sqrt((q.x - p.x) ^ 2 + (q.y - p.y) ^ 2)
+                    local st = ""
+                    pcall(function() st = tostring(e.actor:GetCurrentAnimationState() or "") end)
+                    -- standing on its own (or walking): a seated, lying or working body would show the owner's posture over the probe's walk
+                    local free = st == "" or st == "MotionIdle" or st == "MotionMovement"
+                    if free and h and h > 0 and dd >= (tonumber(minM) or 4) and (not bd or dd < bd) then bd = dd; best = e end
+                end
+            end
+        end
+        if not best then System.LogAlways("[W215PICK] none"); return false end
+        local q = best:GetWorldPos()
+        local a = best:GetWorldAngles()
+        System.LogAlways(string.format("[W215PICK] %s %.3f %.3f %.3f %.4f %.1f", best:GetName(), q.x, q.y, q.z, a and a.z or 0, bd))
+        return true
     end
 end
 

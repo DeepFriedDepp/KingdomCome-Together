@@ -9,6 +9,7 @@
 #include "wo138_rules.h"
 #include "wo213.h"
 #include "wo214.h"
+#include "wo215.h"
 #include "wo209.h"
 
 #ifndef NOMINMAX
@@ -474,6 +475,9 @@ void sender_tick(double now) {
         float x, y, z, yaw;
         if (!npcscan::read_entity(e, &x, &y, &z, &yaw)) continue;
         ++resolved;
+        // WO-215 D.1: a dormant body (an encounter pool's parked wanderer: no action on its full body, no brain running or no physics) is
+        // not a copy anyone should see -- not streamed until it wakes (the joiner's guard keeps its own one parked meanwhile)
+        if (wo215::dormant_host(t.eid, e, t.name.c_str(), now)) continue;
         const float prevX = t.s.x, prevY = t.s.y;   // WO-214 A.0: the previous tick's read (a window's pick prefers bodies that move)
         t.s.x = x; t.s.y = y; t.s.z = z; t.s.rot = yaw; t.s.notHuman = t.notHuman;
         if (!t.haveAttr || std::find(attrIdx.begin(), attrIdx.end(), idx) != attrIdx.end()) read_attrs(t);

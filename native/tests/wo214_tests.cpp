@@ -44,7 +44,7 @@ int wo214_tests(int* passed) {
     // ---- C.1 a base in the same frame
     WCHECK(base_for(true, true) == Base::HostBase && base_for(false, true) == Base::NeutralIdle && base_for(false, false) == Base::Nudge,
            "the host's base when known, else the copy's neutral idle, else the nudge");
-    WCHECK(kcdmp::wo210rules::kPathEmptyRefused == 19 && kcdmp::wo210rules::kPathEmptyOwn == 20 && kcdmp::wo210rules::kPathCount == 21,
+    WCHECK(kcdmp::wo210rules::kPathEmptyRefused == 19 && kcdmp::wo210rules::kPathEmptyOwn == 20 && kcdmp::wo210rules::kPathCount == 26,   // WO-215 added 21..25
            "the two empty-body paths have names (no reseat is charged to 'unknown' for them)");
     WCHECK(std::strcmp(kcdmp::wo210rules::path_name(kcdmp::wo210rules::kPathEmptyRefused), "19-empty-refused") == 0 &&
            std::strcmp(kcdmp::wo210rules::path_name(kcdmp::wo210rules::kPathEmptyOwn), "20-empty-own") == 0, "their names");

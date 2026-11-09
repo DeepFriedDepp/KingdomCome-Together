@@ -12,6 +12,7 @@
 #include "wo187.h"
 #include "wo200.h"
 #include "wo203.h"
+#include "wo215.h"
 #include "engine.h"
 #include "fault_guard.h"
 #include "hits.h"
@@ -198,6 +199,78 @@ int queue_age_ms(uint32_t eid, const wo187::QueueInfo& q, double now, int* ages 
     return static_cast<int>((now - oldest) * 1000.0);
 }
 
+// WO-215 G: one body's JSON object (the detail sample's and the session line's), appended to line; false when the body is skipped
+bool body_json(const Body& b, double now, bool firstBody, std::string& line) {
+    char buf[768];
+    auto it = g_scopes.find(b.eid);
+    if (it == g_scopes.end() || it->second.at < 0 || now - it->second.at > kScopeMaxAgeS) { ++c_skipped; return false; }   // never "empty" by default
+    void* e = engine::entity_by_id(b.eid);
+    float p[3]{};
+    if (!e || !engine::entity_world_pos(e, p)) return false;
+    const char* nm = engine::entity_name(e);
+    char name[128];
+    json_escape(nm ? nm : "?", name, sizeof name);
+    const ScopeCache& c = it->second;
+    const char* fb = nullptr;
+    for (int i = 0; i < c.n; ++i) if (c.sc[i].ok && !c.sc[i].empty && std::strcmp(c.sc[i].name, "FullBody") == 0) fb = c.sc[i].action;
+    const wo187::QueueInfo q = wo187::queue_info(b.eid);
+    // WO-207 G.1: how long the oldest queued action has waited without starting (the same action object still in the queue); G.2: the
+    // body's Mannequin tags (the fragment family a comparison needs)
+    int ages[16]{};
+    const int qa = queue_age_ms(b.eid, q, now, ages);
+    char qd[240] = "";   // [[flags,age_ms,priority],...] the first 6 queued actions
+    for (int i = 0, o = 0; i < q.nacts && i < 6 && o < static_cast<int>(sizeof qd) - 40; ++i)
+        o += std::snprintf(qd + o, sizeof qd - static_cast<size_t>(o), "%s[%u,%d,%d]", i ? "," : "", q.flags[i], ages[i], q.prio[i]);
+    // WO-207 G.1: a body whose physics is no living entity lies (a corpse, a knockdown's ragdoll), whatever its FullBody still holds
+    npcdrive::PhysicsStatus ps{};
+    const bool lying = npcdrive::physics_status(e, &ps) && ps.present && !ps.living;
+    uint8_t tg[20]{};
+    char tgh[41] = "";
+    if (wo187::tag_state(b.eid, tg, sizeof tg)) for (int i = 0; i < 20; ++i) std::snprintf(tgh + 2 * i, 3, "%02x", tg[i]);
+    std::snprintf(buf, sizeof buf, "%s{\"n\":\"%s\",\"k\":\"%s\",\"p\":[%.3f,%.3f,%.3f],\"r\":[0,0,%.4f],\"dead\":%d,\"rag\":%d,\"q\":%d,\"qa\":%d,\"qd\":[%s],\"tg\":\"%s\",\"sa\":%.0f,",
+                  firstBody ? "" : ",", name, b.kind, p[0], p[1], p[2], npcdrive::entity_yaw(e), wo172::copy_dead(b.eid) ? 1 : 0,
+                  (ragdoll_class(fb) || lying) ? 1 : 0, q.n < 0 ? 0 : q.n, qa, qd, tgh, (now - c.at) * 1000.0);
+    line += buf;
+    // WO-210 0.3: the combat state (combat mode, the model's state, the opponent), the FullBody's family by the game's fragment name,
+    // and on a copy the host NPC's FullBody family as the owner last applied it (the stale-posture and combat-idle instruments)
+    {
+        motion::ModelRead m{};
+        const bool mr = motion::read_model(b.eid, &m);
+        char opn[96] = "";
+        if (mr && m.opponentEid) { void* oe = engine::entity_by_id(m.opponentEid); const char* on = oe ? engine::entity_name(oe) : nullptr; json_escape(on ? on : "?", opn, sizeof opn); }
+        const char* fam = "empty";
+        const wo187::ScopeInfo* fbs = nullptr;
+        for (int i = 0; i < c.n; ++i) if (c.sc[i].ok && !c.sc[i].empty && std::strcmp(c.sc[i].name, "FullBody") == 0) fbs = &c.sc[i];
+        if (fbs) { char fn[96] = ""; wo187::fragment_name(b.eid, fbs->frag, fn, sizeof fn); fam = wo210rules::pfam_name(wo210rules::family(wo208rules::class_id(fbs->action), fn, fbs->frag)); }
+        const char* hf = "-";
+        uint8_t hcls = 0; uint32_t hfr = 0;
+        if (std::strcmp(b.kind, "copy") == 0 && wo208::host_fullbody(b.eid, &hcls, &hfr)) {
+            char fn[96] = "";
+            wo187::fragment_name(b.eid, hfr, fn, sizeof fn);
+            hf = wo210rules::pfam_name(wo210rules::family(hcls, fn, hfr));
+        }
+        std::snprintf(buf, sizeof buf, "\"cm\":%d,\"cs\":%d,\"op\":\"%s\",\"fam\":\"%s\",\"hf\":\"%s\",\"sc\":[", mr && m.combatMode ? 1 : 0,
+                      mr && (m.valid & motion::kMvState) ? m.state : -1, opn, fam, hf);
+        line += buf;
+    }
+    bool firstScope = true;
+    for (int i = 0; i < c.n; ++i) {
+        const wo187::ScopeInfo& s = c.sc[i];
+        if (!s.ok || s.empty) continue;   // an empty scope is not listed (the format's rule)
+        char sn[48], an[96];
+        json_escape(s.name, sn, sizeof sn);
+        json_escape(s.action, an, sizeof an);
+        char fnm[96] = "", fne[112] = "";
+        if (wo187::fragment_name(b.eid, s.frag, fnm, sizeof fnm)) json_escape(fnm, fne, sizeof fne);   // WO-210 0.3: the game's own name
+        std::snprintf(buf, sizeof buf, "%s{\"s\":\"%s\",\"c\":\"%s\",\"fr\":%u,\"fn\":\"%s\",\"pr\":%d}", firstScope ? "" : ",", sn, an, s.frag, fne, s.prio);
+        line += buf;
+        firstScope = false;
+    }
+    line += "]}";
+    ++c_bodies;
+    return true;
+}
+
 void probe_tick(double now) {
     if (!g_probe.load(std::memory_order_relaxed)) return;
     if (now - g_lastSample < 1.0 / g_hz) return;
@@ -235,75 +308,7 @@ void probe_tick(double now) {
                   main_thread::frame_count());
     line += buf;
     bool firstBody = true;
-    for (const Body& b : bodies) {
-        auto it = g_scopes.find(b.eid);
-        if (it == g_scopes.end() || it->second.at < 0 || now - it->second.at > kScopeMaxAgeS) { ++c_skipped; continue; }   // never "empty" by default
-        void* e = engine::entity_by_id(b.eid);
-        float p[3]{};
-        if (!e || !engine::entity_world_pos(e, p)) continue;
-        const char* nm = engine::entity_name(e);
-        char name[128];
-        json_escape(nm ? nm : "?", name, sizeof name);
-        const ScopeCache& c = it->second;
-        const char* fb = nullptr;
-        for (int i = 0; i < c.n; ++i) if (c.sc[i].ok && !c.sc[i].empty && std::strcmp(c.sc[i].name, "FullBody") == 0) fb = c.sc[i].action;
-        const wo187::QueueInfo q = wo187::queue_info(b.eid);
-        // WO-207 G.1: how long the oldest queued action has waited without starting (the same action object still in the queue); G.2: the
-        // body's Mannequin tags (the fragment family a comparison needs)
-        int ages[16]{};
-        const int qa = queue_age_ms(b.eid, q, now, ages);
-        char qd[240] = "";   // [[flags,age_ms,priority],...] the first 6 queued actions
-        for (int i = 0, o = 0; i < q.nacts && i < 6 && o < static_cast<int>(sizeof qd) - 40; ++i)
-            o += std::snprintf(qd + o, sizeof qd - static_cast<size_t>(o), "%s[%u,%d,%d]", i ? "," : "", q.flags[i], ages[i], q.prio[i]);
-        // WO-207 G.1: a body whose physics is no living entity lies (a corpse, a knockdown's ragdoll), whatever its FullBody still holds
-        npcdrive::PhysicsStatus ps{};
-        const bool lying = npcdrive::physics_status(e, &ps) && ps.present && !ps.living;
-        uint8_t tg[20]{};
-        char tgh[41] = "";
-        if (wo187::tag_state(b.eid, tg, sizeof tg)) for (int i = 0; i < 20; ++i) std::snprintf(tgh + 2 * i, 3, "%02x", tg[i]);
-        std::snprintf(buf, sizeof buf, "%s{\"n\":\"%s\",\"k\":\"%s\",\"p\":[%.3f,%.3f,%.3f],\"r\":[0,0,%.4f],\"dead\":%d,\"rag\":%d,\"q\":%d,\"qa\":%d,\"qd\":[%s],\"tg\":\"%s\",\"sa\":%.0f,",
-                      firstBody ? "" : ",", name, b.kind, p[0], p[1], p[2], npcdrive::entity_yaw(e), wo172::copy_dead(b.eid) ? 1 : 0,
-                      (ragdoll_class(fb) || lying) ? 1 : 0, q.n < 0 ? 0 : q.n, qa, qd, tgh, (now - c.at) * 1000.0);
-        line += buf;
-        // WO-210 0.3: the combat state (combat mode, the model's state, the opponent), the FullBody's family by the game's fragment name,
-        // and on a copy the host NPC's FullBody family as the owner last applied it (the stale-posture and combat-idle instruments)
-        {
-            motion::ModelRead m{};
-            const bool mr = motion::read_model(b.eid, &m);
-            char opn[96] = "";
-            if (mr && m.opponentEid) { void* oe = engine::entity_by_id(m.opponentEid); const char* on = oe ? engine::entity_name(oe) : nullptr; json_escape(on ? on : "?", opn, sizeof opn); }
-            const char* fam = "empty";
-            const wo187::ScopeInfo* fbs = nullptr;
-            for (int i = 0; i < c.n; ++i) if (c.sc[i].ok && !c.sc[i].empty && std::strcmp(c.sc[i].name, "FullBody") == 0) fbs = &c.sc[i];
-            if (fbs) { char fn[96] = ""; wo187::fragment_name(b.eid, fbs->frag, fn, sizeof fn); fam = wo210rules::pfam_name(wo210rules::family(wo208rules::class_id(fbs->action), fn, fbs->frag)); }
-            const char* hf = "-";
-            uint8_t hcls = 0; uint32_t hfr = 0;
-            if (std::strcmp(b.kind, "copy") == 0 && wo208::host_fullbody(b.eid, &hcls, &hfr)) {
-                char fn[96] = "";
-                wo187::fragment_name(b.eid, hfr, fn, sizeof fn);
-                hf = wo210rules::pfam_name(wo210rules::family(hcls, fn, hfr));
-            }
-            std::snprintf(buf, sizeof buf, "\"cm\":%d,\"cs\":%d,\"op\":\"%s\",\"fam\":\"%s\",\"hf\":\"%s\",\"sc\":[", mr && m.combatMode ? 1 : 0,
-                          mr && (m.valid & motion::kMvState) ? m.state : -1, opn, fam, hf);
-            line += buf;
-        }
-        bool firstScope = true;
-        for (int i = 0; i < c.n; ++i) {
-            const wo187::ScopeInfo& s = c.sc[i];
-            if (!s.ok || s.empty) continue;   // an empty scope is not listed (the format's rule)
-            char sn[48], an[96];
-            json_escape(s.name, sn, sizeof sn);
-            json_escape(s.action, an, sizeof an);
-            char fnm[96] = "", fne[112] = "";
-            if (wo187::fragment_name(b.eid, s.frag, fnm, sizeof fnm)) json_escape(fnm, fne, sizeof fne);   // WO-210 0.3: the game's own name
-            std::snprintf(buf, sizeof buf, "%s{\"s\":\"%s\",\"c\":\"%s\",\"fr\":%u,\"fn\":\"%s\",\"pr\":%d}", firstScope ? "" : ",", sn, an, s.frag, fne, s.prio);
-            line += buf;
-            firstScope = false;
-        }
-        line += "]}";
-        firstBody = false;
-        ++c_bodies;
-    }
+    for (const Body& b : bodies) if (body_json(b, now, firstBody, line)) firstBody = false;
     line += "]}\n";
     std::fwrite(line.data(), 1, line.size(), g_file);
     ++c_lines;
@@ -328,18 +333,78 @@ void probe_tick(double now) {
     if (g_scopes.size() > 512) g_scopes.clear();
 }
 
+// ---- WO-215 G (probe_all): the session probe -- the whole session at a low cost. One body a line, 20 lines a second, round-robin over
+// the bodies within the radius (with 30 bodies each one every 1.5 s), into kcdmp-anim-session.jsonl beside the detail file (which keeps
+// its last minutes at 10 Hz for every body, as before). It rotates at 96 MB keeping the one before (hours of a village's rate).
+FILE* g_sfile = nullptr;
+std::string g_spath;
+uint64_t g_sBytes = 0;
+bool g_sTruncated = false;
+double g_sLast = 0, g_sListAt = -1e9, g_sFlush = 0, g_sRetryAt = 0;
+size_t g_srr = 0;
+std::vector<Body> g_sBodies;
+uint64_t c_sLines = 0, c_sRot = 0;
+constexpr double kSessionEveryS = 0.05;
+constexpr uint64_t kSessionMaxBytes = 96ull << 20;
+
+void session_tick(double now) {
+    if (!g_probe.load(std::memory_order_relaxed) || !wo215::on(wo215rules::kBitProbeAll)) return;
+    if (now - g_sLast < kSessionEveryS) return;
+    g_sLast = now;
+    if (!g_sfile) {
+        char cwd[MAX_PATH]{};
+        if (!GetCurrentDirectoryA(MAX_PATH, cwd) || !cwd[0]) return;
+        g_spath = cwd;
+        if (g_spath.back() != '\\') g_spath += '\\';
+        g_spath += "kcdmp-anim-session.jsonl";
+        g_sfile = _fsopen(g_spath.c_str(), g_sTruncated ? "ab" : "wb", _SH_DENYWR);
+        if (!g_sTruncated) g_sBytes = 0;
+        g_sTruncated = true;
+        if (!g_sfile) return;
+        logf("WO215-PROBE session file %s (one body a line, 20 lines a second, round-robin within %.0f m)", g_spath.c_str(), g_radius);
+    }
+    if (now - g_sListAt >= 1.0) { g_sListAt = now; gather(g_sBodies, now); }
+    if (g_sBodies.empty()) return;
+    const Body b = g_sBodies[g_srr++ % g_sBodies.size()];
+    ScopeCache& c = g_scopes[b.eid];
+    const int n = wo187::read_all_scopes(b.eid, c.sc, kMaxScopesOut);
+    ++c_scopeReads;
+    if (n > 0) { c.n = n; c.at = now; }
+    std::string line;
+    line.reserve(1024);
+    char head[160];
+    std::snprintf(head, sizeof head, "{\"t\":%llu,\"m\":\"%s\",\"f\":%llu,\"s\":1,\"a\":[", static_cast<unsigned long long>(utc_ms()),
+                  machine_name(g_machine), main_thread::frame_count());
+    line += head;
+    if (!body_json(b, now, true, line)) return;
+    line += "]}\n";
+    std::fwrite(line.data(), 1, line.size(), g_sfile);
+    ++c_sLines;
+    g_sBytes += line.size();
+    if (g_sBytes > kSessionMaxBytes && now >= g_sRetryAt) {
+        std::fclose(g_sfile); g_sfile = nullptr;
+        const std::string prev = g_spath.substr(0, g_spath.size() - 6) + ".1.jsonl";
+        if (MoveFileExA(g_spath.c_str(), prev.c_str(), MOVEFILE_REPLACE_EXISTING)) { g_sTruncated = false; ++c_sRot; }
+        else g_sRetryAt = now + 1.0;
+        return;
+    }
+    if (now - g_sFlush > 1.0) { std::fflush(g_sfile); g_sFlush = now; }
+}
+
 } // namespace
 
 void tick() {
     const double now = now_s();
     digest_tick(now);
     probe_tick(now);
+    session_tick(now);   // WO-215 G
 }
 
 void on_pipe_closed() {
     g_armed = false;
     g_probe = false;
     if (g_file) { std::fflush(g_file); }
+    if (g_sfile) { std::fflush(g_sfile); }   // WO-215 G
 }
 
 uint8_t handle(uint8_t op, const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t* outLen) {

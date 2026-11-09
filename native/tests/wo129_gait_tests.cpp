@@ -52,6 +52,7 @@ int wo209_tests(int* passed);              // wo209_tests.cpp (WO-209: the switc
 int wo210_tests(int* passed);              // wo210_tests.cpp (WO-210: the switch word, the whole-body families, the watchdog, the clinch-loop detector)
 int wo211_tests(int* passed);              // wo211_tests.cpp (WO-211: the UI-dispatch guard, the overflow reseat, build ids)
 int wo214_tests(int* passed);              // wo214_tests.cpp (WO-214: one bind, the owner's base, combat end)
+int wo215_tests(int* passed);              // wo215_tests.cpp (WO-215: the route, the gait, the ladder, dormant, the ghost fight)
 int wo213_tests(int* passed);              // wo213_tests.cpp (WO-213: bands, the play-out delay, late postures)
 int wo203_tests(int* passed);              // wo203_tests.cpp (WO-203: every area's rules, one file per area)
 int wo197_tests(int* passed);              // wo197_tests.cpp (WO-197: the recoil and clinch polls, the kept main actions, the pair request)
@@ -405,6 +406,14 @@ int main() {
     {
         int fp = 0;
         const int ff = wo214_tests(&fp);
+        g_pass += fp;
+        g_fail += ff;
+    }
+
+    // WO-215: the route (the engine's own movement request), the gait, the ladder, dormant bodies, the ghost fight
+    {
+        int fp = 0;
+        const int ff = wo215_tests(&fp);
         g_pass += fp;
         g_fail += ff;
     }

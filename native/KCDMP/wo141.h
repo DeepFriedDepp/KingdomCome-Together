@@ -69,6 +69,10 @@ constexpr uint8_t kRFailed     = 4;
 constexpr uint8_t kKindNpc    = 1;
 constexpr uint8_t kKindPlayer = 2;
 
+// WO-215 C (main thread): the NPC-state path's hold on a body's activity -- 0 none (no stance or unstance desired for it), 1 placing (desired,
+// not in step yet), 2 in step, 3 refused (the planner gave up on it: WO-160's give-up window).
+int activity_path(const char* name);
+
 // Anchors only (reads of the loaded images); off the main thread is fine.
 void install();
 bool armed();

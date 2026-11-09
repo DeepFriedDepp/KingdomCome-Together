@@ -22,6 +22,8 @@ public static class Briefing
         /// <summary>WO-206 D: the animation probe's file, analysed; null when the bundle has none (or it could not be read: <see cref="AnimError"/>).</summary>
         public AnimAnalysis? Anim;
         public string? AnimError;
+        /// <summary>WO-215 G: the session probe's file (the whole session, one body a line); null when the bundle has none.</summary>
+        public AnimStream? AnimSession;
     }
 
     public static Input Read(IReadOnlyList<SourceFile> sources)
@@ -47,7 +49,30 @@ public static class Briefing
             catch { }
         }
         ReadAnim(sources, inp);
+        ReadAnimSession(sources, inp);
         return inp;
+    }
+
+    /// <summary>WO-215 G: anim/kcdmp-anim-session.jsonl (and the one before it, .1): the whole session, one body a line. Never fatal.</summary>
+    private static void ReadAnimSession(IReadOnlyList<SourceFile> sources, Input inp)
+    {
+        try
+        {
+            var parts = sources.Where(s => s.EntryName == AnimStream.SessionPrevEntry).Concat(sources.Where(s => s.EntryName == AnimStream.SessionEntry)).ToList();
+            if (parts.Count == 0) return;
+            var st = new AnimStream();
+            foreach (var p in parts)
+            {
+                byte[]? bytes = Packer.Read(p);
+                if (bytes is null) continue;
+                using var r = new StreamReader(new MemoryStream(bytes, false), Encoding.UTF8, false, 1 << 16);
+                string? l;
+                while ((l = r.ReadLine()) is not null) st.AddLine(l);
+            }
+            st.Finish();
+            inp.AnimSession = st;
+        }
+        catch { inp.AnimSession = null; }
     }
 
     /// <summary>WO-206 D: the probe file (anim/kcdmp-anim.jsonl, its pieces, or kcdmp-anim.jsonl as a folder holds it), run
@@ -88,6 +113,9 @@ public static class Briefing
                 inp.Logs.Where(kv => kv.Key.StartsWith("relay", StringComparison.OrdinalIgnoreCase)).OrderBy(kv => kv.Key, StringComparer.Ordinal).SelectMany(kv => kv.Value).ToList()));
         }
         catch (Exception ex) { sb.Append($"## Link\n\n(not read: {ex.GetType().Name}: {ex.Message})\n\n"); }   // never the briefing's end
+        // WO-215 G: the copies' bodies, one line per contract, in plain words (the end of the Link section)
+        try { sb.Append(W215Section.Lines(inp.AnimSession, NativeLines(inp).ToList(), AgentLines(inp).ToList(), Kcd(inp).ToList())).Append('\n'); }
+        catch (Exception ex) { sb.Append($"- **the copies' bodies** (WO-215): not read ({ex.GetType().Name}: {ex.Message})\n\n"); }
         Crashes(inp, sb);
         Session(inp, sb);
         Marks(inp, sb);

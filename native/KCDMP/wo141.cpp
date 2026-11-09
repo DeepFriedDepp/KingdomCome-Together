@@ -1352,6 +1352,19 @@ void install() {
 
 bool armed() { return g_readArmed; }
 
+int activity_path(const char* name) {
+    if (!name || !*name) return 0;
+    auto it = g_desired.find(lower(name));
+    if (it == g_desired.end()) return 0;
+    const Desired& d = it->second;
+    if (R::none(d.a)) return 0;
+    LARGE_INTEGER f, q;
+    QueryPerformanceFrequency(&f); QueryPerformanceCounter(&q);
+    const double now = static_cast<double>(q.QuadPart) / static_cast<double>(f.QuadPart);
+    if (R::gave_up(d.refusals, now - d.gaveUpAt)) return 3;
+    return d.matched ? 2 : 1;
+}
+
 // ---- WO-143: the pieces WO-143 builds on (npcstate.h) ------------------------
 namespace x {
 HMODULE xgenai() { return g_xg; }

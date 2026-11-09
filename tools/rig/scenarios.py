@@ -1449,6 +1449,396 @@ def s_village(r, secs=float(os.environ.get('KCDMP_RIG_VILLAGE_S', '300'))):
     return fn
 
 
+# ---------------------------------------------------------------- WO-215 A.0: the engine's movement request on one copy
+
+W215_HERE = ('local e = System.GetEntityByName("%s"); if not e then System.LogAlways("[W215HERE] none") return end; '
+             'local q = e:GetWorldPos(); local a = e:GetWorldAngles(); '
+             'System.LogAlways(string.format("[W215HERE] %%.3f %%.3f %%.3f %%.4f", q.x, q.y, q.z, a and a.z or 0))')
+
+
+def s_w215_a0(r):
+    """WO-215 A.0: on the joiner, one copy near the joiner (its brain paused by the mod, bound to the native writer) is given the engine's
+    own movement request through the DLL (op 152, built the way the debug door's worker builds it): a walk, a walk back, a jog, a sprint,
+    the exact stop facing a heading, a line followed at walking pace with a new target every frame, and a stop mid-walk. The DLL's
+    WO215-PROBE lines (10 a second) and the animation probe (kcdmp-anim.jsonl) record the body; the WO's own analysis reads them.
+    The targets are the copy's own spot and the joiner's (both on the street: walkable)."""
+    def fn():
+        t = r.a.ask(FIND_INN % os.environ.get('KCDMP_RIG_INN', 'ttkc_woman_2'), 'W207I', 6)
+        if not t or t == 'none': return False, 'no-town', t
+        parts = t.split()
+        x, y = float(parts[1]), float(parts[2])
+        r.a.lua('local now = Calendar.GetWorldTime(); local d = math.floor(now / 86400) * 86400 + 10 * 3600; '
+                'if d < now then d = d + 86400 end; Calendar.SetWorldTime(d)')
+        time.sleep(25)
+        r.a.teleport(x + 6.0, y + 6.0)
+        for _ in range(4):
+            r.b.teleport(x + 7.0, y + 6.5)
+            time.sleep(3)
+            q = r.b.pos()
+            if q and ((q[0] - x - 7.0) ** 2 + (q[1] - y - 6.5) ** 2) ** 0.5 < 15: break
+        time.sleep(20)   # the binds settle
+        pick = r.b.ask('KCD2MP_W215Pick(5, 18)', 'W215PICK', 6)
+        if not pick or pick.startswith('none'): return False, 'no-copy-near', pick
+        f = pick.split()
+        name = f[0]
+        home = (float(f[1]), float(f[2]), float(f[3]))
+        me = r.b.pos()
+        if not me: return False, 'joiner-pos-unknown', pick
+        steps = []
+
+        def here():
+            h = r.b.ask(W215_HERE % name, 'W215HERE', 4)
+            if not h or h == 'none': return None
+            return tuple(float(v) for v in h.split())
+
+        def yaw_to(a, b):   # CryEngine: yaw 0 faces +Y; a body at a facing b
+            return math.atan2(-(b[0] - a[0]), b[1] - a[1])
+
+        def probe(label, mode, tgt, yaw, gait, secs, wait):
+            off = r.b.mark()
+            t0 = int(time.time() * 1000)
+            r.b.lua('KCD2MP_W215Probe(%d, "%s", %.3f, %.3f, %.3f, %.4f, %d, %d)' % (mode, name, tgt[0], tgt[1], tgt[2], yaw, gait, secs))
+            m = r.b.wait('a', off['a'], r'MP-W215 probe mode=%d npc=%s gait=\d+ -> ok=(\d) id=(\d+) \((.*)\)' % (mode, re.escape(name)), 8)
+            time.sleep(wait)
+            at = here()
+            row = {'label': label, 'mode': mode, 'gait': gait, 'target': [round(v, 3) for v in tgt], 'yaw': round(yaw, 4), 't0_ms': t0,
+                   't1_ms': int(time.time() * 1000), 'ok': m.group(1) if m else None, 'id': m.group(2) if m else None, 'why': m.group(3) if m else 'no answer',
+                   'end': [round(v, 3) for v in at] if at else None,
+                   'end_dist_m': round(math.hypot(at[0] - tgt[0], at[1] - tgt[1]), 3) if at else None}
+            steps.append(row)
+            rig.note('w215-a0', **row)
+            return row
+        p0 = here() or (home[0], home[1], home[2], 0.0)
+        mine = (me[0] + 1.0, me[1] + 0.5, me[2])
+        homep = (p0[0], p0[1], p0[2])
+        probe('walk-to-joiner', 1, mine, yaw_to(homep, mine), 0, 25, 12)
+        probe('walk-back', 1, homep, yaw_to(mine, homep), 0, 25, 12)
+        probe('jog-to-joiner', 1, mine, yaw_to(homep, mine), 1, 25, 9)
+        probe('sprint-back', 1, homep, yaw_to(mine, homep), 3, 25, 8)
+        probe('face-joiner', 1, homep, yaw_to(homep, mine), 0x80, 20, 6)
+        probe('face-away', 1, homep, yaw_to(mine, homep), 0x80, 20, 6)
+        d = math.hypot(mine[0] - homep[0], mine[1] - homep[1])
+        probe('follow-line-per-frame', 3, homep, yaw_to(homep, mine), 0, max(4, int(d / 1.4) + 1), max(4, int(d / 1.4) + 4))
+        probe('walk-back-2', 1, homep, yaw_to(mine, homep), 0, 25, 12)
+        r1 = probe('walk-then-stop', 1, mine, yaw_to(homep, mine), 0, 25, 1.6)
+        probe('stop', 2, mine, 0.0, 0, 1, 5)
+        probe('release', 4, homep, 0.0, 0, 1, 3)
+        ok = sum(1 for s in steps if s['ok'] == '1')
+        info = {'npc': name, 'home': [round(v, 2) for v in homep], 'joiner': [round(v, 2) for v in mine], 'dist_m': round(d, 2), 'answered_ok': ok, 'steps': steps}
+        with open(os.path.join(r.dir, 'w215-a0.json'), 'w', encoding='utf-8') as fh: json.dump(info, fh, indent=1)
+        return ok >= 8, 'ok' if ok >= 8 else 'probe-refused', info
+    return fn
+
+
+# WO-215 A: the route's cadence sweep -- the village walk (s_village's place and walker), each setting for KCDMP_RIG_TUNE_S on the same
+# pair: "<label>|<w215_tune args>|<route on|off>". The windows go to w215-tune.json (the WO's own analysis reads them).
+W215_TUNES = os.environ.get('KCDMP_RIG_W215_TUNES', 'c010|150 0 100 25 400 0|on;c050|150 0 500 100 1000 500|on;c100|150 0 1000 150 2000 1000|on;'
+                            'c150|150 0 1500 250 3000 1500|on;writer|150 0 100 25 400 0|off')
+
+
+def s_w215_tune(r, secs=float(os.environ.get('KCDMP_RIG_TUNE_S', '120'))):
+    def fn():
+        t = r.a.ask(FIND_INN % os.environ.get('KCDMP_RIG_INN', 'ttkc_woman_2'), 'W207I', 6)
+        if not t or t == 'none': return False, 'no-town', t
+        parts = t.split()
+        x, y = float(parts[1]), float(parts[2])
+        r.a.lua('local now = Calendar.GetWorldTime(); local d = math.floor(now / 86400) * 86400 + 10 * 3600; '
+                'if d < now then d = d + 86400 end; Calendar.SetWorldTime(d)')
+        time.sleep(25)
+
+        def put_joiner(px, py):
+            for _ in range(4):
+                r.b.teleport(px, py)
+                time.sleep(3)
+                q = r.b.pos()
+                if q and ((q[0] - px) ** 2 + (q[1] - py) ** 2) ** 0.5 < 15: return True
+            return False
+        r.a.teleport(x + 6.0, y + 6.0)
+        put_joiner(x + 7.0, y + 6.5)
+        time.sleep(6)
+
+        def positions():
+            v = r.a.ask(NPC_POS % 45, 'W208V', 4) or ''
+            d = {}
+            for item in filter(None, v.split(';')):
+                try: n, a, b, c = item.split(','); d[n] = (float(a), float(b), float(c))
+                except ValueError: pass
+            return d
+        windows = []
+        for spec in filter(None, W215_TUNES.split(';')):
+            label, args, route = spec.split('|')
+            args = args.replace('_', ' ')   # a queue job's words carry no spaces
+            r.b.lua('KCD2MP_EmitEvent("w215_cfg", "route=%s")' % route)
+            r.b.lua('KCD2MP_EmitEvent("w215_tune", "%s")' % args)
+            time.sleep(3)
+            # a walker near the host, as s_village picks one (the NPC that moved the most in 4 s)
+            walker, moved = None, 0.0
+            for _ in range(4):
+                p0 = positions(); time.sleep(4); p1 = positions()
+                for n, q in p1.items():
+                    if n in p0:
+                        m = ((q[0] - p0[n][0]) ** 2 + (q[1] - p0[n][1]) ** 2) ** 0.5
+                        if m > moved: walker, moved = n, m
+                if walker and moved >= 2.0: break
+            t0 = time.time()
+            follows = 0
+            while time.time() - t0 < secs:
+                time.sleep(15)
+                pw = positions().get(walker) if walker else None
+                hp = r.a.pos()
+                if pw and hp and ((pw[0] - hp[0]) ** 2 + (pw[1] - hp[1]) ** 2) ** 0.5 > 18:
+                    r.a.teleport(pw[0] + 4.0, pw[1] + 4.0)
+                    put_joiner(pw[0] + 5.0, pw[1] + 4.5)
+                    follows += 1
+            row = {'label': label, 'args': args, 'route': route, 'walker': walker, 'follows': follows, 't0_ms': int(t0 * 1000), 't1_ms': int(time.time() * 1000)}
+            windows.append(row)
+            rig.note('w215-tune', **row)
+        r.b.lua('KCD2MP_EmitEvent("w215_cfg", "route=on")')
+        r.b.lua('KCD2MP_EmitEvent("w215_tune", "150 0 - - - -")')
+        with open(os.path.join(r.dir, 'w215-tune.json'), 'w', encoding='utf-8') as fh: json.dump(windows, fh, indent=1)
+        return True, 'ok', {'windows': len(windows)}
+    return fn
+
+
+# WO-215 acceptance scene 2, the blacksmith's house (C): the smith (ttac_blacksmith, the field's own) by day at his anvil, the town at midday, and
+# the houses at night (sleepers) -- each phase a window in w215-scenes.json; the instruments are the owner's (WO215-ACTIVITY-MISSING, the
+# watchdog's reseat paths) and the probes' (a copy's own family against its host NPC's).
+W215_SMITH = os.environ.get('KCDMP_RIG_SMITH', 'ttac_blacksmith')
+
+# WO-215 E: the joiner's combat state around a fight -- every 0.5 s one [W215C] line in its kcd.log when anything changes: this player in
+# combat (IsInCombatDanger / IsInCombatMode), the living NPCs within 20 m in combat, and the WO-215 ghosts failing now (the WO's own analysis reads them)
+W215_COMBAT_WATCH = ('W215C = (W215C or 0) + 1; local gen = W215C; local last = ""; local function k() if gen ~= W215C then return end; '
+                     'local c = 0; pcall(function() local s = player.soul; if s:IsInCombatDanger() == true or s:IsInCombatMode() == true then c = 1 end end); '
+                     'local n = 0; pcall(function() for _, e in ipairs(System.GetEntitiesInSphere(player:GetWorldPos(), 20) or {}) do '
+                     'if e.soul and e ~= player and not string.find(e:GetName(), "kcd2mp_", 1, true) then local d = false; pcall(function() d = e.actor:IsDead() == true end); '
+                     'if not d and e.soul.IsInCombatDanger and e.soul:IsInCombatDanger() == true then n = n + 1 end end end end); '
+                     'local g = 0; if W215 and W215.ghosts then for _, v in pairs(W215.ghosts) do if os.clock() - v.at <= 5 then g = g + 1 end end end; '
+                     'local s = c .. " " .. n .. " " .. g; if s ~= last then last = s; System.LogAlways(string.format("[W215C] %.2f player=%d npcs_fighting=%d ghosts=%d", '
+                     'os.clock(), c, n, g)) end; Script.SetTimer(500, k) end; k()')
+
+
+def s_w215_watch(r, on):
+    def fn():
+        r.b.lua(W215_COMBAT_WATCH if on else 'W215C = (W215C or 0) + 1')
+        return True, 'ok', {'watch': on}
+    return fn
+
+
+W215_AIM = ('local e = System.GetEntityByName("%s"); if e then local p = player:GetWorldPos(); local q = e:GetWorldPos(); '
+            'local yaw = math.atan2(-(q.x - p.x), q.y - p.y); pcall(function() player.actor:PlayerSetViewAngles({x = -0.08, y = 0, z = yaw}) end) end')
+
+
+def w215_frame(r, label, look_at=None):
+    """WO-215 (the acceptance scenes' frames): one frame of the joiner's view -- r_GetScreenShot 1, which stalls the game ~0.3 s (WO-185),
+    so it is taken after a scene's measured window, never inside one -- copied into the run's folder as frame-<label>.jpg from the copy's
+    own user folder (the rig's mirror folder, never the player's). look_at: the joiner's camera turned to that entity first (no input:
+    the actor's own view angles)."""
+    import mirror, shutil
+    if look_at == 'nearest':   # the nearest NPC within 30 m of the joiner (a scene's villagers)
+        look_at = r.b.ask('local p = player:GetWorldPos(); local best, bd; for _, e in ipairs(System.GetEntitiesInSphere(p, 30) or {}) do '
+                          'if e.class == "NPC" and not string.find(e:GetName(), "kcd2mp_", 1, true) then local q = e:GetWorldPos(); '
+                          'local d = (q.x - p.x) ^ 2 + (q.y - p.y) ^ 2; if d > 4 and (not bd or d < bd) then bd = d; best = e end end end; '
+                          'System.LogAlways("[W215N] " .. (best and best:GetName() or "none"))', 'W215N', 4)
+        if look_at == 'none': look_at = None
+    if look_at:
+        try: r.b.lua(W215_AIM % look_at); time.sleep(1.0)
+        except Exception: pass
+    before = time.time()
+    try: r.b.cmd('r_GetScreenShot 1')
+    except Exception as e: return {'frame': label, 'error': str(e)}
+    for _ in range(20):
+        time.sleep(1)
+        for name in mirror.user_folders(r.b.id):
+            d = os.path.join(mirror.SAVED_GAMES, name, 'screenshots')
+            if not os.path.isdir(d): continue
+            new = [os.path.join(d, f) for f in os.listdir(d) if f.lower().endswith('.jpg') and os.path.getmtime(os.path.join(d, f)) >= before - 1]
+            if not new: continue
+            src = max(new, key=os.path.getmtime)
+            n0 = os.path.getsize(src); time.sleep(1.5)
+            if os.path.getsize(src) != n0 or n0 == 0: continue   # still being written
+            dst = os.path.join(r.dir, 'frame-%s.jpg' % label)
+            shutil.copy2(src, dst)
+            rig.note('w215-frame', label=label, file=os.path.basename(dst))
+            return {'frame': label, 'file': os.path.basename(dst), 'bytes': n0}
+    return {'frame': label, 'error': 'no file'}
+
+
+def s_w215_frame(r, label, look_at='nearest'):
+    def fn():
+        info = w215_frame(r, label, look_at)
+        return True, 'ok', info   # a frame is evidence, never a gate
+    return fn
+
+
+W215_COMBAT_Q = ('local c = 0; pcall(function() local s = player.soul; if s:IsInCombatDanger() == true or s:IsInCombatMode() == true then c = 1 end end); '
+                 'System.LogAlways("[W215Q] " .. c)')
+
+
+W215_POOL_HOST = ('local out = {}; for _, e in ipairs(System.GetEntitiesByClass("NPC") or {}) do local n = e:GetName(); '
+                  'if string.find(n, "dummyWanderer", 1, true) then local q = e:GetWorldPos(); out[#out + 1] = string.format("%s@%.1f,%.1f,%.1f", n, q.x, q.y, q.z) end end; '
+                  'System.LogAlways("[W215W] " .. (#out > 0 and table.concat(out, ";") or "none"))')
+W215_POOL_JOINER = ('local out = {}; for _, e in ipairs(System.GetEntitiesInSphere(player:GetWorldPos(), 25) or {}) do local n = e:GetName(); '
+                    'if string.find(n, "dummyWanderer", 1, true) then local hid = false; pcall(function() hid = e:IsHidden() == true end); '
+                    'local b = KCD2MP and KCD2MP.npcPuppets and KCD2MP.npcPuppets[n] ~= nil; '
+                    'out[#out + 1] = n .. ":" .. (hid and "hidden" or "shown") .. ":" .. (b and "bound" or "free") end end; '
+                    'System.LogAlways("[W215P] " .. (#out > 0 and table.concat(out, ";") or "none"))')
+
+
+def s_w215_pool(r):
+    """WO-215 acceptance scene 4 on the bench (D.1): the encounter pool's parked bodies (dummyWanderer_*, the field's Cuman) -- both players
+    beside the first of them on the host; after 20 s the joiner lists the pool bodies within 25 m: shown or hidden, bound as copies or not
+    (D.1 on: the host's census sends none of them while dormant; the twin: copies standing empty). One frame. Evidence, never a gate."""
+    def fn():
+        t = r.a.ask(W215_POOL_HOST, 'W215W', 6)
+        if not t or t == 'none': return True, 'no-pool', t
+        pool = t.split(';')
+        n0, at = pool[0].split('@')
+        x, y, z = (float(v) for v in at.split(','))
+        r.a.teleport(x + 6.0, y + 2.0)
+        r.b.teleport(x + 4.0, y + 4.0)
+        time.sleep(20)
+        seen = r.b.ask(W215_POOL_JOINER, 'W215P', 5)
+        frame = w215_frame(r, 'pool', n0)
+        items = [] if not seen or seen == 'none' else seen.split(';')
+        row = {'pool_on_host': len(pool), 'first': n0, 'at': [x, y, z], 'joiner_within_25m': items,
+               'shown': sum(1 for i in items if ':shown:' in i), 'bound': sum(1 for i in items if i.endswith(':bound')), 'frame': frame}
+        with open(os.path.join(r.dir, 'w215-pool.json'), 'w', encoding='utf-8') as fh: json.dump(row, fh, indent=1)
+        rig.note('w215-pool', **{k: v for k, v in row.items() if k != 'frame'})
+        return True, 'ok', row
+    return fn
+
+
+def s_w215_brawl(r, secs=float(os.environ.get('KCDMP_RIG_W215_BRAWL_S', '60'))):
+    """WO-215 acceptance scene 3 without input: a brawl -- the host sets three bandits on the two players (one on the host, the others on
+    the joiner's figure), both players kept up, <secs> s of fighting; then the host's world ends it the way a fight ends here -- each
+    bandit killed by the host's own actor kill, one after another (their deaths reach the joiner). The instruments: B's empty bodies and
+    T-poses through and after the fight, E's combat tail on the joiner ([W215C] lines: how long its player stays in combat after the last
+    live opponent). One frame mid-fight. Evidence, never a gate."""
+    def fn():
+        t = r.a.ask(FIND_BANDITS3, 'W207K', 6)
+        if not t or t.startswith('none'): return True, 'no-bandits', t
+        names, x, y, z = t.split()
+        bandits = names.split(',')
+        x, y = float(x), float(y)
+        r.a.teleport(x + 4.0, y)
+        r.b.teleport(x + 5.5, y + 1.0)
+        time.sleep(6)
+        for c in (r.a, r.b): c.keep_up()
+        t0 = time.time()
+        r.a.lua(ATTACK % (bandits[0], 'player'))
+        for b in bandits[1:]: r.a.lua(ATTACK % (b, FIGURE))
+        frame = None
+        while time.time() - t0 < secs:
+            time.sleep(10)
+            for c in (r.a, r.b): c.keep_up()
+            if frame is None and time.time() - t0 >= secs / 2: frame = w215_frame(r, 'brawl-fight', bandits[-1])
+        # the fight's end, the host's world deciding: every bandit of it stops (paused on the host -- the bench has no input to kill them,
+        # and a scripted health of 0 kills nobody); then the joiner's own combat state every half second for 30 s (E: how long this player
+        # stays in combat after the last opponent stopped -- the copies of a joiner report no combat state of their own)
+        for b in bandits: r.a.lua('pcall(System.ExecuteCommand, "wh_ai_PauseNPC %s")' % b)
+        t_end = time.time()
+        out_at = None
+        while time.time() - t_end < 30:
+            if r.b.ask(W215_COMBAT_Q, 'W215Q', 3) == '0': out_at = round(time.time() - t_end, 1); break
+            time.sleep(0.5)
+        row = {'bandits': bandits, 'fight_s': round(t_end - t0, 1), 'ended': 'paused on the host', 't0_ms': int(t0 * 1000), 't_end_ms': int(t_end * 1000),
+               'joiner_out_of_combat_after_s': out_at, 'joiner_still_in_combat_after_30s': out_at is None, 'frame': frame}
+        with open(os.path.join(r.dir, 'w215-brawl.json'), 'w', encoding='utf-8') as fh: json.dump(row, fh, indent=1)
+        rig.note('w215-brawl', **{k: v for k, v in row.items() if k != 'frame'})
+        return True, 'ok', row
+    return fn
+
+
+def s_w215_ghostfight(r, hold=float(os.environ.get('KCDMP_RIG_GHOST_HOLD_S', '45'))):
+    """WO-215 E (injected; the bench never meets a ghost -- the field's joiner logged 1,606 "Combat actor init failed" lines, the bench 0):
+    the host sets one bandit on the joiner's figure; once the joiner's player is in combat, the host's bandit is paused (it fights no
+    more) and the joiner's game logs the engine's own failure line for that bandit's copy -- what the field's ghost made it log -- which
+    parks the copy as a ghost (D) and leaves this player in a fight with a ghost only. Measured: the seconds from that line to this
+    player out of combat (the twin, ghost_fight off: still in combat after <hold> s, or the game's own end). Evidence, never a gate."""
+    def fn():
+        t = r.a.ask(FIND_BANDITS3, 'W207K', 6)
+        if not t or t.startswith('none'): return True, 'no-bandits', t
+        names, x, y, z = t.split()
+        bandits = names.split(',')
+        x, y = float(x), float(y)
+        r.a.teleport(x + 4.0, y)
+        r.b.teleport(x + 5.5, y + 1.0)
+        time.sleep(6)
+        for c in (r.a, r.b): c.keep_up()
+        b0 = bandits[0]
+        detail = {'bandit': b0}
+        r.a.lua(ATTACK % (b0, FIGURE))
+        t_set = time.time()
+        inc = None
+        while time.time() - t_set < 45:
+            if r.b.ask(W215_COMBAT_Q, 'W215Q', 3) == '1': inc = round(time.time() - t_set, 1); break
+            time.sleep(1)
+        detail['joiner_in_combat_after_s'] = inc
+        if inc is None:
+            for b in bandits: r.a.lua('pcall(System.ExecuteCommand, "wh_ai_PauseNPC %s")' % b)
+            return True, 'joiner-never-in-combat', detail
+        time.sleep(3)   # a few blows
+        # the whole group paused on the host (a bandit of the group joining the fight would be a live opponent: E rightly keeps that fight)
+        for b in bandits: r.a.lua('pcall(System.ExecuteCommand, "wh_ai_PauseNPC %s")' % b)
+        time.sleep(1)
+        mb = r.b.mark()
+        r.b.lua('System.LogAlways("[Error] Combat actor init failed for actor \'%s\'")' % b0)
+        t_line = time.time()
+        out_at = None
+        while time.time() - t_line < hold:
+            if r.b.ask(W215_COMBAT_Q, 'W215Q', 3) == '0': out_at = round(time.time() - t_line, 1); break
+            time.sleep(0.5)
+        detail['out_of_combat_after_s'] = out_at
+        detail['still_in_combat_after_hold'] = out_at is None
+        detail['hold_s'] = hold
+        g = r.b.wait('k', mb['k'], r'WO215-GHOST npc=%s' % re.escape(b0), 2)
+        detail['parked_as_ghost'] = bool(g)
+        f = r.b.wait('k', mb['k'], r'WO215-GHOSTFIGHT this player was in combat', 2)
+        detail['ghostfight_line'] = bool(f)
+        rig.note('w215-ghostfight', **detail)
+        with open(os.path.join(r.dir, 'w215-ghostfight.json'), 'w', encoding='utf-8') as fh: json.dump(detail, fh, indent=1)
+        for b in bandits: r.a.lua('pcall(System.ExecuteCommand, "wh_ai_ResumeNPC %s")' % b)   # nothing else of the run needs them
+        return True, 'ok', detail
+    return fn
+
+
+def s_w215_smithy(r, secs=float(os.environ.get('KCDMP_RIG_SMITHY_S', '240'))):
+    def fn():
+        windows = []
+
+        def at_time(hh):
+            r.a.lua('local now = Calendar.GetWorldTime(); local d = math.floor(now / 86400) * 86400 + %d; '
+                    'if d < now then d = d + 86400 end; Calendar.SetWorldTime(d)' % int(hh * 3600))
+
+        def put_both(x, y):
+            r.a.teleport(x + 3.0, y + 3.0)
+            for _ in range(4):
+                r.b.teleport(x + 4.0, y + 2.0)
+                time.sleep(3)
+                q = r.b.pos()
+                if q and ((q[0] - x - 4.0) ** 2 + (q[1] - y - 2.0) ** 2) ** 0.5 < 15: return True
+            return False
+
+        for label, hh, phase_s in (('smith-day', 10.0, secs), ('midday', 12.5, secs / 2), ('night', 23.5, secs / 2)):
+            at_time(hh)
+            time.sleep(20)
+            t = r.a.ask(FIND_INN % W215_SMITH, 'W207I', 6)
+            if not t or t == 'none': return False, 'no-smith', t
+            parts = t.split()
+            x, y = float(parts[1]), float(parts[2])
+            put_both(x, y)
+            time.sleep(15)   # the copies bind, the owner and the placements settle
+            t0 = time.time()
+            time.sleep(phase_s)
+            row = {'label': label, 'hour': hh, 'at': [round(x, 1), round(y, 1)], 't0_ms': int(t0 * 1000), 't1_ms': int(time.time() * 1000)}
+            row.update(w215_frame(r, 'smithy-' + label, W215_SMITH))   # after the window (a frame stalls the game)
+            windows.append(row)
+            rig.note('w215-scene', **row)
+        with open(os.path.join(r.dir, 'w215-scenes.json'), 'w', encoding='utf-8') as fh: json.dump(windows, fh, indent=1)
+        return True, 'ok', {'windows': windows}
+    return fn
+
+
 # ---------------------------------------------------------------- WO-209 E.2: the joined talk away from the tavern's brawl, and the brawl
 
 # by day, outside the tavern: the bailiff first, then the smith, the miller (the tavern's evening brawl -- the random event rvacka --
@@ -3177,6 +3567,18 @@ def run(name, args):
         'w214away': [('join', s_join(r)), ('away', s_w214_away(r)), ('turn', s_w214_turn(r)), ('draws', s_w214_draws(r, 5, False)), ('draws-fight', s_w214_draws(r, 5, True))],
         'w214hostkills': [('join', s_join(r)), ('hostkills', s_w214_hostkills(r))],
         'w214draws': [('join', s_join(r)), ('draws', s_w214_draws(r, 5, False)), ('draws-fight', s_w214_draws(r, 5, True))],
+        # WO-215 A.0: the engine's movement request on one copy, then the village walk under the route (A.1)
+        'w215a0': [('join', s_join(r)), ('a0', s_w215_a0(r)), ('village', s_village(r, float(os.environ.get('KCDMP_RIG_VILLAGE_S', '300'))))],
+        'w215tune': [('join', s_join(r)), ('a0', s_w215_a0(r)), ('tune', s_w215_tune(r))],
+        # WO-215 A: the lead sweep (no probe first)
+        'w215lead': [('join', s_join(r)), ('tune', s_w215_tune(r))],
+        # WO-215 acceptance: scene 1 the village walk, scene 2 the blacksmith's house, scene 3 the tavern brawl (one pair, in order)
+        'w215scenes': [('join', s_join(r)), ('village', s_village(r, float(os.environ.get('KCDMP_RIG_VILLAGE_S', '300')))), ('frame-village', s_w215_frame(r, 'village')),
+                       ('smithy', s_w215_smithy(r)), ('pool', s_w215_pool(r)),
+                       ('evening', s_daytime(r, 21 * 3600)), ('watch-on', s_w215_watch(r, True)), ('brawl', s_w215_brawl(r)), ('frame-brawl', s_w215_frame(r, 'brawl-after')),
+                       ('settle', lambda: (time.sleep(20), (True, 'ok', {}))[1]), ('watch-off', s_w215_watch(r, False))],
+        # WO-215 E (injected): a fight whose only opponent turns into a ghost
+        'w215ghost': [('join', s_join(r)), ('watch-on', s_w215_watch(r, True)), ('ghostfight', s_w215_ghostfight(r)), ('watch-off', s_w215_watch(r, False))],
         # WO-213 F.2: the 15-minute session (a walk, a fight, a tavern, a talk), each part on the same pair
         'w213session': [('join', s_join(r)), ('village', s_village(r, 240)), ('figwalk', s_walk(r, 40, smooth=True)), ('c1fight', s_c1fight(r, 180)), ('c2tavern', s_c2tavern(r, 240)),
                         ('talk', s_talk(r, 150))],
@@ -3198,7 +3600,7 @@ def run(name, args):
         # 'long' runs independent checks: one failing does not stop the next (a failed join does)
         if not r.step(nm, fn) and (name not in ('long', 'joinscene', 'joinfight', 'e2pair', 'c1pair', 'e2twinpair', 's1pair', 'smoke', 's1front',
                                                'c1fight', 'c2tavern', 'convboth', 'convday', 'convtimed', 'smoke2', 'awake', 'soak2', 'convscene', 'c1x', 'probefight', 'probetavern', 'village', 'defence', 'loot5', 'convforced', 'convforcedj',
-                                               'idle_check', 'toggle_live', 'convvote_both', 'fight10', 'w211misc', 'w213session', 'w213walk', 'w214away', 'w214hostkills', 'w214draws') or nm == 'join'
+                                               'idle_check', 'toggle_live', 'convvote_both', 'fight10', 'w211misc', 'w213session', 'w213walk', 'w214away', 'w214hostkills', 'w214draws', 'w215a0', 'w215tune', 'w215scenes', 'w215lead', 'w215ghost') or nm == 'join'
                                               or r.steps[-1]['reason'] == 'copy-exited'): break   # a game gone ends the run
     return r.finish()
 

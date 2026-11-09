@@ -1506,6 +1506,7 @@ public partial class GameBridge(ClientConfig config)
         Console.WriteLine($"Connected! Assigned id={myId} (protocol v{Protocol.Version})");
         Wo213OnConnect(link);   // WO-213 A: the link's meters; Steam's own config read back
         Wo214OnConnect();       // WO-214: the mod's own switches
+        Wo215OnConnect();       // WO-215: the mod's own switches
         Wo213StartWriter(link, stream);   // WO-213 B/C: Steam's limits and lanes, the scheduler, the hello
         Console.WriteLine();
 
@@ -6308,6 +6309,9 @@ public partial class GameBridge(ClientConfig config)
                 return;
             case string w214 when w214.StartsWith("w214_", StringComparison.Ordinal):   // WO-214: the switches, the status, F's hands
                 Wo214OnEvent(name, arg);
+                return;
+            case string w215 when w215.StartsWith("w215_", StringComparison.Ordinal):   // WO-215: the switches, the status, A.0's probe and tuning
+                Wo215OnEvent(name, arg);
                 return;
             case "w206_cfg":         // WO-206 E: mp_epoch_check, mp_research_death_from_health
             case "w206_status":      // WO-206 E: mp_w206_status

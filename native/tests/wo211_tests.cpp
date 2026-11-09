@@ -43,7 +43,7 @@ int wo211_tests(int* passed) {
 
     // ---- C.3 and the paths
     WCHECK(kOverflowReseatEveryS >= 1.0 && kOverflowReseatEveryS <= 5.0, "an over-full copy is reseated at most every couple of seconds");
-    WCHECK(kcdmp::wo210rules::kPathOverflow == 18 && kcdmp::wo210rules::kPathEmptyOwn + 1 == kcdmp::wo210rules::kPathCount &&
+    WCHECK(kcdmp::wo210rules::kPathOverflow == 18 && kcdmp::wo210rules::kPathNpcStateRefused + 1 == kcdmp::wo210rules::kPathCount &&
            std::strcmp(kcdmp::wo210rules::path_name(kcdmp::wo210rules::kPathOverflow), "18-overflow") == 0, "the overflow reseat has its own path");
 
     // ---- 0.2: build ids

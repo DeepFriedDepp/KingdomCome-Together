@@ -48,4 +48,9 @@ uint8_t overflow_reseat(uint32_t eid, const char* name, double everyS);
 // writer leaves it where it sits. Main thread.
 bool posture_holds(uint32_t eid);
 
+// WO-215 (main thread): the watchdog's new outcomes -- [0] bases given by the ladder, [1] activities refused here (activity_missing events),
+// [2] refused-rest checks, [3] dormant-host parks asked, [4] stale-ours reseats, [5] checks left to the NPC-state placement; and the copies
+// missing their host's activity now
+void w215_counters(uint32_t out[6], uint32_t* missingNow);
+
 } // namespace kcdmp::wo208

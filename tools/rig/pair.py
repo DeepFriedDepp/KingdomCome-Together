@@ -514,7 +514,8 @@ def collect(tag):
         put(os.path.join(p['root'], 'kcdmp-native.mirror.log'), 'kcdmp-native.mirror.log')
         put(os.path.join(p['dll_dir'], 'kcdmp-native-%s.log' % cid), 'kcdmp-native.log')
         put(os.path.join(p['agent_dir'], 'agent.log'), 'agent.log')
-        for f in ('kcdmp-anim.jsonl', 'kcdmp-anim.1.jsonl', 'digest.jsonl', 'applied.jsonl'):   # WO-210: the probe's rotated piece too (E.1's overlap)
+        # WO-210: the probe's rotated piece too (E.1's overlap); WO-215 G: the whole session's file and its rotated piece
+        for f in ('kcdmp-anim.jsonl', 'kcdmp-anim.1.jsonl', 'kcdmp-anim-session.jsonl', 'kcdmp-anim-session.1.jsonl', 'digest.jsonl', 'applied.jsonl'):
             put(os.path.join(p['root'], f), f)
             put(os.path.join(p['agent_dir'], f), f)
         put(os.path.join(rig.run_dir(), 'relay.log'), 'relay.log')
