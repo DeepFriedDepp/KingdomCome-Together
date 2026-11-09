@@ -34617,7 +34617,8 @@ do
     W215.ghosts = W215.ghosts or {}
     W215.gstats = W215.gstats or { marked = 0, unbound = 0, refused = 0, fightsEnded = 0 }
     W215.GHOST_KEEP_S = 60.0
-    W215.GHOST_FIGHT_S = 2.0
+    -- 4 s: the game's own end of a fight comes first (the bench: 2.3 s after the opponent stopped); a ghost's lock never ends by itself
+    W215.GHOST_FIGHT_S = 4.0
     function KCD2MP_W215Ghost(name)
         if not KCD2MP_W215On("dormant") then return false end
         name = tostring(name or "")
@@ -34703,7 +34704,11 @@ do
                     local dead, fighting = false, false
                     pcall(function() dead = e.actor and e.actor:IsDead() == true end)
                     pcall(function() fighting = e.soul.IsInCombatDanger ~= nil and e.soul:IsInCombatDanger() == true end)
-                    if fighting and not dead then live = live + 1 end
+                    -- a copy on this machine reports no combat state of its own (the bench: none of the bandits striking this player did), so
+                    -- every living body within 15 m counts as a possible opponent: E ends only a fight with no one near but ghosts
+                    local near = false
+                    pcall(function() local q = e:GetWorldPos(); near = (q.x - pp.x) ^ 2 + (q.y - pp.y) ^ 2 <= 225 end)
+                    if not dead and (fighting or near) then live = live + 1 end
                 end
             end
         end
@@ -34717,7 +34722,7 @@ do
         local ended = false
         if W174 and W174.endFights then ended = W174.endFights("w215-ghost") end
         W215.gstats.fightsEnded = W215.gstats.fightsEnded + 1
-        mp_log(string.format("WO215-GHOSTFIGHT this player was in combat with ghosts only (%s; %d failing) for %.1f s, no live opponent within 30 m -> the game's own end of combat (TryEndCombat=%s, the skirmish's StopFight asked) [n=%d]",
+        mp_log(string.format("WO215-GHOSTFIGHT this player was in combat with ghosts only (%s; %d failing) for %.1f s, no one else living within 15 m and no fighter within 30 m -> the game's own end of combat (TryEndCombat=%s, the skirmish's StopFight asked) [n=%d]",
             table.concat(ghostsNear, ","), recent, W215.GHOST_FIGHT_S, tostring(ended), W215.gstats.fightsEnded))
         return true
     end
