@@ -20,7 +20,7 @@ namespace KcdMp.Client;
 public partial class GameBridge
 {
     private readonly ConcurrentDictionary<string, bool> _w215On = new(StringComparer.Ordinal);
-    private bool W215On(string name) => _w215On.TryGetValue(name, out bool v) ? v : !W215Switch.TwinOff(name);
+    private bool W215On(string name) => _w215On.TryGetValue(name, out bool v) ? v : W215Switch.DefaultOn(name) && !W215Switch.TwinOff(name);
     private bool _w215NativeToldOld;
     private long _w215Probes, _w215ProbeRefused;
 

@@ -123,5 +123,8 @@ bool join_held();
 
 // WO-141: every tracked name with a live entity (main thread).
 void for_each_tracked(void (*fn)(const char* name, uint32_t eid, void* ctx), void* ctx);
+// WO-216 A: every tracked body the sender streams now (a live entity, not culled, not held back by the census), with its kind
+// (notHuman: a horse or an animal). Main thread.
+void for_each_streamed(void (*fn)(const char* name, uint32_t eid, bool notHuman, void* ctx), void* ctx);
 
 } // namespace kcdmp::wo138

@@ -116,14 +116,22 @@ public static class Wo208Rules
             o += 1 + nl;
             byte cm = body[o], nsc = body[o + 1];
             o += 2;
-            if (nsc > 2 || o + nsc * Wire.Protocol.NpcAnimScopeLen > body.Length) return false;
+            if (nsc > Wire.Protocol.NpcAnimMaxRecords || o + nsc * Wire.Protocol.NpcAnimScopeLen > body.Length) return false;
             uint eid = eidOf(name);
+            // WO-216 C: the line's records (0xA1 / 0xA2) are the agent's (the activity and the hands go to their own appliers); the DLL's
+            // owner gets the scopes only, as before
+            int real = 0;
+            for (int k = 0; k < nsc; k++) if (body[o + k * Wire.Protocol.NpcAnimScopeLen] < 0xA0) real++;
             if (eid != 0 && known < 255)
             {
                 Span<byte> e = stackalloc byte[4];
                 System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(e, eid);
-                ms.Write(e); ms.WriteByte(cm); ms.WriteByte(nsc);
-                ms.Write(body.Slice(o, nsc * Wire.Protocol.NpcAnimScopeLen));
+                ms.Write(e); ms.WriteByte(cm); ms.WriteByte((byte)real);
+                for (int k = 0; k < nsc; k++)
+                {
+                    var rec = body.Slice(o + k * Wire.Protocol.NpcAnimScopeLen, Wire.Protocol.NpcAnimScopeLen);
+                    if (rec[0] < 0xA0) ms.Write(rec);
+                }
                 known++;
             }
             else unknown++;

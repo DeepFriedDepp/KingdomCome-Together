@@ -3,6 +3,8 @@
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 // WO-208: the native half's switch word and status (wo208.h).
 #include "wo208.h"
+#include "wo216.h"
+#include "wo141.h"
 #include "wo208_rules.h"
 #include "wo203.h"
 #include "wo163.h"
@@ -433,6 +435,12 @@ uint8_t op_stream_read(const uint8_t* body, size_t len, uint8_t* out, size_t cap
         const char* fbCls = nullptr;
         for (int i = 0; i < n; ++i) if (sc[i].ok && !sc[i].empty && !std::strcmp(sc[i].name, "FullBody")) fbCls = sc[i].action;
         const bool down = wo210kd::host_down(eid, e, fbCls);
+        {   // WO-216 F.2: the host NPC's own knockdowns and get-ups as its stream sees them (the copy's latency is measured from these)
+            static std::unordered_map<uint32_t, bool> s_down;
+            auto dit = s_down.find(eid);
+            if (dit == s_down.end()) s_down.emplace(eid, down);
+            else if (dit->second != down) { dit->second = down; logf("WO216-KD host npc=%s down=%d", nm, down ? 1 : 0); }
+        }
         uint8_t rec[2 + 2 * kWireScope];
         uint64_t sig = (cm ? 1 : 2) | (down ? 4 : 0);
         int nsc = 0;
@@ -441,13 +449,26 @@ uint8_t op_stream_read(const uint8_t* body, size_t len, uint8_t* out, size_t cap
             if (which == 255) continue;
             if (put_scope(sc[i], which, rec + 2 + nsc * kWireScope, &sig)) ++nsc;
         }
+        // WO-216 C: the one activity line -- after the two scopes, the body's activity (0xA1: its NPC-state stance or unstance and their
+        // objects, the wire's 30 bytes) and its hands (0xA2: the item classes, left and right), read now, in the same body: the joiner
+        // applies the activity, the hands and the scopes from this one message (the twin: WO-141's and WO-143's own rows, as before)
+        int nx = 0;
+        uint8_t rx[2][kWireScope]{};
+        if (wo216::on(wo216rules::kBitActivityLine)) {
+            // an activity this read cannot see goes out as no record (the joiner keeps what it has): zeros are real ids, not "none"
+            if (wo141::host_activity_wire(eid, rx[nx] + 1)) { rx[nx][0] = 0xA1; rx[nx][31] = 0xFF; ++nx; }
+            uint8_t l[16]{}, r[16]{};
+            if (wo141::host_hands(eid, l, r)) { rx[nx][0] = 0xA2; std::memcpy(rx[nx] + 1, l, 16); std::memcpy(rx[nx] + 17, r, 16); ++nx; }
+            for (int q = 0; q < nx; ++q) for (int b = 0; b < kWireScope; ++b) sig = sig * 1099511628211ULL ^ rx[q][b];
+        }
         HostBody& hb = g_hostBodies[eid];
         if (sig == hb.sig && now - hb.sentAt < kResendS) continue;
-        const size_t need = 1 + nl + 2 + static_cast<size_t>(nsc) * kWireScope;
+        const size_t need = 1 + nl + 2 + static_cast<size_t>(nsc + nx) * kWireScope;
         if (o + need > cap) break;
         out[o] = static_cast<uint8_t>(nl); std::memcpy(out + o + 1, nm, nl); o += 1 + nl;
-        out[o] = static_cast<uint8_t>((cm ? wo210rules::kCmCombat : 0) | (down ? wo210rules::kCmDown : 0)); out[o + 1] = static_cast<uint8_t>(nsc); o += 2;
+        out[o] = static_cast<uint8_t>((cm ? wo210rules::kCmCombat : 0) | (down ? wo210rules::kCmDown : 0)); out[o + 1] = static_cast<uint8_t>(nsc + nx); o += 2;
         std::memcpy(out + o, rec + 2, static_cast<size_t>(nsc) * kWireScope); o += static_cast<size_t>(nsc) * kWireScope;
+        for (int q = 0; q < nx; ++q) { std::memcpy(out + o, rx[q], kWireScope); o += kWireScope; }
         hb.sig = sig; hb.sentAt = now;
         ++count;
         c_streamBodies.fetch_add(1);
@@ -480,6 +501,17 @@ uint8_t op_stream_forget(const uint8_t* body, size_t len, uint8_t* out, size_t c
     }
     if (cap >= 1) { out[0] = static_cast<uint8_t>(n); *outLen = 1; }
     return wo163::kROk;
+}
+
+// ---- WO-216 F.4 / G: a host's combat row played by the owner (its full body held for the row) -----------------------------------
+constexpr double kRowHoldS = 1.4;   // about one swing of the rows' own timings (a blow lands 0.5-1.0 s in, the recovery after it)
+std::unordered_map<uint32_t, double> g_rowHoldUntil;   // main thread
+std::atomic<uint32_t> c_rowPlayed{0}, c_rowRefused{0}, c_rowHeldFrames{0};
+bool row_holds(uint32_t eid, double now) {
+    auto it = g_rowHoldUntil.find(eid);
+    if (it == g_rowHoldUntil.end()) return false;
+    if (now > it->second) { g_rowHoldUntil.erase(it); return false; }
+    return true;
 }
 
 // ---- A.2 the joiner: the host's states as they arrive (op 133), kept per copy for the owner --------------------------------------
@@ -801,6 +833,9 @@ void own_apply(uint32_t eid, OwnCopy& oc, int cm, const HostScope hsc[2], const 
     // past the host's hold)
     const bool aiRuns = wo209::ai_owns_body(eid);
     if (aiRuns) c_oAiHolds.fetch_add(1);
+    // WO-216 F.4 / G: the host's row the owner played holds the full body for the row's length
+    const bool rowRuns = row_holds(eid, now);
+    if (rowRuns) c_rowHeldFrames.fetch_add(1, std::memory_order_relaxed);
     // WO-209 C: nothing of the owner's is queued on a copy whose action queue is already long (the engine allows 10). rc1-c2tavern-1: a
     // seated copy's own actions at the head of its queue (its movement, its look pose) never let the owner's installs start, the owner
     // withdrew each as stale and installed the next, and they piled up behind them -- 11,004 queue overflows on one copy, 59,993 on
@@ -810,7 +845,7 @@ void own_apply(uint32_t eid, OwnCopy& oc, int cm, const HostScope hsc[2], const 
     const bool queueFull = wo209::fix_on(wo209rules::kFixOwnerQueueCap) && wo209rules::owner_queue_full(qi.n);
     if (queueFull) c_oQueueFull.fetch_add(1);
     for (int k = 0; k < 2; ++k) {
-        if ((shot || aiRuns) && k == 0) continue;
+        if ((shot || aiRuns || rowRuns) && k == 0) continue;
         const HostScope* hs = have[k] ? &hsc[k] : nullptr;
         const Fam fam = hs ? fam_of(eid, hs->cls, hs->frag) : Fam::Empty;
         Probe::Scope& o = oc.own[k];
@@ -1000,7 +1035,7 @@ void own_apply(uint32_t eid, OwnCopy& oc, int cm, const HostScope hsc[2], const 
             if (oc.transFrag != cs[0].frag) { oc.transFrag = cs[0].frag; oc.transSince = now; }
             trans = now - oc.transSince <= kTransitionMaxS;
         } else oc.transFrag = 0xFFFFFFFFu;
-        const bool mod = shot || aiRuns || copyF == PFam::Combat || copyF == PFam::Paired;
+        const bool mod = shot || aiRuns || row_holds(eid, now) || copyF == PFam::Combat || copyF == PFam::Paired;
         Verdict v = check(copyF, hostF, trans, mod, !wo210::fix_on(kFixPostureOtherGrace));
         if (have[0] && hsc[0].cls == kClsNone) { if (oc.hostEmptySince < 0) oc.hostEmptySince = now; } else oc.hostEmptySince = -1;   // WO-215 D.1
         if (!have[0] && v != Verdict::Empty) v = Verdict::Ok;   // no host state to judge a posture by: only an empty body counts
@@ -1456,6 +1491,28 @@ uint8_t overflow_reseat(uint32_t eid, const char* name, double everyS) {
     logf("WO211-OVERFLOW npc=%s queue=%d first=%s: ours withdrawn, %s", name ? name : oc.name.c_str(), qi.n, qi.first,
          ok ? "a clean hand-over installed" : "nothing installed (the queue is still long, or no state)");
     return 1;
+}
+
+int owner_play_row(uint32_t eid, const char* spec) {
+    const double now = npcdrive::now_s();
+    auto it = g_owned.find(eid);
+    if (it != g_owned.end() && it->second.own[0].act) own_retire(it->second, it->second.own[0], now, "the host's combat row");
+    const rttr::SwingResult r = rttr::ghost_swing(eid, spec);
+    if (r == rttr::SwingResult::Ok) {
+        g_rowHoldUntil[eid] = now + kRowHoldS;
+        const uint32_t k = c_rowPlayed.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (k <= 60 || k % 200 == 0) logf("WO216-ROW played npc=%s row \"%s\" through the owner (its full body held %.1f s) [n=%u]",
+                                          it != g_owned.end() ? it->second.name.c_str() : "?", spec, kRowHoldS, k);
+    } else {
+        const uint32_t k = c_rowRefused.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (k <= 60 || k % 200 == 0) logf("WO216-ROW refused npc=%s row \"%s\" -> %s [n=%u]", it != g_owned.end() ? it->second.name.c_str() : "?",
+                                          spec, rttr::swing_result_name(r), k);
+    }
+    return static_cast<int>(r);
+}
+int owner_rows_status(char* out, int n) {
+    return std::snprintf(out, static_cast<size_t>(n), "F.4/G owner_rows played=%u refused=%u held_frames=%u", c_rowPlayed.load(), c_rowRefused.load(),
+                         c_rowHeldFrames.load());
 }
 
 bool probe_owned(uint32_t eid) {

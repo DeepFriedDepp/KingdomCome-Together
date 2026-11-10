@@ -22,9 +22,10 @@ int wo215_tests(int* passed) {
     const Name* k = switch_names(&nk);
     uint32_t all = 0;
     for (int i = 0; i < nk; ++i) all |= k[i].b;
-    WCHECK(all == kBitsDefault && nk == 8, "every WO-215 native switch has a name and ships on (%d names, 0x%X)", nk, all);
+    WCHECK(all == kBitsAll && nk == 8, "every WO-215 native switch has a name (%d names, 0x%X)", nk, all);
+    WCHECK(kBitsDefault == (kBitsAll & ~kBitRoute), "every WO-215 switch ships on but the route (WO-216 A.4: it did not pass A.1's test)");
     WCHECK(twin_off_bits("route") == kBitRoute && twin_off_bits("gait, ladder") == (kBitGait | kBitLadder), "the twins by name");
-    WCHECK(twin_off_bits("all") == kBitsDefault && twin_off_bits("one_bind") == 0 && twin_off_bits(nullptr) == 0, "all; WO-214's names are not WO-215's");
+    WCHECK(twin_off_bits("all") == kBitsAll && twin_off_bits("one_bind") == 0 && twin_off_bits(nullptr) == 0, "all (every bit, the route's too); WO-214's names are not WO-215's");
 
     // ---- A.2 the gait: the smallest class whose top speed covers the host's speed with 15 % headroom, hysteresis going down
     WCHECK(gait_for(1.42f, Gait::Walk) == Gait::Walk && gait_for(1.58f, Gait::Walk) == Gait::Walk,
@@ -113,8 +114,10 @@ int wo215_tests(int* passed) {
     WCHECK(writer_reason(true, false, false, false, false, false, true) == WriterWhy::Refused, "refused a moment ago: the writer, then the route again");
     WCHECK(writer_reason(false, false, true, false, false, false, false) == WriterWhy::Beast, "a beast is named as a beast with the switch off too");
     WCHECK(!std::strcmp(writer_why(WriterWhy::None), "routed") && !std::strcmp(writer_why(WriterWhy::Correcting), "correcting"), "the names");
+    WCHECK(!std::strcmp(writer_why(WriterWhy::Far), "far") && route_far(120.0f) && !route_far(80.0f),
+           "WO-216: a copy over 100 m from this player is the writer's (the joiner's pool despawns bodies about 150 m out)");
     WCHECK(!std::strcmp(writer_why(WriterWhy::NotHuman), "not-human") && !std::strcmp(writer_why(WriterWhy::NoPhysics), "no-physics") &&
-           static_cast<int>(WriterWhy::kCount) == 14, "every reason has a name (a horse, a body out of physics range)");
+           static_cast<int>(WriterWhy::kCount) == 15, "every reason has a name (a horse, a body out of physics range, a far one)");
 
     // ---- B the ladder and the let-go
     WCHECK(ladder(true, true, true, true) == Rung::HostActivity, "the host's activity first");

@@ -23,7 +23,9 @@ constexpr uint32_t kBitActivityLine = 0x010; // C.0 one activity line per NPC (o
 constexpr uint32_t kBitDormant = 0x020;      // D.1 the host's census keeps dormant bodies out of the stream
 constexpr uint32_t kBitGhostFight = 0x040;   // E the joiner's player leaves a fight whose every opponent is a ghost
 constexpr uint32_t kBitProbeAll = 0x080;     // G the animation probe covers the whole session (one body a frame)
-constexpr uint32_t kBitsDefault = 0x0FF;
+constexpr uint32_t kBitsAll = 0x0FF;
+// WO-216 A.4: the route ships off (the engine's movement request on a copy did not pass its test); the agent sends the word at connect
+constexpr uint32_t kBitsDefault = kBitsAll & ~kBitRoute;
 
 struct Name { const char* n; uint32_t b; };
 inline const Name* switch_names(int* n) {
@@ -44,7 +46,7 @@ inline uint32_t twin_off_bits(const char* list) {
         const char* s = p;
         while (*p && *p != ',' && *p != ' ') ++p;
         const size_t n = static_cast<size_t>(p - s);
-        if (n == 3 && std::strncmp(s, "all", 3) == 0) b |= kBitsDefault;
+        if (n == 3 && std::strncmp(s, "all", 3) == 0) b |= kBitsAll;
         for (int i = 0; i < nk; ++i)
             if (n == std::strlen(k[i].n) && std::strncmp(s, k[i].n, n) == 0) b |= k[i].b;
     }
@@ -211,16 +213,21 @@ constexpr float kAirVzMps = 1.5f;
 
 // Why a bound body is not routed this frame (A.3: the writer stays for what the route cannot do -- counted, never silent).
 enum class WriterWhy : uint8_t { None = 0, Off = 1, Beast = 2, Parented = 3, Air = 4, Fight = 5, Refused = 6, NoNpc = 7, NotArmed = 8,
-                                 Correcting = 9, Figure = 10, Budget = 11, NotHuman = 12, NoPhysics = 13, kCount = 14 };
+                                 Correcting = 9, Figure = 10, Budget = 11, NotHuman = 12, NoPhysics = 13, Far = 14, kCount = 15 };
 inline const char* writer_why(WriterWhy w) {
     static const char* const k[] = {"routed", "off", "beast", "parented", "air", "fight", "refused", "no-npc", "not-armed", "correcting", "figure",
-                                    "budget", "not-human", "no-physics"};
+                                    "budget", "not-human", "no-physics", "far"};
     const int i = static_cast<int>(w);
     return i >= 0 && i < static_cast<int>(WriterWhy::kCount) ? k[i] : "?";
 }
 // The order of the tests: a figure (a partner's body) and a beast (a horse or an animal: no movement task) never; a parented body (a
 // rider, a carried body) never; the switch; a body in the air; a fighting body (the writer's fight path: holds, chase, the fight band);
 // a body the engine refused a moment ago; then the route.
+// WO-216: a copy farther than this from this player is the writer's -- the joiner's own encounter pool despawns its bodies about 150 m
+// out, and b10 crashed (the engine's path finder, a movement block for a deleted body) on a replayed copy it deleted 150 m away while
+// the copy's path request ran: the route lets a body go (its request cancelled) well inside that
+constexpr float kRouteFarM = 100.0f;
+inline bool route_far(float distToPlayerM) { return distToPlayerM > kRouteFarM; }
 inline WriterWhy writer_reason(bool on, bool figure, bool beast, bool parented, bool air, bool fight, bool refusedRest) {
     if (figure) return WriterWhy::Figure;
     if (beast) return WriterWhy::Beast;

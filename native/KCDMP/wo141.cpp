@@ -1352,6 +1352,27 @@ void install() {
 
 bool armed() { return g_readArmed; }
 
+bool host_activity_wire(uint32_t eid, uint8_t out[30]) {
+    R::Activity a;
+    if (!read_activity(eid, &a)) return false;
+    // WO-164 N: the night undress rides the row's flags (capture_one's rule; the sleep-outfit read once per equipment element)
+    static std::unordered_map<uint32_t, NightRead> s_night;
+    void* c = ctx_of_eid(eid);
+    void* el = c ? equipment_element(c) : nullptr;
+    NightRead& nr = s_night[eid];
+    if (el != nr.elem) { nr.elem = el; nr.night = el ? in_sleep_outfit(c) : false; }
+    if (nr.night) a.flags = static_cast<uint8_t>(a.flags | R::kFlagNightDress);
+    R::encode(a, out);
+    return true;
+}
+bool host_hands(uint32_t eid, uint8_t left[16], uint8_t right[16]) {
+    KH::Hands hh;
+    if (!read_hands(eid, &hh)) return false;
+    std::memcpy(left, hh.left.b, 16);
+    std::memcpy(right, hh.right.b, 16);
+    return true;
+}
+
 int activity_path(const char* name) {
     if (!name || !*name) return 0;
     auto it = g_desired.find(lower(name));

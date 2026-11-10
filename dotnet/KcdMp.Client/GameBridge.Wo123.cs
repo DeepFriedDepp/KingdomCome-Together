@@ -308,6 +308,9 @@ public partial class GameBridge
             case Protocol.NpcOppDown:       // WO-209 A: the host's NPCs' opponents
                 await Wo209OnNpcOppAsync(src, body);
                 return;
+            case Protocol.NpcRouteDown:     // WO-216 A: the host's NPCs' movement requests
+                await Wo216OnNpcRouteAsync(body);
+                return;
             case Protocol.NpcAnimAskDown:   // WO-210 A.3/A.4: a joiner asks for bodies' whole-body state again
                 await Wo210OnAnimAskAsync(src, body);
                 return;

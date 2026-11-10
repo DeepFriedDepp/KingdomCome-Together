@@ -4376,7 +4376,9 @@ local function mp_wo102_resume(name, why)
     if not at then return end
     KCD2MP._npcPaused[name] = nil
     KCD2MP._npcResumePending[name] = nil
+    W216_RELEASE = true   -- WO-216 B: a released copy's resume -- the one B blocks on a joiner (no brain runs here)
     local ok, err = pcall(System.ExecuteCommand, "wh_ai_ResumeNPC " .. tostring(name))
+    W216_RELEASE = false
     local exec = ok and "ok" or ("err:" .. tostring(err))
     if KCD2MP_W190CopyLook then pcall(KCD2MP_W190CopyLook, name, true, "resume") end   -- WO-190 A3: its own look again
     mp_auth_log(name, "resume", "?", why, os.clock() - at)
@@ -34534,7 +34536,8 @@ do
 end
 
 -- ===== WO-215: the animation substrate (docs/WO-215-findings.md) =====
--- Every switch ships on. The agent tells this file the states (KCD2MP_W215Cfg, with the bench's twins applied); a console switch here
+-- Every switch ships on but the route (WO-216 A.4: a copy walks by the writer until the engine's movement request passes its test --
+-- docs/WO-216-findings.md, A). The agent tells this file the states (KCD2MP_W215Cfg, with the bench's twins applied); a console switch here
 -- goes to the agent, which tells the DLL and this file back.
 do
     W215 = W215 or {}
@@ -34543,6 +34546,7 @@ do
         route = "mp_route", gait = "mp_route_gait", ladder = "mp_ladder", letgo_cull = "mp_letgo_cull", activity_line = "mp_activity_line",
         dormant = "mp_dormant", ghost_fight = "mp_ghost_fight", probe_all = "mp_probe_all",
     }
+    W215.DEFAULT_OFF = { route = true }
     W215.HELP = {
         route = "A.1: (joiner) a copy on the ground moves by the engine's own movement request; the writer only corrects it",
         gait = "A.2: (joiner) the request's speed class follows the host NPC's own speed (walk, jog, run, sprint)",
@@ -34555,7 +34559,7 @@ do
     }
     function KCD2MP_W215On(name)
         local v = W215.on[tostring(name)]
-        if v == nil then return true end
+        if v == nil then return not W215.DEFAULT_OFF[tostring(name)] end
         return v
     end
     function KCD2MP_W215Cfg(list)
@@ -34605,7 +34609,7 @@ do
     for k, label in pairs(W215.NAMES) do
         local fname = "KCD2MP_W215Set_" .. k
         _G[fname] = function(arg) return KCD2MP_W215Set(k, arg) end
-        System.AddCCommand(label, fname .. "(%line)", "WO-215 " .. (W215.HELP[k] or k) .. " (default on): " .. label .. " on|off")
+        System.AddCCommand(label, fname .. "(%line)", "WO-215 " .. (W215.HELP[k] or k) .. " (default " .. (W215.DEFAULT_OFF[k] and "off" or "on") .. "): " .. label .. " on|off")
     end
 
     -- ---- D.1 / E (the joiner): ghosts -- copies whose combat actor this engine could not set up ----
@@ -34701,8 +34705,11 @@ do
                 local g = W215.ghosts[nm]
                 if g and now - g.at <= 5.0 then ghostsNear[#ghostsNear + 1] = nm
                 elseif not g then
-                    local dead, fighting = false, false
+                    local dead, fighting, hid = false, false, false
                     pcall(function() dead = e.actor and e.actor:IsDead() == true end)
+                    -- WO-216 H: a body B froze and hid here (the host does not stream it) is no opponent
+                    pcall(function() hid = e.IsHidden ~= nil and e:IsHidden() == true end)
+                    if hid then dead = true end
                     pcall(function() fighting = e.soul.IsInCombatDanger ~= nil and e.soul:IsInCombatDanger() == true end)
                     -- a copy on this machine reports no combat state of its own (the bench: none of the bandits striking this player did), so
                     -- every living body within 15 m counts as a possible opponent: E ends only a fight with no one near but ghosts
@@ -34760,6 +34767,161 @@ do
         local a = best:GetWorldAngles()
         System.LogAlways(string.format("[W215PICK] %s %.3f %.3f %.3f %.4f %.1f", best:GetName(), q.x, q.y, q.z, a and a.z or 0, bd))
         return true
+    end
+end
+
+-- ===== WO-216: the rest of the body (docs/WO-216-findings.md) =====
+-- Every switch ships on. The agent tells this file the states (KCD2MP_W216Cfg, with the bench's twins applied); a console switch here
+-- goes to the agent, which tells the DLL and this file back.
+do
+    W216 = W216 or {}
+    W216.on = W216.on or {}
+    W216.NAMES = {
+        route_replay = "mp_route_replay", no_brains = "mp_no_brains", activity_line = "mp_activity_line_host", outfits = "mp_outfits",
+        riders = "mp_riders", poses = "mp_poses", npc_fights = "mp_npc_fights",
+    }
+    W216.HELP = {
+        route_replay = "A: (both) with mp_route on (it ships off), a copy makes its host NPC's own movement request (goal, speed class, exact end) once per change; the stream only corrects",
+        no_brains = "B: (joiner) no NPC here runs its own brain: every body suspended, one the host does not stream frozen and hidden",
+        activity_line = "C: (both) one activity line from the host per NPC (activity, object, stance, posture, hands, looping, the route's class)",
+        outfits = "D: (both) the host NPC's worn items on its copy, with the spawn and on a change",
+        riders = "E: (both) a rider attached to its horse the engine's way; with mp_route on, the horse moved by its host's request",
+        poses = "F: (both) look poses, falls and get-ups, clinches, recoils and paired hits through the one owner",
+        npc_fights = "G: (both) fights the players are not in: the host's fight line and rows on the copies",
+    }
+    function KCD2MP_W216On(name)
+        local v = W216.on[tostring(name)]
+        if v == nil then return true end
+        return v
+    end
+    function KCD2MP_W216Cfg(list)
+        local n = 0
+        for kv in string.gmatch(tostring(list or ""), "[^,]+") do
+            local k, v = string.match(kv, "^%s*([%w_]+)=(%a+)%s*$")
+            if k and W216.NAMES[k] then W216.on[k] = (v == "on"); n = n + 1 end
+        end
+        if n > 0 and not W216.told then
+            W216.told = true
+            local parts = {}
+            for k in pairs(W216.NAMES) do parts[#parts + 1] = k .. "=" .. (KCD2MP_W216On(k) and "on" or "off") end
+            table.sort(parts)
+            mp_log("WO216-CFG " .. table.concat(parts, " "))
+        end
+        return true
+    end
+    function KCD2MP_W216Set(name, arg)
+        local label = W216.NAMES[tostring(name)]
+        if not label then mp_log("WO216-TOGGLE unknown switch '" .. tostring(name) .. "'"); return false end
+        local v = KCD2MP_Wo122ParseBool(arg)
+        if v == "bad" then mp_log(label .. ": expected on|off, got '" .. tostring(arg) .. "'"); return false end
+        if v == nil then mp_log("WO216-TOGGLE " .. label .. " is " .. (KCD2MP_W216On(name) and "on" or "off")); return true end
+        W216.on[tostring(name)] = v
+        mp_log("WO216-TOGGLE " .. label .. " " .. (v and "on" or "off") .. " -- sent to the agent")
+        KCD2MP_EmitEvent("w216_cfg", tostring(name) .. "=" .. (v and "on" or "off"))
+        return true
+    end
+    function KCD2MP_W216Status()
+        local parts = {}
+        for k, label in pairs(W216.NAMES) do parts[#parts + 1] = label .. "=" .. (KCD2MP_W216On(k) and "on" or "off") end
+        table.sort(parts)
+        mp_log("WO216-STATUS " .. table.concat(parts, " "))
+        KCD2MP_EmitEvent("w216_status", "")
+        return true
+    end
+    System.AddCCommand("mp_w216_status", "KCD2MP_W216Status()", "WO-216: every WO-216 switch and the DLL's numbers")
+
+    -- ---- B (the joiner): no brain runs here. The DLL suspends every body it finds running (once a second, and a body this engine spawns
+    -- on its own at its spawn) and hides the ones the host does not stream. A copy the stream lets go is never resumed (the WO-102 lever's
+    -- release: mp_wo102_resume, the one place a copy got its own brain back in the host's shadow); every other resume here is a feature's
+    -- own (a guard's stop, a talk, the horse this player takes, an avatar's horse) and is told to the DLL as exempt while it runs.
+    --   WO216-NORESUME npc=<n> -- a released copy stays frozen       WO216-EXEMPT npc=<n> secs=<s> why=<w>
+    W216.stats = W216.stats or { blocked = 0, exempt = 0 }
+    W216.exemptAt = W216.exemptAt or {}
+    function KCD2MP_W216JoinerBrainsOff()
+        return KCD2MP_W216On("no_brains") and KCD2MP.w137 ~= nil and KCD2MP.w137.joiner == true and KCD2MP.w137.active == true
+    end
+    function KCD2MP_W216Exempt(name, secs, why)
+        name = tostring(name or "")
+        if name == "" or string.find(name, "^kcd2mp") then return false end
+        local now = os.clock()
+        local at = W216.exemptAt[name]
+        if at and now - at < 20 then return true end   -- told at most every 20 s per body (the DLL keeps it for secs)
+        W216.exemptAt[name] = now
+        W216.stats.exempt = W216.stats.exempt + 1
+        if W216.stats.exempt <= 100 or W216.stats.exempt % 50 == 0 then
+            mp_log(string.format("WO216-EXEMPT npc=%s secs=%d why=%s [n=%d]", name, secs or 120, tostring(why), W216.stats.exempt))
+        end
+        KCD2MP_EmitEvent("w216_exempt", string.format("%s on %d", name, secs or 120))
+        return true
+    end
+    if System and System.ExecuteCommand and not W216.execWrapped then
+        W216.execWrapped = true
+        W216.origExec = System.ExecuteCommand
+        System.ExecuteCommand = function(cmd, ...)
+            local s = tostring(cmd or "")
+            local name = string.match(s, "^%s*wh_ai_ResumeNPC%s+([%w_%-%.]+)")
+            if name and not string.find(name, "^kcd2mp") and KCD2MP_W216JoinerBrainsOff() then
+                if W216_RELEASE then
+                    W216.stats.blocked = W216.stats.blocked + 1
+                    if W216.stats.blocked <= 100 or W216.stats.blocked % 50 == 0 then
+                        mp_log(string.format("WO216-NORESUME npc=%s -- a copy the stream let go stays frozen here (no_brains) [n=%d]", name, W216.stats.blocked))
+                    end
+                    return nil
+                end
+                KCD2MP_W216Exempt(name, 120, "resume")
+            end
+            return W216.origExec(cmd, ...)
+        end
+    end
+    -- ---- D (the joiner): a copy wears its host NPC's worn items. The agent compares the host's set with the copy's own (the DLL reads
+    -- both from the souls' equipment) and asks this file to put on what is missing (the copy's own item of that class, else one made in
+    -- its own inventory) and take off what the host's does not wear -- the game's own equip calls (WO-144's lesson: EquipInventoryItem).
+    --   WO216-DRESS npc=<n> on=<k>/<asked> off=<k>/<asked> made=<k>
+    W216.dress = W216.dress or { calls = 0, on = 0, off = 0, made = 0, fail = 0 }
+    function KCD2MP_W216Dress(name, addList, remList)
+        if not KCD2MP_W216On("outfits") then return false end
+        local e = System.GetEntityByName(tostring(name))
+        if not (e and e.inventory and e.actor) then return false end
+        local D = W216.dress
+        D.calls = D.calls + 1
+        local on, asked, made = 0, 0, 0
+        for cls in string.gmatch(tostring(addList or ""), "[^,]+") do
+            asked = asked + 1
+            local it = nil
+            pcall(function() it = e.inventory:FindItem(cls) end)
+            if not it then
+                pcall(function() e.inventory:CreateItem(cls, 1, 1) end)
+                pcall(function() it = e.inventory:FindItem(cls) end)
+                if it then made = made + 1 end
+            end
+            if it and pcall(function() e.actor:EquipInventoryItem(it) end) then on = on + 1 end
+        end
+        local off, askedOff = 0, 0
+        for cls in string.gmatch(tostring(remList or ""), "[^,]+") do
+            askedOff = askedOff + 1
+            local it = nil
+            pcall(function() it = e.inventory:FindItem(cls) end)
+            if it and pcall(function() e.actor:UnequipInventoryItem(it) end) then off = off + 1 end
+        end
+        D.on = D.on + on; D.off = D.off + off; D.made = D.made + made
+        if on < asked or off < askedOff then D.fail = D.fail + 1 end
+        if D.calls <= 80 or D.calls % 50 == 0 then
+            mp_log(string.format("WO216-DRESS npc=%s on=%d/%d off=%d/%d made=%d [n=%d]", tostring(name), on, asked, off, askedOff, made, D.calls))
+        end
+        return true
+    end
+    -- the agent, every 5 s on a joiner: the horse this player rides stays exempt while ridden
+    function KCD2MP_W216Tick()
+        if not KCD2MP_W216JoinerBrainsOff() then return false end
+        local m = KCD2MP_W151LocalMount and KCD2MP_W151LocalMount() or nil
+        if not m and KCD2MP._mountedHorseName then m = KCD2MP._mountedHorseName end
+        if m then W216.exemptAt[m] = nil; KCD2MP_W216Exempt(m, 30, "ridden") end
+        return true
+    end
+    for k, label in pairs(W216.NAMES) do
+        local fname = "KCD2MP_W216Set_" .. k
+        _G[fname] = function(arg) return KCD2MP_W216Set(k, arg) end
+        System.AddCCommand(label, fname .. "(%line)", "WO-216 " .. (W216.HELP[k] or k) .. " (default on): " .. label .. " on|off")
     end
 end
 

@@ -26,6 +26,11 @@ int status(char* out, int n);
 // WO-210 0.3: an owned copy's host NPC FullBody as the owner last applied it (the probe's "hf"); false when not owned or unknown
 bool host_fullbody(uint32_t eid, uint8_t* cls, uint32_t* frag);
 bool probe_owned(uint32_t eid);
+// WO-216 F.4 / G (main thread): the host's combat row for an owned copy, played by the owner -- the row's own fragment queued the game's
+// way (ghost_swing), the owner's own full-body action retired before it, and the full body held for the row (nothing of the owner's
+// installed, withdrawn or reseated over it) -- never refused as "owner-owns" (WO-214 D.2). The result is the swing's.
+int owner_play_row(uint32_t eid, const char* spec);   // rttr::SwingResult as an int
+int owner_rows_status(char* out, int n);
 // The same for the writers of a copy's COMBAT STATE (its engagement in the player's fight, its strike window, its opponent, its guard
 // hold): only the bench's A.1 copy (driven "only from the recorded state"); with the owner on every copy they stay (the owner's rule 7:
 // combat relations are read, never rewritten by it, and Part B needs the engagement and the strike window).

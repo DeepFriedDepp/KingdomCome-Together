@@ -39,10 +39,12 @@ struct RouteIn {
     float streamVz = 0;     // its vertical speed
     float streamVx = 0, streamVy = 0;   // its planar velocity (the lead's direction)
     bool figure = false, beast = false, parented = false, fight = false;
+    bool horse = false;     // WO-216 E: a horse (npc_scan body kind 1) -- with riders on, moved by its host's own request when it has one
     bool human = true;      // a man or a woman (npc_scan body kind 0): horses and animals keep the writer (F: their riders and harness)
     bool physics = true;    // the body has physics here (a body out of this machine's physics range is entity-written)
     bool stall = false;     // a link stall (wo215_rules.h link_stall): this body's silence is the link's, not its NPC's stop
     float gapS = 0.1f;      // the body's usual gap between samples (wo215_rules.h gap_ema): the lead follows it
+    float newestAgeS = 0;   // WO-216: how long ago the newest sample's pose was true (its host clock mapped here)
     double now = 0;
 };
 enum class Verdict : uint8_t { Writer = 0, Routed = 1, Correct = 2 };
@@ -67,5 +69,7 @@ bool ghost(uint32_t eid);
 
 void tick();   // main thread, every frame: the probe's follow and windows, the status lines
 int status(char* out, int n);
+// WO-216 A: the host's read of its NPCs' requests and the joiner's replay of them (wo216.cpp's status line carries it)
+int replay_status(char* out, int n);
 
 } // namespace kcdmp::wo215

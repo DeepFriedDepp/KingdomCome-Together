@@ -32,6 +32,16 @@ public static class W215Switch
     /// <summary>Every switch: the native ones, then the agent's and the mod's own.</summary>
     public static readonly string[] Names = [.. NativeNames];
 
+    /// <summary>
+    /// WO-216 A.4: the switches that ship off. The route (A.1) does: a copy moved by the engine's movement request -- WO-215's own
+    /// request, or the host NPC's own request replayed (WO-216 A) -- did not pass its test on the bench (docs/WO-216-findings.md, A), so
+    /// a copy walks by the writer, as 0.64.2 should have shipped it. `mp_route on` in the game's console turns it on for a session.
+    /// </summary>
+    public static readonly string[] DefaultOffNames = ["route"];
+
+    /// <summary>The switch's state when nothing set it (before a twin's list or the console).</summary>
+    public static bool DefaultOn(string name) => !DefaultOffNames.Contains(name);
+
     public static bool TwinOff(string name) => TwinOff(Environment.GetEnvironmentVariable(EnvVar), name);
 
     public static bool TwinOff(string? env, string name) =>

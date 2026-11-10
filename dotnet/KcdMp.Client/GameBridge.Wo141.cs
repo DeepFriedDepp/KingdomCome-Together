@@ -181,6 +181,7 @@ public partial class GameBridge
             {
                 if (kind == Protocol.ActivityKindNpc)
                 {
+                    if (Wo216Lined(r.Name)) { Interlocked.Increment(ref _w216RowsRetired); continue; }   // WO-216 C: the line is this body's one path
                     _w141HostRows[r.Name] = r.A;
                     if (_w141Blocked.ContainsKey(r.Name) || W151InFight(r.Name)) continue;   // WO-151 1.1: not before the block tick either
                     await Wo141ApplyAsync(r.Name, r.A, "host");

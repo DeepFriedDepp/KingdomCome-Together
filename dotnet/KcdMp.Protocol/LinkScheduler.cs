@@ -93,6 +93,8 @@ public static class LinkStateCodec
             case Protocol.NpcOppUp: case Protocol.NpcOppDown:            // [kind:1][ghost:1][oppLen][opp]
                 if (b + 3 > p.Length) return 0;
                 return 1 + nl + 3 + p[b + 2];
+            case Protocol.NpcRouteUp: case Protocol.NpcRouteDown:        // WO-216 A: [rec:52]
+                return 1 + nl + Protocol.NpcRouteRecLen;
         }
         return extraKind switch
         {
@@ -112,7 +114,8 @@ public static class LinkStateCodec
         int upType = down ? type - 1 : type;
         int max = Protocol.JoinWireFor(upType) is { } r ? r.Max + (down ? 1 : 0) : Protocol.FramePayloadMax;
         int items = type is Protocol.NpcAnimUp or Protocol.NpcAnimDown ? Protocol.NpcAnimMaxBodies
-                  : type is Protocol.NpcOppUp or Protocol.NpcOppDown ? Protocol.NpcOppMaxBodies : Protocol.ExtraMaxRows;
+                  : type is Protocol.NpcOppUp or Protocol.NpcOppDown ? Protocol.NpcOppMaxBodies
+                  : type is Protocol.NpcRouteUp or Protocol.NpcRouteDown ? Protocol.NpcRouteMaxBodies : Protocol.ExtraMaxRows;
         return (items, Math.Min(max, Protocol.FramePayloadMax));
     }
 

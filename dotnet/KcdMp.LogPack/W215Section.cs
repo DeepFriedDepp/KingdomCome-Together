@@ -22,7 +22,7 @@ public static class W215Section
     private static readonly Regex Pull = new(@"MP-NPCPULL npc=\S+ .*?max_cm=([\d.]+)", RegexOptions.Compiled);
     private static readonly Regex Missing = new(@"WO215-ACTIVITY-MISSING npc=(\S+) host=(\S+)", RegexOptions.Compiled);
 
-    public static string Lines(AnimStream? session, IReadOnlyList<string> native, IReadOnlyList<string> agent, IReadOnlyList<string> kcd)
+    public static string Lines(AnimStream? session, IReadOnlyList<string> native, IReadOnlyList<string> agent, IReadOnlyList<string> kcd, bool noSessionNote = false)
     {
         var sb = new StringBuilder();
         sb.Append("- **the copies' bodies** (WO-215):\n");
@@ -56,7 +56,9 @@ public static class W215Section
             sb.Append($"  - activities missing (a copy standing while its host NPC sits, lies, kneels or works, over 1 s): {miss.Count} copy(ies), {miss.Sum(e => e.Secs):F1} s")
               .Append(miss.Count > 0 ? " -- " + string.Join(", ", miss.OrderByDescending(e => e.Secs).Take(5).Select(e => $"{e.Name} {e.Secs:F0} s")) : "").Append('\n');
         }
-        else sb.Append("  - the session probe's file is not in this bundle (empty bodies and missing activities over the whole session not measured)\n");
+        else sb.Append(noSessionNote
+            ? "  - " + SessionRule.NoSessionFile + " (the session probe was off in this launch; an earlier session's file was left out): empty bodies and missing activities over the whole session not measured\n"
+            : "  - the session probe's file is not in this bundle (empty bodies and missing activities over the whole session not measured)\n");
         // C: the owner's named refusals
         var refused = native.Select(l => Missing.Match(l)).Where(m => m.Success).GroupBy(m => m.Groups[1].Value).ToList();
         sb.Append($"  - activities this machine refused to show (named, the copy's own idle instead): {refused.Count} copy(ies)")

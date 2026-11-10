@@ -114,8 +114,11 @@ public static class Briefing
         }
         catch (Exception ex) { sb.Append($"## Link\n\n(not read: {ex.GetType().Name}: {ex.Message})\n\n"); }   // never the briefing's end
         // WO-215 G: the copies' bodies, one line per contract, in plain words (the end of the Link section)
-        try { sb.Append(W215Section.Lines(inp.AnimSession, NativeLines(inp).ToList(), AgentLines(inp).ToList(), Kcd(inp).ToList())).Append('\n'); }
+        try { sb.Append(W215Section.Lines(inp.AnimSession, NativeLines(inp).ToList(), AgentLines(inp).ToList(), Kcd(inp).ToList(), inp.Logs.ContainsKey(SessionRule.NoteEntry))).Append('\n'); }
         catch (Exception ex) { sb.Append($"- **the copies' bodies** (WO-215): not read ({ex.GetType().Name}: {ex.Message})\n\n"); }
+        // WO-216 I: the rest of the body, one line per contract, in plain words
+        try { sb.Append(W216Section.Lines(NativeLines(inp).ToList(), AgentLines(inp).ToList())).Append('\n'); }
+        catch (Exception ex) { sb.Append($"- **the rest of the body** (WO-216): not read ({ex.GetType().Name}: {ex.Message})\n\n"); }
         Crashes(inp, sb);
         Session(inp, sb);
         Marks(inp, sb);

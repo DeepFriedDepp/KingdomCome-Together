@@ -22,5 +22,9 @@ public static partial class Protocol
     public const byte NpcAnimUp = 0x7A, NpcAnimDown = 0x7B;
     public const int NpcAnimScopeLen = 34;
     public const int NpcAnimMaxBodies = 40;
-    public const int NpcAnimBodyMax = 1 + NpcAnimMaxBodies * (1 + MaxNpcNameLen + 2 + 2 * NpcAnimScopeLen);
+    /// <summary>WO-216 C: a body carries up to four 34-byte records -- its FullBody and UpperBody scopes (ids 0, 1) and the one activity
+    /// line's two (0xA1 the NPC-state activity, the wire's 30 bytes at +1; 0xA2 the hands, left at +1, right at +17).</summary>
+    public const int NpcAnimMaxRecords = 4;
+    public const byte NpcAnimLineActivity = 0xA1, NpcAnimLineHands = 0xA2;
+    public const int NpcAnimBodyMax = 1 + NpcAnimMaxBodies * (1 + MaxNpcNameLen + 2 + NpcAnimMaxRecords * NpcAnimScopeLen);
 }

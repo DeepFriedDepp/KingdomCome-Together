@@ -41,7 +41,8 @@ public static partial class Protocol
     public const int ExtraMaxRows = 12;
     public const int ExtraFragMax = 95, ExtraTagsMax = 159;
     public const int ExtraBodyMin = 2 + 1 + 1 + 2;                                    // [kind][count] + a 1-char name + a gait mask
-    public const int ExtraBodyMax = 2 + ExtraMaxRows * (1 + MaxNpcNameLen + 1 + 1 + MaxNpcNameLen);   // the widest kind (looks: two names)
+    public const int ExtraBodyMax = 2 + ExtraMaxRows * (1 + MaxNpcNameLen + 1 + 1 + MaxNpcNameLen);   // the widest kind (looks: two names); WO-216's
+                                                                                                     // outfit row (one a frame, 1+64+1+40x16) fits under it
 
     public const byte LookNobody = 0, LookHostPlayer = 1, LookPeer = 2, LookNpc = 3;
 }
@@ -58,6 +59,8 @@ public sealed record ExtraRow
     public ulong AlignGuid { get; init; }
     public byte Flags { get; init; }
     public byte TargetKind { get; init; }
+    /// <summary>WO-216 kind 7 (Outfit): the item classes the host's NPC wears (16 bytes each).</summary>
+    public List<byte[]> Worn { get; init; } = new();
     /// <summary>WO-200 kind 5 (Vitals): the host's own health and stamina of its NPC.</summary>
     public float Health { get; init; }
     public float Stamina { get; init; }
@@ -120,6 +123,11 @@ public static class ExtraCodec
                 case Protocol.ExtraKindMount:    // WO-200 II.2: [horseLen][horse] -- empty = on foot
                     PutText(ms, r.Target, Protocol.MaxNpcNameLen);
                     break;
+                case Protocol.ExtraKindOutfit:   // WO-216 D: [n:1] n x [class:16]
+                    if (rows.Count != 1 || r.Worn.Count > Protocol.OutfitMaxItems || r.Worn.Any(w => w.Length != 16)) throw new ArgumentException("an outfit travels alone, 16-byte classes");
+                    ms.WriteByte((byte)r.Worn.Count);
+                    foreach (var w in r.Worn) ms.Write(w);
+                    break;
                 default: throw new ArgumentException($"extra kind {kind}");
             }
         }
@@ -147,8 +155,8 @@ public static class ExtraCodec
         if (body.Length < Protocol.ExtraBodyMin || body.Length > Protocol.ExtraBodyMax) return false;
         kind = body[0];
         int count = body[1];
-        if (kind is < Protocol.ExtraKindHands or > Protocol.ExtraKindMount || count < 1 || count > Protocol.ExtraMaxRows) return false;
-        if (kind == Protocol.ExtraKindOneShot && count != 1) return false;
+        if (kind is < Protocol.ExtraKindHands or > Protocol.ExtraKindOutfit || count < 1 || count > Protocol.ExtraMaxRows) return false;
+        if ((kind == Protocol.ExtraKindOneShot || kind == Protocol.ExtraKindOutfit) && count != 1) return false;
         int o = 2;
         for (int i = 0; i < count; i++)
         {
@@ -197,6 +205,16 @@ public static class ExtraCodec
                 {
                     if (!GetText(body, ref o, Protocol.MaxNpcNameLen, true, out var horse)) return false;
                     rows.Add(new ExtraRow { Name = name, Target = horse });
+                    break;
+                }
+                case Protocol.ExtraKindOutfit:
+                {
+                    if (o >= body.Length) return false;
+                    int n = body[o++];
+                    if (n > Protocol.OutfitMaxItems || o + n * 16 > body.Length) return false;
+                    var worn = new List<byte[]>(n);
+                    for (int k = 0; k < n; k++) { worn.Add(body.Slice(o, 16).ToArray()); o += 16; }
+                    rows.Add(new ExtraRow { Name = name, Worn = worn });
                     break;
                 }
                 default: return false;

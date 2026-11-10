@@ -12,6 +12,26 @@ namespace KcdMp.LogPack;
 /// <summary>One file for the bundle: its name inside it, and where its bytes come from (a path, read with full sharing, or bytes).</summary>
 public sealed record SourceFile(string EntryName, string? Path = null, byte[]? Bytes = null);
 
+/// <summary>WO-216 I: which session probe file belongs to this launch (pure; Wo216LogTests).</summary>
+public static class SessionRule
+{
+    public const string NoteEntry = "anim/session-file-note.txt";
+    public const string NoSessionFile = "no session file for this launch";
+
+    /// <summary>The game's own start: kcd.log's "Log Started at 2026-11-09  09:33:05" (local time), or null.</summary>
+    public static DateTime? LaunchTime(string kcdHead)
+    {
+        var m = System.Text.RegularExpressions.Regex.Match(kcdHead ?? "", @"Log Started at (\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2}:\d{2})");
+        if (!m.Success) return null;
+        return DateTime.TryParseExact(m.Groups[1].Value + " " + m.Groups[2].Value, "yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture,
+                                      DateTimeStyles.AssumeLocal, out var t) ? t : null;
+    }
+
+    /// <summary>A file last written before the launch (a minute's slack for the clock's coarse stamp) is an earlier session's. Unknown
+    /// times keep the file (the briefing reads its own times).</summary>
+    public static bool Stale(DateTime? launch, DateTime? lastWrite) => launch is { } l && lastWrite is { } w && w < l.AddSeconds(-60);
+}
+
 public sealed class PackOptions
 {
     /// <summary>The largest part. Discord's free per-file limit is 20 MB (50 MB with Nitro Basic): 19 MB leaves room.</summary>
@@ -226,22 +246,48 @@ public static class Packer
         return sources;
     }
 
-    /// <summary>WO-215 G: the session probe's files (beside kcd.log, like the detail file) go into the anim folder too.</summary>
+    /// <summary>WO-215 G: the session probe's files (beside kcd.log, like the detail file) go into the anim folder too.
+    /// WO-216 I: only a file written during this launch of the game -- the probe opens it afresh at its first line of a launch, so a launch
+    /// with probe_all off leaves the earlier session's file beside kcd.log. A file last written before the game's own start (kcd.log's
+    /// "Log Started at") is left out, and the bundle says so (anim/session-file-note.txt: "no session file for this launch").</summary>
     internal static IReadOnlyList<SourceFile> ArrangeAnimSession(IReadOnlyList<SourceFile> sources)
     {
         var outp = sources.ToList();
+        DateTime? launch = null;
+        try
+        {
+            var kcd = outp.FirstOrDefault(s => s.EntryName == "kcd.log");
+            if (kcd is not null && Read(kcd) is { } kb) launch = SessionRule.LaunchTime(Encoding.UTF8.GetString(kb, 0, Math.Min(kb.Length, 4096)));
+        }
+        catch { }
+        var notes = new List<string>();
         foreach (var (name, entry) in new[] { (AnimStream.SessionFileName, AnimStream.SessionEntry), (AnimStream.SessionPrevName, AnimStream.SessionPrevEntry) })
         {
             if (outp.Any(s => s.EntryName == entry)) continue;
-            if (outp.FirstOrDefault(s => s.EntryName == name) is { } top) { outp[outp.IndexOf(top)] = top with { EntryName = entry }; continue; }
-            try
+            SourceFile? found = null;
+            if (outp.FirstOrDefault(s => s.EntryName == name) is { } top) { outp.Remove(top); found = top with { EntryName = entry }; }
+            else
             {
-                var kcd = outp.FirstOrDefault(s => s.EntryName == "kcd.log" && s.Path is not null);
-                string? dir = kcd is null ? null : System.IO.Path.GetDirectoryName(kcd.Path);
-                if (dir is not null && File.Exists(System.IO.Path.Combine(dir, name))) outp.Add(new SourceFile(entry, System.IO.Path.Combine(dir, name)));
+                try
+                {
+                    var kcd = outp.FirstOrDefault(s => s.EntryName == "kcd.log" && s.Path is not null);
+                    string? dir = kcd is null ? null : System.IO.Path.GetDirectoryName(kcd.Path);
+                    if (dir is not null && File.Exists(System.IO.Path.Combine(dir, name))) found = new SourceFile(entry, System.IO.Path.Combine(dir, name));
+                }
+                catch { }
             }
-            catch { }
+            if (found is null) continue;
+            DateTime? written = null;
+            try { if (found.Path is not null && File.Exists(found.Path)) written = File.GetLastWriteTime(found.Path); } catch { }
+            if (SessionRule.Stale(launch, written))
+            {
+                notes.Add($"{name}: last written {written:yyyy-MM-dd HH:mm:ss}, before this launch ({launch:yyyy-MM-dd HH:mm:ss}) -- left out");
+                continue;
+            }
+            outp.Add(found);
         }
+        if (notes.Count > 0)
+            outp.Add(new SourceFile(SessionRule.NoteEntry, null, Encoding.UTF8.GetBytes(SessionRule.NoSessionFile + "\n" + string.Join("\n", notes) + "\n")));
         return outp;
     }
 

@@ -13,6 +13,9 @@ public class Wo215Tests
     public void Every_switch_ships_on_and_the_twin_names_turn_one_off()
     {
         Assert.All(W215Switch.Names, n => Assert.False(W215Switch.TwinOff(null, n)));
+        // WO-216 A.4: the route ships off; every other WO-215 switch ships on
+        Assert.False(W215Switch.DefaultOn("route"));
+        Assert.All(W215Switch.Names.Where(n => n != "route"), n => Assert.True(W215Switch.DefaultOn(n)));
         Assert.True(W215Switch.TwinOff("route", "route"));
         Assert.False(W215Switch.TwinOff("route", "gait"));
         Assert.All(W215Switch.Names, n => Assert.True(W215Switch.TwinOff("all", n)));

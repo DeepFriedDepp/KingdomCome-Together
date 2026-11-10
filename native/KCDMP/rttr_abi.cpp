@@ -872,6 +872,58 @@ void* find_soul_by_guid(const unsigned char guid[16]) {
     return plausible_pointer(found) ? found : nullptr;
 }
 
+// WO-216 D: the soul's worn item classes -- the keys of its EquipmentManager's two maps (armour and weapons by class id).
+int soul_equipped(void* soul, unsigned char (*out)[16], int max) {
+    if (!soul || !out || max <= 0) return -1;
+    Api api{};
+    if (!resolve(api)) return -1;
+    void* em = read_object_property(KCDMP_SITE_CALL("rttr::soul_equipped/EquipmentManager"), api, "wh::rpgmodule::Soul", soul, "EquipmentManager", g_layout);
+    if (!plausible_pointer(em)) return -1;
+    static const char* em_names[] = {"wh::entitymodule::EquipmentManager", "wh::entitymodule::C_EquipmentManager"};
+    Type t_em{};
+    const char* chosen = nullptr;
+    if (!resolve_type(api, em_names, 2, &t_em, &chosen)) return -1;
+    int n = 0;
+    bool anyMap = false;
+    for (const char* prop : {"EquippedArmorsByClassId", "EquippedWeaponsByClassId"}) {
+        InstanceBuf inst{};
+        inst.build(g_layout, t_em, em);
+        const std::string_view pn{prop};
+        Variant map_v{};
+        if (!call_get_property_value(KCDMP_SITE_CALL("rttr::soul_equipped/map"), api.get_property_value, &t_em, &map_v, &pn, inst.bytes)) continue;
+        alignas(16) unsigned char view[kViewBufBytes]{};
+        if (!call_create_view(api.create_assoc_view, &map_v, view)) { call_variant_dtor(api.variant_dtor, &map_v); continue; }
+        anyMap = true;
+        alignas(16) unsigned char it[kIterBufBytes]{}, it_end[kIterBufBytes]{};
+        call_view_begin(api.view_begin, view, it);
+        call_view_end(api.view_end, view, it_end);
+        alignas(16) unsigned char pr[kPairBufBytes]{};
+        for (int k = 0; k < 256 && n < max; ++k) {
+            bool more = false;
+            if (!call_iter_ne(api.iter_not_equal, it, it_end, &more) || !more) break;
+            if (call_iter_deref(api.iter_deref, it, pr)) {
+                void* ka = nullptr;
+                std::memcpy(&ka, reinterpret_cast<Variant*>(pr)->data, sizeof(ka));
+                if (plausible_pointer(ka)) {
+                    KCDMP_FAULT_READ(rs, "rttr::soul_equipped/key");
+                    unsigned char g[16]{};
+                    if (fault::guarded(rs, [&] { std::memcpy(g, ka, 16); })) {
+                        bool zero = true;
+                        for (unsigned char b : g) if (b) { zero = false; break; }
+                        if (!zero) std::memcpy(out[n++], g, 16);
+                    }
+                }
+            }
+            if (!call_iter_inc(api.iter_preinc, it)) break;
+        }
+        call_void1(reinterpret_cast<void(*)(void*)>(api.iter_dtor), it);
+        call_void1(reinterpret_cast<void(*)(void*)>(api.iter_dtor), it_end);
+        call_void1(reinterpret_cast<void(*)(void*)>(api.view_dtor), view);
+        call_variant_dtor(api.variant_dtor, &map_v);
+    }
+    return anyMap ? n : -1;
+}
+
 bool apply_damage(const unsigned char guid[16], float stamina, float health,
                   bool suppress_hit_reaction) {
     Api api{};

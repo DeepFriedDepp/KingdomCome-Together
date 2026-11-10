@@ -4,6 +4,7 @@
 #include "crash_capture.h"
 #include "pipe_server.h"
 #include "wo208.h"
+#include "wo216.h"
 #include "wo209.h"
 #include "wo214.h"
 #include "mannequin_read.h"
@@ -729,6 +730,13 @@ void serve(HANDLE h) {
                 const bool ran = run_sync_bounded<rttr::SwingResult>(
                     [entityId, spec](rttr::SwingResult& result) {
                         if (kcdmp::wo209::row_attack(entityId, spec.c_str())) { result = rttr::SwingResult::Ok; return; }   // WO-209 B: the copy's own attack
+                        // WO-216 F.4 / G: the owner plays the host's row on its copy (never "owner-owns"): poses for a fight with a player,
+                        // npc_fights for a fight among the host's NPCs; reaction rows keep WO-214's own path below
+                        if (kcdmp::wo208::probe_owned(entityId) && !kcdmp::wo214rules::reaction_row(spec.c_str()) &&
+                            kcdmp::wo216::on(kcdmp::wo209::mirror_holds_player(entityId) ? kcdmp::wo216rules::kBitPoses : kcdmp::wo216rules::kBitNpcFights)) {
+                            result = static_cast<rttr::SwingResult>(kcdmp::wo208::owner_play_row(entityId, spec.c_str()));
+                            return;
+                        }
                         // WO-208 A.1: one owner -- WO-214 D.1/D.2 (reaction_rows): the host's hit and death reactions play on an owned copy too
                         if (kcdmp::wo214rules::owner_refuses_row(kcdmp::wo208::probe_owned(entityId), kcdmp::wo214::on(kcdmp::wo214rules::kBitReactionRows), spec.c_str())) {
                             result = kcdmp::wo214::on(kcdmp::wo214rules::kBitReactionRows) ? rttr::SwingResult::OwnerOwns : rttr::SwingResult::QueueFaulted;

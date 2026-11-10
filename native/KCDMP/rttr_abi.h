@@ -539,6 +539,12 @@ bool combat_history(void* victim, void* attacker, float seconds, bool* out);
 /// Soul.Position (world, metres).
 bool soul_position(void* soul, float out[3]);
 
+// ---- WO-216 D -----------------------------------------------------------------
+/// The item classes a soul wears: the keys of Soul.EquipmentManager.EquippedArmorsByClassId and .EquippedWeaponsByClassId (the maps the
+/// game's REST API serves as SoulList/<soul>/EquipmentManager/...), 16 bytes each, as the item class id lies in memory. Returns the count
+/// (at most max), -1 when the reflection could not read them. Main thread.
+int soul_equipped(void* soul, unsigned char (*out)[16], int max);
+
 /// Walk SoulList.SoulsByGuid; `visit` returns true to stop. Returns the
 /// number of souls visited.
 int for_each_soul(bool (*visit)(void* soul, void* ctx), void* ctx);

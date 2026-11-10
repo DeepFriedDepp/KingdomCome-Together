@@ -152,7 +152,8 @@ public static class W213Switch
 public static class LinkState
 {
     public static bool IsStateType(int type) => type is Protocol.Position or Protocol.Ghost or Protocol.NpcStateUp or Protocol.NpcStateDown
-        or Protocol.NpcStateQDown or Protocol.NpcAnimUp or Protocol.NpcAnimDown or Protocol.NpcOppUp or Protocol.NpcOppDown;
+        or Protocol.NpcStateQDown or Protocol.NpcAnimUp or Protocol.NpcAnimDown or Protocol.NpcOppUp or Protocol.NpcOppDown
+        or Protocol.NpcRouteUp or Protocol.NpcRouteDown;   // WO-216 A: the host's NPCs' movement requests
 }
 
 /// <summary>

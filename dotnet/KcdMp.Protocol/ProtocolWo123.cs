@@ -114,6 +114,8 @@ public static partial class Protocol
         (NpcOppUp,      NpcOppDown,      "npc-opp",      JoinHeaderLen + 1, JoinHeaderLen + NpcOppBodyMax, JoinFrom.Host),
         // WO-210 A.3/A.4: the joiner asks the host for bodies' whole-body state again (ProtocolWo210.cs) -- joiner to host only
         (NpcAnimAskUp,  NpcAnimAskDown,  "npc-anim-ask", JoinHeaderLen + 1, JoinHeaderLen + NpcAnimAskBodyMax, JoinFrom.Joiner),
+        // WO-216 A: the host's NPCs' movement requests, as state (ProtocolWo216.cs) -- host to joiner only
+        (NpcRouteUp,    NpcRouteDown,    "npc-route",    JoinHeaderLen + 1, JoinHeaderLen + NpcRouteBodyMax, JoinFrom.Host),
     };
 
     /// <summary>The JoinWire row for an up type, or null.</summary>

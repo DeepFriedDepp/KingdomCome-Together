@@ -65,6 +65,7 @@ public partial class GameBridge
     {
         if (!W137Joiner) return;
         Interlocked.Increment(ref _w208StreamFramesIn);
+        await Wo216OnLinesAsync(body);   // WO-216 C: the one activity line's records (the activity, the hands) first, from this same message
         if (!Wo208Rules.TryRekeyNpcAnim(body, name => _npcEntityIds.TryGetValue(name, out uint e) ? e : 0u, out byte[] op, out int known, out int unknown))
         {
             Interlocked.Increment(ref _w208StreamBad);

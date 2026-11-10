@@ -250,6 +250,7 @@ struct Tracked {
     bool        haveAttr = false;
     R::Sent     sent;
     bool        culled = false;
+    bool        dormant = false;    // WO-216 A: the census held it back this tick (no route line either)
     double      bandAt = 0;         // WO-213 D.2: the slot of this NPC's last send (its band's cadence)
     float       sentRot = 0;        // WO-214 A.0/A.1: the yaw that went out last (the change test's rotation)
 };
@@ -477,7 +478,8 @@ void sender_tick(double now) {
         ++resolved;
         // WO-215 D.1: a dormant body (an encounter pool's parked wanderer: no action on its full body, no brain running or no physics) is
         // not a copy anyone should see -- not streamed until it wakes (the joiner's guard keeps its own one parked meanwhile)
-        if (wo215::dormant_host(t.eid, e, t.name.c_str(), now)) continue;
+        if (wo215::dormant_host(t.eid, e, t.name.c_str(), now)) { t.dormant = true; continue; }
+        t.dormant = false;
         const float prevX = t.s.x, prevY = t.s.y;   // WO-214 A.0: the previous tick's read (a window's pick prefers bodies that move)
         t.s.x = x; t.s.y = y; t.s.z = z; t.s.rot = yaw; t.s.notHuman = t.notHuman;
         if (!t.haveAttr || std::find(attrIdx.begin(), attrIdx.end(), idx) != attrIdx.end()) read_attrs(t);
@@ -649,6 +651,11 @@ void set_frame_callback(FrameFn fn) { g_frameFn = fn; }
 
 void for_each_tracked(void (*fn)(const char* name, uint32_t eid, void* ctx), void* ctx) {
     for (const auto& t : g_tracked) if (t.eid) fn(t.name.c_str(), t.eid, ctx);
+}
+
+void for_each_streamed(void (*fn)(const char* name, uint32_t eid, bool notHuman, void* ctx), void* ctx) {
+    if (!g_on.load(std::memory_order_relaxed)) return;
+    for (const auto& t : g_tracked) if (t.eid && !t.culled && !t.dormant) fn(t.name.c_str(), t.eid, t.notHuman, ctx);
 }
 
 void install() {

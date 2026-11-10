@@ -4,6 +4,7 @@
 #include "wo202.h"
 #include "wo202_rules.h"
 #include "npc_drive.h"
+#include "wo216.h"
 #include "wo187.h"
 #include "wo187_rules.h"
 #include "wo209.h"
@@ -1393,11 +1394,17 @@ void tick() {
             ri.streamVz = stream_vz(s);
             if (ri.streamMps > 0.0f) stream_vel(s, &ri.streamVx, &ri.streamVy);
             ri.figure = figure; ri.beast = p.beast; ri.parented = parented;
+            ri.horse = p.beast && npcscan::body_kind(e) == 1;   // WO-216 E
             ri.human = p.human; ri.physics = !p.noPhys;
             // WO-215 A: this body silent while every stream is quiet is a link stall, not its NPC's stop (the stream is moved-gated)
             ri.stall = wo215rules::link_stall(silent215, now - g_anySampleAt.load(std::memory_order_relaxed), stopAfter215);
             ri.gapS = static_cast<float>(s.gapEma > 0.0 ? s.gapEma : 0.1);
-            ri.fight = (s.flags & (0x04 | 0x08)) != 0 || now < p.holdUntil || wo209::mirrored(p.eid);
+            ri.newestAgeS = static_cast<float>((std::min)(1.0, (std::max)(0.0, now - nsm.at)));
+            // WO-216 A: a fight is a swing, the emitter's own engagement, a hold or a mirrored opponent -- the drawn bit alone is no fight (a
+            // villager's tool reads as a weapon in hand: WO-214 E; b1's walkers carrying one stayed on the writer and slid). The twin: as 0.64.2.
+            ri.fight = wo216::on(wo216rules::kBitRouteReplay)
+                           ? ((s.flags & (0x08 | 0x20)) != 0 || now < p.holdUntil || wo209::mirrored(p.eid))
+                           : ((s.flags & (0x04 | 0x08)) != 0 || now < p.holdUntil || wo209::mirrored(p.eid));
             ri.now = now;
             const wo215::RouteOut ro = wo215::route_frame(ri);
             if (ro.v == wo215::Verdict::Routed) {
