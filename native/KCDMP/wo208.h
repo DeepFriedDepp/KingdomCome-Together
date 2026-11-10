@@ -58,4 +58,17 @@ bool posture_holds(uint32_t eid);
 // missing their host's activity now
 void w215_counters(uint32_t out[6], uint32_t* missingNow);
 
+// WO-217 A.0 / 0.2 (main thread): the pieces wo217.cpp's attempt lines and seated-copy rule read
+bool fragment_name_of(uint32_t eid, uint32_t frag, char* out, size_t n);   // the body's own mannequin name of a fragment
+const char* pfam_text(uint8_t fam);                                          // wo210rules::PFam's name
+bool pfam_is_posture(uint8_t fam);
+// the context of an attempt's open: WO-141's activity for the body, its path, the neutral rule, the copy's distance from the local player and
+// from the activity's object (-1: none)
+void place_context(uint32_t eid, const char* name, char* act, size_t n, int* path, bool* neutral, float* dist, float* objDist);
+// 0.2: the watchdog's newest word on a copy -- its host NPC seated (sitting or lying) and the copy in that posture; false: not owned
+bool seat_state(uint32_t eid, bool* hostSeated, bool* copySeated);
+double last_install_age_s(uint32_t eid);
+// WO-217 0.2: the copy's own seat released the game's way (the agent's op-140 release: WO-160's stance reset), at most every 3 s
+bool ask_release(uint32_t eid, const char* name);   // seconds since the owner last installed an action on this copy (1e9: never)
+
 } // namespace kcdmp::wo208

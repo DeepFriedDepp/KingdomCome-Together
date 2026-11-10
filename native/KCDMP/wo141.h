@@ -72,6 +72,10 @@ constexpr uint8_t kKindPlayer = 2;
 // WO-215 C (main thread): the NPC-state path's hold on a body's activity -- 0 none (no stance or unstance desired for it), 1 placing (desired,
 // not in step yet), 2 in step, 3 refused (the planner gave up on it: WO-160's give-up window).
 int activity_path(const char* name);
+// WO-217 A.0 (main thread): the activity WO-141 holds for this body (stance, unstance, their objects), its object's guid (0: none)
+bool activity_text(const char* name, char* out, size_t n, uint64_t* objGuid);
+// WO-217 0.2 (main thread): the body's own NPC state sits or lies on an object now (a seat or a bed; never a workstation)
+bool object_stance_now(uint32_t eid);
 
 // WO-216 C (the host): a body's activity as the wire's 30 bytes, and the item classes in its hands (16 bytes each; zero = empty), read
 // from its NPC-state context now -- the line the host's NpcAnim body carries. Main thread. False when the body has no context.

@@ -225,6 +225,9 @@ local function world()
     w.pendingOpen = {}; w.sessions = {}; w.partial = {}; w.stash = {}; w.itemReq = {}; w.hostTaken = {}; w.hostVerify = {}
     w.bodySig = {}; w.chestSess = {}
     w.bodies, w.items, w.chests = true, true, true
+    -- WO-217: this suite is WO-134's own loot -- the path with mp_loot_live and mp_item_flags off (WO-217's live loot:
+    -- Test-WO217Synthetic)
+    if KCD2MP_W217Cfg then KCD2MP_W217Cfg("loot_live=off,item_flags=off") end
     LOG = {}; TOASTS = {}; LOOTS = {}; TIMERS = {}
 end
 local function asJoiner()

@@ -86,6 +86,8 @@ int read_all_scopes(uint32_t eid, ScopeInfo* out, int max);
 // WO-207 G.1: flags = each queued action's flags (+0x2C) beside it (the probe tells a never-started action from one waiting to resume).
 struct QueueInfo { int n = -1; int kept = 0; char first[48]{}; int32_t firstPrio = 0; const void* acts[16]{}; uint32_t flags[16]{}; int32_t prio[16]{}; int nacts = 0; };
 QueueInfo queue_info(uint32_t eid);
+// WO-217 A.1 #2 (main thread, read-only): a queued action's class by its RTTI ("CAnimActionLooking"), "" when unreadable.
+std::string action_class(const void* act);
 // WO-190 0.1 (main thread, read-only): the body's Mannequin tag state (its action controller's context +0x10, WO-100's read), n <= 20 bytes.
 bool tag_state(uint32_t eid, uint8_t* out, size_t n);
 // WO-210 0.3: a fragment's name in the body's own mannequin table (the game's fragment-ID tag names), and the reverse (main thread).

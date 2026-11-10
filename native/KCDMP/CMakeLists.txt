@@ -90,6 +90,8 @@ add_library(KCDMP SHARED
     wo214.cpp
     wo215.cpp
     wo216.cpp
+    wo217.cpp
+    wo217_carts.cpp
 )
 
 target_include_directories(KCDMP PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

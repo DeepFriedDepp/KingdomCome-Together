@@ -46,6 +46,7 @@ public partial class GameBridge
         Wo214Tick(n);                                     // WO-214: the native word every 2 s, its status every 30 s
         Wo215Tick(n);                                     // WO-215: the native word every 2 s, its status every 30 s
         Wo216Tick(n);                                     // WO-216: the native word every 2 s, its status every 30 s
+        Wo217Tick(n);                                     // WO-217: the native word every 2 s, its status every 30 s
     }
 
     private void Wo201OnEventMore(string name, string? arg)

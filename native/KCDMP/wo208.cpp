@@ -4,6 +4,8 @@
 // WO-208: the native half's switch word and status (wo208.h).
 #include "wo208.h"
 #include "wo216.h"
+#include "wo217.h"
+#include "wo200.h"
 #include "wo141.h"
 #include "wo208_rules.h"
 #include "wo203.h"
@@ -581,8 +583,12 @@ struct OwnCopy {
     // WO-215 C: the host activity this copy's installs have not shown (same host fragment), how often, since when; refused until
     uint32_t c215Frag = 0xFFFFFFFFu; int c215Tries = 0; double c215At = -1e9, c215RefusedUntil = 0; bool c215Missing = false;
     double hostEmptySince = -1, dormantAskAt = -1e9;   // WO-215 D.1: the host NPC's whole body empty since
+    wo217::PlaceEp ep217;       // WO-217 A.0: the attempt the host NPC's posture opened on this copy
+    bool seatHost = false, seatCopy = false; double seatAt = -1e9;   // WO-217 0.2: the watchdog's newest seat word
+    double unclogAt = -1e9;     // WO-217 A.1 #2: the last time its own stale actions were stopped
 };
 std::atomic<uint32_t> c_emptyStretches{0};
+std::atomic<uint32_t> c_unclogs{0}, c_unclogStopped{0};   // WO-217 A.1 #2
 std::atomic<uint64_t> c_emptyMs{0};
 // WO-214 C.1: an empty stretch ends (the body has an action again, the owner let it go, it died or walked out of 60 m) -- told when over 0.3 s
 void empty_close(OwnCopy& oc, double now, const char* why) {
@@ -596,6 +602,7 @@ void empty_close(OwnCopy& oc, double now, const char* why) {
 }
 std::unordered_set<uint32_t> g_postureHeld;   // WO-213 E.3: copies whose posture holds (the watchdog's last check), main thread
 std::unordered_map<uint32_t, OwnCopy> g_owned;   // main thread
+std::unordered_map<uint32_t, double> g_lastInstall;   // WO-217 0.2: the owner's last install per copy (main thread)
 std::unordered_set<uint32_t> g_readyHeld;          // WO-210 D.3: copies whose combat-mode hold the host NPC's streamed state set
 std::atomic<uint32_t> c_readyHolds{0}, c_readyReleases{0};
 std::atomic<uint32_t> c_oInstalls{0}, c_oRefusals{0}, c_oStale{0}, c_oWithdraws{0}, c_oSteps{0}, c_oPulses{0}, c_oApplied{0}, c_oCopies{0}, c_oFar{0};
@@ -721,11 +728,14 @@ bool own_handover(uint32_t eid, OwnCopy& oc, double now, uint8_t path) {
                 if (oc.own[0].act) own_retire(oc, oc.own[0], now, "the hand-over");
                 oc.own[0].act = act; oc.own[0].hostAct = hs->act; oc.own[0].frag = hs->frag; oc.own[0].prio = hs->prio; oc.own[0].queuedAt = now; oc.own[0].started = false;
                 installed = true;
+                wo217::place_note(oc.ep217, wo217::Note::InstallOk);
+                g_lastInstall[eid] = now;
             } else if (wo214::on(wo214rules::kBitOwnerBase)) {
                 // WO-214 C.1 (owner_base): the host's posture refused here (a work fragment whose tool or object this copy has not) --
                 // a base under it in the same frame, the copy's own neutral idle, never an empty body (the field: tsem_man_11 asked for
                 // "working" 23 times, refused every time, FullBody empty for 51 s at 53 m). The watchdog still asks for the posture.
                 wo214::note_posture_refused();
+                wo217::place_note(oc.ep217, wo217::Note::Refused, rttr::swing_result_name(r));
                 oc.lastPath = wo210rules::kPathEmptyRefused; oc.lastPathAt = now;
                 HostScope b{};
                 const bool nk = neutral_idle(eid, &b);
@@ -824,6 +834,15 @@ void own_apply(uint32_t eid, OwnCopy& oc, int cm, const HostScope hsc[2], const 
     }
     wo187::ScopeInfo cs[16];
     const int cn = wo187::read_all_scopes(eid, cs, 16);
+    {   // WO-217 A.0: the attempt line -- first, so this pass's install of a new host action is that attempt's
+        const bool hostHave = have[0];
+        const wo210rules::PFam hf = hostHave ? pfam_of(eid, hsc[0].cls, hsc[0].frag) : wo210rules::PFam::Empty;
+        const bool cok = cn > 0 && cs[0].ok;
+        const wo210rules::PFam cf = !cok || cs[0].empty ? wo210rules::PFam::Empty : pfam_of(eid, class_id(cs[0].action), cs[0].frag);
+        wo217::place_tick(eid, oc.name.c_str(), oc.ep217, hostHave, hostHave ? hsc[0].act : 0, hostHave ? hsc[0].frag : 0, static_cast<uint8_t>(hf),
+                          cok && !cs[0].empty ? cs[0].frag : 0xFFFFFFFFu, static_cast<uint8_t>(cf), cok ? cs[0].action : "-",
+                          cok && !cs[0].empty && is_ours(oc, cs[0].act), now);
+    }
     // WO-209 C.2 (mp_copy_oneshot_request): the host's work one-shot runs on the copy as the game's own NPC-state request (WO-143's) --
     // the owner holds the full body while it runs: nothing installed over it, no base given under it
     const bool shot = wo209::on(wo209rules::kBitShotRequest) && wo143::shot_in_flight(eid);
@@ -845,7 +864,7 @@ void own_apply(uint32_t eid, OwnCopy& oc, int cm, const HostScope hsc[2], const 
     const bool queueFull = wo209::fix_on(wo209rules::kFixOwnerQueueCap) && wo209rules::owner_queue_full(qi.n);
     if (queueFull) c_oQueueFull.fetch_add(1);
     for (int k = 0; k < 2; ++k) {
-        if ((shot || aiRuns || rowRuns) && k == 0) continue;
+        if ((shot || aiRuns || rowRuns) && k == 0) { wo217::place_note(oc.ep217, wo217::Note::Held, shot ? "one-shot" : aiRuns ? "its-own-attack" : "row"); continue; }
         const HostScope* hs = have[k] ? &hsc[k] : nullptr;
         const Fam fam = hs ? fam_of(eid, hs->cls, hs->frag) : Fam::Empty;
         Probe::Scope& o = oc.own[k];
@@ -880,6 +899,7 @@ void own_apply(uint32_t eid, OwnCopy& oc, int cm, const HostScope hsc[2], const 
                 const uint32_t n = c_oStale.fetch_add(1) + 1;
                 if (n <= 40 || n % 100 == 0) logf("WO208-OWN stale npc=%s frag=%u not started in %.0f ms -- removed (#%u)", oc.name.c_str(), o.frag, view.ageS * 1000.0, n);
                 own_retire(oc, o, now, "stale");
+                if (k == 0) wo217::place_note(oc.ep217, wo217::Note::Stale, qi.n > 0 ? qi.first : "an-empty-queue");
                 if (k == 0) { oc.lastPath = wo210rules::kPathStale; oc.lastPathAt = now; }   // A.2 path 3: the watchdog charges a breach to it
                 break;
             }
@@ -891,16 +911,41 @@ void own_apply(uint32_t eid, OwnCopy& oc, int cm, const HostScope hsc[2], const 
                 // player here (the engine's AI attack: his engine resolves the blow), once per host action; refused -> the fragment as before
                 // (started on the state's arrival, owner_tick's early path -- or refused there: the delayed state never asks again)
                 if (k == 0 && wo209::attack_ai_wants(eid, hs->cls, hs->frag)) break;
-                if (queueFull) break;   // the host's action waits for room (the queue cap above)
+                // WO-217 A.1 #2 (placement): a queue held full by the copy's own never-started look / movement actions is drained the game's
+                // way first (IAction::Stop on those only; ours and running ones untouched), at most once a second; the install follows
+                if (queueFull && k == 0 && now - oc.unclogAt >= wo217rules::kUnclogEveryS && wo217::on(wo217rules::kBitPlacement)) {
+                    oc.unclogAt = now;
+                    int stopped = 0; std::string names;
+                    for (int i = 0; i < qi.nacts; ++i) {
+                        void* a = const_cast<void*>(qi.acts[i]);
+                        if (!a) continue;
+                        uint32_t st = 0;
+                        if (!rd(a, 0x28, &st)) continue;
+                        const std::string cls = wo187::action_class(a);
+                        if (!wo217rules::unclog(true, true, is_ours(oc, a), st, cls.c_str())) continue;
+                        if (rttr::stop_action(a)) { ++stopped; if (names.size() < 80) { if (!names.empty()) names += ","; names += cls; } }
+                    }
+                    if (stopped) {
+                        const uint32_t kk = c_unclogs.fetch_add(1, std::memory_order_relaxed) + 1;
+                        c_unclogStopped.fetch_add(static_cast<uint32_t>(stopped), std::memory_order_relaxed);
+                        if (kk <= 200 || kk % 50 == 0)
+                            logf("WO217-UNCLOG npc=%s stopped=%d (%s) queue=%d -- the copy's own never-started actions held its queue full; the host's activity next [n=%u]",
+                                 oc.name.c_str(), stopped, names.c_str(), qi.n, kk);
+                    }
+                }
+                if (queueFull) { if (k == 0) wo217::place_note(oc.ep217, wo217::Note::QueueFull, qi.first); break; }   // the host's action waits for room (the queue cap above)
                 if (o.act) own_retire(oc, o, now, "the host's next action");
                 void* act = nullptr;
                 const rttr::SwingResult r = rttr::install_fragment(eid, hs->frag, hs->tags, hs->prio, hs->flags, &act);
                 if (r == rttr::SwingResult::Ok && act) {
                     o.act = act; o.hostAct = hs->act; o.frag = hs->frag; o.prio = hs->prio; o.queuedAt = now; o.started = false;
+                    if (k == 0) wo217::place_note(oc.ep217, wo217::Note::InstallOk);
+                    g_lastInstall[eid] = now;
                     const uint32_t n = c_oInstalls.fetch_add(1) + 1;
                     if (n <= 80 || n % 200 == 0)
                         logf("WO208-OWN install npc=%s scope=%s class=%s frag=%u prio=%d (#%u)", oc.name.c_str(), kOwnScopes[k], cls_name(hs->cls), hs->frag, hs->prio, n);
                 } else {
+                    if (k == 0) wo217::place_note(oc.ep217, wo217::Note::Refused, rttr::swing_result_name(r));
                     const uint32_t n = c_oRefusals.fetch_add(1) + 1;
                     if (n <= 40) logf("WO208-OWN refused npc=%s scope=%s class=%s frag=%u -> %s", oc.name.c_str(), kOwnScopes[k], cls_name(hs->cls), hs->frag, rttr::swing_result_name(r));
                 }
@@ -1042,6 +1087,10 @@ void own_apply(uint32_t eid, OwnCopy& oc, int cm, const HostScope hsc[2], const 
         // the same fragment is the same body, whatever class plays it (the owner installs the host's idle-state postures through a combat
         // action: d1's first watchdog took "ours, other" against "the host's, working" for the very same work fragment, 132 reseats)
         if (v != Verdict::Empty && have[0] && !cs[0].empty && cs[0].frag == hsc[0].frag) v = Verdict::Ok;
+        // WO-217 0.2: the seat word (the host NPC seated, the copy in that posture) for the writer's one-writer rule
+        oc.seatHost = hostF == PFam::Sitting || hostF == PFam::Lying;
+        oc.seatCopy = copyF == PFam::Sitting || copyF == PFam::Lying;
+        oc.seatAt = now;
         // WO-213 E.3: the copy and its host NPC both in a posture -- the position writer leaves the body alone while it holds
         if (wo213rules::posture_holds(posture(copyF), posture(hostF) || (posture(copyF) && hostF == PFam::Other), true)) g_postureHeld.insert(eid);
         else g_postureHeld.erase(eid);
@@ -1098,7 +1147,10 @@ void own_apply(uint32_t eid, OwnCopy& oc, int cm, const HostScope hsc[2], const 
                 // placement the game's planner gave up on is a named refusal (the base instead, reported missing).
                 if (line215 && (v == Verdict::MissingPosture || v == Verdict::PostureOther) && have[0]) {
                     const int np = wo141::activity_path(oc.name.c_str());
-                    if (np == 1 || np == 2) {
+                    // WO-217 A.1 (placement): a copy the neutral rule keeps from the planner is never left to an NPC-state placement that
+                    // never comes (WO-216's acceptance: every one of 247 such reseats); the owner installs the host's activity itself
+                    if (wo217rules::defer_to_npc_state(wo217::on(wo217rules::kBitPlacement), wo200::copy_neutral_always(), np)) {
+                        wo217::place_note(oc.ep217, wo217::Note::Deferred);
                         c_w215NpcState.fetch_add(1, std::memory_order_relaxed);
                         wo210::note_reseat(oc.name.c_str(), cs[0].empty ? "empty" : pfam_name(copyF), pfam_name(hostF), kPathNpcState, held, false);
                         oc.breachSince = now;
@@ -1106,6 +1158,7 @@ void own_apply(uint32_t eid, OwnCopy& oc, int cm, const HostScope hsc[2], const 
                         return;
                     }
                     if (np == 3 && now >= oc.c215RefusedUntil) {
+                        wo217::place_note(oc.ep217, wo217::Note::RefusedHere);
                         oc.c215RefusedUntil = now + 30.0;
                         oc.c215Missing = true;
                         const bool based = wo215::on(wo215rules::kBitLadder) && w215_give_base(eid, oc, now);
@@ -1128,6 +1181,7 @@ void own_apply(uint32_t eid, OwnCopy& oc, int cm, const HostScope hsc[2], const 
                         return;
                     }
                     if (++oc.c215Tries > 2) {
+                        wo217::place_note(oc.ep217, wo217::Note::RefusedHere);
                         oc.c215RefusedUntil = now + 30.0;
                         oc.c215Missing = true;
                         // B (ladder): the rung under the activity this copy cannot show -- its own idle, else the engine's (the twin: none)
@@ -1179,6 +1233,7 @@ uint8_t op_asks(const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_
 }
 
 void own_release(uint32_t eid, OwnCopy& oc, double now, const char* why, uint8_t path = wo210rules::kPathUnknown) {
+    wo217::place_close(eid, oc.name.c_str(), oc.ep217, now, "let go");
     g_postureHeld.erase(eid);   // WO-213 E.3: a copy the owner lets go of is the position writer's again
     empty_close(oc, now, "let-go");   // WO-214 C.1's instrument
     const bool alive = engine::entity_by_id(eid) != nullptr;
@@ -1355,6 +1410,7 @@ void owner_tick(double now) {
         KCDMP_FAULT_CALL(siteKd, "wo208::kd_tick");
         fault::guarded(siteKd, [&] { kdHeld = wo210kd::copy_tick(eid, oc.name.c_str(), (v.back().cm & wo210rules::kCmDown) != 0, now); });   // the newest word: a fall starts at once
         if (kdHeld) {
+            { auto kh = g_owned.find(eid); if (kh != g_owned.end()) wo217::place_note(kh->second.ep217, wo217::Note::Held, "knockdown"); }
             if (pick > 0) v.erase(v.begin(), v.begin() + pick);
             ++it;
             continue;
@@ -1625,5 +1681,52 @@ const bool kReg = wo203::reg_op(kOpConfig, &op) && wo203::reg_op(kOpStatus, &op)
                && wo203::reg_tick("w208", &tick_reg) && wo203::reg_op(kOpStreamRead, &stream_read_reg) && wo203::reg_op(kOpStreamIn, &stream_in_reg)
                && wo203::reg_op(kOpW210Asks, &asks_reg) && wo203::reg_op(kOpW210StreamForget, &forget_reg);
 } // namespace
+
+// ---- WO-217 (main thread) ----
+bool fragment_name_of(uint32_t eid, uint32_t frag, char* out, size_t n) {
+    if (!out || !n) return false;
+    out[0] = 0;
+    if (frag == 0xFFFFFFFFu) { std::snprintf(out, n, "-"); return false; }
+    const std::string s = frag_name_of(eid, frag);
+    std::snprintf(out, n, "%s", s.empty() ? "?" : s.c_str());
+    return !s.empty();
+}
+const char* pfam_text(uint8_t fam) { return wo210rules::pfam_name(static_cast<wo210rules::PFam>(fam)); }
+bool pfam_is_posture(uint8_t fam) { return wo210rules::posture(static_cast<wo210rules::PFam>(fam)); }
+void place_context(uint32_t eid, const char* name, char* act, size_t n, int* path, bool* neutral, float* dist, float* objDist) {
+    uint64_t og = 0;
+    if (!wo141::activity_text(name, act, n, &og) && act && n) std::snprintf(act, n, "none");
+    *path = wo141::activity_path(name);
+    *neutral = wo200::copy_neutral_always();
+    *dist = -1; *objDist = -1;
+    float cp[3]{}, me[3]{};
+    void* ce = engine::entity_by_id(eid);
+    if (!ce || !engine::entity_world_pos(ce, cp)) return;
+    void* pe = engine::entity_by_id(kPlayerEntity);
+    if (pe && engine::entity_world_pos(pe, me)) *dist = std::sqrt((cp[0] - me[0]) * (cp[0] - me[0]) + (cp[1] - me[1]) * (cp[1] - me[1]));
+    float op[3]{};
+    void* oe = og ? engine::entity_by_guid(og) : nullptr;
+    if (oe && engine::entity_world_pos(oe, op))
+        *objDist = std::sqrt((cp[0] - op[0]) * (cp[0] - op[0]) + (cp[1] - op[1]) * (cp[1] - op[1]) + (cp[2] - op[2]) * (cp[2] - op[2]));
+}
+bool ask_release(uint32_t eid, const char* name) {
+    static std::unordered_map<uint32_t, double> s_at;
+    const double now = npcdrive::now_s();
+    double& at = s_at[eid];
+    if (now - at < 3.0 || g_asks.size() >= 64 || !name || !*name) return false;
+    at = now;
+    g_asks.push_back({1, name});
+    return true;
+}
+double last_install_age_s(uint32_t eid) {
+    const auto it = g_lastInstall.find(eid);
+    return it == g_lastInstall.end() ? 1e9 : npcdrive::now_s() - it->second;
+}
+bool seat_state(uint32_t eid, bool* hostSeated, bool* copySeated) {
+    const auto it = g_owned.find(eid);
+    if (it == g_owned.end() || npcdrive::now_s() - it->second.seatAt > 1.0) return false;
+    *hostSeated = it->second.seatHost; *copySeated = it->second.seatCopy;
+    return true;
+}
 
 } // namespace kcdmp::wo208

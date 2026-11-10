@@ -119,6 +119,9 @@ public static class Briefing
         // WO-216 I: the rest of the body, one line per contract, in plain words
         try { sb.Append(W216Section.Lines(NativeLines(inp).ToList(), AgentLines(inp).ToList())).Append('\n'); }
         catch (Exception ex) { sb.Append($"- **the rest of the body** (WO-216): not read ({ex.GetType().Name}: {ex.Message})\n\n"); }
+        // WO-217 H: the world around the bodies (placements by reason, the seats, the loot ledger, flags, corpses, props, carts)
+        try { sb.Append(W217Section.Lines(NativeLines(inp).ToList(), Kcd(inp).ToList())).Append('\n'); }
+        catch (Exception ex) { sb.Append($"- **the world around the bodies** (WO-217): not read ({ex.GetType().Name}: {ex.Message})\n\n"); }
         Crashes(inp, sb);
         Session(inp, sb);
         Marks(inp, sb);

@@ -1386,6 +1386,25 @@ int activity_path(const char* name) {
     return d.matched ? 2 : 1;
 }
 
+bool object_stance_now(uint32_t eid) {
+    R::Activity cur;
+    if (!eid || !read_activity(eid, &cur)) return false;
+    const R::Activity a = R::normalised(cur);
+    // a seat or a bed only (a workstation, a cart seat or a kneel is not this rule's: a smith at his anvil owns his place too)
+    return (a.stance == R::kSitting || a.stance == R::kLying) && a.stanceObj != 0;
+}
+bool activity_text(const char* name, char* out, size_t n, uint64_t* objGuid) {
+    if (objGuid) *objGuid = 0;
+    if (out && n) out[0] = 0;
+    if (!name || !*name) return false;
+    auto it = g_desired.find(lower(name));
+    if (it == g_desired.end()) return false;
+    const R::Activity a = R::normalised(it->second.a);
+    if (objGuid) *objGuid = a.stanceObj ? a.stanceObj : a.unstanceObj;
+    if (out && n) { const std::string t = describe(a); std::snprintf(out, n, "%s", t.c_str()); }
+    return true;
+}
+
 // ---- WO-143: the pieces WO-143 builds on (npcstate.h) ------------------------
 namespace x {
 HMODULE xgenai() { return g_xg; }

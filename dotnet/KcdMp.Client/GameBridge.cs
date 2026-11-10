@@ -1845,6 +1845,7 @@ public partial class GameBridge(ClientConfig config)
         Wo141OnConnect(cts.Token);           // WO-141: activities (NPCs and players, the game's own state)
         Wo143OnConnect(cts.Token);           // WO-143: hands, gaits, one-shots, looks, the players' minigames on the avatars
         Wo216OnConnect(cts.Token);           // WO-216: the switches, the host's route lines (A)
+        Wo217OnConnect(cts.Token);           // WO-217: the switches
         Wo147OnConnect(cts.Token);           // WO-147: the joiner fights hostile copies, destructive quest steps checked, the leash's stats
         Wo148OnConnect(cts.Token);           // WO-148: carrying on the other screen (the carrier owns the body; the host's world decides)
         Wo154MenuOnConnect(cts.Token);       // WO-154 7b: the mod menu (the saved choices, the host's levers, fast travel)
@@ -6316,6 +6317,9 @@ public partial class GameBridge(ClientConfig config)
                 return;
             case string w216 when w216.StartsWith("w216_", StringComparison.Ordinal):   // WO-216: the switches and the status
                 Wo216OnEvent(name, arg);
+                return;
+            case string w217 when w217.StartsWith("w217_", StringComparison.Ordinal):   // WO-217: the switches, the status, its parts' events
+                Wo217OnEvent(name, arg);
                 return;
             case "w206_cfg":         // WO-206 E: mp_epoch_check, mp_research_death_from_health
             case "w206_status":      // WO-206 E: mp_w206_status

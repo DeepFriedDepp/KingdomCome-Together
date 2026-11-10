@@ -63,7 +63,7 @@ public partial class GameBridge
         if (n % 4 == 2 && W137Joiner && !_w215GhostToldMs.IsEmpty)
         {
             long now = Environment.TickCount64;
-            if (_w215GhostToldMs.Values.Any(t => now - t < 30_000)) _ = ExecLuaAsync("if KCD2MP_W215GhostFightTick then KCD2MP_W215GhostFightTick() end");
+            if (_w215GhostToldMs.Values.Any(t => now - t < 30_000)) _ = ExecLuaAsync(Wo217GhostFightCall());   // WO-217 B.1: with the mirror's opponents
         }
     }
 

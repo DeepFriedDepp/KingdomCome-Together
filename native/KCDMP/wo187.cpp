@@ -438,6 +438,8 @@ bool fragment_id(uint32_t eid, const char* name, uint32_t* out) {
     return false;
 }
 
+std::string action_class(const void* act) { return act ? short_name(rtti_name(act)) : std::string(); }
+
 QueueInfo queue_info(uint32_t eid) {
     constexpr size_t kCtrlQueueBegin = 0x50, kCtrlQueueEnd = 0x58;
     QueueInfo q;

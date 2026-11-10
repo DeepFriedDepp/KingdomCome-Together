@@ -2,6 +2,7 @@
 // GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 #include "npc_scan.h"
+#include "wo217.h"
 #include "fault_guard.h"
 #include "log.h"
 
@@ -95,7 +96,17 @@ bool read_name_safe(const void* entity, char* outBuf, size_t outBufLen) {
             if (static_cast<unsigned char>(c) < 0x20 || static_cast<unsigned char>(c) > 0x7E) return false;
             outBuf[i] = c;
         }
-        if (s[i] != '\0' && i >= static_cast<size_t>(kMaxNameLen)) return false;   // did not terminate in bound
+        if (s[i] != '\0' && i >= static_cast<size_t>(kMaxNameLen)) {
+            // WO-217 B.3: a longer name (printable, ending within 255) goes out as its alias, never cut
+            if (!wo217::on(wo217rules::kBitLongNames) || outBufLen < 11) return false;
+            size_t j = i;
+            for (; j < 255 && s[j] != '\0'; ++j) if (static_cast<unsigned char>(s[j]) < 0x20 || static_cast<unsigned char>(s[j]) > 0x7E) return false;
+            if (s[j] != '\0') return false;
+            char a[16];
+            wo217rules::long_alias(s, a);
+            std::memcpy(outBuf, a, 11);
+            return true;
+        }
         outBuf[i] = '\0';
         return i > 0;
     });

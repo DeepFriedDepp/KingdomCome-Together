@@ -5,6 +5,7 @@
 #include "wo202_rules.h"
 #include "npc_drive.h"
 #include "wo216.h"
+#include "wo217.h"
 #include "wo187.h"
 #include "wo187_rules.h"
 #include "wo209.h"
@@ -381,6 +382,11 @@ struct Puppet {
     float    curRead[3]{};
     bool     curValid = false;
     double   winBlendMaxCm = 0;
+    // WO-217 0.2: the seated-copy pull meter -- the body's position each frame while it or its host NPC is seated, and what this writer did
+    // with it the frame before (wrote the stream, held it for its posture or seat, held it for something else)
+    float    seatPrev[3]{};
+    bool     seatPrevHave = false;
+    const char* seatPrevWriter = "-";
 };
 
 std::unordered_map<std::string, Stream> g_streams;
@@ -824,6 +830,16 @@ const char* reason_name(uint8_t r) {
     }
 }
 
+bool write_entity_tm(void* e, const float pos[3], const float q[4]) {
+    if (!e || !is_a(e, g_vftEntity)) return false;
+    void* par = nullptr;
+    if (!get_parent(e, &par) || par) return false;   // never a child: SetPosRotScale is its LOCAL transform (ef2-b11: a cart under its wagon)
+    void* prs = vslot(e, kEntSetPosRotScale);
+    float scale[3] = { 1, 1, 1 };
+    get_scale(e, scale);
+    return prs && call_prs(prs, e, pos, q, scale);
+}
+
 double now_s() {
     LARGE_INTEGER q; QueryPerformanceCounter(&q);
     return qpc_to_s(q.QuadPart);
@@ -833,10 +849,17 @@ bool entity_pos(void* e, float out[3]) { return e && read_pos(e, out); }
 float entity_yaw(void* e) { return e ? yaw_of(e) : 0.0f; }
 
 namespace {
-struct FindCtx { const char* name; void* found; };
+struct FindCtx { const char* name; void* found; bool alias = false; };
 bool find_visit(void* e, void* ctx) {
     auto* c = static_cast<FindCtx*>(ctx);
     const char* n = engine::entity_name(e);
+    if (c->alias) {   // WO-217 B.3: a long name's alias (the host's scan sends it for a name over 59 characters)
+        if (!n || std::strlen(n) < wo217rules::kLongNameMin) return false;
+        char a[16];
+        wo217rules::long_alias(n, a);
+        if (std::strcmp(a, c->name) == 0) { c->found = e; return true; }
+        return false;
+    }
     char buf[64];
     if (!n || !copy_name(n, buf, sizeof(buf))) return false;
     if (_stricmp(buf, c->name) == 0) { c->found = e; return true; }
@@ -846,6 +869,7 @@ bool find_visit(void* e, void* ctx) {
 
 void* entity_by_name(const char* name) {
     FindCtx c{ name, nullptr };
+    c.alias = wo217rules::is_alias(name) && wo217::on(wo217rules::kBitLongNames);
     engine::for_each_entity(&find_visit, &c);
     return c.found;
 }
@@ -1296,6 +1320,39 @@ void tick() {
                          p.name.c_str(), wo209rules::kActivityDriftM, wo209rules::kActivityDriftS, k);
             }
         } else p.activityDriftSince = 0;
+        // WO-217 0.2: the seated-copy pull meter (every frame while the copy or its host NPC is seated: a single-frame move over 50 cm, and
+        // what wrote each side of it -- the frame before was this writer's stream write, or the body was left to its seat / posture)
+        bool seatHeld = false, seatPlace = false;
+        {
+            bool hs = false, cs2 = false;
+            float cur2[3];
+            const bool seatKnown = wo208::seat_state(p.eid, &hs, &cs2) && (hs || cs2);
+            // every bound copy is asked (a copy in a seat of its own while its host NPC walks is the rule's too); the meter runs while the
+            // owner's word says seated, or while this rule holds the body
+            if (s.n > 0 && read_pos(e, cur2)) {
+                const float ox = cur2[0] - s.ring[s.n - 1].x, oy = cur2[1] - s.ring[s.n - 1].y;
+                seatHeld = wo217::seat_holds(p.eid, p.name.c_str(), std::sqrt(ox * ox + oy * oy), &seatPlace);
+            }
+            if ((seatKnown || seatHeld) && read_pos(e, cur2)) {
+                if (p.seatPrevHave) {
+                    const float jx = cur2[0] - p.seatPrev[0], jy = cur2[1] - p.seatPrev[1], jz = cur2[2] - p.seatPrev[2];
+                    const float jcm = std::sqrt(jx * jx + jy * jy + jz * jz) * 100.0f;
+                    if (jcm > 50.0f) {
+                        char w[160];
+                        std::snprintf(w, sizeof w, "before=%s host_seated=%d copy_seated=%d owner_install_ms=%.0f", p.seatPrevWriter, hs ? 1 : 0, cs2 ? 1 : 0,
+                                      wo208::last_install_age_s(p.eid) * 1000.0);
+                        wo217::seat_note_pull(p.eid, p.name.c_str(), jcm, w);
+                    }
+                }
+                std::memcpy(p.seatPrev, cur2, sizeof cur2);
+                p.seatPrevHave = true;
+            } else p.seatPrevHave = false;
+            p.seatPrevWriter = "stream";   // the default below; a hold says otherwise
+        }
+        if (seatPlace) {   // far from its host NPC's seat: one write puts it there (no blend), the seat holds it after
+            p.blendPending = false; p.blending = false; p.off[0] = p.off[1] = p.off[2] = 0; p.offRot = 0;
+            p.sitting = wo213rules::PostureSitting{};
+        }
         // WO-210 C.3: a copy lying for its host NPC's knockdown is the engine's ragdoll's -- written as the dead and the carried are not
         // WO-213 E.3: a seated, lying or working copy whose posture holds (its host NPC's too) takes no position at all -- a late
         // sample can never make it jitter where it sits -- while its body stays in place by the newest sample (wo213rules)
@@ -1308,7 +1365,8 @@ void tick() {
         if (p.sitting.drifted && !wasDrifted) wo213::note_posture_drift(p.name.c_str(), std::sqrt(dx * dx + dy * dy));
         if (postureHeld && (s.flags & (0x01 | 0x02 | 0x10)) == 0 && now >= p.holdUntil && !parented && !activity_held(p.eid)) wo213::note_posture_skip();
         if ((s.flags & (0x01 | 0x02 | 0x10)) != 0 || now < p.holdUntil || parented || activity_held(p.eid) || wo210kd::held_down(p.eid) || postureHeld ||
-            wo215::probe_owned(p.eid)) {
+            seatHeld || wo215::probe_owned(p.eid)) {
+            p.seatPrevWriter = seatHeld ? "seat" : postureHeld ? "posture" : activity_held(p.eid) ? "activity" : now < p.holdUntil ? "swing-hold" : "held";
             // Dead / unconscious / carried stay on Lua's own behaviour; a swing
             // one-shot owns the body for its hold. Neither is a pull.
             // WO-215 A: a held body is not routed -- its request (if any) ends; A.0's probe owns its own body

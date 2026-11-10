@@ -137,6 +137,7 @@ public partial class GameBridge
         Interlocked.Increment(ref _w209OppFramesIn);
         long nowMs = Environment.TickCount64;
         foreach (var (n, k) in Wo209Rules.WireKinds(body)) _w209OppLast[n] = (k, nowMs);
+        Wo217NoteOpponents(body);   // WO-217 B.1: the host NPCs that fight this player, for the ghost fight
         if (!Wo209Rules.TryJoinerOp(body, _myGhostId, src,
                                     name => _npcEntityIds.TryGetValue(name, out uint e) ? e : 0u,
                                     g => _ghostEntityIds.TryGetValue(g.ToString(CultureInfo.InvariantCulture), out uint fe) ? fe : 0u,

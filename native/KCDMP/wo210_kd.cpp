@@ -3,6 +3,7 @@
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 // WO-210 C.3: a host NPC's knockdown on its copy, the engine's way (wo210_kd.h).
 #include "wo210_kd.h"
+#include "wo217.h"
 #include "wo210.h"
 #include "wo210_rules.h"
 #include "wo206_rules.h"
@@ -44,6 +45,9 @@ struct Api {
     void* requestRagdoll = nullptr;   // C_RagdollManager slot 0: (rm, int mode)
     void* isRagdoll = nullptr;        // slot 1: bool (rm)
     void* requestStandUp = nullptr;   // non-virtual: (rm, int)
+    // WO-217 B.2: C_RagdollManager's stand-up suppress flag -- CanAutoStandUp (not exported) ends `cmp byte [rbx+OFF], al; sete al` after
+    // the soul's dead and unconscious tests (WO-210's re-death notes Q4.1: +0x80); found by that shape at arm time, never assumed
+    uint32_t suppressOff = 0;
     // C.1 / C.2 the finish (OnHit's lethal-no-reaction branch)
     bool deadArmed = false;
     std::string whyDead = "not installed";
@@ -61,6 +65,9 @@ KCDMP_FAULT_CALL(g_siteRm, "wo210kd::ragdoll_manager");
 std::unordered_map<uint32_t, KdState> g_kd;   // main thread
 std::unordered_map<uint32_t, double> g_heldAt;   // the copies held down now (the drive's question), main thread
 std::atomic<uint32_t> c_falls{0}, c_fallRefused{0}, c_ups{0}, c_ownUps{0}, c_deadReleases{0}, c_switchUps{0}, c_hostDownSent{0}, c_noManager{0};
+std::atomic<uint32_t> c_suppressSet{0}, c_suppressCleared{0}, c_refalls{0};   // WO-217 B.2
+struct Follow { bool suppressed = false; int refalls = 0; double lastFallAt = -1e9; };
+std::unordered_map<uint32_t, Follow> g_follow;   // WO-217 B.2, main thread
 
 bool find_seq_exact(const uint8_t* b, size_t n, const uint8_t* pat, size_t pn, size_t* at) {
     for (size_t o = 0; o + pn <= n; ++o) if (!std::memcmp(b + o, pat, pn)) { *at = o; return true; }
@@ -119,6 +126,26 @@ void install() {
         A.isRagdoll = A.vftRm[1];
         if (!text.contains(A.requestRagdoll) || !text.contains(A.isRagdoll)) A.why = "the ragdoll manager's slots are outside the module's code";
         else { A.armed = true; A.why.clear(); }
+    }
+    if (A.armed) {
+        // mov rcx,[rbx+X]; mov rax,[rcx]; call [rax+Y]; test al,al; jne +; mov rcx,[rbx+X]; mov rax,[rcx]; call [rax+Z]; test al,al; jne +;
+        // cmp byte [rbx+OFF], al; sete al
+        const uint8_t* tb = text.begin;
+        const size_t tn = static_cast<size_t>(text.end - tb);
+        int hits = 0; uint32_t off = 0;
+        for (size_t o = 0; o + 49 <= tn; ++o) {
+            const uint8_t* q = tb + o;
+            if (q[0] != 0x48 || q[1] != 0x8B || q[2] != 0x8B || q[7] != 0x48 || q[8] != 0x8B || q[9] != 0x01 || q[10] != 0xFF || q[11] != 0x90) continue;
+            if (q[16] != 0x84 || q[17] != 0xC0 || q[18] != 0x75 || q[20] != 0x48 || q[21] != 0x8B || q[22] != 0x8B) continue;
+            if (q[27] != 0x48 || q[28] != 0x8B || q[29] != 0x01 || q[30] != 0xFF || q[31] != 0x90 || q[36] != 0x84 || q[37] != 0xC0 || q[38] != 0x75) continue;
+            if (q[40] != 0x38 || q[41] != 0x83 || q[46] != 0x0F) continue;
+            if (q[47] != 0x94 || q[48] != 0xC0) continue;
+            uint32_t f = 0; std::memcpy(&f, q + 42, 4);
+            ++hits; off = f;
+        }
+        if (hits == 1 && off > 0 && off < 0x400) A.suppressOff = off;
+        logf("WO217-KD-BUILD the ragdoll manager's stand-up suppress flag %s (+0x%X, %d match(es) of CanAutoStandUp's shape) -- kd_follow %s",
+             A.suppressOff ? "found" : "NOT found", off, hits, A.suppressOff ? "holds a copy down while its host NPC lies" : "lays an early-standing copy down again (no flag)");
     }
     char d1[96] = "-", d2[96] = "-", d3[96] = "-";
     if (A.requestRagdoll) anchor::describe(A.requestRagdoll, d1, sizeof d1);
@@ -225,7 +252,34 @@ bool copy_tick(uint32_t eid, const char* name, bool hostDown, double now) {
     }
     const bool rag = is_ragdoll(rm);
     const double fellAt = s.fellAt;
+    // WO-217 B.2 (kd_follow): while its host NPC lies the copy is held down -- the suppress flag stops its engine's own stand-up; one its engine
+    // stood up anyway is laid down again (bounded); the get-up is the host's up edge only (the twin: WO-210's "up how=own" after 1 s)
+    const bool follow = wo217::on(wo217rules::kBitKdFollow) && wo210::on(kBitKnockdownSync) && !wo172::copy_dead(eid);
+    Follow& fw = g_follow[eid];
+    auto set_suppress = [&](bool v) {
+        if (!A.suppressOff || fw.suppressed == v) return;
+        if (fault::guarded(g_siteRm, [&] { *(static_cast<uint8_t*>(rm) + A.suppressOff) = v ? 1 : 0; })) {
+            fw.suppressed = v;
+            (v ? c_suppressSet : c_suppressCleared).fetch_add(1, std::memory_order_relaxed);
+        }
+    };
+    if (follow && s.held && s.hostDown && hostDown) {
+        set_suppress(true);
+        if (wo217rules::refall(true, s.held, hostDown, rag, now - (fw.lastFallAt > fellAt ? fw.lastFallAt : fellAt), fw.refalls)) {
+            if (fault::guarded(g_siteFall, [&] { using F = void (*)(void*, int); reinterpret_cast<F>(A.requestRagdoll)(rm, 0); })) {
+                ++fw.refalls; fw.lastFallAt = now;
+                const uint32_t k = c_refalls.fetch_add(1) + 1;
+                if (k <= 200 || k % 50 == 0)
+                    logf("WO217-KD refall npc=%s its engine stood it up %.0f ms after its fall while its host NPC lies -- laid down again (#%d) [n=%u]",
+                         name ? name : "?", (now - fellAt) * 1000.0, fw.refalls, k);
+            }
+        }
+        if (s.held) g_heldAt[eid] = now;
+        return true;   // held: no kd_step release while the host lies (the up edge below ends it)
+    }
+    if (!s.held || !hostDown) set_suppress(false);
     const KdAct act = kd_step(s, wo210::on(kBitKnockdownSync), hostDown, rag, wo172::copy_dead(eid), now);
+    if (act == KdAct::Fall) { fw.refalls = 0; fw.lastFallAt = now; if (follow) set_suppress(true); }
     switch (act) {
         case KdAct::Fall: {
             const bool ok = fault::guarded(g_siteFall, [&] { using F = void (*)(void*, int); reinterpret_cast<F>(A.requestRagdoll)(rm, 0); });
@@ -247,7 +301,7 @@ bool copy_tick(uint32_t eid, const char* name, bool hostDown, double now) {
         case KdAct::None: break;
     }
     if (s.held) g_heldAt[eid] = now; else g_heldAt.erase(eid);
-    if (!s.held && !s.hostDown) g_kd.erase(eid);
+    if (!s.held && !s.hostDown) { g_kd.erase(eid); if (!fw.suppressed) g_follow.erase(eid); }
     return s.held;
 }
 

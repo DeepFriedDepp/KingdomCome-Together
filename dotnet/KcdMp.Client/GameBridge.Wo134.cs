@@ -205,6 +205,7 @@ public partial class GameBridge
     {
         if (!LootMsg.TryDecode(body, out var m)) { Interlocked.Increment(ref _w134Dropped); return; }
         if (await Wo135OnLootFrameAsync(type, src, m)) return;   // WO-135: takedowns, the host's build
+        if (await Wo217OnLootFrameAsync(type, src, m)) return;   // WO-217 C: the live loot (requests, grants, the body's list by item ids)
         var f = m.Text.Split(' ');
         string Q(string s) => EscapeLua(s);
         if (type == Protocol.LootAskDown)

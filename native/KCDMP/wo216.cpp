@@ -18,6 +18,7 @@
 #include "rttr_abi.h"
 #include "hits.h"
 #include "wo138.h"
+#include "wo217.h"
 
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -209,7 +210,9 @@ bool b_hide(uint32_t eid, bool hide) {
 }
 
 bool ours(const char* name) {
-    return !name || !*name || std::strncmp(name, "kcd2mp", 6) == 0 || std::strncmp(name, "kcdmp", 5) == 0;
+    if (!name || !*name || std::strncmp(name, "kcd2mp", 6) == 0 || std::strncmp(name, "kcdmp", 5) == 0) return true;
+    // WO-217 0.1 (dialog_twins): the engine's dialogue twins are its conversation's actors -- never hidden, frozen or counted here
+    return wo217rules::engine_dialog_twin(name) && wo217::on(wo217rules::kBitDialogTwins);
 }
 
 struct BBody {
@@ -279,6 +282,56 @@ void b_hook_spawn() {
          "hidden in the frame it appears and suspended once it has a brain");
 }
 
+// WO-217 B.4 (layer_watch): the entity system's EnableLayer (the function that logs its own "EnableLayer '%s', enable:%c, serialized:%c";
+// its vftable slot found at arm time, +0x250 in the bench's build) is wrapped like SpawnEntity: after the engine's own call, a layer switched
+// on is noted, and the census scans every entity at once and each second for kLayerBurstS -- the layer's bodies are suspended and hidden
+// at its activation, not at the next 30 s net (WO-216: eight bodies of another village switched on with their layer, found by the net).
+constexpr double kLayerBurstS = 30.0;   // a1-b7: a village's bodies started running 16 s after their layer came on
+std::unordered_map<uint32_t, double> g_layerBorn;   // WO-217 B.4 (main thread): bodies a layer burst's scan first listed, and when
+std::mutex g_layerMu;
+std::vector<std::string> g_layersOn;                     // (any thread -> main) the layers switched on since the last census
+std::atomic<void*> g_origLayer{nullptr};
+std::atomic<bool> g_layerWatch{false};
+bool g_layerHooked = false;
+const char* g_layerWhy = "not installed";
+uint32_t g_layerSlot = 0;
+double g_layerBurstUntil = -1e9;
+bool g_censusNow = false;
+std::atomic<uint32_t> c_layerOn{0}, c_layerScans{0}, c_layerFound{0}, c_netFound{0}, c_netScans{0};
+void layer_detour(void* es, const char* layer, bool enable, bool serialized) {
+    auto fn = reinterpret_cast<void (*)(void*, const char*, bool, bool)>(g_origLayer.load(std::memory_order_relaxed));
+    fn(es, layer, enable, serialized);   // the engine's own call first, outside any guard of ours
+    if (enable && g_layerWatch.load(std::memory_order_relaxed)) {
+        std::lock_guard<std::mutex> l(g_layerMu);
+        if (g_layersOn.size() < 64) g_layersOn.emplace_back(layer ? layer : "?");
+    }
+}
+void b_hook_layer() {
+    if (g_layerHooked) return;
+    g_layerHooked = true;
+    void* es = engine::entity_system();
+    HMODULE m = GetModuleHandleA("CryEntitySystem.dll");
+    if (!es || !m) { g_layerWhy = "no entity system"; g_layerHooked = false; return; }
+    int cnt = 0;
+    const uint8_t* fn = anchor::function_by_string(m, "EnableLayer '%s', enable:%c, serialized:%c", &cnt);
+    if (!fn || cnt != 1) { g_layerWhy = "EnableLayer (its own log line) not found once"; return; }
+    void** vt = *reinterpret_cast<void***>(es);
+    int slot = -1;
+    for (int i = 0; i < 160; ++i) if (vt[i] == fn) { if (slot >= 0) { slot = -2; break; } slot = i; }
+    if (slot < 0) { g_layerWhy = slot == -2 ? "EnableLayer sits in two slots" : "EnableLayer is not a slot of the entity system"; return; }
+    void** sp = vt + slot;
+    g_origLayer.store(*sp);
+    DWORD old = 0;
+    if (!VirtualProtect(sp, sizeof(void*), PAGE_READWRITE, &old)) { g_layerWhy = "the vftable could not be made writable"; return; }
+    InterlockedExchangePointer(reinterpret_cast<PVOID volatile*>(sp), reinterpret_cast<PVOID>(&layer_detour));
+    DWORD tmp = 0;
+    VirtualProtect(sp, sizeof(void*), old, &tmp);
+    g_layerSlot = static_cast<uint32_t>(slot) * 8;
+    g_layerWhy = "armed";
+    logf("WO217-LAYER the layer watch is in: the entity system's EnableLayer (+0x%X) wrapped -- a layer switched on is scanned at once and "
+         "each second for %.0f s (its bodies frozen and hidden at its activation)", g_layerSlot, kLayerBurstS);
+}
+
 bool exempt(const std::string& name, double now) {
     auto it = g_exempt.find(name);
     if (it == g_exempt.end()) return false;
@@ -292,7 +345,8 @@ void b_queue_pause(uint32_t eid, BBody& b, double now) {
     g_pauseQ.push_back(eid);
 }
 
-struct CensusCtx { double now; uint32_t bodies = 0, running = 0, exemptRunning = 0, hidden = 0, bound = 0, nearRunning = 0, nearN = 0, deadRunning = 0; std::string names;
+struct CensusCtx { double now; bool layerOn = false; uint32_t layerCaught = 0; std::string layerNames; uint32_t bodies = 0, running = 0, exemptRunning = 0, hidden = 0, bound = 0, nearRunning = 0, nearN = 0, deadRunning = 0; std::string names;
+                   const std::unordered_set<uint32_t>* fresh = nullptr; uint32_t freshRunning = 0; std::string freshNames;   // WO-217 B.4
                    std::unordered_set<uint32_t> seen; bool havePlayer = false; float player[3]{}; };
 bool census_visit(void* e, void* ctx) {
     auto* c = static_cast<CensusCtx*>(ctx);
@@ -325,10 +379,16 @@ bool census_visit(void* e, void* ctx) {
         void* soul = hits::soul_of_eid(eid);
         if (soul && rttr::soul_bool(soul, "IsDead", &dead) && dead) { ++c->deadRunning; return false; }   // a corpse: nothing to freeze
         if (ex) ++c->exemptRunning;
-        else {
+        else if (c->layerOn && g_layerBorn.count(eid) && c->now - g_layerBorn[eid] <= kLayerBurstS) {
+            // WO-217 B.4: a body a layer switched on, its brain started inside the layer's watch -- caught at the activation, suspended
+            ++c->layerCaught;
+            if (c->layerNames.size() < 300) { if (!c->layerNames.empty()) c->layerNames += ","; c->layerNames += b.name; }
+            if (g_act) b_queue_pause(eid, b, c->now);
+        } else {
             ++c->running;
             if (nearMe) ++c->nearRunning;
             if (c->names.size() < 600) { if (!c->names.empty()) c->names += ","; c->names += b.name + (bound ? "(bound)" : "(unbound)"); }
+            if (c->fresh && c->fresh->count(eid)) { ++c->freshRunning; if (c->freshNames.size() < 300) { if (!c->freshNames.empty()) c->freshNames += ","; c->freshNames += b.name; } }
             if (g_act) b_queue_pause(eid, b, c->now);
         }
     }
@@ -356,13 +416,51 @@ void b_census(double now) {
     const double t0 = now_s();
     // the full entity scan (~9 ms on the bench) at the join's sweep and then every 30 s as a net; between, the spawn watch adds every
     // body this engine spawns and a body gone drops out by itself (its id no longer answers)
-    if (now - g_listAt >= 30.0 || !g_swept) {
-        g_listAt = now;
+    // WO-217 B.4: the layers switched on since the last census start a burst of full scans (this one and each second for kLayerBurstS)
+    {
+        std::vector<std::string> on;
+        { std::lock_guard<std::mutex> l(g_layerMu); on.swap(g_layersOn); }
+        for (const auto& ln : on) {
+            g_layerBurstUntil = now + kLayerBurstS;
+            const uint32_t k = c_layerOn.fetch_add(1, std::memory_order_relaxed) + 1;
+            if (k <= 200 || k % 50 == 0) logf("WO217-LAYER on layer=%s -- its bodies scanned now and each second for %.0f s [n=%u]", ln.c_str(), kLayerBurstS, k);
+        }
+    }
+    const bool layerScan = wo217::on(wo217rules::kBitLayerWatch) && now < g_layerBurstUntil && g_swept;
+    const bool netScan = now - g_listAt >= 30.0 || !g_swept;
+    std::unordered_set<uint32_t> fresh;
+    if (netScan || layerScan) {
+        if (netScan) g_listAt = now;
         std::vector<uint32_t> v;
         engine::for_each_entity(&list_visit, &v);
+        if (g_swept) {
+            std::unordered_set<uint32_t> was(g_npcList.begin(), g_npcList.end());
+            for (uint32_t id : v) if (!was.count(id)) { fresh.insert(id); if (layerScan) g_layerBorn[id] = now; }
+        }
         g_npcList.swap(v);
+        (layerScan ? c_layerScans : c_netScans).fetch_add(1, std::memory_order_relaxed);
     }
+    c.fresh = fresh.empty() ? nullptr : &fresh;
+    c.layerOn = layerScan || now < g_layerBurstUntil + kLayerBurstS;
+    for (auto it = g_layerBorn.begin(); it != g_layerBorn.end();) { if (now - it->second > kLayerBurstS) it = g_layerBorn.erase(it); else ++it; }
     for (uint32_t eid : g_npcList) if (void* e = engine::entity_by_id(eid)) census_visit(e, &c);
+    // WO-217 B.4: bodies a layer switched on whose brains run inside the layer's watch -- caught at the activation (not the census's misses)
+    if (c.layerCaught) {
+        const uint32_t k = c_layerFound.fetch_add(c.layerCaught, std::memory_order_relaxed) + c.layerCaught;
+        logf("WO217-LAYER found %u running at a layer's activation: %s -- %s [n=%u]", c.layerCaught, c.layerNames.c_str(),
+             g_act ? "suspended" : "left running (the twin)", k);
+    }
+    // ... and bodies running that the list did not hold before this scan (a layer scan's, else the 30 s net's: missed)
+    if (c.freshRunning) {
+        if (layerScan) {
+            const uint32_t k = c_layerFound.fetch_add(c.freshRunning, std::memory_order_relaxed) + c.freshRunning;
+            logf("WO217-LAYER found %u running at a layer's activation: %s -- %s [n=%u]", c.freshRunning, c.freshNames.c_str(),
+                 g_act ? "suspended" : "left running (the twin)", k);
+        } else {
+            const uint32_t k = c_netFound.fetch_add(c.freshRunning, std::memory_order_relaxed) + c.freshRunning;
+            logf("WO217-LAYER the 30 s net found %u running the list did not hold: %s [n=%u]", c.freshRunning, c.freshNames.c_str(), k);
+        }
+    }
     const double ms = (now_s() - t0) * 1000.0;
     // bodies gone since the last census: forgotten
     for (auto it = g_bodies.begin(); it != g_bodies.end();) { if (!c.seen.count(it->first)) it = g_bodies.erase(it); else ++it; }
@@ -469,6 +567,7 @@ void b_stop(const char* why) {
     g_bodies.clear();
     g_pauseQ.clear(); g_hideQ.clear(); g_showQ.clear();
     g_spawnWatch.store(false);
+    g_layerWatch.store(false);
     g_swept = false;
     g_cen = Census{};
     g_npcList.clear();
@@ -497,9 +596,13 @@ void b_tick(double now) {
         g_censusAt = 0;
         b_hook_spawn();
         g_spawnWatch.store(true);
+        b_hook_layer();
+        g_layerWatch.store(true);
     }
     b_spawns(now);
-    if (now - g_censusAt >= wo216rules::kBrainCensusS) { g_censusAt = now; b_census(now); }
+    bool layerNow = false;
+    if (wo217::on(wo217rules::kBitLayerWatch)) { std::lock_guard<std::mutex> l(g_layerMu); layerNow = !g_layersOn.empty(); }
+    if (now - g_censusAt >= wo216rules::kBrainCensusS || layerNow) { g_censusAt = now; b_census(now); }   // WO-217 B.4: a layer on: at once
     b_actions();
 }
 
@@ -516,11 +619,12 @@ int b_status(char* out, int n) {
         "B no_brains=%s role=%u active=%d (%s; spawn watch %s) samples=%u nonzero=%u max_running=%u last_running=%u near_nonzero=%u max_near_running=%u "
         "last_near_running=%u last_near=%u last_dead_with_brain=%u last_exempt_running=%u bodies=%u list=%zu "
         "hidden=%u bound=%u census_ms=%.1f max_ms=%.1f sweep_paused=%u sweep_hidden=%u pauses=%u hides=%u shows=%u local_spawns=%u spawns_seen=%u "
-        "breaches=%u exempt_running=%u exempt_names=%zu last=%s",
+        "breaches=%u exempt_running=%u exempt_names=%zu layer_watch=%s(%s) layers_on=%u layer_scans=%u layer_found=%u net_scans=%u net_found=%u last=%s",
         on(kBitNoBrains) ? "on" : "off", g_role.load(), g_active ? 1 : 0, g_b.why, g_spawnWhy, g_cen.samples, g_cen.nonzero, g_cen.maxRunning,
         g_cen.lastRunning, g_cen.nearNonzero, g_cen.maxNearRunning, g_cen.lastNearRunning, g_cen.lastNear, g_cen.lastDead, g_cen.lastExemptRunning, g_cen.lastBodies, g_npcList.size(), g_cen.lastHidden, g_cen.lastBound, g_cen.lastCostMs, g_cen.maxCostMs,
         c_bSweepPaused.load(), c_bSweepHidden.load(), c_bPauses.load(), c_bHides.load(), c_bShows.load(), c_bLocalSpawns.load(), c_bSpawnSeen.load(),
-        c_bBreaches.load(), c_bExemptRunning.load(), g_exempt.size(), g_lastNames.empty() ? "-" : g_lastNames.substr(0, 300).c_str());
+        c_bBreaches.load(), c_bExemptRunning.load(), g_exempt.size(), wo217::on(wo217rules::kBitLayerWatch) ? "on" : "off", g_layerWhy, c_layerOn.load(),
+        c_layerScans.load(), c_layerFound.load(), c_netScans.load(), c_netFound.load(), g_lastNames.empty() ? "-" : g_lastNames.substr(0, 300).c_str());
 }
 
 // ================================================================================================== D: outfits

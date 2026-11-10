@@ -6051,6 +6051,7 @@ end
 function KCD2MP_W131ParkReleased(name, why)
     if not KCD2MP_W131IsActive() then return false end
     if KCD2MP_W148Holds and KCD2MP_W148Holds(name) then return true end   -- WO-148: a carried body stays shown
+    if KCD2MP_W217CorpseHolds and KCD2MP_W217CorpseHolds(name) then return true end   -- WO-217 E.1: a corpse the host lists stays
     -- WO-151 Phase 2: a ridden horse is the rider's -- never paused or hidden (the field: the host's horse
     -- copy went silent while the host's avatar rode it here, was parked, and the avatar rode a hidden horse)
     if KCD2MP_W151HorseRidden and KCD2MP_W151HorseRidden(name) then
@@ -17104,6 +17105,21 @@ end
 
 function W134.bodyState(name, reason, flags, list)
     local w = KCD2MP.w134
+    if KCD2MP_W217LootLive and KCD2MP_W217LootLive() and W217 and W217.L then   -- WO-217 C: the live list is this copy's one writer
+        if W217.L.sess[name] then return end
+        if reason == "open" and w.pendingOpen[name] and not W217.L.fellBack[name] then   -- the live list opens it; this list only if none comes in 3 s
+            local po0 = w.pendingOpen[name]
+            Script.SetTimer(3000, function()
+                if w.pendingOpen[name] == po0 and not W217.L.sess[name] then
+                    W217.L.fellBack[name] = true
+                    mp_log("WO217-LOOT fallback npc=" .. tostring(name) .. " -- no live list in 3 s: WO-134's list opens it")
+                    W134.bodyState(name, reason, flags, list)
+                    W217.L.fellBack[name] = nil
+                end
+            end)
+            return
+        end
+    end
     if KCD2MP_W166LootDefer and KCD2MP_W166LootDefer(name, reason, flags, list) then return end   -- WO-166 L1: the loot screen is open on it
     if reason ~= "open" and KCD2MP_W201InvBusy and KCD2MP_W201InvBusy(name) then   -- WO-201 B5: any open screen on it (not only ours)
         return KCD2MP_W201InvDefer("w134-state", name, "the host's list of this body", function() W134.bodyState(name, reason, flags, list) end)
@@ -17236,6 +17252,7 @@ end
 -- A loot session: what left the body since the last look went to the player
 -- (a take, sent to the host); what arrived was put in by the player.
 function W134.diffSession(name, sess, e)
+    if W217 and W217.L and W217.L.sess[name] and KCD2MP_W217LootLive and KCD2MP_W217LootLive() then sess.snap = W134.items(e); return end   -- WO-217 C
     local now = W134.items(e)
     local a, b = W134.counts(sess.snap or {}), W134.counts(now)
     local w = KCD2MP.w134
@@ -17334,6 +17351,7 @@ end
 -- Agent -> host: a joiner asked for a body. Answer with its items (parts of 10).
 function KCD2MP_W134HostOpen(peer, tok, name)
     W134.hostSend(tostring(peer), tostring(tok), tostring(name), "open")
+    if KCD2MP_W217HostOpen then pcall(KCD2MP_W217HostOpen, peer, name) end   -- WO-217 C: and the live list, by item ids
 end
 
 function W134.hostSend(peer, tok, name, reason)
@@ -34694,7 +34712,7 @@ do
         return true
     end
     -- E: the agent asks this once a second while ghosts are about (the joiner)
-    function KCD2MP_W215GhostFightTick()
+    function KCD2MP_W215GhostFightTick(mirrorNames)
         if not KCD2MP_W215On("ghost_fight") then W215.gfSince = nil; return false end
         local now = os.clock()
         local inCombat = false
@@ -34725,6 +34743,26 @@ do
                 end
             end
         end
+        -- WO-217 B.1 (ghost_far): the opponent mirror's living, streamed opponents of this player count whatever their distance (the agent
+        -- names the host NPCs that fight this player's figure there; WO-216 H: a mirrored bandit 42 m off kept a real fight)
+        local farLive = 0
+        if mirrorNames and mirrorNames ~= "" and (not KCD2MP_W217On or KCD2MP_W217On("ghost_far")) then
+            for nm in string.gmatch(tostring(mirrorNames), "[^,]+") do
+                if not W215.ghosts[nm] or now - W215.ghosts[nm].at > 5.0 then
+                    local e = nil
+                    pcall(function() e = System.GetEntityByName(nm) end)
+                    local dead, hid = false, false
+                    if e then
+                        pcall(function() dead = e.actor and e.actor:IsDead() == true end)
+                        pcall(function() hid = e.IsHidden ~= nil and e:IsHidden() == true end)
+                    end
+                    local streamed = KCD2MP.npcPuppets and KCD2MP.npcPuppets[nm] ~= nil
+                    if e and not dead and (streamed or not hid) then farLive = farLive + 1 end
+                end
+            end
+            if farLive > 0 then W215.gstats.farKept = (W215.gstats.farKept or 0) + 1 end
+        end
+        live = live + farLive
         -- every ghost failing recently counts, near or not (the engine's own line names the body it fights)
         local recent = 0
         for _, g in pairs(W215.ghosts) do if now - g.at <= 5.0 then recent = recent + 1 end end
@@ -34865,6 +34903,12 @@ do
         W216.origExec = System.ExecuteCommand
         System.ExecuteCommand = function(cmd, ...)
             local s = tostring(cmd or "")
+            -- WO-217 B.3: a long-named body's alias in a command is its real name
+            local verb, al, rest = string.match(s, "^%s*(wh_ai_%a+)%s+(lh%x%x%x%x%x%x%x%x)(.*)$")
+            if verb and KCD2MP_W217RealName then
+                local real = KCD2MP_W217RealName(al)
+                if real then s = verb .. " " .. real .. (rest or ""); cmd = s end
+            end
             local name = string.match(s, "^%s*wh_ai_ResumeNPC%s+([%w_%-%.]+)")
             if name and not string.find(name, "^kcd2mp") and KCD2MP_W216JoinerBrainsOff() then
                 if W216_RELEASE then
@@ -34928,6 +34972,890 @@ do
         local fname = "KCD2MP_W216Set_" .. k
         _G[fname] = function(arg) return KCD2MP_W216Set(k, arg) end
         System.AddCCommand(label, fname .. "(%line)", "WO-216 " .. (W216.HELP[k] or k) .. " (default on): " .. label .. " on|off")
+    end
+end
+
+-- ===== WO-217: the world around the bodies (docs/WO-217-findings.md) =====
+-- Every switch ships on. The agent tells this file the states (KCD2MP_W217Cfg, with the bench's twins applied); a console switch here goes
+-- to the agent, which tells the DLL and this file back.
+do
+    W217 = W217 or {}
+    W217.on = W217.on or {}
+    W217.NAMES = {
+        seat_writer = "mp_seat_writer", placement = "mp_placement", ghost_far = "mp_ghost_far", kd_follow = "mp_kd_follow",
+        long_names = "mp_long_names", layer_watch = "mp_layer_watch", loot_live = "mp_loot_live", item_flags = "mp_item_flags",
+        encounter_world = "mp_encounter_world", carts = "mp_carts", dialog_twins = "mp_dialog_twins", route_skip = "mp_route_skip",
+    }
+    W217.HELP = {
+        seat_writer = "0.2: (joiner) a seated copy has one writer -- its seat; the stream never places it while the host's NPC sits",
+        placement = "A: (joiner) a copy's activity is placed by the owner, never left to a placement that never comes",
+        ghost_far = "B.1: (joiner) a fight with a ghost ends only when the host has no living opponent of this player, at any distance",
+        kd_follow = "B.2: (joiner) a copy stays down while its host NPC is down; it gets up with its host",
+        long_names = "B.3: (both) NPCs and horses with names over 63 characters are copies too",
+        layer_watch = "B.4: (joiner) bodies a layer switches on are frozen and hidden when the layer comes on",
+        loot_live = "C: (both) a body's loot is live for both players: one inventory, takes asked of the host, a ledger",
+        item_flags = "D: (both) an item's owner and stolen mark travel with it",
+        encounter_world = "E: (both) what an encounter leaves -- corpses, props -- is sent to the joiner",
+        carts = "F: (both) carts move with the host's cart, their passengers seated",
+        dialog_twins = "0.1: (joiner) the game's own conversation actors (its dialogue twins) are never hidden or frozen",
+        route_skip = "(joiner) the host's route lines are dropped while mp_route is off (nothing reads them; each cost a pipe round trip)",
+    }
+    function KCD2MP_W217On(name)
+        local v = W217.on[tostring(name)]
+        if v == nil then return true end
+        return v
+    end
+    function KCD2MP_W217Cfg(list)
+        local n = 0
+        for kv in string.gmatch(tostring(list or ""), "[^,]+") do
+            local k, v = string.match(kv, "^%s*([%w_]+)=(%a+)%s*$")
+            if k and W217.NAMES[k] then W217.on[k] = (v == "on"); n = n + 1 end
+        end
+        if n > 0 and not W217.told then
+            W217.told = true
+            local parts = {}
+            for k in pairs(W217.NAMES) do parts[#parts + 1] = k .. "=" .. (KCD2MP_W217On(k) and "on" or "off") end
+            table.sort(parts)
+            mp_log("WO217-CFG " .. table.concat(parts, " "))
+        end
+        return true
+    end
+    function KCD2MP_W217Set(name, arg)
+        local label = W217.NAMES[tostring(name)]
+        if not label then mp_log("WO217-TOGGLE unknown switch '" .. tostring(name) .. "'"); return false end
+        local v = KCD2MP_Wo122ParseBool(arg)
+        if v == "bad" then mp_log(label .. ": expected on|off, got '" .. tostring(arg) .. "'"); return false end
+        if v == nil then mp_log("WO217-TOGGLE " .. label .. " is " .. (KCD2MP_W217On(name) and "on" or "off")); return true end
+        W217.on[tostring(name)] = v
+        mp_log("WO217-TOGGLE " .. label .. " " .. (v and "on" or "off") .. " -- sent to the agent")
+        KCD2MP_EmitEvent("w217_cfg", tostring(name) .. "=" .. (v and "on" or "off"))
+        return true
+    end
+    function KCD2MP_W217Status()
+        local parts = {}
+        for k, label in pairs(W217.NAMES) do parts[#parts + 1] = label .. "=" .. (KCD2MP_W217On(k) and "on" or "off") end
+        table.sort(parts)
+        mp_log("WO217-STATUS " .. table.concat(parts, " ") .. string.format(" ghost_far_kept=%d", (W215 and W215.gstats and W215.gstats.farKept) or 0))
+        KCD2MP_EmitEvent("w217_status", "")
+        return true
+    end
+    System.AddCCommand("mp_w217_status", "KCD2MP_W217Status()", "WO-217: every WO-217 switch and the DLL's numbers")
+
+    -- ---- B.3 (long_names): a body whose name the stream cannot carry goes out as "lh" + two 16-bit sums of its name (the DLL's own
+    -- alias, wo217_rules.h); here an alias finds that body (the long-named bodies are listed once a minute, and on a miss)
+    W217.alias = W217.alias or { map = {}, at = -1e9, hits = 0, misses = 0 }
+    function KCD2MP_W217Alias(n)
+        local h1, h2 = 0, 0
+        for i = 1, #n do local b = string.byte(n, i); h1 = (h1 * 31 + b) % 65521; h2 = (h2 * 37 + b) % 65519 end
+        return string.format("lh%04x%04x", h1, h2)
+    end
+    local function aliasScan()
+        local A = W217.alias
+        A.map, A.at = {}, os.clock()
+        for _, cls in ipairs({ "NPC", "NPC_Female", "Horse", "Dog", "Animal" }) do
+            for _, e in ipairs(System.GetEntitiesByClass(cls) or {}) do
+                local nm = e.GetName and e:GetName() or ""
+                if #nm >= 60 then A.map[KCD2MP_W217Alias(nm)] = nm end
+            end
+        end
+    end
+    function KCD2MP_W217RealName(n)
+        n = tostring(n or "")
+        if not string.match(n, "^lh%x%x%x%x%x%x%x%x$") or not KCD2MP_W217On("long_names") then return nil end
+        local A = W217.alias
+        if not A.map[n] and os.clock() - A.at > 5 then pcall(aliasScan) end
+        if A.map[n] then A.hits = A.hits + 1 else A.misses = A.misses + 1 end
+        return A.map[n]
+    end
+    if System and System.GetEntityByName and not W217.byNameWrapped then
+        W217.byNameWrapped = true
+        local orig = System.GetEntityByName
+        System.GetEntityByName = function(n, ...)
+            local e = orig(n, ...)
+            if e == nil and type(n) == "string" and #n == 10 and string.sub(n, 1, 2) == "lh" then
+                local real = KCD2MP_W217RealName(n)
+                if real then e = orig(real) end
+            end
+            return e
+        end
+    end
+    for k, label in pairs(W217.NAMES) do
+        local fname = "KCD2MP_W217Set_" .. k
+        _G[fname] = function(arg) return KCD2MP_W217Set(k, arg) end
+        System.AddCCommand(label, fname .. "(%line)", "WO-217 " .. (W217.HELP[k] or k) .. " (default on): " .. label .. " on|off")
+    end
+end
+
+-- ===== WO-217 C / D: a body's loot is live for both; stolen is stolen for both =====
+-- The decided design: NPC bodies are shared and host-authoritative, first come first served; items come out of the one body; the joiner's
+-- take is a request to the host; chests stay per-player. With loot_live on:
+--   * one inventory, pushed: while a joiner has a body's loot open (a live session) the host sends that body's items -- each with its own
+--     item id, class, amount, condition, worn, and (item_flags) its owner and stolen mark -- on every change (the agent polls both games
+--     ten times a second while a session lives: the game's own timers stop while a loot screen is open);
+--   * the joiner's copy follows the list by its ids; under an open screen only by MOVES (into or out of a hidden stash of this machine's,
+--     the escrow) -- never a delete, never a create in an inventory a screen shows (WO-166 / WO-201: a delete under an open screen crashed
+--     the game at its close); the screen follows the inventory itself;
+--   * a joiner's take (take, take-all, equip from the body) is a request: the item the screen moved into his pack goes into the escrow
+--     at once (unequipped first) and enters his pack only on the host's grant; a refusal deletes it from the escrow (it never was his)
+--     and shows "Already taken"; no answer in kAskS: cancelled (the host puts a granted item back only on that cancel);
+--   * the host's grant moves the item out of its body (into its own escrow while its own screen shows the body, deleted at the joiner's
+--     ack); the host's own takes are logged the same way;
+--   * the ledger: every request, grant, refusal, apply, cancel and removal is one WO217-LEDGER line with the host's item id on both ends.
+-- The twin (loot_live off): WO-134's class-based path, the open screen's updates deferred to its close (WO-166 L1), as 0.64.3.
+--   WO217-LOOT open|list|take|grant|refuse|apply|cancel|...     WO217-LEDGER side=<host|joiner> ev=<...> body=<n> item=<hostId> ...
+do
+    W217 = W217 or {}
+    W217.L = W217.L or { sess = {}, hostLive = {}, hostEsc = {}, partial = {}, fellBack = {}, tokN = 0, active = 0,
+                         stats = { lists = 0, applied = 0, takes = 0, grants = 0, refusals = 0, cancels = 0, moves = 0, movesFailed = 0, made = 0,
+                                   escrowed = 0, escDeleted = 0, hostTakes = 0, acks = 0, backToBody = 0, flagsSet = 0 } }
+    local L = W217.L
+    L.ASK_S = 5.0          -- a take not answered this long is cancelled (nothing changes on either side)
+    L.SESSION_S = 600.0    -- a live session is over after 10 minutes, or when the player is 6 m from the body with no screen open
+    L.ESCROW = "kcd2mp_w217_escrow"
+
+    function KCD2MP_W217LootLive() return KCD2MP_W217On("loot_live") and KCD2MP.w134 ~= nil and KCD2MP.w134.bodies end
+
+    local function lg(fmt, ...) mp_log(string.format(fmt, ...)) end
+    local function ledger(side, ev, body, item, cls, amt, tok, extra)
+        mp_log(string.format("WO217-LEDGER side=%s ev=%s body=%s item=%s cls=%s amt=%s tok=%s%s", side, ev, tostring(body), tostring(item), tostring(cls),
+            tostring(amt), tostring(tok or "-"), extra and (" " .. extra) or ""))
+    end
+
+    function L.escrow()
+        local e = nil
+        pcall(function() e = System.GetEntityByName(L.ESCROW) end)
+        if not e and player then
+            local p = player:GetWorldPos()
+            pcall(function() e = System.SpawnEntity({ class = "Stash", name = L.ESCROW, position = { x = p.x, y = p.y, z = p.z - 40 } }) end)
+            if e then pcall(function() e:Hide(1) end) end
+        end
+        return e
+    end
+
+    -- an item id's text on the wire: letters, digits and _ only (the game's own text of the id, its other characters as _)
+    function L.key(id) return (string.gsub(tostring(id), "[^%w]", "_")) end
+    -- an inventory's items by their id's text: { [idText] = { w = id, cls, amt, hp } }
+    function L.ids(e)
+        local o = {}
+        pcall(function()
+            for _, id in ipairs(e.inventory:GetInventoryTable() or {}) do
+                local it = ItemManager.GetItem(id)
+                if it and it.class then o[L.key(id)] = { w = id, cls = tostring(it.class), amt = it.amount or 1, hp = it.health or 1 } end
+            end
+        end)
+        return o
+    end
+
+    -- one item moved into another inventory (the game's own move: the id survives); true when it left the source
+    function L.move(src, w, dst)
+        local ok = dst and dst.inventory and pcall(function() dst.inventory:AddItem(w) end)
+        local still = false
+        if src and src.inventory then pcall(function() still = src.inventory:HasItem(w) == true end) end
+        if ok and not still then L.stats.moves = L.stats.moves + 1; return true end
+        L.stats.movesFailed = L.stats.movesFailed + 1
+        return false
+    end
+
+    -- a plain integer (the agent carries it as a uint32), below 2^24 (this Lua's numbers are single precision), started at a random
+    -- point so a reloaded game does not repeat the last session's tokens
+    function L.tok()
+        if not L.tokBase then local b = 1000; pcall(function() b = math.random(1000, 8000000) end); L.tokBase = b end
+        L.tokN = L.tokN + 1
+        if L.tokBase + L.tokN > 16000000 then L.tokBase = 1000; L.tokN = 1 end
+        return string.format("%d", L.tokBase + L.tokN)
+    end
+
+    -- ---- D: an item's owner and stolen mark (item_flags) -- the owner as an entity name both worlds share ("-" none)
+    function KCD2MP_W217OwnerName(wuid)
+        local n = nil
+        pcall(function() local e = XGenAIModule.GetEntityByWUID(wuid); if e and e.GetName then n = e:GetName() end end)
+        if n and string.match(n, "^[%w_]+$") and #n <= 63 then return n end
+        return nil
+    end
+    function L.flagsOf(w)
+        local owner, stolen = "-", 0
+        if not KCD2MP_W217On("item_flags") then return owner, stolen end
+        pcall(function()
+            local o = ItemManager.GetItemOwner(w)
+            if o and KCD2MP_W217OwnerName then owner = KCD2MP_W217OwnerName(o) or "-" end
+        end)
+        pcall(function() local it = ItemManager.GetItem(w); if it and (it.stolen == true or it.isStolen == true or it.IsStolen == true) then stolen = 1 end end)
+        if stolen == 0 and owner ~= "-" then stolen = 1 end   -- an item that is not the player's own and has an owner is stolen goods (the game's rule)
+        return owner, stolen
+    end
+    function L.setFlags(w, owner, stolen)
+        if not KCD2MP_W217On("item_flags") or (owner == "-" and tonumber(stolen) ~= 1) then return false end
+        local ok = false
+        pcall(function()
+            local oe = owner ~= "-" and System.GetEntityByName(owner) or nil
+            local ow = oe and oe.this and oe.this.id or nil
+            if ow then ItemManager.SetItemOwner(w, ow, tonumber(stolen) == 1); ok = true end
+        end)
+        if ok then L.stats.flagsSet = L.stats.flagsSet + 1 end
+        return ok
+    end
+
+    -- ======================================================================== the host
+    -- a body's list: idText:cls:amt:hp:worn:stolen:owner, in parts of 8 (the console's and the wire's limits)
+    function L.hostList(e)
+        local out = {}
+        for k, v in pairs(L.ids(e)) do
+            local owner, stolen = L.flagsOf(v.w)
+            out[#out + 1] = string.format("%s:%s:%d:%.4f:%d:%d:%s", k, v.cls, v.amt, v.hp, 0, stolen, owner)
+        end
+        table.sort(out)
+        return out
+    end
+    function L.hostSend(name, force)
+        local h = L.hostLive[name]
+        if not h then return end
+        local e = nil
+        pcall(function() e = System.GetEntityByName(name) end)
+        local list = e and L.hostList(e) or {}
+        local sig = table.concat(list, ",")
+        if not force and sig == h.sig then return end
+        h.sig = sig; h.rev = h.rev + 1
+        local peers = {}
+        for p, _ in pairs(h.peers) do peers[#peers + 1] = tostring(p) end
+        if #peers == 0 then return end
+        local n = math.max(1, math.ceil(#list / 8))
+        for part = 1, n do
+            local chunk = {}
+            for i = (part - 1) * 8 + 1, math.min(#list, part * 8) do chunk[#chunk + 1] = list[i] end
+            KCD2MP_EmitEvent("w217_blist", string.format("%s %s %d %d %d %s", table.concat(peers, ","), name, h.rev, part, n,
+                #chunk > 0 and table.concat(chunk, ",") or "-"))
+        end
+        L.stats.lists = L.stats.lists + 1
+        h.ids = L.ids(e or {})
+    end
+    -- a joiner opened this body (WO-134's open, answered by the live list too) / closed it
+    function KCD2MP_W217HostOpen(peer, name)
+        if not KCD2MP_W217LootLive() then return false end
+        name = tostring(name)
+        local h = L.hostLive[name] or { peers = {}, rev = 0, sig = nil, ids = {} }
+        L.hostLive[name] = h
+        h.peers[tostring(peer)] = os.clock()
+        h.at = os.clock()
+        L.hostSend(name, true)
+        L.setActive()
+        lg("WO217-LOOT host-open npc=%s peer=%s -- the live list goes to the joiner on every change", name, tostring(peer))
+        return true
+    end
+    function KCD2MP_W217HostEnd(peer, name)
+        local h = L.hostLive[tostring(name)]
+        if h then h.peers[tostring(peer)] = nil end
+        L.setActive()
+        return true
+    end
+    -- a joiner's take: the item with that host id, if the body still has it
+    function KCD2MP_W217HostTakeReq(peer, tok, name, hostId, cls, amt)
+        name, hostId, tok, peer = tostring(name), tostring(hostId), tostring(tok), tostring(peer)
+        local e = nil
+        pcall(function() e = System.GetEntityByName(name) end)
+        local have = e and L.ids(e)[hostId] or nil
+        ledger("host", "request", name, hostId, cls, amt, tok, "peer=" .. peer)
+        if not have then
+            ledger("host", "refuse", name, hostId, cls, amt, tok, "why=gone")
+            L.stats.refusals = L.stats.refusals + 1
+            KCD2MP_EmitEvent("w217_tres", string.format("%s %s refuse %s %s gone 0", peer, tok, name, hostId))
+            return false
+        end
+        local owner, stolen = L.flagsOf(have.w)
+        -- out of the body: into this machine's escrow (the joiner's ack deletes it; only his cancel puts it back), never deleted under an
+        -- open screen of the host's
+        local esc = L.escrow()
+        if not (esc and L.move(e, have.w, esc)) then
+            ledger("host", "refuse", name, hostId, have.cls, have.amt, tok, "why=move-failed")
+            KCD2MP_EmitEvent("w217_tres", string.format("%s %s refuse %s %s busy 0", peer, tok, name, hostId))
+            return false
+        end
+        L.hostEsc[peer .. ":" .. tok] = { w = have.w, body = name, hostId = hostId, cls = have.cls, amt = have.amt, peer = peer, at = os.clock() }
+        L.stats.grants = L.stats.grants + 1
+        ledger("host", "grant", name, hostId, have.cls, have.amt, tok, string.format("stolen=%d owner=%s", stolen, owner))
+        ledger("host", "removed", name, hostId, have.cls, have.amt, tok, "into=escrow")
+        KCD2MP_EmitEvent("w217_tres", string.format("%s %s grant %s %s %s %d", peer, tok, name, hostId, owner, stolen))
+        if KCD2MP.w134 and KCD2MP.w134.bodySig then KCD2MP.w134.bodySig[name] = nil end   -- WO-134's watch sends the new state to the others
+        if W134 and W134.noteTake then pcall(W134.noteTake, name, have.cls, peer, have.amt) end
+        L.hostSend(name, false)
+        return true
+    end
+    -- the joiner applied it (the escrow's copy goes) or cancelled it (it goes back into the body)
+    function KCD2MP_W217HostAck(peer, tok, what)
+        local k = tostring(peer) .. ":" .. tostring(tok)
+        local t = L.hostEsc[k]
+        if not t then return false end
+        L.hostEsc[k] = nil
+        local esc = L.escrow()
+        if what == "applied" then
+            pcall(function() esc.inventory:DeleteItem(t.w, -1) end)
+            L.stats.acks = L.stats.acks + 1
+            ledger("host", "acked", t.body, t.hostId, t.cls, t.amt, tok, "escrow=deleted")
+        else
+            local e = nil
+            pcall(function() e = System.GetEntityByName(t.body) end)
+            local back = e and L.move(esc, t.w, e)
+            L.stats.backToBody = L.stats.backToBody + 1
+            ledger("host", "cancelled", t.body, t.hostId, t.cls, t.amt, tok, back and "back=body" or "back=FAILED")
+            L.hostSend(t.body, false)
+        end
+        return true
+    end
+
+    -- ======================================================================== the joiner
+    function L.setActive()
+        local n = 0
+        for _, _ in pairs(L.sess) do n = n + 1 end
+        for _, h in pairs(L.hostLive) do for _, _ in pairs(h.peers) do n = n + 1 end end
+        if (n > 0) ~= (L.active > 0) then KCD2MP_EmitEvent("w217_lootlive", tostring(n)) end
+        L.active = n
+    end
+    -- the host's live list, in parts
+    function KCD2MP_W217BodyList(name, rev, part, nparts, items)
+        name = tostring(name)
+        part, nparts, rev = tonumber(part) or 1, tonumber(nparts) or 1, tonumber(rev) or 0
+        local acc = L.partial[name]
+        if not acc or acc.rev ~= rev or acc.n ~= nparts then acc = { parts = {}, n = nparts, rev = rev }; L.partial[name] = acc end
+        acc.parts[part] = items or {}
+        for i = 1, acc.n do if not acc.parts[i] then return end end
+        L.partial[name] = nil
+        local list = {}
+        for i = 1, acc.n do for _, it in ipairs(acc.parts[i]) do list[#list + 1] = it end end
+        L.apply(name, rev, list)
+    end
+    -- the copy follows the host's list by its ids
+    function L.apply(name, rev, list)
+        local w = KCD2MP.w134
+        local e = nil
+        pcall(function() e = System.GetEntityByName(name) end)
+        if not e then lg("WO217-LOOT list npc=%s rev=%d -- no such body here", name, rev); return end
+        local s = L.sess[name]
+        local po = w.pendingOpen[name]
+        if not s then
+            if not po then return end   -- no session, no open: nothing of ours (the next open asks again)
+            s = { map = {}, rev = 0, pend = {}, puts = {}, at = os.clock(), opened = false }
+            L.sess[name] = s
+        end
+        if rev < (s.rev or 0) then return end
+        s.rev = rev
+        L.stats.applied = L.stats.applied + 1
+        local have = L.ids(e)
+        local mapped = {}
+        for hid, lid in pairs(s.map) do if have[lid] then mapped[lid] = hid else s.map[hid] = nil end end
+        local esc = L.escrow()
+        local want = {}
+        local made, out, flagsSet = 0, 0, 0
+        for _, it in ipairs(list) do
+            want[it.id] = true
+            local lid = s.map[it.id]
+            if not lid then
+                -- an unmapped item of the same class, amount and condition here is that one (the open's first list)
+                for k, v in pairs(have) do
+                    if not mapped[k] and v.cls == it.cls and v.amt == it.amt and math.abs(v.hp - it.hp) <= 0.01 then lid = k; break end
+                end
+                if lid and s.puts then s.puts[lid] = nil end
+                if not lid then
+                    -- made in the escrow, then moved in (never a create into an inventory a screen may show)
+                    local before = esc and L.ids(esc) or {}
+                    pcall(function() esc.inventory:CreateItem(it.cls, it.hp, it.amt) end)
+                    for k, v in pairs(esc and L.ids(esc) or {}) do
+                        if not before[k] and v.cls == it.cls then if L.move(esc, v.w, e) then lid = k end; break end
+                    end
+                    if lid then made = made + 1 end
+                end
+                if lid then s.map[it.id] = lid; mapped[lid] = it.id end
+            end
+            if lid then
+                local cur = L.ids(e)[lid]
+                if cur and (it.stolen == 1 or it.owner ~= "-") and L.setFlags(cur.w, it.owner, it.stolen) then flagsSet = flagsSet + 1 end
+            end
+        end
+        -- what the host's body no longer holds leaves the copy: moved into the escrow (deleted there, out of every screen's sight)
+        for k, v in pairs(L.ids(e)) do
+            local hid = mapped[k]
+            local pend = false
+            for _, t in pairs(s.pend) do if t.lid == k then pend = true end end
+            if s.puts and s.puts[k] and os.clock() - s.puts[k] < L.ASK_S then pend = true end   -- a put still on its way to the host
+            if not pend and ((hid and not want[hid]) or not hid) then
+                if L.move(e, v.w, esc) then out = out + 1; pcall(function() esc.inventory:DeleteItem(v.w, -1) end) end
+                if hid then s.map[hid] = nil end
+            end
+        end
+        L.stats.made = L.stats.made + made
+        lg("WO217-LOOT list npc=%s rev=%d items=%d -> made=%d out=%d flags=%d", name, rev, #list, made, out, flagsSet)
+        s.snap = L.ids(e)
+        if po and not s.opened then
+            w.pendingOpen[name] = nil
+            s.opened = true
+            s.at = os.clock()
+            if W134.near(e, 5.0) then
+                if KCD2MP_W201InvIntent then pcall(KCD2MP_W201InvIntent, name, "ours") end
+                local ok, err = pcall(function() po.orig(po.ent, po.user or player, po.slot) end)
+                if ok and KCD2MP_W166LootOpened then KCD2MP_W166LootOpened(name, "ours") end
+                lg("WO217-LOOT open npc=%s -- the loot screen opens on the host's items (%d), live ok=%s%s", name, #list, tostring(ok), ok and "" or (" err=" .. tostring(err)))
+            end
+            L.setActive()
+        end
+    end
+    -- the agent, ten times a second while a session lives (both machines)
+    function KCD2MP_W217LootPoll()
+        if not KCD2MP_W217LootLive() then return false end
+        local now = os.clock()
+        -- the host: every live body's list on a change; its own takes logged; stale peers forgotten
+        for name, h in pairs(L.hostLive) do
+            local any = false
+            for p, at in pairs(h.peers) do if now - at > L.SESSION_S then h.peers[p] = nil else any = true end end
+            if not any then L.hostLive[name] = nil
+            else
+                local e = nil
+                pcall(function() e = System.GetEntityByName(name) end)
+                if e then
+                    local nowIds = L.ids(e)
+                    local pl = L.ids(player)
+                    for k, v in pairs(h.ids or {}) do
+                        if not nowIds[k] then
+                            local mine = false
+                            for _, t in pairs(L.hostEsc) do if t.hostId == k then mine = true end end
+                            if not mine and pl[k] then
+                                L.stats.hostTakes = L.stats.hostTakes + 1
+                                ledger("host", "request", name, k, v.cls, v.amt, "own", "peer=host")
+                                ledger("host", "grant", name, k, v.cls, v.amt, "own", "peer=host")
+                                ledger("host", "removed", name, k, v.cls, v.amt, "own", "into=player")
+                                ledger("host", "applied", name, k, v.cls, v.amt, "own", "peer=host")
+                            end
+                        end
+                    end
+                    L.hostSend(name, false)
+                end
+            end
+        end
+        -- the joiner: takes out of each live copy
+        for name, s in pairs(L.sess) do
+            local e = nil
+            pcall(function() e = System.GetEntityByName(name) end)
+            if not e then L.sess[name] = nil
+            else
+                local nowIds = L.ids(e)
+                local pl = nil
+                local esc = nil
+                for lid, v in pairs(s.snap or {}) do
+                    if not nowIds[lid] then
+                        local hid = nil
+                        for h2, l2 in pairs(s.map) do if l2 == lid then hid = h2 end end
+                        pl = pl or L.ids(player)
+                        if hid and pl[lid] then
+                            -- the screen moved it into the player's pack: into the escrow until the host's grant (unequipped first)
+                            esc = esc or L.escrow()
+                            pcall(function() player.actor:UnequipInventoryItem(pl[lid].w) end)
+                            local tok = L.tok()
+                            if L.move(player, pl[lid].w, esc) then
+                                s.pend[tok] = { lid = lid, hid = hid, cls = v.cls, amt = v.amt, at = now, w = pl[lid].w }
+                                s.map[hid] = nil
+                                L.stats.takes = L.stats.takes + 1
+                                L.stats.escrowed = L.stats.escrowed + 1
+                                ledger("joiner", "request", name, hid, v.cls, v.amt, tok)
+                                KCD2MP_EmitEvent("w217_treq", string.format("%s %s %s %s %d", tok, name, hid, v.cls, v.amt))
+                            else
+                                lg("WO217-LOOT take npc=%s item=%s -- not moved into the escrow (kept by the screen's own move; the host is still asked)", name, hid)
+                            end
+                        end
+                    end
+                end
+                -- puts: an item of the player's pack now in the copy (its id survives the move): the host's body gets it (WO-134's put)
+                for lid, v in pairs(nowIds) do
+                    if not (s.snap or {})[lid] and (s.pinv or {})[lid] and not s.puts[lid] then
+                        s.puts[lid] = now
+                        local tok = L.tok()
+                        KCD2MP_EmitEvent("w134_put", string.format("%s %s %s %d %.4f", tok, name, v.cls, v.amt, v.hp))
+                        ledger("joiner", "put", name, "local:" .. lid, v.cls, v.amt, tok)
+                    end
+                end
+                s.snap = L.ids(e)
+                s.pinv = L.ids(player)
+                -- unanswered takes: cancelled (nothing changes on either side: the escrow's item goes, the host puts a granted one back)
+                for tok, t in pairs(s.pend) do
+                    if now - t.at > L.ASK_S then
+                        s.pend[tok] = nil
+                        esc = esc or L.escrow()
+                        pcall(function() esc.inventory:DeleteItem(t.w, -1) end)
+                        L.stats.cancels = L.stats.cancels + 1
+                        ledger("joiner", "cancel", name, t.hid, t.cls, t.amt, tok, "why=no-answer")
+                        KCD2MP_EmitEvent("w217_tack", string.format("%s %s cancel", tok, name))
+                    end
+                end
+                -- the session's end: 10 minutes, or the player away from the body with no screen open on it
+                local away = not W134.near(e, 6.0) and not (KCD2MP_W166LootOpenOn and KCD2MP_W166LootOpenOn(name))
+                if now - s.at > L.SESSION_S or (away and next(s.pend) == nil) then
+                    L.sess[name] = nil
+                    KCD2MP_EmitEvent("w217_lootend", name)
+                    lg("WO217-LOOT end npc=%s -- %s", name, away and "the player walked away" or "10 minutes")
+                end
+            end
+        end
+        L.setActive()
+        return true
+    end
+    -- the host's answer to a take
+    function KCD2MP_W217TakeResult(tok, verdict, name, hostId, owner, stolen)
+        tok, name = tostring(tok), tostring(name)
+        local s = L.sess[name]
+        local t = s and s.pend[tok] or nil
+        if not t then
+            -- a late answer to a take this side already cancelled: nothing is applied (its cancel puts a granted item back on the host)
+            ledger("joiner", "late", name, hostId, "-", 0, tok, "verdict=" .. tostring(verdict))
+            return false
+        end
+        s.pend[tok] = nil
+        local esc = L.escrow()
+        if verdict == "grant" then
+            local ok = L.move(esc, t.w, player)
+            if ok then
+                L.setFlags(t.w, owner or "-", stolen or 0)
+                ledger("joiner", "applied", name, t.hid, t.cls, t.amt, tok, string.format("stolen=%s owner=%s", tostring(stolen), tostring(owner)))
+                KCD2MP_EmitEvent("w217_tack", string.format("%s %s applied", tok, name))
+            else
+                pcall(function() esc.inventory:DeleteItem(t.w, -1) end)
+                ledger("joiner", "apply-failed", name, t.hid, t.cls, t.amt, tok)
+                KCD2MP_EmitEvent("w217_tack", string.format("%s %s cancel", tok, name))
+            end
+        else
+            pcall(function() esc.inventory:DeleteItem(t.w, -1) end)
+            L.stats.refusals = L.stats.refusals + 1
+            L.stats.escDeleted = L.stats.escDeleted + 1
+            ledger("joiner", "refused", name, t.hid, t.cls, t.amt, tok, "why=" .. tostring(verdict))
+            KCD2MP_ShowNativeToast("Already taken")
+        end
+        return true
+    end
+    function KCD2MP_W217LootStatus()
+        local s = L.stats
+        local n = 0
+        for _, _ in pairs(L.sess) do n = n + 1 end
+        local h = 0
+        for _, _ in pairs(L.hostLive) do h = h + 1 end
+        mp_log(string.format("WO217-LOOT status live=%s sessions=%d host_bodies=%d lists=%d applied=%d takes=%d grants=%d refusals=%d cancels=%d moves=%d moves_failed=%d made=%d escrowed=%d host_takes=%d acks=%d back=%d flags=%d",
+            KCD2MP_W217LootLive() and "on" or "off", n, h, s.lists, s.applied, s.takes, s.grants, s.refusals, s.cancels, s.moves, s.movesFailed, s.made, s.escrowed,
+            s.hostTakes, s.acks, s.backToBody, s.flagsSet))
+        return true
+    end
+end
+
+-- ===== WO-217 E.1: corpses (encounter_world) =====
+--   WO217-CORPSE host-list n=<k> | npc=<n> here=<applied|placed|shown|missing> ...
+do
+    W217 = W217 or {}
+    W217.E = W217.E or { sig = nil, at = -1e9, seen = {}, stats = { lists = 0, applied = 0, placed = 0, missing = 0 } }
+    local E = W217.E
+    -- the host, every 2 s (the agent's tick): the dead bodies near its player and each partner's figure; a change goes out
+    function KCD2MP_W217CorpseCensus()
+        if not KCD2MP_W217On("encounter_world") then return false end
+        local centers = {}
+        if player then centers[#centers + 1] = player:GetWorldPos() end
+        for _, g in pairs(KCD2MP.ghosts or {}) do if g.entity then pcall(function() centers[#centers + 1] = g.entity:GetWorldPos() end) end end
+        local out, seen = {}, {}
+        for _, c in ipairs(centers) do
+            local ents = {}
+            pcall(function() ents = System.GetEntitiesInSphere(c, 100) or {} end)
+            for _, e in ipairs(ents) do
+                local n = e.GetName and e:GetName() or ""
+                if (e.class == "NPC" or e.class == "NPC_Female") and not seen[n] and not string.find(n, "kcd2mp_", 1, true) and not string.find(n, "DialogTwin_", 1, true)
+                   and string.match(n, "^[%w_]+$") and #n <= 63 then
+                    local dead = false
+                    pcall(function() dead = e.actor ~= nil and e.actor:IsDead() == true end)
+                    if dead then
+                        seen[n] = true
+                        local q = e:GetWorldPos()
+                        local a = 0
+                        pcall(function() a = e:GetWorldAngles().z end)
+                        out[#out + 1] = string.format("%s:%.1f:%.1f:%.1f:%.2f", n, q.x, q.y, q.z, a)
+                        if #out >= 40 then break end
+                    end
+                end
+            end
+        end
+        table.sort(out)
+        local sig = table.concat(out, ",")
+        if sig == E.sig and os.clock() - E.at < 30 then return true end
+        E.sig, E.at = sig, os.clock()
+        E.stats.lists = E.stats.lists + 1
+        KCD2MP_EmitEvent("w217_corpses", #out > 0 and sig or "-")
+        if E.stats.lists <= 50 or E.stats.lists % 20 == 0 then mp_log(string.format("WO217-CORPSE host-list n=%d [lists=%d]", #out, E.stats.lists)) end
+        return true
+    end
+    -- a corpse the host lists (seen in its last 60 s) is never parked by a stream that stopped
+    E.listed = E.listed or {}
+    function KCD2MP_W217CorpseHolds(name)
+        local at = E.listed[tostring(name)]
+        return at ~= nil and os.clock() - at < 60 and KCD2MP_W217On("encounter_world")
+    end
+    -- the joiner, per body of the host's list: a missing one is made (WO-131's stand-in, created dead); one alive here is reported (the
+    -- agent applies its death); a dead one is shown, kept out of B's hiding and laid where the host's lies
+    function KCD2MP_W217Corpse(name, x, y, z, yaw)
+        if not KCD2MP_W217On("encounter_world") then return false end
+        name = tostring(name)
+        E.listed[name] = os.clock()
+        local e = nil
+        pcall(function() e = System.GetEntityByName(name) end)
+        if not e then
+            local made = nil
+            if KCD2MP_W131StandIn then pcall(function() made = KCD2MP_W131StandIn(name, x, y, z, yaw, 1) end) end
+            if made then
+                E.stats.made = (E.stats.made or 0) + 1
+                mp_log(string.format("WO217-CORPSE npc=%s here=made -- the host's dead body is not in this world (an encounter's own): a stand-in made dead where the host's lies [n=%d]",
+                    name, E.stats.made))
+                KCD2MP_EmitEvent("w217_corpse", name .. " spawned")
+                return true
+            end
+            if not E.seen[name] then
+                E.seen[name] = "missing"
+                E.stats.missing = E.stats.missing + 1
+                mp_log(string.format("WO217-CORPSE npc=%s here=waiting -- the host's dead body is not in this world: its stand-in waits for the host's soul or the guard [n=%d]",
+                    name, E.stats.missing))
+            end
+            KCD2MP_EmitEvent("w217_corpse", name .. " waiting")
+            return false
+        end
+        local deadNow = false
+        pcall(function() deadNow = e.actor ~= nil and e.actor:IsDead() == true end)
+        if not deadNow then
+            KCD2MP_EmitEvent("w217_corpse", name .. " alive")
+            return false
+        end
+        -- WO-137's created-dead stand-in: dead here now -- shown (its own tick would, for a streamed one)
+        local si = KCD2MP.w131 and KCD2MP.w131.standins and KCD2MP.w131.standins[name]
+        if si and si.deadPending then si.deadPending = nil end
+        if KCD2MP_W216Exempt then pcall(KCD2MP_W216Exempt, name, 3600, "corpse") end
+        pcall(function() e:Hide(0) end)
+        local placed = false
+        pcall(function()
+            local q = e:GetWorldPos()
+            if (q.x - x) ^ 2 + (q.y - y) ^ 2 > 2.25 then e:SetWorldPos({ x = x, y = y, z = z + 0.1 }); placed = true end
+        end)
+        local dead = false
+        pcall(function() dead = e.actor ~= nil and e.actor:IsDead() == true end)
+        if placed then E.stats.placed = E.stats.placed + 1 end
+        if E.seen[name] ~= "shown" then
+            E.seen[name] = "shown"
+            E.stats.applied = E.stats.applied + 1
+            mp_log(string.format("WO217-CORPSE npc=%s here=%s dead=%s -- the host's dead body shown here%s [n=%d]", name, placed and "placed" or "shown",
+                tostring(dead), placed and " where the host's lies" or "", E.stats.applied))
+            -- an upright dead copy is laid down the game's way (WO-195's rule)
+            if dead and KCD2MP_W195Ragdoll then pcall(KCD2MP_W195Ragdoll, name) end
+        end
+        KCD2MP_EmitEvent("w217_corpse", name .. " shown")
+        return true
+    end
+end
+
+-- ===== WO-217 F: carts (carts) =====
+--   WO217-CART host-census n=<k> | m cart=<n> dist_m= height_m= host_height_m= riders= seated= off=
+do
+    W217 = W217 or {}
+    W217.F = W217.F or { lastN = 0, stats = { batches = 0, measures = 0, far = 0 } }
+    local F = W217.F
+    local function aboveTerrain(q)
+        local tz = q.z
+        pcall(function() tz = System.GetTerrainElevation(q) end)
+        return q.z - tz
+    end
+    -- the host, 4 times a second (the agent's tick): every WHCart within 150 m of its player or a partner's figure, and its riders
+    function KCD2MP_W217CartCensus()
+        if not KCD2MP_W217On("carts") then return false end
+        local centers = {}
+        if player then centers[#centers + 1] = player:GetWorldPos() end
+        for _, g in pairs(KCD2MP.ghosts or {}) do if g.entity then pcall(function() centers[#centers + 1] = g.entity:GetWorldPos() end) end end
+        local out = {}
+        for _, cart in ipairs(System.GetEntitiesByClass("WHCart") or {}) do
+            -- the cart's top-level body: a WHCart is a child of its wagon (backPart[...], ef2-b11: the write set the child's LOCAL transform);
+            -- the wagon is moved, the cart, its seats and its stash follow as its children
+            local e, depth = cart, 0
+            while depth < 3 do
+                local par = nil
+                pcall(function() par = e:GetParent() end)
+                if not par then break end
+                e, depth = par, depth + 1
+            end
+            local rootFree = true
+            pcall(function() rootFree = e:GetParent() == nil end)
+            local n = e:GetName()
+            if rootFree and #n <= 127 and not string.find(n, "[%s|;,]") then
+                local q = e:GetWorldPos()
+                local near = false
+                for _, c in ipairs(centers) do if (q.x - c.x) ^ 2 + (q.y - c.y) ^ 2 < 22500 then near = true; break end end
+                if near and #out < 10 then
+                    local a = e:GetWorldAngles()
+                    local riders = {}
+                    pcall(function()
+                        for _, r in ipairs(System.GetEntitiesInSphere(q, 3.5) or {}) do
+                            if (r.class == "NPC" or r.class == "NPC_Female") and #riders < 6 then
+                                local rq = r:GetWorldPos()
+                                if (rq.x - q.x) ^ 2 + (rq.y - q.y) ^ 2 < 9 and aboveTerrain(rq) >= 0.5 then
+                                    local rn = r:GetName()
+                                    if string.match(rn, "^[%w_]+$") then riders[#riders + 1] = rn end
+                                end
+                            end
+                        end
+                    end)
+                    out[#out + 1] = string.format("%s|%.3f|%.3f|%.3f|%.4f|%.4f|%.4f|%s", n, q.x, q.y, q.z, a.x, a.y, a.z, #riders > 0 and table.concat(riders, ",") or "-")
+                end
+            end
+        end
+        if #out == 0 and F.lastN == 0 then return true end
+        F.lastN = #out
+        F.stats.batches = F.stats.batches + 1
+        KCD2MP_EmitEvent("w217_carts", #out > 0 and table.concat(out, ";") or "-")
+        if F.stats.batches <= 20 or F.stats.batches % 240 == 0 then mp_log(string.format("WO217-CART host-census n=%d [batches=%d]", #out, F.stats.batches)) end
+        return true
+    end
+    -- the joiner, twice a second per cart within 80 m of this player: where its cart is against the host's, its height, its riders
+    function KCD2MP_W217CartMeasure(name, hx, hy, hz, riders)
+        if not KCD2MP_W217On("carts") then return false end
+        local e = nil
+        pcall(function() e = System.GetEntityByName(tostring(name)) end)
+        if not e or not player then return false end
+        local q = e:GetWorldPos()
+        local p = player:GetWorldPos()
+        if (q.x - p.x) ^ 2 + (q.y - p.y) ^ 2 > 6400 then F.stats.far = F.stats.far + 1; return false end
+        local dist = math.sqrt((q.x - hx) ^ 2 + (q.y - hy) ^ 2 + (q.z - hz) ^ 2)
+        local hh = aboveTerrain({ x = hx, y = hy, z = hz })
+        local n, seated, off = 0, 0, {}
+        for rn in string.gmatch(tostring(riders or ""), "[%w_]+") do
+            n = n + 1
+            local r = nil
+            pcall(function() r = System.GetEntityByName(rn) end)
+            local ok = false
+            if r then
+                local rq = r:GetWorldPos()
+                ok = (rq.x - q.x) ^ 2 + (rq.y - q.y) ^ 2 < 9 and aboveTerrain(rq) >= 0.5
+            end
+            if ok then seated = seated + 1 else off[#off + 1] = rn end
+        end
+        F.stats.measures = F.stats.measures + 1
+        mp_log(string.format("WO217-CART m cart=%s dist_m=%.2f height_m=%.2f host_height_m=%.2f riders=%d seated=%d off=%s [n=%d]", tostring(name), dist,
+            aboveTerrain(q), hh, n, seated, #off > 0 and table.concat(off, ",") or "-", F.stats.measures))
+        return true
+    end
+end
+
+-- ===== WO-217 E.2: what an encounter adds (encounter_world) =====
+do
+    W217 = W217 or {}
+    W217.P = W217.P or { sent = {}, sentAt = {}, mine = {}, stats = { census = 0, sent = 0, gone = 0, made = 0, kept = 0, removed = 0, failed = 0 } }
+    local PR = W217.P
+    PR.CLASSES = { BasicEntity = true, RigidBody = true, RigidBodyEx = true, GeomEntity = true, AnimObject = true, FireplaceSmartObject = true,
+                   CartStash = true, DeadBody_Horse = true, SO_DeadBody_Horse = true, DeadBody_Human = true }
+    local function spawned(e)
+        local fl = 0
+        pcall(function() fl = e:GetFlags() or 0 end)
+        return math.floor(fl / 16777216) % 2 == 1   -- ENTITY_FLAG_SPAWNED (bit 24; single precision keeps it)
+    end
+    local function okName(n) return type(n) == "string" and #n > 0 and #n <= 100 and not string.find(n, "[%s|;\"\\]") end
+    -- the host, every 2 s (with the corpses): the spawned props near the players
+    function KCD2MP_W217PropCensus()
+        if not KCD2MP_W217On("encounter_world") then return false end
+        local centers = {}
+        if player then centers[#centers + 1] = player:GetWorldPos() end
+        for _, g in pairs(KCD2MP.ghosts or {}) do if g.entity then pcall(function() centers[#centers + 1] = g.entity:GetWorldPos() end) end end
+        local now, cur, n = os.clock(), {}, 0
+        for _, c in ipairs(centers) do
+            local ents = {}
+            pcall(function() ents = System.GetEntitiesInSphere(c, 60) or {} end)
+            for _, e in ipairs(ents) do
+                local name = e.GetName and e:GetName() or ""
+                if n < 30 and PR.CLASSES[tostring(e.class)] and okName(name) and not cur[name] and not string.find(name, "kcd2mp", 1, true) and spawned(e) then
+                    local q, a = e:GetWorldPos(), e:GetWorldAngles()
+                    local arch, mdl = "", ""
+                    pcall(function() arch = e:GetArchetype() or "" end)
+                    pcall(function() mdl = tostring(e.Properties and e.Properties.object_Model or "") end)
+                    if not okName(arch) then arch = "-" end
+                    if not okName(mdl) then mdl = "-" end
+                    cur[name] = { row = string.format("%s|%s|%s|%s|%.2f|%.2f|%.2f|%.3f|%.3f|%.3f", name, tostring(e.class), arch, mdl, q.x, q.y, q.z, a.x, a.y, a.z), q = q }
+                    n = n + 1
+                end
+            end
+        end
+        PR.stats.census = PR.stats.census + 1
+        local sent, gone = 0, 0
+        for name, v in pairs(cur) do
+            local was = PR.sent[name]
+            local moved = was == nil or (was.q.x - v.q.x) ^ 2 + (was.q.y - v.q.y) ^ 2 + (was.q.z - v.q.z) ^ 2 > 0.09
+            if moved or now - (PR.sentAt[name] or -1e9) >= 30 then
+                PR.sent[name], PR.sentAt[name] = v, now
+                KCD2MP_EmitEvent("w217_prop", v.row)
+                sent = sent + 1
+            end
+        end
+        for name in pairs(PR.sent) do
+            if not cur[name] then PR.sent[name] = nil; PR.sentAt[name] = nil; KCD2MP_EmitEvent("w217_propgone", name); gone = gone + 1 end
+        end
+        PR.stats.sent, PR.stats.gone = PR.stats.sent + sent, PR.stats.gone + gone
+        if (sent + gone > 0) and (PR.stats.census <= 200 or PR.stats.census % 50 == 0) then
+            mp_log(string.format("WO217-PROP host n=%d sent=%d gone=%d [census=%d]", n, sent, gone, PR.stats.census))
+        end
+        return true
+    end
+    -- the joiner: one prop of the host's list
+    function KCD2MP_W217Prop(name, cls, arch, mdl, x, y, z, ax, ay, az)
+        if not KCD2MP_W217On("encounter_world") then return false end
+        name, cls = tostring(name), tostring(cls)
+        if not okName(name) or not PR.CLASSES[cls] then return false end
+        local mine = PR.mine[name]
+        local e = nil
+        pcall(function() e = System.GetEntityByName(name) end)
+        if e then
+            local ours = false
+            pcall(function() ours = mine ~= nil and e.kcdmpProp == mine.token end)
+            if ours then
+                pcall(function()
+                    local q = e:GetWorldPos()
+                    if (q.x - x) ^ 2 + (q.y - y) ^ 2 + (q.z - z) ^ 2 > 0.09 then e:SetWorldPos({ x = x, y = y, z = z }); e:SetWorldAngles({ x = ax, y = ay, z = az }) end
+                end)
+            elseif not PR.seenKept then
+                PR.seenKept = {}
+            end
+            if not ours and not (PR.seenKept and PR.seenKept[name]) then
+                PR.seenKept = PR.seenKept or {}
+                PR.seenKept[name] = true
+                PR.stats.kept = PR.stats.kept + 1
+                mp_log(string.format("WO217-PROP kept name=%s class=%s -- this world has it: left as it is [n=%d]", name, cls, PR.stats.kept))
+            end
+            return true
+        end
+        local n = 0
+        for _ in pairs(PR.mine) do n = n + 1 end
+        if n >= 30 then return false end
+        local params = { class = cls, name = name, position = { x = x, y = y, z = z } }
+        if arch ~= "-" and arch ~= "" then params.archetype = arch end
+        if mdl ~= "-" and mdl ~= "" then params.properties = { object_Model = mdl } end
+        local ok, err = pcall(function() e = System.SpawnEntity(params) end)
+        if not (ok and e) then
+            PR.stats.failed = PR.stats.failed + 1
+            if PR.stats.failed <= 50 then mp_log(string.format("WO217-PROP failed name=%s class=%s arch=%s err=%s [n=%d]", name, cls, tostring(arch), tostring(err), PR.stats.failed)) end
+            return false
+        end
+        local token = string.format("%s@%.3f", name, os.clock())
+        pcall(function() e.kcdmpProp = token end)
+        if mp_set_no_save then pcall(mp_set_no_save, e) end
+        pcall(function() e:SetWorldAngles({ x = ax, y = ay, z = az }) end)
+        PR.mine[name] = { id = e.id, token = token }
+        PR.stats.made = PR.stats.made + 1
+        mp_log(string.format("WO217-PROP made name=%s class=%s arch=%s at=(%.1f,%.1f,%.1f) -- the host's encounter left it, this world never did [n=%d]",
+            name, cls, tostring(arch), x, y, z, PR.stats.made))
+        return true
+    end
+    -- the joiner: a prop the host's list dropped -- ours is removed (by its token)
+    function KCD2MP_W217PropGone(name)
+        name = tostring(name)
+        local mine = PR.mine[name]
+        if not mine then return false end
+        PR.mine[name] = nil
+        local e = nil
+        pcall(function() e = System.GetEntity(mine.id) end)
+        local ours = false
+        pcall(function() ours = e ~= nil and e.kcdmpProp == mine.token end)
+        if ours then pcall(function() System.RemoveEntity(e.id) end) end
+        PR.stats.removed = PR.stats.removed + 1
+        mp_log(string.format("WO217-PROP removed name=%s ours=%s [n=%d]", name, tostring(ours), PR.stats.removed))
+        return true
     end
 end
 

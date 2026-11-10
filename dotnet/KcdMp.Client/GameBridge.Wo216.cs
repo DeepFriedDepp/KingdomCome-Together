@@ -19,7 +19,7 @@ public partial class GameBridge
     private readonly ConcurrentDictionary<string, bool> _w216On = new(StringComparer.Ordinal);
     private bool W216On(string name) => _w216On.TryGetValue(name, out bool v) ? v : !W216Switch.TwinOff(name);
     private bool _w216NativeToldOld;
-    private long _w216RoutePolls, _w216RouteBodiesOut, _w216RouteFramesIn, _w216RouteBodiesIn, _w216RouteUnknown, _w216RouteBad;
+    private long _w216RoutePolls, _w216RouteBodiesOut, _w216RouteFramesIn, _w216RouteBodiesIn, _w216RouteUnknown, _w216RouteBad, _w216RouteSkipped;
 
     /// <summary>B: 0 none, 1 the host, 2 a joiner in the host's world and not in a load (the DLL's census runs only then).</summary>
     private byte Wo216Role() => W137Host ? (byte)1 : (W137Joiner && !Wo136Holding ? (byte)2 : (byte)0);
@@ -57,7 +57,7 @@ public partial class GameBridge
     private string Wo216StatsLine() =>
         $"MP-W216-STATS {string.Join(' ', W216Switch.Names.Select(n => $"{n}={(W216On(n) ? "on" : "off")}"))} route_polls={Interlocked.Read(ref _w216RoutePolls)}"
         + $" route_bodies_out={Interlocked.Read(ref _w216RouteBodiesOut)} route_frames_in={Interlocked.Read(ref _w216RouteFramesIn)}"
-        + $" route_bodies_in={Interlocked.Read(ref _w216RouteBodiesIn)} route_not_here={Interlocked.Read(ref _w216RouteUnknown)} route_bad={Interlocked.Read(ref _w216RouteBad)}"
+        + $" route_bodies_in={Interlocked.Read(ref _w216RouteBodiesIn)} route_not_here={Interlocked.Read(ref _w216RouteUnknown)} route_bad={Interlocked.Read(ref _w216RouteBad)} route_skipped={Interlocked.Read(ref _w216RouteSkipped)}"
         + $" line_bodies={Interlocked.Read(ref _w216LineBodies)} line_activity_applied={Interlocked.Read(ref _w216LineActApplied)} line_hands_applied={Interlocked.Read(ref _w216LineHandsApplied)}"
         + $" rows_retired={Interlocked.Read(ref _w216RowsRetired)} hand_rows_retired={Interlocked.Read(ref _w216HandRowsRetired)} exempts={Interlocked.Read(ref _w216Exempts)}"
         + $" outfits_out={Interlocked.Read(ref _w216OutfitsOut)} outfits_in={Interlocked.Read(ref _w216OutfitsIn)} dressed={Interlocked.Read(ref _w216Dressed)}"
@@ -320,6 +320,9 @@ public partial class GameBridge
     {
         if (!W137Joiner) return;
         Interlocked.Increment(ref _w216RouteFramesIn);
+        // WO-217 route_skip: with this machine's mp_route off nothing in the DLL reads a line (the replay and the horse replay need it on),
+        // and each line handed in is a pipe round trip -- the busy village's 25 a second held the joiner's queue 30-100 s behind
+        if (Wo217Rules.SkipRoute(W217On("route_skip"), W215On("route"))) { Interlocked.Increment(ref _w216RouteSkipped); return; }
         if (!Wo216Rules.TryRekeyRoute(body, name => _npcEntityIds.TryGetValue(name, out uint e) ? e : 0u, out byte[] op, out int known, out int unknown))
         {
             Interlocked.Increment(ref _w216RouteBad);
