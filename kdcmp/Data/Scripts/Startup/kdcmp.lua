@@ -4370,13 +4370,19 @@ local function mp_wo102_pause(name, p, why)
     if KCD2MP_W144ShowCopy then pcall(KCD2MP_W144ShowCopy, name) end   -- WO-144 2.3: a horse the host uses is shown here
 end
 
+-- WO-216 B: the stream's own releases -- a copy it let go (its silence, the dwell after it, the coverage-gap detector) -- are the resumes
+-- B refuses on a joiner (the body stays frozen here). A feature's resume (a talk, a forced dialogue, a scene, a guard's stop, a ridden
+-- horse, a corpse) and a session-wide one (a lever, a disconnect) still give the body its brain back: the gates' synthetic suites caught
+-- a first build that froze them all (WO-137, WO-151, WO-166, WO-200: a copy's conversation needs it awake).
+local W216_RELEASE_WHY = { silence = true, dwell = true, reconcile = true, ["gap-no-writes"] = true }
+
 -- The unconditional resume: wh_ai_ResumeNPC now, forget the name.
 local function mp_wo102_resume(name, why)
     local at = KCD2MP._npcPaused[name]
     if not at then return end
     KCD2MP._npcPaused[name] = nil
     KCD2MP._npcResumePending[name] = nil
-    W216_RELEASE = true   -- WO-216 B: a released copy's resume -- the one B blocks on a joiner (no brain runs here)
+    W216_RELEASE = W216_RELEASE_WHY[tostring(why)] == true   -- WO-216 B: only the stream's release is refused on a joiner
     local ok, err = pcall(System.ExecuteCommand, "wh_ai_ResumeNPC " .. tostring(name))
     W216_RELEASE = false
     local exec = ok and "ok" or ("err:" .. tostring(err))
