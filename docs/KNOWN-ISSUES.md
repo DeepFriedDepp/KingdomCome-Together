@@ -26,7 +26,8 @@ Plain words, for players and testers. Each line says what you may see, and wheth
 
 - **Chests are each player's own** (by design): a chest the host emptied is still full for the joiner, and the reverse.
 - **Herbs picked from a patch** (the gathering, not a loose item) are each player's own.
-- **Carts** follow the host's carts on the joiner's screen (0.64.4), but **the horse is not hitched** to the joiner's cart yet.
+- **Carts** follow the host's carts on the joiner's screen (0.64.4). **The horses** may not always be with the joiner's cart (the
+  test bench saw both); press `.` if a cart drives without them.
 - **Road encounters** (a robbery, a broken cart): what they leave — the dead, the props — is sent to the joiner from 0.64.4, but this
   could not be tried on the test bench; scene 7 of the tester script is its test.
 - **Doors.** A door you open or close shows the same for the other player. But a door may be **locked on the joiner's side** while
