@@ -33326,13 +33326,12 @@ end
         W3C.listening.map = (W207 and W207.on and W207.on.listen_map == false) and "dialog" or "kcd2mp_listen"
         pcall(ActionMapManager.EnableActionMap, W3C.listening.map, true)
         do   -- WO-218 B.3: the HUD and the player's state as the listen begins (WO-213: 7 of 37 host listens began with 2 of 9 clips visible)
-            local vis, inDlg, danger, fight = {}, false, false, false
+            local vis, inDlg, danger = {}, false, false
             for _, clip in ipairs(W3C_HUD) do local ok, v = pcall(UIAction.IsVisible, "hud", 0, clip); if ok and v then vis[#vis + 1] = clip end end
             pcall(function() inDlg = player.human:IsInDialog() == true end)
             pcall(function() danger = player.soul:IsInCombatDanger() == true end)
-            pcall(function() fight = player.human:IsInCombat() == true end)
-            mp_log(string.format("WO218-LISTEN start partner=%s cid=%s hud_visible=%d/%d [%s] in_dialog=%s combat_danger=%s in_combat=%s map=%s",
-                tostring(starter), tostring(cid), #vis, #W3C_HUD, table.concat(vis, ","), tostring(inDlg), tostring(danger), tostring(fight), tostring(W3C.listening.map)))
+            mp_log(string.format("WO218-LISTEN start partner=%s cid=%s hud_visible=%d/%d [%s] in_dialog=%s combat_danger=%s map=%s",
+                tostring(starter), tostring(cid), #vis, #W3C_HUD, table.concat(vis, ","), tostring(inDlg), tostring(danger), tostring(W3C.listening.map)))
         end
         w3c_hud(true)
         w3c_head(true)   -- WO-208 C.5
