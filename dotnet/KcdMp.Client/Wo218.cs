@@ -94,6 +94,16 @@ public static partial class Wo218Rules
         public bool IsState => !(Type == Protocol.ActivityExtraDown && Kind == Protocol.ExtraKindOneShot);
     }
 
+    /// <summary>One body's queue (the lane per body): the index of the waiting row a new row replaces -- a state row replaces the waiting row of
+    /// the same type and kind; a one-shot replaces nothing (-1: it waits in order).</summary>
+    public static int ReplaceAt(IReadOnlyList<ActUnit> pending, ActUnit u)
+    {
+        if (!u.IsState) return -1;
+        for (int i = 0; i < pending.Count; i++)
+            if (pending[i].IsState && pending[i].Type == u.Type && pending[i].Kind == u.Kind) return i;
+        return -1;
+    }
+
     /// <summary>
     /// The waiting rows as one: each body's newest row of a state kind (at the place of its first row), every one-shot in its order.
     /// </summary>

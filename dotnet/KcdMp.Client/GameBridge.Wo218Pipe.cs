@@ -109,14 +109,15 @@ public partial class GameBridge
 
     // ---------------------------------------------------------------- A.1: the activity lane, every waiting frame at once
 
-    private long _w218ActBatches, _w218ActFrames, _w218ActRows, _w218ActCoalesced, _w218ActGroupsMax;
+    private long _w218ActBatches, _w218ActFrames, _w218ActRows, _w218ActCoalesced;
     private long _w218ActAtMs;   // the read time of the oldest frame the activity lane works on now (0: the lane is idle)
 
     /// <summary>How far the activity lane trails its frames' arrival now (0 when it keeps up).</summary>
     private long Wo218ActLagMs()
     {
         long at = Volatile.Read(ref _w218ActAtMs);
-        return at <= 0 ? 0 : Math.Max(0, W147StampMs(Stopwatch.GetTimestamp()) - at);
+        long lane = at <= 0 ? 0 : Math.Max(0, W147StampMs(Stopwatch.GetTimestamp()) - at);
+        return Math.Max(lane, Wo218BodyLagMs());
     }
 
     /// <summary>The activity lane with the batch on: the first frame and every one already waiting, coalesced; the bodies at once.</summary>
@@ -146,43 +147,94 @@ public partial class GameBridge
             Wo207Trace.Kind.Value = f.Type;
             try { await Wo123OnFrameAsync(f.Type, f.Payload, ct); } catch (Exception ex) { Console.WriteLine($"MP-W218 activity frame failed: {ex.GetType().Name}: {ex.Message}"); }
         }
-        int before = units.Count;
-        var kept = Wo218Rules.CoalesceActivity(units);
         Interlocked.Increment(ref _w218ActBatches);
         Interlocked.Add(ref _w218ActFrames, frames.Count);
-        Interlocked.Add(ref _w218ActRows, before);
-        Interlocked.Add(ref _w218ActCoalesced, before - kept.Count);
-        var groups = kept.GroupBy(u => u.Body).ToList();
-        if (groups.Count > Interlocked.Read(ref _w218ActGroupsMax)) Interlocked.Exchange(ref _w218ActGroupsMax, groups.Count);
-        using var gate = new SemaphoreSlim(24);
-        await Task.WhenAll(groups.Select(async g =>
+        Interlocked.Add(ref _w218ActRows, units.Count);
+        foreach (var u in units) Wo218EnqueueUnit(u, ct);   // each body's own queue: the lane never waits for a body
+    }
+
+    // ---- the lane per body: a state row replaces the same body's waiting row of its kind; a one-shot waits in order; 24 bodies at once
+    private sealed class W218BodyLane
+    {
+        public readonly List<Wo218Rules.ActUnit> Pending = new();
+        public bool Running;
+        public long RunningArrival;   // the read time (Stopwatch ticks) of the row being handled; 0: none
+    }
+    private readonly Dictionary<string, W218BodyLane> _w218Bodies = new(StringComparer.Ordinal);
+    private readonly SemaphoreSlim _w218BodyGate = new(24, 24);
+    private long _w218BodiesRunningMax;
+
+    private void Wo218EnqueueUnit(Wo218Rules.ActUnit u, CancellationToken ct)
+    {
+        W218BodyLane? bl;
+        bool start = false;
+        int running;
+        lock (_w218Bodies)
         {
-            await gate.WaitAsync(ct);
+            if (!_w218Bodies.TryGetValue(u.Body, out bl))
+            {
+                if (_w218Bodies.Count > 600)
+                    foreach (var k in _w218Bodies.Where(kv => !kv.Value.Running && kv.Value.Pending.Count == 0).Select(kv => kv.Key).ToList()) _w218Bodies.Remove(k);
+                _w218Bodies[u.Body] = bl = new W218BodyLane();
+            }
+            int i = Wo218Rules.ReplaceAt(bl.Pending, u);
+            if (i >= 0) { bl.Pending[i] = u; Interlocked.Increment(ref _w218ActCoalesced); }
+            else bl.Pending.Add(u);
+            if (!bl.Running) { bl.Running = true; start = true; }
+            running = _w218Bodies.Values.Count(b => b.Running);
+        }
+        if (running > Interlocked.Read(ref _w218BodiesRunningMax)) Interlocked.Exchange(ref _w218BodiesRunningMax, running);
+        if (start) _ = Wo218RunBodyAsync(u.Body, bl, ct);
+    }
+
+    private async Task Wo218RunBodyAsync(string body, W218BodyLane bl, CancellationToken ct)
+    {
+        while (true)
+        {
+            Wo218Rules.ActUnit u;
+            lock (_w218Bodies)
+            {
+                if (bl.Pending.Count == 0 || ct.IsCancellationRequested) { bl.Running = false; bl.RunningArrival = 0; bl.Pending.Clear(); return; }
+                u = bl.Pending[0];
+                bl.Pending.RemoveAt(0);
+                bl.RunningArrival = u.Arrival;
+            }
+            try { await _w218BodyGate.WaitAsync(ct); }
+            catch (OperationCanceledException) { lock (_w218Bodies) { bl.Running = false; bl.RunningArrival = 0; bl.Pending.Clear(); } return; }
+            Wo207Trace.Kind.Value = u.Type;
+            long t0 = Stopwatch.GetTimestamp();
             try
             {
-                foreach (var u in g)
-                {
-                    Wo207Trace.Kind.Value = u.Type;
-                    long t0 = Stopwatch.GetTimestamp();
-                    try
-                    {
-                        if (u.Type == Protocol.ActivityHostDown) await Wo141OnRowsAsync(u.Type, u.Src, u.Kind, [u.Act!.Value]);
-                        else await Wo143OnRowsAsync(u.Src, u.Kind, [u.Extra!]);
-                    }
-                    catch (Exception ex) { Console.WriteLine($"MP-W218 activity row failed ({u.Body}): {ex.GetType().Name}: {ex.Message}"); }
-                    long wait = (t0 - u.Arrival) * 1000 / Stopwatch.Frequency;
-                    Wo207Trace.Frame(u.Type, wait, (Stopwatch.GetTimestamp() - t0) * 1000 / Stopwatch.Frequency);
-                }
+                if (u.Type == Protocol.ActivityHostDown) await Wo141OnRowsAsync(u.Type, u.Src, u.Kind, [u.Act!.Value]);
+                else await Wo143OnRowsAsync(u.Src, u.Kind, [u.Extra!]);
             }
-            finally { gate.Release(); Wo207Trace.Kind.Value = 0; }
-        }));
+            catch (Exception ex) { Console.WriteLine($"MP-W218 activity row failed ({body}): {ex.GetType().Name}: {ex.Message}"); }
+            finally { _w218BodyGate.Release(); }
+            long wait = (t0 - u.Arrival) * 1000 / Stopwatch.Frequency;
+            Wo207Trace.Frame(u.Type, wait, (Stopwatch.GetTimestamp() - t0) * 1000 / Stopwatch.Frequency);
+            Wo207Trace.Kind.Value = 0;
+        }
+    }
+
+    /// <summary>The oldest row waiting or running in any body's queue: how far the activity lane trails (0 when every body keeps up).</summary>
+    private long Wo218BodyLagMs()
+    {
+        long oldest = 0;
+        lock (_w218Bodies)
+            foreach (var bl in _w218Bodies.Values)
+            {
+                long a = bl.RunningArrival;
+                if (bl.Pending.Count > 0 && (a == 0 || bl.Pending[0].Arrival < a)) a = bl.Pending[0].Arrival;
+                if (a != 0 && (oldest == 0 || a < oldest)) oldest = a;
+            }
+        return oldest == 0 ? 0 : Math.Max(0, W147StampMs(Stopwatch.GetTimestamp()) - W147StampMs(oldest));
     }
 
     // ---------------------------------------------------------------- the module's other hooks
 
     private string Wo218ShedLine() =>
         FormattableString.Invariant($" | shed level={Volatile.Read(ref _w218ShedLevel)} level_max={Interlocked.Exchange(ref _w218ShedMaxLevel, 0)} on={Interlocked.Read(ref _w218ShedOn)} superseded_far={Interlocked.Read(ref _w218ShedSuperseded)} far_rate={Interlocked.Read(ref _w218ShedRate)} mid={Interlocked.Read(ref _w218ShedMid)} asks={Interlocked.Read(ref _w218ShedAsks)}")
-        + FormattableString.Invariant($" | act batches={Interlocked.Exchange(ref _w218ActBatches, 0)} frames={Interlocked.Exchange(ref _w218ActFrames, 0)} rows={Interlocked.Exchange(ref _w218ActRows, 0)} coalesced={Interlocked.Exchange(ref _w218ActCoalesced, 0)} bodies_max={Interlocked.Exchange(ref _w218ActGroupsMax, 0)}");
+        + FormattableString.Invariant($" | act batches={Interlocked.Exchange(ref _w218ActBatches, 0)} frames={Interlocked.Exchange(ref _w218ActFrames, 0)} rows={Interlocked.Exchange(ref _w218ActRows, 0)} coalesced={Interlocked.Exchange(ref _w218ActCoalesced, 0)} bodies_running_max={Interlocked.Exchange(ref _w218BodiesRunningMax, 0)}");
 
     private string Wo218MoreStats() => "";
 

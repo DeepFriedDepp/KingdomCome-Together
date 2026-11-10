@@ -136,4 +136,14 @@ public class Wo218Tests
         Assert.Single(c, u => u.Body == "peer:3");
         Assert.Same(units[6].Extra, c[1].Extra);   // the newest hands row, at the first one's place
     }
+
+    [Fact]
+    public void A_bodys_queue_replaces_its_waiting_state_row_of_the_same_kind_and_never_a_one_shot()
+    {
+        var pending = new List<Wo218Rules.ActUnit> { Row("smith"), Extra("smith", Protocol.ExtraKindHands), Extra("smith", Protocol.ExtraKindOneShot, "a") };
+        Assert.Equal(0, Wo218Rules.ReplaceAt(pending, Row("smith")));                                     // the newer activity row
+        Assert.Equal(1, Wo218Rules.ReplaceAt(pending, Extra("smith", Protocol.ExtraKindHands)));          // the newer hands
+        Assert.Equal(-1, Wo218Rules.ReplaceAt(pending, Extra("smith", Protocol.ExtraKindOneShot, "b")));  // a one-shot waits in order
+        Assert.Equal(-1, Wo218Rules.ReplaceAt(pending, Extra("smith", Protocol.ExtraKindGaits)));         // a kind not waiting: appended
+    }
 }
