@@ -3,6 +3,7 @@
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 // WO-206 -- the digest sweep and the animation probe (wo206.h). Read-only: nothing here writes to the game.
 #include "wo206.h"
+#include "wo218.h"
 #include "wo208.h"
 #include "wo208_rules.h"
 #include "wo210_rules.h"
@@ -56,11 +57,28 @@ bool g_armed = false;
 size_t g_dirtyScan = 0;   // where the next DigestRead starts looking for dirty entries
 uint64_t c_reads = 0, c_found = 0, c_faults = 0;
 
+uint64_t c_budgetCuts = 0;   // WO-218 B.2: frames the digest stopped at its budget
+
 void digest_tick(double now) {
     if (!g_armed || g_paths.empty()) return;
     size_t first = 0;
     const size_t n = sweep_take(g_sweep, g_paths.size(), kPerFrame, now, kMinPassGapS, &first);
+    // WO-218 B.2 (digest_budget): at most kDigestBudgetUs of this frame (at least kDigestMinReads reads); the rest is given back
+    const bool budget = wo218::on(wo218::kBitMainBudget);
+    LARGE_INTEGER q0{}, qf{};
+    if (budget) { QueryPerformanceCounter(&q0); QueryPerformanceFrequency(&qf); }
     for (size_t i = first; i < first + n; ++i) {
+        if (budget && i - first >= wo218::kDigestMinReads) {
+            LARGE_INTEGER q1;
+            QueryPerformanceCounter(&q1);
+            if (static_cast<double>(q1.QuadPart - q0.QuadPart) * 1e6 / static_cast<double>(qf.QuadPart) >= wo218::kDigestBudgetUs) {
+                const size_t back = first + n - i;   // not read this frame: the cursor goes back to i
+                if (!g_sweep.inPass) { g_sweep.inPass = true; if (g_sweep.passes) --g_sweep.passes; }
+                g_sweep.cursor -= back;
+                ++c_budgetCuts;
+                break;
+            }
+        }
         uint8_t kind = 0; int32_t value = -1; bool found = false;
         KCDMP_FAULT_CALL(site, "wo206::digest_read");
         if (!fault::guarded(site, [&] { found = wo200::read_value(g_paths[i].c_str(), &kind, &value); })) { ++c_faults; continue; }

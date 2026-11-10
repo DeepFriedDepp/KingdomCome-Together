@@ -106,6 +106,9 @@ public static class Briefing
         sb.Append("Written by the bug report itself (WO-202). Times are this machine's clock.\n\n");
         var (bv, bid) = BuildOf(inp);   // WO-211 0.2: the build id in the first lines (the installer's name carries the same)
         sb.Append($"**Build:** {bv} build {bid}\n\n");
+        // WO-218 F.4: this machine's queue first -- every number below is late by it
+        try { sb.Append(W218Section.Section(AgentLines(inp).ToList())); }
+        catch (Exception ex) { sb.Append($"{W218Section.Heading}\n\n(not read: {ex.GetType().Name}: {ex.Message})\n\n"); }
         // WO-213 G: the link to the partner is the first thing read in every two-player bundle
         try
         {
@@ -122,6 +125,9 @@ public static class Briefing
         // WO-217 H: the world around the bodies (placements by reason, the seats, the loot ledger, flags, corpses, props, carts)
         try { sb.Append(W217Section.Lines(NativeLines(inp).ToList(), Kcd(inp).ToList())).Append('\n'); }
         catch (Exception ex) { sb.Append($"- **the world around the bodies** (WO-217): not read ({ex.GetType().Name}: {ex.Message})\n\n"); }
+        // WO-218 F.4: the pipe's batch and the queue's pressure
+        try { sb.Append(W218Section.Lines(NativeLines(inp).ToList(), AgentLines(inp).ToList())).Append('\n'); }
+        catch (Exception ex) { sb.Append($"- **the pipe and the queue** (WO-218): not read ({ex.GetType().Name}: {ex.Message})\n\n"); }
         Crashes(inp, sb);
         Session(inp, sb);
         Marks(inp, sb);

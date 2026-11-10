@@ -132,7 +132,34 @@ void tick() {
             if (main_thread::test_task_blocked(nm)) { s_blocked[i] = true; logf("WO203 tick %s blocked for this game (KCDMP_TEST_TASK_BLOCK, research)", t[i].area); }
         }
     }
-    for (int i = 0; i < *n; ++i) if (i >= 64 || !s_blocked[i]) t[i].fn();
+    // WO-218 B.2: with the cost meter on, each area's time (the top ones every 10 s: WO218-COST)
+    if (!main_thread::cost_meter()) { for (int i = 0; i < *n; ++i) if (i >= 64 || !s_blocked[i]) t[i].fn(); return; }
+    static double s_sum[64] = {}, s_max[64] = {}, s_win = 0;
+    static unsigned s_frames = 0;
+    static const double usPerTick = [] { LARGE_INTEGER f; QueryPerformanceFrequency(&f); return 1e6 / static_cast<double>(f.QuadPart); }();
+    auto now = [] { LARGE_INTEGER c; QueryPerformanceCounter(&c); return static_cast<double>(c.QuadPart) * usPerTick; };
+    const double w0 = now();
+    if (s_win == 0) s_win = w0;
+    for (int i = 0; i < *n; ++i) {
+        if (i < 64 && s_blocked[i]) continue;
+        const double a = now();
+        t[i].fn();
+        if (i < 64) { const double d = now() - a; s_sum[i] += d; if (d > s_max[i]) s_max[i] = d; }
+    }
+    ++s_frames;
+    if (now() - s_win < 10e6) return;
+    int idx[64];
+    const int m = *n < 64 ? *n : 64;
+    for (int i = 0; i < m; ++i) idx[i] = i;
+    for (int i = 0; i < m; ++i) for (int j = i + 1; j < m; ++j) if (s_sum[idx[j]] > s_sum[idx[i]]) { const int x = idx[i]; idx[i] = idx[j]; idx[j] = x; }
+    char buf[900];
+    int o = std::snprintf(buf, sizeof buf, "WO218-COST wo203 areas over %u frames (mean/max us a frame):", s_frames);
+    for (int k = 0; k < m && k < 12 && o > 0 && o < static_cast<int>(sizeof buf) - 48; ++k)
+        o += std::snprintf(buf + o, sizeof buf - static_cast<size_t>(o), " %s=%.0f/%.0f", t[idx[k]].area, s_sum[idx[k]] / (s_frames ? s_frames : 1), s_max[idx[k]]);
+    logf("%s", buf);
+    for (int i = 0; i < 64; ++i) { s_sum[i] = 0; s_max[i] = 0; }
+    s_frames = 0;
+    s_win = now();
 }
 
 } // namespace kcdmp::wo203

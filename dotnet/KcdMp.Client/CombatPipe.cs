@@ -22,7 +22,7 @@ namespace KcdMp.Client;
 /// is not injected, combat replication is simply unavailable and the agent says
 /// so once rather than failing on every packet.
 /// </summary>
-public sealed class CombatPipe : IAsyncDisposable
+public sealed partial class CombatPipe : IAsyncDisposable
 {
     private readonly string _pipeName;
 
@@ -2152,7 +2152,7 @@ public sealed class CombatPipe : IAsyncDisposable
                 var (type, body) = await ReadFrameAsync(CancellationToken.None);
                 // WO-118: replies are logged by their callers; 0x81/0x86/0x89
                 // arrive at frame-feed and heartbeat rates and would flood.
-                if (type is not (Result or LocalStateReply or NpcStatusReply or BodyStateReply or LocalAction or PvpHitOut or NpcCombatOut or Wo132Reply or Wo131Reply or Wo137Reply or QuestChangeOut))
+                if (type is not (Result or LocalStateReply or NpcStatusReply or BodyStateReply or LocalAction or PvpHitOut or NpcCombatOut or Wo132Reply or Wo131Reply or Wo137Reply or QuestChangeOut or BatchReply))
                     Console.WriteLine($"[combat] pipe frame 0x{type:X2} ({body.Length} bytes)");
                 if (type == LocalHit && body.Length >= 24)
                 {
@@ -2337,6 +2337,7 @@ public sealed class CombatPipe : IAsyncDisposable
                         catch (Exception ex) { Console.WriteLine($"[npctrace] trace-done not handled: {ex.Message}"); }
                     }
                 }
+                else if (type == BatchReply) OnBatchReply(body);   // WO-218 A.1: never through the single requests' line
                 else if (!_replies.Writer.TryWrite((type, body)))
                 {
                     // DropOldest means TryWrite only fails on a completed
@@ -2534,6 +2535,7 @@ public sealed class CombatPipe : IAsyncDisposable
     {
         if (Wo210PipeBlock.Blocks(type, type == Wo163 && payload.Length > 0 ? payload[0] : -1)) return (null, PipeReason.NotConnected);   // WO-210 H.3's bisect only
         if (!await EnsureConnectedAsync(ct)) return (null, PipeReason.NotConnected);
+        if (UseBatch(type)) return await BatchSendAsync(type, payload, wantType, ct);   // WO-218 A.1: one round trip for every waiting request
 
         long gateAt = Environment.TickCount64;
         bool line = await EnterGateAsync(ct);
@@ -2650,8 +2652,13 @@ public sealed class CombatPipe : IAsyncDisposable
         // WO-144 5: the reader can drop the pipe while a command waits at the gate; a null pipe
         // here was the field's NullReferenceException in every tick after the game died
         var pipe = _pipe ?? throw new IOException("pipe closed");
-        await pipe.WriteAsync(frame, ct);
-        await pipe.FlushAsync(ct);
+        await _writeLock.WaitAsync(ct);   // WO-218 A.1: the batch's pump writes outside the gate
+        try
+        {
+            await pipe.WriteAsync(frame, ct);
+            await pipe.FlushAsync(ct);
+        }
+        finally { _writeLock.Release(); }
     }
 
     private async Task<(byte Type, byte[] Body)> ReadFrameAsync(CancellationToken ct)
@@ -2687,6 +2694,7 @@ public sealed class CombatPipe : IAsyncDisposable
         _replies.Writer.TryComplete();
         _replies = NewReplyChannel();
         _expectedSeq = null;
+        OnDropBatch();   // WO-218 A.1: the waiting batch and its line fail at once; the next connection is probed again
         if (had) Console.WriteLine("[combat] lost the connection to KCDMP.dll");
     }
 

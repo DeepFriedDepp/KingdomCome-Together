@@ -313,7 +313,7 @@ def talk_once(c, npc, x, y, z, how='talk'):
                                          'lines': [l[:180] for l in lines]}
 
 
-def p0_role(r, who, sale_keys=os.environ.get('KCDMP_RIG_SALE_KEYS', 'a,wait1.5,e,wait1.5,x,wait2')):   # the shop's own hints: A the player's side, E to the basket, X close the deal
+def p0_role(r, who, sale_keys=os.environ.get('KCDMP_RIG_SALE_KEYS', 'a,wait1.5,e,wait1.5,e,wait1.5,x,wait2')):   # the shop's own hints: A the player's side, E to the basket, E again (WO-218 D.5: a stack asks how many -- its dialog's E confirms), X close the deal
     """Part 0.1 as <who>: (1) a talk with a villager played to its end, (2) Trade with a shopkeeper of the host's world (its dialogue's trade
     option) and one sale, (3) the nearest plain villager's forced dialogue (DialogModule.ForceDialog: speaker the NPC, listener the player)
     played to its end. Each must start within 2 s and finish. The counts of WO216-NORESUME / WO216-EXEMPT and the census (the joiner's
@@ -1300,9 +1300,14 @@ CLASSES_OF = ('local out, seen = {}, {}; for _, id in ipairs(player.inventory:Ge
 FILL = ('local e = System.GetEntityByName("%s"); local n = 0; if e then for cls in string.gmatch("%s", "[^,]+") do '
         'if pcall(function() e.inventory:CreateItem(cls, 1, 1) end) then n = n + 1 end end end; System.LogAlways("[W217FI] " .. n)')
 # three of the body's items made stolen goods of an owner the house belongs to (the bench's stand-in for a house chest's): SetItemOwner
-STEAL3 = ('local e = System.GetEntityByName("%s"); local o = System.GetEntityByName("%s"); local n = 0; '
-          'if e and o and o.this then local t = e.inventory:GetInventoryTable() or {}; for i = 1, math.min(3, #t) do '
-          'if pcall(function() ItemManager.SetItemOwner(t[i], o.this.id, true) end) then n = n + 1 end end end; System.LogAlways("[W217ST] " .. n)')
+# WO-218 E.3: the game registers the owner write under its documented name or the documentation's own spelling (SerItemOwner); the owner
+# is a WUID (the soul's this.id, else the entity's); each item's owner is read back -- a staging counts only an owner that took
+STEAL3 = ('local e = System.GetEntityByName("%s"); local o = System.GetEntityByName("%s"); local n, how = 0, "none"; '
+          'if e and o then local own = (o.this and o.this.id) or o.id; local t = e.inventory:GetInventoryTable() or {}; '
+          'local f = ItemManager.SetItemOwner or ItemManager.SerItemOwner; how = (ItemManager.SetItemOwner and "SetItemOwner") or (ItemManager.SerItemOwner and "SerItemOwner") or "no-bind"; '
+          'for i = 1, math.min(3, #t) do if f then pcall(function() f(t[i], own, true) end) end; '
+          'local back = nil; pcall(function() back = ItemManager.GetItemOwner(t[i]) end); if back and back ~= 0 and tostring(back) == tostring(own) then n = n + 1 end end end; '
+          'System.LogAlways("[W217ST] " .. n .. " " .. how)')
 TAKE_IDX = ('local e = System.GetEntityByName("%s"); local t = e and e.inventory:GetInventoryTable() or {}; local id = t[%d]; local ok = false; '
             'local cls = "-"; if id then local it = ItemManager.GetItem(id); cls = it and tostring(it.class) or "-"; ok = pcall(function() player.inventory:AddItem(id) end) end; '
             'System.LogAlways("[W217TK] " .. tostring(ok) .. " " .. cls)')

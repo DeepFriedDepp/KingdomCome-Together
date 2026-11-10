@@ -54,6 +54,7 @@ int wo211_tests(int* passed);              // wo211_tests.cpp (WO-211: the UI-di
 int wo214_tests(int* passed);              // wo214_tests.cpp (WO-214: one bind, the owner's base, combat end)
 int wo215_tests(int* passed);              // wo215_tests.cpp (WO-215: the route, the gait, the ladder, dormant, the ghost fight)
 int wo216_tests(int* passed);
+int wo218_tests(int* passed);              // wo218_tests.cpp (WO-218: the pipe's batch)
 int wo217_tests(int* passed);              // wo217_tests.cpp (WO-217: the world around the bodies)              // wo216_tests.cpp (WO-216: the host's request replayed, no brains on the joiner)
 int wo213_tests(int* passed);              // wo213_tests.cpp (WO-213: bands, the play-out delay, late postures)
 int wo203_tests(int* passed);              // wo203_tests.cpp (WO-203: every area's rules, one file per area)
@@ -432,6 +433,14 @@ int main() {
     {
         int fp = 0;
         const int ff = wo217_tests(&fp);
+        g_pass += fp;
+        g_fail += ff;
+    }
+
+    // WO-218: the pipe's batch
+    {
+        int fp = 0;
+        const int ff = wo218_tests(&fp);
         g_pass += fp;
         g_fail += ff;
     }

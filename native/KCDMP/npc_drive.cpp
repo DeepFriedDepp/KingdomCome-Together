@@ -12,6 +12,7 @@
 #include "wo209_rules.h"
 #include "wo210_kd.h"
 #include "wo208.h"
+#include "wo218.h"
 #include "wo213.h"
 #include "wo214.h"
 #include "wo215.h"
@@ -366,6 +367,7 @@ struct Puppet {
     uint32_t frameNo = 0;
     double   livingCheckAt = 0;     // WO-131 2b: when the body's physics was last checked for a ragdoll
     double   activityDriftSince = 0; // WO-209: since when its host NPC is far from the body an activity holds
+    double   driftReleaseAt = -1e9;  // WO-218 C.1: the last time its own posture was asked to release (drift_release)
     wo213rules::PostureSitting sitting;  // WO-213 E.3: a held posture's body found off its place takes the stream for the rest of that sitting
     bool     silenceHeld = false;   // WO-214 B: this silence already passed the old 4 s drop (counted once)
     const char* blendWhy = "bind";  // WO-214 A.3: what asked for the next blend (bind, resume, hold-end, extrap-end)
@@ -1307,7 +1309,13 @@ void tick() {
             float cur[3];
             const RingSample& ns = s.ring[s.n - 1];
             const bool drifted = read_pos(e, cur) && wo209rules::activity_drifted(std::sqrt((cur[0] - ns.x) * (cur[0] - ns.x) + (cur[1] - ns.y) * (cur[1] - ns.y)));
-            if (driftBlocked) { if (!drifted) g_driftBlocked.erase(p.eid); }   // back by its host NPC: an activity may hold it again
+            if (driftBlocked) {
+                if (!drifted) g_driftBlocked.erase(p.eid);   // back by its host NPC: an activity may hold it again
+                else if (wo218::on(wo218::kBitDriftRelease) && now - p.driftReleaseAt >= 3.0) {   // WO-218 C.1: still drifting -- its posture asked again
+                    p.driftReleaseAt = now;
+                    if (wo208::ask_release(p.eid, p.name.c_str())) wo218::note_drift_release();
+                }
+            }
             else if (!drifted) p.activityDriftSince = 0;
             else if (p.activityDriftSince == 0) p.activityDriftSince = now;
             else if (now - p.activityDriftSince >= wo209rules::kActivityDriftS) {
@@ -1318,6 +1326,15 @@ void tick() {
                 if (k <= 200 || k % 100 == 0)
                     logf("WO209-DRIFT npc=%s its host NPC is over %.0f m from the body an activity held for %.0f s: the hold ends, the stream takes it [n=%u]",
                          p.name.c_str(), wo209rules::kActivityDriftM, wo209rules::kActivityDriftS, k);
+                // WO-218 C.1 (drift_release): one writer -- the copy's own posture is released the game's way, else it places the body at its
+                // object while the stream writes it at its host NPC, frame by frame
+                if (wo218::on(wo218::kBitDriftRelease)) {
+                    p.driftReleaseAt = now;
+                    const bool asked = wo208::ask_release(p.eid, p.name.c_str());
+                    const uint32_t kr = asked ? wo218::note_drift_release() : 0;
+                    if (asked && (kr <= 200 || kr % 50 == 0))
+                        logf("WO218-DRIFT npc=%s its own posture released the game's way (one writer: the stream) [n=%u]", p.name.c_str(), kr);
+                }
             }
         } else p.activityDriftSince = 0;
         // WO-217 0.2: the seated-copy pull meter (every frame while the copy or its host NPC is seated: a single-frame move over 50 cm, and

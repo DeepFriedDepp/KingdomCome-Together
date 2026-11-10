@@ -47,6 +47,7 @@
 #include "buffs.h"
 #include "instance.h"
 #include "wo206.h"
+#include "wo218_rules.h"
 #include "log.h"
 
 #include <windows.h>
@@ -54,6 +55,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <cstring>
+#include <deque>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -137,6 +139,17 @@ bool send_frame(HANDLE h, uint8_t type, const void* payload, uint16_t len) {
     return write_all(h, frame, 3u + len);
 }
 
+// WO-218 A.1: a frame over send_frame's 1 KB (the batch's reply), head and body in one write.
+bool send_big(HANDLE h, uint8_t type, const void* payload, size_t len) {
+    if (len > 0xFFFF) return false;
+    std::vector<BYTE> frame(3 + len);
+    frame[0] = type;
+    frame[1] = static_cast<BYTE>(len & 0xFF);
+    frame[2] = static_cast<BYTE>((len >> 8) & 0xFF);
+    if (len) std::memcpy(frame.data() + 3, payload, len);
+    return write_all(h, frame.data(), static_cast<DWORD>(frame.size()));
+}
+
 // Two threads write to this pipe -- the serve loop's replies and the game
 // thread's hits -- so the lock keeps their frames from interleaving. It does
 // nothing about read/write concurrency; see the note on Op above for that.
@@ -189,6 +202,194 @@ void send_unsolicited(uint8_t type, const void* body, uint16_t len, const char* 
     const DWORD err = sent ? 0 : GetLastError();
     LeaveCriticalSection(&g_write_lock);
     if (!sent) logf("PIPE: %s write failed: %lu", what, err);
+}
+
+// ---- WO-218 A.1: the pipe's batch (wo218_rules.h) -------------------------------------------------------------------------------
+KCDMP_FAULT_CALL(g_siteBatchSub, "pipe::batch request");
+
+double w218_now_us() {
+    static double usPerTick = [] { LARGE_INTEGER f; QueryPerformanceFrequency(&f); return 1e6 / static_cast<double>(f.QuadPart); }();
+    LARGE_INTEGER c;
+    QueryPerformanceCounter(&c);
+    return static_cast<double>(c.QuadPart) * usPerTick;
+}
+
+struct PendingBatch {
+    uint16_t id = 0;
+    uint64_t gen = 0;
+    std::vector<uint8_t> raw;
+    std::vector<wo218rules::Sub> subs;
+    size_t next = 0;
+    wo218rules::Reply reply;
+};
+
+std::mutex                                  g_bqMutex;
+std::deque<std::shared_ptr<PendingBatch>>   g_bq;
+std::atomic<bool>                           g_drainPosted{false};
+std::atomic<uint64_t>                       g_connGen{0};
+
+// main thread only: what one frame's pipe turn served, and the drain's own time
+struct W218Stats {
+    wo218rules::FrameCount subs, singles;
+    unsigned long long frameSpent = ~0ull;
+    double spentUs = 0, drainUsSum = 0, drainUsMax = 0, winStartUs = 0;
+    unsigned drains = 0, carries = 0, batches = 0, faulted = 0, cut = 0, notBatchable = 0;
+    size_t replyMax = 0;
+} g_w218;
+std::atomic<uint32_t> g_w218BatchesIn{0}, g_w218Malformed{0};
+
+void w218_maybe_log(double now) {
+    W218Stats& s = g_w218;
+    if (s.winStartUs == 0) s.winStartUs = now;
+    if (now - s.winStartUs < 10e6) return;
+    // close the frames in progress (counted when the next frame starts)
+    const unsigned subFrames = s.subs.frames + (s.subs.cur ? 1 : 0), sinFrames = s.singles.frames + (s.singles.cur ? 1 : 0);
+    const unsigned subMax = s.subs.cur > s.subs.maxPerFrame ? s.subs.cur : s.subs.maxPerFrame;
+    const unsigned sinMax = s.singles.cur > s.singles.maxPerFrame ? s.singles.cur : s.singles.maxPerFrame;
+    logf("WO218-PIPE window_s=%.1f batches_in=%u batches_done=%u subs=%llu subs_frames=%u subs_per_frame_mean=%.2f subs_per_frame_max=%u "
+         "singles=%llu singles_frames=%u singles_per_frame_mean=%.2f singles_per_frame_max=%u carry_frames=%u drains=%u drain_us_mean=%.0f "
+         "drain_us_max=%.0f faulted=%u cut=%u not_batchable=%u malformed=%u reply_max=%zu",
+         (now - s.winStartUs) / 1e6, g_w218BatchesIn.exchange(0), s.batches, s.subs.total, subFrames,
+         subFrames ? static_cast<double>(s.subs.total) / subFrames : 0.0, subMax, s.singles.total, sinFrames,
+         sinFrames ? static_cast<double>(s.singles.total) / sinFrames : 0.0, sinMax, s.carries, s.drains,
+         s.drains ? s.drainUsSum / s.drains : 0.0, s.drainUsMax, s.faulted, s.cut, s.notBatchable, g_w218Malformed.exchange(0), s.replyMax);
+    const unsigned long long keepSub = s.subs.frame, keepSin = s.singles.frame;
+    s.subs.reset(); s.singles.reset();
+    s.subs.frame = keepSub; s.singles.frame = keepSin;
+    s.drainUsSum = s.drainUsMax = 0; s.drains = s.carries = s.batches = s.faulted = s.cut = s.notBatchable = 0; s.replyMax = 0;
+    s.winStartUs = now;
+}
+
+// a single request's task ran on the main thread (run_sync_bounded)
+void w218_note_single() {
+    g_w218.singles.add(main_thread::frame_count(), 1);
+    w218_maybe_log(w218_now_us());
+}
+
+// One generic request, here on the main thread: the reply frame's body into rb (the exact bytes the single path sends, seq 0).
+size_t w218_run_sub(uint8_t type, const uint8_t* body, size_t len, uint8_t* rb, size_t cap, bool* faulted) {
+    *faulted = false;
+    const uint8_t op = len ? body[0] : 0;
+    if (cap < 4) return 0;
+    if (!wo218rules::batchable(type)) { ++g_w218.notBatchable; return wo218rules::failure(rb, op, wo218rules::kReasonNotBatchable); }
+    if (type == kWo163 && len >= 1) {   // WO-203B's own ops (no engine call, their own lock), as the single path tries them first
+        size_t on = 0;
+        uint8_t oreason = kcdmp::wo163::kRFailed;
+        if (kcdmp::wo203::handle_off_main(body[0], body, len, rb + 4, cap - 4 > 512 ? 512 : cap - 4, &on, &oreason)) {
+            if (on > 512) on = 0;
+            rb[0] = oreason == kcdmp::wo163::kROk ? 1 : 0; rb[1] = 0; rb[2] = body[0]; rb[3] = oreason;
+            return 4 + on;
+        }
+    }
+    uint8_t reason = 5;
+    size_t n = 0;
+    const size_t pcap = cap - 4;
+    const bool ok = fault::guarded(g_siteBatchSub, [&] {
+        switch (type) {
+            case kWo131: reason = kcdmp::wo131::handle(body, len, rb + 4, pcap < 256 ? pcap : 256, &n); break;
+            case kWo132: reason = kcdmp::wo132::handle(body, len, rb + 4, pcap < 512 ? pcap : 512, &n); break;
+            case kWo137: reason = kcdmp::wo137::handle(body, len, rb + 4, pcap < 1000 ? pcap : 1000, &n); break;
+            case kWo138: reason = kcdmp::wo138::handle(body, len, rb + 4, pcap < 1000 ? pcap : 1000, &n); break;
+            case kWo139: reason = kcdmp::wo139::handle(body, len, rb + 4, pcap < 300 ? pcap : 300, &n); break;
+            case kWo140: reason = kcdmp::wo140::handle(body, len, rb + 4, pcap < 340 ? pcap : 340, &n); break;
+            case kWo141: reason = kcdmp::wo141::handle(body, len, rb + 4, pcap < 420 ? pcap : 420, &n); break;
+            case kWo143: reason = kcdmp::wo143::handle(body, len, rb + 4, pcap < 420 ? pcap : 420, &n); break;
+            case kWo147: reason = kcdmp::wo147::handle(body, len, rb + 4, pcap < 200 ? pcap : 200, &n); break;
+            case kWo151: reason = kcdmp::wo151::handle(body, len, rb + 4, pcap < 200 ? pcap : 200, &n); break;
+            case kWo163: reason = kcdmp::wo163::handle(body, len, rb + 4, pcap < 512 ? pcap : 512, &n); break;
+            default: break;
+        }
+    });
+    if (!ok) { *faulted = true; ++g_w218.faulted; return wo218rules::failure(rb, op, wo218rules::kReasonTaskFaulted); }
+    if (n > pcap) n = 0;
+    rb[0] = reason == 0 ? 1 : 0; rb[1] = 0; rb[2] = op; rb[3] = reason;
+    return 4 + n;
+}
+
+void w218_post_drain();
+
+// The main thread: the waiting batches in order, at most the frame's budget (at least one request a frame).
+void w218_drain() {
+    g_drainPosted.store(false);
+    W218Stats& s = g_w218;
+    const unsigned long long frame = main_thread::frame_count();
+    const double t0 = w218_now_us();
+    if (s.frameSpent != frame) { s.frameSpent = frame; s.spentUs = 0; }
+    int ran = 0;
+    bool carry = false;
+    static uint8_t rb[4 + 1024];
+    for (;;) {
+        std::shared_ptr<PendingBatch> b;
+        {
+            std::lock_guard<std::mutex> lock(g_bqMutex);
+            if (g_bq.empty()) break;
+            b = g_bq.front();
+        }
+        while (b->next < b->subs.size()) {
+            const double spent = s.spentUs + (w218_now_us() - t0);
+            if (!wo218rules::may_run(ran, spent)) { carry = true; break; }
+            const wo218rules::Sub& sub = b->subs[b->next];
+            bool faulted = false;
+            const size_t n = w218_run_sub(sub.type, b->raw.data() + sub.off, sub.len, rb, sizeof rb, &faulted);
+            b->reply.add(wo218rules::reply_type(sub.type), rb, n);
+            ++b->next;
+            ++ran;
+        }
+        if (carry) break;
+        {
+            std::lock_guard<std::mutex> lock(g_bqMutex);
+            if (!g_bq.empty() && g_bq.front() == b) g_bq.pop_front();
+        }
+        ++s.batches;
+        s.cut += static_cast<unsigned>(b->reply.cut);
+        if (b->reply.b.size() > s.replyMax) s.replyMax = b->reply.b.size();
+        if (b->gen == g_connGen.load() && g_connected && g_pipe != INVALID_HANDLE_VALUE) {
+            EnterCriticalSection(&g_write_lock);
+            const bool sent = send_big(g_pipe, wo218rules::kBatchReply, b->reply.b.data(), b->reply.b.size());
+            LeaveCriticalSection(&g_write_lock);
+            if (!sent) logf("PIPE: BatchReply write failed: %lu", GetLastError());
+        }
+    }
+    const double used = w218_now_us() - t0;
+    s.spentUs += used;
+    if (ran) {
+        s.subs.add(frame, static_cast<unsigned>(ran));
+        ++s.drains; s.drainUsSum += used; if (used > s.drainUsMax) s.drainUsMax = used;
+    }
+    if (carry) { ++s.carries; w218_post_drain(); }
+    w218_maybe_log(w218_now_us());
+}
+
+void w218_post_drain() {
+    if (!g_drainPosted.exchange(true)) main_thread::post([] { w218_drain(); });
+}
+
+// The pipe thread: a batch read -- parsed, queued for the main thread; a malformed one answered at once (ok 0, no requests).
+void w218_on_batch(HANDLE h, const BYTE* body, uint16_t len) {
+    auto b = std::make_shared<PendingBatch>();
+    b->raw.assign(body, body + len);
+    if (!wo218rules::parse_batch(b->raw.data(), b->raw.size(), &b->id, &b->subs)) {
+        g_w218Malformed.fetch_add(1);
+        const BYTE fail[4] = {0, static_cast<BYTE>(len >= 1 ? body[0] : 0), static_cast<BYTE>(len >= 2 ? body[1] : 0), 0};
+        EnterCriticalSection(&g_write_lock);
+        send_frame(h, wo218rules::kBatchReply, fail, sizeof fail);
+        LeaveCriticalSection(&g_write_lock);
+        return;
+    }
+    b->gen = g_connGen.load();
+    b->reply.begin(b->id, static_cast<uint8_t>(b->subs.size()));
+    g_w218BatchesIn.fetch_add(1);
+    {
+        std::lock_guard<std::mutex> lock(g_bqMutex);
+        g_bq.push_back(std::move(b));
+    }
+    w218_post_drain();
+}
+
+void w218_on_disconnect() {
+    g_connGen.fetch_add(1);
+    std::lock_guard<std::mutex> lock(g_bqMutex);
+    g_bq.clear();
 }
 
 void send_local_downed(bool on, respawn::Kind kind) {
@@ -570,6 +771,7 @@ bool run_sync_bounded(const std::function<void(T&)>& work, const char* what, T& 
     // caller's frame (work is copied, state is shared), so a wait given up on can never dangle, and a task the frame runs late still lands.
     std::function<void(T&)> task = work;
     main_thread::post([state, task] {
+        w218_note_single();   // WO-218 A.0: what one frame's pipe turn served
         bool faulted = false;
         try {
             faulted = !fault::guarded(g_sitePipeTask, [&] { task(state->value); });
@@ -612,15 +814,16 @@ void serve(HANDLE h) {
         // Bound the payload before allocating: the pipe is local, but a
         // malformed length should not turn into a huge allocation. WO-118:
         // the sample batch alone may run to kNpcSamplesMaxLen.
-        if (len > 1024 && !(type == kNpcSamples && len <= kNpcSamplesMaxLen)) {
+        if (len > 1024 && !((type == kNpcSamples || type == wo218rules::kBatch) && len <= kNpcSamplesMaxLen)) {
             logf("PIPE: payload of %u bytes is out of range; dropping the connection", len);
             break;
         }
         BYTE body[kNpcSamplesMaxLen];
         if (len && !read_all(h, body, len)) break;
 
-        const uint8_t seq = g_seq++;
         kcdmp::crash::note_pipe(type, len ? body[0] : 0, len);   // WO-202 I.1: the crash report's last requests
+        if (type == wo218rules::kBatch) { w218_on_batch(h, body, len); continue; }   // WO-218 A.1: no sequence number taken
+        const uint8_t seq = g_seq++;
 
         switch (type) {
             case kPing:
@@ -1499,6 +1702,7 @@ void serve(HANDLE h) {
     }
 
     g_connected = false;
+    w218_on_disconnect();   // WO-218 A.1: a waiting batch's reply never reaches the next connection
     logf("PIPE: agent disconnected");
     // WO-118: no agent, no stream -- every native binding is dropped.
     npcdrive::on_pipe_closed();

@@ -47,6 +47,19 @@
 #include "crash_capture.h"
 
 #include <windows.h>
+#include "wo218.h"
+
+// WO-218 B.2 (main_budget): a research file probe (a line dropped into its kcdmp-<x>.txt runs it) looks at its file every 2 s, not every
+// frame -- each opened and read a file on the main thread every frame (40-65 us in MAIN-COST). Off: every frame, as before.
+template <void (*F)()> void w218_slow_watch() {
+    static ULONGLONG s_at = 0;
+    if (kcdmp::wo218::on(kcdmp::wo218::kBitMainBudget)) {
+        const ULONGLONG now = GetTickCount64();
+        if (s_at != 0 && now - s_at < 2000) return;
+        s_at = now;
+    }
+    F();
+}
 
 namespace kcdmp { bool probe_rttr(); }
 namespace kcdmp::rttr {
@@ -229,30 +242,30 @@ DWORD WINAPI plugin_main(LPVOID) {
     // kcdmp-combat.txt on a timer instead of only once at attach, so a human
     // can spawn a ghost, read its id live, and drop it into the file without
     // a relaunch. No-ops whenever the file's content is unchanged.
-    kcdmp::main_thread::post_repeating("rttr::probe_combat_construct_watch", &kcdmp::rttr::probe_combat_construct_watch);
+    kcdmp::main_thread::post_repeating("rttr::probe_combat_construct_watch", &w218_slow_watch<&kcdmp::rttr::probe_combat_construct_watch>);   // WO-218 B.2: every 2 s
     // Same live-reload treatment for WO-43's original PlayAnim diagnostic --
     // needed to pin down a live discrepancy found while re-testing WO-44's
     // ghost class-dispatch finding against a validated ghost.
-    kcdmp::main_thread::post_repeating("rttr::probe_play_anim_watch", &kcdmp::rttr::probe_play_anim_watch);
+    kcdmp::main_thread::post_repeating("rttr::probe_play_anim_watch", &w218_slow_watch<&kcdmp::rttr::probe_play_anim_watch>);   // WO-218 B.2: every 2 s
     // WO-68: same live-reload treatment, so a soul guid can be dropped into
     // kcdmp-contexts.txt after a ghost is already standing in the world.
-    kcdmp::main_thread::post_repeating("sctx::probe_contexts_watch", &kcdmp::sctx::probe_contexts_watch);
+    kcdmp::main_thread::post_repeating("sctx::probe_contexts_watch", &w218_slow_watch<&kcdmp::sctx::probe_contexts_watch>);   // WO-218 B.2: every 2 s
     // WO-99.5: the quest-port probe. Same live-reload treatment, and the same
     // reason -- a node path is chosen after looking at what the running game
     // actually has. File-watched rather than pipe-driven on purpose: the pipe
     // has nMaxInstances = 1, so a pipe command would mean disconnecting the
     // client first (WO-97 s4.4's precondition), and this needs to run while a
     // session is live.
-    kcdmp::main_thread::post_repeating("conceptread::port_watch", &kcdmp::conceptread::port_watch);
+    kcdmp::main_thread::post_repeating("conceptread::port_watch", &w218_slow_watch<&kcdmp::conceptread::port_watch>);   // WO-218 B.2: every 2 s
     // WO-100 Phase 0: the Mannequin tag-state read. Same file-watched,
     // opt-in convention and the same reason -- it has to run during a live
     // session while the maintainer walks, jogs, sprints and crouches, and the
     // pipe (nMaxInstances = 1) is occupied by the agent for the whole session.
-    kcdmp::main_thread::post_repeating("mannequin::tag_watch", &kcdmp::mannequin::tag_watch);
+    kcdmp::main_thread::post_repeating("mannequin::tag_watch", &w218_slow_watch<&kcdmp::mannequin::tag_watch>);   // WO-218 B.2: every 2 s
     // WO-100.5 Phase 1: the first combat WRITE. Same file-watched shape, but
     // ONE-SHOT rather than periodic -- a write that repeats at the tick rate
     // is a hook, not a probe. Idle until kcdmp-combatwrite.txt names a command.
-    kcdmp::main_thread::post_repeating("combatwrite::write_watch", &kcdmp::combatwrite::write_watch);
+    kcdmp::main_thread::post_repeating("combatwrite::write_watch", &w218_slow_watch<&kcdmp::combatwrite::write_watch>);   // WO-218 B.2: every 2 s
     // WO-113: the death guard's per-frame tick (rate-limits itself).
     kcdmp::main_thread::post_repeating("crash::tick", &kcdmp::crash::tick);   // WO-202 I.1: the filter kept first, the module table
     kcdmp::main_thread::post_repeating("respawn::tick", &kcdmp::respawn::tick);
@@ -278,7 +291,7 @@ DWORD WINAPI plugin_main(LPVOID) {
     // Observed: this tick runs at the MAIN MENU too on 1.5.5 (the pipe is up
     // there), which the join's save-list rescan depends on.
     kcdmp::main_thread::post_repeating("joinnative::tick", &kcdmp::joinnative::tick);
-    kcdmp::main_thread::post_repeating("savelist::test_watch", &kcdmp::savelist::test_watch);
+    kcdmp::main_thread::post_repeating("savelist::test_watch", &w218_slow_watch<&kcdmp::savelist::test_watch>);   // WO-218 B.2: every 2 s
     kcdmp::main_thread::post_repeating("wo137::tick", &kcdmp::wo137::tick);   // WO-137: research file + the change queue
     kcdmp::main_thread::post_repeating("wo138::tick", &kcdmp::wo138::tick);   // WO-138: the frame meter + the native NPC sender
     kcdmp::main_thread::post_repeating("wo139::tick", &kcdmp::wo139::tick);   // WO-139: a new trespass level goes to the agent

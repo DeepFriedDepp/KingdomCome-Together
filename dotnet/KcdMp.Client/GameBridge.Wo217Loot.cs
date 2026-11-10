@@ -69,6 +69,7 @@ public partial class GameBridge
                 if (f.Length == 6 && Wo134Rules.BodyName.IsMatch(f[1]))
                 {
                     Interlocked.Increment(ref _w217LootLists);
+                    if (f[3] == "1") Console.WriteLine($"WO218-LOOT host-list npc={f[1]} rev={f[2]} parts={f[4]} -- the host's body changed (E.4's first stamp)");
                     foreach (var ps in f[0].Split(',', StringSplitOptions.RemoveEmptyEntries))
                         if (byte.TryParse(ps, NumberStyles.Integer, CultureInfo.InvariantCulture, out byte peer))
                             _ = Wo134SendAsync(Protocol.LootHostUp, peer, Protocol.LootHostBodyList, 0, $"{f[1]} {f[2]} {f[3]} {f[4]} {f[5]}");

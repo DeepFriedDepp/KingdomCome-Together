@@ -174,6 +174,12 @@ public partial class GameBridge
     {
         if (!ActivityCodec.TryDecode(body, out byte kind, out var rows)) { Console.WriteLine($"MP-W141 malformed activity frame from {src} ({body.Length} bytes)"); return; }
         Interlocked.Add(ref _w141RowsIn, rows.Count);
+        await Wo141OnRowsAsync(type, src, kind, rows);
+    }
+
+    /// <summary>WO-218 A.1: a frame's rows, decoded (the activity lane's batch hands one body's row at a time).</summary>
+    private async Task Wo141OnRowsAsync(int type, byte src, byte kind, IReadOnlyList<ActivityRow> rows)
+    {
         if (type == Protocol.ActivityHostDown)
         {
             if (!W141Joiner) return;

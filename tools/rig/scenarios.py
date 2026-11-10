@@ -4057,12 +4057,14 @@ def run(name, args):
     }.get(name)
     import scen217   # WO-217's scenes
     if plan is None: plan = scen217.plans(r, name, args)
+    import scen218   # WO-218's scenes
+    if plan is None: plan = scen218.plans(r, name, args)
     if plan is None: raise SystemExit('unknown scenario ' + name)
     for nm, fn in plan:
         # 'long' runs independent checks: one failing does not stop the next (a failed join does)
         if not r.step(nm, fn) and (name not in ('long', 'joinscene', 'joinfight', 'e2pair', 'c1pair', 'e2twinpair', 's1pair', 'smoke', 's1front',
                                                'c1fight', 'c2tavern', 'convboth', 'convday', 'convtimed', 'smoke2', 'awake', 'soak2', 'convscene', 'c1x', 'probefight', 'probetavern', 'village', 'defence', 'loot5', 'convforced', 'convforcedj',
-                                               'idle_check', 'toggle_live', 'convvote_both', 'fight10', 'w211misc', 'w213session', 'w213walk', 'w214away', 'w214hostkills', 'w214draws', 'w215a0', 'w215tune', 'w215scenes', 'w215lead', 'w215ghost', 'w216a', 'w216split', 'w216ambush', 'w216road', 'w216outfits', 'w216ride', 'w216brawl', 'w216scenes') and name not in scen217.CONTINUE_ON_FAIL
+                                               'idle_check', 'toggle_live', 'convvote_both', 'fight10', 'w211misc', 'w213session', 'w213walk', 'w214away', 'w214hostkills', 'w214draws', 'w215a0', 'w215tune', 'w215scenes', 'w215lead', 'w215ghost', 'w216a', 'w216split', 'w216ambush', 'w216road', 'w216outfits', 'w216ride', 'w216brawl', 'w216scenes') and name not in scen217.CONTINUE_ON_FAIL and name not in scen218.CONTINUE_ON_FAIL
                                               or nm == 'join' or r.steps[-1]['reason'] == 'copy-exited'): break   # a game gone ends the run
     return r.finish()
 

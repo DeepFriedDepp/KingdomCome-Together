@@ -1846,6 +1846,7 @@ public partial class GameBridge(ClientConfig config)
         Wo143OnConnect(cts.Token);           // WO-143: hands, gaits, one-shots, looks, the players' minigames on the avatars
         Wo216OnConnect(cts.Token);           // WO-216: the switches, the host's route lines (A)
         Wo217OnConnect(cts.Token);           // WO-217: the switches
+        Wo218OnConnect(cts.Token);           // WO-218: the switches, the batch's probe
         Wo147OnConnect(cts.Token);           // WO-147: the joiner fights hostile copies, destructive quest steps checked, the leash's stats
         Wo148OnConnect(cts.Token);           // WO-148: carrying on the other screen (the carrier owns the body; the host's world decides)
         Wo154MenuOnConnect(cts.Token);       // WO-154 7b: the mod menu (the saved choices, the host's levers, fast travel)
@@ -4670,6 +4671,7 @@ public partial class GameBridge(ClientConfig config)
                 Wo138NoteArrival(type, payload);   // WO-138: the source's link is alive (the joiner's hold)
                 Wo147NotePositionAtRead(type, payload, arrival);   // WO-147: the leash's positions, stamped as they arrive
                 Wo147NoteNpcAtRead(type, payload, arrival);        // the backlog fix: the newest sample of each NPC/avatar, as read
+                Wo218NoteAtRead(type, payload, arrival);           // WO-218 A.2: each body's newest NPC state, as read (the shed's "superseded")
                 Volatile.Write(ref _w202LastReadMs, W147StampMs(arrival));   // WO-202 III.2: the queue's lag is measured against this
                 if (Wo213TakeAtRead(type, payload)) continue;   // WO-213: the relay's answer to the hello
                 if (_w213Repeats is { } rf)   // WO-213 C.2: a relay repeat of a posture / opponent already applied here goes no further
@@ -6318,6 +6320,9 @@ public partial class GameBridge(ClientConfig config)
             case string w216 when w216.StartsWith("w216_", StringComparison.Ordinal):   // WO-216: the switches and the status
                 Wo216OnEvent(name, arg);
                 return;
+            case string w218 when w218.StartsWith("w218_", StringComparison.Ordinal):   // WO-218: the switches, the status, its parts' events
+                Wo218OnEvent(name, arg);
+                break;
             case string w217 when w217.StartsWith("w217_", StringComparison.Ordinal):   // WO-217: the switches, the status, its parts' events
                 Wo217OnEvent(name, arg);
                 return;

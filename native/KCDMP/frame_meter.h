@@ -20,6 +20,8 @@ namespace kcdmp::framemeter {
 
 constexpr double kPeriodUs = 60e6;
 constexpr double kSlowFrameUs = 50e3;
+constexpr int    kOursBuckets = 400;          // WO-218 B.2: 50 us x 400 = 20 ms
+constexpr double kOursBucketUs = 50.0;
 
 struct Window {
     double   startUs = 0;        // the window's first frame (0 = nothing yet)
@@ -28,6 +30,7 @@ struct Window {
     double   sumFrameUs = 0, worstFrameUs = 0;
     double   sumOursUs = 0, worstOursUs = 0;
     uint32_t slow = 0;
+    uint32_t oursHist[kOursBuckets + 1]{};   // WO-218 B.2: our time per frame, 50 us buckets (the last: 20 ms and over)
 };
 
 // One frame at nowUs (when the hook ran), oursUs what this DLL's work cost in it.
@@ -44,7 +47,23 @@ inline bool add(Window& w, double nowUs, double oursUs) {
     }
     w.sumOursUs += oursUs;
     if (oursUs > w.worstOursUs) w.worstOursUs = oursUs;
+    {   // WO-218 B.2
+        int b = oursUs > 0 ? static_cast<int>(oursUs / kOursBucketUs) : 0;
+        if (b > kOursBuckets) b = kOursBuckets;
+        ++w.oursHist[b];
+    }
     return nowUs - w.startUs >= kPeriodUs;
+}
+
+// WO-218 B.2: the 95th percentile of our time per frame (the bucket's top edge), 0 with no frame.
+inline double ours_p95(const Window& w) {
+    uint32_t n = 0;
+    for (int i = 0; i <= kOursBuckets; ++i) n += w.oursHist[i];
+    if (!n) return 0.0;
+    const uint32_t want = static_cast<uint32_t>(n * 0.95 + 0.5);
+    uint32_t acc = 0;
+    for (int i = 0; i <= kOursBuckets; ++i) { acc += w.oursHist[i]; if (acc >= want) return (i + 1) * kOursBucketUs; }
+    return (kOursBuckets + 1) * kOursBucketUs;
 }
 
 inline double fps(const Window& w) {
@@ -56,9 +75,9 @@ inline int format(const Window& w, char* out, size_t cap) {
     const double f = w.frames ? static_cast<double>(w.frames) : 1.0;
     return std::snprintf(out, cap,
         "FRAME window_s=%.1f frames=%u fps=%.1f frame_ms_mean=%.1f frame_ms_worst=%.1f slow_frames=%u "
-        "ours_us_mean=%.0f ours_us_max=%.0f",
+        "ours_us_mean=%.0f ours_us_max=%.0f ours_us_p95=%.0f",
         w.sumFrameUs / 1e6, w.frames, fps(w), w.sumFrameUs / f / 1e3, w.worstFrameUs / 1e3, w.slow,
-        w.sumOursUs / f, w.worstOursUs);
+        w.sumOursUs / f, w.worstOursUs, ours_p95(w));
 }
 
 // A new window starting at the frame that closed the last one.

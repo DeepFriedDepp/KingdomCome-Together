@@ -3,6 +3,8 @@
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 // WO-208: the native half's switch word and status (wo208.h).
 #include "wo208.h"
+#include "wo218.h"
+#include "wo218_rules.h"
 #include "wo216.h"
 #include "wo217.h"
 #include "wo200.h"
@@ -586,6 +588,8 @@ struct OwnCopy {
     wo217::PlaceEp ep217;       // WO-217 A.0: the attempt the host NPC's posture opened on this copy
     bool seatHost = false, seatCopy = false; double seatAt = -1e9;   // WO-217 0.2: the watchdog's newest seat word
     double unclogAt = -1e9;     // WO-217 A.1 #2: the last time its own stale actions were stopped
+    double takeoverAt = -1e9;   // WO-218 C.3: the last time its own action was stopped off a placed activity
+    uint32_t takeoverFrag = 0xFFFFFFFFu; int takeoverN = 0; double takeoverFirst = -1e9, takeoverMuteUntil = -1e9;   // C.3's back-off
 };
 std::atomic<uint32_t> c_emptyStretches{0};
 std::atomic<uint32_t> c_unclogs{0}, c_unclogStopped{0};   // WO-217 A.1 #2
@@ -951,6 +955,27 @@ void own_apply(uint32_t eid, OwnCopy& oc, int cm, const HostScope hsc[2], const 
                 }
                 break;
             }
+        }
+    }
+    // WO-218 C.3 (takeover_stop): while the host's line holds an activity this copy showed, the copy's own later action on its full body (its
+    // idle movement, a variation, a scripted callback, its movement transition) is stopped the game's way; the owner's install comes back
+    if (wo218::on(wo218::kBitTakeoverStop) && have[0] && cn > 0 && cs[0].ok && !cs[0].empty && !shot && !aiRuns && !rowRuns
+        && oc.ep217.open && oc.ep217.shownAt >= 0 && oc.ep217.hostAct == hsc[0].act && cs[0].frag != hsc[0].frag
+        && now - oc.takeoverAt >= wo218rules::kTakeoverEveryS && !is_ours(oc, cs[0].act) && wo218rules::takeover_class(cs[0].action)
+        && wo218rules::takeover_family(static_cast<uint8_t>(pfam_of(eid, hsc[0].cls, hsc[0].frag)))
+        && !(cs[0].frag == oc.takeoverFrag && now < oc.takeoverMuteUntil)) {
+        oc.takeoverAt = now;
+        // the back-off: the same fragment stopped twice within 10 s comes back at once (the activity's own variation, re-queued by its
+        // engine): left alone for 60 s, never a stop-and-requeue loop
+        if (cs[0].frag != oc.takeoverFrag || now - oc.takeoverFirst > 10.0) { oc.takeoverFrag = cs[0].frag; oc.takeoverN = 0; oc.takeoverFirst = now; }
+        if (++oc.takeoverN > 2) {
+            oc.takeoverMuteUntil = now + 60.0;
+            logf("WO218-TAKEOVER npc=%s frag=%u came back twice in 10 s (its activity's own variation): left alone for 60 s", oc.name.c_str(), cs[0].frag);
+        } else if (rttr::stop_action(const_cast<void*>(cs[0].act))) {
+            const uint32_t kk = wo218::note_takeover();
+            if (kk <= 200 || kk % 50 == 0)
+                logf("WO218-TAKEOVER npc=%s stopped=%s frag=%u -- the copy's own action took the host's activity over (host frag %u); the activity again [n=%u]",
+                     oc.name.c_str(), cs[0].action, cs[0].frag, hsc[0].frag, kk);
         }
     }
     // rule 1: a base always exists -- the host's locomotion or idle. A copy's full body empty for more than 0.3 s gets the host's own base

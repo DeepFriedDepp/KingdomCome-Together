@@ -65,6 +65,7 @@ public partial class GameBridge
     {
         if (!W137Joiner) return;
         Interlocked.Increment(ref _w208StreamFramesIn);
+        body = Wo218ShedNpcAnim(body);   // WO-218 A.2: a queue over 500 ms sheds superseded far state (never an event)
         await Wo216OnLinesAsync(body);   // WO-216 C: the one activity line's records (the activity, the hands) first, from this same message
         if (!Wo208Rules.TryRekeyNpcAnim(body, name => _npcEntityIds.TryGetValue(name, out uint e) ? e : 0u, out byte[] op, out int known, out int unknown))
         {
@@ -75,6 +76,7 @@ public partial class GameBridge
         Interlocked.Add(ref _w208StreamUnknown, unknown);
         if (known == 0) return;
         Wo207Trace.Kind.Value = Protocol.NpcAnimDown;   // a frame's pipe call: before the background polls at the gate
+        if (Wo218PostStreamIn(op)) return;   // WO-218 A.1: posted into the batch (its answer was never used), merged per body while it waits
         await _combat.Wo163Async(Protocol.Wo208OpStreamIn, op);
     }
 

@@ -215,6 +215,12 @@ public partial class GameBridge
     private async Task Wo143OnFrameAsync(byte src, byte[] body)
     {
         if (!ExtraCodec.TryDecode(body, out byte kind, out var rows)) { Console.WriteLine($"MP-W143 malformed extra frame from {src} ({body.Length} bytes)"); return; }
+        await Wo143OnRowsAsync(src, kind, rows);
+    }
+
+    /// <summary>WO-218 A.1: a frame's rows, decoded (the activity lane's batch hands one body's row at a time).</summary>
+    private async Task Wo143OnRowsAsync(byte src, byte kind, IReadOnlyList<ExtraRow> rows)
+    {
         if (!W141Joiner) return;
         _w143HostId = src;
         Interlocked.Add(ref _w143RowsIn, rows.Count);

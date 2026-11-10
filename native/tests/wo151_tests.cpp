@@ -199,8 +199,10 @@ int wo151_tests(int* passed) {
         framemeter::format(w, buf, sizeof buf);
         FCHECK(std::strstr(buf, "FRAME window_s=60.1 frames=3750 fps=62.4 frame_ms_mean=16.0 frame_ms_worst=80.0 slow_frames=1 ours_us_mean=501 ours_us_max=3000") == buf,
                "the line: %s", buf);
+        FCHECK(std::strstr(buf, " ours_us_p95=550") != nullptr, "WO-218 B.2: the p95 of our time, the bucket's top edge: %s", buf);
         framemeter::restart(w);
         FCHECK(w.frames == 0 && w.startUs == now && w.lastUs == now, "the next window starts at the closing frame");
+        FCHECK(framemeter::ours_p95(w) == 0.0, "no frame, no p95");
         now += 20000; framemeter::add(w, now, 0);
         FCHECK(w.frames == 1 && w.sumFrameUs == 20000, "and measures from it");
     }

@@ -6229,6 +6229,7 @@ function KCD2MP_W131Tick(joiner, shared)
     pcall(KCD2MP_W131InstallLootBlock)
     pcall(KCD2MP_W135InstallTakedowns)   -- WO-135
     if KCD2MP_W136Held and KCD2MP_W136Held() then return end   -- WO-136: no park, sweep or knockout while a world loads
+    if KCD2MP_W218DoorSweep then pcall(KCD2MP_W218DoorSweep) end   -- WO-218 D.1: the doors near the players, once a second
     local now = KCD2MP_W131IsActive()
     if now and not w.active then
         w.active = true
@@ -26962,6 +26963,8 @@ do
         if not n then return end
         local dir, locked = doorState(door)
         if dir ~= 1 and dir ~= -1 then return end
+        W.doorLast = W.doorLast or {}
+        W.doorLast[n] = dir .. ":" .. (locked and 1 or 0)   -- WO-218 D.1: the sweep sends only what differs from this
         W.doorStats.sent = W.doorStats.sent + 1
         if W.doorStats.sent <= 30 or W.doorStats.sent % 100 == 0 then
             mp_log(string.format("WO151-DOOR %s dir=%d locked=%s (%s) -> the joiners [sent=%d]", n, dir, tostring(locked), tostring(why), W.doorStats.sent))
@@ -27047,6 +27050,8 @@ do
         local was = doorState(door)
         local ok = setDoor(door, tonumber(dir) or 0, tonumber(locked) == 1)
         if ok then W.doorStats.applied = W.doorStats.applied + 1 end
+        W.doorHost = W.doorHost or {}
+        W.doorHost[tostring(name)] = { dir = tonumber(dir) or 0, locked = tonumber(locked) == 1 }   -- WO-218 D.1: the host's last word
         -- WO-197 Part C (doors): every host door move's outcome on this screen, rate-limited (the doors' parity evidence)
         W.doorStats.w197 = (W.doorStats.w197 or 0) + 1
         local nn = W.doorStats.w197
@@ -27090,6 +27095,67 @@ do
     end
 
     -- The class-table wraps (one covers every door: instances resolve methods through the class).
+    -- WO-218 D.1 (door_sweep): the host's doors are the doors, by any path. Host: the doors near the players, once a second, sent when
+    -- they differ from what was last sent (at most 8 a second; a door in use waits). Joiner: its own door put back to the host's last word.
+    W.doorSweepStats = W.doorSweepStats or { sweeps = 0, sent = 0, restored = 0, refused = 0 }
+    local function sweepOn() return W.doorSync and ((not KCD2MP_W218On) or KCD2MP_W218On("door_sweep")) end
+    W.doorSweepOn = sweepOn
+    local function nearDoors(r)
+        local out, seen, centres = {}, {}, {}
+        pcall(function() centres[#centres + 1] = player:GetWorldPos() end)
+        for i = 0, 7 do
+            local g = System.GetEntityByName("kcd2mp_" .. i)
+            if g then pcall(function() centres[#centres + 1] = g:GetWorldPos() end) end
+        end
+        for _, c in ipairs(centres) do
+            pcall(function()
+                for _, d in ipairs(System.GetEntitiesInSphereByClass(c, r, "AnimDoor") or {}) do
+                    if d.id and not seen[d.id] then seen[d.id] = true; out[#out + 1] = d end
+                end
+            end)
+        end
+        return out
+    end
+    function KCD2MP_W218DoorSweep()
+        if not sweepOn() then return end
+        local role = doorRole()
+        if not role then return end
+        local S = W.doorSweepStats
+        S.sweeps = S.sweeps + 1
+        W.doorLast = W.doorLast or {}
+        W.doorHost = W.doorHost or {}
+        for _, d in ipairs(nearDoors(40)) do
+            local k = doorKey(d)
+            local inUse = false
+            pcall(function() inUse = d.IsInUse and d:IsInUse() == true end)
+            if k and not inUse then
+                local dir, locked = doorState(d)
+                if role == "host" then
+                    local s = dir .. ":" .. (locked and 1 or 0)
+                    if (dir == 1 or dir == -1) and W.doorLast[k] ~= s and S.sentThis ~= S.sweeps .. ":8" then
+                        local was = W.doorLast[k]
+                        pcall(KCD2MP_W151DoorChanged, d, was and "sweep: changed by another path" or "sweep: first in this session")
+                        S.sent = S.sent + 1
+                        S.n = (S.lastSweep == S.sweeps) and (S.n or 0) + 1 or 1
+                        S.lastSweep = S.sweeps
+                        if S.n >= 8 then S.sentThis = S.sweeps .. ":8" end
+                    end
+                else
+                    local h = W.doorHost[k]
+                    local own = d.w151OwnAt and (os.clock() - d.w151OwnAt) < 5
+                    if h and not own and ((h.dir == 1 or h.dir == -1) and dir ~= h.dir or locked ~= h.locked) then
+                        S.restored = S.restored + 1
+                        if S.restored <= 30 or S.restored % 50 == 0 then
+                            mp_log(string.format("WO218-DOOR %s here dir=%d locked=%s, the host's dir=%d locked=%s -- put back [restored=%d]",
+                                k, dir, tostring(locked), h.dir, tostring(h.locked), S.restored))
+                        end
+                        pcall(setDoor, d, h.dir, h.locked)
+                    end
+                end
+            end
+        end
+    end
+
     function KCD2MP_W151DoorInstall()
         if type(AnimDoor) ~= "table" then return end
         if type(AnimDoor.DoPlayAnimation) == "function" and AnimDoor.DoPlayAnimation ~= W.doorPlayWrap then
@@ -27110,6 +27176,12 @@ do
             local orig = AnimDoor.Lock
             W.doorLockWrap = function(self, ...)
                 local _, l0 = doorState(self)
+                -- WO-218 D.1: this copy's own world never locks a door in a session (the host's lock arrives as an apply)
+                if not l0 and doorRole() == "joiner" and not W.doorApplying and not W.doorInUse and W.doorSweepOn and W.doorSweepOn() then
+                    W.doorSweepStats.refused = W.doorSweepStats.refused + 1
+                    if W.doorSweepStats.refused <= 10 then mp_log("WO218-DOOR " .. tostring(doorKey(self)) .. ": this copy's own lock refused -- the host's world locks its doors") end
+                    return nil
+                end
                 local r = orig(self, ...)
                 -- a load re-locks every locked door (OnLoad: Lock() on an already locked door): no change, no news
                 if not l0 and doorRole() == "host" then pcall(KCD2MP_W151DoorChanged, self, "locked") end
@@ -27134,6 +27206,13 @@ do
                         pcall(KCD2MP_W151DoorAskLocal, self, true, "lockpicked here")
                     else
                         W.doorStats.ownUnlocks = (W.doorStats.ownUnlocks or 0) + 1
+                        -- WO-218 D.1: the copy's own unlock is undone at once (the host's word stands; the sweep would put it back)
+                        if W.doorSweepOn and W.doorSweepOn() then
+                            W.doorApplying = true
+                            pcall(function() self:Lock(true) end)
+                            W.doorApplying = false
+                            W.doorSweepStats.refused = W.doorSweepStats.refused + 1
+                        end
                     end
                 end
                 return r
@@ -33213,6 +33292,11 @@ end
         if danger then W3C.stats.combat = W3C.stats.combat + 1; w3c_leave("combat"); return end
         if hp and L.hp and hp < L.hp - 0.5 then W3C.stats.hits = W3C.stats.hits + 1; w3c_leave("hit"); return end
         if hp then L.hp = hp end
+        -- WO-218 B.3 (listen_reassert): the listen map again once a second -- another exclusive map must never keep the listener's keys
+        L.ticks = (L.ticks or 0) + 1
+        if L.ticks % 5 == 0 and L.map and ((not KCD2MP_W218On) or KCD2MP_W218On("listen_reassert")) then
+            pcall(ActionMapManager.EnableActionMap, L.map, true)
+        end
         Script.SetTimer(200, function() w3c_watch(gen) end)
 end
 
@@ -33241,6 +33325,15 @@ end
         -- game's "dialog" map includes open_pause_menu on the same Back keys -- a Back that cleared a vote opened the pause menu
         W3C.listening.map = (W207 and W207.on and W207.on.listen_map == false) and "dialog" or "kcd2mp_listen"
         pcall(ActionMapManager.EnableActionMap, W3C.listening.map, true)
+        do   -- WO-218 B.3: the HUD and the player's state as the listen begins (WO-213: 7 of 37 host listens began with 2 of 9 clips visible)
+            local vis, inDlg, danger, fight = {}, false, false, false
+            for _, clip in ipairs(W3C_HUD) do local ok, v = pcall(UIAction.IsVisible, "hud", 0, clip); if ok and v then vis[#vis + 1] = clip end end
+            pcall(function() inDlg = player.human:IsInDialog() == true end)
+            pcall(function() danger = player.soul:IsInCombatDanger() == true end)
+            pcall(function() fight = player.human:IsInCombat() == true end)
+            mp_log(string.format("WO218-LISTEN start partner=%s cid=%s hud_visible=%d/%d [%s] in_dialog=%s combat_danger=%s in_combat=%s map=%s",
+                tostring(starter), tostring(cid), #vis, #W3C_HUD, table.concat(vis, ","), tostring(inDlg), tostring(danger), tostring(fight), tostring(W3C.listening.map)))
+        end
         w3c_hud(true)
         w3c_head(true)   -- WO-208 C.5
         pcall(function() W3C.listening.hp = player.soul:GetState("health") end)
@@ -35086,6 +35179,74 @@ do
     end
 end
 
+-- ===== WO-218: the release candidate (docs/WO-218-findings.md) =====
+-- Every switch ships on. The agent tells this file the states (KCD2MP_W218Cfg, with the bench's twins applied); a console switch here goes
+-- to the agent, which tells the DLL and this file back.
+do
+    W218 = W218 or {}
+    W218.on = W218.on or {}
+    W218.NAMES = {
+        pipe_batch = "mp_pipe_batch", pipe_shed = "mp_pipe_shed", takeover_stop = "mp_takeover_stop", door_sweep = "mp_door_sweep",
+        listen_reassert = "mp_listen_reassert", drift_release = "mp_drift_release", main_budget = "mp_main_budget",
+    }
+    W218.HELP = {
+        pipe_batch = "A.1: (both) one pipe round trip carries every waiting request; the newest state of a body only",
+        pipe_shed = "A.2: (joiner) a queue older than 500 ms sheds superseded state of far bodies first (never an event)",
+        takeover_stop = "C.3: (joiner) a copy's own idle, variation or callback never takes over the host's activity it shows",
+        door_sweep = "D.1: (both) the host's doors are the doors: swept near the players and put back on the joiner; the joiner never locks one itself",
+        listen_reassert = "B.3: (both) while listening in on the partner's talk the listen keys are asserted again once a second",
+        drift_release = "C.1: (joiner) a copy whose host NPC walked off its activity is released from its own posture: one writer, no flicker",
+        main_budget = "B.2: (both) the bug report's divergence digest spends at most 0.3 ms of a frame; the research file probes look every 2 s, not every frame",
+    }
+    function KCD2MP_W218On(name)
+        local v = W218.on[tostring(name)]
+        if v == nil then return true end
+        return v
+    end
+    function KCD2MP_W218Cfg(list)
+        local n = 0
+        for kv in string.gmatch(tostring(list or ""), "[^,]+") do
+            local k, v = string.match(kv, "^%s*([%w_]+)=(%a+)%s*$")
+            if k and W218.NAMES[k] then W218.on[k] = (v == "on"); n = n + 1 end
+        end
+        if n > 0 and not W218.told then
+            W218.told = true
+            local parts = {}
+            for k in pairs(W218.NAMES) do parts[#parts + 1] = k .. "=" .. (KCD2MP_W218On(k) and "on" or "off") end
+            table.sort(parts)
+            mp_log("WO218-CFG " .. table.concat(parts, " "))
+        end
+        return true
+    end
+    function KCD2MP_W218Set(name, arg)
+        local label = W218.NAMES[tostring(name)]
+        if not label then mp_log("WO218-TOGGLE unknown switch '" .. tostring(name) .. "'"); return false end
+        local v = KCD2MP_Wo122ParseBool(arg)
+        if v == "bad" then mp_log(label .. ": expected on|off, got '" .. tostring(arg) .. "'"); return false end
+        if v == nil then mp_log("WO218-TOGGLE " .. label .. " is " .. (KCD2MP_W218On(name) and "on" or "off")); return true end
+        W218.on[tostring(name)] = v
+        mp_log("WO218-TOGGLE " .. label .. " " .. (v and "on" or "off") .. " -- sent to the agent")
+        KCD2MP_EmitEvent("w218_cfg", tostring(name) .. "=" .. (v and "on" or "off"))
+        return true
+    end
+    function KCD2MP_W218Status()
+        local parts = {}
+        for k, label in pairs(W218.NAMES) do parts[#parts + 1] = label .. "=" .. (KCD2MP_W218On(k) and "on" or "off") end
+        table.sort(parts)
+        local ds = KCD2MP.w151 and KCD2MP.w151.doorSweepStats or {}
+        mp_log("WO218-STATUS " .. table.concat(parts, " ") .. string.format(" door_sweeps=%d door_sent=%d door_restored=%d door_refused=%d",
+            ds.sweeps or 0, ds.sent or 0, ds.restored or 0, ds.refused or 0))
+        KCD2MP_EmitEvent("w218_status", "")
+        return true
+    end
+    System.AddCCommand("mp_w218_status", "KCD2MP_W218Status()", "WO-218: every WO-218 switch, the pipe's batch and the DLL's numbers")
+    for k, label in pairs(W218.NAMES) do
+        local fname = "KCD2MP_W218Set_" .. k
+        _G[fname] = function(arg) return KCD2MP_W218Set(k, arg) end
+        System.AddCCommand(label, fname .. "(%line)", "WO-218 " .. (W218.HELP[k] or k) .. " (default on): " .. label .. " on|off")
+    end
+end
+
 -- ===== WO-217 C / D: a body's loot is live for both; stolen is stolen for both =====
 -- The decided design: NPC bodies are shared and host-authoritative, first come first served; items come out of the one body; the joiner's
 -- take is a request to the host; chests stay per-player. With loot_live on:
@@ -35382,6 +35543,7 @@ do
         end
         L.stats.made = L.stats.made + made
         lg("WO217-LOOT list npc=%s rev=%d items=%d -> made=%d out=%d flags=%d", name, rev, #list, made, out, flagsSet)
+        if out > 0 then KCD2MP_EmitEvent("w218_lootout", string.format("%s %d %d", name, rev, out)) end   -- WO-218 E.4: the screen's rows went now
         s.snap = L.ids(e)
         if po and not s.opened then
             w.pendingOpen[name] = nil
