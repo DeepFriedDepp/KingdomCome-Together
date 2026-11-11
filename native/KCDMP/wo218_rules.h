@@ -107,29 +107,4 @@ inline bool takeover_class(const char* cls) {
 }
 constexpr double kTakeoverEveryS = 0.5;
 
-// ---- C.1 drift_release: one writer -------------------------------------------------------------------------------------------
-// The acceptance's flips (one woodcutter's copy every other frame 8.5 m apart for 15 minutes): WO-209's drift block lifted the first
-// frame the stream itself had put the body back by its host NPC -- at once, since the stream writes a blocked body -- and the owner
-// placed the host's activity again at the joiner's own object. Now a block lasts at least drift_block_s() (60 s, doubled for each
-// drift of the same body within kDriftStrikeResetS, at most 8 minutes), and the writer catches two writers on its own: the engine
-// moving a body it writes by more than kForeignMoveM, kForeignFrames times within kForeignWindowS.
-constexpr double kDriftStrikeResetS = 600.0;
-inline double drift_block_s(int strikes) {
-    const int s = strikes < 0 ? 0 : (strikes > 3 ? 3 : strikes);
-    return 60.0 * static_cast<double>(1 << s);
-}
-constexpr float kForeignMoveM = 4.0f;
-constexpr int kForeignFrames = 10;
-constexpr double kForeignWindowS = 2.0;
-// Counts the frames something else moved a written body far; true on the frame the count reaches kForeignFrames within the window.
-struct ForeignMeter {
-    double since = -1;
-    int n = 0;
-    bool add(double now) {
-        if (since < 0 || now - since > kForeignWindowS) { since = now; n = 0; }
-        return ++n == kForeignFrames;
-    }
-    void reset() { since = -1; n = 0; }
-};
-
 }  // namespace kcdmp::wo218rules

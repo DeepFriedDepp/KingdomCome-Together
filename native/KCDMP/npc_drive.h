@@ -107,9 +107,6 @@ bool walk_from_host();
 // Main thread.
 void set_activity_hold(uint32_t eid, bool on);
 bool activity_held(uint32_t eid);
-// WO-209 / WO-218 C.1: this body's drift block holds (its host NPC was far from where its own activity placed it): no activity hold, and
-// the owner installs no position-owning activity on it, until the block lifts. Main thread.
-bool drift_blocked(uint32_t eid);
 
 // ---- 0x11 bind, main thread (the pipe marshals it) ---------------------------
 // [on:1][eid:4][wuid:8][ax:4f][ay:4f][az:4f][delayMs:2][nameLen:1][name]

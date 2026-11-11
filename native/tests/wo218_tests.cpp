@@ -58,23 +58,6 @@ int wo218_tests(int* passed) {
     CHECK(takeover_family(4) && takeover_family(5) && takeover_family(7) && !takeover_family(1) && !takeover_family(3) && !takeover_family(9));
     CHECK(takeover_class("CAnimActionAIMovement") && takeover_class("C_VariationAction") && takeover_class("C_CallbackAction"));
     CHECK(!takeover_class("C_CombatAnimAction") && !takeover_class("CAnimActionLooking") && !takeover_class(nullptr) && !takeover_class("C_Variation"));
-    // C.1: a drift block lasts 60 s, doubled per strike, at most 8 minutes
-    CHECK(drift_block_s(0) == 60.0 && drift_block_s(1) == 120.0 && drift_block_s(3) == 480.0 && drift_block_s(9) == 480.0 && drift_block_s(-2) == 60.0);
-    // C.1: two writers -- ten far moves within 2 s fire once; nine do not; a gap over 2 s starts the count again
-    {
-        ForeignMeter m;
-        bool fired = false;
-        for (int i = 0; i < 9; ++i) fired |= m.add(100.0 + i * 0.04);
-        CHECK(!fired);
-        CHECK(m.add(100.4));          // the tenth within the window
-        CHECK(!m.add(100.44));        // once, not again on the eleventh
-        ForeignMeter g;
-        for (int i = 0; i < 9; ++i) g.add(200.0 + i * 0.1);
-        CHECK(!g.add(203.0));         // past the window: the count starts at one again
-        int n = 0;
-        for (int i = 1; i < 10; ++i) n += g.add(203.0 + i * 0.05) ? 1 : 0;
-        CHECK(n == 1);
-    }
     *passed = g_pass;
     return g_fail;
 }
