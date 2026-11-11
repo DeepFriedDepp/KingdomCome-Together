@@ -180,6 +180,12 @@ def plans(r, name, args):
         # B.1: 30 minutes of staged fights in one session (WO-209's crash gate): the host and the joiner against two or three bandits,
         # the joiner swinging (send-only keys), the copies attacking him, five minutes each; any game gone fails the run
         'w218fights': [('join', S.s_join(r)), ('cost-on', cost(r, True))] + [('fight-%02d' % (i + 1), S.s_c1fight(r)) for i in range(int(os.environ.get('KCDMP_RIG_C1_N', '6')))],
+        # the release build's own check (b6: the lane per body, the 60 m door sweep): A's test, then the doors watched 5 minutes
+        'w218a2': [('join', S.s_join(r)), ('cost-on', cost(r, True)), ('day', T.daytime(r, 10.0)),
+                   ('talks-joiner', T.p0_role(r, 'joiner')), ('talks-host', T.p0_role(r, 'host')),
+                   ('tavern', T.p0_sitters(r, secs=float(os.environ.get('KCDMP_RIG_SIT_S', '600')))),
+                   ('watch-on', S.s_w215_watch(r, True)), ('brawl', S.s_w216_brawl(r)), ('watch-off', S.s_w215_watch(r, False)),
+                   ('day2', T.daytime(r, 10.0)), ('doors', T.doors(r)), ('cost-off', cost(r, False))],
         # B.4: 60 minutes joined -- the partner walking the village, two fights, one talk each, one loot, one sleep vote
         'w218soak': [('join', S.s_join(r)), ('cost-on', cost(r, True)), ('day', T.daytime(r, 10.0)), ('soak-start', soak_start(r, t_start)),
                      ('walk-1', village_walk(r, 300)), ('talks-joiner', T.p0_role(r, 'joiner')), ('talks-host', T.p0_role(r, 'host')),
@@ -200,4 +206,4 @@ def plans(r, name, args):
     }.get(name)
 
 
-CONTINUE_ON_FAIL = ('w218a0', 'w218a', 'w218soak', 'w218fights', 'w218cd', 'w218acc')
+CONTINUE_ON_FAIL = ('w218a0', 'w218a', 'w218soak', 'w218fights', 'w218cd', 'w218acc', 'w218a2')
