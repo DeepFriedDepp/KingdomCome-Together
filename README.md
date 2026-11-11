@@ -68,6 +68,7 @@ and weather. Each feature below says how far it is proven:
 | The join, seen by the host | The game's own panel shows the partner's progress through the whole join, while the world is held | 🧪 |
 | A join that can't work | Plain words why (saves from the regular game, only copies of this world, no character) and **Join with a new character**; a load that freezes the game is told plainly (restart the game) | 🧪 |
 | Nobody's menu stops the other | The host's world keeps running while either player is in a menu, the map or the inventory | ✅ |
+| Keeping up in a crowd | The partner's game shows the host's world on time in a packed tavern and a brawl (0.65.0 on the test bench: people's movements and the fight within a tenth of a second 99 % of the time; what they do — sitting down, a job — usually within a quarter of a second, at worst about one and a half; 0.64.4 fell up to a minute behind) | 🧪 |
 | Joining holds the host's world | While the partner joins, the host's world really stands still | 🧪 |
 | Whistling | Your whistle (call your horse) is heard at your figure on the other screen | 🧪 |
 | Riding the host's horses | The rider's horse is the rider's: nothing of the mod moves, pauses or animates it while it is ridden | 🧪 |
@@ -99,11 +100,12 @@ and weather. Each feature below says how far it is proven:
 | The host's people | Where the host's villagers walk, sit, work and sleep, on the partner's screen too | ✅ |
 | One clock | The partner's time follows the host's | ✅ |
 | Weather | The host's own weather, read from the game as it changes; on the partner's screen only the host's weather blends | 🧪 |
-| Doors | The host's world owns every door: what opens, closes or locks there opens, closes or locks on the partner's screen; the partner's own door asks the host | 🧪 |
+| Doors | The host's world owns every door: what opens, closes or locks there opens, closes or locks on the partner's screen (swept once a second near the players, 0.65.0); the partner's own door asks the host; the partner's world never locks one by itself | 🧪 |
 | Sleeping together | One player lies down, the other is asked, and both sleep | ✅ |
 | Crime and guards | The host's guards judge the partner's crimes; hitting a bandit is no crime | ✅ |
 | Crimes count for both | A crime by either player counts for both; a fine or punishment by either clears both, and the wanted icon goes with it (`mp_crime_mode individual` for the old way) | ⚠️ |
-| Looting | Bodies are the host's (first come, first served); loose items exist once; chests are per player | ✅ |
+| Looting | Bodies are the host's (first come, first served); chests are per player | ✅ |
+| Loose items in the world | A sword or a purse lying on the ground exists once for both players | ⚠️ not shown on the test bench yet (see `docs/KNOWN-ISSUES.md`) |
 | Dropping items for each other | What one drops, the other can pick up; the first pickup wins | ✅ |
 | Carrying | A body (dead or knocked out) or a sack one player carries is carried by that player's figure on the other screen and lies where it was put down; one carrier at a time, decided by the host's world | 🧪 |
 | Carrying a living quest person | A person a quest lets you carry alive (the wounded hunter) is carried the same way | ⚠️ built and tested in scripts; not seen in the game yet |
@@ -154,6 +156,9 @@ and weather. Each feature below says how far it is proven:
   them, on that player's screen.
 - The journal's **marker letters** can differ between the two players.
 - At the **grindstone** the blade is not in the other figure's hands.
+- **Stolen marks** do not travel with a looted or dropped item: this game build gives scripts no way to set an item's owner.
+- **Work tied to an object** (a smith at the anvil, a cook at the pot) may show on the partner's screen beside its object, without
+  the tool; and a person may now and then **flicker** between two places (`docs/KNOWN-ISSUES.md`).
 - **Emotes** (other than the whistle) and **duels** are not built.
 
 Details per feature, with the evidence: the findings pages in `docs/`; the
