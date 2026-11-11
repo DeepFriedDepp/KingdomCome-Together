@@ -154,6 +154,10 @@ ATTACK = ("local a = System.GetEntityByName('{a}'); local b = System.GetEntityBy
           "local ok = pcall(function() XGenAIModule.SendMessageToEntityData(a.this.id, 'crime:attackInitiatedByConcept', t) end); "
           "local ha, hb = -1, -1; pcall(function() ha = a.actor:GetHealth() end); pcall(function() hb = b.actor:GetHealth() end); "
           "Q(string.format('attack sent=%s hp %.0f/%.0f', tostring(ok), ha, hb))")
+# WO-218: the fight's watch between rows (no attack sent) -- the victim's health and the player's, once a second
+WATCH = ("local b = System.GetEntityByName('{b}'); local hb, hp = -1, -1; "
+         "pcall(function() hb = b and (b.actor:IsDead() and 0 or b.actor:GetHealth()) or -1 end); "
+         "pcall(function() hp = player.actor:GetHealth() end); Q(string.format('%.0f %.0f', hb, hp))")
 
 
 def run(args):
@@ -227,7 +231,33 @@ def run(args):
             with open(partner, 'a') as f:     # 4 m one way at a walk, the next time back
                 f.write('move 1.0 %.4f 4\n' % (-1.5708 if pace_dir > 0 else 1.5708))
             pace_dir, next_pace = -pace_dir, el + 10.0
-        time.sleep(max(0.0, 10.0 - ((time.time() - t0) % 10.0)))
+        # WO-218: "nobody fights the player" held between the rows too -- on save440 a pair's victim went down between two looks, its
+        # attacker turned on the player and killed him within the 10 s (both runs, the mod's and the game's own: the last minutes were the
+        # Game Over screen). Once a second while a pair fights: a victim near the ground ends that pair (the next pair at the next look),
+        # the player hurt ends the fight.
+        row_at = t0 + (int((time.time() - t0) // 10.0) + 1) * 10.0   # this row's moment: the watch never runs past it
+        while True:
+            left = row_at - time.time()
+            if left <= 1.5 or fighters is None or stopped_fight:
+                time.sleep(max(0.0, left))
+                break
+            time.sleep(1.0)
+            w = g.lua(WATCH.format(b=fighters[1]), 0.4)
+            m = re.match(r'(-?\d+) (-?\d+)', w[0]) if w else None
+            if not m:
+                continue
+            vb, ph = int(m.group(1)), int(m.group(2))
+            if ph < hp0 - 5:
+                stopped_fight = True
+                notes.append('%.0fs the player lost health (%.0f -> %d, the watch): the fighters were removed' % (time.time() - t0, hp0, ph))
+                remove(g, fighters)
+                fighters = None
+            elif 0 <= vb < 25:
+                notes.append('%.0fs pair %d: the victim at %d, the pair removed before it falls (the watch)' % (time.time() - t0, pairs, vb))
+                remove(g, fighters)
+                fighters = None
+                fight_hp, fight_hp_at = None, time.time() - t0
+                next_attack = time.time() - t0
         r = g.lua("Q(System.GetFrameID() .. ' ' .. System.GetCurrAsyncTime() .. ' ' .. player.actor:GetHealth())", 0.4)
         if not r:
             notes.append('%.0fs no answer from the game (a menu, a load?)' % (time.time() - t0))
