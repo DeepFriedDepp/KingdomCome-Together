@@ -859,6 +859,11 @@ void own_apply(uint32_t eid, OwnCopy& oc, int cm, const HostScope hsc[2], const 
     // WO-216 F.4 / G: the host's row the owner played holds the full body for the row's length
     const bool rowRuns = row_holds(eid, now);
     if (rowRuns) c_rowHeldFrames.fetch_add(1, std::memory_order_relaxed);
+    // WO-218 C.1 (drift_release): a copy whose drift block holds keeps the stream's place -- the host's activity that owns a position
+    // (lying, sitting, kneeling, working) is not installed on its full body again until the block lifts (the acceptance's woodcutter:
+    // the owner placed it at the joiner's own chopping block, 8.5 m from the host's, while the stream wrote it at the host's NPC)
+    const bool driftHeld = wo218::on(wo218::kBitDriftRelease) && have[0] && npcdrive::drift_blocked(eid) &&
+                           wo218rules::takeover_family(static_cast<uint8_t>(pfam_of(eid, hsc[0].cls, hsc[0].frag)));
     // WO-209 C: nothing of the owner's is queued on a copy whose action queue is already long (the engine allows 10). rc1-c2tavern-1: a
     // seated copy's own actions at the head of its queue (its movement, its look pose) never let the owner's installs start, the owner
     // withdrew each as stale and installed the next, and they piled up behind them -- 11,004 queue overflows on one copy, 59,993 on
@@ -869,6 +874,7 @@ void own_apply(uint32_t eid, OwnCopy& oc, int cm, const HostScope hsc[2], const 
     if (queueFull) c_oQueueFull.fetch_add(1);
     for (int k = 0; k < 2; ++k) {
         if ((shot || aiRuns || rowRuns) && k == 0) { wo217::place_note(oc.ep217, wo217::Note::Held, shot ? "one-shot" : aiRuns ? "its-own-attack" : "row"); continue; }
+        if (driftHeld && k == 0) { wo217::place_note(oc.ep217, wo217::Note::Held, "drift"); continue; }   // WO-218 C.1
         const HostScope* hs = have[k] ? &hsc[k] : nullptr;
         const Fam fam = hs ? fam_of(eid, hs->cls, hs->frag) : Fam::Empty;
         Probe::Scope& o = oc.own[k];

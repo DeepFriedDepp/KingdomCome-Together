@@ -13,6 +13,7 @@
 #include "wo210_kd.h"
 #include "wo208.h"
 #include "wo218.h"
+#include "wo218_rules.h"
 #include "wo213.h"
 #include "wo214.h"
 #include "wo215.h"
@@ -370,6 +371,12 @@ struct Puppet {
     double   driftReleaseAt = -1e9;  // WO-218 C.1: the last time its own posture was asked to release (drift_release)
     wo213rules::PostureSitting sitting;  // WO-213 E.3: a held posture's body found off its place takes the stream for the rest of that sitting
     bool     silenceHeld = false;   // WO-214 B: this silence already passed the old 4 s drop (counted once)
+    // WO-218 C.1 (drift_release): the drift block lasts until driftBlockUntil (60 s, doubled per strike); two writers caught directly
+    double   driftBlockUntil = 0;
+    double   lastDriftAt = -1e9;
+    int      driftStrikes = 0;
+    bool     foreignFrame = false;  // this frame the engine moved the body over kForeignMoveM from our last write
+    wo218rules::ForeignMeter foreign;
     const char* blendWhy = "bind";  // WO-214 A.3: what asked for the next blend (bind, resume, hold-end, extrap-end)
     bool     blendFar = false;      // WO-215 A.1: the route's corrector blends whatever the distance (never a snap; a teleport over 25 m still jumps)
     bool     beast = false;         // WO-144 2.3: a horse or an encounter animal whose physics is not a living entity
@@ -720,6 +727,7 @@ void pull_flush(Puppet& p, double now) {
 // One puppet, one frame. Returns false on an engine fault (the caller disarms).
 bool write_one(Puppet& p, void* e, const float pose[4], bool* wrote) {
     *wrote = false;
+    p.foreignFrame = false;
     float cur[3]{};
     const bool haveCur = read_pos(e, cur);
     p.curValid = haveCur;
@@ -743,6 +751,7 @@ bool write_one(Puppet& p, void* e, const float pose[4], bool* wrote) {
         const float dx = cur[0] - p.last[0], dy = cur[1] - p.last[1], dz = cur[2] - p.last[2];
         const double cm = std::sqrt(static_cast<double>(dx) * dx + static_cast<double>(dy) * dy + static_cast<double>(dz) * dz) * 100.0;
         ++p.winFrames;
+        p.foreignFrame = std::sqrt(dx * dx + dy * dy) > wo218rules::kForeignMoveM;   // WO-218 C.1
         p.sumCm += cm;
         p.sumDzCm += dz * 100.0;
         if (cm > p.maxCm) p.maxCm = cm;
@@ -1032,6 +1041,33 @@ void set_activity_hold(uint32_t eid, bool on) {
     else if (g_activityHeld.erase(eid)) logf("MP-NPCWRITE eid=%u event=activity-release (the stream takes the body back)", eid);
 }
 bool activity_held(uint32_t eid) { return eid && g_activityHeld.count(eid) != 0; }
+bool drift_blocked(uint32_t eid) { return eid && g_driftBlocked.count(eid) != 0; }
+
+// WO-218 C.1 (drift_release): one writer -- the copy's own posture is released the game's way (else it places the body at its object
+// while the stream writes it at its host NPC, frame by frame), and the block holds for drift_block_s(strikes). `foreign`: the writer
+// caught the two writers itself (an unheld body the engine kept moving far from the stream's write), so the block starts here.
+std::atomic<uint32_t> c_foreignFires{0};
+void drift_release_now(Puppet& p, double now, bool foreign) {
+    if (now - p.lastDriftAt > wo218rules::kDriftStrikeResetS) p.driftStrikes = 0;
+    const double blockS = wo218rules::drift_block_s(p.driftStrikes);
+    p.driftBlockUntil = now + blockS;
+    if (p.driftStrikes < 8) ++p.driftStrikes;
+    p.lastDriftAt = now;
+    if (foreign) {
+        set_activity_hold(p.eid, false);
+        g_driftBlocked.insert(p.eid);
+        const uint32_t k = c_foreignFires.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (k <= 200 || k % 50 == 0)
+            logf("WO218-FLIP npc=%s two writers: something else placed the body over %.0f m from the stream's write %d times in %.0f s -- "
+                 "its activity is held off for %.0f s, the stream keeps it [n=%u]", p.name.c_str(), wo218rules::kForeignMoveM,
+                 wo218rules::kForeignFrames, wo218rules::kForeignWindowS, blockS, k);
+    }
+    p.driftReleaseAt = now;
+    const bool asked = wo208::ask_release(p.eid, p.name.c_str());
+    const uint32_t kr = asked ? wo218::note_drift_release() : 0;
+    if (asked && (kr <= 200 || kr % 50 == 0))
+        logf("WO218-DRIFT npc=%s its own posture released the game's way (one writer: the stream; blocked %.0f s) [n=%u]", p.name.c_str(), blockS, kr);
+}
 
 bool parse_bind(const uint8_t* body, size_t len, BindRequest* out) {
     // [on:1][eid:4][wuid:8][ax:4f][ay:4f][az:4f][delayMs:2][nameLen:1][name]
@@ -1310,8 +1346,10 @@ void tick() {
             const RingSample& ns = s.ring[s.n - 1];
             const bool drifted = read_pos(e, cur) && wo209rules::activity_drifted(std::sqrt((cur[0] - ns.x) * (cur[0] - ns.x) + (cur[1] - ns.y) * (cur[1] - ns.y)));
             if (driftBlocked) {
-                if (!drifted) g_driftBlocked.erase(p.eid);   // back by its host NPC: an activity may hold it again
-                else if (wo218::on(wo218::kBitDriftRelease) && now - p.driftReleaseAt >= 3.0) {   // WO-218 C.1: still drifting -- its posture asked again
+                // back by its host NPC: an activity may hold it again. WO-218 C.1: not before the block's time -- the stream writes a blocked
+                // body, so it is "back" the very next frame, and the activity placed it at the joiner's own object again
+                if (!drifted && (!wo218::on(wo218::kBitDriftRelease) || now >= p.driftBlockUntil)) g_driftBlocked.erase(p.eid);
+                else if (drifted && wo218::on(wo218::kBitDriftRelease) && now - p.driftReleaseAt >= 3.0) {   // WO-218 C.1: still drifting -- its posture asked again
                     p.driftReleaseAt = now;
                     if (wo208::ask_release(p.eid, p.name.c_str())) wo218::note_drift_release();
                 }
@@ -1328,13 +1366,7 @@ void tick() {
                          p.name.c_str(), wo209rules::kActivityDriftM, wo209rules::kActivityDriftS, k);
                 // WO-218 C.1 (drift_release): one writer -- the copy's own posture is released the game's way, else it places the body at its
                 // object while the stream writes it at its host NPC, frame by frame
-                if (wo218::on(wo218::kBitDriftRelease)) {
-                    p.driftReleaseAt = now;
-                    const bool asked = wo208::ask_release(p.eid, p.name.c_str());
-                    const uint32_t kr = asked ? wo218::note_drift_release() : 0;
-                    if (asked && (kr <= 200 || kr % 50 == 0))
-                        logf("WO218-DRIFT npc=%s its own posture released the game's way (one writer: the stream) [n=%u]", p.name.c_str(), kr);
-                }
+                if (wo218::on(wo218::kBitDriftRelease)) drift_release_now(p, now, false);
             }
         } else p.activityDriftSince = 0;
         // WO-217 0.2: the seated-copy pull meter (every frame while the copy or its host NPC is seated: a single-frame move over 50 cm, and
@@ -1536,6 +1568,15 @@ void tick() {
             return;
         }
         if (wrote) { ++writing; g_statWrites.fetch_add(1, std::memory_order_relaxed); npctrace::note_write(e, pose); }
+        // WO-218 C.1 (drift_release): two writers -- the engine moved this written body far from our last write, again and again (the
+        // acceptance's woodcutter: placed at the joiner's own chopping block every other frame, 8.5 m from the stream, for 15 minutes)
+        if (p.foreignFrame) {
+            p.foreignFrame = false;
+            if (wo218::on(wo218::kBitDriftRelease) && wo209::fix_on(wo209rules::kFixActivityDrift) && !g_driftBlocked.count(p.eid) && p.foreign.add(now)) {
+                p.foreign.reset();
+                drift_release_now(p, now, true);
+            }
+        }
         if (p.curValid) {   // WO-163 (A5): cur = the engine's position before our write; pose = ours; the applied one is the render position
             const bool engaged = now < p.holdUntil || p.blending || (s.haveSt2 && (s.st2.bits & motion::kBitCombat) != 0 && now - s.st2At < 2.0);
             p.snap.frame(now, {p.curRead[0], p.curRead[1], p.curRead[2]}, {pose[0], pose[1], pose[2]}, wrote, engaged);

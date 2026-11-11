@@ -6322,7 +6322,7 @@ public partial class GameBridge(ClientConfig config)
                 return;
             case string w218 when w218.StartsWith("w218_", StringComparison.Ordinal):   // WO-218: the switches, the status, its parts' events
                 Wo218OnEvent(name, arg);
-                break;
+                return;
             case string w217 when w217.StartsWith("w217_", StringComparison.Ordinal):   // WO-217: the switches, the status, its parts' events
                 Wo217OnEvent(name, arg);
                 return;

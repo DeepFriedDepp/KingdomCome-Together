@@ -186,6 +186,11 @@ def plans(r, name, args):
                    ('tavern', T.p0_sitters(r, secs=float(os.environ.get('KCDMP_RIG_SIT_S', '600')))),
                    ('watch-on', S.s_w215_watch(r, True)), ('brawl', S.s_w216_brawl(r)), ('watch-off', S.s_w215_watch(r, False)),
                    ('day2', T.daytime(r, 10.0)), ('doors', T.doors(r)), ('cost-off', cost(r, False))],
+        # C.1's flip check (b7): the acceptance's second morning as it ran (the drops, the doors, the loose items), then the partner walking
+        # the village 10 minutes -- where the acceptance's woodcutter flipped every other frame for 15 minutes
+        'w218flip': [('join', S.s_join(r)), ('cost-on', cost(r, True)), ('day', T.daytime(r, 10.0)),
+                     ('drops', T.drops(r, 'flip')), ('doors', T.doors(r)), ('loose', T.loose_items(r)),
+                     ('walk', village_walk(r, float(os.environ.get('KCDMP_RIG_WALK_S', '600')))), ('cost-off', cost(r, False))],
         # B.4: 60 minutes joined -- the partner walking the village, two fights, one talk each, one loot, one sleep vote
         'w218soak': [('join', S.s_join(r)), ('cost-on', cost(r, True)), ('day', T.daytime(r, 10.0)), ('soak-start', soak_start(r, t_start)),
                      ('walk-1', village_walk(r, 300)), ('talks-joiner', T.p0_role(r, 'joiner')), ('talks-host', T.p0_role(r, 'host')),
