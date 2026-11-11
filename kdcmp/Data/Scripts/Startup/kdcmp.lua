@@ -27095,7 +27095,7 @@ do
     end
 
     -- The class-table wraps (one covers every door: instances resolve methods through the class).
-    -- WO-218 D.1 (door_sweep): the host's doors are the doors, by any path. Host: the doors near the players, once a second, sent when
+    -- WO-218 D.1 (door_sweep): the host's doors are the doors, by any path. Host: the doors within 60 m of the players, once a second, sent when
     -- they differ from what was last sent (at most 8 a second; a door in use waits). Joiner: its own door put back to the host's last word.
     W.doorSweepStats = W.doorSweepStats or { sweeps = 0, sent = 0, restored = 0, refused = 0 }
     local function sweepOn() return W.doorSync and ((not KCD2MP_W218On) or KCD2MP_W218On("door_sweep")) end
@@ -27124,7 +27124,7 @@ do
         S.sweeps = S.sweeps + 1
         W.doorLast = W.doorLast or {}
         W.doorHost = W.doorHost or {}
-        for _, d in ipairs(nearDoors(40)) do
+        for _, d in ipairs(nearDoors(60)) do   -- WO-218 D.1: 60 m (the acceptance: the doors that differed stood 52-53 m off, past 40 m)
             local k = doorKey(d)
             local inUse = false
             pcall(function() inUse = d.IsInUse and d:IsInUse() == true end)
