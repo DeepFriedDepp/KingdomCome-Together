@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/branding/banner-1280.jpg" alt="Kingdom Come: Together" width="820">
+  <img src="docs/branding/KCT_txt.png" alt="Kingdom Come: Together" width="820">
 </p>
 
 <p align="center">
