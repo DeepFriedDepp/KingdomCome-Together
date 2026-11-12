@@ -27,9 +27,9 @@
 
 Kingdom Come: Together is co-op for the single-player game. One of you hosts your world; your friend joins it with
 their own Henry. From there you play the game you already know, side by side: the same villages and people, the same
-quests, the same fights, the same clock.
+quests, the same fights, the same clock... experienced TOGETHER.
 
-It is not a server platform and there are no lobbies of strangers. It is the campaign, shared.
+It is not a server platform and there are no lobbies of strangers. It is the campaign, shared, with only who you want to enjoy it with.
 
 ## Where it's at
 
@@ -38,13 +38,16 @@ and now and then something will break. New builds come often.
 
 | Works well | Works, but rough | Not yet |
 |---|---|---|
-| Joining a friend's world with your own character | Villagers glide a little when they walk on the partner's screen | Cutscenes for both players at once |
-| Seeing each other: walking, riding, clothes, weapons | Some villagers stand idle where the host sees them working | Bows and crossbows on the other player's figure |
-| Fighting the same enemies; hits and deaths count for both | Trading as the partner can fail to open | Hearing each other's conversations |
-| Shared quests: either of you can move a quest forward | Grabs and paired moves in fights don't always show | Playing far apart (you are kept within about 650 m) |
-| Talking to the host's villagers | A scripted scene can leave the partner on a black screen for a while | The regular (non-Modding-Tools) game |
-| Looting, dropping items for each other, sleeping, one shared clock | Lip sync, voice chat and player-vs-player dice are unpolished | |
-| Crime: the host's guards judge both of you | | |
+| Joining a friend's world with your own character, or a new one | Joining each other's conversations: you listen in and vote on answers, but the camera and keys can misbehave | Playing far apart (you are kept within about 650 m) |
+| Seeing each other: walking, riding, clothes, weapons | Villagers glide when they walk on the partner's screen | Carts moving on the partner's screen |
+| Fighting the same enemies: hits, knockdowns and deaths show for both | Some villagers stand idle, or work without their tools, where the host sees them busy | Grabs in fights |
+| Shared quests: either of you can move a quest forward | Cutscenes play for both, but one can leave the partner on a black screen for a while | Shared chests and shop stock (each player has their own) |
+| Looting bodies and dropping items for each other | Trading as the partner can close by itself | Road encounters matching on both screens |
+| Sleeping together, one shared clock | Paired moves and weapon draws in fights don't always show | Stolen marks on shared items |
+| Crime: the host's guards judge both of you | Bows and crossbows: the shot shows, the draw and aim don't | The regular (non-Modding-Tools) game |
+| | Lip sync, voice chat and dice between players are unpolished | |
+
+<sub>As of release 0.63.9.</sub>
 
 The full, current list lives in **[Known issues](docs/KNOWN-ISSUES.md)**. What changed in each build is on the
 **[releases page](https://github.com/DeepFriedDepp/KingdomCome-Together/releases)**.
@@ -63,10 +66,11 @@ the game from Steam still gives you normal single-player.
 
 1. Download **`KingdomComeTogether-Setup`** from the [releases page](https://github.com/DeepFriedDepp/KingdomCome-Together/releases/latest) and run it. Both of you.
 2. Open the launcher. The first time, it shows a short checklist and sets everything up for you.
-3. **Host:** click **HOST GAME**, share the address or Steam code it shows, click **PLAY**, then pick **Start Game** on the game's main menu.
-4. **Partner:** click **ADD SERVER** (or **JOIN THROUGH STEAM**), enter what the host gave you, click **PLAY**, then pick **Join Game**.
+3. **Host:** click **HOST GAME**, click **PLAY**, then pick **Start Game** on the game's main menu.
+4. **Partner:** click **JOIN THROUGH STEAM**, select Find Friends, choose Join on your Friend's name, click **PLAY**, then pick **Join Game** in the main menu.
+IF PROMPTED as the Joiner, select "Start a New Save" if this is your first time.
 
-That's it. The partner needs no save of their own and lands beside the host.
+That's it.
 
 Playing from different houses? Use the Steam code, or see **[Networking](docs/NETWORKING.md)** for the other ways.
 Every screen, step by step, is in the **[Quick start](docs/QUICKSTART.md)**.
