@@ -59,9 +59,13 @@ def _cvars(user_folder, tex_level, pool_mb, w, h, x, y):
     ]
 
 
+# WO-220: KCDMP_RIG_LOW=A,B -- the copies named run small and at the lowest quality (1280x720, the 2 GB texture pool, every quality
+# group 1 in the copy's own profile): two games on one card and one CPU, so that both hold 60 fps and a measure measures the mod
+LOW = [c for c in os.environ.get('KCDMP_RIG_LOW', '').upper().split(',') if c]
 COPIES = {
     'A': {'root': os.environ.get('KCDMP_RIG_ROOT_A', r'D:\SteamLibrary\kcdmp_rig_A'), 'user_folder': 'KingdomCome2_A',
-          'cvars': _cvars('KingdomCome2_A', 6, 4096, 1600, 900, 80, 60), 'res': ('1600', '900')},
+          'cvars': _cvars('KingdomCome2_A', 4, 2048, 1280, 720, 80, 60) if 'A' in LOW else _cvars('KingdomCome2_A', 6, 4096, 1600, 900, 80, 60),
+          'res': ('1280', '720') if 'A' in LOW else ('1600', '900')},
     'B': {'root': os.environ.get('KCDMP_RIG_ROOT_B', r'D:\SteamLibrary\kcdmp_rig_B'), 'user_folder': 'KingdomCome2_B',
           'cvars': _cvars('KingdomCome2_B', 4, 2048, 1280, 720, os.environ.get('KCDMP_RIG_B_X', '2600'), os.environ.get('KCDMP_RIG_B_Y', '60')),
           'res': ('1280', '720')},
@@ -98,10 +102,16 @@ def copy_system_cfg(install_text, cvars):
     return '\n'.join([keep, '', BEGIN] + ['%s = %s' % kv for kv in cvars]) + '\n'
 
 
-def copy_attributes(xml, res):
-    """The player's profile attributes with a copy's display, volume and texture values (pure; tested)."""
+LOW_SPEC = ('Characters', 'GlobalIllumination', 'Light', 'ObjectDetail', 'Particles', 'PostProcessing', 'Shading', 'Shadows', 'Vegetation',
+            'VolumetricEffects')
+
+
+def copy_attributes(xml, res, low=False):
+    """The player's profile attributes with a copy's display, volume and texture values (pure; tested). WO-220 `low`: every quality
+    group at its lowest (the scoreboard's joiner: two games on one PC, so that both hold 60 fps and a measure measures the mod)."""
     want = {'res_fs': '0', 'res_x': res[0], 'res_y': res[1], 'sound_master': '0', 'sound_music': '0', 'sound_sound': '0',
             'vsync': '0', 'sys_spec_Texture': '1'}
+    if low: want.update({'sys_spec_' + k: '1' for k in LOW_SPEC})
     out = xml
     for k, v in want.items():
         rx = re.compile(r'(<Attr name="%s" value=")[^"]*(")' % re.escape(k))
@@ -175,7 +185,7 @@ def seed_profile(cid):
         shutil.copy2(os.path.join(src, 'settings.xml'), os.path.join(dst, 'settings.xml'))
         shutil.copy2(os.path.join(src, 'default', 'profile.xml'), os.path.join(dst, 'default', 'profile.xml'))
         with open(os.path.join(dst, 'default', 'attributes.xml'), 'w', encoding='ascii', newline='\r\n') as f:
-            f.write(copy_attributes(x, COPIES[cid]['res']))
+            f.write(copy_attributes(x, COPIES[cid]['res'], low=cid in LOW))
         os.makedirs(os.path.join(SAVED_GAMES, name, 'saves'), exist_ok=True)
         say('profile seeded', dst)
 

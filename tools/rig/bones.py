@@ -8,6 +8,10 @@
 <sync wall ms>: the wall time (unix ms) at which the rig read the [W206B-SYNC] line (the engine clock is mapped to wall time
 with that one offset; the console's own delay, ~20 ms, is the error). A sample takes the body's bone line nearest in time,
 within 150 ms; a sample with none keeps no "b" (the detectors' bone variants then skip it).
+
+WO-220: a bone line with no joint in it is no sample. (Until WO-220 the sampler asked for joint names this skeleton does not have,
+every line was empty, and an empty line was merged and counted as "with bones": WO-206's "1,458 samples with bones" measured nothing.)
+The count printed at the end is of samples that took at least one joint; a merge that took none exits 1.
 """
 import bisect, json, re, sys
 
@@ -28,6 +32,7 @@ def read_bones(kcd_log, sync_wall_ms):
             if not m or sync is None: continue
             t_ms = sync_wall_ms + (float(m.group(1)) - sync) * 1000.0
             bones = {k: [float(x), float(y), float(z)] for k, x, y, z in PART.findall(m.group(3))}
+            if not bones: continue   # an empty row is no sample
             per.setdefault(m.group(2), []).append((t_ms, bones))
     for v in per.values(): v.sort(key=lambda r: r[0])
     return per
@@ -56,4 +61,5 @@ if __name__ == '__main__':
     if len(sys.argv) != 5: sys.exit(__doc__)
     per = read_bones(sys.argv[1], float(sys.argv[3]))
     n, hit = merge(sys.argv[2], per, sys.argv[4])
-    print('bodies in the bone lines: %d; actor samples %d, with bones %d' % (len(per), n, hit))
+    print('bodies with joints in the bone lines: %d; actor samples %d, with bones %d' % (len(per), n, hit))
+    if hit == 0: sys.exit(1)
