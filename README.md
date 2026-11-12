@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/branding/KCT_txt.png" alt="Kingdom Come: Together" width="820">
+  <img src="docs/branding/KCT_txt.png" alt="Kingdom Come: Together" width="600">
 </p>
 
 <p align="center">
@@ -8,8 +8,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/DeepFriedDepp/KingdomCome-Together/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/DeepFriedDepp/KingdomCome-Together?include_prereleases&label=latest%20release&color=8a3324&style=flat-square"></a>
-  <img alt="Status: open beta" src="https://img.shields.io/badge/status-open%20beta-b8860b?style=flat-square">
+  <a href="https://github.com/DeepFriedDepp/KingdomCome-Together/releases/latest"><img alt="Latest release" src="https://img.shields.io/badge/latest%20release-v0.63.9-8a3324?style=flat-square"></a>
   <img alt="Platform: Windows" src="https://img.shields.io/badge/platform-Windows-555555?style=flat-square">
   <a href="LICENSE"><img alt="License: GPLv3" src="https://img.shields.io/badge/license-GPLv3-2c3e50?style=flat-square"></a>
   <a href="https://dsc.gg/kcd2-together"><img alt="Discord" src="https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white&style=flat-square"></a>
