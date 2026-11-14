@@ -38,10 +38,11 @@ constexpr size_t kActorEntity = 0x38;      // the actor's entity (read in SetMon
 constexpr size_t kActStatus = 0x28, kActRefs = 0x58;
 constexpr size_t kSlotStarted = 14, kSlotEnding = 17, kSlotEvent18 = 18, kSlotDelete = 23;
 constexpr size_t kVtCopy = 48;          // slots copied into the quiet vftable (the class has 29; the rest is never called)
-constexpr size_t kMaxTracked = 4096;
+constexpr size_t kMaxTracked = 16384;
+constexpr double kEndedKeepS = 60.0;    // an ended (stopped, quiet) action that never finished is forgotten after this, our reference kept
 constexpr double kDoneKeepS = 30.0;     // a finished action is forgotten after this
 
-struct Entry { uint32_t eid = 0; void* actor = nullptr; void* action = nullptr; double t0 = 0; bool ended = false; };
+struct Entry { uint32_t eid = 0; void* actor = nullptr; void* action = nullptr; double t0 = 0; bool ended = false; double endedAt = 0; };
 
 std::mutex g_mu;
 std::vector<Entry> g_tracked;
@@ -50,7 +51,7 @@ void* const* g_actionVft = nullptr;      // the engine's own
 void* g_quiet[1 + kVtCopy] = {};         // [0] = the engine's RTTI locator (vftable[-1]); [1..] = the quiet copy
 using ReleaseFn = void (*)(void*);
 ReleaseFn g_origRelease = nullptr;
-std::atomic<uint32_t> c_withPart{0}, c_tracked{0}, c_hook{0}, c_ended{0}, c_stopped{0}, c_quieted{0}, c_explicit{0}, c_forgotten{0}, c_offMain{0};
+std::atomic<uint32_t> c_withPart{0}, c_tracked{0}, c_hook{0}, c_ended{0}, c_stopped{0}, c_quieted{0}, c_explicit{0}, c_forgotten{0}, c_offMain{0}, c_orphans{0};
 DWORD g_mainTid = 0;
 
 double now_s() { LARGE_INTEGER q, f; QueryPerformanceCounter(&q); QueryPerformanceFrequency(&f); return double(q.QuadPart) / double(f.QuadPart); }
@@ -71,13 +72,16 @@ bool add_ref(void* action) {
 }
 // the controller's own way of giving a reference back (CryAction: lock xadd [+0x58], -1; at zero the action's slot 23)
 bool drop_ref(void* action) {
-    KCDMP_FAULT_CALL(site, "combat_actions::drop_ref");
-    return fault::guarded(site, [&] {
-        if (InterlockedDecrement(reinterpret_cast<volatile LONG*>(static_cast<char*>(action) + kActRefs)) <= 0) {
-            auto* vt = *reinterpret_cast<void***>(action);
-            reinterpret_cast<void (*)(void*)>(vt[kSlotDelete])(action);
-        }
-    });
+    KCDMP_FAULT_READ(site, "combat_actions::drop_ref");
+    LONG left = 1;
+    void** vt = nullptr;
+    if (!fault::guarded(site, [&] {
+            left = InterlockedDecrement(reinterpret_cast<volatile LONG*>(static_cast<char*>(action) + kActRefs));
+            vt = *reinterpret_cast<void***>(action);
+        })) return false;
+    // the action's own delete frees memory (the allocator's lock): a plain call, never under the fault guard
+    if (left <= 0 && vt) reinterpret_cast<void (*)(void*)>(vt[kSlotDelete])(action);
+    return true;
 }
 bool set_vft(void* action) {
     KCDMP_FAULT_READ(site, "combat_actions::set_vft");
@@ -96,6 +100,7 @@ bool set_vft(void* action) {
 void end_entry(Entry& e, int* stopped, int* quieted) {
     if (e.ended) return;
     e.ended = true;
+    e.endedAt = now_s();
     uint32_t st = 0;
     if (rd_u32(e.action, kActStatus, &st) && st >= 1 && st <= 3 && rttr::stop_action(e.action)) { ++*stopped; c_stopped.fetch_add(1); }
     if (g_armed.load() && set_vft(e.action)) { ++*quieted; c_quieted.fetch_add(1); }
@@ -220,8 +225,16 @@ void tick() {
             Entry& e = g_tracked[i];
             uint32_t st = 1;
             const bool readable = rd_u32(e.action, kActStatus, &st);
-            if (!readable || ((st == 0 || st == 4) && now - e.t0 > kDoneKeepS)) {
-                if (readable) done.push_back(e.action);
+            // Our reference goes back only for a finished action (status none or finished: its controller is through with it).
+            // Never for a waiting or running one, whatever its count says: rm3-d4 -- "only this table holds it" (count <= 1) was
+            // true of two waiting installs the controller's queue still walked; the drop deleted them and the next walk ran into the
+            // freed blocks. A record that was ended (its body's combat part went: stopped and quiet) and did not finish within
+            // kEndedKeepS is forgotten with our reference KEPT: the action stays allocated (0x1A8 bytes), nothing can run into it.
+            const bool finished = readable && (st == 0 || st == 4) && now - e.t0 > kDoneKeepS;
+            const bool left = readable && !finished && e.ended && now - e.endedAt > kEndedKeepS;
+            if (left) c_orphans.fetch_add(1, std::memory_order_relaxed);
+            if (!readable || finished || left) {
+                if (finished) done.push_back(e.action);
                 g_tracked[i] = g_tracked.back();
                 g_tracked.pop_back();
                 c_forgotten.fetch_add(1, std::memory_order_relaxed);
@@ -234,8 +247,8 @@ void tick() {
 int status(char* out, int n) {
     size_t live = 0;
     { std::lock_guard<std::mutex> lock(g_mu); live = g_tracked.size(); }
-    return std::snprintf(out, static_cast<size_t>(n), "armed=%d on=%d recorded=%u live=%zu forgotten=%u release_calls=%u with_part=%u (off_main=%u) ended=%u stopped=%u quiet=%u explicit=%u",
-                         g_armed.load() ? 1 : 0, wo221::on(wo221::kBitCombatActionEnd) ? 1 : 0, c_tracked.load(), live, c_forgotten.load(), c_hook.load(),
+    return std::snprintf(out, static_cast<size_t>(n), "armed=%d on=%d recorded=%u live=%zu forgotten=%u (ref_kept=%u) release_calls=%u with_part=%u (off_main=%u) ended=%u stopped=%u quiet=%u explicit=%u",
+                         g_armed.load() ? 1 : 0, wo221::on(wo221::kBitCombatActionEnd) ? 1 : 0, c_tracked.load(), live, c_forgotten.load(), c_orphans.load(), c_hook.load(),
                          c_withPart.load(), c_offMain.load(), c_ended.load(), c_stopped.load(), c_quieted.load(), c_explicit.load());
 }
 
@@ -252,10 +265,10 @@ void track(uint32_t eid, void* actor, void* action) {
     void* evicted = nullptr;
     {
         std::lock_guard<std::mutex> lock(g_mu);
-        if (g_tracked.size() >= kMaxTracked) {   // never reached in play (a body's actions finish in seconds); the oldest is ended and let go
+        if (g_tracked.size() >= kMaxTracked) {   // the oldest record is ended (stopped, quiet) and forgotten -- our reference kept (never a delete here)
             int s = 0, q = 0;
             end_entry(g_tracked.front(), &s, &q);
-            evicted = g_tracked.front().action;
+            c_orphans.fetch_add(1, std::memory_order_relaxed);
             g_tracked.front() = g_tracked.back();
             g_tracked.pop_back();
         }
