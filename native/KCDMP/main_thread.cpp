@@ -93,6 +93,18 @@ double   g_winStartUs = 0;
 uint32_t g_winFrames = 0, g_winItems = 0;
 double   g_origSumUs = 0, g_oursSumUs = 0, g_oursMaxUs = 0, g_batchSumUs = 0;
 constexpr double kCostWindowUs = 10e6;
+// WO-221 F.1: which item made a frame slow -- for every frame in which this DLL's work took kSlowOursUs or more, the largest single
+// item of that frame (a repeating task, or the queued work: the pipe's requests). A mean hides it: the 95th percentile of our time
+// is made by the one frame in twenty that carries such an item.
+constexpr double kSlowOursUs = 1500.0;
+struct SlowItem { const char* name = "?"; uint32_t n = 0; double sumUs = 0; };
+std::vector<SlowItem> g_slow;
+uint32_t g_slowFrames = 0;
+void note_slow(const char* name, double us) {
+    ++g_slowFrames;
+    for (auto& s : g_slow) if (s.name == name || std::strcmp(s.name, name) == 0) { ++s.n; s.sumUs += us; return; }
+    g_slow.push_back(SlowItem{name, 1, us});
+}
 
 void note_cost(double origUs, double oursUs, double batchUs, uint32_t items, double nowUs) {
     if (g_winStartUs == 0) g_winStartUs = nowUs;
@@ -115,6 +127,13 @@ void note_cost(double origUs, double oursUs, double batchUs, uint32_t items, dou
         const TaskCost& c = g_cost[idx[k]];
         n += std::snprintf(buf + n, sizeof buf - n, " %s=%.0f/%.0f", c.name, c.sumUs / f, c.maxUs);
     }
+    if (g_slowFrames && n > 0 && n < static_cast<int>(sizeof buf) - 120) {
+        std::sort(g_slow.begin(), g_slow.end(), [](const SlowItem& a, const SlowItem& b) { return a.n > b.n; });
+        n += std::snprintf(buf + n, sizeof buf - n, " | frames over %.1f ms: %u; their largest item (frames, its mean us):", kSlowOursUs / 1e3, g_slowFrames);
+        for (size_t k = 0; k < g_slow.size() && k < 5 && n > 0 && n < static_cast<int>(sizeof buf) - 48; ++k)
+            n += std::snprintf(buf + n, sizeof buf - n, " %s=%u/%.0f", g_slow[k].name, g_slow[k].n, g_slow[k].sumUs / g_slow[k].n);
+    }
+    g_slow.clear(); g_slowFrames = 0;
     logf("%s", buf);
     for (auto& c : g_cost) { c.sumUs = 0; c.maxUs = 0; }
     g_winStartUs = nowUs;
@@ -162,6 +181,7 @@ void hooked_update(void* self, float dt) {
     }
     const bool cost = g_costOn.load(std::memory_order_relaxed);
     if (cost && g_cost.size() < repeating.size()) g_cost.resize(repeating.size());
+    const char* topName = "?"; double topUs = 0;   // WO-221 F.1: this frame's largest item
     for (size_t i = 0; i < repeating.size(); ++i) {
         Repeating& r = *repeating[i];
         if (r.blocked) continue;
@@ -173,6 +193,7 @@ void hooked_update(void* self, float dt) {
         c.name = r.name;
         c.sumUs += d;
         if (d > c.maxUs) c.maxUs = d;
+        if (d > topUs) { topUs = d; topName = r.name; }
     }
 
     double batchUs = 0;
@@ -188,6 +209,7 @@ void hooked_update(void* self, float dt) {
     const double t2 = now_us();
     fault::tick(t2 / 1e6);                 // WO-151: the 60 s FAULT-SUM line
     note_frame_rate(t1, t2 - t1);          // WO-151: the 60 s FRAME line
+    if (cost && t2 - t1 >= kSlowOursUs) { if (batchUs > topUs) note_slow("queued-work", batchUs); else note_slow(topName, topUs); }   // WO-221 F.1
     if (cost) note_cost(t1 - t0, t2 - t1, batchUs, items, t2);
 }
 

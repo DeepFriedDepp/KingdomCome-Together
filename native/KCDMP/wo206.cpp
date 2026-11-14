@@ -24,10 +24,15 @@
 #include "npc_scan.h"
 #include <windows.h>
 #include <atomic>
+#include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <cstdio>
 #include <cstring>
+#include <deque>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -94,13 +99,8 @@ uint8_t g_machine = 0;
 double g_hz = kDefaultHz;
 float g_radius = kDefaultRadiusM;
 int g_scopeReads = kDefaultScopeReads;
-FILE* g_file = nullptr;
-bool g_truncated = false;
-std::string g_path;
-uint64_t g_fileBytes = 0;
-double g_lastSample = 0, g_lastFlush = 0;
-uint64_t c_lines = 0, c_bodies = 0, c_scopeReads = 0, c_skipped = 0, c_rotations = 0, c_rotateRetries = 0;
-double g_retryRotateAt = 0;   // WO-213: a failed rotation's next try
+double g_lastSample = 0;
+uint64_t c_lines = 0, c_bodies = 0, c_scopeReads = 0, c_skipped = 0;
 // the probe's own cost on the main thread (the bench: the probe alone took ~6 % of the frame rate), per part, logged every 10 s
 double c_tGather = 0, c_tScopes = 0, c_tLine = 0, g_lastCostLog = 0;
 uint64_t c_costSamples = 0;
@@ -111,21 +111,98 @@ std::unordered_map<uint32_t, ScopeCache> g_scopes;
 
 struct Body { uint32_t eid; const char* kind; };
 
-void open_file() {
-    if (g_file) return;
-    char cwd[MAX_PATH]{};
-    if (!GetCurrentDirectoryA(MAX_PATH, cwd) || !cwd[0]) return;
-    std::string p(cwd);
-    if (p.back() != '\\') p += '\\';
-    p += "kcdmp-anim.jsonl";
-    g_path = p;
-    const bool append = g_truncated;
-    g_file = _fsopen(p.c_str(), append ? "ab" : "wb", _SH_DENYWR);   // one file per game process: the first start truncates
-    g_truncated = true;
-    if (!append) g_fileBytes = 0;   // WO-213: an append (a rotation that waits for a reader) keeps counting the file's bytes
-    if (g_file) logf("WO206-PROBE writing %s (machine=%s %.0f Hz %.0f m, %d scope reads a sample)", p.c_str(), machine_name(g_machine), g_hz,
-                     g_radius, g_scopeReads);
-}
+// WO-221 F.1: a recorder's file, written off the main thread. The main thread hands over finished lines (push); the writer's own
+// thread opens the file (the first start of a game process truncates it, a rotation that had to wait appends), writes, flushes once
+// a second and rotates it at its size limit, keeping the one before -- what the main thread did itself until 0.65.0 (a flush or a
+// rotation in the frame: the area's 10 ms frames). A reader holding the file makes a rotation wait a second and try again (WO-213).
+// Nothing of the engine is touched on that thread: strings and a FILE only.
+struct Writer {
+    const char* fileName;
+    uint64_t maxBytes;
+    const char* openedLine;
+    std::mutex mu;
+    std::condition_variable cv, cvDone;
+    std::deque<std::string> q;
+    size_t qBytes = 0;
+    bool flushAsked = false, started = false;
+    uint64_t flushDone = 0;
+    std::string dir;
+    std::atomic<uint64_t> lines{0}, rotations{0}, rotateRetries{0}, dropped{0}, queueMax{0};
+
+    Writer(const char* name, uint64_t max, const char* opened) : fileName(name), maxBytes(max), openedLine(opened) {}
+
+    void push(std::string&& s) {   // main thread
+        std::unique_lock<std::mutex> l(mu);
+        if (!started) {
+            char cwd[MAX_PATH]{};
+            if (!GetCurrentDirectoryA(MAX_PATH, cwd) || !cwd[0]) return;
+            dir = cwd;
+            if (dir.back() != '\\') dir += '\\';
+            started = true;
+            std::thread([this] { run(); }).detach();
+        }
+        if (qBytes > (16u << 20)) { dropped.fetch_add(1, std::memory_order_relaxed); return; }   // a stuck disk never grows the queue without bound
+        qBytes += s.size();
+        if (qBytes > queueMax.load(std::memory_order_relaxed)) queueMax.store(qBytes, std::memory_order_relaxed);
+        q.push_back(std::move(s));
+        l.unlock();
+        cv.notify_one();
+    }
+    // main thread: what was handed over is on disk when this returns (at most 250 ms: the probe was switched off, the session ended)
+    void flush_now() {
+        std::unique_lock<std::mutex> l(mu);
+        if (!started) return;
+        const uint64_t want = flushDone + 1;
+        flushAsked = true;
+        cv.notify_one();
+        cvDone.wait_for(l, std::chrono::milliseconds(250), [&] { return flushDone >= want; });
+    }
+    void run() {
+        const std::string path = dir + fileName;
+        FILE* f = nullptr;
+        bool truncated = false;
+        uint64_t bytes = 0;
+        ULONGLONG lastFlush = GetTickCount64(), retryAt = 0;
+        for (;;) {
+            std::deque<std::string> batch;
+            bool flush = false;
+            {
+                std::unique_lock<std::mutex> l(mu);
+                cv.wait_for(l, std::chrono::milliseconds(500), [&] { return !q.empty() || flushAsked; });
+                batch.swap(q);
+                qBytes = 0;
+                flush = flushAsked;
+                flushAsked = false;
+            }
+            for (std::string& s : batch) {
+                if (!f) {
+                    f = _fsopen(path.c_str(), truncated ? "ab" : "wb", _SH_DENYWR);
+                    if (!truncated) bytes = 0;
+                    truncated = true;
+                    if (f) logf(openedLine, path.c_str());
+                }
+                if (!f) { dropped.fetch_add(1, std::memory_order_relaxed); continue; }
+                std::fwrite(s.data(), 1, s.size(), f);
+                bytes += s.size();
+                lines.fetch_add(1, std::memory_order_relaxed);
+                if (bytes > maxBytes && GetTickCount64() >= retryAt) {
+                    std::fclose(f); f = nullptr;
+                    const std::string prev = path.substr(0, path.size() - 6) + ".1.jsonl";
+                    if (MoveFileExA(path.c_str(), prev.c_str(), MOVEFILE_REPLACE_EXISTING)) { truncated = false; rotations.fetch_add(1, std::memory_order_relaxed); }
+                    else { rotateRetries.fetch_add(1, std::memory_order_relaxed); retryAt = GetTickCount64() + 1000; }
+                }
+            }
+            const ULONGLONG nowMs = GetTickCount64();
+            if (f && (flush || nowMs - lastFlush > 1000)) { std::fflush(f); lastFlush = nowMs; }
+            if (flush) {
+                { std::lock_guard<std::mutex> l(mu); ++flushDone; }
+                cvDone.notify_all();
+            }
+        }
+    }
+};
+Writer g_writer("kcdmp-anim.jsonl", kMaxFileBytes, "WO206-PROBE writing %s (a writer thread: the main thread only hands lines over)");
+Writer g_sWriter("kcdmp-anim-session.jsonl", 96ull << 20, "WO215-PROBE session file %s (one body a line, 20 lines a second; a writer thread)");
 
 void gather(std::vector<Body>& out, double now) {
     out.clear();
@@ -293,8 +370,6 @@ void probe_tick(double now) {
     if (!g_probe.load(std::memory_order_relaxed)) return;
     if (now - g_lastSample < 1.0 / g_hz) return;
     g_lastSample = now;
-    open_file();
-    if (!g_file) return;
     static std::vector<Body> bodies;
     const double t0 = now_s();
     gather(bodies, now);
@@ -322,13 +397,13 @@ void probe_tick(double now) {
     std::string line;
     line.reserve(4096);
     char buf[768];   // WO-207: a body's line with its tags and queue detail (qd) runs past 512
-    std::snprintf(buf, sizeof buf, "{\"t\":%llu,\"m\":\"%s\",\"f\":%llu,\"a\":[", static_cast<unsigned long long>(utc_ms()), machine_name(g_machine),
-                  main_thread::frame_count());
+    std::snprintf(buf, sizeof buf, "{\"t\":%llu,\"m\":\"%s\",\"f\":%llu,\"L\":\"%06x\",\"a\":[", static_cast<unsigned long long>(utc_ms()), machine_name(g_machine),
+                  main_thread::frame_count(), launch_id());   // WO-221 F: the row's launch
     line += buf;
     bool firstBody = true;
     for (const Body& b : bodies) if (body_json(b, now, firstBody, line)) firstBody = false;
     line += "]}\n";
-    std::fwrite(line.data(), 1, line.size(), g_file);
+    g_writer.push(std::move(line));   // WO-221 F.1: written, flushed and rotated on the writer's thread
     ++c_lines;
     c_tLine += now_s() - t2;
     if (++c_costSamples, now - g_lastCostLog > 10.0) {
@@ -337,50 +412,22 @@ void probe_tick(double now) {
              static_cast<unsigned long long>(c_costSamples), c_tGather / n * 1e6, c_tScopes / n * 1e6, c_tLine / n * 1e6, bodies.size());
         c_tGather = c_tScopes = c_tLine = 0; c_costSamples = 0; g_lastCostLog = now;
     }
-    g_fileBytes += line.size();
-    if (g_fileBytes > kMaxFileBytes && now >= g_retryRotateAt) {   // a long session keeps this file and the one before it (the bundle's size stays bounded)
-        std::fclose(g_file); g_file = nullptr;
-        const std::string prev = g_path.substr(0, g_path.size() - 6) + ".1.jsonl";
-        // WO-213: a reader holding the file (the bench's judge) makes the move fail -- then keep appending and try again a second later;
-        // the "wb" reopen used to truncate the file under the reader (a figure walk's 15 minutes were lost so)
-        if (MoveFileExA(g_path.c_str(), prev.c_str(), MOVEFILE_REPLACE_EXISTING)) { g_truncated = false; ++c_rotations; }
-        else { ++c_rotateRetries; g_retryRotateAt = now + 1.0; }
-        return;
-    }
-    if (now - g_lastFlush > 1.0) { std::fflush(g_file); g_lastFlush = now; }
     if (g_scopes.size() > 512) g_scopes.clear();
 }
 
 // ---- WO-215 G (probe_all): the session probe -- the whole session at a low cost. One body a line, 20 lines a second, round-robin over
 // the bodies within the radius (with 30 bodies each one every 1.5 s), into kcdmp-anim-session.jsonl beside the detail file (which keeps
 // its last minutes at 10 Hz for every body, as before). It rotates at 96 MB keeping the one before (hours of a village's rate).
-FILE* g_sfile = nullptr;
-std::string g_spath;
-uint64_t g_sBytes = 0;
-bool g_sTruncated = false;
-double g_sLast = 0, g_sListAt = -1e9, g_sFlush = 0, g_sRetryAt = 0;
+double g_sLast = 0, g_sListAt = -1e9;
 size_t g_srr = 0;
 std::vector<Body> g_sBodies;
-uint64_t c_sLines = 0, c_sRot = 0;
+uint64_t c_sLines = 0;
 constexpr double kSessionEveryS = 0.05;
-constexpr uint64_t kSessionMaxBytes = 96ull << 20;
 
 void session_tick(double now) {
     if (!g_probe.load(std::memory_order_relaxed) || !wo215::on(wo215rules::kBitProbeAll)) return;
     if (now - g_sLast < kSessionEveryS) return;
     g_sLast = now;
-    if (!g_sfile) {
-        char cwd[MAX_PATH]{};
-        if (!GetCurrentDirectoryA(MAX_PATH, cwd) || !cwd[0]) return;
-        g_spath = cwd;
-        if (g_spath.back() != '\\') g_spath += '\\';
-        g_spath += "kcdmp-anim-session.jsonl";
-        g_sfile = _fsopen(g_spath.c_str(), g_sTruncated ? "ab" : "wb", _SH_DENYWR);
-        if (!g_sTruncated) g_sBytes = 0;
-        g_sTruncated = true;
-        if (!g_sfile) return;
-        logf("WO215-PROBE session file %s (one body a line, 20 lines a second, round-robin within %.0f m)", g_spath.c_str(), g_radius);
-    }
     if (now - g_sListAt >= 1.0) { g_sListAt = now; gather(g_sBodies, now); }
     if (g_sBodies.empty()) return;
     const Body b = g_sBodies[g_srr++ % g_sBodies.size()];
@@ -391,22 +438,13 @@ void session_tick(double now) {
     std::string line;
     line.reserve(1024);
     char head[160];
-    std::snprintf(head, sizeof head, "{\"t\":%llu,\"m\":\"%s\",\"f\":%llu,\"s\":1,\"a\":[", static_cast<unsigned long long>(utc_ms()),
-                  machine_name(g_machine), main_thread::frame_count());
+    std::snprintf(head, sizeof head, "{\"t\":%llu,\"m\":\"%s\",\"f\":%llu,\"s\":1,\"L\":\"%06x\",\"a\":[", static_cast<unsigned long long>(utc_ms()),
+                  machine_name(g_machine), main_thread::frame_count(), launch_id());   // WO-221 F: the row's launch
     line += head;
     if (!body_json(b, now, true, line)) return;
     line += "]}\n";
-    std::fwrite(line.data(), 1, line.size(), g_sfile);
+    g_sWriter.push(std::move(line));   // WO-221 F.1
     ++c_sLines;
-    g_sBytes += line.size();
-    if (g_sBytes > kSessionMaxBytes && now >= g_sRetryAt) {
-        std::fclose(g_sfile); g_sfile = nullptr;
-        const std::string prev = g_spath.substr(0, g_spath.size() - 6) + ".1.jsonl";
-        if (MoveFileExA(g_spath.c_str(), prev.c_str(), MOVEFILE_REPLACE_EXISTING)) { g_sTruncated = false; ++c_sRot; }
-        else g_sRetryAt = now + 1.0;
-        return;
-    }
-    if (now - g_sFlush > 1.0) { std::fflush(g_sfile); g_sFlush = now; }
 }
 
 } // namespace
@@ -421,8 +459,8 @@ void tick() {
 void on_pipe_closed() {
     g_armed = false;
     g_probe = false;
-    if (g_file) { std::fflush(g_file); }
-    if (g_sfile) { std::fflush(g_sfile); }   // WO-215 G
+    g_writer.flush_now();
+    g_sWriter.flush_now();   // WO-215 G
 }
 
 uint8_t handle(uint8_t op, const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t* outLen) {
@@ -495,7 +533,7 @@ uint8_t handle(uint8_t op, const uint8_t* body, size_t len, uint8_t* out, size_t
             if (len > 5 && body[5] != 255 && body[5] > 0) g_scopeReads = body[5];
             if (on != g_probe.load()) logf("WO206-PROBE %s (machine=%s)", on ? "on" : "off", machine_name(g_machine));
             g_probe = on;
-            if (!on && g_file) std::fflush(g_file);
+            if (!on) g_writer.flush_now();
             out[0] = on ? 1 : 0; put_u32(out + 1, static_cast<uint32_t>(c_lines));
             *outLen = 5;
             return kROk;
@@ -512,7 +550,8 @@ int status_text(char* out, int n) {
         g_armed ? 1 : 0, g_paths.size(), g_sweep.passes, static_cast<unsigned long long>(c_reads), static_cast<unsigned long long>(c_found),
         static_cast<unsigned long long>(c_faults), g_probe.load() ? 1 : 0, machine_name(g_machine), static_cast<unsigned long long>(c_lines),
         static_cast<unsigned long long>(c_bodies), static_cast<unsigned long long>(c_scopeReads), static_cast<unsigned long long>(c_skipped),
-        static_cast<unsigned long long>(c_rotations), static_cast<unsigned long long>(c_rotateRetries), g_scopes.size(), g_qages.size());
+        static_cast<unsigned long long>(g_writer.rotations.load() + g_sWriter.rotations.load()),
+        static_cast<unsigned long long>(g_writer.rotateRetries.load() + g_sWriter.rotateRetries.load()), g_scopes.size(), g_qages.size());
     return k < 0 ? 0 : (k >= n ? n - 1 : k);
 }
 

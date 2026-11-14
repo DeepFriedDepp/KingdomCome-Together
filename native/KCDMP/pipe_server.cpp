@@ -55,6 +55,8 @@
 #include <atomic>
 #include <condition_variable>
 #include <cstring>
+#include <algorithm>
+#include <unordered_map>
 #include <deque>
 #include <functional>
 #include <memory>
@@ -238,6 +240,31 @@ struct W218Stats {
 } g_w218;
 std::atomic<uint32_t> g_w218BatchesIn{0}, g_w218Malformed{0};
 
+// WO-221 F.1: what each kind of request costs the main thread -- per (type, op) of a batch's requests, 10 s windows. The batch's
+// budget lets one request run whatever it costs; this says which request that is.
+struct SubCost { unsigned n = 0; double sumUs = 0, maxUs = 0; };
+std::unordered_map<unsigned, SubCost> g_subCost;   // main thread
+void w221_note_sub(uint8_t type, uint8_t op, double us) {
+    SubCost& c = g_subCost[(static_cast<unsigned>(type) << 8) | op];
+    ++c.n; c.sumUs += us; if (us > c.maxUs) c.maxUs = us;
+}
+void w221_log_subs(double windowS) {
+    if (g_subCost.empty()) return;
+    std::vector<std::pair<unsigned, SubCost>> v(g_subCost.begin(), g_subCost.end());
+    std::sort(v.begin(), v.end(), [](const auto& a, const auto& b) { return a.second.sumUs > b.second.sumUs; });
+    char buf[900];
+    int n = std::snprintf(buf, sizeof buf, "WO221-PIPECOST window_s=%.1f by time (type/op n mean_us max_us):", windowS);
+    for (size_t k = 0; k < v.size() && k < 8 && n > 0 && n < static_cast<int>(sizeof buf) - 60; ++k)
+        n += std::snprintf(buf + n, sizeof buf - n, " 0x%02X/%u n=%u %.0f %.0f;", v[k].first >> 8, v[k].first & 0xFF, v[k].second.n,
+                           v[k].second.sumUs / v[k].second.n, v[k].second.maxUs);
+    std::sort(v.begin(), v.end(), [](const auto& a, const auto& b) { return a.second.maxUs > b.second.maxUs; });
+    if (n > 0 && n < static_cast<int>(sizeof buf) - 80) n += std::snprintf(buf + n, sizeof buf - n, " | the largest single ones:");
+    for (size_t k = 0; k < v.size() && k < 3 && n > 0 && n < static_cast<int>(sizeof buf) - 40; ++k)
+        n += std::snprintf(buf + n, sizeof buf - n, " 0x%02X/%u %.0f us;", v[k].first >> 8, v[k].first & 0xFF, v[k].second.maxUs);
+    logf("%s", buf);
+    g_subCost.clear();
+}
+
 void w218_maybe_log(double now) {
     W218Stats& s = g_w218;
     if (s.winStartUs == 0) s.winStartUs = now;
@@ -253,6 +280,7 @@ void w218_maybe_log(double now) {
          subFrames ? static_cast<double>(s.subs.total) / subFrames : 0.0, subMax, s.singles.total, sinFrames,
          sinFrames ? static_cast<double>(s.singles.total) / sinFrames : 0.0, sinMax, s.carries, s.drains,
          s.drains ? s.drainUsSum / s.drains : 0.0, s.drainUsMax, s.faulted, s.cut, s.notBatchable, g_w218Malformed.exchange(0), s.replyMax);
+    w221_log_subs((now - s.winStartUs) / 1e6);   // WO-221 F.1
     const unsigned long long keepSub = s.subs.frame, keepSin = s.singles.frame;
     s.subs.reset(); s.singles.reset();
     s.subs.frame = keepSub; s.singles.frame = keepSin;
@@ -330,7 +358,9 @@ void w218_drain() {
             if (!wo218rules::may_run(ran, spent)) { carry = true; break; }
             const wo218rules::Sub& sub = b->subs[b->next];
             bool faulted = false;
+            const double s0 = w218_now_us();
             const size_t n = w218_run_sub(sub.type, b->raw.data() + sub.off, sub.len, rb, sizeof rb, &faulted);
+            w221_note_sub(sub.type, sub.len ? b->raw[sub.off] : 0, w218_now_us() - s0);   // WO-221 F.1
             b->reply.add(wo218rules::reply_type(sub.type), rb, n);
             ++b->next;
             ++ran;

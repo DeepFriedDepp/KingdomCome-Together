@@ -149,12 +149,14 @@ int wo148_x64_tests(int* passed) {
     // ---- the log line: the thread id in one fixed column ---------------------------
     {
         char a[64], b[64], c[64];
-        const int na = format_log_prefix(a, sizeof a, 9, 5, 7, 42, 4u);
-        const int nb = format_log_prefix(b, sizeof b, 23, 59, 59, 999, 14820u);
-        const int nc = format_log_prefix(c, sizeof c, 0, 0, 0, 0, 999999u);
+        const int na = format_log_prefix(a, sizeof a, 9, 5, 7, 42, 4u, 0x1a2b3cu);
+        const int nb = format_log_prefix(b, sizeof b, 23, 59, 59, 999, 14820u, 0xffffffu);
+        const int nc = format_log_prefix(c, sizeof c, 0, 0, 0, 0, 999999u, 1u);
         XCHECK(na == kLogPrefixLen && nb == kLogPrefixLen && nc == kLogPrefixLen, "the prefix is always %d characters (%d %d %d)", kLogPrefixLen, na, nb, nc);
-        XCHECK(std::strcmp(a, "[09:05:07.042] t000004 ") == 0, "prefix: '%s'", a);
-        XCHECK(std::strcmp(b, "[23:59:59.999] t014820 ") == 0, "prefix: '%s'", b);
+        XCHECK(std::strcmp(a, "[09:05:07.042] t000004 L1a2b3c ") == 0, "prefix: '%s'", a);
+        XCHECK(std::strcmp(b, "[23:59:59.999] t014820 Lffffff ") == 0, "prefix: '%s'", b);
+        XCHECK(std::strcmp(c, "[00:00:00.000] t999999 L000001 ") == 0, "prefix: '%s'", c);
+        XCHECK(a[23] == 'L' && b[23] == 'L' && c[23] == 'L', "the launch starts at column 24 (WO-221 F)");
         XCHECK(a[15] == 't' && b[15] == 't' && c[15] == 't', "the thread id starts at column 16");
     }
 

@@ -24,6 +24,9 @@ public static class Briefing
         public string? AnimError;
         /// <summary>WO-215 G: the session probe's file (the whole session, one body a line); null when the bundle has none.</summary>
         public AnimStream? AnimSession;
+        /// <summary>WO-221 F: what the launch filter kept and left out (the native log, the detail probe, the session probe); null: not read.</summary>
+        public LaunchFilter.Result? NativeLaunch, AnimLaunch, SessionLaunch;
+        public string? NativeEntry;
     }
 
     public static Input Read(IReadOnlyList<SourceFile> sources)
@@ -61,14 +64,18 @@ public static class Briefing
             var parts = sources.Where(s => s.EntryName == AnimStream.SessionPrevEntry).Concat(sources.Where(s => s.EntryName == AnimStream.SessionEntry)).ToList();
             if (parts.Count == 0) return;
             var st = new AnimStream();
+            var rows = new List<string>();
             foreach (var p in parts)
             {
                 byte[]? bytes = Packer.Read(p);
                 if (bytes is null) continue;
                 using var r = new StreamReader(new MemoryStream(bytes, false), Encoding.UTF8, false, 1 << 16);
                 string? l;
-                while ((l = r.ReadLine()) is not null) st.AddLine(l);
+                while ((l = r.ReadLine()) is not null) rows.Add(l);
             }
+            // WO-221 F: the file before this one (.1) is whatever launch last filled it: only this launch's rows are the session
+            inp.SessionLaunch = LaunchFilter.ProbeNewest(rows);
+            foreach (var l in inp.SessionLaunch.Lines) st.AddLine(l);
             st.Finish();
             inp.AnimSession = st;
         }
@@ -87,7 +94,18 @@ public static class Briefing
             byte[]? bytes = whole is not null ? Packer.Read(whole)
                           : AnimBundle.Join(pieces.Select(p => (p.EntryName, Packer.Read(p) ?? Array.Empty<byte>())), AnimStream.BundleEntry);
             if (bytes is null) { inp.AnimError = "the file could not be opened"; return; }
-            inp.Anim = AnimDetect.Analyse(AnimStream.Parse(bytes));
+            // WO-221 F: this launch's rows only
+            var rows = new List<string>();
+            using (var r = new StreamReader(new MemoryStream(bytes, false), Encoding.UTF8, false, 1 << 16))
+            {
+                string? l;
+                while ((l = r.ReadLine()) is not null) rows.Add(l);
+            }
+            inp.AnimLaunch = LaunchFilter.ProbeNewest(rows);
+            var st = new AnimStream();
+            foreach (var l in inp.AnimLaunch.Lines) st.AddLine(l);
+            st.Finish();
+            inp.Anim = AnimDetect.Analyse(st);
         }
         catch (Exception ex) { inp.AnimError = ex.GetType().Name + ": " + ex.Message; }
     }
@@ -106,6 +124,7 @@ public static class Briefing
         sb.Append("Written by the bug report itself (WO-202). Times are this machine's clock.\n\n");
         var (bv, bid) = BuildOf(inp);   // WO-211 0.2: the build id in the first lines (the installer's name carries the same)
         sb.Append($"**Build:** {bv} build {bid}\n\n");
+        try { sb.Append(LaunchLine(inp)); } catch { }   // WO-221 F
         // WO-218 F.4: this machine's queue first -- every number below is late by it
         try { sb.Append(W218Section.Section(AgentLines(inp).ToList())); }
         catch (Exception ex) { sb.Append($"{W218Section.Heading}\n\n(not read: {ex.GetType().Name}: {ex.Message})\n\n"); }
@@ -186,8 +205,28 @@ public static class Briefing
         return start;
     }
 
-    private static IEnumerable<string> NativeLines(Input inp) =>
-        inp.Logs.Where(kv => kv.Key.StartsWith("kcdmp-native", StringComparison.OrdinalIgnoreCase)).OrderBy(kv => kv.Key, StringComparer.Ordinal).SelectMany(kv => kv.Value);
+    /// <summary>WO-221 F: the native log's lines of this launch only -- one file (the DLL's own, else its mirror: they hold the same
+    /// lines and both were counted before), and of it the newest launch's lines. Read once per briefing.</summary>
+    private static IEnumerable<string> NativeLines(Input inp)
+    {
+        if (inp.NativeLaunch is null)
+        {
+            inp.NativeEntry = LaunchFilter.PickNative(inp.Logs.Keys);
+            inp.NativeLaunch = LaunchFilter.NativeNewest(inp.NativeEntry is null ? Array.Empty<string>() : inp.Logs[inp.NativeEntry]);
+        }
+        return inp.NativeLaunch.Lines;
+    }
+
+    /// <summary>WO-221 F: one line that says which launch every count below is of, and what was left out.</summary>
+    private static string LaunchLine(Input inp)
+    {
+        _ = NativeLines(inp);
+        static string One(string what, LaunchFilter.Result? r) =>
+            r is null ? $"{what}: none" : r.Launch is null ? $"{what}: {r.Lines.Count} line(s), no launch named (an older DLL: all counted)"
+                                        : $"{what}: launch L{r.Launch}, {r.Lines.Count} line(s) counted, {r.LeftOut} of other launches left out";
+        return $"**This launch only:** {One("the native log" + (inp.NativeEntry is null ? "" : $" ({inp.NativeEntry})"), inp.NativeLaunch)}; "
+             + $"{One("the detail probe", inp.AnimLaunch)}; {One("the session probe", inp.SessionLaunch)}.\n\n";
+    }
 
     // ---- I.1: the crashes, first ----
     private static void Crashes(Input inp, StringBuilder sb)

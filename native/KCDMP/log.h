@@ -85,19 +85,37 @@ inline std::string mirror_log_path() {
 }
 
 // WO-148: every line carries the id of the thread that wrote it, in one fixed
-// column right after the time:
-//   [HH:MM:SS.mmm] tNNNNNN text
-// six digits, zero-padded (Windows thread ids are far below a million in
-// practice; a larger one would widen its own line only). The text starts at
-// column 23 (kLogPrefixLen). Parsers that search for a substring are unaffected;
-// one that needs the thread reads the seven characters after the "] ".
-constexpr int kLogPrefixLen = 23;
+// column right after the time; WO-221 F: and its launch, in the next:
+//   [HH:MM:SS.mmm] tNNNNNN Lxxxxxx text
+// the thread in six digits, zero-padded (Windows thread ids are far below a million
+// in practice; a larger one would widen its own line only), the launch in six hex
+// digits (launch_id() below: one value for this process, another for the next). The
+// text starts at column 31 (kLogPrefixLen). Parsers that search for a substring are
+// unaffected; one that needs the thread reads the seven characters after the "] ".
+// The launch is there because the logs of several launches end up side by side (a
+// bundle carries the kept earlier logs, a probe file outlives its launch): a count
+// taken over them mixed sessions (a field briefing: 5,834 s where the session had 160).
+constexpr int kLogPrefixLen = 31;
+
+// This process's launch: 24 bits of its creation time and id, the same for every line and every probe row it writes.
+inline unsigned launch_id() {
+    static unsigned id = 0;
+    if (!id) {
+        FILETIME c{}, e{}, k{}, u{};
+        unsigned long long t = 0;
+        if (GetProcessTimes(GetCurrentProcess(), &c, &e, &k, &u)) t = (static_cast<unsigned long long>(c.dwHighDateTime) << 32) | c.dwLowDateTime;
+        unsigned long long h = (t / 10000ull) * 0x9E3779B97F4A7C15ull ^ (static_cast<unsigned long long>(GetCurrentProcessId()) * 0xC2B2AE3D27D4EB4Full);
+        id = static_cast<unsigned>((h >> 29) & 0xFFFFFFu);
+        if (!id) id = 1;
+    }
+    return id;
+}
 
 // Writes the prefix (no terminator past it) into out[0..kLogPrefixLen) and returns
 // the count written. Pure, so the native unit tests can pin the column.
 inline int format_log_prefix(char* out, size_t cap, int hour, int minute, int second, int ms,
-                             unsigned long tid) {
-    return std::snprintf(out, cap, "[%02d:%02d:%02d.%03d] t%06lu ", hour, minute, second, ms, tid);
+                             unsigned long tid, unsigned launch) {
+    return std::snprintf(out, cap, "[%02d:%02d:%02d.%03d] t%06lu L%06x ", hour, minute, second, ms, tid, launch & 0xFFFFFFu);
 }
 
 // WO-202 I.1: the last kCrashRingLines lines this DLL logged, kept in memory for the crash report. crash_capture.cpp reads it
@@ -143,7 +161,7 @@ inline void logf(const char* fmt, ...) {
     GetLocalTime(&st);
     char prefix[48];
     format_log_prefix(prefix, sizeof prefix, st.wHour, st.wMinute, st.wSecond, st.wMilliseconds,
-                      static_cast<unsigned long>(GetCurrentThreadId()));
+                      static_cast<unsigned long>(GetCurrentThreadId()), launch_id());
     if (note_rotation) {
         note_rotation = false;
         for (FILE* dst : { f, mirror }) {
