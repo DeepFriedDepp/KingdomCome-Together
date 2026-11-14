@@ -93,6 +93,8 @@ add_library(KCDMP SHARED
     wo217.cpp
     wo217_carts.cpp
     wo218.cpp
+    wo221.cpp
+    combat_actions.cpp
 )
 
 target_include_directories(KCDMP PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

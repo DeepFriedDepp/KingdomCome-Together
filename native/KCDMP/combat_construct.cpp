@@ -53,6 +53,7 @@
 // EntityModule.dll / CombatModule.dll this session (docs/WO-44-findings.md).
 
 #include "combat_swing.h"
+#include "combat_actions.h"
 #include "anchors.h"
 #include "fault_guard.h"
 #include "hits.h"
@@ -953,6 +954,7 @@ SwingResult ghost_swing(uint32_t entityId, const char* fragSpec) {
         call_release(anim);   // still drop our ref; the object outlives the fault path
         return SwingResult::QueueFaulted;
     }
+    combatactions::track(entityId, actor, anim);   // WO-221 A: recorded, and ended before this body's combat part goes
     uint32_t status = ~0u, refc = ~0u;
     read_u32(anim, 0x28, &status);
     read_u32(anim, 0x58, &refc);
@@ -1020,6 +1022,7 @@ SwingResult install_fragment(uint32_t entityId, uint32_t fragmentId, const uint8
         call_release(anim);
         return SwingResult::QueueFaulted;
     }
+    combatactions::track(entityId, actor, anim);   // WO-221 A: recorded, and ended before this body's combat part goes
     *outAction = anim;
     return SwingResult::Ok;
 }

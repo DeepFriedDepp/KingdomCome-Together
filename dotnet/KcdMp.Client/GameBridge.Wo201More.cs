@@ -48,6 +48,7 @@ public partial class GameBridge
         Wo216Tick(n);                                     // WO-216: the native word every 2 s, its status every 30 s
         Wo217Tick(n);
         Wo218Tick(n);                                     // WO-218: the native word and the batch's probe, MP-PIPE every 10 s                                     // WO-217: the native word every 2 s, its status every 30 s
+        Wo221Tick(n);                                     // WO-221: the native word, the status
     }
 
     private void Wo201OnEventMore(string name, string? arg)

@@ -26,6 +26,7 @@
 #include "npc_trace.h"
 #include "motion.h"
 #include "respawn_actions.h"
+#include "combat_actions.h"
 
 #include <windows.h>
 #include <atomic>
@@ -998,7 +999,10 @@ uint8_t on_config(const uint8_t* body, size_t len) {
     return kOk;
 }
 
-void on_pipe_closed() { g_dropAll = true; g_holdAll = false; }
+void on_pipe_closed() {
+    g_dropAll = true; g_holdAll = false;
+    combatactions::end_all("the session ended (the agent's pipe closed)");   // WO-221 A: the copies are the game's own bodies again
+}
 
 uint32_t chase_follows() { return c_chaseFollow.load(); }
 uint32_t chase_hold_ends() { return c_chaseEnded.load(); }

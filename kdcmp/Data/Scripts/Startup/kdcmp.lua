@@ -35246,6 +35246,68 @@ do
     end
 end
 
+-- ===== WO-221: bodies that walk right, and a horse each (docs/WO-221-findings.md) =====
+-- Every switch ships on. The agent tells this file the states (KCD2MP_W221Cfg, with the bench's twins applied); a console switch here goes
+-- to the agent, which tells the DLL and this file back. mp_w221_status lists them.
+do
+    W221 = W221 or {}
+    W221.on = W221.on or {}
+    W221.NAMES = {
+        combat_action_end = "mp_combat_action_end", talk_hold = "mp_talk_hold", drive = "mp_drive", holders = "mp_holders",
+    }
+    W221.HELP = {
+        combat_action_end = "A: (both) no combat animation of ours outlives its body's combat part (the joiner's fight crash)",
+        talk_hold = "B: (joiner) a copy woken for a talk asks nothing of its own schedule while it talks (the trade that closed)",
+        drive = "C: (joiner) a walking person is moved by the game's own movement, not placed: the step and the feet are the game's",
+        holders = "C.3: (joiner) one table says who holds a body: the driver, the writer, a seat, an activity, a fall, a mount, a one-shot",
+    }
+    function KCD2MP_W221On(name)
+        local v = W221.on[tostring(name)]
+        if v == nil then return true end
+        return v
+    end
+    function KCD2MP_W221Cfg(list)
+        local n = 0
+        for kv in string.gmatch(tostring(list or ""), "[^,]+") do
+            local k, v = string.match(kv, "^%s*([%w_]+)=(%a+)%s*$")
+            if k and W221.NAMES[k] then W221.on[k] = (v == "on"); n = n + 1 end
+        end
+        if n > 0 and not W221.told then
+            W221.told = true
+            local parts = {}
+            for k in pairs(W221.NAMES) do parts[#parts + 1] = k .. "=" .. (KCD2MP_W221On(k) and "on" or "off") end
+            table.sort(parts)
+            mp_log("WO221-CFG " .. table.concat(parts, " "))
+        end
+        return true
+    end
+    function KCD2MP_W221Set(name, arg)
+        local label = W221.NAMES[tostring(name)]
+        if not label then mp_log("WO221-TOGGLE unknown switch '" .. tostring(name) .. "'"); return false end
+        local v = KCD2MP_Wo122ParseBool(arg)
+        if v == "bad" then mp_log(label .. ": expected on|off, got '" .. tostring(arg) .. "'"); return false end
+        if v == nil then mp_log("WO221-TOGGLE " .. label .. " is " .. (KCD2MP_W221On(name) and "on" or "off")); return true end
+        W221.on[tostring(name)] = v
+        mp_log("WO221-TOGGLE " .. label .. " " .. (v and "on" or "off") .. " -- sent to the agent")
+        KCD2MP_EmitEvent("w221_cfg", tostring(name) .. "=" .. (v and "on" or "off"))
+        return true
+    end
+    function KCD2MP_W221Status()
+        local parts = {}
+        for k, label in pairs(W221.NAMES) do parts[#parts + 1] = label .. "=" .. (KCD2MP_W221On(k) and "on" or "off") end
+        table.sort(parts)
+        mp_log("WO221-STATUS " .. table.concat(parts, " "))
+        KCD2MP_EmitEvent("w221_status", "")
+        return true
+    end
+    System.AddCCommand("mp_w221_status", "KCD2MP_W221Status()", "WO-221: every WO-221 switch and the DLL's numbers")
+    for k, label in pairs(W221.NAMES) do
+        local fname = "KCD2MP_W221Set_" .. k
+        _G[fname] = function(arg) return KCD2MP_W221Set(k, arg) end
+        System.AddCCommand(label, fname .. "(%line)", "WO-221 " .. (W221.HELP[k] or k) .. " (default on): " .. label .. " on|off")
+    end
+end
+
 -- ===== WO-217 C / D: a body's loot is live for both; stolen is stolen for both =====
 -- The decided design: NPC bodies are shared and host-authoritative, first come first served; items come out of the one body; the joiner's
 -- take is a request to the host; chests stay per-player. With loot_live on:
