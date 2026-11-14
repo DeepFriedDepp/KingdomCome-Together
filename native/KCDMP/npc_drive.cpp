@@ -27,6 +27,9 @@
 #include "motion.h"
 #include "respawn_actions.h"
 #include "combat_actions.h"
+#include "body_drive.h"
+#include "holders.h"
+#include "wo221.h"
 
 #include <windows.h>
 #include <atomic>
@@ -336,9 +339,14 @@ float stream_vz(const Stream& s) {
     return 0.0f;
 }
 std::atomic<uint32_t> c_chaseFollow{0}, c_chaseEnded{0};
+std::atomic<uint32_t> c_engineHolds{0};   // WO-221 C: bodies left where the engine holds them (the insisting engine)
 std::atomic<uint32_t> c_activityDrift{0};   // WO-209: activity holds ended because the host's NPC walked away from the body
 
 struct Puppet {
+    // WO-221 C (the insisting engine): when the engine last moved the written body over 2 m, how long the next hold is, until when the
+    // body is left where the engine holds it, when a hold last ran, and where its host NPC stood when the hold began
+    double bigPullAt = -1e9, engineHoldS = 60.0, engineHoldUntil = -1e9, engineHoldEndedAt = -1e9;
+    float engineHoldHost[3]{};
     std::string key, name;
     uint32_t eid = 0;
     void*    ent = nullptr;
@@ -429,6 +437,8 @@ void drop(std::unordered_map<std::string, Puppet>::iterator it, uint8_t reason, 
          it->second.eid, static_cast<unsigned long long>(it->second.writes));
     motion::body_released(it->second.key.c_str(), it->second.eid);   // WO-121: gait/combat hand the body back
     wo215::route_release(it->second.eid, "dropped");                  // WO-215 A: its movement request ends with it
+    bodydrive::release(it->second.eid, "dropped");                    // WO-221 C: a driven copy's request ends with it
+    holders::forget(it->second.eid);
     if (tell) notify_drop(reason, it->second.name);
     if (reason == kNotLiving) {   // WO-147: remembered for the hit gate (a ragdoll is a moment, not a release)
         const double t = now_s();
@@ -747,6 +757,20 @@ bool write_one(Puppet& p, void* e, const float pose[4], bool* wrote) {
         p.sumCm += cm;
         p.sumDzCm += dz * 100.0;
         if (cm > p.maxCm) p.maxCm = cm;
+        if (cm > 200.0 && holders::on()) {
+            const double nowP = now_s();
+            if (nowP - p.bigPullAt <= 30.0) {
+                if (nowP - p.engineHoldEndedAt > 600.0) p.engineHoldS = 60.0;
+                p.engineHoldUntil = nowP + p.engineHoldS;
+                p.engineHoldHost[0] = pose[0]; p.engineHoldHost[1] = pose[1]; p.engineHoldHost[2] = pose[2];
+                const uint32_t k = c_engineHolds.fetch_add(1, std::memory_order_relaxed) + 1;
+                if (k <= 200 || k % 50 == 0)
+                    logf("WO221-HOLD npc=%s the engine put the body back %.1f m twice within %.0f s: it is left where the engine holds it for %.0f s "
+                         "(its host NPC walking 3 m off ends that) [n=%u]", p.name.c_str(), cm / 100.0, nowP - p.bigPullAt, p.engineHoldS, k);
+                p.engineHoldS = (std::min)(480.0, p.engineHoldS * 2.0);
+                p.bigPullAt = -1e9;
+            } else p.bigPullAt = nowP;
+        }
         if (cm > kPullFloorCm) {
             ++p.winMoved;
             const float ax = p.anchor[0] - p.last[0], ay = p.anchor[1] - p.last[1];
@@ -1149,6 +1173,8 @@ uint8_t bind_main(const BindRequest& req) {
         s.lastSampleAt = s.lastSampleAt > 0 ? s.lastSampleAt : now;
     }
     p.blendPending = true;   // the first write starts from the body, not from the stream (blend_start)
+    // WO-221 C (B1d): a copy's own movement plan, left by its paused brain, ends once -- on the AI update's thread (wo215::cancel_own_plan)
+    if (p.human && !beast && wo221::on(wo221::kBitDrive) && std::strncmp(req.name, "kcd2mp_", 7) != 0) wo215::cancel_own_plan(req.eid);
     g_statBound.store(static_cast<uint16_t>(g_bound.size()));
     logf("MP-NPCBIND npc=%s result=ok%s%s%s%s eid=0x%X wuid=%016llX lua_wuid=%016llX anchor=(%.2f,%.2f,%.2f) delay_ms=%u jitter_allow_ms=%.0f bound=%zu stream_age_s=%.1f",
          req.name, rebind ? " rebind=1" : "", beast ? " body=horse-or-animal (entity-written)" : "",
@@ -1385,9 +1411,35 @@ void tick() {
         const bool postureHeld = wo213rules::posture_hold_sitting(holds, havePos, dx, dy, now, &p.sitting);
         if (p.sitting.drifted && !wasDrifted) wo213::note_posture_drift(p.name.c_str(), std::sqrt(dx * dx + dy * dy));
         if (postureHeld && (s.flags & (0x01 | 0x02 | 0x10)) == 0 && now >= p.holdUntil && !parented && !activity_held(p.eid)) wo213::note_posture_skip();
-        if ((s.flags & (0x01 | 0x02 | 0x10)) != 0 || now < p.holdUntil || parented || activity_held(p.eid) || wo210kd::held_down(p.eid) || postureHeld ||
-            seatHeld || wo215::probe_owned(p.eid)) {
-            p.seatPrevWriter = seatHeld ? "seat" : postureHeld ? "posture" : activity_held(p.eid) ? "activity" : now < p.holdUntil ? "swing-hold" : "held";
+        // WO-221 C.3 (mp_holders): one table says who holds this body. The claims are found as before (above); the table's one rule
+        // decides among them, records the holder and counts every hand-over. Off (the twin): the writer's own yield rules, as 0.65.0.
+        const bool tableOn = holders::on();
+        holders::Holder hold = holders::Holder::Writer;
+        if (tableOn) {
+            holders::Claims hc;
+            hc.fall = (s.flags & (0x01 | 0x02 | 0x10)) != 0 || wo210kd::held_down(p.eid);
+            hc.mount = parented;
+            hc.oneShot = now < p.holdUntil;
+            hc.seat = seatHeld;
+            // the insisting engine (write_one): held until the time is up or its host NPC has walked 3 m from where it stood
+            bool engineHeld = now < p.engineHoldUntil;
+            if (engineHeld) {
+                const float hx = s.n > 0 ? s.ring[s.n - 1].x - p.engineHoldHost[0] : 0.0f, hy = s.n > 0 ? s.ring[s.n - 1].y - p.engineHoldHost[1] : 0.0f;
+                if (hx * hx + hy * hy > 9.0f) { engineHeld = false; p.engineHoldUntil = -1e9; p.engineHoldS = 60.0; }
+                p.engineHoldEndedAt = now;
+            }
+            hc.activity = activity_held(p.eid) || postureHeld || engineHeld;
+            hc.probe = wo215::probe_owned(p.eid);
+            hold = holders::decide(hc);
+        }
+        const bool heldNow = tableOn ? hold != holders::Holder::Writer
+                                     : ((s.flags & (0x01 | 0x02 | 0x10)) != 0 || now < p.holdUntil || parented || activity_held(p.eid) || wo210kd::held_down(p.eid) ||
+                                        postureHeld || seatHeld || wo215::probe_owned(p.eid));
+        if (heldNow) {
+            if (tableOn) holders::set(p.eid, p.name.c_str(), hold, now);
+            bodydrive::release(p.eid, "held");   // WO-221 C: a held body is not driven
+            p.seatPrevWriter = tableOn ? holders::name(hold)
+                                       : seatHeld ? "seat" : postureHeld ? "posture" : activity_held(p.eid) ? "activity" : now < p.holdUntil ? "swing-hold" : "held";
             // Dead / unconscious / carried stay on Lua's own behaviour; a swing
             // one-shot owns the body for its hold. Neither is a pull.
             // WO-215 A: a held body is not routed -- its request (if any) ends; A.0's probe owns its own body
@@ -1485,6 +1537,39 @@ void tick() {
                            ? ((s.flags & (0x08 | 0x20)) != 0 || now < p.holdUntil || wo209::mirrored(p.eid))
                            : ((s.flags & (0x04 | 0x08)) != 0 || now < p.holdUntil || wo209::mirrored(p.eid));
             ri.now = now;
+            // WO-221 C (mp_drive): a copy that walks is driven -- the engine's own per-frame movement request moves it and nothing writes
+            // it. The driver's snap (a body left behind) is one plain write of this frame's pose, no blend; its arrival hands the body to
+            // the writer, which blends the last half metre and the facing from where the body stands.
+            {
+                bodydrive::In di;
+                di.eid = p.eid; di.ent = e; di.name = p.name.c_str();
+                std::memcpy(di.render, pose, sizeof di.render);
+                di.newest[0] = nsm.x; di.newest[1] = nsm.y; di.newest[2] = nsm.z; di.newest[3] = nsm.rot;
+                di.newestAgeS = static_cast<float>((std::max)(0.0, now - nsm.at));
+                di.vx = ri.streamVx; di.vy = ri.streamVy; di.mps = ri.streamMps; di.vz = ri.streamVz;
+                di.figure = figure; di.beast = p.beast; di.parented = parented; di.human = p.human; di.physics = !p.noPhys; di.fight = ri.fight;
+                di.now = now;
+                const bodydrive::Out dv = bodydrive::frame(di);
+                if (dv == bodydrive::Out::Driven) {
+                    if (tableOn) holders::set(p.eid, p.name.c_str(), holders::Holder::Driver, now);
+                    p.haveLast = false;
+                    p.havePrev = false;
+                    p.blendPending = true;   // when the writer takes it again (an arrival, a fight, a fall), from where the body stands
+                    p.blendWhy = "drive-end";
+                    p.blending = false;
+                    p.extrapolating = false;
+                    p.seatPrevWriter = "driver";
+                    const double renderAt3 = now - renderDelay;
+                    const double gapS3 = s.n > 0 && renderAt3 > s.ring[s.n - 1].at ? renderAt3 - s.ring[s.n - 1].at : -1.0;
+                    motion::body_frame(p.key.c_str(), e, p.eid, 0.0f, 0.0f, 0.0f, s.haveSt2 ? &s.st2 : nullptr, s.haveSt2 ? now - s.st2At : 1e9, now, gapS3);
+                    p.winStart = now;   // the driver logs the driven body's own window (MP-NPCPULL ... driven=1)
+                    ++it;
+                    continue;
+                }
+                if (dv == bodydrive::Out::Snap) { p.blendPending = false; p.blending = false; p.off[0] = p.off[1] = p.off[2] = 0; p.offRot = 0; }
+                if (dv == bodydrive::Out::Arrive) { p.blendPending = true; p.blendWhy = "arrive"; }
+                if (tableOn) holders::set(p.eid, p.name.c_str(), holders::Holder::Writer, now);
+            }
             const wo215::RouteOut ro = wo215::route_frame(ri);
             if (ro.v == wo215::Verdict::Routed) {
                 p.haveLast = false;

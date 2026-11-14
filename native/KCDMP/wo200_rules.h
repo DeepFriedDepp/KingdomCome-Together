@@ -45,6 +45,8 @@ enum class Method : uint8_t {
     SetState,      // SetState (HealTo, set health): a soul's health / stamina / ... written
     Damage,        // TakeDamage (KillNpc), Revive: a soul's life
     Items,         // CreateItems, MoveItems (inventories: money when the library around it is a money one)
+    PlayerHorse,   // WO-221 D.1: ReplacePlayerHorse -- the one "player's horse" of this game set (a purchase, a gift)
+    KillSoul,      // WO-221 D.1: Kill -- gated only as the disposal of the old horse that follows a ReplacePlayerHorse
 };
 
 inline const char* last_segment(const char* name) {
@@ -64,6 +66,8 @@ inline Method method_kind(const char* methodName) {
     if (!std::strcmp(s, "SetState")) return Method::SetState;
     if (!std::strcmp(s, "TakeDamage") || !std::strcmp(s, "Revive")) return Method::Damage;
     if (!std::strcmp(s, "CreateItems") || !std::strcmp(s, "MoveItems")) return Method::Items;
+    if (!std::strcmp(s, "ReplacePlayerHorse")) return Method::PlayerHorse;
+    if (!std::strcmp(s, "Kill")) return Method::KillSoul;
     return Method::Other;
 }
 
@@ -160,6 +164,22 @@ inline Verdict decide(uint8_t role, Kind k, Method m, Target t, bool inClosure, 
         if (c.route && (alwaysPlayer || playerBody)) return Verdict::TalkerOnlyHost;
     }
     return Verdict::Run;
+}
+
+// WO-221 D.1 (mp_own_horse): the game has one player and so one "player's horse": the quest graph of a purchase or a gift sets it
+// (ReplacePlayerHorse) and, when the player had one, disposes of the old horse (Kill, the body hidden). Run for the wrong player that
+// takes his partner's new horse for his own and kills his own horse. So where a conversation is not this machine's player's -- the
+// host inside a joiner's replay closure, the joiner inside its mirror of the host's own conversation -- the node is passed through:
+// not run, its OnExec pulsed, so the rest of the purchase (the horse leaves the trader, the quest goes on) happens as it does alone.
+// The Kill that follows in the same library instance, while that pulse runs, is passed through the same way.
+enum class HorsePass : uint8_t { No = 0, Replace, Kill };
+inline HorsePass horse_pass(uint8_t role, Kind k, Method m, bool inClosure, bool mirrorTalker, bool joined, bool passInFlight, bool sameParent,
+                            bool on) {
+    if (!on || k != Kind::Function) return HorsePass::No;
+    const bool partners = (role == kRoleHost && inClosure) || (role == kRoleJoiner && joined && mirrorTalker);
+    if (m == Method::PlayerHorse && partners) return HorsePass::Replace;
+    if (m == Method::KillSoul && passInFlight && sameParent) return HorsePass::Kill;
+    return HorsePass::No;
 }
 
 // Gate 1 (the tap) on the joiner: a clock's out-port fire is dropped (I.4); a dialogue node's is recorded (I.1) and runs here too.

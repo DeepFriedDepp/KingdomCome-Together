@@ -93,11 +93,13 @@ public partial class GameBridge
             case "w217_corpses": // host: <name:x:y:z:yaw,...|->  (E.1)
                 if (arg is { Length: > 0 } && arg.Length <= Protocol.LootTextMax)
                     foreach (byte j in Wo134Peers()) _ = Wo134SendAsync(Protocol.LootHostUp, j, Protocol.LootHostCorpses, 0, arg);
+                if (arg is { Length: > 1 }) Wo221OnHostCorpses(arg);   // WO-221 E.1: their wounds follow
                 return true;
             case "w217_corpse":  // joiner: <name> <spawned|waiting|alive|shown>  (E.1)
             {
                 var sp = (arg ?? "").Split(' ');
                 if (sp.Length == 2 && Wo134Rules.BodyName.IsMatch(sp[0])) _ = Wo217OnCorpseStateAsync(sp[0], sp[1]);
+                if (sp.Length == 2 && sp[1] == "shown") Wo221OnCorpseShown(sp[0]);   // WO-221 E.1: its wounds, once it is shown
                 return true;
             }
             case "w217_prop":     // host: <name|class|arch|model|x|y|z|ax|ay|az>  (E.2)

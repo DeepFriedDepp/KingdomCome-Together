@@ -478,6 +478,20 @@ const char kOurRequester[] = "KCDMP one-shot";
 
 bool on_request(void* ctx, void* req) {
     c_hooked.fetch_add(1, std::memory_order_relaxed);
+    // WO-221 B (mp_talk_hold): a copy in a conversation with this player -- its own schedule asks nothing of it. The schedule's
+    // state request is refused here, at the function's entry, with the function's own refusal value (the gate answers -1), so the
+    // body's state stays free for the dialogue's own requests (0.65.0: the woken copy's job asked first, failed on a body it does
+    // not move, and the dialogue never got its turn: "the talk that never starts").
+    if (talkhold::any_held() && ctx && req) {
+        uint64_t w = 0;
+        void* rn = nullptr;
+        char who[200] = "";
+        rd64(static_cast<char*>(ctx) - kObjCtx, kObjWuid, &w);
+        if (w && rd(req, kReqName, &rn) && rn) {
+            rdstr(static_cast<const char*>(rn), who, sizeof who);
+            if (talkhold::refuses_request(w, who)) return true;
+        }
+    }
     const bool wantShots = (g_capture.load(std::memory_order_relaxed) & kBitOneShots) != 0;
     const bool research = g_capLog.load(std::memory_order_relaxed);
     if (!wantShots && !research) return false;
@@ -1196,7 +1210,7 @@ void install() {
     g_tickArmed = g_animArmed && g_ctxPreUpdate && g_execUpdate && g_ctxUpdate;
     if (g_reqChange && g_vftAnimAction) {
         const char* why = nullptr;
-        g_hookArmed = inlinehook::install_gate(g_reqChange, kProReqChange, sizeof kProReqChange, &on_request, &why);
+        g_hookArmed = inlinehook::install_gate_neg(g_reqChange, kProReqChange, sizeof kProReqChange, &on_request, &why);
         if (!g_hookArmed) logf("WO143-BUILD the one-shot capture hook NOT installed: %s", why ? why : "?");
     }
     // the look target: the NPC object's getter at vtbl[0x210] is `lea rax, [rbx + disp]` -- read the disp

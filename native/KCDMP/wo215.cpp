@@ -424,7 +424,9 @@ struct ReqX {
 };
 constexpr size_t kReqStyle = 0xFC, kReqTolA = 0x110, kReqTolB = 0x114;
 
-uint32_t queue_request(void* npc, const float target[3], int speedEnum, bool exact, float yaw, const ReqX* x = nullptr) {
+// plain (WO-221): the calls are made with no fault guard around them -- the manager's queue takes the manager's own mutex, and a fault
+// caught inside it would leave it held (the standing rule of WO-221 for every engine call it adds).
+uint32_t queue_request(void* npc, const float target[3], int speedEnum, bool exact, float yaw, const ReqX* x = nullptr, bool plain = false) {
     if (!g_api.armed || !npc) return kNoRequest;
     void* mgr = task_manager();
     if (!mgr) return kNoRequest;
@@ -438,7 +440,7 @@ uint32_t queue_request(void* npc, const float target[3], int speedEnum, bool exa
     uint32_t id = kNoRequest;
     bool built = false;
     KCDMP_FAULT_CALL(site, "wo215::queue_request");
-    const bool ok = fault::guarded(site, [&] {
+    auto body = [&] {
         using Ctor = void* (*)(void*, void*);
         using Base = void* (*)(void*);
         using Setter = void (*)(void*, const float*, const float*);
@@ -484,7 +486,9 @@ uint32_t queue_request(void* npc, const float target[3], int speedEnum, bool exa
         void* fDel = *reinterpret_cast<void**>(*reinterpret_cast<uint8_t**>(path));
         reinterpret_cast<void (*)(void*, uint32_t)>(fDel)(path, 0);
         reinterpret_cast<Dtor>(g_api.reqDtor)(req);
-    });
+    };
+    bool ok = true;
+    if (plain) body(); else ok = fault::guarded(site, body);
     if (!ok) {
         c_faults.fetch_add(1, std::memory_order_relaxed);
         disarm(built ? "a fault inside the movement request (queue)" : "a fault inside the movement request (build)");
@@ -524,7 +528,9 @@ bool cancel_request(void* npc, uint32_t id) {
 // The main thread (the route) and the probe post the newest order per body; the AI update's entry carries them out on its own thread,
 // before the update runs -- the engine's brains make their requests in the same update. Posting keeps one order per body (a newer one
 // replaces it: a request cancels the task's current one by itself), so a paused AI update never piles orders up.
-enum : uint8_t { kOrdWalk = 1, kOrdExact = 2, kOrdCancel = 3, kOrdReplay = 4 };   // 4: WO-216 A.1, the host's own request
+enum : uint8_t { kOrdWalk = 1, kOrdExact = 2, kOrdCancel = 3, kOrdReplay = 4, kOrdCancelAny = 5, kOrdGoPlain = 6, kOrdStopPlain = 7 };   // 4: WO-216 A.1; 5: WO-221 C (B1d)
+size_t tasks_by_wuid(void* mgr, std::unordered_map<uint64_t, void*>* out);
+std::atomic<uint32_t> c_planCancels{0};
 enum : uint8_t { kOutQueued = 1, kOutRefused = 2, kOutNoNpc = 3 };
 struct Order { uint8_t kind = 0; float target[3]{}; int speed = 1; float yaw = 0; uint32_t seq = 0; ReqX x; };
 struct Outcome { uint32_t seq = 0; uint32_t id = kNoRequest; uint8_t what = 0; };
@@ -598,17 +604,56 @@ void ai_drain() {
             oc.what = kOutNoNpc;
             g_ourId.erase(eid);
             c_noNpcAi.fetch_add(1, std::memory_order_relaxed);
+        } else if (o.kind == kOrdCancelAny) {
+            // WO-221 C (B1d): whatever request the body's movement task holds (its paused brain's last one: the source of the joiner's
+            // "Agent is stuck" lines) ends by the task's own cancel -- here, on the AI update's thread at its entry, where the engine's
+            // brains make and cancel their requests themselves. The cancel only marks the task's request ended (WO-215 read it whole).
+            void* mgr = task_manager();
+            static std::unordered_map<uint64_t, void*> s_any;
+            uint64_t w = 0;
+            if (mgr && rd(npc, kNpcWuid, &w) && tasks_by_wuid(mgr, &s_any)) {
+                auto ti = s_any.find(w);
+                uint32_t cur = kNoRequest;
+                if (ti != s_any.end() && rd(ti->second, 0x10, &cur) && cur != kNoRequest) {
+                    void* task = ti->second;
+                    // a plain call: an engine AI call of this work order runs under no fault guard (the task was looked up just now,
+                    // on this thread, in the manager's own table; the reads above are memory reads only)
+                    reinterpret_cast<void (*)(void*)>(g_api.taskCancel)(task);
+                    const bool okc = true;
+                    const uint32_t k = c_planCancels.fetch_add(1, std::memory_order_relaxed) + 1;
+                    if (k <= 60 || k % 200 == 0)
+                        logf("WO221-PLAN eid=0x%X its own movement request %u (left by its paused brain) %s by the task's own cancel, on the AI update's thread [n=%u]",
+                             eid, cur, okc ? "cancelled" : "NOT cancelled", k);
+                }
+            }
+        } else if (o.kind == kOrdStopPlain) {
+            // WO-221 D.2: our own request ends by the task's own cancel, plain, only while it is still the body's current one
+            auto it = g_ourId.find(eid);
+            if (it != g_ourId.end()) {
+                void* mgr = task_manager();
+                static std::unordered_map<uint64_t, void*> s_own;
+                uint64_t w = 0;
+                if (mgr && rd(npc, kNpcWuid, &w) && tasks_by_wuid(mgr, &s_own)) {
+                    auto ti = s_own.find(w);
+                    uint32_t cur = kNoRequest;
+                    if (ti != s_own.end() && rd(ti->second, 0x10, &cur) && cur == it->second) {
+                        reinterpret_cast<void (*)(void*)>(g_api.taskCancel)(ti->second);
+                        c_cancels.fetch_add(1, std::memory_order_relaxed);
+                    }
+                }
+                g_ourId.erase(it);
+            }
         } else if (o.kind == kOrdCancel) {
             auto it = g_ourId.find(eid);
             if (it != g_ourId.end()) { cancel_request(npc, it->second); g_ourId.erase(it); }
         } else {
-            const uint32_t id = queue_request(npc, o.target, o.speed, o.kind == kOrdExact, o.yaw, o.kind == kOrdReplay ? &o.x : nullptr);
+            const uint32_t id = queue_request(npc, o.target, o.speed, o.kind == kOrdExact, o.yaw, o.kind == kOrdReplay ? &o.x : nullptr, o.kind == kOrdGoPlain);
             oc.id = id;
             oc.what = id == kNoRequest ? kOutRefused : kOutQueued;
             if (id != kNoRequest) g_ourId[eid] = id; else g_ourId.erase(eid);
         }
         c_drained.fetch_add(1, std::memory_order_relaxed);
-        if (o.kind != kOrdCancel) {
+        if (o.kind != kOrdCancel && o.kind != kOrdCancelAny && o.kind != kOrdStopPlain) {
             std::lock_guard<std::mutex> l(g_ordMu);
             g_outcomes[eid] = oc;
         }
@@ -1655,12 +1700,21 @@ bool walk_own(uint32_t eid) {
     return it != g_routes.end() && it->second.active;
 }
 bool probe_owned(uint32_t eid) { return g_probe.on && g_probe.eid == eid; }
+uint32_t order_go(uint32_t eid, const float target[3], uint8_t gait) {
+    return post_order(eid, kOrdGoPlain, target, speed_enum(static_cast<Gait>(gait < kGaits ? gait : 0)), 0.0f);
+}
+void order_stop(uint32_t eid) { post_order(eid, kOrdStopPlain, nullptr, 0, 0.0f); }
 bool ai_post(std::function<void()> fn) {
     if (!g_hooked.load(std::memory_order_relaxed)) return false;   // no door: the caller decides
     { std::lock_guard<std::mutex> l(g_aiFnMu); g_aiFns.push_back(std::move(fn)); }
     g_aiFnsPending.store(true, std::memory_order_release);
     return true;
 }
+void cancel_own_plan(uint32_t eid) {
+    if (!eid || !g_armed.load(std::memory_order_relaxed) || !g_hooked.load(std::memory_order_relaxed)) return;
+    post_order(eid, kOrdCancelAny, nullptr, 0, 0.0f);
+}
+uint32_t plan_cancels() { return c_planCancels.load(std::memory_order_relaxed); }
 
 bool dormant_host(uint32_t eid, void* ent, const char* name, double now) {
     if (!on(kBitDormant) || !eid || !ent) return false;

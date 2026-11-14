@@ -45,6 +45,7 @@
 #include "wo195_rules.h"
 #include "wo201_rules.h"
 #include "wo215.h"
+#include "body_drive.h"
 
 namespace kcdmp::motion {
 namespace {
@@ -1576,7 +1577,7 @@ void body_frame(const char* key, void* ent, uint32_t eid, float renderSpeedMps, 
     const bool fresh = st && stAgeS < 1.5;
     // gait
     // WO-215 A: a routed copy's gait is its own movement system's -- the request's speed class and its own locomotion; ours stays off it
-    const bool gaitOn = g_gait && (b.avatar ? g_cfgAvatarGait.load() : g_cfgNpcGait.load()) && (b.avatar || !wo215::routed(eid));
+    const bool gaitOn = g_gait && (b.avatar ? g_cfgAvatarGait.load() : g_cfgNpcGait.load()) && (b.avatar || (!wo215::routed(eid) && !bodydrive::driven(eid)));   // WO-221 C: a driven copy's gait is the engine's
     if (gaitOn) {
         float s = (b.avatar && fresh) ? st->speedCm / 100.0f : renderSpeedMps;
         // A render step faster than any gait (> 9 m/s) is a snap or a teleport,

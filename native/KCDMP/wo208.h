@@ -26,6 +26,9 @@ int status(char* out, int n);
 // WO-210 0.3: an owned copy's host NPC FullBody as the owner last applied it (the probe's "hf"); false when not owned or unknown
 bool host_fullbody(uint32_t eid, uint8_t* cls, uint32_t* frag);
 bool probe_owned(uint32_t eid);
+// WO-221 C.1: the family of the host NPC's FullBody state as the owner last had it (wo208_rules.h Fam), 0xFF when the owner has no
+// word for this copy. Main thread.
+uint8_t host_family(uint32_t eid);
 // WO-216 F.4 / G (main thread): the host's combat row for an owned copy, played by the owner -- the row's own fragment queued the game's
 // way (ghost_swing), the owner's own full-body action retired before it, and the full body held for the row (nothing of the owner's
 // installed, withdrawn or reseated over it) -- never refused as "owner-owns" (WO-214 D.2). The result is the swing's.

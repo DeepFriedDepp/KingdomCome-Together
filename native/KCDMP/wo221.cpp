@@ -19,7 +19,7 @@ namespace kcdmp::wo221 {
 
 namespace {
 struct N { const char* n; uint32_t b; };
-const N kNames[] = {{"combat_action_end", kBitCombatActionEnd}, {"talk_hold", kBitTalkHold}, {"drive", kBitDrive}, {"holders", kBitHolders}};
+const N kNames[] = {{"combat_action_end", kBitCombatActionEnd}, {"talk_hold", kBitTalkHold}, {"drive", kBitDrive}, {"holders", kBitHolders}, {"own_horse", kBitOwnHorse}, {"corpse_look", kBitCorpseLook}};
 }
 
 uint32_t twin_off_bits(const char* names) {
@@ -56,7 +56,7 @@ uint32_t twin_off() {
 }
 
 struct More { const char* area; StatusFn fn; };
-More g_more[8];
+More g_more[24];
 int g_moreN = 0;
 
 int status(char* out, int n) {
@@ -95,7 +95,19 @@ uint8_t op(uint8_t opc, const uint8_t* body, size_t len, uint8_t* out, size_t ca
     }
     if (opc == kOpStatus) {
         char t[1000];
-        int n = status(t, sizeof t);
+        // [page:1] (optional): 0 = the switches, k = the k-th area's own line, past the last = nothing. No page: all that fits (0.65.x).
+        int n = 0;
+        if (len >= 2) {
+            const int page = body[1];
+            if (page == 0) {
+                n = std::snprintf(t, sizeof t, "bits=0x%X twin_off=0x%X role=%u", g_bits.load(), twin_off(), g_role.load());
+                for (const N& x : kNames) if (n > 0 && n < static_cast<int>(sizeof t)) n += std::snprintf(t + n, sizeof t - static_cast<size_t>(n), " %s=%d", x.n, on(x.b) ? 1 : 0);
+            } else if (page <= g_moreN) {
+                n = std::snprintf(t, sizeof t, "%s: ", g_more[page - 1].area);
+                const int m = g_more[page - 1].fn(t + n, static_cast<int>(sizeof t) - n);
+                if (m > 0) n += (m < static_cast<int>(sizeof t) - n ? m : static_cast<int>(sizeof t) - n - 1);
+            }
+        } else n = status(t, sizeof t);
         if (n < 0) n = 0;
         if (static_cast<size_t>(n) >= sizeof t) n = static_cast<int>(sizeof t) - 1;
         if (static_cast<size_t>(n) > cap) n = static_cast<int>(cap);
@@ -112,7 +124,7 @@ const bool kReg = wo203::reg_op(kOpConfig, &op) && wo203::reg_op(kOpStatus, &op)
 } // namespace
 
 bool add_status(const char* area, StatusFn fn) {
-    if (g_moreN >= 8) return false;
+    if (g_moreN >= 24) return false;
     g_more[g_moreN++] = More{area, fn};
     return true;
 }

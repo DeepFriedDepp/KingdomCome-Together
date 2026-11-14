@@ -289,7 +289,21 @@ public partial class GameBridge
         if (id >= 0 && W201("monologue_rescue_exempt") && Wo201Rules.IsSoloDudeDialogue(line)) id = -1;   // WO-201 B6: his own monologue is no conversation
         if (id >= 0) _w179DudeDialogId = id;
         if (Wo179Rules.ConversationRunning(line, _w179DudeDialogId)) _w179TwinSeenMs = Environment.TickCount64;
+        // WO-221 B (mp_talk_hold): a conversation at its choices runs (a forced one, or one an NPC started, shows its choices first)
+        if (W221On("talk_hold"))
+        {
+            int any = Wo221Rules.DudeDialogIdAnywhere(line);
+            if (any >= 0) _w221DudeAnyDialogId = any;
+            else if (Wo221Rules.IsChoiceOf(line, _w221DudeAnyDialogId))
+            {
+                _w179TwinSeenMs = Environment.TickCount64;
+                Interlocked.Increment(ref _w221ChoiceSigns);
+            }
+        }
     }
+
+    private volatile int _w221DudeAnyDialogId = -1;
+    private long _w221ChoiceSigns;
 
     private volatile int _w179DudeDialogId = -1;
 

@@ -25,6 +25,7 @@
 #include "wo214.h"
 #include "wo215.h"
 #include "talk_hold.h"
+#include "body_drive.h"
 #include "wo141.h"
 #include "wo211.h"
 #include "wo211_rules.h"
@@ -660,7 +661,7 @@ std::string frag_name_of(uint32_t eid, uint32_t frag) {
 // WO-215 A: a routed copy's walk start and stop are its own movement system's (the engine's request plays IdleToMove / MoveToIdle itself):
 // for such a copy the host's walk transitions are locomotion -- the copy's base -- never an install of ours (E.1's rule is for written copies)
 Fam fam_of(uint32_t eid, uint8_t cls, uint32_t frag) {
-    if (cls == kClsMoveTransition && walk_transition_frag(frag) && wo215::walk_own(eid)) return Fam::Loco;
+    if (cls == kClsMoveTransition && walk_transition_frag(frag) && (wo215::walk_own(eid) || bodydrive::driven(eid))) return Fam::Loco;   // WO-221 C
     return family_of_id(cls, frag);
 }
 wo210rules::PFam pfam_of(uint32_t eid, uint8_t cls, uint32_t frag) {
@@ -1756,6 +1757,11 @@ bool ask_release(uint32_t eid, const char* name) {
 double last_install_age_s(uint32_t eid) {
     const auto it = g_lastInstall.find(eid);
     return it == g_lastInstall.end() ? 1e9 : npcdrive::now_s() - it->second;
+}
+uint8_t host_family(uint32_t eid) {
+    const auto it = g_owned.find(eid);
+    if (it == g_owned.end() || !it->second.hostHave) return 0xFF;
+    return static_cast<uint8_t>(fam_of(eid, it->second.host.cls, it->second.host.frag));
 }
 bool seat_state(uint32_t eid, bool* hostSeated, bool* copySeated) {
     const auto it = g_owned.find(eid);

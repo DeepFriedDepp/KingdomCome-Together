@@ -7,6 +7,7 @@
 #include "wo202.h"
 #include "wo202_rules.h"
 #include "wo200_rules.h"
+#include "wo221.h"
 
 #include <windows.h>
 #include <atomic>
@@ -675,6 +676,47 @@ void scene_note(const void* node, uint32_t cid, const HandlerRead& h, Verdict v)
     push_event(kEvClosureClass, cid, kind_name(Kind::SceneStarter), kRttiHandler);
 }
 
+// WO-221 D.1: the horse rule's pass-through (wo200_rules.h horse_pass). The node is not run; its OnExec is pulsed here, inside the
+// engine's own Execute of that node, on its thread, by a plain call of the port's own trigger -- what the node itself would do next;
+// no fault guard around it (the pulse runs the quest graph downstream).
+thread_local bool t_horsePass = false;
+thread_local char t_horseParent[128] = "";
+std::atomic<uint32_t> c_horseReplace{0}, c_horseKill{0}, c_horseNoPort{0};
+void horse_pass_through(void* node, uint32_t cid, HorsePass hp, const char* parent, uint8_t role) {
+    char path[480] = "?";
+    ++t_inGate;
+    wo137::path_of(node, path, sizeof path);
+    --t_inGate;
+    (hp == HorsePass::Replace ? c_horseReplace : c_horseKill).fetch_add(1, std::memory_order_relaxed);
+    logf("WO221-HORSE %s: %s not run (%s) -- %s; its OnExec pulsed", role == kRoleHost ? "host" : "joiner", path,
+         hp == HorsePass::Replace ? "ReplacePlayerHorse" : "Kill",
+         hp == HorsePass::Replace ? (role == kRoleHost ? "a joiner's purchase or gift: this game's own player's horse stays as it is"
+                                                       : "the host's own purchase or gift, mirrored here: this player's horse stays as it is")
+                                  : "the old horse's disposal that follows it");
+    push_event(kEvHorsePass, cid, hp == HorsePass::Replace ? "replace" : "kill", path);
+    void* port = wo137::find_port_ref(node, "OnExec");
+    const void* pvt = nullptr;
+    if (!port || !rd(port, 0, &pvt) || !is_trigger_port_vft(pvt)) {
+        if (port) wo137::release_ref(port);
+        c_horseNoPort.fetch_add(1, std::memory_order_relaxed);
+        logf("WO221-HORSE %s has no OnExec trigger port: the chain behind it stops here", path);
+        return;
+    }
+    const bool was = t_horsePass;
+    char prev[sizeof t_horseParent];
+    std::memcpy(prev, t_horseParent, sizeof prev);
+    if (hp == HorsePass::Replace) { t_horsePass = true; strncpy_s(t_horseParent, parent ? parent : "", _TRUNCATE); }
+    g_origOut(port);
+    if (hp == HorsePass::Replace) { t_horsePass = was; std::memcpy(t_horseParent, prev, sizeof prev); }
+    wo137::release_ref(port);
+}
+
+int horse_status(char* out, int n) {
+    return std::snprintf(out, static_cast<size_t>(n), "replace_passed=%u kill_passed=%u no_port=%u", c_horseReplace.load(), c_horseKill.load(),
+                         c_horseNoPort.load());
+}
+const bool kHorseReg = wo221::add_status("horse_gate", &horse_status);
+
 bool gate(void* node, void* /*ctx*/) {
     if (!g_gateOn.load(std::memory_order_relaxed) || t_inGate) return false;
     c_gateCalls.fetch_add(1, std::memory_order_relaxed);
@@ -702,6 +744,18 @@ bool gate(void* node, void* /*ctx*/) {
         if (!wo137::function_method(node, mname, sizeof mname)) return false;
         m = method_kind(mname);
         if (m == Method::Other) return false;
+        if (m == Method::PlayerHorse || m == Method::KillSoul) {   // WO-221 D.1: gated by the horse rule only
+            if (m == Method::KillSoul && !t_horsePass) return false;
+            char pn[128] = "";
+            ++t_inGate;
+            const bool pok = parent_name(node, pn, sizeof pn);
+            --t_inGate;
+            const HorsePass hp = horse_pass(role, k, m, inClosure, mirror, c.joined, t_horsePass, pok && std::strcmp(pn, t_horseParent) == 0,
+                                            wo221::on(wo221::kBitOwnHorse));
+            if (hp == HorsePass::No) return false;
+            horse_pass_through(node, cid, hp, pok ? pn : "", role);
+            return true;
+        }
     }
     Target t = Target::Unknown;
     if (needs_target(role, k, m, inClosure, mirror, c)) t = read_target(node);

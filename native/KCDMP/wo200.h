@@ -48,6 +48,7 @@ constexpr uint8_t kOpStatus = 70, kOpConfig = 71, kOpPoll = 72, kOpReplay = 73, 
 // WO-207 D.2: the joiner's NPC triggers -- [cmd:1] 0 = forget every node, 1 = add: [n:1] then n x [len:2][path] -> [resolved:1][missing:1]
 constexpr uint8_t kOpQuietNodes = 125;
 constexpr uint8_t kEvCapture = 1, kEvQuietDrop = 2, kEvRefused = 3, kEvClosureClass = 4, kEvReplay = 5;
+constexpr uint8_t kEvHorsePass = 6;   // WO-221 D.1: a = "replace" | "kill", b = the node's path
 
 void install();   // off the main thread: the tap's slot and the node gate's inline hook (each fails closed on its own)
 void tick();      // main thread, every frame

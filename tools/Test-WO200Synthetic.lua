@@ -177,8 +177,10 @@ do
         KCD2MP._npcPaused[n] = NOW
     end
     KCD2MP_W137TalkResume("b_semin", "OnTalk")   -- this player's talk wakes the target (WO-137)
+    if KCD2MP_W221TalkHeld then KCD2MP_W221TalkHeld("b_semin", "held") end   -- WO-221 B: the DLL's hold ack (the copy is woken on it)
     CMDS = {}
     KCD2MP_W137TalkAttempt(2699, "Dude b_semin b_suk")
+    if KCD2MP_W221TalkHeld then KCD2MP_W221TalkHeld("b_suk", "held") end   -- WO-221 B: the DLL's hold ack (the copy is woken on it)
     local suk = KCD2MP.w137.talking["b_suk"]
     check("b: the second speaker (a paused copy) is woken for the conversation", suk ~= nil and suk.twin == true and suk.started == true
         and cmdCount("wh_ai_ResumeNPC b_suk") == 1, table.concat(CMDS, " | "))

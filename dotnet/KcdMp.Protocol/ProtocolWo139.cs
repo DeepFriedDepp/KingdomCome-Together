@@ -71,6 +71,10 @@ public static partial class Protocol
     // ---- host kinds (APPEND-ONLY) ----
     public const byte CrimeHostJudged = 1, CrimeHostStop = 2, CrimeHostPursue = 3, CrimeHostRecord = 4,
                       CrimeHostHorses = 5, CrimeHostCleared = 6, CrimeHostMode = 7, CrimeHostShops = 8,
+                      CrimeHostBagBase = 12,       // WO-221 D.4: "<horse> <part> <parts> <class:units,...|->" -- what the host's horse carries (a join)
+                      CrimeHostBagTake = 13,       // WO-221 D.4: "<tok> <horse> <class> <units>" -- the partner took this from the owner's horse
+                      CrimeHostCorpseLooks = 11,   // WO-221 E.1: "<body>=<12 hex: six zones of blood>,..." -- the wounds of the host's dead bodies
+                      CrimeHostHorseOwners = 10,   // WO-221 D: "<horse>=<owner key, 8 hex>,..." or "-" -- the host's record of whose horse is whose
                       CrimeHostKeepers = 9;   // WO-221 B: "<part> <parts> <name>=<shop db id>,..." -- which shop each keeper near the players keeps
 
     public static string CrimeAskName(byte k) => k switch
@@ -81,7 +85,7 @@ public static partial class Protocol
     public static string CrimeHostName(byte k) => k switch
     {
         CrimeHostJudged => "judged", CrimeHostStop => "stop", CrimeHostPursue => "pursue", CrimeHostRecord => "record",
-        CrimeHostHorses => "horses", CrimeHostCleared => "cleared", CrimeHostMode => "mode", CrimeHostShops => "shops", CrimeHostKeepers => "keepers", _ => $"unknown-{k}",
+        CrimeHostHorses => "horses", CrimeHostCleared => "cleared", CrimeHostMode => "mode", CrimeHostShops => "shops", CrimeHostKeepers => "keepers", CrimeHostHorseOwners => "horse-owners", CrimeHostCorpseLooks => "corpse-looks", CrimeHostBagBase => "bag-base", CrimeHostBagTake => "bag-take", _ => $"unknown-{k}",
     };
 }
 

@@ -27,6 +27,13 @@ constexpr double kLapseS = 45.0;   // the agent renews every 15 s while the conv
 
 enum class Lane { Owner, Rows, Seat, Count };
 
+// Any thread (the engine asks for NPC-state changes on its AI workers): is this request the own schedule's of a copy held for a
+// conversation? `npcWuid` is the asking NPC's id, `requester` the request's own name (a brain's: "/(NPC)<name>/(Base-SUBB)
+// npc_basic_scheduler/(BT)<its job>/..."). True: refused the engine's own way by the caller's gate (wo143.cpp). The copy's other
+// sub-brains -- the one that answers the dialogue among them -- ask as before.
+bool any_held();
+bool refuses_request(uint64_t npcWuid, const char* requester);
+
 // main thread: is this copy in a conversation now (and the switch on)? `lane` counts who stood down.
 bool holds(uint32_t eid, Lane lane);
 bool holds_name(const char* name, Lane lane);

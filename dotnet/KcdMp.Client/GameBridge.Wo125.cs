@@ -148,6 +148,7 @@ public partial class GameBridge
                 SaveBranchMap();
             }
             if (seed is uint) Wo134OnHostWorld(tag, md5, loaded);   // WO-134: the host's chest ledger pairs with this save
+            if (seed is uint) Wo221HorseOnHostWorld(tag, md5, loaded);   // WO-221 D.1: so does the record of whose horse is whose
             if (seed is uint && _sharedWorld && config.IsHosting) _henry.MarkHosted(tag);   // WO-157: this install's own playthrough (the launcher's host flow only)
             Console.WriteLine($"MP-HENRY host: world {tag} ({why}: {SaveDisplay(path)}, md5 {md5[..8]} = the save's footer MD5) player={who.Player} henry={On(who.IsHenry)} branch_depth={BranchNewestFirst().Count}");
             if (changed)

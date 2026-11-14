@@ -302,7 +302,7 @@ public partial class GameBridge
     private async Task Wo216RouteTickAsync()
     {
         if (!W137Host || !W216On("route_replay")) return;
-        var peers = Wo134Peers();
+        var peers = Wo221RouteReaders(Wo134Peers());   // WO-221 F: only the joiners that read the lines; none -> no read, nothing sent
         if (peers.Count == 0) return;
         var r = await _combat.Wo163Async(Protocol.Wo216OpRouteRead, [(byte)Protocol.NpcRouteMaxBodies]);
         Interlocked.Increment(ref _w216RoutePolls);

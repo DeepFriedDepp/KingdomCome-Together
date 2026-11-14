@@ -66,6 +66,11 @@ public static partial class Protocol
                       QuestHostConverse = 6;
     // ---- ask kinds (APPEND-ONLY) ----
     public const byte QuestAskRequest = 1, QuestAskTalk = 2, QuestAskResync = 3, QuestAskOwnHorse = 4;
+    // (5 = QuestAskOutPortReplay, ProtocolWo200.cs) WO-221 D.4: 6 the owner's horse inventory "<horse> <rev> <part> <parts> <class:units,...|->",
+    // 7 the owner's answer to the partner's take "<tok> grant|refuse|busy"
+    public const byte QuestAskHorseBags = 6, QuestAskBagAnswer = 7;
+    // WO-221 F: 8 "1" | "0" -- this joiner reads the host's route lines (its mp_route is on) or does not
+    public const byte QuestAskRouteUse = 8;
 
     public static string QuestHostName(byte k) => k switch
     {

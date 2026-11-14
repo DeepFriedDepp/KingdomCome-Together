@@ -62,6 +62,15 @@ bool probe_owned(uint32_t eid);
 // WO-221: work carried out at the AI update's next entry, on its own thread, before the update runs. false: there is no door on
 // this build (the AI update's hook was refused) and nothing was queued.
 bool ai_post(std::function<void()> fn);
+// WO-221 D.2: one body of this world sent to a point by the engine's own movement request (gait: 0 walk .. 3 sprint), and that
+// request cancelled the task's own way. Posted from the main thread, carried out at the AI update's next entry (its own thread),
+// like the route's orders. Returns the order's number.
+uint32_t order_go(uint32_t eid, const float target[3], uint8_t gait);
+void order_stop(uint32_t eid);
+// WO-221 C (B1d): the body's own movement plan -- the request its brain had queued when it was paused, still in its movement task -- is
+// cancelled the task's own way at the AI update's next entry (its own thread). Main thread; nothing when the task has no request.
+void cancel_own_plan(uint32_t eid);
+uint32_t plan_cancels();
 
 // ---- D.1 (the host): the census -- a tracked NPC that is dormant (its full body empty for 2 s, and no brain running or no physics: an
 // encounter pool's parked wanderer) is not streamed until it wakes. Cached per body (read at most twice a second). Main thread.

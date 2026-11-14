@@ -97,6 +97,10 @@ add_library(KCDMP SHARED
     combat_actions.cpp
     shops.cpp
     talk_hold.cpp
+    body_order.cpp
+    corpse_look.cpp
+    body_drive.cpp
+    holders.cpp
 )
 
 target_include_directories(KCDMP PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

@@ -61,7 +61,7 @@ bool rip_inside(const Suspended* s, uintptr_t a, size_t n) {
 // push rcx/rdx/r8/r9; sub rsp,0x68; save xmm0-3; call cb; restore; add rsp,0x68;
 // pop r9/r8/rdx/rcx; jmp [rip+0] -> trampoline. At entry RSP == 8 (mod 16); four
 // pushes + 0x68 leave it 16-aligned for the call, with 0x20 of shadow space.
-size_t emit_thunk(uint8_t* p, Callback cb, void* tramp, bool gate = false) {
+size_t emit_thunk(uint8_t* p, Callback cb, void* tramp, int gate = 0) {
     uint8_t* s = p;
     auto put = [&](std::initializer_list<uint8_t> b) { for (uint8_t x : b) *p++ = x; };
     auto put64 = [&](uint64_t v) { std::memcpy(p, &v, 8); p += 8; };
@@ -79,11 +79,17 @@ size_t emit_thunk(uint8_t* p, Callback cb, void* tramp, bool gate = false) {
     put({0xF3, 0x0F, 0x6F, 0x5C, 0x24, 0x50});
     put({0x48, 0x83, 0xC4, 0x68});                      // add rsp, 0x68
     put({0x41, 0x59, 0x41, 0x58, 0x5A, 0x59});          // pop r9; pop r8; pop rdx; pop rcx
-    if (gate) {
+    if (gate == 1) {
         // WO-135: the callback said refuse -> return 0 without running the target.
         put({0x84, 0xC0});                              // test al, al
         put({0x74, 0x03});                              // jz +3 (run the original)
         put({0x31, 0xC0});                              // xor eax, eax
+        put({0xC3});                                    // ret
+    } else if (gate == 2) {
+        // WO-221 B: the same, for a target whose own refusal is -1.
+        put({0x84, 0xC0});                              // test al, al
+        put({0x74, 0x04});                              // jz +4 (run the original)
+        put({0x83, 0xC8, 0xFF});                        // or eax, -1
         put({0xC3});                                    // ret
     }
     put({0xFF, 0x25, 0, 0, 0, 0}); put64(reinterpret_cast<uint64_t>(tramp));
@@ -135,19 +141,23 @@ int hook_of_page(uintptr_t addr) {
     return -1;
 }
 
-bool install_impl(void* target, const uint8_t* expect, size_t len, Callback cb, const char** why, bool gate, void* detour = nullptr,
+bool install_impl(void* target, const uint8_t* expect, size_t len, Callback cb, const char** why, int gate, void* detour = nullptr,
                   void** original = nullptr);
 
 bool install(void* target, const uint8_t* expect, size_t len, Callback cb, const char** why) {
-    return install_impl(target, expect, len, cb, why, false);
+    return install_impl(target, expect, len, cb, why, 0);
 }
 
 bool install_gate(void* target, const uint8_t* expect, size_t len, GateCallback cb, const char** why) {
-    return install_impl(target, expect, len, reinterpret_cast<Callback>(cb), why, true);
+    return install_impl(target, expect, len, reinterpret_cast<Callback>(cb), why, 1);
+}
+
+bool install_gate_neg(void* target, const uint8_t* expect, size_t len, GateCallback cb, const char** why) {
+    return install_impl(target, expect, len, reinterpret_cast<Callback>(cb), why, 2);
 }
 
 bool install_gate4(void* target, const uint8_t* expect, size_t len, GateCallback4 cb, const char** why) {
-    return install_impl(target, expect, len, reinterpret_cast<Callback>(cb), why, true);
+    return install_impl(target, expect, len, reinterpret_cast<Callback>(cb), why, 1);
 }
 
 // Copies up to `n` bytes of live code into `out`; returns how many were readable.
@@ -162,7 +172,7 @@ static size_t read_code(const uint8_t* src, uint8_t* out, size_t n) {
 // boundary (per thread: callers log `why` right after the call).
 static thread_local char t_why[160];
 
-bool install_impl(void* target, const uint8_t* expect, size_t len, Callback cb, const char** why, bool gate, void* detour, void** original) {
+bool install_impl(void* target, const uint8_t* expect, size_t len, Callback cb, const char** why, int gate, void* detour, void** original) {
     const char* dummy = nullptr;
     if (!why) why = &dummy;
     if (!target || !expect || (!cb && !detour) || (detour && !original) || len < 14 || len > 32) { *why = "bad arguments"; return false; }

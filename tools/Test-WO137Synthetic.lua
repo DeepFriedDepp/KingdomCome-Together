@@ -254,6 +254,7 @@ do -- (c) talking (joiner)
     check("c: the copy is paused (a puppet)", cmdCount("wh_ai_PauseNPC tzel_olbram") == 1)
     local mark = #LOG
     BasicAIActions.OnTalk(e, player, 0)
+    if KCD2MP_W221TalkHeld then KCD2MP_W221TalkHeld("tzel_olbram", "held") end   -- WO-221 B: the DLL's hold ack (the copy is woken on it)
     check("c: Talk on a copy: its brain back for the conversation", cmdCount("wh_ai_ResumeNPC tzel_olbram") == 1 and KCD2MP._npcPaused["tzel_olbram"] == nil)
     -- WO-166 T3 (mp_talk_resume_first, default on): a press on a paused copy goes on 200 ms after the resume
     local due = TIMERS; TIMERS = {}
@@ -294,6 +295,7 @@ do -- (c) talking (joiner)
     NOW = NOW + 3.5   -- WO-164 T2: a press under 3 s after a talk to the same copy ended is not passed on
     local markNs = #LOG
     BasicAIActions.OnTalk(e, player, 0)
+    if KCD2MP_W221TalkHeld then KCD2MP_W221TalkHeld("tzel_olbram", "held") end   -- WO-221 B: the DLL's hold ack (the copy is woken on it)
     NOW = NOW + 10; KCD2MP_W137Session(false, true, true)
     check("c: not started after 10 s: still waiting", KCD2MP.w137.talking["tzel_olbram"] ~= nil)
     NOW = NOW + 16; KCD2MP_W137Session(false, true, true)
@@ -339,6 +341,7 @@ do -- (c) talking (joiner)
     CMDS = {}
     if KCD2MP.w167 then KCD2MP.w167.talkFallback = true; KCD2MP.w167.talk.lastNpc = {} end
     KCD2MP_W137TalkRequest(400)
+    if KCD2MP_W221TalkHeld then KCD2MP_W221TalkHeld("tzel_olbram", "held") end   -- WO-221 B: the DLL's hold ack (the copy is woken on it)
     check("c: a request by another path: the copy in reach is freed", cmdCount("wh_ai_ResumeNPC tzel_olbram") == 1
         and KCD2MP.w137.talking["tzel_olbram"] ~= nil and KCD2MP.w137.talking["tzel_olbram"].id == 400)
     if KCD2MP.w167 then KCD2MP.w167.talkFallback = false end
@@ -379,6 +382,7 @@ do -- (c) talking (joiner)
     KCD2MP_ApplyNpcState("tzel_maid", 1, -1, 0, 0, 100, 0, 0, 1, 1000)
     KCD2MP_W137Session(false, true, true)
     BasicAIActions.OnChat(e2, player, 0)
+    if KCD2MP_W221TalkHeld then KCD2MP_W221TalkHeld("tzel_maid", "held") end   -- WO-221 B: the DLL's hold ack (the copy is woken on it)
     check("c: a chat frees the copy too", KCD2MP.w137.talking["tzel_maid"] ~= nil and KCD2MP.w137.talking["tzel_maid"].via == "OnChat")
     NOW = NOW + 11; CMDS = {}
     KCD2MP_W137Backstop()

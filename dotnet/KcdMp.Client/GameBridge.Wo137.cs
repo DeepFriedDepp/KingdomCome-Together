@@ -409,6 +409,17 @@ public partial class GameBridge
                     Interlocked.Increment(ref _w137TalksIn);
                     Wo137Post(() => Wo137HostTalkAsync(src, m.Tok, on, npc));
                     return;
+                case Protocol.QuestAskRouteUse when m.Text is "1" or "0":   // WO-221 F: does this joiner read route lines
+                    Wo221OnRouteUse(src, m.Text == "1");
+                    return;
+                case Protocol.QuestAskHorseBags:   // WO-221 D.4: the owner's horse inventory
+                case Protocol.QuestAskBagAnswer:   //             his answer to the partner's take
+                    Wo221OnBagAsk(src, m.Kind, m.Tok, m.Text);
+                    return;
+                case Protocol.QuestAskOwnHorse when W221OwnHorse && (m.Text == "-" || Wo137Text.IsNpc(m.Text)):
+                    // WO-221 D.1: the word goes to the record (its token is the joiner's key); taken only after a purchase of his ran here
+                    Wo221OnHorseClaim(src, m.Tok, m.Text);
+                    return;
                 case Protocol.QuestAskOwnHorse when Wo137Text.IsNpc(m.Text):
                     // WO-160 6: the joiner's own horse (bought, bonded): this world marks it his, and fetches it when he whistles
                     Console.WriteLine($"MP-WO160 host: ghost {src}'s own horse is {m.Text} -- marked in this world (fetched to his avatar when he whistles)");
@@ -835,6 +846,7 @@ public partial class GameBridge
                 if (f.Length >= 2 && f[0] is "on" or "off" && Wo137Text.IsNpc(f[1])) Wo141OnTalk(f[0] == "on", f[1]);
                 return;
             case "w160_ownhorse":  // WO-160 6: <horse> -- this joiner's own horse (bought, bonded): the host is told
+                if (f.Length >= 1 && Wo137Text.IsNpc(f[0]) && W137Joiner && W221OwnHorse) { Wo221SendHorseWord(f[0]); return; }   // WO-221 D.1
                 if (f.Length >= 1 && Wo137Text.IsNpc(f[0]) && W137Joiner)
                 {
                     uint htok = Interlocked.Increment(ref _w137Tok);

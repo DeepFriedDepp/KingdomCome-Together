@@ -56,6 +56,8 @@ using GateCallback = bool (*)(void* a1, void* a2);
 bool install_gate(void* target, const uint8_t* expect, size_t len, GateCallback cb, const char** why);
 // WO-138: the same gate for a callback that reads the first FOUR arguments --
 // the thunk calls `cb` with rcx/rdx/r8/r9 exactly as they were at the entry.
+// WO-221 B: the same gate for a function whose own refusal value is -1 (an int): a refused call returns -1 to its caller.
+bool install_gate_neg(void* target, const uint8_t* expect, size_t len, GateCallback cb, const char** why);
 using GateCallback4 = bool (*)(void* a1, void* a2, void* a3, void* a4);
 bool install_gate4(void* target, const uint8_t* expect, size_t len, GateCallback4 cb, const char** why);
 

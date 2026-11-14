@@ -210,6 +210,7 @@ public partial class GameBridge
     }
 
     /// <summary>A capture's node is one of this player's conversations, running or ended within 3 s.</summary>
+    private long _w221SiblingOwn;
     private bool Wo200IsOwnTalk(string path)
     {
         long now = W200Now();
@@ -218,6 +219,10 @@ public partial class GameBridge
             if (t.EndMs != 0 && now - t.EndMs > 3000) continue;
             if (now - t.StartMs > 900_000) continue;
             foreach (var n in t.Names) if (Wo200Rules.PathMatchesTalk(path, n)) return true;
+            // WO-221 D.1: a dialogue the conversation went on into (a sibling in the same quest module: the groom's "obchod")
+            if (W221OwnHorse)
+                foreach (var n in t.Names)
+                    if (Wo221Rules.SameQuestModule(path, n)) { Interlocked.Increment(ref _w221SiblingOwn); return true; }
         }
         return false;
     }
@@ -280,6 +285,9 @@ public partial class GameBridge
                 Console.WriteLine($"MP-W200 closure {closure:X8} meets {b} ({a})");
                 return;
             case 5:   // the host ran a replay (its own log)
+                return;
+            case 6:   // WO-221 D.1: the gate passed a ReplacePlayerHorse (or the Kill after it) through
+                Wo221OnHorsePass(closure, a, b);
                 return;
         }
     }
@@ -401,6 +409,7 @@ public partial class GameBridge
             Console.WriteLine($"MP-W200 host: a replay from ghost {src} refused (malformed)");
             return;
         }
+        Wo221NoteReplay(src, closure);   // WO-221 D.1: a horse node the gate passes in this closure is this joiner's
         Interlocked.Increment(ref _w200ReplaysIn);
         if (!W200("s1_replay"))
         {

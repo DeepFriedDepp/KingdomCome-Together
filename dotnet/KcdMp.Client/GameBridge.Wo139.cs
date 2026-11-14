@@ -509,6 +509,16 @@ public partial class GameBridge
                         await ExecLuaAsync($"if KCD2MP_W139LegalHorses then KCD2MP_W139LegalHorses(\"{csv}\") end");
                     }
                     return;
+                case Protocol.CrimeHostBagBase:   // WO-221 D.4
+                case Protocol.CrimeHostBagTake:
+                    Wo221OnBagText(m.Kind, m.Text);
+                    return;
+                case Protocol.CrimeHostCorpseLooks:   // WO-221 E.1
+                    Wo221OnCorpseLooksText(m.Text);
+                    return;
+                case Protocol.CrimeHostHorseOwners:   // WO-221 D
+                    Wo221OnHorseOwnersText(m.Text);
+                    return;
                 case Protocol.CrimeHostKeepers:   // WO-221 B
                     Wo221OnKeepersText(m.Text);
                     return;

@@ -7489,6 +7489,9 @@ function KCD2MP_W137Session(host, joiner, active)
         if active and (host or joiner) and KCD2MP_W167FtListen then pcall(KCD2MP_W167FtListen) end   -- WO-167 FT1/FT2: the map's picks
     end
     pcall(KCD2MP_W160OwnHorseTick)   -- WO-160 6: a joiner's own horse is told to the host
+    if host and active and KCD2MP_W221CallTick then pcall(KCD2MP_W221CallTick) end   -- WO-221 D.2: a called horse on its way
+    if host and active and KCD2MP_W221HostBagsTick then pcall(KCD2MP_W221HostBagsTick) end   -- WO-221 D.4: a joiner's horse carries what his copy carries
+    if joiner and active and KCD2MP_W221BagsTick then pcall(KCD2MP_W221BagBaseRetry); pcall(KCD2MP_W221BagsTick) end   -- WO-221 D.4: the owner's copy speaks
 end
 
 -- The 8 ms draw loop: the agent went away without telling (a crash) -> give back.
@@ -7606,7 +7609,11 @@ function KCD2MP_W137TalkResume(name, via)
     w.talking[name] = t
     KCD2MP_EmitEvent("w164_talk", "ask " .. name .. " " .. tostring(via) .. " " .. (wasPaused and "1" or "0"))   -- WO-164 T0
     if KCD2MP_W157TalkFree then KCD2MP_W157TalkFree(name) end   -- WO-157 3b.4: the copy free to talk (and to trade)
-    if wasPaused then mp_wo102_resume(name, "w137-talk") end
+    if wasPaused then
+        -- WO-221 B (mp_talk_hold): woken once the DLL holds its schedule
+        if KCD2MP_W221On and KCD2MP_W221On("talk_hold") and KCD2MP_W221ResumeHeld then KCD2MP_W221ResumeHeld(name)
+        else mp_wo102_resume(name, "w137-talk") end
+    end
     w.stats.talks = w.stats.talks + 1
     -- WO-144 1.3: nothing is held on the key press. The host holds its NPC only once this
     -- conversation has really started (KCD2MP_W137TalkAttempt, the engine's own start line):
@@ -16362,7 +16369,26 @@ local function mp_item_inv_counts()
         end
         counts = c
     end)
-    return counts
+    -- WO-221 E.3 (mp_horse_drop): an item dropped out of this player's own horse's inventory left no trace here -- the detector
+    -- below wants the class's count to have gone DOWN, and it counted the player's own inventory only (the testers: the item lay on
+    -- the ground for the one who dropped it and for nobody else). The horse's inventory counts too: a move between the two leaves the
+    -- sum as it was, a drop out of either lowers it. The horse coming or going (it streams) is a baseline tick, never a drop.
+    local horseKey = "-"
+    if counts and KCD2MP_W221On and KCD2MP_W221On("horse_drop") then
+        pcall(function()
+            if not (player.player and player.player.GetHorseId) then return end
+            local hid = player.player:GetHorseId()
+            local h = hid and hid ~= 0 and System.GetEntity(hid) or nil
+            if not (h and h.class == "Horse" and h.inventory) then return end
+            local t = h.inventory:GetInventoryTable()
+            for i = 1, #t do
+                local it = ItemManager.GetItem(t[i])
+                if it and it.class then counts[it.class] = (counts[it.class] or 0) + (it.amount or 1) end
+            end
+            horseKey = tostring(h.id)
+        end)
+    end
+    return counts, horseKey
 end
 
 local function mp_item_tracked_count()
@@ -16394,8 +16420,9 @@ local function mp_item_world_reloaded()
 end
 
 local function mp_item_detect(pp)
-    local counts = mp_item_inv_counts()
+    local counts, horseKey = mp_item_inv_counts()
     local prev = KCD2MP._itemInvCounts
+    if horseKey ~= (KCD2MP._itemHorseKey or "-") then prev = nil; KCD2MP._itemHorseKey = horseKey end   -- WO-221 E.3: a baseline tick
     if counts then KCD2MP._itemInvCounts = counts end
     local ents = System.GetEntitiesInSphere(pp, KCD2MP.itemSync.dropRadius) or {}
     for _, e in ipairs(ents) do
@@ -21632,7 +21659,11 @@ KCD2MP.w160.horseStats = KCD2MP.w160.horseStats or { told = 0, marked = 0, fetch
 function KCD2MP_W160OwnHorseTick()
     local w = KCD2MP.w160
     if not w.horseFetch then return end
-    if not (KCD2MP.w137 and KCD2MP.w137.joiner and KCD2MP.w137.active) then return end
+    if not (KCD2MP.w137 and KCD2MP.w137.joiner and KCD2MP.w137.active) then
+        if W221 and W221.horse then W221.horse.mine = nil; W221.horse.seen = nil end   -- WO-221 D.1: a new join starts from the host's record
+        w.ownHorse.name = nil
+        return
+    end
     local o = w.ownHorse
     local now = os.clock()
     if (now - o.at) < 5.0 then return end
@@ -21646,8 +21677,25 @@ function KCD2MP_W160OwnHorseTick()
         if e and e.class == "Horse" then pcall(function() name = e:GetName() end) end
     end
     if name and (not string.find(name, "^[%w_]+$") or string.find(name, "^kcd2mp_")) then name = nil end
-    if name == o.name then return end
+    if name == o.name then
+        -- WO-221 D.1: this game's own "player's horse" is what the host's record says (a refused word, a join, a reload)
+        if KCD2MP_W221HorseKeep then o.name = KCD2MP_W221HorseKeep(name, o.changedAt) end
+        if W221 and W221.horse and W221.horse.mine ~= nil then W221.horse.seen = true end   -- from here on a change is this player's own doing
+        return
+    end
+    -- WO-221 D.1: a word goes to the host only for a change of this game's own horse AFTER the host's record was told here (the
+    -- horse this game holds right after a join or a reload is the save's, not a purchase: the record corrects it)
+    if KCD2MP_W221On and KCD2MP_W221On("own_horse") and W221 and W221.horse then
+        if W221.horse.mine == nil then return end
+        if not W221.horse.seen then
+            W221.horse.seen = true
+            o.name = name
+            o.changedAt = -1e9   -- no grace: the record decides at the next tick
+            return
+        end
+    end
     o.name = name
+    o.changedAt = now
     if not name then
         mp_log("WO160-HORSE own: this player has no horse of his own now")
         return
@@ -21939,6 +21987,11 @@ function KCD2MP_W164Frame()
                and not (KCD2MP_W167RetryHeld and KCD2MP_W167RetryHeld(name, t)) then   -- WO-167 T1: never within 3 s of a dialogue's end
                 KCD2MP_W164Retry(name, t)
             end
+            -- WO-221 B (mp_talk_force): the retry was not taken either -> the conversation is forced, once
+            if t.w164Retried and not t.started and not t.sawDialog and not t.w221Forced and (now - t.since) > W164_RETRY_S
+               and t.via ~= "request-fallback" and t.via ~= "forced" and KCD2MP_W221TalkForce then
+                KCD2MP_W221TalkForce(name, t)
+            end
         end
     end
     if KCD2MP_W167FocusTick then pcall(KCD2MP_W167FocusTick, now) end   -- WO-167 T3: the copy stood in front of (NOHOOK)
@@ -22226,10 +22279,15 @@ function KCD2MP_W166TalkPress(npc, user, slot, orig, via)
     pcall(function() KCD2MP_W164NotePress(name, orig, npc, user, slot) end)
     w.talk.stats.resumeFirst = w.talk.stats.resumeFirst + 1
     mp_log(string.format("WO166-TALK resume-first npc=%s via=%s delay_ms=%d -- the copy is resumed before the request is made", name, tostring(via), W166_RESUME_DELAY_MS))
-    Script.SetTimer(W166_RESUME_DELAY_MS, function()
+    local tries = 0
+    local function press()
+        -- WO-221 B: the press waits for the copy to be woken (it is woken once the DLL holds its schedule), then the usual delay
+        tries = tries + 1
+        if tries <= 4 and KCD2MP_W221ResumePending and KCD2MP_W221ResumePending(name) then Script.SetTimer(150, press); return end
         local ok, err = pcall(orig, npc, user, slot)
         if not ok then mp_log("WO166-TALK resume-first npc=" .. name .. " press failed: " .. tostring(err)) end
-    end)
+    end
+    Script.SetTimer(W166_RESUME_DELAY_MS, press)
     return true
 end
 
@@ -25763,6 +25821,8 @@ end
 function KCD2MP_W160Whistle(src)
     local w = KCD2MP.w160
     if not w.horseFetch then return false end
+    -- WO-221 D.2 (mp_own_horse): the horse comes by its own movement (KCD2MP_W221Call); the placement below is 0.65.0's
+    if KCD2MP_W221On and KCD2MP_W221On("own_horse") and KCD2MP_W221Call then return KCD2MP_W221Call(src) end
     src = tostring(src)
     local name = w.peerHorses[src]
     if not name then return false end
@@ -35254,7 +35314,8 @@ do
     W221.on = W221.on or {}
     W221.NAMES = {
         combat_action_end = "mp_combat_action_end", talk_hold = "mp_talk_hold", drive = "mp_drive", holders = "mp_holders",
-        shop_keeper = "mp_shop_keeper",
+        shop_keeper = "mp_shop_keeper", own_horse = "mp_own_horse", talk_force = "mp_talk_force",
+        corpse_look = "mp_corpse_look", horse_drop = "mp_horse_drop", saddlebags = "mp_saddlebags", route_quiet = "mp_route_quiet",
     }
     W221.HELP = {
         combat_action_end = "A: (both) no combat animation of ours outlives its body's combat part (the joiner's fight crash)",
@@ -35262,6 +35323,12 @@ do
         drive = "C: (joiner) a walking person is moved by the game's own movement, not placed: the step and the feet are the game's",
         holders = "C.3: (joiner) one table says who holds a body: the driver, the writer, a seat, an activity, a fall, a mount, a one-shot",
         shop_keeper = "B: (both) a shopkeeper's copy keeps the same shop as the host's keeper, so the joiner's Trade opens its shop",
+        own_horse = "D: (both) each player owns their own horse: the host's world keeps the record, a purchase is the buyer's only",
+        corpse_look = "E.1: (both) a dead body the joiner did not see die has the host body's wounds",
+        horse_drop = "E.3: (both) an item dropped out of your own horse's inventory is a drop for both players, like one out of your own",
+        saddlebags = "D.4: (both) a horse's inventory is its owner's: it is the same in both games and kept by the host's saves; the partner may take from it",
+        route_quiet = "F: (host) the NPCs' route lines are read and sent only for joiners whose mp_route is on; (joiner) says so every 10 s",
+        talk_force = "B: (joiner) a talk the person never answers (the request and its retry time out) is started the game's forced way",
     }
     function KCD2MP_W221On(name)
         local v = W221.on[tostring(name)]
@@ -35328,6 +35395,589 @@ do
             end
         end
         KCD2MP_EmitEvent("w221_keepers", #out > 0 and table.concat(out, ",") or "-")
+        return true
+    end
+    -- D (mp_own_horse): a horse per player. The game has one "player's horse"; the host's world keeps the record of whose horse is whose
+    -- (the agent), and each game's own "player's horse" is made what the record says for its player.
+    W221.horse = W221.horse or { mine = nil, fixes = 0, waits = 0 }
+    -- host (asked by the agent every 10 s): this game's own player's horse, by name
+    function KCD2MP_W221HostOwnHorse()
+        local name = nil
+        pcall(function()
+            local id = player.player:GetHorseId()
+            local e = id and id ~= 0 and System.GetEntity(id) or nil
+            if e and e.class == "Horse" then name = e:GetName() end
+        end)
+        if name and not string.find(name, "^[%w_]+$") then name = nil end
+        KCD2MP_EmitEvent("w221_hosthorse", name or "-")
+        return true
+    end
+    -- host (the agent, on a change of the record): "<ghost>=<horse>,..." -- the horses of the joiners in this world (the whistle's
+    -- and the call's list: WO-160's marks are the record's now)
+    function KCD2MP_W221PeerHorses(csv)
+        local w = KCD2MP.w160
+        if not w then return false end
+        local was = w.peerHorses or {}
+        w.peerHorses = {}
+        local n = 0
+        for peer, horse in string.gmatch(tostring(csv or ""), "(%d+)=([%w_]+)") do w.peerHorses[peer] = horse; n = n + 1 end
+        -- a horse the record no longer names is the world's again: its own brain back
+        W221.waiting = W221.waiting or {}
+        for _, old in pairs(was) do
+            local still = false
+            for _, h in pairs(w.peerHorses) do if h == old then still = true end end
+            if not still and W221.waiting[old] then
+                W221.waiting[old] = nil
+                pcall(function() System.ExecuteCommand("wh_ai_ResumeNPC " .. old) end)
+                mp_log("WO221-HORSE host: " .. old .. " is no joiner's horse any more -- its own brain again")
+            end
+        end
+        mp_log(string.format("WO221-HORSE host: the record names %d joiner horse(s) in this world: %s", n, n > 0 and tostring(csv) or "none"))
+        return true
+    end
+    -- joiner (the agent, when the host's record says so): this player's own horse by name, "" = none
+    function KCD2MP_W221MyHorse(name)
+        name = tostring(name or "")
+        if name ~= "" and not string.find(name, "^[%w_]+$") then return false end
+        local wasKnown = W221.horse.mine ~= nil
+        W221.horse.mine = name
+        if KCD2MP_W221BagsOwner then pcall(KCD2MP_W221BagsOwner, name, wasKnown) end
+        mp_log("WO221-HORSE joiner: the host's record says this player's own horse is " .. (name ~= "" and name or "none"))
+        return true
+    end
+    -- joiner (WO-160's 5 s tick, after it read this game's own "player's horse"): made what the record says. A horse this game
+    -- has just made its player's (a purchase: the word is on its way to the host) is left alone for 20 s; nothing is changed
+    -- while the player rides. Returns the name this game holds after it (the tick's own memory).
+    function KCD2MP_W221HorseKeep(localName, changedAt)
+        local h = W221.horse
+        if not KCD2MP_W221On("own_horse") or h.mine == nil then return localName end
+        local rec = h.mine ~= "" and h.mine or nil
+        if rec == localName then return localName end
+        if changedAt and (os.clock() - changedAt) < 20.0 then h.waits = h.waits + 1; return localName end
+        local riding = false
+        pcall(function() riding = player.human:IsMounted() == true end)
+        if riding then h.waits = h.waits + 1; return localName end
+        if not rec then
+            local ok = pcall(function() player.player:ClearPlayerHorse() end)
+            h.fixes = h.fixes + 1
+            mp_log(string.format("WO221-HORSE joiner: this game held %s as its player's horse, the record says none -> cleared (%s)", tostring(localName), ok and "ok" or "the call failed"))
+            return ok and nil or localName
+        end
+        local e = nil
+        pcall(function() e = System.GetEntityByName(rec) end)
+        if not (e and e.class == "Horse") then
+            if (h.notHereAt or -1e9) < os.clock() - 60 then
+                h.notHereAt = os.clock()
+                mp_log("WO221-HORSE joiner: the record's horse " .. rec .. " is not in this game now (far from this player): set when it is")
+            end
+            return localName
+        end
+        local ok = pcall(function() player.player:SetPlayerHorse(e.id) end)
+        h.fixes = h.fixes + 1
+        mp_log(string.format("WO221-HORSE joiner: this game held %s as its player's horse, the record says %s -> set (%s)", tostring(localName), rec, ok and "ok" or "the call failed"))
+        return ok and rec or localName
+    end
+    -- D.2 (host): a joiner's whistle calls HIS horse, by the horse's own movement. The game's own recipe for its one player's horse
+    -- (interrupt_animal_moveToPlayer): a move to the caller -- a walk under 10 m, faster under 20 m, the fastest beyond; it stops 3 to
+    -- 4 m short; the destination is read again every 2 s -- and only when it has not arrived after 15 s is it put down out of sight
+    -- behind the caller, from where it comes on. Here the move is the engine's own movement request (the DLL, op 195), asked every
+    -- 2 s; the horse's brain is paused for the trip (its own plans would cancel the request) and given back at its end.
+    --   WO221-CALL ghost=<n> horse=<name> start|order|teleport|end why=<w>
+    W221.calls = W221.calls or {}
+    W221.callStats = W221.callStats or { started = 0, arrived = 0, teleports = 0, gaveUp = 0, refused = 0, orders = 0 }
+    local function w221_planar(a, b) return math.sqrt((a.x - b.x) ^ 2 + (a.y - b.y) ^ 2) end
+    local function w221_figure(src)
+        local g = KCD2MP.ghosts and (KCD2MP.ghosts[src] or KCD2MP.ghosts[tonumber(src) or -1])
+        return g and g.entity
+    end
+    local function w221_ridden(name, e)
+        if KCD2MP_W151HorseRidden and KCD2MP_W151HorseRidden(name) then return true end
+        local rider = false
+        pcall(function() if e.horse and e.horse.HasRider then rider = e.horse:HasRider() == true end end)
+        return rider
+    end
+    function KCD2MP_W221Call(src)
+        src = tostring(src)
+        local st = W221.callStats
+        local name = KCD2MP.w160 and KCD2MP.w160.peerHorses[src]
+        if not name then
+            st.refused = st.refused + 1
+            if st.refused <= 20 then mp_log("WO221-CALL ghost=" .. src .. " whistled: the record names no horse of his in this world -- nothing is called") end
+            return false
+        end
+        local c = W221.calls[src]
+        if c and c.horse == name then return true end   -- already on its way
+        local e = nil
+        pcall(function() e = System.GetEntityByName(name) end)
+        local av = w221_figure(src)
+        local why = (not e) and "the horse is not in the host's world now" or (not av) and "his figure is not here" or w221_ridden(name, e) and "it has a rider" or nil
+        if why then
+            st.refused = st.refused + 1
+            mp_log(string.format("WO221-CALL ghost=%s horse=%s refused: %s", src, name, why))
+            return false
+        end
+        local d = 0
+        pcall(function() d = w221_planar(av:GetWorldPos(), e:GetWorldPos()) end)
+        if d <= 4.5 then
+            mp_log(string.format("WO221-CALL ghost=%s horse=%s is %.1f m from his figure already -- left where it is", src, name, d))
+            return true
+        end
+        local now = os.clock()
+        W221.calls[src] = { horse = name, t0 = now, legAt = now, orderAt = -1e9, teleports = 0, orders = 0, d0 = d }
+        st.started = st.started + 1
+        pcall(function() System.ExecuteCommand("wh_ai_PauseNPC " .. name) end)
+        mp_log(string.format("WO221-CALL ghost=%s horse=%s start: %.0f m from his figure -- it comes by its own movement (its brain paused for the trip)", src, name, d))
+        KCD2MP_W221CallTick()
+        return true
+    end
+    -- D.2 (host, once a second): a joiner's horse waits where it is. In the game alone the player's horse waits for him; on the
+    -- host a joiner's horse is not the game's player horse, and with its own brain it walks home to the trader's stable (the
+    -- bench: within a minute of the call's end). So its brain stays paused in the host's world -- while it waits, while its owner
+    -- rides it (the DLL writes a ridden horse from its rider's stream) and for a call's trip; paused again after a load (a new body).
+    function KCD2MP_W221HorsesWait()
+        local w = KCD2MP.w160
+        if not (w and w.peerHorses) or not KCD2MP_W221On("own_horse") then return end
+        W221.waiting = W221.waiting or {}
+        for _, name in pairs(w.peerHorses) do
+            local e = nil
+            pcall(function() e = System.GetEntityByName(name) end)
+            if e and e.class == "Horse" and W221.waiting[name] ~= tostring(e.id) then
+                W221.waiting[name] = tostring(e.id)
+                pcall(function() System.ExecuteCommand("wh_ai_PauseNPC " .. name) end)
+                mp_log("WO221-HORSE host: " .. name .. " waits where it is for its owner (its brain paused in this world)")
+            end
+        end
+    end
+    function KCD2MP_W221CallTick()
+        pcall(KCD2MP_W221HorsesWait)
+        if next(W221.calls) == nil then return end
+        local now = os.clock()
+        local st = W221.callStats
+        for src, c in pairs(W221.calls) do
+            local e, av, why = nil, w221_figure(src), nil
+            pcall(function() e = System.GetEntityByName(c.horse) end)
+            local ap, hp = nil, nil
+            if e and av then pcall(function() ap = av:GetWorldPos(); hp = e:GetWorldPos() end) end
+            if not (ap and hp) then why = "the horse or his figure left this world"
+            elseif not KCD2MP_W221On("own_horse") then why = "mp_own_horse off"
+            elseif w221_ridden(c.horse, e) then why = "it has a rider"
+            else
+                local d = w221_planar(ap, hp)
+                if d <= 4.5 then
+                    why = string.format("arrived (%.1f m from his figure, %.1f s, %d order(s), %d teleport(s))", d, now - c.t0, c.orders, c.teleports)
+                    st.arrived = st.arrived + 1
+                elseif (now - c.t0) > 60.0 then
+                    why = string.format("not there after 60 s (%.0f m off)", d)
+                    st.gaveUp = st.gaveUp + 1
+                elseif (now - c.legAt) >= 15.0 then
+                    -- the game's own rule: not arrived after 15 s -> put down behind the caller, out of his sight, and it comes on
+                    local back = 25.0
+                    pcall(function() local v = tonumber(System.GetCVar("wh_horse_WhistleTeleportBackDistance")); if v and v > 5 and v < 200 then back = v end end)
+                    local yaw = 0
+                    pcall(function() local a = av:GetWorldAngles(); yaw = a and a.z or 0 end)
+                    local px, py = ap.x + math.sin(yaw) * back, ap.y - math.cos(yaw) * back
+                    local pz = ap.z
+                    pcall(function() pz = System.GetTerrainElevation({ x = px, y = py, z = ap.z }) or ap.z end)
+                    if math.abs(pz - ap.z) > 8.0 then pz = ap.z end
+                    pcall(function() e:SetWorldPos({ x = px, y = py, z = pz + 0.3 }); e:SetWorldAngles({ x = 0, y = 0, z = yaw }) end)
+                    c.legAt = now; c.orderAt = -1e9; c.teleports = c.teleports + 1
+                    st.teleports = st.teleports + 1
+                    mp_log(string.format("WO221-CALL ghost=%s horse=%s teleport: still %.0f m off after 15 s -> put down %.0f m behind his figure (the game's own rule), it comes on", src, c.horse, d, back))
+                elseif (now - c.orderAt) >= 2.0 then
+                    local gait = d < 10.0 and 0 or (d < 20.0 and 2 or 3)
+                    local k = 3.0 / math.max(d, 0.01)   -- 3 m short of him, on the horse's side
+                    KCD2MP_EmitEvent("w221_go", string.format("%s %.2f %.2f %.2f %d", c.horse, ap.x + (hp.x - ap.x) * k, ap.y + (hp.y - ap.y) * k, ap.z, gait))
+                    c.orderAt = now; c.orders = c.orders + 1
+                    st.orders = st.orders + 1
+                    if c.orders <= 3 then mp_log(string.format("WO221-CALL ghost=%s horse=%s order: %.0f m off, gait %d", src, c.horse, d, gait)) end
+                end
+            end
+            if why then
+                KCD2MP_EmitEvent("w221_stop", c.horse)
+                mp_log(string.format("WO221-CALL ghost=%s horse=%s end why=%s -- it waits there", src, c.horse, why))
+                W221.calls[src] = nil
+            end
+        end
+    end
+    -- B (mp_talk_force, joiner): a talk the copy never takes. A copy woken for a talk sometimes does not take the player's request at
+    -- all -- its own brain is in the middle of something it does not leave (the bench: the inn's second maid, 2 of 12 talks, the
+    -- request and WO-164's one retry both timed out) -- and the player stands there for 20 s. When the retry has not started 4 s on,
+    -- the conversation is started the way the game starts one that must happen (DialogModule.ForceDialog, the game's own call): the
+    -- same dialogue with the same choices, the trade among them, without waiting for the copy's brain.
+    --   WO221-TALK force npc=<n> ok=<bool> -- ...
+    W221.forceStats = W221.forceStats or { forced = 0, failed = 0 }
+    function KCD2MP_W221TalkForce(name, t)
+        if not KCD2MP_W221On("talk_force") then return false end
+        t.w221Forced = true
+        local e = nil
+        pcall(function() e = System.GetEntityByName(name) end)
+        if not (e and player and DialogModule and DialogModule.ForceDialog) then
+            W221.forceStats.failed = W221.forceStats.failed + 1
+            mp_log("WO221-TALK force npc=" .. tostring(name) .. " not possible here (no body, or this build has no ForceDialog)")
+            return false
+        end
+        -- this player's open request goes first (the soul's own way, as the retry does): the forced dialogue is the one that runs
+        pcall(function()
+            local s = player.soul
+            if s and s.RestrictDialog then s:RestrictDialog(true); s:RestrictDialog(false) end
+        end)
+        t.id = nil
+        t.since = os.clock()   -- the talk's own start window begins again
+        local ok = pcall(DialogModule.ForceDialog, e.id, player.id)
+        if ok then W221.forceStats.forced = W221.forceStats.forced + 1 else W221.forceStats.failed = W221.forceStats.failed + 1 end
+        mp_log(string.format("WO221-TALK force npc=%s ok=%s -- the request and its retry were not taken: the conversation is started the game's own forced way [n=%d]",
+            tostring(name), tostring(ok), W221.forceStats.forced))
+        KCD2MP_EmitEvent("w164_talk", "retry " .. tostring(name) .. " forced=" .. (ok and "ok" or "err"))
+        return ok
+    end
+    -- B (mp_talk_hold, joiner): a copy is woken for a talk only once the DLL holds its schedule (the agent's word, KCD2MP_W221TalkHeld),
+    -- or 400 ms on -- woken first, its scheduler asked for its job's animation before the hold was there and the dialogue waited behind
+    -- that request for good.
+    W221.resumeWait = W221.resumeWait or {}
+    function KCD2MP_W221ResumeHeld(name)
+        W221.resumeWait[name] = os.clock()
+        Script.SetTimer(400, function() KCD2MP_W221TalkHeld(name, "timeout") end)
+    end
+    function KCD2MP_W221ResumePending(name) return W221.resumeWait[name] ~= nil end
+    function KCD2MP_W221TalkHeld(name, how)
+        name = tostring(name)
+        local at = W221.resumeWait[name]
+        if not at then return false end
+        W221.resumeWait[name] = nil
+        local talking = KCD2MP.w137 and KCD2MP.w137.talking[name] ~= nil
+        if talking and KCD2MP._npcPaused[name] ~= nil then mp_wo102_resume(name, "w137-talk") end
+        mp_log(string.format("WO221-TALK npc=%s woken %.0f ms after the ask (%s)%s", name, (os.clock() - at) * 1000, tostring(how),
+            talking and "" or " -- the talk was over already: left paused"))
+        return true
+    end
+    -- D.4 (mp_saddlebags): a horse's inventory is its owner's. The joiner's game shows HIS copy of his horse, with its own inventory;
+    -- the horse the host's world keeps (and saves) is another. One authority at a time, by where the owner is:
+    --   * the owner in the session: his copy is the list. The mod sends its contents (by item class) on every change; the host's
+    --     horse is made the same (items made, items removed) -- so the horse carries on the host's screen what it carries on his, and
+    --     the host's save keeps it. The partner (the host's player) may take from it like from a shared body: what he takes waits in
+    --     this machine's escrow until the owner's game has given it up (it removes it from the copy and says so) -- first come, first
+    --     served; refused when the owner took it first (the escrowed copy is deleted: it never was his), put back when no answer comes.
+    --     What the partner puts in is handed back to him (only its owner loads this horse).
+    --   * the owner joining: the host's horse is the list (it is what the world kept). The host sends it once, the copy is made the
+    --     same, and only then does the copy speak again. A horse just bought speaks at once (its first gear is the owner's game's).
+    --   * the owner away: the host's horse is an ordinary inventory of the host's world.
+    -- Never under an open inventory screen (a change under it crashes the game at its close, WO-166 / WO-201): it waits.
+    --   WO221-LEDGER side=<host|joiner> ev=<bag-in|bag-out|take-ask|take-grant|take-refuse|take-back|put-back|base> horse=<n> cls=<c8> n=<k> ...
+    W221.bags = W221.bags or { rev = 0, sig = nil, sentAt = -1e9, based = false, horse = nil, host = {}, pend = {}, parts = {}, tokN = 0,
+                               stats = { sent = 0, applied = 0, made = 0, removed = 0, asks = 0, grants = 0, refusals = 0, backs = 0, putBacks = 0, bases = 0 } }
+    local BG = W221.bags
+    local function bag_on() return KCD2MP_W221On("saddlebags") and KCD2MP_W221On("own_horse") end
+    local function bag_screen() return W201 ~= nil and W201.inv ~= nil and W201.inv.open == true end
+    local function bag_ledger(side, ev, horse, cls, n, extra)
+        mp_log(string.format("WO221-LEDGER side=%s ev=%s horse=%s cls=%s n=%d%s", side, ev, tostring(horse), string.sub(tostring(cls), 1, 8), n or 0, extra and (" " .. extra) or ""))
+    end
+    -- an inventory by item class: { [class] = units }
+    local function bag_counts(e)
+        local c, hp = {}, {}
+        local ok = pcall(function()
+            for _, id in ipairs(e.inventory:GetInventoryTable() or {}) do
+                local it = ItemManager.GetItem(id)
+                if it and it.class then
+                    local k = tostring(it.class)
+                    c[k] = (c[k] or 0) + (it.amount or 1)
+                    local h = tonumber(it.health) or 1
+                    if hp[k] == nil or h < hp[k] then hp[k] = h end   -- a class's condition on the wire: its worst piece's
+                end
+            end
+        end)
+        if not ok then return nil end
+        return c, hp
+    end
+    local function bag_text(c, hp)
+        local out = {}
+        for cls, n in pairs(c) do
+            if string.match(cls, "^[%x%-]+$") and #cls == 36 then
+                out[#out + 1] = cls .. ":" .. string.format("%d:%d", n, math.floor(math.max(0, math.min(1, (hp and hp[cls]) or 1)) * 100 + 0.5))
+            end
+        end
+        table.sort(out)
+        return out
+    end
+    local function bag_parse(items)
+        local c, hp = {}, {}
+        for cls, n, h in string.gmatch(tostring(items or ""), "([%x%-]+):(%d+):(%d+)") do if #cls == 36 then c[cls] = tonumber(n); hp[cls] = (tonumber(h) or 100) / 100 end end
+        return c, hp
+    end
+    -- an inventory made what a list says, by class; returns made, removed (units)
+    local function bag_reconcile(e, want, side, horse, skip, hp)
+        local have = bag_counts(e)
+        if not have then return 0, 0 end
+        local made, removed = 0, 0
+        for cls, n in pairs(want) do
+            local h = have[cls] or 0
+            if n > h and not (skip and skip[cls]) then
+                local before = {}
+                pcall(function() for _, id in ipairs(e.inventory:GetInventoryTable() or {}) do before[tostring(id)] = true end end)
+                if pcall(function() e.inventory:CreateItem(cls, (hp and hp[cls]) or 1, n - h) end) then
+                    made = made + (n - h)
+                    bag_ledger(side, "bag-in", horse, cls, n - h)
+                    -- gear is worn as on its owner's horse (a saddle that only lies in the bags does not show)
+                    pcall(function()
+                        for _, id in ipairs(e.inventory:GetInventoryTable() or {}) do
+                            if not before[tostring(id)] and e.actor and e.actor.EquipInventoryItem then pcall(function() e.actor:EquipInventoryItem(id) end) end
+                        end
+                    end)
+                end
+            end
+        end
+        for cls, h in pairs(have) do
+            local n = want[cls] or 0
+            if h > n and not (skip and skip[cls]) then
+                if pcall(function() e.inventory:DeleteItemOfClass(cls, h - n) end) then
+                    removed = removed + (h - n)
+                    bag_ledger(side, "bag-out", horse, cls, h - n)
+                end
+            end
+        end
+        return made, removed
+    end
+    local function bag_send(ev, head, list)
+        local n = math.max(1, math.ceil(#list / 20))
+        for part = 1, n do
+            local chunk = {}
+            for i = (part - 1) * 20 + 1, math.min(#list, part * 20) do chunk[#chunk + 1] = list[i] end
+            KCD2MP_EmitEvent(ev, string.format("%s %d %d %s", head, part, n, #chunk > 0 and table.concat(chunk, ",") or "-"))
+        end
+    end
+
+    -- ---- the owner (a joiner), once a second
+    function KCD2MP_W221BagsTick()
+        if not bag_on() then return end
+        local name = W221.horse and W221.horse.mine
+        if not name or name == "" then BG.based = false; BG.horse = nil; return end
+        if BG.horse ~= name then return end          -- not this horse's turn to speak yet (a join waits for the host's list)
+        if not BG.based then return end
+        local e = nil
+        pcall(function() e = System.GetEntityByName(name) end)
+        if not (e and e.class == "Horse" and e.inventory) then return end
+        local c, hp = bag_counts(e)
+        if not c then return end
+        local list = bag_text(c, hp)
+        local sig = table.concat(list, ",")
+        local now = os.clock()
+        if sig == BG.sig and (now - BG.sentAt) < 30.0 then return end
+        BG.sig, BG.sentAt = sig, now
+        BG.rev = BG.rev + 1
+        BG.stats.sent = BG.stats.sent + 1
+        bag_send("w221_bags", string.format("%s %d", name, BG.rev), list)
+    end
+    -- the record changed here (KCD2MP_W221MyHorse): a horse just bought speaks at once, one found at a join waits for the host's list
+    function KCD2MP_W221BagsOwner(name, wasKnown)
+        if name == "" then BG.based = false; BG.horse = nil; return end
+        if BG.horse == name then return end
+        BG.horse, BG.sig, BG.rev = name, nil, 0
+        BG.based = wasKnown == true
+        mp_log(string.format("WO221-BAGS joiner: %s -- %s", name, BG.based and "just made this player's: its inventory here is the list (its first gear is this game's)"
+            or "this player's by the host's record: the host's horse is the list first (asked for)"))
+    end
+    -- the host's list at a join: the copy is made the same, then the copy speaks
+    function KCD2MP_W221BagBase(name, part, parts, items)
+        if not bag_on() then return false end
+        name = tostring(name)
+        part, parts = tonumber(part) or 1, tonumber(parts) or 1
+        if part == 1 then BG.parts = {}; BG.partsHp = {} end
+        local pc, ph = bag_parse(items)
+        for cls, n in pairs(pc) do BG.parts[cls] = n; BG.partsHp[cls] = ph[cls] end
+        if part < parts then return true end
+        local want, whp = BG.parts, BG.partsHp
+        BG.parts, BG.partsHp = {}, {}
+        if BG.horse ~= name or BG.based then return false end
+        if bag_screen() then BG.baseWait = { name = name, want = want, hp = whp }; return true end
+        local e = nil
+        pcall(function() e = System.GetEntityByName(name) end)
+        if not (e and e.class == "Horse" and e.inventory) then BG.baseWait = { name = name, want = want, hp = whp }; return true end
+        local made, removed = bag_reconcile(e, want, "joiner", name, nil, whp)
+        BG.based, BG.baseWait = true, nil
+        BG.stats.bases = BG.stats.bases + 1
+        bag_ledger("joiner", "base", name, "-", 0, string.format("made=%d removed=%d -- the copy carries what the host's horse carries; from here the copy is the list", made, removed))
+        return true
+    end
+    function KCD2MP_W221BagBaseRetry()
+        local w = BG.baseWait
+        if w and not bag_screen() then
+            local parts = bag_text(w.want, w.hp)
+            BG.parts = {}
+            KCD2MP_W221BagBase(w.name, 1, 1, #parts > 0 and table.concat(parts, ",") or "-")
+        end
+    end
+    -- the partner took <n> of <cls> from this player's horse in the host's world: given up here (removed from the copy), or not
+    function KCD2MP_W221BagTake(tok, name, cls, n)
+        n = tonumber(n) or 0
+        local verdict = "refuse"
+        if bag_on() and BG.horse == tostring(name) and BG.based and n > 0 then
+            if bag_screen() then verdict = "busy"
+            else
+                local e = nil
+                pcall(function() e = System.GetEntityByName(tostring(name)) end)
+                local have = 0
+                if e and e.inventory then pcall(function() have = e.inventory:GetCountOfClass(cls) end) end
+                if have >= n and pcall(function() e.inventory:DeleteItemOfClass(cls, n) end) then
+                    verdict = "grant"
+                    BG.stats.grants = BG.stats.grants + 1
+                    bag_ledger("joiner", "take-grant", name, cls, n, "tok=" .. tostring(tok) .. " -- the partner has it now")
+                else
+                    BG.stats.refusals = BG.stats.refusals + 1
+                    bag_ledger("joiner", "take-refuse", name, cls, n, "tok=" .. tostring(tok) .. " have=" .. tostring(have))
+                end
+            end
+        end
+        KCD2MP_EmitEvent("w221_bagans", string.format("%s %s", tostring(tok), verdict))
+        return true
+    end
+
+    -- ---- the host
+    local function bag_escrow() return W217 and W217.L and W217.L.escrow and W217.L.escrow() or nil end
+    -- the owner's list (a joiner's copy): this world's horse is made the same
+    function KCD2MP_W221HostBags(peer, name, rev, part, parts, items)
+        if not bag_on() then return false end
+        peer, name = tostring(peer), tostring(name)
+        if not (KCD2MP.w160 and KCD2MP.w160.peerHorses and KCD2MP.w160.peerHorses[peer] == name) then return false end
+        part, parts = tonumber(part) or 1, tonumber(parts) or 1
+        local key = peer .. "/" .. name
+        if part == 1 then BG.parts[key] = { c = {}, hp = {} } end
+        local acc = BG.parts[key] or { c = {}, hp = {} }
+        if not acc.c then acc = { c = {}, hp = {} } end
+        local pc, ph = bag_parse(items)
+        for cls, n in pairs(pc) do acc.c[cls] = n; acc.hp[cls] = ph[cls] end
+        BG.parts[key] = acc
+        if part < parts then return true end
+        BG.parts[key] = nil
+        local h = BG.host[name] or { want = {}, rev = 0 }
+        h.want, h.hp, h.rev, h.peer, h.at = acc.c, acc.hp, tonumber(rev) or 0, peer, os.clock()
+        BG.host[name] = h
+        return true
+    end
+    -- once a second: the horse follows its owner's list; the partner's take is asked of the owner; his put is handed back
+    function KCD2MP_W221HostBagsTick()
+        if not bag_on() or not player then return end
+        local now = os.clock()
+        -- a take nobody answered: back onto the horse
+        for tok, p in pairs(BG.pend) do
+            if now - p.at > 5.0 then
+                BG.pend[tok] = nil
+                local esc, e = bag_escrow(), nil
+                pcall(function() e = System.GetEntityByName(p.horse) end)
+                local back = 0
+                if esc and e then for _, w in ipairs(p.items) do if W217.L.move(esc, w, e) then back = back + 1 end end end
+                BG.stats.backs = BG.stats.backs + 1
+                bag_ledger("host", "take-back", p.horse, p.cls, p.n, string.format("tok=%s moved=%d -- its owner's game did not answer: back on the horse", tok, back))
+            end
+        end
+        if bag_screen() then return end
+        for name, h in pairs(BG.host) do
+            local g = KCD2MP.ghosts and (KCD2MP.ghosts[h.peer] or KCD2MP.ghosts[tonumber(h.peer) or -1])
+            local e = nil
+            pcall(function() e = System.GetEntityByName(name) end)
+            if not (g and g.entity) or not (KCD2MP.w160.peerHorses[h.peer] == name) then
+                BG.host[name] = nil   -- its owner left (or it is his no more): an ordinary inventory of this world
+            elseif e and e.class == "Horse" and e.inventory then
+                local have = bag_counts(e)
+                local pending = {}
+                for _, p in pairs(BG.pend) do if p.horse == name then pending[p.cls] = true end end
+                if have then
+                    local mine = bag_counts(player) or {}
+                    local was = h.mine or mine
+                    for cls, n in pairs(h.want) do
+                        local hv = have[cls] or 0
+                        -- fewer on the horse than its owner's list, and the host's player holds more of it than a second ago: he took it
+                        if hv < n and not pending[cls] and (mine[cls] or 0) > (was[cls] or 0) and (now - (h.at or 0)) > 1.0 then
+                            local k = math.min(n - hv, (mine[cls] or 0) - (was[cls] or 0))
+                            local esc, items = bag_escrow(), {}
+                            if esc then
+                                pcall(function()
+                                    for _, id in ipairs(player.inventory:GetInventoryTable() or {}) do
+                                        local it = ItemManager.GetItem(id)
+                                        if #items < k and it and tostring(it.class) == cls and W217.L.move(player, id, esc) then items[#items + 1] = id end
+                                    end
+                                end)
+                            end
+                            if #items > 0 then
+                                BG.tokN = BG.tokN + 1
+                                local tok = string.format("%d", 1000 + BG.tokN)
+                                BG.pend[tok] = { horse = name, cls = cls, n = #items, items = items, at = now, peer = h.peer }
+                                pending[cls] = true
+                                BG.stats.asks = BG.stats.asks + 1
+                                bag_ledger("host", "take-ask", name, cls, #items, "tok=" .. tok .. " -- held in escrow until its owner's game gives it up")
+                                KCD2MP_EmitEvent("w221_bagtake", string.format("%s %s %s %s %d", h.peer, tok, name, cls, #items))
+                                mine[cls] = (mine[cls] or 0) - #items
+                            end
+                        end
+                    end
+                    -- more on the horse than its owner's list, and the host's player holds less: his put -- handed back
+                    for cls, hv in pairs(have) do
+                        local n = h.want[cls] or 0
+                        if hv > n and (mine[cls] or 0) < (was[cls] or 0) and not pending[cls] then
+                            local k, moved = math.min(hv - n, (was[cls] or 0) - (mine[cls] or 0)), 0
+                            pcall(function()
+                                for _, id in ipairs(e.inventory:GetInventoryTable() or {}) do
+                                    local it = ItemManager.GetItem(id)
+                                    if moved < k and it and tostring(it.class) == cls and W217.L.move(e, id, player) then moved = moved + 1 end
+                                end
+                            end)
+                            if moved > 0 then
+                                BG.stats.putBacks = BG.stats.putBacks + 1
+                                bag_ledger("host", "put-back", name, cls, moved, "-- only its owner loads this horse")
+                                KCD2MP_ShowNativeToast("Only its owner can load this horse.")
+                                pending[cls] = true   -- this tick's reconcile leaves the class alone
+                            end
+                        end
+                    end
+                    local made, removed = bag_reconcile(e, h.want, "host", name, pending, h.hp)
+                    if made + removed > 0 then
+                        BG.stats.applied = BG.stats.applied + 1
+                        BG.stats.made, BG.stats.removed = BG.stats.made + made, BG.stats.removed + removed
+                    end
+                    h.mine = bag_counts(player) or mine
+                end
+            end
+        end
+    end
+    -- the owner's answer to a take
+    function KCD2MP_W221HostBagAnswer(peer, tok, verdict)
+        tok = tostring(tok)
+        local p = BG.pend[tok]
+        if not p or tostring(peer) ~= p.peer then return false end
+        BG.pend[tok] = nil
+        local esc, e = bag_escrow(), nil
+        pcall(function() e = System.GetEntityByName(p.horse) end)
+        if verdict == "grant" then
+            local moved = 0
+            if esc then for _, w in ipairs(p.items) do if W217.L.move(esc, w, player) then moved = moved + 1 end end end
+            local h = BG.host[p.horse]
+            if h and h.want[p.cls] then h.want[p.cls] = math.max(0, h.want[p.cls] - p.n) end
+            BG.stats.grants = BG.stats.grants + 1
+            bag_ledger("host", "take-grant", p.horse, p.cls, p.n, string.format("tok=%s moved=%d -- its owner's game gave it up: the partner's now", tok, moved))
+        elseif verdict == "refuse" then
+            local gone = 0
+            if esc then for _, w in ipairs(p.items) do if pcall(function() esc.inventory:DeleteItem(w) end) then gone = gone + 1 end end end
+            BG.stats.refusals = BG.stats.refusals + 1
+            bag_ledger("host", "take-refuse", p.horse, p.cls, p.n, string.format("tok=%s deleted=%d -- its owner had taken it first: the escrowed copy never was the partner's", tok, gone))
+            KCD2MP_ShowNativeToast("Already taken.")
+        else
+            local back = 0
+            if esc and e then for _, w in ipairs(p.items) do if W217.L.move(esc, w, e) then back = back + 1 end end end
+            BG.stats.backs = BG.stats.backs + 1
+            bag_ledger("host", "take-back", p.horse, p.cls, p.n, string.format("tok=%s moved=%d -- its owner has its inventory open: back on the horse", tok, back))
+            KCD2MP_ShowNativeToast("Your partner has that horse's bags open.")
+        end
+        return true
+    end
+    -- a joiner whose record names a horse joined: this world's horse is the list, once
+    function KCD2MP_W221HostBagBase(peer, name)
+        if not bag_on() then return false end
+        local e = nil
+        pcall(function() e = System.GetEntityByName(tostring(name)) end)
+        local c, hp = nil, nil
+        if e and e.inventory then c, hp = bag_counts(e) end
+        if not c then return false end
+        local list = bag_text(c, hp)
+        bag_send("w221_bagbase", string.format("%s %s", tostring(peer), tostring(name)), list)
+        bag_ledger("host", "base", name, "-", #list, "to=ghost " .. tostring(peer) .. " -- what this world's horse carries is the list its owner's copy starts from")
         return true
     end
     System.AddCCommand("mp_w221_status", "KCD2MP_W221Status()", "WO-221: every WO-221 switch and the DLL's numbers")
@@ -35895,6 +36545,42 @@ do
             if dead and KCD2MP_W195Ragdoll then pcall(KCD2MP_W195Ragdoll, name) end
         end
         KCD2MP_EmitEvent("w217_corpse", name .. " shown")
+        return true
+    end
+    -- WO-221 E.1 (corpse_look), the joiner, every 2 s (the agent's tick): the ragdoll call a death makes does nothing for a body outside
+    -- the game's physics range (it died, or was made, while this player was far away) -- it still stands when he gets there. Every dead
+    -- NPC within 40 m of this player whose head is more than 0.9 m above its feet is laid down again by the game's own ragdoll: at
+    -- most once per 3 s and 6 times a body. The partner's figures are never touched.
+    function KCD2MP_W221CorpseLay()
+        if not (player and KCD2MP_W221On and KCD2MP_W221On("corpse_look")) then return false end
+        E.lay = E.lay or {}
+        local p = player:GetWorldPos()
+        local near = nil
+        pcall(function() near = System.GetEntitiesInSphere(p, 40) end)
+        for _, e in ipairs(near or {}) do
+            if (e.class == "NPC" or e.class == "NPC_Female") and e.actor and e.id ~= player.id then
+                local name = e:GetName()
+                local dead = false
+                pcall(function() dead = e.actor:IsDead() == true end)
+                if dead and not string.find(name, "kcd2mp_", 1, true) then
+                    local up, hidden = nil, false
+                    pcall(function() hidden = e:IsHidden() == true end)
+                    pcall(function() local h, q = e:GetBonePos("Head"), e:GetWorldPos(); if h then up = h.z - q.z end end)
+                    local st = E.lay[name] or { n = 0, at = -1e9 }
+                    E.lay[name] = st
+                    if up and up > 0.9 and not hidden and st.n < 6 and os.clock() - st.at >= 3 then
+                        st.n, st.at, st.lies = st.n + 1, os.clock(), nil
+                        local ok, err = pcall(function() e:RagDollize(0) end)
+                        E.stats.laid = (E.stats.laid or 0) + 1
+                        mp_log(string.format("WO221-CORPSE npc=%s dead and standing (head %.2f m up) near this player -> %s -- laid down again, try %d of 6 [n=%d]", name, up,
+                            ok and "ok" or ("FAILED " .. tostring(err)), st.n, E.stats.laid))
+                    elseif up and up <= 0.9 and st.n > 0 and not st.lies then
+                        st.lies = true
+                        mp_log(string.format("WO221-CORPSE npc=%s lies now (head %.2f m up) after %d call(s)", name, up, st.n))
+                    end
+                end
+            end
+        end
         return true
     end
 end

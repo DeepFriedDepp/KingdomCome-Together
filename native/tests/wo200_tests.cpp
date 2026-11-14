@@ -32,6 +32,29 @@ int wo200_tests(int* passed) {
     WCHECK(method_kind("math::boolean::Or") == Method::Other && method_kind("GetState") == Method::Other, "pure logic and reads run");
     WCHECK(method_kind(nullptr) == Method::Other && method_kind("") == Method::Other, "no name: other");
 
+    // ---- WO-221 D.1: the one "player's horse" is set only for the player whose conversation it is ----
+    WCHECK(method_kind("ReplacePlayerHorse") == Method::PlayerHorse && method_kind("wh::rpgmodule::Kill") == Method::KillSoul, "the horse methods");
+    WCHECK(decide(kRoleHost, Kind::Function, Method::PlayerHorse, Target::Unknown, true, false, false, false, on) == Verdict::Run &&
+           decide(kRoleHost, Kind::Function, Method::KillSoul, Target::Other, true, false, false, false, on) == Verdict::Run,
+           "the gate's own decision leaves both alone (the horse rule passes them through, a Kill elsewhere runs)");
+    WCHECK(horse_pass(kRoleHost, Kind::Function, Method::PlayerHorse, true, false, false, false, false, true) == HorsePass::Replace,
+           "host, a joiner's replay closure: ReplacePlayerHorse is passed through");
+    WCHECK(horse_pass(kRoleHost, Kind::Function, Method::PlayerHorse, false, false, false, false, false, true) == HorsePass::No,
+           "host, its own conversation or quest: its own horse is set as alone");
+    WCHECK(horse_pass(kRoleJoiner, Kind::Function, Method::PlayerHorse, false, true, true, false, false, true) == HorsePass::Replace,
+           "joiner, the mirror of the host's own conversation: passed through");
+    WCHECK(horse_pass(kRoleJoiner, Kind::Function, Method::PlayerHorse, false, false, true, false, false, true) == HorsePass::No &&
+           horse_pass(kRoleJoiner, Kind::Function, Method::PlayerHorse, false, true, false, false, false, true) == HorsePass::No,
+           "joiner, his own purchase (or not joined): his own game sets his horse");
+    WCHECK(horse_pass(kRoleHost, Kind::Function, Method::KillSoul, true, false, false, true, true, true) == HorsePass::Kill,
+           "the Kill of the same library instance while the pass runs: the old horse's disposal, passed through");
+    WCHECK(horse_pass(kRoleHost, Kind::Function, Method::KillSoul, true, false, false, true, false, true) == HorsePass::No &&
+           horse_pass(kRoleHost, Kind::Function, Method::KillSoul, true, false, false, false, true, true) == HorsePass::No,
+           "any other Kill runs (another library; no pass in flight)");
+    WCHECK(horse_pass(kRoleHost, Kind::Function, Method::PlayerHorse, true, false, false, false, false, false) == HorsePass::No &&
+           horse_pass(kRoleHost, Kind::Behaviour, Method::PlayerHorse, true, false, false, false, false, true) == HorsePass::No,
+           "the switch off (0.65.0), or not a function node: nothing is passed");
+
     // ---- I.5: no quest behaviours on puppets (the joiner in the host's world) ----
     for (Kind k : {Kind::Behaviour, Kind::EntityContext, Kind::SchedulerLink, Kind::Interrupt}) {
         WCHECK(decide(kRoleJoiner, k, Method::Other, Target::Other, false, false, false, false, on) == Verdict::PuppetRefused,

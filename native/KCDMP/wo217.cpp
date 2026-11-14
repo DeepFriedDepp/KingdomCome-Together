@@ -4,6 +4,7 @@
 // WO-217: the world around the bodies -- the native half's switch word, status, A.0's attempt lines and 0.2's seated-copy rule (wo217.h).
 #include "wo217.h"
 #include "talk_hold.h"
+#include "holders.h"
 #include "wo203.h"
 #include "wo163.h"
 #include "wo208.h"
@@ -47,7 +48,7 @@ uint32_t twin_off() {
 std::atomic<uint32_t> c_out[static_cast<int>(Outcome::kCount)]{};
 std::atomic<uint32_t> c_out2s[static_cast<int>(Outcome::kCount)]{};   // attempts the host held 2 s or more
 std::atomic<uint32_t> c_shown1s{0}, c_lines{0};
-std::atomic<uint32_t> c_seatHolds{0}, c_seatPlaces{0}, c_seatPulls{0}, c_seatReleases{0};
+std::atomic<uint32_t> c_seatHolds{0}, c_seatPlaces{0}, c_seatPulls{0}, c_seatReleases{0}, c_seatStuck{0};
 
 } // namespace
 uint8_t role() { return g_role.load(); }
@@ -197,6 +198,36 @@ bool seat_holds(uint32_t eid, const char* name, float offM, bool* placeOnce) {
     static std::unordered_map<uint32_t, double> s_relSince;   // main thread
     if (s != Seat::Release) s_relSince.erase(eid);
     if (s == Seat::NotSeated) return false;
+    if (s == Seat::Release && holders::on() && (ob.seated || copySeated)) {
+        // WO-221 C.3 (the holder table): a body its own seat holds is the seat's, never the writer's. 0.65.0 gave it back to the
+        // stream after 4 s whether or not it had stood up -- one guest was written at its seat and pulled back by it 14,800 times in
+        // ten minutes (the base runs' largest class: before=stream host_seated=0 copy_seated=1). The release is asked only when the
+        // host's NPC state wants no seat for it either (the placement lane would seat it again at once: the tug), at the agent's
+        // own pace (once per 5 s); a body that has not stood up 30 s after its NPC left for good is the writer's again (counted).
+        char at[96] = "";
+        uint64_t obj = 0;
+        const bool hostWantsSeat = wo141::activity_text(name, at, sizeof at, &obj) && obj != 0;
+        static std::unordered_map<uint32_t, double> s_leftAt;   // main thread: since when the host wants no seat and is off it
+        // (a body that only PLAYS a seat -- the owner's own seated line, no seat of its own state -- is held the same way: driven or
+        // written it would slide about sitting; the owner's hand-over stands it up, the release below is for its own state's seat)
+        if (hostWantsSeat || offM < 1.5f) { s_leftAt.erase(eid); c_seatHolds.fetch_add(1, std::memory_order_relaxed); return true; }
+        const double leftAt = s_leftAt.emplace(eid, now0).first->second;
+        if (now0 - leftAt > 30.0) {
+            const uint32_t k = c_seatStuck.fetch_add(1, std::memory_order_relaxed) + 1;
+            if (k <= 50 || k % 500 == 0)
+                logf("WO221-HOLD npc=%s still in its own seat 30 s after its host NPC left it (%.1f m off): the release did not take -- the writer's again [n=%u]",
+                     name ? name : "?", offM, k);
+            return false;
+        }
+        if (now0 - leftAt > 1.0 && wo208::ask_release(eid, name)) {
+            const uint32_t k = c_seatReleases.fetch_add(1, std::memory_order_relaxed) + 1;
+            if (k <= 200 || k % 50 == 0)
+                logf("WO217-SEAT npc=%s released from its own seat (its host NPC is not seated and its state wants no seat, %.1f m off) -- the game's own "
+                     "release; the seat holds it until it stands [n=%u]", name ? name : "?", offM, k);
+        }
+        c_seatHolds.fetch_add(1, std::memory_order_relaxed);
+        return true;
+    }
     if (s == Seat::Release) {
         constexpr double kReleaseHoldS = 4.0;
         auto rs = s_relSince.emplace(eid, now0).first;

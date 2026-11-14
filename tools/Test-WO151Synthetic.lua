@@ -678,6 +678,7 @@ do
     KCD2MP.npcPuppets["tvid_hunter"] = { owner = 0 }
     KCD2MP._npcPaused["tvid_hunter"] = NOW
     KCD2MP_W137TalkAttempt(957, "Dude,tvid_hunter")
+    if KCD2MP_W221TalkHeld then KCD2MP_W221TalkHeld("tvid_hunter", "held") end   -- WO-221 B: the DLL's hold ack (the copy is woken on it)
     local t = KCD2MP.w137.talking["tvid_hunter"]
     check("i: a forced dialogue on a paused copy resumes it for the conversation", t ~= nil and t.forced and t.started and t.resumed
         and cmdCount("wh_ai_ResumeNPC tvid_hunter") == 1, t and tostring(t.resumed))
