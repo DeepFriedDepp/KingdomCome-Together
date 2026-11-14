@@ -70,7 +70,8 @@ public static partial class Protocol
     public const byte CrimeAskReport = 1, CrimeAskOutcome = 2, CrimeAskResync = 3, CrimeAskEndFights = 4;
     // ---- host kinds (APPEND-ONLY) ----
     public const byte CrimeHostJudged = 1, CrimeHostStop = 2, CrimeHostPursue = 3, CrimeHostRecord = 4,
-                      CrimeHostHorses = 5, CrimeHostCleared = 6, CrimeHostMode = 7, CrimeHostShops = 8;
+                      CrimeHostHorses = 5, CrimeHostCleared = 6, CrimeHostMode = 7, CrimeHostShops = 8,
+                      CrimeHostKeepers = 9;   // WO-221 B: "<part> <parts> <name>=<shop db id>,..." -- which shop each keeper near the players keeps
 
     public static string CrimeAskName(byte k) => k switch
     {
@@ -80,7 +81,7 @@ public static partial class Protocol
     public static string CrimeHostName(byte k) => k switch
     {
         CrimeHostJudged => "judged", CrimeHostStop => "stop", CrimeHostPursue => "pursue", CrimeHostRecord => "record",
-        CrimeHostHorses => "horses", CrimeHostCleared => "cleared", CrimeHostMode => "mode", CrimeHostShops => "shops", _ => $"unknown-{k}",
+        CrimeHostHorses => "horses", CrimeHostCleared => "cleared", CrimeHostMode => "mode", CrimeHostShops => "shops", CrimeHostKeepers => "keepers", _ => $"unknown-{k}",
     };
 }
 

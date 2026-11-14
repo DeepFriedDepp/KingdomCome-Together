@@ -567,10 +567,15 @@ def loot_body_once(r, bandits):
     killed = None
     if (not t or t == 'none') and bandits:
         killed = r.a.ask(KILL_ONE % bandits[0], 'W208K', 6)
-        for _ in range(12):
+        for i in range(12):
             time.sleep(5)
             t = r.b.ask(FIND_BODY, 'W208B', 6)
             if t and t != 'none': break
+            # WO-221 B: this build's scripts have no kill (the pick answered "none"): the host's own death call through its agent --
+            # the bench's verb (KCDMP_TEST_W221=1) -- makes the body; its death reaches the joiner as any host death does
+            if i == 1:
+                r.a.lua('KCD2MP_EmitEvent("w221_test_kill", "%s")' % bandits[0])
+                killed = '%s; then the host\'s own death call' % killed
     if not t or t == 'none': return False, 'no-body', {'killed': killed}
     name, x, y, z, n = t.split()
     # at the body's own height first (a body on a floor; d9-loot5's first take stood 44 m off after three terrain-height writes), then the

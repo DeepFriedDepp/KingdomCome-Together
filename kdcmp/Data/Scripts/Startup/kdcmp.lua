@@ -35254,12 +35254,14 @@ do
     W221.on = W221.on or {}
     W221.NAMES = {
         combat_action_end = "mp_combat_action_end", talk_hold = "mp_talk_hold", drive = "mp_drive", holders = "mp_holders",
+        shop_keeper = "mp_shop_keeper",
     }
     W221.HELP = {
         combat_action_end = "A: (both) no combat animation of ours outlives its body's combat part (the joiner's fight crash)",
         talk_hold = "B: (joiner) a copy woken for a talk asks nothing of its own schedule while it talks (the trade that closed)",
         drive = "C: (joiner) a walking person is moved by the game's own movement, not placed: the step and the feet are the game's",
         holders = "C.3: (joiner) one table says who holds a body: the driver, the writer, a seat, an activity, a fall, a mount, a one-shot",
+        shop_keeper = "B: (both) a shopkeeper's copy keeps the same shop as the host's keeper, so the joiner's Trade opens its shop",
     }
     function KCD2MP_W221On(name)
         local v = W221.on[tostring(name)]
@@ -35298,6 +35300,34 @@ do
         table.sort(parts)
         mp_log("WO221-STATUS " .. table.concat(parts, " "))
         KCD2MP_EmitEvent("w221_status", "")
+        return true
+    end
+    -- B (host, every 10 s, asked by the agent): which shop each keeper near a player keeps. In the game a keeper keeps a shop only
+    -- while its own state holds the "open shop" element (its brain takes it up with its work); a joiner's copies never do, so the
+    -- host says it and the joiner's DLL opens the same shop with the copy (the shop's own call). The game's own script call reads it.
+    function KCD2MP_W221HostKeepers()
+        if not (Shops and Shops.GetShopDBIdByKeeper) then return false end
+        local out, seen = {}, {}
+        local centers = {}
+        if player then centers[#centers + 1] = player:GetWorldPos() end
+        for _, g in pairs(KCD2MP.ghosts or {}) do if g.entity then pcall(function() centers[#centers + 1] = g.entity:GetWorldPos() end) end end
+        for _, c in ipairs(centers) do
+            local ents = {}
+            pcall(function() ents = System.GetEntitiesInSphere(c, 300) or {} end)
+            for _, e in ipairs(ents) do
+                if e.soul and e ~= player and (e.class == "NPC" or e.class == "NPC_Female") then
+                    local n = nil
+                    pcall(function() n = e:GetName() end)
+                    if n and not seen[n] and #n <= 59 and string.match(n, "^[%w_]+$") and not string.find(n, "^kcd2mp_") then
+                        seen[n] = true
+                        local id = -1
+                        pcall(function() id = Shops.GetShopDBIdByKeeper(e.id) end)
+                        if type(id) == "number" and id >= 0 and #out < 80 then out[#out + 1] = n .. "=" .. string.format("%d", id) end
+                    end
+                end
+            end
+        end
+        KCD2MP_EmitEvent("w221_keepers", #out > 0 and table.concat(out, ",") or "-")
         return true
     end
     System.AddCCommand("mp_w221_status", "KCD2MP_W221Status()", "WO-221: every WO-221 switch and the DLL's numbers")

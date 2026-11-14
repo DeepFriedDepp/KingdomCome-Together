@@ -509,6 +509,9 @@ public partial class GameBridge
                         await ExecLuaAsync($"if KCD2MP_W139LegalHorses then KCD2MP_W139LegalHorses(\"{csv}\") end");
                     }
                     return;
+                case Protocol.CrimeHostKeepers:   // WO-221 B
+                    Wo221OnKeepersText(m.Text);
+                    return;
                 case Protocol.CrimeHostShops when Wo139Rules.TryParseHorses(m.Text, out int spart, out int snparts, out var keepers):
                     if (spart == 1) _w139ShopParts.Clear();
                     _w139ShopParts.AddRange(keepers);

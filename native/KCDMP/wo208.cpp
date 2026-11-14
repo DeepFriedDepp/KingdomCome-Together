@@ -24,6 +24,7 @@
 #include "wo213.h"
 #include "wo214.h"
 #include "wo215.h"
+#include "talk_hold.h"
 #include "wo141.h"
 #include "wo211.h"
 #include "wo211_rules.h"
@@ -1338,6 +1339,15 @@ void owner_tick(double now) {
             const auto ow = g_owned.find(eid);
             if (ow != g_owned.end()) { own_release(eid, ow->second, now, "the A.0 probe owns it", wo210rules::kPathSwitch); g_owned.erase(ow); }
             v.clear();
+            ++it;
+            continue;
+        }
+        // WO-221 B (mp_talk_hold): a copy in a conversation is asked for nothing -- the owner lets it go for the talk (its installs
+        // released once) and neither installs nor drains its queue meanwhile; the host's states wait here for the talk's end
+        if (talkhold::holds(eid, talkhold::Lane::Owner)) {
+            const auto ow = g_owned.find(eid);
+            if (ow != g_owned.end()) { own_release(eid, ow->second, now, "it is in a conversation", wo210rules::kPathSwitch); g_owned.erase(ow); }
+            if (v.size() > 1) v.erase(v.begin(), v.end() - 1);   // the newest of the host's states is the one the talk's end applies
             ++it;
             continue;
         }

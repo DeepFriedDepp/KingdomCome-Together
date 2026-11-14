@@ -367,6 +367,23 @@ def w_talk(r, keys_ok):
             _leave(c, keys_ok)
             time.sleep(2)
             if det.get('choices'): works(r, 'talk', True, 'the choices came', rows); return True, 'ok', rows
+        # WO-221 B (staged properly): on this save the host's Henry is wanted and no villager of the host's world will talk to him, so
+        # the host's readiness answers "no" for all of them. A merchant talks to anyone: the keepers the host's world has ready to
+        # sell (not the first: the trade check's), their dialogue to its list of choices.
+        if not any(x.get('choices') for x in rows):
+            shops = r.a.ask(T.SHOPS_NEAR, 'W217S', 8) or ''
+            for ent in [e for e in shops.split(';') if '@' in e][1:4]:
+                npc, at = ent.split('@'); x, y, z = (float(v) for v in at.split(','))
+                tried.append(npc)
+                cid, m0, det = _start_talk(c, npc, x, y, z)
+                det['merchant'] = True
+                if cid:
+                    m, dt = T._wait_any(c, m0['k'], r'\[ID: %s\] (\d+)\) (\S+)|\[ID: %s\] Dialog (ending|interrupted|ends)' % (cid, cid), 45)
+                    det['choices'] = bool(m and m.group(1)); det['after_s'] = round(dt, 1) if dt else None
+                rows.append(det)
+                _leave(c, keys_ok)
+                time.sleep(2)
+                if det.get('choices'): works(r, 'talk', True, 'the choices came (a merchant: no villager talks to the host\'s wanted Henry)', rows); return True, 'ok', rows
         if not tried: works(r, 'talk', None, 'no villager ready to talk on the host', rows)
         else: works(r, 'talk', False, 'no talk reached its choices (%d tried)' % len(tried), rows)
         return True, 'no-choices', rows

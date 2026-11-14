@@ -279,7 +279,9 @@ public partial class GameBridge
     /// <summary>WO-137's talk (w137_talk on|off npc): the copy's own brain has it for the conversation.</summary>
     private void Wo141OnTalk(bool on, string npc)
     {
+        bool was = _w141Talking.ContainsKey(npc);
         if (on) _w141Talking[npc] = true; else _w141Talking.TryRemove(npc, out _);
+        if (was != on) Wo221OnTalk(on, npc);   // WO-221 B (mp_talk_hold): the DLL's lanes ask nothing of it meanwhile
     }
 
     // ---------------------------------------------------------------- a new joiner

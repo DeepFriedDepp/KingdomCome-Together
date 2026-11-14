@@ -28,6 +28,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <functional>
 #include <mutex>
 #include <string>
 #include <unordered_map>
@@ -558,6 +559,18 @@ bool take_outcome(uint32_t eid, Outcome* out) {
     return true;
 }
 
+// WO-221: a generic entry through the same door -- work posted from any thread is carried out at the AI update's next entry, on its
+// own thread, before the update runs (where the engine's own brains make their AI calls).
+std::mutex g_aiFnMu;
+std::vector<std::function<void()>> g_aiFns;
+std::atomic<bool> g_aiFnsPending{false};
+void run_ai_fns() {
+    if (!g_aiFnsPending.exchange(false, std::memory_order_acq_rel)) return;
+    std::vector<std::function<void()>> work;
+    { std::lock_guard<std::mutex> l(g_aiFnMu); work.swap(g_aiFns); }
+    for (auto& f : work) f();
+}
+
 void capture_ai(double now);   // WO-216 A.0 (the host): its streamed NPCs' requests
 void ended_ai(double now);     // WO-216 A.1 (the joiner): which of our requests ended
 
@@ -566,6 +579,7 @@ void ai_drain() {
     const double tNow = now_s();
     capture_ai(tNow);
     ended_ai(tNow);
+    run_ai_fns();
     if (!g_ordersPending.exchange(false, std::memory_order_acq_rel)) return;
     std::unordered_map<uint32_t, Order> work;
     {
@@ -1641,6 +1655,12 @@ bool walk_own(uint32_t eid) {
     return it != g_routes.end() && it->second.active;
 }
 bool probe_owned(uint32_t eid) { return g_probe.on && g_probe.eid == eid; }
+bool ai_post(std::function<void()> fn) {
+    if (!g_hooked.load(std::memory_order_relaxed)) return false;   // no door: the caller decides
+    { std::lock_guard<std::mutex> l(g_aiFnMu); g_aiFns.push_back(std::move(fn)); }
+    g_aiFnsPending.store(true, std::memory_order_release);
+    return true;
+}
 
 bool dormant_host(uint32_t eid, void* ent, const char* name, double now) {
     if (!on(kBitDormant) || !eid || !ent) return false;

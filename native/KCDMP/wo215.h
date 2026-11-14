@@ -19,6 +19,7 @@
 //        (mp_route_correct_m; the route's per-frame mode and its cadence -- the bench's sweep; 0xFFFF / 0xFF leave a value as it is)
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include "wo215_rules.h"
 
 namespace kcdmp::wo215 {
@@ -58,6 +59,9 @@ bool routed(uint32_t eid);
 bool walk_own(uint32_t eid);
 // A.0's probe owns this body for its run: every writer leaves it alone. Main thread.
 bool probe_owned(uint32_t eid);
+// WO-221: work carried out at the AI update's next entry, on its own thread, before the update runs. false: there is no door on
+// this build (the AI update's hook was refused) and nothing was queued.
+bool ai_post(std::function<void()> fn);
 
 // ---- D.1 (the host): the census -- a tracked NPC that is dormant (its full body empty for 2 s, and no brain running or no physics: an
 // encounter pool's parked wanderer) is not streamed until it wakes. Cached per body (read at most twice a second). Main thread.

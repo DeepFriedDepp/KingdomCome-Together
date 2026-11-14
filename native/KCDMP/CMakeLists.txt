@@ -95,6 +95,8 @@ add_library(KCDMP SHARED
     wo218.cpp
     wo221.cpp
     combat_actions.cpp
+    shops.cpp
+    talk_hold.cpp
 )
 
 target_include_directories(KCDMP PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

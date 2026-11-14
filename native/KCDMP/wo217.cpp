@@ -3,6 +3,7 @@
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 // WO-217: the world around the bodies -- the native half's switch word, status, A.0's attempt lines and 0.2's seated-copy rule (wo217.h).
 #include "wo217.h"
+#include "talk_hold.h"
 #include "wo203.h"
 #include "wo163.h"
 #include "wo208.h"
@@ -180,6 +181,7 @@ void place_tick(uint32_t eid, const char* name, PlaceEp& ep, bool haveHost, uint
 // ---------------------------------------------------------------------------------------------------- 0.2: one writer for a seat
 bool seat_holds(uint32_t eid, const char* name, float offM, bool* placeOnce) {
     *placeOnce = false;
+    if (talkhold::holds(eid, talkhold::Lane::Seat)) return false;   // WO-221 B: a copy in a conversation is asked for nothing
     bool hostSeated = false, copySeated = false;
     const bool owned = wo208::seat_state(eid, &hostSeated, &copySeated);
     // the copy's own NPC-state seat, read twice a second per body

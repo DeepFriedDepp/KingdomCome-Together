@@ -2,6 +2,7 @@
 // GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 #include "wo143.h"
+#include "talk_hold.h"
 #include "wo208.h"
 #include "wo209.h"
 #include "wo209_rules.h"
@@ -1264,6 +1265,7 @@ uint8_t handle(const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t
         // ran -- the owner holds the full body while it runs (shot_in_flight); the bench's A.1 copy stays the probe's alone
         const bool shotRequest = body[0] == 4 && wo209::on(wo209rules::kBitShotRequest);
         if (name_at(1, &nm, &at) && wo208::probe_owned_name(nm.c_str()) && !(shotRequest && !wo208::probe_only(hits::eid_of_name(nm.c_str())))) return kRNotArmed;
+        if (!nm.empty() && talkhold::holds_name(nm.c_str(), talkhold::Lane::Rows)) return kRNotArmed;   // WO-221 B: a copy in a conversation is asked for nothing
     }
     switch (body[0]) {
         case 1: {   // Config [capture][apply] -> [armed]
