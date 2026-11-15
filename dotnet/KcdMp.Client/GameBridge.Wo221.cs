@@ -308,6 +308,12 @@ public partial class GameBridge
                 if (W137Host && Wo221BagRules.SplitPeer(arg, out byte bp, out string rest) && (name == "w221_bagtake" ? Wo221BagRules.IsTake(rest) : Wo221BagRules.IsBase(rest)))
                     _ = Wo139SendAsync(Protocol.CrimeHostUp, bp, name == "w221_bagtake" ? Protocol.CrimeHostBagTake : Protocol.CrimeHostBagBase, 0, rest);
                 return;
+            case "w221_horseask":    // D (joiner): the mod has no word of the record (its session paused: a host's reload, a join)
+                if (!W137Joiner || !W221OwnHorse) return;
+                Interlocked.Increment(ref _w221HorseAsks);
+                if (Wo221HorseAsk.Answer(_w221MyHorse) is { } ans) _ = ExecLuaAsync($"if KCD2MP_W221MyHorse then KCD2MP_W221MyHorse(\"{EscapeLua(ans)}\") end");
+                else if (Environment.TickCount64 - _w221AskWordAtMs > 5_000) { _w221AskWordAtMs = Environment.TickCount64; Wo221SendHorseWord("-"); }
+                return;
             case "w221_hosthorse":   // D (host): this game's own player's horse (never recorded for a joiner)
                 _w221HostOwnHorse = arg is { Length: > 0 } hh && hh != "-" && Wo137Text.IsNpc(hh) ? hh : "";
                 _w221HostOwnHorseKnown = true;

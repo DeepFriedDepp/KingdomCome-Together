@@ -335,4 +335,50 @@ do
     noErrs("M")
 end
 
+-- (W) WO-221 finish: the joiner's own horse after the host's reload. The bench (0.65.2 horse5): the session paused for the reload,
+-- the joiner's world came back from the host's save (whose player's horse is the HOST's), and the joiner's game kept the host's horse
+-- for up to 40 s after the session came back (the record's word was forgotten in the pause; the host resends every 30 s).
+do
+    local SETS = {}
+    local HORSES = { [101] = { class = "Horse", name = "h_host" }, [102] = { class = "Horse", name = "h_joiner" } }
+    for id, h in pairs(HORSES) do h.id = id; h.GetName = function() return h.name end; ENTS[h.name] = h end
+    local HELD = 102
+    System.GetEntity = function(id) return HORSES[id] end
+    player.player = { GetHorseId = function() return HELD end, SetPlayerHorse = function(_, id) SETS[#SETS + 1] = id; HELD = id end,
+                      ClearPlayerHorse = function() HELD = 0 end }
+    player.human = { IsMounted = function() return false end }
+    KCD2MP.w137.host, KCD2MP.w137.joiner, KCD2MP.w137.active = false, true, true
+    KCD2MP.w160.horseFetch = true
+    local function tick() NOW = NOW + 5.1; KCD2MP_W160OwnHorseTick() end
+    -- a joined player with his own horse: the record told, the game agrees
+    KCD2MP_W221MyHorse("h_joiner")
+    tick(); tick()
+    check("W1: told and agreeing: nothing set", #SETS == 0 and HELD == 102)
+    -- the host reloads: the session pauses (the word is forgotten), the world comes back with the host's horse as this player's
+    KCD2MP.w137.active = false
+    tick()
+    check("W2: the pause forgets the record's word", W221.horse.mine == nil)
+    HELD = 101
+    KCD2MP.w137.active = true
+    local mark = #LOG
+    tick()
+    check("W3: back in with no word: the agent is asked at once (no word goes to the host for the save's horse)",
+        countEvt("w221_horseask", "h_host", mark) == 1 and countEvt("w160_ownhorse", nil, mark) == 0)
+    NOW = NOW + 1
+    KCD2MP.w160.ownHorse.at = -1e9
+    KCD2MP_W160OwnHorseTick()
+    check("W4: not asked again within 3 s", countEvt("w221_horseask", nil, mark) == 1)
+    tick()
+    check("W5: asked again after 3 s", countEvt("w221_horseask", nil, mark) == 2)
+    -- the agent answers with the host's last word: the next session tick makes this game's horse his own again, at once
+    KCD2MP_W221MyHorse("h_joiner")
+    NOW = NOW + 0.3
+    KCD2MP_W160OwnHorseTick()
+    check("W6: the answer is applied at the next session tick (not 5 s later, not after the host's 30 s send)",
+        HELD == 102 and SETS[#SETS] == 102 and lastLog("the record says h_joiner -> set", mark) ~= nil, tostring(HELD))
+    tick(); tick()
+    check("W7: and stays (no word to the host: it is the record's horse, not a purchase)", HELD == 102 and #SETS == 1 and countEvt("w160_ownhorse", nil, mark) == 0)
+    noErrs("W")
+end
+
 OUT = table.concat(RESULTS, "\n")

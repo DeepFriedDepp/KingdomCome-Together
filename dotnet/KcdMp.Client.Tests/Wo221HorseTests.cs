@@ -88,4 +88,15 @@ public class Wo221HorseTests
         }
         finally { try { Directory.Delete(root, true); } catch (IOException) { } }
     }
+
+    [Fact]
+    public void The_mods_ask_is_answered_from_the_hosts_last_word()
+    {
+        Assert.Null(Wo221HorseAsk.Answer("?"));                                     // not told yet on this connection: ask the host
+        Assert.Null(Wo221HorseAsk.Answer(null));
+        Assert.Equal("", Wo221HorseAsk.Answer(""));                                 // the record names no horse of his
+        Assert.Equal("tsem_horseForSale_2", Wo221HorseAsk.Answer("tsem_horseForSale_2"));   // after a host's reload: his own again
+        Assert.Null(Wo221HorseAsk.Answer("kcd2mp_horse_1"));                        // never a mod's own body
+        Assert.Null(Wo221HorseAsk.Answer("bad\"name"));
+    }
 }

@@ -154,3 +154,15 @@ public sealed class HorseStore
         }
     }
 }
+
+/// <summary>WO-221 finish: the joiner's mod asks for the record's word when it has none (it forgets it while its session pauses: a
+/// host's reload, a join). The agent keeps the host's last word for this connection.</summary>
+public static class Wo221HorseAsk
+{
+    /// <summary>What answers the mod's ask: the agent's word for the mod (a horse name, or "" for none), or null when the host has
+    /// not told this connection yet ("?") -- then the host is asked (the joiner's key, "-").</summary>
+    public static string? Answer(string? myHorse) =>
+        myHorse is null || myHorse == "?" ? null
+        : myHorse.Length == 0 ? ""
+        : HorseRecord.IsHorseName(myHorse) ? myHorse : null;
+}

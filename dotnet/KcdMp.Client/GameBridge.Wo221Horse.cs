@@ -35,7 +35,7 @@ public sealed partial class GameBridge
     private volatile string _w221HostOwnHorse = "";
     private volatile bool _w221HostOwnHorseKnown;
     private string _w221HorsesSent = "";
-    private long _w221HorsesSentAtMs, _w221HorseClaims, _w221HorseTaken, _w221HorseRefused, _w221HorsePasses, _w221HorseTold;
+    private long _w221HorsesSentAtMs, _w221HorseClaims, _w221HorseTaken, _w221HorseRefused, _w221HorsePasses, _w221HorseTold, _w221HorseAsks, _w221AskWordAtMs;
     private volatile string _w221MyHorse = "?";   // joiner: what the record says is this player's ("" none, "?" not told yet)
 
     private const long W221HorsePassWindowMs = 120_000;
@@ -228,7 +228,7 @@ public sealed partial class GameBridge
     }
 
     private string Wo221HorseStats() =>
-        $" horses: record={(Wo221HorseRecordCsv())} claims={_w221HorseClaims} taken={_w221HorseTaken} refused={_w221HorseRefused} gate_passes={_w221HorsePasses} told={_w221HorseTold} mine={_w221MyHorse} host_own={(_w221HostOwnHorse.Length > 0 ? _w221HostOwnHorse : "-")}";
+        $" horses: record={(Wo221HorseRecordCsv())} claims={_w221HorseClaims} taken={_w221HorseTaken} refused={_w221HorseRefused} gate_passes={_w221HorsePasses} told={_w221HorseTold} asks={_w221HorseAsks} mine={_w221MyHorse} host_own={(_w221HostOwnHorse.Length > 0 ? _w221HostOwnHorse : "-")}";
 
     private string Wo221HorseRecordCsv()
     {

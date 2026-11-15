@@ -21716,11 +21716,22 @@ function KCD2MP_W160OwnHorseTick()
     -- WO-221 D.1: a word goes to the host only for a change of this game's own horse AFTER the host's record was told here (the
     -- horse this game holds right after a join or a reload is the save's, not a purchase: the record corrects it)
     if KCD2MP_W221On and KCD2MP_W221On("own_horse") and W221 and W221.horse then
-        if W221.horse.mine == nil then return end
+        if W221.horse.mine == nil then
+            -- WO-221 finish: the record's word is forgotten while the session pauses (a host's reload, a join); the agent keeps
+            -- the host's last word, so ask it at once instead of waiting for the host's next 30 s send (0.65.2 bench: the
+            -- joiner's game held the host's horse up to 40 s after its session came back)
+            if (now - (W221.horse.askedAt or -1e9)) >= 3.0 then
+                W221.horse.askedAt = now
+                W221.horse.asks = (W221.horse.asks or 0) + 1
+                KCD2MP_EmitEvent("w221_horseask", name or "-")
+            end
+            return
+        end
         if not W221.horse.seen then
             W221.horse.seen = true
             o.name = name
-            o.changedAt = -1e9   -- no grace: the record decides at the next tick
+            o.changedAt = -1e9   -- no grace: the record decides now (the horse this game holds is the save's, not a purchase)
+            if KCD2MP_W221HorseKeep then o.name = KCD2MP_W221HorseKeep(name, o.changedAt) end
             return
         end
     end
@@ -35473,6 +35484,8 @@ do
         if name ~= "" and not string.find(name, "^[%w_]+$") then return false end
         local wasKnown = W221.horse.mine ~= nil
         W221.horse.mine = name
+        -- the next session tick reads this game's horse at once (not up to 5 s later) and makes it what the record says
+        if not wasKnown and KCD2MP.w160 and KCD2MP.w160.ownHorse then KCD2MP.w160.ownHorse.at = -1e9 end
         if KCD2MP_W221BagsOwner then pcall(KCD2MP_W221BagsOwner, name, wasKnown) end
         mp_log("WO221-HORSE joiner: the host's record says this player's own horse is " .. (name ~= "" and name or "none"))
         return true
