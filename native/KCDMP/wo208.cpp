@@ -18,6 +18,7 @@
 #include "wo209_rules.h"
 #include "wo143.h"
 #include "wo172.h"
+#include "wo221.h"
 #include "wo210.h"
 #include "wo210_kd.h"
 #include "wo210_rules.h"
@@ -1276,15 +1277,20 @@ void own_release(uint32_t eid, OwnCopy& oc, double now, const char* why, uint8_t
         own_handover(eid, oc, now, path);
         oc.host = keep; oc.hostHave = keepHave;
     }
+    // WO-221 A: a dead body's animation is the engine's own (its death takes the controller apart): the owner gives its references
+    // back and touches nothing else -- no stop, no priority (rm4: the joiner crashed in the controller's update 1.0 s after the
+    // let-go of a dying copy stopped its base action)
+    const bool deadBody = wo221::on(wo221::kBitCombatActionEnd) && (path == wo210rules::kPathDeath || wo172::copy_dead(eid));
     for (auto& s : oc.own) if (s.act) {
         if (alive) {
             uint32_t st = 0;
-            if (hand && rd(s.act, 0x28, &st) && st < 2) rttr::stop_action(s.act); else wr_prio(s.act, kWithdrawnPriority);
+            if (deadBody) { /* only the reference */ }
+            else if (hand && rd(s.act, 0x28, &st) && st < 2) rttr::stop_action(s.act); else wr_prio(s.act, kWithdrawnPriority);
             rttr::release_action(s.act);
         }
         s = Probe::Scope{};
     }
-    if (oc.baseAct) { if (alive) { if (!hand) rttr::stop_action(oc.baseAct); rttr::release_action(oc.baseAct); } oc.baseAct = nullptr; }
+    if (oc.baseAct) { if (alive) { if (!hand && !deadBody) rttr::stop_action(oc.baseAct); rttr::release_action(oc.baseAct); } oc.baseAct = nullptr; }
     for (auto& r : oc.retired) if (alive) rttr::release_action(r.act);
     oc.retired.clear();
     if (oc.held && alive) motion::set_npc_guard_hold(eid, false, nullptr, npcdrive::now_s());

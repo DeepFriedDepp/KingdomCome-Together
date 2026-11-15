@@ -3,6 +3,7 @@
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 // WO-195: dead copies fall and end the fight -- the native half (wo195.h).
 #include "wo195.h"
+#include "combat_actions.h"
 #include "wo163.h"
 #include "wo195_rules.h"
 
@@ -119,6 +120,9 @@ uint8_t handle(uint8_t op, const uint8_t* body, size_t len, uint8_t* out, size_t
             std::memcpy(&eid, body + 1, 4);
             if (!eid || !engine::entity_by_id(eid)) return wo163::kRNoActor;
             c_asked.fetch_add(1);
+            // WO-221 A: the body's recorded combat actions end before its death (the death takes its combat part apart without the
+            // release call the mechanism hooks)
+            combatactions::end_for_entity(eid, "its death is applied next");
             out[0] = on() ? release(eid, "the agent: a death applied") : 0;
             read_body(eid, &out[1], &out[2]);
             *outLen = 3;

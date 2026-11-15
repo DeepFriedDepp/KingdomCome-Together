@@ -3877,6 +3877,9 @@ public partial class GameBridge(ClientConfig config)
         }
         await Wo195OnCopyDeathAsync(npcName, via);   // WO-195 1: every fight hold goes first (the engagement, the guard hold, the wish and its pin)
         await Wo131BeforeDeathAsync(npcName);   // WO-131 1c: the copy guard comes off for the host's death
+        // WO-221 A: the DLL has just ended the body's recorded actions (the release above); its controller drops them at its next
+        // update -- the death, which takes the body's combat part apart, comes 200 ms later
+        if (W221On("combat_action_end")) await Task.Delay(200, ct);
         bool applied = false;
         try { applied = await _combat.ApplyDeathAsync(lg, ct); }
         catch (Exception ex) { Console.WriteLine($"[npcdeath] ApplyDeath threw for '{npcName}': {ex.Message}"); }

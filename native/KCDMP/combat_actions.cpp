@@ -184,6 +184,9 @@ void install() {
     g_quiet[1 + kSlotStarted] = reinterpret_cast<void*>(&quiet_slot);
     g_quiet[1 + kSlotEnding] = reinterpret_cast<void*>(&quiet_slot);
     g_quiet[1 + kSlotEvent18] = reinterpret_cast<void*>(&quiet_slot);
+    // rm6: an ended action is never deleted either -- a death takes the body's combat part (and its action manager) apart while the
+    // controller's queue still holds the action; the block stays allocated (0x1A8 bytes) and the queue's walk finds a quiet action
+    g_quiet[1 + kSlotDelete] = reinterpret_cast<void*>(&quiet_slot);
 
     // every vftable that carries the release (C_Actor and the classes derived from it) gets ours in that slot
     anchor::Range rdata{};
