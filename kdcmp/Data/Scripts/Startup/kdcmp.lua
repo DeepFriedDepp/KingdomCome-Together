@@ -9779,6 +9779,7 @@ end
 SCRATCH.NPCPUPPETTICK_PPOS_SCRATCH = {}
 SCRATCH.NPCPUPPETTICK_AP_SCRATCH   = {}
 function KCD2MP_NpcPuppetTick(arg, gen)
+    if KCD2MP_W221WheelsTick then pcall(KCD2MP_W221WheelsTick) end   -- WO-221 E.2: the carts' wheels (50 ms)
     -- WO-84: absorb the orphan of a generation that stopped ITSELF.
     --
     -- This tick reschedules its successor at the TOP (below) and may decide at
@@ -10524,6 +10525,21 @@ function KCD2MP_NpcPuppetTick(arg, gen)
                     pcall(function() cIdle = KCD2MP_CombatIdleFor(e) end)
                     if cIdle then tag, anim = "combatidle", cIdle end
                 end
+            end
+            -- WO-221 E.2 (mp_cart_seat): a body that sits on a cart (it is the cart's child) keeps the animation its seat gives it --
+            -- no clip of this loop (the cart's own speed read as "sprint"), no stop of its layer. Asked once a second per puppet.
+            if KCD2MP_W221On and KCD2MP_W221On("cart_seat") and e.GetParent then
+                if (now - (p.w221ParAt or -1e9)) > 1.0 then
+                    p.w221ParAt = now
+                    local par = nil
+                    pcall(function() par = e:GetParent() end)
+                    if par and not p.w221OnCart then
+                        KCD2MP.w221CartRiders = (KCD2MP.w221CartRiders or 0) + 1
+                        mp_log(string.format("WO221-CART rider=%s sits on a cart (%s): its seat's animation is left alone [n=%d]", name, tostring(par.class), KCD2MP.w221CartRiders))
+                    end
+                    p.w221OnCart = par ~= nil
+                end
+                if p.w221OnCart then return end
             end
             -- WO-121: a native-written copy gets the engine's own gait
             -- (SetPseudoSpeed every frame from its rendered speed); the clip
@@ -35329,7 +35345,7 @@ do
     W221.NAMES = {
         combat_action_end = "mp_combat_action_end", talk_hold = "mp_talk_hold", drive = "mp_drive", holders = "mp_holders",
         shop_keeper = "mp_shop_keeper", own_horse = "mp_own_horse", talk_force = "mp_talk_force",
-        corpse_look = "mp_corpse_look", horse_drop = "mp_horse_drop", saddlebags = "mp_saddlebags", route_quiet = "mp_route_quiet", cart_seat = "mp_cart_seat",
+        corpse_look = "mp_corpse_look", horse_drop = "mp_horse_drop", saddlebags = "mp_saddlebags", route_quiet = "mp_route_quiet", cart_seat = "mp_cart_seat", cart_wheels = "mp_cart_wheels",
     }
     W221.HELP = {
         combat_action_end = "A: (both) no combat animation of ours outlives its body's combat part (the joiner's fight crash)",
@@ -35343,6 +35359,7 @@ do
         saddlebags = "D.4: (both) a horse's inventory is its owner's: it is the same in both games and kept by the host's saves; the partner may take from it",
         route_quiet = "F: (host) the NPCs' route lines are read and sent only for joiners whose mp_route is on; (joiner) says so every 10 s",
         cart_seat = "E.2: (joiner) a cart's rider keeps its seat's pose (the puppet start does not reset a body that sits on a cart)",
+        cart_wheels = "E.2: (joiner) the wheels of a cart's copy turn with the way the copy moves",
         talk_force = "B: (joiner) a talk the person never answers (the request and its retry time out) is started the game's forced way",
     }
     function KCD2MP_W221On(name)
@@ -36661,8 +36678,71 @@ do
         return true
     end
     -- the joiner, twice a second per cart within 80 m of this player: where its cart is against the host's, its height, its riders
+    -- WO-221 E.2 (mp_cart_wheels), the joiner: the wheels of a cart's copy turn with the way the copy moves. Called from the 50 ms puppet
+    -- tick; a cart is turned while the host's census named it in the last 3 s (KCD2MP_W217CartMeasure, twice a second).
+    F.wheels = F.wheels or {}
+    local function wheelsOf(top)
+        local ws = {}
+        local function scan(e, depth)
+            local n = 0
+            pcall(function() n = e:GetChildCount() or 0 end)
+            for i = 0, n - 1 do
+                local c = nil
+                pcall(function() c = e:GetChild(i) end)
+                if c then
+                    local cn = ""
+                    pcall(function() cn = c:GetName() end)
+                    if string.sub(cn, 1, 6) == "wheel_" and #ws < 8 then
+                        local r = 0.62
+                        pcall(function()
+                            local mn, mx = c:GetLocalBBox()
+                            if mn and mx and (mx.z - mn.z) > 0.3 and (mx.z - mn.z) < 3 then r = (mx.z - mn.z) / 2 end
+                        end)
+                        ws[#ws + 1] = { e = c, r = r }
+                    elseif depth < 2 then scan(c, depth + 1) end
+                end
+            end
+        end
+        scan(top, 0)
+        return ws
+    end
+    function KCD2MP_W221WheelsTick()
+        if not (KCD2MP_W221On and KCD2MP_W221On("cart_wheels")) then return false end
+        local now = os.clock()
+        for name, w in pairs(F.wheels) do
+            if now - w.seen > 3.0 then F.wheels[name] = nil
+            else
+                local e = nil
+                pcall(function() e = System.GetEntityByName(name) end)
+                if e then
+                    local q, a = e:GetWorldPos(), e:GetWorldAngles()
+                    if w.last and q and a then
+                        -- the way along the cart's own heading (yaw 0 faces +Y), signed: a cart backing turns its wheels back
+                        local ds = (q.x - w.last.x) * -math.sin(a.z) + (q.y - w.last.y) * math.cos(a.z)
+                        if ds > -2 and ds < 2 and (ds > 0.0005 or ds < -0.0005) then
+                            if not w.list then w.list = wheelsOf(e); F.stats.wheelCarts = (F.stats.wheelCarts or 0) + 1
+                                mp_log(string.format("WO221-WHEELS cart=%s wheels=%d radius_m=%.2f -- they turn with the way the cart's copy moves [n=%d]", name, #w.list,
+                                    w.list[1] and w.list[1].r or 0, F.stats.wheelCarts)) end
+                            for _, wh in ipairs(w.list) do
+                                pcall(function()
+                                    local wa = wh.e:GetAngles()
+                                    local x = wa.x - ds / wh.r
+                                    if x > math.pi then x = x - 2 * math.pi elseif x < -math.pi then x = x + 2 * math.pi end
+                                    wh.e:SetAngles({ x = x, y = wa.y, z = wa.z })
+                                end)
+                            end
+                            w.way = (w.way or 0) + math.abs(ds)
+                        end
+                    end
+                    if q then w.last = { x = q.x, y = q.y } end
+                end
+            end
+        end
+        return true
+    end
     function KCD2MP_W217CartMeasure(name, hx, hy, hz, riders)
         if not KCD2MP_W217On("carts") then return false end
+        do local wn = tostring(name); local w = F.wheels[wn] or {}; w.seen = os.clock(); F.wheels[wn] = w end   -- WO-221 E.2: this cart's wheels turn
         local e = nil
         pcall(function() e = System.GetEntityByName(tostring(name)) end)
         if not e or not player then return false end
