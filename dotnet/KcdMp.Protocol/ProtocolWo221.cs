@@ -42,8 +42,10 @@ public static class W221Switch
 
     /// <summary>The agent's and the mod's own switches (the agent tells the mod): shop_keeper (B: a copy of a shopkeeper keeps the host
     /// keeper's shop -- the host says which, the joiner's DLL opens it with the copy by the shop's own call), talk_force (B: the
-    /// mod's own: a talk the copy never takes is started the game's forced way).</summary>
-    public static readonly string[] AgentNames = ["shop_keeper", "talk_force", "horse_drop", "saddlebags", "route_quiet", "cart_seat", "cart_wheels"];
+    /// mod's own: a talk the copy never takes is started the game's forced way), ragdoll_once (A: a fresh corpse is laid down by one
+    /// ragdoll at a time, only after the game's own death action had its time -- the joiner's crashes came ~1 s after a ragdoll of a
+    /// body 0.65 s dead).</summary>
+    public static readonly string[] AgentNames = ["shop_keeper", "talk_force", "horse_drop", "saddlebags", "route_quiet", "cart_seat", "cart_wheels", "ragdoll_once"];
 
     public static readonly string[] Names = [.. NativeNames, .. AgentNames];
 

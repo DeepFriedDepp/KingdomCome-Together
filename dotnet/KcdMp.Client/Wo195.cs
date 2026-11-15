@@ -39,6 +39,16 @@ public static class Wo195Rules
     public static bool Upright(byte dead, byte living) => dead == 1 && living == 1;
     public const int RagdollSettleMs = 400;
 
+    /// <summary>WO-221 finish (mp_ragdoll_once): the physics ragdoll of an upright dead copy waits until its death is this old, and the
+    /// body is read again first (the game's own death action, or another rule, may have laid it down meanwhile). rm3, rm4, rm6, rm11:
+    /// every joiner crash of the death test came within seconds of a dead copy's skeleton change; rm4 and rm11 ~1 s after this ragdoll,
+    /// called 0.65 s after the death, while the game's dead action was starting.</summary>
+    public const int RagdollGraceMs = 2_500;
+
+    /// <summary>How long still to wait before the physics ragdoll of a death applied at <paramref name="releasedMs"/> (0 = now).</summary>
+    public static int RagdollWaitMs(bool on, long releasedMs, long nowMs) =>
+        !on ? 0 : (int)Math.Clamp(RagdollGraceMs - (nowMs - releasedMs), 0, RagdollGraceMs);
+
     public static bool ReleaseDue(bool on, long lastReleaseMs, long nowMs) => on && (lastReleaseMs <= 0 || nowMs - lastReleaseMs >= ReleaseDedupeMs);
 
     /// <summary>A copy marked dead is never engaged, guard-held or wished again (until its host stream says it lives: a reload).</summary>

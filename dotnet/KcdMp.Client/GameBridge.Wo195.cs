@@ -219,6 +219,15 @@ public partial class GameBridge
                         if (upright) how214 = "finished+ragdolled";
                     }
                 }
+                if (upright && Wo195Rules.RagdollWaitMs(W221On("ragdoll_once"), releasedMs, Environment.TickCount64) is int wait && wait > 0)
+                {
+                    // WO-221 finish (mp_ragdoll_once): the game's own death action first; then only a body that still stands
+                    await Task.Delay(wait);
+                    var rw = await _combat.Wo163Async(Protocol.Wo195OpCheck, a);
+                    if (rw is { Ok: true, Payload.Length: >= 4 } yw) { x = yw; upright = Wo195Rules.Upright(x.Payload[0], x.Payload[2]); }
+                    Interlocked.Increment(ref _w221RagdollWaits);
+                    if (!upright) { Interlocked.Increment(ref _w221RagdollSpared); how214 = "lay-down-by-itself"; }
+                }
                 if (upright)
                 {
                     if (how214 != "finished+ragdolled") how214 = "ragdolled";

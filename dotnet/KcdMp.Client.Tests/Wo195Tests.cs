@@ -145,4 +145,13 @@ public class Wo195Tests
         Assert.Contains("f.Length == 6 && name == \"w134_take\" && Wo195Rules.IsScreenMark(f[5])", w134);   // the joiner's event
         Assert.Contains("f.Length == 5 && m.Kind == Protocol.LootAskBodyTake && Wo195Rules.IsScreenMark(f[4])", w134);   // the host's frame
     }
+
+    [Fact]
+    public void The_physics_ragdoll_waits_for_the_games_own_death_action()
+    {
+        Assert.Equal(0, Wo195Rules.RagdollWaitMs(false, 1_000, 1_650));                  // the twin: at once (0.65.0)
+        Assert.Equal(1_850, Wo195Rules.RagdollWaitMs(true, 1_000, 1_650));               // 0.65 s after the death: 1.85 s more
+        Assert.Equal(0, Wo195Rules.RagdollWaitMs(true, 1_000, 4_000));                   // already 3 s dead: at once
+        Assert.Equal(Wo195Rules.RagdollGraceMs, Wo195Rules.RagdollWaitMs(true, 5_000, 4_000));   // a clock that runs backwards: the whole grace
+    }
 }

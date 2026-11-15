@@ -822,6 +822,34 @@ do -- the switches and the commands
     noErrs("C1")
 end
 
+do -- WO-221 finish (mp_ragdoll_once): one ragdoll per fresh corpse at a time, never on a body that already lies
+    local calls = 0
+    local HEAD = 1.45
+    local body = { id = 9101, class = "NPC", actor = { IsDead = function() return true end },
+                   GetName = function() return "tvez_rd" end, GetWorldPos = function() return { x = 0, y = 0, z = 10 } end,
+                   GetBonePos = function(_, b) return { x = 0, y = 0, z = 10 + HEAD } end, IsHidden = function() return false end,
+                   RagDollize = function() calls = calls + 1 end }
+    ENTS["tvez_rd"] = body
+    KCD2MP.w195.deadRelease = true
+    W221.on.ragdoll_once = nil   -- the default: on
+    NOW = NOW + 100
+    check("R1: an upright dead copy is ragdolled", KCD2MP_W195Ragdoll("tvez_rd") == true and calls == 1)
+    NOW = NOW + 1
+    check("R2: a second ragdoll of the same body within 4 s is refused (any path)", KCD2MP_W195Ragdoll("tvez_rd") == false and calls == 1
+        and logCount("WO221-RAGDOLL npc=tvez_rd WO195-RAGDOLL refused: ragdolled") == 1)
+    NOW = NOW + 4
+    HEAD = 0.3
+    check("R3: a body that lies already is never ragdolled", KCD2MP_W195Ragdoll("tvez_rd") == false and calls == 1
+        and logCount("refused: it lies already") == 1)
+    HEAD = 1.45
+    check("R4: still standing 5 s later: ragdolled again", KCD2MP_W195Ragdoll("tvez_rd") == true and calls == 2)
+    W221.on.ragdoll_once = false
+    NOW = NOW + 0.5
+    check("R5: the twin (off): the 0.65.0 rule, no limit", KCD2MP_W195Ragdoll("tvez_rd") == true and calls == 3)
+    W221.on.ragdoll_once = nil
+    noErrs("R")
+end
+
 local pass, fail = 0, 0
 for _, r in ipairs(RESULTS) do if r:sub(1, 4) == "PASS" then pass = pass + 1 else fail = fail + 1 end end
 OUT = table.concat(RESULTS, "\n") .. string.format("\n%d passed, %d failed", pass, fail)

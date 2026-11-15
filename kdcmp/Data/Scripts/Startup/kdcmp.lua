@@ -30930,8 +30930,10 @@ function KCD2MP_W195Ragdoll(name)
         mp_log(string.format("WO195-RAGDOLL npc=%s refused (%s)", tostring(name), not e and "no body" or not dead and "it is not dead here" or "no RagDollize"))
         return false
     end
+    if KCD2MP_W221RagdollRefused and KCD2MP_W221RagdollRefused(e, name, "WO195-RAGDOLL") then return false end
     local ok, err = pcall(function() e:RagDollize(0) end)
     w.stats.ragdolled = (w.stats.ragdolled or 0) + 1
+    if KCD2MP_W221RagdollDone then KCD2MP_W221RagdollDone(name) end
     mp_log(string.format("WO195-RAGDOLL npc=%s -> %s -- the dead copy stood upright: the game's own ragdoll lays it down", tostring(name), ok and "ok" or ("FAILED " .. tostring(err))))
     return ok
 end
@@ -35357,6 +35359,7 @@ do
         combat_action_end = "mp_combat_action_end", talk_hold = "mp_talk_hold", drive = "mp_drive", holders = "mp_holders",
         shop_keeper = "mp_shop_keeper", own_horse = "mp_own_horse", talk_force = "mp_talk_force",
         corpse_look = "mp_corpse_look", horse_drop = "mp_horse_drop", saddlebags = "mp_saddlebags", route_quiet = "mp_route_quiet", cart_seat = "mp_cart_seat", cart_wheels = "mp_cart_wheels",
+        ragdoll_once = "mp_ragdoll_once",
     }
     W221.HELP = {
         combat_action_end = "A: (both) no combat animation of ours outlives its body's combat part (the joiner's fight crash)",
@@ -35372,6 +35375,7 @@ do
         cart_seat = "E.2: (joiner) a cart's rider keeps its seat's pose (the puppet start does not reset a body that sits on a cart)",
         cart_wheels = "E.2: (joiner) the wheels of a cart's copy turn with the way the copy moves",
         talk_force = "B: (joiner) a talk the person never answers (the request and its retry time out) is started the game's forced way",
+        ragdoll_once = "A: (joiner) a fresh corpse is laid down by one ragdoll at a time, after the game's own death action had its time, never when it already lies",
     }
     function KCD2MP_W221On(name)
         local v = W221.on[tostring(name)]
@@ -36596,6 +36600,33 @@ do
     -- the game's physics range (it died, or was made, while this player was far away) -- it still stands when he gets there. Every dead
     -- NPC within 40 m of this player whose head is more than 0.9 m above its feet is laid down again by the game's own ragdoll: once
     -- per 3 s for the first six tries, then once per 15 s (e1c: one body took the sixth). The partner's figures are never touched.
+    -- WO-221 finish (mp_ragdoll_once): every joiner crash of the death test (rm3, rm4, rm6, rm11) came within seconds of a dead copy's
+    -- skeleton change; rm4 and rm11 ~1 s after WO-195's ragdoll of a body 0.65 s dead (the game's own dead action starting). Now one
+    -- ragdoll per body per 4 s (any path), none on a body that already lies (its head under 0.9 m above its feet).
+    W221.ragdolledAt = W221.ragdolledAt or {}
+    W221.ragdollStats = W221.ragdollStats or { refusedRecent = 0, refusedLying = 0, waitedFresh = 0 }
+    local function w221HeadUp(e)
+        local up = nil
+        pcall(function() local h, q = e:GetBonePos("Head"), e:GetWorldPos(); if h then up = h.z - q.z end end)
+        return up
+    end
+    function KCD2MP_W221RagdollDone(name) W221.ragdolledAt[tostring(name)] = os.clock() end
+    function KCD2MP_W221RagdollRefused(e, name, who)
+        if not KCD2MP_W221On("ragdoll_once") then return false end
+        local at = W221.ragdolledAt[tostring(name)]
+        if at and os.clock() - at < 4.0 then
+            W221.ragdollStats.refusedRecent = W221.ragdollStats.refusedRecent + 1
+            mp_log(string.format("WO221-RAGDOLL npc=%s %s refused: ragdolled %.1f s ago (one at a time) [n=%d]", tostring(name), who, os.clock() - at, W221.ragdollStats.refusedRecent))
+            return true
+        end
+        local up = w221HeadUp(e)
+        if up and up <= 0.9 then
+            W221.ragdollStats.refusedLying = W221.ragdollStats.refusedLying + 1
+            mp_log(string.format("WO221-RAGDOLL npc=%s %s refused: it lies already (head %.2f m up) [n=%d]", tostring(name), who, up, W221.ragdollStats.refusedLying))
+            return true
+        end
+        return false
+    end
     function KCD2MP_W221CorpseLay()
         if not (player and KCD2MP_W221On and KCD2MP_W221On("corpse_look")) then return false end
         E.lay = E.lay or {}
@@ -36611,11 +36642,16 @@ do
                     local up, hidden = nil, false
                     pcall(function() hidden = e:IsHidden() == true end)
                     pcall(function() local h, q = e:GetBonePos("Head"), e:GetWorldPos(); if h then up = h.z - q.z end end)
-                    local st = E.lay[name] or { n = 0, at = -1e9 }
+                    local st = E.lay[name] or { n = 0, at = -1e9, deadSince = os.clock() }
                     E.lay[name] = st
-                    if up and up > 0.9 and not hidden and os.clock() - st.at >= (st.n < 6 and 3 or 15) then
+                    -- mp_ragdoll_once: a body seen dead for under 4 s, or ragdolled under 4 s ago, is the game's (and WO-195's) to lay down
+                    local fresh = KCD2MP_W221On("ragdoll_once") and ((os.clock() - (st.deadSince or -1e9)) < 4.0
+                        or (os.clock() - (W221.ragdolledAt[name] or -1e9)) < 4.0)
+                    if fresh and up and up > 0.9 then W221.ragdollStats.waitedFresh = W221.ragdollStats.waitedFresh + 1 end
+                    if up and up > 0.9 and not hidden and not fresh and os.clock() - st.at >= (st.n < 6 and 3 or 15) then
                         st.n, st.at, st.lies = st.n + 1, os.clock(), nil
                         local ok, err = pcall(function() e:RagDollize(0) end)
+                        KCD2MP_W221RagdollDone(name)
                         E.stats.laid = (E.stats.laid or 0) + 1
                         mp_log(string.format("WO221-CORPSE npc=%s dead and standing (head %.2f m up) near this player -> %s -- laid down again, try %d [n=%d]", name, up,
                             ok and "ok" or ("FAILED " .. tostring(err)), st.n, E.stats.laid))
