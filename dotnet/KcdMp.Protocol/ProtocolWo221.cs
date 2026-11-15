@@ -22,6 +22,8 @@ public static partial class Protocol
     /// <summary>corpse_look.h: 197 Read [name len:1][name] -> [code:1][six zones 0..255]; 198 Set [name len:1][name][six zones] -> [code:1][changed:1].
     /// Codes: 1 ok, 2 no such body here, 3 not armed, 4 the switch is off, 5 the body has no helper (never bloodied).</summary>
     public const byte Wo221OpBloodRead = 197, Wo221OpBloodSet = 198;
+    /// <summary>D.1 (the host): the quest module instances that sell a joiner's recorded horse: [n:1]{[len:2][path]}.</summary>
+    public const byte Wo221OpHorseModules = 199;
 }
 
 /// <summary>
@@ -41,7 +43,7 @@ public static class W221Switch
     /// <summary>The agent's and the mod's own switches (the agent tells the mod): shop_keeper (B: a copy of a shopkeeper keeps the host
     /// keeper's shop -- the host says which, the joiner's DLL opens it with the copy by the shop's own call), talk_force (B: the
     /// mod's own: a talk the copy never takes is started the game's forced way).</summary>
-    public static readonly string[] AgentNames = ["shop_keeper", "talk_force", "horse_drop", "saddlebags", "route_quiet"];
+    public static readonly string[] AgentNames = ["shop_keeper", "talk_force", "horse_drop", "saddlebags", "route_quiet", "cart_seat"];
 
     public static readonly string[] Names = [.. NativeNames, .. AgentNames];
 

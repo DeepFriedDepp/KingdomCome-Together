@@ -177,4 +177,30 @@ public class Wo221Tests
         Assert.False(Wo221Rules.SameQuestModule(null, talk));
         Assert.False(Wo221Rules.SameQuestModule("", ""));
     }
+
+    [Fact]
+    public void The_choice_lines_reach_the_agent()
+    {
+        const string choice = "[ID: 357] 1) Barbora.open_world.nextnextgenpunishment.arrestdialogue.straze__zatykaci_chat.dec2.surrender [used=false][priority=0]";
+        Assert.True(LogTailGameTransport.Wo144Passes(choice));          // the forward list passes what the rule reads
+        Assert.True(Wo221Rules.IsChoiceOf(choice, 357));
+        const string start = "New dialogue 'Barbora.open_world.nextnextgenpunishment.arrestdialogue.straze__zatykaci_chat (chat - Id: 357) (AI::RequestDialog)' is starting. Params: souls = 'Ex: ttkc_man_2 - meta override: STRAZ_ZATYKANI_CHAT; Ex: Dude' forced = false";
+        Assert.Equal(357, Wo221Rules.DudeDialogIdAnywhere(start));
+    }
+
+    [Fact]
+    public void The_module_that_sells_a_horse_is_read_from_the_passed_node()
+    {
+        const string node = "Barbora.trosecko.nakup_koni__trosecko.horse_trader_semin.horseinstance_1.replaceplayerhorse_disposeoldifexists.replaceplayerhorse4_1";
+        Assert.Equal("Barbora.trosecko.nakup_koni__trosecko.horse_trader_semin.horseinstance_1", Wo221Rules.HorseModuleOf(node));
+        Assert.Equal("", Wo221Rules.HorseModuleOf("Barbora.a.b"));       // not that deep
+        Assert.Equal("", Wo221Rules.HorseModuleOf("not a path"));
+        Assert.Equal("", Wo221Rules.HorseModuleOf(null));
+        byte[] body = Wo221Rules.HorseModulesBody(["Barbora.a.b.c.d", "bad path", "Barbora.a.b.c.d"]);
+        Assert.Equal(1, body[0]);                                         // the duplicate and the bad one are left out
+        Assert.Equal(15, body[1] | (body[2] << 8));
+        Assert.Equal("Barbora.a.b.c.d", System.Text.Encoding.ASCII.GetString(body, 3, 15));
+        Assert.Equal(new byte[] { 0 }, Wo221Rules.HorseModulesBody([]));
+        Assert.Equal(199, Protocol.Wo221OpHorseModules);
+    }
 }

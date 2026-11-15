@@ -78,7 +78,15 @@ public sealed partial class GameBridge
                     _w221HorseStore.SaveCurrent(tag, p);
                     Console.WriteLine($"MP-W221 horse: host loaded md5 {md5[..8]}: its paired record is back ({p.Entries.Count} horse(s): {p.Csv()})");
                 }
-                else Console.WriteLine($"MP-W221 horse: host loaded md5 {md5[..8]}: no record paired with it -- the running record is kept ({_w221HorseRec.Entries.Count} horse(s))");
+                else
+                {
+                    // a save from before any horse was recorded (or older than the pairs kept): in that world nobody's horse is
+                    // recorded -- never a later save's record (a horse the joiner had not bought there)
+                    int had = _w221HorseRec.Entries.Count;
+                    _w221HorseRec = new HorseRecord();
+                    _w221HorseStore.SaveCurrent(tag, _w221HorseRec);
+                    Console.WriteLine($"MP-W221 horse: host loaded md5 {md5[..8]}: no record paired with it -- nobody's horse is recorded in that world (the running record had {had})");
+                }
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
             {
@@ -89,6 +97,8 @@ public sealed partial class GameBridge
     }
 
     /// <summary>Host: a joiner's replay is about to run in this world (its closure id): a horse node the gate passes in it is that joiner's.</summary>
+    private readonly ConcurrentDictionary<byte, string> _w221PassModule = new();
+    private string _w221ModsSent = "\u0001"; private long _w221ModsSentAtMs, _w221HostBuys;
     private void Wo221NoteReplay(byte src, uint closure)
     {
         if (_w221ClosurePeer.Count > 4096) _w221ClosurePeer.Clear();
@@ -104,6 +114,13 @@ public sealed partial class GameBridge
             Console.WriteLine($"MP-W221 horse: the host's own purchase or gift, mirrored here, left this player's horse alone ({what}: {path})");
             return;
         }
+        if (what == "hostbuy")
+        {
+            Interlocked.Increment(ref _w221HostBuys);
+            Console.WriteLine($"MP-W221 horse: the host bought a horse the record names a joiner's ({path}): it stays the joiner's; this game's own horse is unchanged; the price went to the groom");
+            _ = ExecLuaAsync("if KCD2MP_Wo124Msg then KCD2MP_Wo124Msg(\"That horse is your partner's. It stays theirs; the groom kept the coin.\") end");
+            return;
+        }
         if (!_w221ClosurePeer.TryGetValue(closure, out byte peer))
         {
             Console.WriteLine($"MP-W221 horse: the gate passed {what} in closure {closure:X8} of no known joiner ({path})");
@@ -111,6 +128,7 @@ public sealed partial class GameBridge
         }
         if (what != "replace") return;
         _w221HorsePassMs[peer] = Environment.TickCount64;
+        _w221PassModule[peer] = Wo221Rules.HorseModuleOf(path);   // the module instance that sells the horse he bought
         Console.WriteLine($"MP-W221 horse: ghost {peer}'s purchase or gift ran in this world (closure {closure:X8}): this game's own horse stays as it is; his word names the horse");
     }
 
@@ -140,6 +158,8 @@ public sealed partial class GameBridge
                 bool ranHere = _w221HorsePassMs.TryGetValue(src, out long at) && now - at <= W221HorsePassWindowMs;
                 rec.Set(k, $"ghost {src}", horse, ranHere ? "bought (its purchase ran in this world)" : "bought (in his own game)", DateTimeOffset.UtcNow.ToUnixTimeSeconds());
                 try { _w221HorseStore.SaveCurrent(_w221HorseTag!, rec); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+                if (ranHere && _w221PassModule.TryRemove(src, out string? mod) && mod.Length > 0 && rec.OwnerOf(horse) is { } ent) ent.Module = mod;
+                try { _w221HorseStore.SaveCurrent(_w221HorseTag!, rec); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
                 _w221HorsePassMs.TryRemove(src, out _);
                 Interlocked.Increment(ref _w221HorseTaken);
                 Console.WriteLine($"MP-W221 horse: {horse} is ghost {src}'s own horse in this world now (key {k:x8}; the record: {rec.Csv()})");
@@ -164,8 +184,15 @@ public sealed partial class GameBridge
         if (_w221HostOwnHorseKnown)
             foreach (var (peer, w) in _w221ClaimWaiting.ToArray())
                 if (_w221ClaimWaiting.TryRemove(peer, out _) && Environment.TickCount64 - w.AtMs < W221HorsePassWindowMs) Wo221OnHorseClaim(peer, 0, w.Horse);
-        string csv;
-        lock (_w221HorseGate) csv = rec.Csv();
+        string csv, mods;
+        lock (_w221HorseGate) { csv = rec.Csv(); mods = string.Join("\n", rec.Entries.Where(e => e.Module.Length > 0).Select(e => e.Module).Distinct()); }
+        // D.1: the DLL's gate is told which modules sell a joiner's horse (on a change and every 30 s)
+        long nowM = Environment.TickCount64;
+        if (mods != _w221ModsSent || nowM - _w221ModsSentAtMs > 30_000)
+        {
+            _w221ModsSent = mods; _w221ModsSentAtMs = nowM;
+            _ = _combat.Wo163Async(Protocol.Wo221OpHorseModules, Wo221Rules.HorseModulesBody(mods.Length == 0 ? [] : mods.Split('\n')));
+        }
         long now = Environment.TickCount64;
         if (csv == _w221HorsesSent && now - _w221HorsesSentAtMs < 30_000) return;
         bool changed = csv != _w221HorsesSent;

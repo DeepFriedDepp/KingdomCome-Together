@@ -3284,6 +3284,20 @@ function KCD2MP_NpcDetach(name, p, why)
             tostring(name), tostring(why)))
         return
     end
+    -- WO-221 E.2 (mp_cart_seat): a rider of a cart is the cart's child and wears the engine's own "cart" pose tags; the reset below
+    -- clears them ("ForceIdleState clears 'cart' tags") and the copy stands on its seat for the rest of the ride. Not detached.
+    if KCD2MP_W221On and KCD2MP_W221On("cart_seat") then
+        local par = nil
+        if e.GetParent then pcall(function() par = e:GetParent() end) end
+        if par then
+            st.skipped = st.skipped + 1
+            p.detachPending = nil
+            st.onCart = (st.onCart or 0) + 1
+            mp_log(string.format("MP-DETACH npc=%s stance=skipped unstance=skipped result=skipped-on-a-cart changed=0 why=%s parent=%s [n=%d]",
+                tostring(name), tostring(why), tostring(par.class), st.onCart))
+            return
+        end
+    end
     local inDialog = false
     if not pcall(function() if e.human and e.human.IsInDialog then inDialog = e.human:IsInDialog() == true end end) then
         KCD2MP_DialogGuardFailed(name, "detach")
@@ -35315,7 +35329,7 @@ do
     W221.NAMES = {
         combat_action_end = "mp_combat_action_end", talk_hold = "mp_talk_hold", drive = "mp_drive", holders = "mp_holders",
         shop_keeper = "mp_shop_keeper", own_horse = "mp_own_horse", talk_force = "mp_talk_force",
-        corpse_look = "mp_corpse_look", horse_drop = "mp_horse_drop", saddlebags = "mp_saddlebags", route_quiet = "mp_route_quiet",
+        corpse_look = "mp_corpse_look", horse_drop = "mp_horse_drop", saddlebags = "mp_saddlebags", route_quiet = "mp_route_quiet", cart_seat = "mp_cart_seat",
     }
     W221.HELP = {
         combat_action_end = "A: (both) no combat animation of ours outlives its body's combat part (the joiner's fight crash)",
@@ -35328,6 +35342,7 @@ do
         horse_drop = "E.3: (both) an item dropped out of your own horse's inventory is a drop for both players, like one out of your own",
         saddlebags = "D.4: (both) a horse's inventory is its owner's: it is the same in both games and kept by the host's saves; the partner may take from it",
         route_quiet = "F: (host) the NPCs' route lines are read and sent only for joiners whose mp_route is on; (joiner) says so every 10 s",
+        cart_seat = "E.2: (joiner) a cart's rider keeps its seat's pose (the puppet start does not reset a body that sits on a cart)",
         talk_force = "B: (joiner) a talk the person never answers (the request and its retry time out) is started the game's forced way",
     }
     function KCD2MP_W221On(name)
@@ -36549,8 +36564,8 @@ do
     end
     -- WO-221 E.1 (corpse_look), the joiner, every 2 s (the agent's tick): the ragdoll call a death makes does nothing for a body outside
     -- the game's physics range (it died, or was made, while this player was far away) -- it still stands when he gets there. Every dead
-    -- NPC within 40 m of this player whose head is more than 0.9 m above its feet is laid down again by the game's own ragdoll: at
-    -- most once per 3 s and 6 times a body. The partner's figures are never touched.
+    -- NPC within 40 m of this player whose head is more than 0.9 m above its feet is laid down again by the game's own ragdoll: once
+    -- per 3 s for the first six tries, then once per 15 s (e1c: one body took the sixth). The partner's figures are never touched.
     function KCD2MP_W221CorpseLay()
         if not (player and KCD2MP_W221On and KCD2MP_W221On("corpse_look")) then return false end
         E.lay = E.lay or {}
@@ -36568,11 +36583,11 @@ do
                     pcall(function() local h, q = e:GetBonePos("Head"), e:GetWorldPos(); if h then up = h.z - q.z end end)
                     local st = E.lay[name] or { n = 0, at = -1e9 }
                     E.lay[name] = st
-                    if up and up > 0.9 and not hidden and st.n < 6 and os.clock() - st.at >= 3 then
+                    if up and up > 0.9 and not hidden and os.clock() - st.at >= (st.n < 6 and 3 or 15) then
                         st.n, st.at, st.lies = st.n + 1, os.clock(), nil
                         local ok, err = pcall(function() e:RagDollize(0) end)
                         E.stats.laid = (E.stats.laid or 0) + 1
-                        mp_log(string.format("WO221-CORPSE npc=%s dead and standing (head %.2f m up) near this player -> %s -- laid down again, try %d of 6 [n=%d]", name, up,
+                        mp_log(string.format("WO221-CORPSE npc=%s dead and standing (head %.2f m up) near this player -> %s -- laid down again, try %d [n=%d]", name, up,
                             ok and "ok" or ("FAILED " .. tostring(err)), st.n, E.stats.laid))
                     elseif up and up <= 0.9 and st.n > 0 and not st.lies then
                         st.lies = true

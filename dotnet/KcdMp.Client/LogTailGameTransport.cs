@@ -482,6 +482,9 @@ public sealed class LogTailGameTransport : IGameTransport
         // WO-183 2: a conversation's dialogue twins (MasterSlaveManager lines naming 'DialogTwin_<soul>'): WO-179's A3 guard waited for
         // them and the forward lists never passed one -- every joiner conversation was ended 3.6-3.9 s in (the field: 6 of 6 haggles)
         "DialogTwin_",
+        // WO-221 B: a dialogue's choices ("[ID: n] k) path [used=false][priority=0]"): a conversation at its choices is running -- the
+        // rescue's rule read them and the forward lists never passed one (trade6: 24 rescues of conversations waiting for a choice)
+        "[used=",
         // WO-183 3: the engine's refusal of a save while another is pending
         "because there is another savegame pending",
         // WO-189 C: a cutscene's initialization with its holder (the stage feed drops the holder; a barrier's holder names the wait)

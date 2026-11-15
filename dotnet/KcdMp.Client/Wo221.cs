@@ -255,3 +255,33 @@ public static partial class Wo221Rules
         return parent.Count(ch => ch == '.') >= 2;
     }
 }
+
+/// <summary>WO-221 D.1: the quest module instance that sells a horse.</summary>
+public static partial class Wo221Rules
+{
+    /// <summary>"...horse_trader_semin.horseinstance_1.replaceplayerhorse_disposeoldifexists.replaceplayerhorse4_1" -> "...horse_trader_semin.horseinstance_1":
+    /// the node's path without its last two segments (the library that holds the node, the node); "" when the path is not that deep.</summary>
+    public static string HorseModuleOf(string? nodePath)
+    {
+        if (string.IsNullOrEmpty(nodePath) || !Wo137Text.IsPath(nodePath)) return "";
+        int a = nodePath.LastIndexOf('.');
+        int b = a > 0 ? nodePath.LastIndexOf('.', a - 1) : -1;
+        if (b <= 0) return "";
+        string m = nodePath[..b];
+        return m.Count(ch => ch == '.') >= 3 ? m : "";
+    }
+
+    /// <summary>Op 199's body: [n:1]{[len:2][path]} -- at most 32 modules of at most 400 characters.</summary>
+    public static byte[] HorseModulesBody(IReadOnlyList<string> modules)
+    {
+        var ok = modules.Where(m => m.Length is > 0 and <= 400 && Wo137Text.IsPath(m)).Distinct().Take(32).ToList();
+        var b = new List<byte> { (byte)ok.Count };
+        foreach (string m in ok)
+        {
+            byte[] p = Encoding.ASCII.GetBytes(m);
+            b.Add((byte)(p.Length & 0xFF)); b.Add((byte)(p.Length >> 8));
+            b.AddRange(p);
+        }
+        return [.. b];
+    }
+}

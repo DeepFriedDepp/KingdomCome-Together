@@ -440,6 +440,7 @@ public partial class GameBridge
                 }
                 _w200HostQueue.TryDequeue(out _);
                 uint hc = Wo200Rules.HostClosure(q.Src, q.Closure);
+                Wo221NoteReplay(q.Src, hc);   // WO-221 D.1: the gate names the closure this world runs the replay in
                 byte[] pb = Encoding.ASCII.GetBytes(q.Path), qb = Encoding.ASCII.GetBytes(q.Port);
                 var a = new byte[4 + 2 + pb.Length + 1 + qb.Length];
                 BinaryPrimitives.WriteUInt32LittleEndian(a, hc);

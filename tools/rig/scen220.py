@@ -342,9 +342,13 @@ def _start_talk(c, npc, x, y, z, force=False):
     m0 = c.mark()
     if force: c.ask(T.FORCE_DLG % npc, 'W217D', 4)
     else: c.lua(T.CLASS_TALK % npc)
-    m, _dt = T._wait_any(c, m0['k'], T.ANY_DLG + '|' + T.CANCELLED, 25)
-    if not m or re.search(T.CANCELLED, m.group(0)): return None, m0, {'npc': npc, 'ready_wait_s': ready, 'cancelled': bool(m)}
-    return m.group(2), m0, {'npc': npc, 'ready_wait_s': ready, 'dialog': m.group(1)[-80:]}
+    # WO-221 B: a request the game cancels is asked again by the mod (4 s) and started the forced way (8 s): the dialogue is waited
+    # for 30 s, the cancels are only counted; a forced dialogue may be a "chat" (a greeting with choices)
+    rx = T.ANY_DLG.replace('(?:normal|ingame)', '(?:normal|ingame|chat)') if force else T.ANY_DLG
+    m, _dt = T._wait_any(c, m0['k'], rx, 12 if force else 30)
+    cancels = sum(1 for l in c.lines(c.klog, m0['k']) if re.search(T.CANCELLED, l))
+    if not m: return None, m0, {'npc': npc, 'ready_wait_s': ready, 'cancelled': cancels > 0, 'cancels': cancels}
+    return m.group(2), m0, {'npc': npc, 'ready_wait_s': ready, 'dialog': m.group(1)[-80:], 'cancels': cancels}
 
 
 def w_talk(r, keys_ok):
@@ -428,11 +432,18 @@ def w_forced(r, keys_ok):
     def fn():
         T = _T()
         c = r.b
-        t = c.ask(T.FORCED_NEAR, 'W217FV', 6)
-        if not t or t == 'none':
+        # WO-221 B: a villager the game forces no dialogue on (it has none with the player) is not the subject: the next nearest, three at most
+        tried, cid, m0, det = [], None, c.mark(), {}
+        for _ in range(3):
+            t = c.ask(T.FORCED_NEAR % ', '.join('["%s"]=true' % n for n in tried), 'W217FV', 6)
+            if not t or t == 'none': break
+            npc, x, y, z = t.split()
+            tried.append(npc)
+            cid, m0, det = _start_talk(c, npc, float(x), float(y), float(z), force=True)
+            if cid: break
+        if not tried:
             works(r, 'forced', None, 'no plain villager near the joiner'); return True, 'not-run', None
-        npc, x, y, z = t.split()
-        cid, m0, det = _start_talk(c, npc, float(x), float(y), float(z), force=True)
+        det['villagers_tried'] = tried
         if any(re.search(T.SCREEN_IN, l) for l in c.lines(c.klog, m0['k'])) and keys_ok:
             import keys
             k = keys.Keys(_S().rec_of(c), 'wo220-forced-close'); det['esc'] = T.esc(c, k); k.release()

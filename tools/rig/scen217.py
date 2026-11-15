@@ -139,13 +139,13 @@ VILLAGER_NEAR = ('local ex = {%s}; local p = player:GetWorldPos(); local best, b
                  'else System.LogAlways("[W217V] none") end')
 # WO-217 r9: the forced dialogue's speaker -- the nearest plain villager (a numbered man / woman: no quest of his own), alive, not ours;
 # the dialogue restriction does not matter to a forced dialogue, so no readiness check
-FORCED_NEAR = ('local p = player:GetWorldPos(); local best, bd; for _, e in ipairs(System.GetEntitiesInSphere(p, 400) or {}) do '
-               'local n = e.GetName and e:GetName() or ""; if (e.class == "NPC" or e.class == "NPC_Female") and e.soul '
-               'and (string.match(n, "^%a+_man_%d+$") or string.match(n, "^%a+_woman_%d+$")) then local h, shop = 0, false; '
+FORCED_NEAR = ('local ex = {%s}; local p = player:GetWorldPos(); local best, bd; for _, e in ipairs(System.GetEntitiesInSphere(p, 400) or {}) do '
+               'local n = e.GetName and e:GetName() or ""; if (e.class == "NPC" or e.class == "NPC_Female") and e.soul and not ex[n] '
+               'and (string.match(n, "^%%a+_man_%%d+$") or string.match(n, "^%%a+_woman_%%d+$")) then local h, shop = 0, false; '
                'pcall(function() shop = e.soul:HasScriptContext("shop_sellerReadyToSell") == true end); '
                'pcall(function() h = e.soul:GetState("health") end); local q = e:GetWorldPos(); local dd = (q.x - p.x) ^ 2 + (q.y - p.y) ^ 2; '
                'if h and h > 0 and not shop and (not bd or dd < bd) then bd = dd; best = e end end end; '
-               'if best then local q = best:GetWorldPos(); System.LogAlways(string.format("[W217FV] %s %.2f %.2f %.2f", best:GetName(), q.x, q.y, q.z)) '
+               'if best then local q = best:GetWorldPos(); System.LogAlways(string.format("[W217FV] %%s %%.2f %%.2f %%.2f", best:GetName(), q.x, q.y, q.z)) '
                'else System.LogAlways("[W217FV] none") end')
 CLASS_TALK = ('local e = System.GetEntityByName("%s"); if e then local f = BasicAIActions and BasicAIActions.OnTalk or e.OnTalk; f(e, player, 0) end')
 FORCE_DLG = ('local e = System.GetEntityByName("%s"); local how = "none"; if e then '
@@ -414,7 +414,7 @@ def p0_role(r, who, sale_keys=os.environ.get('KCDMP_RIG_SALE_KEYS', 'a,wait1.5,e
         # (3) the forced dialogue: the nearest plain villager (r9: never a quest giver -- the bailiff's dialogue played the bench save's
         # own quest scene, a fast travel and a story dialogue that stayed open for the rest of the run)
         row = {'what': 'forced'}
-        t = c.ask(FORCED_NEAR, 'W217FV', 6)
+        t = c.ask(FORCED_NEAR % '', 'W217FV', 6)
         if t and t != 'none':
             npc, x, y, z = t.split()
             m_f = c.mark()

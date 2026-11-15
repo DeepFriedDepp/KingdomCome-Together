@@ -22,6 +22,8 @@ public sealed class HorseRecord
         public string OwnerName { get; set; } = "";
         public string How { get; set; } = "";       // bought | given | told
         public long SinceUnixS { get; set; }
+        /// <summary>The quest module instance that sells this horse (learned when its purchase replayed in the host's world), or "".</summary>
+        public string Module { get; set; } = "";
     }
 
     public List<Entry> Entries { get; set; } = new();

@@ -586,7 +586,8 @@ def loot_body_once(r, bandits):
     detail = {'body': name, 'items': int(n), 'killed': killed, 'dist': d}
     if d is None or d < 0 or d > 2.5: return False, 'body-out-of-reach', detail
     opened = r.b.ask(OPEN_BODY % name, 'W208O', 5)
-    mo = r.b.wait('k', mb['k'], r'WO134-BODY open npc=%s -- the loot screen opens on the host.s items \((\d+)\)' % re.escape(name), 20)
+    # WO-221 B: WO-217's live list writes "WO217-LOOT open ..." (WO-134's line is the older builds')
+    mo = r.b.wait('k', mb['k'], r'(?:WO134-BODY|WO217-LOOT) open npc=%s -- the loot screen opens on the host.s items \((\d+)\)' % re.escape(name), 20)
     detail.update({'open_call': opened, 'opened': mo.group(0)[:120] if mo else None})
     if not mo: return False, 'body-not-opened', detail
     if mo.group(1) == '0': return False, 'body-empty-on-host', detail
