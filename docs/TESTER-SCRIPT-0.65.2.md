@@ -24,8 +24,8 @@ trade**, and **a horse for each player**. The scenes follow that order.
   up and walk, not slide away seated. Press `.` each time.
 
 ## Scene 3 — a fight, walking away, coming back (5 minutes) · `mark scene3`
-- Find bandits (or start a brawl) and fight them together until some are dead. Then **both players walk 300 m away, wait half a
-  minute, and come back** to the same spot. Do it twice.
+- Find bandits (or start a fight) and fight them together **to the death: each of you kills at least one**. Then **both players
+  walk 300 m away, wait half a minute, and come back** to the same spot. Do it twice.
 - **Both, watch:** does either game freeze or close — during the fight, when you come back, or in the minute after? This is the crash
   0.65.2 was made to fix. If a game closes, start it again and **send the bug report at once** (the crash report goes with it).
 - **Joiner, also:** do the dead lie where the host's dead lie? Is any dead body standing up?

@@ -1,18 +1,20 @@
-# Known issues (0.65.0)
+# Known issues (0.65.2)
 
 Plain words, for players and testers. Each line says what you may see, what to do about it if anything, and whether a switch changes
-it. The work orders' findings (`docs/WO-215-findings.md` … `docs/WO-218-findings.md`) have the measurements.
+it. The work orders' findings (`docs/WO-215-findings.md` … `docs/WO-221-findings.md`) have the measurements.
 
 ## People walking and working
 
-- **Walking villagers are moved by the stream, not by their own feet.** On the joiner's screen a villager follows the host's villager
-  a moment behind; once in a while one is pulled back a step. The game's own walking for copies (`mp_route on`) is closer to the host
-  but corrects more and once crashed the joiner's game when a far body was removed: it is **off** by default. Try it with `mp_route on`
-  for a while (the tester script's last scene) and say which looks better.
-- **A person may flicker or jerk between two places** — usually for seconds, now and then for minutes (a woodcutter on our bench for
-  fifteen): on the joiner's screen the person's own job or seat and the host's stream both place them. Most often right after a fight,
-  or while someone works at a spot that is not where the host's person works. It happened in 0.64 too; it shows more now that the
-  joiner sees everything on time. Press `.` when you see it and say who.
+- **Walking villagers walk on their own feet now, but not always in the same place.** On the joiner's screen a walking person is
+  walked by the game towards where the host's person is (`mp_drive`, on). The steps and feet are right; the place is the host's
+  within half a metre most of the time, and now and then a person is put back a step or more (KI_PULLS). A person who falls far
+  behind is put where the host's is in one go. `mp_drive off` gives 0.65.0's placed walk back.
+- **A person may still flicker or jerk between two places** — usually for seconds, now and then for minutes. It is nearly always
+  someone the joiner's game itself holds somewhere else than the host's stream says (a guest it keeps on a seat, a worker at a
+  spot). 0.65.2 leaves such a person where the game holds them after two tries (`mp_holders`, on), which makes it rarer, not gone
+  (KI_FLIPS). Press `.` when you see it and say who.
+- **The game's own routes for copies (`mp_route`) stay off** and are still in the build: this build's walk did not hold every one of
+  its marks on our bench, so the older ways were not removed.
 - **Activities.** Most of what villagers do (working, eating, sleeping) shows on the joiner's copy within a second. Still missing at
   times: **work tied to an object** (a smith at his forge, a cook at her pot) may show the copy standing idle at the place.
 - **Seated guests** jump between seats much less than in 0.64.3, but not never. Press `.` when one jumps.
@@ -20,45 +22,62 @@ it. The work orders' findings (`docs/WO-215-findings.md` … `docs/WO-218-findin
 
 ## Fights
 
-- **A knocked-down copy stays down while its host NPC lies**; it may fall or get up a few tenths of a second after the host's.
+- **The fight crash on the joiner's side** is fixed for the ways we could reproduce it (KI_CRASH). If a game closes during or after
+  a fight, start it again and send the bug report at once: the crash report goes with it. `mp_combat_action_end off` gives 0.65.0's
+  behaviour back (it crashes on our bench).
+- **A knocked-down copy stays down while its host NPC lies**; it may fall or get up a few tenths of a second after the host's, and
+  on our bench one get-up in a handful was not shown.
 - **Paired attacks** (one fighter's move answered by another's) are not always shown on the joiner. **Grabs** do not happen between the
   players and the host's people.
 - **The host's frame rate in fights** may drop a few frames a second with the fast fight updates of 0.64; `mp_npc_bands off` in the
   host's console brings back the old rates. Tell us if you see it.
-- **The mod's own work on the host** costs about 1.7 ms of a frame on average and, in about one frame in twenty, 9–10 ms (our bench;
-  the bug report's check of the story's state was cut to a third of a millisecond in 0.65.0, the rest is not smaller yet). A stutter on
-  the host you can feel: press `.`.
+- **The mod's own work on the host** costs about KI_COSTMEAN ms of a frame on average and, in about one frame in twenty, KI_COST95 ms
+  (our bench; 0.65.0: 13 ms). The bug report's recorders now write their files on their own thread; what is left is the reading of
+  the game's state itself, which has to happen on the game's main thread. A stutter on the host you can feel: press `.`.
+
+## Horses
+
+- **The joiner's horse may look bare on the host's screen** (no saddle), while it is saddled on the joiner's: the starting saddle is
+  a gift to the buyer in the buyer's game only. The bags work all the same.
+- **Host: do not buy a horse the joiner has already bought.** While the joiner's horse stands in the trader's yard, the trader
+  offers it to the host as well (the game's rule for "for sale" is per player). If the host buys it, the horse stays the joiner's,
+  the host keeps his own, a message says so — and **the price is gone** (the game takes it before the mod can step in).
+- **Food dropped out of a horse's bags may vanish** before the other player picks it up (seen with an onion, twice on our bench;
+  weapons and money were fine). `mp_horse_drop off` turns the shared drop from a horse's inventory off.
+- **A host who loads a save before the mod is connected** keeps the horse record of the running session, not that save's. It is
+  right when the save is the newest one; after loading an older save this way, the joiner may be told a horse is his that he had
+  not bought yet in that world. Loading from inside a session is not affected.
+- KI_RIDE
+- **The first time a player mounts**, the game's own "Riding a horse" page opens and holds that player's game until it is closed.
 
 ## Items and the world
 
 - **Chests are each player's own** (by design): a chest the host emptied is still full for the joiner, and the reverse.
 - **Herbs picked from a patch** (the gathering, not a loose item) are each player's own.
 - **Loose items lying in the world** (a sword on the ground, a coin purse) may not be the same for both players.
-- **Carts** follow the host's carts on the joiner's screen. **The horses** may not always be with the joiner's cart; press `.` if a
-  cart drives without them.
+- **Carts** follow the host's carts on the joiner's screen about a metre off at most; the riders sit, the wheels turn, the horses
+  pull. A rider's exact pose on the seat may differ a little from the host's.
 - **Road encounters** (a robbery, a broken cart): what they leave — the dead, the props — is sent to the joiner, but our test bench
   could not start one on demand; the tester script's scene 6 is its test.
+- **A dead body the joiner did not see die** lies down within a few seconds of the joiner coming near (up to about twenty for a body
+  far from where it died); for that moment it may stand.
 - **Stolen items:** an item's owner and stolen mark do not travel with it yet when it is looted or dropped: the mod sends them, but this
   game build gives scripts no way to set an item's owner (the call is not there), so the joiner's copy of the item is unmarked.
 
 ## Conversations
 
-- **A trade with a busy shopkeeper may end by itself on the joiner's screen** a few seconds after it begins (once in two trades in our
-  acceptance: the innkeeper's copy was busy with her own bar work when the conversation started). Talk to them again.
-
+- **A talk may not start at the first try** (about one in twelve on our bench: the request timed out). Talk to them again.
+- **Some shopkeepers do not take every item** on the joiner's side that they take on the host's (two keepers on our bench never
+  took an onion). Press `.` and say which shopkeeper and which item.
 - **Listening in on the partner's talk:** once in a while the listener's keys may stop working for that talk (seen on the host, about
-  one listen in five in some sessions on our bench, not traced). 0.65.0 re-asserts the listen keys once a second; press `.` if it
+  one listen in five in some sessions on our bench, not traced). The listen keys are re-asserted once a second; press `.` if it
   still happens and leave with Back.
 
 ## The connection
 
-- **The joiner keeps up now.** 0.65.0 hands the joiner's game everything waiting in one go instead of one request a frame: on our bench,
-  in a packed tavern and a brawl, people's movements and the fight reached the joiner within a tenth of a second 99 % of the time, where
-  0.64.4 fell up to a minute behind. What people do (sitting down, a job) usually shows within a quarter of a second, but can take up to
-  about one and a half. If the joiner still sees the host's world late, the bug report's first section ("The queue") says how late;
-  press `.` and say where.
 - **A short stall when something loads** (a trade screen, a conversation's scene): the joiner's game itself stops for a second or
   two, and what the host does in that moment arrives just after.
+- **The host's memory climbs while the host waits alone:** join within a couple of minutes of the host loading.
 
 ## The game's own systems
 
@@ -69,11 +88,12 @@ it. The work orders' findings (`docs/WO-215-findings.md` … `docs/WO-218-findin
 - **Playing far apart** (beyond the leash) is not supported: people near the far player may freeze or be missing.
 - **Flying is off** in co-op (`mp_allow_fly on` for testers).
 
-## Fixed in 0.65.0
+## Fixed in 0.65.2
 
-- **The joiner fell seconds to minutes behind in crowds and fights** (0.64.x on our bench: a packed tavern up to a minute, a brawl's
-  falls and work late). Fixed (`mp_pipe_batch`, on).
-- **Doors differed between the players** — a door locked on the joiner's side only, or a door a villager opened left shut for the
-  joiner. Fixed within 60 m of either player (`mp_door_sweep`, on); a door farther off may differ until one of you comes near.
-- **A copy dropped its work for a moment of its own** (a stretch, a serving gesture, an idle step) while the host's person went on.
-  Fixed for the common cases (`mp_takeover_stop`, on).
+- **The joiner's game closing during or after a fight** (`mp_combat_action_end`, on).
+- **The joiner's trade failing** — no shop screen with a shopkeeper at work, a talk with a busy person never starting, a talk ended
+  by the mod while the joiner was choosing (`mp_shop_keeper`, `mp_talk_hold`, `mp_talk_force`, on).
+- **Sliding feet and slow steps** of walking people on the joiner's screen (`mp_drive`, on).
+- **A joiner's bought horse lost at the next join; a whistle that fetched instead of called** (`mp_own_horse`, on).
+- **Dead bodies standing or in the bind pose** when the joiner had not seen them die (`mp_corpse_look`, on).
+- **Cart riders standing, wheels not turning, cart horses missing** (`mp_cart_seat`, `mp_cart_wheels`, on).
