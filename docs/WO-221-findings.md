@@ -1,10 +1,16 @@
 # WO-221 — 0.65.2: bodies that walk right, and a horse each
 
 `SCORE place=84.7 thing=81.5 step=1.68 slide=44 pulls=1.09 flips=0.126 lane99=685 cost95=13.0 works=5/10`  (0.65.0, the base line: mean of 3)
-@@SCORE_SHIPPED@@
-@@SCORE_TWIN@@
+`SCORE place=78.0 thing=78.1 step=1.06 slide=31 pulls=0.20 flips=0.034 lane99=914 cost95=10.2 works=9.3/10`  (0.65.2 as shipped: mean of 3)
+`SCORE place=89.8 thing=84.0 step=1.74 slide=44 pulls=1.05 flips=0.283 lane99=819 cost95=9.5 works=9/10`  (the twin, every WO-221 switch off: mean of 3)
 
-@@SUMMARY@@
+**In short.** The joiner's crash when a fighting body is taken away mid-swing is fixed (forty removals clean, the twin
+crashes); a different crash after many deaths near the joiner is not (2 to 26 deaths in a staged massacre: Known Issues). The trade
+works for the joiner (shop screens 7 of 7 started talks on the final build, sales go through once) and the works-at-all checks
+pass 9, 9 and 10 of 10 (0.65.0: 5). Each player owns a horse: buy, call, ride together, saddlebags, a host reload and a rejoin
+all hold on the final build. The dead lie, cart riders sit and wheels turn. Walking copies walk on their own legs with the host's
+step and a fifth of the pulls, but are within half a metre of the host's place less often: the walk's bars (C.4) are not met, so
+nothing is deleted. The host's p95 cost fell from 13.0 to 10.2 ms against a bar of 1.5. Every switch ships on.
 
 Roles only: "the host", "the joiner", "the maintainer". Words as in the design audit: a copy, driven, the writer, the owner, the
 stream. Footing marks: [code] read in this repository, [binary] read in the game's own files, [bench] measured on the bench (two
@@ -15,21 +21,62 @@ crash records and ledgers are in the WO's notes.
 
 ## 1. The scoreboard
 
-`tools/rig`'s scoreboard, unchanged in what it measures (three of its works-at-all checks were corrected to read what the game
-does now, §3.4). Three scenes runs and three checks runs as shipped, three scenes runs and one checks run of the twin, by turns
-on one build (@@BUILD@@), nothing compiled beside them.
+`tools/rig`'s scoreboard, unchanged in what it measures (its works-at-all checks were corrected to read what the game does
+now: three in §3.4, the leave step and the body loot below the works table). Three scenes runs and three checks runs as shipped, three scenes runs and one checks run of the twin, by turns
+on one build (`35e99e8`, the build this release ships), nothing compiled beside them.
 
-@@SCORE_TABLE@@
+| | fs1 | fs2 | fs3 | **shipped, mean** (spread) | ft1 | ft2 | ft3 | **twin, mean** (spread) | **0.65.0** (spread) |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| place (within 0.5 m, %) | 77.7 | 78.2 | 78.1 | **78.0** (0.5) | 92.9 | 83.5 | 93.1 | **89.8** (9.5) | **84.7** (11.2) |
+| thing (same activity, %) | 79.2 | 75.6 | 79.5 | **78.1** (4.0) | 85.1 | 81.9 | 84.9 | **84.0** (3.2) | **81.5** (7.2) |
+| step (copy / host) | 1.00 | 1.17 | 1.00 | **1.06** (0.17) | 1.76 | 1.76 | 1.68 | **1.74** (0.08) | **1.68** (0.18) |
+| slide (% of speed) | 42 | 40 | 10 | **31** (32) | 44 | 43 | 45 | **44** (2) | **44** (10) |
+| pulls (a body-minute) | 0.18 | 0.30 | 0.12 | **0.20** (0.18) | 0.91 | 1.04 | 1.21 | **1.05** (0.30) | **1.09** (0.80) |
+| flips (a body-minute) | 0.026 | 0.026 | 0.050 | **0.034** (0.024) | 0.072 | 0.421 | 0.357 | **0.283** (0.349) | **0.126** (0.193) |
+| lane99 (ms) | 771 | 865 | 1105 | **914** (334) | 725 | 916 | 816 | **819** (191) | **685** (75) |
+| cost95, the host (ms) | 10.7 | 10.0 | 9.8 | **10.2** (0.9) | 9.2 | 9.0 | 10.2 | **9.5** (1.2) | **13.0** (1.4) |
+| works (of 10) | 9 | 9 | 10 | **9.3** (1) | 9 | 9 | 9 | **9** (one checks run) | **5** (0) |
+
+Scenes runs fsN / ftN, checks runs fwN / ftw1 (each shipped scenes run is scored with its own checks run; the twin's three with
+its one). No game closed in any of the ten runs; faults 0 wherever the frame line was written.
 
 A difference smaller than the base line's spread is not a change. By that rule:
 
-@@SCORE_READING@@
+- **Better than 0.65.0, outside its spread:** the step (×1.06 against ×1.68), the pulls (0.20 against 1.09), the host's cost
+  (10.2 against 13.0 ms), the works checks (9.3 against 5), and the slide (31 against 44, spread 10 — but the shipped runs
+  themselves range 10–42). Better than the twin by the same rule: the step, the pulls, the flips.
+- **Worse than 0.65.0, outside its spread:** the lane's 99th percentile (914 against 685 ms, spread 75) — the twin's is worse too
+  (819), so it is not the WO-221 switches'.
+- **No change by the rule:** the activity (78.1 against 81.5, spread 7.2), the flips against 0.65.0 (0.034 against 0.126, spread
+  0.193) and the place (78.0 against 84.7, spread 11.2) — though all three shipped runs' place lies under 0.65.0's lowest run
+  (80.3), and the twin's is higher (89.8): the driver costs place (§4.2).
 
 ### Works at all, check by check
 
-@@WORKS_TABLE@@
+| check | fw1 | fw2 | fw3 | the twin (ftw1) | 0.65.0 (3 runs) |
+|---|---|---|---|---|---|
+| the join | yes | yes | yes | yes | yes |
+| a talk to its choices | yes | yes | yes | yes | yes |
+| a trade screen | yes | **no**: two talk requests not taken (one timed out by the engine) | yes | **no**: both talks started, no shop screen (`mp_shop_keeper` off) | no |
+| a forced dialogue | yes | yes | yes | yes | no |
+| a loot take (a chest and a body) | yes | yes | yes | yes | not run (no body) |
+| a door use | yes | yes | yes | yes | yes |
+| a drop picked up by the other | 2 of 2 | 2 of 2 | 2 of 2 | 2 of 2 | yes |
+| a knockdown and get-up | **no**: 2 falls, 1 get-up shown | yes | yes | yes | yes |
+| a mount | yes | yes | yes | yes | no |
+| a sleep vote | yes | yes | yes | yes | yes |
 
-## 2. Part A — the fight crash (`mp_combat_action_end`)
+**The checks runs were run twice** on the final build. In the first set (kept as fw1–fw3 / ftw1 "-leak" in the WO's notes) the
+rig's own leave step did not end the dialogues it started: it asked the player's `IsInDialog`, which reads false while the mod's
+dialogue stand-in holds the player's talk, so the talk check's merchant dialogue ran on through the trade check (no trade could
+start) and the forced check's dialogue (a surrender, with choices) was still open at the sleep check, where the joiner's game
+refused the sleep (the twin's forced dialogue happened to be a four-second chat; its sleep passed). The loot check waited for
+WO-134's take line while WO-217's live loot (on since 0.64.4) took the item by its own lines. Both are the rig's
+(`tools/rig/scen220.py`: a check's dialogue is ended by its own id until the engine's end line for it is in the log;
+`tools/rig/scenarios.py`: the body take read from WO-217's ask, its applied verdict and the host's body one item lighter);
+nothing that counts as a pass was loosened. 0.65.0's base line ran with the old leave step: its trade "no" may be partly the rig's.
+
+## 2. Part A — the fight crash (`mp_combat_action_end`, `mp_ragdoll_once`)
 
 **Cause** [binary] [bench]. The 0.65.0 joiner's crash dump: the faulting function is `C_CombatAnimAction`'s "fragment started"
 callback (vftable slot 14); slot 17 ("the fragment is about to end") and 18 read the same thing — the body's combat part (the
@@ -63,19 +110,36 @@ combat parts. The test found three more faces of the same thing, each in the mec
    part). Now, for a death the mod applies, the DLL ends every recorded action of that body first (the game's stop and the quiet
    vftable, whose delete slot is silent too, so the block stays allocated under whatever still points at it), and the agent waits
    200 ms before it applies the death.
+4. *Heap corruption after deaths, in the engine's allocator* (run rm11 on the final dev build, 2 deaths in: the main thread, a
+   time-of-day update into the renderer; run rm13 on the build after it, 22 deaths in: an animation worker thread, the action
+   controller's update). Both stop in the same allocator path (one CrySystem global, then the system's heap), following a free-list
+   link that is not one: in rm13 the chain runs from a block into an action scope's vftable and on into code bytes — a live object's
+   pointer sat on a free list, so something wrote into memory after it was freed. Every crash of the death test (rm3, rm4, rm6, rm11,
+   and the twin's) came within seconds of a dead copy's skeleton change (a ragdoll); in rm4 and rm11 about a second after WO-195's
+   ragdoll of a body 0.65 s dead. `mp_ragdoll_once` (the fourth approach) makes it one ragdoll per body at a time, after the game's
+   own death action had 2.5 s, never on a body that already lies — and rm13 crashed 2.2 s after a death with no ragdoll in the six
+   seconds before it. So the ragdoll timing is not the cause. Whose write it is was not found; the leading suspect is approach 3's
+   own end of a dying body's actions (the stop and the quiet vftable) on a block the engine had already freed when a death took the
+   body's combat part apart without the hooked call — unproven.
 
 | way | as shipped | the twin (`mp_combat_action_end off`) |
 |---|---|---|
 | rebind (unbound and bound again at once) | 40 of 40, 0 crashes, 0 faults | 40, clean (this way alone does not crash) |
 | unbind (3 s unbound; the no-brains rule hides it) | 40 of 40, clean | 40, clean |
 | hide (hidden 2 s, shown) | 40 of 40, clean | 40, clean |
-| death (the host's world kills its NPC) | @@RM_DEATH@@ | **the joiner crashed 77 s into the death phase, after 4 deaths with a swing queued**: an access violation reading 0x474 inside slot 17, not on the main thread — the crash this work order is about |
-| remove (the joiner's own entity system removes the body) | @@RM_REMOVE@@ | not reached (the twin crashed before it) |
-| session end (the joiner's agent stopped and started) | @@RM_SESSION@@ | not reached |
+| death (the host's world kills its NPC) | **not clean**: crashes at 25, 26, 9, 2 and 22 deaths (rm3, rm4, rm6, rm11, rm13; one face each, above); 18 deaths without one (rm7, rm8: staging ended them) | **the joiner crashed 77 s into the death phase, after 4 deaths with a swing queued**: an access violation reading 0x474 inside slot 17, not on the main thread — the crash this work order is about |
+| remove (the joiner's own entity system removes the body) | 40 of 40 (26 with a swing queued), 4 trips of 300 m, 0 crashes, 0 faults (rm12) | not reached (the twin crashed before it) |
+| session end (the joiner's agent stopped and started) | 2, not 40: 148 recorded actions ended in two session ends, 0 faults (rm9, rm14). After one the restarted agent is not joined and the joiner holds no copy, so each needs its own launch of the pair; forty were not run | not reached |
 
-@@A_VERDICT@@
+**Verdict.** The crash the work order is about — a combat action of ours running on a body whose combat part is gone — is fixed:
+the removal ways that crashed 0.65.0 by it (a level-of-detail drop on a far trip, a removal, a session end) are clean, and the
+twin crashes. The bar (0 crashes) is **not** met for deaths: four approaches each removed one face of a crash that follows deaths
+on the joiner, and the fifth face is open. In a staged massacre (a death every 15 s near the joiner, swings queued on the dying)
+the joiner's game closed once per 2 to 26 deaths; in the field one death near the joiner is far rarer, and 0.65.0 closes by the
+twin's face as well. Both switches ship on; Known Issues names it.
 
-**The scoreboard without a crash** [bench]: @@A_SCORE_RUNS@@
+**The scoreboard without a crash** [bench]: every finals run on the final build — six scenes runs, four checks runs and the four checks runs the rig first spoiled —
+and the four E runs: no game closed, faults 0 wherever the frame line was written.
 
 ## 3. Part B — the trade and the basic checks
 
@@ -111,6 +175,8 @@ Three faults stood behind "the trade fails" [bench] [binary].
 | **trade5, the twin** (`talk_hold`, `talk_force`, `shop_keeper` off) | | 7 of 7 | **2 of 7** | **5** | 1 | 5 |
 | trade7 | + the rescue's choice rule seen | 5 of 6 | 5 of 5 started | 0 | (staging) | **0** |
 | **trade8** | the same, the sale's keys right | **11 of 12** | **11 of 11 started** | **0** | **5** | **0** |
+| trade9 | f2 | 6 of 6 | 6 of 6 | 0 | 4 of 6 (the 2 others: an empty sell list for the bench's onion) | 0 |
+| **trade10** | **f3, the final build** | **7 of 8** | **7 of 7 started** | **0** | 4 of 8 asked (the same two keepers twice: empty sell list) | 0 |
 
 The bar: the shop screen 10 of 10, a sale 5 of 5. **Met for the talks that started** (11 screens of 11, 5 sales — the innkeeper
 twice, the grocer, the inn's maid twice — each sale's item out of the joiner's inventory and its price into his purse once; a
@@ -121,9 +187,10 @@ own goods list or ours is not known.
 ### 3.3 The forced dialogue, the mount
 
 - **Forced dialogue** (the bar: starts 5 of 5): 4 of 6 in trade8 — the two misses were one villager the game has nothing to force
-  on (the same request on the host's own game starts nothing either). The rig now passes such a villager over for the next. On the
-  checks runs: @@FORCED_WORKS@@.
-- **A copy follows its rider onto a horse** (the mount check): @@MOUNT_WORKS@@. 0.65.0: never passed.
+  on (the same request on the host's own game starts nothing either). The rig now passes such a villager over for the next. trade9 (f2): 5 of 5;
+  trade10 (f3): 2 of 5 — three women with nothing to force (no dialogue at all), both tries on a man started. On the
+  checks runs: 3 of 3 shipped, the twin's 1 of 1 (each check's own villager).
+- **A copy follows its rider onto a horse** (the mount check): 3 of 3 shipped and the twin's (the copy mounted and dismounted). 0.65.0: never passed.
 
 ### 3.4 The rig's checks, staged properly
 
@@ -151,9 +218,38 @@ Three approaches were measured in turn [bench]: (1) every walking copy driven, s
 
 ### 4.2 The bars (C.4)
 
-@@C4_TABLE@@
+The three shipped finals (fs1–fs3) beside the three twins (ft1–ft3, every WO-221 switch off) and 0.65.0's base line, all on the
+final build's scoreboard [bench]:
 
-@@C4_READING@@
+| measure | bar | fs1 | fs2 | fs3 | the twin (mean; runs) | 0.65.0 (mean) | held? |
+|---|---|---:|---:|---:|---:|---:|---|
+| step period, copy / host NPC | within 10 % | ×1.00 | ×1.17 | ×1.00 | ×1.74 (1.76/1.76/1.68) | ×1.68 | 2 of 3 (fs2 had four walkers) |
+| planted-foot slide, copy | host's walkers + 5 | 42 % (host 8) | 40 % (host 22) | 10 % (host 5) | 44 % | 44 % | 1 of 3: missed by 29 and 13 points |
+| the same place, all bodies | ≥ 84.7 % and outside its spread | 77.7 % | 78.2 % | 78.1 % | 89.8 % (92.9/83.5/93.1) | 84.7 % (80.3–91.4) | 0 of 3: 6.6 points below |
+| the same place, walking bodies | ≥ 90 % | 68.7 % | 86.1 % | 59.4 % | 85.1 % (89.6/74.3/91.4) | 77.3 % | 0 of 3 |
+| pulls over 50 cm a body-minute | ≤ 0.2 | 0.18 | 0.30 | 0.12 | 1.05 (0.91/1.04/1.21) | 1.09 | 2 of 3 |
+| flips a body-minute | 0 | 0.026 (7) | 0.026 (3) | 0.050 (10) | 0.283 (3/30/20) | 0.126 | 0 of 3 (an eighth of the twin's) |
+| a seated guest's pulls in the tavern | under half of 0.65.0's | 21 (14 guests) | 20 (7 guests) | — (no guests) | 25 (ft2, 13 guests; ft1, ft3 no guests) | 56 and 28 (base1, base3) | 0 of 2: 21 and 20 against under 14 |
+| crashes, faults | 0, and 20 driven copies removed mid-walk | 0 | 0 | 0 | 0 | — | met: 0 in six runs; 23 driven copies removed mid-walk (9 on f3, 14 on f2, the same drive code), 0 crashes |
+
+(The place of the walking bodies is the scoreboard's "the host's NPC walks" row; 0.65.0's mean is of its three runs, 75.7, 71.5
+and 84.8 %. The tavern scene lasts five minutes; how many guests it had was the save's hour, not the build's.)
+
+**Reading.** The driver does what it was built for and costs what it was feared to cost. The feet: the step is the host's (×1.00
+in the two runs with a dozen or more walkers, against ×1.74 for the twin), and the pulls fall to a fifth of the twin's and of
+0.65.0's (0.20 against 1.05 and 1.09), the flips to an eighth. The place: a driven body walks on its own legs towards where the
+host's NPC is and arrives a little late or a little wide, so the walking bodies are within half a metre less often than when the
+writer places them (71 % against 85 %), and the slide is the host's own in one run and well over it in the other two (42 % against
+8, 40 % against 22; walkers at an ordinary pace slide too, so it is not only the running guards). The rest of the loss in place
+is the tavern's: with guests in it the shipped build put them 54–61 % within half a metre, the twin 83 %, because `mp_holders` leaves
+a guest where the joiner's own game holds him (on his seat) instead of fighting it — the twin's tavern had 22 flips in 118 windows,
+the shipped build's 3–5 in 750–1,000. Without the tavern the shipped village was 87.2, 97.3 and 77.6 % (the twin 94.4, 91.3,
+94.2 %; 0.65.0 81.1, 85.4, 86.8 %).
+
+**C.4 does not hold on any of the three runs.** Missed: the place of all bodies (by 6.6 points under the base line), the walking
+bodies' place (by 4 to 31 points), the slide in two runs, the flips (not 0), the tavern's pulls (21 and 20 against under 14), the
+pulls in one run (0.30) and the step in one (×1.17, four walkers). Three approaches were measured (§4.1), the third twice (score5
+and the finals). The driver ships on with `mp_drive off` as its switch.
 
 **What a pull and a flip are** [code] [bench]. A pull is the *engine* moving a written body away from the writer's last write within
 one frame (over 50 cm); a flip is a 10 s window with a pull over 5 m in which the body moved in over 40 % of the frames. The flips
@@ -161,11 +257,22 @@ are not the walk's: in the run that was read body by body, one seated guest made
 (the copy sits on a seat 6.11 m from its NPC's place; the writer writes, its own seat puts it back), other seated guests were
 placed 3–26 m by the seat rule, and one body was snapped every 3 s with a height difference of 5 m. `mp_holders` is for these.
 
-**The other marks**: @@C4_OTHERS@@
+**The other marks**: *the frames* [bench] — a driven walker beside its host NPC and a handover, framed on both screens at once.
+Four tries to frame them: walk1-f1 void (a copy closed at the pause), walk1-f2 (the viewers placed by the walker saw walls),
+walk2-f3 (the check passed, but the walker had walked out of the shot by the time it was taken — looked at, not counted), and
+walkc-f3 (the viewers put 4–7.5 m ahead of the walker on its own heading, with a clear line, facing back). Of walkc's four pairs,
+two show it: the same villager at the same spot by the white house on both screens just as he arrived from his walk (the
+arrival, where the driver hands him back), and the same road scene on both screens with the walker on the road and a guard beside
+it, each at the same place; the other two missed (an empty road, a wall). *Removals*: 23 driven copies taken away mid-walk on the
+f2 and f3 builds (the drive code is the same in both), 0 crashes, 0 faults.
 
 ### 4.3 The delete list (C.5)
 
-@@C5@@
+**Nothing is deleted.** The order deletes WO-220's list for the walk (the route and its replay, the gait hysteresis, the
+extrapolation and blend layers, the six yield rules) only when C.4 holds on all three runs; it held on none (§4.2). The route
+stays in the build, off by default (`mp_route`), and the host no longer reads or sends its lines for a joiner who has it off
+(`mp_route_quiet`, §7). The writer's layers stay because the writer still places every body the driver does not drive, and
+`mp_drive off` must give 0.65.0's walk back whole.
 
 ## 5. Part D — a horse per player (`mp_own_horse`, `mp_saddlebags`)
 
@@ -203,7 +310,24 @@ paused on the host while nobody rides or calls it.
 
 ### 5.3 The proofs
 
-@@D_PROOFS@@
+[bench] Three runs on the pair (frames in the WO's notes: the purchase on both screens, the call, the ride as each player sees the
+other):
+
+| | f1 (horse5) | f2 (horse6) | f3 (horse7, the final build) |
+|---|---|---|---|
+| D.1 buy | joiner bought one, paid once; the host bought another; neither touched by the other | joiner bought one, paid once; the bench's driver made the host pick the joiner's horse three times: it stayed the joiner's each time, the host was told and the price stayed with the groom (Known Issues) | joiner bought one (paid once, 170); the host bought his own; neither touched by the other |
+| D.2 call | 22.3 → 4.8 m in 6 s; the host's horse 0 m | 56 → 4.3 m in 12 s (the game's own put-down at 15 s); the host's horse 0 m | 22 → 8 m in 9 s; the host's horse 0 m |
+| D.3 ride | not run (the bench's heading did not hold: the rider hit an overhang) | joiner alone 525 m, 17/17 stretches mounted; with the host 270 m away his copy of the horse jumped back 20–128 m twice (the game's fall-through rescue: Known Issues) | **side by side**: 535 m and 681 m, 24 stretches, both mounted throughout, the horses at most **1.25 m** apart between the two games (mostly 0.1–0.4 m) |
+| D.4 bags | 4 moves, duplicated 0, lost 0 | 4 moves, duplicated 0, lost 0 | 4 moves both ways, counted on both sides |
+| host save + reload | record paired and back; **the joiner's game then held the host's horse** (the fault below) | the fix: the joiner's horse is his again 1 s after his session comes back | record paired and back; the joiner kept his horse, the host his |
+| D.5 rejoin | horse moved 0.0 m in 60 s away; back in 90 s, told, has it | 0.0 m; back in 85 s | 0.0 m; back in 136 s with his horse |
+
+**The reload fault (found in f1, fixed in f2, `750c786`).** After the host loads a save, the joiner's world comes from that save,
+whose "player's horse" is the host's. The joiner's session is inactive while the host loads (about 190 s on the bench), and every
+inactive tick wiped the mod's word on the joiner's horse; the mod then waited for the host's next send (every 30 s) and two more
+ticks. Now the mod asks its agent at once (`w221_horseask`, 3 s apart at most), the agent answers from the host's last word or asks
+the host, and the first tick after the word applies it. Proof: the synthetic Lua scenario W1–W7 (W3–W6 fail on the old Lua) and the
+bench (f2: asked at once, the horse his 1.0 s after the session came back; f3: kept).
 
 ## 6. Part E
 
@@ -215,7 +339,11 @@ WO-216's; a dead NPC within 40 m of the joiner whose head is still over 0.9 m up
 while the joiner was 600 m off, a body made dead by an event — lie on both screens, none upright, none in the bind pose (framed
 pairs in the WO's notes, frames e1); the far villager took the sixth try, the event body the first. Before the rule ran (it first
 sat in a function the agent stops calling once a body is "shown") the far kill and the event body lay on the host and stood on the
-joiner. @@E1_TWIN@@
+joiner. **On the final build** (e1s, f3): the three bodies lie on both screens — the head's height over the body's place −0.07, −0.42 and
+−0.08 m on the joiner, −0.01 to −0.07 m on the host (the game's own bone positions; a standing body reads 1.55 m). **The twin** (e1tw, f3, `mp_corpse_look off`): the save's
+own body lies, and the far villager and the event body **stand** on the joiner (head 1.55 m up, hips 0.90 m) while they lie on
+the host. Frames: the event body lies on the road on the joiner's screen (e1s); the far body's frames of both runs are blocked by
+a living villager who stepped into the shot — the bone heights are the proof for that one.
 
 ### 6.2 E.2 — carts (`mp_cart_seat`, `mp_cart_wheels`)
 
@@ -230,11 +358,28 @@ way the cart's copy moved along its own heading over the wheel's radius.
 The caravan pass on the shipped build (30 samples, by day, nearest pass 24.9 m): the rider seated in 30 of 30 samples (head
 1.09–1.14 m over the cart on both screens); the joiner's wheels turned 58.1 rad each, the host's 56.7–58.7; both cart horses
 within 0.59 m (p95) of their place, unhidden; the cart's copy 0.95 m (p95), 1.59 m at most from the host's. Framed pairs in the
-WO's notes (frames e2: the pass and a near frame, host and joiner). @@E2_TWIN@@
+WO's notes (frames e2: the pass and a near frame, host and joiner). **On the final build** (e2s, f3; 30 samples, 5 near the joiner): the rider seated in 5 of 5 near samples (head within 0.25 m of
+the host's), 0.05 m off his place at the cart (p95); the joiner's wheels turned 58.0 rad each, the host's 57.6–58.2; both cart
+horses within 1 m of their place in 5 of 5, 0.63–0.65 m (p95), unhidden; the cart's copy 0.87 m (p95), 1.34 m at most from the
+host's. **The twin** (e2tw, f3, `mp_cart_seat` and `mp_cart_wheels` off): the joiner's wheels turned **0 rad** (the host's
+55.8–57.4), the rider's head was within 0.25 m of the host's in 3 of 5 near samples; the horses and the cart's place, which
+these switches do not touch, were as shipped (cart 1.18 m p95).
 
 ### 6.3 E.3 — an item dropped out of a horse's inventory (`mp_horse_drop`)
 
-[code] The drop detector counts the player's own horse's inventory too. [bench] @@E3@@
+[code] The drop detector counts the player's own horse's inventory too. [bench] Horse inventories at 180 m down the open lane from the stable (f2, f3) and at the
+trader's yard (f1):
+
+| item | joiner's horse → host | host's horse → joiner |
+|---|---|---|
+| weapon (mace) | 3/3 | 3/3 |
+| money (25) | 3/3 (f2: it reached the host in 0.9 s; the bench's ground read missed it) | 3/3 |
+| tool (broom) | 3/3 | 3/3 |
+| apple | 2/2 at 180 m; **1/1 vanished** at the yard | 3/3 |
+| onion / food | 2/2 at 180 m; **3/3 vanished** at the yard (seen by the host after 2.3 s, gone 4.5–9 s after it was made there, nobody has it) | not tested: the bench's script cannot put food into the host's own horse (every try made nothing) |
+
+Every drop went through the ledger: no duplicate anywhere; the vanished food is a loss, never a copy. Cause of the yard's losses not
+found; Known Issue as it stands, with `mp_horse_drop off` as its switch.
 
 ## 7. Part F
 
@@ -243,7 +388,9 @@ WO's notes (frames e2: the pass and a near frame, host and joiner). @@E2_TWIN@@
   average and 11 ms at most. Their files are now opened, written, flushed (once a second) and rotated on a writer thread of their
   own; the main thread hands it finished lines. Not moved: every engine read (main thread by nature) and the text of a sample,
   which is built between those reads; a cache of the digest's node per path was weighed and left out (a stale node pointer is a
-  crash). **The bar (the host's p95 under 1.5 ms on the scoreboard's cost line) is not met**: @@F_COST@@. What is left, by area
+  crash). **The bar (the host's p95 under 1.5 ms on the scoreboard's cost line) is not met**: on the three shipped finals the host's p95 was 10.70, 9.97 and 9.82 ms (mean 10.2 ms; 0.65.0: 13.0 ms), its mean
+  2.14, 1.86 and 1.79 ms (0.65.0: 2.79 ms) — the p95 a fifth lower, the bar missed by 8.7 ms. The twin (every WO-221 switch off,
+  the recorders' thread kept: it has no switch) held 9.5 ms. What is left, by area
   (the host's own lines, mean / max a frame): the two stream reads the joiner's copies live on (the host's animation line and the
   opponents, 6–7 a second each, 1.1–1.5 ms mean, 9–13 ms max — the largest item in a fifth of the slow frames; not recorders); the
   recorders' own engine reads and sample text (0.55–0.78 ms mean, 11–12 ms max); the health sampler, WO-138's and WO-213's ticks
@@ -257,14 +404,46 @@ WO's notes (frames e2: the pass and a near frame, host and joiner). @@E2_TWIN@@
 
 ## 8. Every bar missed
 
-@@BARS_MISSED@@
+| part | bar | result on the final build | by how much | what was tried |
+|---|---|---|---|---|
+| A | 0 crashes in the removal test, deaths included | removals, unbinds, hides, rebinds 40 of 40 each, clean; **deaths: the joiner crashed after 2 to 26** | five crashes in five death runs that reached 25 deaths | four approaches, each removing one face (§2): the release hook, the table that never deletes what the queue holds, no stop on a dying body, ending a dying body's actions first, and one ragdoll at a time (`mp_ragdoll_once`); the fifth face (a write after free in the engine's heap) not found |
+| A | 40 session ends | 2, both clean (148 actions ended, 0 faults) | 38 not run | each session end leaves the joiner unjoined and needs a launch of the pair; the session's time went to the death crash |
+| B | the talk starts 10 of 10 | 11 of 12 (trade8), 7 of 8 (trade10, f3) | one start in eight to twelve | a request is asked again at 4 s and forced at 8 s; the miss is a request the engine itself timed out twice (Known Issues) |
+| B | a sale 5 of 5 | 5 of 5 asked in trade8; 4 of 8 in trade10 | the misses are two keepers who never take the bench's onion (an empty sell list), and one talk that did not start | not traced: the keeper's own goods list or ours is not known (Known Issues) |
+| B | the forced dialogue 5 of 5 | trade9 5 of 5; trade10 2 of 5 | three villagers the game has no dialogue to force on (the host's game starts nothing either) | the rig passes such a villager over for the next, three at most |
+| C.4 | step, slide, place, walking place, pulls, flips, the tavern's pulls | §4.2: none of the three shipped runs holds all; step 2 of 3, slide 1 of 3, place 0, walking place 0, pulls 2 of 3, flips 0, tavern 0 of 2 | place 6.6 points under the base line; walking bodies 4–31 points under 90 %; slide up to 29 points over; flips 0.026–0.050 a body-minute against 0; tavern 21 and 20 pulls against under 14 | three approaches (§4.1), measured on seven scoreboard runs; C.5 deletes nothing |
+| E.3 | a drop out of a horse's inventory reaches the other player, food included | weapons, money, tools 3/3 both ways; the joiner's food 2/2 at 180 m; **food at the horse trader's yard vanished 4 of 4**; the host's food untested | food at the yard: all lost (never duplicated) | the drop runs through the ledger like any drop; the yard's losses are not traced (Known Issues, `mp_horse_drop off`) |
+| F | the host's p95 under 1.5 ms | 10.2 ms (9.8–10.7) | 8.7 ms over (0.65.0: 13.0) | the recorders on a writer thread of their own; what is left is engine reads on the main thread (§7) |
 
 ## 9. README status for 0.65.2
 
-The README is the maintainer's to edit; these are the lines to paste. The version is named in three places: the title line's
-badge or heading, the "Download" / installer name line, and the status table's heading.
+The README is the maintainer's to edit; these are the lines to paste. The version is named in three places that must agree: the
+release badge at the top (`latest release-v0.63.9` today), the "As of release …" line under the status table (0.63.9 today), and
+the Known issues link (`docs/KNOWN-ISSUES.md`, whose heading says 0.65.2). For this build: the badge and the "as of" line read
+0.65.2 once the maintainer publishes it.
 
-@@README_BLOCK@@
+The status table, with this build's changes (rows the build does not touch are as they stand in the README today):
+
+```markdown
+| Works well | Works, but rough | Not yet |
+|---|---|---|
+| Joining a friend's world with your own character, or a new one | Joining each other's conversations: you listen in and vote on answers, but the camera and keys can misbehave | Playing far apart (you are kept within about 650 m) |
+| Seeing each other: walking, riding, clothes, weapons | Villagers walk on their own feet on the partner's screen, but are not always in exactly the same place; now and then one is pulled back | Grabs in fights |
+| Fighting the same enemies: hits, knockdowns and deaths show for both | Some villagers stand idle, or work without their tools, where the host sees them busy | Shared chests and shop stock (each player has their own) |
+| Shared quests: either of you can move a quest forward | Cutscenes play for both, but one can leave the partner on a black screen for a while | Road encounters matching on both screens |
+| Looting bodies and dropping items for each other | The partner's game can close after many deaths nearby | Stolen marks on shared items |
+| Sleeping together, one shared clock | Paired moves and weapon draws in fights don't always show | The regular (non-Modding-Tools) game |
+| Crime: the host's guards judge both of you | Bows and crossbows: the shot shows, the draw and aim don't | |
+| A horse each: buy, call, ride and use the saddlebags of your own | The partner's horse looks bare (no saddle) on the host's screen; food dropped from a horse's bags by the stable can vanish | |
+| Trading as the partner: the shop opens and selling works | Lip sync, voice chat and dice between players are unpolished | |
+| Carts on the partner's screen: riders sit, wheels turn | | |
+```
+
+What changed against the README's table: three rows added under "Works well" (a horse each, trading as the partner, carts);
+"Trading as the partner can close by itself" is gone from "Works, but rough"; "Villagers glide when they walk" is replaced by the
+walking line above; the crash after many deaths, the bare horse and the food at the stable are new under "Works, but rough";
+"Carts moving on the partner's screen" is gone from "Not yet". The line under the table: `<sub>As of release 0.65.2.</sub>`, and the
+badge: `latest%20release-v0.65.2`.
 
 ## 10. The audit, the gates, save safety
 
@@ -289,7 +468,7 @@ objects are guarded everywhere (they take no lock) and are not listed.
 | 11 | E.1 | the dirt helper's accessor, blood read and set | main thread (a pipe op in our frame tick; the game's own blood script call runs there too) | **plain** | unknown (the accessor allocates) |
 | 12 | F | none: the writer thread touches our own files only | its own thread | — | — |
 
-Script calls added (the game's own binds, main thread by construction): `Player.GetHorseId`; `RagDollize` (E.1's lay-down);
+Script calls added (the game's own binds, main thread by construction): `Player.GetHorseId`; `RagDollize` (E.1's lay-down; A's `mp_ragdoll_once` only refuses or delays it, reading the head bone by `GetBonePos`);
 `DialogModule.ForceDialog` (B); inventory create / remove / list on a horse through WO-217's ledger helpers (D.4); `SetWorldPos`
 for a called horse's put-down (D.2); the game's pause / resume console commands for a recorded horse (D.5); `GetParent`,
 `GetChild`, `GetLocalBBox`, `GetAngles` / `SetAngles` on a cart's wheel entities (E.2). The holders' rules (C) and the horse
@@ -298,14 +477,35 @@ WO-217's ledger moves, WO-195's death.
 
 ### 10.2 The gates
 
-@@GATES@@
+Every offline gate on the final tree (the build `35e99e8` plus this commit's documents and the rig's two checks), run once after
+the last bench run with nothing else on the machine: **100 of 100 passed** — the native build and its unit tests, the pak rebuild,
+the relay round trip, the agent, setup and log-bundle tests, every synthetic Lua and C# suite, the protocol and version checks.
+**The no-input-capture gate** (`tools/Check-NoInputCapture.ps1`, with its self-test: every planted capture caught, the clean
+files passed) ran first and last over the native DLL and injector, the bench's builds, the rig, the harness and every test tool
+built here: "RESULT: PASS -- nothing checked can read what a person types or clicks", both times. The shipped mod takes no
+screenshot (no screenshot call in its DLL, agent, relay or scripts; the bench's frames are taken by the rig through the game's
+console). The same gates ran again after the
+rebase and before the installer (below); the installer's own safety gates and the publishing gate are hard.
 
 ### 10.3 Save safety and conduct on the maintainer's PC
 
-@@SAVES@@
+- **Before the first launch** the maintainer's whole saves folder was copied byte for byte into a git-ignored folder of the
+  repository, with a list of every file's SHA-256 and size (1,136 files). Checked against that list again after the last bench run (2026-11-15, 16:23): changed 0,
+  gone 0, added 0.
+- **Every bench run** played in the bench's own mirror folders (two linked copies of the game with their own user folders); none
+  saved into a real slot. The rig checked the real saves' hash list at each run's start and end: MATCH every time, never a
+  difference; the mirror-roots check passed at each run's end.
+- **The host's horse record and the chest ledger** live in the mod's own data folder, never in a save file; a save the record is
+  paired with is named by its hash, not changed.
+- **Items and money** moved between the players only through the ledger (the saddlebags' escrow, the horse drops, the trade's sale
+  in the joiner's own game): duplicates 0 in every run that counted them; the losses found (food at the horse trader's yard; a
+  money pile claimed after the host's reload) are losses, never copies.
+- **The maintainer's PC**: his launcher, agent and relay were not running and were not touched; no Windows setting was changed;
+  the bench's games ran in their own windows without taking focus from anything of his (the rig's own "front" helper only orders
+  its two copies). The maintainer's own modified documents and untracked files were never staged.
 
 ## 11. The switches
 
 `mp_w221_status` lists them; each is on, each is its own twin when off:
-`mp_combat_action_end` (A), `mp_shop_keeper`, `mp_talk_hold`, `mp_talk_force` (B), `mp_drive`, `mp_holders` (C), `mp_own_horse`,
+`mp_combat_action_end`, `mp_ragdoll_once` (A), `mp_shop_keeper`, `mp_talk_hold`, `mp_talk_force` (B), `mp_drive`, `mp_holders` (C), `mp_own_horse`,
 `mp_saddlebags` (D), `mp_corpse_look`, `mp_cart_seat`, `mp_cart_wheels`, `mp_horse_drop` (E), `mp_route_quiet` (F).

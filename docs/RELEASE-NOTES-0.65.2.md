@@ -23,17 +23,22 @@ script's last section names them.
   people many times a second and played a walking animation on top: feet slid, steps were too slow for the speed, and now and then a
   person was pulled back. Now the joiner's game is told where each walking person is going and walks them there with its own legs —
   the same way it walks its own villagers. On our test bench the step of a walking copy matches the host's person's (it was about
-  two thirds too slow), and a planted foot slides about a third as far as before. People who sit, work, fight or stand still are
-  placed as before.
+  two thirds too slow), a planted foot slides less (not yet as little as the host's own), and a person is pulled back a fifth as
+  often. The price: a walking person is a little less often exactly where the host's is (within half a metre about seven times in
+  ten). People who sit, work, fight or stand still are placed as before.
 - **People the game itself holds somewhere** (a guest it keeps putting back on a seat, a worker at a spot) are left where the game
-  holds them instead of being fought over many times a second.
+  holds them instead of being fought over many times a second: on our bench people flickered between two places an eighth as
+  often. Such a guest may sit on another seat than on the host's screen.
 
 ### The fight crash
 
-- **The joiner's game closing during or after a fight** — most often when the players came back to a place where a fight had been —
-  had one cause: an attack the mod had queued on a person was run after the game had already put that person's fighting part away.
-  The mod now ends every action it queued on a person at the moment the game puts that part away, when the person dies and when the
-  session ends. See Known for what our removal test still shows.
+- **The joiner's game closing during or after a fight** — most often when the players came back to a place where a fight had been.
+  One cause is fixed: an attack the mod had queued on a person was run after the game had already put that person's fighting part
+  away. The mod now ends every action it queued on a person at the moment the game puts that part away, when the person dies and
+  when the session ends; on our bench forty fighting copies taken away mid-swing closed nothing.
+- **A fresh body is laid down once.** The mod no longer throws a body that has just died into a second fall while the game's own
+  death is still playing (`mp_ragdoll_once`).
+- **Not fixed yet: a crash after many deaths near the joiner** (see Known).
 
 ### The joiner's talk and trade
 
@@ -66,15 +71,15 @@ script's last section names them.
 
 ### The host's frame and the bug report
 
-- **The bug report's recorders write their files on a thread of their own.** The host's worst frames spend about a quarter less time
-  in the mod than in 0.65.0; the target we set ourselves is not met (see Known).
+- **The bug report's recorders write their files on a thread of their own.** The host's worst frames spend about a fifth less time
+  in the mod than in 0.65.0 (10 ms against 13 in one frame in twenty); the target we set ourselves is not met (see Known).
 - **The bug report's briefing counts only this launch of the game** (it used to add up everything in the log files).
 - **The host no longer reads and sends walking routes nobody uses** (`mp_route` is off by default; a joiner who turns it on gets
   them again).
 
 ## Fixed
 
-- **The fight crash** on the joiner's side (above).
+- **The fight crash when a fighting person is taken away mid-swing** on the joiner's side (above).
 - **"The trade fails"**: no shop screen with a shopkeeper at work; a talk that never started with a busy person; a talk ended by the
   mod while the joiner was choosing.
 - **A joiner's bought horse was lost** at the next join, and his whistle fetched the horse instead of calling it.
@@ -85,7 +90,16 @@ script's last section names them.
 
 The short list; the full one is `docs/KNOWN-ISSUES.md`.
 
-KNOWN_SHORT_LIST
+- **The joiner's game can still close after people die near him** (a different crash from the one fixed; on our bench once in 2
+  to 26 deaths in a staged massacre). Send the bug report at once if it happens.
+- **Walking villagers** walk on their own feet but are a little less often in exactly the host's place; a person pulled back or
+  flickering between two places is rarer, not gone.
+- **The host's frame**: the mod still takes about 10 ms in one frame in twenty on the host (the target was 1.5 ms).
+- **The joiner's horse may look bare** (no saddle) on the host's screen. **Host: do not buy a horse the joiner has bought** — it
+  stays his, and the price is lost.
+- **Food dropped out of a horse's bags near the horse trader's stable may vanish** (weapons, money and tools are fine).
+- **A horse ridden far from the other player may jump back** on the other's screen for a moment; riding together it does not.
+- **A talk may not start at the first try** (about one in twelve): talk to them again.
 
 ## How to report
 

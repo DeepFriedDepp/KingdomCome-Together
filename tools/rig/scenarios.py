@@ -598,8 +598,21 @@ def loot_body_once(r, bandits):
         if detail['took'] and not str(detail['took']).startswith('nil'): break
         detail['take_retries'] = i + 1
         time.sleep(1.5)
-    mt = r.b.wait('k', mb['k'], r'WO134-BODY take npc=%s cls=(\S+) amt=(\d+) tok=(\S+)' % re.escape(name), 20)
+    mt = r.b.wait('k', mb['k'], r'WO134-BODY take npc=%s cls=(\S+) amt=(\d+) tok=(\S+)|w217_treq (\S+) %s \S+ (\S+) (\d+)' % (re.escape(name), re.escape(name)), 20)
     if not mt: return False, 'body-take-not-seen', detail
+    if mt.group(4):
+        # WO-221 finish: WO-217's live loot (on since 0.64.4) asks the host by its own event (w217_treq), not WO-134's take line; the
+        # same three facts are read: the joiner's ask, the host's verdict for that token (w217_tack ... applied), and the host's body
+        # one item lighter in the next live list the host sends (WO217-LOOT list ... items=n-1)
+        tok = mt.group(4)
+        detail['joiner_take'] = mt.group(0)[:160]
+        mr = r.b.wait('k', mb['k'], r'w217_tack %s %s (\S+)' % (re.escape(tok), re.escape(name)), 20)
+        detail['result'] = mr.group(0)[:160] if mr else None
+        ml = r.b.wait('k', mb['k'], r'WO217-LOOT list npc=%s rev=\d+ items=%d\b' % (re.escape(name), int(mo.group(1)) - 1), 20)
+        detail['host_take'] = ml.group(0)[:160] if ml else None
+        if not mr or mr.group(1) != 'applied': return False, 'body-take-refused', detail
+        if not ml: return False, 'host-not-told', detail
+        return True, 'ok', detail
     detail['joiner_take'] = mt.group(0)[:160]
     mh = r.a.wait('k', ma['k'], r'WO134-BODY host-take npc=%s cls=\S+ amt=\d+ from=\S+ -> (\S+)' % re.escape(name), 20)
     detail['host_take'] = mh.group(0)[:160] if mh else None

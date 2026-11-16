@@ -71,5 +71,5 @@ trade**, and **a horse for each player**. The scenes follow that order.
 ## The switches (only if asked)
 Every part of 0.65.2's own work can be turned off live from the console, one at a time, to compare: `mp_w221_status` lists them
 (`mp_combat_action_end`, `mp_talk_hold`, `mp_talk_force`, `mp_shop_keeper`, `mp_drive`, `mp_holders`, `mp_own_horse`,
-`mp_saddlebags`, `mp_corpse_look`, `mp_horse_drop`, `mp_cart_seat`, `mp_cart_wheels`, `mp_route_quiet`). The earlier builds'
+`mp_saddlebags`, `mp_corpse_look`, `mp_horse_drop`, `mp_cart_seat`, `mp_cart_wheels`, `mp_route_quiet`, `mp_ragdoll_once`). The earlier builds'
 switches: `mp_w218_status`, `mp_w217_status`, `mp_w216_status`.

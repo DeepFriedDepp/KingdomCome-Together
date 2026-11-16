@@ -309,20 +309,48 @@ def brawl(r, secs=BRAWL_S):
 # ---------------------------------------------------------------- the works-at-all checks (the joiner's side unless said)
 
 LEAVE = 'pcall(function() if player.human:IsInDialog() then player.human:InterruptDialog() end end)'
+# WO-221 finish: IsInDialog reads false while the mod's dialogue stand-in holds the player's talk (fw1-f3: the talk check's merchant
+# dialogue ran on for 4.5 minutes through the trade check, and the forced check's dialogue was still open at the sleep check, so the
+# game refused the sleep). A dialogue the check started is ended by its own id: the game's interrupt without the IsInDialog gate,
+# then Back in that copy's window, until the engine's own "[ID: n] Dialog ending|interrupted" line for it is in the log.
+LEAVE_ANY = 'pcall(function() player.human:InterruptDialogs() end); pcall(function() player.human:InterruptDialog() end)'
 
 
 def _in_dialog(c):
     return (c.ask(_T().IN_DIALOG, 'W217I', 3) or 'false').strip() == 'true'
 
 
-def _leave(c, keys_ok):
-    c.lua(LEAVE)
+def _dlg_ended(c, off, cid):
+    rx = r'\[ID: %s\] Dialog (ending|interrupted)' % cid
+    return any(re.search(rx, l) for l in c.lines(c.klog, off))
+
+
+def _leave(c, keys_ok, cid=None, off=None):
+    if cid is None:
+        c.lua(LEAVE)
+        t0 = time.time()
+        while time.time() - t0 < 8:
+            if not _in_dialog(c): return True
+            time.sleep(1.0)
+        if keys_ok: return _T().end_dialog(c)
+        return not _in_dialog(c)
+    if _dlg_ended(c, off, cid): return True
+    c.lua(LEAVE_ANY)
     t0 = time.time()
     while time.time() - t0 < 8:
-        if not _in_dialog(c): return True
+        if _dlg_ended(c, off, cid): return True
         time.sleep(1.0)
-    if keys_ok: return _T().end_dialog(c)
-    return not _in_dialog(c)
+    if keys_ok:
+        import keys
+        k = keys.Keys(_S().rec_of(c), 'wo221-enddlg')
+        try:
+            for _ in range(2):   # Back only while the dialogue's end is not in the log (after it, an Esc opens the pause menu)
+                if _dlg_ended(c, off, cid): break
+                _T().esc(c, k)
+                time.sleep(2.0)
+        finally:
+            k.release()
+    return _dlg_ended(c, off, cid)
 
 
 def _start_talk(c, npc, x, y, z, force=False):
@@ -368,7 +396,7 @@ def w_talk(r, keys_ok):
                 m, dt = T._wait_any(c, m0['k'], r'\[ID: %s\] (\d+)\) (\S+)|\[ID: %s\] Dialog (ending|interrupted|ends)' % (cid, cid), 45)
                 det['choices'] = bool(m and m.group(1)); det['after_s'] = round(dt, 1) if dt else None
             rows.append(det)
-            _leave(c, keys_ok)
+            det['left'] = _leave(c, keys_ok, cid, m0['k']) if cid else _leave(c, keys_ok)
             time.sleep(2)
             if det.get('choices'): works(r, 'talk', True, 'the choices came', rows); return True, 'ok', rows
         # WO-221 B (staged properly): on this save the host's Henry is wanted and no villager of the host's world will talk to him, so
@@ -385,7 +413,7 @@ def w_talk(r, keys_ok):
                     m, dt = T._wait_any(c, m0['k'], r'\[ID: %s\] (\d+)\) (\S+)|\[ID: %s\] Dialog (ending|interrupted|ends)' % (cid, cid), 45)
                     det['choices'] = bool(m and m.group(1)); det['after_s'] = round(dt, 1) if dt else None
                 rows.append(det)
-                _leave(c, keys_ok)
+                det['left'] = _leave(c, keys_ok, cid, m0['k']) if cid else _leave(c, keys_ok)
                 time.sleep(2)
                 if det.get('choices'): works(r, 'talk', True, 'the choices came (a merchant: no villager talks to the host\'s wanted Henry)', rows); return True, 'ok', rows
         if not tried: works(r, 'talk', None, 'no villager ready to talk on the host', rows)
@@ -418,7 +446,7 @@ def w_trade(r, keys_ok):
                     det['esc'] = T.esc(c, k); k.release()
                     time.sleep(0.5)
             rows.append(det)
-            _leave(c, keys_ok)
+            det['left'] = _leave(c, keys_ok, cid, m0['k']) if cid else _leave(c, keys_ok)
             time.sleep(2)
             if det.get('screen'): works(r, 'trade', True, 'the shop screen opened', rows); return True, 'ok', rows
         if not rows: works(r, 'trade', None, 'no shopkeeper ready to sell on the host', shops)
@@ -447,7 +475,7 @@ def w_forced(r, keys_ok):
         if any(re.search(T.SCREEN_IN, l) for l in c.lines(c.klog, m0['k'])) and keys_ok:
             import keys
             k = keys.Keys(_S().rec_of(c), 'wo220-forced-close'); det['esc'] = T.esc(c, k); k.release()
-        _leave(c, keys_ok)
+        det['left'] = _leave(c, keys_ok, cid, m0['k']) if cid else _leave(c, keys_ok)
         works(r, 'forced', bool(cid), 'the dialogue started' if cid else 'no dialogue started', det)
         return True, 'ok' if cid else 'no-dialogue', det
     return fn
