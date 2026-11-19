@@ -8,7 +8,7 @@ namespace KcdMp.Client;
 
 /// <summary>WO-132: one NPC's combat state as the DLL read it (frame 0x9B / op 6). Zones are table ids, -1 = none.</summary>
 public readonly record struct NpcCombatState(uint Eid, bool Combat, sbyte GuardZone, sbyte GuardStance, sbyte AtkZone,
-                                             bool Block, bool OpponentIsPlayer, uint OpponentEid, string Name, bool HasCombatActor = true)
+                                             bool Block, bool OpponentIsPlayer, uint OpponentEid, string Name, bool HasCombatActor = true, bool Fleeing = false)
 {
     /// <summary>[eid:4][combat][gz][gs][atk][block][oppIsPlayer][oppEid:4][nameLen][name]</summary>
     public static bool TryParse(ReadOnlySpan<byte> b, out NpcCombatState s)
@@ -17,7 +17,7 @@ public readonly record struct NpcCombatState(uint Eid, bool Combat, sbyte GuardZ
         if (b.Length < 15 || b.Length != 15 + b[14]) return false;
         static sbyte Z(byte v) => v == 0xFF ? (sbyte)-1 : (sbyte)v;
         s = new NpcCombatState(BinaryPrimitives.ReadUInt32LittleEndian(b), b[4] == 1, Z(b[5]), Z(b[6]), Z(b[7]), b[8] == 1, b[9] == 1,
-                               BinaryPrimitives.ReadUInt32LittleEndian(b[10..]), System.Text.Encoding.ASCII.GetString(b.Slice(15, b[14])));
+                               BinaryPrimitives.ReadUInt32LittleEndian(b[10..]), System.Text.Encoding.ASCII.GetString(b.Slice(15, b[14])), true, b[4] == 2);
         return true;
     }
 
@@ -109,6 +109,7 @@ public static class Wo132Rules
         if (s.Combat) bits |= BodyState2Bits.CombatMode;
         if (s.Block) bits |= BodyState2Bits.BlockHeld;
         if (s.OpponentIsPlayer || s.OpponentEid != 0) bits |= BodyState2Bits.Locked;
+        if (s.Fleeing && !s.Combat) bits |= BodyState2Bits.Fleeing;   // WO-222 D (the DLL says it only with flee_live on)
         var st = new BodyState2(0, 0, bits, Protocol.ZoneFromTableId(s.GuardZone), Protocol.StanceFromTableId(s.GuardStance),
                                 Protocol.ZoneFromTableId(s.AtkZone), 0, 0, 0);
         NpcCombatTarget t = NpcCombatTarget.None;

@@ -1662,11 +1662,11 @@ public partial class GameBridge(ClientConfig config)
             // Anything under half a hit point is sensor noise, not combat
             // state worth a wire message and a peer-side game-thread apply.
             // WO-210 E.2: a blow the DLL filtered (judge) carries no numbers by design -- the host's engine judges it.
-            if (!judge && Wo147Rules.HitCarriesNothing(health, stamina)) return;
+            if (!judge && Wo147Rules.HitCarriesNothing(health, stamina)) { if (byPlayer) Wo222NoteSend(null, false, "carries-nothing", health, stamina); return; }
             // WO-147: on a joiner only this player's own blows go to the host (the sampler reports any drop
             // near the player: the field's host avatar hit a hidden local copy and the gate took it for the
             // joiner's). And a blow that cost only stamina now goes too (a block, a broken weapon).
-            if (Wo147DropNotOwnBlow(byPlayer, health, stamina)) return;
+            if (Wo147DropNotOwnBlow(byPlayer, health, stamina)) { if (byPlayer) Wo222NoteSend(null, false, "not-own-blow", health, stamina); return; }
             try
             {
                 // WO-40 Phase 5: per-save guids are unreliable across
@@ -1700,6 +1700,7 @@ public partial class GameBridge(ClientConfig config)
                 if (NpcDamageGuard.IsDrop(verdict))
                 {
                     _stats.DmgOutDropped++;
+                    if (byPlayer) Wo222NoteSend(npcName, false, "guard-" + NpcDamageGuard.Reason(verdict), health, stamina);
                     Console.WriteLine(FormattableString.Invariant(
                         $"MP-DMG dir=drop npc={npcName ?? "?"} hp={health:F1} st={stamina:F1} fatal={(died ? 1 : 0)} reason={NpcDamageGuard.Reason(verdict)} authority={(_isDamageAuthority ? 1 : 0)}"));
                     return;
@@ -1710,11 +1711,12 @@ public partial class GameBridge(ClientConfig config)
                     // WO-131 1b/1c: on a joiner, only a hit on the host's NPC where
                     // the host has it goes out, and never as a kill.
                     var (w131Send, w131Health, w131Fatal) = await Wo131GateOutboundAsync(soul, npcName, health, died, judge);
-                    if (!w131Send) { _stats.DmgOutDropped++; return; }
+                    if (!w131Send) { _stats.DmgOutDropped++; if (byPlayer) Wo222NoteSend(npcName, false, "not-the-hosts-npc-here", health, stamina); return; }
                     health = w131Health; died = w131Fatal;
                     await SendNpcDamageAsync(stream, npcName, stamina, health, suppressHitReaction: true, fatal: died,
                                              attributed: byPlayer && _npcAttribution, judgeThere: judge);   // WO-121 Phase 5; WO-210 E.2
                     if (byPlayer && _npcAttribution) _w121AttribOut++;
+                    if (byPlayer) Wo222NoteSend(npcName, true, "sent", health, stamina);
                     Console.WriteLine($"[combat] sent hit {health:F1} on '{npcName}' ({soul}){(died ? " FATAL" : "")}{(judge ? " (not judged here: the host's engine decides)" : "")}");
                     NoteRequestResolvedOut(npcName);   // WO-102 Phase 5
                     _stats.DmgOut++; if (died) _stats.DmgOutFatal++;
@@ -1848,6 +1850,7 @@ public partial class GameBridge(ClientConfig config)
         Wo217OnConnect(cts.Token);           // WO-217: the switches
         Wo218OnConnect(cts.Token);           // WO-218: the switches, the batch's probe
         Wo221OnConnect(cts.Token);           // WO-221: the switches
+        Wo222OnConnect(cts.Token);           // WO-222: the switches
         Wo147OnConnect(cts.Token);           // WO-147: the joiner fights hostile copies, destructive quest steps checked, the leash's stats
         Wo148OnConnect(cts.Token);           // WO-148: carrying on the other screen (the carrier owns the body; the host's world decides)
         Wo154MenuOnConnect(cts.Token);       // WO-154 7b: the mod menu (the saved choices, the host's levers, fast travel)
@@ -6326,6 +6329,9 @@ public partial class GameBridge(ClientConfig config)
                 return;
             case string w218 when w218.StartsWith("w218_", StringComparison.Ordinal):   // WO-218: the switches, the status, its parts' events
                 Wo218OnEvent(name, arg);
+                return;
+            case string w222 when w222.StartsWith("w222_", StringComparison.Ordinal):   // WO-222: the switches, the status
+                Wo222OnEvent(name, arg);
                 return;
             case string w221 when w221.StartsWith("w221_", StringComparison.Ordinal):   // WO-221: the switches, the status, its parts' events
                 Wo221OnEvent(name, arg);

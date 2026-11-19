@@ -28,7 +28,21 @@ it. The work orders' findings (`docs/WO-215-findings.md` … `docs/WO-221-findin
   taken away mid-swing) is fixed. A different crash after deaths is not: on our bench, in a staged massacre (a death near the
   joiner every 15 seconds), the joiner's game closed once in 2 to 26 deaths. If a game closes during or after a fight, start it
   again and send the bug report at once: the crash report goes with it. `mp_combat_action_end off` gives 0.65.0's behaviour back
-  (it crashes on our bench too, sooner).
+  (it crashes on our bench too, sooner). WO-222's bench saw two more joiner closes in fights, in another place in the game's combat
+  code (once with WO-222's switches off, once on), and one host close on the game's renderer thread after an hour of fights.
+- **An enemy fighting the joiner may, on the joiner's screen, be fighting the host's figure instead of him.** Its swing plays, but
+  the joiner's own game does not judge a blow from it (on our bench this was the cause of most of the host's waits for the joiner's
+  verdict that ran out: one blow in ten to one in three over a whole session, 4 % in a fight against two bandits). For such a blow
+  the host waits up to 1.5 s, then the joiner's game judges the host's blow against his guard as it arrives (rarely it takes the
+  host's numbers). A blow you blocked or dodged on your screen is never charged on top of it: a late verdict of yours stands, and a
+  host verdict already applied is given back (`mp_def_wait`). Press `.` when you take a hit you did not see coming.
+- **The joiner lands fewer blows than the host** on our bench (about one swing in five touched a body, the host's one in two): his
+  attacks are cut short when he is struck, and the enemy blocks and dodges as the host's does. Every touch goes to the host and is
+  judged there. The bug report now says, per swing, what it touched or why not (`W222-SWING`), and its briefing has one line for it.
+- **An enemy that runs away (or begs for mercy) stays the joiner's enemy** (`mp_flee_live`): it runs on his screen and his blows on it
+  count (on our bench every blow of his on a runner reached the host and landed). Our bench could make an enemy flee only now and
+  then, and its joiner knocked a runner down but did not see one die: press `.` and say "runner" if one cannot be killed. A runner
+  the joiner strikes may turn and fight him again.
 - **A knocked-down copy stays down while its host NPC lies**; it may fall or get up a few tenths of a second after the host's, and
   on our bench one get-up in a handful was not shown.
 - **Paired attacks** (one fighter's move answered by another's) are not always shown on the joiner. **Grabs** do not happen between the

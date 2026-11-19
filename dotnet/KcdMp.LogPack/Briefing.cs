@@ -476,6 +476,16 @@ public static class Briefing
         var w197 = agent.LastOrDefault(x => x.Contains("MP-W197-STATS", StringComparison.Ordinal));
         string recoils = w197 is null ? "n/a" : $"recoils {Rx(w197, "recoil_played")}, clinches {Rx(w197, "clinch_played")}";
         o.Add(new Score("recoils and clinches played", recoils, "every one the host's world plays"));
+        // WO-222 E: every swing of this player in a fight -- what it touched, whether the touch went to the host, and why the others did not
+        var w222Sw = native.Where(x => x.Contains("W222-SWING n=", StringComparison.Ordinal)).Select(x => Regex.Match(x, @"reason=(\S+)")).Where(m => m.Success).Select(m => m.Groups[1].Value).ToList();
+        if (w222Sw.Count > 0)
+        {
+            int touched = w222Sw.Count(r => r == "touched");
+            int sent = agent.Count(x => x.Contains("W222-SEND ", StringComparison.Ordinal) && x.Contains(" sent why=", StringComparison.Ordinal));
+            var through = w222Sw.Where(r => r is "in-reach-no-touch" or "not-hostile-here" or "held" or "dead").GroupBy(r => r).Select(g => $"{g.Key} {g.Count()}").ToList();
+            o.Add(new Score("this player's swings: made / touched a body / touches sent / passed through a body (by reason)",
+                $"{w222Sw.Count} / {touched} / {sent} / {(through.Count == 0 ? "0" : string.Join(", ", through))}", "every swing that meets a body counts"));
+        }
         var pings = agent.Select(x => Ping.Match(x)).Where(m => m.Success).Select(m => int.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture)).ToList();
         o.Add(new Score("message latency (the network ping)", pings.Count == 0 ? "n/a" : $"p99 {Pct(pings, 99)} ms", "p99 < 1000 ms"));
         // WO-204 Act V: the game's own queue lag, a line of its own; a backgrounded game's queue apart (a minimised game runs slow)

@@ -265,6 +265,7 @@ public partial class GameBridge
         var c2 = hasDamage ? await Wo165VictimDecidesAsync(hitId, m, ct) : null;
         bool byEngine = c2 is { } e2 && e2.Call != Wo165Rules.DamageCall.FallbackApplyHost;
         bool applied = byEngine || (hasDamage && await ApplyPlayerHitAsync(m.Health, m.Stamina, ct));
+        if (applied && !byEngine && hasDamage && m.Attacker.Length > 0) Wo222NoteApplied(m.Attacker, hitId, m.Health, m.Stamina, m.Verdict);   // WO-222 C
         if (c2 is { } e3)
         {
             HitVerdict said = e3.Call == Wo165Rules.DamageCall.FallbackApplyHost ? m.Verdict : e3.Outcome;

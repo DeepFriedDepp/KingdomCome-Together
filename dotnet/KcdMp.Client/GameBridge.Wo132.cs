@@ -290,6 +290,12 @@ public partial class GameBridge
         // WO-147: or it fights an avatar -- never a dead one (the live bandit was watched again after its death)
         bool want = Wo132Rules.HostWatches(flags) || ((flags & Protocol.NpcStateFlagDead) == 0 && Wo147FightWatched(npcName));
         long now = Environment.TickCount64;
+        // WO-222 D (flee_live): a body that runs or begs puts its weapon away; it stays watched for two minutes after its fight while it
+        // lives, so the DLL reads its flight and the joiner keeps it as an enemy (the bench: the runner was dropped from the watch the
+        // moment it holstered, and its copy was released three seconds later)
+        if (want) _w222FightWatchAt[npcName] = now;
+        else if ((flags & Protocol.NpcStateFlagDead) == 0 && W222On("flee_live") && _w222FightWatchAt.TryGetValue(npcName, out long fw)
+                 && Wo222Rules.KeepWatching(fw, now)) want = true;
         if (want)
         {
             if (_w132Watched.TryGetValue(npcName, out long at) && now - at < 30_000) return;
@@ -350,6 +356,23 @@ public partial class GameBridge
             if (v == Wo132Rules.EngageVerdict.Engage) Wo195NoteRefused(ev.Name, "engage");
             if (v != Wo132Rules.EngageVerdict.Ignore) v = engaged ? Wo132Rules.EngageVerdict.Release : Wo132Rules.EngageVerdict.Ignore;
         }
+        // WO-222 D (flee_live): the host's NPC flees or surrenders, alive -- still an enemy: its copy stays in this player's fight (no combat
+        // hold: it runs as its host NPC runs), up to the DLL's flee range; never released for the flight itself
+        if (ev.Fleeing && W222On("flee_live") && guarded && bound && eid != 0 && !w195Dead && Wo136Rules.MayEngage(Wo136HostNpcDown(ev.Name)))
+        {
+            _w183Left.Report(ev.Name, true, Environment.TickCount64);
+            var rf = await _combat.Wo132EngageAsync(true, eid, ev.State, ct, intentInRange: true, flee: true);
+            if (rf.Ok)
+            {
+                bool firstFlee = !_w222FleeEngaged.ContainsKey(ev.Name);
+                _w222FleeEngaged[ev.Name] = Environment.TickCount64;
+                _w132Engaged[ev.Name] = (DateTime.UtcNow, eid);
+                if (firstFlee) { Interlocked.Increment(ref _w222FleeOn); Console.WriteLine(FormattableString.Invariant($"MP-W222 flee {ev.Name}: its host NPC flees -- its copy stays in my fight ({rf.DistM:F1} m), no combat hold, it runs")); }
+                return;
+            }
+            Console.WriteLine(FormattableString.Invariant($"MP-W222 flee {ev.Name}: not held in my fight (reason {rf.Reason}, {rf.DistM:F1} m)"));
+        }
+        else if (_w222FleeEngaged.TryRemove(ev.Name, out _)) Console.WriteLine($"MP-W222 flee {ev.Name}: its host NPC no longer flees ({(ev.InCombat ? "fights again" : "out of the fight")})");
         // WO-178 C1: the copy is offered to the DLL's hostility answer (the joiner's lock-on) -- engaged with him, or fighting the host
         if (guarded && bound && eid != 0) Wo178OfferFor(ev, eid, w195Dead || !Wo136Rules.MayEngage(Wo136HostNpcDown(ev.Name)));
         // WO-187: its wished opponent (A2) and its guard hold (C2); A1: the host's own position of the NPC within range of me

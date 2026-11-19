@@ -9,6 +9,7 @@
 #include "fault_guard.h"
 
 #include <windows.h>
+#include <algorithm>
 #include <atomic>
 #include <cmath>
 #include <cstdio>
@@ -26,6 +27,8 @@
 #include "wo136.h"
 #include "wo166.h"
 #include "wo195.h"
+#include "wo222.h"
+#include "script_context.h"
 
 namespace kcdmp::wo132 {
 namespace {
@@ -40,7 +43,8 @@ uint32_t player_eid() {
 }
 
 // Host: the watched NPCs and what went out last.
-struct Watched { uint32_t eid; motion::NpcCombat last{}; bool sent = false; double lastSent = 0; };
+struct Watched { uint32_t eid; motion::NpcCombat last{}; bool sent = false; double lastSent = 0;
+                 bool flee = false, lastFlee = false; double fleeReadAt = 0, foughtAt = -1e9, fleeUntil = -1e9; };   // WO-222 D: fleeing (hostile, not fighting)
 std::vector<Watched> g_watch;          // main thread only
 constexpr size_t kMaxWatch = 48;
 double g_lastSample = 0;
@@ -58,18 +62,50 @@ std::vector<uint32_t> g_engaged;
 bool is_engaged(uint32_t eid) { for (uint32_t e : g_engaged) if (e == eid) return true; return false; }
 
 constexpr float kEngageRangeM = 15.0f;
-constexpr float kIntentRangeM = 40.0f;   // WO-187 A1: the host's NPC is within kEngageRangeM of this player; its copy here may be this far behind
+constexpr float kIntentRangeM = 40.0f;
+constexpr float kFleeRangeM = 80.0f;     // WO-222 D: a fleeing enemy's copy stays in this player's fight this far (the game's flee runs 100-140 m)
+constexpr double kFleeGraceS = 20.0;     // WO-222 D: a flight is one flight while the contexts come and go within this
+std::vector<uint32_t> g_fleeing;         // WO-222 D (joiner, main thread): engaged copies held in the fight without the combat hold
+std::atomic<uint32_t> c_fleeEngage{0};   // WO-187 A1: the host's NPC is within kEngageRangeM of this player; its copy here may be this far behind
 std::atomic<uint32_t> c_far{0};
 std::atomic<uint32_t> c_leave{0}, c_leaveFail{0}, c_engageOn{0}, c_engageOff{0}, c_engageSkirmish{0}, c_watchOut{0}, c_fail{0};
 
 uint8_t wire_zone(int8_t v) { return v < 0 ? 0xFF : static_cast<uint8_t>(v); }
 
-void emit(uint32_t eid, const motion::NpcCombat& c) {
+// WO-222 D: bodies that struck a joiner's figure (any thread: the hit hook), read by the watch tick
+std::mutex g_figFightMu;
+std::unordered_map<uint32_t, double> g_figFight;
+double figure_fight_at(uint32_t eid) {
+    std::lock_guard<std::mutex> lk(g_figFightMu);
+    auto f = g_figFight.find(eid);
+    return f == g_figFight.end() ? -1e9 : f->second;
+}
+
+// WO-222 D: the game's own flee (and surrender) on a living soul -- the contexts its flee interrupt adds (interrupt_flee.xml). Main thread.
+std::atomic<uint32_t> c_fleeReads{0}, c_fleeSeen{0};
+// 1 = the flee or surrender contexts are on it, 0 = alive without them, -1 = dead, knocked out or no soul
+int flee_now(uint32_t eid) {
+    void* soul = hits::soul_of_eid(eid);
+    if (!soul) return -1;
+    bool dead = false, ko = false;
+    rttr::soul_bool(soul, "IsDead", &dead);
+    rttr::soul_bool(soul, "IsUnconscious", &ko);
+    if (dead || ko) return -1;
+    c_fleeReads.fetch_add(1, std::memory_order_relaxed);
+    // the flee interrupt's contexts (interrupt_flee.xml) and the surrender's (interrupt_mercy.xml: the enemy who begs is still an enemy)
+    const bool f = sctx::has_soul_context(soul, "combat_flee") == 1 || sctx::has_soul_context(soul, "crime_interruptFlee") == 1 ||
+                   sctx::has_soul_context(soul, "combat_surrender") == 1 || sctx::has_soul_context(soul, "crime_interruptMercy") == 1;
+    if (f) c_fleeSeen.fetch_add(1, std::memory_order_relaxed);
+    return f ? 1 : 0;
+}
+
+void emit(uint32_t eid, const motion::NpcCombat& c, bool flee = false) {
     CombatFn fn = g_combatFn.load();
     if (!fn) return;
     uint8_t b[16 + 64]{};
     std::memcpy(b, &eid, 4);
-    b[4] = c.combat; b[5] = wire_zone(c.guardZone); b[6] = wire_zone(c.guardStance); b[7] = wire_zone(c.atkZone);
+    b[4] = c.combat ? 1 : flee ? 2 : 0;   // WO-222 D: 2 = fleeing or surrendering -- out of combat mode, still an enemy (flee_live)
+    b[5] = wire_zone(c.guardZone); b[6] = wire_zone(c.guardStance); b[7] = wire_zone(c.atkZone);
     b[8] = c.block; b[9] = c.opponentIsPlayer;
     std::memcpy(b + 10, &c.opponentEid, 4);
     const char* n = nullptr;
@@ -96,6 +132,13 @@ void put_read(uint8_t* out, const motion::NpcCombat& c) {
 } // namespace
 
 void set_combat_callback(CombatFn fn) { g_combatFn.store(fn); }
+
+void note_figure_fight(uint32_t npcEid) {
+    if (!npcEid) return;
+    std::lock_guard<std::mutex> lk(g_figFightMu);
+    if (g_figFight.size() > 256) g_figFight.clear();
+    g_figFight[npcEid] = now_s();
+}
 
 uint8_t handle(const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t* outLen) {
     *outLen = 0;
@@ -126,11 +169,14 @@ uint8_t handle(const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t
         return kROk;
     }
     case kOpEngage: {
-        if (n != 1 + 4 + sizeof(motion::State2) && n != 1 + 4 + sizeof(motion::State2) + 1) return kRBadRequest;
+        if (n != 1 + 4 + sizeof(motion::State2) && n != 1 + 4 + sizeof(motion::State2) + 1 && n != 1 + 4 + sizeof(motion::State2) + 2) return kRBadRequest;
         bool on = a[0] != 0;
         // WO-187 A1: the agent's word that the HOST's NPC is within range of this player and targets him -- the copy here may lag behind it
         // (a chase); it is engaged up to kIntentRangeM by its own position
-        const bool intent = n == 1 + 4 + sizeof(motion::State2) + 1 && a[17] == 1;
+        const bool intent = n >= 1 + 4 + sizeof(motion::State2) + 1 && a[17] == 1;
+        // WO-222 D (flee_live): the host's NPC flees -- still an enemy: in this player's fight, its local hits discarded, but no combat hold
+        // (its combat mode is the host NPC's own: out of it, so it runs as the host's NPC runs), and up to kFleeRangeM
+        const bool flee = n == 1 + 4 + sizeof(motion::State2) + 2 && a[18] == 1 && wo222::on(wo222::kBitFleeLive);
         const uint32_t eid = get_u32(a + 1);
         motion::State2 st{};
         std::memcpy(&st, a + 5, sizeof st);
@@ -150,7 +196,7 @@ uint8_t handle(const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t
                 dist = std::sqrt(dx * dx + dy * dy + dz * dz);
             }
         }
-        bool tooFar = on && (dist < 0 || dist > (intent ? kIntentRangeM : kEngageRangeM));
+        bool tooFar = on && (dist < 0 || dist > (flee ? kFleeRangeM : intent ? kIntentRangeM : kEngageRangeM));
         // WO-209 A (mp_copy_opponent_mirror): a copy the mirror holds in this player's fight (the host's NPC fights his figure) is never let
         // go for its distance -- adds only, never a removal; the fight's end (the host's NPC out of combat, dead) still releases it
         if (tooFar && is_engaged(eid) && wo209::mirror_holds_player(eid)) tooFar = false;
@@ -169,8 +215,22 @@ uint8_t handle(const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t
                 logf("WO132-ENGAGE eid=0x%X on: skirmish vs the local player %s (rv=0x%llX); its local hits on the player are discarded",
                      eid, sk ? "added" : "NOT added", static_cast<unsigned long long>(rv));
             }
-            motion::set_npc_engage(eid, true, &st, now);
+            if (flee) {
+                motion::set_npc_engage(eid, false, nullptr, now);   // no combat hold: the host's NPC is out of combat mode while it flees
+                if (std::find(g_fleeing.begin(), g_fleeing.end(), eid) == g_fleeing.end()) {
+                    g_fleeing.push_back(eid);
+                    c_fleeEngage.fetch_add(1);
+                    // the copy's own fight stance goes too (its guard hold, the combat mode the mod held on it): the driver runs it as its host
+                    // NPC runs (the bench: held in its stance, the run's requests left it standing and the writer pulled it 2-3 m at a time)
+                    motion::drop_fight_holds(eid, "WO-222 D: its host NPC flees");
+                    logf("WO222-FLEE eid=0x%X engaged as a fleeing enemy (%.1f m): in this player's fight, no combat hold -- it runs as its host NPC runs", eid, dist);
+                }
+            } else {
+                for (auto it = g_fleeing.begin(); it != g_fleeing.end(); ++it) if (*it == eid) { g_fleeing.erase(it); break; }
+                motion::set_npc_engage(eid, true, &st, now);
+            }
         } else {
+            for (auto it = g_fleeing.begin(); it != g_fleeing.end(); ++it) if (*it == eid) { g_fleeing.erase(it); break; }
             motion::set_npc_engage(eid, false, nullptr, now);
             if (is_engaged(eid)) {
                 uint64_t rv = 0;
@@ -365,14 +425,34 @@ void tick() {
             it = g_watch.erase(it);
             continue;
         }
-        const bool changed = !it->sent || !same(c, it->last);
         // WO-147: a fight with an avatar reads combat=0 (combat mode is the player's fight's): its opponent keeps
         // the heartbeat too, or the joiner's engagement went stale after 3 s.
         const bool fighting = c.combat || c.opponentIsPlayer || c.opponentEid != 0;
-        const bool hb = fighting && now - it->lastSent >= 1.0;
+        // WO-222 D (flee_live): a body that fought in the last two minutes -- anyone this game reads, or a joiner's figure, whose fight
+        // reads no combat and no opponent here (WO-147; the bench's runner was such a body: its flight was never read) -- and is out of
+        // the fight now is read for the game's own flee and surrender: the soul contexts its interrupts put on it (combat_flee,
+        // crime_interruptFlee; combat_surrender, crime_interruptMercy). Alive, it is still an enemy, and the joiner's copy stays in his
+        // fight. A villager fleeing a crime it never fought in is not. 2 Hz, main thread (the context manager has no lock: WO-68).
+        if (fighting) { it->foughtAt = now; it->flee = false; }
+        else {
+            const double fa = figure_fight_at(it->eid);
+            if (fa > it->foughtAt) it->foughtAt = fa;
+        }
+        if (!fighting && wo222::on(wo222::kBitFleeLive) && now - it->foughtAt < 120.0 && now - it->fleeReadAt >= 0.5) {
+            it->fleeReadAt = now;
+            // the game drops the contexts for moments inside one flight (the bench: 7 s between two flee interrupts while it ran on):
+            // an enemy that fled within kFleeGraceS, alive and not fighting, still flees
+            const int f = flee_now(it->eid);
+            if (f == 1) it->fleeUntil = now + kFleeGraceS;
+            it->flee = f == 1 || (f == 0 && now < it->fleeUntil);
+        } else if (!wo222::on(wo222::kBitFleeLive)) it->flee = false;
+        const bool changed = !it->sent || !same(c, it->last) || it->flee != it->lastFlee;
+        const bool hb = (fighting || it->flee) && now - it->lastSent >= 1.0;
         if (changed || hb) {
-            emit(it->eid, c);
-            it->last = c; it->sent = true; it->lastSent = now;
+            emit(it->eid, c, it->flee);
+            if (it->flee != it->lastFlee) logf("WO222-FLEE npc eid=0x%X %s (the game's flee contexts on its soul) -- %s", it->eid, it->flee ? "flees" : "no longer flees",
+                                               it->flee ? "still an enemy: its copies stay in the joiners' fights" : "its combat word goes as read");
+            it->last = c; it->sent = true; it->lastSent = now; it->lastFlee = it->flee;
         }
         ++it;
     }
@@ -386,6 +466,7 @@ bool release_copy(uint32_t eid, const char* why) {
     const bool sk = soul && hits::skirmish_remove(soul, &rv);
     hits::discard_from(eid, false);
     for (auto it = g_engaged.begin(); it != g_engaged.end(); ++it) if (*it == eid) { g_engaged.erase(it); break; }
+    for (auto it = g_fleeing.begin(); it != g_fleeing.end(); ++it) if (*it == eid) { g_fleeing.erase(it); break; }
     c_engageOff.fetch_add(1);
     logf("WO132-ENGAGE eid=0x%X off: %s -- combat hold released, skirmish %s", eid, why ? why : "-", sk ? "left" : "NOT left");
     return true;
@@ -405,6 +486,7 @@ void local_player_left_fight(const char* why) {
     const size_t n = g_engaged.size();
     for (uint32_t e : g_engaged) { hits::discard_from(e, false); motion::set_npc_engage(e, false, nullptr, now_s()); }
     g_engaged.clear();
+    g_fleeing.clear();
     logf("WO209-ENGAGE the local player left his fight (%s): %zu copy/copies no longer held in it (re-added only by a new engage)",
          why ? why : "?", n);
 }

@@ -298,6 +298,13 @@ public partial class GameBridge
             // authority) speaks for its NPCs; a name must be authored.
             // WO-151: and its hit reaction (NpcHit), so a copy shows the host's reaction, not its own.
             bool npcHit = (ActionKind)f.Kind == ActionKind.NpcHit;
+            if (npcHit)
+            {
+                // WO-222 B.1: a reaction the host's engine played that does not go out is said, with why
+                string? w222Why = !_npcRows ? "npc-rows-off" : !_isDamageAuthority ? "not-the-authority" : !_w151Reactions ? "npc-reactions-off"
+                    : !NpcNamePattern.IsMatch(f.Name) || Protocol.IsNeverSyncedNpcName(f.Name) ? "not-a-synced-name" : !Wo163OutboundRowOk(f) ? "row-refused" : null;
+                if (w222Why is not null) { Console.WriteLine($"W222-REACTOUT npc={f.Name} row={f.Row} dropped why={w222Why}"); return; }
+            }
             if (((ActionKind)f.Kind != ActionKind.Attack && !npcHit) || !_npcRows || !_isDamageAuthority) return;
             if (npcHit && !_w151Reactions) return;
             if (!NpcNamePattern.IsMatch(f.Name) || Protocol.IsNeverSyncedNpcName(f.Name)) return;

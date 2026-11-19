@@ -89,6 +89,8 @@ bool release_dead(uint32_t eid);
 bool release_copy(uint32_t eid, const char* why);
 // WO-208 F.1 (main thread): does this machine hold the copy in the local player's fight (engaged: its skirmish add, until released)?
 bool engaged(uint32_t eid);
+// WO-222 D (any thread: the hit hook): this NPC struck a joiner's figure -- it is in a fight the host's combat model does not show
+void note_figure_fight(uint32_t npcEid);
 // WO-209 A (main thread): the opponent mirror engages this copy in the local player's fight -- his skirmish joined (AddSoulToSkirmish,
 // the same as op 2's first engage; adds only), its local hits on him discarded as op 2's. The combat hold stays op 2's. False when
 // refused: dead, a scripted scene's copy, farther than maxM, no soul. True when it is engaged (already, or now).

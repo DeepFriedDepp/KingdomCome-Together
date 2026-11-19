@@ -66,6 +66,8 @@ const char* swing_result_name(SwingResult r);
 /// fails to resolve; a visually inert success (weapon sheathed) still
 /// returns Ok, matching WO-45's live observation.
 SwingResult ghost_swing(uint32_t entityId, const char* fragSpec);
+SwingResult ghost_swing_prio(uint32_t entityId, const char* fragSpec, uint32_t priority);   // WO-222 B
+bool last_swing(uint32_t eid, uint32_t* frag, uint32_t* prio, double* ageS);   // WO-222 B.1: the body's last queued row (main thread)
 
 /// WO-208 A (main thread): queue the host's fragment (its id, its 20-byte tag block, its priority, its flags) on this body through its
 /// own C_CombatAnimActionManager -- ghost_swing's route without the spec text. On Ok, *outAction holds one reference of the caller's

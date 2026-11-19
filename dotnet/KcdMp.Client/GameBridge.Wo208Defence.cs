@@ -56,6 +56,7 @@ public partial class GameBridge
             return;
         }
         if (Wo208Rules.IsJudgement(outcome)) _w208JudgedAt[npc] = Environment.TickCount64;   // none: the host's verdict is applied here as before
+        if (Wo208Rules.IsJudgement(outcome)) Wo222OwnJudgement(npc, outcome);   // WO-222 C: a host guess applied a moment ago is given back
         else _w209NoneAt[npc] = Environment.TickCount64;   // WO-209 B: a host verdict waiting for this window goes now
         uint seq = Interlocked.Increment(ref _w208DefSeq);
         Interlocked.Increment(ref _w208DefOut);
@@ -97,6 +98,7 @@ public partial class GameBridge
             list.Add(new W208Outcome { At = now, Outcome = outcome, Hp = hp, St = st, Seq = seq });
         }
         Console.WriteLine(FormattableString.Invariant($"WO208-DEF in npc={npc} joiner={src} outcome={Wo208Rules.DefName(outcome)} hp={hp:F1} st={st:F1} seq={seq}"));
+        Wo222NoteLateAnswer(src, npc, outcome, now);   // WO-222 C: a verdict of his that came after the host's guess went
     }
 
     /// <summary>
@@ -114,7 +116,13 @@ public partial class GameBridge
         // wait only; an answered one (hit, block, parry, "none") is applied at once as before.
         long lastBlow = _w210LastBlow.TryGetValue((ghost, attacker), out long lb) ? lb : 0;
         _w210LastBlow[(ghost, attacker)] = blow;
-        if (W210("combo_hold") && Wo210Rules.ComboContinues(lastBlow, blow)) { hold = Wo210Rules.ComboHoldMs(rtt); Interlocked.Increment(ref _w210ComboHolds); }
+        bool combo = W210("combo_hold") && Wo210Rules.ComboContinues(lastBlow, blow);
+        if (combo) { hold = Wo210Rules.ComboHoldMs(rtt); Interlocked.Increment(ref _w210ComboHolds); }
+        // WO-222 C (def_wait): the wait follows how long this joiner's own verdicts take to come in (the slowest of his last answers, late
+        // ones included, and a margin); the twin keeps WO-208's fixed wait
+        bool w222 = W222On("def_wait");
+        var ring = _w222DefDelays.GetOrAdd(ghost, _ => new Wo222Rules.DelayRing());
+        if (w222) hold = Wo222Rules.DefHoldMs(ring.Snapshot(), combo ? Wo210Rules.ComboHoldMs(rtt) : 0);
         while (true)
         {
             if (_w208Outcomes.TryGetValue((ghost, attacker), out var list))
@@ -128,12 +136,23 @@ public partial class GameBridge
                     if (o is not null)
                     {
                         o.Used = true;
+                        if (Wo208Rules.IsJudgement(o.Outcome) && Wo222Rules.DelaySample(o.At, blow)) ring.Add((int)(o.At - blow));
                         return (Wo208Rules.IsJudgement(o.Outcome), o.Outcome, o.Hp, o.St, Environment.TickCount64 - blow);
                     }
                 }
             }
-            long waited = Environment.TickCount64 - blow;
-            if (waited >= hold) return (false, 0, 0, 0, waited);
+            long now2 = Environment.TickCount64;
+            long waited = now2 - blow;
+            if (waited >= hold)
+            {
+                if (w222)
+                {
+                    Interlocked.Increment(ref _w222DefFallbacks);
+                    Wo222NoteFallback(ghost, attacker, blow);
+                    Console.WriteLine(FormattableString.Invariant($"W222-DEF fallback npc={attacker} joiner={ghost} hold_ms={hold} waited_ms={waited} samples={ring.Snapshot().Length}"));
+                }
+                return (false, 0, 0, 0, waited);
+            }
             await Task.Delay(15);
         }
     }

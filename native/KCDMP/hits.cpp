@@ -3,6 +3,8 @@
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 // WO-121 Phases 5 and 6 -- see hits.h.
 #include "hits.h"
+#include "blow_ledger.h"
+#include "wo132.h"
 #include "wo208.h"
 #include "wo208_rules.h"
 #include "wo166.h"
@@ -305,6 +307,7 @@ void* hit_common(bool missile, HitFn orig, void* self, void* out, const uint8_t*
         // WO-132: an NPC's hit is watched the same way, so the owner gets the
         // hit's own damage -- never a bleed tick or any other drop between hits.
         const bool byNpc = !byPlayer && aeid != 0 && g_npcWatch.load(std::memory_order_relaxed);
+        if (!byPlayer && aeid) kcdmp::wo132::note_figure_fight(aeid);   // WO-222 D: its fight is with a figure (the flee read needs to know)
         if (byNpc) c_npcAvatarHits.fetch_add(1, std::memory_order_relaxed);
         float hp0 = 0, st0 = 0;
         const bool r0 = (byPlayer || byNpc) && rttr::soul_state(vsoul, "health", &hp0) && rttr::soul_state(vsoul, "stamina", &st0);
@@ -365,6 +368,7 @@ void* hit_common(bool missile, HitFn orig, void* self, void* out, const uint8_t*
                 const uint8_t blk = v & 0xFF, second = (v >> 8) & 0xFF, pb = (v >> 16) & 0xFF, broken = (v >> 24) & 0xFF;
                 const int k = broken ? 4 : pb ? 3 : blk ? 2 : 1;
                 static const char* const kNames[] = { "-", "hit", "blocked", "pb", "broken" };
+                kcdmp::blow_ledger::on_player_blow(veid, static_cast<uint8_t>(k));   // WO-222 A.0 (the host) / E (a joiner's touch)
                 const uint32_t n = c_hostBlows[k].fetch_add(1, std::memory_order_relaxed);
                 if (n < 400) logf("WO176-HOSTHIT victim=0x%X outcome=%s rec=[blk %u second %u pb %u broken %u] -- the host's own blow, the engine's verdict [n=%u]",
                                   veid, kNames[k], blk, second, pb, broken, n + 1);

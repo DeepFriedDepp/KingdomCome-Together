@@ -118,6 +118,15 @@ public partial class GameBridge
         Wo131HitCheck? hc = null;
         try { hc = await _combat.Wo131HitCheckAsync(soul, npcName); } catch { }
         var (v, h) = Wo131Rules.GateJoinerHit(hc, health);
+        // WO-222 D (flee_live): a fleeing enemy's copy runs a step or two behind its host NPC's newest position (the bench's chase: 3.1 and
+        // 3.7 m, both touches dropped as "far from the host" -- the runner the joiner could not kill); the host's engine judges it there
+        if (v == Wo131Rules.HitVerdict.DropFar && hc is { } fh && W222On("flee_live") && _w222FleeEngaged.ContainsKey(npcName) && fh.DistM >= 0
+            && fh.DistM <= Wo222Rules.FleeHitMaxDistM)
+        {
+            v = Wo131Rules.HitVerdict.Forward; h = health;
+            Interlocked.Increment(ref _w222FleeHitsForwarded);
+            Console.WriteLine(FormattableString.Invariant($"MP-W222 flee hit on {npcName} forwarded at {fh.DistM:F2} m from the host's place -- a running enemy's copy trails its host NPC"));
+        }
         if (v != Wo131Rules.HitVerdict.Forward)
         {
             Interlocked.Increment(ref _w131HitsDropped);

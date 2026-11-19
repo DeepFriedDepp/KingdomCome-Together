@@ -894,12 +894,14 @@ public sealed partial class CombatPipe : IAsyncDisposable
 
     /// <summary>op 2: engage (or release) a bound copy against the local player with the host NPC's combat state.</summary>
     public async Task<(bool Ok, bool First, bool Skirmish, float DistM, byte Reason)> Wo132EngageAsync(bool on, uint eid, BodyState2 st, CancellationToken ct = default,
-                                                                                                    bool intentInRange = false)
+                                                                                                    bool intentInRange = false, bool flee = false)
     {
         // WO-187 A1: a trailing byte says the host's own NPC is within range of this player and targets him (the copy may lag): the DLL then
         // engages a copy farther than its range here; without it the short form (an older DLL takes only that)
-        var a = new byte[1 + 4 + BodyState2.Len + (intentInRange ? 1 : 0)];
-        if (intentInRange) a[^1] = 1;
+        // WO-222 D: a second trailing byte -- the host's NPC flees: engaged without the combat hold, farther (a WO-222 DLL takes it)
+        var a = new byte[1 + 4 + BodyState2.Len + (flee ? 2 : intentInRange ? 1 : 0)];
+        if (intentInRange) a[1 + 4 + BodyState2.Len] = 1;
+        if (flee) a[^1] = 1;
         a[0] = B(on);
         BinaryPrimitives.WriteUInt32LittleEndian(a.AsSpan(1), eid);
         st.Write(a.AsSpan(5));

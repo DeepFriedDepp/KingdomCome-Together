@@ -36037,6 +36037,89 @@ do
     end
 end
 
+-- ===== WO-222: hits that land like single-player (docs/WO-222-findings.md) =====
+-- Every switch ships on. The agent tells this file the states (KCD2MP_W222Cfg, with the bench's twins applied); a console switch here goes
+-- to the agent, which tells the DLL and this file back. mp_w222_status lists them.
+do
+    W222 = W222 or {}
+    W222.on = W222.on or {}
+    W222.NAMES = {
+        react_parity = "mp_react_parity", react_show = "mp_react_show", flee_live = "mp_flee_live", swing_log = "mp_swing_log",
+        dead_lay = "mp_dead_lay", def_wait = "mp_def_wait",
+    }
+    W222.HELP = {
+        react_parity = "A: (host) a joiner's blow is applied the way the host's own blow would be, so the enemy flinches as it would at the host's",
+        react_show = "B: (joiner) the host's hit reaction plays on its copy here, ahead of anything the copy is doing",
+        flee_live = "D: (both) a fleeing or surrendering enemy is still an enemy for the joiner: its copy stays in his fight, runs, and can be struck",
+        swing_log = "E: (joiner) every swing of this player is accounted for in the log (what it touched, or why it touched nothing)",
+        dead_lay = "F.1: (joiner) a dead copy left standing is laid down",
+        def_wait = "C: (host) the wait for the joiner's own verdict on a blow follows the link (and a late verdict corrects the host's guess)",
+    }
+    function KCD2MP_W222On(name)
+        local v = W222.on[tostring(name)]
+        if v == nil then return true end
+        return v
+    end
+    function KCD2MP_W222Cfg(list)
+        local n = 0
+        for kv in string.gmatch(tostring(list or ""), "[^,]+") do
+            local k, v = string.match(kv, "^%s*([%w_]+)=(%a+)%s*$")
+            if k and W222.NAMES[k] then W222.on[k] = (v == "on"); n = n + 1 end
+        end
+        if n > 0 and not W222.told then
+            W222.told = true
+            local parts = {}
+            for k in pairs(W222.NAMES) do parts[#parts + 1] = k .. "=" .. (KCD2MP_W222On(k) and "on" or "off") end
+            table.sort(parts)
+            mp_log("WO222-CFG " .. table.concat(parts, " "))
+        end
+        return true
+    end
+    function KCD2MP_W222Set(name, arg)
+        local label = W222.NAMES[tostring(name)]
+        if not label then mp_log("WO222-TOGGLE unknown switch '" .. tostring(name) .. "'"); return false end
+        local v = KCD2MP_Wo122ParseBool(arg)
+        if v == "bad" then mp_log(label .. ": expected on|off, got '" .. tostring(arg) .. "'"); return false end
+        if v == nil then mp_log("WO222-TOGGLE " .. label .. " is " .. (KCD2MP_W222On(name) and "on" or "off")); return true end
+        W222.on[tostring(name)] = v
+        mp_log("WO222-TOGGLE " .. label .. " " .. (v and "on" or "off") .. " -- sent to the agent")
+        KCD2MP_EmitEvent("w222_cfg", tostring(name) .. "=" .. (v and "on" or "off"))
+        return true
+    end
+    function KCD2MP_W222Status()
+        local parts = {}
+        for k, label in pairs(W222.NAMES) do parts[#parts + 1] = label .. "=" .. (KCD2MP_W222On(k) and "on" or "off") end
+        table.sort(parts)
+        mp_log("WO222-STATUS " .. table.concat(parts, " "))
+        KCD2MP_EmitEvent("w222_status", "")
+        return true
+    end
+    -- C (joiner): this machine's engine judged a blow the host's guess had already been applied for -- the guess is given back through
+    -- the soul's own state (one blow, one judge). Never on a dead player (a death is not undone here).
+    function KCD2MP_W222GiveBack(hp, st, npc)
+        local ok, err = pcall(function()
+            local s = player and player.soul
+            if not s then return end
+            local dead = false
+            pcall(function() dead = player.actor and player.actor:IsDead() == true end)
+            if dead then mp_log("WO222-GIVEBACK npc=" .. tostring(npc) .. " skipped: the player is dead"); return end
+            local h0 = s:GetState("health") or 0
+            local s0 = s:GetState("stamina") or 0
+            if (tonumber(hp) or 0) > 0 then s:SetState("health", h0 + tonumber(hp)) end
+            if (tonumber(st) or 0) > 0 then s:SetState("stamina", s0 + tonumber(st)) end
+            mp_log(string.format("WO222-GIVEBACK npc=%s health %.1f -> %.1f stamina %.1f -> %.1f", tostring(npc), h0, s:GetState("health") or -1, s0, s:GetState("stamina") or -1))
+        end)
+        if not ok then mp_log("WO222-GIVEBACK failed: " .. tostring(err)) end
+        return ok
+    end
+    System.AddCCommand("mp_w222_status", "KCD2MP_W222Status()", "WO-222: every WO-222 switch and the DLL's numbers")
+    for k, label in pairs(W222.NAMES) do
+        local fname = "KCD2MP_W222Set_" .. k
+        _G[fname] = function(arg) return KCD2MP_W222Set(k, arg) end
+        System.AddCCommand(label, fname .. "(%line)", "WO-222 " .. (W222.HELP[k] or k) .. " (default on): " .. label .. " on|off")
+    end
+end
+
 -- ===== WO-217 C / D: a body's loot is live for both; stolen is stolen for both =====
 -- The decided design: NPC bodies are shared and host-authoritative, first come first served; items come out of the one body; the joiner's
 -- take is a request to the host; chests stay per-player. With loot_live on:

@@ -11,6 +11,7 @@
 #include "wo172.h"
 #include "wo165_rules.h"
 #include "anchors.h"
+#include "blow_ledger.h"
 #include "engine.h"
 #include "fault_guard.h"
 #include "hits.h"
@@ -151,11 +152,11 @@ bool gate(void* rpg, void* result, void* hitIn, void* flags) {
         return false;
     }
     if (!model) return false;
-    if (type == none) { c_noneType.fetch_add(1); return true; }   // the engine: no attack type, no core -- for a copy nothing at all
+    if (type == none) { c_noneType.fetch_add(1); blow_ledger::on_player_blow(veid, blow_ledger::kGatedNoType); return true; }   // the engine: no attack type, no core -- for a copy nothing at all
     const double now = now_s();
     {
         std::lock_guard<std::mutex> lk(g_mu);
-        if (repeat_filtered(g_win, veid, skip != 0, now, g_timeoutS.load())) { c_repeat.fetch_add(1); return true; }
+        if (repeat_filtered(g_win, veid, skip != 0, now, g_timeoutS.load())) { c_repeat.fetch_add(1); blow_ledger::on_player_blow(veid, blow_ledger::kGatedRepeat); return true; }
     }
     // the engine's own dry run under the attacker actor's lock, exactly as RPGProcessHit calls the core but for apply = 0
     float str = strength;
@@ -185,6 +186,7 @@ bool gate(void* rpg, void* result, void* hitIn, void* flags) {
         else c_queueFull.fetch_add(1);
     }
     c_blows.fetch_add(1);
+    blow_ledger::on_player_blow(veid, blow_ledger::kGatedSent);   // WO-222 E: a touch of this player's blade on a copy, sent to the host
     return true;
 }
 

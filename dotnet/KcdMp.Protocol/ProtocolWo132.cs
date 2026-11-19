@@ -42,6 +42,8 @@ public readonly record struct NpcCombatEvent(uint SenderMs, BodyState2 State, Np
     public const int MaxNameLen = Protocol.ActionPayloadMaxLen - FixedLen;
 
     public bool InCombat => State.CombatMode;
+    /// <summary>WO-222 D: the host's NPC flees or surrenders (hostile, not fighting).</summary>
+    public bool Fleeing => (State.Bits & BodyState2Bits.Fleeing) != 0;
 
     public byte[] ToBytes()
     {

@@ -3,6 +3,7 @@
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 #include "crash_capture.h"
 #include "pipe_server.h"
+#include "wo222.h"
 #include "wo208.h"
 #include "wo216.h"
 #include "wo209.h"
@@ -976,7 +977,10 @@ void serve(HANDLE h) {
                             return;
                         }
                         if (kcdmp::wo208::probe_owned(entityId)) kcdmp::wo214::note_owned_reaction(kcdmp::wo214rules::death_row(spec.c_str()));
-                        result = rttr::ghost_swing(entityId, spec.c_str());
+                        // WO-222 B (react_show): the host's hit reaction plays over whatever the copy is doing -- at the priority the engine's
+                        // own hit reaction takes (over a swing's 5), as it interrupted the host NPC's swing; the twin queues it at 5 behind it
+                        const bool w222React = kcdmp::wo222::on(kcdmp::wo222::kBitReactShow) && kcdmp::wo214rules::reaction_row(spec.c_str());
+                        result = w222React ? rttr::ghost_swing_prio(entityId, spec.c_str(), kcdmp::wo222::kReactionPriority) : rttr::ghost_swing(entityId, spec.c_str());
                         if (result == rttr::SwingResult::Ok) kcdmp::wo187::note_move(entityId);   // WO-187 C2: the move's scope is watched
                     },
                     "GhostSwing", res);

@@ -15,7 +15,7 @@ namespace kcdmp::wo203 {
 
 namespace {
 
-constexpr int kMaxEntries = 16;
+constexpr int kMaxEntries = 32;
 
 struct Named { const char* area; VoidFn fn; };
 struct NamedStatus { const char* area; StatusFn fn; };

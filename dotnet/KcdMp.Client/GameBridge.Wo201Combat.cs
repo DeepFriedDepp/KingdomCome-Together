@@ -24,7 +24,7 @@ public partial class GameBridge
     {
         if (!W137Joiner) return;
         long now = Environment.TickCount64;
-        bool f = Wo201Rules.HostFights(ev.InCombat, ev.Target != NpcCombatTarget.None);
+        bool f = Wo201Rules.HostFights(ev.InCombat, ev.Target != NpcCombatTarget.None) || (ev.Fleeing && W222On("flee_live"));   // WO-222 D: a flight is no end of the fight
         bool had = _w201HostFight.TryGetValue(ev.Name, out var prev);
         _w201HostFight[ev.Name] = (f, ev.Target, now);
         if (f) { _w201EndDue.TryRemove(ev.Name, out _); return; }

@@ -804,7 +804,19 @@ const char* swing_result_name(SwingResult r) {
     return "unknown";
 }
 
-SwingResult ghost_swing(uint32_t entityId, const char* fragSpec) {
+// WO-222 B: the same at a given priority (a hit reaction plays over the body's own swing, as the host NPC's did); ghost_swing = 5
+SwingResult ghost_swing(uint32_t entityId, const char* fragSpec) { return ghost_swing_prio(entityId, fragSpec, 5); }
+// WO-222 B.1: each body's last queued row (main thread) -- asked 150 ms after a reaction row arrived whether the body plays it
+struct W222Queued { uint32_t frag = 0, prio = 0; double at = 0; };
+std::unordered_map<uint32_t, W222Queued> g_w222Queued;
+double ls_now() { LARGE_INTEGER q, f; QueryPerformanceCounter(&q); QueryPerformanceFrequency(&f); return double(q.QuadPart) / double(f.QuadPart); }
+bool last_swing(uint32_t eid, uint32_t* frag, uint32_t* prio, double* ageS) {
+    auto it = g_w222Queued.find(eid);
+    if (it == g_w222Queued.end()) return false;
+    *frag = it->second.frag; *prio = it->second.prio; *ageS = ls_now() - it->second.at;
+    return true;
+}
+SwingResult ghost_swing_prio(uint32_t entityId, const char* fragSpec, uint32_t priority) {
     if (!fragSpec || !fragSpec[0] || std::strlen(fragSpec) > 191) {
         logf("SWING: rejected -- missing/oversized fragment spec");
         return SwingResult::BadSpec;
@@ -937,7 +949,7 @@ SwingResult ghost_swing(uint32_t entityId, const char* fragSpec) {
     }
     void* anim = nullptr;
     if (!call_anim_ctor(reinterpret_cast<AnimCtorFn>(ctorFn), mem, combatActor,
-                        /*priority*/ 5, static_cast<uint32_t>(out.fragmentID),
+                        /*priority*/ priority, static_cast<uint32_t>(out.fragmentID),
                         out.tagsB, &anim) || !anim) {
         logf("SWING: entity=%u -- C_CombatAnimAction ctor faulted/null", entityId);
         return SwingResult::CtorFailed;
@@ -955,6 +967,8 @@ SwingResult ghost_swing(uint32_t entityId, const char* fragSpec) {
         return SwingResult::QueueFaulted;
     }
     combatactions::track(entityId, actor, anim);   // WO-221 A: recorded, and ended before this body's combat part goes
+    if (g_w222Queued.size() > 512) g_w222Queued.clear();
+    g_w222Queued[entityId] = W222Queued{static_cast<uint32_t>(out.fragmentID), priority, ls_now()};   // WO-222 B.1
     uint32_t status = ~0u, refc = ~0u;
     read_u32(anim, 0x28, &status);
     read_u32(anim, 0x58, &refc);

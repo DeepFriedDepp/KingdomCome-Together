@@ -89,6 +89,9 @@ public enum BodyState2Bits : byte
     /// <summary>WO-154: the sender's own body is down (its physics is no living entity: a knockdown's ragdoll, a
     /// knockout). The avatar falls, lies and stands up on this bit's edges.</summary>
     Downed = 0x40,
+    /// <summary>WO-222 D: an NPC of the host's that flees or surrenders -- out of combat mode, still an enemy (its copies stay in the
+    /// joiners' fights). Only in the NpcCombat event; an older agent ignores it.</summary>
+    Fleeing = 0x80,
 }
 
 /// <summary>WO-121: the 12 replicated-state bytes (Position/Ghost flag 0x10).</summary>

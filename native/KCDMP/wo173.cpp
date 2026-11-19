@@ -15,6 +15,8 @@
 #include <vector>
 
 #include "anchors.h"
+#include "blow_ledger.h"
+#include "wo222.h"
 #include "buffs.h"
 #include "engine.h"
 #include "fault_guard.h"
@@ -106,6 +108,7 @@ const void* g_vftGameRules = nullptr;
 std::atomic<uint32_t> c_chCalls{0}, c_chHandled{0}, c_chRefused{0};
 void* const* g_vftHitAction = nullptr;   // WO-178
 std::atomic<uint32_t> c_playerRecoil{0}, c_playerKept{0};
+std::atomic<uint32_t> c_parityAlive{0};   // WO-222 A: blows on an NPC fighting the striking figure out of combat mode, offered the reaction
 uintptr_t g_setAction = 0;
 
 struct Pending {
@@ -442,6 +445,10 @@ uint8_t do_real_hit(const uint8_t* body, size_t len, uint8_t* out, size_t cap, s
     }
     p.fb = fb;
     if (veid) g_pending.push_back(p);
+    // WO-222 A.0: the blow ledger's record (what the body was doing, what it did next)
+    if (veid) blow_ledger::on_figure_blow(veid, p.engine ? static_cast<uint8_t>(rr.outcome == wo165::Outcome::Hit ? 1 : rr.outcome == wo165::Outcome::Blocked ? 2
+                                                  : rr.outcome == wo165::Outcome::PerfectBlock ? 3 : rr.outcome == wo165::Outcome::Broken ? 4 : 0) : 0,
+                                          rr.react, rr.reactKind, heldS, f.type, f.zone, f.strength, static_cast<uint8_t>(fb));
     out[0] = applied;
     out[1] = static_cast<uint8_t>(rr.outcome);
     out[2] = static_cast<uint8_t>(fb);
@@ -508,7 +515,15 @@ uint8_t react(void* aCa, void* vCa, uint8_t* result, int32_t* kindOut) {
     const ReactionSites& s = g_sites;
     bool alive = false, own = false, flag = false;
     if (!call_b1(s.alive, vCa, &alive)) { react_off("the victim's can-react test"); return static_cast<uint8_t>(React::Fault); }
-    if (!alive) return static_cast<uint8_t>(React::NotAlive);
+    if (!alive) {
+        // WO-222 A (react_parity, the host): an NPC that fights the joiner's figure reads out of combat mode (combat mode is the local
+        // player's fight's: WO-147), so the engine finds it cannot react -- where the host's own player, the one it would be fighting,
+        // gets its reaction. A blow of the figure it fights is offered the reaction as the host's player's blow would be.
+        void* opp = wo222::on(wo222::kBitReactParity) && wo222::role() == 1 && aCa != motion::player_combat_actor() ? motion::opponent_ca(vCa) : nullptr;
+        if (!opp || opp != aCa) return static_cast<uint8_t>(React::NotAlive);
+        const uint32_t k = c_parityAlive.fetch_add(1) + 1;
+        if (k <= 40 || k % 100 == 0) logf("WO222-REACT the victim fights the figure that struck it, out of combat mode -- its reaction is offered as to the host's own blow [n=%u]", k);
+    }
     if (!call_b1(s.ownReaction, vCa, &own)) { react_off("the victim's own-action test"); return static_cast<uint8_t>(React::Fault); }
     if (own) return static_cast<uint8_t>(React::Own);
     if (!call_b1(s.attackerFlag, aCa, &flag)) { react_off("the attacker's flag"); return static_cast<uint8_t>(React::Fault); }
@@ -614,7 +629,11 @@ uint8_t handle(uint8_t op, const uint8_t* body, size_t len, uint8_t* out, size_t
     switch (op) {
         case kOpRealHit: {
             bool held = false;
-            const uint8_t r = do_real_hit(body, len, out, cap, outLen, true, &held, -1.0);
+            // WO-222 A (react_parity): never held -- a host's own blow lands the moment its blade touches; the hold applied the joiner's up
+            // to 0.8 s later, after the body had started its own attack (the engine then finds it cannot react). The figure reads Striking
+            // for the processor's call alone (WO-210 C.4's way) when its own window is not open. The twin keeps WO-178's hold.
+            const bool mayHold = !wo222::on(wo222::kBitReactParity);
+            const uint8_t r = do_real_hit(body, len, out, cap, outLen, mayHold, &held, -1.0);
             if (r != wo163::kROk || !held) return r;
             // WO-178 C4 (1): applied = 4 (held) and the hold's id in the seq field; op 28 answers once tick has run it
             Held h{};
