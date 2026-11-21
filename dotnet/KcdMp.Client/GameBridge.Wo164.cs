@@ -496,8 +496,10 @@ public partial class GameBridge
     {
         long now = Environment.TickCount64;
         if (_w164HostCombatTold.TryGetValue(npc, out long at) && now - at < 1000) return;
+        bool newFight = !_w164HostCombatTold.TryGetValue(npc, out long last) || now - last > 10_000;
         _w164HostCombatTold[npc] = now;
         _ = ExecLuaAsync($"if KCD2MP_W164HostCombat then KCD2MP_W164HostCombat(\"{EscapeLua(npc)}\") end");
+        if (newFight) _ = KubaHostFightWeaponAsync(npc);   // KUBA 33d: the host NPC's weapon in its copy's hand as its fight starts
     }
 
     private async Task<string?> W164UnstanceNameAsync(ushort id)

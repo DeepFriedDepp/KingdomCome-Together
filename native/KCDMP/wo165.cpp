@@ -13,6 +13,7 @@
 #include "wo173_rules.h"
 
 #include <windows.h>
+#include <algorithm>
 #include <atomic>
 #include <cmath>
 #include <cstdio>
@@ -26,6 +27,12 @@
 #include "hits.h"
 #include "local_state.h"
 #include "log.h"
+#include "npc_drive.h"   // KUBA 19: the victim NPC's facing
+#include "combat_swing.h"   // KUBA 21: the block's own fragment on the NPC
+#include "wo187.h"          // KUBA 21: its tags
+#include "main_thread.h"    // KUBA 23: the guard's per-frame hold
+#include "wo208.h"          // KUBA 30 stage 2: the NPCs a partner's local duel drives
+#include "motion.h"
 #include "rttr_abi.h"
 #include "wo173.h"
 
@@ -179,6 +186,124 @@ bool armed() { return g_armed; }
 bool off() { return g_off.load(); }
 const char* why() { return g_off.load() ? "switched off by a fault this session" : g_why; }
 
+// KUBA 23 (host, 16.11 11:49-12:03: KUBA 21's block fragment was queued "ok" 43 times, yet the guard played CombatHitLowMovementGen
+// every time -- the hit reaction is the engine's pick from the NPC's REAL guard, and the NPC was never in it: the replay is an instant
+// hit, its AI never saw the figure's swing). Now the block is decided when the figure's swing STARTS (wo136::avatar_swing: the host
+// knows its target then) and the NPC's own block is held up the engine's way (combat_SetBlock's setter, re-asserted every frame against
+// its AI) until the blow lands or 1.2 s pass -- the blow then meets a raised guard and the engine blocks it with its own animation and
+// numbers. The blow's KUBA 19 keeps that decision. KCDMP_KUBA_SWING_GUARD=off.
+namespace {
+struct KubaGuard { uint32_t attacker = 0; double until = 0, startedAt = 0, firstAt = 0; bool block = false, held = false, logged = false; };
+std::unordered_map<uint32_t, KubaGuard> g_kubaGuards;   // npc eid -> the decision for the swing in flight (main thread)
+std::unordered_map<uint32_t, double> g_kubaGuardEnd;    // 23c: npc eid -> when its last held guard came down (its AI's rest)
+bool g_kubaGuardTick = false;
+uint32_t g_kubaGuardN = 0;
+double kuba_now_s() { return static_cast<double>(GetTickCount64()) / 1000.0; }
+bool kuba_swing_guard_on() {
+    static int s = -1;
+    if (s < 0) {
+        char v[16] = {0};
+        const DWORD n = GetEnvironmentVariableA("KCDMP_KUBA_SWING_GUARD", v, sizeof v);
+        s = (n > 0 && n < sizeof v && (!_stricmp(v, "off") || !std::strcmp(v, "0"))) ? 0 : 1;
+        logf("KUBA-23 an NPC raises its block when a partner's figure swings at it (KCDMP_KUBA_SWING_GUARD=off turns it off): %s", s ? "on" : "OFF");
+    }
+    return s == 1;
+}
+int kuba_block_pct_env() {
+    static int s = -1;
+    if (s < 0) {
+        char b[16] = {};
+        const DWORD n = GetEnvironmentVariableA("KCDMP_KUBA_NPC_BLOCK_PCT", b, sizeof b);
+        // 23d: 40 % (13:10-13:22 at 55 % with the combo hold: 38 % of the partner's blows blocked, "almost impossible to fight")
+        const int v = (n > 0 && n < sizeof b) ? std::atoi(b) : 40;
+        s = v < 0 ? 0 : (v > 100 ? 100 : v);
+    }
+    return s;
+}
+uint32_t kuba_rng() { static uint32_t r = 0x7F4A7C15u; r = r * 1664525u + 1013904223u; return r >> 8; }
+void kuba_guard_tick() {
+    if (g_kubaGuards.empty()) return;
+    const double now = kuba_now_s();
+    for (auto it = g_kubaGuards.begin(); it != g_kubaGuards.end();) {
+        KubaGuard& g = it->second;
+        if (now >= g.until) {
+            if (g.held) {
+                motion::kuba_npc_set_block(it->first, false, true);   // block down, its combat AI back
+                if (g_kubaGuardEnd.size() > 256) g_kubaGuardEnd.clear();
+                g_kubaGuardEnd[it->first] = now;                      // 23c: its AI's rest starts
+            }
+            it = g_kubaGuards.erase(it);
+            continue;
+        }
+        if (g.block) g.held = motion::kuba_npc_set_block(it->first, true, !g.held) || g.held;   // held up every frame (its AI off once)
+        // 23b: the evidence -- what the NPC's model says a quarter second into the raised guard (Blocking or not)
+        if (g.held && !g.logged && now - g.startedAt >= 0.25) {
+            g.logged = true;
+            motion::ModelRead m{};
+            static uint32_t s_n = 0;
+            if (motion::read_model(it->first, &m) && ++s_n <= 60)
+                logf("KUBA-23 guard check npc=0x%X 250 ms into the raised block: state=0x%X block_zone=%d [n=%u]", it->first,
+                     static_cast<unsigned>(m.state), (m.valid & motion::kMvBlockZone) ? m.blockZone : -9, s_n);
+        }
+        ++it;
+    }
+}
+}   // namespace
+
+void kuba_swing_guard(uint32_t npcEid, uint32_t attackerEid) {
+    if (!npcEid || !attackerEid || !kuba_swing_guard_on() || motion::is_avatar_eid(npcEid)) return;
+    if (wo208::kuba_remote_duel(npcEid)) return;   // KUBA 30 stage 2: the partner's own brain blocks for it on his screen
+    const int pct = kuba_block_pct_env();
+    if (pct <= 0) return;
+    if (!g_kubaGuardTick) { g_kubaGuardTick = true; main_thread::post_repeating("kuba23-guard", [] { kuba_guard_tick(); }); }
+    motion::ModelRead m{};
+    if (!motion::read_model(npcEid, &m) || !(m.valid & motion::kMvState)) return;
+    const int32_t vs = m.state;
+    const bool inCombat = (m.valid & motion::kMvCombatMode) && m.combatMode != 0;
+    const bool busy = (vs & 0x8) || (vs & 0x40) || (vs & 0x20);   // Striking, Hit, Withdraw (as KUBA 19)
+    void* vEnt = engine::entity_by_id(npcEid);
+    void* aEnt = engine::entity_by_id(attackerEid);
+    float vp[3]{}, ap[3]{};
+    const float fc = (vEnt && aEnt && engine::entity_world_pos(vEnt, vp) && engine::entity_world_pos(aEnt, ap))
+                         ? facing_cos(npcdrive::entity_yaw(vEnt), vp[0], vp[1], ap[0], ap[1]) : -2.0f;
+    const double now = kuba_now_s();
+    // KUBA 23c (16.11 12:45-12:58): the swing -> blow gap on the host reached 1.3 s (12:50:18.3 BLOCK UP -> 12:50:19.6 the blow), the
+    // 1.2 s window had closed -- now 2 s (KCDMP_KUBA_SWING_GUARD_MS). A guard already up for this attacker stays up through his combo (no
+    // re-roll that drops it mid-combo), at most 3 s in all; after a window the NPC gets its combat AI back for a rest (1.2 s,
+    // KCDMP_KUBA_GUARD_REST_MS) before the next block -- with every swing opening a window it stood AI-less, never turning to the player.
+    static int s_winMs = -1, s_restMs = -1;
+    if (s_winMs < 0) {
+        char b[16] = {};
+        DWORD n = GetEnvironmentVariableA("KCDMP_KUBA_SWING_GUARD_MS", b, sizeof b);
+        s_winMs = (n > 0 && n < sizeof b) ? (std::clamp)(std::atoi(b), 300, 5000) : 1500;   // 23d: 1.5 s (2 s kept a missed NPC AI-less too long)
+        n = GetEnvironmentVariableA("KCDMP_KUBA_GUARD_REST_MS", b, sizeof b);
+        s_restMs = (n > 0 && n < sizeof b) ? (std::clamp)(std::atoi(b), 0, 10000) : 1200;
+        logf("KUBA-23d swing guard window %d ms, rest after a guard %d ms, block chance %d%%, no hold through a combo", s_winMs, s_restMs, pct);
+    }
+    KubaGuard& g = g_kubaGuards[npcEid];
+    const bool wasHeld = g.held;
+    // 23d: the hold through a combo is gone (Kuba 13:22: "the fix made it worse, you can hardly fight" -- a guard up for a whole combo
+    // blocked blow after blow of an NPC that could neither turn nor strike back); every swing decides on its own again
+    const bool combo = false;
+    auto re = g_kubaGuardEnd.find(npcEid);
+    const bool capped = wasHeld && g.block && now - g.firstAt >= 3.0;   // held 3 s through a combo: down, its AI's turn
+    const bool resting = capped || (!wasHeld && re != g_kubaGuardEnd.end() && (now - re->second) * 1000.0 < s_restMs);
+    if (capped) g_kubaGuardEnd[npcEid] = now;
+    const bool roll = static_cast<int>(kuba_rng() % 100u) < pct;
+    const bool block = combo || (inCombat && !busy && !resting && std::isfinite(fc) && fc >= 0.2f && roll);
+    if (wasHeld && !block) motion::kuba_npc_set_block(npcEid, false, true);
+    if (!combo) g.firstAt = now;
+    g.attacker = attackerEid; g.startedAt = now; g.until = now + s_winMs / 1000.0; g.block = block; g.held = false; g.logged = false;
+    if (block) g.held = motion::kuba_npc_set_block(npcEid, true, !wasHeld);   // its combat AI off for the window (once)
+    ++g_kubaGuardN;
+    if (g_kubaGuardN <= 80 || g_kubaGuardN % 50 == 0)
+        logf("KUBA-23 swing guard npc=0x%X attacker=0x%X state=0x%X combat=%d facing_cos=%.2f chance=%d%% -> %s [n=%u]", npcEid, attackerEid,
+             static_cast<unsigned>(vs), inCombat ? 1 : 0, fc, pct,
+             block ? (g.held ? (combo ? "BLOCK UP (kept through the combo)" : "BLOCK UP (held until the blow)") : "block decided, the setter refused") :
+             !inCombat ? "no (not in combat mode)" : busy ? "no (its own swing / reaction)" : resting ? "no (its AI's turn after a guard)" :
+             fc < 0.2f ? "no (not facing the striker)" : "no (the roll)", g_kubaGuardN);
+}
+
 Result replay(const Request& rq) {
     Result res{};
     if (g_off.load()) { res.reason = kOff; c_refused.fetch_add(1); return res; }
@@ -194,7 +319,7 @@ Result replay(const Request& rq) {
     void* vCa = nullptr; void* vModel = nullptr;
     const bool victimIsPlayer = veid == peid;
     const bool vok = victimIsPlayer ? motion::player_combat_parts(&vCa, &vModel)
-                                    : motion::combat_parts(veid, (rq.flags & kFlagCreateCa) != 0, &vCa, &vModel);
+                                    : motion::combat_parts(veid, (rq.flags & kFlagCreateCa) != 0 || rq.createVictimCa, &vCa, &vModel);
     if (!vok || vCa == aCa) { res.reason = kNoVictim; c_refused.fetch_add(1); return res; }
     void* rpg = nullptr; void* back = nullptr;
     if (!rd(aCa, g_rpgOffset, &rpg) || !is_a(rpg, g_vftRpg) || !rd(rpg, 8, &back) || back != aCa) { res.reason = kNoProcessor; c_refused.fetch_add(1); return res; }
@@ -243,6 +368,7 @@ Result replay(const Request& rq) {
     build_sub_hit(sub);
     // WO-178 (mp_own_block): the player's own held block decides a copy's blow (wo178_rules.h own_block)
     bool ownBlock = false;
+    bool kubaBlock = false;   // KUBA 21: KUBA 19 decided this NPC blocks
     float ownFacing = -2.0f;
     if (victimIsPlayer && wo178::own_block_on() && (res.victimModel.valid & motion::kMvState)) {
         localstate::LocalState ls{};
@@ -254,6 +380,63 @@ Result replay(const Request& rq) {
             logf("WO178-OWNBLOCK player state=0x%X facing_cos=%.2f block=%s block_zone=%d->%d attacker=0x%X", static_cast<unsigned>(res.victimModel.state),
                  ownFacing, ownBlock ? "yes (the engine is told he blocks, facing the swing)" : "no (not facing the striker)", res.victimModel.blockZone,
                  ownBlock ? res.written.zone : res.victimModel.blockZone, rq.attackerEid);
+    }
+    // KUBA 19 (host; joiner 20:28-20:33 vs three guards: 0 blocks in the host's stream, every partner blow "hit" -- the replay is an
+    // instant hit, the NPC's AI never saw a swing to raise its block against): an NPC in combat mode, facing the striking figure, not
+    // striking or reeling itself, defends the blow by chance -- the engine computes the block (stamina, broken, the block reaction).
+    // KUBA 23c (16.11 12:45-12:58): a guard held up for this very swing decides first, whatever else the model reads -- with its combat AI
+    // switched off the blow often skipped KUBA 19's gate (12:51:43 BLOCK UP -> 12:51:44 "engine=hit", no KUBA-19 line at all)
+    bool kubaGuardDone = false;
+    // KUBA 30 stage 2: an NPC a partner's local duel drives -- his engine judged the blow on his screen (its own brain blocked it or not);
+    // that verdict is the engine's input here, never a roll and never a guard raised on this paused body
+    if (!victimIsPlayer && wo208::kuba_remote_duel(veid)) {
+        kubaGuardDone = true;
+        ownBlock = rq.kubaVerdict == 2;
+        static uint32_t s_d = 0;
+        if (++s_d <= 80 || s_d % 50 == 0)
+            logf("KUBA-30 duel blow victim=0x%X the partner's verdict=%s -> %s [n=%u]", veid,
+                 rq.kubaVerdict == 2 ? "blocked" : rq.kubaVerdict == 1 ? "hit" : "none", ownBlock ? "BLOCKS" : "hit", s_d);
+    }
+    if (!kubaGuardDone && !victimIsPlayer && rq.npcBlockPct > 0) {
+        auto kg = g_kubaGuards.find(veid);
+        if (kg != g_kubaGuards.end() && kg->second.attacker == rq.attackerEid && kuba_now_s() < kg->second.until && kg->second.block && kg->second.held) {
+            kubaGuardDone = true;
+            ownBlock = true;   // a real raised guard: the engine plays its own block (KUBA 21's fragment not needed)
+            kg->second.until = kuba_now_s() + 0.4;
+            static uint32_t s_g = 0;
+            if (++s_g <= 80 || s_g % 50 == 0)
+                logf("KUBA-23 blow on the raised guard victim=0x%X state=0x%X -> BLOCKS (the engine judges it, its own animation) (attack zone %d) [n=%u]", veid,
+                     static_cast<unsigned>(res.victimModel.state), res.written.zone, s_g);
+        }
+    }
+    if (!kubaGuardDone && !victimIsPlayer && rq.npcBlockPct > 0 && (res.victimModel.valid & motion::kMvState) && (res.victimModel.valid & motion::kMvCombatMode) &&
+        res.victimModel.combatMode != 0) {
+        const int32_t vs = res.victimModel.state;
+        const bool busy = (vs & 0x8) || (vs & 0x40) || (vs & 0x20);   // Striking, Hit, Withdraw: no block from inside its own action
+        float ap[3]{};
+        void* aEnt = engine::entity_by_id(rq.attackerEid);
+        const float fc = (aEnt && engine::entity_world_pos(aEnt, ap)) ? facing_cos(npcdrive::entity_yaw(vEnt), pos[0], pos[1], ap[0], ap[1]) : -2.0f;
+        static uint32_t s_rng = 0x9E3779B9u;
+        s_rng = s_rng * 1664525u + 1013904223u;
+        bool roll = static_cast<int>((s_rng >> 8) % 100u) < rq.npcBlockPct;
+        bool block = !busy && std::isfinite(fc) && fc >= 0.2f && roll;
+        // KUBA 23: the swing's own decision stands (its guard is up now, or it was decided not to block)
+        auto kg = g_kubaGuards.find(veid);
+        const bool fromSwing = kg != g_kubaGuards.end() && kg->second.attacker == rq.attackerEid && kuba_now_s() < kg->second.until;
+        if (fromSwing) {
+            block = kg->second.block && std::isfinite(fc) && fc >= 0.2f;
+            kg->second.until = kuba_now_s() + (kg->second.held ? 0.4 : 0.0);   // held a moment more for the block reaction, then let go
+        } else if (kuba_swing_guard_on()) {
+            // 23c: no guard was raised for this blow -- no block in the numbers alone (an invisible block: a hit on the screen, no damage)
+            block = false;
+        }
+        static uint32_t s_n = 0;
+        if (++s_n <= 80 || s_n % 50 == 0)
+            logf("KUBA-19 npc block victim=0x%X state=0x%X facing_cos=%.2f chance=%u%%%s -> %s (attack zone %d) [n=%u]", veid, static_cast<unsigned>(vs), fc,
+                 rq.npcBlockPct, fromSwing ? " (KUBA-23: the swing's decision)" : kuba_swing_guard_on() ? " (KUBA-23c: no guard raised for it)" : "",
+                 block ? "BLOCKS (the engine judges the block)" : busy ? "busy (its own swing / reaction)" : fc < 0.2f ? "not facing the striker" : "no block",
+                 res.written.zone, s_n);
+        if (block) { ownBlock = true; kubaBlock = !(fromSwing && kg->second.held); }   // KUBA 21's fragment only where no real guard was up
     }
     build_hit_in(hitIn, (rq.flags & kFlagSkipFilter) != 0, vCa, details, sub, sub + kSubHitBytes, ownBlock);
 
@@ -333,6 +516,32 @@ Result replay(const Request& rq) {
         case Outcome::Broken: c_broken.fetch_add(1); break;
         case Outcome::Filtered: c_filtered.fetch_add(1); break;
         default: c_none.fetch_add(1); break;
+    }
+    // KUBA 21 (host, 16.11 11:20-11:31: KUBA 19's 12 blocks were all "engine=blocked", yet the guard played CombatHitGen each time -- on
+    // the host and so on the joiner's copy: a block in the numbers, a hit on the screen. The replay is an instant hit, the NPC was never in
+    // its guard, the reaction tail picks the hit reaction). A blow KUBA 19 had it block, and the engine judged blocked, gets the block's own
+    // fragment on the NPC over the hit reaction (the NPC's natural block: C_CombatAnimAction CombatBlockGen 900, prio 5, flags 0x1A20;
+    // perfect 901, broken 899) -- the host's stream then carries it to the copy. KCDMP_KUBA_BLOCK_ANIM=off.
+    if (kubaBlock && !victimIsPlayer && (res.outcome == Outcome::Blocked || res.outcome == Outcome::PerfectBlock || res.outcome == Outcome::Broken)) {
+        static int s_on = -1;
+        if (s_on < 0) {
+            char v[16] = {0};
+            const DWORD n = GetEnvironmentVariableA("KCDMP_KUBA_BLOCK_ANIM", v, sizeof v);
+            s_on = (n > 0 && n < sizeof v && (!_stricmp(v, "off") || !std::strcmp(v, "0"))) ? 0 : 1;
+            logf("KUBA-21 an NPC's block of a partner's blow plays its block animation %s (KCDMP_KUBA_BLOCK_ANIM=off turns it off)", s_on ? "on" : "OFF");
+        }
+        if (s_on) {
+            const uint32_t frag = res.outcome == Outcome::PerfectBlock ? 901u : res.outcome == Outcome::Broken ? 899u : 900u;
+            uint8_t tg[20]{};
+            if (!wo187::tag_state(veid, tg, sizeof tg)) std::memset(tg, 0, sizeof tg);
+            void* act = nullptr;
+            const rttr::SwingResult r = rttr::install_fragment(veid, frag, tg, 6, 0x1A20, &act);
+            if (r == rttr::SwingResult::Ok && act) rttr::release_action(act);
+            static uint32_t s_n = 0;
+            if (++s_n <= 80 || s_n % 50 == 0)
+                logf("KUBA-21 npc block anim victim=0x%X outcome=%s frag=%u -> %s [n=%u]", veid,
+                     res.outcome == Outcome::PerfectBlock ? "perfect" : res.outcome == Outcome::Broken ? "broken" : "blocked", frag, rttr::swing_result_name(r), s_n);
+        }
     }
     res.reason = kOk;
     if (cap.seen) {

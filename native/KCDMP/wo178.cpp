@@ -799,6 +799,7 @@ void install() {
 }
 
 bool host_answer_on() { return g_isHost.load() && g_hostAnswer.load() && g_armed.load() && !g_off.load(); }
+bool is_host_role() { return g_isHost.load(); }   // KUBA 33c: the agent's role word
 
 int game_hostile(uint32_t eid) {
     auto it = g_slotOf.find(eid);

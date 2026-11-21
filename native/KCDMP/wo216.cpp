@@ -226,6 +226,10 @@ struct BBody {
 std::unordered_map<uint32_t, BBody> g_bodies;           // main thread
 std::unordered_map<std::string, double> g_exempt;       // name -> until (s)
 std::vector<uint32_t> g_pauseQ, g_hideQ, g_showQ;       // main thread: the actions, at most kPerFrame a frame
+// KUBA 42: copies whose host NPC sat down while they stood -- their brain resumed for a short while so their own engine seats them
+std::vector<std::string> g_kubaResumeQ;                  // main thread
+std::unordered_map<uint32_t, double> g_kubaWakeAt;      // eid -> the last wake (s)
+std::atomic<uint32_t> c_kubaWakes{0};
 constexpr int kPerFrame = 24;
 std::mutex g_spawnMu;
 std::vector<uint32_t> g_spawned;                        // the spawn watch's new entities (any thread -> main)
@@ -363,7 +367,8 @@ bool census_visit(void* e, void* ctx) {
     BBody& b = g_bodies[eid];
     if (b.name.empty()) { b.name = nm; b.kind = kind; }
     const bool bound = npcdrive::is_bound_eid(eid);
-    const bool ex = exempt(b.name, c->now);
+    // KUBA 30 (0.65 merge): a copy in this player's local duel fights with its own brain -- exempt while the duel lasts
+    const bool ex = exempt(b.name, c->now) || wo208::kuba_in_duel(eid);
     if (bound) ++c->bound;
     bool nearMe = false;   // within 150 m of this player (the bodies a player here could see)
     if (c->havePlayer) {
@@ -528,7 +533,7 @@ void b_spawns(double now) {
         if (!e) { b.spawnAt = -1; continue; }
         uint64_t w = 0; int st = -1, mask = -1;
         if (!actions::brain_state(e, &w, &st, &mask) || st < 0) continue;
-        if (g_act && st == 0 && !exempt(b.name, now)) b_queue_pause(kv.first, b, now);
+        if (g_act && st == 0 && !exempt(b.name, now) && !wo208::kuba_in_duel(kv.first)) b_queue_pause(kv.first, b, now);
         b.spawnAt = -1;
     }
 }
@@ -543,6 +548,13 @@ void b_actions() {
         if (it == g_bodies.end() || !engine::entity_by_id(eid)) continue;
         std::snprintf(cmd, sizeof cmd, "wh_ai_PauseNPC %s", it->second.name.c_str());
         if (b_exec(cmd)) { it->second.pausedByUs = true; c_bPauses.fetch_add(1, std::memory_order_relaxed); }
+        --budget;
+    }
+    while (budget > 0 && !g_kubaResumeQ.empty()) {
+        const std::string nm = g_kubaResumeQ.back();
+        g_kubaResumeQ.pop_back();
+        std::snprintf(cmd, sizeof cmd, "wh_ai_ResumeNPC %s", nm.c_str());
+        b_exec(cmd);
         --budget;
     }
     while (budget > 0 && !g_hideQ.empty()) {
@@ -756,6 +768,32 @@ const bool kReg = wo203::reg_op(kOpConfig, &op) && wo203::reg_op(kOpStatus, &op)
 } // namespace
 
 bool on(uint32_t bit) { return (g_bits.load(std::memory_order_relaxed) & ~twin_off() & bit) != 0; }
+
+// KUBA 42 (joiner 21.11 15:41-15:44, 0.65.2): copies that sat at their bind kept sitting (KUBA 41), but a host NPC that sat down later
+// (tsem_woman_9 stood up and sat again; tsem_man_1 / tsem_man_17 came from the wood pile) left its copy standing: the copy's brain is
+// suspended (B), a suspended copy never carries out the stance set on it, and the seat loop installed for it plays nothing (KUBA 40).
+// So: its brain resumed for 12 s (exempt from B's census meanwhile), at most every 30 s a copy -- its own engine walks the last step and
+// sits (SitDown -> its own SittingIdle); B suspends it again after (a seated loop stays under a suspended brain). KCDMP_KUBA_SEAT_WAKE=off.
+bool kuba_seat_wake(uint32_t eid, const char* name) {
+    static int s_on = -1;
+    if (s_on < 0) {
+        char v[8]{}; size_t got = 0;
+        s_on = (getenv_s(&got, v, sizeof v, "KCDMP_KUBA_SEAT_WAKE") == 0 && got && (std::strcmp(v, "off") == 0 || std::strcmp(v, "0") == 0)) ? 0 : 1;
+        logf("KUBA-42 a standing copy of a seated host NPC gets its brain for 12 s to sit itself %s (KCDMP_KUBA_SEAT_WAKE=off turns it off)", s_on ? "on" : "OFF");
+    }
+    if (!s_on || !eid || !name || !*name || !g_active || !g_act || !g_b.armed) return false;
+    const double now = now_s();
+    auto it = g_kubaWakeAt.find(eid);
+    if (it != g_kubaWakeAt.end() && now - it->second < 30.0) return false;
+    g_kubaWakeAt[eid] = now;
+    g_exempt[name] = now + 12.0;
+    g_kubaResumeQ.push_back(name);
+    auto bt = g_bodies.find(eid);
+    if (bt != g_bodies.end()) bt->second.pausedByUs = false;
+    const uint32_t k = c_kubaWakes.fetch_add(1) + 1;
+    if (k <= 100 || k % 50 == 0) logf("KUBA-42 seat wake npc=%s: its brain resumed for 12 s so its engine seats it [n=%u]", name, k);
+    return true;
+}
 bool configured() { return g_configured.load(std::memory_order_relaxed); }
 
 int status(char* out, int n) {

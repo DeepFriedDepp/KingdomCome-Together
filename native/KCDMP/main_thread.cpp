@@ -14,6 +14,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <mutex>
@@ -49,6 +50,10 @@ struct Repeating {
 
 std::mutex                              g_mutex;
 std::vector<std::function<void()>>      g_queue;
+// KUBA 20: posts made ON the main thread (a task deferring work to the next frame) wait here -- the next frame's drain runs them,
+// never this frame's linger below, so "post from the main thread = next frame" keeps its meaning.
+std::vector<std::function<void()>>      g_mainQueue;
+std::atomic<uint32_t>                   g_offPosts{0};   // KUBA 20: bumped by every post from another thread (the pipe's commands)
 std::vector<std::shared_ptr<Repeating>> g_repeating;
 std::condition_variable                 g_drained;
 std::atomic<unsigned long long>         g_frames{0};
@@ -153,6 +158,89 @@ bool run_guarded(fault::Site& site, std::function<void()>* work) {
     return !fault::guarded(site, [&] { (*work)(); });
 }
 
+// KUBA 20: the pipe linger. The agent asks the DLL one command at a time and each command waited for the NEXT frame's drain -- at
+// most ~1 command per frame. On a weak PC (28 fps, 16.11 log: ~20 commands/s served, 577 frames queued, 72 s behind) the host's
+// NPC stream piled up until the copies went stale and vanished. Now, in a frame where the agent's work ran, the main thread waits a
+// short gap for the agent's next command (its reply goes out at once, the next command is back in well under a millisecond) and runs
+// it in the same frame, up to a budget: a share of the frame time, capped. Spin-waits on the QPC clock -- a timed sleep on Windows can
+// round up to 15.6 ms. KCDMP_KUBA_PIPE_LINGER=0 off; _PCT (share of dt, 20), _MAX_US (6000), _GAP_US (1000).
+struct KubaLinger { bool on = true; double pct = 20, maxUs = 6000, gapUs = 1000; };
+int kuba_env_int(const char* name, int def) {
+    char b[32] = {0};
+    const DWORD n = GetEnvironmentVariableA(name, b, sizeof b);
+    if (n == 0 || n >= sizeof b) return def;
+    return std::atoi(b);
+}
+const KubaLinger& kuba_linger() {
+    static const KubaLinger c = [] {
+        KubaLinger k;
+        k.on = kuba_env_int("KCDMP_KUBA_PIPE_LINGER", 1) != 0;
+        k.pct = std::clamp(kuba_env_int("KCDMP_KUBA_PIPE_LINGER_PCT", 20), 1, 60);
+        k.maxUs = std::clamp(kuba_env_int("KCDMP_KUBA_PIPE_LINGER_MAX_US", 6000), 200, 30000);
+        k.gapUs = std::clamp(kuba_env_int("KCDMP_KUBA_PIPE_LINGER_GAP_US", 1000), 50, 5000);
+        logf("KUBA-20 pipe linger %s pct=%.0f max_us=%.0f gap_us=%.0f", k.on ? "on" : "off", k.pct, k.maxUs, k.gapUs);
+        return k;
+    }();
+    return c;
+}
+struct KubaLingerStats { uint32_t frames = 0, tasks = 0, budgetEnds = 0; double sumUs = 0, maxUs = 0, logAtUs = 0; };
+KubaLingerStats g_kubaLinger;
+
+// Runs on the main thread after the frame's own drain. Returns the extra tasks it ran.
+uint32_t kuba_pipe_linger(float dt) {
+    const KubaLinger& cfg = kuba_linger();
+    const double budget = std::clamp(static_cast<double>(dt) * 1e6 * cfg.pct / 100.0, 500.0, cfg.maxUs);
+    const double l0 = now_us();
+    uint32_t extra = 0;
+    bool budgetEnd = false;
+    for (;;) {
+        // wait (spin) for another thread's post, the gap at most and never past the budget
+        const uint32_t seen = g_offPosts.load(std::memory_order_acquire);
+        bool any;
+        {
+            std::lock_guard<std::mutex> lock(g_mutex);
+            any = !g_queue.empty();
+        }
+        if (!any) {
+            const double w0 = now_us();
+            unsigned spins = 0;
+            for (;;) {
+                if (g_offPosts.load(std::memory_order_acquire) != seen) { any = true; break; }
+                const double t = now_us();
+                if (t - l0 >= budget) { budgetEnd = true; break; }
+                if (t - w0 >= cfg.gapUs) break;
+                if ((++spins & 63) == 0) SwitchToThread(); else YieldProcessor();
+            }
+        }
+        if (!any) break;
+        std::vector<std::function<void()>> more;
+        {
+            std::lock_guard<std::mutex> lock(g_mutex);
+            more.swap(g_queue);
+        }
+        for (auto& w : more) run_guarded(g_queuedSite, &w);
+        extra += static_cast<uint32_t>(more.size());
+        if (now_us() - l0 >= budget) { budgetEnd = true; break; }
+    }
+    const double us = now_us() - l0;
+    KubaLingerStats& s = g_kubaLinger;
+    ++s.frames;
+    s.tasks += extra;
+    s.sumUs += us;
+    if (us > s.maxUs) s.maxUs = us;
+    if (budgetEnd) ++s.budgetEnds;
+    const double now = l0 + us;
+    if (s.logAtUs == 0) s.logAtUs = now;
+    if (now - s.logAtUs >= 60e6) {
+        logf("KUBA-20 pipe linger window_s=%.0f frames=%u extra_tasks=%u tasks_per_frame=%.2f us_mean=%.0f us_max=%.0f budget_ends=%u",
+             (now - s.logAtUs) / 1e6, s.frames, s.tasks, s.frames ? static_cast<double>(s.tasks) / s.frames : 0.0,
+             s.frames ? s.sumUs / s.frames : 0.0, s.maxUs, s.budgetEnds);
+        s = KubaLingerStats{};
+        s.logAtUs = now;
+    }
+    return extra;
+}
+
 void hooked_update(void* self, float dt) {
     // Original first: queued work should observe the state the frame produced,
     // and if our work throws the game has still updated.
@@ -174,9 +262,13 @@ void hooked_update(void* self, float dt) {
     // would block every post() for the duration of a call into the game, which
     // is exactly the deadlock the comment above warns about.
     std::vector<std::shared_ptr<Repeating>> repeating;
+    size_t offThread = 0;   // KUBA 20: the tasks other threads (the pipe) posted -- the agent is talking this frame
     {
         std::lock_guard<std::mutex> lock(g_mutex);
-        if (!g_queue.empty()) batch.swap(g_queue);
+        if (!g_mainQueue.empty()) batch.swap(g_mainQueue);
+        offThread = g_queue.size();
+        if (batch.empty()) batch.swap(g_queue);
+        else { for (auto& w : g_queue) batch.push_back(std::move(w)); g_queue.clear(); }
         repeating = g_repeating;
     }
     const bool cost = g_costOn.load(std::memory_order_relaxed);
@@ -197,12 +289,13 @@ void hooked_update(void* self, float dt) {
     }
 
     double batchUs = 0;
-    const uint32_t items = static_cast<uint32_t>(batch.size());
+    uint32_t items = static_cast<uint32_t>(batch.size());
     if (!batch.empty()) {
         const double b0 = now_us();
         for (auto& work : batch) {
             run_guarded(g_queuedSite, &work);
         }
+        if (offThread > 0 && kuba_linger().on) items += kuba_pipe_linger(dt);   // KUBA 20
         batchUs = now_us() - b0;
         g_drained.notify_all();
     }
@@ -282,8 +375,12 @@ void post_repeating(const char* name, std::function<void()> work) {
 }
 
 void post(std::function<void()> work) {
+    // KUBA 20: from the main thread itself -> the next frame (g_mainQueue), never the linger running right now
+    const bool onMain = g_main_thread_id != 0 && GetCurrentThreadId() == g_main_thread_id;
     std::lock_guard<std::mutex> lock(g_mutex);
+    if (onMain) { g_mainQueue.push_back(std::move(work)); return; }
     g_queue.push_back(std::move(work));
+    g_offPosts.fetch_add(1, std::memory_order_release);
 }
 
 bool run_sync(std::function<void()> work, unsigned timeout_ms) {

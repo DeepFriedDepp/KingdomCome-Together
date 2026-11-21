@@ -115,28 +115,52 @@ inline PFam family(uint8_t cls, const char* fragName, uint32_t frag) {
     }
 }
 inline bool posture(PFam f) { return f == PFam::Lying || f == PFam::Sitting || f == PFam::Kneeling || f == PFam::Working; }
+// KUBA 10 (joiner 2026-11-15 15:51-15:58): family() calls every variation a fidget of the standing idle, but most variations on copies
+// are a work posture's own fidget -- GuardVAR, SellerLoop_VAR, LumberJackSawVAR, RepairFenceHammer_VAR, BeggarVAR, Leaning_Left_VAR,
+// CarpenterVAR (the probes of four sessions: only MotionIdleVARdefault is the standing idle's). A copy in its work fidget while the host's
+// NPC works read as "standing (its own)" against "working": a missing posture, reseated every 1-2 s (ttkc_man_21 the guard 27 times,
+// ttkc_man_4 30) -- each one cutting the animation. A named variation that is not the standing idle's and names no posture is one.
+inline bool work_fidget_name(const char* n) {
+    if (!n || !*n || starts(n, "MotionIdle")) return false;
+    if (!has(n, "VAR") && !has(n, "_var") && !has(n, "Var")) return false;
+    return posture_of_name(n) == PFam::Other;
+}
+// The watchdog's verdict with the fidget taken for the work it belongs to: a copy whose full body runs a work fidget (a variation, by
+// class) misses no working posture of its host NPC.
+inline bool fidget_of_work(bool copyIsVariation, const char* copyFragName, PFam host) {
+    return copyIsVariation && host == PFam::Working && work_fidget_name(copyFragName);
+}
 inline bool base(PFam f) { return f == PFam::Standing || f == PFam::Moving || f == PFam::Combat; }
 
 // ---- A.5 the watchdog's verdict on one copy at one check ----------------------------------------------------------------------
 // copy: the family its FullBody runs; host: the host NPC's current streamed family; copyTransition: the copy's fragment is a posture's
 // way in or out; modAction: a mod action whose start the host named runs (the copy's own attack, a work one-shot, a paired half, the
 // engine's own hit reaction or recoil after a blow).
-enum class Verdict : uint8_t { Ok = 0, Empty = 1, StalePosture = 2, MissingPosture = 3, StaleDead = 4, PostureOther = 5 };
-constexpr int kVerdictCount = 6;
+enum class Verdict : uint8_t { Ok = 0, Empty = 1, StalePosture = 2, MissingPosture = 3, StaleDead = 4, PostureOther = 5, Sliding = 6 };
+constexpr int kVerdictCount = 7;
 inline const char* verdict_name(Verdict v) {
     switch (v) { case Verdict::Empty: return "empty"; case Verdict::StalePosture: return "stale-posture"; case Verdict::MissingPosture: return "missing-posture";
-                 case Verdict::StaleDead: return "stale-dead"; case Verdict::PostureOther: return "posture-vs-other"; default: return "ok"; }
+                 case Verdict::StaleDead: return "stale-dead"; case Verdict::PostureOther: return "posture-vs-other"; case Verdict::Sliding: return "sliding"; default: return "ok"; }
 }
+// Sliding (the moonwalk, after 0.63.9): the body is being moved on this screen at this speed or more while its full body plays no
+// locomotion. The field's measure (the joiner's animation probe, session 2026-11-14): 217 samples of a tavern keeper's copy gliding at
+// 1.5-2.0 m/s through his own Bartender_CleaningTable, 179 through a WagonIdle, while the host's NPC walked -- check() called every one
+// of them Ok, because an "other" family is no posture and a base family is no posture either.
+constexpr float kSlideMps = 0.6f;
 // otherSure: the host's "other" (a fragment no family names: a seated gesture, an interaction, a callback) counts as a breach of the
 // copy's posture as soon as a base would (the twin posture_other_grace off); on, it gets PostureOther's longer grace -- d6-waitnight's
 // seated drinkers were reseated at every gesture of their host NPC (356 reseats, the copy a half second behind each time)
-inline Verdict check(PFam copy, PFam host, bool copyTransition, bool modAction, bool otherSure = false) {
+inline Verdict check(PFam copy, PFam host, bool copyTransition, bool modAction, bool otherSure = false, bool bodyMoving = false) {
     if (copy == PFam::Empty) return Verdict::Empty;
     if (modAction || copyTransition || copy == host) return Verdict::Ok;
     if (copy == PFam::Dead && host != PFam::Dead && host != PFam::Empty) return Verdict::StaleDead;
     if (posture(copy) && host == PFam::Other && !otherSure) return Verdict::PostureOther;               // a gesture in the posture, most likely
     if (posture(copy) && host != PFam::Empty && host != PFam::Paired) return Verdict::StalePosture;   // the copy lies / sits where its NPC does not
     if (posture(host) && !posture(copy)) return Verdict::MissingPosture;                               // the NPC lies / sits, the copy stands
+    // the moonwalk: the stream drags the body while a gesture, an interaction or a work animation of no family holds its full body, and
+    // the host's NPC stands or walks -- the hand-over gives it the host's own base instead, and its own locomotion plays again. Only
+    // against a host base: a hand-over while the host runs that very kind of animation would install what already plays.
+    if (bodyMoving && copy == PFam::Other && (host == PFam::Standing || host == PFam::Moving)) return Verdict::Sliding;
     return Verdict::Ok;
 }
 // How long a verdict may last before the copy is reseated (A.1: a stale posture at most 0.3 s; an empty FullBody 0.3 s -- the detector's
@@ -144,7 +168,8 @@ inline Verdict check(PFam copy, PFam host, bool copyTransition, bool modAction, 
 // host's gives the owner's install of that fragment its time).
 inline double breach_after_s(Verdict v) {
     switch (v) { case Verdict::Empty: return 0.3; case Verdict::StalePosture: return 0.3; case Verdict::StaleDead: return 0.3;
-                 case Verdict::MissingPosture: return 1.0; case Verdict::PostureOther: return 2.5; default: return 1e9; }
+                 case Verdict::MissingPosture: return 1.0; case Verdict::PostureOther: return 2.5; case Verdict::Sliding: return 0.75;
+                 default: return 1e9; }
 }
 constexpr double kWatchEveryS = 0.25;   // A.5: each owned copy every 250 ms
 constexpr float kWatchRadiusM = 60.0f;  // within this of the local player

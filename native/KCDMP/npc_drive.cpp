@@ -30,6 +30,8 @@
 #include "body_drive.h"
 #include "holders.h"
 #include "wo221.h"
+#include "wo132.h"   // KUBA 30: the copy's engagement in the local player's fight
+#include "wo208.h"   // KUBA 30: the duel's asks, the owner's pause
 
 #include <windows.h>
 #include <atomic>
@@ -350,6 +352,12 @@ struct Puppet {
     std::string key, name;
     uint32_t eid = 0;
     void*    ent = nullptr;
+    bool     kubaDuel = false;                                   // KUBA 30: a local duel -- its own brain moves it here
+    double   kubaDuelWant = -1, kubaDuelLost = -1, kubaDuelAt = 0, kubaDuelCheck = 0, kubaDuelCalm = -1;
+    double   kubaDuelBlockUntil = 0;                             // KUBA 32: no new duel before this (the host took it back, or one just ended)
+    double   kubaDuelLeftAt = -1e9;                              // KUBA 33: its own brain last walked out of a duel here
+    double   kubaDuelCheckLogged = -1e9;                         // KUBA 34: "no duel: the host has not answered" last told
+    int      kubaDuelLeftN = 0;                                  //          how many times within a minute
     uint64_t wuid = 0;
     float    anchor[3]{};
     double   delay = 0.12;
@@ -439,6 +447,13 @@ void drop(std::unordered_map<std::string, Puppet>::iterator it, uint8_t reason, 
     wo215::route_release(it->second.eid, "dropped");                  // WO-215 A: its movement request ends with it
     bodydrive::release(it->second.eid, "dropped");                    // WO-221 C: a driven copy's request ends with it
     holders::forget(it->second.eid);
+    if (it->second.kubaDuel) {   // KUBA 30: a copy dropped mid-duel -- its brain paused again, the owner back
+        it->second.kubaDuel = false;
+        wo208::kuba_duel_mind(it->second.eid, false, "joiner");   // KUBA 33
+        wo208::kuba_set_duel(it->second.eid, false);
+        wo208::kuba_push_ask(wo208::kKubaAskDuelOff, it->second.name);
+        logf("KUBA-30 duel end npc=%s: the copy was dropped (%s)", it->second.name.c_str(), reason_name(reason));
+    }
     if (tell) notify_drop(reason, it->second.name);
     if (reason == kNotLiving) {   // WO-147: remembered for the hit gate (a ragdoll is a moment, not a release)
         const double t = now_s();
@@ -1291,6 +1306,21 @@ void tick() {
     const bool holdAll = g_holdAll.load(std::memory_order_relaxed);
 
     uint16_t writing = 0;
+    // KUBA 26 (joiner, 17.11: "the enemy walks through me in a fight, then steps back, jerking the camera"): the host's NPC closes on
+    // where the joiner's figure WAS (the figure, the stream and the copy each run ~100+ ms behind), so the copy's written position lands
+    // inside the local player -- the game pushes him out and the camera jerks. A copy is never written closer than the personal space
+    // (KCDMP_KUBA_PERSONAL_SPACE_CM, 65; 0 = off) to the local player: it stops at the edge, along the line it came from.
+    static int s_spaceCm = -1;
+    if (s_spaceCm < 0) {
+        char b[16] = {};
+        const DWORD n = GetEnvironmentVariableA("KCDMP_KUBA_PERSONAL_SPACE_CM", b, sizeof b);
+        s_spaceCm = (n > 0 && n < sizeof b) ? std::atoi(b) : 65;
+        if (s_spaceCm < 0) s_spaceCm = 0;
+        logf("KUBA-26 a copy is kept %d cm from the local player (KCDMP_KUBA_PERSONAL_SPACE_CM; 0 = off)", s_spaceCm);
+    }
+    static uint32_t s_spaceN = 0;
+    float kubaPp[3]{};
+    const bool kubaPpOk = s_spaceCm > 0 && kcdmp::actions::player_position(kubaPp);
     for (auto it = g_bound.begin(); it != g_bound.end();) {
         Puppet& p = it->second;
         auto sIt = g_streams.find(p.key);
@@ -1326,10 +1356,140 @@ void tick() {
         // picked up) has LOCAL coordinates: never written until it is free.
         void* parent = nullptr;
         const bool parented = get_parent(e, &parent) && parent != nullptr;
+        // KUBA 30 (17.11, "rebuild the fight"): the local duel. A copy whose host NPC fights only this player (the mirror holds him,
+        // the copy is engaged in his fight), alive and within 10 m, runs its OWN brain here: its steps, swings, blocks and reactions
+        // are this engine's, against him, with no stream lag. While the duel lasts this writer writes nothing (the owner installs
+        // nothing, wo208), health and death still come from the host. It ends when the host NPC stops fighting him (2 s), dies,
+        // or the copy wanders 8 m from its host NPC or 18 m from him -- the stream then blends it back. KCDMP_KUBA_DUEL=off.
+        static int s_duel = -1;
+        if (s_duel < 0) {
+            char b[16] = {};
+            const DWORD n = GetEnvironmentVariableA("KCDMP_KUBA_DUEL", b, sizeof b);
+            // KUBA 30e: ON again -- the 19.11 brain that never fought was KUBA 31's weapon re-draw loop (now off), not the duel
+            s_duel = (n > 0 && n < sizeof b && (!_stricmp(b, "off") || !std::strcmp(b, "0"))) ? 0 : 1;
+            logf("KUBA-30 the local duel (a copy fighting only this player runs its own brain here) %s (KCDMP_KUBA_DUEL=off turns it off)", s_duel ? "on" : "OFF");
+        }
+        if (s_duel == 1 && !p.beast) {
+            if (now - p.kubaDuelCheck >= 0.25) {
+                p.kubaDuelCheck = now;
+                float bp[3]{}, pp[3]{};
+                const bool haveBp = read_pos(e, bp);
+                const bool havePp = kcdmp::actions::player_position(pp);
+                const float pdist = (haveBp && havePp) ? std::sqrt((bp[0] - pp[0]) * (bp[0] - pp[0]) + (bp[1] - pp[1]) * (bp[1] - pp[1])) : 999.0f;
+                float leash = 0.0f;
+                if (haveBp && s.n > 0) {
+                    const RingSample& a = s.ring[s.n - 1];
+                    leash = std::sqrt((a.x - bp[0]) * (a.x - bp[0]) + (a.y - bp[1]) * (a.y - bp[1]));
+                }
+                const bool alive = (s.flags & (0x01 | 0x02 | 0x10)) == 0 && !wo210kd::held_down(p.eid);
+                const bool holdsPlayer = wo209::mirror_holds_player(p.eid) && wo132::engaged(p.eid);
+                if (!p.kubaDuel) {
+                    wo208::kuba_release_take(p.eid);   // KUBA 32: a late word of the host's for a duel already over
+                    bool want = alive && holdsPlayer && !parented && pdist < 10.0f && leash < 6.0f && now >= p.kubaDuelBlockUntil;
+                    if (want && !wo208::kuba_host_ok()) {   // KUBA 34: a host on the original mod never takes the duel's frames
+                        want = false;
+                        static int s_noHostLogs = 0;
+                        if (s_noHostLogs < 20 && now - p.kubaDuelCheckLogged > 30.0) {
+                            ++s_noHostLogs; p.kubaDuelCheckLogged = now;
+                            logf("KUBA-34 npc=%s fights this player, but no duel here: the host has not answered the hello (not this fork?) -- the stream drives it",
+                                 p.name.c_str());
+                        }
+                    }
+                    if (!want) p.kubaDuelWant = -1;
+                    else if (p.kubaDuelWant < 0) p.kubaDuelWant = now;
+                    else if (now - p.kubaDuelWant >= 0.4) {
+                        p.kubaDuel = true; p.kubaDuelAt = now; p.kubaDuelLost = -1; p.kubaDuelCalm = -1;
+                        // KUBA 32: its own combat AI on -- the engagement (WO-132) switched it off while the stream drove it, and the writer
+                        // (which would hold it off) writes nothing while the duel lasts
+                        const bool autoOn = motion::kuba_npc_automation(p.eid, true);
+                        if (!autoOn) logf("KUBA-32 duel npc=%s: its combat automation could not be switched on (no combat actor yet)", p.name.c_str());
+                        wo208::kuba_duel_mind(p.eid, true, "joiner");   // KUBA 33: it fights -- no flight, no murder seen at its mates' bodies
+                        wo208::kuba_set_duel(p.eid, true);
+                        wo208::kuba_push_ask(wo208::kKubaAskDuelOn, p.name);
+                        logf("KUBA-30 duel start npc=%s eid=0x%X %.1f m from the player, %.1f m from its host NPC -- its own brain fights him here", p.name.c_str(), p.eid, pdist, leash);
+                    }
+                } else {
+                    // KUBA 30f: the host's brain runs again during the duel (30b was for its paused brain), so its hold is real once more:
+                    // the host NPC turned to another (the host player's blows took its aggro, or this player is down) ends the duel in 2 s.
+                    // The copy's own brain out of combat mode for 5 s ends it too.
+                    wo208::kuba_duel_armed_tick(p.eid, p.name.c_str());   // KUBA 37: an armed player -- its brain fights armed
+                    if (!holdsPlayer) { if (p.kubaDuelLost < 0) p.kubaDuelLost = now; } else p.kubaDuelLost = -1;
+                    bool cmOn = true;
+                    const bool cmRead = motion::combat_mode_of(p.eid, &cmOn);
+                    if (cmRead && !cmOn) { if (p.kubaDuelCalm < 0) p.kubaDuelCalm = now; } else p.kubaDuelCalm = -1;
+                    // KUBA 32: the host said its player took the NPC's aggro (his blow, or its brain turned to him) -- at once, not 2 s later
+                    const bool released = wo208::kuba_release_take(p.eid);
+                    // KUBA 39 (21.11, group fights: a waiting attacker is out of combat mode while its mates fight -- its duel ended after
+                    // 5 s, its weapon went away, a new duel drew it again, round and round): while its host NPC still fights this player,
+                    // its own calm ends the duel only after 30 s
+                    const double calmS = holdsPlayer ? 30.0 : 5.0;
+                    const char* why = released ? "the host player took its aggro (the host's word)" :
+                                      !alive ? "the host NPC is down or dead" : parented ? "carried" : pdist >= 18.0f ? "18 m from the player" :
+                                      (p.kubaDuelLost >= 0 && now - p.kubaDuelLost >= 2.0) ? "its host NPC fights another now" :
+                                      (p.kubaDuelCalm >= 0 && now - p.kubaDuelCalm >= calmS) ?
+                                          (holdsPlayer ? "its own brain left the fight (30 s out of combat mode, its host NPC still on this player)"
+                                                       : "its own brain left the fight (5 s out of combat mode)") : nullptr;
+                    if (why) {
+                        p.kubaDuel = false; p.kubaDuelWant = -1;
+                        // KUBA 33: its own brain walked out of the fight here (out of combat mode, or 18 m off with the player near where it
+                        // started) -- the host's brain has it again and the next duel waits: 15 s, 45 s after a second such end within a
+                        // minute (20.11: the copy fled, the host brain ran it back, a new duel, it fled again -- round and round)
+                        const bool calm = !released && alive && (p.kubaDuelCalm >= 0 && now - p.kubaDuelCalm >= calmS);
+                        const bool wandered = !released && alive && pdist >= 18.0f && leash < 6.0f;
+                        double block = released ? 6.0 : 2.0;   // KUBA 32: the mirror's word lags the host's -- no restart on it
+                        if (calm || wandered) {
+                            p.kubaDuelLeftN = (now - p.kubaDuelLeftAt < 60.0) ? p.kubaDuelLeftN + 1 : 1;
+                            p.kubaDuelLeftAt = now;
+                            block = p.kubaDuelLeftN >= 2 ? 45.0 : 15.0;
+                        }
+                        p.kubaDuelBlockUntil = now + block;
+                        motion::kuba_npc_automation(p.eid, false);   // KUBA 32: as the writer left it (its frame gives it back when no hold wants it)
+                        wo208::kuba_duel_mind(p.eid, false, "joiner");
+                        wo208::kuba_set_duel(p.eid, false);
+                        wo208::kuba_push_ask(wo208::kKubaAskDuelOff, p.name);
+                        p.blendPending = true;
+                        logf("KUBA-30 duel end npc=%s after %.1f s: %s (%.1f m from its host NPC) -- the stream takes it back; no new duel for %.0f s", p.name.c_str(),
+                             now - p.kubaDuelAt, why, leash, block);
+                    }
+                }
+            }
+            if (p.kubaDuel) {
+                p.haveLast = false;
+                p.havePrev = false;
+                p.blendPending = true;
+                if (now - p.winStart >= kPullWindowS) pull_flush(p, now);
+                ++it;
+                continue;
+            }
+        }
         // WO-187 B2: a hold already running ends when the host's NPC breaks into a run (the stream moves on without the copy)
         if (now < p.holdUntil && wo187::chase_follow_on() && stream_speed(s) >= wo187rules::kChaseFollowMps) {
             p.holdUntil = now;
             c_chaseEnded.fetch_add(1, std::memory_order_relaxed);
+        }
+        // KUBA 28 (joiner, 17.11 14:17-14:25: "it stood still instead of staying at the player, above all with the attack/defence icons
+        // and in my combos" -- swing holds of 1.8-4.5 s while the host's NPC stepped around the fight at walking pace, then resumes of
+        // 1-5 m): a hold ends as soon as the host's NPC is KCDMP_KUBA_HOLD_DRIFT_CM (80) from the held body -- the writer blends it back
+        if (now < p.holdUntil && s.n > 0) {
+            static int s_driftCm = -1;
+            if (s_driftCm < 0) {
+                char b[16] = {};
+                const DWORD n = GetEnvironmentVariableA("KCDMP_KUBA_HOLD_DRIFT_CM", b, sizeof b);
+                s_driftCm = (n > 0 && n < sizeof b) ? std::atoi(b) : 80;
+                logf("KUBA-28 a copy's swing hold ends when its host NPC is %d cm away (KCDMP_KUBA_HOLD_DRIFT_CM; 0 = off)", s_driftCm);
+            }
+            float bp[3];
+            if (s_driftCm > 0 && read_pos(e, bp)) {
+                const RingSample& a = s.ring[s.n - 1];
+                const float dx = a.x - bp[0], dy = a.y - bp[1];
+                const float d = std::sqrt(dx * dx + dy * dy);
+                if (d * 100.0f > s_driftCm) {
+                    p.holdUntil = now;
+                    static uint32_t s_n = 0;
+                    if (++s_n <= 40 || s_n % 200 == 0)
+                        logf("KUBA-28 npc=%s hold ended: its host NPC is %.0f cm away -- the writer takes it back [n=%u]", p.name.c_str(), d * 100.0f, s_n);
+                }
+            }
         }
         // WO-209 (the owner's village runs: copies held at a seat while their host NPC walked off, one 46 m away most of a run): an activity
         // hold whose host NPC is kActivityDriftM from the body for kActivityDriftS ends -- the row that would have ended it was lost or
@@ -1618,6 +1778,22 @@ void tick() {
             if (sp > 0.001f && segMps > 0.001f) { p.velX *= segMps / sp; p.velY *= segMps / sp; }
             p.speedMps = segMps;
         }
+        // KUBA 26: never inside the local player
+        if (kubaPpOk && !p.beast && !motion::is_avatar_eid(p.eid)) {
+            const float r = s_spaceCm / 100.0f;
+            float dx = pose[0] - kubaPp[0], dy = pose[1] - kubaPp[1];
+            const float dz = std::fabs(pose[2] - kubaPp[2]);
+            float d = std::sqrt(dx * dx + dy * dy);
+            if (d < r && dz < 1.6f) {
+                if (d < 0.01f && p.haveLast) { dx = p.last[0] - kubaPp[0]; dy = p.last[1] - kubaPp[1]; d = std::sqrt(dx * dx + dy * dy); }
+                if (d >= 0.01f) {
+                    pose[0] = kubaPp[0] + dx / d * r;
+                    pose[1] = kubaPp[1] + dy / d * r;
+                    if (++s_spaceN <= 40 || s_spaceN % 500 == 0)
+                        logf("KUBA-26 npc=%s written %.0f cm from the local player -> kept at %d cm [n=%u]", p.name.c_str(), d * 100.0f, s_spaceCm, s_spaceN);
+                }
+            }
+        }
         if (!write_one(p, e, pose, &wrote)) {
             if (!g_announcedFault) { g_announcedFault = true; logf("MP-NPCWRITE npc=%s engine call FAULTED", p.name.c_str()); }
             disarm("an engine call faulted inside the per-frame write");
@@ -1719,6 +1895,18 @@ bool physics_status(void* e, PhysicsStatus* out) {
 bool is_bound_eid(uint32_t eid) {
     if (!eid) return false;
     for (const auto& kv : g_bound) if (kv.second.eid == eid) return true;
+    return false;
+}
+
+bool render_lag_s(uint32_t eid, double* s) {
+    if (!eid || !s) return false;
+    for (const auto& kv : g_bound) {
+        if (kv.second.eid != eid) continue;
+        const double lag = kv.second.delay + kv.second.lateApplied;
+        if (!(lag >= 0.0) || lag > 2.0) return false;   // also NaN
+        *s = lag;
+        return true;
+    }
     return false;
 }
 

@@ -136,6 +136,10 @@ uint8_t drop_fight_holds(uint32_t eid, const char* why);
 // WO-190 0.4: [figures: frames, glide, in-place, class changes][copies: the same] since the DLL loaded (any thread).
 void loco_counters(uint32_t out[8]);
 bool fight_held(uint32_t eid);                   // WO-190: a copy held in combat mode for a fight (engaged, or WO-187's guard hold), fresh
+// KUBA 23 (host, main thread): an NPC's own block up / down (combat_SetBlock's setter); automation=true at the window's edges: its
+// combat automation off before the block goes up, back on after it comes down
+bool kuba_npc_set_block(uint32_t eid, bool on, bool automation);
+bool kuba_npc_automation(uint32_t eid, bool on);   // KUBA 32 (host): an NPC's own combat automation on/off (main thread)
 void* actor_of(uint32_t eid);                    // the C_Actor of an entity id (main thread), null when none
 void set_ko_hold(uint32_t eid, bool on);
 // WO-201 follow-up B9: a standing copy's stale TurnAngle is cleared before its AI-movement action picks idle / turn (mp_copy_no_idle_turn, bit 16)
@@ -144,6 +148,7 @@ int noturn_status(char* out, int n);
 bool skel_desired_param(void* ent, uint32_t id, float* out);   // research read (WO190-LOCO)
 bool skel_layer_scale(void* ent, int layer, float* out);        // research read (WO190-LOCO)
 int skel_fifo_text(void* ent, int layer, char* out, int n);       // research read (WO190-FIFO)
+int skel_fifo_count(void* ent, int layer);                         // KUBA 11: the layer's animation count, -1 unreadable (0 = bind pose)
 bool pseudo_speed(uint32_t eid, float* ps, int* kind, int* count); // research read (WO190-LOCO)         // WO-201 V.4: the avatar guard is not put back on this figure while the engine knocks it out
 bool combat_mode_of(uint32_t eid, bool* on);     // its combat model's CombatMode (false = unreadable)
 bool requeue_guard_idle(uint32_t eid);           // the guard zone written away and back: the engine re-queues its guard idle
@@ -190,6 +195,13 @@ bool read_model(uint32_t eid, ModelRead* out);        // false = no actor for ei
 
 // For hits.cpp: is this entity id a native-written avatar, and its soul.
 bool is_avatar_eid(uint32_t eid);
+// After 0.63.9 (the moonwalk): how fast this body is being rendered along on this screen (the gait's own smoothed speed in m/s, what
+// the stream and the engine move it at). False = no such body here, or the gait is not writing it (then nothing is judged by it).
+// Main thread.
+bool body_render_speed(uint32_t eid, float* mps);
+void kuba_set_combat_feet(uint32_t eid, bool on);   // KUBA 16: the copy runs its combat footwork (its motion params follow its rendered move)
+void kuba_hold_figure_combat(uint32_t figEid, bool on);   // KUBA 33 (host): a partner's figure kept in combat mode while an NPC fights his duel copy (counted)
+int kuba_feet_status(char* out, int n);
 // The local player's combat actor (main-thread cache; 0 when unknown).
 void* player_combat_actor();
 // WO-210 B.1 (any thread, read-only): a combat actor's opponent as a combat actor, or null.

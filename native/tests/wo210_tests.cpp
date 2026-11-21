@@ -78,7 +78,49 @@ int wo210_tests(int* passed) {
            "A / C.3: the fight base and the knockdown-by-action fixes have their own twin bits");
     WCHECK(breach_after_s(Verdict::StalePosture) <= 0.3 && breach_after_s(Verdict::Empty) <= 0.3 && breach_after_s(Verdict::MissingPosture) >= 0.5,
            "A.1: a stale posture at most 0.3 s; the owner's own posture install first");
+
+    // ---- the moonwalk (after 0.63.9): the body dragged along while no locomotion plays
+    WCHECK(check(PFam::Other, PFam::Moving, false, false, false, true) == Verdict::Sliding &&
+           check(PFam::Other, PFam::Standing, false, false, false, true) == Verdict::Sliding,
+           "sliding: a gesture or a work animation holds the full body while the stream drags the body and the host's NPC stands or walks");
+    WCHECK(check(PFam::Other, PFam::Moving, false, false, false, false) == Verdict::Ok,
+           "a body that is not being moved is no moonwalk (0.63.9's own verdict)");
+    WCHECK(check(PFam::Other, PFam::Other, false, false, false, true) == Verdict::Ok &&
+           check(PFam::Other, PFam::Empty, false, false, false, true) == Verdict::Ok,
+           "never against a host state the hand-over would install as the same kind again, nor against no host state");
+    WCHECK(check(PFam::Other, PFam::Working, false, false, false, true) == Verdict::MissingPosture,
+           "a working host NPC keeps 0.63.9's own verdict (the copy misses its posture), moving or not");
+    WCHECK(check(PFam::Other, PFam::Moving, true, false, false, true) == Verdict::Ok &&
+           check(PFam::Other, PFam::Moving, false, true, false, true) == Verdict::Ok,
+           "a transition on its way, and an animation the mod itself drives, are left alone while moving too");
+    WCHECK(check(PFam::Standing, PFam::Moving, false, false, false, true) == Verdict::Ok &&
+           check(PFam::Moving, PFam::Standing, false, false, false, true) == Verdict::Ok &&
+           check(PFam::Combat, PFam::Moving, false, false, false, true) == Verdict::Ok,
+           "a base family keeps 0.63.9's verdict: the gait's own speed class decides what it plays, not the watchdog");
+    WCHECK(check(PFam::Sitting, PFam::Moving, false, false, false, true) == Verdict::StalePosture &&
+           check(PFam::Lying, PFam::Standing, false, false, false, true) == Verdict::StalePosture,
+           "a posture while moving stays the stale posture it was, with its own 0.3 s");
+    WCHECK(breach_after_s(Verdict::Sliding) >= 0.5 && breach_after_s(Verdict::Sliding) <= 1.5 && kSlideMps > 0.1f && kSlideMps < 1.4f,
+           "sliding: a walking body, judged after about three checks");
+    WCHECK(!std::strcmp(verdict_name(Verdict::Sliding), "sliding") && kVerdictCount == 7, "the verdict has a name and a counter");
     WCHECK(kWatchEveryS <= 0.25 && kWatchRadiusM >= 60.0f, "A.5: every 250 ms within 60 m");
+
+    // ---- KUBA 10a: a work posture's own fidget is the work (the probes' variation names, 2026-11-14/15)
+    WCHECK(work_fidget_name("GuardVAR") && work_fidget_name("SellerLoop_VAR") && work_fidget_name("Seller2Loop_VAR") &&
+           work_fidget_name("LumberJackSawVAR") && work_fidget_name("RepairFenceHammer_VAR") && work_fidget_name("BeggarVAR") &&
+           work_fidget_name("Leaning_Left_VAR") && work_fidget_name("Leaning_Back_VAR") && work_fidget_name("CarpenterVAR") &&
+           work_fidget_name("HousekeeperFeedingHen_VAR") && work_fidget_name("Hlbrd_VAR"),
+           "KUBA 10a: the work fidgets the field's copies played");
+    WCHECK(!work_fidget_name("MotionIdleVARdefault") && !work_fidget_name("MotionIdleVAR") && !work_fidget_name("") && !work_fidget_name(nullptr),
+           "KUBA 10a: the standing idle's own fidget, and a nameless fragment, stay the standing idle");
+    WCHECK(!work_fidget_name("SittingIdle_VAR") && !work_fidget_name("LyingIdle_VAR") && !work_fidget_name("Guard") && !work_fidget_name("EatingMash"),
+           "KUBA 10a: a posture's fidget keeps its posture's family; a fragment that is no variation by name is not one");
+    WCHECK(fidget_of_work(true, "GuardVAR", PFam::Working) && !fidget_of_work(false, "GuardVAR", PFam::Working) &&
+           !fidget_of_work(true, "GuardVAR", PFam::Sitting) && !fidget_of_work(true, "GuardVAR", PFam::Lying) &&
+           !fidget_of_work(true, "MotionIdleVARdefault", PFam::Working),
+           "KUBA 10a: only a variation by class, a work fidget by name, against a working host NPC");
+    WCHECK(check(family(kcdmp::wo208rules::kClsVariation, "GuardVAR", 257), PFam::Working, false, false) == Verdict::MissingPosture,
+           "KUBA 10a: check() itself is unchanged (the watchdog applies the fidget rule after it; the twin keeps 0.63.9's verdict)");
 
     // ---- A.2 the paths
     WCHECK(!std::strcmp(path_name(kPathDrift), "1-drift") && !std::strcmp(path_name(kPathBase), "15-host-base") && !std::strcmp(path_name(kPathUnknown), "unknown"),

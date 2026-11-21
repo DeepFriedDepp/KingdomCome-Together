@@ -311,6 +311,9 @@ public partial class GameBridge
             case Protocol.NpcRouteDown:     // WO-216 A: the host's NPCs' movement requests
                 await Wo216OnNpcRouteAsync(body);
                 return;
+            case Protocol.KubaDuelDown:     // KUBA 30 stage 2: a joiner's local duel drives this host's NPC
+                await KubaOnDuelFrameAsync(src, body);
+                return;
             case Protocol.NpcAnimAskDown:   // WO-210 A.3/A.4: a joiner asks for bodies' whole-body state again
                 await Wo210OnAnimAskAsync(src, body);
                 return;

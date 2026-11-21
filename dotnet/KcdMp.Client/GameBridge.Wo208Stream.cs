@@ -50,6 +50,8 @@ public partial class GameBridge
                 }
                 try { await Wo208StreamTickAsync(); }
                 catch (Exception ex) { Console.WriteLine($"MP-W208 stream tick failed: {ex.GetType().Name}: {ex.Message}"); }
+                try { await KubaDuelSendTickAsync(); await KubaHostDuelTickAsync(); }   // KUBA 30 stage 2
+                catch (Exception ex) { Console.WriteLine($"KUBA-30 duel tick failed: {ex.GetType().Name}: {ex.Message}"); }
                 if (!oppFirst)
                 {
                     try { await Wo209OppTickAsync(); }

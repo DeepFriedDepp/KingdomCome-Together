@@ -203,6 +203,7 @@ uint8_t handle(const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t
         if (tooFar) { on = false; c_far.fetch_add(1); }
         if (on && hits::scene_owned_eid(eid, "wo132-engage")) on = false;   // WO-174: a scripted brawl's copy never engages the player through the mod
         if (on && wo195::dead_gate(eid, "engage")) on = false;   // WO-195: a dead copy is never engaged again (an engage on it is an engage off)
+        if (on && wo209::kuba_calm_copy(eid)) on = false;   // KUBA 14: its host NPC flees or cowers -- no fight here (an engage on it is an engage off)
         if (on) {
             if (!is_engaged(eid)) {
                 first = 1;
@@ -483,12 +484,17 @@ bool engaged(uint32_t eid) { return eid != 0 && is_engaged(eid); }
 // old fight was never added to his new one, and its own attacks at him ran from the old skirmish.
 void local_player_left_fight(const char* why) {
     if (g_engaged.empty() || !wo209::on(wo209rules::kBitOppMirror)) return;
-    const size_t n = g_engaged.size();
-    for (uint32_t e : g_engaged) { hits::discard_from(e, false); motion::set_npc_engage(e, false, nullptr, now_s()); }
-    g_engaged.clear();
+    // KUBA 36: a copy in his local duel stays held -- its own brain fights him (letting it go cleared its target pin: it left combat)
+    std::vector<uint32_t> kept;
+    size_t n = 0;
+    for (uint32_t e : g_engaged) {
+        if (wo208::kuba_in_duel(e)) { kept.push_back(e); continue; }
+        hits::discard_from(e, false); motion::set_npc_engage(e, false, nullptr, now_s()); ++n;
+    }
+    g_engaged.swap(kept);
     g_fleeing.clear();
-    logf("WO209-ENGAGE the local player left his fight (%s): %zu copy/copies no longer held in it (re-added only by a new engage)",
-         why ? why : "?", n);
+    logf("WO209-ENGAGE the local player left his fight (%s): %zu copy/copies no longer held in it (re-added only by a new engage)%s",
+         why ? why : "?", n, g_engaged.empty() ? "" : " -- the local duels' copies kept");
 }
 
 bool mirror_engage(uint32_t eid, float maxM, const char* why) {

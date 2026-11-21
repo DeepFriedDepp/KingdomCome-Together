@@ -168,6 +168,13 @@ public partial class GameBridge
         if (eid != 0) _ = Wo195CheckLaterAsync(npc, eid, now);
     }
 
+    // KUBA 9 switches. Twins: KCDMP_KUBA_FALL_RECHECK=0, KCDMP_KUBA_FINISH_UPRIGHT=off.
+    private static readonly int KubaFallRecheckN =
+        int.TryParse(Environment.GetEnvironmentVariable("KCDMP_KUBA_FALL_RECHECK"), out int kn) ? Math.Clamp(kn, 0, 60) : 12;
+    private static readonly bool KubaFinishUpright =
+        !string.Equals(Environment.GetEnvironmentVariable("KCDMP_KUBA_FINISH_UPRIGHT"), "off", StringComparison.OrdinalIgnoreCase);
+    private long _kubaFinishUpright, _kubaFallRechecks;
+
     /// <summary>The release's proof: the body 1 s later (combat mode off, a ragdoll), this player's combat state 2 s later (the Lua).</summary>
     private async Task Wo195CheckLaterAsync(string npc, uint eid, long releasedMs)
     {
@@ -180,6 +187,14 @@ public partial class GameBridge
             var a = new byte[4];
             BinaryPrimitives.WriteUInt32LittleEndian(a, eid);
             var r = await _combat.Wo163Async(Protocol.Wo195OpCheck, a);
+            // KUBA 9 (joiner 15:08-15:11): 9 of 12 checks found the copy not dead yet (the death landed 6-40 s later) and nothing looked
+            // at it again -- those bodies died standing. Read it again each second until it is dead (or KubaFallRecheckN tries).
+            for (int k = 0; k < KubaFallRecheckN && r is { Ok: true, Payload.Length: >= 4 } rk && rk.Payload[0] != 1; k++)
+            {
+                await Task.Delay(1000);
+                Interlocked.Increment(ref _kubaFallRechecks);
+                r = await _combat.Wo163Async(Protocol.Wo195OpCheck, a);
+            }
             if (r is { Ok: true, Payload.Length: >= 4 } x)
             {
                 // the mod's ApplyDeath kills the soul with no death reaction: the copy stays upright, frozen in the dead action's first pose
@@ -214,8 +229,11 @@ public partial class GameBridge
                         _ = Wo210DeathCheckAsync(npc, "copy-" + Wo210FinishHow(fin, upright));
                         if (upright) how214 = "finished";
                         // the finish lays it down (its own ragdoll) -- WO-214 D.3: a body still living after it (a copy killed while held in
-                        // its fight) gets the physics ragdoll below as well
-                        upright = Wo214Rules.RagdollAfterFinish(deathGround, x.Payload[2]);
+                        // its fight) gets the physics ragdoll below as well; KUBA 9: after "already-dead-state" the finish does nothing
+                        // (no ragdoll, no dead action) and the copy stood frozen -- the re-read decides there too
+                        bool stillUp = KubaFinishUpright && fin is { Result: Protocol.Wo210FinishAlready } && Wo195Rules.Upright(x.Payload[0], x.Payload[2]);
+                        if (stillUp) Interlocked.Increment(ref _kubaFinishUpright);
+                        upright = Wo214Rules.RagdollAfterFinish(deathGround, x.Payload[2]) || stillUp;
                         if (upright) how214 = "finished+ragdolled";
                     }
                 }

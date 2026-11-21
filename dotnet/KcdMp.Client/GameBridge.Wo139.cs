@@ -488,6 +488,16 @@ public partial class GameBridge
                     return;
                 case Protocol.CrimeHostStop when Wo139Rules.TryParseStop(m.Text, out string guard, out var crimes, out int fine):
                     Interlocked.Increment(ref _w139StopsIn);
+                    // KUBA 36 (20.11 15:05-15:07: "I fought an NPC and it suddenly vanished from my screen"): the host's guard asked for this
+                    // player's arrest four times while its copy fought him in the local duel -- the arrest's talk took the copy's body (the
+                    // duel ended "unbound") and he attacked it again each time. Mid-duel the stop is not run here: the host is told
+                    // "attacked" at once (his fight goes on, as when he answers a stop with his blade).
+                    if (KubaDuelActive(guard))
+                    {
+                        _ = Wo139SendAsync(Protocol.CrimeAskUp, Protocol.JoinTargetHost, Protocol.CrimeAskOutcome, m.Tok, $"{Wo139Rules.OutcomeText("attacked", guard, 0)} 0 0 0");
+                        Console.WriteLine($"KUBA-36 stop #{m.Tok} by {guard} not run here: it fights this player in the local duel -- told the host 'attacked'");
+                        return;
+                    }
                     Console.WriteLine($"MP-W139 joiner: stop #{m.Tok} by {guard} for {string.Join(",", crimes.Select(c => $"{c.Crime}:{c.Count}"))} (the crime table's fine {fine / 10.0:F1} groschen) -- the game's own arrest runs here");
                     _w139StoppedHere[guard] = true;
                     Wo211OnStop(crimes.Select(c => c.Crime));   // WO-211 D: the partner's crime under the joint mode, told plainly

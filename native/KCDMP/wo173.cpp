@@ -9,6 +9,7 @@
 #include <atomic>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <unordered_map>
@@ -142,6 +143,36 @@ std::unordered_map<uint32_t, std::vector<uint8_t>> g_heldDone;   // id -> op 18'
 uint32_t g_heldSeq = 0;
 std::atomic<uint32_t> c_held{0}, c_heldEngine{0}, c_heldRaw{0}, c_heldOther{0}, c_floorStopped{0}, c_medianCapped{0};
 std::atomic<uint32_t> c_corrRetired{0}, c_noValues{0};   // WO-210 C.4
+// Hit fix (after 0.63.9): the joiner's blow on an NPC that is not in a fight. Such an NPC has no combat actor on the host, the replay
+// refused it (no-victim-combat-actor) and -- with the raw path retired (WO-210 C.4) and the joiner's blows carrying no numbers (E.2) --
+// nothing was applied, so the NPC never entered a fight and every later blow was refused the same way. Now the victim gets its combat
+// actor the engine's own way for the blow (wo165 Request createVictimCa); a victim that cannot have one (the engine says no) takes the
+// joiner's own numbers the capped raw way when the blow carries any. KCDMP_VICTIM_CA=off in the game's environment is the old behaviour.
+std::atomic<uint32_t> c_victimCaMade{0}, c_victimCaNone{0}, c_noCaRaw{0};
+// KUBA 19 (host): the chance (0-100) an NPC fighting a partner's figure blocks his blow; KCDMP_KUBA_NPC_BLOCK_PCT=0 turns it off (as 0.63.9:
+// the engine never saw a block). Default 55: the guards of the field's fight defended none of 11 blows.
+uint8_t kuba_npc_block_pct() {
+    static int s = -1;
+    if (s < 0) {
+        char b[16] = {};
+        const DWORD n = GetEnvironmentVariableA("KCDMP_KUBA_NPC_BLOCK_PCT", b, sizeof b);
+        const int v = (n > 0 && n < sizeof b) ? std::atoi(b) : 55;
+        s = v < 0 ? 0 : (v > 100 ? 100 : v);
+        logf("KUBA-19 an NPC fighting a partner's figure blocks his blow %d%% of the time it can (KCDMP_KUBA_NPC_BLOCK_PCT; 0 = never, as 0.63.9)", s);
+    }
+    return static_cast<uint8_t>(s);
+}
+
+bool victim_ca_fix_on() {
+    static int s = -1;
+    if (s < 0) {
+        char b[16] = {};
+        const DWORD n = GetEnvironmentVariableA("KCDMP_VICTIM_CA", b, sizeof b);
+        s = (n == 3 && (b[0] == 'o' || b[0] == 'O') && (b[1] == 'f' || b[1] == 'F') && (b[2] == 'f' || b[2] == 'F')) ? 0 : 1;
+        if (!s) logf("WO173-HIT the victim combat actor fix is OFF for this game (KCDMP_VICTIM_CA=off): a blow on an NPC with no combat actor is refused as in 0.63.9");
+    }
+    return s == 1;
+}
 // WO-178 C4 (2): the engine's own stamina cost of a landed blow, per NPC and attack kind, and per kind alone (main thread).
 std::unordered_map<uint64_t, kcdmp::wo178rules::Ring> g_medNpc;
 std::unordered_map<int, kcdmp::wo178rules::Ring> g_medKind;
@@ -377,8 +408,25 @@ uint8_t do_real_hit(const uint8_t* body, size_t len, uint8_t* out, size_t cap, s
         wo165::Request rq{};
         rq.attackerEid = avatarEid; rq.victimEid = veid; rq.fields = f;
         rq.strikeForCall = strikeForCall;
+        rq.npcBlockPct = motion::is_avatar_eid(veid) ? 0 : kuba_npc_block_pct();   // KUBA 19: an NPC defends a partner's blow by chance
+        if (ab[24] & 0x10) rq.kubaVerdict = (ab[24] & 0x20) ? 2 : 1;   // KUBA 30 stage 2: the partner's engine judged it in his local duel
         rq.flags = wo165::kFlagSkipFilter | wo165::kFlagIntended | (g_reactOn.load() && !g_reactFaulted.load() ? wo165::kFlagReact : 0);
+        // the hit fix: a victim with no combat actor yet (not in a fight) gets one the engine's own way for this blow
+        bool hadCa = true;
+        if (victim_ca_fix_on() && !motion::is_avatar_eid(veid)) {
+            void* ca0 = nullptr; void* model0 = nullptr;
+            hadCa = motion::combat_parts(veid, false, &ca0, &model0);
+            rq.createVictimCa = !hadCa;
+        }
         rr = wo165::replay(rq);
+        if (!hadCa) {
+            void* ca1 = nullptr; void* model1 = nullptr;
+            const bool made = motion::combat_parts(veid, false, &ca1, &model1);
+            const uint32_t k = (made ? c_victimCaMade : c_victimCaNone).fetch_add(1) + 1;
+            if (k <= 50 || k % 100 == 0)
+                logf("WO173-HIT npc=%s had no combat actor (not in a fight): %s [n=%u]", name.c_str(),
+                     made ? "it got one the engine's own way, the engine judges this blow" : "it has none after the ask (not combat-capable, or the replay stopped earlier)", k);
+        }
         if (rr.reason != wo165::kOk) {
             fb = Fallback::Replay;
             static unsigned s_said = 0;
@@ -391,6 +439,13 @@ uint8_t do_real_hit(const uint8_t* body, size_t len, uint8_t* out, size_t cap, s
     hits::AttribResult ar{};
     uint8_t applied = 0;
     float stApplied = 0, hpApplied = 0;
+    // the hit fix: the victim has no combat actor and the engine gives it none -- its own engine can never judge this blow; when the
+    // joiner's game judged it (the blow carries his numbers), they are applied the capped raw way, as before WO-210 C.4
+    const bool rawForNoCa = victim_ca_fix_on() && fb == Fallback::Replay && rr.reason == wo165::kNoVictim && pre.victimFound && (st > 0.0f || hp > 0.0f);
+    if (rawForNoCa) {
+        const uint32_t k = c_noCaRaw.fetch_add(1) + 1;
+        if (k <= 50 || k % 100 == 0) logf("WO173-HIT npc=%s has no combat actor and gets none: the joiner's own numbers applied the capped raw way (st %.2f hp %.2f) [n=%u]", name.c_str(), st, hp, k);
+    }
     if (fb == Fallback::None) {
         // the engine applied the blow: only the victim-side history, the skirmish and (switch) the threat of WO-121's path run.
         // WO-210 C.4: the echo guard is told what the engine took, read now (the core applied it in the call), never the joiner's number --
@@ -419,8 +474,9 @@ uint8_t do_real_hit(const uint8_t* body, size_t len, uint8_t* out, size_t cap, s
         p.clientHit = rr.clientHit;
     } else if (routes_nowhere(fb)) {
         c_kept.fetch_add(1);   // WO-176 (A1): no engine, no raw blow -- the agent tells the joiner the fight is the story's
-    } else if (wo210::fix_on(wo210rules::kFixNoJoinerValues)) {
+    } else if (wo210::fix_on(wo210rules::kFixNoJoinerValues) && !rawForNoCa) {
         // WO-210 C.4: a blow the host's engine did not judge is not applied from the joiner's numbers (the twin keeps the capped raw path)
+        // (the hit fix: but a victim the engine can never judge -- no combat actor, none to be had -- takes them the capped raw way below)
         const uint32_t k = c_noValues.fetch_add(1) + 1;
         if (k <= 50 || k % 100 == 0)
             logf("WO210-BLOW npc=%s not applied: %s -- the host's engine judges the joiner's blows, his numbers are never applied [n=%u]", name.c_str(), fallback_name(fb), k);

@@ -7,6 +7,7 @@
 #include "wo210_rules.h"
 #include "wo210_kd.h"
 #include "wo203.h"
+#include "wo208.h"   // KUBA 30c: kuba_in_duel
 #include "wo173.h"
 #include "wo172.h"
 #include "wo165_rules.h"
@@ -401,7 +402,13 @@ void tick() {
         if (on) {
             npcdrive::BoundBody bb[kRows];
             const int n = npcdrive::bound_bodies(bb, kRows);
-            for (int i = 0; i < n; ++i) if (bb[i].eid && !motion::is_avatar_eid(bb[i].eid)) copies.insert(bb[i].eid);
+            // KUBA 30c: a copy in the local duel is judged by this engine (its own brain blocks; the verdict goes to the host)
+            // KUBA 33c (host): this world's own NPC bound for a partner's duel (KUBA 32) is no copy -- the host player's blows on it are
+            // this engine's (20.11: ten swings of the host on such an NPC were all "not judged here, sent to the host" -- to itself -- so
+            // none landed and none took its aggro)
+            for (int i = 0; i < n; ++i)
+                if (bb[i].eid && !motion::is_avatar_eid(bb[i].eid) && !wo208::kuba_in_duel(bb[i].eid) && !wo208::kuba_remote_duel(bb[i].eid))
+                    copies.insert(bb[i].eid);
         }
         rebuild(on, copies);
         contexts(fx_wanted(), copies, now);

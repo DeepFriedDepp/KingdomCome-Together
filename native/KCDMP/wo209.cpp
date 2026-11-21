@@ -74,8 +74,24 @@ std::string who(uint32_t eid) {
 // ---- A, the host: each NPC near a player, its opponent (op 136) -----------------------------------------------------------------
 // The NPCs within the owner stream's radius of the local player or a partner's figure (the list walked once a second); per body its combat
 // model's opponent (motion's read, read-only), sent when it changed and again every kOppResendS while it has one.
-struct HostOpp { uint8_t kind = kHostNone; uint32_t opp = 0; double sentAt = -1e9; bool told = false; };
+struct HostOpp { uint8_t kind = kHostNone; uint32_t opp = 0; double sentAt = -1e9; bool told = false; double cmOnAt = -1e9; bool cmSeen = false, staleSaid = false; };
 std::unordered_map<uint32_t, HostOpp> g_hostOpp;   // main thread
+// Stale opponent (after 0.63.9; field: a bandit who surrendered and sat tied kept the joiner's figure in his combat model's opponent
+// slot with combat mode off -- the joiner's copy of him stood in his fight for minutes, in combat stance at the joiner, barking, and the
+// joiner's own Henry stayed in combat). A person (not an animal) whose combat mode has been off for kOppOutOfCombatS has no opponent to
+// tell; a retarget's moment of combat mode 0 (WO-183: under 1.5 s) is inside the grace. KCDMP_OPP_COMBAT_GATE=off: as 0.63.9.
+constexpr double kOppOutOfCombatS = 2.0;
+std::atomic<uint32_t> c_oppStale{0};
+bool opp_gate_on() {
+    static int s = -1;
+    if (s < 0) {
+        char b[16] = {};
+        const DWORD n = GetEnvironmentVariableA("KCDMP_OPP_COMBAT_GATE", b, sizeof b);
+        s = (n == 3 && (b[0] | 0x20) == 'o' && (b[1] | 0x20) == 'f' && (b[2] | 0x20) == 'f') ? 0 : 1;
+        if (!s) logf("WO209-OPP the out-of-combat gate is OFF for this game (KCDMP_OPP_COMBAT_GATE=off): a stale opponent is told as in 0.63.9");
+    }
+    return s == 1;
+}
 std::vector<uint32_t> g_list;
 double g_listAt = -1e9;
 std::atomic<uint32_t> c_oppReads{0}, c_oppOut{0}, c_oppChanges{0};
@@ -122,9 +138,23 @@ uint8_t op_opp_read(const uint8_t* body, size_t len, uint8_t* out, size_t cap, s
         if (nl == 0 || nl > 63) continue;
         motion::ModelRead m{};
         c_oppReads.fetch_add(1);
-        const uint32_t opp = motion::read_model(eid, &m) && m.hasModel ? m.opponentEid : 0;
-        const uint8_t kind = host_kind(opp, me, opp != 0 && motion::is_avatar_eid(opp));
+        uint32_t opp = motion::read_model(eid, &m) && m.hasModel ? m.opponentEid : 0;
         HostOpp& h = g_hostOpp[eid];
+        // the stale-opponent gate: combat mode read for this body, a person, off for kOppOutOfCombatS -> nobody
+        if (opp && opp_gate_on() && (m.valid & motion::kMvCombatMode) && npcscan::body_kind(e) == 0) {
+            if (!h.cmSeen) { h.cmSeen = true; h.cmOnAt = now; }   // first sight: the grace starts now
+            if (m.combatMode) { h.cmOnAt = now; h.staleSaid = false; }
+            else if (now - h.cmOnAt >= kOppOutOfCombatS) {
+                const uint32_t k = c_oppStale.fetch_add(1) + 1;
+                if (!h.staleSaid) {
+                    h.staleSaid = true;
+                    logf("WO209-OPP host npc=%s is out of combat mode for %.1f s with %s still in its opponent slot: told as nobody (#%u reads)", nm,
+                         now - h.cmOnAt, who(opp).c_str(), k);
+                }
+                opp = 0;
+            }
+        } else { h.cmSeen = false; h.staleSaid = false; }   // nothing to judge by here: the grace starts afresh when there is
+        const uint8_t kind = host_kind(opp, me, opp != 0 && motion::is_avatar_eid(opp));
         const bool changed = !h.told || h.kind != kind || h.opp != opp;
         if (!h.told && kind == kHostNone) { h.told = true; continue; }   // a body that never fought: nothing to tell
         if (!opp_send_due(changed, now - h.sentAt, kind)) continue;
@@ -208,6 +238,37 @@ void twin_sample(double now) {
     }
 }
 
+// KUBA 14 (joiner 19:47-19:53, villagers attacked: the copies held in the local player's fight played their own combat footwork --
+// CombatMovement / CombatTurnBig / CombatIdle, 234 samples of it running at 3+ m/s with nothing on the skeleton -- while their host NPCs
+// fled (AIMovement), cowered or knelt (idle-state postures)). A host NPC whose FullBody runs no fight action (locomotion, a transition, an
+// idle state or its fidget) for kKubaNoFightS (4 s; 1.5 s released fighting guards, 20:09) is no fight here: the mirror neither engages the copy nor holds its combat mode, and an
+// engagement it made is released -- the owner then shows the host's flight or posture. KCDMP_KUBA_FLEE_RELEASE=off: as before.
+constexpr double kKubaNoFightS = 4.0;   // 20:07-20:17: the guards' own calm stretches in a fight reached 2.9 s (p99 2.8); a fleeing villager's p90 70 s
+std::unordered_map<uint32_t, double> g_kubaNoFightSince;   // main thread
+std::atomic<uint32_t> c_kubaFleeReleased{0}, c_kubaFleeSkipped{0};
+bool kuba_flee_on() {
+    static int s = -1;
+    if (s < 0) {
+        char v[16] = "";
+        const DWORD n = GetEnvironmentVariableA("KCDMP_KUBA_FLEE_RELEASE", v, sizeof v);
+        s = (n > 0 && n < sizeof v && (_stricmp(v, "off") == 0 || std::strcmp(v, "0") == 0)) ? 0 : 1;
+        logf("KUBA-14 a copy whose host NPC flees or cowers (no fight action %.1f s) is not held in the local fight: %s (KCDMP_KUBA_FLEE_RELEASE=off turns it off)",
+             kKubaNoFightS, s ? "on" : "OFF");
+    }
+    return s == 1;
+}
+// True while the host NPC's FullBody has run no fight action for kKubaNoFightS.
+bool kuba_host_not_fighting(uint32_t copy, double now) {
+    if (!kuba_flee_on()) return false;
+    uint8_t cls = 0; uint32_t frag = 0;
+    const bool have = wo208::host_fullbody(copy, &cls, &frag);
+    const bool calm = have && (cls == wo208rules::kClsAIMovement || cls == wo208rules::kClsMoveTransition || cls == wo208rules::kClsIdleState ||
+                               cls == wo208rules::kClsVariation);
+    if (!calm) { g_kubaNoFightSince.erase(copy); return false; }
+    auto it = g_kubaNoFightSince.try_emplace(copy, now).first;
+    return now - it->second >= kKubaNoFightS;
+}
+
 void mirror_tick(double now) {
     if (!on(kBitOppMirror)) {
         if (g_mirrorWasOn) {
@@ -230,15 +291,21 @@ void mirror_tick(double now) {
         }
         if (now - m.applyAt < kMirrorTickS) { ++it; continue; }
         m.applyAt = now;
+        const bool kubaCalm = kuba_host_not_fighting(copy, now);
+        if (kubaCalm && wo132::engaged(copy) && wo132::release_copy(copy, "KUBA-14: the host's NPC flees or cowers, it fights nobody here")) {
+            const uint32_t k = c_kubaFleeReleased.fetch_add(1) + 1;
+            if (k <= 40 || k % 100 == 0) logf("KUBA-14 released 0x%X from the local fight: its host NPC runs no fight action [n=%u]", copy, k);
+        }
         const Mirror step = mirror_step(m.kind, wo132::engaged(copy));
-        if (step == Mirror::EngageWish) {
+        if (step == Mirror::EngageWish && kubaCalm) c_kubaFleeSkipped.fetch_add(1);
+        else if (step == Mirror::EngageWish) {
             if (wo132::mirror_engage(copy, kMirrorEngageM, "mirror: the host's NPC fights your figure there")) c_engaged.fetch_add(1);
             else c_engageRefused.fetch_add(1);
         }
         // the copy joins his fight within one stream tick: combat mode held while the mirror holds it on him (WO-132's engagement hold,
         // refreshed here; the host's own combat state, op 2's, replaces the stand-in's guard when it comes). d7-defence: a copy's first
         // swings came while it was still out of combat -- its combat mode came with the host's combat state 1.5-2 s later -- refused or cut
-        if (mirror_holds_combat(m.kind, wo132::engaged(copy))) { motion::set_npc_engage(copy, true, nullptr, npcdrive::now_s()); c_combatHeld.fetch_add(1); }
+        if (!kubaCalm && mirror_holds_combat(m.kind, wo132::engaged(copy))) { motion::set_npc_engage(copy, true, nullptr, npcdrive::now_s()); c_combatHeld.fetch_add(1); }
         uint32_t have = 0;
         const bool match = step != Mirror::Clear && wo187::mirror_wish(copy, wish_kind(m.kind), m.target, &have);
         if (step == Mirror::Clear) wo187::mirror_wish(copy, 0, 0, nullptr);
@@ -434,6 +501,9 @@ bool on(uint32_t bit) { return (g_bits.load(std::memory_order_relaxed) & ~twin_o
 
 bool fix_on(uint32_t fixBit) { return (twin_off() & fixBit) == 0; }
 
+// KUBA 14: the same test for WO-132's own engage (op 2, the agent's): a calm host NPC's copy is not taken into the local fight again.
+bool kuba_calm_copy(uint32_t copy) { return kuba_host_not_fighting(copy, npcdrive::now_s()); }
+
 bool mirror_holds_player(uint32_t copy) {
     if (!on(kBitOppMirror)) return false;
     auto it = g_mirror.find(copy);
@@ -473,6 +543,9 @@ bool ai_in_his_fight(uint32_t copy) {
 } // namespace
 
 bool attack_ai_wants(uint32_t copy, uint8_t cls, uint32_t frag) {
+    // KUBA 32: never for a copy in the local duel -- its own brain swings; the host's state of its NPC is that very swing coming back
+    // (the host shows the copy's moves), and an attack started from it here would echo every swing
+    if (wo208::kuba_in_duel(copy)) return false;
     return on(kBitAttackAi) && cls == wo208rules::kClsCombatAnim && attack_frag(frag) && mirror_holds_player(copy) && wo132::engaged(copy)
            && resolve_ai_attack() != nullptr && ai_in_his_fight(copy);
 }
@@ -510,6 +583,7 @@ bool row_attack(uint32_t copy, const char* spec) {
     // aZ tag -- for every copy, owned or not: the row comes as the host's attack starts, the owner's state a stream poll later (the owner's
     // early path then finds the attack running: ai_attack_recent)
     if (!spec || !on(kBitAttackAi) || motion::is_avatar_eid(copy)) return false;
+    if (wo208::kuba_in_duel(copy)) return false;   // KUBA 32: its own brain swings (the host's row is its own swing coming back)
     const uint32_t frag = attack_frag_by_name(spec);
     if (!frag || !resolve_ai_attack()) return false;
     const bool holds = mirror_holds_player(copy), engaged = wo132::engaged(copy);
@@ -591,6 +665,7 @@ void ai_retry_tick(double now) {
 namespace { std::atomic<uint32_t> c_pairStart{0}, c_pairStartRefused{0}, c_pairMove{0}, c_pairMoveRefused{0}, c_pairHeld{0}; }
 
 bool paired_wants(uint32_t copy, uint32_t frag) {
+    if (wo208::kuba_in_duel(copy)) return false;   // KUBA 32: its own brain leads its paired moves
     return on(kBitPairedEngine) && paired_role(frag) != Paired::No && mirror_holds_player(copy) && wo132::engaged(copy);
 }
 
@@ -618,12 +693,12 @@ int status(char* out, int n) {
     const uint32_t ts = c_twinSamples.load(), tm = c_twinMatch.load();
     return std::snprintf(out, static_cast<size_t>(n), "w209 bits=0x%X twin_off=0x%X configured=%d | opp host reads=%u out=%u changes=%u | mirror off-samples=%u off-match=%u (%.1f %%) | mirror copies=%zu in=%u bad=%u "
                          "samples=%u match=%u (%.1f %%) engaged=%u combat_held=%u engage_refused=%u cleared=%u follows=%u follow_p50=%.0f ms follow_p90=%.0f ms | "
-                         "ai_attack %s calls=%u started=%u refused=%u not_hostile=%u out_of_fight=%u retried=%u retry_lapsed=%u row_await_mirror=%u row_not_held=%u faults=%u landed=%u missed=%u none=%u lock_on=%u/%u | paired start=%u start_refused=%u move=%u move_refused=%u held=%u",
+                         "ai_attack %s calls=%u started=%u refused=%u not_hostile=%u out_of_fight=%u retried=%u retry_lapsed=%u row_await_mirror=%u row_not_held=%u faults=%u landed=%u missed=%u none=%u lock_on=%u/%u | paired start=%u start_refused=%u move=%u move_refused=%u held=%u | kuba14 flee_released=%u engage_skipped=%u",
                          g_bits.load(), twin_off(), g_configured.load() ? 1 : 0, c_oppReads.load(), c_oppOut.load(), c_oppChanges.load(), ts, tm, ts ? 100.0 * tm / ts : 0.0, g_mirror.size(),
                          c_in.load(), c_bad.load(), s, m, s ? 100.0 * m / s : 0.0, c_engaged.load(), c_combatHeld.load(), c_engageRefused.load(), c_cleared.load(), c_follows.load(),
                          follow_p(0.5), follow_p(0.9), g_aiAttackState == 1 ? "found" : g_aiAttackState ? "NOT-found" : "unresolved", c_aiCalls.load(),
                          c_aiStarted.load(), c_aiRefused.load(), c_aiNotHostile.load(), c_aiOutOfFight.load(), c_aiRetried.load(), c_aiRetryLapsed.load(), c_rowAwaitMirror.load(), c_rowNotHeld.load(), c_aiFault.load(), c_aiLanded.load(), c_aiMissed.load(), c_aiNone.load(), c_lockOn.load(), c_lockSamples.load(), c_pairStart.load(),
-                         c_pairStartRefused.load(), c_pairMove.load(), c_pairMoveRefused.load(), c_pairHeld.load());
+                         c_pairStartRefused.load(), c_pairMove.load(), c_pairMoveRefused.load(), c_pairHeld.load(), c_kubaFleeReleased.load(), c_kubaFleeSkipped.load());
 }
 
 namespace {

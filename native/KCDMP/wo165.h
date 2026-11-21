@@ -46,6 +46,15 @@ struct Request {
     // put back right after, in the same call -- no frame sees it): the engine judges the victim's block only against a striking attacker,
     // and a partner's figure inside its own hit reaction has no strike window when his blow arrives (the old way: the capped raw path)
     bool strikeForCall = false;
+    // Hit fix (after 0.63.9): an NPC victim that has no combat actor yet (a townsman who never fought) gets one the engine's own way
+    // (C_Actor::GetOrCreateCombatActor, its own capability gates) for this blow -- the victim only, never the attacker. Without it the
+    // replay refused every blow on such an NPC (no-victim-combat-actor), and since WO-210 C.4 / E.2 a refused blow is applied nowhere.
+    bool createVictimCa = false;
+    // KUBA 19 (host): a partner's blow on an NPC that fights his figure -- the chance (0-100) the NPC defends it: the engine is told the
+    // victim blocks (hit-in +3, its block zone the blow's zone) and computes the block itself, exactly as WO-178 tells it for the player
+    uint8_t npcBlockPct = 0;
+    // KUBA 30 stage 2: the partner's own engine's verdict on this blow on an NPC his local duel drives (-1 none, 1 hit, 2 blocked)
+    int8_t kubaVerdict = -1;
 };
 
 enum Reason : uint8_t {
@@ -76,6 +85,8 @@ bool armed();
 bool off();                 // switched off by a fault this session
 const char* why();
 Result replay(const Request& rq);
+// KUBA 23 (host, main thread): a partner's figure starts a swing at this NPC -- it decides its block now and holds its guard up for the blow
+void kuba_swing_guard(uint32_t npcEid, uint32_t attackerEid);
 
 // the measured damage of a finished replay (the slot hook's watch): state 0 unknown seq, 1 pending, 2 measured, 3 merged into an earlier
 struct Damage { uint8_t state = 0; float health = 0, stamina = 0; bool victimLive = false; };

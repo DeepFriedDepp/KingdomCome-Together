@@ -84,6 +84,12 @@ public partial class GameBridge
         return true;
     }
 
+    // KUBA 30: the DLL's local-duel asks (op 140 kinds 2 / 3) and the copies in a duel now (name -> since)
+    private const byte KubaAskDuelOn = 226, KubaAskDuelOff = 227;   // 0.65 merge: 2, 3 are WO-213/215 asks
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, long> _kubaDuel = new(StringComparer.Ordinal);
+    private long _kubaDuelVerdictsDropped;
+    private bool KubaDuelActive(string name) => _kubaDuel.ContainsKey(name);
+
     /// <summary>The joiner, 4 times a second: the owner's watchdog asks (op 140) -- a copy holding a posture of its own its host NPC
     /// left, after a reseat that could not lay over it -- released the game's way, at most once per copy per 5 s.</summary>
     private async Task Wo210AsksTickAsync()
@@ -107,6 +113,16 @@ public partial class GameBridge
                 long kd = Interlocked.Increment(ref _w215DormantAsks);
                 if (kd <= 100 || kd % 50 == 0) Console.WriteLine($"MP-W215 dormant npc={name}: its host NPC's whole body is empty (dormant on the host) -> the mod parks the copy [n={kd}]");
                 _ = ExecLuaAsync($"if KCD2MP_W215Dormant then KCD2MP_W215Dormant(\"{EscapeLua(name)}\") end");
+                continue;
+            }
+            if (kind == KubaAskDuelOn || kind == KubaAskDuelOff)   // KUBA 30: the local duel's edges
+            {
+                bool on = kind == KubaAskDuelOn;
+                if (on) _kubaDuel[name] = now; else _kubaDuel.TryRemove(name, out _);
+                if (!on) await KubaDuelOverToHostAsync(name);   // KUBA 33: the host's NPC takes its own brain back now
+                _ = Task.Run(() => KubaDuelWeaponAsync(name, on));   // KUBA 33b: the host NPC's weapon in its hand, not its brain's fists
+                try { await ExecLuaAsync($"if KCD2MP_KubaDuel then KCD2MP_KubaDuel(\"{EscapeLua(name)}\", {(on ? 1 : 0)}, \"dll\") end"); }
+                catch (Exception ex) { Console.WriteLine($"KUBA-30 duel {(on ? "start" : "end")} npc={name} not sent to the mod: {ex.Message}"); }
                 continue;
             }
             if (kind != Protocol.Wo210AskRelease) continue;

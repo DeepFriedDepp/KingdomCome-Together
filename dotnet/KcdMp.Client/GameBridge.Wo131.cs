@@ -219,12 +219,51 @@ public partial class GameBridge
     /// <summary>1c: right before the host's death is applied to a copy, lift its guard.</summary>
     private async Task Wo131BeforeDeathAsync(string name)
     {
-        if (!_w131Guarded.TryRemove(name, out uint eid)) return;
+        // KUBA 9 (joiner 15:08-15:11): the 0x31 / 0x27 / owner-death routes apply one death at once. The first took the name
+        // here and waited at the pipe for the lift; the next found no name, applied ApplyDeath on the still-guarded copy (its
+        // imm buff left it at hp 1, alive) and the copy died 6-26 s later, upright. The second route now waits for the lift.
+        uint eid;
+        TaskCompletionSource? mine = null;
+        Task? pending = null;
+        lock (_kubaGuardOff)
+        {
+            if (_w131Guarded.TryRemove(name, out eid))
+            {
+                mine = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                _kubaGuardOff[name] = mine.Task;
+            }
+            else _kubaGuardOff.TryGetValue(name, out pending);
+        }
+        if (mine is null)
+        {
+            if (KubaDeathGuardWait && pending is not null)
+            {
+                Interlocked.Increment(ref _kubaGuardOffWaits);
+                try { await pending.WaitAsync(TimeSpan.FromSeconds(10)); } catch { }
+            }
+            return;
+        }
+        try { await Wo131GuardOffAsync(name, eid); }
+        finally
+        {
+            mine.TrySetResult();
+            lock (_kubaGuardOff) { _kubaGuardOff.TryRemove(new KeyValuePair<string, Task>(name, mine.Task)); }
+        }
+    }
+
+    private async Task Wo131GuardOffAsync(string name, uint eid)
+    {
         try { await _combat.Wo131CopyGuardAsync(false, eid); } catch { }
         await Wo132DiscardAsync(false, eid);
         if (_w132Engaged.TryRemove(name, out var eg)) { try { await _combat.Wo132EngageAsync(false, eg.Eid, default); } catch { } }
         Console.WriteLine($"MP-WO131 copy guard off {name}: the host's death is applied now, at the host's position");
     }
+
+    // KUBA 9: a guard lift in flight per name (a concurrent death route awaits it). Twin: KCDMP_KUBA_DEATH_GUARD_WAIT=off.
+    private readonly ConcurrentDictionary<string, Task> _kubaGuardOff = new(StringComparer.OrdinalIgnoreCase);
+    private long _kubaGuardOffWaits;
+    private static readonly bool KubaDeathGuardWait =
+        !string.Equals(Environment.GetEnvironmentVariable("KCDMP_KUBA_DEATH_GUARD_WAIT"), "off", StringComparison.OrdinalIgnoreCase);
 
     // -------------------------------------------------------------------- host
 

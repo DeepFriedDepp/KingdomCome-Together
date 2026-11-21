@@ -84,6 +84,16 @@ int wo209_tests(int* passed) {
     WCHECK(!owner_queue_full(-1) && !owner_queue_full(0) && !owner_queue_full(5), "room: the owner installs (an unreadable queue is no cap)");
     WCHECK(owner_queue_full(6) && owner_queue_full(10), "six queued: the owner waits (rc1-c2tavern-1: 11,004 overflows on one copy)");
 
+    // ---- the cap after 0.63.9: the copy's own queued actions are no reason to install nothing
+    WCHECK(!owner_queue_refuses(6) && !owner_queue_refuses(8) && owner_queue_refuses(9) && owner_queue_refuses(10),
+           "the owner stops one short of the engine's own limit, not at six");
+    WCHECK(!owner_queue_refuses(-1), "an unreadable queue is no cap");
+    WCHECK(owner_queue_crowded(0, 1) && owner_queue_crowded(8, 2) && !owner_queue_crowded(8, 0) && !owner_queue_crowded(6, 0),
+           "ours pending is withdrawn first; the copy's own six are left alone");
+    WCHECK(owner_queue_crowded(9, 0) && owner_queue_refuses(9),
+           "at the engine's own limit the owner installs nothing, whatever the queue is made of");
+    WCHECK(kEngineQueueLimit == 10 && kOwnerQueueCap < kEngineQueueLimit, "the engine's limit and 0.63.9's own cap (kept for the strict twin)");
+
     // ---- B without the owner: the swing row's fragment and zone
     WCHECK(attack_frag_by_name("CombatAttackGen, leftGuard+eZ1+aZ1+slash") == 897, "an attack row");
     WCHECK(attack_frag_by_name("CombatAttackSpecialGen, r_noweapon+aZ5+kick") == 906 && attack_frag_by_name("CombatAttackComboGen, x") == 937, "special and combo");

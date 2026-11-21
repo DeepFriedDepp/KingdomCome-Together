@@ -14,6 +14,9 @@
 #include "wo163.h"
 #include "wo187.h"
 #include "wo132.h"
+#include "wo195.h"   // KUBA 32: a dead NPC ends a partner's duel with it
+#include "script_context.h"   // KUBA 33: the duel NPC's brain kept in its fight
+#include "wo178.h"            // KUBA 33c: the host's role
 #include "wo209.h"
 #include "wo209_rules.h"
 #include "wo143.h"
@@ -593,6 +596,15 @@ struct OwnCopy {
     double unclogAt = -1e9;     // WO-217 A.1 #2: the last time its own stale actions were stopped
     double takeoverAt = -1e9;   // WO-218 C.3: the last time its own action was stopped off a placed activity
     uint32_t takeoverFrag = 0xFFFFFFFFu; int takeoverN = 0; double takeoverFirst = -1e9, takeoverMuteUntil = -1e9;   // C.3's back-off
+    double kubaWatchAt = 0, kubaEmptySince = -1, kubaFixAt = -1e9, kubaBackoff = 0;   // KUBA 11: the skeleton's own bind-pose watch
+    double kubaSeatCtxAt = -1;      // KUBA 40c: the copy's own engine sat / laid it (its seat context is there) -- -1: standing
+    double kubaSeatFailAt = -1e9;   // KUBA 40c: ours played nothing in that seat (not reopened for 30 s)
+    double kubaIdleNudgeAt = -1e9;  // KUBA 42b: the last idle asked for an empty full body
+    uint64_t kubaSeatNoteAct = 0;   // KUBA 40: the host action last told (one line per host action)
+    uint32_t kubaFixes = 0;
+    bool kubaFeet = false;   // KUBA 16
+    const void* kubaTransAct = nullptr; double kubaTransSince = -1; uint64_t kubaTransBlockHost = 0;   // KUBA 13: a walk transition held too long
+    const void* kubaTorsoAct = nullptr; double kubaTorsoSince = -1; const void* kubaTorsoStopped = nullptr;   // KUBA 29: a stuck arms overlay
 };
 std::atomic<uint32_t> c_emptyStretches{0};
 std::atomic<uint32_t> c_unclogs{0}, c_unclogStopped{0};   // WO-217 A.1 #2
@@ -616,6 +628,45 @@ std::atomic<uint32_t> c_oInstalls{0}, c_oRefusals{0}, c_oStale{0}, c_oWithdraws{
 std::string g_ownerOnly;
 double g_ownerDelayS = 0.38;
 bool g_ownerEnvRead = false;
+
+// ---- the animation's phase (after 0.63.9) ---------------------------------------------------------------------------------------
+// A copy's POSITION is rendered one interpolation delay behind the host (npc_drive: 120 ms at the bind, plus the jitter allowance in
+// use), and its animation state must be applied on the very frame the body shows that moment -- else the body slides first and the walk
+// starts a quarter second later, the host's swing lands on the copy long after its blow, and every stance change arrives late (the
+// field, 2026-11-14: positions 120 ms behind, animations 380 ms behind -- a 260 ms phase error on every copy, all the time).
+//   g_ownerDelayS stays what it was for the bench's own feed probe (KCDMP_TEST_W208_OWNER_DELAY_MS names it; the A.1 copy has no
+// stream of its own), and the live owner asks the writer for the body's own lag instead.
+// KCDMP_ANIM_PHASE=off in the game's environment: the owner waits g_ownerDelayS for every copy, as 0.63.9 did.
+constexpr double kBindDelayS = 0.12;   // npc_drive's own default (the bind asks for 120 ms: 1.2 x the 10 Hz emit period)
+std::atomic<uint32_t> c_phaseBodies{0};
+double g_phaseLast = 0;
+bool anim_phase_on() {
+    static int s = -1;
+    if (s < 0) {
+        const std::string v = env("KCDMP_ANIM_PHASE");
+        s = (v == "off" || v == "OFF" || v == "Off") ? 0 : 1;
+        if (!s) logf("WO208-PHASE off for this game (KCDMP_ANIM_PHASE=off): the owner waits %.0f ms for every copy, as 0.63.9", g_ownerDelayS * 1000.0);
+    }
+    return s == 1;
+}
+// How long after its arrival a state is applied on this copy: the body's own render lag, else the bench's own delay.
+double owner_delay_for(uint32_t eid) {
+    if (!anim_phase_on() || !g_ownerOnly.empty()) return g_ownerDelayS;   // the bench's A.1 feed copy keeps its own delay
+    // the writer's own lag for a bound body; a body it does not drive (a standing NPC the host streams nothing for, or the agent's own
+    // Lua writer) gets the bind's own interpolation delay, which both writers render with
+    double lag = kBindDelayS;
+    npcdrive::render_lag_s(eid, &lag);
+    // one line at the start and when the lag really moved, at most every 10 s (the jitter allowance slews all the time)
+    static double s_said = -1e9;
+    const double nowS = qpc_s();
+    if (c_phaseBodies.fetch_add(1) == 0 || (std::fabs(lag - g_phaseLast) > 0.05 && nowS - s_said > 10.0)) {
+        s_said = nowS;
+        g_phaseLast = lag;
+        logf("WO208-PHASE the owner applies the host's state %.0f ms after it arrives (this body's position is rendered that far behind; was %.0f ms)",
+             lag * 1000.0, g_ownerDelayS * 1000.0);
+    }
+    return lag;
+}
 
 const char* cls_name(uint8_t id) {
     switch (id) {
@@ -671,7 +722,217 @@ wo210rules::PFam pfam_of(uint32_t eid, uint8_t cls, uint32_t frag) {
 // The asks the agent drains (op 140): a copy whose own engine posture the hand-over could not lay over -- released the game's way.
 struct Ask { uint8_t kind; std::string name; };
 std::vector<Ask> g_asks;   // main thread
+std::unordered_set<uint32_t> g_kubaDuelEids;   // KUBA 30: copies in a local duel (main thread)
+std::unordered_set<uint32_t> g_kubaRemoteDuel;   // KUBA 30 stage 2 (host): its NPCs a partner's local duel drives (main thread)
 std::atomic<uint32_t> c_asksOut{0};
+// ---- the late stop (after 0.63.9) ------------------------------------------------------------------------------------------------
+// An action of ours withdrawn by its priority (0), or a base of ours handed over and left running (1), keeps its Interruptable flag:
+// when another action takes its scope Mannequin puts it back into the body's queue "to resume when possible" -- and at priority 0 or 1,
+// under the copy's own base, it never does. The owner dropped its reference after 5 s and forgot it; the action stayed in the queue
+// for good. Field (the joiner's animation probe): one more every 30-60 s on a tavern copy (a queue of 1 grew to 7 in 199 s; villagers
+// left 25 minutes before still carried four), until the owner's own cap (6 queued: nothing more installed, the copy just stands) and
+// then the engine's limit (10: "attempting to queue too many actions") were reached.
+// Now every action of ours the owner lets go of unfinished is followed here, one reference kept, until it finishes; one found pending
+// after it ran (or pending for 10 s) is ended the game's own way (IAction::Stop: the controller takes it out of the queue).
+// KCDMP_LATE_STOP=off in the game's environment: as 0.63.9.
+struct LateAct { uint32_t eid; void* act; double at; bool seen; double stoppedAt; };
+std::vector<LateAct> g_late;   // main thread
+std::atomic<uint32_t> c_lateTaken{0}, c_lateStopped{0}, c_lateFinished{0}, c_lateGone{0}, c_lateExpired{0}, c_lateNoStop{0};
+bool late_on() {
+    static int s = -1;
+    if (s < 0) {
+        const std::string v = env("KCDMP_LATE_STOP");
+        s = (v == "off" || v == "OFF" || v == "Off") ? 0 : 1;
+        if (!s) logf("WO208-LATE off for this game (KCDMP_LATE_STOP=off): a withdrawn action of ours is forgotten after 5 s as in 0.63.9");
+    }
+    return s == 1;
+}
+// Takes over the owner's one reference of `act` (the entity is alive: the caller checked).
+void late_take(uint32_t eid, void* act) {
+    if (!act) return;
+    uint32_t st = 0;
+    const bool readable = rd(act, 0x28, &st);
+    if (!late_on() || !readable || st >= 4 || g_late.size() >= 4096) { rttr::release_action(act); return; }
+    g_late.push_back({eid, act, qpc_s(), st == 2 || st == 3, -1.0});
+    c_lateTaken.fetch_add(1);
+}
+void late_tick(double now) {
+    static double s_at = 0, s_log = 0;
+    if (now - s_at < 0.25) return;
+    s_at = now;
+    for (size_t i = 0; i < g_late.size();) {
+        LateAct& e = g_late[i];
+        bool drop = false, release = true;
+        uint32_t st = 0;
+        void* ent = engine::entity_by_id(e.eid);
+        if (!ent) { drop = true; release = false; c_lateGone.fetch_add(1); }   // a body gone may have taken its controller: our reference is left (WO-202's rule)
+        else if (!rd(e.act, 0x28, &st) || st >= 4) { drop = true; c_lateFinished.fetch_add(1); }
+        else if (e.stoppedAt >= 0) { if (now - e.stoppedAt > 5.0) drop = true; }   // stopped: the controller ends it; our reference goes as the owner's does
+        else if (st == 2 || st == 3) { e.seen = true; if (now - e.at > 900.0) { drop = true; c_lateExpired.fetch_add(1); } }
+        else if (e.seen || now - e.at > 10.0) {
+            // pending: it ran and the engine put it back, or it never started -- nothing of ours waits in a queue we no longer drive
+            if (rttr::stop_action(e.act)) {
+                e.stoppedAt = now;
+                const uint32_t k = c_lateStopped.fetch_add(1) + 1;
+                if (k <= 60 || k % 100 == 0) {
+                    const char* nm = engine::entity_name(ent);
+                    logf("WO208-LATE npc=%s an action of ours was back in its queue %.1f s after the owner let it go (%s): stopped the game's own way [n=%u]",
+                         nm ? nm : "?", now - e.at, e.seen ? "it had run: the engine requeued it" : "it never started", k);
+                }
+            } else { drop = true; c_lateNoStop.fetch_add(1); }
+        }
+        if (drop) { if (release) rttr::release_action(e.act); g_late.erase(g_late.begin() + static_cast<std::ptrdiff_t>(i)); }
+        else ++i;
+    }
+    if (now - s_log > 60.0 && c_lateTaken.load() > 0) {
+        s_log = now;
+        logf("WO208-LATE status taken=%u stopped=%u finished=%u body_gone=%u expired=%u no_stop=%u watching=%zu", c_lateTaken.load(), c_lateStopped.load(),
+             c_lateFinished.load(), c_lateGone.load(), c_lateExpired.load(), c_lateNoStop.load(), g_late.size());
+    }
+}
+
+// The moonwalk reseat (after 0.63.9, wo210_rules.h Verdict::Sliding): KCDMP_SLIDE_RESEAT=off in the game's environment leaves the
+// watchdog as 0.63.9 had it (a dragged body with a gesture or a work animation on its full body is not a breach).
+bool slide_on() {
+    static int s = -1;
+    if (s < 0) {
+        const std::string v = env("KCDMP_SLIDE_RESEAT");
+        s = (v == "off" || v == "OFF" || v == "Off") ? 0 : 1;
+        if (!s) logf("WO210-STATE the moonwalk reseat is OFF for this game (KCDMP_SLIDE_RESEAT=off): as 0.63.9");
+    }
+    return s == 1;
+}
+
+// KUBA 10 (joiner 2026-11-15 15:51-15:58: 158 reseats, ~120 of them the same few copies every 1-2 s, every one "installed").
+// a) KCDMP_KUBA_FIDGET_OK=off: a copy's work fidget is a missing posture again (wo210_rules.h fidget_of_work).
+// b) KCDMP_KUBA_RESEAT_REINSTALL=off: the hand-over takes "ours already plays it" from the host action's id alone again -- an action of
+//    ours for that very host action that finished, or that another action pushed off the full body, made every reseat a no-op that
+//    still said "the host's state installed"; now it is withdrawn and the host's state installed anew.
+std::atomic<uint32_t> c_kubaFidgetOk{0}, c_kubaReinstall{0};
+bool kuba_switch(const char* name, int* cache, const char* what) {
+    if (*cache < 0) {
+        const std::string v = env(name);
+        *cache = (v == "off" || v == "OFF" || v == "Off") ? 0 : 1;
+        logf("KUBA-10 %s %s (%s=off turns it off)", what, *cache ? "on" : "OFF", name);
+    }
+    return *cache == 1;
+}
+bool kuba_fidget_on() { static int s = -1; return kuba_switch("KCDMP_KUBA_FIDGET_OK", &s, "a copy's work fidget counts as its work"); }
+// KUBA 11 (KCDMP_KUBA_TPOSE_FIX=off: watch and log only, never repair): a copy whose skeleton plays nothing on layer 0 shows the bind
+// pose (the player's "T-pose") while its Mannequin FullBody scope still names an action -- every detector of the mod reads the scope,
+// so none saw the field's T-poses (Kuba, 2026-11-15: 5+ marks a session, detectors 0). A clip stopped under a running action
+// (the Lua's ent:StopAnimation(0, 0) when a puppet is bound, WO121-GAIT "parked") leaves exactly that. Repair: the action ours withdrawn,
+// the host's state installed anew (the hand-over), the locomotion nudged when nothing could be installed.
+std::atomic<uint32_t> c_kubaTposeSeen{0}, c_kubaTposeFixed{0}, c_kubaTposeBack{0}, c_kubaTposeUnread{0};
+bool kuba_tpose_fix_on() { static int s = -1; return kuba_switch("KCDMP_KUBA_TPOSE_FIX", &s, "a copy in the bind pose (no animation on its skeleton) is repaired"); }
+// KUBA 43 (16:13 log: IdleToMove of ours, 0.5-1 s of T-pose before KUBA 13's clock cut it): a walk transition of ours in the bind pose
+bool kuba_trans_bind_on() { static int s = -1; return kuba_switch("KCDMP_KUBA_TRANS_BIND", &s, "a walk transition of ours in the bind pose is cut at once"); }
+// KUBA 45 (20:39 log: 1118 samples of an empty full body with exactly one action queued -- ours, at priority 1 -- never started; every
+// action at 2 or more installs; the copy's default facial expression holds its scope at 1 and is not interruptible): the base the owner
+// gives an empty body (the host's base fragment, the neutral idle) goes in at 2 -- the engine's own locomotion's priority; it stays
+// interruptible, so the copy's own base at 2 still takes the body over. KCDMP_KUBA_BASE_PRIO=off: priority 1 as before.
+bool kuba_base_prio_on() { static int s = -1; return kuba_switch("KCDMP_KUBA_BASE_PRIO", &s, "the owner's base for an empty body goes in at priority 2"); }
+int32_t base_priority() { return kuba_base_prio_on() ? 2 : kBasePriority; }
+// KUBA 12 (joiner 17:04-17:16 probe: Lying 16281/16294, SittingIdle 12897/12928, EatingMash, CampRazorSharpening, Sunbathing ... installed
+// by the owner as a combat action play NOTHING on the skeleton; the same postures as the engine's own idle state play) -- a fragment of
+// ours seen in the bind pose is learned and never installed by the owner again: the copy's own engine (its seat, WO-160) or its base shows.
+std::unordered_set<uint32_t> g_kubaDeadFrags;   // main thread
+std::unordered_map<uint32_t, int> g_kubaEmptyHits;   // main thread: bind-pose sightings per fragment of ours (learned at 3: one was a fluke -- 19:23-19:53 learned Leaning_Back_Loop, 0 of 990 empty before)
+std::atomic<uint32_t> c_kubaLearned{0}, c_kubaSkipped{0};
+bool kuba_learn_on() { static int s = -1; return kuba_switch("KCDMP_KUBA_LEARN_EMPTY", &s, "a fragment of ours that plays nothing is never installed again"); }
+// KUBA 13 (joiner 17:04-17:16 probe: 23 % of the moving copies' samples ran IdleToMove; its stretches median 1-2.6 s, p90 5-12 s, max
+// 26 s, ~730 m dragged in the start-to-walk pose -- the moonwalk): a walk transition (IdleToMove / MoveToIdle) on the full body past
+// kKubaTransMaxS while the body is dragged at walking speed is stopped, and the walk takes over (the host's base, the locomotion nudge).
+// KCDMP_KUBA_TRANS_CUT=off: as before.
+constexpr double kKubaTransMaxS = 0.9;
+std::atomic<uint32_t> c_kubaTransCut{0};
+bool kuba_trans_on() { static int s = -1; return kuba_switch("KCDMP_KUBA_TRANS_CUT", &s, "a walk transition held past 0.9 s on a dragged body is cut"); }
+std::atomic<uint32_t> c_kubaSeatAsks{0};
+// KUBA 18 is OFF by default since 16.11 (KCDMP_KUBA_SEAT_ASK=on turns it on): with it, no copy sat in two sessions (10:57, 11:20) --
+// each release met WO-211's loop guard ("re-seated N ms after its release", "a placement into the seat ... held back") and the seat never
+// came; without it (15.11 17:06, 19:23) the copies sat the engine's way (C_CallbackAction SitDown -> C_AnimActionIdleState SittingIdle).
+bool kuba_seat_ask_on() {
+    static int s = -1;
+    if (s < 0) {
+        const std::string v = env("KCDMP_KUBA_SEAT_ASK");
+        s = (v == "on" || v == "ON" || v == "On" || v == "1") ? 1 : 0;
+        logf("KUBA-10 a standing copy of a seated host NPC is re-seated the game's way (KUBA 18) %s (KCDMP_KUBA_SEAT_ASK=on turns it on)", s ? "on" : "OFF");
+    }
+    return s == 1;
+}
+// KUBA 22: a copy the ENGINE seated (or laid down) keeps its own posture loop -- the host's next posture loop of the same family (another
+// seated idle, the seated dialog pose) is not installed over it. 15.11 19:26: tzel_woman_9 seated by its engine, the host's IdleState
+// frag 10 installed over it and never started (30 stale reinstalls, 300 ms apart), then the T-pose and the standing copy; tzel_michal and
+// tzel_david: IngameDialogPose_SittingWithOrWithoutTable_Loop installed over their engine seat -> T-pose -> standing. One-shots (beer,
+// guest calls: C_CallbackAction) and dialog gestures still play; the host standing up still hands the copy over. KCDMP_KUBA_SEAT_KEEP=off.
+bool kuba_seat_keep_on() { static int s = -1; return kuba_switch("KCDMP_KUBA_SEAT_KEEP", &s, "a copy seated by its own engine keeps its seat loop (KUBA 22)"); }
+std::atomic<uint32_t> c_kubaSeatKeep{0};
+bool kuba_walk_feet_on() { static int s = -1; return kuba_switch("KCDMP_KUBA_WALK_FEET", &s, "an ordinary walking copy's feet get its rendered speed and direction (KUBA 17)"); }
+bool kuba_dead_frag(uint32_t frag) {
+    if (!kuba_learn_on() || g_kubaDeadFrags.empty() || !g_kubaDeadFrags.count(frag)) return false;
+    c_kubaSkipped.fetch_add(1);
+    return true;
+}
+bool kuba_reinstall_on() { static int s = -1; return kuba_switch("KCDMP_KUBA_RESEAT_REINSTALL", &s, "a reseat re-installs ours when it is off the body"); }
+// KUBA 40 (joiner 21.11 14:17, 0.65.2, KCDMP_KUBA_TPOSE_FIX=off): ttkc_woman_10's host NPC sat; the owner installed its IdleState
+// SittingIdle (frag 10) as ours on a copy standing -> layer 0 empty for 52 s (the T-pose); with KUBA 11 on it was swapped for an idle (the
+// copy stood). 0.63.9 probes: a seat loop as ours on a standing copy plays nothing (after MotionIdle 623/623 samples empty); the engine's
+// own IdleState SittingIdle after its own SitDown always plays (11092/11092) -- the seat (the bench as its context) is the engine's.
+// KUBA 40c (21.11 14:30): WO-216's join sweep suspended 569 brains at 14:30:28.47 -- ttkc_woman_10 sat (its own SittingIdle at .46),
+// the suspended brain ended its seat loop: its own MotionIdle on a body held in the seat = the T-pose. Its own SitDown later (14:33:19)
+// ended the same way (no brain to start the loop). So: a seat / lie loop (and the object loops below) is installed as ours ONLY on a copy
+// its own engine has seated (its seat context is there: its own SitDown / LieDown / a seated loop seen, no StandUp / walk since); on a
+// standing copy it is not installed (it stands, never the T-pose). KCDMP_KUBA_SEAT_ENGINE=off: as before.
+bool kuba_seat_engine_on() { static int s = -1; return kuba_switch("KCDMP_KUBA_SEAT_ENGINE", &s, "a seat / lie / object loop goes as ours only on a copy its engine seated (KUBA 40)"); }
+std::atomic<uint32_t> c_kubaSeatEngine{0}, c_kubaSeatCtx{0};
+// KUBA 40b: object-bound loops measured empty on copies when installed as ours (0.63.9 probes, f0 = 0 share): the dialog seat pose,
+// CampSnooze, EatingMashWaiting, Embroidery 100 %; Sunbathing, EatingMash, DiceNew_StartSuccess, CampRazorSharpening 98-99 %.
+bool kuba_object_loop_name(const std::string& n) {
+    static const char* const kLoops[] = {
+        "IngameDialogPose_SittingWithOrWithoutTable_Loop", "Quest_SittingSad", "CampSnoozeLoop", "EatingMash", "EatingMashWaiting",
+        "Embroidery", "Sunbathing", "DiceNew_StartSuccess", "DiceNew_TurnSuccess", "CampRazorSharpening", "HousekeeperSpindleLoop",
+        "HousekeeperBasketWeaving"};
+    for (const char* s : kLoops) if (n == s) return true;
+    return false;
+}
+// true = the host's posture is NOT installed as ours on this copy now
+bool kuba_seat_block(const OwnCopy& oc, uint32_t eid, uint8_t cls, uint32_t frag) {
+    // 21.11 14:44: ours SittingIdle / Lying played nothing in the engine's seat either (5 of 5 "FAILED") -- never installed
+    if (!kuba_seat_engine_on()) return false;
+    if (cls == kClsIdleState || cls == kClsVariation) {
+        const wo210rules::PFam f = pfam_of(eid, cls, frag);
+        if (f == wo210rules::PFam::Sitting || f == wo210rules::PFam::Lying) return true;
+    }
+    if (cls == kClsCallback) return false;   // one-shots (SitDown, StandUp, beer) still go
+    return kuba_object_loop_name(frag_name_of(eid, frag));
+}
+// the copy's own full body (not ours) read every 250 ms: its engine's seat context opens / closes
+void kuba_seat_ctx_watch(OwnCopy& oc, uint32_t eid, uint8_t cls, uint32_t frag, double now) {
+    const std::string n = frag_name_of(eid, frag);
+    const wo210rules::PFam f = pfam_of(eid, cls, frag);
+    const bool in = n == "SitDown" || n == "LieDown" || n == "CampSnoozeIn" || n == "EatingMashIn" ||
+                    n == "IngameDialogPose_SittingWithOrWithoutTable_In" || f == wo210rules::PFam::Sitting || f == wo210rules::PFam::Lying;
+    const bool out = n == "StandUp" || n == "GetUp" || f == wo210rules::PFam::Moving ||
+                     (n.size() > 3 && n.compare(n.size() - 3, 3, "Out") == 0);
+    if (in && oc.kubaSeatCtxAt < 0) {
+        oc.kubaSeatCtxAt = now;
+        const uint32_t k = c_kubaSeatCtx.fetch_add(1) + 1;
+        if (k <= 60 || k % 100 == 0) logf("KUBA-40 seat ctx npc=%s in (its own %s) -- the host's seat loop may go as ours [n=%u]", oc.name.c_str(), n.c_str(), k);
+    } else if (out && oc.kubaSeatCtxAt >= 0) {
+        oc.kubaSeatCtxAt = -1;
+        const uint32_t k = c_kubaSeatCtx.fetch_add(1) + 1;
+        if (k <= 60 || k % 100 == 0) logf("KUBA-40 seat ctx npc=%s out (its own %s) [n=%u]", oc.name.c_str(), n.c_str(), k);
+    }
+}
+void kuba_seat_engine_note(OwnCopy& oc, uint32_t eid, const HostScope* hs, const char* where) {
+    if (oc.kubaSeatNoteAct == hs->act) return;   // one line per host action
+    oc.kubaSeatNoteAct = hs->act;
+    const uint32_t n = c_kubaSeatEngine.fetch_add(1) + 1;
+    if (n <= 200 || n % 100 == 0)
+        logf("KUBA-40 seat engine npc=%s the host's %s/%s (%s) not installed: the copy stands, its engine has not seated it (%s) [n=%u]", oc.name.c_str(),
+             cls_name(hs->cls), frag_name_of(eid, hs->frag).c_str(), wo210rules::pfam_name(pfam_of(eid, hs->cls, hs->frag)), where, n);
+}
+
 void own_retire(OwnCopy& oc, Probe::Scope& s, double now, const char* why);
 bool is_ours(const OwnCopy& oc, const void* act) {
     if (!act) return false;
@@ -687,7 +948,7 @@ bool w215_give_base(uint32_t eid, OwnCopy& oc, double now) {
     if (neutral_idle(eid, &b)) {
         if (oc.baseAct && oc.baseFrag == b.frag) return true;
         void* ba = nullptr;
-        if (rttr::install_fragment(eid, b.frag, b.tags, kBasePriority, b.flags, &ba) == rttr::SwingResult::Ok && ba) {
+        if (rttr::install_fragment(eid, b.frag, b.tags, base_priority(), b.flags, &ba) == rttr::SwingResult::Ok && ba) {
             if (oc.baseAct) { rttr::stop_action(oc.baseAct); oc.retired.push_back({oc.baseAct, now}); }
             oc.baseAct = ba; oc.baseFrag = b.frag; oc.baseAt = now; oc.baseStarted = false;
             c_w215Bases.fetch_add(1, std::memory_order_relaxed);
@@ -700,6 +961,32 @@ bool w215_give_base(uint32_t eid, OwnCopy& oc, double now) {
     if (given) c_w215Bases.fetch_add(1, std::memory_order_relaxed);
     return given;
 }
+
+// ---- the queue cap (after 0.63.9, wo209_rules.h) ---------------------------------------------------------------------------------
+// KCDMP_QUEUE_CAP=strict in the game's environment: 0.63.9's own cap (any six queued actions, ours or the copy's own, stop the owner).
+bool queue_cap_strict() {
+    static int s = -1;
+    if (s < 0) {
+        const std::string v = env("KCDMP_QUEUE_CAP");
+        s = (v == "strict" || v == "STRICT" || v == "Strict") ? 1 : 0;
+        if (s) logf("WO208-QUEUE the strict queue cap is on for this game (KCDMP_QUEUE_CAP=strict): as 0.63.9");
+    }
+    return s == 1;
+}
+int ours_queued(const OwnCopy& oc, const wo187::QueueInfo& qi) {
+    int n = 0;
+    for (int i = 0; i < qi.nacts; ++i) if (is_ours(oc, qi.acts[i])) ++n;
+    return n;
+}
+// Is there a reason to withdraw our own pending action before installing anything?
+bool queue_cap_crowded(const OwnCopy& oc, const wo187::QueueInfo& qi) {
+    return queue_cap_strict() ? wo209rules::owner_queue_full(qi.n) : wo209rules::owner_queue_crowded(qi.n, ours_queued(oc, qi));
+}
+// After that withdraw: is the queue still so long that the engine itself would refuse?
+bool queue_cap_refuses(int queued) {
+    return queue_cap_strict() ? wo209rules::owner_queue_full(queued) : wo209rules::owner_queue_refuses(queued);
+}
+std::atomic<uint32_t> c_capRefused{0}, c_capPassed{0};
 
 // The host's current FullBody state installed the owner's way, in the same frame as the release of what it replaces: a base family as
 // our base action under the copy's own base (the copy's own base, when it comes, replaces it); any other family at the host's priority
@@ -715,19 +1002,44 @@ bool own_handover(uint32_t eid, OwnCopy& oc, double now, uint8_t path) {
     bool installed = false, neutral = false;
     // WO-211 C.2: a hand-over never queues behind a long queue (the field's seated copy: nine of our actions waiting behind its own look
     // actions, 3,712 overflows) -- ours still pending are withdrawn first (one pending action of ours per copy); still long: nothing new
-    if (wo211::on(wo211rules::kBitHandoverQueueCap) && wo209rules::owner_queue_full(wo187::queue_info(eid).n)) {
+    if (wo211::on(wo211rules::kBitHandoverQueueCap) && queue_cap_crowded(oc, wo187::queue_info(eid))) {
         for (auto& sc : oc.own) {
             uint32_t st = 0;
             if (sc.act && rd(sc.act, 0x28, &st) && st < 2) own_retire(oc, sc, now, "a long queue: one pending action of ours at a time");
         }
-        if (wo209rules::owner_queue_full(wo187::queue_info(eid).n)) {
+        if (queue_cap_refuses(wo187::queue_info(eid).n)) {
+            const uint32_t k = c_capRefused.fetch_add(1) + 1;
+            if (k <= 20 || k % 200 == 0)
+                logf("WO208-QUEUE npc=%s the hand-over installs nothing: %d actions queued, the engine refuses past %d [n=%u]", oc.name.c_str(),
+                     wo187::queue_info(eid).n, wo209rules::kEngineQueueLimit, k);
             wo211::note_handover_queue_full();
             wo210::note_handover(path, false, false);
             return false;
         }
+        c_capPassed.fetch_add(1);
     }
-    if (hs && !is_base(fam) && fam != Fam::Hold) {
-        if (oc.own[0].act && oc.own[0].hostAct == hs->act) installed = true;   // ours already plays it
+    // KUBA 40: a seat / lie / object loop on a copy its engine has not seated is never ours -- the base below (it stands)
+    const bool kubaObj = hs && kuba_seat_block(oc, eid, hs->cls, hs->frag);
+    if (kubaObj) kuba_seat_engine_note(oc, eid, hs, "hand-over: the neutral base");
+    if (hs && !is_base(fam) && fam != Fam::Hold && !kuba_dead_frag(hs->frag) && !kubaObj) {
+        bool oursOn = oc.own[0].act && oc.own[0].hostAct == hs->act;
+        if (oursOn && kuba_reinstall_on()) {
+            // KUBA 10b: "ours plays it" only while ours holds the full body, or still waits its turn (decide()'s stale rule has that one)
+            uint32_t st = 0;
+            const bool readable = rd(oc.own[0].act, 0x28, &st);
+            wo187::ScopeInfo cur[16];
+            const int ncur = wo187::read_all_scopes(eid, cur, 16);
+            const bool onFull = ncur > 0 && cur[0].ok && !cur[0].empty && cur[0].act == oc.own[0].act;
+            if (!onFull && !(readable && st < 2)) {
+                own_retire(oc, oc.own[0], now, "the reseat: ours is no longer on the full body");
+                oursOn = false;
+                const uint32_t k = c_kubaReinstall.fetch_add(1) + 1;
+                if (k <= 40 || k % 100 == 0)
+                    logf("KUBA-10 reinstall npc=%s frag=%u status=%u%s -- the host's state installed anew (#%u)", oc.name.c_str(), hs->frag, st,
+                         readable ? "" : "(unreadable)", k);
+            }
+        }
+        if (oursOn) installed = true;   // ours already plays it
         else {
             void* act = nullptr;
             const rttr::SwingResult r = rttr::install_fragment(eid, hs->frag, hs->tags, hs->prio, hs->flags, &act);
@@ -751,7 +1063,7 @@ bool own_handover(uint32_t eid, OwnCopy& oc, double now, uint8_t path) {
                 if (nk && oc.baseAct && oc.baseFrag == b.frag) given = true;   // ours already plays that idle
                 else if (nk) {
                     void* ba = nullptr;
-                    const rttr::SwingResult rb = rttr::install_fragment(eid, b.frag, b.tags, kBasePriority, b.flags, &ba);
+                    const rttr::SwingResult rb = rttr::install_fragment(eid, b.frag, b.tags, base_priority(), b.flags, &ba);
                     if (rb == rttr::SwingResult::Ok && ba) {
                         if (oc.baseAct) { rttr::stop_action(oc.baseAct); oc.retired.push_back({oc.baseAct, now}); }
                         oc.baseAct = ba; oc.baseFrag = b.frag; oc.baseAt = now; oc.baseStarted = false;
@@ -794,7 +1106,7 @@ bool own_handover(uint32_t eid, OwnCopy& oc, double now, uint8_t path) {
         else if (have && oc.baseAct && oc.baseFrag == b.frag) installed = true;   // ours already plays that base
         else if (have) {
             void* act = nullptr;
-            const rttr::SwingResult r = rttr::install_fragment(eid, b.frag, b.tags, kBasePriority, b.flags, &act);
+            const rttr::SwingResult r = rttr::install_fragment(eid, b.frag, b.tags, base_priority(), b.flags, &act);
             if (r == rttr::SwingResult::Ok && act) {
                 if (oc.baseAct) { rttr::stop_action(oc.baseAct); oc.retired.push_back({oc.baseAct, now}); }
                 oc.baseAct = act; oc.baseFrag = b.frag; oc.baseAt = now; oc.baseStarted = false;
@@ -828,6 +1140,10 @@ void own_retire(OwnCopy& oc, Probe::Scope& s, double now, const char* why) {
 
 void own_apply(uint32_t eid, OwnCopy& oc, int cm, const HostScope hsc[2], const bool have[2], double now) {
     c_oApplied.fetch_add(1);
+    if (!g_kubaDuelEids.empty() && g_kubaDuelEids.count(eid)) {   // KUBA 30: a local duel -- its own brain animates it, the owner waits
+        oc.breachSince = -1;
+        return;
+    }
     if (g_ownerOnly.empty()) {
         // every copy: its combat state stays WO-132's / WO-187's (the engagement, the guard hold from the host's fights) -- not the owner's
     } else if (cm) {
@@ -868,10 +1184,48 @@ void own_apply(uint32_t eid, OwnCopy& oc, int cm, const HostScope hsc[2], const 
     // seven the next night, 125,205 in the smoke. (rc2 left a seated copy to the game instead: no overflow, but the beds' sleepers stood
     // -- the owner's own install is what lays them down: lying matched 0 % of 2,716 samples, rc1 ~100 %.)
     const wo187::QueueInfo qi = wo187::queue_info(eid);
-    const bool queueFull = wo209::fix_on(wo209rules::kFixOwnerQueueCap) && wo209rules::owner_queue_full(qi.n);
+    // the cap, after 0.63.9 (wo209_rules.h): the copy's own queued actions are no reason to install nothing -- only the engine's own limit is
+    const bool queueFull = wo209::fix_on(wo209rules::kFixOwnerQueueCap) && queue_cap_refuses(qi.n);
+    // KUBA 29 (joiner, 17.11 14:17-14:25: "it often gets stuck in a fighting animation of the arms" -- the TorsoDetail overlay held a
+    // one-shot for 42 s (CombatAttackFailedPB, SpawnedEnemy_002) and 75 s (WeaponHolsterFull, SpawnedEnemy_001)): a TorsoDetail action
+    // that is no loop and holds over 3 s is stopped the game's own way (once per action). KCDMP_KUBA_TORSO_UNSTICK=off.
+    {
+        static int s_torso = -1;
+        if (kuba_switch("KCDMP_KUBA_TORSO_UNSTICK", &s_torso, "a stuck arms overlay (TorsoDetail one-shot over 3 s) is stopped (KUBA 29)")) {
+            const void* tAct = nullptr; uint32_t tFrag = 0;
+            for (int i = 0; i < cn; ++i)
+                if (cs[i].ok && !cs[i].empty && !std::strcmp(cs[i].name, "TorsoDetail")) { tAct = cs[i].act; tFrag = cs[i].frag; break; }
+            if (tAct != oc.kubaTorsoAct) { oc.kubaTorsoAct = tAct; oc.kubaTorsoSince = now; }
+            else if (tAct && tAct != oc.kubaTorsoStopped && now - oc.kubaTorsoSince > 3.0) {
+                const std::string tn = frag_name_of(eid, tFrag);
+                const bool loop = tn.find("Loop") != std::string::npos || tn.find("Idle") != std::string::npos || tn.find("VAR") != std::string::npos;
+                // 29b (17.11 14:39-14:45: 12 of its 13 stops were WeaponHolsterFull -- the weapon's own holster state, not a stuck move;
+                // "no better, a bit worse"): only a combat move (Combat..., no guard pose) is stopped
+                const bool combatMove = tn.rfind("Combat", 0) == 0 && tn.find("Guard") == std::string::npos;
+                if (!loop && combatMove) {
+                    oc.kubaTorsoStopped = tAct;
+                    const bool ok = rttr::stop_action(const_cast<void*>(tAct));
+                    static uint32_t s_n = 0;
+                    if (++s_n <= 60 || s_n % 100 == 0)
+                        logf("KUBA-29 npc=%s TorsoDetail %s held %.1f s -> stopped %s [n=%u]", oc.name.c_str(), tn.c_str(), now - oc.kubaTorsoSince,
+                             ok ? "the game's way" : "-- the stop is not in this build", s_n);
+                }
+            }
+        }
+    }
     if (queueFull) c_oQueueFull.fetch_add(1);
+    // KUBA 27 (joiner, 17.11 13:44-13:56: 18 of the host's 23 blocks reached the copy, but up to 2 s late -- each late one while the copy
+    // ran its own AI attack at the local player (WO-209), during which the owner installs nothing on the full body): the host NPC's block
+    // (CombatBlock...) goes on the copy at once, over its own attack (one priority above it). KCDMP_KUBA_BLOCK_FIRST=off.
+    static int s_blockFirst = -1;
+    const bool blockFirstOn = kuba_switch("KCDMP_KUBA_BLOCK_FIRST", &s_blockFirst, "the host NPC's block goes on its copy over the copy's own attack (KUBA 27)");
+    bool kubaBlockFirst = false;
+    if (blockFirstOn && (aiRuns || shot) && have[0]) {
+        const std::string bn = frag_name_of(eid, hsc[0].frag);
+        kubaBlockFirst = bn.rfind("CombatBlock", 0) == 0;
+    }
     for (int k = 0; k < 2; ++k) {
-        if ((shot || aiRuns || rowRuns) && k == 0) { wo217::place_note(oc.ep217, wo217::Note::Held, shot ? "one-shot" : aiRuns ? "its-own-attack" : "row"); continue; }
+        if ((shot || aiRuns || rowRuns) && k == 0 && !kubaBlockFirst) { wo217::place_note(oc.ep217, wo217::Note::Held, shot ? "one-shot" : aiRuns ? "its-own-attack" : "row"); continue; }
         const HostScope* hs = have[k] ? &hsc[k] : nullptr;
         const Fam fam = hs ? fam_of(eid, hs->cls, hs->frag) : Fam::Empty;
         Probe::Scope& o = oc.own[k];
@@ -879,6 +1233,7 @@ void own_apply(uint32_t eid, OwnCopy& oc, int cm, const HostScope hsc[2], const 
         if (o.act) {
             view.have = true; view.hostAct = o.hostAct; view.ageS = now - o.queuedAt;
             rd(o.act, 0x24, &view.prio);
+            if (k == 0 && kubaBlockFirst && hs && view.prio == hs->prio + 1) view.prio = hs->prio;   // KUBA 27: our +1 is not a step to undo
             rd(o.act, 0x28, &view.status);
             if (view.status == 2 || view.status == 3) o.started = true;
             if (o.started && view.status < 2) view.status = 2;
@@ -941,9 +1296,58 @@ void own_apply(uint32_t eid, OwnCopy& oc, int cm, const HostScope hsc[2], const 
                     }
                 }
                 if (queueFull) { if (k == 0) wo217::place_note(oc.ep217, wo217::Note::QueueFull, qi.first); break; }   // the host's action waits for room (the queue cap above)
+                if (k == 0 && kuba_dead_frag(hs->frag)) break;   // KUBA 12: plays nothing on a copy
+                if (k == 0 && oc.kubaTransBlockHost && hs->act == oc.kubaTransBlockHost) break;   // KUBA 13: the transition just cut
+                if (k == 0 && kuba_seat_block(oc, eid, hs->cls, hs->frag)) {   // KUBA 40: plays nothing as ours on a copy not seated by its engine
+                    if (o.act) own_retire(oc, o, now, "KUBA-40: not seated by its engine");
+                    kuba_seat_engine_note(oc, eid, hs, "install");
+                    // KUBA 42: a host NPC sitting / lying, its copy standing on its own (or empty): its brain seats / lays it
+                    {
+                        const wo210rules::PFam hf42 = pfam_of(eid, hs->cls, hs->frag);
+                        if ((hf42 == wo210rules::PFam::Sitting || hf42 == wo210rules::PFam::Lying) && cn > 0 && cs[0].ok &&
+                            (cs[0].empty || (!is_ours(oc, cs[0].act) && pfam_of(eid, class_id(cs[0].action), cs[0].frag) == wo210rules::PFam::Standing)))
+                            wo216::kuba_seat_wake(eid, oc.name.c_str());
+                        // KUBA 42b (15:57 Trosky: the host's SitDown / LieDown played as ours, then nothing -- the full body EMPTY, the T-pose
+                        // 893 samples): an empty full body gets the locomotion's idle (it stands) until its engine seats it
+                        if (cn > 0 && cs[0].ok && cs[0].empty && now - oc.kubaIdleNudgeAt >= 2.0) {
+                            oc.kubaIdleNudgeAt = now;
+                            const bool ok = motion::request_idle_pulse(eid);
+                            static uint32_t s_n = 0;
+                            if (++s_n <= 60 || s_n % 100 == 0)
+                                logf("KUBA-42 empty npc=%s the host %s, nothing on its full body -> the idle %s [n=%u]", oc.name.c_str(),
+                                     wo210rules::pfam_name(hf42), ok ? "asked" : "refused", s_n);
+                        }
+                    }
+                    break;
+                }
+                // KUBA 22: the engine's own seat (or bed) loop stays under the host's next loop of the same posture
+                if (k == 0 && kuba_seat_keep_on() && hs->cls != kClsCallback && hs->cls != kClsDialogAnim && cn > 0 && cs[0].ok && !cs[0].empty &&
+                    !is_ours(oc, cs[0].act)) {
+                    const uint8_t ccls = class_id(cs[0].action);
+                    if (ccls == kClsIdleState || ccls == kClsVariation || ccls == kClsCallback) {
+                        using wo210rules::PFam;
+                        const PFam cf = pfam_of(eid, ccls, cs[0].frag);
+                        const PFam hf = pfam_of(eid, hs->cls, hs->frag);
+                        if ((cf == PFam::Sitting || cf == PFam::Lying) && hf == cf) {
+                            if (o.act) own_retire(oc, o, now, "KUBA-22: the copy's engine posture stays");
+                            const uint32_t n = c_kubaSeatKeep.fetch_add(1) + 1;
+                            if (n <= 40 || n % 200 == 0)
+                                logf("KUBA-22 seat keep npc=%s %s by its engine (%s/%s) -- the host's %s/%s not installed over it [n=%u]", oc.name.c_str(),
+                                     wo210rules::pfam_name(cf), cs[0].action, frag_name_of(eid, cs[0].frag).c_str(), cls_name(hs->cls), frag_name_of(eid, hs->frag).c_str(), n);
+                            break;
+                        }
+                    }
+                }
                 if (o.act) own_retire(oc, o, now, "the host's next action");
                 void* act = nullptr;
-                const rttr::SwingResult r = rttr::install_fragment(eid, hs->frag, hs->tags, hs->prio, hs->flags, &act);
+                const bool overAi = k == 0 && kubaBlockFirst;   // KUBA 27: one priority above the copy's own attack
+                const rttr::SwingResult r = rttr::install_fragment(eid, hs->frag, hs->tags, overAi ? hs->prio + 1 : hs->prio, hs->flags, &act);
+                if (overAi) {
+                    static uint32_t s_n = 0;
+                    if (++s_n <= 60 || s_n % 100 == 0)
+                        logf("KUBA-27 block first npc=%s frag=%s over its own %s -> %s [n=%u]", oc.name.c_str(), frag_name_of(eid, hs->frag).c_str(),
+                             aiRuns ? "AI attack" : "one-shot", rttr::swing_result_name(r), s_n);
+                }
                 if (r == rttr::SwingResult::Ok && act) {
                     o.act = act; o.hostAct = hs->act; o.frag = hs->frag; o.prio = hs->prio; o.queuedAt = now; o.started = false;
                     if (k == 0) wo217::place_note(oc.ep217, wo217::Note::InstallOk);
@@ -1014,13 +1418,13 @@ void own_apply(uint32_t eid, OwnCopy& oc, int cm, const HostScope hsc[2], const 
             motion::combat_mode_of(eid, &c);
             if (hb) {
                 void* act = nullptr;
-                const rttr::SwingResult r = rttr::install_fragment(eid, hb->frag, hb->tags, kBasePriority, hb->flags, &act);
+                const rttr::SwingResult r = rttr::install_fragment(eid, hb->frag, hb->tags, base_priority(), hb->flags, &act);
                 if (r == rttr::SwingResult::Ok && act) { oc.baseAct = act; oc.baseFrag = hb->frag; how = "the host's base fragment installed"; }
                 else how = rttr::swing_result_name(r);
             } else if (wo214::on(wo214rules::kBitOwnerBase) && !c && neutral_idle(eid, &nb)) {
                 // WO-214 C.1 (owner_base): no host base known -- the copy's own neutral idle (the field's 3 "no host base to give it" stood empty)
                 void* act = nullptr;
-                const rttr::SwingResult r = rttr::install_fragment(eid, nb.frag, nb.tags, kBasePriority, nb.flags, &act);
+                const rttr::SwingResult r = rttr::install_fragment(eid, nb.frag, nb.tags, base_priority(), nb.flags, &act);
                 if (r == rttr::SwingResult::Ok && act) {
                     oc.baseAct = act; oc.baseFrag = nb.frag; oc.baseAt = now; oc.baseStarted = false;
                     how = "the copy's neutral idle installed (no host base)";
@@ -1039,7 +1443,7 @@ void own_apply(uint32_t eid, OwnCopy& oc, int cm, const HostScope hsc[2], const 
         uint32_t st = 0;
         const bool alive = engine::entity_by_id(eid) != nullptr;
         if (!alive || !rd(oc.retired[i].act, 0x28, &st) || st >= 4 || now - oc.retired[i].at > 5.0) {
-            if (alive) rttr::release_action(oc.retired[i].act);
+            if (alive) late_take(eid, oc.retired[i].act);   // the late stop: unfinished -> followed until it ends (finished or unreadable: released there)
             oc.retired.erase(oc.retired.begin() + static_cast<std::ptrdiff_t>(i));
         } else ++i;
     }
@@ -1096,6 +1500,116 @@ void own_apply(uint32_t eid, OwnCopy& oc, int cm, const HostScope hsc[2], const 
             }
         } else empty_close(oc, now, !cs[0].empty ? "an-action-again" : wo172::copy_dead(eid) ? "dead" : "beyond-60m");
     }
+    // KUBA 11: the skeleton's own bind-pose watch -- every 250 ms, layer 0's animation count; none for 0.3 s on a living, standing copy
+    // is the T-pose the player sees. Told (KUBA-TPOSE) with what the Mannequin scope claims, and repaired at most every 1 s (backed off
+    // to 4 s while the same stretch lasts).
+    if (now - oc.kubaWatchAt >= 0.25) {
+        oc.kubaWatchAt = now;
+        void* ent = engine::entity_by_id(eid);
+        const int f0 = ent ? motion::skel_fifo_count(ent, 0) : -1;
+        const bool skip = wo172::copy_dead(eid) || wo210kd::held_down(eid);
+        // KUBA 40c: the copy's engine seat context, from its own full body; a body of its own in the bind pose for 0.5 s while its host NPC
+        // sits / lies is a body held in its seat with its loop gone (the suspended brain) -- the context is there, the host's loop may go;
+        // ours in that seat still empty after 3 s: the context is closed again (not reopened for 30 s; the copy gets the base)
+        if (!skip && kuba_seat_engine_on() && cn > 0 && cs[0].ok) {
+            const bool oursFb = !cs[0].empty && is_ours(oc, cs[0].act);
+            if (!cs[0].empty && !oursFb) kuba_seat_ctx_watch(oc, eid, class_id(cs[0].action), cs[0].frag, now);
+            const wo210rules::PFam hf = oc.hostHave ? pfam_of(eid, oc.host.cls, oc.host.frag) : wo210rules::PFam::Empty;
+            const bool hostSeat = hf == wo210rules::PFam::Sitting || hf == wo210rules::PFam::Lying;
+            if (f0 == 0 && oc.kubaEmptySince >= 0 && hostSeat) {
+                if (!oursFb && oc.kubaSeatCtxAt < 0 && now - oc.kubaEmptySince >= 0.5 && now - oc.kubaSeatFailAt >= 30.0) {
+                    oc.kubaSeatCtxAt = now;
+                    const uint32_t k = c_kubaSeatCtx.fetch_add(1) + 1;
+                    if (k <= 60 || k % 100 == 0) logf("KUBA-40 seat ctx npc=%s in (its own body held in its seat, the bind pose %.0f ms) [n=%u]", oc.name.c_str(), (now - oc.kubaEmptySince) * 1000.0, k);
+                } else if (oursFb && oc.kubaSeatCtxAt >= 0 && now - oc.kubaEmptySince >= 3.0 && now - oc.kubaSeatCtxAt >= 3.0) {
+                    oc.kubaSeatCtxAt = -1; oc.kubaSeatFailAt = now;
+                    const uint32_t k = c_kubaSeatCtx.fetch_add(1) + 1;
+                    logf("KUBA-40 seat ctx npc=%s FAILED: ours %s plays nothing in its seat either -- closed for 30 s [n=%u]", oc.name.c_str(), frag_name_of(eid, cs[0].frag).c_str(), k);
+                    if (oc.own[0].act) own_retire(oc, oc.own[0], now, "KUBA-40: ours plays nothing in the seat");
+                    own_handover(eid, oc, now, wo210rules::kPathUnknown);
+                }
+            }
+        }
+        // KUBA 16: the combat footwork's feet (motion.cpp writes the copy's travel speed / angle while its full body runs it)
+        // KUBA 17 (Kuba, 20:49 fight: "the NPCs move their legs and no moonwalk -- now the same for ordinary NPCs walking"): the copy's own
+        // locomotion (CAnimActionAIMovement: MotionIdle / MotionMovement / turns) gets the same travel speed and angle from its rendered move
+        // -- WO-201's walking copies stepped at half rate (their walk's parameters held from its first blend). KCDMP_KUBA_WALK_FEET=off: as 16.
+        {
+            const bool live = !skip && cn > 0 && cs[0].ok && !cs[0].empty;
+            // 17b (21:07-21:13): only a human copy's own walk (fragment MotionMovement) -- a dog's locomotion (no fragment names: 351 samples
+            // of nothing on its skeleton) and standing idles (ttkc_woman_15's MotionIdle, 41 s of nothing) are left to the engine
+            const bool footwork = live && (std::strcmp(cs[0].action, "C_CombatAnimActionMovement") == 0 ||
+                                           (kuba_walk_feet_on() && std::strcmp(cs[0].action, "CAnimActionAIMovement") == 0 &&
+                                            frag_name_of(eid, cs[0].frag) == "MotionMovement"));
+            if (footwork != oc.kubaFeet) { motion::kuba_set_combat_feet(eid, footwork); oc.kubaFeet = footwork; }
+        }
+        // KUBA 13: the walk transition's clock
+        if (!skip && kuba_trans_on() && cn > 0 && cs[0].ok && !cs[0].empty) {
+            const std::string tn = frag_name_of(eid, cs[0].frag);
+            const bool walkTrans = tn == "IdleToMove" || tn == "MoveToIdle";
+            if (!walkTrans) { oc.kubaTransAct = nullptr; oc.kubaTransSince = -1; }
+            else {
+                if (oc.kubaTransAct != cs[0].act) { oc.kubaTransAct = cs[0].act; oc.kubaTransSince = now; }
+                float mps = 0;
+                const bool dragged = motion::body_render_speed(eid, &mps) && mps >= 0.6f;
+                // KUBA 43: ours in the bind pose for 0.3 s goes at once (16:13: IdleToMove of ours, 0.5-1 s of T-pose before 13 cut it)
+                const bool bindOurs = kuba_trans_bind_on() && f0 == 0 && oc.kubaEmptySince >= 0 && now - oc.kubaEmptySince >= 0.3
+                                      && is_ours(oc, cs[0].act);
+                if ((dragged && now - oc.kubaTransSince >= kKubaTransMaxS) || bindOurs) {
+                    const bool oursT = is_ours(oc, cs[0].act);
+                    if (oursT && oc.own[0].act == cs[0].act) { oc.kubaTransBlockHost = oc.own[0].hostAct; own_retire(oc, oc.own[0], now, "KUBA-13: a walk transition held too long"); }
+                    else rttr::stop_action(const_cast<void*>(cs[0].act));
+                    bool walked = false;
+                    if (oc.hostHave && is_base(family_of_id(oc.host.cls, oc.host.frag))) walked = own_handover(eid, oc, now, wo210rules::kPathUnknown);
+                    if (!walked) walked = motion::request_idle_pulse(eid);
+                    const uint32_t k = c_kubaTransCut.fetch_add(1) + 1;
+                    if (k <= 60 || k % 100 == 0)
+                        logf("KUBA-13 cut npc=%s %s (%s) held %.0f ms at %.2f m/s -> %s [n=%u]", oc.name.c_str(), tn.c_str(), oursT ? "ours" : "its own",
+                             (now - oc.kubaTransSince) * 1000.0, mps, walked ? "the walk installed" : "stopped only", k);
+                    oc.kubaTransAct = nullptr; oc.kubaTransSince = -1;
+                }
+            }
+        }
+        if (f0 < 0) c_kubaTposeUnread.fetch_add(1);
+        if (f0 != 0 || skip) {
+            if (f0 > 0 && oc.kubaEmptySince >= 0 && oc.kubaFixes > 0) {
+                const uint32_t k = c_kubaTposeBack.fetch_add(1) + 1;
+                if (k <= 60 || k % 100 == 0)
+                    logf("KUBA-TPOSE back npc=%s layer0=%d after %.0f ms (%u repair(s)) [n=%u]", oc.name.c_str(), f0, (now - oc.kubaEmptySince) * 1000.0, oc.kubaFixes, k);
+            }
+            oc.kubaEmptySince = -1; oc.kubaFixes = 0; oc.kubaBackoff = 0;
+        } else {
+            if (oc.kubaEmptySince < 0) oc.kubaEmptySince = now;
+            if (now - oc.kubaEmptySince >= 0.3 && now - oc.kubaFixAt >= 1.0 + oc.kubaBackoff) {
+                const bool first = oc.kubaFixes == 0;
+                const char* fbCls = (cn > 0 && cs[0].ok && !cs[0].empty) ? cs[0].action : "-";
+                const std::string fbName = (cn > 0 && cs[0].ok && !cs[0].empty) ? frag_name_of(eid, cs[0].frag) : std::string("-");
+                const bool ours = cn > 0 && cs[0].ok && !cs[0].empty && is_ours(oc, cs[0].act);
+                const char* hostFam = oc.hostHave ? wo210rules::pfam_name(pfam_of(eid, oc.host.cls, oc.host.frag)) : "-";
+                bool fixed = false;
+                if (ours && kuba_learn_on() && cs[0].frag && first && ++g_kubaEmptyHits[cs[0].frag] >= 3 && g_kubaDeadFrags.insert(cs[0].frag).second) {
+                    c_kubaLearned.fetch_add(1);
+                    logf("KUBA-12 learned frag=%u (%s) plays nothing on a copy -- the owner never installs it again", cs[0].frag, fbName.c_str());
+                }
+                if (kuba_tpose_fix_on()) {
+                    if (oc.own[0].act) own_retire(oc, oc.own[0], now, "KUBA-11: the bind pose (nothing on the skeleton)");
+                    if (oc.baseAct) { rttr::stop_action(oc.baseAct); oc.retired.push_back({oc.baseAct, now}); oc.baseAct = nullptr; oc.baseFrag = 0; }
+                    fixed = own_handover(eid, oc, now, wo210rules::kPathUnknown);
+                    if (!fixed) fixed = motion::request_idle_pulse(eid);
+                    if (fixed) c_kubaTposeFixed.fetch_add(1);
+                }
+                if (first) c_kubaTposeSeen.fetch_add(1);
+                const uint32_t k = c_kubaTposeSeen.load();
+                if (oc.kubaFixes < 3 && (k <= 200 || k % 50 == 0))
+                    logf("KUBA-TPOSE npc=%s layer0=0 for %.0f ms full_body=%s/%s (%s) host=%s queue=%d -> %s (#%u, stretch repair %u)", oc.name.c_str(),
+                         (now - oc.kubaEmptySince) * 1000.0, fbCls, fbName.c_str(), ours ? "ours" : "its own", hostFam, qi.n,
+                         !kuba_tpose_fix_on() ? "watch only (KCDMP_KUBA_TPOSE_FIX=off)" : fixed ? "the host's state installed anew" : "nothing installed", k, oc.kubaFixes + 1);
+                ++oc.kubaFixes;
+                oc.kubaFixAt = now;
+                oc.kubaBackoff = oc.kubaBackoff <= 0 ? 0.5 : (oc.kubaBackoff * 2 > 3.0 ? 3.0 : oc.kubaBackoff * 2);
+            }
+        }
+    }
     // WO-210 A.5 the watchdog: every 250 ms, the copy's full body against the host NPC's current family (wo210_rules.h check()); a breach
     // that outlasts its threshold is reseated through the hand-over and told (WO210-STATE reseat), charged to the copy's last exit path
     if (wo210::on(wo210rules::kBitStateAlways) && now - oc.watchAt >= wo210rules::kWatchEveryS && cn > 0 && cs[0].ok) {
@@ -1109,7 +1623,10 @@ void own_apply(uint32_t eid, OwnCopy& oc, int cm, const HostScope hsc[2], const 
             trans = now - oc.transSince <= kTransitionMaxS;
         } else oc.transFrag = 0xFFFFFFFFu;
         const bool mod = shot || aiRuns || row_holds(eid, now) || copyF == PFam::Combat || copyF == PFam::Paired;
-        Verdict v = check(copyF, hostF, trans, mod, !wo210::fix_on(kFixPostureOtherGrace));
+        // the moonwalk: is the body being dragged along this screen right now (the gait's own smoothed speed)?
+        float slideMps = 0;
+        const bool bodyMoving = slide_on() && motion::body_render_speed(eid, &slideMps) && slideMps >= kSlideMps;
+        Verdict v = check(copyF, hostF, trans, mod, !wo210::fix_on(kFixPostureOtherGrace), bodyMoving);
         if (have[0] && hsc[0].cls == kClsNone) { if (oc.hostEmptySince < 0) oc.hostEmptySince = now; } else oc.hostEmptySince = -1;   // WO-215 D.1
         if (!have[0] && v != Verdict::Empty) v = Verdict::Ok;   // no host state to judge a posture by: only an empty body counts
         // the same fragment is the same body, whatever class plays it (the owner installs the host's idle-state postures through a combat
@@ -1137,6 +1654,12 @@ void own_apply(uint32_t eid, OwnCopy& oc, int cm, const HostScope hsc[2], const 
             }
         }
         if (v == Verdict::MissingPosture) wo213::note_missing_check();
+        // KUBA 10a: the copy's work fidget (GuardVAR, SellerLoop_VAR ...) is the work its host NPC does, not a missing posture
+        if (v == Verdict::MissingPosture && kuba_fidget_on() && !cs[0].empty &&
+            fidget_of_work(class_id(cs[0].action) == kClsVariation, frag_name_of(eid, cs[0].frag).c_str(), hostF)) {
+            v = Verdict::Ok;
+            c_kubaFidgetOk.fetch_add(1);
+        }
         wo210::note_check(static_cast<uint8_t>(v));
         if (v == Verdict::Ok) { oc.breachSince = -1; oc.breach = 0; oc.reseatBackoff = 0; }
         else {
@@ -1149,6 +1672,7 @@ void own_apply(uint32_t eid, OwnCopy& oc, int cm, const HostScope hsc[2], const 
                 if (path == kPathUnknown && v == Verdict::MissingPosture) path = kPathInstallPending;
                 if (path == kPathUnknown && (v == Verdict::StalePosture || v == Verdict::StaleDead) && copysOwn) path = kPathOwnPosture;
                 if (path == kPathUnknown && v == Verdict::PostureOther) path = kPathInstallPending;   // the host's gesture not shown yet
+                if (path == kPathUnknown && v == Verdict::Sliding && copysOwn) path = kPathOwnPosture;   // the moonwalk: its own animation
                 // WO-214 C.1: an empty body no exit of ours explains is the copy's own engine's (its own action ended with nothing after)
                 if (path == kPathUnknown && v == Verdict::Empty && wo214::on(wo214rules::kBitOwnerBase)) path = kPathEmptyOwn;
                 const bool line215 = wo215::on(wo215rules::kBitActivityLine);
@@ -1228,11 +1752,26 @@ void own_apply(uint32_t eid, OwnCopy& oc, int cm, const HostScope hsc[2], const 
                 const bool ok = own_handover(eid, oc, now, path);
                 // the copy's own engine posture (its NPC state's bed, seat or workstation: an idle state at priority 3) is over any base
                 // of ours: its stance is released the game's own way by the agent (op 140), at most every 5 s
-                if ((v == Verdict::StalePosture || v == Verdict::StaleDead) && copysOwn && now - oc.askedAt >= 5.0 && g_asks.size() < 64) {
+                if ((v == Verdict::StalePosture || v == Verdict::StaleDead || v == Verdict::Sliding) && copysOwn && now - oc.askedAt >= 5.0 && g_asks.size() < 64) {
                     oc.askedAt = now;
                     g_asks.push_back({1, oc.name});
                 }
-                wo210::note_reseat(oc.name.c_str(), cs[0].empty ? "empty" : (std::string(pfam_name(copyF)) + (copysOwn ? "(its own)" : "(ours)")).c_str(),
+                // KUBA 18 (joiner 21:08-21:13: while the host's NPC sat, its copy stood 72 % of the samples -- ttkc_man_16 "placed=sitting@..."
+                // by WO-160 from 21:09:52, standing, reseated every 9 s with nothing that sits it: the seated fragments played through ours
+                // show nothing (KUBA 12), and a paused copy never carries out a stance set on it). The reverse case: the host's NPC sits or
+                // lies, its copy stands on its own -- its stance is released the game's way (op 140) so WO-160's next placement seats it the
+                // engine's own way (WO-211: "the copy was let go, WO-160 sat it down again"), at most every 10 s. KCDMP_KUBA_SEAT_ASK=off.
+                else if (v == Verdict::MissingPosture && copysOwn && (hostF == PFam::Sitting || hostF == PFam::Lying) && kuba_seat_ask_on() &&
+                         now - oc.askedAt >= 10.0 && g_asks.size() < 64) {
+                    oc.askedAt = now;
+                    g_asks.push_back({1, oc.name});
+                    const uint32_t k = c_kubaSeatAsks.fetch_add(1) + 1;
+                    if (k <= 60 || k % 100 == 0)
+                        logf("KUBA-18 seat npc=%s stands while its host NPC %s -- its stance released for WO-160 to seat it again [n=%u]", oc.name.c_str(),
+                             hostF == PFam::Sitting ? "sits" : "lies", k);
+                }
+                wo210::note_reseat(oc.name.c_str(), cs[0].empty ? "empty" : (std::string(pfam_name(copyF)) + (copysOwn ? "(its own)" : "(ours)") +
+                                   (v == Verdict::Sliding ? ",sliding@" + std::to_string(static_cast<int>(slideMps * 100.0f)) + "cm/s" : "")).c_str(),
                                    pfam_name(hostF), path, held, ok);
                 oc.breachSince = now;   // asked again after another threshold, backed off while the same breach outlasts the reseats (1 s .. 8 s)
                 oc.reseatBackoff = oc.reseatBackoff <= 0 ? 0.75 : (oc.reseatBackoff * 2 > 8.0 ? 8.0 : oc.reseatBackoff * 2);
@@ -1264,6 +1803,7 @@ void own_release(uint32_t eid, OwnCopy& oc, double now, const char* why, uint8_t
     wo217::place_close(eid, oc.name.c_str(), oc.ep217, now, "let go");
     g_postureHeld.erase(eid);   // WO-213 E.3: a copy the owner lets go of is the position writer's again
     empty_close(oc, now, "let-go");   // WO-214 C.1's instrument
+    if (oc.kubaFeet) { motion::kuba_set_combat_feet(eid, false); oc.kubaFeet = false; }   // KUBA 16
     const bool alive = engine::entity_by_id(eid) != nullptr;
     // WO-210 A.2 (paths 2, 12, 13, 14): the host's current base -- or the body's neutral idle when the host's state is a posture or not
     // known -- installed now under the copy's own base and left running when we let go: the copy's own engine replaces it once it queues
@@ -1286,12 +1826,12 @@ void own_release(uint32_t eid, OwnCopy& oc, double now, const char* why, uint8_t
             uint32_t st = 0;
             if (deadBody) { /* only the reference */ }
             else if (hand && rd(s.act, 0x28, &st) && st < 2) rttr::stop_action(s.act); else wr_prio(s.act, kWithdrawnPriority);
-            rttr::release_action(s.act);
+            if (deadBody) rttr::release_action(s.act); else late_take(eid, s.act);   // KUBA: the late stop
         }
         s = Probe::Scope{};
     }
-    if (oc.baseAct) { if (alive) { if (!hand && !deadBody) rttr::stop_action(oc.baseAct); rttr::release_action(oc.baseAct); } oc.baseAct = nullptr; }
-    for (auto& r : oc.retired) if (alive) rttr::release_action(r.act);
+    if (oc.baseAct) { if (alive) { if (!hand && !deadBody) rttr::stop_action(oc.baseAct); if (deadBody) rttr::release_action(oc.baseAct); else late_take(eid, oc.baseAct); } oc.baseAct = nullptr; }
+    for (auto& r : oc.retired) if (alive) { if (deadBody) rttr::release_action(r.act); else late_take(eid, r.act); }
     oc.retired.clear();
     if (oc.held && alive) motion::set_npc_guard_hold(eid, false, nullptr, npcdrive::now_s());
     wo210::note_release(path);
@@ -1362,7 +1902,7 @@ void owner_tick(double now) {
         // from the local player were owned here with no full-body action the engine plays at that distance (empty: a T-pose as they come
         // into view). The owner drives the copies near the local player; a farther one is its own engine's and the old writers', as with
         // the owner off (owner_near_only)
-        if (nearOnly) {
+        if (nearOnly && !g_kubaRemoteDuel.count(eid)) {   // KUBA 30 stage 2: a partner's duel is driven at any distance from this player
             float cp[3]{};
             const float d = engine::entity_world_pos(e, cp) ? std::sqrt((cp[0] - me[0]) * (cp[0] - me[0]) + (cp[1] - me[1]) * (cp[1] - me[1])) : -1.0f;
             const auto ow = g_owned.find(eid);
@@ -1427,7 +1967,7 @@ void owner_tick(double now) {
         // the newest state at least one stream delay old
         // WO-213 E.1: the owner applies a state the same delay after its arrival as the copy's position is played out (the old 0.38 s
         // when the play-out is off or not known yet)
-        double ownerDelay = g_ownerDelayS;
+        double ownerDelay = owner_delay_for(eid);   // KUBA: the anim phase (WO-213 E.1 below overrides it when on)
         if (wo213::on(wo213rules::kBitPlayoutAdaptive)) { const double pd = npcdrive::playout_delay_s(eid); if (pd > 0) ownerDelay = pd; }
         int pick = -1;
         for (int i = 0; i < static_cast<int>(v.size()); ++i) if (now - v[i].at >= ownerDelay) pick = i;
@@ -1531,7 +2071,9 @@ void target_watch_tick() {
 
 void probe_tick() {
     fault::guarded_silent([] { target_watch_tick(); });
+    fault::guarded_silent([] { kuba_remote_tick(); });   // KUBA 32 (host): the partners' duels on their NPCs
     { const double t = qpc_s(); fault::guarded_silent([t] { owner_tick(t); }); }   // A.2
+    { const double t = qpc_s(); fault::guarded_silent([t] { late_tick(t); }); }    // the late stop
     if (!g_p.tried) probe_init();
     if (!g_p.host && !g_p.joiner) return;
     const double now = qpc_s();
@@ -1613,6 +2155,711 @@ int owner_rows_status(char* out, int n) {
                          c_rowHeldFrames.load());
 }
 
+// KUBA 30 stage 2, op 142 (the joiner): its copies in a local duel, as the host's NPCs are streamed (op 132) plus their position --
+// every call, every duel body (the host drives its NPC from this). [count:1] then per body [nameLen:1][name][x:4f][y:4f][z:4f][yaw:4f]
+// [cm:1][nsc:1] nsc x kWireScope. body: [op][max]
+std::atomic<uint32_t> c_kubaDuelReads{0};
+uint8_t op_kuba_duel_read(const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t* outLen) {
+    if (len != 2 || cap < 1) return wo163::kRBadRequest;
+    const int max = body[1] ? body[1] : 1;
+    size_t o = 1;
+    int count = 0;
+    for (uint32_t eid : g_kubaDuelEids) {
+        if (count >= max) break;
+        void* e = engine::entity_by_id(eid);
+        const char* nm = e ? engine::entity_name(e) : nullptr;
+        float p[3]{};
+        if (!nm || !engine::entity_world_pos(e, p)) continue;
+        const size_t nl = std::strlen(nm);
+        if (nl == 0 || nl > 63) continue;
+        const float yaw = npcdrive::entity_yaw(e);
+        bool cm = false;
+        motion::combat_mode_of(eid, &cm);
+        wo187::ScopeInfo sc[10];
+        const int n = wo187::read_all_scopes(eid, sc, 10);
+        uint8_t rec[2 * kWireScope];
+        uint64_t sig = 0;
+        int nsc = 0;
+        for (int i = 0; i < n && nsc < 2; ++i) {
+            const uint8_t which = !std::strcmp(sc[i].name, "FullBody") ? 0 : !std::strcmp(sc[i].name, "UpperBody") ? 1 : 255;
+            if (which == 255) continue;
+            if (put_scope(sc[i], which, rec + nsc * kWireScope, &sig)) ++nsc;
+        }
+        const size_t need = 1 + nl + 16 + 2 + static_cast<size_t>(nsc) * kWireScope + kKubaDuelExt;
+        if (o + need > cap) break;
+        out[o] = static_cast<uint8_t>(nl); std::memcpy(out + o + 1, nm, nl); o += 1 + nl;
+        std::memcpy(out + o, p, 12); std::memcpy(out + o + 12, &yaw, 4); o += 16;
+        out[o] = static_cast<uint8_t>(cm ? wo210rules::kCmCombat : 0); out[o + 1] = static_cast<uint8_t>(nsc); o += 2;
+        std::memcpy(out + o, rec, static_cast<size_t>(nsc) * kWireScope); o += static_cast<size_t>(nsc) * kWireScope;
+        // KUBA 32: the copy's own guard -- its block held, its guard and attack zones (wire: table id + 1, 0 = none), as its brain has them
+        motion::NpcCombat nc{};
+        const bool ncOk = motion::read_npc_combat(eid, &nc) && nc.hasCa;
+        out[o] = static_cast<uint8_t>(ncOk && nc.block ? 1 : 0);
+        out[o + 1] = static_cast<uint8_t>(ncOk && nc.guardZone >= 0 ? nc.guardZone + 1 : 0);
+        out[o + 2] = static_cast<uint8_t>(ncOk && nc.guardStance >= 0 ? nc.guardStance + 1 : 0);
+        out[o + 3] = static_cast<uint8_t>(ncOk && nc.atkZone >= 0 ? nc.atkZone + 1 : 0);
+        out[o + 4] = 0xFF; out[o + 5] = 0;
+        o += kKubaDuelExt;
+        ++count;
+    }
+    c_kubaDuelReads.fetch_add(1);
+    out[0] = static_cast<uint8_t>(count);
+    *outLen = o;
+    return wo163::kROk;
+}
+
+// KUBA 30 stage 2, op 143 (the host): its NPC <name> is in a partner's local duel (on) or no more (off) -- the owner drives it from the
+// partner's states (op 133, any distance), the swing guard and the block roll leave it alone. body: [op][on:1][nameLen:1][name] ->
+// [eid:4] (0 = no such NPC here)
+// ---- KUBA 32 (host): the brain goes where the fight is --------------------------------------------------------------------------
+// Kuba, 19.11 ("not two brains beating each other in a random sequence: one fight, the same on both screens, like a normal game"): an
+// NPC fighting only a partner has ONE brain -- his copy's, on his machine (KUBA 30, no lag for the player who fights). This world's NPC
+// is that brain's body here: its own combat automation off (it neither swings nor blocks on its own -- the writer's engagement hold, the
+// figures' own path), its brain NOT paused (its target, its weapon, its senses stay), its position the partner's copy's (the native
+// writer, bound by the agent), its combat mode, guard zone and block his copy's (State2 through the engagement hold), and every move his
+// copy's brain starts -- an attack, a combo's next swing, a feint, a dodge -- installed here as the very same fragment with the same tags
+// and priority, one render delay after it arrived (the delay the position is shown with, so move and place stay together). Hit and
+// block reactions are not copied: the partner's blows come with his engine's verdict and the host's replay plays them (KUBA 30 stage 2).
+// The host player's own blow on such an NPC, or its brain turning to him, takes it back at once: automation on, its target the host
+// player the engine's way, the agent unbinds it and tells the partner (W203 kind 13) to end his duel.
+//   KCDMP_KUBA_REMOTE_REPLAY=off: the partner's moves are not installed (position and guard only).
+namespace {
+struct KubaRState { double at = 0; uint8_t cm = 0, flags = 0, gz = 0, gs = 0, az = 0; bool haveFb = false; uint8_t fb[kWireScope]{}; };
+struct KubaRemote {
+    std::string name;
+    uint8_t src = 0;
+    uint32_t figEid = 0;                 // KUBA 33: the partner's figure here (held in combat mode, the NPC's target)
+    uint32_t retargets = 0;
+    double startAt = 0, lastFrameAt = 0, logAt = 0, oppAt = 0, tgtAt = 0;
+    std::vector<KubaRState> q;
+    uint32_t lastPartnerAct = 0;
+    void* ours = nullptr; uint32_t oursFrag = 0;
+    std::vector<Probe::Retired> retired;
+    uint32_t installs = 0, refusals = 0, skipped = 0, frames = 0, blockEdges = 0;
+    bool blockWas = false, haveState = false;
+    KubaRState last{};
+};
+std::unordered_map<uint32_t, KubaRemote> g_kubaRemote;   // main thread
+std::vector<std::string> g_kubaTaken;                     // main thread: NPCs taken back here, for the agent (op 153's answer)
+std::mutex g_kubaHostBlowMx;
+std::vector<uint32_t> g_kubaHostBlows;                    // any thread -> main thread
+std::unordered_set<uint32_t> g_kubaReleased;              // joiner, main thread: copies the host took back
+std::atomic<uint32_t> c_kubaRInstalls{0}, c_kubaRRefusals{0}, c_kubaRTaken{0}, c_kubaRFrames{0};
+
+bool kuba_replay_on() {
+    static int s = -1;
+    if (s < 0) {
+        const std::string v = env("KCDMP_KUBA_REMOTE_REPLAY");
+        s = (v == "off" || v == "OFF" || v == "Off" || v == "0") ? 0 : 1;
+        logf("KUBA-32 a partner's duel copy's own moves are installed on this world's NPC %s (KCDMP_KUBA_REMOTE_REPLAY=off turns it off)", s ? "on" : "OFF");
+    }
+    return s == 1;
+}
+
+void kuba_retire_ours(uint32_t eid, KubaRemote& r, double now) {
+    if (!r.ours) return;
+    uint32_t st = 0;
+    if (rd(r.ours, 0x28, &st) && st < 2) rttr::stop_action(r.ours);   // still waiting: never starts
+    else if (st < 4) wr_prio(r.ours, kWithdrawnPriority);              // running: the next move takes the body now (a combo's next swing)
+    r.retired.push_back({r.ours, now});
+    r.ours = nullptr; r.oursFrag = 0;
+    (void)eid;
+}
+
+// The NPC is this world's own again. aggroHost: its target becomes the host player (his blow, or its brain's own turn to him).
+void kuba_remote_end(uint32_t eid, const char* why, bool aggroHost) {
+    auto it = g_kubaRemote.find(eid);
+    const bool alive = engine::entity_by_id(eid) != nullptr;
+    std::string name = it != g_kubaRemote.end() ? it->second.name : std::string("?");
+    double held = it != g_kubaRemote.end() ? qpc_s() - it->second.startAt : 0;
+    uint32_t inst = 0, refused = 0, skipped = 0, frames = 0, figEid = 0, retargets = 0;
+    if (it != g_kubaRemote.end()) {
+        KubaRemote& r = it->second;
+        inst = r.installs; refused = r.refusals; skipped = r.skipped; frames = r.frames; figEid = r.figEid; retargets = r.retargets;
+        motion::kuba_hold_figure_combat(r.figEid, false);   // KUBA 33
+        if (alive) {
+            if (r.ours) late_take(eid, r.ours);   // a swing in flight finishes as it is
+            for (auto& x : r.retired) late_take(eid, x.act);
+        }
+        r.ours = nullptr; r.retired.clear();
+        g_kubaRemote.erase(it);
+    }
+    g_kubaRemoteDuel.erase(eid);
+    g_copyStates.erase(eid);
+    motion::kuba_set_combat_feet(eid, false);
+    // its own combat AI back BEFORE the hold goes (the hold's release clears the guard request; the AI holds the fight itself then -- no
+    // sheathe and draw again), then the hold
+    bool autoOn = false, target = false;
+    if (alive) {
+        void* ca = nullptr; void* model = nullptr;
+        if (motion::combat_parts(eid, false, &ca, &model)) {
+            autoOn = motion::kuba_npc_automation(eid, true);
+            if (aggroHost) {
+                // KUBA 33c: pinned to him the game's way too (the brain's own pick does not take him back from the figure)
+                target = kuba_aggro_to(eid, kPlayerEntity, "the host player took it from the partner's duel");
+            } else if (figEid) {
+                // KUBA 33: the partner's duel over (his copy's brain is back in the stream) -- its own brain takes the same fight on, with him
+                void* fe = engine::entity_by_id(figEid);
+                target = fe && wo187::set_logical_target(ca, fe);
+            }
+        }
+    }
+    kuba_duel_mind(eid, false, "host");   // KUBA 33
+    motion::set_npc_engage(eid, false, nullptr, 0);
+    if (aggroHost) { g_kubaTaken.push_back(name); c_kubaRTaken.fetch_add(1); }
+    logf("KUBA-32 host duel end npc=%s eid=0x%X after %.1f s: %s -- its own brain again (automation %s%s); %u moves of the partner's copy shown, "
+         "%u refused, %u not shown, %u frames, %u re-target(s)", name.c_str(), eid, held, why, autoOn ? "on" : "NOT given back",
+         aggroHost ? (target ? ", its target the host player" : ", the host player NOT set as its target")
+                   : (figEid ? (target ? ", its target the partner's figure" : ", the partner's figure NOT set as its target") : ""),
+         inst, refused, skipped, frames, retargets);
+}
+}  // namespace (KUBA 32)
+
+uint8_t op_kuba_remote_duel(const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t* outLen) {
+    *outLen = 0;
+    if (len < 4 || cap < 4) return wo163::kRBadRequest;
+    const bool on = body[1] != 0;
+    const size_t nl = body[2];
+    if (nl == 0 || nl > 63 || (3 + nl != len && 4 + nl != len)) return wo163::kRBadRequest;
+    const std::string name(reinterpret_cast<const char*>(body + 3), nl);
+    const uint8_t src = 4 + nl == len ? body[3 + nl] : 0xFF;   // KUBA 32: the partner whose copy fights it
+    void* e = npcdrive::entity_by_name(name.c_str());
+    const uint32_t eid = e ? engine::entity_id(e) : 0;
+    const char* how = !eid ? "no such NPC here" : on ? "the partner's brain fights with it: driven from his stream" : "its own again";
+    if (eid) {
+        if (on) {
+            g_kubaRemoteDuel.insert(eid);
+            auto ins = g_kubaRemote.try_emplace(eid);
+            KubaRemote& r = ins.first->second;
+            if (ins.second) {
+                r.name = name; r.src = src; r.startAt = qpc_s(); r.lastFrameAt = r.startAt;
+                // its fight is with the partner's figure here, the engine's way (the brain keeps whatever else it knows)
+                bool target = false;
+                if (src != 0xFF) {
+                    char fig[24]; std::snprintf(fig, sizeof fig, "kcd2mp_%u", static_cast<unsigned>(src));
+                    void* fe = npcdrive::entity_by_name(fig);
+                    r.figEid = fe ? engine::entity_id(fe) : 0;
+                    motion::kuba_hold_figure_combat(r.figEid, true);   // KUBA 33: his figure is never "out of combat" for its brain
+                    void* ca = nullptr; void* model = nullptr;
+                    if (fe && motion::combat_parts(eid, true, &ca, &model)) target = wo187::set_logical_target(ca, fe);
+                }
+                r.tgtAt = qpc_s();
+                kuba_duel_mind(eid, true, "host");   // KUBA 33: no flight, no crime seen, while the partner's brain fights with it
+                kuba_replay_on();
+                motion::kuba_set_combat_feet(eid, true);   // KUBA 16's feet: its footwork steps with the written place
+                logf("KUBA-32 host duel start npc=%s eid=0x%X partner=%u -- his copy's brain fights; here its moves, guard and place%s",
+                     name.c_str(), eid, static_cast<unsigned>(src), target ? " (its target: his figure)" : "");
+            }
+        } else if (g_kubaRemote.count(eid)) {
+            kuba_remote_end(eid, "the partner's duel frames ended", false);
+            how = "its own again";
+        } else {
+            g_kubaRemoteDuel.erase(eid);
+            g_copyStates.erase(eid);
+            auto it = g_owned.find(eid);
+            if (it != g_owned.end()) { own_release(eid, it->second, qpc_s(), "KUBA-30: the partner's duel ended", wo210rules::kPathSwitch); g_owned.erase(it); }
+        }
+    }
+    logf("KUBA-30 remote duel %s npc=%s eid=0x%X -- %s", on ? "on" : "off", name.c_str(), eid, how);
+    std::memcpy(out, &eid, 4);
+    *outLen = 4;
+    return wo163::kROk;
+}
+
+// op 153 (the host): one partner's duel frame, as op 150 read it on his machine (after [op]: [count:1] per body [nameLen:1][name][x][y][z]
+// [yaw][cm:1][nsc:1] nsc x kWireScope [ext: kKubaDuelExt]) -> [n:1] n x ([nameLen:1][name]) = the NPCs taken back here since the last call
+uint8_t op_kuba_remote_frame(const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t* outLen) {
+    *outLen = 0;
+    if (len < 2 || cap < 1) return wo163::kRBadRequest;
+    const double now = qpc_s();
+    const int n = body[1];
+    size_t o = 2;
+    for (int i = 0; i < n; ++i) {
+        if (o + 1 > len) return wo163::kRBadRequest;
+        const size_t nl = body[o];
+        if (nl == 0 || nl > 63 || o + 1 + nl + 18 > len) return wo163::kRBadRequest;
+        const std::string name(reinterpret_cast<const char*>(body + o + 1), nl);
+        o += 1 + nl + 16;
+        KubaRState s;
+        s.at = now; s.cm = body[o];
+        const int nsc = body[o + 1];
+        o += 2;
+        if (nsc > 2 || o + static_cast<size_t>(nsc) * kWireScope + kKubaDuelExt > len) return wo163::kRBadRequest;
+        for (int k = 0; k < nsc; ++k) {
+            const uint8_t* sc = body + o + static_cast<size_t>(k) * kWireScope;
+            if (sc[0] == 0) { s.haveFb = true; std::memcpy(s.fb, sc, kWireScope); }
+        }
+        o += static_cast<size_t>(nsc) * kWireScope;
+        s.flags = body[o]; s.gz = body[o + 1]; s.gs = body[o + 2]; s.az = body[o + 3];
+        o += kKubaDuelExt;
+        void* e = npcdrive::entity_by_name(name.c_str());
+        const uint32_t eid = e ? engine::entity_id(e) : 0;
+        auto it = eid ? g_kubaRemote.find(eid) : g_kubaRemote.end();
+        if (it == g_kubaRemote.end()) continue;   // not (or no longer) driven by a partner here
+        KubaRemote& r = it->second;
+        r.q.push_back(s);
+        if (r.q.size() > 64) r.q.erase(r.q.begin(), r.q.begin() + static_cast<std::ptrdiff_t>(r.q.size() - 64));
+        r.lastFrameAt = now;
+        ++r.frames;
+        c_kubaRFrames.fetch_add(1);
+    }
+    size_t w = 1, told = 0;
+    while (!g_kubaTaken.empty()) {
+        const std::string& nm = g_kubaTaken.front();
+        const size_t l = nm.size() > 63 ? 63 : nm.size();
+        if (w + 1 + l > cap) break;
+        out[w] = static_cast<uint8_t>(l); std::memcpy(out + w + 1, nm.data(), l);
+        w += 1 + l; ++told;
+        g_kubaTaken.erase(g_kubaTaken.begin());
+    }
+    out[0] = static_cast<uint8_t>(told);
+    *outLen = w;
+    return wo163::kROk;
+}
+
+// op 154 (the joiner): [op][nameLen][name] -- the host took this NPC back (its player's aggro): the duel with its copy ends now
+uint8_t op_kuba_duel_release(const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t* outLen) {
+    *outLen = 0;
+    if (len < 3) return wo163::kRBadRequest;
+    const size_t nl = body[1];
+    if (nl == 0 || nl > 63 || 2 + nl != len) return wo163::kRBadRequest;
+    const std::string name(reinterpret_cast<const char*>(body + 2), nl);
+    uint32_t hit = 0;
+    for (uint32_t eid : g_kubaDuelEids) {
+        void* e = engine::entity_by_id(eid);
+        const char* nm = e ? engine::entity_name(e) : nullptr;
+        if (nm && _stricmp(nm, name.c_str()) == 0) { hit = eid; break; }
+    }
+    if (hit) g_kubaReleased.insert(hit);
+    logf("KUBA-32 the host took npc=%s back (its player's aggro) -- %s", name.c_str(), hit ? "its duel here ends now" : "no duel with it here");
+    if (cap >= 1) { out[0] = hit ? 1 : 0; *outLen = 1; }
+    return wo163::kROk;
+}
+
+void kuba_note_host_blow(uint32_t victimEid) {
+    if (!victimEid) return;
+    std::lock_guard<std::mutex> lock(g_kubaHostBlowMx);
+    if (g_kubaHostBlows.size() < 64) g_kubaHostBlows.push_back(victimEid);
+}
+
+bool kuba_release_take(uint32_t eid) {
+    if (g_kubaReleased.empty()) return false;
+    return g_kubaReleased.erase(eid) != 0;
+}
+
+void kuba_remote_tick() {
+    std::vector<uint32_t> blows;
+    {
+        std::lock_guard<std::mutex> lock(g_kubaHostBlowMx);
+        blows.swap(g_kubaHostBlows);
+    }
+    kuba_aggro_tick(qpc_s());   // KUBA 33c
+    for (uint32_t v : blows) {
+        if (g_kubaRemote.count(v)) { kuba_remote_end(v, "the host player's blow landed on it", true); continue; }
+        kuba_host_blow_free(v);   // KUBA 33c: an NPC fighting a partner's figure outside a duel
+    }
+    if (g_kubaRemote.empty()) return;
+    const double now = qpc_s();
+    const double dnow = npcdrive::now_s();
+    std::vector<std::pair<uint32_t, const char*>> ends;
+    for (auto& kv : g_kubaRemote) {
+        const uint32_t eid = kv.first;
+        KubaRemote& r = kv.second;
+        if (!engine::entity_by_id(eid)) { ends.push_back({eid, "the NPC is gone"}); continue; }
+        // its brain turned to the host player on its own (it saw him, his arrow, ...): his fight now
+        if (now - r.oppAt >= 0.25) {
+            r.oppAt = now;
+            if (wo195::dead_gate(eid, "kuba-duel")) { ends.push_back({eid, "the NPC is dead"}); continue; }   // the game's own death has it
+            motion::NpcCombat nc{};
+            if (motion::read_npc_combat(eid, &nc) && nc.opponentIsPlayer) { ends.push_back({eid, "its own brain turned to the host player"}); continue; }
+            // KUBA 33: its brain lost the partner's figure as its opponent (it ended its fight, or picked nobody): the figure again, at most
+            // once a second -- at the duel's end its own brain goes on with the fight it is in
+            if (r.figEid && nc.opponentEid != r.figEid && now - r.tgtAt >= 1.0) {
+                r.tgtAt = now;
+                void* fe = engine::entity_by_id(r.figEid);
+                void* ca = nullptr; void* model = nullptr;
+                if (fe && motion::combat_parts(eid, false, &ca, &model) && wo187::set_logical_target(ca, fe)) {
+                    const uint32_t k = ++r.retargets;
+                    if (k <= 5 || k % 20 == 0)
+                        logf("KUBA-33 host duel npc=%s its brain had lost the partner's figure (opponent %s) -- his figure is its target again [n=%u]",
+                             r.name.c_str(), nc.opponentEid ? "another" : "none", k);
+                }
+            }
+        }
+        // the newest state at least one render delay old: the move starts where the written position shows that moment
+        double delay = kBindDelayS;
+        npcdrive::render_lag_s(eid, &delay);
+        int pick = -1;
+        for (int i = 0; i < static_cast<int>(r.q.size()); ++i) if (now - r.q[i].at >= delay) pick = i;
+        if (pick >= 0) { r.last = r.q[pick]; r.haveState = true; }
+        if (r.haveState) {
+            // the partner copy's guard, every frame (the engagement hold: combat mode, automation off, guard / attack zone, block)
+            motion::State2 st{};
+            st.bits = static_cast<uint8_t>(motion::kBitCombat | ((r.last.flags & 1) ? motion::kBitBlock : 0));
+            st.guardZone = r.last.gz; st.guardStance = r.last.gs; st.atkZone = r.last.az;
+            motion::set_npc_engage(eid, true, &st, dnow);
+            const bool blk = (r.last.flags & 1) != 0;
+            if (blk != r.blockWas) { r.blockWas = blk; ++r.blockEdges; }
+        }
+        if (pick >= 0) {
+            const KubaRState& s = r.q[pick];
+            if (s.haveFb && kuba_replay_on()) {
+                const uint8_t* p = s.fb;
+                uint32_t act = 0; std::memcpy(&act, p + 30, 4);
+                if (act != r.lastPartnerAct) {
+                    r.lastPartnerAct = act;
+                    const uint8_t cls = p[1];
+                    uint16_t frag = 0; std::memcpy(&frag, p + 2, 2);
+                    const int32_t prio = static_cast<int8_t>(p[4]);
+                    uint32_t flags = 0; std::memcpy(&flags, p + 6, 4);
+                    const std::string fn = frag_name_of(eid, frag);
+                    const bool baseCls = cls == kClsNone || cls == kClsCombatMove || cls == kClsAIMovement || cls == kClsMoveTransition || cls == kClsIdleState;
+                    if (!baseCls && kuba_mirror_frag(fn.c_str())) {
+                        kuba_retire_ours(eid, r, now);
+                        void* a = nullptr;
+                        const rttr::SwingResult res = rttr::install_fragment(eid, frag, p + 10, prio, flags, &a);
+                        if (res == rttr::SwingResult::Ok && a) {
+                            r.ours = a; r.oursFrag = frag; ++r.installs;
+                            const uint32_t k = c_kubaRInstalls.fetch_add(1) + 1;
+                            if (k <= 80 || k % 100 == 0)
+                                logf("KUBA-32 host duel npc=%s shows the partner copy's %s (frag %u, %s, prio %d) %.0f ms after it arrived [n=%u]", r.name.c_str(),
+                                     fn.c_str(), frag, cls_name(cls), prio, (now - s.at) * 1000.0, k);
+                        } else {
+                            ++r.refusals;
+                            const uint32_t k = c_kubaRRefusals.fetch_add(1) + 1;
+                            if (k <= 40 || k % 100 == 0)
+                                logf("KUBA-32 host duel npc=%s the partner copy's %s (frag %u) refused here: %s [n=%u]", r.name.c_str(), fn.c_str(), frag,
+                                     rttr::swing_result_name(res), k);
+                        }
+                    } else if (!baseCls) {
+                        ++r.skipped;
+                        if (r.skipped <= 12) logf("KUBA-32 host duel npc=%s the partner copy's %s/%s left to this NPC (a reaction or its base)", r.name.c_str(),
+                                                  cls_name(cls), fn.empty() ? "?" : fn.c_str());
+                    }
+                }
+            }
+            if (pick > 0) r.q.erase(r.q.begin(), r.q.begin() + pick);
+        }
+        for (size_t i = 0; i < r.retired.size();) {
+            uint32_t st = 0;
+            if (!rd(r.retired[i].act, 0x28, &st) || st >= 4 || now - r.retired[i].at > 5.0) {
+                late_take(eid, r.retired[i].act);
+                r.retired.erase(r.retired.begin() + static_cast<std::ptrdiff_t>(i));
+            } else ++i;
+        }
+        if (now - r.logAt >= 2.0) {
+            r.logAt = now;
+            motion::NpcCombat nc{};
+            motion::read_npc_combat(eid, &nc);
+            void* oe = nc.opponentEid ? engine::entity_by_id(nc.opponentEid) : nullptr;
+            const char* on = oe ? engine::entity_name(oe) : nullptr;
+            logf("KUBA-32 host duel npc=%s %.1f s: frames=%u shown=%u refused=%u not_shown=%u block_edges=%u combat=%u block=%u opponent=%s last_frame=%.0f ms ago delay=%.0f ms",
+                 r.name.c_str(), now - r.startAt, r.frames, r.installs, r.refusals, r.skipped, r.blockEdges, nc.combat, nc.block, on ? on : "none",
+                 (now - r.lastFrameAt) * 1000.0, delay * 1000.0);
+        }
+    }
+    for (auto& x : ends) kuba_remote_end(x.first, x.second, std::strcmp(x.second, "its own brain turned to the host player") == 0);
+}
+
+void kuba_push_ask(uint8_t kind, const std::string& name) {
+    if (g_asks.size() < 64) g_asks.push_back({kind, name});
+}
+void kuba_set_duel(uint32_t eid, bool on) {
+    if (on) g_kubaDuelEids.insert(eid); else g_kubaDuelEids.erase(eid);
+}
+bool kuba_in_duel(uint32_t eid) { return eid && !g_kubaDuelEids.empty() && g_kubaDuelEids.count(eid) != 0; }
+
+// KUBA 33 (20.11, "after the brain switch the enemies ran away instead of fighting, and when the brain switched back they ran at me and
+// attacked, then it switched and they ran away, round and round"): the brain that took a duel over is a whole NPC brain, and it judged
+// the scene on its own -- a bandit next to his mates' bodies saw the player as a murderer (SoulFlee + "npc_obvinuje_hrace__vrazda", 0.3 s
+// after its brain resumed on the joiner), a villager in a fistfight left it when the player had a weapon in hand (combat termination,
+// weapon away) -- and the other machine's brain then ran back into the fight. The game's own per-soul switches (Tables :: ScriptContext.xml,
+// Class="Entity", each read by the brain on itself) keep it in the fight it was given: on = set while the duel lasts, off = cleared while
+// it lasts. Refcount-aware (sctx): only what this wrote is put back at the end. KCDMP_KUBA_DUEL_MIND=off.
+namespace {
+struct MindCtx { const char* name; bool want; };
+constexpr MindCtx kMind[] = {
+    {"combat_neverSurrenderOrFlee", true},                  // no flee or surrender of its own (SKIRMISH_SOULFLEE)
+    {"combat_alwaysJoinSkirmish", true},                    // it stays in the skirmish it is in
+    {"crime_ignoreCorpses", true},                          // the bodies around a fight are no murder it saw
+    {"crime_ignoreUnconsciousBodies", true},
+    {"combat_ignoreMurdered", true},
+    {"combat_ignoreMurderedByPlayer", true},
+    {"combat_ignoreKnockedOutByPlayer", true},
+    {"crime_ignoreNPCHitVolumes", true},                    // a blow on another NPC is no assault it witnessed
+    {"crime_ignorePlayersDrawnWeapon", true},
+    {"crime_disableReport", true},                          // never runs off to a guard
+    {"crime_disableCrimeInformationEmit", true},
+    {"switch_disabledInformationReaction", true},           // new crime information starts no behaviour (the witness's flight)
+    {"combat_fleeOnDrawnWeaponInUnarmedCombat", false},     // a fistfight is not left for the player's drawn weapon
+    {"combat_alwaysWithdrawSkirmish", false},
+    {"combat_flee", false},
+    {"combat_neverMercyAlwaysFlee", false},
+};
+constexpr int kMindN = static_cast<int>(sizeof(kMind) / sizeof(*kMind));
+static_assert(kMindN <= 32, "the written set is a 32-bit mask");
+std::unordered_map<uint32_t, uint32_t> g_kubaMind;   // main thread: eid -> the contexts this wrote
+std::unordered_map<uint32_t, bool> g_kubaArmed;      // KUBA 37, main thread: eid -> combat_forceArmed written by this (false = already set)
+std::atomic<bool> g_kubaPlayerArmed{false};          // KUBA 37: the agent's word (op 157)
+bool kuba_armed_on() {
+    static int s = -1;
+    if (s < 0) {
+        const std::string v = env("KCDMP_KUBA_DUEL_ARMED");
+        s = (v == "off" || v == "OFF" || v == "Off" || v == "0") ? 0 : 1;
+        logf("KUBA-37 a duel NPC fights armed while this player holds a weapon (the game's combat_forceArmed) %s (KCDMP_KUBA_DUEL_ARMED=off turns it off)",
+             s ? "on" : "OFF");
+    }
+    return s == 1;
+}
+std::atomic<uint32_t> c_kubaMindSet{0}, c_kubaMindFail{0};
+bool kuba_mind_on() {
+    static int s = -1;
+    if (s < 0) {
+        const std::string v = env("KCDMP_KUBA_DUEL_MIND");
+        s = (v == "off" || v == "OFF" || v == "Off" || v == "0") ? 0 : 1;
+        logf("KUBA-33 a duel NPC's brain kept in its fight (no flight, no crime seen) %s (KCDMP_KUBA_DUEL_MIND=off turns it off)", s ? "on" : "OFF");
+    }
+    return s == 1;
+}
+}  // namespace
+
+void kuba_duel_mind(uint32_t eid, bool on, const char* who) {
+    if (!eid) return;
+    if (on) {
+        if (!kuba_mind_on() || g_kubaMind.count(eid)) return;
+        void* soul = hits::soul_of_eid(eid);
+        if (!soul) { logf("KUBA-33 npc eid=0x%X (%s): no soul -- its brain judges the scene on its own", eid, who); return; }
+        uint32_t wrote = 0;
+        int ok = 0, already = 0, bad = 0;
+        std::string missing;
+        for (int i = 0; i < kMindN; ++i) {
+            const int r = sctx::set_soul_context_quiet(soul, kMind[i].name, kMind[i].want);
+            if (r == 1) { wrote |= 1u << i; ++ok; }
+            else if (r == 0) ++already;
+            else { ++bad; if (missing.size() < 200) { missing += ' '; missing += kMind[i].name; } }
+        }
+        g_kubaMind[eid] = wrote;
+        c_kubaMindSet.fetch_add(static_cast<uint32_t>(ok)); c_kubaMindFail.fetch_add(static_cast<uint32_t>(bad));
+        void* e = engine::entity_by_id(eid);
+        const char* nm = e ? engine::entity_name(e) : nullptr;
+        logf("KUBA-33 npc=%s (%s) kept in its fight: %d switch(es) written, %d already so, %d failed%s%s", nm ? nm : "?", who, ok, already, bad,
+             bad ? " --" : "", missing.c_str());
+        return;
+    }
+    auto ai = g_kubaArmed.find(eid);   // KUBA 37: only what this wrote is cleared
+    if (ai != g_kubaArmed.end()) {
+        const bool wroteArmed = ai->second;
+        g_kubaArmed.erase(ai);
+        void* s = wroteArmed && engine::entity_by_id(eid) ? hits::soul_of_eid(eid) : nullptr;
+        if (s) {
+            const int r = sctx::set_soul_context_quiet(s, "combat_forceArmed", false);
+            logf("KUBA-37 npc eid=0x%X (%s) duel over: combat_forceArmed cleared (%d)", eid, who, r);
+        }
+    }
+    auto it = g_kubaMind.find(eid);
+    if (it == g_kubaMind.end()) return;
+    const uint32_t wrote = it->second;
+    g_kubaMind.erase(it);
+    void* soul = engine::entity_by_id(eid) ? hits::soul_of_eid(eid) : nullptr;
+    if (!soul) return;   // gone: its contexts went with it
+    int back = 0;
+    for (int i = 0; i < kMindN; ++i)
+        if (wrote & (1u << i)) { if (sctx::set_soul_context_quiet(soul, kMind[i].name, !kMind[i].want) >= 0) ++back; }
+    logf("KUBA-33 npc eid=0x%X (%s) its own judgement again: %d switch(es) put back", eid, who, back);
+}
+
+// KUBA 33c (host, 20.11: "the aggro practically cannot be taken over: as player 2 I hit an NPC beating player 1 and it never turned to
+// me, and the other way round"): the last player to hit an NPC is its opponent -- the engine's SetLogicalTarget and the game's own "fight
+// this one" (combat_forcedTarget, the battles' and quest fights' lever), pinned to him until 30 s after his last blow, then the NPC's own
+// judgement again. Player 2's blow arrives as his NpcDamage (the agent's op 155), the host player's through the hit hook. A pin from
+// another player is lifted first. KCDMP_KUBA_AGGRO=off.
+namespace {
+struct KubaPin { uint32_t target = 0; bool wrote = false; double at = 0; };
+std::unordered_map<uint32_t, KubaPin> g_kubaPins;   // main thread: NPC eid -> its pinned opponent (entity id)
+std::unordered_map<uint32_t, double> g_kubaHostBlowAt;
+std::atomic<uint32_t> c_kubaAggroSwitch{0};
+constexpr double kKubaPinS = 30.0;
+bool kuba_aggro_on() {
+    static int s = -1;
+    if (s < 0) {
+        const std::string v = env("KCDMP_KUBA_AGGRO");
+        s = (v == "off" || v == "OFF" || v == "Off" || v == "0") ? 0 : 1;
+        logf("KUBA-33c the last player to hit an NPC takes its aggro %s (KCDMP_KUBA_AGGRO=off turns it off)", s ? "on" : "OFF");
+    }
+    return s == 1;
+}
+void kuba_unpin(uint32_t eid, KubaPin& p) {
+    if (p.wrote) {
+        void* soul = engine::entity_by_id(eid) ? hits::soul_of_eid(eid) : nullptr;
+        void* ts = engine::entity_by_id(p.target) ? hits::soul_of_eid(p.target) : nullptr;
+        if (soul && ts) sctx::set_soul_relation(soul, ts, "combat_forcedTarget", false);
+    }
+    p = KubaPin{};
+}
+}  // namespace
+
+// The NPC `eid` fights `targetEid` now (an entity id: the host player or a partner's figure). True = it was set (or already so).
+bool kuba_aggro_to(uint32_t eid, uint32_t targetEid, const char* why) {
+    if (!eid || !targetEid || !kuba_aggro_on()) return false;
+    void* e = engine::entity_by_id(eid);
+    void* te = engine::entity_by_id(targetEid);
+    if (!e || !te || wo195::dead_gate(eid, "kuba-aggro")) return false;
+    const double now = qpc_s();
+    KubaPin& p = g_kubaPins[eid];
+    if (p.target == targetEid) { p.at = now; return true; }   // his already: the hold refreshed
+    if (p.target) kuba_unpin(eid, p);
+    void* ca = nullptr; void* model = nullptr;
+    const bool slt = motion::combat_parts(eid, true, &ca, &model) && wo187::set_logical_target(ca, te);
+    void* soul = hits::soul_of_eid(eid);
+    void* ts = hits::soul_of_eid(targetEid);
+    const int r = (soul && ts) ? sctx::set_soul_relation(soul, ts, "combat_forcedTarget", true) : -1;
+    p.target = targetEid; p.wrote = r == 1; p.at = now;
+    const uint32_t k = c_kubaAggroSwitch.fetch_add(1) + 1;
+    const char* nm = engine::entity_name(e);
+    const char* tn = engine::entity_name(te);
+    if (k <= 100 || k % 50 == 0)
+        logf("KUBA-33c npc=%s fights %s now (%s): logical target %s, forced target %s [n=%u]", nm ? nm : "?", tn ? tn : "?", why,
+             slt ? "set" : "NOT set", r == 1 ? "pinned" : r == 0 ? "already" : "NOT pinned", k);
+    return slt || r >= 0;
+}
+
+// An NPC of this world fighting a partner's figure (no duel of his yet, or his stream-driven fight) or pinned to him: the host player's
+// blow takes it -- at most once a second per NPC. Main thread.
+void kuba_host_blow_free(uint32_t v) {
+    if (!wo178::is_host_role()) return;   // the joiner's own blows on copies are the host's to judge
+    const double t = qpc_s();
+    if (g_kubaHostBlowAt.size() > 256) g_kubaHostBlowAt.clear();
+    double& at = g_kubaHostBlowAt[v];
+    if (t - at < 1.0) return;
+    at = t;
+    motion::NpcCombat nc{};
+    const bool fightsFigure = motion::read_npc_combat(v, &nc) && nc.opponentEid && !nc.opponentIsPlayer && motion::is_avatar_eid(nc.opponentEid);
+    const auto pin = g_kubaPins.find(v);
+    const bool pinnedElsewhere = pin != g_kubaPins.end() && pin->second.target && pin->second.target != kPlayerEntity;
+    if (fightsFigure || pinnedElsewhere) kuba_aggro_to(v, kPlayerEntity, "the host player's blow landed on it");
+}
+
+// Main thread, every frame: pins 30 s after the last blow go, so do pins on NPCs gone or dead.
+void kuba_aggro_tick(double now) {
+    for (auto it = g_kubaPins.begin(); it != g_kubaPins.end();) {
+        const bool gone = !engine::entity_by_id(it->first);
+        if (!it->second.target || gone || now - it->second.at > kKubaPinS || wo195::dead_gate(it->first, "kuba-aggro")) {
+            if (!gone) kuba_unpin(it->first, it->second);
+            it = g_kubaPins.erase(it);
+        } else ++it;
+    }
+}
+
+// op 155 (the host): [op][src][nameLen][name] -- player `src`'s blow on this NPC landed (his NpcDamage, applied here): his figure is its
+// opponent now -> [r:1] 1 switched (or already his), 2 a partner's duel has it, 0 nothing
+uint8_t op_kuba_aggro(const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t* outLen) {
+    *outLen = 0;
+    if (len < 4 || cap < 1) return wo163::kRBadRequest;
+    const uint8_t src = body[1];
+    const size_t nl = body[2];
+    if (nl == 0 || nl > 63 || 3 + nl != len) return wo163::kRBadRequest;
+    const std::string name(reinterpret_cast<const char*>(body + 3), nl);
+    void* e = npcdrive::entity_by_name(name.c_str());
+    const uint32_t eid = e ? engine::entity_id(e) : 0;
+    uint8_t r = 0;
+    if (eid && g_kubaRemote.count(eid)) r = 2;   // its brain is his copy's already
+    else if (eid) {
+        char fig[24]; std::snprintf(fig, sizeof fig, "kcd2mp_%u", static_cast<unsigned>(src));
+        void* fe = npcdrive::entity_by_name(fig);
+        const uint32_t feid = fe ? engine::entity_id(fe) : 0;
+        if (feid && kuba_aggro_to(eid, feid, "the partner's blow landed on it")) r = 1;
+    }
+    out[0] = r; *outLen = 1;
+    return wo163::kROk;
+}
+bool kuba_remote_duel(uint32_t eid) { return eid && !g_kubaRemoteDuel.empty() && g_kubaRemoteDuel.count(eid) != 0; }
+
+// KUBA 34 (20.11: the host played on the original mod -- the joiner's copies fought with their own brain while the host's NPCs fought
+// another fight, a quest's allies among them): the agent says when the host answered its hello (and when it stopped answering)
+namespace {
+std::atomic<bool> g_kubaHostOk{false};
+bool kuba_host_check_on() {
+    static int s = -1;
+    if (s < 0) {
+        const std::string v = env("KCDMP_KUBA_HOST_CHECK");
+        s = (v == "off" || v == "OFF" || v == "Off" || v == "0") ? 0 : 1;
+        logf("KUBA-34 a copy's brain fights here only with a host on this fork (it answered the hello) %s (KCDMP_KUBA_HOST_CHECK=off turns it off)",
+             s ? "on" : "OFF");
+    }
+    return s == 1;
+}
+uint8_t op_kuba_host_ok(const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t* outLen) {
+    *outLen = 0;
+    if (len < 2 || cap < 1) return wo163::kRBadRequest;
+    const bool on = body[1] != 0;
+    if (g_kubaHostOk.exchange(on) != on)
+        logf("KUBA-34 the host %s -- a copy's own brain %s", on ? "runs this fork (it answered the hello)" : "no longer answers the hello (or another host)",
+             on ? "may fight its duel here again" : "fights no new duel here (the stream drives every copy)");
+    out[0] = on ? 1 : 0; *outLen = 1;
+    return wo163::kROk;
+}
+uint8_t op_kuba_player_armed(const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t* outLen) {   // KUBA 37
+    *outLen = 0;
+    if (len < 2 || cap < 1) return wo163::kRBadRequest;
+    const bool on = body[1] != 0;
+    if (g_kubaPlayerArmed.exchange(on) != on)
+        logf("KUBA-37 this player %s", on ? "holds a weapon -- a duel NPC's brain fights armed" : "holds no weapon -- a new duel keeps the brain's own choice (fists against fists)");
+    out[0] = on ? 1 : 0; *outLen = 1;
+    return wo163::kROk;
+}
+}  // namespace
+bool kuba_host_ok() { return !kuba_host_check_on() || g_kubaHostOk.load(); }
+
+// KUBA 37 (joiner, main thread, the duel's tick): once this player holds a weapon during the duel, the copy's brain fights armed for the
+// rest of it (the vanilla brain never goes back to its fists either)
+void kuba_duel_armed_tick(uint32_t eid, const char* name) {
+    if (!eid || !g_kubaPlayerArmed.load() || g_kubaArmed.count(eid) || !kuba_armed_on()) return;
+    void* soul = hits::soul_of_eid(eid);
+    if (!soul) return;
+    const int r = sctx::set_soul_context_quiet(soul, "combat_forceArmed", true);
+    g_kubaArmed[eid] = (r == 1);
+    static int s_logs = 0;
+    if (s_logs < 60) {
+        ++s_logs;
+        logf("KUBA-37 npc=%s this player holds a weapon: combat_forceArmed %s -- its brain draws and keeps its weapon", name ? name : "?",
+             r == 1 ? "set" : r == 0 ? "already set" : "NOT possible");
+    }
+}
+
+// KUBA 30 stage 2: the local engine's verdicts on the local player's blows on duel copies (the hit hook's thread -> the agent's op 152)
+namespace { std::mutex g_kubaVerdictMx; std::unordered_map<uint32_t, std::pair<uint8_t, ULONGLONG>> g_kubaVerdicts; }
+void kuba_note_duel_verdict(uint32_t eid, uint8_t outcome) {
+    if (!eid || outcome == 0) return;
+    std::lock_guard<std::mutex> lock(g_kubaVerdictMx);
+    if (g_kubaVerdicts.size() > 64) g_kubaVerdicts.clear();
+    g_kubaVerdicts[eid] = {outcome, GetTickCount64()};
+}
+// op 152 (the joiner's agent, before it sends a blow on a duel copy): [op][nameLen][name] -> [outcome:1] (0 = none in the last 1.5 s);
+// the verdict is consumed
+uint8_t op_kuba_take_verdict(const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t* outLen) {
+    *outLen = 0;
+    if (len < 3 || cap < 1) return wo163::kRBadRequest;
+    const size_t nl = body[1];
+    if (nl == 0 || nl > 63 || 2 + nl != len) return wo163::kRBadRequest;
+    const std::string name(reinterpret_cast<const char*>(body + 2), nl);
+    uint8_t outcome = 0;
+    for (uint32_t eid : g_kubaDuelEids) {
+        void* e = engine::entity_by_id(eid);
+        const char* nm = e ? engine::entity_name(e) : nullptr;
+        if (!nm || _stricmp(nm, name.c_str()) != 0) continue;
+        std::lock_guard<std::mutex> lock(g_kubaVerdictMx);
+        auto it = g_kubaVerdicts.find(eid);
+        if (it != g_kubaVerdicts.end()) {
+            if (GetTickCount64() - it->second.second <= 1500) outcome = it->second.first;
+            g_kubaVerdicts.erase(it);
+        }
+        break;
+    }
+    out[0] = outcome;
+    *outLen = 1;
+    return wo163::kROk;
+}
+
 bool probe_owned(uint32_t eid) {
     if (!eid) return false;
     if (eid == g_probeEid.load(std::memory_order_relaxed)) return true;
@@ -1623,6 +2870,7 @@ std::atomic<uint32_t> c_targetRefused{0}, c_fightHeals{0};
 bool in_player_fight(uint32_t copy) {
     const bool sw = on(kBitTargetInFight);
     if (!sw) return true;
+    if (kuba_in_duel(copy)) return true;   // KUBA 36: a duel copy fights him with its own brain
     void* pe = engine::entity_by_id(kPlayerEntity);
     void* cs = hits::soul_of_eid(copy);
     void* ps = pe ? hits::soul_of_eid(engine::entity_id(pe)) : nullptr;
@@ -1633,6 +2881,10 @@ bool in_player_fight(uint32_t copy) {
 bool target_player_ok(uint32_t copy, const char* site) {
     const bool sw = on(kBitTargetInFight);
     if (!sw) return true;
+    // KUBA 36 (20.11 15:05: "NPCs fighting player 2 sometimes act as if they lost their brain"): a copy in this player's local duel
+    // fights him with its own brain -- he is its target whatever the skirmish relation reads; the heal below (StopFight + every copy let
+    // go of his fight) ended its fight and cleared the pins of the other duel copies: each left combat 5 s later and sheathed its weapon.
+    if (kuba_in_duel(copy)) return true;
     void* pe = engine::entity_by_id(kPlayerEntity);
     void* cs = hits::soul_of_eid(copy);
     void* ps = pe ? hits::soul_of_eid(engine::entity_id(pe)) : nullptr;
@@ -1683,7 +2935,7 @@ bool probe_only(uint32_t eid) {
 
 double owner_shift_s(uint32_t eid) {
     if (!eid || !on(kBitOwner) || !g_ownerOnly.empty() || g_owned.count(eid) == 0) return 0.0;
-    return g_ownerDelayS + kStreamEveryS / 2;   // the state arrives within one stream period of the row, then waits the stream delay
+    return owner_delay_for(eid) + kStreamEveryS / 2;   // the state arrives within one stream period of the row, then waits that body's own lag
 }
 
 bool probe_owned_name(const char* name) {
@@ -1703,13 +2955,19 @@ bool probe_only_name(const char* name) {
 }
 
 int status(char* out, int n) {
+    char kuba16[96] = "";
+    motion::kuba_feet_status(kuba16, sizeof kuba16);
     return std::snprintf(out, static_cast<size_t>(n), "w208 bits=0x%X twin_off=0x%X configured=%d | target_violations=%u bodies=%u | probe %s npc=%s installs=%u "
                          "refusals=%u stale=%u withdraws=%u | owner copies=%zu ever=%u applied=%u installs=%u refusals=%u stale=%u withdraws=%u stops=%u steps=%u base=%u shot_holds=%u ai_holds=%u queue_full=%u far=%u "
-                         "stream reads=%u bodies=%u states_in=%u bad=%u forgot=%u | W210 ready_holds=%u ready_releases=%u asks=%u", g_bits.load(), twin_off(), g_configured.load() ? 1 : 0, c_violations.load(), c_violationBodies.load(),
+                         "stream reads=%u bodies=%u states_in=%u bad=%u forgot=%u | W210 ready_holds=%u ready_releases=%u asks=%u | phase %s last_ms=%.0f picks=%u | queue_cap %s refused=%u passed=%u | kuba10 fidget_ok=%u reinstall=%u | kuba11 tpose_seen=%u fixed=%u back=%u unreadable=%u | kuba12 learned=%u skipped=%u | kuba13 trans_cut=%u | %s", g_bits.load(), twin_off(), g_configured.load() ? 1 : 0, c_violations.load(), c_violationBodies.load(),
                          g_p.host ? "host" : g_p.joiner ? "joiner" : "off", g_p.name.c_str(), g_p.installs, g_p.refusals, g_p.stale, g_p.withdraws, g_owned.size(),
                          c_oCopies.load(), c_oApplied.load(), c_oInstalls.load(), c_oRefusals.load(), c_oStale.load(), c_oWithdraws.load(), c_oStops.load(), c_oSteps.load(),
                          c_oPulses.load(), c_oShotHolds.load(), c_oAiHolds.load(), c_oQueueFull.load(), c_oFar.load(), c_streamReads.load(), c_streamBodies.load(), c_statesIn.load(), c_statesBad.load(),
-                         c_forgot.load(), c_readyHolds.load(), c_readyReleases.load(), c_asksOut.load());
+                         c_forgot.load(), c_readyHolds.load(), c_readyReleases.load(), c_asksOut.load(),
+                         anim_phase_on() ? "on" : "off", g_phaseLast * 1000.0, c_phaseBodies.load(), queue_cap_strict() ? "strict" : "engine-limit",
+                         c_capRefused.load(), c_capPassed.load(), c_kubaFidgetOk.load(), c_kubaReinstall.load(),
+                         c_kubaTposeSeen.load(), c_kubaTposeFixed.load(), c_kubaTposeBack.load(), c_kubaTposeUnread.load(),
+                         c_kubaLearned.load(), c_kubaSkipped.load(), c_kubaTransCut.load(), kuba16);
 }
 
 namespace {
@@ -1718,10 +2976,24 @@ void tick_reg() { probe_tick(); }
 uint8_t stream_read_reg(uint8_t, const uint8_t* b, size_t l, uint8_t* o, size_t c, size_t* ol) { return op_stream_read(b, l, o, c, ol); }
 uint8_t stream_in_reg(uint8_t, const uint8_t* b, size_t l, uint8_t* o, size_t c, size_t* ol) { return op_stream_in(b, l, o, c, ol); }
 uint8_t asks_reg(uint8_t, const uint8_t* b, size_t l, uint8_t* o, size_t c, size_t* ol) { return op_asks(b, l, o, c, ol); }
+uint8_t kuba_duel_read_reg(uint8_t, const uint8_t* b, size_t l, uint8_t* o, size_t c, size_t* ol) { return op_kuba_duel_read(b, l, o, c, ol); }
+uint8_t kuba_remote_duel_reg(uint8_t, const uint8_t* b, size_t l, uint8_t* o, size_t c, size_t* ol) { return op_kuba_remote_duel(b, l, o, c, ol); }
+uint8_t kuba_take_verdict_reg(uint8_t, const uint8_t* b, size_t l, uint8_t* o, size_t c, size_t* ol) { return op_kuba_take_verdict(b, l, o, c, ol); }
 uint8_t forget_reg(uint8_t, const uint8_t* b, size_t l, uint8_t* o, size_t c, size_t* ol) { return op_stream_forget(b, l, o, c, ol); }
+uint8_t kuba_remote_frame_reg(uint8_t, const uint8_t* b, size_t l, uint8_t* o, size_t c, size_t* ol) { return op_kuba_remote_frame(b, l, o, c, ol); }
+uint8_t kuba_duel_release_reg(uint8_t, const uint8_t* b, size_t l, uint8_t* o, size_t c, size_t* ol) { return op_kuba_duel_release(b, l, o, c, ol); }
+uint8_t kuba_aggro_reg(uint8_t, const uint8_t* b, size_t l, uint8_t* o, size_t c, size_t* ol) { return op_kuba_aggro(b, l, o, c, ol); }   // KUBA 33c
+uint8_t kuba_host_ok_reg(uint8_t, const uint8_t* b, size_t l, uint8_t* o, size_t c, size_t* ol) { return op_kuba_host_ok(b, l, o, c, ol); }   // KUBA 34
+uint8_t kuba_player_armed_reg(uint8_t, const uint8_t* b, size_t l, uint8_t* o, size_t c, size_t* ol) { return op_kuba_player_armed(b, l, o, c, ol); }   // KUBA 37
 const bool kReg = wo203::reg_op(kOpConfig, &op) && wo203::reg_op(kOpStatus, &op) && wo203::reg_status("w208", &status_reg)
                && wo203::reg_tick("w208", &tick_reg) && wo203::reg_op(kOpStreamRead, &stream_read_reg) && wo203::reg_op(kOpStreamIn, &stream_in_reg)
-               && wo203::reg_op(kOpW210Asks, &asks_reg) && wo203::reg_op(kOpW210StreamForget, &forget_reg);
+               && wo203::reg_op(kOpW210Asks, &asks_reg) && wo203::reg_op(kOpW210StreamForget, &forget_reg)
+               && wo203::reg_op(kOpKubaDuelRead, &kuba_duel_read_reg) && wo203::reg_op(kOpKubaRemoteDuel, &kuba_remote_duel_reg)
+               && wo203::reg_op(kOpKubaTakeVerdict, &kuba_take_verdict_reg)   // KUBA 30
+               && wo203::reg_op(kOpKubaRemoteFrame, &kuba_remote_frame_reg) && wo203::reg_op(kOpKubaDuelRelease, &kuba_duel_release_reg)   // KUBA 32
+               && wo203::reg_op(kOpKubaAggro, &kuba_aggro_reg)   // KUBA 33c
+               && wo203::reg_op(kOpKubaHostOk, &kuba_host_ok_reg)   // KUBA 34
+               && wo203::reg_op(kOpKubaPlayerArmed, &kuba_player_armed_reg);   // KUBA 37
 } // namespace
 
 // ---- WO-217 (main thread) ----

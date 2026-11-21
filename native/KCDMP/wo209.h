@@ -27,6 +27,8 @@ bool host_fights(uint32_t eid);
 // A (main thread): the mirror holds this copy in the local player's fight -- its host NPC fights his figure there now (wo132's op 2 never
 // lets it go for its distance meanwhile).
 bool mirror_holds_player(uint32_t copy);
+// KUBA 14: the host NPC of this copy has run no fight action for 4 s (it flees, cowers, kneels): no local engagement for it.
+bool kuba_calm_copy(uint32_t copy);
 // A (main thread): the mirror speaks for this copy's opponent (WO-187's agent wish leaves it alone).
 bool mirrored(uint32_t copy);
 // B (main thread, mp_copy_attack_ai): is this host action (its class and fragment) to be the copy's own combat attack at the local player --

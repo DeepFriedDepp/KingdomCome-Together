@@ -58,6 +58,7 @@ int status_text(char* out, int n);
 
 // Host (WO-165's lock tick, main thread): an NPC fighting a partner's figure, offered while mp_host_lock_answer is on.
 bool host_answer_on();
+bool is_host_role();   // KUBA 33c: this machine is the host (the agent's Config role word)
 void offer_local(uint32_t eid);
 // WO-209 (main thread): the game's own last answer to the local player's picker for a listed copy, before this hook's override:
 // 1 hostile, 0 not hostile, -1 not listed or not asked yet.

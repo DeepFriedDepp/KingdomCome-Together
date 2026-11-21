@@ -963,6 +963,7 @@ void serve(HANDLE h) {
                 rttr::SwingResult res = rttr::SwingResult::Ok;
                 const bool ran = run_sync_bounded<rttr::SwingResult>(
                     [entityId, spec](rttr::SwingResult& result) {
+                        if (kcdmp::wo208::kuba_in_duel(entityId)) { result = rttr::SwingResult::Ok; return; }   // KUBA 30: its own brain swings and reacts
                         if (kcdmp::wo209::row_attack(entityId, spec.c_str())) { result = rttr::SwingResult::Ok; return; }   // WO-209 B: the copy's own attack
                         // WO-216 F.4 / G: the owner plays the host's row on its copy (never "owner-owns"): poses for a fight with a player,
                         // npc_fights for a fight among the host's NPCs; reaction rows keep WO-214's own path below

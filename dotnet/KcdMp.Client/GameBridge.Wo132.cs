@@ -308,7 +308,36 @@ public partial class GameBridge
             });
         }
         else if (_w132Watched.TryRemove(npcName, out _))
+        {
             _ = _combat.Wo132WatchAsync(false, npcName);
+            _ = Wo132SendLeftCombatAsync(npcName);   // KUBA 38
+        }
+    }
+
+    /// <summary>
+    /// KUBA 38: the watch ends (the NPC put its weapon away) while the last word the joiners got says it fights. The native watch sends
+    /// only on a change and nothing at its end, so that word stood forever (the field: Semine after the duel -- "fights the host" from
+    /// 12:46:27 on; the joiner's copy kept attacking the host's figure, WO-201 B4 never refused it). The joiners are told it left combat.
+    /// </summary>
+    private async Task Wo132SendLeftCombatAsync(string name)
+    {
+        try
+        {
+            if (!_isDamageAuthority || _wo121Stream is not Stream stream) return;
+            if (!_w132LastSent.TryGetValue(name, out var last) || (!last.InCombat && last.Target == NpcCombatTarget.None)) return;
+            var ev = last with
+            {
+                SenderMs = SenderMsNow(),
+                State = last.State with { Bits = BodyState2Bits.None },
+                Target = NpcCombatTarget.None,
+                TargetGhost = 0,
+            };
+            _w132LastSent[name] = ev;
+            await WritePacketAsync(stream, _actionOut.Build(ActionKind.NpcCombat, ActionPhase.Commit, ev.ToBytes()), _wo121Ct);
+            Interlocked.Increment(ref _w132CombatOut);
+            Console.WriteLine($"KUBA-38 npc-combat out {ev} -- its watch ended (weapon away) while the joiners' last word said it fights: they are told it left combat");
+        }
+        catch (Exception ex) { Console.WriteLine($"KUBA-38 npc-combat out {name} failed ({ex.GetType().Name})"); }
     }
 
     /// <summary>0x9B: a watched NPC's combat state -> NpcCombat on the action channel.</summary>
