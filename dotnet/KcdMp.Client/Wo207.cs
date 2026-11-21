@@ -24,6 +24,30 @@ public static class Wo207Trace
     /// <summary>A joined conversation's pipe calls (the starter's camera pump and its options/lines polls, the listener's lane): with
     /// mp_conv_pipe_first they count as a frame's at the pipe's gate (CombatPipe.FramesFirst), never behind the background polls.</summary>
     public const int ConvKind = 0x2000;
+    /// <summary>KUBA (2026-11-15): the copies' own control calls -- the native writer's binds and unbinds, a swing's write hold, the
+    /// writer's 1 Hz heartbeat. They count as a frame's at the pipe's gate: as background callers they waited behind ~86 polls a
+    /// second (MP-W207-Q pipe_bg_ms on the joiner: p50 1.3 s, p90 6.2 s, max 41.9 s in one session) and only 92 of 265 binds the
+    /// mod asked for reached the DLL. Twin: environment KCDMP_KUBA_COPY_PIPE_FIRST=off (the old background calls).</summary>
+    public const int CopyKind = 0x3000;
+    public static readonly bool CopyPipeFirst =
+        !string.Equals(Environment.GetEnvironmentVariable("KCDMP_KUBA_COPY_PIPE_FIRST"), "off", StringComparison.OrdinalIgnoreCase);
+    /// <summary>Marks the calling flow's pipe calls as the copies' (call at the top of the async flow that makes them).</summary>
+    public static void CopyFirst() { if (CopyPipeFirst) Kind.Value = CopyKind; }
+
+    /// <summary>KUBA 8: the local player's native position read (0x0A), the source of this player's figure on the partner's machine,
+    /// waited behind the polls as well (read cadence p95 0.4-0.7 s, max 4.9 s; the host saw this joiner's packets 240-500 ms apart with
+    /// 1.5-2.6 s holes -- the figure its NPCs fight). Twin: KCDMP_KUBA_POS_PIPE_FIRST=off.</summary>
+    public const int PosKind = 0x3002;
+    public static readonly bool PosPipeFirst =
+        !string.Equals(Environment.GetEnvironmentVariable("KCDMP_KUBA_POS_PIPE_FIRST"), "off", StringComparison.OrdinalIgnoreCase);
+    public static void PosFirst() { if (PosPipeFirst) Kind.Value = PosKind; }
+
+    /// <summary>KUBA 9: a host death applied on a copy runs its pipe calls (the guard's lift, ApplyDeath, the releases) in the first
+    /// lane. Twin: KCDMP_KUBA_DEATH_PIPE_FIRST=off.</summary>
+    public const int DeathKind = 0x3003;
+    public static readonly bool DeathPipeFirst =
+        !string.Equals(Environment.GetEnvironmentVariable("KCDMP_KUBA_DEATH_PIPE_FIRST"), "off", StringComparison.OrdinalIgnoreCase);
+    public static void DeathFirst() { if (DeathPipeFirst) Kind.Value = DeathKind; }
 
     public sealed class Row
     {

@@ -186,6 +186,15 @@ public partial class GameBridge
         // host when one arrives (a role change in flight) applies it all the same and says so in the line below
         long now = Environment.TickCount64;
         string by = m.Attacker.Length > 0 ? m.Attacker : "-";
+        // KUBA 30: a copy in a local duel strikes this player with its own brain, judged by this engine -- the host's NPC's blow on the
+        // figure is not this fight's (applying it too would hit him twice)
+        if (m.Attacker.Length > 0 && KubaDuelActive(m.Attacker))
+        {
+            long kd = Interlocked.Increment(ref _kubaDuelVerdictsDropped);
+            if (kd <= 40 || kd % 50 == 0)
+                Console.WriteLine(FormattableString.Invariant($"KUBA-30 host verdict dropped by={by} hid={hitId} dmg={m.Health:F1}/{m.Stamina:F1} -- the local duel's own blows count here [n={kd}]"));
+            return;
+        }
         if (!_w161Dedupe.Accept(src, hitId, now))
         {
             _w161Stats.Dup();

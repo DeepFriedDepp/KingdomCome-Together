@@ -123,6 +123,20 @@ int wo208_tests(int* passed) {
         WCHECK(!parse_feed("x 5 cm 0", &s) && !parse_feed("t 5 cm 0 s FullBody C 1 2 3 4 0102 ab", &s), "a malformed line is refused");
     }
 
+    // ---- KUBA 32: the partner copy's moves its NPC on the host shows (fragment names from the field's logs and probes)
+    WCHECK(kuba_mirror_frag("CombatAttackGen") && kuba_mirror_frag("CombatAttackSpecial") && kuba_mirror_frag("CombatAttackCombo"), "attacks are shown");
+    WCHECK(kuba_mirror_frag("CombatAttackSyncGen"), "a sync attack too (the engine plays its fallback when it has no partner)");
+    WCHECK(kuba_mirror_frag("CombatAttackFailedPB"), "an attack failed on a perfect block is the attacker's own move: shown");
+    WCHECK(kuba_mirror_frag("CombatDodgeBack") && kuba_mirror_frag("CombatFeint"), "dodges and feints are shown");
+    WCHECK(!kuba_mirror_frag("CombatHitGen") && !kuba_mirror_frag("CombatHitLowMovementGen") && !kuba_mirror_frag("CombatHitTorso"), "hit reactions are the replay's");
+    WCHECK(!kuba_mirror_frag("CombatBlockGen") && !kuba_mirror_frag("CombatPreblock"), "blocks are the replay's and the guard's");
+    WCHECK(!kuba_mirror_frag("CombatDeathGen") && !kuba_mirror_frag("CombatKnockdown") && !kuba_mirror_frag("DeathFront"), "deaths and knockdowns never");
+    WCHECK(!kuba_mirror_frag("CombatIdle") && !kuba_mirror_frag("CombatTurnBig") && !kuba_mirror_frag("CombatMovement") && !kuba_mirror_frag("MotionIdle"),
+           "the base is the NPC's own");
+    WCHECK(!kuba_mirror_frag("WeaponHolsterFull") && !kuba_mirror_frag("WeaponDraw"), "weapon moves are the NPC's own");
+    WCHECK(!kuba_mirror_frag("CombatClinchAttack"), "a clinch needs both bodies");
+    WCHECK(!kuba_mirror_frag("SittingIdle") && !kuba_mirror_frag("") && !kuba_mirror_frag(nullptr), "anything else, nothing");
+
     *passed = g_pass;
     return g_fail;
 }

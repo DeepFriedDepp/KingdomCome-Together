@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <unordered_set>
 #include <cstdio>
 #include <cstring>
 #include <mutex>
@@ -278,6 +279,7 @@ struct Body {
     // WO-187 C2: a figure's last fresh state with the combat bit (a quiet stream keeps it wo187rules::kFigureLingerS)
     State2 lastCombatSt{};
     double lastCombatBitAt = -1;
+    uint32_t kubaHeldLogs = 0;   // KUBA 33: held in combat mode for a partner's duel (one log line per hold)
     uint32_t lingers = 0;
 };
 std::unordered_map<uint32_t, Body> g_bodies;
@@ -293,6 +295,9 @@ struct Engage { State2 st{}; double at = 0; };
 std::unordered_map<uint32_t, Engage> g_engage;
 constexpr double kEngageStaleS = 3.0;   // no fresh host state for this long: the hold lets go
 std::atomic<uint32_t> c_engageHolds{0}, c_engageReleases{0};
+// KUBA 33 (host): partners' figures held in combat mode while NPCs here fight their duel copies -- figure eid -> duels. Main thread.
+std::unordered_map<uint32_t, int> g_kubaFigHold;
+bool kuba_figure_held(uint32_t eid) { return !g_kubaFigHold.empty() && g_kubaFigHold.count(eid) != 0; }
 // WO-187 C2: copies whose host NPC fights anyone (not only this player): combat mode held for the fight, no skirmish, no engagement.
 std::unordered_map<uint32_t, Engage> g_guardHold;
 std::atomic<uint32_t> c_guardHolds{0}, c_figureLingers{0}, c_idlePulses{0}, c_idleRequeues{0};
@@ -322,8 +327,11 @@ bool write_tag_inputs(void* actor, float cls, float vx, float vy) {
     });
 }
 
+void kuba_feet_apply(void* actor);   // KUBA 16 (defined with the B9 parameter block helpers below)
+std::atomic<int> g_kubaFeetLive{0};
 // UpdateMannequinTags entry (any thread). Cheap when nothing is driven.
 void on_update_tags(void* actor) {
+    if (g_kubaFeetLive.load(std::memory_order_relaxed) > 0) kuba_feet_apply(actor);
     if (g_gaitTable.live() <= 0 || !g_tags.load(std::memory_order_relaxed)) return;
     float cls, vx, vy;
     if (!g_gaitTable.read(actor, g_gaitTick.load(std::memory_order_relaxed), kGaitStaleTicks, &cls, &vx, &vy)) return;
@@ -1262,6 +1270,68 @@ void clear_turn(void* actor) {
     v = 0.0f; std::memcpy(b + at * 4, &v, 4);
     if (call_setparams(fs, anim, b)) c_turnCleared.fetch_add(1, std::memory_order_relaxed);
 }
+// ---- KUBA 16: a fighting copy's feet ------------------------------------------------------------------------------------------------
+// The guards' copies (joiner 20:07-20:33): 5,820 probe samples of their own combat footwork (C_CombatAnimActionMovement) while the
+// writer moved the body -- the clip on the skeleton, the legs still: the footwork's blend reads the animated character's desired motion
+// parameters, which the copy's own (held) movement request leaves at zero. Here, at the tag update (after the movement controller wrote
+// its frame), a copy the owner sees in its combat footwork gets TravelSpeed (id 0) and TravelAngle (id 2) from the rendered velocity, in
+// the block B9 already reads and writes (its own verified get / set). KCDMP_KUBA_COMBAT_FEET=off: as before.
+struct KubaFeet { void* actor = nullptr; float speed = 0, angle = 0; uint32_t tick = 0; };
+KubaFeet g_kubaFeet[160];   // KUBA 17: every near copy's locomotion too (the owner's copies, ~80 bound at most)
+std::atomic<uint32_t> c_kubaFeetWrites{0}, c_kubaFeetNoBlock{0};
+void kuba_feet_apply(void* actor) {
+    if (!g_noTurn || !actor) return;   // the B9 install verified the get / set slots
+    const uint32_t now = g_gaitTick.load(std::memory_order_relaxed);
+    for (const KubaFeet& f : g_kubaFeet) {
+        if (f.actor != actor || now - f.tick > kGaitStaleTicks) continue;
+        void* fa = vslot(actor, kActorGetAnimChar);
+        void* anim = nullptr;
+        if (!fa || !call_p0(fa, actor, &anim) || !anim) return;
+        void* fg = vslot(anim, kAnimGetParams);
+        void* fs = vslot(anim, kAnimSetParams);
+        void* blk = nullptr;
+        if (!fg || !fs || !call_p0(fg, anim, &blk) || !blk) return;
+        uint8_t b[0x20]{};
+        for (int i = 0; i < 0x20; ++i) if (!rd(blk, static_cast<size_t>(i), &b[i])) return;
+        int count = b[wo201rules::kParamCount];
+        if (count > wo201rules::kParamMax) { c_kubaFeetNoBlock.fetch_add(1, std::memory_order_relaxed); return; }
+        const uint8_t ids[2] = {0, 2};
+        const float vals[2] = {f.speed, f.angle};
+        for (int k = 0; k < 2; ++k) {
+            int at = -1;
+            if (!wo201rules::turn_param_at(b, sizeof b, ids[k], &at)) {
+                if (count >= wo201rules::kParamMax) continue;
+                at = count++;
+                b[wo201rules::kParamIds + at] = ids[k];
+                b[wo201rules::kParamCount] = static_cast<uint8_t>(count);
+            }
+            std::memcpy(b + at * 4, &vals[k], 4);
+        }
+        if (call_setparams(fs, anim, b)) c_kubaFeetWrites.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+}
+void kuba_feet_publish(void* actor, float speed, float angle) {
+    const uint32_t now = g_gaitTick.load(std::memory_order_relaxed);
+    KubaFeet* freeSlot = nullptr;
+    for (KubaFeet& f : g_kubaFeet) {
+        if (f.actor == actor) { f.speed = speed; f.angle = angle; f.tick = now; return; }
+        if (!freeSlot && (!f.actor || now - f.tick > kGaitStaleTicks * 4)) freeSlot = &f;
+    }
+    if (freeSlot) { freeSlot->actor = actor; freeSlot->speed = speed; freeSlot->angle = angle; freeSlot->tick = now; }
+}
+std::unordered_set<uint32_t> g_kubaFeetEids;   // main thread: the copies the owner saw in their combat footwork (wo208)
+bool kuba_feet_on() {
+    static int s = -1;
+    if (s < 0) {
+        char v[16] = "";
+        const DWORD n = GetEnvironmentVariableA("KCDMP_KUBA_COMBAT_FEET", v, sizeof v);
+        s = (n > 0 && n < sizeof v && (_stricmp(v, "off") == 0 || std::strcmp(v, "0") == 0)) ? 0 : 1;
+        logf("KUBA-16 a fighting copy's footwork gets its rendered speed and direction: %s (KCDMP_KUBA_COMBAT_FEET=off turns it off)", s ? "on" : "OFF");
+    }
+    return s == 1;
+}
+
 int __fastcall hk_aim_update(void* self, float dt) {
     if (g_cfgNoTurn.load(std::memory_order_relaxed) && g_copyTable.live() > 0) {
         void* actor = nullptr;
@@ -1677,6 +1747,15 @@ void body_frame(const char* key, void* ent, uint32_t eid, float renderSpeedMps, 
         b.cls = cls;
         apply_gait(b, cls);
         publish_gait(b, cls, tvx, tvy);
+        if (!b.avatar && !g_kubaFeetEids.empty() && g_kubaFeetEids.count(eid) && kuba_feet_on()) {   // KUBA 16
+            const float yaw = kcdmp::npcdrive::entity_yaw(b.ent);
+            const float fx = -std::sin(yaw), fy = std::cos(yaw);           // forward
+            const float rx = std::cos(yaw), ry = std::sin(yaw);            // right
+            const float lf = b.velX * fx + b.velY * fy, lr = b.velX * rx + b.velY * ry;
+            const float sp = std::sqrt(lf * lf + lr * lr);
+            const bool moving = sp >= 0.25f;
+            kuba_feet_publish(b.actor, moving ? sp : 0.0f, moving ? std::atan2(-lr, lf) : 0.0f);
+        }
         if (!b.avatar) {   // WO-201 follow-up B9: the copies the AI-movement wrapper may clear a stale turn on
             if (!g_copyTable.holds(b.copySlot, b.actor)) b.copySlot = g_copyTable.insert(b.actor, g_gaitTick.load(std::memory_order_relaxed));
             if (b.copySlot >= 0) g_copyTable.publish(b.copySlot, cls, 0.0f, 0.0f, g_gaitTick.load(std::memory_order_relaxed));
@@ -1739,6 +1818,19 @@ void body_frame(const char* key, void* ent, uint32_t eid, float renderSpeedMps, 
                  wo187rules::kFigureLingerS);
         }
         if (fresh) b.lingers = 0;
+        // KUBA 33 (host, 20.11: "it looked as if the NPC did not know whom to fight"): while an NPC of this world fights this partner's duel
+        // copy (KUBA 32), his figure stays in combat mode -- his own combat mode drops between his swings (the player's lock), and the NPC's
+        // brain read "target is out of combat" and ended its fight (Requested combat termination: Instant termination, 0.1-1.2 s after
+        // every duel start), its weapon away and drawn again by the hold. The held state is his last guard, never a block.
+        if (!(fresh && (st->bits & kBitCombat)) && kuba_figure_held(eid)) {
+            State2 h = b.lastCombatSt;
+            h.bits = kBitCombat;
+            if (b.combatHeld && b.kubaHeldLogs++ == 0)
+                logf("KUBA-33 figure=%s kept in combat mode: an NPC here fights his duel copy (his own combat mode dropped)", b.key.c_str());
+            apply_combat(b, &h, now);
+            return;
+        }
+        if (fresh && (st->bits & kBitCombat)) b.kubaHeldLogs = 0;
         apply_combat(b, fresh ? st : (linger ? &b.lastCombatSt : nullptr), now);
     }
     else if (b.automationOff || b.combatHeld) release_body(b, "toggle off");
@@ -2012,6 +2104,33 @@ uint8_t drop_fight_holds(uint32_t eid, const char* why) {
 
 void* actor_of(uint32_t eid) { return actor_by_eid(eid); }
 
+// KUBA 23 (host): an NPC's own block held up (or let go) the engine's own way -- the setter the figures' block goes through
+// (combat_SetBlock's unique call, WO-121). Main thread.
+// KUBA 23b (16.11 12:18-12:26: the setter alone was "BLOCK UP" 14 times, yet the guard turned, idled and took the hit -- its combat AI
+// (the automation) owns the block and overrode it): `automation` = the window's edges -- going up, the NPC's combat automation is
+// switched off first (as the figures' is, whose block does show: CombatBlockGen 900 on kcd2mp_1); going down it is given back.
+bool kuba_npc_set_block(uint32_t eid, bool on, bool automation) {
+    if (!g_combat.load() || !A.fnSetBlock) return false;
+    void* actor = actor_by_eid(eid);
+    void* ca = actor ? combat_actor_of(actor, false) : nullptr;
+    if (!ca) return false;
+    if (on && automation && A.fnAuto && g_autoCmd && !call_auto(A.fnAuto, g_autoCmd, ca, false)) return false;
+    const bool ok = call_setblock(A.fnSetBlock, ca, on, 0);
+    if (!on && automation && A.fnAuto && g_autoCmdOn) call_auto(A.fnAuto, g_autoCmdOn, ca, true);
+    return ok;
+}
+
+// KUBA 32 (host, main thread): an NPC's own combat automation on or off, the engine's way (combat_EnableAutomation's path) -- given back
+// before a partner's duel lets go of it, so its own AI holds the fight when the writer's hold is released (no sheathe and draw again).
+bool kuba_npc_automation(uint32_t eid, bool on) {
+    if (!g_combat.load() || !A.fnAuto) return false;
+    void* actor = actor_by_eid(eid);
+    void* ca = actor ? combat_actor_of(actor, false) : nullptr;
+    if (!ca) return false;
+    if (on) return g_autoCmdOn && call_auto(A.fnAuto, g_autoCmdOn, ca, true);
+    return g_autoCmd && call_auto(A.fnAuto, g_autoCmd, ca, false);
+}
+
 void loco_counters(uint32_t out[8]) {
     for (int k = 0; k < 2; ++k) {
         out[4 * k] = c_locoFrames[k].load(); out[4 * k + 1] = c_locoGlide[k].load(); out[4 * k + 2] = c_locoInPlace[k].load(); out[4 * k + 3] = c_locoClsChanges[k].load();
@@ -2141,6 +2260,33 @@ bool is_avatar_eid(uint32_t eid) {
     return it != g_bodies.end() && it->second.avatar;
 }
 
+// KUBA 16 (main thread): the owner's word that this copy's full body runs its combat footwork now (or no longer).
+void kuba_set_combat_feet(uint32_t eid, bool on) {
+    if (!eid) return;
+    if (on && !kuba_feet_on()) return;
+    if (on) g_kubaFeetEids.insert(eid); else g_kubaFeetEids.erase(eid);
+    g_kubaFeetLive.store(static_cast<int>(g_kubaFeetEids.size()), std::memory_order_relaxed);
+}
+void kuba_hold_figure_combat(uint32_t figEid, bool on) {
+    if (!figEid) return;
+    if (on) { ++g_kubaFigHold[figEid]; return; }
+    auto it = g_kubaFigHold.find(figEid);
+    if (it != g_kubaFigHold.end() && --it->second <= 0) g_kubaFigHold.erase(it);
+}
+int kuba_feet_status(char* out, int n) {
+    return std::snprintf(out, static_cast<size_t>(n), "kuba16 feet=%zu writes=%u no_block=%u b9=%d", g_kubaFeetEids.size(), c_kubaFeetWrites.load(),
+                         c_kubaFeetNoBlock.load(), g_noTurn ? 1 : 0);
+}
+
+bool body_render_speed(uint32_t eid, float* mps) {
+    auto it = g_bodies.find(eid);
+    if (it == g_bodies.end()) return false;
+    const float s = it->second.speedEma;
+    if (!(s >= 0.0f) || s > 100.0f) return false;   // also NaN
+    *mps = s;
+    return true;
+}
+
 void* player_combat_actor() { return g_playerCa.load(); }
 
 // WO-210 B.1 (any thread, read-only): a combat actor's opponent as a combat actor (its model +0x1118, checked by class), or null
@@ -2252,6 +2398,23 @@ bool pseudo_speed(uint32_t eid, float* ps, int* kind, int* count) {
     Body tmp; tmp.actor = actor; tmp.eid = eid;
     *count = body_range(tmp, 1e9);
     return true;
+}
+
+// KUBA 11: layer `layer`'s animation FIFO count only (the same verified path as skel_fifo_text, no names); -1 = unreadable.
+// 0 on a living body's layer 0 is the bind pose the player sees (a T-pose), whatever the Mannequin scope says it runs.
+int skel_fifo_count(void* ent, int layer) {
+    if (!g_skelReads || !ent || layer < 0 || layer > 15) return -1;
+    void* fnChar = vslot(ent, kEntGetCharacter);
+    void* ch = nullptr; void* sk = nullptr;
+    if (!fnChar || fnChar != g_fnEntGetChar || !call_p1u(fnChar, ent, 0, &ch) || !is_a(ch, g_vftCharInst)) return -1;
+    void* fnSkel = vslot(ch, kCharGetSkelAnim);
+    if (!fnSkel || !call_p0(fnSkel, ch, &sk) || !is_a(sk, g_vftSkelAnim)) return -1;
+    void* fnNum = vslot(sk, 0x78);
+    if (fnNum != g_vftSkelAnim[0x78 / 8]) return -1;
+    int cnt = -1;
+    KCDMP_FAULT_CALL(site, "motion::skel_fifo_count");
+    if (!fault::guarded(site, [&] { cnt = reinterpret_cast<int (*)(void*, int)>(fnNum)(sk, layer); })) return -1;
+    return cnt;
 }
 
 // WO-201 follow-up (research, read-only): layer `layer`'s animation FIFO -- the count, and each animation's first 0x50 bytes as text.

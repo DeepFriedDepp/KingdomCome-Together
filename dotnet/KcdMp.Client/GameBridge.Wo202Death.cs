@@ -101,7 +101,10 @@ public partial class GameBridge
                     else if (f is { Result: Protocol.Wo210FinishDone or Protocol.Wo210FinishAlready }) Interlocked.Increment(ref _w202DeathLying);
                     await Task.Delay(Wo195Rules.RagdollSettleMs);
                     await Wo210DeathCheckAsync(npc, how);
-                    if (f is { Result: Protocol.Wo210FinishDone or Protocol.Wo210FinishAlready }) return;
+                    // KUBA 9: "already-dead-state" does nothing to the body -- an upright one goes on to the physics fall below
+                    if (f is { Result: Protocol.Wo210FinishDone }) return;
+                    if (f is { Result: Protocol.Wo210FinishAlready } && !(KubaFinishUpright && upright0)) return;
+                    if (f is { Result: Protocol.Wo210FinishAlready }) Interlocked.Increment(ref _kubaFinishUpright);
                 }
                 if (!Wo195Rules.Upright(x.Payload[0], x.Payload[2]))
                 {

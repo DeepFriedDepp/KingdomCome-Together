@@ -1713,8 +1713,9 @@ public partial class GameBridge(ClientConfig config)
                     var (w131Send, w131Health, w131Fatal) = await Wo131GateOutboundAsync(soul, npcName, health, died, judge);
                     if (!w131Send) { _stats.DmgOutDropped++; if (byPlayer) Wo222NoteSend(npcName, false, "not-the-hosts-npc-here", health, stamina); return; }
                     health = w131Health; died = w131Fatal;
+                    byte kubaFlags = byPlayer ? await KubaDuelVerdictFlagsAsync(npcName) : (byte)0;   // KUBA 30 stage 2
                     await SendNpcDamageAsync(stream, npcName, stamina, health, suppressHitReaction: true, fatal: died,
-                                             attributed: byPlayer && _npcAttribution, judgeThere: judge);   // WO-121 Phase 5; WO-210 E.2
+                                             attributed: byPlayer && _npcAttribution, judgeThere: judge, extraFlags: kubaFlags);   // WO-121 Phase 5; WO-210 E.2
                     if (byPlayer && _npcAttribution) _w121AttribOut++;
                     if (byPlayer) Wo222NoteSend(npcName, true, "sent", health, stamina);
                     Console.WriteLine($"[combat] sent hit {health:F1} on '{npcName}' ({soul}){(died ? " FATAL" : "")}{(judge ? " (not judged here: the host's engine decides)" : "")}");
@@ -2211,7 +2212,7 @@ public partial class GameBridge(ClientConfig config)
                 LocalState? natState2 = nat;
                 if (nat is null && _posNative && state.HasValue && _posNativeRefusedByOracle)
                 {
-                    try { natState2 = await _combat.ReadLocalStateAsync(cts.Token); } catch (OperationCanceledException) { throw; } catch { }
+                    try { natState2 = await ReadLocalStateFirstAsync(cts.Token); } catch (OperationCanceledException) { throw; } catch { }
                 }
                 else if (!_posNative || !state.HasValue)
                     _cadNative.Break();
@@ -3844,6 +3845,7 @@ public partial class GameBridge(ClientConfig config)
 
     private async Task ApplyRemoteNpcDeathAsync(string npcName, Guid? knownLocalGuid, byte sourceGhostId, string via, CancellationToken ct, bool bypassDedupe = false)
     {
+        Wo207Trace.DeathFirst();   // KUBA 9: the death's own pipe calls in the first lane (scoped to this call)
         var now = DateTime.UtcNow;
         if (!bypassDedupe && _npcDeathAppliedUtc.TryGetValue(npcName, out var lastUtc) && now - lastUtc < NpcDeathDedupeWindow)
         {
@@ -5146,6 +5148,8 @@ public partial class GameBridge(ClientConfig config)
                                     $"MP-DMG dir=in ghost={ndSource} npc={ndName} hp={ndHealth:F1} st={ndStamina:F1} fatal={(ndFatal ? 1 : 0)} result={(localGuid is null ? "nosoul" : !ndHasDelta ? "nodelta" : ndApplied ? "applied" : "failed")} authority={(_isDamageAuthority ? 1 : 0)}"));
                                 if (ndApplied)
                                     _ = TriggerReactiveAggroAsync(ndSource, ct);
+                                if (ndApplied && !ndFatal && localGuid is not null)
+                                    _ = KubaAggroToPartnerAsync(ndSource, ndName);   // KUBA 33c: his blow landed -- the NPC fights him now
                                 if (ndFatal && _isDamageAuthority && Wo176IsArranged(ndName))
                                     Wo176NoteFatalKept(ndName, ndSource);   // WO-176 A1: a quest's arranged fight decides its own deaths
                                 else if (ndFatal)
@@ -6140,6 +6144,9 @@ public partial class GameBridge(ClientConfig config)
             case "w136_torch":
             case "w136_check":
                 Wo136OnEvent(name, arg);
+                return;
+            case "kuba_armed":       // KUBA 37: this player holds a weapon (1) or not (0)
+                KubaOnArmed(arg);
                 return;
             case "w137_sync":        // WO-137: shared quests
             case "w137_talk":
@@ -7189,7 +7196,9 @@ public partial class GameBridge(ClientConfig config)
                 if (p.Length != 2 || !NpcNamePattern.IsMatch(p[0]) || p[0].Length > NativeNpcCodec.MaxNameLen
                     || !ushort.TryParse(p[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out ushort ms)) return;
                 Interlocked.Increment(ref _nativeHolds);
-                _ = _combat.NpcHoldAsync(p[0], ms);
+                string holdName = p[0];
+                // KUBA: a swing's hold is due now -- at the pipe's gate it goes before the background polls
+                _ = Task.Run(() => { Wo207Trace.CopyFirst(); return _combat.NpcHoldAsync(holdName, ms); });
                 return;
             }
             case "npc_trace":
@@ -7221,7 +7230,7 @@ public partial class GameBridge(ClientConfig config)
                 if (p[1] == "off")
                 {
                     _nativeBound.TryRemove(npc, out _);   // WO-118 follow-up: Lua writes it: full rate again
-                    NativeBindInOrder(() => _combat.NpcBindAsync(false, 0, 0, 0, 0, 0, 0, npc));
+                    NativeBindInOrder(() => { Wo207Trace.CopyFirst(); return _combat.NpcBindAsync(false, 0, 0, 0, 0, 0, 0, npc); });   // KUBA: before the polls
                     return;
                 }
                 if (p.Length != 8
@@ -7244,6 +7253,7 @@ public partial class GameBridge(ClientConfig config)
                     Console.WriteLine($"[wo121] ghost {bindGhost} entity id 0x{eid:X} learned from its native bind");
                 NativeBindInOrder(async () =>
                 {
+                    Wo207Trace.CopyFirst();   // KUBA: the bind goes before the background polls at the pipe's gate
                     var (ok, reason) = await _combat.NpcBindAsync(true, eid, wuid, ax, ay, az, delayMs, npc);
                     if (ok) Interlocked.Increment(ref _nativeBindsOk); else Interlocked.Increment(ref _nativeBindsRefused);
                     if (ok) _nativeBound[npc] = 1; else _nativeBound.TryRemove(npc, out _);   // WO-118 follow-up
@@ -7302,6 +7312,7 @@ public partial class GameBridge(ClientConfig config)
         if (Interlocked.Exchange(ref _nativeHeartbeatBusy, 1) == 1) return;
         try
         {
+            Wo207Trace.CopyFirst();   // KUBA: the writer's heartbeat goes before the background polls (scoped to this async method)
             if (!_combat.IsConnected && !await _combat.EnsureConnectedAsync(ct)) return;
             var st = await _combat.NpcStatusAsync(ct);
             if (st is not { } s) return;
@@ -7407,7 +7418,7 @@ public partial class GameBridge(ClientConfig config)
     public async Task SendNpcDamageAsync(Stream stream, string npcName,
                                                 float stamina, float health,
                                                 bool suppressHitReaction,
-                                                bool fatal = false, bool attributed = false, bool judgeThere = false)
+                                                bool fatal = false, bool attributed = false, bool judgeThere = false, byte extraFlags = 0)
     {
         var nb = Encoding.UTF8.GetBytes(npcName);
         var packet = new byte[3 + 1 + nb.Length + Protocol.NpcDamageFixedTail];
@@ -7422,6 +7433,7 @@ public partial class GameBridge(ClientConfig config)
         if (fatal) ndFlags |= Protocol.NpcDamageFlagFatal;   // WO-86
         if (attributed) ndFlags |= Protocol.NpcDamageFlagAttributed;   // WO-121
         if (judgeThere) ndFlags |= Protocol.NpcDamageFlagJudgeThere;   // WO-210 E.2
+        ndFlags |= extraFlags;   // KUBA 30 stage 2: the local duel's verdict (0x10 | 0x20 blocked)
         packet[o + 8] = ndFlags;
         await WritePacketAsync(stream, packet);
     }
@@ -7484,6 +7496,13 @@ public partial class GameBridge(ClientConfig config)
     /// </summary>
     private long _posNativeRefusedAtMs;   // WO-164 TR: when the oracle refused (re-armed after PosNativeRearmMs)
     private const long PosNativeRearmMs = 60_000;
+
+    /// <summary>KUBA 8: the local player's native read, ahead of the background polls at the pipe's gate (the kind is scoped to this call).</summary>
+    private async Task<LocalState?> ReadLocalStateFirstAsync(CancellationToken ct)
+    {
+        Wo207Trace.PosFirst();
+        return await _combat.ReadLocalStateAsync(ct);
+    }
 
     private async Task<LocalState?> ReadNativeStateAsync(PlayerState oracle, CancellationToken ct)
     {

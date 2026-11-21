@@ -12,12 +12,20 @@
 //   133 StreamIn [n:1] n x ([eid:4][cm:1][nsc:1] nsc x 34-byte scope) -> [n:1]                         (A.2, the joiner: kept for the owner)
 #pragma once
 #include <cstdint>
+#include <string>
 
 namespace kcdmp::wo208 {
 
 constexpr uint8_t kOpConfig = 130, kOpStatus = 131, kOpStreamRead = 132, kOpStreamIn = 133;
 // WO-210 (the owner's data lives here): 140 the asks the agent does the game's way, 141 the host's stream forgets bodies (sent again)
 constexpr uint8_t kOpW210Asks = 140, kOpW210StreamForget = 141;
+// KUBA 30 stage 2: 150 the joiner's duel copies as states with their position, 151 the host's NPC in a partner's duel (on/off by name)
+constexpr uint8_t kOpKubaDuelRead = 240, kOpKubaRemoteDuel = 241, kOpKubaTakeVerdict = 242;
+// KUBA 32 ("the brain goes where the fight is"): 153 the host takes one duel frame of a partner (his copy's own actions to replay on its
+// NPC) and answers the NPCs it took back itself (the host player's aggro); 154 the joiner: the host took this copy back -- end its duel now
+constexpr uint8_t kOpKubaRemoteFrame = 243, kOpKubaDuelRelease = 244;
+// The per-body tail KUBA 32 adds to every op 150 body: [flags:1 bit0 block][guardZone:1][guardStance:1][atkZone:1][hpPct:1][rsv:1]
+constexpr size_t kKubaDuelExt = 6;
 
 bool on(uint32_t bit);   // wo208_rules.h kBit*: the agent's word, less the bench twin's
 int status(char* out, int n);
@@ -34,6 +42,41 @@ uint8_t host_family(uint32_t eid);
 // installed, withdrawn or reseated over it) -- never refused as "owner-owns" (WO-214 D.2). The result is the swing's.
 int owner_play_row(uint32_t eid, const char* spec);   // rttr::SwingResult as an int
 int owner_rows_status(char* out, int n);
+// KUBA 30 (main thread): an ask for the agent (op 140): kind 2 = the copy's local duel starts (its brain resumed), 3 = it ends
+void kuba_push_ask(uint8_t kind, const std::string& name);
+constexpr uint8_t kKubaAskDuelOn = 226, kKubaAskDuelOff = 227;   // 0.65 merge: 2 and 3 are upstream's posture-late and dormant
+// KUBA 30 (main thread): the copies in a local duel -- the owner installs nothing on them (their own brain animates them)
+void kuba_set_duel(uint32_t eid, bool on);
+bool kuba_in_duel(uint32_t eid);
+// KUBA 30 stage 2 (any thread): this engine's verdict (1 hit, 2 blocked, 3 perfect, 4 broken) on the local player's blow on a duel copy
+void kuba_note_duel_verdict(uint32_t eid, uint8_t outcome);
+// KUBA 30 stage 2 (host, main thread): its NPC is driven by a partner's local duel
+bool kuba_remote_duel(uint32_t eid);
+// KUBA 32 (host, any thread): the host player's own blow landed on this NPC (the hit hook) -- a partner's duel with it ends, the aggro is his
+void kuba_note_host_blow(uint32_t victimEid);
+// KUBA 32 (joiner, main thread): the host took this duel copy back (op 154) -- true once
+bool kuba_release_take(uint32_t eid);
+// KUBA 32 (host, main thread, every frame): the partners' duels replayed on their NPCs
+void kuba_remote_tick();
+// KUBA 33 (both, main thread): a duel NPC's brain kept in its fight -- never flees or surrenders, sees no crime (corpses, murders, a drawn
+// weapon in a fistfight) -- the game's own per-soul contexts, set at the duel's start, and only those it wrote cleared at its end
+void kuba_duel_mind(uint32_t eid, bool on, const char* who);
+// KUBA 33c (host, main thread): the NPC fights `targetEid` (the host player 0x7777 or a partner's figure) -- its logical target and the
+// game's combat_forcedTarget pin, held 30 s after the last refresh; the tick lifts old pins
+bool kuba_aggro_to(uint32_t eid, uint32_t targetEid, const char* why);
+void kuba_aggro_tick(double now);
+void kuba_host_blow_free(uint32_t victimEid);
+constexpr uint8_t kOpKubaAggro = 245;   // [op][src][nameLen][name] -> [r:1] 1 his now, 2 in his duel, 0 nothing
+// KUBA 34 (joiner): the host runs this fork (it answered the agent's hello) -- only then may a copy's brain fight here (a host on the
+// original mod never takes the duel's frames: the copy and its NPC fight two fights). [op][on:1] -> [on:1]. KCDMP_KUBA_HOST_CHECK=off.
+constexpr uint8_t kOpKubaHostOk = 246;
+bool kuba_host_ok();
+// KUBA 37 (joiner): this player holds a weapon (the agent, from the mod's hand poll). [op][on:1] -> [on:1]. While it does, a duel copy's
+// brain is given the game's combat_forceArmed (its weapon out, as the vanilla brain draws once an armed player attacks: this brain never
+// learns of an armed assault, the blows are judged on the host); bare hands leave its fists alone. Cleared at the duel's end.
+// KCDMP_KUBA_DUEL_ARMED=off.
+constexpr uint8_t kOpKubaPlayerArmed = 247;
+void kuba_duel_armed_tick(uint32_t eid, const char* name);
 // The same for the writers of a copy's COMBAT STATE (its engagement in the player's fight, its strike window, its opponent, its guard
 // hold): only the bench's A.1 copy (driven "only from the recorded state"); with the owner on every copy they stay (the owner's rule 7:
 // combat relations are read, never rewritten by it, and Part B needs the engagement and the strike window).

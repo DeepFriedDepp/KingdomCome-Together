@@ -360,6 +360,7 @@ void* hit_common(bool missile, HitFn orig, void* self, void* out, const uint8_t*
             std::lock_guard<std::mutex> lock(g_qMutex);
             if (g_marks.size() < 128) g_marks.push_back({veid, 0});
         }
+        wo208::kuba_note_host_blow(veid);   // KUBA 32: this player's blow takes a partner's duel NPC back (its aggro is his now)
         // WO-176 (B1a): the engine's own verdict on the host's real blow (the record it built: block +0x54, second +0x55, perfect +0x56,
         // broken +0x57) -- the baseline the joiner's real hits are compared with. Read only, never changes the blow.
         if (!missile) {
@@ -367,6 +368,7 @@ void* hit_common(bool missile, HitFn orig, void* self, void* out, const uint8_t*
             if (rd(data, 0x54, &v)) {
                 const uint8_t blk = v & 0xFF, second = (v >> 8) & 0xFF, pb = (v >> 16) & 0xFF, broken = (v >> 24) & 0xFF;
                 const int k = broken ? 4 : pb ? 3 : blk ? 2 : 1;
+                wo208::kuba_note_duel_verdict(veid, static_cast<uint8_t>(k));   // KUBA 30 stage 2: this engine's verdict on a duel copy, for the host
                 static const char* const kNames[] = { "-", "hit", "blocked", "pb", "broken" };
                 kcdmp::blow_ledger::on_player_blow(veid, static_cast<uint8_t>(k));   // WO-222 A.0 (the host) / E (a joiner's touch)
                 const uint32_t n = c_hostBlows[k].fetch_add(1, std::memory_order_relaxed);

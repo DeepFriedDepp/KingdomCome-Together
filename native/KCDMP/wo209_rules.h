@@ -58,6 +58,16 @@ inline bool owner_keeps(bool owned, float distM) { return distM >= 0 && distM <=
 // rc1's taverns: the owner's installs piled up behind a seated copy's own actions that never finished). Unreadable (-1): no cap.
 constexpr int kOwnerQueueCap = 6;
 inline bool owner_queue_full(int queued) { return queued >= kOwnerQueueCap; }
+// After 0.63.9: that cap counted the COPY'S OWN queued actions too, and a body whose own engine keeps a long queue of its own (a caravan
+// soldier on a wagon: its wagon idle, its seat, its look pose) then got nothing of the host's at all -- the field, 2026-11-15: 1,558
+// hand-overs installed nothing, every one of them refused here, the watchdog called it a missing posture 4,288 times (126 reseats of
+// "standing, want=working" on the caravan), and the engine's own limit was reached 9 times in the whole session. What the cap is really
+// for is (a) one pending action of ours at a time -- the pile-up rc1's taverns saw was OURS, nine idle-state actions of the owner behind
+// a seated copy's own look action -- and (b) never making the engine refuse an 11th action. So: ours pending -> withdraw it first (as
+// 0.63.9 did), and refuse only where the engine itself is about to.
+constexpr int kEngineQueueLimit = 10;   // the engine's own "attempting to queue too many actions"
+inline bool owner_queue_refuses(int queued) { return queued >= kEngineQueueLimit - 1; }
+inline bool owner_queue_crowded(int queued, int ours) { return ours >= 1 || owner_queue_refuses(queued); }
 
 inline bool activity_refused_for_owner(bool probeOnly, bool owned, bool neutral, bool fixOn) {
     return probeOnly || (owned && !(neutral && fixOn));

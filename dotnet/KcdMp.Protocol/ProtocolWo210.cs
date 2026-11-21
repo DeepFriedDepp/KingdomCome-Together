@@ -37,4 +37,15 @@ public static partial class Protocol
     public const byte NpcAnimAskUp = 0x7E, NpcAnimAskDown = 0x7F;
     public const int NpcAnimAskMaxBodies = 32;
     public const int NpcAnimAskBodyMax = 1 + NpcAnimAskMaxBodies * (1 + MaxNpcNameLen);
+
+    /// <summary>
+    /// KUBA 30 stage 2 / KUBA 32 (the local duel, reversed for the host): the joiner's copies its own brain fights it with, 30 times a
+    /// second -- [count:1] then per body [nameLen:1][name][x:4f][y:4f][z:4f][yaw:4f][cm:1][nsc:1] nsc x NpcAnimScopeLen (FullBody /
+    /// UpperBody, the NpcAnim scope layout) [flags:1 bit0 block][guardZone:1][guardStance:1][atkZone:1][hpPct:1][rsv:1] (KUBA 32). The
+    /// host's NPC is that brain's body there (its place, its guard, its moves). Joiner to host.
+    /// </summary>
+    public const byte KubaDuelUp = 0xE0, KubaDuelDown = 0xE1;   // KUBA (0.65 merge): 0x80 is upstream's LinkHello
+    public const int KubaDuelMaxBodies = 4;
+    public const int KubaDuelExtLen = 6;
+    public const int KubaDuelBodyMax = 1 + KubaDuelMaxBodies * (1 + MaxNpcNameLen + 16 + 2 + 2 * NpcAnimScopeLen + KubaDuelExtLen);
 }

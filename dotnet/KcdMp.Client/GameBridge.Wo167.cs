@@ -354,6 +354,17 @@ public partial class GameBridge
             if (_w190CopyWeaponHold && Wo190Rules.Lights.Contains(right)) return;   // WO-190 A2: a torch is never a fighting copy's weapon
             w = right;
         }
+        // KUBA 35 (20.11 14:33, "NPCs that turn to player 2 attack me with fists"): in this player's local duel the host's NPC only replays
+        // the copy's moves (its own hand reads empty 0.6 s after the duel starts: ttkc_man_1 14:33:02 R=-, 14:33:03 R=bdb6...) -- that row
+        // holstered the copy's weapon and drew it again a second later. In a duel the copy's own brain holds the weapon: an empty hand is
+        // neither remembered (the duel's end draws the known weapon) nor told; a weapon is remembered only.
+        if (KubaDuelActive(r.Name))
+        {
+            if (w != "-") _w167HostWeapon[r.Name] = w;
+            long k = Interlocked.Increment(ref _kubaDuelHandsIgnored);
+            if (k <= 20 || k % 50 == 0) Console.WriteLine($"KUBA-35 npc={r.Name}: the host's hand row ({(w == "-" ? "empty" : w[..Math.Min(8, w.Length)])}) ignored -- in the local duel its own brain holds the weapon [n={k}]");
+            return;
+        }
         string was = _w167HostWeapon.TryGetValue(r.Name, out var pw) ? pw : "";
         _w167HostWeapon[r.Name] = w;
         if (w == was) return;
@@ -376,12 +387,15 @@ public partial class GameBridge
     private void Wo167RowWeapon(string npc, ActionRowCatalog.Row row)
     {
         if (!_w167CopyWeapons) return;
+        if (KubaDuelActive(npc)) return;   // KUBA 35: a duel copy's own brain holds its weapon
         bool? armed = Wo167Rules.RowArmed(row.Tags);
         if (armed is null) return;
         string cls = armed == false ? "-" : (_w167HostWeapon.TryGetValue(npc, out var w) && w != "-" ? w : "?");
         Interlocked.Increment(ref _w167WeaponCalls);
         _ = ExecLuaAsync($"if KCD2MP_W167Weapon then KCD2MP_W167Weapon(\"{npc}\", \"{cls}\", \"row\") end");
     }
+
+    private long _kubaDuelHandsIgnored;
 
     /// <summary>C2: the host reported its NPC in combat in the last 10 s (WO-164's own record of the host's combat events).</summary>
     private bool W167HostFought(string npc) => _w164HostCombatTold.TryGetValue(npc, out long at) && Environment.TickCount64 - at < 10_000;

@@ -2921,13 +2921,58 @@ TUNE.NPC_NATIVE_BIND_WAIT_S = 1.0 -- a fresh puppet waits this long for its firs
 -- followed a native-to-legacy hand-over by 0.3-6.7 s), not an NPC's own brain.
 TUNE.NPC_NATIVE_UNBIND_HOLD_S = 1.5
 
+-- KUBA patience (2026-11-14, joiner session 21:47-21:53): the heartbeat and the bind's answer reach Lua through the
+-- agent's single pipe lane to the DLL, where background calls wait behind the relay frames' calls (MP-W207-Q
+-- pipe_bg_ms: p50 0.08-0.36 s, p90 2.6-2.9 s, p99 4.9-5.6 s over three sessions). With a 3.0 s limit the heartbeat
+-- went "stale" 9 times in 6 minutes and every one of those unbound EVERY copy at once (60-94 "npc_native ... off tick"
+-- per trip, 573 in all): ~90 NPCs handed to the 50 ms Lua writer with its legacy clips (807 "Animation-queue
+-- overflow" in kcd.log), held still 1.5 s, then bound again and blended back -- the "teleporting, appearing,
+-- disappearing" copies. The DLL was alive all along (no drop, no fault): the answer was late, not missing.
+-- A late bind answer (>3 s) also re-sent the bind, and every re-bind resets the DLL's writer state (rebind=1 lines).
+-- On: stale after 10 s (over the measured p99), a bind re-sent after 8 s. A real loss still fails closed: a broken
+-- pipe stops the heartbeat entirely, and the DLL's own drops still come back at once as a nack.
+-- Twin: mp_npc_native_patience off = the original 3.0 s / 3.0 s.
+KCD2MP.npcNativePatience = true
+function KCD2MP_ApplyNativePatience()
+    if KCD2MP.npcNativePatience then
+        TUNE.NPC_NATIVE_STALE_S, TUNE.NPC_NATIVE_RESEND_S = 10.0, 8.0
+    else
+        TUNE.NPC_NATIVE_STALE_S, TUNE.NPC_NATIVE_RESEND_S = 3.0, 3.0
+    end
+end
+KCD2MP_ApplyNativePatience()
+function KCD2MP_SetNativePatience(arg)
+    local s = tostring(arg or ""):lower():gsub("^%s+", ""):gsub("%s+$", "")
+    if s == "on" or s == "1" or s == "true" then KCD2MP.npcNativePatience = true
+    elseif s == "off" or s == "0" or s == "false" then KCD2MP.npcNativePatience = false
+    elseif s ~= "" and s ~= "%line" and s ~= "nil" then
+        mp_log("mp_npc_native_patience: expected on|off, got '" .. tostring(arg) .. "'")
+        return false
+    end
+    KCD2MP_ApplyNativePatience()
+    local n = KCD2MP._npcNative
+    mp_log(string.format("KUBA-PATIENCE %s stale_s=%.1f resend_s=%.1f | stale_trips=%d late_beats=%d max_gap_s=%.1f",
+        KCD2MP.npcNativePatience and "on" or "off", TUNE.NPC_NATIVE_STALE_S, TUNE.NPC_NATIVE_RESEND_S,
+        n.staleTrips or 0, n.lateBeats or 0, n.maxGap or 0))
+    return true
+end
+
 function KCD2MP_NpcNativeHealthy()
     local n = KCD2MP._npcNative
     -- WO-214 B (one_bind): the agent's heartbeat reaches this file through the game's console, which a busy joiner runs seconds behind --
     -- three seconds without one unbound every puppet ("off tick", 184 in the field) and this file wrote them all itself; ten now
     local staleS = (KCD2MP_W214On and KCD2MP_W214On("one_bind")) and 10.0 or TUNE.NPC_NATIVE_STALE_S
-    return KCD2MP.npcNativeWrite and n.armed and n.on and n.aliveAt ~= nil
-        and (os.clock() - n.aliveAt) < staleS
+    local age = n.aliveAt and (os.clock() - n.aliveAt) or nil
+    local healthy = KCD2MP.npcNativeWrite and n.armed and n.on and age ~= nil
+        and age < staleS
+    -- KUBA patience: say when the heartbeat's age (and nothing else) takes the writer away -- it used to be silent
+    if n.wasHealthy and not healthy and age and age >= staleS then
+        n.staleTrips = (n.staleTrips or 0) + 1
+        mp_log(string.format("KUBA-PATIENCE native=stale heartbeat_age_s=%.1f limit_s=%.1f bound=%d trips=%d -- every copy goes back to the Lua writer",
+            age, staleS, n.bound or 0, n.staleTrips))
+    end
+    n.wasHealthy = healthy and true or false
+    return healthy
 end
 
 -- The agent's heartbeat (GameBridge.NativeHeartbeatAsync), once a second while
@@ -2935,6 +2980,17 @@ end
 function KCD2MP_NpcNativeAlive(armed, on, bound, writing)
     local n = KCD2MP._npcNative
     local was = KCD2MP_NpcNativeHealthy()
+    -- KUBA patience: the gap since the last beat (should be ~1 s); one over 3 s is a trip the old limit would have made
+    if n.aliveAt then
+        local gap = os.clock() - n.aliveAt
+        if gap > (n.maxGap or 0) then n.maxGap = gap end
+        if gap > 3.0 then
+            n.lateBeats = (n.lateBeats or 0) + 1
+            mp_log(string.format("KUBA-PATIENCE heartbeat late gap_s=%.1f limit_s=%.1f late=%d trips=%d max_gap_s=%.1f%s",
+                gap, TUNE.NPC_NATIVE_STALE_S, n.lateBeats, n.staleTrips or 0, n.maxGap,
+                gap < TUNE.NPC_NATIVE_STALE_S and " -- copies kept bound (the old 3 s limit would have unbound them all)" or ""))
+        end
+    end
     n.aliveAt = os.clock()
     n.armed = (tonumber(armed) or 0) == 1
     n.on = (tonumber(on) or 0) == 1
@@ -3053,9 +3109,59 @@ end
 -- rendered speed, riding, the corpse freeze, labels). A riding, mounted or
 -- frozen ghost is never bound; a one-shot holds the writer for its window.
 TUNE.GHOST_NATIVE_DELAY_MS = 100   -- ~3.5 samples of the ~30 Hz player stream; the ring holds 8
+
+-- KUBA 25 (host, 16.11: "as player 2 it is incredibly hard to kill an enemy, the same stats and weapon kill 3 as host much faster"):
+-- the joiner's blow is judged on the host with the FIGURE as the attacker, and the figure's soul has a plain NPC's stats and skills --
+-- 49 of 58 replayed blows took 0 hp (only 33-48 stamina). The figure is given the local player's stats and combat skills (raised to
+-- them the game's own way: a level is never lowered), checked by reading them back, again every 60 s. Kuba's two Henrys are alike;
+-- the joiner's own numbers would need a wire field (not done). mp_kuba_figure_stats on|off.
+KCD2MP.kubaFigStats = KCD2MP.kubaFigStats == nil and true or KCD2MP.kubaFigStats
+local KUBA_FIG_STATS = { "strength", "agility", "vitality", "speech" }
+local KUBA_FIG_SKILLS = { "fencing", "weapon_sword", "weapon_axe", "weapon_mace", "weapon_large", "weapon_heavy", "weapon_polearm",
+                          "weapon_unarmed", "weapon_shield", "defense", "warfare", "heavy_armour", "unarmed" }
+local function kuba_lv(soul, getter, nm)
+    local v
+    pcall(function() if soul[getter] then v = tonumber(soul[getter](soul, nm)) end end)
+    return v
+end
+function KCD2MP_KubaFigureStats(name, e)
+    if not KCD2MP.kubaFigStats or not e or not e.soul or not player or not player.soul then return end
+    local raised, same, missing, notes = 0, 0, 0, {}
+    local function one(getter, adv, nm)
+        local want = kuba_lv(player.soul, getter, nm)
+        local have = kuba_lv(e.soul, getter, nm)
+        if want == nil or have == nil then missing = missing + 1; return end
+        if have >= want then same = same + 1; return end
+        pcall(function() if e.soul[adv] then e.soul[adv](e.soul, nm, want) end end)
+        local now = kuba_lv(e.soul, getter, nm)
+        raised = raised + 1
+        notes[#notes + 1] = string.format("%s %s->%s(want %s)", nm, tostring(have), tostring(now), tostring(want))
+    end
+    for _, nm in ipairs(KUBA_FIG_STATS) do one("GetStatLevel", "AdvanceToStatLevel", nm) end
+    for _, nm in ipairs(KUBA_FIG_SKILLS) do one("GetSkillLevel", "AdvanceToSkillLevel", nm) end
+    if raised > 0 or not KCD2MP._kubaFigLogged then
+        KCD2MP._kubaFigLogged = true
+        mp_log(string.format("KUBA-25 figure %s gets this player's stats/skills: raised=%d already=%d unknown=%d %s", tostring(name), raised, same,
+            missing, table.concat(notes, ", ")))
+    end
+end
+function KCD2MP_KubaFigureStatsSet(arg)
+    local v = KCD2MP_Wo122ParseBool(arg)
+    if v == "bad" or v == nil then mp_log("KUBA-25 mp_kuba_figure_stats is " .. (KCD2MP.kubaFigStats and "on" or "off")); return v ~= "bad" end
+    KCD2MP.kubaFigStats = v
+    mp_log("KUBA-25 mp_kuba_figure_stats " .. (v and "on" or "off"))
+    return true
+end
+System.AddCCommand("mp_kuba_figure_stats", "KCD2MP_KubaFigureStatsSet(%line)",
+    "KUBA 25: the partner's figure gets this player's stats and combat skills (its blows are judged with them): on|off")
+
 function KCD2MP_GhostNativeSync(id, ghost, want)
     local st = ghost and ghost.istate
     if not st then return end
+    if ghost.entity and os.clock() - (st.kubaStatsAt or -1000) >= 60 then   -- KUBA 25
+        st.kubaStatsAt = os.clock()
+        pcall(KCD2MP_KubaFigureStats, "kcd2mp_" .. tostring(id), ghost.entity)
+    end
     local name = "kcd2mp_" .. tostring(id)
     local now = os.clock()
     if want and st.dismountPending then want = false end   -- 0.28.3: still on the horse
@@ -3179,12 +3285,26 @@ function KCD2MP_Wo121GaitNative(isAvatar)
 end
 
 -- Stop the Lua loop's clip once, so the engine's Mannequin shows through.
+-- KUBA 11 (2026-11-15): StopAnimation(0, 0) empties the skeleton's layer 0 -- the engine's own Mannequin clip with it. A body bound
+-- with no clip of ours (its first bind, a re-bind) lost the animation its scope still runs: the bind pose (a T-pose) until the engine's
+-- next fragment. Now the layer is stopped only when this file itself started a clip on it (st.animTag / st.animLoopName);
+-- mp_lua_park_stop_always on = as 0.63.9.
+KCD2MP.kubaParkStopAlways = false
 function KCD2MP_Wo121Park(ent, st, who)
     st.w121Parked = true
+    local ours = st.animTag ~= nil or st.animLoopName ~= nil
     st.animLoopName = nil
-    local ok = pcall(function() ent:StopAnimation(0, 0) end)
+    local ok = "skipped"
+    if ours or KCD2MP.kubaParkStopAlways then
+        ok = tostring(pcall(function() ent:StopAnimation(0, 0) end))
+    end
     KCD2MP.w121.parked = KCD2MP.w121.parked + 1
-    mp_log(string.format("WO121-GAIT body=%s lua_clip=parked stop=%s -- the engine's own gait/stance drives it", tostring(who), tostring(ok)))
+    mp_log(string.format("WO121-GAIT body=%s lua_clip=parked stop=%s -- the engine's own gait/stance drives it", tostring(who), ok))
+end
+function KCD2MP_SetParkStopAlways(arg)
+    local s = tostring(arg or ""):lower()
+    if s == "on" or s == "1" then KCD2MP.kubaParkStopAlways = true elseif s == "off" or s == "0" then KCD2MP.kubaParkStopAlways = false end
+    mp_log("KUBA-PARK stop_always=" .. (KCD2MP.kubaParkStopAlways and "on (as 0.63.9)" or "off (only a clip this file started is stopped)"))
 end
 
 function KCD2MP_NpcNativeCfgEmit()
@@ -4340,6 +4460,8 @@ local function mp_wo102_pause(name, p, why)
     -- WO-137 Phase 4: the copy the local player is talking to runs its own brain
     -- for the conversation (KCD2MP_W137TalkResume); paused again at its end.
     if KCD2MP.w137 and KCD2MP.w137.talking[name] then return end
+    -- KUBA 30: nor a copy in a local duel with this player (its own brain fights him here; KCD2MP_KubaDuel)
+    if KCD2MP._kubaDuel and KCD2MP._kubaDuel[name] then return end
     -- WO-201 B8: nor a scoped twin a conversation of this player still wants (a pending request, WO-170's scene hold, 2 s after its end)
     if KCD2MP_W201TwinWanted and KCD2MP_W201TwinWanted(name, why) then return end
     -- WO-151 3.4: nor a copy the scene guard resumed for a scene's end positioning (until the release).
@@ -4403,6 +4525,120 @@ local function mp_wo102_resume(name, why)
     if KCD2MP_W190CopyLook then pcall(KCD2MP_W190CopyLook, name, true, "resume") end   -- WO-190 A3: its own look again
     mp_auth_log(name, "resume", "?", why, os.clock() - at)
     mp_pause_log(name, "resume", exec, why, "?", os.clock() - at)
+end
+
+-- KUBA 30 (joiner): the local duel. A copy whose host NPC fights only this player runs its OWN brain here for the fight -- its moves,
+-- swings, blocks and reactions are this game's own, against this player, with no stream lag (the DLL stops writing its position and
+-- installing the host's animations while the duel lasts; its health and death still come from the host). The DLL asks (op 140 kinds
+-- 2 / 3) through the agent; the end pauses the brain again and the stream takes the body back.
+KCD2MP._kubaDuel = KCD2MP._kubaDuel or {}
+KCD2MP._kubaDuelStats = KCD2MP._kubaDuelStats or { starts = 0, ends = 0 }
+
+-- KUBA 37: does this player hold a weapon (anything in a hand but a light)? Told to the agent on a change; the DLL gives a duel copy's
+-- brain the game's combat_forceArmed while he does (fists against bare hands stay the vanilla fistfight).
+KCD2MP._kubaArmed = nil
+KCD2MP._kubaArmedAt = 0
+function KCD2MP_KubaArmedTick()
+    if not (player and player.human) then return end
+    local now = os.clock()
+    if now - (KCD2MP._kubaArmedAt or 0) < 0.25 then return end
+    KCD2MP._kubaArmedAt = now
+    local w = KCD2MP.w136
+    if not (w and w.handClass) then return end
+    local armed, held = false, "-"
+    for _, h in ipairs({ 0, 1 }) do
+        local c = w.handClass(player, h)
+        local light = c and ((w.TORCHES and w.TORCHES[c]) or (KCD2MP.w144 and KCD2MP.w144.LIGHTS and KCD2MP.w144.LIGHTS[c]))
+        if c and not light then armed = true; held = string.sub(c, 1, 8) end
+    end
+    if armed ~= KCD2MP._kubaArmed then
+        KCD2MP._kubaArmed = armed
+        mp_log(string.format("KUBA-37 this player %s (%s)", armed and "holds a weapon" or "holds no weapon", held))
+        KCD2MP_EmitEvent("kuba_armed", armed and "1" or "0")
+    end
+end
+
+-- KUBA 32 (host): an NPC of this world a partner's local duel drives -- ONE brain, his copy's: here the agent binds it to the native
+-- writer (his copy's place, 30 times a second) and the DLL gives it his copy's guard and moves (wo208.cpp KUBA 32); its own brain is never
+-- paused (target, weapon, senses stay), only its combat automation is off. This table is the log's only (30f's nudge is gone).
+KCD2MP._kubaHostDuel = KCD2MP._kubaHostDuel or {}
+function KCD2MP_KubaHostDuel(name, on, x, y, z)
+    name = tostring(name)
+    if not string.find(name, "^[%w_]+$") then return false end
+    on = tonumber(on) == 1
+    local e = nil
+    pcall(function() e = System.GetEntityByName(name) end)
+    if on then
+        if KCD2MP._kubaHostDuel[name] then return true end
+        if not e then mp_log("KUBA-30 host duel npc=" .. name .. ": no such entity here"); return false end
+        local hexid = string.match(tostring(e.id), "(%x+)%s*$")
+        if not hexid then return false end
+        local wuid = "0"
+        pcall(function() if e.soul and e.soul.GetId then wuid = string.match(tostring(e.soul:GetId()), "(%x+)%s*$") or "0" end end)
+        -- KUBA 32: the host's brain stays ON (30f's lesson: paused, it lost its target and weapon); its automation is off in the DLL and
+        -- it shows the partner copy's moves -- one fight, the same on both screens
+        KCD2MP._kubaHostDuel[name] = os.clock()
+        mp_log(string.format("KUBA-32 host duel start npc=%s -- the partner's copy's brain fights; this NPC shows its moves, guard and place", name))
+    else
+        local at = KCD2MP._kubaHostDuel[name]
+        if not at then return true end
+        KCD2MP._kubaHostDuel[name] = nil
+        mp_log(string.format("KUBA-32 host duel end npc=%s after %.1f s -- its own brain again", name, os.clock() - at))
+    end
+    return true
+end
+-- KUBA 30f: the partner's duel copy is at x,y,z -- this host NPC (brain on) is put there when it has drifted over 2.5 m from it (at most once
+-- in 2 s; never while it is dead or carried), so both screens show the fight in one place
+KCD2MP._kubaNudgeAt = KCD2MP._kubaNudgeAt or {}
+KCD2MP._kubaNudges = KCD2MP._kubaNudges or 0
+function KCD2MP_KubaHostNudge(name, x, y, z)
+    name = tostring(name)
+    x, y, z = tonumber(x), tonumber(y), tonumber(z)
+    if not (x and y and z) or not KCD2MP._kubaHostDuel[name] then return false end
+    local now = os.clock()
+    if now - (KCD2MP._kubaNudgeAt[name] or -1e9) < 2.0 then return false end
+    local e = nil
+    pcall(function() e = System.GetEntityByName(name) end)
+    if not e then return false end
+    local dead = false
+    pcall(function() dead = (e.IsDead and e:IsDead()) or (e.soul and e.soul.IsDead and e.soul:IsDead()) or false end)
+    if dead then return false end
+    local p = nil
+    pcall(function() p = e:GetWorldPos() end)
+    if not p then return false end
+    local dx, dy = (p.x or 0) - x, (p.y or 0) - y
+    local d = math.sqrt(dx * dx + dy * dy)
+    if d < 2.5 or d > 30 or math.abs((p.z or z) - z) > 3 then return false end
+    KCD2MP._kubaNudgeAt[name] = now
+    KCD2MP._kubaNudges = KCD2MP._kubaNudges + 1
+    pcall(function() e:SetWorldPos({ x = x, y = y, z = z }) end)
+    if KCD2MP._kubaNudges <= 40 or KCD2MP._kubaNudges % 50 == 0 then
+        mp_log(string.format("KUBA-30 host nudge npc=%s %.1f m from the partner's copy -> put there [n=%d]", name, d, KCD2MP._kubaNudges))
+    end
+    return true
+end
+function KCD2MP_KubaDuel(name, on, why)
+    name = tostring(name)
+    if not string.find(name, "^[%w_]+$") then return false end
+    on = tonumber(on) == 1
+    if on then
+        if KCD2MP._kubaDuel[name] then return true end
+        KCD2MP._kubaDuel[name] = os.clock()
+        KCD2MP._kubaDuelStats.starts = KCD2MP._kubaDuelStats.starts + 1
+        if KCD2MP._npcPaused[name] then mp_wo102_resume(name, "kuba-duel")
+        else pcall(System.ExecuteCommand, "wh_ai_ResumeNPC " .. name) end
+        mp_log(string.format("KUBA-30 duel start npc=%s -- its own brain fights this player here (%s) [n=%d]", name, tostring(why), KCD2MP._kubaDuelStats.starts))
+    else
+        local at = KCD2MP._kubaDuel[name]
+        if not at then return true end
+        KCD2MP._kubaDuel[name] = nil
+        KCD2MP._kubaDuelStats.ends = KCD2MP._kubaDuelStats.ends + 1
+        local p = KCD2MP.npcPuppets and KCD2MP.npcPuppets[name]
+        if p then mp_wo102_pause(name, p, "kuba-duel-end") else pcall(System.ExecuteCommand, "wh_ai_PauseNPC " .. name) end
+        mp_log(string.format("KUBA-30 duel end npc=%s after %.1f s (%s) -- paused again, the stream takes it back [n=%d]", name, os.clock() - at,
+            tostring(why), KCD2MP._kubaDuelStats.ends))
+    end
+    return true
 end
 
 -- WO-108 s3.5: the release used when WRITES STOP (silence). The pause is held
@@ -10041,10 +10277,33 @@ function KCD2MP_NpcPuppetTick(arg, gen)
                 W214.pendingWeapon[name] = nil
                 pcall(KCD2MP_W167Weapon, name, pc, "hands214")
             end
+            -- KUBA 31 (joiner, 17.11 15:30: the duel's resumed brain swapped the host NPC's weapon WO-167 had put in the copy's hand for
+            -- its own -- "Changing weapon for SpawnedEnemy_001", long_sword_common): in a local duel the host NPC's weapon is checked once
+            -- a second and put back in the hand when neither hand holds it
+            -- KUBA 31b (19.11 14:37): OFF -- handClass reads nil/nil on a brained copy, so this re-drew every ~4 s, the brain swapped back
+            -- (20x WeaponChanged in one duel) and never attacked; the 17.11 duel without it had Attack 4, HitTarget 3, PerfectBlock 2
+            if false and KCD2MP._kubaDuel and KCD2MP._kubaDuel[name] and e.human and now - (p.kubaWeapAt or 0) >= 1.0 then
+                p.kubaWeapAt = now
+                local ws = KCD2MP.w167 and KCD2MP.w167.combat and KCD2MP.w167.combat.weap[name]
+                local want = ws and ws.cls
+                if want and want ~= "?" and want ~= "-" then
+                    local h0, h1 = KCD2MP.w136.handClass(e, 0), KCD2MP.w136.handClass(e, 1)
+                    if h0 ~= want and h1 ~= want then
+                        ws.drawn = false
+                        local ok = KCD2MP_W167Weapon(name, want, "kuba-duel")
+                        p.kubaWeapFixes = (p.kubaWeapFixes or 0) + 1
+                        if p.kubaWeapFixes <= 10 or p.kubaWeapFixes % 20 == 0 then
+                            mp_log(string.format("KUBA-31 duel weapon npc=%s held %s/%s, not the host's %s -> drawn again ok=%s [n=%d]", name,
+                                tostring(h0), tostring(h1), string.sub(want, 1, 8), tostring(ok), p.kubaWeapFixes))
+                        end
+                    end
+                end
+            end
             -- WO-40 Phase 6: the authority's weapon state, applied on the
             -- transition (the same DrawWeapon/HolsterWeapon calls the ghost
             -- path live-verified in WO-39).
-            if (p.drawn or false) ~= (p.appliedDrawn or false) and not (KCD2MP_W167WeaponHeld and KCD2MP_W167WeaponHeld(name, now)) then
+            if (p.drawn or false) ~= (p.appliedDrawn or false) and not (KCD2MP_W167WeaponHeld and KCD2MP_W167WeaponHeld(name, now))
+                and not (KCD2MP._kubaDuel and KCD2MP._kubaDuel[name]) then   -- KUBA 31: in a duel its own brain draws and sheathes
                 p.appliedDrawn = p.drawn or false
                 if e.human then
                     if p.drawn then mp_npc_draw(name, e)
@@ -13659,6 +13918,7 @@ function KCD2MP_InterpTick(arg, gen)
             end
             pcall(KCD2MP_W136RideTick)    -- WO-136 Phase 3: the rider owns the horse
             pcall(KCD2MP_W136TorchTick)   -- WO-136 Phase 5: the torch in hand
+            pcall(KCD2MP_KubaArmedTick)   -- KUBA 37: a weapon in hand (a duel NPC fights armed)
             pcall(KCD2MP_W148Tick)        -- WO-148: this player's own carry (a body, a sack)
         end
     end
@@ -24751,7 +25011,9 @@ function KCD2MP_W167StandInSpawned(name, e)
 end
 
 -- C2: the host's NPC holds `cls` (an item class; "?" = a weapon whose class is not known here; "-" = nothing in its hand).
-function KCD2MP_W167Weapon(name, cls, why)
+-- KUBA 33b: `force` = told again even when C2 believes it holds it already (a duel copy's own brain took it away: its resumed brain went
+-- for its fists, and the weapon came back only with the next engage, 12 s later)
+function KCD2MP_W167Weapon(name, cls, why, force)
     local W = KCD2MP.w167
     if not W.copyWeapons or W.faults.off["copy-weapons"] then return false end   -- a fault keeps it off for the session
     name, cls = tostring(name or ""), tostring(cls or "?")
@@ -24767,14 +25029,17 @@ function KCD2MP_W167Weapon(name, cls, why)
         return false
     end
     if W214 and W214.pendingWeapon then W214.pendingWeapon[name] = nil end
+    -- KUBA 35: in a local duel only the duel's own (forced) draws reach the copy -- the host NPC's rows there are its replay of this copy
+    if not force and KCD2MP._kubaDuel and KCD2MP._kubaDuel[name] then return true end
     if KCD2MP_W201InvBusy and KCD2MP_W201InvBusy(e) then   -- WO-201 B5: a screen is open on this copy's inventory
-        return KCD2MP_W201InvDefer("w167-weapon", name, "the host NPC's weapon", function() KCD2MP_W167Weapon(name, cls, why) end)
+        return KCD2MP_W201InvDefer("w167-weapon", name, "the host NPC's weapon", function() KCD2MP_W167Weapon(name, cls, why, force) end)
     end
     local C = W.combat
     local st = C.weap[name] or {}
     -- a new body under this name (re-spawned, re-streamed) or a new puppet record: what the old one held means nothing for it
     if (st.eid ~= nil and st.eid ~= e.id) or (st.p ~= nil and st.p ~= p) then st = {} end
     st.eid, st.p = e.id, p
+    if force then st.drawn = nil end   -- KUBA 33b
     C.weap[name] = st
     local now = os.clock()
     st.at = now   -- the hand is C2's now: the stream's drawn flag and the old re-assert leave this copy alone for a while
@@ -29119,6 +29384,9 @@ local ok, err = pcall(function()
     -- WO-118 build marker: every new default on one line. The DLL logs its own
     -- WO118-NATIVE line (armed, or DISARMED with the anchor that failed) in
     -- kcdmp-native.log. Missing = stale pak (memory/kcd2mp-lua-deploy-gotcha.md).
+    mp_log("KUBA-PARK build marker: a bound body's layer is stopped only under a clip of the mod (mp_lua_park_stop_always on|off)")
+    mp_log(string.format("KUBA-PATIENCE build marker: patience=%s native_stale_s=%.1f native_resend_s=%.1f (mp_npc_native_patience on|off)",
+        KCD2MP.npcNativePatience and "on" or "off", TUNE.NPC_NATIVE_STALE_S, TUNE.NPC_NATIVE_RESEND_S))
     mp_log(string.format("WO118-BUILD npc_native_write=%s npc_detach=%s native_stale_s=%.1f native_retry_s=%.0f"
         .. " -- per-frame native write at the frame hook (ground collider kept), MP-NPCPULL + MP-NPCBIND in kcdmp-native.log,"
         .. " mp_npc_trace <name> [s]; mp_puppet_rate is legacy-only (mp_preset_legacy = native off, detach off)",
@@ -29492,6 +29760,8 @@ local ok, err = pcall(function()
     System.AddCCommand("mp_quest_hide",   "KCD2MP_QuestWaitingDismiss()",    "WO-96: hide the WAITING FOR PEER line until the story positions change (same as F12 with no prompt up)")
     System.AddCCommand("mp_npc_chainfix", 'KCD2MP_SetNpcChainFix(%line)', "WO-69/WO-78: on (default since WO-78) makes a leaked puppet-tick chain exit when detected; off logs it and leaves it running: mp_npc_chainfix on|off")
     System.AddCCommand("mp_ghost_chainfix", 'KCD2MP_SetGhostChainFix(%line)', "WO-78: on (default) makes a leaked ghost interp chain exit when detected; off logs it and leaves it running: mp_ghost_chainfix on|off")
+    System.AddCCommand("mp_lua_park_stop_always", 'KCD2MP_SetParkStopAlways(%line)', "KUBA 11: on = a bound body's skeleton layer is stopped even with no clip of the mod on it (as 0.63.9; a T-pose); default off: mp_lua_park_stop_always on|off")
+    System.AddCCommand("mp_npc_native_patience", 'KCD2MP_SetNativePatience(%line)', "KUBA: the native writer's heartbeat limit 10 s and bind re-send 8 s (default on); off = the original 3 s / 3 s: mp_npc_native_patience on|off")
     System.AddCCommand("mp_npc_senderclock", 'KCD2MP_SetNpcSenderClock(%line)', "WO-110 R6: render NPC puppets on the SENDER's clock (default on); off = the 0.26.4 arrival-time stamp: mp_npc_senderclock on|off")
     System.AddCCommand("mp_npc_smooth",  'KCD2MP_SetNpcSmooth(%line)', "WO-77: NPC puppet renderer -- on (default) = time-based interpolation-behind (1.2 x emit period), off = pre-WO-77 per-tick 0.5 lerp: mp_npc_smooth on|off")
 
@@ -33945,17 +34215,60 @@ do
         end
     end
     -- the agent: live 1 = a session runs (every 5 s), 0 = it ended or the game quits; chosen = the launcher's setting
+    -- KUBA 24 (host; 16.11 13:11-13:23): the joiner's copies froze mid-walk the farther they were from the HOST (frozen while moving:
+    -- 1.4 % at 20-40 m, 9 % at 40-60 m, 19 % at 60-90 m) -- on the host itself the NPCs past ~90 m stood still 82 % of their walking
+    -- samples: the engine stops updating the AI and the skeletons (root-motion walking) of what the host's camera does not see. While a
+    -- session runs with a partner on the host, both are forced on (ai_UpdateAllAlways: "over-rides the auto-disabling of invisible/distant
+    -- AI"; ca_ForceUpdateSkeletons: every skeleton updated, seen or not); the player's own values come back when the session ends.
+    -- mp_kuba_far_npcs on|off (default on).
+    W207.kubaFar = W207.kubaFar or { on = true, was = {} }
+    local KF = W207.kubaFar
+    local KF_CVARS = { "ai_UpdateAllAlways", "ca_ForceUpdateSkeletons" }
+    local function kuba_far_apply(why)
+        local want = A.live and KF.on and KCD2MP_W134HostActive ~= nil and KCD2MP_W134HostActive() == true
+        for _, cv in ipairs(KF_CVARS) do
+            local ok, v = pcall(System.GetCVar, cv)
+            local cur = ok and tonumber(v) or nil
+            if want then
+                if cur ~= nil and KF.was[cv] == nil then KF.was[cv] = cur end
+                if cur ~= nil and cur ~= 1 then
+                    pcall(System.SetCVar, cv, "1")
+                    mp_log(string.format("KUBA-24 %s 1 while a partner plays on this host -- the NPCs far from the host's camera keep moving (was %s; %s)", cv, tostring(KF.was[cv]), tostring(why)))
+                elseif cur == nil then
+                    mp_log("KUBA-24 " .. cv .. " unreadable -- left alone")
+                end
+            elseif KF.was[cv] ~= nil then
+                pcall(System.SetCVar, cv, tostring(KF.was[cv]))
+                mp_log(string.format("KUBA-24 %s back to the player's own %s (%s)", cv, tostring(KF.was[cv]), tostring(why)))
+                KF.was[cv] = nil
+            end
+        end
+    end
     function KCD2MP_W207KeepAwake(live, chosen)
         A.live = tonumber(live) == 1
         if chosen ~= nil then A.chosen = tonumber(chosen) == 1 end
         A.pushAt = os.clock()
         w207_apply(A.live and "session" or "session over")
+        pcall(kuba_far_apply, A.live and "session" or "session over")   -- KUBA 24
         return true
     end
     -- the mod's own clock: an agent gone without a word (killed) gives the player's value back after 20 s
     function KCD2MP_W207AwakeWatch()
         if A.was ~= nil and A.live and os.clock() - A.pushAt > 20 then A.live = false; w207_restore("no word from the agent for 20 s") end
+        if not A.live and next(KF.was) ~= nil then pcall(kuba_far_apply, "no session") end   -- KUBA 24
     end
+    function KCD2MP_KubaFarNpcs(arg)
+        local v = KCD2MP_Wo122ParseBool(arg)
+        if v == "bad" or v == nil then
+            mp_log("KUBA-24 mp_kuba_far_npcs is " .. (KF.on and "on" or "off") .. " (on|off)")
+            return v ~= "bad"
+        end
+        KF.on = v
+        pcall(kuba_far_apply, "mp_kuba_far_npcs " .. (v and "on" or "off"))
+        return true
+    end
+    System.AddCCommand("mp_kuba_far_npcs", "KCD2MP_KubaFarNpcs(%line)",
+        "KUBA 24: (host) NPCs far from the host's camera keep moving while a partner plays (ai_UpdateAllAlways, ca_ForceUpdateSkeletons): on|off")
     function KCD2MP_W207SetKeepAwake(arg)
         local v = KCD2MP_Wo122ParseBool(arg)
         if v == "bad" then mp_log("mp_keep_awake: expected on|off, got '" .. tostring(arg) .. "'"); return false end

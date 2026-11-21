@@ -168,6 +168,10 @@ struct BoundBody { uint32_t eid = 0; float speedMps = 0; double streamAgeS = -1;
 int bound_bodies(BoundBody* out, int max);
 // WO-210 E.6: this writer drives the body (a copy of the host's NPC, a partner's figure). Main thread.
 bool is_bound_eid(uint32_t eid);
+// After 0.63.9 (the animation's phase): how far behind the host this body's POSITION is rendered -- its interpolation delay plus the
+// jitter allowance in use (seconds). The owner applies the host's animation state exactly this long after it arrived, so the action
+// starts on the frame the body shows that moment. False = this writer does not drive the body. Main thread.
+bool render_lag_s(uint32_t eid, double* s);
 
 // WO-131 1b: is a hit on this name's local body a hit on the host's NPC? Main
 // thread. bound = this DLL drives the body; ageS = seconds since the newest

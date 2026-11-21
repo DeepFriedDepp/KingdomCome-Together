@@ -116,6 +116,7 @@ public static partial class Protocol
         (NpcAnimAskUp,  NpcAnimAskDown,  "npc-anim-ask", JoinHeaderLen + 1, JoinHeaderLen + NpcAnimAskBodyMax, JoinFrom.Joiner),
         // WO-216 A: the host's NPCs' movement requests, as state (ProtocolWo216.cs) -- host to joiner only
         (NpcRouteUp,    NpcRouteDown,    "npc-route",    JoinHeaderLen + 1, JoinHeaderLen + NpcRouteBodyMax, JoinFrom.Host),
+        (KubaDuelUp,    KubaDuelDown,    "kuba-duel",    JoinHeaderLen + 1, JoinHeaderLen + KubaDuelBodyMax, JoinFrom.Joiner),   // KUBA 30 stage 2
     };
 
     /// <summary>The JoinWire row for an up type, or null.</summary>

@@ -129,6 +129,22 @@ inline Fam family(const char* cls, uint32_t frag) {
 }
 inline bool is_base(Fam f) { return f == Fam::Empty || f == Fam::Idle || f == Fam::Loco || f == Fam::CombatMove; }
 
+// KUBA 32 (host): the moves a partner's duel copy starts on its own that its NPC here shows as the very same fragment -- attacks, combo
+// swings, feints, dodges, kicks, a failed attack on a perfect block. Reactions (hit, block, death, knockdown) are the host's replay of the
+// partner's verdict; the base (footwork, guard idle, turns, walk) is the NPC's own from its written place; weapon moves are its own; a
+// clinch needs both bodies.
+inline bool kuba_mirror_frag(const char* n) {
+    if (!n || !*n) return false;
+    static const char* const kNo[] = { "CombatHit", "CombatBlock", "CombatPreblock", "CombatPreBlock", "CombatDeath", "CombatKnock", "CombatStagger",
+                                       "CombatFall", "CombatSurrender", "CrimeSurrender", "Death", "Knock", "Weapon", "CombatIdle", "CombatTurn",
+                                       "CombatMovement", "CombatGuard", "Motion", "IdleTo", "MoveTo" };
+    for (const char* p : kNo) if (std::strncmp(n, p, std::strlen(p)) == 0) return false;
+    if (std::strstr(n, "Death") || std::strstr(n, "Knock") || std::strstr(n, "Clinch")) return false;
+    static const char* const kYes[] = { "Attack", "Dodge", "Feint", "Master", "Riposte", "Kick", "Taunt", "Combo", "Push", "Shove", "Strike", "Lunge" };
+    for (const char* p : kYes) if (std::strstr(n, p)) return true;
+    return false;
+}
+
 // Rule 3: an action of ours that has not started within this is removed (and counted).
 constexpr double kStaleS = 0.30;
 // The priority a withdrawn action of ours steps down to: under every base action (the AI movement 2, combat footwork 4), so the

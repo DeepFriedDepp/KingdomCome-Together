@@ -357,6 +357,7 @@ uint32_t avatar_swing(uint32_t avatarEid) {
         logf("WO136-SWING avatar eid=0x%X at npc=%s (%.1f m) skirmish=%s -- the avatar fights it; the swing threatens it", avatarEid, nb, n.bestD,
              added ? "added (its opponent now)" : "kept");
     note_threat(n.best, avatarEid, 1, "avatar-swing");
+    kcdmp::wo165::kuba_swing_guard(n.best, avatarEid);   // KUBA 23: its block decided at the swing, its guard up for the blow
     return n.best;
 }
 

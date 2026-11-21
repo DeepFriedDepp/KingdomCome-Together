@@ -363,7 +363,8 @@ bool census_visit(void* e, void* ctx) {
     BBody& b = g_bodies[eid];
     if (b.name.empty()) { b.name = nm; b.kind = kind; }
     const bool bound = npcdrive::is_bound_eid(eid);
-    const bool ex = exempt(b.name, c->now);
+    // KUBA 30 (0.65 merge): a copy in this player's local duel fights with its own brain -- exempt while the duel lasts
+    const bool ex = exempt(b.name, c->now) || wo208::kuba_in_duel(eid);
     if (bound) ++c->bound;
     bool nearMe = false;   // within 150 m of this player (the bodies a player here could see)
     if (c->havePlayer) {
@@ -528,7 +529,7 @@ void b_spawns(double now) {
         if (!e) { b.spawnAt = -1; continue; }
         uint64_t w = 0; int st = -1, mask = -1;
         if (!actions::brain_state(e, &w, &st, &mask) || st < 0) continue;
-        if (g_act && st == 0 && !exempt(b.name, now)) b_queue_pause(kv.first, b, now);
+        if (g_act && st == 0 && !exempt(b.name, now) && !wo208::kuba_in_duel(kv.first)) b_queue_pause(kv.first, b, now);
         b.spawnAt = -1;
     }
 }

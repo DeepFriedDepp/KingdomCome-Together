@@ -102,6 +102,11 @@ public partial class GameBridge
                 Wo206OnMarker(m); break;
             case Protocol.W203FigureHand:   // WO-214 F
                 Wo214OnFigureHand(src, m); break;
+            case KubaW203WornAsk: case KubaW203DuelRelease:   // KUBA 32: NPC worn sets asked for, a partner's duel NPC taken back
+            case KubaW203DuelOver:                            // KUBA 33: a joiner's duel ended (his copy is the stream's again)
+                KubaOnSideFrame(src, m); break;
+            case KubaW203Hello: case KubaW203HelloAck:        // KUBA 34: does the host run this fork?
+                KubaOnHello(src, m); break;
             default:
                 Interlocked.Increment(ref _w203SideUnknown); break;
         }
