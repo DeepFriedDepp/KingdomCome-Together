@@ -3292,8 +3292,11 @@ end
 KCD2MP.kubaParkStopAlways = false
 function KCD2MP_Wo121Park(ent, st, who)
     st.w121Parked = true
-    local ours = st.animTag ~= nil or st.animLoopName ~= nil
+    -- KUBA 41 (21.11 14:44, 0.65.2): a new puppet is seeded animTag = "idle" without any clip -- every park stopped layer 0 (19 of 19,
+    -- "stop=true"): a seated copy's own SittingIdle lost its clip (the T-pose, 16 s). Only a clip this file really started counts.
+    local ours = st.luaClip == true or st.animLoopName ~= nil
     st.animLoopName = nil
+    st.luaClip = nil
     local ok = "skipped"
     if ours or KCD2MP.kubaParkStopAlways then
         ok = tostring(pcall(function() ent:StopAnimation(0, 0) end))
@@ -3385,6 +3388,18 @@ end
 KCD2MP.npcDetach = true
 KCD2MP._npcDetachStats = { issued = 0, skipped = 0, changed = 0, unchanged = 0 }
 
+KCD2MP.kubaKeepSeat = true
+KCD2MP.kubaNoClipBeforeBind = true   -- KUBA 41b
+function KCD2MP_KubaSeatState(s)
+    s = tostring(s or "")
+    return s:find("Sitting", 1, true) ~= nil or s:find("Lying", 1, true) ~= nil or s:find("Snooze", 1, true) ~= nil
+        or s:find("Sleep", 1, true) ~= nil or s:find("SitDown", 1, true) ~= nil or s:find("LieDown", 1, true) ~= nil
+end
+function KCD2MP_SetKubaKeepSeat(arg)
+    local v = tostring(arg or ""):lower()
+    if v == "on" or v == "1" then KCD2MP.kubaKeepSeat = true elseif v == "off" or v == "0" then KCD2MP.kubaKeepSeat = false end
+    mp_log("KUBA-41 keep_seat=" .. (KCD2MP.kubaKeepSeat and "on" or "off"))
+end
 function KCD2MP_NpcDetach(name, p, why)
     if not KCD2MP.npcDetach or not p then return end
     local e = nil
@@ -3435,6 +3450,16 @@ function KCD2MP_NpcDetach(name, p, why)
     p.detachPending = nil
     local before = "?"
     pcall(function() if e.actor and e.actor.GetCurrentAnimationState then before = tostring(e.actor:GetCurrentAnimationState()) end end)
+    -- KUBA 41 (21.11 14:30, 0.65.2): ttkc_woman_10 sat on the joiner as on the host; the puppet start's reset stood her up
+    -- ("SittingIdle->MotionIdle") and left her body on the bench -- the T-pose. A copy seated / lying keeps its seat (its own engine's
+    -- loop plays; a loop installed for it plays nothing). mp_kuba_keep_seat off = as before.
+    if KCD2MP.kubaKeepSeat and KCD2MP_KubaSeatState(before) then
+        st.skipped = st.skipped + 1
+        st.kubaSeat = (st.kubaSeat or 0) + 1
+        mp_log(string.format("MP-DETACH npc=%s stance=skipped unstance=skipped result=skipped-seated(%s) changed=0 why=%s (KUBA 41) [n=%d]",
+            tostring(name), before, tostring(why), st.kubaSeat))
+        return
+    end
     local ok1, err1 = pcall(System.ExecuteCommand, "wh_ai_NPCStateResetElement " .. tostring(name) .. " Stance")
     local ok2, err2 = pcall(System.ExecuteCommand, "wh_ai_NPCStateResetElement " .. tostring(name) .. " Unstance")
     st.issued = st.issued + 1
@@ -10803,6 +10828,14 @@ function KCD2MP_NpcPuppetTick(arg, gen)
             -- WO-121: a native-written copy gets the engine's own gait
             -- (SetPseudoSpeed every frame from its rendered speed); the clip
             -- below would sit on top of it. Horses stay on their clips.
+            -- KUBA 41b (21.11 15:12): the first tick after the puppet start (the native bind asked, its answer not back yet) started a
+            -- clip of ours ("NPC-SYNC anim ttkc_woman_10 -> sprint", 0.75 s before "native=bound"), and the park then stopped layer 0 --
+            -- the engine's own seat / bed clip with it (20 of 20 "stop=true"). While the bind is asked, no clip of ours is started.
+            if KCD2MP.kubaNoClipBeforeBind and p.nativeSent and not p.nativeOwned and not p.luaClip and tostring(e.class or "") ~= "Horse"
+               and KCD2MP_Wo121GaitNative(false) then
+                KCD2MP.kubaClipHeld = (KCD2MP.kubaClipHeld or 0) + 1
+                return
+            end
             if p.nativeOwned and tostring(e.class or "") ~= "Horse" and KCD2MP_Wo121GaitNative(false) then
                 if not p.w121Parked then KCD2MP_Wo121Park(e, p, name) end
                 return
@@ -10828,6 +10861,7 @@ function KCD2MP_NpcPuppetTick(arg, gen)
             if p.animTag ~= tag or (now - (p.animRefreshAt or 0)) > 1.0 then
                 p.animRefreshAt = now
                 pcall(function() e:StartAnimation(0, anim, 0, 0.15, 1.0, true) end)
+                p.luaClip = true   -- KUBA 41: a clip of ours is on layer 0
                 p.animClip = anim   -- WO-214 C.3: the clip of the held tag
                 if p.animTag ~= tag then
                     p.animTag, p.animTagAt = tag, now
@@ -29760,6 +29794,7 @@ local ok, err = pcall(function()
     System.AddCCommand("mp_quest_hide",   "KCD2MP_QuestWaitingDismiss()",    "WO-96: hide the WAITING FOR PEER line until the story positions change (same as F12 with no prompt up)")
     System.AddCCommand("mp_npc_chainfix", 'KCD2MP_SetNpcChainFix(%line)', "WO-69/WO-78: on (default since WO-78) makes a leaked puppet-tick chain exit when detected; off logs it and leaves it running: mp_npc_chainfix on|off")
     System.AddCCommand("mp_ghost_chainfix", 'KCD2MP_SetGhostChainFix(%line)', "WO-78: on (default) makes a leaked ghost interp chain exit when detected; off logs it and leaves it running: mp_ghost_chainfix on|off")
+    System.AddCCommand("mp_kuba_keep_seat",      'KCD2MP_SetKubaKeepSeat(%line)', "KUBA 41: on = a copy seated / lying at its puppet start keeps its seat (no WO-118 detach); default on: mp_kuba_keep_seat on|off")
     System.AddCCommand("mp_lua_park_stop_always", 'KCD2MP_SetParkStopAlways(%line)', "KUBA 11: on = a bound body's skeleton layer is stopped even with no clip of the mod on it (as 0.63.9; a T-pose); default off: mp_lua_park_stop_always on|off")
     System.AddCCommand("mp_npc_native_patience", 'KCD2MP_SetNativePatience(%line)', "KUBA: the native writer's heartbeat limit 10 s and bind re-send 8 s (default on); off = the original 3 s / 3 s: mp_npc_native_patience on|off")
     System.AddCCommand("mp_npc_senderclock", 'KCD2MP_SetNpcSenderClock(%line)', "WO-110 R6: render NPC puppets on the SENDER's clock (default on); off = the 0.26.4 arrival-time stamp: mp_npc_senderclock on|off")

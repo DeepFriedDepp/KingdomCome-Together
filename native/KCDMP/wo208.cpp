@@ -597,6 +597,10 @@ struct OwnCopy {
     double takeoverAt = -1e9;   // WO-218 C.3: the last time its own action was stopped off a placed activity
     uint32_t takeoverFrag = 0xFFFFFFFFu; int takeoverN = 0; double takeoverFirst = -1e9, takeoverMuteUntil = -1e9;   // C.3's back-off
     double kubaWatchAt = 0, kubaEmptySince = -1, kubaFixAt = -1e9, kubaBackoff = 0;   // KUBA 11: the skeleton's own bind-pose watch
+    double kubaSeatCtxAt = -1;      // KUBA 40c: the copy's own engine sat / laid it (its seat context is there) -- -1: standing
+    double kubaSeatFailAt = -1e9;   // KUBA 40c: ours played nothing in that seat (not reopened for 30 s)
+    double kubaIdleNudgeAt = -1e9;  // KUBA 42b: the last idle asked for an empty full body
+    uint64_t kubaSeatNoteAct = 0;   // KUBA 40: the host action last told (one line per host action)
     uint32_t kubaFixes = 0;
     bool kubaFeet = false;   // KUBA 16
     const void* kubaTransAct = nullptr; double kubaTransSince = -1; uint64_t kubaTransBlockHost = 0;   // KUBA 13: a walk transition held too long
@@ -821,6 +825,14 @@ bool kuba_fidget_on() { static int s = -1; return kuba_switch("KCDMP_KUBA_FIDGET
 // the host's state installed anew (the hand-over), the locomotion nudged when nothing could be installed.
 std::atomic<uint32_t> c_kubaTposeSeen{0}, c_kubaTposeFixed{0}, c_kubaTposeBack{0}, c_kubaTposeUnread{0};
 bool kuba_tpose_fix_on() { static int s = -1; return kuba_switch("KCDMP_KUBA_TPOSE_FIX", &s, "a copy in the bind pose (no animation on its skeleton) is repaired"); }
+// KUBA 43 (16:13 log: IdleToMove of ours, 0.5-1 s of T-pose before KUBA 13's clock cut it): a walk transition of ours in the bind pose
+bool kuba_trans_bind_on() { static int s = -1; return kuba_switch("KCDMP_KUBA_TRANS_BIND", &s, "a walk transition of ours in the bind pose is cut at once"); }
+// KUBA 45 (20:39 log: 1118 samples of an empty full body with exactly one action queued -- ours, at priority 1 -- never started; every
+// action at 2 or more installs; the copy's default facial expression holds its scope at 1 and is not interruptible): the base the owner
+// gives an empty body (the host's base fragment, the neutral idle) goes in at 2 -- the engine's own locomotion's priority; it stays
+// interruptible, so the copy's own base at 2 still takes the body over. KCDMP_KUBA_BASE_PRIO=off: priority 1 as before.
+bool kuba_base_prio_on() { static int s = -1; return kuba_switch("KCDMP_KUBA_BASE_PRIO", &s, "the owner's base for an empty body goes in at priority 2"); }
+int32_t base_priority() { return kuba_base_prio_on() ? 2 : kBasePriority; }
 // KUBA 12 (joiner 17:04-17:16 probe: Lying 16281/16294, SittingIdle 12897/12928, EatingMash, CampRazorSharpening, Sunbathing ... installed
 // by the owner as a combat action play NOTHING on the skeleton; the same postures as the engine's own idle state play) -- a fragment of
 // ours seen in the bind pose is learned and never installed by the owner again: the copy's own engine (its seat, WO-160) or its base shows.
@@ -862,6 +874,64 @@ bool kuba_dead_frag(uint32_t frag) {
     return true;
 }
 bool kuba_reinstall_on() { static int s = -1; return kuba_switch("KCDMP_KUBA_RESEAT_REINSTALL", &s, "a reseat re-installs ours when it is off the body"); }
+// KUBA 40 (joiner 21.11 14:17, 0.65.2, KCDMP_KUBA_TPOSE_FIX=off): ttkc_woman_10's host NPC sat; the owner installed its IdleState
+// SittingIdle (frag 10) as ours on a copy standing -> layer 0 empty for 52 s (the T-pose); with KUBA 11 on it was swapped for an idle (the
+// copy stood). 0.63.9 probes: a seat loop as ours on a standing copy plays nothing (after MotionIdle 623/623 samples empty); the engine's
+// own IdleState SittingIdle after its own SitDown always plays (11092/11092) -- the seat (the bench as its context) is the engine's.
+// KUBA 40c (21.11 14:30): WO-216's join sweep suspended 569 brains at 14:30:28.47 -- ttkc_woman_10 sat (its own SittingIdle at .46),
+// the suspended brain ended its seat loop: its own MotionIdle on a body held in the seat = the T-pose. Its own SitDown later (14:33:19)
+// ended the same way (no brain to start the loop). So: a seat / lie loop (and the object loops below) is installed as ours ONLY on a copy
+// its own engine has seated (its seat context is there: its own SitDown / LieDown / a seated loop seen, no StandUp / walk since); on a
+// standing copy it is not installed (it stands, never the T-pose). KCDMP_KUBA_SEAT_ENGINE=off: as before.
+bool kuba_seat_engine_on() { static int s = -1; return kuba_switch("KCDMP_KUBA_SEAT_ENGINE", &s, "a seat / lie / object loop goes as ours only on a copy its engine seated (KUBA 40)"); }
+std::atomic<uint32_t> c_kubaSeatEngine{0}, c_kubaSeatCtx{0};
+// KUBA 40b: object-bound loops measured empty on copies when installed as ours (0.63.9 probes, f0 = 0 share): the dialog seat pose,
+// CampSnooze, EatingMashWaiting, Embroidery 100 %; Sunbathing, EatingMash, DiceNew_StartSuccess, CampRazorSharpening 98-99 %.
+bool kuba_object_loop_name(const std::string& n) {
+    static const char* const kLoops[] = {
+        "IngameDialogPose_SittingWithOrWithoutTable_Loop", "Quest_SittingSad", "CampSnoozeLoop", "EatingMash", "EatingMashWaiting",
+        "Embroidery", "Sunbathing", "DiceNew_StartSuccess", "DiceNew_TurnSuccess", "CampRazorSharpening", "HousekeeperSpindleLoop",
+        "HousekeeperBasketWeaving"};
+    for (const char* s : kLoops) if (n == s) return true;
+    return false;
+}
+// true = the host's posture is NOT installed as ours on this copy now
+bool kuba_seat_block(const OwnCopy& oc, uint32_t eid, uint8_t cls, uint32_t frag) {
+    // 21.11 14:44: ours SittingIdle / Lying played nothing in the engine's seat either (5 of 5 "FAILED") -- never installed
+    if (!kuba_seat_engine_on()) return false;
+    if (cls == kClsIdleState || cls == kClsVariation) {
+        const wo210rules::PFam f = pfam_of(eid, cls, frag);
+        if (f == wo210rules::PFam::Sitting || f == wo210rules::PFam::Lying) return true;
+    }
+    if (cls == kClsCallback) return false;   // one-shots (SitDown, StandUp, beer) still go
+    return kuba_object_loop_name(frag_name_of(eid, frag));
+}
+// the copy's own full body (not ours) read every 250 ms: its engine's seat context opens / closes
+void kuba_seat_ctx_watch(OwnCopy& oc, uint32_t eid, uint8_t cls, uint32_t frag, double now) {
+    const std::string n = frag_name_of(eid, frag);
+    const wo210rules::PFam f = pfam_of(eid, cls, frag);
+    const bool in = n == "SitDown" || n == "LieDown" || n == "CampSnoozeIn" || n == "EatingMashIn" ||
+                    n == "IngameDialogPose_SittingWithOrWithoutTable_In" || f == wo210rules::PFam::Sitting || f == wo210rules::PFam::Lying;
+    const bool out = n == "StandUp" || n == "GetUp" || f == wo210rules::PFam::Moving ||
+                     (n.size() > 3 && n.compare(n.size() - 3, 3, "Out") == 0);
+    if (in && oc.kubaSeatCtxAt < 0) {
+        oc.kubaSeatCtxAt = now;
+        const uint32_t k = c_kubaSeatCtx.fetch_add(1) + 1;
+        if (k <= 60 || k % 100 == 0) logf("KUBA-40 seat ctx npc=%s in (its own %s) -- the host's seat loop may go as ours [n=%u]", oc.name.c_str(), n.c_str(), k);
+    } else if (out && oc.kubaSeatCtxAt >= 0) {
+        oc.kubaSeatCtxAt = -1;
+        const uint32_t k = c_kubaSeatCtx.fetch_add(1) + 1;
+        if (k <= 60 || k % 100 == 0) logf("KUBA-40 seat ctx npc=%s out (its own %s) [n=%u]", oc.name.c_str(), n.c_str(), k);
+    }
+}
+void kuba_seat_engine_note(OwnCopy& oc, uint32_t eid, const HostScope* hs, const char* where) {
+    if (oc.kubaSeatNoteAct == hs->act) return;   // one line per host action
+    oc.kubaSeatNoteAct = hs->act;
+    const uint32_t n = c_kubaSeatEngine.fetch_add(1) + 1;
+    if (n <= 200 || n % 100 == 0)
+        logf("KUBA-40 seat engine npc=%s the host's %s/%s (%s) not installed: the copy stands, its engine has not seated it (%s) [n=%u]", oc.name.c_str(),
+             cls_name(hs->cls), frag_name_of(eid, hs->frag).c_str(), wo210rules::pfam_name(pfam_of(eid, hs->cls, hs->frag)), where, n);
+}
 
 void own_retire(OwnCopy& oc, Probe::Scope& s, double now, const char* why);
 bool is_ours(const OwnCopy& oc, const void* act) {
@@ -878,7 +948,7 @@ bool w215_give_base(uint32_t eid, OwnCopy& oc, double now) {
     if (neutral_idle(eid, &b)) {
         if (oc.baseAct && oc.baseFrag == b.frag) return true;
         void* ba = nullptr;
-        if (rttr::install_fragment(eid, b.frag, b.tags, kBasePriority, b.flags, &ba) == rttr::SwingResult::Ok && ba) {
+        if (rttr::install_fragment(eid, b.frag, b.tags, base_priority(), b.flags, &ba) == rttr::SwingResult::Ok && ba) {
             if (oc.baseAct) { rttr::stop_action(oc.baseAct); oc.retired.push_back({oc.baseAct, now}); }
             oc.baseAct = ba; oc.baseFrag = b.frag; oc.baseAt = now; oc.baseStarted = false;
             c_w215Bases.fetch_add(1, std::memory_order_relaxed);
@@ -948,7 +1018,10 @@ bool own_handover(uint32_t eid, OwnCopy& oc, double now, uint8_t path) {
         }
         c_capPassed.fetch_add(1);
     }
-    if (hs && !is_base(fam) && fam != Fam::Hold && !kuba_dead_frag(hs->frag)) {
+    // KUBA 40: a seat / lie / object loop on a copy its engine has not seated is never ours -- the base below (it stands)
+    const bool kubaObj = hs && kuba_seat_block(oc, eid, hs->cls, hs->frag);
+    if (kubaObj) kuba_seat_engine_note(oc, eid, hs, "hand-over: the neutral base");
+    if (hs && !is_base(fam) && fam != Fam::Hold && !kuba_dead_frag(hs->frag) && !kubaObj) {
         bool oursOn = oc.own[0].act && oc.own[0].hostAct == hs->act;
         if (oursOn && kuba_reinstall_on()) {
             // KUBA 10b: "ours plays it" only while ours holds the full body, or still waits its turn (decide()'s stale rule has that one)
@@ -990,7 +1063,7 @@ bool own_handover(uint32_t eid, OwnCopy& oc, double now, uint8_t path) {
                 if (nk && oc.baseAct && oc.baseFrag == b.frag) given = true;   // ours already plays that idle
                 else if (nk) {
                     void* ba = nullptr;
-                    const rttr::SwingResult rb = rttr::install_fragment(eid, b.frag, b.tags, kBasePriority, b.flags, &ba);
+                    const rttr::SwingResult rb = rttr::install_fragment(eid, b.frag, b.tags, base_priority(), b.flags, &ba);
                     if (rb == rttr::SwingResult::Ok && ba) {
                         if (oc.baseAct) { rttr::stop_action(oc.baseAct); oc.retired.push_back({oc.baseAct, now}); }
                         oc.baseAct = ba; oc.baseFrag = b.frag; oc.baseAt = now; oc.baseStarted = false;
@@ -1033,7 +1106,7 @@ bool own_handover(uint32_t eid, OwnCopy& oc, double now, uint8_t path) {
         else if (have && oc.baseAct && oc.baseFrag == b.frag) installed = true;   // ours already plays that base
         else if (have) {
             void* act = nullptr;
-            const rttr::SwingResult r = rttr::install_fragment(eid, b.frag, b.tags, kBasePriority, b.flags, &act);
+            const rttr::SwingResult r = rttr::install_fragment(eid, b.frag, b.tags, base_priority(), b.flags, &act);
             if (r == rttr::SwingResult::Ok && act) {
                 if (oc.baseAct) { rttr::stop_action(oc.baseAct); oc.retired.push_back({oc.baseAct, now}); }
                 oc.baseAct = act; oc.baseFrag = b.frag; oc.baseAt = now; oc.baseStarted = false;
@@ -1225,6 +1298,28 @@ void own_apply(uint32_t eid, OwnCopy& oc, int cm, const HostScope hsc[2], const 
                 if (queueFull) { if (k == 0) wo217::place_note(oc.ep217, wo217::Note::QueueFull, qi.first); break; }   // the host's action waits for room (the queue cap above)
                 if (k == 0 && kuba_dead_frag(hs->frag)) break;   // KUBA 12: plays nothing on a copy
                 if (k == 0 && oc.kubaTransBlockHost && hs->act == oc.kubaTransBlockHost) break;   // KUBA 13: the transition just cut
+                if (k == 0 && kuba_seat_block(oc, eid, hs->cls, hs->frag)) {   // KUBA 40: plays nothing as ours on a copy not seated by its engine
+                    if (o.act) own_retire(oc, o, now, "KUBA-40: not seated by its engine");
+                    kuba_seat_engine_note(oc, eid, hs, "install");
+                    // KUBA 42: a host NPC sitting / lying, its copy standing on its own (or empty): its brain seats / lays it
+                    {
+                        const wo210rules::PFam hf42 = pfam_of(eid, hs->cls, hs->frag);
+                        if ((hf42 == wo210rules::PFam::Sitting || hf42 == wo210rules::PFam::Lying) && cn > 0 && cs[0].ok &&
+                            (cs[0].empty || (!is_ours(oc, cs[0].act) && pfam_of(eid, class_id(cs[0].action), cs[0].frag) == wo210rules::PFam::Standing)))
+                            wo216::kuba_seat_wake(eid, oc.name.c_str());
+                        // KUBA 42b (15:57 Trosky: the host's SitDown / LieDown played as ours, then nothing -- the full body EMPTY, the T-pose
+                        // 893 samples): an empty full body gets the locomotion's idle (it stands) until its engine seats it
+                        if (cn > 0 && cs[0].ok && cs[0].empty && now - oc.kubaIdleNudgeAt >= 2.0) {
+                            oc.kubaIdleNudgeAt = now;
+                            const bool ok = motion::request_idle_pulse(eid);
+                            static uint32_t s_n = 0;
+                            if (++s_n <= 60 || s_n % 100 == 0)
+                                logf("KUBA-42 empty npc=%s the host %s, nothing on its full body -> the idle %s [n=%u]", oc.name.c_str(),
+                                     wo210rules::pfam_name(hf42), ok ? "asked" : "refused", s_n);
+                        }
+                    }
+                    break;
+                }
                 // KUBA 22: the engine's own seat (or bed) loop stays under the host's next loop of the same posture
                 if (k == 0 && kuba_seat_keep_on() && hs->cls != kClsCallback && hs->cls != kClsDialogAnim && cn > 0 && cs[0].ok && !cs[0].empty &&
                     !is_ours(oc, cs[0].act)) {
@@ -1323,13 +1418,13 @@ void own_apply(uint32_t eid, OwnCopy& oc, int cm, const HostScope hsc[2], const 
             motion::combat_mode_of(eid, &c);
             if (hb) {
                 void* act = nullptr;
-                const rttr::SwingResult r = rttr::install_fragment(eid, hb->frag, hb->tags, kBasePriority, hb->flags, &act);
+                const rttr::SwingResult r = rttr::install_fragment(eid, hb->frag, hb->tags, base_priority(), hb->flags, &act);
                 if (r == rttr::SwingResult::Ok && act) { oc.baseAct = act; oc.baseFrag = hb->frag; how = "the host's base fragment installed"; }
                 else how = rttr::swing_result_name(r);
             } else if (wo214::on(wo214rules::kBitOwnerBase) && !c && neutral_idle(eid, &nb)) {
                 // WO-214 C.1 (owner_base): no host base known -- the copy's own neutral idle (the field's 3 "no host base to give it" stood empty)
                 void* act = nullptr;
-                const rttr::SwingResult r = rttr::install_fragment(eid, nb.frag, nb.tags, kBasePriority, nb.flags, &act);
+                const rttr::SwingResult r = rttr::install_fragment(eid, nb.frag, nb.tags, base_priority(), nb.flags, &act);
                 if (r == rttr::SwingResult::Ok && act) {
                     oc.baseAct = act; oc.baseFrag = nb.frag; oc.baseAt = now; oc.baseStarted = false;
                     how = "the copy's neutral idle installed (no host base)";
@@ -1413,6 +1508,28 @@ void own_apply(uint32_t eid, OwnCopy& oc, int cm, const HostScope hsc[2], const 
         void* ent = engine::entity_by_id(eid);
         const int f0 = ent ? motion::skel_fifo_count(ent, 0) : -1;
         const bool skip = wo172::copy_dead(eid) || wo210kd::held_down(eid);
+        // KUBA 40c: the copy's engine seat context, from its own full body; a body of its own in the bind pose for 0.5 s while its host NPC
+        // sits / lies is a body held in its seat with its loop gone (the suspended brain) -- the context is there, the host's loop may go;
+        // ours in that seat still empty after 3 s: the context is closed again (not reopened for 30 s; the copy gets the base)
+        if (!skip && kuba_seat_engine_on() && cn > 0 && cs[0].ok) {
+            const bool oursFb = !cs[0].empty && is_ours(oc, cs[0].act);
+            if (!cs[0].empty && !oursFb) kuba_seat_ctx_watch(oc, eid, class_id(cs[0].action), cs[0].frag, now);
+            const wo210rules::PFam hf = oc.hostHave ? pfam_of(eid, oc.host.cls, oc.host.frag) : wo210rules::PFam::Empty;
+            const bool hostSeat = hf == wo210rules::PFam::Sitting || hf == wo210rules::PFam::Lying;
+            if (f0 == 0 && oc.kubaEmptySince >= 0 && hostSeat) {
+                if (!oursFb && oc.kubaSeatCtxAt < 0 && now - oc.kubaEmptySince >= 0.5 && now - oc.kubaSeatFailAt >= 30.0) {
+                    oc.kubaSeatCtxAt = now;
+                    const uint32_t k = c_kubaSeatCtx.fetch_add(1) + 1;
+                    if (k <= 60 || k % 100 == 0) logf("KUBA-40 seat ctx npc=%s in (its own body held in its seat, the bind pose %.0f ms) [n=%u]", oc.name.c_str(), (now - oc.kubaEmptySince) * 1000.0, k);
+                } else if (oursFb && oc.kubaSeatCtxAt >= 0 && now - oc.kubaEmptySince >= 3.0 && now - oc.kubaSeatCtxAt >= 3.0) {
+                    oc.kubaSeatCtxAt = -1; oc.kubaSeatFailAt = now;
+                    const uint32_t k = c_kubaSeatCtx.fetch_add(1) + 1;
+                    logf("KUBA-40 seat ctx npc=%s FAILED: ours %s plays nothing in its seat either -- closed for 30 s [n=%u]", oc.name.c_str(), frag_name_of(eid, cs[0].frag).c_str(), k);
+                    if (oc.own[0].act) own_retire(oc, oc.own[0], now, "KUBA-40: ours plays nothing in the seat");
+                    own_handover(eid, oc, now, wo210rules::kPathUnknown);
+                }
+            }
+        }
         // KUBA 16: the combat footwork's feet (motion.cpp writes the copy's travel speed / angle while its full body runs it)
         // KUBA 17 (Kuba, 20:49 fight: "the NPCs move their legs and no moonwalk -- now the same for ordinary NPCs walking"): the copy's own
         // locomotion (CAnimActionAIMovement: MotionIdle / MotionMovement / turns) gets the same travel speed and angle from its rendered move
@@ -1435,7 +1552,10 @@ void own_apply(uint32_t eid, OwnCopy& oc, int cm, const HostScope hsc[2], const 
                 if (oc.kubaTransAct != cs[0].act) { oc.kubaTransAct = cs[0].act; oc.kubaTransSince = now; }
                 float mps = 0;
                 const bool dragged = motion::body_render_speed(eid, &mps) && mps >= 0.6f;
-                if (dragged && now - oc.kubaTransSince >= kKubaTransMaxS) {
+                // KUBA 43: ours in the bind pose for 0.3 s goes at once (16:13: IdleToMove of ours, 0.5-1 s of T-pose before 13 cut it)
+                const bool bindOurs = kuba_trans_bind_on() && f0 == 0 && oc.kubaEmptySince >= 0 && now - oc.kubaEmptySince >= 0.3
+                                      && is_ours(oc, cs[0].act);
+                if ((dragged && now - oc.kubaTransSince >= kKubaTransMaxS) || bindOurs) {
                     const bool oursT = is_ours(oc, cs[0].act);
                     if (oursT && oc.own[0].act == cs[0].act) { oc.kubaTransBlockHost = oc.own[0].hostAct; own_retire(oc, oc.own[0], now, "KUBA-13: a walk transition held too long"); }
                     else rttr::stop_action(const_cast<void*>(cs[0].act));

@@ -36,5 +36,7 @@ bool on(uint32_t bit);       // the agent's word, less the bench twin's
 bool configured();           // the agent told this DLL its word (a joiner or a host in a session)
 
 int status(char* out, int n);
+// KUBA 42: a standing copy of a seated host NPC: its brain resumed for 12 s (at most every 30 s); true = asked now
+bool kuba_seat_wake(uint32_t eid, const char* name);
 
 } // namespace kcdmp::wo216
