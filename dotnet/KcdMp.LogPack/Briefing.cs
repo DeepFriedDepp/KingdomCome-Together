@@ -486,6 +486,9 @@ public static class Briefing
             o.Add(new Score("this player's swings: made / touched a body / touches sent / passed through a body (by reason)",
                 $"{w222Sw.Count} / {touched} / {sent} / {(through.Count == 0 ? "0" : string.Join(", ", through))}", "every swing that meets a body counts"));
         }
+        // WO-223 F: whom the enemies noticed first (the host's mod), and the copies that fought the wrong player (the joiner's DLL)
+        if (Wo223Briefing.NoticeValue(Kcd(inp)) is { } w223N) o.Add(new Score("enemies noticed the host / the joiner first", w223N, "whoever a camp would notice first in single-player"));
+        if (Wo223Briefing.CopyValue(native) is { } w223C) o.Add(new Score("copies fighting the wrong player", w223C, "0 s"));
         var pings = agent.Select(x => Ping.Match(x)).Where(m => m.Success).Select(m => int.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture)).ToList();
         o.Add(new Score("message latency (the network ping)", pings.Count == 0 ? "n/a" : $"p99 {Pct(pings, 99)} ms", "p99 < 1000 ms"));
         // WO-204 Act V: the game's own queue lag, a line of its own; a backgrounded game's queue apart (a minimised game runs slow)
