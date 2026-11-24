@@ -135,5 +135,39 @@ check(_sc.w189_stall(_log[:2]) == 0.0, 'no stall after the read: 0')
 check(_sc.w189_stall(_log[2:]) is None, 'no readiness read in the log: None')
 check(_sc.w189_stall([_log[2], _log[1]]) == 0.0, 'a stall before the read is not the one it caused')
 
+# ---- WO-223: the approach scene's pure parts (the plan and what is owed, a run's stages from the reader's lines)
+import scen223 as _w223
+check([x[0] for x in _w223.plan_tags('host:walk:10:2;joiner:crouch:23:1:30')] == ['host-walk-10-1', 'host-walk-10-2', 'joiner-crouch-23-b30-1'],
+      'the plan names its runs (who, pace, hour, where the host stands, the run)')
+_done = {'rows': {'host-walk-10-1': {}}, 'tries': {'host-walk-10-2': 3, 'host-walk-10-3': 1}}
+check([x[0] for x in _w223.owed('host:walk:10:4', _done)] == ['host-walk-10-3', 'host-walk-10-4'], 'owed: not the finished run, not the one tried three times')
+check(_w223.void_reason({'why': 'stuck', 'first': {'notice': None}}) == 'stuck', 'a walker held by a tree before anyone noticed him measured nothing')
+check(_w223.void_reason({'why': 'stuck', 'first': {'notice': ['b', {}]}}) is None, 'held after he was noticed: the run counts')
+check(_w223.void_reason({'why': 'reached the camp', 'first': {}}) is None, 'a joiner nobody noticed who reached the camp is a result')
+check(_w223.void_reason({'walker': {'err': 'stance: wanted crouch'}}) == 'walker: stance: wanted crouch', 'the wrong stance is void')
+_lines = ['[W223A] 10.00 100.0 0.0 1.41 0.430 1:80.0:0:21.4:20.0,0.0 2:82.0:1:21.4:18.0,0.0 P:300.0,0.0',
+          '[W223A] 10.20 100.0 0.0 1.41 0.430 1:80.0:0:21.4:20.0,0.0 2:82.0:1:21.4:18.0,0.0 P:300.0,0.0',
+          '[W223A] 11.20 97.0 0.0 1.91 0.430 1:77.0:0:21.4:20.0,0.0 2:79.0:1:21.4:18.0,0.0 P:300.0,0.0',
+          "Attempting to start new dialogue (runtime id '7') with souls 'Ex: b1 - meta override: SAMOMLUVA'",
+          '[W223A] 30.00 40.0 0.0 1.91 0.430 1:20.0:0:28.1:20.0,0.0 2:22.0:1:21.4:18.0,0.0 P:300.0,0.0',
+          "Attempting to start new dialogue (runtime id '8') with souls 'Ex: b1 - meta override: NPC_VIDI_NEPRITELE_A_BUDE_UTOCIT'",
+          '[W223A] 31.00 37.0 0.0 1.91 0.430 1:17.0:1:28.1:20.0,0.0 2:19.0:1:21.4:18.0,0.0 P:300.0,0.0',
+          'Skirmish event: TargetChanged on b1 (target kcd2mp_1)',
+          '[W223A] 32.00 34.0 0.0 1.91 0.430 1:13.0:3:28.1:21.0,0.0 2:16.0:1:21.4:18.0,0.0 P:300.0,0.0',
+          'Skirmish event: Attack on b1 (target kcd2mp_1)']
+_s, _e = _w223.read_run(_lines, ['b1', 'b2'], 'kcd2mp_1')
+_m = _w223.summarise(_s, _e, ['b1', 'b2'], 'kcd2mp_1')
+check(len(_s) == 6 and _s[0]['hx'] == 300.0, 'the samples of the reader are read, the place of the host player with them')
+_far = [dict(s, x=s['x'] + 100.0) for s in _s[:2]] + [dict(_s[2], x=150.0), dict(_s[3], x=99.0), dict(_s[4], x=60.0)]
+check(_w223.walk_start(_far) == _far[3]['t'], 'a subject who began beyond the start: the clock starts where he passes the start distance from the camp')
+check(_m['b1']['notice']['how'].startswith('view radius') and _m['b1']['notice']['d'] == 20.0 and abs(_m['b1']['notice']['t'] - 19.8) < 0.01,
+      'notice = the raised view radius, timed from the start of the walk (its own chatter is no notice)')
+check(_m['b1']['warn']['bark'].startswith('NPC_VIDI_NEPRITELE') and _m['b1']['draw']['d'] == 17.0, 'the warning bark and the draw')
+check(_m['b1']['target']['who'] == 'kcd2mp_1' and _m['b1']['charge']['d'] == 13.0, 'whom it took, and the charge (combat mode and closing on him)')
+check('draw' not in _m['b2'] and 'notice' not in _m['b2'], 'a bandit that carried its weapon drawn before the walk neither drew nor noticed')
+check(_w223.first_of(_m, 'notice')[0] == 'b1', 'the first bandit of a stage')
+check(_w223.targets_at(_e, ['b1', 'b2'], 31.5) == {'b1': 'kcd2mp_1'} and _w223.targets_at(_e, ['b1', 'b2'], 30.0) == {}, 'whom each bandit fights at a moment')
+check(_w223.bark_name('Ex: a - meta override: X; Nx: b - meta override: Y', 'b') == 'Y', 'a bark belongs to its speaker')
+
 print('RESULT: %d passed, %d failed' % (passed, failed))
 sys.exit(1 if failed else 0)

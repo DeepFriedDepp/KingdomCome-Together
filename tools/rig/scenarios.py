@@ -1284,6 +1284,35 @@ def s_defence(r, attackers=1, swings=40, secs=float(os.environ.get('KCDMP_RIG_DE
         sent = {'block_holds': 0, 'timed_blocks': 0, 'dodges': 0, 'open': 0, 'refused': 0, 'err': None}
         stop = threading.Event()
 
+        def frame_prep(npc):
+            # WO-223's frame, first: the host rested and put on a spot with a clear line to the bandit (a host who is being beaten
+            # beside the fight frames a red blur)
+            try:
+                import scen217
+                r.a.lua(scen217.VITALS)
+                t_ = r.a.ask(scen217.FRAME_SPOT % (npc, 0.0), 'W217F', 6)
+                if t_ and not t_.startswith('none'):
+                    x_, y_, z_, yaw_, _d, _n = t_.split()
+                    r.a.lua(scen217.PLACE_VIEW % (float(x_), float(y_), float(z_) + 0.05, -0.12, float(yaw_)))
+                sent['frame_prep'] = 'done'
+            except BaseException as ex:
+                sent['frame_prep'] = 'error: %s: %s' % (type(ex).__name__, ex)
+
+        def block_frame(npc):
+            # WO-223's frame: the joiner's held guard against a copy aimed at him, both screens (the host turned to it)
+            try:
+                import scen217
+                r.a.lua_nowait(scen217.AIM_AT % npc)
+                time.sleep(0.55)
+                res = {}
+                th2 = [threading.Thread(target=lambda c=c, kk=kk: res.__setitem__(kk, scen217.shot(r, c, 'block-%s' % kk)))
+                       for c, kk in ((r.a, 'host'), (r.b, 'joiner'))]
+                for t_ in th2: t_.start()
+                for t_ in th2: t_.join(timeout=40)
+                sent['frame'] = res
+            except BaseException as ex:
+                sent['frame'] = {'error': '%s: %s' % (type(ex).__name__, ex)}
+
         def defender():
             try:
                 g = game_input.Game('wo208-defence')
@@ -1306,13 +1335,21 @@ def s_defence(r, attackers=1, swings=40, secs=float(os.environ.get('KCDMP_RIG_DE
                         # takes the nearest lockable enemy in his view cone (WO-186)
                         for l in new:
                             m9 = re.search(r'WO209-ATK npc=(\S+) .*own attack at the local player started', l)
-                            if m9: r.b.lua_nowait(FACE_TO % m9.group(1)); sent['turns'] = sent.get('turns', 0) + 1
+                            if m9: r.b.lua_nowait(FACE_TO % m9.group(1)); sent['turns'] = sent.get('turns', 0) + 1; sent['last_npc'] = m9.group(1)
                         if windup:
                             # WO-209: the copy's own attack lands 0.6 s after its start (d6: p50 605 ms, up to 1.5 s) -- a held guard through
                             # it, presses near the blow (blocks, perfect blocks), a dodge, an open blow (d6's 0.15 / 0.30 s presses came early)
                             k = n % 6
                             if k in (0, 5):
-                                time.sleep(0.10); g.click('right', 1300); sent['block_holds'] += 1
+                                time.sleep(0.10)
+                                if os.environ.get('KCDMP_RIG_W223_FRAME') and sent.get('last_npc') and sent['block_holds'] >= 1:
+                                    if 'frame_prep' not in sent:
+                                        sent['frame_prep'] = 'asked'
+                                        threading.Thread(target=frame_prep, args=(sent['last_npc'],), daemon=True).start()
+                                    elif sent.get('frame_prep') == 'done' and 'frame' not in sent:
+                                        sent['frame'] = 'asked'
+                                        threading.Thread(target=block_frame, args=(sent['last_npc'],), daemon=True).start()
+                                g.click('right', 1300); sent['block_holds'] += 1
                             elif k in (1, 2):
                                 time.sleep(0.40 if k == 1 else 0.55)
                                 g.click('right', 300); sent['timed_blocks'] += 1
@@ -1361,10 +1398,12 @@ def s_defence(r, attackers=1, swings=40, secs=float(os.environ.get('KCDMP_RIG_DE
             return d
         hp, jp = per(host_out), per(joiner_out)
         mismatch = 0
+        from collections import Counter as _C
+        swing_judged = _C(m.group(1) for l in hl for m in [re.search(r'WO208-DEF swing npc=(\S+)', l)] if m)
         for n, outs in hp.items():
-            it = iter(jp.get(n, []))
-            for o in outs:
-                if not any(o == q for q in it): mismatch += 1
+            took, sent_ = _C(outs), _C(jp.get(n, []))
+            took['missed'] -= min(took['missed'], swing_judged.get(n, 0))   # the host's own "his engine judged this swing already"
+            mismatch += sum(max(0, k - sent_.get(o, 0)) for o, k in took.items())
         skipped = sum(1 for l in jl if 'WO208-DEF skipped' in l)
         blocking = sum(1 for l in r.a.lines(r.a.nlog, ma['n']) if re.search(r'WO121-MOTION body=kcd2mp_\d+ block=1', l))
         # B.6: the joiner's own lock-on on the copy that swings at him (the strike window's mid line names the player's opponent)
@@ -1378,7 +1417,7 @@ def s_defence(r, attackers=1, swings=40, secs=float(os.environ.get('KCDMP_RIG_DE
         detail = {'bandits': bandits, 'group': group, 'attackers_seen': sorted({n for n, _ in host_out} | {m.group(1) for l in hl for m in [re.search(r'WO208-DEF fallback npc=(\S+)', l)] if m}), 'judged_by_joiner': len(host_out), 'fallbacks': fallbacks, 'rate_pct': rate,
                   'joiner_windows_without_evidence': no_outcome, 'host_recoils_b4': recoils,
                   'joiner_outcomes': dict(Counter(o for _, o in joiner_out)), 'host_took': dict(Counter(o for _, o in host_out)),
-                  'outcome_mismatch': mismatch, 'joiner_skipped_host_verdicts': skipped, 'host_saw_figure_block_lines': blocking,
+                  'outcome_mismatch': mismatch, 'swings_already_judged': sum(swing_judged.values()), 'joiner_skipped_host_verdicts': skipped, 'host_saw_figure_block_lines': blocking,
                   'lock_on_windows': '%d/%d' % (locked, len(mids)), 'input': sent}
         if total == 0: return False, 'no-blows', detail
         if rate < 95.0: return False, 'judged-below-95', detail
@@ -4083,12 +4122,16 @@ def run(name, args):
     if plan is None: plan = scen220.plans(r, name, args)
     import scen222   # WO-222: hits that land like single-player
     if plan is None: plan = scen222.plans(r, name, args)
+    import scen223   # WO-223: enemies notice the joiner, and fight him on both screens
+    if plan is None: plan = scen223.plans(r, name, args)
+    import scen223e   # WO-223 Part E: the regression scenes
+    if plan is None: plan = scen223e.plans(r, name, args)
     if plan is None: raise SystemExit('unknown scenario ' + name)
     for nm, fn in plan:
         # 'long' runs independent checks: one failing does not stop the next (a failed join does)
         if not r.step(nm, fn) and (name not in ('long', 'joinscene', 'joinfight', 'e2pair', 'c1pair', 'e2twinpair', 's1pair', 'smoke', 's1front',
                                                'c1fight', 'c2tavern', 'convboth', 'convday', 'convtimed', 'smoke2', 'awake', 'soak2', 'convscene', 'c1x', 'probefight', 'probetavern', 'village', 'defence', 'loot5', 'convforced', 'convforcedj',
-                                               'idle_check', 'toggle_live', 'convvote_both', 'fight10', 'w211misc', 'w213session', 'w213walk', 'w214away', 'w214hostkills', 'w214draws', 'w215a0', 'w215tune', 'w215scenes', 'w215lead', 'w215ghost', 'w216a', 'w216split', 'w216ambush', 'w216road', 'w216outfits', 'w216ride', 'w216brawl', 'w216scenes') and name not in scen217.CONTINUE_ON_FAIL and name not in scen218.CONTINUE_ON_FAIL and name not in scen220.CONTINUE_ON_FAIL and name not in scen222.CONTINUE_ON_FAIL
+                                               'idle_check', 'toggle_live', 'convvote_both', 'fight10', 'w211misc', 'w213session', 'w213walk', 'w214away', 'w214hostkills', 'w214draws', 'w215a0', 'w215tune', 'w215scenes', 'w215lead', 'w215ghost', 'w216a', 'w216split', 'w216ambush', 'w216road', 'w216outfits', 'w216ride', 'w216brawl', 'w216scenes') and name not in scen217.CONTINUE_ON_FAIL and name not in scen218.CONTINUE_ON_FAIL and name not in scen220.CONTINUE_ON_FAIL and name not in scen222.CONTINUE_ON_FAIL and name not in scen223.CONTINUE_ON_FAIL and name not in scen223e.CONTINUE_ON_FAIL
                                               or nm == 'join' or r.steps[-1]['reason'] == 'copy-exited'): break   # a game gone ends the run
     return r.finish()
 

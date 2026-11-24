@@ -37,7 +37,8 @@ SCAN = {'1': 0x02, '2': 0x03, '3': 0x04, '4': 0x05, 'b': 0x30, 'r': 0x13, 'f': 0
         'w': 0x11, 's': 0x1F, 'a': 0x1E, 'd': 0x20, 'space': 0x39, 'enter': 0x1C, 'q': 0x10, 'h': 0x23,
         'home': 0x47, 'delete': 0x53, 'insert': 0x52, 'end': 0x4F, 'pgup': 0x49, 'pgdn': 0x51, 'f1': 0x3B,   # WO-184: f1 = photo mode
         'm': 0x32, 'j': 0x24, 'f3': 0x3D,   # WO-211: the map, the journal (B's menu storm), the Modding Tools' flight key (E)
-        'x': 0x2D}   # WO-217: the trade screen's close-the-deal key
+        'x': 0x2D,   # WO-217: the trade screen's close-the-deal key
+        'lshift': 0x2A, 'c': 0x2E}   # WO-223: the approach's sprint (held) and the crouch toggle
 EXTENDED = {'home', 'delete', 'insert', 'end', 'pgup', 'pgdn'}   # WO-178: the navigation keys are extended scan codes
 KEYEVENTF_EXTENDEDKEY = 0x0001
 KEYEVENTF_SCANCODE, KEYEVENTF_KEYUP, INPUT_MOUSE, INPUT_KEYBOARD = 0x0008, 0x0002, 0, 1
