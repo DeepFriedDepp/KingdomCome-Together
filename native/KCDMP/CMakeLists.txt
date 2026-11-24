@@ -95,6 +95,7 @@ add_library(KCDMP SHARED
     wo218.cpp
     wo221.cpp
     wo222.cpp
+    wo223.cpp
     blow_ledger.cpp
     combat_actions.cpp
     shops.cpp

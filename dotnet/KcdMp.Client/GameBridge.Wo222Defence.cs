@@ -66,6 +66,7 @@ public partial class GameBridge
         if (!Wo208Rules.IsJudgement(outcome) || !_w222LastFallback.TryGetValue((ghost, attacker), out long blow) || nowMs - blow > Wo222Rules.CorrectWithinMs) return;
         _w222LastFallback.TryRemove((ghost, attacker), out _);
         Interlocked.Increment(ref _w222DefLate);
+        if (_w223Answers.TryGetValue(ghost, out var tally)) tally.LateAnswer();   // WO-223 C: answered after all
         if (Wo222Rules.DelaySample(nowMs, blow)) _w222DefDelays.GetOrAdd(ghost, _ => new Wo222Rules.DelayRing()).Add((int)(nowMs - blow));
         Console.WriteLine(FormattableString.Invariant($"W222-DEF late npc={attacker} joiner={ghost} own={Wo208Rules.DefName(outcome)} after_blow_ms={nowMs - blow} -- his engine's verdict came after the host's guess: his game keeps his own"));
     }

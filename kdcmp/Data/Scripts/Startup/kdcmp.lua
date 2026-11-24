@@ -812,6 +812,10 @@ function KCD2MP_EmitTick()
     pcall(KCD2MP_PollBedNear)       -- WO-39 Phase 8: throttled internally to 1 Hz
     if KCD2MP_QuestProximityTick then pcall(KCD2MP_QuestProximityTick) end  -- WO-94: throttled internally to 1 Hz
     if KCD2MP_W195PollNoise then pcall(KCD2MP_W195PollNoise) end            -- WO-195B: the joiner's noise peak, throttled internally to 5 Hz
+    -- WO-223: the agent's beat stopped for 10 s with the engine's detail radius raised -> the engine's own again
+    if W223 and W223.lodNow and W223.lodBaseM and W223.lodNow ~= W223.lodBaseM and W223.tickAt and (os.clock() - W223.tickAt) > 10.0 then
+        pcall(KCD2MP_W223Reset, "no beat from the agent for 10 s")
+    end
 end
 
 -- intervalMs is optional; the agent passes its configured rate.
@@ -13082,6 +13086,7 @@ function KCD2MP_InterpTick(arg, gen)
         end
         if KCD2MP.ghostChainFix then return end   -- the stale chain stops rescheduling and dies here
     end
+    if KCD2MP_W223HoldTick then pcall(KCD2MP_W223HoldTick) end   -- WO-223: the next hold of each planned NPC, as the last one ends
     if arg ~= "ext" then
         Script.SetTimer(20, function() KCD2MP_InterpTick(nil, gen) end)  -- reschedule FIRST: crash-safe, tick never stops
         -- Only a scheduled fire counts as the chain being alive. A pumped call
@@ -36117,6 +36122,1048 @@ do
         local fname = "KCD2MP_W222Set_" .. k
         _G[fname] = function(arg) return KCD2MP_W222Set(k, arg) end
         System.AddCCommand(label, fname .. "(%line)", "WO-222 " .. (W222.HELP[k] or k) .. " (default on): " .. label .. " on|off")
+    end
+end
+
+-- ===== WO-223: enemies notice the joiner, and fight him on both screens (docs/WO-223-findings.md) =====
+-- Every switch ships on. The agent tells this file the states (KCD2MP_W223Cfg, with the bench's twins applied); a console switch here goes
+-- to the agent, which tells the DLL and this file back. mp_w223_status lists them.
+--
+-- B (the host): why a camp ignored a joiner walking into it, and what this does about it.
+--   * Attention. The game's NPCs attend to a player always (rpg_param PerceptionPriorBoostPlayer) and to another NPC almost never; its
+--     own watch and check behaviours raise an NPC's attention to the player with the relation context PerceptionPriorityBoost. The same
+--     context from a hostile NPC to the joiner's figure makes that NPC's own perception -- its view cone, its view radius, its rays --
+--     attend to the figure; what it then does is the engine's own enemy reaction (the alert, the bark, the draw, the attack, its own
+--     skirmish against the figure). The DLL sets the pairs (wo223.cpp); this file names them, twice a second.
+--   * The gate. An NPC body is seen at the full view radius the moment it is in view, whatever its stance or the light; a player is
+--     not: the engine shrinks the radius by his visibility and stealth skill and needs seconds of clear view that depend on his
+--     conspicuousness, the distance and his skill (C_RPGPerception's recognition data; W223.E below). So the mod keeps that meter for
+--     the joiner, with his OWN values as his own game reads them (sent by his agent on every change), and names the pair a little
+--     before it would be full (nameLeadS); his steps are heard by WO-195B's noise rule. Hostile = the NPC's own relationship to the
+--     figure reads enemy (the game's faction table), or it is in a fight already.
+--   * The hold. Until an NPC's eyes should be free its own perception of the figure is held off (the game's own
+--     XGenAIModule.IgnorePerception, as its behaviours use it): left alone the engine attends to the figure by itself -- a walking
+--     joiner was found at 20 m -- and then sees it as it sees any NPC's body: at once, at the full radius, in the dark as by day.
+--     Measured: the engine DROPS a hold asked for while one runs, a running hold cannot be shortened or ended, and a length must be
+--     written as the game's files write one (a whole number and a unit; a decimal holds nothing). So the beat only plans, per NPC,
+--     the moment its eyes should be free -- the predicted fill of the meter (stepped along his way in at his closing speed) less the
+--     engine's lag from free sight to its alert -- and a fast tick (KCD2MP_W223HoldTick, on the ghost interpolation timer) asks for
+--     each next hold as the last one ends, none longer than what is left until that moment. The pair is named a little earlier, so
+--     the engine attends to it the moment its eyes are free.
+--   * The guard (E, w223_guard). An NPC that is a friend of the host's own player is no enemy of his partner, whatever the faction
+--     table says of the figure (an ally of the host's in a quest): never named, and its perception of the figure held off for good.
+--     And an NPC that is no enemy of the host's own player either way (its relationship to him reads 0: a camp's bandits) does not
+--     fight his partner on sight: the game sets such a camp on a player by its trespass routine, which only a player can be given
+--     (its warnings, its talk, its crime record). So the mod keeps that routine's outcome for the figure: nothing outside the
+--     camp's private ground (the host world's own area label); on it, once such an NPC would recognise or hear a player, an armed
+--     joiner who stands is fought at once ("armed and looks like a threat": the game's own words) and anyone else when the camp's
+--     patience is spent as the game's routine counts it: after its fourth warning (campPatienceS: 30 s from the alert to the
+--     attack, measured on the host's own player crouching in the bench camp), or him coming at the NPC (first had further than 4 m
+--     and now within 2 m, or 10 m nearer than where it first had him). Once one of the camp fights him, all that have him do. Its
+--     warnings to him are not played: they are the player's own script.
+--   * The range. The engine runs full perception only for the NPCs nearest the host's own player (WH_AI_LOD_MaxDetailDistance, 150 m).
+--     While a figure is further from the host than that, the radius is raised to reach it (never above lodMaxM) and put back after.
+-- Log tags: WO223-CFG, WO223-TOGGLE, WO223-STATUS, WO223-RESET, WO223-ENGINE (the game's recognition numbers as read), WO223-GATE (an
+-- NPC named or dropped for a figure, and why), WO223-SPLIT (an enemy left to the host), WO223-EYES (the joiner: a copy's eyes held off the other figures), WO223-CAMP (a camp caught a joiner on its ground), WO223-GUARD (a friend of the host's
+-- held off), WO223-NOTICE (who each enemy noticed first), WO223-LOD (the radius changed); the bench's own, off unless asked for:
+-- WO223-FIG (what the gate read per NPC and beat), WO223-MODEL (the same meter kept for the host's own player).
+do
+    W223 = W223 or {}
+    W223.on = W223.on or {}
+    W223.NAMES = {
+        w223_perceive = "mp_w223_perceive", w223_copy_target = "mp_w223_copy_target", w223_combat_mode = "mp_w223_combat_mode",
+        w223_guard = "mp_w223_guard", w223_notice_log = "mp_w223_notice_log", w223_split = "mp_w223_split",
+    }
+    W223.HELP = {
+        w223_perceive = "B: (host) hostile NPCs notice a joiner's figure as they would notice a player in his place",
+        w223_copy_target = "C: (joiner) a copy fights whom its host NPC fights: the joiner himself when that is his figure",
+        w223_combat_mode = "D: (host) the engine's own combat mode decides a hit reaction; WO-222's offer only for a blow it still reads out of it (off: the engine's word alone)",
+        w223_guard = "E: (both) what the old rules protect stays protected (no assault or crime reaction to a partner's figure)",
+        w223_notice_log = "F: (both) who noticed whom first, and whom each enemy fights on both screens, in the log",
+        w223_split = "B: (host) with both players at an enemy and none on the host yet, a second enemy is left to the host for a moment",
+    }
+    -- scanM: NPCs this near a figure are looked at; keepS: a named NPC stays named this long after it last passed the gate;
+    -- lodNearM: a figure nearer the host than this needs no wider radius; lodPadM: the radius reaches this far past the figure;
+    -- lodMaxM: never wider than this; lodFarN: the detail budget while the radius is raised (the engine's own is kept otherwise).
+    -- closeM: this near he is noticed whichever way the NPC looks (the host's own player, crouching at night behind a bandit: 1.6 m).
+    W223.P = W223.P or { scanM = 45.0, keepS = 4.0, lodNearM = 100.0, lodPadM = 60.0, lodMaxM = 450.0, lodFarN = 120, stealthFreshS = 20.0,
+                         soundEveryS = 0.5, soundMin = 0.02, closeM = 1.6, skillMax = 30, maxStepS = 1.5,
+                         -- The scans' idle rate: after quietAfter beats in which no scan met an enemy of a figure's (or a friend
+                         -- of the host's it holds off), the scans run on every quietEvery-th beat only (1 s); the first enemy met
+                         -- puts them back on every beat. 45 m is 9 s of a sprint and 4 s of a gallop: nothing is named later for it.
+                         quietAfter = 6, quietEvery = 2,
+                         -- The notice log reads the gate's own scan for a figure, and for the host's own player too while he
+                         -- stands within noticeShareM of a figure (one query a beat for a pair that walks together, not three).
+                         noticeShareM = 15.0,
+                         -- The hold (the engine drops a hold asked for while one runs, and none can be ended early; a length is
+                         -- written as the game's own files write one: a whole number and a unit -- '500ms', '5s'):
+                         holdMaxS = 3.0,    -- no hold longer than this (what a change of his pace can cost)
+                         holdNearS = 1.2,   -- ... and none longer than this once its eyes are due within the look-ahead
+                         holdMinS = 0.1,    -- none shorter than this
+                         planFreshS = 1.5,  -- a plan the beat has not renewed for this long holds nothing any more
+                         freeLagS = 0.6,    -- its eyes are free this long before the meter's predicted fill (the engine's alert
+                                            -- follows free sight of a named body by 0.6 .. 1.1 s; the host's own alert trails the meter)
+                         lookS = 4.0,       -- how far ahead the meter is stepped (the longest hold and the lag fit inside)
+                         nameLeadS = 1.75,  -- named this long before the meter fills: the pair is set before its eyes are free
+                         friendHoldS = 60.0, -- E: a friend of the host's is held off a minute at a time
+                         campCatchLeadS = 0.25, -- a camp has "caught" a joiner it will not fight at once when the meter is this near full
+                         campNearHoldM = 4.0, campNearHoldS = 0.8, -- a caught joiner this near a camp NPC: shorter holds (he may come at it)
+                         eyesHoldS = 1.5,   -- C.2 (the joiner): a copy's eyes are held off the other players' figures this long at a time
+                         eyesFreshS = 3.0,  -- ... while the agent keeps naming it (once a second); unnamed this long, nothing is held
+                         splitHostM = 12.0, -- B.3 (w223_split): the host's own player this near an enemy the figure would be named for ...
+                         splitHoldS = 5.0,  -- ... with no enemy on him yet: that enemy is left to him this long at most
+                         splitForgetS = 20.0, -- a split not asked for this long starts again
+                         splitCallM = 15.0, -- ... and while an enemy fights the figure, one alert enemy this near the host is called on him
+                         splitCallClearM = 12.0, -- (one not yet alert: this near, with a clear line to him)
+                         splitCallAgainS = 3.0, splitCallMax = 2, -- a second call, to another enemy, when the first brought nothing
+                         splitCallKeepS = 8.0, -- an enemy called on the host is not named for the figure this long (its eyes held off him)
+                         hostModel = false, -- the bench's calibration log (WO223-MODEL: the same meter for the host's own player)
+                         gateLog = false,   -- the bench's gate log (WO223-FIG: what the gate read per NPC and beat)
+                         campPatienceS = 30.0, -- a camp that caught him on its ground and does not fight him at once does after this long (the
+                                               -- game's routine: after its fourth warning; measured on the host's own player: 29.9 s)
+                         campPatienceArmedS = 30.0, -- ... armed but crouching: the same (that measurement)
+                         campNearM = 2.0, campNearFromM = 4.0, campAdvanceM = 10.0, -- ... or at once when he comes at the NPC
+                         campForgetS = 60.0,   -- off its ground this long, the camp's count of him starts again (the game's own pause)
+                         maxClosing = 8.0,  -- m/s: no player closes faster on foot
+                         ray = "one",       -- the line of sight in the meter: "one" (WO-139's line from the NPC's eyes to his chest: the
+                                            -- form that fills when the engine alerts to the host's own player, measured), "any" (any of six
+                                            -- lines from standing or sitting eyes to his head, chest or knees), "none"
+                         visTerm = false }  -- a visibility-above-0 factor on the seconds of clear view: the game's code has one, but its
+                                            -- alert of the host's own player comes 0.8 s later than a meter with it (measured): off
+    -- The engine's own rule for a player (the numbers are the game's parameter object's, read by the DLL; these are this build's, kept
+    -- when nothing was read):
+    --   the radius an NPC sees him at = max(minR, its view radius x (his visibility below 0: 1 - vis / minVis, held in 0..1)
+    --                                       x (1 - skR x his stealth skill as a fraction));
+    --   the seconds of clear view it needs = (tP + his conspicuousness x (tConPos above 0, tConNeg below)) x curve(distance / radius)
+    --                                       x (1 + skT x skill fraction); nearer than minR: none;
+    --                                       (with P.visTerm also x (his visibility above 0: 1 - vis / maxVis): off, see P)
+    --   the curve = the engine's gain function (0 at the NPC's feet, 1 at the edge of the radius, steep in the middle);
+    --   out of view what it has gathered falls by `decay` a second.
+    -- For an NPC's body the engine multiplies the time by npcMod (0): a body is recognised the moment it is in view.
+    W223.E = W223.E or { minR = 2.5, minVis = -2.0, tP = 4.0, tConPos = -2.0, tConNeg = -4.0, gain = 0.1, decay = -0.5, npcMod = 0.0,
+                         skT = 0.6, skR = 0.3, maxVis = 3.5, src = "built-in" }
+    W223.meter = W223.meter or {}
+    W223.figAt = W223.figAt or {}
+    W223.stealth = W223.stealth or {}
+    W223.att = W223.att or {}
+    W223.lastSent = W223.lastSent or {}
+    W223.soundAt = W223.soundAt or {}
+    W223.stats = W223.stats or { ticks = 0, figures = 0, gateIn = 0, gateOut = 0, sounds = 0, lodChanges = 0, stealthIn = 0, sends = 0 }
+    function KCD2MP_W223On(name)
+        local v = W223.on[tostring(name)]
+        if v == nil then return true end
+        return v
+    end
+    function KCD2MP_W223Cfg(list)
+        local n = 0
+        for kv in string.gmatch(tostring(list or ""), "[^,]+") do
+            local k, v = string.match(kv, "^%s*([%w_]+)=(%a+)%s*$")
+            if k and W223.NAMES[k] then W223.on[k] = (v == "on"); n = n + 1 end
+        end
+        if n > 0 and not W223.told then
+            W223.told = true
+            local parts = {}
+            for k in pairs(W223.NAMES) do parts[#parts + 1] = k .. "=" .. (KCD2MP_W223On(k) and "on" or "off") end
+            table.sort(parts)
+            mp_log("WO223-CFG " .. table.concat(parts, " "))
+        end
+        return true
+    end
+    function KCD2MP_W223Set(name, arg)
+        local label = W223.NAMES[tostring(name)]
+        if not label then mp_log("WO223-TOGGLE unknown switch '" .. tostring(name) .. "'"); return false end
+        local v = KCD2MP_Wo122ParseBool(arg)
+        if v == "bad" then mp_log(label .. ": expected on|off, got '" .. tostring(arg) .. "'"); return false end
+        if v == nil then mp_log("WO223-TOGGLE " .. label .. " is " .. (KCD2MP_W223On(name) and "on" or "off")); return true end
+        W223.on[tostring(name)] = v
+        mp_log("WO223-TOGGLE " .. label .. " " .. (v and "on" or "off") .. " -- sent to the agent")
+        KCD2MP_EmitEvent("w223_cfg", tostring(name) .. "=" .. (v and "on" or "off"))
+        return true
+    end
+    function KCD2MP_W223Status()
+        local parts = {}
+        for k, label in pairs(W223.NAMES) do parts[#parts + 1] = label .. "=" .. (KCD2MP_W223On(k) and "on" or "off") end
+        table.sort(parts)
+        local s = W223.stats
+        mp_log(string.format("WO223-STATUS %s | host ticks=%d figures=%d named=%d dropped=%d holds=%d sounds=%d stealth_in=%d sends=%d detail_radius=%s (changes %d) numbers=%s late_beats=%d guarded=%d camps_caught=%d left_to_the_host=%d called_on_the_host=%d idle_beats=%d | joiner copies_with_eyes_held=%d eye_holds=%d",
+            table.concat(parts, " "), s.ticks, s.figures, s.gateIn, s.gateOut, s.holds or 0, s.sounds, s.stealthIn, s.sends, tostring(W223.lodNow or "engine"), s.lodChanges,
+            tostring(W223.E and W223.E.src), s.lateBeats or 0, s.guarded or 0, s.caught or 0, s.splits or 0, s.calls or 0, s.idleBeats or 0, s.eyesCopies or 0, s.eyes or 0))
+        KCD2MP_EmitEvent("w223_status", "")
+        return true
+    end
+
+    -- the host of a shared world (the same test as WO-131's perception rule)
+    function KCD2MP_W223Host()
+        return KCD2MP.hitSensorOn == true and KCD2MP.w122 ~= nil and KCD2MP.w122.sharedWorld == true
+    end
+
+    -- The agent (host): a joiner's own stealth snapshot (WO-195's text: c=,l=,v=,n=,s=,k=), as his own game reads it.
+    function KCD2MP_W223Stealth(src, text)
+        local c = KCD2MP_W195ParseStealth(tostring(text or ""))
+        if not c.known then return false end
+        W223.stealth[tostring(src)] = { text = tostring(text), at = os.clock() }
+        W223.stats.stealthIn = W223.stats.stealthIn + 1
+        return true
+    end
+
+    -- pure: the detail radius wanted for a furthest figure `far` metres from the host's player (base = the engine's own).
+    function KCD2MP_W223LodWant(far, base, P)
+        if far <= P.lodNearM or far + P.lodPadM > P.lodMaxM then return base end   -- near: nothing to do; beyond the cap: nothing to gain
+        return math.max(base, math.ceil((far + P.lodPadM) / 30) * 30)
+    end
+
+    -- The engine's own radius for full NPC perception, raised to reach a figure the host's player is far from, put back after.
+    function KCD2MP_W223Lod(far)
+        local W, P = W223, W223.P
+        if not W.lodBaseM then
+            pcall(function() W.lodBaseM = tonumber(System.GetCVar("WH_AI_LOD_MaxDetailDistance")) end)
+            pcall(function() W.lodBaseN = tonumber(System.GetCVar("WH_AI_LOD_MaxCountDetail")) end)
+            if not (W.lodBaseM and W.lodBaseN and W.lodBaseM > 0 and W.lodBaseN > 0) then W.lodBaseM, W.lodBaseN = nil, nil; return false end
+            W.lodNow = W.lodBaseM
+        end
+        local want = KCD2MP_W223LodWant(far, W.lodBaseM, P)
+        -- widened at once, narrowed only by two steps or more (a figure walking a boundary does not flip it)
+        if want == W.lodNow or (want < W.lodNow and want > W.lodBaseM and W.lodNow - want < 60) then return true end
+        local ok = pcall(function()
+            System.SetCVar("WH_AI_LOD_MaxDetailDistance", tostring(want))
+            System.SetCVar("WH_AI_LOD_MaxCountDetail", tostring(want > W.lodBaseM and math.max(W.lodBaseN, P.lodFarN) or W.lodBaseN))
+        end)
+        mp_log(string.format("WO223-LOD the engine's full-detail radius %s -> %s m (a figure %.0f m from the host's player; the engine's own is %s m, %s NPCs) %s",
+            tostring(W.lodNow), tostring(want), far, tostring(W.lodBaseM), tostring(W.lodBaseN), ok and "" or "FAILED"))
+        if ok then W.lodNow = want; W.stats.lodChanges = W.stats.lodChanges + 1 end
+        return ok
+    end
+
+    -- Is this NPC hostile to the figure by the game's own faction table (its relationship to the figure's soul reads enemy)?
+    -- Second result, with the guard on: "friend" -- it reads enemy to the figure but is a friend of the host's own player (kept out);
+    -- "camp" -- it is no enemy of the host's own player either way (0): it fights his partner as the game's camp routine fights a
+    -- player, not on sight.
+    function KCD2MP_W223Hostile(e, figW)
+        local r, rp = nil, nil
+        pcall(function() r = tonumber(e.soul:GetRelationship(figW)) end)
+        if player and player.this then pcall(function() rp = tonumber(e.soul:GetRelationship(player.this.id)) end) end
+        if r ~= nil and r < 0 then
+            if rp ~= nil and KCD2MP_W223On("w223_guard") then
+                if rp > 0 then return false, "friend" end
+                if rp == 0 then return true, "camp" end
+            end
+            return true
+        end
+        -- an animal that hunts the host's own player hunts a player: the figure's faction is not in the animals' table (it reads neutral)
+        if KCD2MP_W136IsAnimalClass(e.class) then return rp ~= nil and rp < 0 end
+        return false
+    end
+
+    -- The agent (host): the engine's recognition numbers as the DLL read them ("minR=..,minVis=..,..."); refused unless all are there.
+    function KCD2MP_W223Engine(text)
+        local E = {}
+        for k, v in string.gmatch(tostring(text or ""), "(%a+)=(%-?[%d%.]+)") do E[k] = tonumber(v) end
+        for _, k in ipairs({ "minR", "minVis", "tP", "tConPos", "tConNeg", "gain", "decay", "npcMod", "skT", "skR" }) do
+            if type(E[k]) ~= "number" then return false end
+        end
+        if not (E.minR > 0 and E.minVis < 0 and E.tP > 0 and E.gain > 0 and E.gain < 1) then return false end
+        if not (type(E.maxVis) == "number" and E.maxVis > 0) then E.maxVis = 3.5 end   -- a DLL that does not send it yet
+        E.src = "engine"
+        local was = W223.E
+        W223.E = E
+        if was.src ~= "engine" then
+            mp_log(string.format("WO223-ENGINE the gate uses the engine's own numbers: min radius %.2f m, visibility floor %.2f and ceiling %.2f, time %.2f s (con x %.2f / x %.2f), gain %.3f, decay %.2f /s, skill: time x %.2f, radius x %.2f",
+                E.minR, E.minVis, E.maxVis, E.tP, E.tConPos, E.tConNeg, E.gain, E.decay, E.skT, E.skR))
+        end
+        return true
+    end
+
+    -- pure: the engine's bias and gain curves
+    function KCD2MP_W223Bias(x, g)
+        if g <= 0 then return 0 end
+        if g >= 1 then return 1 end
+        return x / ((1 / g - 2) * (1 - x) + 1)
+    end
+    function KCD2MP_W223Curve(rel, g)
+        if rel < 0.5 then return KCD2MP_W223Bias(2 * rel, g) * 0.5 end
+        return KCD2MP_W223Bias(2 * rel - 1, 1 - g) * 0.5 + 0.5
+    end
+    -- pure: the radius (m) at which an NPC whose view radius is vir sees a player of visibility vis and stealth skill fraction sk
+    function KCD2MP_W223ViewR(vir, vis, sk, E)
+        local f = 1
+        if vis < 0 then f = math.max(0, math.min(1, 1 - vis / E.minVis)) end
+        return math.max(E.minR, vir * f * (1 - math.max(0, math.min(1, sk * E.skR))))
+    end
+    -- pure: the seconds of clear view at d metres (R = the radius above) an NPC needs to recognise him (vis = his visibility, nil = 0);
+    -- 0 = at once
+    function KCD2MP_W223RecogT(d, R, con, sk, E, vis)
+        if d <= E.minR then return 0 end
+        local t = (E.tP + con * (con > 0 and E.tConPos or E.tConNeg)) * KCD2MP_W223Curve(math.min(1, d / math.max(0.01, R)), E.gain)
+        if vis and vis > 0 then t = t * math.max(0, math.min(1, 1 - vis / (E.maxVis or 3.5))) end
+        return math.max(0, t * (1 + sk * E.skT))
+    end
+    -- pure: one step of an NPC's recognition of him: m (0..1) after dt seconds in or out of view at d metres
+    function KCD2MP_W223Meter(m, dt, inView, d, R, con, sk, E, vis)
+        if not inView then return math.max(0, m - math.abs(E.decay) * dt) end
+        local t = KCD2MP_W223RecogT(d, R, con, sk, E, vis)
+        if t <= 0.001 then return 1 end
+        return math.min(1, m + dt / t)
+    end
+
+    -- pure: will the meter be full within L seconds? He closes on the NPC at `closing` m/s (0 = he stands or walks away): the meter
+    -- is stepped along his way in, a tenth of a second at a time, gathering while he is inside its reach (R) with the angle as it
+    -- is now (the seconds it needs fall steeply in the middle of the reach: one value for the whole look-ahead named him too early).
+    function KCD2MP_W223FillWithin(L, m, d, closing, R, angOk, con, sk, E, vis)
+        return KCD2MP_W223FillIn(L, m, d, closing, R, angOk, con, sk, E, vis) ~= nil
+    end
+    -- pure: the seconds until the meter is full, looking L seconds ahead (nil: not within L)
+    function KCD2MP_W223FillIn(L, m, d, closing, R, angOk, con, sk, E, vis)
+        if m >= 1 then return 0 end
+        if not (angOk and R > 0) then return nil end
+        local c = math.max(0, closing)
+        local steps = math.max(1, math.ceil(L / 0.1 - 0.001))
+        local h = L / steps
+        local dd = d
+        for i = 1, steps do
+            dd = math.max(0, dd - c * h * 0.5)   -- where he is in the middle of the step
+            if dd <= R then
+                local t = KCD2MP_W223RecogT(dd, R, con, sk, E, vis)
+                if t <= 0.001 then return (i - 1) * h end
+                m = m + h / t
+                if m >= 1 then return i * h end
+            end
+            dd = math.max(0, dd - c * h * 0.5)
+        end
+        return nil
+    end
+    -- The fast tick (the ghost interpolation timer, every 20 ms; the beat too): every planned NPC whose eyes are not free yet is
+    -- asked for a hold, no longer than what is left until its eyes should be free. The engine drops a hold asked for while one runs,
+    -- so of all these only the one right after a hold's end is taken: the NPC is un-held for one tick at most.
+    -- C.2 (w223_copy_target, the joiner). On this screen a copy of the host's NPC has a brain of its own, and another player's
+    -- figure that fights it is the enemy that brain picks: the host's NPC turned to this player, and its copy went on fighting the
+    -- figure -- for 7 to 100 s in the swap scene, through twenty rounds of ending its fight and engaging it again (WO-210's repair:
+    -- its brain picked the figure again each time). What a brain cannot perceive it cannot pick: while the host's NPC fights this
+    -- player (the agent names those copies once a second, from the host's opponent stream), the copy's own perception of every
+    -- other player's figure is held off, eyesHoldS at a time (the same hold as the host's gate; a hold cannot be ended early, so
+    -- one lapses at most that long after its host NPC turned away again).
+    --   WO223-EYES npc=<n> its host NPC fights you: its own eyes are held off <k> other figure(s)
+    --   WO223-EYES npc=<n> no longer (after <s> s)
+    function KCD2MP_W223CopyEyes(list)
+        local W = W223
+        W.eyes = W.eyes or { rows = {}, at = 0 }
+        local E = W.eyes
+        local now = os.clock()
+        E.at = now
+        local want = {}
+        if KCD2MP_W223On("w223_copy_target") then
+            for nm in string.gmatch(tostring(list or ""), "[^,]+") do want[nm] = true end
+        end
+        for nm, row in pairs(E.rows) do
+            if not want[nm] then
+                E.rows[nm] = nil
+                if KCD2MP_W223On("w223_notice_log") then mp_log(string.format("WO223-EYES npc=%s no longer (after %.1f s)", nm, now - row.since)) end
+            end
+        end
+        for nm in pairs(want) do
+            if not E.rows[nm] then E.rows[nm] = { since = now, to = {} } end
+        end
+        return KCD2MP_W223CopyEyesTick(now)
+    end
+    function KCD2MP_W223CopyEyesTick(now)
+        local W, P = W223, W223.P
+        local E = W.eyes
+        if not (E and next(E.rows)) then return 0 end
+        now = now or os.clock()
+        if now - E.at > P.eyesFreshS then E.rows = {}; return 0 end   -- the agent stopped naming them: nothing is held any more
+        if not (XGenAIModule and XGenAIModule.IgnorePerception and XGenAIModule.GetMyWUID and KCD2MP.ghosts) then return 0 end
+        local n = 0
+        local text = string.format("%dms", math.floor(P.eyesHoldS * 1000 + 0.5))
+        for nm, row in pairs(E.rows) do
+            local e = System.GetEntityByName(nm)
+            local ew = nil
+            if e then pcall(function() ew = XGenAIModule.GetMyWUID(e) end) end
+            if ew then
+                local k = 0
+                for id, g in pairs(KCD2MP.ghosts) do
+                    local fig = g and g.entity
+                    if fig then
+                        k = k + 1
+                        if (row.to[id] or -1) - now <= 0.02 then   -- the last hold has run out (one asked for while it runs is dropped)
+                            local fw = nil
+                            pcall(function() fw = XGenAIModule.GetMyWUID(fig) end)
+                            if fw and pcall(XGenAIModule.IgnorePerception, ew, fw, text, false, false) then
+                                row.to[id] = now + P.eyesHoldS
+                                n = n + 1
+                            end
+                        end
+                    end
+                end
+                if not row.told and k > 0 then
+                    row.told = true
+                    W.stats.eyesCopies = (W.stats.eyesCopies or 0) + 1
+                    if KCD2MP_W223On("w223_notice_log") then
+                        mp_log(string.format("WO223-EYES npc=%s its host NPC fights you: its own eyes are held off %d other figure(s)", nm, k))
+                    end
+                end
+            end
+        end
+        if n > 0 then W.stats.eyes = (W.stats.eyes or 0) + n end
+        return n
+    end
+
+    function KCD2MP_W223HoldTick(now)
+        local W, P = W223, W223.P
+        if W.eyes then KCD2MP_W223CopyEyesTick(now) end   -- C.2: the joiner's own holds, at the same pace
+        if not W.plan then return 0 end
+        now = now or os.clock()
+        W.holdTickAt = now
+        local n = 0
+        for fn, plan in pairs(W.plan) do
+            local figAI = W.planFig and W.planFig[fn]
+            if figAI then
+                for _, row in pairs(plan) do
+                    if now - row.at <= P.planFreshS then
+                        local text = row.maxText
+                        if row.freeAt then
+                            local left = row.freeAt - now
+                            if left < P.holdMinS then text = nil
+                            elseif left < row.maxS then text = string.format("%dms", math.floor(left * 1000 + 0.5)) end
+                        end
+                        if text and pcall(XGenAIModule.IgnorePerception, row.ew, figAI, text, false, false) then n = n + 1 end
+                    end
+                end
+            end
+        end
+        if n > 0 then W.stats.holds = (W.stats.holds or 0) + n end
+        return n
+    end
+
+    -- Is any line from the NPC's eyes (standing, or sitting at a fire) to his head, his chest or his knees free of anything solid?
+    function KCD2MP_W223Los(npc, target, tp, crouch)
+        local np = W139.pos(npc)
+        if not (np and tp) then return false end
+        local tops = crouch and { 1.0, 0.6, 0.3 } or { 1.65, 1.1, 0.4 }
+        for _, ez in ipairs({ 1.6, 1.0 }) do
+            for _, tz in ipairs(tops) do
+                local dx, dy, dz = tp.x - np.x, tp.y - np.y, (tp.z + tz) - (np.z + ez)
+                local d = math.sqrt(dx * dx + dy * dy + dz * dz)
+                local hits = nil
+                pcall(function() hits = Physics.RayWorldIntersection({ x = np.x, y = np.y, z = np.z + ez }, { x = dx, y = dy, z = dz }, 1, ent_all, npc.id) end)
+                if type(hits) ~= "table" or #hits == 0 then return true end
+                local h = hits[1]
+                local hitE = nil
+                pcall(function() hitE = h.entity end)
+                if (target and hitE == target) or (tonumber(h.dist) or 0) >= d - 0.5 then return true end
+            end
+        end
+        return false
+    end
+    -- the meter's line of sight by P.ray
+    function KCD2MP_W223Clear(npc, target, tp, crouch)
+        local ray = W223.P.ray
+        if ray == "one" then return KCD2MP_W139Los(npc, target, tp) end
+        if ray == "any" then return KCD2MP_W223Los(npc, target, tp, crouch) end
+        return true
+    end
+
+    -- Calibration (the bench; off unless a test sets W223.P.hostModel): the same meter kept for the HOST's own player, logged every
+    -- beat for the NPCs that have him near their reach -- the engine's own alert of him is the yardstick. m = the rule as the gate
+    -- uses it; m_plain = the same without the visibility-above-0 term. Reads only; nothing is named or held.
+    function KCD2MP_W223HostModel(now)
+        local W, P, E = W223, W223.P, W223.E
+        local pp = W139.pos(player)
+        if not pp then return 0 end
+        local ctx = KCD2MP_W195ParseStealth(KCD2MP_W195Stealth())
+        local sk = math.max(0, math.min(1, (ctx.skill >= 0 and ctx.skill or 0) / P.skillMax))
+        local con = ctx.con > -99 and ctx.con or 0
+        local vis = ctx.vis > -99 and ctx.vis or 0
+        W.hostMeter = W.hostMeter or {}
+        local dt = math.max(0, math.min(P.maxStepS, now - (W.hostAt or now)))
+        W.hostAt = now
+        local ents = {}
+        pcall(function() ents = System.GetEntitiesInSphere(pp, P.scanM) or {} end)
+        local n = 0
+        for _, e in ipairs(ents) do
+            if e ~= player and e.soul and (e.class == "NPC" or e.class == "NPC_Female") and not mp_is_mod_entity(e) then
+                local nm = nil
+                pcall(function() nm = e:GetName() end)
+                local dead = false
+                pcall(function() dead = e.actor and e.actor:IsDead() == true end)
+                local np = nm and not dead and W139.pos(e)
+                if np then
+                    local d = math.sqrt((pp.x - np.x) ^ 2 + (pp.y - np.y) ^ 2 + (pp.z - np.z) ^ 2)
+                    local asleep = KCD2MP_W195IsAsleep(e, nm)
+                    local vir, fov = KCD2MP_W195NpcSight(e)
+                    local R = asleep and 0 or KCD2MP_W223ViewR(vir or KCD2MP.w195.P.baseM, vis, sk, E)
+                    local ang = R > 0 and KCD2MP_W139AngleTo(e, pp) or nil
+                    local angOk = R > 0 and (ang == nil or ang <= ((fov or KCD2MP.w195.P.fovDeg) / 2) + KCD2MP.w195.P.fovPadDeg)
+                    local inView = angOk and d <= R
+                    local row = W.hostMeter[nm]
+                    if not row then row = { a = 0, b = 0 }; W.hostMeter[nm] = row end
+                    row.a = KCD2MP_W223Meter(row.a, dt, inView, d, R, con, sk, E, vis)
+                    row.b = KCD2MP_W223Meter(row.b, dt, inView, d, R, con, sk, E, 0)
+                    if d <= R + 6 or row.a > 0 or row.b > 0 then
+                        n = n + 1
+                        local l1, l6 = false, false
+                        if d <= R + 6 then l1 = KCD2MP_W139Los(e, player, pp); l6 = KCD2MP_W223Los(e, player, pp, ctx.crouch) end
+                        mp_log(string.format("WO223-MODEL npc=%s d=%.1f R=%.1f vir=%.1f ang=%.0f fov=%.0f in_view=%d m=%.2f m_plain=%.2f vis=%.2f con=%.2f skill=%d asleep=%d los1=%d los_any=%d crouch=%d",
+                            nm, d, R, vir or -1, ang or -1, fov or -1, inView and 1 or 0, row.a, row.b, vis, con, ctx.skill, asleep and 1 or 0,
+                            l1 and 1 or 0, l6 and 1 or 0, ctx.crouch and 1 or 0))
+                    end
+                end
+            end
+        end
+        return n
+    end
+
+    -- One figure: the hostile NPCs near it that would see or hear a player with the joiner's own values -> named for the DLL.
+    -- B.3 (w223_split, the host). Two players walk into a camp together: the figure is named for the first enemy that would
+    -- recognise him, and then for the second -- and both took him, while the host's own player stood beside him with no enemy for
+    -- ten seconds and more (five of ten two-player runs). One enemy on the figure is enough while the host has none: an enemy
+    -- the figure would now be named for (by sight, not by ear or at arm's length) is not named, and its eyes stay held off him,
+    -- while the host's own player stands within splitHostM of it, upright, and the game says nothing is after him
+    -- (IsInCombatDanger) -- for splitHoldS at most. Its own perception then has only the host's player to go by.
+    --   WO223-SPLIT figure=<n> npc=<n> left to the host: he stands <m> m from it with no enemy on him (<k> on the figure)
+    --   WO223-SPLIT figure=<n> over after <s> s: <the host has an enemy on him | its time is up>
+    function KCD2MP_W223SplitHold(fn, nm, np, now, namedN)
+        local W, P = W223, W223.P
+        if not (KCD2MP_W223On("w223_split") and namedN >= 1 and np and (P.splitHoldS or 0) > 0) then return false end
+        if not (player and player.soul and player.soul.IsInCombatDanger and player.GetWorldPos) then return false end
+        W.split = W.split or {}
+        local s = W.split[fn]
+        if s and (now - s.last) > P.splitForgetS then s = nil; W.split[fn] = nil end
+        if s and s.over then return false end
+        local pp = nil
+        pcall(function() pp = player:GetWorldPos() end)
+        if not pp then return false end
+        local hd = math.sqrt((pp.x - np.x) ^ 2 + (pp.y - np.y) ^ 2 + (pp.z - np.z) ^ 2)
+        if hd > P.splitHostM or KCD2MP.playerSneaking == true then return false end
+        local danger = false
+        pcall(function() danger = player.soul:IsInCombatDanger() == true end)
+        local why = (danger and "the host has an enemy on him") or ((s and now - s.since >= P.splitHoldS) and "its time is up") or nil
+        if why then
+            if s then
+                s.over = true; s.last = now
+                if KCD2MP_W223On("w223_notice_log") then mp_log(string.format("WO223-SPLIT figure=%s over after %.1f s: %s", fn, now - s.since, why)) end
+            end
+            return false
+        end
+        if not s then s = { since = now, told = {} }; W.split[fn] = s end
+        s.last = now
+        if not s.told[nm] then
+            s.told[nm] = true
+            W.stats.splits = (W.stats.splits or 0) + 1
+            if KCD2MP_W223On("w223_notice_log") then
+                mp_log(string.format("WO223-SPLIT figure=%s npc=%s left to the host: he stands %.1f m from it with no enemy on him (%d on the figure)", fn, nm, hd, namedN))
+            end
+        end
+        return true
+    end
+
+    -- B.3, the camp's call (w223_split, the host). A fight with the host's own player pulls the rest of a camp in within a second;
+    -- a fight with the figure tells its mates nothing about the host, whom each must recognise by the engine's own timer -- 5 to
+    -- 9 s after the fight's start in four two-player runs of ten, with the hold above alone. So while an enemy fights the figure
+    -- and the game says nothing is after the host's own player (upright, alive): ONE enemy of the figure's that fights nobody yet,
+    -- within splitCallM of the host, that the engine says is alert (or that stands within splitCallClearM with a clear line to
+    -- him), is sent the game's own attack call at him ('crime:attackInitiatedByConcept', the inbox its own trees use). A camp NPC
+    -- (no enemy of the host's on sight) only where the camp's own rule fights a player at once: armed, on its private ground.
+    -- A second call goes to another enemy when the first brought nothing in splitCallAgainS; no more in that fight.
+    --   WO223-SPLIT figure=<n> npc=<n> called on the host: he stands <m> m from it (<alert|in clear view>; <why it may>) with no
+    --               enemy on him while <k> fight the figure sent=<b>
+    -- Was this enemy called on the host a moment ago (it is then no enemy of the figure's for splitCallKeepS: not named, held off)?
+    function KCD2MP_W223Called(fn, nm, now)
+        local c = W223.call and W223.call[fn]
+        local at = c and c.tried[nm]
+        return at ~= nil and (now - at) <= (W223.P.splitCallKeepS or 0) and KCD2MP_W223On("w223_split")
+    end
+
+    function KCD2MP_W223SplitCall(fn, now, cands, figFights)
+        local W, P = W223, W223.P
+        if not (KCD2MP_W223On("w223_split") and (P.splitCallM or 0) > 0) then return nil end
+        W.call = W.call or {}
+        local c = W.call[fn]
+        if (figFights or 0) < 1 then
+            if c and now - c.last > P.splitForgetS then W.call[fn] = nil end
+            return nil
+        end
+        if not c then c = { n = 0, tried = {}, last = now }; W.call[fn] = c end
+        c.last = now
+        if c.n >= P.splitCallMax or (c.at and now - c.at < P.splitCallAgainS) then return nil end
+        if not (player and player.this and player.soul and player.soul.IsInCombatDanger and player.GetWorldPos) then return nil end
+        if KCD2MP.playerSneaking == true then return nil end
+        local danger, dead = false, false
+        pcall(function() danger = player.soul:IsInCombatDanger() == true end)
+        pcall(function() dead = player.actor ~= nil and player.actor:IsDead() == true end)
+        if danger or dead then return nil end
+        local pp = nil
+        pcall(function() pp = player:GetWorldPos() end)
+        if not pp then return nil end
+        local armed, ground = false, nil
+        pcall(function() armed = player.human ~= nil and player.human:IsWeaponDrawn() == true end)
+        local best, bestD, bestWhy = nil, nil, nil
+        for _, k in ipairs(cands or {}) do
+            if k.np and not c.tried[k.nm] then
+                local hd = math.sqrt((pp.x - k.np.x) ^ 2 + (pp.y - k.np.y) ^ 2 + (pp.z - k.np.z) ^ 2)
+                local may = hd <= P.splitCallM
+                if may and k.camp then
+                    if ground == nil then ground = KCD2MP_W157AreaAt(pp) == "private" end
+                    may = armed and ground
+                end
+                if may and (not bestD or hd < bestD) then
+                    local why = KCD2MP_W223Alert(k.e) and "alert"
+                        or ((hd <= P.splitCallClearM and KCD2MP_W223Los(k.e, player, pp, false)) and "in clear view" or nil)
+                    if why then best, bestD, bestWhy = k, hd, why end
+                end
+            end
+        end
+        if not best then return nil end
+        local t = W139.stim("crime:attackInitiatedByConcept")
+        local ok = false
+        if t then
+            t.target = player.this.id
+            t.priorityTarget = true
+            ok = W139.send(best.e, "crime:attackInitiatedByConcept", t) == true
+        end
+        c.tried[best.nm] = now; c.n = c.n + 1; c.at = now
+        if ok then
+            W.stats.calls = (W.stats.calls or 0) + 1
+            -- the DLL pins it to the host's own player with the game's own forced target for a few seconds: the call alone made it
+            -- join the fight, and the fight's enemy was the figure (1 called enemy of 9 took the host within 5 s)
+            KCD2MP_EmitEvent("w223_call", best.nm)
+        end
+        if KCD2MP_W223On("w223_notice_log") then
+            mp_log(string.format("WO223-SPLIT figure=%s npc=%s called on the host: he stands %.1f m from it (%s; %s) with no enemy on him while %d fight the figure sent=%s",
+                fn, best.nm, bestD, bestWhy, best.camp and "armed on its ground" or "its enemy", figFights, tostring(ok)))
+        end
+        return best.nm
+    end
+
+    function KCD2MP_W223Figure(id, fig, fn, fp, now)
+        local W, P = W223, W223.P
+        local st = W.stealth[id]
+        local ctx = nil
+        if st and (now - st.at) < P.stealthFreshS then ctx = KCD2MP_W195ParseStealth(st.text) end
+        if not (ctx and ctx.known) then ctx = KCD2MP_W195AvatarCtx(id) or KCD2MP_W195ParseStealth("") end
+        local env = KCD2MP_W195Env(fp)
+        local figW = nil
+        pcall(function() figW = fig.this.id end)
+        if not figW then return 0 end
+        local set = W.att[fn]
+        if not set then set = {}; W.att[fn] = set end
+        local meter = W.meter[fn]
+        if not meter then meter = {}; W.meter[fn] = meter end
+        local E = W.E
+        local dt = math.max(0, math.min(P.maxStepS, now - (W.figAt[fn] or now)))
+        local stepS = now - (W.figAt[fn] or now)
+        if W.figAt[fn] and stepS > 1.2 then W.stats.lateBeats = (W.stats.lateBeats or 0) + 1 end
+        W.figAt[fn] = now
+        W.dprev = W.dprev or {}
+        local dprev, dnow = W.dprev[fn] or {}, {}
+        local own = st ~= nil and (now - st.at) < P.stealthFreshS
+        local sk = math.max(0, math.min(1, (ctx.skill >= 0 and ctx.skill or 0) / P.skillMax))
+        local con = ctx.con > -99 and ctx.con or 0
+        local _, noiseM = KCD2MP_W195Reach(ctx, env, nil)
+        local figAI = nil
+        if (P.holdMaxS or 0) > 0 and XGenAIModule and XGenAIModule.GetMyWUID and XGenAIModule.IgnorePerception then
+            pcall(function() figAI = XGenAIModule.GetMyWUID(fig) end)
+        end
+        W.plan = W.plan or {}
+        W.planFig = W.planFig or {}
+        local plan = W.plan[fn]
+        if not plan then plan = {}; W.plan[fn] = plan end
+        W.planFig[fn] = figAI
+        -- one NPC's row of the plan: when its eyes should be free of the hold (nil: not yet known -- held on), the longest hold
+        local function planRow(e, nm, freeAt, maxS)
+            if not figAI then return nil end
+            local row = plan[nm]
+            if not row then
+                local ew = nil
+                pcall(function() ew = XGenAIModule.GetMyWUID(e) end)
+                if not ew then return nil end
+                row = { ew = ew }
+                plan[nm] = row
+            end
+            row.freeAt, row.maxS, row.at = freeAt, maxS or P.holdMaxS, now
+            row.maxText = string.format("%dms", math.floor(row.maxS * 1000 + 0.5))
+            return row
+        end
+        local ents = {}
+        pcall(function() ents = System.GetEntitiesInSphere(fp, P.scanM) or {} end)
+        W.scanOf = W.scanOf or {}
+        W.scanOf[id] = { ents = ents, at = now }
+        local heardBy = 0
+        local live = {}
+        -- the camp rule's inputs: is he on private ground of the host's world (asked once a beat, when a camp NPC is near), is he armed
+        local ground = nil
+        local function onPrivate()
+            if ground == nil then ground = KCD2MP_W157AreaAt(fp) == "private" end
+            return ground
+        end
+        local armed = false
+        pcall(function() armed = fig.human ~= nil and fig.human:IsWeaponDrawn() == true end)
+        W.caught = W.caught or {}
+        local camps = 0
+        local namedN = 0   -- B.3: how many enemies are named for him now
+        local figFights, cands = 0, {}   -- ... how many are in a fight, and who fights nobody yet (the camp's call)
+        for _, at in pairs(set) do
+            if now - at <= P.keepS then namedN = namedN + 1 end
+        end
+        for _, e in ipairs(ents) do
+            if e ~= fig and e ~= player and e.soul and (e.class == "NPC" or e.class == "NPC_Female" or KCD2MP_W136IsAnimalClass(e.class))
+               and not mp_is_mod_entity(e) then
+                local nm = nil
+                pcall(function() nm = e:GetName() end)
+                local dead = false
+                pcall(function() dead = e.actor and e.actor:IsDead() == true end)
+                local hostile, guarded = false, nil
+                if nm and not dead then hostile, guarded = KCD2MP_W223Hostile(e, figW) end
+                if hostile or guarded then W.sawEnemy = true end
+                if guarded == "friend" and figAI then
+                    -- E: a friend of the host's: its own perception of the figure is held off for good (it must never turn on him)
+                    if planRow(e, nm, nil, P.friendHoldS) then
+                        W.stats.guarded = (W.stats.guarded or 0) + 1
+                        W.guardTold = W.guardTold or {}
+                        if not W.guardTold[nm] then
+                            W.guardTold[nm] = true
+                            mp_log(string.format("WO223-GUARD figure=%s npc=%s reads enemy to the figure by its faction but is a friend of the host's own player: left out, and held off", fn, nm))
+                        end
+                    end
+                end
+                if hostile then
+                    local np = W139.pos(e)
+                    local d = np and math.sqrt((fp.x - np.x) ^ 2 + (fp.y - np.y) ^ 2 + (fp.z - np.z) ^ 2) or 999
+                    local asleep = KCD2MP_W195IsAsleep(e, nm)
+                    local vir, fov = KCD2MP_W195NpcSight(e)
+                    local fighting = false
+                    pcall(function() fighting = e.soul:IsInCombatMode() == true end)
+                    -- sight: the engine's radius for a player of his visibility and skill, the NPC's own field of view, a clear line
+                    local R = 0
+                    if not asleep then
+                        local v0 = vir or KCD2MP.w195.P.baseM
+                        if ctx.vis > -99 then R = KCD2MP_W223ViewR(v0, ctx.vis, sk, E)
+                        else R = math.max(E.minR, v0 * KCD2MP_W195SightFactor(ctx, env)) end   -- his own visibility is not known: WO-195's terms
+                    end
+                    local inView, angOk = false, false
+                    local angDeg, clearNow = nil, nil
+                    if R > 0 then
+                        local ang = KCD2MP_W139AngleTo(e, fp)
+                        angDeg = ang
+                        angOk = ang == nil or ang <= ((fov or KCD2MP.w195.P.fovDeg) / 2) + KCD2MP.w195.P.fovPadDeg
+                        -- the line itself is the engine's to judge once the pair is named (its own rays, to his body): the mod's one ray
+                        -- from eye height called it blocked where the engine saw the host's own player
+                        if angOk and d <= R + 8 then
+                            local clear = KCD2MP_W223Clear(e, fig, fp, ctx.crouch)
+                            clearNow = clear
+                            if d <= R then inView = clear end
+                            if not clear then angOk = false end   -- no look-ahead through a wall
+                        end
+                    end
+                    -- how fast he closes on it (this beat against the last)
+                    local closing = 0
+                    local pd = dprev[nm]
+                    if pd and stepS > 0.1 and stepS < 2.5 then closing = math.max(0, math.min(P.maxClosing, (pd - d) / stepS)) end
+                    dnow[nm] = d
+                    local was = meter[nm] or 0
+                    local vis = (P.visTerm and ctx.vis > -99) and ctx.vis or 0
+                    local m = KCD2MP_W223Meter(was, dt, inView, d, R, con, sk, E, vis)
+                    meter[nm] = m; live[nm] = true
+                    if P.gateLog and (d <= R + 6 or d <= 8 or m > 0) then
+                        mp_log(string.format("WO223-FIG npc=%s d=%.1f R=%.1f vir=%.1f ang=%.0f fov=%.0f ang_ok=%d clear=%d in_view=%d m=%.2f vis=%.2f con=%.2f skill=%d crouch=%d asleep=%d camp=%d priv=%d armed=%d closing=%.1f noise=%.1f named=%d",
+                            nm, d, R, vir or -1, angDeg or -1, fov or -1, angOk and 1 or 0, clearNow == nil and -1 or (clearNow and 1 or 0), inView and 1 or 0, m,
+                            ctx.vis, con, ctx.skill, ctx.crouch and 1 or 0, asleep and 1 or 0, guarded == "camp" and 1 or 0,
+                            guarded == "camp" and (onPrivate() and 1 or 0) or -1, armed and 1 or 0, closing, noiseM or -1, set[nm] and 1 or 0))
+                    end
+                    -- hearing: his steps within WO-195B's noise reach; this near he is noticed anyway
+                    local heard = (noiseM or 0) > 0 and d <= noiseM
+                    local close = (not asleep) and d <= P.closeM
+                    local v = nil
+                    -- the seconds until it would recognise a player in his place (nil: not within the look-ahead), and from that the
+                    -- moment its own eyes should be free of the hold
+                    local fillIn = KCD2MP_W223FillIn(P.lookS, m, d, closing, R, angOk, con, sk, E, vis)
+                    local seen = fillIn ~= nil and fillIn <= P.nameLeadS
+                    local freeAt = fillIn and (now + fillIn - P.freeLagS) or nil
+                    local holdMax = nil
+                    if fighting then v = "fighting"
+                    elseif guarded == "camp" then
+                        -- a camp's NPC: no fight on sight. On its private ground, once it would recognise or hear a player, the camp
+                        -- has caught him: an armed joiner who stands is fought at once, anyone else when its patience is spent.
+                        camps = camps + 1
+                        local c = W.caught[fn]
+                        local threat = armed and not ctx.crouch
+                        -- (an armed joiner who stands on its ground is fought as an enemy on sight: its eyes are planned the same way
+                        -- from the start; anyone else is held on until the camp's patience says otherwise)
+                        if not (threat and onPrivate()) then freeAt = nil end
+                        local has = heard or close or (fillIn ~= nil and fillIn <= (threat and P.nameLeadS or P.campCatchLeadS))
+                        if onPrivate() and has then
+                            if not c then
+                                c = { at = now, by = nm, d0 = {} }
+                                W.caught[fn] = c
+                                W.stats.caught = (W.stats.caught or 0) + 1
+                                if KCD2MP_W223On("w223_notice_log") then
+                                    mp_log(string.format("WO223-CAMP figure=%s caught on private ground by %s at %.1f m (%s; armed %d, crouch %d): %s",
+                                        fn, nm, d, seen and "seen" or (heard and "heard" or "close"), armed and 1 or 0, ctx.crouch and 1 or 0,
+                                        (armed and not ctx.crouch) and "armed and standing, it fights him at once"
+                                        or string.format("it fights him when the camp's patience is spent (%.0f s), or when he comes at it", armed and P.campPatienceArmedS or P.campPatienceS)))
+                                end
+                            end
+                            c.d0[nm] = c.d0[nm] or d   -- how far he was when this one first had him
+                            local d0 = c.d0[nm]
+                            local pressed = (d0 > P.campNearFromM and d <= P.campNearM) or (d0 > P.campAdvanceM and d <= d0 - P.campAdvanceM)
+                            local endAt = c.at + (armed and P.campPatienceArmedS or P.campPatienceS)   -- when its patience is spent
+                            if threat then
+                                v = "caught armed on its ground"
+                                freeAt = (heard or close) and now or (now + (fillIn or 0) - P.freeLagS)
+                                c.fight = true   -- the camp's patience is one: once one of it fights him, all that have him do
+                            elseif pressed or c.fight then
+                                v = pressed and "came at it on its ground" or "stayed on its ground"
+                                freeAt = now
+                                c.fight = true
+                            else
+                                -- its patience runs: its eyes stay held until that is spent (named a little before, as an enemy is)
+                                freeAt = endAt - P.freeLagS
+                                if endAt - now <= P.nameLeadS then v = "stayed on its ground" end
+                                if now >= endAt then c.fight = true end
+                                if d <= P.campNearHoldM then holdMax = P.campNearHoldS end
+                            end
+                        end
+                        if not v and set[nm] and m > 0 then v = "kept" end
+                    elseif seen then v = "seen"
+                    elseif heard then v = asleep and "woken" or "heard"
+                    elseif close then v = "close"
+                    elseif set[nm] and m > 0 then v = "kept" end   -- it has seen him and has not yet lost him
+                    -- B.3: one enemy has him and the host beside him has none: this one is left to the host for a moment
+                    -- (judged as soon as its eyes are planned to be freed, not only when it is named: the hold then is already the long one)
+                    if (v or freeAt) and not set[nm] and not fighting and v ~= "heard" and v ~= "woken" and v ~= "close"
+                       and KCD2MP_W223SplitHold(fn, nm, np, now, namedN) then
+                        v, freeAt, holdMax = nil, nil, nil
+                    end
+                    -- (an enemy called on the host a moment ago is the host's: not named for the figure, its eyes held off him)
+                    local called = KCD2MP_W223Called(fn, nm, now)
+                    if called then v, freeAt, holdMax = nil, nil, nil
+                    elseif fighting then figFights = figFights + 1
+                    elseif not v and not set[nm] and not asleep and (e.class == "NPC" or e.class == "NPC_Female") then
+                        cands[#cands + 1] = { e = e, nm = nm, np = np, camp = guarded == "camp" }
+                    end
+                    -- the plan of its hold: none for one that sleeps (it sees nothing) or fights; free at once for one that heard him
+                    -- or has him this close; as planned when it was named, for one kept
+                    if asleep or (fighting and not called) then plan[nm] = nil
+                    else
+                        if v == "heard" or v == "woken" or v == "close" then freeAt = now
+                        elseif v == "kept" then freeAt = (plan[nm] and plan[nm].freeAt) or now end
+                        if not holdMax and freeAt and freeAt - now <= P.lookS then holdMax = P.holdNearS end
+                        planRow(e, nm, freeAt, holdMax)
+                    end
+                    if v then
+                        if not set[nm] then
+                            namedN = namedN + 1
+                            W.stats.gateIn = W.stats.gateIn + 1
+                            if KCD2MP_W223On("w223_notice_log") then
+                                mp_log(string.format("WO223-GATE figure=%s npc=%s named: %s at %.1f m (sight %.1f m, noise %.1f m, vib %.2f, con %.2f, skill %d, crouch %d%s)",
+                                    fn, nm, v, d, R, noiseM or -1, ctx.vis, con, ctx.skill, ctx.crouch and 1 or 0, own and "" or ", his own values not known: the figure's"))
+                            end
+                        end
+                        set[nm] = now
+                        -- (a camp NPC that fights him now and caught him by ear is given his steps to hear too: a hold stops an NPC's
+                        -- eyes, not its ears -- a sleeper named by ear answered the sound under a running hold)
+                        if v == "heard" or v == "woken" or v == "close" or (guarded == "camp" and v ~= "fighting" and (heard or close)) then heardBy = heardBy + 1 end
+                    end
+                end
+            end
+        end
+        -- the plan keeps only who this beat looked at (out of reach, dead, gone: nothing is held for it any more), and its first
+        -- holds are asked for now
+        for nm, row in pairs(plan) do
+            if row.at ~= now then plan[nm] = nil end
+        end
+        KCD2MP_W223SplitCall(fn, now, cands, figFights)
+        KCD2MP_W223HoldTick(now)
+        for nm in pairs(meter) do
+            if not live[nm] then meter[nm] = nil end   -- out of reach, dead or gone
+        end
+        -- the camp's count of him: kept while he is on its ground, started again after campForgetS off it (or with no camp NPC near)
+        local c = W.caught[fn]
+        if c then
+            if camps > 0 and onPrivate() then c.offAt = nil
+            else
+                c.offAt = c.offAt or now
+                if now - c.offAt >= P.campForgetS then W.caught[fn] = nil end
+            end
+        end
+        W.dprev[fn] = dnow
+        local names = {}
+        for nm, at in pairs(set) do
+            if now - at > P.keepS then
+                set[nm] = nil
+                W.stats.gateOut = W.stats.gateOut + 1
+            else names[#names + 1] = nm end
+        end
+        table.sort(names)
+        local text = fn .. "|" .. table.concat(names, ",")
+        if #names > 0 or W.lastSent[fn] ~= text then
+            KCD2MP_EmitEvent("w223_attend", text)
+            W.stats.sends = W.stats.sends + 1
+        end
+        W.lastSent[fn] = text
+        -- his steps, as loud as his own game says, where a hostile NPC is in earshot (the engine's own movement sound, from his figure)
+        if heardBy > 0 and (now - (W.soundAt[fn] or -1e9)) >= P.soundEveryS and XGenAIModule and XGenAIModule.ProduceSoundWUID then
+            W.soundAt[fn] = now
+            pcall(function() XGenAIModule.ProduceSoundWUID(3, figW, math.max(ctx.noi, P.soundMin)) end)
+            W.stats.sounds = W.stats.sounds + 1
+        end
+        return #names
+    end
+
+    -- F (the host): who each enemy noticed first. An enemy is alert when the engine says so: its view radius raised (its alerted
+    -- value, 28.1 against 18.7 .. 21.4), combat mode, or combat danger. At that moment the player it most likely noticed is the one in
+    -- its field of view and nearest (nobody in view: the nearest); the line says how far he was, how fast he moved, whether he crouched,
+    -- and where the other player was. One line per enemy per alert (an enemy calm for alertAgainS can be counted again).
+    --   WO223-NOTICE npc=<n> noticed=<host|joiner:<id>> at=<m> pace=<m/s> crouch=<0|1> in_view=<0|1> other=<who> other_at=<m>
+    function KCD2MP_W223Alert(e)
+        local a = false
+        pcall(function() a = (tonumber(e.soul:GetDerivedStat("vir")) or 0) >= 25.0 end)
+        if not a then pcall(function() a = e.soul:IsInCombatMode() == true end) end
+        if not a then pcall(function() a = e.soul:IsInCombatDanger() == true end) end
+        return a
+    end
+    function KCD2MP_W223NoticeTick(now, pp, figs)
+        local W = W223
+        if not (KCD2MP_W223On("w223_notice_log") and #figs > 0) then return 0 end
+        W.alert = W.alert or {}
+        -- the host's own pace from his own places (this tick against the last)
+        local hv = 0
+        if W.hostAt and now > W.hostAt and now - W.hostAt < 2.0 then hv = math.sqrt((pp.x - W.hostX) ^ 2 + (pp.y - W.hostY) ^ 2) / (now - W.hostAt) end
+        W.hostAt, W.hostX, W.hostY = now, pp.x, pp.y
+        local hcrouch = KCD2MP.playerSneaking == true
+        if not hcrouch then local f = KCD2MP_W195Stat("fsm"); if f and f > 0 and f < 0.25 then hcrouch = true end end
+        local cands = { { who = "host", p = pp, v = hv, crouch = hcrouch } }
+        for _, f in ipairs(figs) do
+            local st = f.g and f.g.istate
+            local own = W.stealth[f.id]
+            local oc = own and (now - own.at) < W.P.stealthFreshS and KCD2MP_W195ParseStealth(own.text) or nil
+            local crouch = st ~= nil and st.stance == "c"
+            if oc and oc.known then crouch = oc.crouch end   -- his own game's word first
+            local sc = W.scanOf and W.scanOf[f.id]
+            local shared = sc and sc.at == now and sc.ents or nil
+            cands[#cands + 1] = { who = "joiner:" .. f.id, p = f.fp, v = (st and st.smoothedSpeed) or 0, crouch = crouch, ents = shared }
+            -- (the host's own player beside this figure: the same NPCs are in reach of both)
+            if shared and not cands[1].ents and math.sqrt((f.fp.x - pp.x) ^ 2 + (f.fp.y - pp.y) ^ 2) <= (W.P.noticeShareM or 0) then cands[1].ents = shared end
+        end
+        local seen, n = {}, 0
+        for _, c in ipairs(cands) do
+            local ents = c.ents
+            if not ents then
+                ents = {}
+                pcall(function() ents = System.GetEntitiesInSphere(c.p, W.P.scanM) or {} end)
+            end
+            for _, e in ipairs(ents) do
+                local nm = nil
+                if e ~= player and e.soul and (e.class == "NPC" or e.class == "NPC_Female" or KCD2MP_W136IsAnimalClass(e.class)) and not mp_is_mod_entity(e) then
+                    pcall(function() nm = e:GetName() end)
+                end
+                if nm and not seen[nm] and not string.find(nm, "^kcd2mp_") then
+                    seen[nm] = true
+                    if KCD2MP_W223Hostile(e, figs[1].figW) then
+                        W.sawEnemy = true
+                        local al = KCD2MP_W223Alert(e)
+                        local rec = W.alert[nm]
+                        if al and not (rec and rec.on) then
+                            local np = W139.pos(e)
+                            local _, fov = KCD2MP_W195NpcSight(e)
+                            local half = ((fov or W223.P.fovDeg or 95) / 2) + 5
+                            local best, bestView, other = nil, false, nil
+                            for _, k in ipairs(cands) do
+                                k.d = np and math.sqrt((k.p.x - np.x) ^ 2 + (k.p.y - np.y) ^ 2) or 999
+                                local ang = KCD2MP_W139AngleTo(e, k.p)
+                                k.view = ang ~= nil and ang <= half and k.d <= 40.0   -- in its field of view and within any NPC's reach
+                            end
+                            for _, k in ipairs(cands) do
+                                if best == nil or (k.view and not bestView) or (k.view == bestView and k.d < best.d) then best, bestView = k, k.view end
+                            end
+                            for _, k in ipairs(cands) do
+                                if k ~= best and (other == nil or k.d < other.d) then other = k end
+                            end
+                            n = n + 1
+                            W.stats.notices = (W.stats.notices or 0) + 1
+                            mp_log(string.format("WO223-NOTICE npc=%s noticed=%s at=%.1f pace=%.1f crouch=%d in_view=%d other=%s other_at=%.1f",
+                                nm, best.who, best.d, best.v, best.crouch and 1 or 0, bestView and 1 or 0, other and other.who or "-", other and other.d or -1))
+                            W.alert[nm] = { on = true, at = now }
+                        elseif al and rec then rec.at = now
+                        elseif (not al) and rec and rec.on and (now - rec.at) > 30.0 then W.alert[nm] = nil end
+                    end
+                end
+            end
+        end
+        return n
+    end
+
+    -- The engine's own radius back, nobody named (the switch off, this game no host, the session over).
+    function KCD2MP_W223Reset(why)
+        local W = W223
+        local was = W.lodNow
+        if W.lodNow and W.lodBaseM and W.lodNow ~= W.lodBaseM then KCD2MP_W223Lod(0) end
+        local n = 0
+        for fn, last in pairs(W.lastSent) do
+            if last ~= fn .. "|" then KCD2MP_EmitEvent("w223_attend", fn .. "|"); W.lastSent[fn] = fn .. "|"; n = n + 1 end
+        end
+        W.att = {}
+        W.meter = {}
+        W.quietBeats = 0
+        W.figAt = {}
+        W.dprev = {}
+        W.caught = {}
+        W.split = {}; W.call = {}
+        W.eyes = nil
+        W.plan = {}
+        W.planFig = {}
+        if (was and W.lodBaseM and was ~= W.lodBaseM) or n > 0 then
+            mp_log(string.format("WO223-RESET %s: the engine's own detail radius (%s m), %d figure(s) no longer named", tostring(why), tostring(W.lodBaseM), n))
+        end
+        return true
+    end
+
+    -- The agent (host), twice a second: every figure looked at, the radius kept.
+    function KCD2MP_W223Tick()
+        local W = W223
+        W.stats.ticks = W.stats.ticks + 1
+        W.tickAt = os.clock()
+        if not (KCD2MP_W223On("w223_perceive") and KCD2MP_W223Host() and player) then
+            KCD2MP_W223Reset("w223_perceive off or not the host")
+            return false
+        end
+        local now = os.clock()
+        local pp = W139.pos(player)
+        if not pp then return false end
+        if W.P.hostModel then pcall(KCD2MP_W223HostModel, now) end
+        local far, n = 0, 0
+        local figs = {}
+        -- (the scans' idle rate: see P.quietAfter)
+        local quiet = W.quietBeats or 0
+        local scan = quiet < (W.P.quietAfter or 0) or (W.P.quietEvery or 1) <= 1 or (W.stats.ticks % W.P.quietEvery) == 0
+        if scan then W.sawEnemy = false else W.stats.idleBeats = (W.stats.idleBeats or 0) + 1 end
+        for id, g in pairs(KCD2MP.ghosts or {}) do
+            local fig = g.entity
+            local fp = fig and W139.pos(fig)
+            local fn = nil
+            if fp then pcall(function() fn = fig:GetName() end) end
+            if fp and fn then
+                n = n + 1
+                local dh = math.sqrt((fp.x - pp.x) ^ 2 + (fp.y - pp.y) ^ 2)
+                if dh > far then far = dh end
+                if scan then pcall(KCD2MP_W223Figure, tostring(id), fig, fn, fp, now) end
+                local figW = nil
+                pcall(function() figW = fig.this.id end)
+                if figW then figs[#figs + 1] = { id = tostring(id), g = g, fp = fp, figW = figW } end
+            end
+        end
+        W.stats.figures = n
+        KCD2MP_W223Lod(far)
+        if scan then
+            pcall(KCD2MP_W223NoticeTick, now, pp, figs)
+            if W.sawEnemy or n == 0 then W.quietBeats = 0 else W.quietBeats = quiet + 1 end
+        end
+        return true
+    end
+
+    System.AddCCommand("mp_w223_status", "KCD2MP_W223Status()", "WO-223: every WO-223 switch and the DLL's numbers")
+    for k, label in pairs(W223.NAMES) do
+        local fname = "KCD2MP_W223Set_" .. k
+        _G[fname] = function(arg) return KCD2MP_W223Set(k, arg) end
+        System.AddCCommand(label, fname .. "(%line)", "WO-223 " .. (W223.HELP[k] or k) .. " (default on): " .. label .. " on|off")
     end
 end
 

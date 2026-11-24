@@ -28,9 +28,9 @@ public static class Wo222Rules
     /// in the sample too) plus a margin, between 800 ms and 2 s; before five answers are known, 1 s. <paramref name="comboMs"/> (WO-210
     /// E.3's combo hold) is a floor when the blow continues a combo.
     /// </summary>
-    public static int DefHoldMs(IReadOnlyList<int> delaysMs, int comboMs = 0)
+    public static int DefHoldMs(IReadOnlyList<int> delaysMs, int comboMs = 0, int capMs = DefHoldCapMs)
     {
-        int h = delaysMs.Count < DefMinSamples ? DefHoldUnknownMs : Math.Clamp(delaysMs.Max() + DefMarginMs, DefHoldFloorMs, DefHoldCapMs);
+        int h = delaysMs.Count < DefMinSamples ? DefHoldUnknownMs : Math.Clamp(delaysMs.Max() + DefMarginMs, DefHoldFloorMs, Math.Max(DefHoldFloorMs, capMs));
         return Math.Max(h, comboMs);
     }
 

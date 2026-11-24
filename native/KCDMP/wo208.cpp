@@ -20,6 +20,7 @@
 #include "wo172.h"
 #include "wo221.h"
 #include "wo210.h"
+#include "wo223.h"
 #include "wo210_kd.h"
 #include "wo210_rules.h"
 #include "wo213.h"
@@ -1648,7 +1649,10 @@ bool target_player_ok(uint32_t copy, const char* site) {
         static std::unordered_map<uint32_t, wo210rules::HealTrack> s_heal;
         static double s_lastHeal = -1e9;
         const double now = npcdrive::now_s();
-        if (wo210rules::heal_step(s_heal[copy], now, s_lastHeal)) {
+        // WO-223 C: with the copy's own eyes held off the other figures (the mod, w223_copy_target) a repair sticks -- the first may
+        // come before the hold is in place (p21's one wrong spell: 6.7 s, cured by the second repair 5 s after the first): the next
+        // may follow kHealSoonerS sooner
+        if (wo210rules::heal_step(s_heal[copy], now, s_lastHeal - (wo223::on(wo223::kBitCopyTarget) ? wo223::kHealSoonerS : 0.0))) {
             s_lastHeal = now;
             s_heal.clear();
             bool stopped = false;

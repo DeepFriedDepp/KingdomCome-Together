@@ -30,6 +30,7 @@
 #include "body_drive.h"
 #include "holders.h"
 #include "wo221.h"
+#include "wo223.h"
 
 #include <windows.h>
 #include <atomic>
@@ -377,6 +378,7 @@ struct Puppet {
     double   livingCheckAt = 0;     // WO-131 2b: when the body's physics was last checked for a ragdoll
     double   activityDriftSince = 0; // WO-209: since when its host NPC is far from the body an activity holds
     double   driftReleaseAt = -1e9;  // WO-218 C.1: the last time its own posture was asked to release (drift_release)
+    double   fightSeatSince = 0;     // WO-223 C: since when a copy in the local player's fight is held off its host NPC's place
     wo213rules::PostureSitting sitting;  // WO-213 E.3: a held posture's body found off its place takes the stream for the rest of that sitting
     bool     silenceHeld = false;   // WO-214 B: this silence already passed the old 4 s drop (counted once)
     const char* blendWhy = "bind";  // WO-214 A.3: what asked for the next blend (bind, resume, hold-end, extrap-end)
@@ -1338,10 +1340,31 @@ void tick() {
         if ((activity_held(p.eid) || driftBlocked) && s.n > 0 && wo209::fix_on(wo209rules::kFixActivityDrift)) {
             float cur[3];
             const RingSample& ns = s.ring[s.n - 1];
-            const bool drifted = read_pos(e, cur) && wo209rules::activity_drifted(std::sqrt((cur[0] - ns.x) * (cur[0] - ns.x) + (cur[1] - ns.y) * (cur[1] - ns.y)));
-            if (driftBlocked) {
-                if (!drifted) g_driftBlocked.erase(p.eid);   // back by its host NPC: an activity may hold it again
-                else if (wo218::on(wo218::kBitDriftRelease) && now - p.driftReleaseAt >= 3.0) {   // WO-218 C.1: still drifting -- its posture asked again
+            const bool haveCur = read_pos(e, cur);
+            const float offM = haveCur ? std::sqrt((cur[0] - ns.x) * (cur[0] - ns.x) + (cur[1] - ns.y) * (cur[1] - ns.y)) : 0.0f;
+            const bool drifted = haveCur && wo209rules::activity_drifted(offM);
+            // WO-223 C (w223_copy_target): a copy in the local player's fight is never held at the seat its host NPC has left. The
+            // drift rule above waits for 4 m: a camp bandit that stood up and fought the joiner 3 m from its seat left its copy
+            // seated for 17 s -- every attack of the copy refused, every blow the host's guess. In his fight, off its host NPC's
+            // place for kFightSeatS: the hold ends, its own posture is released the game's way, and no activity holds it again
+            // while the fight lasts.
+            const bool inHisFight = wo223::fight_seat_rule(p.eid);
+            if (inHisFight && !driftBlocked && haveCur && offM > wo223::kFightSeatM) {
+                if (p.fightSeatSince == 0) p.fightSeatSince = now;
+                else if (now - p.fightSeatSince >= wo223::kFightSeatS) {
+                    p.fightSeatSince = 0;
+                    p.activityDriftSince = 0;
+                    set_activity_hold(p.eid, false);
+                    g_driftBlocked.insert(p.eid);
+                    p.driftReleaseAt = now;
+                    const bool asked = wo208::ask_release(p.eid, p.name.c_str());
+                    wo223::note_fight_seat(p.name.c_str(), offM, asked);
+                }
+            } else p.fightSeatSince = 0;
+            if (g_driftBlocked.count(p.eid) != 0 && !driftBlocked) { /* released this frame: the stream has it from the next */ }
+            else if (driftBlocked) {
+                if (!drifted && !inHisFight) g_driftBlocked.erase(p.eid);   // back by its host NPC: an activity may hold it again
+                else if ((drifted || offM > wo223::kFightSeatM) && wo218::on(wo218::kBitDriftRelease) && now - p.driftReleaseAt >= 3.0) {   // WO-218 C.1: still drifting -- its posture asked again
                     p.driftReleaseAt = now;
                     if (wo208::ask_release(p.eid, p.name.c_str())) wo218::note_drift_release();
                 }

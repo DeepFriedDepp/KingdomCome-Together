@@ -28,6 +28,7 @@
 #include "wo166.h"
 #include "wo195.h"
 #include "wo222.h"
+#include "wo223.h"
 #include "script_context.h"
 
 namespace kcdmp::wo132 {
@@ -428,6 +429,8 @@ void tick() {
         // WO-147: a fight with an avatar reads combat=0 (combat mode is the player's fight's): its opponent keeps
         // the heartbeat too, or the joiner's engagement went stale after 3 s.
         const bool fighting = c.combat || c.opponentIsPlayer || c.opponentEid != 0;
+        // WO-223 D: an NPC whose opponent is a partner's figure -- does the engine count it as in combat mode? (counted, read-only)
+        if (!c.opponentIsPlayer && c.opponentEid != 0 && motion::is_avatar_eid(c.opponentEid)) wo223::note_figure_combat(c.combat);
         // WO-222 D (flee_live): a body that fought in the last two minutes -- anyone this game reads, or a joiner's figure, whose fight
         // reads no combat and no opponent here (WO-147; the bench's runner was such a body: its flight was never read) -- and is out of
         // the fight now is read for the game's own flee and surrender: the soul contexts its interrupts put on it (combat_flee,

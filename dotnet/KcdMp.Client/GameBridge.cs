@@ -1851,6 +1851,7 @@ public partial class GameBridge(ClientConfig config)
         Wo218OnConnect(cts.Token);           // WO-218: the switches, the batch's probe
         Wo221OnConnect(cts.Token);           // WO-221: the switches
         Wo222OnConnect(cts.Token);           // WO-222: the switches
+        Wo223OnConnect(cts.Token);           // WO-223: the switches
         Wo147OnConnect(cts.Token);           // WO-147: the joiner fights hostile copies, destructive quest steps checked, the leash's stats
         Wo148OnConnect(cts.Token);           // WO-148: carrying on the other screen (the carrier owns the body; the host's world decides)
         Wo154MenuOnConnect(cts.Token);       // WO-154 7b: the mod menu (the saved choices, the host's levers, fast travel)
@@ -6332,6 +6333,9 @@ public partial class GameBridge(ClientConfig config)
                 return;
             case string w222 when w222.StartsWith("w222_", StringComparison.Ordinal):   // WO-222: the switches, the status
                 Wo222OnEvent(name, arg);
+                return;
+            case string w223 when w223.StartsWith("w223_", StringComparison.Ordinal):   // WO-223: the switches, the status, the attend sets
+                Wo223OnEvent(name, arg);
                 return;
             case string w221 when w221.StartsWith("w221_", StringComparison.Ordinal):   // WO-221: the switches, the status, its parts' events
                 Wo221OnEvent(name, arg);

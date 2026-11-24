@@ -102,6 +102,8 @@ public partial class GameBridge
                 Wo206OnMarker(m); break;
             case Protocol.W203FigureHand:   // WO-214 F
                 Wo214OnFigureHand(src, m); break;
+            case Protocol.W203Stealth:   // WO-223 B
+                Wo223OnStealth(src, m); break;
             default:
                 Interlocked.Increment(ref _w203SideUnknown); break;
         }

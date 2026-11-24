@@ -699,6 +699,7 @@ public partial class GameBridge
         Wo201OnDisconnect();   // WO-201: its parts' session state goes
         Wo202OnDisconnect();
         Wo203OnDisconnect();
+        Wo223OnDisconnect();   // WO-223: the engine's own detail radius back, no attention pair named
         Wo151SceneReset("disconnect");
         Wo184Reset("disconnect");
         Wo167SceneReset();

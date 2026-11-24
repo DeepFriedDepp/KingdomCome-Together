@@ -144,7 +144,8 @@ public class Wo203W164FitTests
         Assert.Equal((byte)13, Protocol.ConvTimer);
         string[] w203 = { "defence-swing", "defence-outcome", "guard-state", "engage-early", "npc-worn", "npc-pose", "join-progress", "focus-edge", "travel-route" };
         for (int i = 0; i < w203.Length; i++) Assert.Equal(w203[i], Protocol.W203KindName((byte)(i + 1)));
-        Assert.Equal("unknown-13", Protocol.W203KindName(13));   // WO-206: 10 the digest checkpoint, 11 the epochs; WO-214: 12 the figure's hand
+        Assert.Equal("stealth", Protocol.W203KindName(13));      // WO-223: 13 the joiner's own stealth values
+        Assert.Equal("unknown-14", Protocol.W203KindName(14));   // WO-206: 10 the digest checkpoint, 11 the epochs; WO-214: 12 the figure's hand
         Assert.Equal(10, Protocol.Version);   // no bump: new types on the join channel
     }
 }

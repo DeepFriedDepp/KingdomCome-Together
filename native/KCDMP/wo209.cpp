@@ -22,6 +22,7 @@
 #include "wo178.h"
 #include "wo210.h"
 #include "wo210_rules.h"
+#include "wo223.h"
 #include <windows.h>
 #include <algorithm>
 #include <atomic>
@@ -251,6 +252,8 @@ void mirror_tick(double now) {
         if (sample_counts(m.kind, now - m.changedAt)) {
             c_samples.fetch_add(1);
             if (match) c_match.fetch_add(1);
+            // WO-223 F: the record of every copy whose host NPC fights this player -- in his fight? aimed at him? for how long not?
+            wo223::note_copy(copy, name_of(copy), m.kind == kHerePlayer, have ? who(have).c_str() : "", match, wo208::in_player_fight(copy), now);
         }
         ++it;
     }
@@ -370,7 +373,11 @@ void ai_window_tick(double now) {
             const bool alive = engine::entity_by_id(w.eid) && motion::combat_parts(w.eid, false, &ca, &model);
             const void* cur = alive ? wo187::director_scope(ca, 0).act : nullptr;
             if (alive && !w.act && cur && cur != w.pre) w.act = cur;   // the attack installed a frame after the call: adopted
-            const bool waiting = alive && !w.act && now - w.begin < kAiAdoptS;   // not installed yet: wait for it a little
+            // WO-223 C (w223_copy_target): an attack asked for while the copy's last action still ran (a retry after the engine's
+            // "busy") is installed when that action ends -- later than kAiAdoptS: the window closed at 0.25 s and told the host
+            // "nothing landed", and the blow his engine judged 0.1-0.2 s later answered no blow of the host's (every host guess of
+            // the two-bandit defence scene). It waits kAiAdoptLongS for the action instead.
+            const bool waiting = alive && !w.act && now - w.begin < (wo223::on(wo223::kBitCopyTarget) ? wo223::kAiAdoptLongS : kAiAdoptS);   // not installed yet: wait for it a little
             const bool running = alive && (waiting || (w.act && cur == w.act));
             if (!running || now - w.begin > kAiAttackMaxS) w.end = now;
             ++it;

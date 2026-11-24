@@ -91,14 +91,15 @@ public static partial class Protocol
                       W203NpcPose = 6, W203JoinProgress = 7, W203FocusEdge = 8, W203TravelRoute = 9,
                       W203DigestCheckpoint = 10,   // WO-206 C (ProtocolWo206.cs)
                       W203Epoch = 11,   // WO-206 E
-                      W203FigureHand = 12;   // WO-214 F (ProtocolWo214.cs)
+                      W203FigureHand = 12,   // WO-214 F (ProtocolWo214.cs)
+                      W203Stealth = 13;   // WO-223 B (ProtocolWo223.cs)
 
     public static string W203KindName(byte k) => k switch
     {
         W203DefenceSwing => "defence-swing", W203DefenceOutcome => "defence-outcome", W203GuardState => "guard-state",
         W203EngageEarly => "engage-early", W203NpcWorn => "npc-worn", W203NpcPose => "npc-pose", W203JoinProgress => "join-progress",
         W203FocusEdge => "focus-edge", W203TravelRoute => "travel-route", W203DigestCheckpoint => "digest-checkpoint", W203Epoch => "epoch",
-        W203FigureHand => "figure-hand",
+        W203FigureHand => "figure-hand", W203Stealth => "stealth",
         _ => $"unknown-{k}",
     };
 

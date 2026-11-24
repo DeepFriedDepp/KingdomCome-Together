@@ -17,6 +17,7 @@
 #include "anchors.h"
 #include "blow_ledger.h"
 #include "wo222.h"
+#include "wo223.h"
 #include "buffs.h"
 #include "engine.h"
 #include "fault_guard.h"
@@ -521,6 +522,10 @@ uint8_t react(void* aCa, void* vCa, uint8_t* result, int32_t* kindOut) {
         // gets its reaction. A blow of the figure it fights is offered the reaction as the host's player's blow would be.
         void* opp = wo222::on(wo222::kBitReactParity) && wo222::role() == 1 && aCa != motion::player_combat_actor() ? motion::opponent_ca(vCa) : nullptr;
         if (!opp || opp != aCa) return static_cast<uint8_t>(React::NotAlive);
+        // WO-223 D: with the figure's fights real skirmishes the engine counts such a body in combat mode at most blows and this
+        // branch is not reached; it is reached for the rest, and the offer is made there as before (never stacked: the engine
+        // refused). mp_w223_combat_mode off leaves those to the engine's word alone
+        if (wo223::retire_parity_offer()) return static_cast<uint8_t>(React::NotAlive);
         const uint32_t k = c_parityAlive.fetch_add(1) + 1;
         if (k <= 40 || k % 100 == 0) logf("WO222-REACT the victim fights the figure that struck it, out of combat mode -- its reaction is offered as to the host's own blow [n=%u]", k);
     }
