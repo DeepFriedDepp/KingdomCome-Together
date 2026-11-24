@@ -30,12 +30,43 @@ it. The work orders' findings (`docs/WO-215-findings.md` … `docs/WO-221-findin
   again and send the bug report at once: the crash report goes with it. `mp_combat_action_end off` gives 0.65.0's behaviour back
   (it crashes on our bench too, sooner). WO-222's bench saw two more joiner closes in fights, in another place in the game's combat
   code (once with WO-222's switches off, once on), and one host close on the game's renderer thread after an hour of fights.
-- **An enemy fighting the joiner may, on the joiner's screen, be fighting the host's figure instead of him.** Its swing plays, but
-  the joiner's own game does not judge a blow from it (on our bench this was the cause of most of the host's waits for the joiner's
-  verdict that ran out: one blow in ten to one in three over a whole session, 4 % in a fight against two bandits). For such a blow
-  the host waits up to 1.5 s, then the joiner's game judges the host's blow against his guard as it arrives (rarely it takes the
-  host's numbers). A blow you blocked or dodged on your screen is never charged on top of it: a late verdict of yours stands, and a
-  host verdict already applied is given back (`mp_def_wait`). Press `.` when you take a hit you did not see coming.
+- **Enemies notice the joiner now** (`mp_w223_perceive`, on). A hostile camp or patrol makes the joiner out as it would the
+  host — by the game's own measure of how well he can be seen and heard, with his own crouch, light, noise and stealth skill — and
+  fights him in a real fight of the host's game. What is not yet the same as for the host:
+  - **The distance.** At a walk the joiner was noticed a few metres further out than the host on our bench, at a sprint a few
+    metres nearer; every stage up to the draw came within a second of the host's at both
+    paces. Crouched in the dark he gets nearer than the host does before anyone notices (his game reports him a little darker
+    than the host's own).
+  - **Now and then nobody notices him.** In one bench walk of eighteen the joiner reached the middle of a camp and stood there
+    unnoticed: the one bandit facing him did not see him where he had stopped, two slept, two stood with their backs to him.
+    If a camp ignores you although a bandit plainly looks at you, press `.` and say "ignored" — and whether it woke when you moved.
+  - **A camp's warnings are not heard by the joiner.** A camp does not attack a crouched or unarmed visitor at once: it warns him
+    for half a minute, then attacks (or at once when he walks up to one of them). The host hears "get out"; the joiner hears and
+    sees nothing during that half minute, then the camp attacks. An armed joiner who stands on its ground is attacked at once,
+    as an armed host is.
+  - **Wolves and wild dogs.** The rule is in (an animal that hunts the host hunts the joiner); our bench could not stage a hunt,
+    so it is not shown. Tell us what they did.
+- **Both players at a camp** (`mp_w223_split`, on): when the camp's fight starts with the joiner and nobody is on the host, one
+  bandit near the host is sent at him (the game's own attack call and "fight this one", for six seconds; then the game picks
+  again). On our bench each player had an enemy on him within five seconds in 23 fights of 25 (3 of 5 with the switch off); in
+  one of the two the host stood outside the camp's ground and every bandit took the joiner for over ten seconds.
+  `mp_w223_split off` leaves it to the game.
+- **An enemy fighting the joiner on the host's screen now fights him on his own** (`mp_w223_copy_target`, on): on our bench its
+  copy was in his fight and aimed at him in 99.8 % of the time it should be, also when both players are on one bandit (before,
+  such a copy could go on swinging at the host's figure for minutes). One bench scene, with a joiner who had lost his weapon,
+  showed copies standing idle for a minute while their host NPCs came at him; press `.` and say "idle enemy" if you see that.
+- **A few blows on the joiner are still the host's guess, not his own game's verdict**: 3 to 4 % of the blows in a camp fight
+  with several bandits on him, 5 % when a bandit swaps between the players, 4 % against two bandits (0.65.2's way on the same
+  bench: 4 to 10 %). They are blows of fast chains and combos that the copy on his screen could not replay in time. The host waits
+  up to 3 s for his verdict, then sends its own. A blow you blocked or dodged on your screen is never charged on top of it: a
+  late verdict of yours stands, and a host verdict already applied is given back (`mp_def_wait`). **Blows inside a grab** are always the host's (the joiner's game
+  has no grab with a copy). Press `.` when you take a hit you did not see coming.
+- **A clean hit of the joiner's sometimes draws no flinch.** In a fight both players are in, his clean hits made the enemy
+  flinch every time on our bench (16 of 16); in a fight he had alone, mostly (9 of 12). It can fail for a stretch — the host's
+  game then reads the enemy "out of combat mode" and plays no hit reaction — on an enemy whose fight with him was broken off
+  and taken up again: our bench's own duel scene, where the bandit's fight is stopped and started by the bench, had 14 of 27
+  (16 of 17 before enemies noticed the joiner). The hit wounds and kills either way. Press `.` and say "no flinch", and what
+  happened just before.
 - **The joiner lands fewer blows than the host** on our bench (about one swing in five touched a body, the host's one in two): his
   attacks are cut short when he is struck, and the enemy blocks and dodges as the host's does. Every touch goes to the host and is
   judged there. The bug report now says, per swing, what it touched or why not (`W222-SWING`), and its briefing has one line for it.
@@ -104,6 +135,9 @@ it. The work orders' findings (`docs/WO-215-findings.md` … `docs/WO-221-findin
 
 ## The game's own systems
 
+- **The host's game may take twice its usual memory after it loads a save with a joiner in the session** (on our bench: 9 GB
+  to 17.5 GB within a few minutes, then flat; about one session in twenty-five, also on 0.65.0). On a PC with 16 GB that ends in
+  a slow or closed game. Restart the host's game and send the bug report if you see it.
 - **Lip-sync of conversation lines** depends on the game's facial data, which the Modding Tools build does not ship. The mod installs
   nothing outside its own folder; if you want lip-sync, the community's own instructions for adding the game's facial data to the
   Modding Tools install apply.
