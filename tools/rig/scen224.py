@@ -136,6 +136,57 @@ def grab_keys(r, c, stop, st, tag):
         except BaseException: pass
 
 
+class chain_framer:
+    """WO-224 B: while a fight runs, a host/joiner frame pair each time a copy's chain step starts on the joiner's screen -- its own
+    attack started (the DLL's WO209-ATK "started" line) no more than 1.6 s after its last one. Each player's view is turned to that
+    enemy and both frames are taken together, at once (the follow-up is over in about a second). At most `most` pairs, 8 s apart."""
+
+    def __init__(self, r, mark_b, tag, most=3):
+        self.r, self.mk, self.tag, self.most = r, mark_b, tag, most
+        self.stop_ev = threading.Event()
+        self.out = []
+        self.th = threading.Thread(target=self.run, daemon=True)
+        self.th.start()
+
+    def run(self):
+        import scen217
+        r, b = self.r, self.r.b
+        seen = 0; last = 0.0
+        try:
+            b.lua('System.SetCVar("wh_ai_PostLoadErrorDebugDraw", 0)')
+        except BaseException: pass
+        while not self.stop_ev.is_set() and len(self.out) < self.most:
+            self.stop_ev.wait(0.08)
+            try:
+                lines = [l for l in b.lines(b.nlog, self.mk['n']) if 'own attack at the local player started' in l and 'WO209-ATK npc=' in l]
+            except BaseException: continue
+            if len(lines) <= seen: continue
+            seen = len(lines)
+            if time.time() - last < 8.0 or len(lines) < 2: continue
+            m = re.search(r'WO209-ATK npc=(\S+)', lines[-1])
+            tm = [T.match(l) for l in lines[-6:]]
+            if not m: continue
+            # a chain step: this copy's last start before this one, no more than 1.6 s earlier
+            mine = [l for l in lines[-6:] if ('npc=' + m.group(1) + ' ') in l]
+            if len(mine) < 2 or (_t(mine[-1]) or 0) - (_t(mine[-2]) or -99) > 1.6: continue
+            last = time.time()
+            npc = m.group(1); label = 'chain-%s-%d' % (self.tag, len(self.out) + 1)
+            try:
+                for c in (r.a, r.b): c.lua(scen217.AIM_AT % npc)
+                time.sleep(0.12)
+                res = {}
+                th = [threading.Thread(target=lambda c=c, k=k: res.__setitem__(k, scen217.shot(r, c, '%s-%s' % (label, k)))) for c, k in ((r.a, 'host'), (r.b, 'joiner'))]
+                for t_ in th: t_.start()
+                for t_ in th: t_.join(timeout=40)
+                self.out.append({'label': label, 'npc': npc, 'line': lines[-1][:160], 'took_s': round(time.time() - last, 2), **res})
+            except BaseException as ex:
+                self.out.append({'label': label, 'npc': npc, 'err': '%s: %s' % (type(ex).__name__, ex)})
+
+    def stop(self):
+        self.stop_ev.set(); self.th.join(timeout=50)
+        return self.out
+
+
 def grab_phase(r, who, want, secs):
     S = _S()
     import scen222
@@ -232,8 +283,77 @@ def s_grab(r, who, want, secs):
     return fn
 
 
+def s_chain(r, secs):
+    """WO-224 B: one bandit of the camp, lured LURE_M out, fights the joiner alone; the joiner stands (weapon drawn, kept alive) and
+    takes its chains; the host, rested, stands beside them with a clear line and watches. A host/joiner frame pair at the copy's
+    chain steps (chain_framer). The numbers are read from the run's logs afterwards (rows224b.py, waits.py)."""
+    def fn():
+        S = _S()
+        import scen217, scen222
+        a, b = r.a, r.b
+        t = a.ask(S.FIND_BANDIT1, 'W210B', 6)
+        if not t or t == 'none': return False, 'no-bandit', t
+        bandit = t.split()[0]
+        for c in (a, b): c.keep_up()
+        a.lua(scen222.KEEP_NPC % (bandit, 35.0, 90.0, ''))
+        mb = b.mark()
+        lt = a.ask(LURE_Q % bandit, 'W224L', 6)
+        try:
+            qx, qy, qz, dx, dy, near = lt.split(); qx, qy, dx, dy = float(qx), float(qy), float(dx), float(dy)
+            lx, ly = qx + dx * LURE_M, qy + dy * LURE_M
+            b.teleport(lx, ly); a.teleport(lx + dx * 6.0 - dy * 3.0, ly + dy * 6.0 + dx * 3.0)
+        except (AttributeError, ValueError):
+            scen222.place_near(b, bandit, 2.2, 0.0); scen222.place_near(a, bandit, 0.0, 7.0)
+        time.sleep(5)
+        b.lua(scen222.DRAW)
+        a.lua(S.ATTACK % (bandit, S.FIGURE))
+        t_l = time.time(); came = False
+        while time.time() - t_l < 45:
+            time.sleep(1.5)
+            try: d = float(b.ask(scen222.DIST_Q % bandit, 'W222D', 3) or -1)
+            except ValueError: d = -1.0
+            if 0 <= d <= 4.5: came = True; break
+        b.lua(S.FACE_TO % bandit)
+        # the host: rested, on a spot 3-8 m from the bandit with a clear line, turned to it
+        placed = None
+        try:
+            a.lua(scen217.VITALS)
+            sp = a.ask(scen217.FRAME_SPOT % (bandit, 0.0), 'W217F', 6)
+            if sp and not sp.startswith('none'):
+                x_, y_, z_, yaw_, _d, _n = sp.split()
+                a.lua(scen217.PLACE_VIEW % (float(x_), float(y_), float(z_) + 0.05, -0.12, float(yaw_)))
+                placed = sp
+        except BaseException as ex:
+            placed = 'error: %s: %s' % (type(ex).__name__, ex)
+        cf = chain_framer(r, mb, 'lone', most=4)
+        t0 = last = time.time()
+        while time.time() - t0 < secs:
+            time.sleep(1.0)
+            if time.time() - last > 12:
+                last = time.time()
+                try: d = float(b.ask(scen222.DIST_Q % bandit, 'W222D', 3) or -1)
+                except ValueError: d = -1.0
+                if d < 0 or d > 6.0: scen222.place_near(b, bandit, 2.2, 0.0)
+                b.lua(scen222.DRAW); b.lua(S.FACE_TO % bandit)
+                a.lua(OTHERS_STOP % bandit)
+                a.lua(scen217.VITALS)
+                a.lua(S.ATTACK % (bandit, S.FIGURE))
+        frames = cf.stop()
+        a.lua(scen222.STOP_KEEP_NPC); a.lua(S.STOP % (bandit, 2241))
+        for c in (a, b): c.stop_keep()
+        time.sleep(3.0)
+        starts = sum(1 for l in b.lines(b.nlog, mb['n']) if 'own attack at the local player started' in l)
+        out = {'bandit': bandit, 'came': came, 'host_spot': placed, 'copy_attack_starts': starts, 'frames': frames}
+        rig.say('  chain scene', bandit, 'the copy\'s attacks started', starts, 'frames', len(frames))
+        return starts > 0, ('ok' if starts > 0 else 'no-attack'), out
+    return fn
+
+
 def plans(r, name, args):
     S = _S()
+    if name == 'w224chain':
+        import scen217
+        return [('join', S.s_join(r)), ('day', scen217.daytime(r, 10.0)), ('chain', s_chain(r, float(os.environ.get('KCDMP_RIG_W224_S', '150'))))]
     if name == 'w224grab':
         import scen217
         return [('join', S.s_join(r)), ('day', scen217.daytime(r, 10.0)),
@@ -242,4 +362,4 @@ def plans(r, name, args):
     return None
 
 
-CONTINUE_ON_FAIL = ('w224grab',)
+CONTINUE_ON_FAIL = ('w224grab', 'w224chain')

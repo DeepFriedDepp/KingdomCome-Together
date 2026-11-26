@@ -44,6 +44,16 @@ bool row_attack(uint32_t copy, const char* spec);
 // WO-224 A (main thread): a clinch move or a sync attack of a copy in the engine's clinch with the local player -- the copy's own attack
 // request with the host row's zone (the engine builds the paired action and starts his half). False = refused.
 bool clinch_move(uint32_t copy, uint32_t hostFrag, int zone);
+// WO-224 B: the combo's own places, read off the engine's AI attack's bytes on this build (never assumed): the offset of the model's
+// "ComboSlot" property and the combo component's input function. False = not found (B then does nothing).
+bool combo_abi(ptrdiff_t* slotOff, const void** inputFn);
+// WO-224 B (main thread, reads only): is this combat model's ComboSlot open? `known` = the property's layout was confirmed by its own
+// getter's bytes (false: nothing is read, the answer is "closed").
+bool combo_slot_open(void* model, bool* known);
+// WO-224 B (the joiner, main thread): the host's NPC made its combo input -- its copy makes the same input, through the engine's own AI
+// attack, in the frame its own slot is open. 1 = queued, 0 = not a copy whose attacks are its own here.
+int chain_input(uint32_t copy, int zone, int input);
+int chain_status(char* out, int n);
 // B (main thread): an attack of the copy's own started within the last withinS seconds (by the row or the owner).
 bool ai_attack_recent(uint32_t copy, double withinS);
 // B: the copy's own attack is still running (its window open).

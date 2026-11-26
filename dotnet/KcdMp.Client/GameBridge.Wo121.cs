@@ -297,6 +297,7 @@ public partial class GameBridge
             // swing that exact row. Only the owner (the host under host
             // authority) speaks for its NPCs; a name must be authored.
             // WO-151: and its hit reaction (NpcHit), so a copy shows the host's reaction, not its own.
+            if ((ActionKind)f.Kind == ActionKind.NpcChain) { await Wo224ChainOutAsync(f, ms, s); return; }             // WO-224 B: an NPC's chain input, as it is made
             if ((ActionKind)f.Kind == ActionKind.AvatarClinch) { await Wo224FigureClinchOutAsync(f, ms, s); return; }   // WO-224 A: a partner's figure, clinched in the host's world
             bool npcHit = (ActionKind)f.Kind == ActionKind.NpcHit;
             if (npcHit)
@@ -306,6 +307,9 @@ public partial class GameBridge
                     : !NpcNamePattern.IsMatch(f.Name) || Protocol.IsNeverSyncedNpcName(f.Name) ? "not-a-synced-name" : !Wo163OutboundRowOk(f) ? "row-refused" : null;
                 if (w222Why is not null) { Console.WriteLine($"W222-REACTOUT npc={f.Name} row={f.Row} dropped why={w222Why}"); return; }
             }
+            // WO-224 B (the instrument): a copy's OWN attack on a machine that does not speak for it -- which row its engine chose (the
+            // host NPC's row for the same swing is in the host's log: the same fragment has the same chain point, another has another)
+            if ((ActionKind)f.Kind == ActionKind.Attack && !_isDamageAuthority) { Wo224NoteCopyRow(f); return; }
             if (((ActionKind)f.Kind != ActionKind.Attack && !npcHit) || !_npcRows || !_isDamageAuthority) return;
             if (npcHit && !_w151Reactions) return;
             if (!NpcNamePattern.IsMatch(f.Name) || Protocol.IsNeverSyncedNpcName(f.Name)) return;
@@ -394,6 +398,7 @@ public partial class GameBridge
             case ActionKind.AvatarRecoil:   // WO-197 B1
             case ActionKind.AvatarClinch:   // WO-197 B3
             case ActionKind.FigureClinch:   // WO-224 A
+            case ActionKind.NpcChain:       // WO-224 B
                 break;
             default:
                 return false;
@@ -452,6 +457,9 @@ public partial class GameBridge
                 return true;
             case ActionKind.AvatarClinch:
                 await Wo197OnClinchInAsync(a, catalog, ct);      // WO-197 B3: the partner's clinch on his figure and its opponent
+                return true;
+            case ActionKind.NpcChain:
+                await Wo224OnChainInAsync(a, ct);                // WO-224 B: the host NPC's chain input, for its copy here
                 return true;
             case ActionKind.FigureClinch:
                 await Wo224OnFigureClinchInAsync(a, ct);         // WO-224 A: the host's world clinched this player's figure

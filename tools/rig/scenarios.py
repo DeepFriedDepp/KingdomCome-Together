@@ -1371,6 +1371,12 @@ def s_defence(r, attackers=1, swings=40, secs=float(os.environ.get('KCDMP_RIG_DE
             finally:
                 try: g.release_all()
                 except BaseException: pass
+        cf = None
+        if os.environ.get('KCDMP_RIG_W224_CHAIN_FRAME'):
+            # WO-224 B: a frame pair when a copy's chain step starts; the host first on a clear spot beside the fight
+            frame_prep(bandits[0])
+            import scen224
+            cf = scen224.chain_framer(r, mb, 'def%d' % attackers)
         th = threading.Thread(target=defender, daemon=True); th.start()
         t0 = last = time.time()
         while time.time() - t0 < secs:
@@ -1381,6 +1387,7 @@ def s_defence(r, attackers=1, swings=40, secs=float(os.environ.get('KCDMP_RIG_DE
                 last = time.time()
             time.sleep(2)
         stop.set(); th.join(timeout=10)
+        if cf: sent['chain_frames'] = cf.stop()
         for i, b in enumerate(bandits): r.a.lua(STOP % (b, i))
         for c in (r.a, r.b): c.stop_keep()
         time.sleep(2)

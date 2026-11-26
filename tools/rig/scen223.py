@@ -839,6 +839,10 @@ def camp2_once(r, tag, fight_s):
         return out
     for n in names: a.lua(scen222.KEEP_NPC.replace('W222NK', 'W223NK_' + n) % (n, 35.0, 90.0, ''))
     for c in (a, b): c.lua(scen222.DRAW)
+    cf = None
+    if os.environ.get('KCDMP_RIG_W224_CHAIN_FRAME'):   # WO-224 B: a frame pair when a copy's chained follow-up starts
+        import scen224
+        cf = scen224.chain_framer(r, mb, tag)
     locks = []
     k = 0; turns = []
     while time.time() - t_fight < fight_s:
@@ -875,6 +879,7 @@ def camp2_once(r, tag, fight_s):
                 locks.append({'at_s': round(time.time() - t_fight), 'enemies_on_joiner': on_fig, 'enemies_on_host': on_host,
                               'host_locked': hl[0], 'host_ok': hl[1], 'joiner_locked': jl[0], 'joiner_ok': jl[1]})
     time.sleep(1.0)
+    if cf: out['chain_frames'] = cf.stop()
     a.lua(READER_STOP)
     samples, events = read_run(a.lines(a.klog, off), names, fig)
     for i, n in enumerate(names):

@@ -216,6 +216,11 @@ double last_npc_attack_s(uint32_t eid);
 // WO-197 (main thread): a local-player action found by a poll (not by the EnterImpl capture) -- the recoil, the clinch -- queued with the
 // captured ones (the agent gets it as a LocalAction frame, eid 0). guid / alt may be null.
 void push_local_action(uint8_t kind, uint8_t flags, const uint8_t guid[16], const uint8_t* alt);
+// WO-224 B (main thread): a body's requested attack zone (the combat model's RequestedAtkZone), through the engine's own setter the
+// stream's writer uses for a copy. False = no body, no setter, or the call faulted.
+bool set_requested_atk_zone(uint32_t eid, int zone);
+// WO-224 B (main thread): a body's guard zone and stance, at once, through the engine's own setter the stream's writer uses for a copy.
+bool set_guard_zone(uint32_t eid, int zone, int stance);
 // WO-224 A (main thread): the same for a body that is not the local player (a partner's figure): its entity id and name ride along.
 void push_body_action(uint8_t kind, uint8_t flags, uint32_t eid, const char* name, const uint8_t guid[16]);
 

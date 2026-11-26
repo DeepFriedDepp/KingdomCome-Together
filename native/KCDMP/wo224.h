@@ -44,6 +44,17 @@ constexpr uint8_t kOpResolveNear = 226;
 //       255 not possible). hint = the host NPC's weapon class (0xFE it holds nothing, 0xFF no word): used while the copy's hand
 //       holds no item object yet.
 constexpr uint8_t kOpWeaponRefresh = 227;
+//   228 ChainInput [eid:4][requested zone:1 (0xFF = none)][input class:4] -> [result:1]: B, the joiner -- the host's NPC made its
+//       combo input; its copy makes the same input, with the same requested attack zone, when its own chain slot opens (1 queued,
+//       0 not a copy whose attacks are its own here).
+constexpr uint8_t kOpChainInput = 228;
+// B: the body action the host's DLL hands its agent for an NPC's combo input (ActionKind.NpcChain): flags = the zone (0xFF none), the
+// row field's first 4 bytes = the engine's input class.
+constexpr uint8_t kActionNpcChain = 22;
+// B (research, the bench only: KCDMP_TEST_W224_MODELS=1): a snapshot of this body's combat model and combo component, appended to
+// kcdmp-w224-models.bin beside the game; a W224-MODEL line names the record. kind 1 = the host's NPC at its chain input, 2 = the copy
+// at its own. Main thread; reads only.
+void model_dump(int kind, uint32_t eid, int zone, int input);
 
 // the native word's bits (the agent's W224Switch.NativeNames, in order)
 constexpr uint32_t kBitClinch = 1u << 0;      // A: a grab plays on both bodies on both screens
@@ -98,7 +109,9 @@ bool take_local_start();
 int start_clinch(uint32_t masterEid, uint32_t slaveEid, const char* who, char* why, size_t whyN);
 // Ends a clinch on a body (and on its clinch partner when `withPartner`): guard type main, the engine's guard asserted. Returns the
 // number of bodies it ended (0 = none was in one).
-int end_clinch(uint32_t eid, bool withPartner, const char* who);
+int end_clinch(uint32_t eid, bool withPartner, const char* who, unsigned minAgeMs = 0);
+// A.3: a leave from the other machine does not end a clinch this machine's engine started less than this long ago.
+constexpr unsigned kEndMinAgeMs = 400;
 // A (main thread): a body's combat weapon classes against its hands, refreshed the engine's way when they differ (wo224.cpp).
 int weapon_refresh(uint32_t eid, const char* why, int* beforeRight, int* afterRight);
 // A.1 (the joiner, main thread): a host NPC's row for its copy while the copy is in the engine's clinch with the local player.

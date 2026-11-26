@@ -66,7 +66,9 @@ public partial class GameBridge
         $" | own figure in the host's world: told_out={Interlocked.Read(ref _w224FigOut)} told_in={Interlocked.Read(ref _w224FigIn)} no_copy={Interlocked.Read(ref _w224FigNoBody)}" +
         $" enters_told_to_the_dll={Interlocked.Read(ref _w224FigStarted)} leaves_told={Interlocked.Read(ref _w224FigEnded)} not_taken={Interlocked.Read(ref _w224FigRefused)}" +
         $" refusals_out={Interlocked.Read(ref _w224FigRefusalsOut)} refusals_in={Interlocked.Read(ref _w224FigRefusalsIn)}" +
-        $" | copies' weapon classes: asked={Interlocked.Read(ref _w224WeaponAsks)} refreshed={Interlocked.Read(ref _w224WeaponRefreshed)}";
+                $" | copies' weapon classes: asked={Interlocked.Read(ref _w224WeaponAsks)} refreshed={Interlocked.Read(ref _w224WeaponRefreshed)}" +
+        $" | chain inputs: host seen={Interlocked.Read(ref _w224ChainSeen)} sent={Interlocked.Read(ref _w224ChainOut)} not_sent={Interlocked.Read(ref _w224ChainNotSent)}" +
+        $" ; in={Interlocked.Read(ref _w224ChainIn)} queued={Interlocked.Read(ref _w224ChainQueued)} not_taken={Interlocked.Read(ref _w224ChainNotTaken)} dropped={Interlocked.Read(ref _w224ChainDropped)}";
 
     /// <summary>The 4 Hz session tick: the native word every 2 s, the status and the stats every 30 s, the mod told every minute; a
     /// clinch nobody has spoken of for a while is ended.</summary>
@@ -108,6 +110,57 @@ public partial class GameBridge
         }
     }
 
+    // ---------------------------------------------------------------- B: an NPC's chain input
+    private long _w224ChainSeen, _w224ChainOut, _w224ChainNotSent, _w224ChainIn, _w224ChainQueued, _w224ChainNotTaken, _w224ChainDropped;
+
+    /// <summary>B (the host): one of its NPCs, fighting a joiner's figure, made its combo input with its swing's chain slot open (the
+    /// DLL's watch on the engine's combo input). Sent at once, before the follow-up's own row; with the switch off it is counted
+    /// and said, not sent (the bench's twin measures the lead with it).</summary>
+    private async Task Wo224ChainOutAsync(LocalActionFrame f, uint ms, Stream s)
+    {
+        Interlocked.Increment(ref _w224ChainSeen);
+        int input = BinaryPrimitives.ReadInt32LittleEndian(f.Row.ToByteArray());
+        string zone = f.Flags == 0xFF ? "-" : f.Flags.ToString(CultureInfo.InvariantCulture);
+        string? why = !W137Host ? "not the host of a shared world" : !W224On("w224_chains") ? "w224_chains off" : !_npcRows ? "npc rows off"
+            : !NpcNamePattern.IsMatch(f.Name) || Protocol.IsNeverSyncedNpcName(f.Name) ? "not a synced name" : null;
+        if (why is not null)
+        {
+            Interlocked.Increment(ref _w224ChainNotSent);
+            Console.WriteLine($"MP-ACTION section=outbound kind=NpcChain npc={f.Name} zone={zone} input={input} dispatch=not-sent ({why})");
+            return;
+        }
+        byte[] pkt = _actionOut.Build(ActionKind.NpcChain, ActionPhase.Commit, new RowEvent(ms, f.Flags, f.Row, f.Name).ToBytes());
+        await WritePacketAsync(s, pkt, _wo121Ct);
+        _w121EvOut++;
+        Interlocked.Increment(ref _w224ChainOut);
+        Console.WriteLine($"MP-ACTION section=outbound kind=NpcChain gen={_actionOut.Gen} npc={f.Name} zone={zone} input={input}");
+    }
+
+    /// <summary>B (the joiner): the host's NPC made its chain input -- its copy here makes the same one when its own chain slot opens
+    /// (the DLL's op 228; wo209.cpp's chain_tick). A copy that fights someone else is not taken: it plays the owner's animation.</summary>
+    private async Task Wo224OnChainInAsync(InboundAction a, CancellationToken ct)
+    {
+        if (!RowEvent.TryFromBytes(a.Payload, out var re) || re.Name.Length == 0) { Interlocked.Increment(ref _w224ChainDropped); Console.WriteLine($"MP-ACTION section=inbound kind=NpcChain dispatch=dropped-malformed len={a.Payload.Length}"); return; }
+        Interlocked.Increment(ref _w224ChainIn);
+        string head = $"MP-ACTION section=inbound kind=NpcChain npc={re.Name} zone={(re.Flags == 0xFF ? "-" : re.Flags.ToString(CultureInfo.InvariantCulture))}";
+        uint eid = 0;
+        string? why = !W224On("w224_chains") ? "w224_chains off" : !W137Joiner ? "not a joiner in the host's world" : !_npcRows ? "npc rows off" : Wo172RowOnDead(re.Name) ? "the copy is dead"
+            : !_npcEntityIds.TryGetValue(re.Name, out eid) || eid == 0 ? "no copy of it here" : null;
+        if (why is not null) { Interlocked.Increment(ref _w224ChainDropped); Console.WriteLine($"{head} dispatch=dropped ({why}; its follow-up's row is played as before)"); return; }
+        var b = new byte[9];
+        BinaryPrimitives.WriteUInt32LittleEndian(b, eid);
+        b[4] = re.Flags;
+        re.Row.ToByteArray().AsSpan(0, 4).CopyTo(b.AsSpan(5));   // the engine's input class, as the host's NPC passed it
+        try
+        {
+            var r = await _combat.Wo163Async(Protocol.Wo224OpChainInput, b, ct);
+            byte res = r is { Ok: true, Payload.Length: >= 1 } x ? x.Payload[0] : (byte)255;
+            if (res == 1) Interlocked.Increment(ref _w224ChainQueued); else Interlocked.Increment(ref _w224ChainNotTaken);
+            Console.WriteLine($"{head} dispatch={(res == 1 ? "queued (the copy makes the same input when its own chain slot opens)" : res == 0 ? "not-taken (its attacks are not its own here: it fights someone else)" : "native-failed (its follow-up's row is played as before)")}");
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException) { Interlocked.Increment(ref _w224ChainNotTaken); Console.WriteLine($"{head} dispatch=native-failed ({ex.GetType().Name}; its follow-up's row is played as before)"); }
+    }
+
     private long _w224WeaponAsks, _w224WeaponRefreshed;
 
     /// <summary>The host NPC's weapon, as its hand's last word said (the item's class; "-" = it holds nothing), by NPC name.</summary>
@@ -145,6 +198,18 @@ public partial class GameBridge
             }
         }
         catch { }
+    }
+
+    private long _w224CopyRows;
+
+    /// <summary>B (the instrument, a joiner): the row a copy's own attack plays here (the DLL's capture of its attack action), one line a
+    /// swing: W224-COPYROW npc=.. row=.. table=.. spec="..".</summary>
+    private void Wo224NoteCopyRow(LocalActionFrame f)
+    {
+        if (!W137Joiner || !W224On("w224_clinch_log")) return;
+        long k = Interlocked.Increment(ref _w224CopyRows);
+        string what = _rowCatalog.IsCompletedSuccessfully && _rowCatalog.Result is { } cat && cat.TryGet(f.Row, out var known) ? $"table={known.Table} spec=\"{known.Spec}\"" : "table=UNKNOWN";
+        Console.WriteLine($"W224-COPYROW npc={f.Name} row={f.Row} {what} [n={k}]");
     }
 
     // ---------------------------------------------------------------- A: a partner's clinch here

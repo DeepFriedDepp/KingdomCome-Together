@@ -173,6 +173,13 @@ inline constexpr uint8_t kAiUpdateInternal[18] = {
     0x48, 0x8B, 0xC4, 0x55, 0x57, 0x41, 0x55, 0x48, 0x8D, 0x68, 0x98, 0x48, 0x81, 0xEC, 0x50, 0x01, 0x00, 0x00,
 };
 
+// wo224.cpp (WO-224 B): the combo component's input (found off the engine's AI attack: `mov rcx,[rcx+4A0h]; mov edx,ebx; call`) -- seen
+// on the host only, never refused: an NPC's chain input is told to the joiner as it is made.
+// mov [rsp+8],rbx; push rdi; sub rsp,20h; mov rbx,rcx; mov edi,edx
+inline constexpr uint8_t kComboInput[15] = {
+    0x48, 0x89, 0x5C, 0x24, 0x08, 0x57, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0xD9, 0x8B, 0xFA,
+};
+
 struct Entry { const char* name; const uint8_t* bytes; size_t len; };
 inline constexpr Entry kAll[] = {
     {"motion UpdateMannequinTags", kMotionTags, sizeof kMotionTags},
@@ -187,6 +194,7 @@ inline constexpr Entry kAll[] = {
     {"wo178 hostility test", kHostileTest, sizeof kHostileTest},
     {"wo178 clinch start", kClinchStart, sizeof kClinchStart},
     {"wo178 CanClinch (WO-210 B.1)", kCanClinch, sizeof kCanClinch},
+    {"wo224 combo input (B)", kComboInput, sizeof kComboInput},
     {"wo210 RPGProcessHit (E.2)", kRpgProcessHit, sizeof kRpgProcessHit},
     {"wo178 state handler (research)", kStateHandler, sizeof kStateHandler},
     {"wo178 slot start (research)", kSlotStart, sizeof kSlotStart},

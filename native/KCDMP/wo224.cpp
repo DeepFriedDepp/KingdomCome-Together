@@ -19,6 +19,8 @@
 #include "wo166.h"
 #include "fault_guard.h"
 #include "anchors.h"
+#include "hook_prologues.h"
+#include "inline_hook.h"
 #include "log.h"
 
 #ifndef NOMINMAX
@@ -641,8 +643,158 @@ void moves_tick() {
     }
 }
 
+// ---- B: the host NPC's chain input, told as it is made ------------------------------------------------------------------------------
+// The engine's combo input (the combo component's, called by the NPC automation's combo step and by the player's own attack input):
+// when the body's ComboSlot is open the running swing chains into a follow-up at its chain point. The host's DLL sees every call
+// (a full detour that only reads and records, on the engine's own thread, then runs the engine's function untouched); the main thread
+// tells the agent those of an NPC whose opponent is a partner's figure. With the switch off the hook is not installed.
+using ComboInputFn = void(__fastcall*)(void* comp, int32_t input);
+ComboInputFn g_comboOrig = nullptr;
+std::atomic<int> g_comboHook{0};   // 0 not tried, 1 armed, -1 not on this build
+std::atomic<ptrdiff_t> g_comboSlotOff{0};
+struct ComboRec { const void* ca; void* model; int32_t input; uint8_t slot; ULONGLONG tick; int32_t reqZone, curZone; };
+// the combat model's RequestedAtkZone (+0x200) and the running attack's zone (+0x1C0); a property's value at +8 (motion.cpp's table)
+constexpr ptrdiff_t kModelReqAtkZone = 0x200 + 8, kModelAtkZone = 0x1C0 + 8;
+std::mutex g_comboMu;
+ComboRec g_comboRing[64];
+uint32_t g_comboHead = 0, g_comboTail = 0;   // under g_comboMu
+std::atomic<uint32_t> c_comboCalls{0}, c_comboOverrun{0};
+// the audit: the engine's own combo inputs by thread [0 main, 1 another], and those on another thread while the mod's main-thread work ran
+std::atomic<uint32_t> c_comboThread[2]{}, c_comboBeside{0};
+uint32_t c_comboOpen = 0, c_comboClosed = 0, c_comboNpc = 0, c_comboAtFigure = 0, c_chainTold = 0, c_comboLayout = 0;
+
+void __fastcall combo_detour(void* comp, int32_t input) {
+    // the engine's own thread, at its own point: the same two reads the function itself makes next, one byte, a record
+    if (comp && g_role.load(std::memory_order_relaxed) == 1) {
+        const void* ca = *reinterpret_cast<void* const*>(static_cast<const char*>(comp) + 8);
+        void* model = ca ? *reinterpret_cast<void* const*>(static_cast<const char*>(ca) + 0x2F0) : nullptr;
+        const ptrdiff_t off = g_comboSlotOff.load(std::memory_order_relaxed);
+        if (model && off) {
+            const uint8_t slot = *(static_cast<const uint8_t*>(model) + off + 8);
+            const int32_t reqZone = *reinterpret_cast<const int32_t*>(static_cast<const char*>(model) + kModelReqAtkZone);
+            const int32_t curZone = *reinterpret_cast<const int32_t*>(static_cast<const char*>(model) + kModelAtkZone);
+            c_comboCalls.fetch_add(1, std::memory_order_relaxed);
+            {
+                const bool onMain = GetCurrentThreadId() == main_thread::main_thread_id();
+                c_comboThread[onMain ? 0 : 1].fetch_add(1, std::memory_order_relaxed);
+                if (!onMain && main_thread::in_mod_section()) c_comboBeside.fetch_add(1, std::memory_order_relaxed);
+            }
+            std::lock_guard<std::mutex> lock(g_comboMu);
+            if (g_comboHead - g_comboTail < 64) g_comboRing[g_comboHead++ % 64] = ComboRec{ca, model, input, slot, GetTickCount64(), reqZone, curZone};
+            else c_comboOverrun.fetch_add(1, std::memory_order_relaxed);
+        }
+    }
+    g_comboOrig(comp, input);
+}
+
+void chain_arm() {   // main thread, the host, once
+    if (g_comboHook.load() != 0) return;
+    g_comboHook.store(-1);
+    ptrdiff_t slot = 0;
+    const void* fn = nullptr;
+    if (!wo209::combo_abi(&slot, &fn) || !fn) { logf("W224-CHAIN the host's watch is not armed: the combo's input is not found off the engine's AI attack on this build"); return; }
+    // the hooked function's own reads of its combat actor and model, by its bytes: mov rax,[rbx+8]; mov rcx,[rax+2F0h]
+    static const uint8_t kReads[] = {0x48, 0x8B, 0x43, 0x08, 0x48, 0x8B, 0x88, 0xF0, 0x02, 0x00, 0x00};
+    uint8_t head[0x1B + sizeof kReads]{};
+    KCDMP_FAULT_READ(site, "wo224::chain_arm");
+    if (!fault::guarded(site, [&] { std::memcpy(head, fn, sizeof head); }) || std::memcmp(head + 0x1B, kReads, sizeof kReads) != 0) {
+        logf("W224-CHAIN the host's watch is not armed: the combo input does not read its combat actor and model where it did");
+        return;
+    }
+    g_comboSlotOff.store(slot);
+    const char* why = nullptr;
+    if (!inlinehook::install_detour(const_cast<void*>(fn), hookpro::kComboInput, sizeof hookpro::kComboInput, reinterpret_cast<void*>(&combo_detour),
+                                    reinterpret_cast<void**>(&g_comboOrig), &why)) {
+        logf("W224-CHAIN the host's watch is not armed: the patch was refused (%s)", why ? why : "?");
+        return;
+    }
+    g_comboHook.store(1);
+    char a[64];
+    anchor::describe(fn, a, sizeof a);
+    logf("W224-CHAIN the host's watch armed: the combo component's input=%s -- an NPC's chain input at a partner's figure is told as it is made (never refused, never changed)", a);
+}
+
+void model_dump_impl(int kind, uint32_t eid, int zone, int input);
+void chain_drain() {   // main thread
+    ComboRec recs[32];
+    int n = 0;
+    {
+        std::lock_guard<std::mutex> lock(g_comboMu);
+        while (g_comboTail != g_comboHead && n < 32) recs[n++] = g_comboRing[g_comboTail++ % 64];
+    }
+    const uint32_t me = n ? player_eid() : 0;
+    const ULONGLONG nowT = GetTickCount64();
+    for (int i = 0; i < n; ++i) {
+        const ComboRec& r = recs[i];
+        bool known = false;
+        wo209::combo_slot_open(r.model, &known);   // the layout's check (once); the slot itself was read in the call
+        if (!known) { ++c_comboLayout; continue; }
+        if (r.slot) ++c_comboOpen; else ++c_comboClosed;
+        const uint32_t eid = eid_of_ca(r.ca);
+        if (!eid) continue;
+        const bool isMe = eid == me, isFig = motion::is_avatar_eid(eid);
+        motion::ModelRead m{};
+        const bool read = !isMe && !isFig && motion::read_model(eid, &m);
+        const uint32_t opp = read ? m.opponentEid : 0;
+        const bool atFigure = opp && motion::is_avatar_eid(opp);
+        // the zone the NPC had REQUESTED for its next attack when it made the input (its automation sets it before the input); the
+        // running swing's own zone is not it (b1/b2 sent that: the next row's zone was another in three of four)
+        const int zone = (r.reqZone >= 0 && r.reqZone <= 5) ? r.reqZone : -1;
+        if (!isMe && !isFig) { ++c_comboNpc; if (atFigure) ++c_comboAtFigure; }
+        const bool tell = rules::chain_tell(r.slot != 0, isMe, isFig, atFigure);
+        if (!isMe && !isFig && atFigure && (c_comboAtFigure <= 400 || c_comboAtFigure % 50 == 0))
+            logf("W224-CHAIN input npc=%s requested_zone=%d running_zone=%d input=%d slot=%s opponent=%s (%llu ms ago) -> %s [n=%u]", name_of(eid), zone, r.curZone, r.input,
+                 r.slot ? "open" : "closed", name_of(opp),
+                 static_cast<unsigned long long>(nowT - r.tick), tell ? "told" : "not told: the engine itself dropped it (its slot was closed)", c_comboAtFigure);
+        if (!tell) continue;
+        uint8_t g[16]{};
+        std::memcpy(g, &r.input, 4);
+        model_dump_impl(1, eid, zone, r.input);   // (research, the bench only)
+        motion::push_body_action(kActionNpcChain, static_cast<uint8_t>(zone < 0 ? 0xFF : zone), eid, name_of(eid), g);
+        ++c_chainTold;
+    }
+}
+
+uint32_t c_modelRecs = 0;
+void model_dump_impl(int kind, uint32_t eid, int zone, int input) {
+    static int s_on = -1;
+    if (s_on < 0) s_on = env("KCDMP_TEST_W224_MODELS").empty() ? 0 : 1;
+    if (!s_on || !eid) return;
+    void* ca = nullptr; void* model = nullptr; void* comp = nullptr;
+    if (!motion::combat_parts(eid, false, &ca, &model) || !ca || !model) return;
+    rd(ca, 0x4A0, &comp);
+    struct Rec { char magic[4]; uint32_t n, kind, eid, tick; int32_t zone, input; uint32_t nameHash; uint8_t model[0x1300]; uint8_t comp[0x140]; };
+    static Rec r;   // main thread only
+    std::memset(&r, 0, sizeof r);
+    std::memcpy(r.magic, "W224", 4);
+    r.n = ++c_modelRecs; r.kind = static_cast<uint32_t>(kind); r.eid = eid; r.tick = static_cast<uint32_t>(GetTickCount64());
+    r.zone = zone; r.input = input; r.nameHash = rules::name_hash(name_of(eid));
+    KCDMP_FAULT_READ(site, "wo224::model_dump");
+    // page by page: the model's allocation may end before 0x1300
+    for (size_t off = 0; off < sizeof r.model; off += 0x100)
+        if (!fault::guarded(site, [&] { std::memcpy(r.model + off, static_cast<const uint8_t*>(model) + off, 0x100); })) break;
+    if (comp) fault::guarded(site, [&] { std::memcpy(r.comp, comp, sizeof r.comp); });
+    FILE* f = nullptr;
+    if (fopen_s(&f, "kcdmp-w224-models.bin", "ab") != 0 || !f) return;
+    std::fwrite(&r, 1, sizeof r, f);
+    std::fclose(f);
+    logf("W224-MODEL rec=%u kind=%d npc=%s zone=%d input=%d", r.n, kind, name_of(eid), zone, input);
+}
+
+int status_chain_host(char* out, int n) {
+    return std::snprintf(out, static_cast<size_t>(n), "watch=%s combo_inputs_seen=%u (slot open %u, closed %u; lost to a full record %u; layout unconfirmed %u) an_npcs=%u at_a_figure=%u told=%u | "
+                         "the engine's own combo inputs by thread: main=%u other=%u, on another thread WHILE the mod's main-thread work ran=%u",
+                         g_comboHook.load() == 1 ? "armed" : g_comboHook.load() ? "not on this build" : "not armed (not the host, or the switch off)", c_comboCalls.load(), c_comboOpen,
+                         c_comboClosed, c_comboOverrun.load(), c_comboLayout, c_comboNpc, c_comboAtFigure, c_chainTold, c_comboThread[0].load(), c_comboThread[1].load(),
+                         c_comboBeside.load());
+}
+int status_chain_copy(char* out, int n) { return wo209::chain_status(out, n); }
+
 void tick() {
     file_tick();
+    // B: the bench's twin (the switch masked off) keeps the watch -- its inputs are counted and logged, the agent sends none
+    if (role() == 1 && (g_bits.load(std::memory_order_relaxed) & kBitChains) && g_comboHook.load(std::memory_order_relaxed) == 0) chain_arm();
+    if (g_comboHook.load(std::memory_order_relaxed) == 1) chain_drain();
     if (!on(kBitClinchLog) && !on(kBitClinch)) return;
     figures_tick();
     ssg_drain();          // every start: logged with the log bit; a figure's (the host) and the local player's own (the joiner) told
@@ -775,8 +927,8 @@ uint8_t op(uint8_t opc, const uint8_t* body, size_t len, uint8_t* out, size_t ca
         std::memcpy(&a, body + 1, 4); std::memcpy(&b, body + 5, 4);
         int n = 0;
         if (on(kBitClinch)) {
-            n = end_clinch(a, b == 0xFFFFFFFFu, "the agent");
-            if (b != 0xFFFFFFFFu) n += end_clinch(b, false, "the agent");
+            n = end_clinch(a, b == 0xFFFFFFFFu, "the agent", kEndMinAgeMs);
+            if (b != 0xFFFFFFFFu) n += end_clinch(b, false, "the agent", kEndMinAgeMs);
         }
         out[0] = static_cast<uint8_t>(n);
         *outLen = 1;
@@ -812,6 +964,16 @@ uint8_t op(uint8_t opc, const uint8_t* body, size_t len, uint8_t* out, size_t ca
         *outLen = 3;
         return wo163::kROk;
     }
+    if (opc == kOpChainInput) {   // [eid:4][zone:1] -> [result:1]
+        if (len != 10 || cap < 1) return wo163::kRBadRequest;
+        uint32_t e = 0;
+        int32_t input = 0;
+        std::memcpy(&e, body + 1, 4);
+        std::memcpy(&input, body + 6, 4);
+        out[0] = static_cast<uint8_t>((role() == 2 && e) ? wo209::chain_input(e, body[5] == 0xFF ? -1 : body[5], input) : 0);
+        *outLen = 1;
+        return wo163::kROk;
+    }
     if (opc == kOpResolveNear) {   // [near eid:4][name hash:4] -> [eid:4]: the one body within kResolveM of that entity whose name has this hash
         if (len != 9 || cap < 4) return wo163::kRBadRequest;
         uint32_t nearE = 0, hash = 0;
@@ -840,7 +1002,7 @@ uint8_t op(uint8_t opc, const uint8_t* body, size_t len, uint8_t* out, size_t ca
 
 int status_reg(char* out, int n) { return status(out, n); }
 const bool kReg = wo203::reg_op(kOpConfig, &op) && wo203::reg_op(kOpStatus, &op) && wo203::reg_op(kOpClinchStart, &op) && wo203::reg_op(kOpClinchEnd, &op) &&
-                  wo203::reg_op(kOpClinchRead, &op) && wo203::reg_op(kOpClinchHost, &op) && wo203::reg_op(kOpResolveNear, &op) && wo203::reg_op(kOpWeaponRefresh, &op) && wo203::reg_status("w224", &status_reg) && wo203::reg_tick("w224", &tick);
+                  wo203::reg_op(kOpClinchRead, &op) && wo203::reg_op(kOpClinchHost, &op) && wo203::reg_op(kOpResolveNear, &op) && wo203::reg_op(kOpWeaponRefresh, &op) && wo203::reg_op(kOpChainInput, &op) && wo203::reg_status("w224", &status_reg) && wo203::reg_tick("w224", &tick);
 const bool kRegRec = add_status("A the joiner's own clinch against the host's word", &status_reconcile);
 int status_rows(char* out, int n) {
     return std::snprintf(out, static_cast<size_t>(n), "moves_through_the_engine=%u (on a retry %u) refused_at_first=%u never_started=%u halves_left_to_the_engine=%u", c_rowMoves, c_rowMovesRetried, c_rowMovesRefused,
@@ -848,6 +1010,8 @@ int status_rows(char* out, int n) {
 }
 const bool kRegRows = add_status("A a copy's rows inside a clinch with the local player", &status_rows);
 const bool kRegSsg = add_status("A clinch starts", &status_ssg);
+const bool kRegChainHost = add_status("B the host's NPCs' chain inputs", &status_chain_host);
+const bool kRegChainCopy = add_status("B a chain input on its copy", &status_chain_copy);
 const bool kRegAudit = add_status("A audit, threads", &status_audit);
 const bool kRegWeapons = add_status("A a copy's weapon classes", &status_weapons);
 const bool kRegCan = add_status("A clinch test", &status_can);
@@ -1021,6 +1185,7 @@ int start_clinch(uint32_t masterEid, uint32_t slaveEid, const char* who_, char* 
 // it -- but nothing here ends a puppet's move when its partner body has gone its own way: a13, the joiner's figure stood in a
 // SyncTransition for 4.3 s after his own screen had left the clinch (the host's NPC had gone into its own strike). 0.7 s after
 // the end it is looked at again, and a puppet still in the clinch gets its fresh guard. A new start for it cancels the look.
+uint32_t c_endTooFresh = 0;
 struct LateEnd { uint32_t eid; ULONGLONG due; };
 LateEnd g_lateEnd[8]{};
 uint32_t c_lateEnds = 0;
@@ -1052,11 +1217,24 @@ void late_end_tick() {
     }
 }
 
-int end_clinch(uint32_t eid, bool withPartner, const char* who_) {
+int end_clinch(uint32_t eid, bool withPartner, const char* who_, unsigned minAgeMs) {
     const uint32_t me = player_eid();
     const uint32_t a = eid ? eid : me;
     const ClinchRead ra = read_clinch(a);
     if (!ra.ok) return 0;
+    // a "leave" from the other machine is the word for the clinch it knew: a clinch this machine's engine started a moment ago (a
+    // re-grab while that word was on its way) is not that clinch, and its own end will be told
+    if (minAgeMs && ra.in) {
+        const ULONGLONG now = GetTickCount64();
+        for (int j = 0; j < g_watchN; ++j)
+            if (g_watch[j].eid == a && g_watch[j].in && now - g_watch[j].since < minAgeMs) {
+                const uint32_t k = ++c_endTooFresh;
+                if (k <= 30 || k % 25 == 0)
+                    logf("W224-CLINCH end by %s not taken: %s entered this clinch %llu ms ago -- the word is older than it [n=%u]", who_, a == me ? "the-local-player" : name_of(a),
+                         static_cast<unsigned long long>(now - g_watch[j].since), k);
+                return 0;
+            }
+    }
     int n = 0;
     uint32_t bodies[2] = {a, (withPartner && ra.opponent) ? ra.opponent : 0};
     for (uint32_t b : bodies) {
@@ -1190,4 +1368,5 @@ bool clinch_row_recent(uint32_t copy) {
 }
 
 // wo178's start detour asks (any thread): a re-applied sync guard for a body whose clinch the mod is ending is refused
+namespace kcdmp::wo224 { void model_dump(int kind, uint32_t eid, int zone, int input) { model_dump_impl(kind, eid, zone, input); } }
 namespace kcdmp::wo224 { bool ending_refuses(int32_t type, const void* masterCa, const void* slaveCa) { return type != kActionStartSyncGuard && (is_ending(masterCa) || is_ending(slaveCa)); } }

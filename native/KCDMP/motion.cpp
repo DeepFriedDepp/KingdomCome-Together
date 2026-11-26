@@ -1907,6 +1907,18 @@ void push_local_action(uint8_t kind, uint8_t flags, const uint8_t guid[16], cons
 
 // WO-224 A (main thread): an action of a body that is not the local player, found by a poll -- a partner's figure entering or leaving
 // a clinch in the host's world. The agent gets it as a LocalAction frame with the body's entity id and name.
+bool set_requested_atk_zone(uint32_t eid, int zone) {
+    void* ca = nullptr; void* model = nullptr;
+    if (zone < 0 || zone > 5 || !A.fnSetAtkZone || !combat_parts(eid, false, &ca, &model) || !ca) return false;
+    return call_setatkzone(A.fnSetAtkZone, ca, zone);
+}
+
+bool set_guard_zone(uint32_t eid, int zone, int stance) {
+    void* ca = nullptr; void* model = nullptr;
+    if (zone < 0 || zone > 5 || stance < 0 || !A.fnSetGuardZone || !combat_parts(eid, false, &ca, &model) || !ca) return false;
+    return call_setguardzone(A.fnSetGuardZone, ca, zone, stance);
+}
+
 void push_body_action(uint8_t kind, uint8_t flags, uint32_t eid, const char* name, const uint8_t guid[16]) {
     Captured c{};
     c.kind = kind; c.flags = flags; c.ic = -1; c.zone = -1; c.type = -1; c.eid = eid;

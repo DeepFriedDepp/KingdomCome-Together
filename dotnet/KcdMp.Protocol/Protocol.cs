@@ -1723,6 +1723,11 @@ public enum ActionKind : byte
     /// body's name hash, 8 hex digits&gt;". The joiner it names starts or ends the same clinch in his own game, with the copy of that
     /// body. Only the host sends it; the relay forwards it as is.</summary>
     FigureClinch = 21,
+    /// <summary>WO-224 B: one of the host's NPCs, fighting a joiner's figure, made its combo input while its running swing's chain slot
+    /// was open (the engine chains a follow-up at the swing's chain point) -- payload <see cref="RowEvent"/>: Flags = the attack zone
+    /// (0xFF = none read), Row's first 4 bytes = the engine's input class, the name = the NPC's. Sent as the input is made, before the
+    /// follow-up's own NpcAttack row; the joiner's copy makes the same input when its own slot opens. Only the host sends it.</summary>
+    NpcChain = 22,
 }
 
 /// <summary>WO-151 3.5: what an Emote action plays (APPEND-ONLY).</summary>

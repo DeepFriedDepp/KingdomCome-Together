@@ -68,6 +68,42 @@ int wo224_tests(int* passed) {
     WCHECK(name_hash("tkop_vrahBandit_5") == 0x88988F7Fu && name_hash("kcd2mp_1") == 0x8FE98974u, "the agent's own values");
     WCHECK(name_hash("") == 0 && name_hash(nullptr) == 0, "no name: 0");
     WCHECK(name_hash("tkop_vrahBandit_5") != name_hash("tkop_vrahBandit_4"), "two bodies, two hashes");
+    // ---- B: the guard a row starts from
+    WCHECK(row_guard_side("CombatAttackGen, leftGuard+eZ1+aZ1+slash+attack_heavy") == 1 && row_guard_side("CombatAttackSpecialGen, rightGuard+eZ2+aZ5+stab") == 0,
+           "the row's own tag");
+    WCHECK(row_guard_side("CombatAttackSyncGen, clinch1+eZ1+endClinch1+aZ2+slash") == -1 && row_guard_side(nullptr) == -1 && row_guard_side("") == -1, "a row that does not say");
+    WCHECK(guard_zone_of_side(1) == 2 && guard_stance_of_side(1) == 0 && guard_zone_of_side(0) == 1 && guard_stance_of_side(0) == 1,
+           "the model's own values before a row of each guard: the other side from the swing's own zone");
+    WCHECK(guard_zone_of_side(-1) == -1 && guard_stance_of_side(-1) == -1, "no side: nothing to set");
+    // ---- B: a chain input
+    WCHECK(attack_action("Attack") && attack_action("StaticAttack") && attack_action("SyncAttack"), "the attack actions");
+    WCHECK(!attack_action("FailedAttack") && !attack_action("Guard") && !attack_action("Hit") && !attack_action("none") && !attack_action(nullptr), "everything else is not a follow-up");
+    WCHECK(chain_tell(true, false, false, true), "an NPC's input with its slot open, at a partner's figure: told");
+    WCHECK(!chain_tell(false, false, false, true), "the slot closed: the engine itself dropped the input, nothing to tell");
+    WCHECK(!chain_tell(true, true, false, true) && !chain_tell(true, false, true, true) && !chain_tell(true, false, false, false), "not the local player's, not a figure's, not at anybody else");
+    WCHECK(chain_before(true, true, true, false, 0.0) == kChainApply, "the copy's slot is open: its input now");
+    WCHECK(chain_before(false, true, true, false, 0.4) == kChainWait && chain_before(false, true, true, true, 0.4) == kChainWait, "its swing runs, the slot not open yet: waits (row or no row)");
+    WCHECK(chain_before(true, false, true, false, 0.1) == kChainWait, "not held in the local player's fight yet: waits");
+    WCHECK(chain_before(false, true, false, true, 0.2) == kChainFresh, "the follow-up's row is here and the copy runs no swing: a fresh attack, not a wait");
+    WCHECK(chain_before(false, true, false, true, 0.1) == kChainWait && chain_before(false, true, false, false, 0.5) == kChainWait, "a moment first; without the row there is nothing to start");
+    WCHECK(chain_before(false, true, true, true, kChainSlotWaitS + 0.01) == kChainFresh && chain_before(true, true, true, false, kChainSlotWaitS + 0.01) == kChainLapse,
+           "past the wait: the row's attack fresh, or nothing");
+    WCHECK(chain_after(true, "Attack", 0.3) == kAfterFollowed && chain_after(true, "Guard", 0.3) == kAfterNotFollowed && chain_after(true, "Hit", 0.1) == kAfterNotFollowed,
+           "the next action in the main scope: the follow-up, or not");
+    WCHECK(chain_after(false, "Attack", 0.5) == kAfterWait && chain_after(false, "Attack", kChainFollowS + 0.01) == kAfterLapse, "the swing still runs: waits, bounded");
+    WCHECK(chain_after(false, "Guard", 0.3, false) == kAfterWait && chain_after(false, "Guard", kChainFollowIdleS + 0.01, false) == kAfterLapse &&
+           chain_after(false, "Attack", kChainFollowIdleS + 0.01, true) == kAfterWait, "an input made with no swing running: a short wait only");
+    // b6: the slot's force
+    WCHECK(chain_before(false, true, true, true, 0.4, true) == kChainForce, "the host NPC chained, the copy's swing made no contact: the slot is forced");
+    WCHECK(chain_before(false, true, true, false, 0.4, true) == kChainWait, "no row yet: the host NPC's follow-up is not known to have started");
+    WCHECK(chain_before(true, true, true, true, 0.4, true) == kChainApply, "the engine opened it: no force");
+    WCHECK(chain_before(false, false, true, true, 0.4, true) == kChainWait, "not in the local player's fight: no force");
+    WCHECK(chain_before(false, true, false, true, 0.1, true) == kChainWait && chain_before(false, true, false, true, 0.2, true) == kChainFresh, "no swing: nothing to force");
+    WCHECK(!chain_force_due(0.01, 0.9, 0.5), "never in the row's own frame");
+    WCHECK(!chain_force_due(0.1, 0.4, 0.6) && chain_force_due(0.25, 0.6, 0.6), "when the copy's swing is as old as the host NPC's was");
+    WCHECK(chain_force_due(kChainForceMaxS, 0.3, 0.9), "bounded after the row");
+    WCHECK(!chain_force_due(0.1, -1.0, 0.6) && chain_force_due(0.2, -1.0, 0.6) && !chain_force_due(0.1, 0.5, 0.05) && chain_force_due(0.2, 0.5, 5.0),
+           "ages not known or not plausible: a fixed moment after the row");
     *passed = g_pass;
     return g_fail;
 }

@@ -326,13 +326,14 @@ void poll_player() {
     uint8_t ev = clinch_event(g_clinchWas, now, newMove);
     // WO-224 A: a clinch the mod ended and the engine started again in the same frame shows this poll no gap -- its start is told
     if (wo224::take_local_start() && !ev && now == Clinch::Idle) ev = kClinchEnter;
-    // WO-224 A: a clinch held with no move is said again every 3 s -- the other machine ends a clinch nobody has spoken of for 6 s (its
-    // net under a lost end), and a quiet 10.6 s clinch of the host's was dropped there at 6.5 s (a14)
+    // WO-224 A: a clinch held with no move is said again every second -- the other machine ends a clinch nobody has spoken of for 6 s
+    // (its net under a lost end: a quiet 10.6 s clinch of the host's was dropped there at 6.5 s, a14), and a clinch that fell apart
+    // on the other screen (two puppets drift out of the sync guard's distance: a15, 0.55 s of a 2.9 s clinch shown) is started again
     {
         static ULONGLONG s_lastWord = 0;
         const ULONGLONG tk = GetTickCount64();
         if (ev) s_lastWord = tk;
-        else if (now == Clinch::Idle && wo224::on(wo224::kBitClinch) && tk - s_lastWord > 3000) { ev = kClinchEnter; s_lastWord = tk; }
+        else if (now == Clinch::Idle && wo224::on(wo224::kBitClinch) && tk - s_lastWord > 1000) { ev = kClinchEnter; s_lastWord = tk; }
     }
     if (now == Clinch::Move) g_lastSt = s0.act;
     else if (now == Clinch::None) g_lastSt = nullptr;

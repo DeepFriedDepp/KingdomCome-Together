@@ -32,6 +32,10 @@ public static partial class Protocol
     /// possible). hint = the host NPC's weapon class by the weapon catalogue (<see cref="Wo224Rules.WeaponHintNothing"/> = it holds
     /// nothing, <see cref="Wo224Rules.WeaponHintNone"/> = no word): the copy's class while its hand holds no item object yet.</summary>
     public const byte Wo224OpWeaponRefresh = 227;
+    /// <summary>B: 228 ChainInput [eid:4][requested zone:1 (0xFF none)][input class:4] -> [result:1] -- the joiner: the host's NPC made
+    /// its combo input; its copy makes the same input, with the same requested attack zone, when its own chain slot opens (1 queued,
+    /// 0 not a copy whose attacks are its own here).</summary>
+    public const byte Wo224OpChainInput = 228;
 }
 
 /// <summary>
