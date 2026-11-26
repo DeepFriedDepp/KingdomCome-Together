@@ -28526,6 +28526,9 @@ do
         local key = M.KEY_NAMES[M.menuKey] or "Insert"
         System.DrawText(x, y, "Kingdom Come: Together -- mod menu (" .. key .. " to close)", L.title)
         y = y + L.line + 6
+        -- WO-224 C: every build says whether it is the project's own (the agent's offline check of the build's signature). Never hidden.
+        System.DrawText(x, y, KCD2MP_W224OfficialText and KCD2MP_W224OfficialText() or "Unofficial build -- not made by Kingdom Come: Together", L.small)
+        y = y + L.line
         if M.clean then
             System.DrawText(x, y, "Clean screen is ON: the mod shows nothing else.", L.row)
             y = y + L.line
@@ -37243,19 +37246,36 @@ end
 --   B  mp_w224_chains      an enemy's chain of swings plays on its copy as a chain.
 --   D  mp_w224_death       the death handling without the step WO-221 suspected.
 --   A.0 mp_w224_clinch_log the clinch instrument (read-only).
+--   C  mp_w224_official    the build's signature is checked (the agent, offline) and the mod menu says "Official build <version>" or
+--                          "Unofficial build -- not made by Kingdom Come: Together". Off = not checked = unofficial; never hidden.
 -- Log tags: W224-CFG, W224-TOGGLE, W224-STATUS; the DLL's W224-SSG (a clinch start), W224-CLINCH (the mod's own start and end).
 do
     W224 = W224 or {}
     W224.on = W224.on or {}
     W224.NAMES = {
         w224_clinch = "mp_w224_clinch", w224_chains = "mp_w224_chains", w224_death = "mp_w224_death", w224_clinch_log = "mp_w224_clinch_log",
+        w224_official = "mp_w224_official",
     }
     W224.HELP = {
         w224_clinch = "A: (both) a grab plays on both bodies on both screens and ends on both when it ends on either",
         w224_chains = "B: (both) an enemy's chain of swings plays on its copy as a chain, so the joiner's own game judges every blow",
         w224_death = "D: (joiner) a dying copy's actions end without the step WO-221 suspected of the crash after deaths",
         w224_clinch_log = "A.0: (both) every clinch start and the engine's clinch test, counted in the log (read-only)",
+        w224_official = "C: (both) the build's signature is checked and the mod menu says Official or Unofficial build; off = not checked = Unofficial",
     }
+    -- C: is this build the project's own? The agent checks the signature beside its binaries, offline (OfficialBuild.cs), and says the
+    -- result here. Until it has, the menu says so; whenever the check is off or fails the build reads unofficial. The line is never
+    -- hidden, and no code here may make a build without the maintainer's signature read "Official" (AGENTS.md, rule 6).
+    W224.UNOFFICIAL = "Unofficial build -- not made by Kingdom Come: Together"
+    W224.officialText = W224.officialText or "Build not checked yet (the agent says which when it is connected)"
+    function KCD2MP_W224Official(ok, version, why)
+        local v = tostring(version or "")
+        local text = ((ok == 1 or ok == true) and string.match(v, "^[%w%.%-]+$")) and ("Official build " .. v) or W224.UNOFFICIAL
+        if text ~= W224.officialText then mp_log("W224-OFFICIAL " .. text .. " (" .. tostring(why or "?") .. ")") end
+        W224.officialText = text
+        return true
+    end
+    function KCD2MP_W224OfficialText() return W224.officialText or W224.UNOFFICIAL end
     function KCD2MP_W224On(name)
         local v = W224.on[tostring(name)]
         if v == nil then return true end
@@ -37291,7 +37311,7 @@ do
         local parts = {}
         for k, label in pairs(W224.NAMES) do parts[#parts + 1] = label .. "=" .. (KCD2MP_W224On(k) and "on" or "off") end
         table.sort(parts)
-        mp_log("W224-STATUS " .. table.concat(parts, " ") .. " (the DLL's numbers follow in the agent's log: MP-W224-NATIVE, MP-W224-STATS)")
+        mp_log("W224-STATUS " .. table.concat(parts, " ") .. " | " .. KCD2MP_W224OfficialText() .. " (the DLL's numbers follow in the agent's log: MP-W224-NATIVE, MP-W224-STATS)")
         KCD2MP_EmitEvent("w224_status", "")
         return true
     end

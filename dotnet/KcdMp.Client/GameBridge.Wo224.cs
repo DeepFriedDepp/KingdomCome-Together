@@ -54,11 +54,17 @@ public partial class GameBridge
         catch { }
     }
 
-    private async Task Wo224TellModAsync() =>
+    private async Task Wo224TellModAsync()
+    {
         await ExecLuaAsync($"if KCD2MP_W224Cfg then KCD2MP_W224Cfg(\"{string.Join(',', W224Switch.Names.Select(n => n + "=" + (W224On(n) ? "on" : "off")))}\") end");
+        // C: the mod menu's line. The switch off = not checked, and a build that is not checked reads unofficial.
+        var (ok, version, why) = OfficialBuild.ConsoleWord(W224On(W224Switch.Official), ReleaseVersionInfo.Official);
+        await ExecLuaAsync($"if KCD2MP_W224Official then KCD2MP_W224Official({(ok ? 1 : 0)}, \"{version}\", \"{why}\") end");
+    }
+
 
     private string Wo224StatsLine() =>
-        $"MP-W224-STATS {string.Join(' ', W224Switch.Names.Select(n => $"{n}={(W224On(n) ? "on" : "off")}"))}" +
+        $"MP-W224-STATS {string.Join(' ', W224Switch.Names.Select(n => $"{n}={(W224On(n) ? "on" : "off")}"))} build=\"{(W224On(W224Switch.Official) ? ReleaseVersionInfo.Official.Text : OfficialBuild.UnofficialText)}\"" +
         $" clinch_in={Interlocked.Read(ref _w224ClinchIn)} no_body={Interlocked.Read(ref _w224ClinchNoBody)} named_by_hash={Interlocked.Read(ref _w224NamedByHash)}" +
         $" starts={Interlocked.Read(ref _w224Starts)} started={Interlocked.Read(ref _w224Started)} already={Interlocked.Read(ref _w224Already)} refused={Interlocked.Read(ref _w224Refused)}" +
         $" moves={Interlocked.Read(ref _w224Moves)} moves_played={Interlocked.Read(ref _w224MovesPlayed)} leaves={Interlocked.Read(ref _w224Leaves)}" +

@@ -26,4 +26,8 @@ public static class ReleaseVersionInfo
 
     /// <summary>WO-211 0.2: the release string the handshake carries ("version+build id"; a dev build: the version alone).</summary>
     public static readonly string Wire = KcdMp.Wire.BuildId.Wire(Current, BuildIdValue);
+
+    /// <summary>WO-224 C: is this build the project's own (KcdMp.Wire.OfficialBuild: the signature beside the binaries, checked
+    /// offline, once)? A development build and a fork's build are not.</summary>
+    public static readonly KcdMp.Wire.OfficialBuild.Result Official = KcdMp.Wire.OfficialBuild.Check(AppContext.BaseDirectory, Current, BuildIdValue);
 }

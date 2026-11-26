@@ -124,6 +124,7 @@ public static class Briefing
         sb.Append("Written by the bug report itself (WO-202). Times are this machine's clock.\n\n");
         var (bv, bid) = BuildOf(inp);   // WO-211 0.2: the build id in the first lines (the installer's name carries the same)
         sb.Append($"**Build:** {bv} build {bid}\n\n");
+        sb.Append(OfficialLine(inp));   // WO-224 C: the project's own build, or not
         try { sb.Append(LaunchLine(inp)); } catch { }   // WO-221 F
         // WO-218 F.4: this machine's queue first -- every number below is late by it
         try { sb.Append(W218Section.Section(AgentLines(inp).ToList())); }
@@ -337,6 +338,19 @@ public static class Briefing
         return m is null ? ("?", "unknown (an agent older than WO-211)") : (m.Groups[1].Value, m.Groups[2].Value);
     }
     private static readonly Regex BuildLine = new(@"MP-BUILD version=(\S+) build=(\S+)", RegexOptions.CultureInvariant);
+
+    /// <summary>WO-224 C: "Official build &lt;version&gt;" or "Unofficial build ..." as the agent's own offline check said at its start
+    /// (MP-OFFICIAL official=1|0 text="..." reason="..."), the newest. An agent that never said it is older than the check.</summary>
+    public static string OfficialLine(Input inp)
+    {
+        var m = AgentLines(inp).Select(x => OfficialMark.Match(x)).LastOrDefault(x => x.Success);
+        if (m is null) return "**Build status:** not stated (an agent older than 0.65.5 does not check its build)\n\n";
+        bool official = m.Groups[1].Value == "1" && m.Groups[2].Value.StartsWith(OfficialPrefix, StringComparison.Ordinal);
+        return official ? $"**{m.Groups[2].Value}**\n\n" : $"**{UnofficialText}** ({Cut(m.Groups[3].Value, 200)})\n\n";
+    }
+    private const string OfficialPrefix = "Official build ";
+    private const string UnofficialText = "Unofficial build \u2014 not made by Kingdom Come: Together";
+    private static readonly Regex OfficialMark = new("MP-OFFICIAL official=([01]) text=\"([^\"]*)\" reason=\"([^\"]*)\"", RegexOptions.CultureInvariant);
 
     /// <summary>WO-211 F: the role an agent recorded with a mark's snapshot.</summary>
     private static readonly Regex MarkRole = new(@"MP-MARK-SNAP mark=\S+ agent origin=\S+ role=(host|joiner)\b", RegexOptions.CultureInvariant);

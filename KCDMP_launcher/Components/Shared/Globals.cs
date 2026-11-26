@@ -33,6 +33,9 @@ namespace KCDMP_launcher.Components.Shared
             ?? "0.0.0";
         /// <summary>WO-211 0.2: this build's id (the short commit and the build time; "dev" without one) -- the About shows it.</summary>
         public static string BuildId { get; } = KcdMp.Wire.BuildId.Current;
+        /// <summary>WO-224 C: is this build the project's own? The signature beside the binaries, checked offline, once
+        /// (KcdMp.Wire.OfficialBuild; docs/OFFICIAL-BUILDS.md). The status line and the About say it.</summary>
+        public static KcdMp.Wire.OfficialBuild.Result Official { get; } = KcdMp.Wire.OfficialBuild.Check(AppContext.BaseDirectory, Version, BuildId);
         public static string ConfigFilePath { get; } = Path.Combine(AppFolder, "config.json");
 
         public static StyleProfile CurrentStyleProfile { get; set; } = new StyleProfile();

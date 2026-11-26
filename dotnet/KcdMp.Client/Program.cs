@@ -79,6 +79,9 @@ try
     Console.SetOut(new TeeTextWriter(Console.Out, teeStream));
     Console.WriteLine($"[log] agent output tee -> {agentLogPath}");
     Console.WriteLine($"MP-BUILD version={ReleaseVersionInfo.Current} build={ReleaseVersionInfo.BuildIdValue} (WO-211 0.2: the installer, the launcher's About, the DLL's log and the crash reports name the same id)");
+    // WO-224 C: is this build the project's own? Offline: the signature beside the binaries, the files it names. The bug report's
+    // briefing reads this line.
+    Console.WriteLine($"MP-OFFICIAL official={(ReleaseVersionInfo.Official.Official ? 1 : 0)} text=\"{ReleaseVersionInfo.Official.Text}\" reason=\"{ReleaseVersionInfo.Official.Reason}\"");
 }
 catch (Exception ex)
 {

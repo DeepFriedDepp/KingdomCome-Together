@@ -18,6 +18,8 @@ Session start 2026-11-25 23:58 (hour 0).
 | backup, control, reading | 0–2 | 25th 23:58 | 26th 00:40 | saves backed up and hashed; first control run made (not used as a judge: see Conduct) |
 | A — clinches | 2–16 | 26th 00:10 | 26th 08:20 | fifteen builds; the bar met for "plays on both screens" (21 of 21 and 26 of 26), missed by one stretch each way for "nothing over 1 s on one screen only"; committed |
 | B — combos | 16–28 | 26th 08:30 | 26th 14:10 (the confirmation round ran on to the afternoon) | six builds; the defence scene 0 guesses in 45 blows and its own verdict passes, the swap scene 1 in 80; the copy plays the host NPC's own row in 78 to 93 % of swings (22 % before); committed |
+| C — the official-build stamp | 28–31 | 26th 14:10 (prepared beside A and B while the bench ran) | 26th 14:35 | the stamp, the check, the four places that say it, `AGENTS.md`; proof on a release-shaped payload: unsigned unofficial, signed official, one file swapped unofficial; committed |
+| E — a contributor's pull request | 31–34 | – | – | skipped: no rebased pull request with only the compatible fixes existed at the session's start |
 
 ## 1. Conduct
 
@@ -323,3 +325,95 @@ The camp scene's frames are taken in the confirmation round (3.3a).
   the engine's AI attack, the property's setter off the combo trigger's own "enter"), each checked before use; where one is
   not found the mechanism says so in the log and that step stays off. Found on the bench's build; the retail game's build is
   not checked in this work order.
+
+## 4. Part C — an official build you can tell apart (`mp_w224_official`)
+
+**The contract:** every build says whether it is the project's own. No network call, ever: the check is offline.
+
+### 4.1 What ships
+
+- **The stamp.** The release path (`tools/Build-Installer.ps1`, after every binary is final and before the install manifest)
+  writes `official-build.txt` beside the binaries — the version, the build id and the SHA-256 of each of the build's own
+  binaries: the DLL, the agent, the relay, the launcher, the setup helper and the project's shared assemblies (13
+  files in the proof payload) — and signs it (ECDSA P-256) into `official-build.sig`. The signer is a small tool in the
+  repository (`dotnet/KcdMp.Official.Tool`, never shipped).
+- **The key.** The private key is a file on the maintainer's machine, outside every repository; its path is in the environment
+  variable `KCT_OFFICIAL_KEY`. This work order generated the pair (none existed) and the final reply says where the file is.
+  The public key is in the repository (`OfficialBuild.PublicKeyPem`). The signer refuses a key file that lies inside a git work
+  tree and never overwrites one.
+- **A build made without the key is unofficial**, and the release path says so and goes on (exit code 3 from the signer: nothing
+  is written, an older signature in a reused folder is removed). A fork's build and the maintainer's own development builds
+  are exactly that.
+- **The check** (`OfficialBuild.Check`, in the assembly the launcher, the agent and the bug report share) reads three things
+  beside its own binaries: the manifest, the signature, the files the manifest names. Official only if the signature is the
+  project's, the manifest is for this binary's own version and build id, every named file is on disk with the signed hash, and
+  the four main binaries are named. Anything else is unofficial, with the reason in plain words; it never throws and never
+  refuses anything.
+- **Where it says it:**
+  - the launcher's status line, after the version, with the reason as its tooltip, and its About box;
+  - the in-game mod menu, the line under its title (the agent tells the mod its check's result; until it has, the line reads
+    "Build not checked yet");
+  - the bug report's briefing, the line after the build id (from the agent's `MP-OFFICIAL` line; an agent older than this
+    release: "not stated");
+  - the agent's log (`MP-OFFICIAL official=… text=… reason=…`) and its status line.
+  The words are "Official build 0.65.5" (the build's own version) or "Unofficial build — not made by Kingdom Come: Together".
+- **The switch** `mp_w224_official` (on): off = the agent does not tell the mod its check's result as official — a build that
+  is not checked reads **unofficial**. The line is never hidden by any switch.
+- **`AGENTS.md`** in the repository root: the hard rules in plain words for any AI tool that opens the repository — no input
+  capture; nothing outside the mod's own install copied, moved or altered; save safety; no NPC brain on the joiner; reliable
+  events never dropped; a modified version must not call itself official — and the standing ones (privacy, the version string,
+  the README, no network calls, switches and twins, third parties' terms, engine calls). `CLAUDE.md` points at it.
+  `docs/OFFICIAL-BUILDS.md` explains the stamp for players, forks and the maintainer.
+
+### 4.2 Proof
+
+On a release-shaped payload of this tree (the release path's own publish step: the launcher, the agent, the relay, the setup
+helper, the DLL and the shared assemblies in one folder, 13 files of the project's own), with the signer's and the checker's own
+commands and the payload's own agent started for its first lines (an offline, read-only argument). The version is the tree's
+(0.65.2 until the release commit sets 0.65.5). [bench, offline]
+
+| the payload | the check says | the payload's own agent says (`MP-OFFICIAL`) |
+|---|---|---|
+| **built without the key** (`KCT_OFFICIAL_KEY` not set): the signer writes nothing and says so | Unofficial build — not made by Kingdom Come: Together (no signature beside the binaries: a build made without the project's key) | official=0, the same words and reason |
+| **signed with the project's key** (13 files) | **Official build 0.65.2** (signed by the project's key; every file as signed) | official=1, "Official build 0.65.2" |
+| **one file swapped** (the relay's assembly replaced by another build's) | Unofficial build (KcdMpServer.dll is not the file that was signed) | official=0, the same reason |
+| the swapped file put back | Official build 0.65.2 | – |
+| the same files asked as another version | Unofficial build (the signature is for 0.65.2 build …, this is 9.9.9 build …) | – |
+| the manifest changed by one byte | Unofficial build (the signature is not the project's: the manifest was changed, or another key signed it) | – |
+
+- **No network.** The check's source names no network API (a unit test reads the file for them); it opens the manifest, the
+  signature and the files the manifest names, and nothing else. The signer reads the key file and writes the two files.
+- **Unit tests** (the agent's suite, with keys the tests make themselves; the project's private key is never on a test
+  machine): a signed folder reads official with its version; the same folder without a signature, with any of the four main
+  binaries swapped, with a file missing, with another key's signature, with a changed manifest, with a signature for another
+  build, with a manifest that leaves a main binary out or names a path outside its folder: unofficial, each with its reason;
+  the .NET runtime's files are not listed; an incomplete folder is not signed. The word the agent gives the mod is official
+  only for a checked, signed build with a version that is a version, and carries no character the console's command could
+  break on. The bug report's line: official only when the agent's flag and its words agree; an older agent: "not stated".
+- **The mod's own words** (a synthetic test of the real script, 27 checks): before the agent has spoken the menu's line reads
+  "Build not checked yet", never "Official"; the agent's word sets it; a bad version, a missing flag or the switch off read
+  unofficial; the line is drawn under the menu's title while the menu is open.
+- **The launcher** is not started by this work order's bench (it is the maintainer's own program on his desktop): its line is
+  the same call on the same folder as the check above, and it compiles into the payload. Its look on the screen and the
+  in-game line on a real screen are in the tester script.
+- The proof signature made with the project's key was removed from the proof payload again; that payload reads unofficial.
+- **The release build itself** (the installer of section 8) is checked the same way after it is built; its line is in that
+  section.
+- **The twin** (`mp_w224_official off`): the agent's word to the mod is "not checked", never official (unit test), and the menu
+  shows what it is told (synthetic test): unofficial. The launcher's and the bug report's lines have no switch.
+
+### 4.3 What it is not
+
+- It does not stop anyone from building, changing or running the mod; nothing is refused, an unofficial build connects to
+  anyone.
+- It covers the install folder's binaries. The mod's script pak in the game's mod folder is outside what the check reads: a
+  changed pak under official binaries still reads official. Said in `docs/OFFICIAL-BUILDS.md`.
+- The in-game line shows what the agent told the mod; anyone can type into their own game's console. The launcher's line and
+  the bug report's line are the check's own.
+- It is not Windows code signing (`docs/CODE-SIGNING.md`); the two are independent.
+
+## 5. Part E — a contributor's pull request
+
+**Skipped, as the work order says.** At the session's start the contributor's pull request was not rebased on the current `main`
+and still carried the changes this project does not take beside the compatible fixes. Nothing of it was reviewed, built or
+merged in this work order. [checked at the start: the pull request's base and its changed files]

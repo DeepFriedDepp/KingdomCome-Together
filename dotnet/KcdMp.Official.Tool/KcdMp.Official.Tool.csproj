@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- WO-224 C: the release path's signer, never shipped. Signs a release folder's manifest with the maintainer's private key (its
+       path in the environment variable KCT_OFFICIAL_KEY, never in the repository) and checks a folder the way the launcher and the
+       agent do. docs/OFFICIAL-BUILDS.md. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>kct-official</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\KcdMp.Protocol\KcdMp.Protocol.csproj" />
+  </ItemGroup>
+</Project>

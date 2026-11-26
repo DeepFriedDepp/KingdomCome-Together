@@ -366,6 +366,27 @@ if ($LASTEXITCODE -ne 0) { throw "the relay fault-mode gate FAILED -- a shipped 
 # sha256 on a rebuild from identical sources -- observed 2026-08-28), so a
 # manifest written before a later rebuild describes a pak that no longer
 # exists and fails verification on a perfectly good artifact.
+# WO-224 C: the official-build stamp (docs\OFFICIAL-BUILDS.md). The maintainer's private key is NOT in the repository: its path is
+# in the environment variable KCT_OFFICIAL_KEY on his machine. With it, the payload's own binaries are hashed into
+# official-build.txt and that file is signed (official-build.sig); the launcher, the agent and the bug report then read
+# "Official build <version>". Without it nothing is written and the build reads "Unofficial build": a fork's build and a
+# development build are exactly that. After every binary is final (the code signing above changes them), before the install
+# manifest below (which lists the two files). Offline: no network call.
+Write-Host "Official-build stamp (WO-224 C) ..."
+$officialTool = Join-Path $root "dotnet\KcdMp.Official.Tool\KcdMp.Official.Tool.csproj"
+& dotnet run --project $officialTool -c Release -- sign $payload $Version $buildId
+$officialExit = $LASTEXITCODE
+if ($officialExit -eq 3) {
+    $officialNote = "UNOFFICIAL (no private key: KCT_OFFICIAL_KEY is not set on this machine)"
+    Write-Host "This build is UNOFFICIAL: it will say 'Unofficial build -- not made by Kingdom Come: Together' everywhere." -ForegroundColor Yellow
+} elseif ($officialExit -ne 0) {
+    throw "the official-build stamp FAILED (exit $officialExit): the key did not sign, or its signature does not verify against the public key in this tree. Not shipping."
+} else {
+    & dotnet run --project $officialTool -c Release --no-build -- check $payload $Version $buildId
+    if ($LASTEXITCODE -ne 0) { throw "the official-build stamp was written and does not check. Not shipping." }
+    $officialNote = "Official build $Version"
+}
+
 & (Join-Path $PSScriptRoot "New-InstallManifest.ps1") `
     -AppDir $payload `
     -ModFiles @{ "mod.manifest"    = (Join-Path $root "kdcmp\mod.manifest")
@@ -398,6 +419,7 @@ Write-Host "Installer: $setup ($mb MB)"
 Write-Host "build id : $buildId"
 Write-Host ("sha256   : " + (Get-FileHash $setup -Algorithm SHA256).Hash.ToLowerInvariant())
 Write-Host ("signed   : " + $(if ($signing) { "yes (Azure Artifact Signing)" } else { "NO -- unsigned build" }))
+Write-Host ("official : " + $officialNote)
 if ($ReleaseCandidate) { Write-Host ("WARNING: " + $rcNote) -ForegroundColor Yellow }
 if ($Push) {
     # WO-179 0.1: the push step goes through the publishing gate, never around it

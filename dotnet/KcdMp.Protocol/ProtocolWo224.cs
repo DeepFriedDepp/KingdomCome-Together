@@ -51,7 +51,11 @@ public static class W224Switch
     /// w224_clinch_log (A.0: the clinch instrument, read-only).</summary>
     public static readonly string[] NativeNames = ["w224_clinch", "w224_chains", "w224_death", "w224_clinch_log"];
 
-    public static readonly string[] Names = [.. NativeNames];
+    /// <summary>C: w224_official -- the agent's own (no native bit): the build's signature is checked and the mod menu says "Official
+    /// build" or "Unofficial build". Off = not checked, and a build that is not checked reads unofficial (the text is never hidden).</summary>
+    public const string Official = "w224_official";
+
+    public static readonly string[] Names = [.. NativeNames, Official];
 
     public static bool TwinOff(string name) => TwinOff(Environment.GetEnvironmentVariable(EnvVar), name);
 
