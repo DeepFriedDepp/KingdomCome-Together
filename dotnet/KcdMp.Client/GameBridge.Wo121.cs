@@ -297,6 +297,7 @@ public partial class GameBridge
             // swing that exact row. Only the owner (the host under host
             // authority) speaks for its NPCs; a name must be authored.
             // WO-151: and its hit reaction (NpcHit), so a copy shows the host's reaction, not its own.
+            if ((ActionKind)f.Kind == ActionKind.AvatarClinch) { await Wo224FigureClinchOutAsync(f, ms, s); return; }   // WO-224 A: a partner's figure, clinched in the host's world
             bool npcHit = (ActionKind)f.Kind == ActionKind.NpcHit;
             if (npcHit)
             {
@@ -392,6 +393,7 @@ public partial class GameBridge
             case ActionKind.AvatarHit:
             case ActionKind.AvatarRecoil:   // WO-197 B1
             case ActionKind.AvatarClinch:   // WO-197 B3
+            case ActionKind.FigureClinch:   // WO-224 A
                 break;
             default:
                 return false;
@@ -450,6 +452,9 @@ public partial class GameBridge
                 return true;
             case ActionKind.AvatarClinch:
                 await Wo197OnClinchInAsync(a, catalog, ct);      // WO-197 B3: the partner's clinch on his figure and its opponent
+                return true;
+            case ActionKind.FigureClinch:
+                await Wo224OnFigureClinchInAsync(a, ct);         // WO-224 A: the host's world clinched this player's figure
                 return true;
             case ActionKind.NpcAttack:
             {

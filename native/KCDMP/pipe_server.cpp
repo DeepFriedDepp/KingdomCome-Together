@@ -49,6 +49,7 @@
 #include "instance.h"
 #include "wo206.h"
 #include "wo218_rules.h"
+#include "wo224.h"
 #include "log.h"
 
 #include <windows.h>
@@ -964,6 +965,8 @@ void serve(HANDLE h) {
                 const bool ran = run_sync_bounded<rttr::SwingResult>(
                     [entityId, spec](rttr::SwingResult& result) {
                         if (kcdmp::wo209::row_attack(entityId, spec.c_str())) { result = rttr::SwingResult::Ok; return; }   // WO-209 B: the copy's own attack
+                        // WO-224 A: a paired row of a copy in the engine's clinch with the local player -- the engine's paired move (his half too)
+                        if (kcdmp::wo224::clinch_row(entityId, spec.c_str()) == 1) { result = rttr::SwingResult::Ok; return; }
                         // WO-216 F.4 / G: the owner plays the host's row on its copy (never "owner-owns"): poses for a fight with a player,
                         // npc_fights for a fight among the host's NPCs; reaction rows keep WO-214's own path below
                         if (kcdmp::wo208::probe_owned(entityId) && !kcdmp::wo214rules::reaction_row(spec.c_str()) &&

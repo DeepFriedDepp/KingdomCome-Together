@@ -35,6 +35,7 @@ uint8_t handle(uint8_t op, const uint8_t* body, size_t len, uint8_t* out, size_t
 void tick();                       // main thread, every frame (dllmain post_repeating)
 bool striking_recently(uint32_t eid);
 float swing_hit_distance(uint32_t eid);
+const void* weapon_lookup_fn();   // WO-224: the engine's weapon-class-by-hand-slot lookup the reach uses (null = not resolved on this build)
 int weapon_class_id(void* ca);   // WO-187 (main thread): the right hand's weapon class id (a shield: the other hand), -1 unreadable
 // WO-190 A1 (main thread): both hands' weapon classes (the game's weapon_class ids; -1 = none); false when the lookup is not armed or faulted.
 bool weapon_classes(void* ca, int* right, int* left);

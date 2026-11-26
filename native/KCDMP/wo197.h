@@ -49,6 +49,11 @@ int ensure_guard(void* ca);
 // WO-209 C.1 (main thread): the engine's own clinch start, C_CombatActorClinch::StartSyncGuard(type, master, slave) on two bodies by entity
 // id (the owner's: a copy as master, the local player as slave). 1 started, 0 refused (why says what the engine had), -1 not armed.
 int start_sync_guard(int32_t type, uint32_t master, uint32_t slave, char* why, size_t whyN);
+// WO-224 A (main thread): the same entry on two combat actors, with the engine's ACTION type (35 = a new clinch); see wo224.h.
+int start_sync_guard_raw(int32_t type, void* masterCa, void* slaveCa);
+// WO-224 A (main thread): a Guard entered afresh (TerminateInternal(0) + EnsureGuardAction's new Guard) even when one runs: the way
+// out of a sync guard. 1 = a Guard runs, 0 = refused, -1 = not armed.
+int force_guard(void* ca);
 
 void tick();   // main thread, every frame (B1 / B3 polls)
 uint8_t handle(uint8_t op, const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t* outLen);

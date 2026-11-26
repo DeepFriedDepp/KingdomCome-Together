@@ -41,6 +41,9 @@ bool ai_attack(uint32_t copy, uint32_t hostFrag);
 // B without the owner (main thread): a swing row of the host's attack (WO-167's spec, "Fragment, tags") on an NPC copy the mirror holds on
 // the local player -- the copy's own attack instead, its zone the row's aZ tag. True = started (the row is not played).
 bool row_attack(uint32_t copy, const char* spec);
+// WO-224 A (main thread): a clinch move or a sync attack of a copy in the engine's clinch with the local player -- the copy's own attack
+// request with the host row's zone (the engine builds the paired action and starts his half). False = refused.
+bool clinch_move(uint32_t copy, uint32_t hostFrag, int zone);
 // B (main thread): an attack of the copy's own started within the last withinS seconds (by the row or the owner).
 bool ai_attack_recent(uint32_t copy, double withinS);
 // B: the copy's own attack is still running (its window open).

@@ -689,6 +689,8 @@ float swing_reach_limit(uint32_t eid) {
     return best ? wo178rules::contact_limit(best->engineReach, best->hitDist) : wo178rules::reach_limit(0);
 }
 
+const void* weapon_lookup_fn() { return resolve_reach() ? reinterpret_cast<const void*>(g_weapon) : nullptr; }
+
 int weapon_class_id(void* ca) {
     // the weapon class of the combat actor's right hand (a shield there means the other hand), its id at the class's +8 (0xC = a shield)
     if (!ca || !resolve_reach() || !g_weapon) return -1;

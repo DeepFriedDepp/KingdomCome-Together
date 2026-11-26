@@ -216,5 +216,7 @@ double last_npc_attack_s(uint32_t eid);
 // WO-197 (main thread): a local-player action found by a poll (not by the EnterImpl capture) -- the recoil, the clinch -- queued with the
 // captured ones (the agent gets it as a LocalAction frame, eid 0). guid / alt may be null.
 void push_local_action(uint8_t kind, uint8_t flags, const uint8_t guid[16], const uint8_t* alt);
+// WO-224 A (main thread): the same for a body that is not the local player (a partner's figure): its entity id and name ride along.
+void push_body_action(uint8_t kind, uint8_t flags, uint32_t eid, const char* name, const uint8_t guid[16]);
 
 } // namespace kcdmp::motion

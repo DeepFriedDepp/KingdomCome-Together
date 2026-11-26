@@ -369,7 +369,10 @@ public partial class GameBridge
             Interlocked.Increment(ref w == "-" ? ref _w214Holsters : ref _w214Draws);
             Console.WriteLine($"WO214-DRAW npc={r.Name} hand={(w == "-" ? "-" : w[..Math.Min(8, w.Length)])} told={(w == "-" ? "sheathe" : "draw")} (the host NPC's hand changed)");
         }
-        await ExecLuaAsync($"if KCD2MP_W167Weapon then KCD2MP_W167Weapon(\"{r.Name}\", \"{w}\", \"{(drawEvent ? "hands214" : "hands")}\") end");
+        Wo224OnHostWeapon(r.Name, w);   // WO-224 A: the DLL is told the host NPC's weapon class (the copy's, until the item is in its hand)
+        // WO-224 A: the host NPC's left hand rides along (the copy's hands are checked against both after the draw)
+        string left224 = ExtraRow.ClassText(r.Left);
+        await ExecLuaAsync($"if KCD2MP_W167Weapon then KCD2MP_W167Weapon(\"{r.Name}\", \"{w}\", \"{(drawEvent ? "hands214" : "hands")}\", \"{(Guid.TryParse(left224, out _) ? left224 : "-")}\") end");
     }
 
     /// <summary>C2: a host attack row played on a copy says armed or unarmed -- the copy follows (with the host's class when known).</summary>

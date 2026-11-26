@@ -159,7 +159,7 @@ public partial class GameBridge
                 { cflags = (byte)(cflags & ~Wo197Rules.ClinchRows); master = Guid.Empty; slave = Guid.Empty; }
                 string? opp = W202("recoil_clinch") ? _w202OwnOpponent : null;   // WO-202 IV.3: the body this player clinched (the DLL's read)
                 what = $"clinch={Wo197Rules.ClinchPhaseName(cflags)} role={((cflags & Wo197Rules.ClinchMaster) != 0 ? "master" : "slave")} row={(master == Guid.Empty ? "-" : master.ToString())} slave_row={(slave == Guid.Empty ? "-" : slave.ToString())} opponent={opp ?? "-"}";
-                return _actionOut.Build(ActionKind.AvatarClinch, ActionPhase.Commit, Wo197Rules.ClinchEvent(ms, cflags, master, slave, opp).ToBytes());
+                return _actionOut.Build(ActionKind.AvatarClinch, ActionPhase.Commit, Wo197Rules.ClinchEvent(ms, cflags, master, slave, opp, W224On("w224_clinch")).ToBytes());
             default:
                 return null;
         }
@@ -272,8 +272,30 @@ public partial class GameBridge
         string head = $"MP-ACTION section=inbound ghost={gid} kind=AvatarClinch clinch={Wo197Rules.ClinchPhaseName(re.Flags)} role={(master ? "master" : "slave")}";
         if (!_w197Clinch) { Console.WriteLine($"{head} dispatch=dropped-toggle-off"); return; }
         if (catalog is null || !_ghostEntityIds.TryGetValue(gid, out uint feid)) { Console.WriteLine($"{head} dispatch=dropped-no-figure"); return; }
+        // WO-224 A: the body his clinch names (its name's hash) comes first -- his engine's own word for whom he clinched
+        (bool Ok, byte Reason, byte[] Payload)? q = null;
+        bool w224 = W224On("w224_clinch");
+        if (w224)
+        {
+            // his machine could not enter the clinch this world has his figure in: ended here, with whoever it is with
+            if (phase == Wo197Rules.ClinchLeave && (re.Flags & Wo224Rules.FlagRefused) != 0) { await Wo224EndFigureClinchAsync(head, feid, ct); return; }
+            uint he = Wo224NamedBody(re, out string? hn);
+            if (he == 0 && Wo224Rules.ClinchOpponentHash(re.Name) is uint hh && hh != 0)
+            {
+                // (the host keeps no table of its own world's NPCs by name: its DLL looks among the bodies near his figure)
+                var rr = await _combat.Wo163Async(Protocol.Wo224OpResolveNear, Wo224Pair(feid, hh), ct);
+                if (rr is { Ok: true, Payload.Length: >= 4 } rx) { he = BinaryPrimitives.ReadUInt32LittleEndian(rx.Payload); hn = he != 0 ? $"0x{he:X}" : null; }
+            }
+            if (he != 0)
+            {
+                // (not through WO-197's pair query: it refuses a copy the animation owner holds -- every copy since WO-209)
+                Interlocked.Increment(ref _w224NamedByHash);
+                await Wo224OnClinchAsync(head + $" opponent={hn}", gid, feid, he, master, phase, re, catalog, ct);
+                return;
+            }
+        }
         // his figure's opponent here (the DLL's read; a copy -- never this player, whose body is his own input's)
-        var q = await Wo197PairOpAsync(feid, 0, 0, "", "", ct);
+        if (q is not { Ok: true }) q = await Wo197PairOpAsync(feid, 0, 0, "", "", ct);
         if (q is not { Ok: true } && Wo197CopyFighting(a.SourceGhostId) is uint cf) q = await Wo197PairOpAsync(feid, cf, 0, "", "", ct);
         // WO-202 IV.3: the clinch names the body his player clinched (his engine's value): that copy here
         if (q is not { Ok: true } && W202("recoil_clinch") && Wo197Rules.ClinchOpponent(re) is string on && _npcEntityIds.TryGetValue(on, out uint oe) && oe != 0)
@@ -281,8 +303,14 @@ public partial class GameBridge
             q = await Wo197PairOpAsync(feid, oe, 0, "", "", ct);
             if (q is { Ok: true }) Console.WriteLine($"{head} opponent={on} (named by the clinch: the copy of the body his player clinched)");
         }
-        if (q is not { Ok: true, Payload.Length: >= 4 } qa) { Console.WriteLine($"{head} dispatch=skipped (his figure has no opponent body here)"); return; }
+        if (q is not { Ok: true, Payload.Length: >= 4 } qa)
+        {
+            if (w224) Interlocked.Increment(ref _w224ClinchNoBody);
+            Console.WriteLine($"{head} dispatch=skipped (his figure has no opponent body here)");
+            return;
+        }
         uint opp = BinaryPrimitives.ReadUInt32LittleEndian(qa.Payload);
+        if (w224) { await Wo224OnClinchAsync(head, gid, feid, opp, master, phase, re, catalog, ct); return; }   // WO-224 A: the engine's own clinch on the pair
         uint mEid = master ? feid : opp, sEid = master ? opp : feid;
         if (phase == Wo197Rules.ClinchEnter)
         {

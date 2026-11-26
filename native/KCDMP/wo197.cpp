@@ -4,6 +4,8 @@
 // WO-197: the animation-sync release's native half (wo197.h).
 #include "wo197.h"
 #include "wo208.h"
+#include "wo224.h"
+#include "wo224_rules.h"
 #include "wo197_rules.h"
 #include "wo163.h"
 #include "wo166.h"
@@ -107,8 +109,10 @@ constexpr char kSsgLabel[] = "wh::combatmodule::C_CombatActorClinch::StartSyncGu
 constexpr char kTerminateInternal[] = "?TerminateInternal@C_ActionDirector@framework@wh@@IEAAXH@Z";
 using EnsureFn = void*(__fastcall*)(void* ca);
 using SsgFn = bool(__fastcall*)(int32_t type, void* master, void* slave, void* r9, void* fifth);
+using TermFn = void(__fastcall*)(void* director, int scope);
 EnsureFn g_ensure = nullptr;
 SsgFn g_ssg = nullptr;
+TermFn g_term = nullptr;
 bool g_resolved = false;
 const char* g_why = "not resolved";
 
@@ -159,6 +163,17 @@ bool resolve() {
         return false;
     }
     g_ensure = reinterpret_cast<EnsureFn>(const_cast<uint8_t*>(found));
+    // WO-224 A: the import itself (Framework's C_ActionDirector::TerminateInternal(int scope), the call EnsureGuardAction makes on
+    // the combat actor's director before it installs a Guard) -- for a Guard that must be entered afresh (force_guard)
+    {
+        void* t = nullptr;
+        KCDMP_FAULT_READ(tsite, "wo197::terminate_import");
+        if (fault::guarded(tsite, [&] { t = *reinterpret_cast<void* const*>(slot); }) && t && GetModuleHandleA("Framework.dll")) {
+            MEMORY_BASIC_INFORMATION mbi{};
+            // the slot must point into Framework's image (bound at load; never a stub of ours)
+            if (VirtualQuery(t, &mbi, sizeof mbi) && mbi.AllocationBase == GetModuleHandleA("Framework.dll")) g_term = reinterpret_cast<TermFn>(t);
+        }
+    }
     g_why = "armed";
     char a[64], b[64];
     anchor::describe(found, a, sizeof a);
@@ -299,9 +314,26 @@ void poll_player() {
     // B3: the clinch
     if (!g_clinch.load()) return;
     const wo187::DirAction s1 = wo187::director_scope(ca, 1);
-    const Clinch now = clinch_of(s0.act ? s0.name : "", s1.act ? s1.name : "");
+    Clinch now = clinch_of(s0.act ? s0.name : "", s1.act ? s1.name : "");
+    // WO-224 A: a body whose guard type is still a sync type is in its clinch -- the hit half of a clinch move (SyncHit) and a sync
+    // attack run with no guard movement in scope 1, and the old poll said "leave" in the middle of the clinch (then "move" again)
+    // -- and a clinch that BEGINS inside a sync attack (the enemy's grabbing blow: the engine starts the clinch with the player in
+    // SyncHit, no guard movement yet) is a clinch from that frame on: the old poll first saw it at its first move, 1.2 s later,
+    // and never said "enter" (a12: the one host clinch of 21 the joiner's screen did not show).
+    if (now == Clinch::None && wo224::on(wo224::kBitClinch) && wo224::rules::sync_guard_type(wo224::read_clinch(0).guardType))
+        now = Clinch::Idle;
     const bool newMove = now == Clinch::Move && s0.act != g_lastSt;
-    const uint8_t ev = clinch_event(g_clinchWas, now, newMove);
+    uint8_t ev = clinch_event(g_clinchWas, now, newMove);
+    // WO-224 A: a clinch the mod ended and the engine started again in the same frame shows this poll no gap -- its start is told
+    if (wo224::take_local_start() && !ev && now == Clinch::Idle) ev = kClinchEnter;
+    // WO-224 A: a clinch held with no move is said again every 3 s -- the other machine ends a clinch nobody has spoken of for 6 s (its
+    // net under a lost end), and a quiet 10.6 s clinch of the host's was dropped there at 6.5 s (a14)
+    {
+        static ULONGLONG s_lastWord = 0;
+        const ULONGLONG tk = GetTickCount64();
+        if (ev) s_lastWord = tk;
+        else if (now == Clinch::Idle && wo224::on(wo224::kBitClinch) && tk - s_lastWord > 3000) { ev = kClinchEnter; s_lastWord = tk; }
+    }
     if (now == Clinch::Move) g_lastSt = s0.act;
     else if (now == Clinch::None) g_lastSt = nullptr;
     if (ev) {
@@ -436,6 +468,33 @@ int start_sync_guard(int32_t type, uint32_t master, uint32_t slave, char* why, s
     if (r) c_syncGuardOk.fetch_add(1);
     else if (why) std::snprintf(why, whyN, "refused by the engine (master scope 0 %s, slave scope 0 %s; a missing guard_sync_movement row or an unset guard stance is the engine's own kcd.log line)",
                                 md.empty() ? "?" : md.c_str(), sd.empty() ? "?" : sd.c_str());
+    return r ? 1 : 0;
+}
+
+// WO-224 A (main thread): the same entry on two combat actors the caller resolved this frame. Not under the fault guard (the call
+// builds actions on both bodies' directors; nothing that may hold an engine lock is unwound by us). 1 started, 0 refused, -1 not armed.
+int start_sync_guard_raw(int32_t type, void* masterCa, void* slaveCa) {
+    if (!masterCa || !slaveCa || !resolve() || !g_ssg) return -1;
+    c_syncGuards.fetch_add(1);
+    const bool r = g_ssg(type, masterCa, slaveCa, nullptr, nullptr);
+    if (r) c_syncGuardOk.fetch_add(1);
+    return r ? 1 : 0;
+}
+
+// WO-224 A (main thread): a Guard entered afresh on this combat actor -- the two calls EnsureGuardAction itself makes when the main
+// action is not a Guard (the director's TerminateInternal(0), then a new Guard through the actor's own factory), made also when a
+// Guard already runs there. A fresh Guard re-reads the model's guard type on entry: this is how a sync guard (a clinch) the engine
+// can no longer re-establish falls back to the plain guard, the engine's own way. The director is the one wo187 reads (checked by
+// class there). Not under the fault guard. 1 = a Guard runs, 0 = the engine refused, -1 = not armed / no director.
+int force_guard(void* ca) {
+    if (!ca || !resolve() || !g_ensure || !g_term) return -1;
+    if (!wo187::director_scope(ca, 0).ok) return -1;
+    void* dir = nullptr;
+    if (!rd(ca, 0x2E0, &dir) || !dir) return -1;
+    c_ensure.fetch_add(1);
+    g_term(dir, 0);
+    void* r = g_ensure(ca);
+    (r ? c_ensureOk : c_ensureRefused).fetch_add(1);
     return r ? 1 : 0;
 }
 

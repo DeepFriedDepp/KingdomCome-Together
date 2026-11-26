@@ -118,17 +118,14 @@ public static class Wo197Rules
     public static string ClinchPhaseName(byte flags) => (flags & ClinchPhaseMask) switch { ClinchEnter => "enter", ClinchMove => "move", ClinchLeave => "leave", _ => "?" };
 
     /// <summary>The clinch event's payload: the master row as the RowEvent's row, the slave row as its name (32 hex digits).</summary>
-    public static RowEvent ClinchEvent(uint ms, byte flags, Guid masterRow, Guid slaveRow, string? opponent = null) =>
-        new(ms, flags, masterRow, (slaveRow == Guid.Empty ? "" : slaveRow.ToString("N")) + (ClinchOpponentOk(opponent) ? "|" + opponent : ""));
+    /// <remarks>WO-224 A: <paramref name="hashed"/> = the body's name as its hash behind a '_' (Wo224Rules.ClinchName), which the
+    /// RowEvent's parser takes; the WO-202 form ("|name") it refuses -- kept as the twin's (w224_clinch off).</remarks>
+    public static RowEvent ClinchEvent(uint ms, byte flags, Guid masterRow, Guid slaveRow, string? opponent = null, bool hashed = false) =>
+        hashed ? new(ms, flags, masterRow, Wo224Rules.ClinchName(slaveRow, ClinchOpponentOk(opponent) ? opponent : null))
+               : new(ms, flags, masterRow, (slaveRow == Guid.Empty ? "" : slaveRow.ToString("N")) + (ClinchOpponentOk(opponent) ? "|" + opponent : ""));
 
-    /// <summary>The slave row: the name's first 32 characters (WO-202: a "|opponent" may follow).</summary>
-    public static Guid ClinchSlaveRow(RowEvent e)
-    {
-        string s = e.Name;
-        int bar = s.IndexOf('|');
-        if (bar >= 0) s = s[..bar];
-        return s.Length == 32 && Guid.TryParseExact(s, "N", out var g) ? g : Guid.Empty;
-    }
+    /// <summary>The slave row: the name's first 32 characters (WO-202: a "|opponent" may follow; WO-224: a "_hash").</summary>
+    public static Guid ClinchSlaveRow(RowEvent e) => Wo224Rules.ClinchSlaveRow(e.Name);
 
     /// <summary>WO-202 IV.3: the body the sender's player clinched (his engine's own opponent), or null.</summary>
     public static string? ClinchOpponent(RowEvent e)

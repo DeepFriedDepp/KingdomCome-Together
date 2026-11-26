@@ -51,6 +51,7 @@ public partial class GameBridge
         Wo221Tick(n);                                     // WO-221: the native word, the status
         Wo222Tick(n);                                     // WO-222: the native word, the status
         Wo223Tick(n);                                     // WO-223: the native word, the host's look at every figure, the joiner's stealth
+        Wo224Tick(n);                                     // WO-224: the native word, the status, a clinch nobody speaks of any more
     }
 
     private void Wo201OnEventMore(string name, string? arg)

@@ -1718,6 +1718,11 @@ public enum ActionKind : byte
     /// guard, 2 a clinch move, 3 leave), bit 2 = this player is the master, bit 3 = Row (the master's row) and the slave's row (the RowEvent's
     /// name: its 32 hex digits, "N" format) are the engine's own SyncTransition rows. Any player sends it; the relay forwards it as is.</summary>
     AvatarClinch = 20,
+    /// <summary>WO-224 A: the host's world put a joiner's figure into a clinch, or took it out of one -- payload <see cref="RowEvent"/>:
+    /// Flags as AvatarClinch's (phase enter / leave, bit 2 = the FIGURE is the master), no row, the name "&lt;ghost id&gt;_&lt;the other
+    /// body's name hash, 8 hex digits&gt;". The joiner it names starts or ends the same clinch in his own game, with the copy of that
+    /// body. Only the host sends it; the relay forwards it as is.</summary>
+    FigureClinch = 21,
 }
 
 /// <summary>WO-151 3.5: what an Emote action plays (APPEND-ONLY).</summary>

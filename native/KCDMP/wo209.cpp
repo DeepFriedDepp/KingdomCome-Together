@@ -23,6 +23,7 @@
 #include "wo210.h"
 #include "wo210_rules.h"
 #include "wo223.h"
+#include "wo224.h"
 #include <windows.h>
 #include <algorithm>
 #include <atomic>
@@ -535,6 +536,13 @@ bool row_attack(uint32_t copy, const char* spec) {
     return ai_attack_zone(copy, frag, row_zone(spec), "row");
 }
 
+// WO-224 A: a paired move of a copy in the engine's clinch with the local player, by the host's row (the same attack request, the
+// same gates; in a clinch the engine's attack factory builds the clinch move or the sync attack and starts his half itself)
+bool clinch_move(uint32_t copy, uint32_t hostFrag, int zone) {
+    if (!on(kBitAttackAi) || !resolve_ai_attack()) return false;
+    return ai_attack_zone(copy, hostFrag, zone, "clinch-row", true);
+}
+
 namespace {
 bool ai_attack_zone(uint32_t copy, uint32_t hostFrag, int zone, const char* via, bool retry) {
     if (wo195::dead_gate(copy, "ai-attack")) return false;
@@ -611,7 +619,11 @@ bool paired_engine(uint32_t copy, uint32_t frag) {
         return ok;
     }
     char why[256];
-    const int r = wo197::start_sync_guard(kClinchGuardType, copy, player_eid(), why, sizeof why);
+    // WO-224 A: the engine's action type for a new clinch, through the mod's own start (the gate lets it by); off = as before WO-224
+    // (a guard type where the engine wants an action type, behind the mod's own gate: refused every time)
+    int r = wo224::on(wo224::kBitClinch) ? wo224::start_clinch(copy, 0, "its host NPC started one", why, sizeof why)
+                                         : wo197::start_sync_guard(kClinchGuardType, copy, player_eid(), why, sizeof why);
+    if (r == 2) r = 1;   // in a clinch with him already
     (r == 1 ? c_pairStart : c_pairStartRefused).fetch_add(1);
     const uint32_t k = c_pairStart.load() + c_pairStartRefused.load();
     if (k <= 40 || k % 25 == 0)

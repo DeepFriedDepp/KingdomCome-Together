@@ -1905,6 +1905,17 @@ void push_local_action(uint8_t kind, uint8_t flags, const uint8_t guid[16], cons
     if (g_captured.size() < 256) g_captured.push_back(c); else c_capDropped.fetch_add(1);
 }
 
+// WO-224 A (main thread): an action of a body that is not the local player, found by a poll -- a partner's figure entering or leaving
+// a clinch in the host's world. The agent gets it as a LocalAction frame with the body's entity id and name.
+void push_body_action(uint8_t kind, uint8_t flags, uint32_t eid, const char* name, const uint8_t guid[16]) {
+    Captured c{};
+    c.kind = kind; c.flags = flags; c.ic = -1; c.zone = -1; c.type = -1; c.eid = eid;
+    if (name) std::snprintf(c.name, sizeof c.name, "%s", name);
+    if (guid) std::memcpy(c.guid, guid, 16);
+    std::lock_guard<std::mutex> lock(g_capMutex);
+    if (g_captured.size() < 256) g_captured.push_back(c); else c_capDropped.fetch_add(1);
+}
+
 int status_text_motion(char* out, int n);
 
 int status_text(char* out, int n) {

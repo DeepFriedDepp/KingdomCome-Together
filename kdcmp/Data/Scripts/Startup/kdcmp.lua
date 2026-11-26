@@ -24756,7 +24756,7 @@ function KCD2MP_W167StandInSpawned(name, e)
 end
 
 -- C2: the host's NPC holds `cls` (an item class; "?" = a weapon whose class is not known here; "-" = nothing in its hand).
-function KCD2MP_W167Weapon(name, cls, why)
+function KCD2MP_W167Weapon(name, cls, why, left)
     local W = KCD2MP.w167
     if not W.copyWeapons or W.faults.off["copy-weapons"] then return false end   -- a fault keeps it off for the session
     name, cls = tostring(name or ""), tostring(cls or "?")
@@ -24811,6 +24811,19 @@ function KCD2MP_W167Weapon(name, cls, why)
     local want = (cls ~= "?") and cls or st.cls
     if want and KCD2MP.w144.LIGHTS[want] and W190 and W190.on.copy_weapon_hold then want = nil end
     if st.drawn == true and (cls == "?" or st.cls == cls) then return true end   -- held already: never asserted again
+    -- WO-224 A: the host's NPC CHANGED its weapon in the fight (the game's own: a second weapon drawn). The copy still holds the
+    -- first one. The new one is drawn over it, at once (not animated: the host's NPC holds it already), and the old one STAYS in
+    -- the hand until the new one is there -- a weapon the copy did not own is created first and is in no hand for up to 3.6 s
+    -- (measured twice: its model loads), and a copy with its old weapon put away first fought those seconds bare-handed: no
+    -- clinch row, a 0.8 m reach. The copy's combat weapon class is the DLL's to keep right (wo224.cpp: the engine's own refresh
+    -- whenever its hands and its combat model differ); the check below puts the old weapon away once the new one is held.
+    local swapped, oldCls = false, nil
+    if W224 and KCD2MP_W224On("w224_clinch") and st.drawn == true and st.cls and want and want ~= "?" and st.cls ~= want then
+        swapped, oldCls = true, st.cls
+        W224.weaponSwaps = (W224.weaponSwaps or 0) + 1
+        mp_log(string.format("W224-WEAPON npc=%s the host's NPC changed its weapon %s -> %s: the new one is drawn over the old, which stays in the hand until it is there (why=%s, #%d)",
+            name, string.sub(st.cls, 1, 8), string.sub(want, 1, 8), tostring(why), W224.weaponSwaps))
+    end
     local item, owned = nil, "unknown"
     if want and want ~= "?" and want ~= "-" and e.inventory and type(e.inventory.FindItem) == "function" then
         pcall(function() item = e.inventory:FindItem(want) end)
@@ -24823,7 +24836,11 @@ function KCD2MP_W167Weapon(name, cls, why)
     end
     local how = "own"
     if item and e.human and type(e.human.DrawFromInventory) == "function" then
-        if KCD2MP.w167.try("c2-draw", "copy-weapons", function() e.human:DrawFromInventory(item, 0, true) end) then how = "this-class" end
+        -- WO-224 A: a weapon CHANGED in the fight is in the copy's hand at once (the draw's third argument is "animate"): the host's
+        -- NPC holds it already when its hand's word comes, and for the length of a holster and a draw (2-4 s, measured) the copy read
+        -- unarmed while the host's NPC fought armed -- every grab of that time was refused on the joiner's screen
+        local animate = not swapped
+        if KCD2MP.w167.try("c2-draw", "copy-weapons", function() e.human:DrawFromInventory(item, 0, animate) end) then how = swapped and "this-class-at-once" or "this-class" end
     end
     if how == "own" then mp_npc_draw(name, e) end
     st.drawn = true
@@ -24832,6 +24849,55 @@ function KCD2MP_W167Weapon(name, cls, why)
     C.stats.drawn = C.stats.drawn + 1
     mp_log(string.format("WO167-WEAPON npc=%s hand=%s owned=%s drawn=%s why=%s -- the host's NPC holds a weapon: this copy holds it too, once",
         name, (want and want ~= "?") and string.sub(want, 1, 8) or "?", owned, how, tostring(why)))
+    -- WO-224 A: the draw is checked, not believed. A copy that stood up from a meal or from work into the fight still had that thing
+    -- in its hand (the host's NPC had put it down): the weapon's draw "succeeded" and the copy's combat actor read bare hands -- its
+    -- reach 0.8 m, and no clinch row, so the host's grabs with that bandit did not show (a7: 36 starts refused, weapon class 12
+    -- against the host NPC's 5). 0.9 s after the draw: whatever is in the copy's hands that the host's NPC does not hold (its weapon,
+    -- its left hand's thing) goes back into the inventory (never dropped), and when the weapon is not in a hand it is drawn again and
+    -- looked at again, up to six times (a weapon the copy did not own is created first and is in no hand for up to 3.6 s).
+    if W224 and (KCD2MP_W224On("w224_clinch") or KCD2MP_W224On("w224_clinch_log")) and want and want ~= "?" and type(Script) == "table" and type(Script.SetTimer) == "function" then
+        local hostLeft = (left ~= nil and tostring(left) ~= "-" and tostring(left) ~= "") and tostring(left) or nil
+        local round = 0
+        local check
+        check = function()
+            round = round + 1
+            local e2, st2 = nil, KCD2MP.w167.combat.weap[name]
+            pcall(function() e2 = System.GetEntityByName(name) end)
+            if not (e2 and e2.human and st2 and st2.drawn == true and st2.cls == want) then return end
+            local h0, h1 = KCD2MP.w136.handClass(e2, 0), KCD2MP.w136.handClass(e2, 1)
+            local held = (h0 == want) or (h1 == want)
+            local put = 0
+            if KCD2MP_W224On("w224_clinch") and type(e2.human.HolsterToInventory) == "function" then
+                for h, c in pairs({ [0] = h0, [1] = h1 }) do
+                    -- (the weapon it held before a change stays until the new one is in a hand)
+                    if c and c ~= want and c ~= hostLeft and (held or c ~= oldCls) then
+                        pcall(function() e2.human:HolsterToInventory(h, false) end)
+                        put = put + 1
+                    end
+                end
+                if not held and e2.inventory and type(e2.inventory.FindItem) == "function" and type(e2.human.DrawFromInventory) == "function" then
+                    local it = nil
+                    pcall(function() it = e2.inventory:FindItem(want) end)
+                    if it then pcall(function() e2.human:DrawFromInventory(it, 0, false) end) end   -- at once: it should be held already
+                end
+            end
+            W224.weaponChecks = (W224.weaponChecks or 0) + 1
+            if (not held) or put > 0 then W224.weaponFixes = (W224.weaponFixes or 0) + 1 end
+            -- the engine's combat reads a body's weapon class from its combat model, not from its hands: the DLL asks the engine's own
+            -- refresh when the two differ (wo224.cpp, op 227)
+            if KCD2MP_W224On("w224_clinch") then KCD2MP_EmitEvent("w224_weapon", name) end
+            if W224.weaponChecks <= 40 or (not held) or put > 0 or round > 1 then
+                mp_log(string.format("W224-WEAPON npc=%s 0.9 s after the draw of %s (look %d): hand0=%s hand1=%s (the host's left hand: %s) -> %s (checks %d, fixed %d)", name,
+                    string.sub(want, 1, 8), round, h0 and string.sub(tostring(h0), 1, 8) or "-", h1 and string.sub(tostring(h1), 1, 8) or "-",
+                    hostLeft and string.sub(hostLeft, 1, 8) or "-",
+                    held and (put > 0 and (put .. " other thing(s) put away") or "held") or ("NOT in a hand: " .. put .. " thing(s) put away, drawn again"),
+                    W224.weaponChecks, W224.weaponFixes or 0))
+            end
+            -- not held, or something was put away: looked at again (a created weapon's model loads for up to 3.6 s)
+            if ((not held) or put > 0) and round < 6 and KCD2MP_W224On("w224_clinch") then Script.SetTimer(900, check) end
+        end
+        Script.SetTimer(900, check)
+    end
     if why == "hands214" then mp_log(string.format("WO214-DRAW npc=%s played how=%s hand=%s", name, how, (want and want ~= "?") and string.sub(want, 1, 8) or "?")) end
     return true
 end
@@ -37164,6 +37230,76 @@ do
         local fname = "KCD2MP_W223Set_" .. k
         _G[fname] = function(arg) return KCD2MP_W223Set(k, arg) end
         System.AddCCommand(label, fname .. "(%line)", "WO-223 " .. (W223.HELP[k] or k) .. " (default on): " .. label .. " on|off")
+    end
+end
+
+-- ===== WO-224: grabs and combos in step (docs/WO-224-findings.md) =====
+-- Every switch ships on. The agent tells this file the states (KCD2MP_W224Cfg, with the bench's twins applied); a console switch here goes
+-- to the agent, which tells the DLL and this file back. mp_w224_status lists them and the DLL's numbers (the clinch starts, the engine's
+-- clinch test per kind of pair and why the local player's failed).
+--   A  mp_w224_clinch      a grab between a player and an enemy plays on both bodies on both screens: the engine's own clinch between
+--                          the joiner and the copy of the enemy that grabbed him (or that he grabbed), and between a partner's figure
+--                          and the body he grabbed; it ends on both screens when it ends on either.
+--   B  mp_w224_chains      an enemy's chain of swings plays on its copy as a chain.
+--   D  mp_w224_death       the death handling without the step WO-221 suspected.
+--   A.0 mp_w224_clinch_log the clinch instrument (read-only).
+-- Log tags: W224-CFG, W224-TOGGLE, W224-STATUS; the DLL's W224-SSG (a clinch start), W224-CLINCH (the mod's own start and end).
+do
+    W224 = W224 or {}
+    W224.on = W224.on or {}
+    W224.NAMES = {
+        w224_clinch = "mp_w224_clinch", w224_chains = "mp_w224_chains", w224_death = "mp_w224_death", w224_clinch_log = "mp_w224_clinch_log",
+    }
+    W224.HELP = {
+        w224_clinch = "A: (both) a grab plays on both bodies on both screens and ends on both when it ends on either",
+        w224_chains = "B: (both) an enemy's chain of swings plays on its copy as a chain, so the joiner's own game judges every blow",
+        w224_death = "D: (joiner) a dying copy's actions end without the step WO-221 suspected of the crash after deaths",
+        w224_clinch_log = "A.0: (both) every clinch start and the engine's clinch test, counted in the log (read-only)",
+    }
+    function KCD2MP_W224On(name)
+        local v = W224.on[tostring(name)]
+        if v == nil then return true end
+        return v
+    end
+    function KCD2MP_W224Cfg(list)
+        local n = 0
+        for kv in string.gmatch(tostring(list or ""), "[^,]+") do
+            local k, v = string.match(kv, "^%s*([%w_]+)=(%a+)%s*$")
+            if k and W224.NAMES[k] then W224.on[k] = (v == "on"); n = n + 1 end
+        end
+        if n > 0 and not W224.told then
+            W224.told = true
+            local parts = {}
+            for k in pairs(W224.NAMES) do parts[#parts + 1] = k .. "=" .. (KCD2MP_W224On(k) and "on" or "off") end
+            table.sort(parts)
+            mp_log("W224-CFG " .. table.concat(parts, " "))
+        end
+        return true
+    end
+    function KCD2MP_W224Set(name, arg)
+        local label = W224.NAMES[tostring(name)]
+        if not label then mp_log("W224-TOGGLE unknown switch '" .. tostring(name) .. "'"); return false end
+        local v = KCD2MP_Wo122ParseBool(arg)
+        if v == "bad" then mp_log(label .. ": expected on|off, got '" .. tostring(arg) .. "'"); return false end
+        if v == nil then mp_log("W224-TOGGLE " .. label .. " is " .. (KCD2MP_W224On(name) and "on" or "off")); return true end
+        W224.on[tostring(name)] = v
+        mp_log("W224-TOGGLE " .. label .. " " .. (v and "on" or "off") .. " -- sent to the agent")
+        KCD2MP_EmitEvent("w224_cfg", tostring(name) .. "=" .. (v and "on" or "off"))
+        return true
+    end
+    function KCD2MP_W224Status()
+        local parts = {}
+        for k, label in pairs(W224.NAMES) do parts[#parts + 1] = label .. "=" .. (KCD2MP_W224On(k) and "on" or "off") end
+        table.sort(parts)
+        mp_log("W224-STATUS " .. table.concat(parts, " ") .. " (the DLL's numbers follow in the agent's log: MP-W224-NATIVE, MP-W224-STATS)")
+        KCD2MP_EmitEvent("w224_status", "")
+        return true
+    end
+    System.AddCCommand("mp_w224_status", "KCD2MP_W224Status()", "WO-224: every WO-224 switch and the DLL's numbers")
+    for k, label in pairs(W224.NAMES) do
+        local fname = "KCD2MP_W224Set_" .. k
+        _G[fname] = function(arg) return KCD2MP_W224Set(k, arg) end
+        System.AddCCommand(label, fname .. "(%line)", "WO-224 " .. (W224.HELP[k] or k) .. " (default on): " .. label .. " on|off")
     end
 end
 

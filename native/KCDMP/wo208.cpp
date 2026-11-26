@@ -21,6 +21,7 @@
 #include "wo221.h"
 #include "wo210.h"
 #include "wo223.h"
+#include "wo224.h"
 #include "wo210_kd.h"
 #include "wo210_rules.h"
 #include "wo213.h"
@@ -891,6 +892,8 @@ void own_apply(uint32_t eid, OwnCopy& oc, int cm, const HostScope hsc[2], const 
         // with the local player as the partner, once per host action (decide() holds every paired fragment otherwise)
         if (k == 0 && hs && fam == Fam::Hold && hs->cls == kClsCombatAnim && oc.aiHostAct != hs->act && !copyRuns && wo209::paired_wants(eid, hs->frag)) {
             oc.aiHostAct = hs->act;
+            // WO-224 A: the host's row for this very action already went through the engine (it comes a stream delay before this state)
+            if (wo224::clinch_row_recent(eid)) continue;
             if (o.act) own_retire(oc, o, now, "the host's paired action");
             wo209::paired_engine(eid, hs->frag);
             continue;

@@ -153,6 +153,8 @@ bool run_guarded(fault::Site& site, std::function<void()>* work) {
     return !fault::guarded(site, [&] { (*work)(); });
 }
 
+std::atomic<bool> g_inModSection{false};
+
 void hooked_update(void* self, float dt) {
     // Original first: queued work should observe the state the frame produced,
     // and if our work throws the game has still updated.
@@ -161,6 +163,8 @@ void hooked_update(void* self, float dt) {
     const double t1 = now_us();
 
     ++g_frames;
+    g_inModSection.store(true, std::memory_order_release);   // WO-224: the audit's mark (cleared at this function's end)
+    struct ModSection { ~ModSection() { g_inModSection.store(false, std::memory_order_release); } } modSection;
     g_lastDt.store(dt, std::memory_order_relaxed);   // WO-138: the frame meter
     if (g_main_thread_id == 0) g_main_thread_id = GetCurrentThreadId();
     // WO-202 I.1 (research only, KCDMP_TEST_CRASH): a deliberate main-thread fault outside every guard, so the crash capture is
@@ -362,6 +366,7 @@ bool run_sync(std::function<void()> work, unsigned timeout_ms, bool* faulted) {
 unsigned long long frame_count() { return g_frames.load(std::memory_order_relaxed); }
 float last_dt() { return g_lastDt.load(std::memory_order_relaxed); }
 unsigned long main_thread_id() { return static_cast<unsigned long>(g_main_thread_id); }
+bool in_mod_section() { return g_inModSection.load(std::memory_order_acquire); }
 
 void set_cost_meter(bool on) {
     const bool was = g_costOn.exchange(on);

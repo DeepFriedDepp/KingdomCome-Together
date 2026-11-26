@@ -189,7 +189,7 @@ public static class Wo207Rules
     /// <summary>B.2: the action kinds whose body starts with the sender's own ms (WO-121's combat moments, judged against
     /// Protocol.EventStaleMs): an attack, a jump, a block, a dodge, an NPC's attack row or hit, an avatar's hit, recoil or clinch.</summary>
     public static bool StampedActionKind(byte k) => (ActionKind)k is ActionKind.Attack or ActionKind.Jump or ActionKind.BlockImpulse or ActionKind.Dodge
-        or ActionKind.NpcAttack or ActionKind.NpcHit or ActionKind.AvatarHit or ActionKind.AvatarRecoil or ActionKind.AvatarClinch;
+        or ActionKind.NpcAttack or ActionKind.NpcHit or ActionKind.AvatarHit or ActionKind.AvatarRecoil or ActionKind.AvatarClinch or ActionKind.FigureClinch;
 
     /// <summary>B.2: how far a stamped combat action (an ActionDown payload: [sourceGhostId:1][kind:1][seq:2][phase:1][gen:4][len:1][body],
     /// the body starting with the sender's ms) is behind its sender's newest position stamp; null when it is not such an action or nothing
