@@ -22,6 +22,7 @@
 #include "wo210.h"
 #include "wo223.h"
 #include "wo224.h"
+#include "combat_actions.h"
 #include "wo210_kd.h"
 #include "wo210_rules.h"
 #include "wo213.h"
@@ -130,6 +131,7 @@ template <class T> bool rd(const void* base, size_t off, T* out) {
     return fault::guarded(site, [&] { std::memcpy(out, static_cast<const char*>(base) + off, sizeof(T)); });
 }
 bool wr_prio(void* act, int32_t v) {
+    if (!combatactions::still_ours(act, "the owner's priority write")) return false;   // WO-224 D
     KCDMP_FAULT_READ(site, "wo208::own_priority_write");   // our own action's priority (WO-202's step-down; Kind::Read covers both)
     return fault::guarded(site, [&] { *reinterpret_cast<int32_t*>(static_cast<char*>(act) + 0x24) = v; });
 }
@@ -690,7 +692,7 @@ bool w215_give_base(uint32_t eid, OwnCopy& oc, double now) {
         if (oc.baseAct && oc.baseFrag == b.frag) return true;
         void* ba = nullptr;
         if (rttr::install_fragment(eid, b.frag, b.tags, kBasePriority, b.flags, &ba) == rttr::SwingResult::Ok && ba) {
-            if (oc.baseAct) { rttr::stop_action(oc.baseAct); oc.retired.push_back({oc.baseAct, now}); }
+            if (oc.baseAct) { rttr::stop_ours(oc.baseAct, "the owner's stop of its base"); oc.retired.push_back({oc.baseAct, now}); }
             oc.baseAct = ba; oc.baseFrag = b.frag; oc.baseAt = now; oc.baseStarted = false;
             c_w215Bases.fetch_add(1, std::memory_order_relaxed);
             return true;
@@ -755,7 +757,7 @@ bool own_handover(uint32_t eid, OwnCopy& oc, double now, uint8_t path) {
                     void* ba = nullptr;
                     const rttr::SwingResult rb = rttr::install_fragment(eid, b.frag, b.tags, kBasePriority, b.flags, &ba);
                     if (rb == rttr::SwingResult::Ok && ba) {
-                        if (oc.baseAct) { rttr::stop_action(oc.baseAct); oc.retired.push_back({oc.baseAct, now}); }
+                        if (oc.baseAct) { rttr::stop_ours(oc.baseAct, "the owner's stop of its base"); oc.retired.push_back({oc.baseAct, now}); }
                         oc.baseAct = ba; oc.baseFrag = b.frag; oc.baseAt = now; oc.baseStarted = false;
                         given = true;
                     }
@@ -777,7 +779,7 @@ bool own_handover(uint32_t eid, OwnCopy& oc, double now, uint8_t path) {
         motion::combat_mode_of(eid, &cmNow);
         if (wo210::fix_on(wo210rules::kFixFightBaseOwn) && (fam == Fam::CombatMove || cmNow)) {
             if (oc.own[0].act) own_retire(oc, oc.own[0], now, "a fight's base is the copy's own");
-            if (oc.baseAct) { rttr::stop_action(oc.baseAct); oc.retired.push_back({oc.baseAct, now}); oc.baseAct = nullptr; oc.baseFrag = 0; }
+            if (oc.baseAct) { rttr::stop_ours(oc.baseAct, "the owner's stop of its base"); oc.retired.push_back({oc.baseAct, now}); oc.baseAct = nullptr; oc.baseFrag = 0; }
             wo210::note_handover(path, true, false);
             return true;
         }
@@ -798,7 +800,7 @@ bool own_handover(uint32_t eid, OwnCopy& oc, double now, uint8_t path) {
             void* act = nullptr;
             const rttr::SwingResult r = rttr::install_fragment(eid, b.frag, b.tags, kBasePriority, b.flags, &act);
             if (r == rttr::SwingResult::Ok && act) {
-                if (oc.baseAct) { rttr::stop_action(oc.baseAct); oc.retired.push_back({oc.baseAct, now}); }
+                if (oc.baseAct) { rttr::stop_ours(oc.baseAct, "the owner's stop of its base"); oc.retired.push_back({oc.baseAct, now}); }
                 oc.baseAct = act; oc.baseFrag = b.frag; oc.baseAt = now; oc.baseStarted = false;
                 installed = true;
             }
@@ -820,7 +822,7 @@ void own_retire(OwnCopy& oc, Probe::Scope& s, double now, const char* why) {
     // rules 2 and 3: an action of ours still pending is removed (the game's own stop: never installed later); a running one steps down,
     // so the copy's own base action installs at once (WO-202's withdraw, as the engine's own)
     uint32_t st = 0;
-    if (rd(s.act, 0x28, &st) && st < 2 && rttr::stop_action(s.act)) c_oStops.fetch_add(1);
+    if (rd(s.act, 0x28, &st) && st < 2 && rttr::stop_ours(s.act, "the owner's stop of its own action")) c_oStops.fetch_add(1);
     else wr_prio(s.act, kWithdrawnPriority);
     oc.retired.push_back({s.act, now});
     const uint32_t k = c_oWithdraws.fetch_add(1) + 1;
@@ -1001,7 +1003,7 @@ void own_apply(uint32_t eid, OwnCopy& oc, int cm, const HostScope hsc[2], const 
         const bool otherHolds = cur && !is_ours(oc, cur);
         const bool legacy = !wo210::on(wo210rules::kBitStateAlways) && !empty && cn > 0 && cs[0].act != oc.baseAct;
         if (!readable || st >= 4 || legacy || (otherHolds && (oc.baseStarted || now - oc.baseAt > 1.0))) {   // finished, or the copy's own base is back: ours goes
-            if (st < 4) rttr::stop_action(oc.baseAct);
+            if (st < 4) rttr::stop_ours(oc.baseAct, "the owner's stop of its base");
             oc.retired.push_back({oc.baseAct, now});
             oc.baseAct = nullptr;
         }
@@ -1289,12 +1291,12 @@ void own_release(uint32_t eid, OwnCopy& oc, double now, const char* why, uint8_t
         if (alive) {
             uint32_t st = 0;
             if (deadBody) { /* only the reference */ }
-            else if (hand && rd(s.act, 0x28, &st) && st < 2) rttr::stop_action(s.act); else wr_prio(s.act, kWithdrawnPriority);
+            else if (hand && rd(s.act, 0x28, &st) && st < 2) rttr::stop_ours(s.act, "the owner's stop of its own action"); else wr_prio(s.act, kWithdrawnPriority);
             rttr::release_action(s.act);
         }
         s = Probe::Scope{};
     }
-    if (oc.baseAct) { if (alive) { if (!hand && !deadBody) rttr::stop_action(oc.baseAct); rttr::release_action(oc.baseAct); } oc.baseAct = nullptr; }
+    if (oc.baseAct) { if (alive) { if (!hand && !deadBody) rttr::stop_ours(oc.baseAct, "the owner's stop of its base"); rttr::release_action(oc.baseAct); } oc.baseAct = nullptr; }
     for (auto& r : oc.retired) if (alive) rttr::release_action(r.act);
     oc.retired.clear();
     if (oc.held && alive) motion::set_npc_guard_hold(eid, false, nullptr, npcdrive::now_s());
@@ -1586,7 +1588,7 @@ uint8_t overflow_reseat(uint32_t eid, const char* name, double everyS) {
     if (now - oc.overflowAt < everyS) return 3;
     oc.overflowAt = now;
     for (auto& sc : oc.own) if (sc.act) own_retire(oc, sc, now, "the engine's queue is over-full");
-    if (oc.baseAct) { rttr::stop_action(oc.baseAct); oc.retired.push_back({oc.baseAct, now}); oc.baseAct = nullptr; oc.baseFrag = 0; }
+    if (oc.baseAct) { rttr::stop_ours(oc.baseAct, "the owner's stop of its base"); oc.retired.push_back({oc.baseAct, now}); oc.baseAct = nullptr; oc.baseFrag = 0; }
     const wo187::QueueInfo qi = wo187::queue_info(eid);
     const bool ok = own_handover(eid, oc, now, wo210rules::kPathOverflow);
     wo211::note_overflow_reseat(true, ok);

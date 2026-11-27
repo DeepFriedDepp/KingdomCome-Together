@@ -21,6 +21,7 @@ public partial class GameBridge
     private readonly ConcurrentDictionary<string, bool> _w224On = new(StringComparer.Ordinal);
     private bool W224On(string name) => _w224On.TryGetValue(name, out bool v) ? v : !W224Switch.TwinOff(name);
     private int _w224Pushing;
+    private long _w224EngineRagdolls, _w224RawRagdolls, _w224LeftForSweep;   // D: dead copies down without the script's ragdoll / thrown by it 2.5 s after the death (the switch off) / left standing for the sweep
     private long _w224ClinchIn, _w224ClinchNoBody, _w224Starts, _w224Started, _w224Already, _w224Refused, _w224Moves, _w224MovesPlayed, _w224Leaves, _w224Ended,
         _w224NamedByHash, _w224EndedSilent, _w224CouldNotEnterIn;
     /// <summary>The partner figures in a clinch here, by figure entity: the body it clinched, when its player's machine last said so.</summary>
@@ -65,6 +66,7 @@ public partial class GameBridge
 
     private string Wo224StatsLine() =>
         $"MP-W224-STATS {string.Join(' ', W224Switch.Names.Select(n => $"{n}={(W224On(n) ? "on" : "off")}"))} build=\"{(W224On(W224Switch.Official) ? ReleaseVersionInfo.Official.Text : OfficialBuild.UnofficialText)}\"" +
+        $" dead_down_without_script_ragdoll={Interlocked.Read(ref _w224EngineRagdolls)} script_ragdoll_at_2500ms={Interlocked.Read(ref _w224RawRagdolls)} left_for_the_sweep={Interlocked.Read(ref _w224LeftForSweep)}" +
         $" clinch_in={Interlocked.Read(ref _w224ClinchIn)} no_body={Interlocked.Read(ref _w224ClinchNoBody)} named_by_hash={Interlocked.Read(ref _w224NamedByHash)}" +
         $" starts={Interlocked.Read(ref _w224Starts)} started={Interlocked.Read(ref _w224Started)} already={Interlocked.Read(ref _w224Already)} refused={Interlocked.Read(ref _w224Refused)}" +
         $" moves={Interlocked.Read(ref _w224Moves)} moves_played={Interlocked.Read(ref _w224MovesPlayed)} leaves={Interlocked.Read(ref _w224Leaves)}" +

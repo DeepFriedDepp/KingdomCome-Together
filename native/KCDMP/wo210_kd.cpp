@@ -5,7 +5,9 @@
 #include "wo210_kd.h"
 #include "wo217.h"
 #include "wo210.h"
+#include "wo187.h"
 #include "wo210_rules.h"
+#include "wo224.h"
 #include "wo206_rules.h"
 #include "wo203.h"
 #include "wo163.h"
@@ -20,6 +22,7 @@
 #include "npc_scan.h"
 #include "rttr_abi.h"
 #include <windows.h>
+#include <cmath>
 #include <atomic>
 #include <cstdio>
 #include <cstring>
@@ -323,6 +326,10 @@ constexpr uint8_t kOpFinish = 142;
 constexpr uint8_t kFinDone = 0, kFinAlready = 1, kFinAlive = 2, kFinNotArmed = 3, kFinNoBody = 4, kFinFaulted = 5;
 KCDMP_FAULT_CALL(g_siteFinish, "wo210kd::finish");
 std::atomic<uint32_t> c_fin[6]{};
+std::atomic<uint32_t> c_w224Stood{0}, c_w224Asked{0};   // WO-224 D: dead-state bodies found no ragdoll at the finish; of those asked to fall
+std::atomic<uint32_t> c_w224Stands{0};                   // ... and found so again while their one request stood (not asked twice)
+std::unordered_map<uint32_t, double> g_w224AskedAt;      // main thread: when each body's ragdoll manager was asked
+constexpr double kW224AskOnceS = 60.0;
 
 const char* fin_name(uint8_t r) {
     static const char* const k[] = {"finished", "already-dead-state", "alive", "not-armed", "no-body", "faulted"};
@@ -350,7 +357,37 @@ uint8_t finish(uint32_t eid, uint8_t* deadStateAfter, bool* ragdolled) {
         if (reinterpret_cast<BS>(mvt[A.isStateSlot / 8])(model, A.deadState)) { res = kFinAlready; *deadStateAfter = 1; return; }
         res = kFinDone;
     });
-    if (!ok1 || res != kFinDone) return ok1 ? res : kFinFaulted;
+    if (!ok1) return kFinFaulted;
+    // WO-224 D (mp_w224_death): a body whose dead state is set already but which is no ragdoll -- the mod's ApplyDeath sets the state
+    // with no death reaction, and the copy stands frozen -- is asked to fall the engine's own way, through its ragdoll manager: the
+    // call the game's own hit-death handler makes (below, for a body this finish kills). Until now such a body was left to the
+    // script's physics ragdoll 2.5 s later; the joiner's game closed 0.2 to 0.7 s after one of those about once in 85.
+    if (res == kFinAlready) {
+        if (wo224::on(wo224::kBitDeath)) {
+            if (void* rm = manager_of(eid)) {
+                if (!is_ragdoll(rm)) {
+                    c_w224Stood.fetch_add(1);
+                    // asked once: the manager takes the request and the engine runs it when it runs the body (at once near the
+                    // player; a body still held by what it was doing, or far off, later). A second request on a body whose first
+                    // one stands was followed by an access violation 0.1 s later (run gon-2): never twice within a minute.
+                    const double now = npcdrive::now_s();
+                    auto it = g_w224AskedAt.find(eid);
+                    if (it != g_w224AskedAt.end() && now - it->second < kW224AskOnceS) {
+                        c_w224Stands.fetch_add(1);
+                    } else {
+                        if (g_w224AskedAt.size() > 512) g_w224AskedAt.clear();
+                        g_w224AskedAt[eid] = now;
+                        if (fault::guarded(g_siteFall, [&] { using F = void (*)(void*, int); reinterpret_cast<F>(A.requestRagdoll)(rm, 0); })) {
+                            *ragdolled = true;
+                            c_w224Asked.fetch_add(1);
+                        }
+                    }
+                }
+            }
+        }
+        return res;
+    }
+    if (res != kFinDone) return res;
     if (void* rm = manager_of(eid)) {
         if (!is_ragdoll(rm) && fault::guarded(g_siteFall, [&] { using F = void (*)(void*, int); reinterpret_cast<F>(A.requestRagdoll)(rm, 0); })) *ragdolled = true;
     }
@@ -381,8 +418,9 @@ uint8_t op_finish(uint8_t, const uint8_t* body, size_t len, uint8_t* out, size_t
     uint8_t dead = 0; bool rag = false;
     const uint8_t r = eid ? finish(eid, &dead, &rag) : kFinNoBody;
     const uint32_t k = c_fin[r < 6 ? r : 5].fetch_add(1) + 1;
-    if (r != kFinAlready || k <= 50)
-        logf("WO210-DEATH finish npc=%s result=%s dead_state=%u ragdoll=%s [n=%u]", nl ? name : "?", fin_name(r), dead, rag ? "requested" : "lying-already-or-none", k);
+    if (r != kFinAlready || k <= 50 || rag)
+        logf("WO210-DEATH finish npc=%s result=%s dead_state=%u ragdoll=%s [n=%u]%s", nl ? name : "?", fin_name(r), dead, rag ? "requested" : "lying-already-or-none", k,
+             r == kFinAlready && rag ? " -- W224: it stood dead; its own ragdoll manager is asked" : "");
     out[0] = r; out[1] = dead;
     *outLen = 2;
     return wo163::kROk;

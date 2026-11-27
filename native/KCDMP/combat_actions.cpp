@@ -5,6 +5,7 @@
 #include "combat_actions.h"
 #include "combat_swing.h"
 #include "wo221.h"
+#include "wo224.h"
 #include "wo203.h"
 #include "anchors.h"
 #include "engine.h"
@@ -57,6 +58,7 @@ DWORD g_mainTid = 0;
 double now_s() { LARGE_INTEGER q, f; QueryPerformanceCounter(&q); QueryPerformanceFrequency(&f); return double(q.QuadPart) / double(f.QuadPart); }
 
 void quiet_slot(void*) {}   // what the three callbacks become: nothing is read, nothing is called
+std::atomic<uint32_t> c_oursChecks{0}, c_stale{0};
 
 bool rd_u32(const void* p, size_t off, uint32_t* out) {
     KCDMP_FAULT_READ(site, "combat_actions::rd_u32");
@@ -72,6 +74,7 @@ bool add_ref(void* action) {
 }
 // the controller's own way of giving a reference back (CryAction: lock xadd [+0x58], -1; at zero the action's slot 23)
 bool drop_ref(void* action) {
+    if (!still_ours(action, "the table's forget")) return false;   // WO-224 D
     KCDMP_FAULT_READ(site, "combat_actions::drop_ref");
     LONG left = 1;
     void** vt = nullptr;
@@ -102,7 +105,7 @@ void end_entry(Entry& e, int* stopped, int* quieted) {
     e.ended = true;
     e.endedAt = now_s();
     uint32_t st = 0;
-    if (rd_u32(e.action, kActStatus, &st) && st >= 1 && st <= 3 && rttr::stop_action(e.action)) { ++*stopped; c_stopped.fetch_add(1); }
+    if (rd_u32(e.action, kActStatus, &st) && st >= 1 && st <= 3 && rttr::stop_ours(e.action, "the table's stop")) { ++*stopped; c_stopped.fetch_add(1); }
     if (g_armed.load() && set_vft(e.action)) { ++*quieted; c_quieted.fetch_add(1); }
     c_ended.fetch_add(1);
 }
@@ -250,9 +253,11 @@ void tick() {
 int status(char* out, int n) {
     size_t live = 0;
     { std::lock_guard<std::mutex> lock(g_mu); live = g_tracked.size(); }
-    return std::snprintf(out, static_cast<size_t>(n), "armed=%d on=%d recorded=%u live=%zu forgotten=%u (ref_kept=%u) release_calls=%u with_part=%u (off_main=%u) ended=%u stopped=%u quiet=%u explicit=%u",
+    return std::snprintf(out, static_cast<size_t>(n), "armed=%d on=%d recorded=%u live=%zu forgotten=%u (ref_kept=%u) release_calls=%u with_part=%u (off_main=%u) ended=%u stopped=%u quiet=%u explicit=%u"
+                         " | w224_death=%d still_ours_asked=%u NOT_ours=%u",
                          g_armed.load() ? 1 : 0, wo221::on(wo221::kBitCombatActionEnd) ? 1 : 0, c_tracked.load(), live, c_forgotten.load(), c_orphans.load(), c_hook.load(),
-                         c_withPart.load(), c_offMain.load(), c_ended.load(), c_stopped.load(), c_quieted.load(), c_explicit.load());
+                         c_withPart.load(), c_offMain.load(), c_ended.load(), c_stopped.load(), c_quieted.load(), c_explicit.load(),
+                         wo224::on(wo224::kBitDeath) ? 1 : 0, c_oursChecks.load(), c_stale.load());
 }
 
 const bool kReg = wo203::reg_install("combat_actions", &install) && wo203::reg_tick("combat_actions", &tick) && wo221::add_status("combat_actions", &status);
@@ -260,6 +265,30 @@ const bool kReg = wo203::reg_install("combat_actions", &install) && wo203::reg_t
 } // namespace
 
 bool armed() { return g_armed.load(); }
+
+bool still_ours(const void* action, const char* who) {
+    if (!action) return false;
+    if (!g_armed.load() || !wo224::on(wo224::kBitDeath)) return true;
+    const void* vt = nullptr;
+    KCDMP_FAULT_READ(site, "combat_actions::still_ours");
+    const bool read = fault::guarded(site, [&] { vt = *reinterpret_cast<void* const*>(action); });
+    c_oursChecks.fetch_add(1, std::memory_order_relaxed);
+    if (read && (vt == static_cast<const void*>(g_actionVft) || vt == static_cast<const void*>(&g_quiet[1]))) return true;
+    const uint32_t k = c_stale.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (k <= 80 || k % 100 == 0) {
+        char d[128] = "unreadable";
+        if (read) {
+            std::snprintf(d, sizeof d, "%p", vt);
+            // a vftable of another class names it (module+offset); a heap value is a freed block's link
+            HMODULE m = nullptr;
+            if (vt && GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, static_cast<LPCSTR>(vt), &m) && m)
+                anchor::describe(vt, d, sizeof d);
+        }
+        logf("W224-STALE who=%s action=%p: the block is no longer an action of ours (its first word: %s) -- not touched%s [n=%u]", who ? who : "?", action, d,
+             GetCurrentThreadId() == g_mainTid ? "" : " (not the main thread)", k);
+    }
+    return false;
+}
 
 void track(uint32_t eid, void* actor, void* action) {
     if (!action || !wo221::on(wo221::kBitCombatActionEnd)) return;

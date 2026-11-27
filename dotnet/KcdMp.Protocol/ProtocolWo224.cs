@@ -47,7 +47,7 @@ public static class W224Switch
     public const string EnvVar = "KCDMP_TEST_W224_OFF";
 
     /// <summary>The native word's bits (wo224.h), in order: w224_clinch (A: a grab plays on both bodies on both screens), w224_chains
-    /// (B: an enemy's chain of swings plays on its copy as a chain), w224_death (D: the death handling without the suspect step),
+    /// (B: an enemy's chain of swings plays on its copy as a chain), w224_death (D: an action the mod queued is stopped or given back only while its block is still that action),
     /// w224_clinch_log (A.0: the clinch instrument, read-only).</summary>
     public static readonly string[] NativeNames = ["w224_clinch", "w224_chains", "w224_death", "w224_clinch_log"];
 

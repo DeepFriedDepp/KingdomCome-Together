@@ -228,8 +228,20 @@ public partial class GameBridge
                     Interlocked.Increment(ref _w221RagdollWaits);
                     if (!upright) { Interlocked.Increment(ref _w221RagdollSpared); how214 = "lay-down-by-itself"; }
                 }
-                if (upright)
+                // WO-224 D (mp_w224_death): the finish above has asked the body's own ragdoll manager (once: the DLL does not ask a body
+                // twice). A body still upright here is one the engine has not run yet -- still held by what it was doing, or far from this
+                // player -- and NOTHING is thrown at it now: every close of the joiner's game in the staged massacre came within two
+                // seconds of this step (the script's physics ragdoll 2.5 s after the death, or a second request). The dead-lay sweep
+                // lays it down from six seconds after the death on (Wo222: the script's ragdoll there was never followed by a fault).
+                if (!upright && how214 == "engine") Interlocked.Increment(ref _w224EngineRagdolls);
+                if (upright && W224On("w224_death"))
                 {
+                    Interlocked.Increment(ref _w224LeftForSweep);
+                    how214 = "left-for-the-sweep";
+                }
+                else if (upright)
+                {
+                    Interlocked.Increment(ref _w224RawRagdolls);
                     if (how214 != "finished+ragdolled") how214 = "ragdolled";
                     await ExecLuaAsync($"if KCD2MP_W195Ragdoll then KCD2MP_W195Ragdoll(\"{EscapeLua(npc)}\") end");
                     await Task.Delay(Wo195Rules.RagdollSettleMs);
@@ -245,8 +257,8 @@ public partial class GameBridge
                 }
                 bool down = x.Payload[1] != 1 && x.Payload[3] == 0 && x.Payload[2] == 0;
                 Interlocked.Increment(ref down ? ref _w195FallDown : ref _w195FallStanding);
-                if (upright) Interlocked.Increment(ref _w195Ragdolled);
-                Console.WriteLine($"WO195-FALL npc={npc} after_ms={Environment.TickCount64 - releasedMs} dead={(x.Payload[0] == 1 ? "yes" : "no")} combat_mode={Wo195Rules.Tri(x.Payload[1], "on", "off")} living={Wo195Rules.Tri(x.Payload[2], "yes", "no(ragdoll)")} fight_held={(x.Payload[3] == 1 ? "YES" : "no")} ragdolled={(upright ? "yes (it stood upright)" : "no (not needed)")}");
+                if (upright && how214 != "left-for-the-sweep") Interlocked.Increment(ref _w195Ragdolled);
+                Console.WriteLine($"WO195-FALL npc={npc} after_ms={Environment.TickCount64 - releasedMs} dead={(x.Payload[0] == 1 ? "yes" : "no")} combat_mode={Wo195Rules.Tri(x.Payload[1], "on", "off")} living={Wo195Rules.Tri(x.Payload[2], "yes", "no(ragdoll)")} fight_held={(x.Payload[3] == 1 ? "YES" : "no")} ragdolled={(upright ? (how214 == "left-for-the-sweep" ? "later (it stood upright: left for the sweep)" : "yes (it stood upright)") : "no (not needed)")}");
             }
             else Console.WriteLine($"WO195-FALL npc={npc} no answer (the body is gone, or an older DLL)");
             await Task.Delay(Wo195Rules.PlayerCheckMs - Wo195Rules.FallCheckMs);

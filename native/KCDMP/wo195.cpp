@@ -16,6 +16,10 @@
 #include "wo172.h"
 #include "wo187.h"
 
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
 #include <atomic>
 #include <cstdio>
 #include <cstring>
@@ -122,7 +126,15 @@ uint8_t handle(uint8_t op, const uint8_t* body, size_t len, uint8_t* out, size_t
             c_asked.fetch_add(1);
             // WO-221 A: the body's recorded combat actions end before its death (the death takes its combat part apart without the
             // release call the mechanism hooks)
-            combatactions::end_for_entity(eid, "its death is applied next");
+            // (WO-224 D, the bench only: KCDMP_TEST_W224_NOEND=1 leaves this step out -- the test of what it protects from)
+            static int s_noEnd = -1;
+            if (s_noEnd < 0) {
+                char v[8] = {};
+                const DWORD n = GetEnvironmentVariableA("KCDMP_TEST_W224_NOEND", v, sizeof v);
+                s_noEnd = (n > 0 && n < sizeof v && v[0] == '1') ? 1 : 0;
+                if (s_noEnd) logf("W224-DEATH the bench's switch: a dying body's recorded combat actions are NOT ended before its death (KCDMP_TEST_W224_NOEND=1)");
+            }
+            if (!s_noEnd) combatactions::end_for_entity(eid, "its death is applied next");
             out[0] = on() ? release(eid, "the agent: a death applied") : 0;
             read_body(eid, &out[1], &out[2]);
             *outLen = 3;

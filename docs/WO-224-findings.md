@@ -20,6 +20,7 @@ Session start 2026-11-25 23:58 (hour 0).
 | B — combos | 16–28 | 26th 08:30 | 26th 14:10 (the confirmation round ran on to the afternoon) | six builds; the defence scene 0 guesses in 45 blows and its own verdict passes, the swap scene 1 in 80; the copy plays the host NPC's own row in 78 to 93 % of swings (22 % before); committed |
 | C — the official-build stamp | 28–31 | 26th 14:10 (prepared beside A and B while the bench ran) | 26th 14:35 | the stamp, the check, the four places that say it, `AGENTS.md`; proof on a release-shaped payload: unsigned unofficial, signed official, one file swapped unofficial; committed |
 | E — a contributor's pull request | 31–34 | – | – | skipped: no rebased pull request with only the compatible fixes existed at the session's start |
+| D — the crash after deaths | 34–38 | 26th 14:28 | 26th 23:55 (its four hours ran to six and a half of work; the maintainer paused the session from 20:43 to 23:45) | the suspect refuted (it is a protection); every fault follows the mod's own step 2.5 s after a death; five builds; what ships does nothing there: 2 runs, 80 deaths, no fault, against 2 closes in 5 runs — not proven; committed |
 
 ## 1. Conduct
 
@@ -30,6 +31,13 @@ Session start 2026-11-25 23:58 (hour 0).
   second, reads the game's tables) was started from the build folder of the run then on the bench. It wrote a settings file and a
   log into that build folder — not into the copies the run used — and both were removed once the bench was free. No compile, no
   rebuild; said here because it touched a build folder mid-run.
+- **The maintainer paused the session (26th 20:43 to 23:45).** A bench round of Part D was running; its next three sessions did not
+  come up or lost both games during a join (no crash report), and the round ended on its stop file. Those three are not counted
+  anywhere. Nothing was built, run or committed during the pause.
+- **Part D ran over its box.** Four hours were planned; it took about six and a half of work, taken from the hours Parts A to C
+  had left over (they ended fourteen hours ahead of the plan), not from hours 38 to 48.
+- **Disk.** The bench's run folders (logs and the animation probes' files of every run) stood at 32 GB on the system drive when
+  the finals began. They are scratch, outside the repository; the final reply says where they are.
 
 ## 2. Part A — clinches (`mp_w224_clinch`)
 
@@ -417,3 +425,113 @@ commands and the payload's own agent started for its first lines (an offline, re
 **Skipped, as the work order says.** At the session's start the contributor's pull request was not rebased on the current `main`
 and still carried the changes this project does not take beside the compatible fixes. Nothing of it was reviewed, built or
 merged in this work order. [checked at the start: the pull request's base and its changed files]
+
+## 6. Part D — the crash after deaths (`mp_w224_death`)
+
+**The test:** WO-221's staged massacre on the pair — the host's world says an NPC near the joiner died, every seven seconds;
+the mod's own swing is queued on the dying copy three seconds before; the joiner is sent 300 m away and back after every ten —
+40 deaths a run, each run its own session. A **fault** is the joiner's game closing, or an access violation it survived (it
+hangs for seconds and goes on; twice here). Every crash report is kept with its run. [bench]
+
+### 6.1 The suspect, tested directly
+
+WO-221 named its own third approach — before a death the mod applies, every combat action the mod queued on that body is
+stopped the game's way and made quiet — as the leading suspect: a stop and a vftable write "on a block the engine may already
+have freed".
+
+| the massacre | runs | faults |
+|---|---:|---|
+| that step **left out** | 2 | **2**: the game closed after 4 deaths and after 1 (33 s and 24 s into the deaths) |
+| that step in, as 0.65.2 | 5 | **2: the game closed five deaths in, both times** |
+
+- **The step is a protection, not the cause.** Without it the joiner's game closes within half a minute: a swing of the mod's
+  left on a dying body runs into the combat part the death takes apart — the fault WO-221 built the step against.
+- **It does not touch freed blocks.** A check was built for exactly that suspicion: before the mod stops, lowers or gives back
+  any action it queued itself, it asks whether the block still carries that action's own vftable (the engine's, or the mod's
+  quiet copy); if not, the block is left alone and a line is logged. Asked more than 16,000 times over 14 runs:
+  **not once was a block not the mod's action**, and with the check on the game faulted as it does without it. The suspect is
+  refuted. (A first form of the check sat in the mod's general stop and refused 92 stops of copies' own movement and looking
+  actions in one run — other classes, rightly stopped. That run is not counted; the check now asks only about actions the mod
+  queued itself.)
+
+### 6.2 What the faults have in common
+
+**Every fault read — eight: six closes and two access violations the game survived, with that step in and out, on five
+builds — came 2.6 to 6 seconds after a death was applied to a copy, 0.1 to 1.5 seconds after the mod's own "2.5 seconds later"
+step did something to that body.** What the step
+did differed from build to build, and the fault came all the same:
+
+| build | 0.6 s after the death | 2.5 s after the death | runs | faults |
+|---|---|---|---:|---|
+| 0.65.2's way | – | the script's raw physics ragdoll (`RagDollize`) on a body that still stands — 38 of 40 bodies | 5 | 2: the game closed five deaths in, both times |
+| a second | the game's own ragdoll request | the request again, then the script's ragdoll | 6 | 1 (survived), 0.1 s after the script's ragdoll |
+| a third | the request | the request again; the script's ragdoll only far from the player | 2 | 1 (survived), 0.1 s after the second request — no script ragdoll near it |
+| a fourth | the request, once | the script's ragdoll only far from the player | 2 | 1 (closed), 0.5 s after the script's ragdoll on a far body |
+| **what ships** | the request, once | **nothing** | 2 | **0** |
+
+Against that: the script's ragdoll thrown **five seconds or more** after a death — by the dead-lay sweep (5, 7 and 9 s) and the
+corpse-lay sweep (every 3 s on a body standing within 40 m) — some 250 times in these runs, was never followed by a fault.
+
+The crash sites differ from fault to fault — the action controller's update on an animation worker (a null read; a call
+through a freed object), a vector of actions being released, the movement transitions controller of a *living* walking copy
+releasing a transition action freed under it, the heap on a render thread — what WO-221 met as "one face each time". All are
+one thing: something a body's action controller still pointed at had been freed. **Who frees it was not found.** The first
+reading — "it only happens to a seated copy whose ragdoll does not take" (4 closes of 12 such bodies, 0 of 130 others, on
+0.65.2's way) — did not survive the next builds: a standing guard and a far villager whose ragdoll took were hit as well.
+
+Two things learned on the way: [binary] [bench]
+
+- **Why the raw ragdoll ran at nearly every death.** The mod applies a copy's death by setting its dead state, with no death
+  reaction; the copy stands frozen. The mod then finishes the body "the engine's way", and that routine returned as soon as it
+  found the dead state already set — *before* its own ragdoll request. So 38 dead copies of 40 stood for 2.5 s and were thrown
+  down by WO-195's fallback.
+- **What the game's own request does.** Asked of the body's ragdoll manager (the request the game's hit-death handler makes),
+  it lays a dead copy down at once within about 115 m of the player (17 of 19 bodies in one run: on the ground 1.0 s after the
+  death). From about 125 m on it is accepted and left pending — the engine does not run it there — and so it is for a near
+  body still held by what it was doing (a seat, a kneel). A second request on such a body is answered "no".
+
+### 6.3 What ships
+
+`mp_w224_death` (on):
+
+- **A dead copy is asked to fall the game's own way, once**, 0.6 s after its death (the finish now makes the request it used to
+  return before). Most copies near the player lie one second after the death instead of three.
+- **Nothing is thrown at a dead copy for the first six seconds.** The script's raw ragdoll at 2.5 s is gone, and no second
+  request is made. A body that still stands is laid down by the dead-lay sweep from six seconds on (it was four), by the
+  corpse-lay sweep from nine (it was four) — with the script's ragdoll, as before, at a time it has not been followed by a
+  fault.
+- **The check of 6.1** stays in: a block that is no longer the mod's action is never stopped, lowered or released, and says so
+  in the log (`W224-STALE`). It has not fired on the bench; in the field its line would name the caller.
+
+The massacre on the build that ships: **2 runs, 80 deaths, no fault** (0.65.2's way: 2 closes in 5 runs). Of the 80 dead
+copies, 48 were on the ground one second after the death by the game's own request; the other 32 were laid down by the sweep,
+between 6 and 25 s after the death (half of them within 9 s) — **none was left standing** (0.65.2's way left 6 to 8 of 40 standing after its
+three tries). The check of 6.1 was asked 3,805 times and found nothing.
+
+**This is not proof that the fault is gone.** Two clean runs against a way that faults in two runs of five would happen by
+chance about one time in three. Three more runs the shipped way and two of the twin were queued when the maintainer paused the
+bench for three hours; they were lost with it (both games went away during a join; no crash report, nothing of the mod's). What
+the finals added is in section 7. The crash stays in Known Issues, with what is known about it now.
+
+### 6.4 The twin (`mp_w224_death off`, the same build)
+
+`KCDMP_TEST_W224_OFF=w224_death`: no check, no request at the finish, the script's ragdoll 2.5 s after the death — 0.65.2's way.
+Measured on four builds of this part (the code path is the same in all): 5 runs, **2 closes** (each five deaths in, within two
+seconds of the script's ragdoll on the same seated copy), 3 clean with 6 to 8 of 40 bodies left standing. The twin's runs on
+the shipped build itself are among those lost to the pause; section 7 has the ones made in the finals.
+
+### 6.5 Not done, and known
+
+- **The cause is not found.** What frees the object a body's action controller still holds, in the seconds after the mod
+  applied a death to it, is not known. The mod's own actions are ruled out as the freed blocks (6.1); the timing is known
+  (6.2); the rest is open. The next step would be the engine's own death path for a body whose dead state was set from
+  outside: what it tears down between two and six seconds after, and whether a ragdoll request or a physics ragdoll in that
+  window races it.
+- **A dead copy the game does not lay down at once stands for six to ten seconds** (a body still held by a seat or a kneel, a
+  body beyond about 120 m): three seconds in 0.65.2. In a fight next to the player the game's own request works, and the body
+  lies after one second instead of three.
+- **Deaths in the massacre are the mod's applied deaths** (the host's word, no blow on the joiner's screen). A death by a blow
+  plays its death reaction and falls by itself; those were not what closed the game on the bench.
+- **The bench's own switch** `KCDMP_TEST_W224_NOEND=1` (leaves WO-221's step out) is in the DLL for this test and does nothing
+  unless that environment variable is set.
+- **Retail.** The request's address is the one WO-210 reads for knockdowns; nothing new is resolved.

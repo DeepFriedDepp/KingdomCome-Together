@@ -99,7 +99,8 @@ public partial class GameBridge
                 long now = Environment.TickCount64;
                 foreach (var (npc, at) in _w195Dead.ToArray())
                 {
-                    if (now - at < 4000 || now - at > 120_000) continue;
+                    // WO-224 D (mp_w224_death): six seconds, not four -- nothing is thrown at a body in the first seconds after its death
+                    if (now - at < (W224On("w224_death") ? 6000 : 4000) || now - at > 120_000) continue;
                     int tries = _w222LayTries.TryGetValue(npc, out int t) ? t : 0;
                     if (tries >= 3) continue;
                     var nb = System.Text.Encoding.ASCII.GetBytes(npc);
@@ -120,7 +121,9 @@ public partial class GameBridge
                     if (still)
                     {
                         how = f is null ? "ragdoll" : "finish+ragdoll";
-                        await ExecLuaAsync($"if KCD2MP_W195Ragdoll then KCD2MP_W195Ragdoll(\"{EscapeLua(npc)}\") end");
+                        // WO-224 D: this is the sweep (six seconds or more after the death): the script's physics ragdoll is allowed here,
+                        // near this player too (`true`: the mod's script refuses it to any earlier caller near him)
+                        await ExecLuaAsync($"if KCD2MP_W195Ragdoll then KCD2MP_W195Ragdoll(\"{EscapeLua(npc)}\", true) end");
                         await Task.Delay(Wo195Rules.RagdollSettleMs);
                         var r3 = await _combat.Wo163Async(Protocol.Wo195OpCheck, a);
                         still = r3 is { Ok: true, Payload.Length: >= 4 } z && Wo195Rules.Upright(z.Payload[0], z.Payload[2]);

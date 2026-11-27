@@ -59,7 +59,7 @@ void model_dump(int kind, uint32_t eid, int zone, int input);
 // the native word's bits (the agent's W224Switch.NativeNames, in order)
 constexpr uint32_t kBitClinch = 1u << 0;      // A: a grab plays on both bodies on both screens
 constexpr uint32_t kBitChains = 1u << 1;      // B: an enemy's chain of swings plays on its copy as a chain
-constexpr uint32_t kBitDeath = 1u << 2;       // D: the death handling without the suspect step
+constexpr uint32_t kBitDeath = 1u << 2;       // D: an action of ours is stopped / given back only while its block is still that action
 constexpr uint32_t kBitClinchLog = 1u << 3;   // A.0: the instrument (read-only; every twin keeps it)
 constexpr uint32_t kBitsDefault = kBitClinch | kBitChains | kBitDeath | kBitClinchLog;
 

@@ -77,6 +77,8 @@ bool release_action(void* action);
 /// WO-208 A.2: the game's own stop of an action (IAction::Stop: never installed when still pending, blended out when running);
 /// false when the game's function is not found in this build (the caller steps the priority down instead). Main thread.
 bool stop_action(void* action);
+/// WO-224 D: the same for an action the mod queued itself and kept a pointer to -- only while the block is still that action.
+bool stop_ours(void* action, const char* who);
 
 // WO-167 C3: "shown" means rendered. ghost_swing hands its reference to the queued action to the watch (true = taken); each frame the
 // watch reads the action's status until it was installed or never will be (wo167_rules.h), then drops the reference. Main thread only.

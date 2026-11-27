@@ -29,4 +29,11 @@ int end_all(const char* why);
 
 bool armed();
 
+// WO-224 D (mp_w224_death): is this block still an action of ours -- does it carry the engine's own C_CombatAnimAction vftable, or
+// our quiet copy? A death takes a body's action controller apart; a pointer the mod kept can then name a freed block, or another
+// object that took its place, and a reference "given back" there is taken from that other object. Every place of the mod that gives
+// a reference back, stops an action or writes into one asks this first; `who` names the caller for the count and the log. Any
+// thread. Not armed (the class is not found in this build) or the switch off: true, 0.65.2's behaviour.
+bool still_ours(const void* action, const char* who);
+
 } // namespace kcdmp::combatactions

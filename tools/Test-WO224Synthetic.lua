@@ -8,6 +8,8 @@
 --       without the flag read "Unofficial build -- not made by Kingdom Come: Together"
 --   (d) C, the mod menu draws the line under its title while it is open, on the right of the screen like the rest
 --   (e) the switches: mp_w224_status names every one and the build's line; the agent's list sets them
+--   (f) D: the script's physics ragdoll is refused for a dead copy near the local player (the game's own request stands), allowed at
+--       the last try and for a far body; the switch off gives 0.65.2's way
 -- What this proves: the Lua half's words. The check itself (the signature, the files) is the agent's (Wo224OfficialTests.cs); the
 -- clinch and chain mechanisms are the DLL's and the bench's.
 
@@ -174,6 +176,40 @@ do
     KCD2MP_W224Cfg("w224_chains=on,w224_official=on,nonsense=on")
     check("e: ...and back; an unknown name is nothing", KCD2MP_W224On("w224_chains") == true and KCD2MP_W224On("w224_official") == true and KCD2MP_W224On("nonsense") == true)
     check("e: no Lua errors", #ERRS == 0, ERRS[1])
+end
+
+-- (f) D: the script's physics ragdoll and a dead copy near the local player
+do
+    local thrown = 0
+    local function body(name, x, dead)
+        local e = { id = 900 + #name, GetName = function() return name end, GetWorldPos = function() return { x = x, y = 0, z = 0 } end,
+                    actor = { IsDead = function() return dead end }, RagDollize = function() thrown = thrown + 1 end }
+        ENTS[name] = e
+        return e
+    end
+    KCD2MP.w195.deadRelease = true
+    KCD2MP_W224Cfg("w224_death=on")
+    if KCD2MP_W221Set then KCD2MP_W221Set("ragdoll_once", "off") end   -- (WO-221's own "one at a time" rule is not what is tested here)
+    body("near_dead", 30, true); body("far_dead", 300, true); body("near_alive", 30, false)
+    local mark = #LOG
+    thrown = 0
+    NOW = NOW + 10   -- (WO-221's "one ragdoll a body at a time" rule counts 4 s; each check here is its own moment)
+    check("f: a dead copy 30 m from the player is refused the script's ragdoll", KCD2MP_W195Ragdoll("near_dead") == false and thrown == 0, thrown)
+    check("f: ...and the log says the game's own request stands", logCount("the game's own ragdoll request stands", mark) == 1, lastLog("WO195-RAGDOLL"))
+    NOW = NOW + 10
+    check("f: ...the last try may use it", KCD2MP_W195Ragdoll("near_dead", true) == true and thrown == 1, thrown)
+    thrown = 0
+    NOW = NOW + 10
+    check("f: a dead copy 300 m off gets it as before (the engine does not run its own request there)", KCD2MP_W195Ragdoll("far_dead") == true and thrown == 1, thrown)
+    thrown = 0
+    check("f: a living body never", KCD2MP_W195Ragdoll("near_alive") == false and KCD2MP_W195Ragdoll("near_alive", true) == false and thrown == 0, thrown)
+    KCD2MP_W224Cfg("w224_death=off")
+    thrown = 0
+    NOW = NOW + 10
+    check("f: the switch off: 0.65.2's way (the script's ragdoll at once, near or far)", KCD2MP_W195Ragdoll("near_dead") == true and thrown == 1, thrown)
+    KCD2MP_W224Cfg("w224_death=on")
+    ENTS["near_dead"], ENTS["far_dead"], ENTS["near_alive"] = nil, nil, nil
+    check("f: no Lua errors", #ERRS == 0, ERRS[1])
 end
 
 -- Summary, in the shared driver's contract (Test-NpcSmoothSynthetic.ps1 reads the global OUT).

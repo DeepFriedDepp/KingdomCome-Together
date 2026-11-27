@@ -1041,7 +1041,8 @@ SwingResult install_fragment(uint32_t entityId, uint32_t fragmentId, const uint8
     return SwingResult::Ok;
 }
 
-bool release_action(void* action) { return action && call_release(action); }
+// (WO-224 D: only while the block is still an action of ours -- a death may have freed it, and another action taken its place)
+bool release_action(void* action) { return action && combatactions::still_ours(action, "a reference given back") && call_release(action); }
 
 // WO-208 A.2 (rules 2 and 3): the game's own stop of an action -- Mannequin's IAction::Stop (CombatModule's copy, 1.5.5 +0x10AB10:
 // flags at +0x2C |= Stopping | BlendOut, then the same for each sub-action), after which the controller never installs the action and
@@ -1082,6 +1083,11 @@ bool stop_action(void* action) {
     return fault::guarded(site, [&] { reinterpret_cast<void (*)(void*)>(fn)(action); });
 }
 
+// WO-224 D: the stop of an action the mod queued itself and kept a pointer to (the table's records, the owner's own scopes and
+// base) -- only while the block is still that action. The general stop above is also used on the copy's own actions read fresh
+// from a scope (other classes); those are not asked.
+bool stop_ours(void* action, const char* who) { return action && combatactions::still_ours(action, who) && stop_action(action); }
+
 // --- WO-167 C3: "shown" means rendered (wo167_rules.h). ----------------------
 // A queued swing's action is kept (one reference of ours) and its status read each frame until it reads Installed / Exiting (the
 // copy's animation started), Finished without that, or wo167rules::kWatchS passes; then our reference is dropped through the action's
@@ -1105,6 +1111,7 @@ bool w_read_status(void* anim, uint32_t* out) {
 }
 
 bool w_release(void* anim) {
+    if (!combatactions::still_ours(anim, "the swing watch")) return true;   // WO-224 D: not ours any more -- the watch forgets it
     KCDMP_FAULT_CALL(site, "wo167::watch_release");
     return fault::guarded(site, [&] {
         auto* vtbl = *reinterpret_cast<void***>(anim);
@@ -1169,7 +1176,7 @@ void swing_keep_last(uint32_t eid, void* anim) {
     if (!anim || !kcdmp::wo202::on(kcdmp::wo202rules::kBitAnimShown)) return;
     InterlockedIncrement(reinterpret_cast<volatile LONG*>(reinterpret_cast<char*>(anim) + 0x58));
     LastSwing& l = g_lastSwing[eid];
-    if (l.anim && swing_owner_alive(eid)) call_release(l.anim);
+    if (l.anim && swing_owner_alive(eid)) release_action(l.anim);   // (WO-224 D: release_action asks first)
     l.anim = anim;
     l.at = w_now();
 }
@@ -1181,6 +1188,7 @@ void swing_lower_previous(uint32_t eid) {
     g_lastSwing.erase(it);
     if (!prev) return;
     if (!swing_owner_alive(eid)) { c_lowerSkipped.fetch_add(1); return; }
+    if (!combatactions::still_ours(prev, "the last swing")) { c_lowerSkipped.fetch_add(1); return; }   // WO-224 D
     uint32_t st = 0, pr = 0;
     const bool on = kcdmp::wo202::on(kcdmp::wo202rules::kBitAnimShown);
     if (read_u32(prev, kcdmp::wo202rules::kActStatusOff, &st) && read_u32(prev, kcdmp::wo202rules::kActPriorityOff, &pr) &&
@@ -1205,7 +1213,7 @@ void swing_watch_tick() {
         const double t = w_now();
         for (auto it = g_lastSwing.begin(); it != g_lastSwing.end();) {
             if (t - it->second.at > kcdmp::wo202rules::kLastSwingKeepS) {
-                if (it->second.anim && swing_owner_alive(it->first)) call_release(it->second.anim);
+                if (it->second.anim && swing_owner_alive(it->first)) release_action(it->second.anim);
                 it = g_lastSwing.erase(it);
             }
             else ++it;

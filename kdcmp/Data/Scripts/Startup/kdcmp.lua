@@ -30993,7 +30993,15 @@ System.AddCCommand("mp_w195_status", 'KCD2MP_W195Status()', "WO-195: the dead-co
 
 -- 1: a copy the host's death left upright (the mod's ApplyDeath kills the soul with no death reaction: it stays frozen in the dead
 -- action's first pose) is laid down by the game's own ragdoll. Only a body that reads dead; the agent asks after its 1 s check.
-function KCD2MP_W195Ragdoll(name)
+-- WO-224 D (mp_w224_death): the script's physics ragdoll is not thrown at a dead copy NEAR the local player. There the game's own
+-- ragdoll request (the DLL's finish asks the body's ragdoll manager) lays a body down at once unless the body is still held by what
+-- it was doing (a seat, a kneel, a post) -- and on such a held body the script's ragdoll does not take either, and about one time
+-- in ten the game closed 0.2 to 1.4 s later (every close of the staged massacre). The request stands; the agent's dead-lay sweep,
+-- six seconds or more after the death, passes `last` and may use the script's ragdoll (thrown that late it was never followed by a
+-- fault). The agent no longer calls this 2.5 s after a death at all while the switch is on; the rule here keeps any other early
+-- caller off a body near the player.
+KCD2MP_W224_NEAR_M = 120
+function KCD2MP_W195Ragdoll(name, last)
     local w = KCD2MP.w195
     if not w.deadRelease then return false end
     local e = nil
@@ -31003,6 +31011,21 @@ function KCD2MP_W195Ragdoll(name)
     if not (e and dead and e.RagDollize) then
         mp_log(string.format("WO195-RAGDOLL npc=%s refused (%s)", tostring(name), not e and "no body" or not dead and "it is not dead here" or "no RagDollize"))
         return false
+    end
+    if last ~= true and KCD2MP_W224On and KCD2MP_W224On("w224_death") and player then
+        local d = nil
+        pcall(function()
+            local a, p = e:GetWorldPos(), player:GetWorldPos()
+            d = math.sqrt((a.x - p.x) ^ 2 + (a.y - p.y) ^ 2 + (a.z - p.z) ^ 2)
+        end)
+        if d and d < KCD2MP_W224_NEAR_M then
+            w.stats.w224Held = (w.stats.w224Held or 0) + 1
+            if w.stats.w224Held <= 60 or w.stats.w224Held % 50 == 0 then
+                mp_log(string.format("WO195-RAGDOLL npc=%s refused: %.0f m from this player -- the game's own ragdoll request stands (asked again); the script's physics ragdoll only from the sweep, six seconds after the death on [n=%d]",
+                    tostring(name), d, w.stats.w224Held))
+            end
+            return false
+        end
     end
     if KCD2MP_W221RagdollRefused and KCD2MP_W221RagdollRefused(e, name, "WO195-RAGDOLL") then return false end
     local ok, err = pcall(function() e:RagDollize(0) end)
@@ -37244,7 +37267,8 @@ end
 --                          the joiner and the copy of the enemy that grabbed him (or that he grabbed), and between a partner's figure
 --                          and the body he grabbed; it ends on both screens when it ends on either.
 --   B  mp_w224_chains      an enemy's chain of swings plays on its copy as a chain.
---   D  mp_w224_death       the death handling without the step WO-221 suspected.
+--   D  mp_w224_death       before the mod stops, lowers or gives back an action it queued itself, it asks whether the block is still
+--                          that action (a death may have freed it); one that is not is left alone and logged (W224-STALE).
 --   A.0 mp_w224_clinch_log the clinch instrument (read-only).
 --   C  mp_w224_official    the build's signature is checked (the agent, offline) and the mod menu says "Official build <version>" or
 --                          "Unofficial build -- not made by Kingdom Come: Together". Off = not checked = unofficial; never hidden.
@@ -37259,7 +37283,7 @@ do
     W224.HELP = {
         w224_clinch = "A: (both) a grab plays on both bodies on both screens and ends on both when it ends on either",
         w224_chains = "B: (both) an enemy's chain of swings plays on its copy as a chain, so the joiner's own game judges every blow",
-        w224_death = "D: (joiner) a dying copy's actions end without the step WO-221 suspected of the crash after deaths",
+        w224_death = "D: (both) an action the mod queued is stopped or given back only while its block is still that action (after a death it may not be); else left alone and logged",
         w224_clinch_log = "A.0: (both) every clinch start and the engine's clinch test, counted in the log (read-only)",
         w224_official = "C: (both) the build's signature is checked and the mod menu says Official or Unofficial build; off = not checked = Unofficial",
     }
@@ -37931,7 +37955,10 @@ do
                     local st = E.lay[name] or { n = 0, at = -1e9, deadSince = os.clock() }
                     E.lay[name] = st
                     -- mp_ragdoll_once: a body seen dead for under 4 s, or ragdolled under 4 s ago, is the game's (and WO-195's) to lay down
-                    local fresh = KCD2MP_W221On("ragdoll_once") and ((os.clock() - (st.deadSince or -1e9)) < 4.0
+                    -- WO-224 D (mp_w224_death): nine seconds, not four -- the game's own ragdoll request stands that long before the
+                    -- script's physics ragdoll is thrown at a body near this player (KCD2MP_W195Ragdoll's rule, the agent's last try)
+                    local w224 = KCD2MP_W224On and KCD2MP_W224On("w224_death")
+                    local fresh = (KCD2MP_W221On("ragdoll_once") or w224) and ((os.clock() - (st.deadSince or -1e9)) < (w224 and 9.0 or 4.0)
                         or (os.clock() - (W221.ragdolledAt[name] or -1e9)) < 4.0)
                     if fresh and up and up > 0.9 then W221.ragdollStats.waitedFresh = W221.ragdollStats.waitedFresh + 1 end
                     if up and up > 0.9 and not hidden and not fresh and os.clock() - st.at >= (st.n < 6 and 3 or 15) then
