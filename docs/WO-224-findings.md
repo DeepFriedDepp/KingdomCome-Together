@@ -21,6 +21,8 @@ Session start 2026-11-25 23:58 (hour 0).
 | C — the official-build stamp | 28–31 | 26th 14:10 (prepared beside A and B while the bench ran) | 26th 14:35 | the stamp, the check, the four places that say it, `AGENTS.md`; proof on a release-shaped payload: unsigned unofficial, signed official, one file swapped unofficial; committed |
 | E — a contributor's pull request | 31–34 | – | – | skipped: no rebased pull request with only the compatible fixes existed at the session's start |
 | D — the crash after deaths | 34–38 | 26th 14:28 | 26th 23:55 (its four hours ran to six and a half of work; the maintainer paused the session from 20:43 to 23:45) | the suspect refuted (it is a protection); every fault follows the mod's own step 2.5 s after a death; five builds; what ships does nothing there: 2 runs, 80 deaths, no fault, against 2 closes in 5 runs — not proven; committed |
+| F — re-checks and finals | 38–44 | 26th 23:55 (on the final build, the moment D was committed) | 27th 18:45 | A re-measured 19 of 20, 23 of 23, 25 of 25; B's chain on every scene (the same row 76 to 86 %, the twin 0 to 10 %), the defence scene's guesses 9 of 132 (bar missed); WO-222's bars 41 of 47 and 84 of 84; WO-223's table, camp 5 of 5, guard pass; the massacre 0 closes in 5 runs; **the scoreboard: place lower than today's `main` in 3 pairs of 3 (a regression, cause not found)**; no crash, no closed game |
+| G — the build, the documents, the push | 44–48 | 27th 18:45 | – | the release commit; the installer and the push follow (8) |
 
 ## 1. Conduct
 
@@ -287,8 +289,42 @@ verdict waits doubled; the corrected guard 3 of 54 and 1 of 186; the "ask at onc
 on those builds: 3 of 112, 7 of 165 (4.2 %) and 2 of 46 (traced on the last two: each guess after a slot that did not open or a
 finisher the copy did not reach).
 
-**The camp scene, the whole-scenes run, the twins of this build and the force's own twin were on the bench when this part was
-committed. Their rows are added by the next commit of this document (3.3a).**
+### 3.3a On the final build, beside its twin
+
+The finals ran each scene on the final build (Part D's tree, every switch on) and then on the same build with
+`KCDMP_TEST_W224_OFF=w224_chains` on both machines (the twin; 3.4). Rows paired by time; each scene its own session. [bench]
+
+| scene | the final build: blows, the host's guesses | ... the same row / guard side / attack zone | the twin: blows, guesses | ... the same row / guard side / attack zone |
+|---|---|---|---|---|
+| the defence scene | 51, **7 (13.7 %)** | 82 % / 100 % / 91 % | 9, 0 | 0 % / 7 % / 0 % (14 pairs) |
+| the whole-scenes run | 226, 12 (5.3 %) | 80 % / 98 % / 92 % | 369, 19 (5.1 %) | 10 % / 23 % / 22 % |
+| the camp scene (180 s, chains framed) | 133, **1 (0.8 %)** | 86 % / 99 % / 92 % | 118, 3 (2.5 %) | 10 % / 32 % / 27 % |
+| the swap scene | 144, **3 (2.1 %)** | 76 % / 98 % / 86 % | 73, 3 (4.1 %) | 10 % / 29 % / 20 % |
+
+- **The chain: met, and the twin fails it in every scene.** On the final build the copy plays the host's row in 76 to 86 % of
+  swings and from the same guard side in 98 to 100 %; on the twin in 0 to 10 % and 7 to 32 %. Shifting the twin's rows by one
+  swing pairs them better (the guard side 56 to 70 %): the twin's copy runs one swing behind, which is what this part fixed.
+- **The guesses: met in the camp and swap scenes, missed in the defence scene.** Six of the defence scene's seven guesses are one
+  copy: a third bandit that joined the fight, whose host NPC changed from a club to its fists while its rows played; the engine
+  refused its attacks for 3 s and the guard it was given did not take. That is not the chain mechanism (its rows in that run
+  were the same row in 82 %), but it counts against the bar. The defence scene's two top-up runs: 1 guess in 32 blows and 1 in
+  49 (3.1 %, 2.0 %; the same row 96 % and 90 %, the guard side 100 %), each passing the scene's own verdict (96.9 %, 97.9 %). Over
+  the three runs, **9 guesses in 132 blows (6.8 %), 3 of 132 (2.3 %) without the one copy**: the ≤ 1 % bar is **missed** on
+  the final build; the B round's own defence run read 0 of 45 (3.3). The whole-scenes run
+  reads 5.3 % shipped and 5.1 % twin: its guesses come in bursts from single copies in the chase scenes (four within 4 s from
+  one), two after a combo finisher and two refused.
+- The guess rate is stated beside the twin, not taken as B's test: the twin's defence scene here had one bandit and nine blows.
+- The force's own twin (`KCDMP_TEST_W224_FORCE=0`: the slot the mod opens left shut): the defence
+  scene 1 guess in 41 blows (its own verdict passes, 97.4 %), the swap scene 1 in 146; the same row 81 % and 77 %, the guard side
+  100 % and 99 %. **This step's own effect is not shown by the finals**: with it off the build read as well as with it on. It
+  is part of `mp_w224_chains` (no switch of its own); it stays because the dodge case it answers (3.2) was measured on the build
+  that added it (3.3: 4 and 10 chain inputs through the opened slot, each followed by the engine's chain), not because the finals
+  separate it.
+- Every run: no fault, no stale read, no game closed; the real saves' hashes unchanged.
+
+**Frames.** The camp scene's three frame pairs (taken mid-chain in the 180 s run) are each player's own first-person view in a
+crowded fight, the host's under the hurt vignette: they show both screens in the same fight, not the same swing from comparable
+angles, and are not offered as evidence of the row. The clean scene's pair (3.5) stays the like-for-like one.
 
 ### 3.4 The twin (`mp_w224_chains off`, the same build)
 
@@ -314,7 +350,7 @@ dodges, one blow in six judged by the host's guess.
 The clean scene (one bandit on a standing joiner, the host beside them), the host's window and the joiner's at the same moment
 of a chain's second swing; the file is in the WO's notes (`frames/B-chain-lone-b4-3-zoom.jpg`, the build with the corrected
 guard). Looked at: the bandit's axe is raised over the same shoulder on both screens, the joiner's figure in the same guard.
-The camp scene's frames are taken in the confirmation round (3.3a).
+The camp scene's frames, taken on the final build, are described in 3.3a.
 
 ### 3.6 Not done, and known
 
@@ -510,15 +546,16 @@ three tries). The check of 6.1 was asked 3,805 times and found nothing.
 
 **This is not proof that the fault is gone.** Two clean runs against a way that faults in two runs of five would happen by
 chance about one time in three. Three more runs the shipped way and two of the twin were queued when the maintainer paused the
-bench for three hours; they were lost with it (both games went away during a join; no crash report, nothing of the mod's). What
-the finals added is in section 7. The crash stays in Known Issues, with what is known about it now.
+bench for three hours; they were lost with it (both games went away during a join; no crash report, nothing of the mod's). The
+finals added three more runs (7.5): as shipped, 5 runs, 200 deaths, no close; the twin ran two there, with no close either. The crash stays in Known Issues, with what is known about it now.
 
 ### 6.4 The twin (`mp_w224_death off`, the same build)
 
 `KCDMP_TEST_W224_OFF=w224_death`: no check, no request at the finish, the script's ragdoll 2.5 s after the death — 0.65.2's way.
 Measured on four builds of this part (the code path is the same in all): 5 runs, **2 closes** (each five deaths in, within two
 seconds of the script's ragdoll on the same seated copy), 3 clean with 6 to 8 of 40 bodies left standing. The twin's runs on
-the shipped build itself are among those lost to the pause; section 7 has the ones made in the finals.
+the shipped build itself are among those lost to the pause; the finals ran two (7.5), with no close, so the twin's record over
+the work order is 2 closes in 7 runs.
 
 ### 6.5 Not done, and known
 
@@ -535,3 +572,229 @@ the shipped build itself are among those lost to the pause; section 7 has the on
 - **The bench's own switch** `KCDMP_TEST_W224_NOEND=1` (leaves WO-221's step out) is in the DLL for this test and does nothing
   unless that environment variable is set.
 - **Retail.** The request's address is the one WO-210 reads for knockdowns; nothing new is resolved.
+
+## 7. The finals on the final build
+
+The final build is the tree of Part D's commit (every switch on); every run below is that build, the field's link shape, each scene
+its own session unless said. The finals ran from 26th 23:55 to 27th 18:45. Every run: the real saves' hashes unchanged, the
+mirror roots clean. [bench]
+
+### 7.1 Part A, re-measured
+
+With the two follow-ups of 2.4 (the "in a clinch" word every second; a leave does not end a clinch younger than 0.4 s), the drill
+as in 2.4:
+
+| | the host's grabs (20 clinches) | the joiner's grabs (23) | the same, not swinging (25) | the bar |
+|---|---|---|---|---|
+| shown on the other screen within 1.5 s | **19 of 20** (median 0.11 s) | **23 of 23** (median 0.00 s, nine in ten within 0.21 s) | **25 of 25** | 18 of 20 |
+| time in a clinch on both screens at once | 43.8 s of 48.2 s | 36.7 s of 40.9 s | 41.8 s of 46.0 s | – |
+| one-screen stretches over 1 s | **1** (2.5 s, his own screen only) | **0** (the longest 0.98 s) | **0** (0.56 s) | none |
+| the other screen left after it ended | median 0.22 s, longest 0.25 s | – | – | within 1 s |
+
+"Plays on both screens": **met**. "None left stuck over 1 s": **met for the joiner's grabs** (one stretch of 1.5 s on the part's
+own build), **missed by one stretch in the host's run**, as on the part's own build: a clinch that ended early on the joiner's
+screen (2.4). The rig's own per-clinch count in the joiner's runs says "2 stuck" and "3 stuck": the host's world left his figure's
+clinch more than 1 s after his own screen in a re-grab (2.7, "two engines grabbing at once"); no stretch of one screen only
+exceeded 1 s.
+
+### 7.2 WO-222's bars
+
+By WO-222's own ledger, over the reference scene (twice) and the whole-scenes run:
+
+| | the final build | WO-222's bar / WO-223's shipped build |
+|---|---|---|
+| the joiner's clean hits that make the enemy react | **41 of 47 (87 %)**: 5 of 6, 14 of 17, 22 of 24 | WO-223: the reference scene 14 of 27 |
+| the host's own clean hits in the same runs | 26 of 29 (90 %) | – |
+| the host's reactions shown on the copies | **84 of 84** | – |
+| a fleeing enemy stays an enemy | **not shown**: no bandit fled in four chase scenes | as on WO-222's bench, "only now and then" |
+
+The joiner's misses: three "the victim cannot react" (out of its fight), one refused by the enemy's own director, one with no
+reaction found, one not applicable. The reference scene is the one WO-223 called out (the bench stops and restarts the bandit's
+fight): 19 of 23 there now. The host-kills scene (D in a real fight) killed nobody in 57 minutes (the host's 85 to 93 swings);
+it has no data, and its twin was not run.
+
+### 7.3 WO-223's bars
+
+**The approach table** (one session, 15 runs, the day; the mean distance from the walking player and time from the walk's start):
+
+| who, pace | noticed | drawn on | attacked |
+|---|---|---|---|
+| the host, a walk (2 runs) | 3.4 m / 27.1 s | 6.0 m / 29.5 s | 6.7 m / 30.2 s |
+| the joiner, a walk (3) | 8.7 m / 26.1 s | 7.0 m / 28.9 s | 6.4 m / 29.9 s |
+| the host, a sprint (2) | 10.6 m / 18.9 s | 3.5 m / 21.2 s | 3.2 m / 21.9 s |
+| the joiner, a sprint (3) | 6.1 m / 20.7 s | 5.1 m / 25.4 s | 5.1 m / 26.3 s |
+| both, a walk (5) | 9.1 m / 24.8 s | 4.4 m / 27.1 s | 2.5 m / 28.4 s |
+
+- At a walk the joiner is noticed, drawn on and attacked within a second of the host, noticed 5 m further out (WO-223's known
+  "further at a walk"). At a sprint he is attacked 4.4 s later than the host (WO-223's shipped build: 2.3 s) — two and three
+  runs, inside the runs' own spread, but the wrong way.
+- Every run was noticed (WO-223: one walk in eighteen unnoticed). With both players, the camp went for the joiner first in four
+  runs of five.
+
+**The two-player camp** (five fights): each player had an enemy on him within 5 s in **5 of 5**. **The guard scene** (the
+regression scenes of WO-223): **passes** (5 steps). **Lock-on:** the scene's own pass rule reads "no lock" (as on WO-223's final
+build, where the game's own opponent-change lines were the measure: the rule waits 2.5 s for one line per key press in a camp
+where everyone joins); the joiner's rule answered yes for a copy in the partner's fight 32 times and in his own 97.
+
+In these four sessions the host's guesses were 3 of 212, 1 of 107, 1 of 147 blows (1.4, 0.9, 0.7 %), and no game faulted.
+
+### 7.4 The scoreboard beside today's control
+
+Three runs of the final build and three of today's `main` (the tree of WO-223's commit, built the same way), alternating on one
+afternoon, the field plan, low settings; then two of the final build with every WO-224 switch off. [bench]
+
+| | the final build | | | every WO-224 switch off | | today's `main` | | |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| run | 1 | 2 | 3 | 1 | 2 | 1 | 2 | 3 |
+| place (the copy within 0.5 m of the host's person, %) | **76.5** | **63.0** | **75.8** | 82.4 | 73.3 | 82.3 | 82.8 | 80.9 |
+| the same activity (%) | 86.0 | 75.6 | 80.7 | 85.5 | 80.1 | 82.3 | 78.4 | 80.9 |
+| step | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 |
+| pulls / flips (per body-minute) | 0.09 / 0.008 | 0.12 / 0.012 | 0.23 / 0.031 | 0.12 / 0.012 | 0.11 / 0.017 | 0.14 / 0.034 | 0.26 / 0.077 | 0.10 / 0.008 |
+| the stream's lag, p99 (ms) | 860 | 954 | 975 | 783 | 893 | 759 | 851 | 831 |
+| the mod's cost on the host, 95th percentile (ms) | 7.6 | 8.0 | 7.8 | 9.8 | 8.3 | 8.0 | 5.7 | 7.9 |
+| seated and lying bodies: share of samples / place | 38 % / 63.8 | 49 % / 43.9 | 33 % / 57.7 | 29 % / 71.7 | 44 % / 64.8 | 32 % / 63.0 | 23 % / 68.5 | 39 % / 77.1 |
+| the other bodies: place | 82.7 | 79.0 | 81.2 | 84.7 | 77.3 | 89.6 | 81.9 | 79.5 |
+
+The works checks (the join, a talk, a forced dialogue, a sleep vote, a loot take, drops, a chest, a mount, a knockdown, the
+trade screen): 9 of 10 on the final build and 9 of 10 on `main`, the same check missing on both (no shop screen: the two
+shopkeepers tried were busy).
+
+**Place: a regression.** The final build reads lower than `main` in all three pairs, by 5.1 to 19.8 points (means 71.8 and
+82.0); by the order's rule, the scoreboard does not show "no regression". The same activity is level (80.8 and 80.5); the
+stream's lag is about 116 ms higher at its 99th percentile. Most of the loss is in seated and lying bodies (a sitter a seat off,
+a sleeper a bed off): three sleepers a bed off made 1,636 of the second run's 1,732 misses in its tavern; the other bodies are
+level in two pairs of three.
+
+**The cause is not found.** With every WO-224 switch off the same build read 82.4 and 73.3: one run at `main`'s level, one at
+the final build's. WO-224's mechanisms may carry part of it; the rest is the build or the scenes' mix (the seated share ran from
+23 to 49 % between runs). It is in Known Issues, and the installer (8) was built as the order says with this stated beside it.
+
+### 7.5 Part D, the massacre on the final build
+
+The staged massacre of 6 (40 applied deaths around the joiner's figure in the village), three more runs as shipped and two of the
+twin (`mp_w224_death off`), each its own session. [bench]
+
+| | runs | deaths | the joiner's game closed | faults |
+|---|---|---|---|---|
+| as shipped, the finals | 3 | 120 | **0** | 0 (the check of 6.1 found a stale block 3 times in one run and left it alone) |
+| as shipped, with 6.3's two runs | 5 | 200 | **0** | 0 |
+| the twin, the finals | 2 | 80 | **0** | one burst of 32 caught reads at one site (the save-readiness reader of WO-189) during the join, three minutes before the first death; caught and counted, the game went on |
+| the twin, over the work order (6.4 and these) | 7 | 280 | 2 | – |
+
+The twin did not close the game in the finals. Over the work order the build that ships has 0 closes in 5 runs and the twin 2 in
+7; if the shipped build closed as often as the twin, five clean runs would still happen about one time in five. **Not proven**,
+and Known Issues says so. The rig's verdict on the first twin run reads "fault" for the caught reads at the join; they are not the
+crash after deaths.
+
+### 7.6 Crashes and incidents in the finals
+
+- **No crash and no closed game in the finals**, on either copy, in any run (the crash folders' newest reports are from the
+  26th, before the final build). No run was voided.
+- **Faults:** none in any run of the final build, except the twin's one burst of 32 caught reads at the join (7.5).
+- **Skipped:** the twin of the host-kills scene, because the scene killed nobody in 57 minutes as shipped (7.2), so its twin
+  would have had nothing to compare.
+- **The maintainer's own programs** (launcher, agent, relay) were not stopped or touched by the finals; the bench runs its own
+  copies from their own folders.
+- Every run: the real saves' hash list unchanged, the mirror roots clean.
+
+## 8. The installer, and the official check on it
+
+The installer is built from the release commit (the one that sets `VERSION` to 0.65.5), by the release-candidate path, signed
+with the project's key. Its name, size, hash, the live save round trip and the official check on its payload are added by the
+commit after it.
+
+## 9. Thread and lock audit (every engine call WO-224 adds)
+
+The rule: an engine movement or AI call is made on the thread and at the point in the frame the engine makes it; no engine call
+that may take an engine lock runs under our fault guard. "Its own guard" below means a structured-exception catch around that
+call; every per-frame task and pipe op of the mod has run inside the frame task list's outer catch since 0.4x, unchanged here.
+Memory reads of engine objects are guarded everywhere (they take no lock) and are not listed.
+
+**Where the engine itself makes these calls** — measured, not assumed. The two clinch detours and the combo-input detour count
+the thread of every call the engine makes: for NPCs the clinch test, the clinch start and the combo input come on worker threads
+(one host run: clinch tests main 9,960, other 93,482; clinch starts main 5, other 17), for the local player on the main thread.
+And they count how many of the calls on another thread arrived while the main thread was inside the mod's own per-frame work
+(after the engine's module update has returned: the task list and the queued pipe ops, where the mod makes its calls): **0 of
+6,746,764 clinch tests and 8,916 clinch starts on other threads in every run of both machines** (71 machine-runs of the final build: the finals, the scoreboard and the massacre), and 0 of 2,586 combo inputs on other threads (378 more came on the main thread). The engine's combat workers do not run beside the mod's work; the mod's
+calls on combat actors at that point race nothing of theirs. [bench]
+
+| part | call | where the mod makes it | its own guard | may it take an engine lock? |
+|---|---|---|---|---|
+| A | the engine's clinch test and clinch start, hooked (detours: the answer is seen, the engine's own function runs untouched; a pair the rule refuses gets the function's own "no") | the engine's own thread, inside its own call | none (the detour is plain reads, atomics and one leaf lock of ours around a 64-entry record) | the engine's own call as its caller made it |
+| A | `StartSyncGuard(35, master, slave, 0, 0)` — the mod's own clinch start | main thread, the mod's per-frame work (a pipe op, or the tick that follows the host's word) — where WO-197 has made this call since 0.61.0 | **none** (was guarded until this work order) | allocates the two guard actions through the actors' own factories; no lock of the engine's seen in its code path [binary, read] |
+| A | `C_ActionDirector::TerminateInternal(director, 0)` then the engine's `EnsureGuardAction(actor)` — a fresh guard for a body held in an ended clinch (the two calls `EnsureGuardAction` itself makes for a body whose main action is not a guard) | main thread, the same point | none | as above |
+| A | the weapon component's update (class from hands -> the model's `WeaponClasses`) and its class-from-hands read | main thread, the same point; only for a copy in combat mode whose two readings differ | none | reads the actor's hand items through the item manager (the engine's own getters) |
+| A | the `WeaponClasses` property's own setter (one int, with the property's change signal) | main thread, the same point; only while the copy's hand holds no item object | none | no |
+| A | `human:HolsterToInventory`, `human:DrawFromInventory(item, hand, false)`, `inventory:FindItem` (Lua) — the copy's weapon checked 0.9 s after a draw | main thread (a `Script.SetTimer` callback of the mod, where WO-167's draw runs) | Lua's `pcall` | the script binding's own |
+| B | the engine's combo input, hooked on the host (a detour that reads the body's slot flag and requested zone and records; the engine's function runs untouched) | the engine's own thread, inside its own call | none | the engine's own call |
+| B | the engine's combo input on a copy (`comboComponent->Input(inputClass)`) | main thread, the mod's per-frame work, in the frame the copy's own chain slot reads open | **none** | fires the component's own signals (the running attack's listener); no lock seen [binary, read] |
+| B | the engine's setter of a model's bool property, on a copy's `ComboSlot` (open before the copy's combo input when the host NPC chained and no contact opened it here; closed again by the mod) | main thread, the same point, the same frame as the input | **none** | writes one byte and fires the property's change signal (the listeners the engine's own combo trigger reaches by the same call); no lock seen [binary, read] |
+| B | the requested attack zone's setter and the guard zone's setter (the two the stream's writer has used for copies since 0.2x) | main thread, the same point | the existing guard of those two helpers, unchanged | property setters; no |
+| B | the engine's AI attack for a copy (WO-209's call, unchanged; now given the row's starting guard instead of its attack zone) | main thread, as before | the existing guard of that call, unchanged | as audited in WO-209 |
+| C | none: the official-build check reads files and verifies a signature; it makes no engine call and no network call | the launcher's and the agent's own start | – | – |
+| D | the body's own ragdoll manager's `RequestRagdoll(manager, 0)` for a dead-state copy that is no ragdoll (the request the game's hit-death handler makes; WO-210 has made it for knockdowns since 0.63.9) | main thread, the mod's per-frame work (the agent's "finish this body" pipe op) | the existing guard of that call site, unchanged | a request: it checks the actor's state and hands the ragdoll to the actor's own update; no lock seen [binary, read] |
+| D | the question "is this block still an action of ours" — one pointer read of the block's first word, compared with the engine's vftable for that class and the mod's quiet copy — before the mod's own stop, priority write and reference release | wherever those already ran (main thread; the table's stop also inside the engine's own release call on the engine's thread) | the read is under the fault guard (a read takes no lock); the calls it gates are as they were | no |
+| D | removed for a body the manager lays down: the script's `entity:RagDollize(0)` on a dead copy (it stays the last resort for a body the manager does not lay down) | main thread (a console statement of the agent's) | Lua's `pcall` | the script binding's own |
+
+No engine movement or AI call of this work order is made off the thread the engine uses for the player's own (the main thread)
+except inside the engine's own calls (the detours); no call that may take an engine lock was put under a guard of its own.
+
+## 10. README status for 0.65.5 (for the maintainer to paste)
+
+`README.md` is the maintainer's and was not touched. The block below replaces its release badge line, its "Where it's at"
+table, the "As of" line and keeps the Known Issues link. Each line of the table names what backs it: a run of this work order
+(the bench's run names; their logs and frames are in the WO's notes), a framed scene, or the earlier findings it is carried
+over from unchanged.
+
+The badge (line 11 of the README):
+
+```html
+<a href="https://github.com/DeepFriedDepp/KingdomCome-Together/releases/latest"><img alt="Latest release" src="https://img.shields.io/badge/latest%20release-v0.65.5-8a3324?style=flat-square"></a>
+```
+
+The table and the two lines under it:
+
+```markdown
+| Works well | Works, but rough | Not yet |
+|---|---|---|
+| Joining a friend's world with your own character, or a new one | Joining each other's conversations: you listen in and vote on answers, but the camera and keys can misbehave | Playing far apart (you are kept within about 650 m) |
+| Seeing each other: walking, riding, clothes, weapons | Villagers walk on their own feet on the partner's screen, but not always in the same place (a little less often than in 0.65.2) | Shared chests and shop stock (each player has their own) |
+| Fighting the same enemies: hits, flinches, knockdowns and deaths show for both | Some villagers stand idle, or work without their tools, where the host sees them busy | Road encounters matching on both screens |
+| Enemies notice and fight both players | Grabs in fights: both of you are held and see it; the strike out of a grab is a plain one for the joiner | Stolen marks on shared items |
+| Shared quests: either of you can move a quest forward | Enemy combos play as the same chain on both screens; a finisher is sometimes a plain blow, and some blows on the joiner are still the host's call | The regular (non-Modding-Tools) game |
+| Looting bodies and dropping items for each other | Cutscenes play for both, but one can leave the partner on a black screen for a while | |
+| Sleeping together, one shared clock | The joiner's game can close after people die near him (rarer in this build) | |
+| Crime: the host's guards judge both of you | Bows and crossbows: the shot shows, the draw and aim don't | |
+| A horse for each player; trading as the partner | Carts follow about a metre off; lip sync, voice chat and dice between players are unpolished | |
+| Every build says whether it is official | | |
+
+<sub>As of release 0.65.5.</sub>
+
+The full, current list lives in **[Known issues](docs/KNOWN-ISSUES.md)**. What changed in each build is on the
+**[releases page](https://github.com/DeepFriedDepp/KingdomCome-Together/releases)**.
+```
+
+What backs each line:
+
+| line | backed by |
+|---|---|
+| Joining a friend's world | every bench run of the finals joined (the join step of 30-odd sessions on the final build; the scoreboard's works check, 7) |
+| Seeing each other | carried over unchanged from 0.65.2 (WO-221, WO-222); nothing of this work order touches it |
+| Fighting the same enemies | WO-222's bars on the final build (7): the joiner's clean hits flinch 41 of 47, the host's reactions on copies 84 of 84; knockdowns 2 of 2 shown with get-ups (the works check) |
+| Enemies notice and fight both players | WO-223's approach table on the final build (7): walking, every stage within a second of the host's; the two-player camp 5 of 5 with an enemy on each within 5 s |
+| Shared quests | carried over from WO-210 and WO-221; not re-measured |
+| Looting, dropping items | the works check on the final build: a loot take, 2 of 2 drops taken by the other, a chest (7) |
+| Sleeping together | the works check: a sleep vote, one clock after it (7) |
+| Crime | WO-223's guard scene on the final build: PASS, the crime lines on both (7) |
+| A horse each; trading | the works check: a mount; trading fixed in 0.65.2 (Known Issues, "Fixed in 0.65.2"; the bench's shop screen did not open in this work order's works runs, shipped or control: two shopkeepers busy) |
+| Every build says whether it is official | section 4.2 and the release build's own check (8) |
+| Joining conversations | carried over from WO-206/WO-217; the works check's talk and forced dialogue passed (7) |
+| Villagers walk on their own feet, not always in the same place | the scoreboard (7): the copy within 0.5 m of the host's person 72 % of samples on the final build against 82 % for today's `main` (a regression, cause not found: 7.4 and Known Issues) |
+| Some villagers stand idle or work without tools | the scoreboard's "the same activity" (7) and WO-221's activity findings |
+| Grabs in fights | section 2.4 and the re-measure on the final build (7): 19 of 20, 23 of 23, 25 of 25 shown; the exit strike (2.7) |
+| Enemy combos | section 3.3 and 3.3a: the same chain, the host's guesses 0.7 to 2 % in camp and swap scenes; finishers 3.6 |
+| Cutscenes | carried over from WO-194/WO-221 |
+| The joiner's game can close after deaths | section 6 and 7 |
+| Bows, carts, lip sync, voice, dice | carried over from 0.65.2's README; nothing of this work order touches them |
+| Carts about a metre off | Known Issues since 0.65.2 (the cart switches); moved from "Not yet" |
+| Not yet (the five left) | carried over from the README's current table; grabs and carts moved out of it |

@@ -1,7 +1,11 @@
-# Known issues (0.65.2)
+# Known issues (0.65.5)
 
 Plain words, for players and testers. Each line says what you may see, what to do about it if anything, and whether a switch changes
-it. The work orders' findings (`docs/WO-215-findings.md` … `docs/WO-221-findings.md`) have the measurements.
+it. The work orders' findings (`docs/WO-215-findings.md` … `docs/WO-224-findings.md`) have the measurements.
+
+**Which build is this?** The launcher's status line, the in-game mod menu and a bug report's first lines say "Official build
+0.65.5" or "Unofficial build — not made by Kingdom Come: Together". An unofficial build is somebody else's (or a changed one): it
+runs and connects, and its problems may not be on this list. `docs/OFFICIAL-BUILDS.md` explains it.
 
 ## People walking and working
 
@@ -20,16 +24,24 @@ it. The work orders' findings (`docs/WO-215-findings.md` … `docs/WO-221-findin
 - **Activities.** Most of what villagers do (working, eating, sleeping) shows on the joiner's copy within a second. Still missing at
   times: **work tied to an object** (a smith at his forge, a cook at her pot) may show the copy standing idle at the place.
 - **Seated guests** jump between seats much less than in 0.64.3, but not never. Press `.` when one jumps.
+- **In 0.65.5 villagers are in the host's place a little less often than in 0.65.2**, mostly people sitting or lying (a guest a
+  seat off, a sleeper a bed off): on our bench the copy was within half a metre of the host's person in 72 % of samples against
+  82 % for 0.65.2 on the same afternoon. The cause is not found; with this build's switches off it read 78 %. What they do (the
+  same activity) is as in 0.65.2. Press `.` and say who, when someone sits or lies somewhere else than on the host's screen.
 - **Horses of the animal care** (very long names) may still behave as the joiner's own horse (frozen) rather than the host's.
 
 ## Fights
 
-- **The joiner's game can still close after people die near the joiner.** The fight crash of 0.65.0 (a fighting copy whose body was
-  taken away mid-swing) is fixed. A different crash after deaths is not: on our bench, in a staged massacre (a death near the
-  joiner every 15 seconds), the joiner's game closed once in 2 to 26 deaths. If a game closes during or after a fight, start it
-  again and send the bug report at once: the crash report goes with it. `mp_combat_action_end off` gives 0.65.0's behaviour back
-  (it crashes on our bench too, sooner). WO-222's bench saw two more joiner closes in fights, in another place in the game's combat
-  code (once with WO-222's switches off, once on), and one host close on the game's renderer thread after an hour of fights.
+- **The joiner's game can still close after people die near the joiner.** On our bench (a staged massacre: 40 deaths near the
+  joiner, one every 15 seconds) 0.65.2's way closed the joiner's game in 2 runs of 7, each time about two seconds after the mod
+  threw a dead body down itself, 2.5 seconds after its death. This build no longer does anything to a dead body for its first six
+  seconds (`mp_w224_death`, on): 5 runs, 200 deaths, no close. That is fewer, **not proven gone**: what the game frees under the
+  body in those seconds is not found. If a game closes during or after a fight, start it again and send the bug report at once:
+  the crash report goes with it. `mp_w224_death off` gives 0.65.2's way back. WO-222's bench saw two more joiner closes in fights,
+  in another place in the game's combat code, and one host close on the game's renderer thread after an hour of fights; neither
+  was seen in this build's finals.
+- **A dead copy the game does not lay down at once stands for six to ten seconds** (one that sat or knelt when it died, or one
+  far from the joiner); in 0.65.2, three. In a fight next to the joiner the body lies about one second after the death.
 - **Enemies notice the joiner now** (`mp_w223_perceive`, on). A hostile camp or patrol makes the joiner out as it would the
   host — by the game's own measure of how well he can be seen and heard, with his own crouch, light, noise and stealth skill — and
   fights him in a real fight of the host's game. What is not yet the same as for the host:
@@ -55,12 +67,17 @@ it. The work orders' findings (`docs/WO-215-findings.md` … `docs/WO-221-findin
   copy was in his fight and aimed at him in 99.8 % of the time it should be, also when both players are on one bandit (before,
   such a copy could go on swinging at the host's figure for minutes). One bench scene, with a joiner who had lost his weapon,
   showed copies standing idle for a minute while their host NPCs came at him; press `.` and say "idle enemy" if you see that.
-- **A few blows on the joiner are still the host's guess, not his own game's verdict**: 3 to 4 % of the blows in a camp fight
-  with several bandits on him, 5 % when a bandit swaps between the players, 4 % against two bandits (0.65.2's way on the same
-  bench: 4 to 10 %). They are blows of fast chains and combos that the copy on his screen could not replay in time. The host waits
-  up to 3 s for his verdict, then sends its own. A blow you blocked or dodged on your screen is never charged on top of it: a
-  late verdict of yours stands, and a host verdict already applied is given back (`mp_def_wait`). **Blows inside a grab** are always the host's (the joiner's game
-  has no grab with a copy). Press `.` when you take a hit you did not see coming.
+- **Some blows on the joiner are still the host's guess, not his own game's verdict.** On our bench, with this build: about 1 to 2
+  blows in 100 in a camp fight and when a bandit swaps between the players, about 5 in 100 over a long session of scenes, and 2 to
+  14 in 100 in a duel where the joiner dodges a lot (in the worst run, six of seven from one bandit that changed its weapon in the
+  fight). The copy of an enemy now plays the same chain of swings as the host's enemy (`mp_w224_chains`, on); the guesses left come
+  in bursts from a single copy that its own game would not let attack for a moment, after a combo finisher it did not reach, or
+  on the first blow of a copy not yet in the joiner's fight. The host waits up to 3 s for his verdict, then sends its own. A blow
+  you blocked or dodged on your screen is never charged on top of it: a late verdict of yours stands, and a host verdict already
+  applied is given back (`mp_def_wait`). **Blows inside a grab** are judged by the host. Press `.` when you take a hit you did
+  not see coming.
+- **A combo's finisher** is sometimes a plain blow on the joiner's screen (when the copy's own combo had not counted the chain:
+  on our bench about two finishers in five). **A chain goes on after you dodged its blow**, because on the host's screen it did.
 - **A clean hit of the joiner's sometimes draws no flinch.** In a fight both players are in, his clean hits made the enemy
   flinch every time on our bench (16 of 16); in a fight he had alone, mostly (9 of 12). It can fail for a stretch — the host's
   game then reads the enemy "out of combat mode" and plays no hit reaction — on an enemy whose fight with him was broken off
@@ -76,8 +93,12 @@ it. The work orders' findings (`docs/WO-215-findings.md` … `docs/WO-221-findin
   the joiner strikes may turn and fight him again.
 - **A knocked-down copy stays down while its host NPC lies**; it may fall or get up a few tenths of a second after the host's, and
   on our bench one get-up in a handful was not shown.
-- **Paired attacks** (one fighter's move answered by another's) are not always shown on the joiner. **Grabs** do not happen between the
-  players and the host's people.
+- **Grabs** (`mp_w224_clinch`, on) play on both bodies on both screens and end on both: on our bench 19 of 20 of the host's grabs
+  and all 23 of the joiner's showed on the other screen within 1.5 s. What is not the same yet: **the strike out of a grab** is
+  a plain strike on the joiner's screen, not the paired one; **two grabs at once** (both players and one enemy) can break one of
+  them early on one screen; and in one bench run a grab ended early on one screen and the other held on for 2.5 s. An enemy that
+  **changes its weapon** fights with the new style at once on the joiner's screen, but its hands may show the old weapon for up to
+  ten seconds.
 - **The host's frame rate in fights** may drop a few frames a second with the fast fight updates of 0.64; `mp_npc_bands off` in the
   host's console brings back the old rates. Tell us if you see it.
 - **The mod's own work on the host** costs about 1.9 ms of a frame on average and, in about one frame in twenty, 10 ms
@@ -144,6 +165,14 @@ it. The work orders' findings (`docs/WO-215-findings.md` … `docs/WO-221-findin
 - **Weapons may pop in** for a moment when a person draws on the joiner's screen.
 - **Playing far apart** (beyond the leash) is not supported: people near the far player may freeze or be missing.
 - **Flying is off** in co-op (`mp_allow_fly on` for testers).
+
+## Fixed in 0.65.5
+
+- **Grabs leaving a bandit stuck, and the joiner standing free while his figure was held** (`mp_w224_clinch`, on).
+- **Enemies' swings on the joiner's screen coming from the mirrored side and falling behind; combo finishers never shown**
+  (`mp_w224_chains`, on).
+- **An enemy fighting unarmed on the joiner's screen after it changed its weapon** (`mp_w224_clinch`, on).
+- **Dead copies standing frozen for three seconds** next to the joiner (`mp_w224_death`, on): they lie after about one.
 
 ## Fixed in 0.65.2
 
