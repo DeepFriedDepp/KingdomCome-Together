@@ -22,7 +22,7 @@ Session start 2026-11-25 23:58 (hour 0).
 | E — a contributor's pull request | 31–34 | – | – | skipped: no rebased pull request with only the compatible fixes existed at the session's start |
 | D — the crash after deaths | 34–38 | 26th 14:28 | 26th 23:55 (its four hours ran to six and a half of work; the maintainer paused the session from 20:43 to 23:45) | the suspect refuted (it is a protection); every fault follows the mod's own step 2.5 s after a death; five builds; what ships does nothing there: 2 runs, 80 deaths, no fault, against 2 closes in 5 runs — not proven; committed |
 | F — re-checks and finals | 38–44 | 26th 23:55 (on the final build, the moment D was committed) | 27th 18:45 | A re-measured 19 of 20, 23 of 23, 25 of 25; B's chain on every scene (the same row 76 to 86 %, the twin 0 to 10 %), the defence scene's guesses 9 of 132 (bar missed); WO-222's bars 41 of 47 and 84 of 84; WO-223's table, camp 5 of 5, guard pass; the massacre 0 closes in 5 runs; **the scoreboard: place lower than today's `main` in 3 pairs of 3 (a regression, cause not found)**; no crash, no closed game |
-| G — the build, the documents, the push | 44–48 | 27th 18:45 | 27th 19:30 | VERSION 0.65.5; the documents; gates 102 of 102 before and after the release commit; the signed release-candidate installer reads "Official build 0.65.5" (8), its live save round trip PASS; pushed. Hour 38 kept: after it only re-checks ran, among them two scoreboard runs with every switch off |
+| G — the build, the documents, the push | 44–48 | 27th 18:45 | 27th 19:30 | VERSION 0.65.5; the documents; gates 102 of 102 before the release commit, 101 of 102 after it (one timing-dependent relay test; see Conduct); the signed release-candidate installer reads "Official build 0.65.5" (8), its live save round trip PASS; pushed. Hour 38 kept: after it only re-checks ran, among them two scoreboard runs with every switch off |
 
 ## 1. Conduct
 
@@ -40,6 +40,15 @@ Session start 2026-11-25 23:58 (hour 0).
   had left over (they ended fourteen hours ahead of the plan), not from hours 38 to 48.
 - **Disk.** The bench's run folders (logs and the animation probes' files of every run) stood at 32 GB on the system drive when
   the finals began. They are scratch, outside the repository; the final reply says where they are.
+
+- **A relay test failed in the last gates run (Part G).** The gates on the release tree passed 102 of 102; on the final head (one
+  findings-only commit later, the same code) the relay suite failed one test of 230, and on three reruns it failed one of WO-213's
+  scheduler tests (`With_a_state_lane_the_state_goes_beside_an_event_burst_and_twin_one_lane_after_it`) each time; alone it passes. Its
+  cause, read in the code: the link writer's send budget starts at zero and fills with the time since the writer was made, and the
+  test pumps at once — in a warm suite in well under a millisecond, before the budget holds one frame. The test and the scheduler
+  are WO-213's (unchanged since 9 November); WO-224 changes neither. Single relay-test failures of this kind are in the gate logs of
+  WO-211, WO-214 and WO-218 too. Not fixed here (no new work after hour 38); the fix is the test's (start its writer with a
+  budget, or wait one refill), a follow-up.
 
 ## 2. Part A — clinches (`mp_w224_clinch`)
 
