@@ -22,7 +22,7 @@ Session start 2026-11-25 23:58 (hour 0).
 | E — a contributor's pull request | 31–34 | – | – | skipped: no rebased pull request with only the compatible fixes existed at the session's start |
 | D — the crash after deaths | 34–38 | 26th 14:28 | 26th 23:55 (its four hours ran to six and a half of work; the maintainer paused the session from 20:43 to 23:45) | the suspect refuted (it is a protection); every fault follows the mod's own step 2.5 s after a death; five builds; what ships does nothing there: 2 runs, 80 deaths, no fault, against 2 closes in 5 runs — not proven; committed |
 | F — re-checks and finals | 38–44 | 26th 23:55 (on the final build, the moment D was committed) | 27th 18:45 | A re-measured 19 of 20, 23 of 23, 25 of 25; B's chain on every scene (the same row 76 to 86 %, the twin 0 to 10 %), the defence scene's guesses 9 of 132 (bar missed); WO-222's bars 41 of 47 and 84 of 84; WO-223's table, camp 5 of 5, guard pass; the massacre 0 closes in 5 runs; **the scoreboard: place lower than today's `main` in 3 pairs of 3 (a regression, cause not found)**; no crash, no closed game |
-| G — the build, the documents, the push | 44–48 | 27th 18:45 | – | the release commit; the installer and the push follow (8) |
+| G — the build, the documents, the push | 44–48 | 27th 18:45 | 27th 19:30 | VERSION 0.65.5; the documents; gates 102 of 102 before and after the release commit; the signed release-candidate installer reads "Official build 0.65.5" (8), its live save round trip PASS; pushed. Hour 38 kept: after it only re-checks ran, among them two scoreboard runs with every switch off |
 
 ## 1. Conduct
 
@@ -699,9 +699,24 @@ crash after deaths.
 
 ## 8. The installer, and the official check on it
 
-The installer is built from the release commit (the one that sets `VERSION` to 0.65.5), by the release-candidate path, signed
-with the project's key. Its name, size, hash, the live save round trip and the official check on its payload are added by the
-commit after it.
+Built from a clean clone of the release commit (`6093f2a`; the maintainer's uncommitted files and untracked folders not in it,
+the start saves copied in), by `tools/Build-Installer.ps1 -Version 0.65.5 -ReleaseCandidate`, with the project's signing key
+given to that one build process only. Local only: no tag, no GitHub release.
+
+- **`KingdomComeTogether-Setup-0.65.5-6093f2a-2611280255.exe`**, 108,324,002 bytes (103.3 MB), SHA-256
+  `58a8cc1731b139a8238b2c307baaae67d063606b0b89f66d764c2e7db56e101f`. Build id `6093f2a-2611280255`.
+- **A release candidate, not soak-tested** (the build log and the installer's verify file say so): the frame-rate soak runs
+  only before a public release.
+- **Every gate of the build passed**: the setup cases 41 of 41, the relay's tests 37 of 37, the no-input-tooling,
+  no-screenshot and no-input-capture gates over 1,039 files, the publishing gate, the script pak rebuilt from its sources, and
+  the **live save round trip** on one bench copy (a throwaway save: the draw state survives a save and a reload, the save's
+  health ok, no stuck fight): PASS. The real saves' hashes were unchanged after it.
+- **The official check on the release payload** (the build's own step, then again by hand with the checker's own command):
+  the build signed its 13 files and read back **"Official build 0.65.5 (signed by the project's key; every file as signed)"**.
+  The same payload asked as another build id reads "Unofficial build — not made by Kingdom Come: Together (the signature is
+  for 0.65.5 build 6093f2a-2611280255, this is 0.65.5 build 0000000-0000000000)".
+- **Before it goes to testers**: the scoreboard's regression in place (7.4) is the maintainer's call; the installer was built
+  as the order says, with it stated here and in Known Issues.
 
 ## 9. Thread and lock audit (every engine call WO-224 adds)
 
